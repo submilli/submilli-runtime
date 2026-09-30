@@ -5,6 +5,9 @@ import { MockLanguageModelV3 } from "ai/test";
 
 const base = process.env.SUBMILLI_SERVER_URL ?? "http://127.0.0.1:18128";
 const endpoint = base + "/mcp/support-read";
+// serve_fixture.py prints this. It is a `user`-role token, so a pass shows this surface needs no more.
+const token = process.env.SUBMILLI_SERVER_TOKEN;
+assert.ok(token, "SUBMILLI_SERVER_TOKEN is required");
 const code = 'import { readBalance } from "@acme/billing"; function main(): number { return readBalance("cus_northwind"); }';
 
 function usage(): object {
@@ -14,8 +17,10 @@ function usage(): object {
   };
 }
 
-async function open(customerId?: string): Promise<MCPClient> {
+// The token admits the application; the binding says which customer.
+async function open(customerId?: string, bearer: string | null = token): Promise<MCPClient> {
   const headers: Record<string, string> = {};
+  if (bearer !== null) headers.Authorization = "Bearer " + bearer;
   if (customerId !== undefined) headers["submilli-variables"] = "customerId=" + customerId;
   return createMCPClient({
     transport: { type: "http", url: endpoint, headers },
@@ -72,7 +77,12 @@ async function main(): Promise<void> {
   }
 
   // The server rejects a session without the required binding at initialize.
+  // The token is still sent, so this is the 400 and not an authentication error.
   await assert.rejects(open(), /required variable 'customerId'/);
+  // Without a token the server answers 401 before it reads the binding. The
+  // client has no OAuth provider, so it reports the refusal rather than
+  // starting a sign-in.
+  await assert.rejects(open("cus_northwind", null), /HTTP 401.*unauthorized/);
   console.log("vercel MCP + mock model validation passed");
 }
 

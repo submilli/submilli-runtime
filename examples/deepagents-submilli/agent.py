@@ -10,6 +10,7 @@ AI Studio.
 Usage::
 
     export GOOGLE_API_KEY=...            # Google AI Studio key
+    export SUBMILLI_SERVER_TOKEN=...     # the token the server was started with
     python agent.py "What is the 30th Fibonacci number?" --blueprint demo
 
 Prerequisites: a running server with the blueprint registered — see README.md.
@@ -108,6 +109,15 @@ def build_model(model_name: str) -> ChatGoogleGenerativeAI:
     return ChatGoogleGenerativeAI(model=model_name, temperature=0, google_api_key=api_key)
 
 
+def server_token() -> str:
+    """The API token this agent was given for the server. Read from the
+    environment, never from a flag, so it stays out of the process list."""
+    token = os.environ.get("SUBMILLI_SERVER_TOKEN")
+    if not token:
+        sys.exit("error: set SUBMILLI_SERVER_TOKEN to the token the server was started with")
+    return token
+
+
 async def run(prompt: str, blueprint: str, server_url: str, model_name: str) -> None:
     mcp_url = f"{server_url.rstrip('/')}/mcp/{blueprint}"
     client = MultiServerMCPClient(
@@ -115,6 +125,7 @@ async def run(prompt: str, blueprint: str, server_url: str, model_name: str) -> 
             "submilli": {
                 "transport": "streamable_http",
                 "url": mcp_url,
+                "headers": {"Authorization": f"Bearer {server_token()}"},
             }
         }
     )

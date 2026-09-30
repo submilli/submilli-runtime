@@ -1,8 +1,9 @@
 {{- if .Values.ingress.enabled }}
 {{- /*
-An Ingress publishes an unauthenticated code-execution API outside the cluster.
-It is off by default and NOTES.txt says so loudly when it is turned on. Put an
-authenticating proxy in front of it.
+An Ingress publishes a code-execution API outside the cluster, protected by
+nothing but a bearer token — and by nothing at all with `auth.enabled: false`.
+It is off by default and NOTES.txt says so loudly when it is turned on. It needs
+TLS: a bearer token over plain HTTP is readable by everything on the path.
 */ -}}
 apiVersion: networking.k8s.io/v1
 kind: Ingress

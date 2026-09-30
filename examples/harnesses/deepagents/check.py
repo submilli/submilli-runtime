@@ -7,6 +7,7 @@ import pathlib
 from langchain_core.language_models.fake_chat_models import GenericFakeChatModel
 from langchain_core.messages import AIMessage
 
+import agent
 from agent import answer
 
 PROGRAM = (pathlib.Path(__file__).parent.parent / "note.ts").read_text()
@@ -49,6 +50,13 @@ async def main() -> None:
         pass  # The server refuses the connection: the blueprint requires a user.
     else:
         raise AssertionError("a session without the user binding was accepted")
+    agent.SUBMILLI_SERVER_TOKEN = "a-token-the-server-does-not-know"
+    try:
+        await answer("total", "u_ada", scripted(PROGRAM))
+    except Exception:
+        pass  # The server answers 401 before it looks at anything else.
+    else:
+        raise AssertionError("a token the server does not know was accepted")
     print("deepagents: ok")
 
 

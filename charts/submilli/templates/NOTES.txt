@@ -1,3 +1,5 @@
+{{- $fullname := include "submilli.fullname" . -}}
+{{- $secret := include "submilli.authSecretName" . -}}
 submilli {{ .Chart.AppVersion }} installed as release {{ .Release.Name }}.
 
 Reach the server:
@@ -6,34 +8,87 @@ Reach the server:
   http{{ if $.Values.ingress.tls }}s{{ end }}://{{ .host }}
 {{- end }}
 {{- else if eq .Values.service.type "ClusterIP" }}
-  kubectl --namespace {{ .Release.Namespace }} port-forward svc/{{ include "submilli.fullname" . }} {{ .Values.service.port }}:{{ .Values.service.port }}
-  curl http://127.0.0.1:{{ .Values.service.port }}/v1/status
+  kubectl --namespace {{ .Release.Namespace }} port-forward svc/{{ $fullname }} {{ .Values.service.port }}:{{ .Values.service.port }}
+  curl -i http://127.0.0.1:{{ .Values.service.port }}/healthz
 {{- else }}
-  kubectl --namespace {{ .Release.Namespace }} get svc {{ include "submilli.fullname" . }} -w
+  kubectl --namespace {{ .Release.Namespace }} get svc {{ $fullname }} -w
 {{- end }}
 
-READ THIS BEFORE PUTTING ANYTHING REAL BEHIND IT
-------------------------------------------------
-The server's HTTP API is completely unauthenticated. There is no token, no
-allowlist, no per-request identity. Anything that can reach port
-{{ .Values.server.port }} can execute arbitrary code in the sandbox, register
-and rewrite blueprints, read back results, and stop the process via
-POST /v1/shutdown. Treat network reachability as the only access control, and
-treat this release as non-production until inbound auth ships.
+AUTHENTICATION
+--------------
+{{- if not .Values.auth.enabled }}
+  auth.enabled is FALSE. THE API IS COMPLETELY UNAUTHENTICATED.
+
+  There is no token and no per-request identity. Anything that can reach port
+  {{ .Values.server.port }} can execute arbitrary code in the sandbox, register and rewrite
+  blueprints, read back results, and stop the process via POST /v1/shutdown.
+  Network reachability is the only access control. Do not run this way outside
+  a throwaway cluster.
+{{- else }}
+  Every route except /healthz needs `Authorization: Bearer <token>`. There
+  are two tokens:
+
+    admin   every route
+    user    run code, sessions, MCP, and the read-only blueprint prompt and
+            package documentation routes; 403 on everything else
+
+  Give agents the user token. No token, or an unknown one, is a 401.
+{{- if .Values.auth.existingSecret }}
+
+  They are read from your Secret {{ $secret }} (auth.existingSecret).
+{{- else }}
+
+  They were generated into the Secret {{ $secret }} and are kept across
+  upgrades, and across `helm uninstall`.
+
+  If this release is rendered without cluster access (Argo CD, or
+  `helm template | kubectl apply`), the chart cannot read that Secret back and
+  the tokens change on every render. Set auth.existingSecret there.
+{{- end }}
+
+  Read them:
+    kubectl get secret {{ $secret }} -n {{ .Release.Namespace }} -o jsonpath='{.data.{{ .Values.auth.adminTokenKey | replace "." "\\." }}}' | base64 -d
+    kubectl get secret {{ $secret }} -n {{ .Release.Namespace }} -o jsonpath='{.data.{{ .Values.auth.userTokenKey | replace "." "\\." }}}' | base64 -d
+
+  Use one:
+    TOKEN=$(kubectl get secret {{ $secret }} -n {{ .Release.Namespace }} -o jsonpath='{.data.{{ .Values.auth.adminTokenKey | replace "." "\\." }}}' | base64 -d)
+    curl -H "Authorization: Bearer $TOKEN" http://127.0.0.1:{{ .Values.service.port }}/v1/status
+
+  Tokens are read at boot. After changing the Secret:
+    kubectl --namespace {{ .Release.Namespace }} rollout restart statefulset/{{ $fullname }}
+{{- end }}
+
+NETWORK
+-------
 {{- if not .Values.networkPolicy.enabled }}
-
   networkPolicy.enabled is FALSE. Nothing restricts which pods can reach this
-  server. In a shared cluster that means every pod in every namespace.
+  server. In a shared cluster that means every pod in every namespace
+{{- if .Values.auth.enabled }}, and a
+  token is all that stands between each of them and code execution.
+{{- else }}, and with
+  auth.enabled also false every one of them can execute code on it.
+{{- end }}
 {{- else if not .Values.networkPolicy.allowFrom }}
-
   A default-deny NetworkPolicy is installed and networkPolicy.allowFrom is
   empty, so nothing but the chart's own tests can reach the server yet. Add the
   workloads that should talk to it.
+{{- else }}
+  A default-deny NetworkPolicy admits only the peers in networkPolicy.allowFrom.
+{{- if .Values.auth.enabled }}
+  It is the second layer behind the tokens, not a replacement for them.
+{{- end }}
 {{- end }}
 {{- if .Values.ingress.enabled }}
 
-  ingress.enabled is TRUE. An unauthenticated code-execution API is now
-  published outside the cluster. Put an authenticating proxy in front of it.
+  ingress.enabled is TRUE. A code-execution API is now published outside the
+  cluster
+{{- if not .Values.auth.enabled }} WITH NO AUTHENTICATION. Put an authenticating proxy in front of
+  it, or turn auth.enabled back on.
+{{- else if not .Values.ingress.tls }}, and ingress.tls is empty: the bearer token crosses the
+  network in the clear unless something in front terminates TLS.
+{{- else }}, protected only by its bearer tokens. Treat the admin token
+  accordingly.
+{{- end }}
 {{- end }}
 
 {{- if .Values.networkPolicy.enabled }}
@@ -45,7 +100,10 @@ treat this release as non-production until inbound auth ships.
 
   kubectl port-forward tunnels through the API server and bypasses
   NetworkPolicy entirely. Anyone with pods/portforward permission reaches this
-  server regardless of the policy.
+  server regardless of the policy
+{{- if .Values.auth.enabled }}, though still not past the tokens.
+{{- else }}.
+{{- end }}
 {{- end }}
 {{- if .Values.blueprints }}
 

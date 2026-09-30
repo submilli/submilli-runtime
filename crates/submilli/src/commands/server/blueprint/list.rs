@@ -6,10 +6,12 @@ use std::process::ExitCode;
 use anyhow::{Context, Result};
 use serde::Deserialize;
 
+use crate::commands::http::{ServerTarget, ok_or_report};
+
 #[derive(clap::Args)]
 pub struct Args {
-    #[arg(long, default_value = "http://127.0.0.1:8128")]
-    server: String,
+    #[command(flatten)]
+    target: ServerTarget,
 }
 
 #[derive(Debug, Deserialize)]
@@ -23,16 +25,20 @@ struct BlueprintSummary {
 }
 
 pub fn execute(args: Args) -> Result<ExitCode> {
-    let base = args.server.trim_end_matches('/');
+    let base = args.target.base();
     let url = format!("{base}/v1/blueprints");
 
-    let agent: ureq::Agent = ureq::Agent::config_builder().build().into();
+    let agent = args.target.agent()?;
     let resp = match agent.get(&url).call() {
         Ok(r) => r,
         Err(err) => {
             eprintln!("error: {err}");
             return Ok(ExitCode::from(1));
         }
+    };
+
+    let Some(resp) = ok_or_report(resp) else {
+        return Ok(ExitCode::from(1));
     };
 
     let body: ListResponse = resp

@@ -81,7 +81,7 @@ impl BlueprintTarget {
         match std::env::var("SUBMILLI_SERVER_URL") {
             Ok(v) if !v.trim().is_empty() => Ok(BlueprintTarget {
                 base: v.trim_end_matches('/').to_string(),
-                client: http::client(),
+                client: http::server_agent_from_env()?,
             }),
             _ => bail!("SUBMILLI_SERVER_URL is not set; export the submilli-server's base URL"),
         }
@@ -112,10 +112,7 @@ fn apply_blueprint(target: &BlueprintTarget, doc: &ProbedDoc) -> Result<()> {
         })?;
     let status = resp.status().as_u16();
     if status != 200 {
-        let message = resp
-            .into_body()
-            .read_json::<http::ServerError>()
-            .map_or_else(|_| format!("server returned HTTP {status}"), |e| e.message);
+        let message = http::error_message(resp);
         bail!(
             "submilli-server rejected {} (document {}): {message}",
             doc.file.display(),

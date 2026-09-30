@@ -33,9 +33,9 @@ service. Install the CLI/server using [setup](setup.md), then:
    permits only the bound customer's balance.
 4. Run `submilli build check`, `submilli build test`,
    `submilli build publish-local`, and `submilli blueprint lint blueprint.yaml`.
-5. Start `submilli-server --bind 127.0.0.1 --port 8128` in another terminal.
-   Use the same `SUBMILLI_HOME` for the CLI and server if overriding the default:
-   the server must see the package store where you published the fixture.
+5. Export `SUBMILLI_SERVER_TOKEN` (`openssl rand -hex 32`) and start
+   `submilli-server --bind 127.0.0.1 --port 8128` in another terminal with
+   the same variable ([setup](setup.md)).
 6. Run `submilli server blueprint apply blueprint.yaml --server http://127.0.0.1:8128`.
    The MCP URL is now `http://127.0.0.1:8128/mcp/support-read`.
 
@@ -43,6 +43,7 @@ Before involving a model, verify the endpoint:
 
 ```sh
 curl --fail-with-body http://127.0.0.1:8128/v1/execute \
+  -H "Authorization: Bearer $SUBMILLI_SERVER_TOKEN" \
   -H 'content-type: application/json' \
   -d '{"blueprint":"support-read","variables":{"customerId":"cus_northwind"},"code":"import { readBalance } from \"@acme/billing\"; function main(): number { return readBalance(\"cus_northwind\"); }"}'
 ```
@@ -68,6 +69,11 @@ HTTP. Load tools from that endpoint; preserve their names, schemas, and full
 descriptions. The execution tool's description teaches the TypeScript subset;
 discovery tools supply package and built-in declarations. Do not replace this
 with a generic “execute JavaScript” schema or assume there is only one tool.
+
+Send `Authorization: Bearer <token>` on every MCP and REST request, with the
+token read from `SUBMILLI_SERVER_TOKEN` in the host process; a missing or
+unknown token is `401`. [Setup](setup.md) covers giving the harness a `user`
+token.
 
 Bind session variables before MCP initialization, from authenticated and
 authorized application state. Header format:

@@ -8,8 +8,8 @@ use std::time::Duration;
 
 use anyhow::Result;
 use axum::{
-    Router,
-    routing::{delete, get, post},
+    Router, middleware,
+    routing::{MethodRouter, delete, get, post},
 };
 use interpreter::runtime::{
     HttpClient, LlmProvider, ReqwestHttpClient, RuntimeConfig, StoreData,
@@ -25,6 +25,7 @@ use tokio::sync::Notify;
 use wasmtime::{Engine, Linker, Module};
 
 use crate::ServerConfig;
+use crate::auth::{Access, AuthConfig, Guard};
 use crate::blueprint::{BlueprintStore, FileBlueprintStore, InMemoryBlueprintStore};
 use crate::blueprint_seed::seed_blueprints;
 use crate::config::{OAuthProvider, VolumeTable};
@@ -58,6 +59,7 @@ pub struct AppState {
 }
 
 struct AppStateInner {
+    auth: Arc<AuthConfig>,
     engine: Engine,
     base_linker: Linker<StoreData>,
     runtime: RuntimeConfig,
@@ -202,6 +204,7 @@ impl AppState {
 
         Ok(Self {
             inner: Arc::new(AppStateInner {
+                auth: Arc::new(config.auth),
                 network_policy: Arc::clone(&policy),
                 engine,
                 base_linker,
@@ -264,6 +267,10 @@ impl AppState {
 
     pub(crate) fn bind_addr(&self) -> Option<SocketAddr> {
         self.inner.bind_addr.get().copied()
+    }
+
+    pub(crate) fn auth(&self) -> Arc<AuthConfig> {
+        Arc::clone(&self.inner.auth)
     }
 
     pub(crate) fn engine(&self) -> &Engine {
@@ -743,104 +750,176 @@ fn layered_package_store(root: Option<PathBuf>, fallback: Option<PathBuf>) -> Pa
 }
 
 pub fn app(state: AppState) -> Router {
-    Router::new()
-        .route("/v1/status", get(crate::handlers::admin::status))
-        .route("/v1/shutdown", post(crate::handlers::admin::shutdown))
-        .route("/v1/execute", post(crate::handlers::execute::handle))
-        .route("/v1/sessions", post(crate::handlers::sessions::create))
+    routes(state.auth()).router.with_state(state)
+}
+
+/// Every route and the access it requires, in registration order.
+pub fn route_table() -> Vec<(&'static str, Access)> {
+    routes(Arc::new(AuthConfig::Disabled)).table
+}
+
+fn routes(auth: Arc<AuthConfig>) -> Routes {
+    use crate::handlers::{
+        admin, blueprint, capabilities, execute, last_run, mcp_auth, packages, secret, sessions,
+        volumes,
+    };
+
+    Routes::new(auth)
+        .route("/healthz", Access::Public, get(admin::healthz))
+        .route("/v1/status", Access::Admin, get(admin::status))
+        .route("/v1/shutdown", Access::Admin, post(admin::shutdown))
+        .route("/v1/execute", Access::User, post(execute::handle))
+        .route("/v1/sessions", Access::User, post(sessions::create))
         .route(
             "/v1/sessions/{session_id}/execute",
-            post(crate::handlers::sessions::execute),
+            Access::User,
+            post(sessions::execute),
         )
         .route(
             "/v1/sessions/{session_id}/rebind",
-            post(crate::handlers::sessions::rebind),
+            Access::User,
+            post(sessions::rebind),
         )
         .route(
             "/v1/sessions/{session_id}/last-run",
-            get(crate::handlers::last_run::handle),
+            Access::User,
+            get(last_run::handle),
         )
         .route(
             "/v1/sessions/{session_id}",
-            delete(crate::handlers::sessions::disconnect),
+            Access::User,
+            delete(sessions::disconnect),
         )
         .route(
             "/v1/blueprints",
-            post(crate::handlers::blueprint::add).get(crate::handlers::blueprint::list),
+            Access::Admin,
+            post(blueprint::add).get(blueprint::list),
         )
         .route(
             "/v1/blueprints/{name}",
-            get(crate::handlers::blueprint::show)
-                .put(crate::handlers::blueprint::apply)
-                .delete(crate::handlers::blueprint::remove),
+            Access::Admin,
+            get(blueprint::show)
+                .put(blueprint::apply)
+                .delete(blueprint::remove),
         )
+        // This and the per-blueprint `packages/*` and `builtins*` reads further
+        // down are what an agent calls to learn what its blueprint offers, so
+        // they need no more than the token that runs code against it.
         .route(
             "/v1/blueprints/{name}/prompt",
-            get(crate::handlers::blueprint::prompt),
+            Access::User,
+            get(blueprint::prompt),
         )
         .route(
             "/v1/secrets",
-            post(crate::handlers::secret::put).get(crate::handlers::secret::list),
+            Access::Admin,
+            post(secret::put).get(secret::list),
         )
         // Write-only externally: secrets can be stored, listed, and deleted, but
         // never read back over the API. The runtime reads values in-process.
-        .route(
-            "/v1/secrets/{*key}",
-            delete(crate::handlers::secret::remove),
-        )
-        .route("/v1/packages", get(crate::handlers::packages::installed))
+        .route("/v1/secrets/{*key}", Access::Admin, delete(secret::remove))
+        .route("/v1/packages", Access::Admin, get(packages::installed))
         .route(
             "/v1/packages/{*name}",
-            delete(crate::handlers::packages::uninstall),
+            Access::Admin,
+            delete(packages::uninstall),
         )
         .route(
             "/v1/packages/install",
-            post(crate::handlers::packages::install),
+            Access::Admin,
+            post(packages::install),
         )
         .route(
             "/v1/blueprints/{name}/packages/search",
-            get(crate::handlers::packages::blueprint_search),
+            Access::User,
+            get(packages::blueprint_search),
         )
         .route(
             "/v1/blueprints/{name}/packages/docs",
-            get(crate::handlers::packages::blueprint_docs),
+            Access::User,
+            get(packages::blueprint_docs),
         )
         .route(
             "/v1/blueprints/{name}/builtins",
-            get(crate::handlers::packages::blueprint_builtins),
+            Access::User,
+            get(packages::blueprint_builtins),
         )
         .route(
             "/v1/blueprints/{name}/builtins/docs",
-            get(crate::handlers::packages::blueprint_builtin_docs),
+            Access::User,
+            get(packages::blueprint_builtin_docs),
         )
-        .route("/v1/capabilities", get(crate::handlers::capabilities::list))
+        .route("/v1/capabilities", Access::Admin, get(capabilities::list))
         // Read-only, and names only: the host directory behind a volume name
         // never crosses this boundary.
-        .route("/v1/volumes", get(crate::handlers::volumes::list))
+        .route("/v1/volumes", Access::Admin, get(volumes::list))
         .route(
             "/v1/mcp/{blueprint}/auth-status",
-            get(crate::handlers::mcp_auth::auth_status),
+            Access::Admin,
+            get(mcp_auth::auth_status),
         )
         .route(
             "/v1/mcp/{blueprint}/{server}/auth-config",
-            get(crate::handlers::mcp_auth::auth_config),
+            Access::Admin,
+            get(mcp_auth::auth_config),
         )
         .route(
             "/v1/mcp/{blueprint}/{server}/refresh-token",
-            post(crate::handlers::mcp_auth::put_refresh_token)
-                .delete(crate::handlers::mcp_auth::delete_refresh_token),
+            Access::Admin,
+            post(mcp_auth::put_refresh_token).delete(mcp_auth::delete_refresh_token),
         )
         .route(
             "/v1/mcp/{blueprint}/{server}/oauth/exchange",
-            post(crate::handlers::mcp_auth::oauth_exchange),
+            Access::Admin,
+            post(mcp_auth::oauth_exchange),
         )
         .route(
             "/mcp/{blueprint}",
+            Access::User,
             post(crate::mcp::mcp_handler)
                 .get(crate::mcp::mcp_handler)
                 .delete(crate::mcp::mcp_handler),
         )
-        .with_state(state)
+}
+
+/// The router under construction. Its only way to add a route takes the
+/// [`Access`] that route requires, so an endpoint cannot be registered without
+/// deciding who may call it.
+struct Routes {
+    router: Router<AppState>,
+    auth: Arc<AuthConfig>,
+    table: Vec<(&'static str, Access)>,
+}
+
+impl Routes {
+    fn new(auth: Arc<AuthConfig>) -> Self {
+        Self {
+            router: Router::new(),
+            auth,
+            table: Vec::new(),
+        }
+    }
+
+    fn route(
+        mut self,
+        path: &'static str,
+        access: Access,
+        handlers: MethodRouter<AppState>,
+    ) -> Self {
+        let handlers = match access {
+            Access::Public => handlers,
+            // Layered on the method router rather than each handler, so a
+            // request with a method the path does not serve is refused for its
+            // missing token before it learns which methods exist.
+            Access::User | Access::Admin => handlers.layer(middleware::from_fn_with_state(
+                Guard::new(Arc::clone(&self.auth), access),
+                crate::auth::require,
+            )),
+        };
+        self.router = self.router.route(path, handlers);
+        self.table.push((path, access));
+        self
+    }
 }
 
 fn selected_stdlib_declarations(names: &BTreeSet<String>) -> Vec<PackageDeclaration> {

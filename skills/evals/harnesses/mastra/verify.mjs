@@ -10,19 +10,35 @@ const { MCPClient } = await import(
 
 const base = process.env.SUBMILLI_SERVER_URL ?? 'http://127.0.0.1:18128';
 const blueprint = `${base}/mcp/support-read`;
+// serve_fixture.py prints this. It is a `user`-role token, so a pass shows this surface needs no more.
+const token = process.env.SUBMILLI_SERVER_TOKEN;
+assert.ok(token, 'SUBMILLI_SERVER_TOKEN is required');
 
 function program(customerId) {
   return `import { readBalance } from "@acme/billing"; function main(): number { return readBalance("${customerId}"); }`;
 }
 
-async function clientFor(binding) {
-  const requestInit = binding === null
-    ? undefined
-    : { headers: { 'submilli-variables': `customerId=${binding}` } };
+// The token admits the application; the binding says which customer.
+async function clientFor(binding, bearer = token) {
+  const headers = {};
+  if (bearer !== null) headers.Authorization = `Bearer ${bearer}`;
+  if (binding !== null) headers['submilli-variables'] = `customerId=${binding}`;
   return new MCPClient({
-    id: `submilli-smoke-${binding ?? 'missing'}`,
-    servers: { submilli: { url: new URL(blueprint), requestInit } },
+    id: `submilli-smoke-${binding ?? 'missing'}-${bearer === null ? 'anonymous' : 'token'}`,
+    servers: { submilli: { url: new URL(blueprint), requestInit: { headers } } },
   });
+}
+
+// Mastra logs a refused connection and offers no toolset; this returns why.
+async function refusal(binding, bearer) {
+  const client = await clientFor(binding, bearer);
+  try {
+    const { toolsets, errors } = await client.listToolsetsWithErrors();
+    assert.equal(toolsets.submilli, undefined, 'a refused connection offers no tools');
+    return errors.submilli ?? '';
+  } finally {
+    await client.disconnect();
+  }
 }
 
 async function execute(binding, requestedCustomer) {
@@ -51,4 +67,10 @@ await assert.rejects(
   /required|variable|invalid_request|connect|toolsets|discovered/i,
 );
 
-console.log('Mastra MCP smoke passed: allowed, cross-tenant denial, missing binding, cleanup');
+// The missing binding is refused with the token present, so not as a 401.
+assert.doesNotMatch(await refusal(null, token), /401|unauthorized/i);
+// Without a token the server answers 401 before it reads the binding. The
+// adapter has no OAuth provider, so it reports the refusal and starts no sign-in.
+assert.match(await refusal('cus_northwind', null), /unauthorized[\s\S]*HTTP 401/);
+
+console.log('Mastra MCP smoke passed: allowed, cross-tenant denial, missing binding, missing token, cleanup');

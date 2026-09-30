@@ -9,25 +9,20 @@ use std::process::ExitCode;
 use anyhow::{Context, Result};
 use serde::Deserialize;
 
+use crate::commands::http::{ServerTarget, error_message};
+
 #[derive(clap::Args)]
 pub struct Args {
     file: PathBuf,
 
-    #[arg(long, default_value = "http://127.0.0.1:8128")]
-    server: String,
+    #[command(flatten)]
+    target: ServerTarget,
 }
 
 #[derive(Debug, Deserialize)]
 struct ApplyResponse {
     name: String,
     created: bool,
-}
-
-#[derive(Debug, Deserialize)]
-struct ErrorResponse {
-    #[allow(dead_code)]
-    error: String,
-    message: String,
 }
 
 pub fn execute(args: Args) -> Result<ExitCode> {
@@ -42,15 +37,10 @@ pub fn execute(args: Args) -> Result<ExitCode> {
         }
     };
 
-    let base = args.server.trim_end_matches('/');
+    let base = args.target.base();
     let url = format!("{base}/v1/blueprints/{}", blueprint.name);
 
-    // Disable ureq's default "non-2xx is an error" so we can read the
-    // structured `{ error, message }` body the server returns on 400.
-    let agent: ureq::Agent = ureq::Agent::config_builder()
-        .http_status_as_error(false)
-        .build()
-        .into();
+    let agent = args.target.agent()?;
     let resp = match agent
         .put(&url)
         .send_json(serde_json::json!({ "yaml": yaml }))
@@ -72,10 +62,7 @@ pub fn execute(args: Args) -> Result<ExitCode> {
         println!("{verb} blueprint '{}'", body.name);
         Ok(ExitCode::SUCCESS)
     } else {
-        match resp.into_body().read_json::<ErrorResponse>() {
-            Ok(err) => eprintln!("error: {}", err.message),
-            Err(_) => eprintln!("error: server returned HTTP {status}"),
-        }
+        eprintln!("error: {}", error_message(resp));
         Ok(ExitCode::from(1))
     }
 }

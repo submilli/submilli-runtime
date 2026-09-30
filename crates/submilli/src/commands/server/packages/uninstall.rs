@@ -6,13 +6,15 @@ use std::process::ExitCode;
 use anyhow::Result;
 use serde::Deserialize;
 
+use crate::commands::http::{ServerTarget, error_message};
+
 #[derive(clap::Args)]
 pub struct Args {
     /// Package to remove, e.g. `@submilli/jina`.
     name: String,
 
-    #[arg(long, default_value = "http://127.0.0.1:8128")]
-    server: String,
+    #[command(flatten)]
+    target: ServerTarget,
 }
 
 #[derive(Debug, Deserialize)]
@@ -21,21 +23,11 @@ struct UninstallResponse {
     still_available_from: Option<String>,
 }
 
-#[derive(Debug, Deserialize)]
-struct ErrorResponse {
-    #[allow(dead_code)]
-    error: String,
-    message: String,
-}
-
 pub fn execute(args: Args) -> Result<ExitCode> {
-    let base = args.server.trim_end_matches('/');
+    let base = args.target.base();
     let url = format!("{base}/v1/packages/{}", args.name);
 
-    let agent: ureq::Agent = ureq::Agent::config_builder()
-        .http_status_as_error(false)
-        .build()
-        .into();
+    let agent = args.target.agent()?;
     let resp = match agent.delete(&url).call() {
         Ok(r) => r,
         Err(err) => {
@@ -56,10 +48,7 @@ pub fn execute(args: Args) -> Result<ExitCode> {
         }
         Ok(ExitCode::SUCCESS)
     } else {
-        match resp.into_body().read_json::<ErrorResponse>() {
-            Ok(err) => eprintln!("error: {}", err.message),
-            Err(_) => eprintln!("error: server returned HTTP {status}"),
-        }
+        eprintln!("error: {}", error_message(resp));
         Ok(ExitCode::from(1))
     }
 }

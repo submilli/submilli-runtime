@@ -105,8 +105,9 @@ python3 skills/evals/harnesses/serve_fixture.py
 The fixture compiles the billing example from the distributed references,
 publishes it into a temporary store, starts a loopback server on port 18128,
 and registers `support-read`. It checks allowed, denied and missing-binding
-REST responses before reporting ready. Set
-`SUBMILLI_SERVER_URL=http://127.0.0.1:18128` for the adapter checks. Stop with
+REST responses before reporting ready, then prints an `export
+SUBMILLI_SERVER_URL=… SUBMILLI_SERVER_TOKEN=…` line for the adapter checks;
+the token it prints has the `user` role. Stop with
 Ctrl-C to remove the server and temporary store; use `--port` if occupied.
 These checks establish transport/API behavior; they do not establish live
 model quality or successful assistant-driven implementation.

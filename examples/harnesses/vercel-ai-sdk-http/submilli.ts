@@ -7,6 +7,8 @@ import { z } from "zod";
 export interface SessionOptions {
   /** Base URL of submilli-server. */
   server: string;
+  /** An API token the server accepts. It stays in your application. */
+  token: string;
   /** The registered blueprint every program in this session runs under. */
   blueprint: string;
   /** Values for the blueprint's variables, from your application's own state. */
@@ -33,14 +35,24 @@ interface Prompt {
 }
 
 export async function openSession(options: SessionOptions): Promise<Session> {
+  // Every request carries the token, and a request with a body sends it as JSON.
+  const call = (url: string, method = "GET", body?: unknown): Promise<Response> =>
+    fetch(url, {
+      method,
+      headers: {
+        Authorization: `Bearer ${options.token}`,
+        ...(body === undefined ? {} : { "content-type": "application/json" }),
+      },
+      body: body === undefined ? undefined : JSON.stringify(body),
+    });
+
   const blueprint = `${options.server}/v1/blueprints/${encodeURIComponent(options.blueprint)}`;
-  const describe: Prompt = await json(await fetch(`${blueprint}/prompt`));
+  const describe: Prompt = await json(await call(`${blueprint}/prompt`));
 
   const { session_id } = await json(
-    await fetch(`${options.server}/v1/sessions`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ blueprint: options.blueprint, variables: options.variables ?? {} }),
+    await call(`${options.server}/v1/sessions`, "POST", {
+      blueprint: options.blueprint,
+      variables: options.variables ?? {},
     }),
   );
   const session = `${options.server}/v1/sessions/${session_id}`;
@@ -53,13 +65,7 @@ export async function openSession(options: SessionOptions): Promise<Session> {
         description: describe.prompt,
         inputSchema: z.object({ code: z.string() }),
         execute: async ({ code }) => {
-          const run = await json(
-            await fetch(`${session}/execute`, {
-              method: "POST",
-              headers: { "content-type": "application/json" },
-              body: JSON.stringify({ code }),
-            }),
-          );
+          const run = await json(await call(`${session}/execute`, "POST", { code }));
           // A denial or a compile error arrives here as `error`, for the model to read.
           return { result: run.result, console: run.console, error: run.error };
         },
@@ -67,38 +73,38 @@ export async function openSession(options: SessionOptions): Promise<Session> {
       submilli__typescript__last_run: tool({
         description: describe.tools.last_run,
         inputSchema: z.object({}),
-        execute: async () => json(await fetch(`${session}/last-run`)),
+        execute: async () => json(await call(`${session}/last-run`)),
       }),
       submilli__typescript__packages__search: tool({
         description: describe.tools.search,
         inputSchema: z.object({ query: z.string().default("") }),
         execute: async ({ query }) =>
-          json(await fetch(`${blueprint}/packages/search?${new URLSearchParams({ q: query })}`)),
+          json(await call(`${blueprint}/packages/search?${new URLSearchParams({ q: query })}`)),
       }),
       submilli__typescript__packages__docs: tool({
         description: describe.tools.docs,
         inputSchema: z.object({ name: z.string() }),
         execute: async ({ name }) => {
-          const docs = await fetch(`${blueprint}/packages/docs?${new URLSearchParams({ name })}`);
+          const docs = await call(`${blueprint}/packages/docs?${new URLSearchParams({ name })}`);
           return docs.text();
         },
       }),
       submilli__typescript__builtins__list: tool({
         description: describe.tools.builtins_list,
         inputSchema: z.object({}),
-        execute: async () => json(await fetch(`${blueprint}/builtins`)),
+        execute: async () => json(await call(`${blueprint}/builtins`)),
       }),
       submilli__typescript__builtins__docs: tool({
         description: describe.tools.builtins_docs,
         inputSchema: z.object({ names: z.array(z.string()) }),
         execute: async ({ names }) => {
           const query = new URLSearchParams(names.map((name) => ["name", name]));
-          return json(await fetch(`${blueprint}/builtins/docs?${query}`));
+          return json(await call(`${blueprint}/builtins/docs?${query}`));
         },
       }),
     },
     close: async () => {
-      await fetch(session, { method: "DELETE" });
+      await call(session, "DELETE");
     },
   };
 }

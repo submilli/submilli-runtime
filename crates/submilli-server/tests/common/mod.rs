@@ -14,7 +14,9 @@ pub const BIN: &str = env!("CARGO_BIN_EXE_submilli-server");
 /// telemetry off (its flush would otherwise reach for sentry.io from a test),
 /// and every ambient variable that could steer the address ladder, name a
 /// state directory, point at a config file, or key the store cleared, so the
-/// developer's shell cannot change what the server resolves. `extra_env` is
+/// developer's shell cannot change what the server resolves. It serves without
+/// authentication: these tests are about process lifecycle, and
+/// `auth_process.rs` covers a server that requires tokens. `extra_env` is
 /// applied last.
 pub fn spawn_server(
     home: &Path,
@@ -27,6 +29,7 @@ pub fn spawn_server(
         .args(["--bind", "127.0.0.1", "--port"])
         .arg(port.to_string())
         .args(["--shutdown-grace", &shutdown_grace_secs.to_string()])
+        .arg("--allow-unauthenticated")
         .env("SUBMILLI_HOME", home)
         .env("SUBMILLI_TELEMETRY", "0")
         .env_remove("HOST")
@@ -44,6 +47,8 @@ pub fn spawn_server(
         .env_remove("SUBMILLI_SECRET_STORE_KEY_ENV")
         .env_remove("SUBMILLI_SECRET_STORE_KEY_FILE")
         .env_remove("SUBMILLI_SECRET_KEY")
+        .env_remove("SUBMILLI_ALLOW_UNAUTHENTICATED")
+        .env_remove("SUBMILLI_SERVER_TOKEN")
         .stdout(Stdio::null())
         .stderr(Stdio::null());
     for (key, value) in extra_env {

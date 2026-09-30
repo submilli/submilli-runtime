@@ -6,15 +6,14 @@ use std::process::ExitCode;
 use anyhow::Result;
 use serde::Deserialize;
 
-use crate::commands::http::{client, read_or_error};
+use crate::commands::http::{ServerTarget, read_or_error};
 
 #[derive(clap::Args)]
 pub struct Args {
     /// Blueprint to report on.
     blueprint: String,
-    /// Base URL of the running submilli-server.
-    #[arg(long = "server", default_value = "http://127.0.0.1:8128")]
-    server_url: String,
+    #[command(flatten)]
+    target: ServerTarget,
 }
 
 #[derive(Debug, Deserialize)]
@@ -42,8 +41,8 @@ pub fn execute(args: Args) -> Result<ExitCode> {
 }
 
 fn run(args: &Args) -> Result<()> {
-    let agent = client();
-    let base = args.server_url.trim_end_matches('/');
+    let agent = args.target.agent()?;
+    let base = args.target.base();
     let body: StatusBody = read_or_error(
         agent
             .get(&format!("{base}/v1/mcp/{}/auth-status", args.blueprint))

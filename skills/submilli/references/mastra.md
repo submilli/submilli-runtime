@@ -8,7 +8,7 @@ boundary; Mastra remains the model loop.
 
 For fixed, shared MCP identity, `await client.listTools()` can be supplied as
 `tools` when constructing an agent. For an authenticated request or tenant,
-create a fresh `MCPClient`, bind the trusted identity in `requestInit.headers`,
+create a fresh `MCPClient`, put the token and the trusted identity in `requestInit.headers`,
 call `await client.listToolsets()`, and pass that result as `toolsets` to the
 existing agent's `generate()` or `stream()` call. Do not cache customer tool
 closures in a global agent or mutate headers on a shared client. Current
@@ -20,6 +20,9 @@ import { MCPClient } from '@mastra/mcp';
 import { mastra } from './mastra';
 
 const agent = mastra.getAgent('assistant');
+// The API token the application was given for the server.
+const token = process.env.SUBMILLI_SERVER_TOKEN;
+if (!token) throw new Error('SUBMILLI_SERVER_TOKEN is not set');
 
 export async function handleRequest(prompt: string, customerId: string) {
   // Derive this value from authenticated, authorized application state.
@@ -33,7 +36,10 @@ export async function handleRequest(prompt: string, customerId: string) {
       submilli: {
         url: new URL('http://127.0.0.1:8128/mcp/support-read'),
         requestInit: {
-          headers: { 'submilli-variables': `customerId=${customerId}` },
+          headers: {
+            Authorization: `Bearer ${token}`,
+            'submilli-variables': `customerId=${customerId}`,
+          },
         },
       },
     },
@@ -107,6 +113,8 @@ import { MCPClient } from '@mastra/mcp';
 import { mastra } from './mastra.js';
 
 const serverUrl = process.env.SUBMILLI_SERVER_URL ?? 'http://127.0.0.1:8128';
+const token = process.env.SUBMILLI_SERVER_TOKEN;
+if (!token) throw new Error('SUBMILLI_SERVER_TOKEN is not set');
 const customerId = process.env.DEMO_CUSTOMER_ID ?? 'cus_northwind';
 if (!/^cus_[a-z0-9_]+$/.test(customerId) || /[;\r\n]/.test(customerId)) {
   throw new Error('invalid DEMO_CUSTOMER_ID');
@@ -117,7 +125,9 @@ const client = new MCPClient({
   servers: {
     submilli: {
       url: new URL(`${serverUrl}/mcp/support-read`),
-      requestInit: { headers: { 'submilli-variables': `customerId=${customerId}` } },
+      requestInit: {
+        headers: { Authorization: `Bearer ${token}`, 'submilli-variables': `customerId=${customerId}` },
+      },
     },
   },
 });
@@ -141,8 +151,10 @@ Install and run from that project directory:
 npm install
 # Set the provider key only for a real model run; this guide does not perform one.
 export OPENAI_API_KEY=...
-SUBMILLI_SERVER_URL=http://127.0.0.1:8128 npm run typecheck
-SUBMILLI_SERVER_URL=http://127.0.0.1:8128 npm start
+export SUBMILLI_SERVER_URL=http://127.0.0.1:8128
+# SUBMILLI_SERVER_TOKEN must already hold the token the server was started with.
+npm run typecheck
+npm start
 ```
 
 The deterministic setup can run without a model key by replacing the model
@@ -161,7 +173,8 @@ reuse it when validating this recipe rather than copying a partial scaffold.
 The blueprint must declare required `customerId`, allow
 `acme.com/balance.read` only when `customerId == ${vars.customerId}`, and use
 `default: deny`. The MCP URL is
-`http://127.0.0.1:8128/mcp/support-read`; bind the trusted value with
+`http://127.0.0.1:8128/mcp/support-read`; send `SUBMILLI_SERVER_TOKEN` as
+`Authorization: Bearer …` and bind the trusted value with
 `submilli-variables: customerId=cus_northwind`.
 Variables constrain generated code; they are not authentication. Put the
 server behind trusted ingress before exposing it outside the host application.

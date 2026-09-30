@@ -350,7 +350,8 @@ unreachable `main` rules (an earlier rule shadows a later one), on
 Register and run:
 
 ```sh
-submilli-server                                  # separate terminal
+export SUBMILLI_SERVER_TOKEN=...                 # the token the server was started with
+submilli-server                                  # separate terminal, same variable
 submilli server packages install submilli/submilli-runtime @submilli/jina
 submilli server blueprint apply blueprint.yaml   # or: submilli apply -f dir/
 submilli server run-code --blueprint support-orders program.ts
@@ -364,10 +365,12 @@ store (`submilli build publish-local`, `submilli install`), so a package may
 work locally without being in `packages list`. `apply` doesn't check that
 packages are installed; the first program that imports a missing one fails.
 
+The server and the `submilli server` commands share one token,
+`SUBMILLI_SERVER_TOKEN`; see [setup](setup.md).
+
 `apply` rejects a blueprint whose secrets use `env:` or `file:` with "not
-allowed for a blueprint registered over the API": the server has no inbound
-authentication, so those sources would let any caller read its environment or
-filesystem. They work only for local runs (`submilli run --blueprint`). For a
+allowed for a blueprint registered over the API": those sources would let an
+API caller read the server's environment or filesystem. They work only for local runs (`submilli run --blueprint`). For a
 server, declare the secret with `--store` and provision the value into the
 server's secret store, or use a `harness` source bound per session:
 
@@ -376,7 +379,8 @@ submilli blueprint secret add ORDERS_API_TOKEN --store ORDERS_API_TOKEN
 printf '%s' "$ORDERS_API_TOKEN" | submilli server secret put ORDERS_API_TOKEN
 ```
 
-REST is `POST /v1/execute` with `{ "blueprint", "code", "variables", "secrets" }`;
+REST is `POST /v1/execute` with `{ "blueprint", "code", "variables", "secrets" }`
+and `Authorization: Bearer $SUBMILLI_SERVER_TOKEN`;
 the response carries `result`, `console`, and on failure `error.kind` and
 `error.message`. A missing required variable is rejected as `invalid_request`
 before compilation. MCP clients bind variables in the `submilli-variables`

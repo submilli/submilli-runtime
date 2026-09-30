@@ -5,10 +5,12 @@ use std::process::ExitCode;
 use anyhow::Context;
 use serde::Deserialize;
 
+use crate::commands::http::{ServerTarget, ok_or_report};
+
 #[derive(clap::Args)]
 pub struct Args {
-    #[arg(long, default_value = "http://127.0.0.1:8128")]
-    server: String,
+    #[command(flatten)]
+    target: ServerTarget,
 }
 
 #[derive(Debug, Deserialize)]
@@ -22,12 +24,17 @@ struct StatusResponse {
 }
 
 pub fn execute(args: Args) -> anyhow::Result<ExitCode> {
-    let base = args.server.trim_end_matches('/');
+    let base = args.target.base();
     let url = format!("{base}/v1/status");
-    let agent: ureq::Agent = ureq::Agent::config_builder().build().into();
+    let agent = args.target.agent()?;
 
     let Ok(resp) = agent.get(&url).call() else {
         println!("stopped (no server at {base})");
+        return Ok(ExitCode::from(1));
+    };
+    // A server that refuses the token is running; saying "stopped" would hide
+    // the real problem.
+    let Some(resp) = ok_or_report(resp) else {
         return Ok(ExitCode::from(1));
     };
 

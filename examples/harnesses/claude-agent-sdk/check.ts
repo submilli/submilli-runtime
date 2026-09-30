@@ -1,5 +1,6 @@
 // Checks that the agent in agent.ts connects to a local submilli-server and is
-// offered its tools, and that a connection without a user is refused. It
+// offered its tools, and that a connection without a user, or with a token the
+// server does not know, is refused. It
 // sends the model nothing, so it costs nothing. The Claude Agent SDK has no
 // scripted model to stand in for a real one; run agent.ts to see a full answer.
 
@@ -35,4 +36,8 @@ assert.ok(offered.includes("submilli__typescript__execute"), offered.join(", "))
 
 const unbound = await connect("");
 assert.equal(unbound.status, "failed");
+
+process.env.SUBMILLI_SERVER_TOKEN = "a-token-the-server-does-not-know";
+const unknown = await connect("u_ada");
+assert.equal(unknown.status, "failed");
 console.log("claude-agent-sdk: ok");

@@ -72,24 +72,31 @@ ENV SUBMILLI_HOME=/var/lib/submilli \
 # compose.yaml instead.
 
 # 0.0.0.0 inside the container is required for the container network to reach the
-# server; host exposure is controlled at publish time. The API has no inbound
-# authentication yet (SUB-950), so every documented example publishes as
-# `127.0.0.1:8128:8128` on a dedicated user-defined network.
+# server; host exposure is controlled at publish time. The API requires a bearer
+# token, but it speaks plain HTTP, so every documented example still publishes as
+# `127.0.0.1:8128:8128` on a dedicated user-defined network: the token is one
+# layer and reachability is the other.
 EXPOSE 8128
 
 USER 65532:65532
 
 # The probe is a separate process and cannot inherit CMD flags, so it resolves
 # the address from $SUBMILLI_BIND/$SUBMILLI_PORT or --config — the same ladder
-# the server binds with. Intervals are explicit rather than inherited because
-# /v1/status enumerates blueprints and counts sessions on every call.
+# the server binds with. It calls /healthz, which needs no token and reveals
+# nothing, so the probe works without any credential in its environment.
 #
 # Docker and Compose honor this; Kubernetes ignores a Dockerfile HEALTHCHECK, so
-# SUB-374 still needs real probe endpoints.
+# the chart points its own probes at /healthz.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
     CMD ["/usr/local/bin/submilli-server", "--health-check"]
 
 # No init process. An init exists to reap zombies and forward signals to
 # children; the server spawns no subprocesses and installs its own SIGTERM/SIGINT
 # handlers, so the binary is a correct PID 1 on its own.
+#
+# No CMD, and a bare `docker run IMAGE` exits non-zero: the server refuses to
+# start until it has an API token (`-e SUBMILLI_SERVER_TOKEN`, as compose.yaml
+# does, or `api_tokens` in a config file $SUBMILLI_CONFIG points at), or the
+# operator opts out with SUBMILLI_ALLOW_UNAUTHENTICATED=1. Baking either choice
+# into the image would make it the default for everyone who pulls it.
 ENTRYPOINT ["/usr/local/bin/submilli-server"]

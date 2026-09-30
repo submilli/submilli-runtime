@@ -226,6 +226,36 @@
         }
       }
     },
+    "auth": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "description": "Require a bearer token on the API. False makes the server serve unauthenticated, leaving network reachability as the only access control."
+        },
+        "existingSecret": {
+          "type": "string",
+          "maxLength": 253,
+          "description": "Existing Secret holding the admin and user tokens. Empty means the chart generates one. Required for Argo CD and other 'helm template' flows, where the generated tokens would change on every render."
+        },
+        "adminTokenKey": {
+          "type": "string",
+          "pattern": "^[-._a-zA-Z0-9]+$",
+          "maxLength": 253,
+          "description": "Secret key, and file name under /etc/submilli/auth, of the admin token. The pattern is the Secret key alphabet, which also keeps it a single path segment."
+        },
+        "userTokenKey": {
+          "type": "string",
+          "pattern": "^[-._a-zA-Z0-9]+$",
+          "maxLength": 253
+        }
+      }
+    },
+    "config": {
+      "type": "object",
+      "description": "Extra keys merged into the server's config file. Free-form here because the server owns the key set and rejects unknown keys at boot; the chart's template refuses the keys it sets itself."
+    },
     "networkPolicy": {
       "type": "object",
       "additionalProperties": false,

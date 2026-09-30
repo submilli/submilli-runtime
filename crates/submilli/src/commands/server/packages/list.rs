@@ -10,10 +10,12 @@ use std::process::ExitCode;
 use anyhow::{Context, Result};
 use serde::Deserialize;
 
+use crate::commands::http::{ServerTarget, ok_or_report};
+
 #[derive(clap::Args)]
 pub struct Args {
-    #[arg(long, default_value = "http://127.0.0.1:8128")]
-    server: String,
+    #[command(flatten)]
+    target: ServerTarget,
 }
 
 #[derive(Debug, Deserialize)]
@@ -42,19 +44,23 @@ fn managed_by_default() -> bool {
 }
 
 pub fn execute(args: Args) -> Result<ExitCode> {
-    let base = args.server.trim_end_matches('/');
+    let base = args.target.base();
     let url = format!("{base}/v1/packages");
 
-    let body: ListResponse = match ureq::get(&url).call() {
-        Ok(mut resp) => resp
-            .body_mut()
-            .read_json()
-            .context("server returned malformed JSON")?,
+    let resp = match args.target.agent()?.get(&url).call() {
+        Ok(resp) => resp,
         Err(err) => {
             eprintln!("error: {err}");
             return Ok(ExitCode::from(1));
         }
     };
+    let Some(resp) = ok_or_report(resp) else {
+        return Ok(ExitCode::from(1));
+    };
+    let body: ListResponse = resp
+        .into_body()
+        .read_json()
+        .context("server returned malformed JSON")?;
 
     if body.roots.len() > 1 {
         eprintln!("stores: {}", body.roots.join(", "));

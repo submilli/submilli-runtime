@@ -1,6 +1,5 @@
 use std::collections::BTreeMap;
 use std::fmt;
-use std::net::IpAddr;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -9,6 +8,7 @@ use interpreter::runtime::{LlmLimits, NetworkPolicy, RuntimeConfig, SessionKvLim
 use submilli_shared::llm::ModelDispatch;
 use submilli_shared::secret_store::SecretStore;
 
+use crate::auth::AuthConfig;
 use crate::blueprint::BlueprintStore;
 use crate::idempotency_store::IdempotencyStore;
 use crate::session::SessionStore;
@@ -17,6 +17,9 @@ use crate::session_store::DurableSessionStore;
 #[derive(Clone, Default)]
 pub struct ServerConfig {
     pub runtime: RuntimeConfig,
+    /// Who may call the HTTP API. Defaults to [`AuthConfig::Disabled`]; the
+    /// `submilli-server` binary requires tokens unless the operator opts out.
+    pub auth: AuthConfig,
     /// Outbound HTTP egress policy (SSRF guard). Defaults to allow-all; the
     /// `submilli-server` binary installs `deny_private` via its CLI flags.
     pub network_policy: NetworkPolicy,
@@ -195,18 +198,6 @@ pub fn default_cli_package_store_dir() -> PathBuf {
     submilli_build::default_package_store_dir()
 }
 
-pub fn warn_if_external_bind(addr: IpAddr) {
-    if addr.is_loopback() {
-        return;
-    }
-    tracing::warn!(
-        %addr,
-        "bound outside loopback: this server has no inbound authentication, so anything that \
-         can reach this port can run code, manage blueprints, and stop the server; make sure \
-         only your application can reach it (https://submilli.ai/docs/deploying/)"
-    );
-}
-
 /// An operator-declared volume table: name → host directory. A blueprint's
 /// `vfs: { mode: persistent, volume: <name> }` resolves through this table, so a
 /// blueprint never names a host directory of its own.
@@ -221,7 +212,8 @@ pub type VolumeTable = BTreeMap<String, PathBuf>;
 /// The secret-store directory and key file are deliberately here rather than
 /// read off [`ServerConfig`]: that struct carries the opened store, not the
 /// paths it was opened from, so a caller that skipped these fields would let a
-/// volume swallow the decryption key unnoticed.
+/// volume swallow the decryption key unnoticed. The same holds for the API
+/// token files.
 #[derive(Clone, Debug, Default)]
 pub struct ServerDirectories {
     pub blueprint_dir: Option<PathBuf>,
@@ -232,6 +224,9 @@ pub struct ServerDirectories {
     pub package_fallback_root: Option<PathBuf>,
     pub secret_store_dir: Option<PathBuf>,
     pub secret_store_key_file: Option<PathBuf>,
+    /// The files `api_tokens` entries read their tokens from. Like the key
+    /// file, they never reach [`ServerConfig`], which holds only digests.
+    pub api_token_files: Vec<PathBuf>,
     pub session_storage_root: Option<PathBuf>,
     /// The durable session store — lifecycle records plus the idempotency
     /// ledger in a subdirectory of it. A different directory from
@@ -269,8 +264,10 @@ impl ServerDirectories {
             package_fallback_root: config.package_fallback_root.clone(),
             secret_store_dir: None,
             secret_store_key_file: None,
-            // Neither the secret store's paths nor the config file's survive into
-            // `ServerConfig`; an embedder that wants them guarded fills them in.
+            api_token_files: Vec::new(),
+            // Neither the secret store's paths, the token files', nor the config
+            // file's survive into `ServerConfig`; an embedder that wants them
+            // guarded fills them in.
             config_file: None,
             session_storage_root: Some(
                 config
@@ -708,7 +705,17 @@ fn guarded_dirs(dirs: &ServerDirectories) -> Vec<GuardedDir> {
         ),
     ];
 
+    let token_files = dirs.api_token_files.iter().map(|path| {
+        (
+            "API token file",
+            Some(path.clone()),
+            Direction::VolumeContains,
+            "a guest read would reach a token that authenticates to this server's API",
+        )
+    });
+
     rows.into_iter()
+        .chain(token_files)
         .filter_map(|(owned, path, direction, reason)| {
             let path = path?;
             Some(GuardedDir {

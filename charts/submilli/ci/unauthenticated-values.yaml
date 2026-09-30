@@ -1,0 +1,5 @@
+# Authentication off. Covers the branch with no token Secret, no auth volume, and
+# `allow_unauthenticated` in the config file — a pod that names a Secret the chart
+# did not render hangs in ContainerCreating, and only an install shows it.
+auth:
+  enabled: false

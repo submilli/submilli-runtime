@@ -35,7 +35,12 @@ export async function answer(
     servers: {
       submilli: {
         url: new URL(`${SUBMILLI_SERVER}/mcp/${BLUEPRINT}`),
-        requestInit: { headers: { "submilli-variables": `userId=${userId}` } },
+        requestInit: {
+          headers: {
+            Authorization: `Bearer ${serverToken()}`,
+            "submilli-variables": `userId=${userId}`,
+          },
+        },
       },
     },
   });
@@ -50,6 +55,13 @@ export async function answer(
   } finally {
     await submilli.disconnect();
   }
+}
+
+/** The API token this application was given for the server. */
+function serverToken(): string {
+  const token = process.env.SUBMILLI_SERVER_TOKEN;
+  if (!token) throw new Error("SUBMILLI_SERVER_TOKEN is not set: export the token the server was started with");
+  return token;
 }
 
 if (import.meta.filename === process.argv[1]) {

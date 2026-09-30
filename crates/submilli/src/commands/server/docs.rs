@@ -4,6 +4,9 @@ use std::process::ExitCode;
 
 use anyhow::{Context, Result};
 
+use crate::commands::http::{ServerTarget, error_message};
+use ureq::http::StatusCode;
+
 #[derive(clap::Args)]
 pub struct Args {
     /// Package name, including `@mcp/<server>` virtual packages.
@@ -11,12 +14,12 @@ pub struct Args {
     /// Registered blueprint whose package catalog to query.
     #[arg(long)]
     blueprint: String,
-    #[arg(long, default_value = "http://127.0.0.1:8128")]
-    server: String,
+    #[command(flatten)]
+    target: ServerTarget,
 }
 
 pub fn execute(args: Args) -> Result<ExitCode> {
-    let mut url = url::Url::parse(&args.server).context("invalid server URL")?;
+    let mut url = url::Url::parse(args.target.base()).context("invalid server URL")?;
     url.path_segments_mut()
         .map_err(|_| anyhow::anyhow!("server URL cannot contain a path"))?
         .pop_if_empty()
@@ -24,12 +27,17 @@ pub fn execute(args: Args) -> Result<ExitCode> {
     url.query_pairs_mut()
         .clear()
         .append_pair("name", &args.name);
-    let response = ureq::get(url.as_str())
-        .config()
-        .http_status_as_error(false)
-        .build()
-        .call();
+    let response = args.target.agent()?.get(url.as_str()).call();
     let mut response = response.context("fetching package docs")?;
+    // Only a refused token is rewritten, because the fix for it is on this
+    // side. Every other failure is printed as the server sent it.
+    if matches!(
+        response.status(),
+        StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN
+    ) {
+        eprintln!("error: {}", error_message(response));
+        return Ok(ExitCode::FAILURE);
+    }
     let success = response.status().is_success();
     let body = response
         .body_mut()

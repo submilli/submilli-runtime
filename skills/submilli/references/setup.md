@@ -86,8 +86,16 @@ installs do not automatically propagate to remote/cloud machines.
 
 ## Deploying the server
 
-The server does not authenticate callers, so every deployment has one rule:
-run one server per application and make sure only that application can
+The server needs a bearer token on every request except `GET /healthz`.
+Export `SUBMILLI_SERVER_TOKEN` (`openssl rand -hex 32`) before starting it:
+the server takes it as its admin token, and `submilli server` commands and the
+application send the same variable. For an agent that runs where the user
+doesn't fully trust it, add a `user` token in the config file
+(`api_tokens: [{ name: app, role: user, token_file: /path }]`): it can run
+programs but not change blueprints. Compose reads the token from `.env`; the
+Helm chart generates both tokens into the Secret `<release>-auth`.
+
+Still run one server per application and make sure only that application can
 reach it. Read https://submilli.ai/docs/deploying/ before advising on
 production; the mechanics that matter most:
 
@@ -105,10 +113,8 @@ which the server reconciles on every start. Only seeded blueprints may use
 
 Mistakes to avoid:
 
-- In a container or pod, the startup warning "bound outside loopback" is
-  expected: the server must listen on all addresses inside it, and the port
-  publish, network, or NetworkPolicy is the boundary. On a plain machine the
-  same warning means the bind is wrong.
+- Probes use `GET /healthz` or `submilli-server --health-check`, which need
+  no token; `/v1/status` does.
 - In `allowFrom`, a `namespaceSelector` and `podSelector` in the same list
   item mean both must match; as separate items either one admits, which is
   far wider. Run `helm test submilli` after every install and upgrade: it
@@ -130,8 +136,8 @@ Mistakes to avoid:
   a client must stay on one pod through the headless Service
   (`submilli-0.submilli-headless.<namespace>.svc:8128`). Don't suggest it for
   scale unless the application does that.
-- Never put secret values in `values.yaml`, on command lines, or in Compose
-  environment variables; use Kubernetes Secrets or files.
+- Never put secret values in `values.yaml` or on command lines; use
+  Kubernetes Secrets or files.
 
 ### Resource limits
 

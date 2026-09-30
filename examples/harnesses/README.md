@@ -27,6 +27,7 @@ package. From this directory:
 mkdir -p "$HOME/submilli-notes"
 printf 'volumes:\n  notes: %s\n' "$HOME/submilli-notes" > server.yaml
 head -c 32 /dev/urandom | base64 > store.key
+export SUBMILLI_SERVER_TOKEN=$(openssl rand -hex 32)
 
 submilli-server --config server.yaml --secret-store-key-file store.key &
 
@@ -75,9 +76,10 @@ GOOGLE_GENERATIVE_AI_API_KEY=... npm run agent
 
 Every directory has a check that needs no model API key. It runs the agent
 against the local server with a scripted model that calls the execute tool
-with `note.ts`, and asserts three things: the note is written to the user's
-directory, the same program aimed at another user's directory is denied, and
-a connection that names no user is refused.
+with `note.ts`, and asserts four things: the note is written to the user's
+directory, the same program aimed at another user's directory is denied, a
+connection that names no user is refused, and so is one whose token the
+server does not know.
 
 ```sh
 npm run check       # the TypeScript examples
@@ -86,4 +88,4 @@ python check.py     # the Python examples
 
 The Claude Agent SDK has no scripted model, so its check stops short of the
 model: it asserts that the agent connects and is offered the execute tool, and
-that a connection without a user fails.
+that a connection without a user, or with an unknown token, fails.

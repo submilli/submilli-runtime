@@ -1,0 +1,542 @@
+suite: authentication and the server config file
+templates:
+  - configmap-config.yaml
+  - secret-auth.yaml
+  - statefulset.yaml
+tests:
+  - it: generates both tokens by default
+    template: secret-auth.yaml
+    asserts:
+      - hasDocuments:
+          count: 1
+      - equal:
+          path: metadata.name
+          value: RELEASE-NAME-submilli-auth
+      # Shape, never equality: the values are random. 48 alphanumerics sits
+      # inside the server's token alphabet and above its 32-character floor, so
+      # a generated token can never be one the server refuses at boot.
+      - matchRegex:
+          path: data["admin-token"]
+          pattern: ^[A-Za-z0-9]{48}$
+          decodeBase64: true
+      - matchRegex:
+          path: data["user-token"]
+          pattern: ^[A-Za-z0-9]{48}$
+          decodeBase64: true
+
+  - it: keeps the generated tokens when the release is uninstalled
+    template: secret-auth.yaml
+    asserts:
+      # The tokens are handed to callers out of band. A reinstall that minted
+      # new ones would break every caller, the same way losing the volume
+      # would lose their sessions.
+      - equal:
+          path: metadata.annotations["helm.sh/resource-policy"]
+          value: keep
+
+  - it: follows the configured key names
+    template: secret-auth.yaml
+    set:
+      auth:
+        adminTokenKey: root
+        userTokenKey: agent
+    asserts:
+      - exists:
+          path: data.root
+      - exists:
+          path: data.agent
+      - notExists:
+          path: data["admin-token"]
+
+  - it: generates nothing when the operator brings a Secret
+    template: secret-auth.yaml
+    set:
+      auth.existingSecret: my-tokens
+    asserts:
+      # Rendering one anyway would leave two sources of truth, and the unused
+      # one is the one `kubectl get secret` finds first by name.
+      - hasDocuments:
+          count: 0
+
+  - it: mounts the operator's Secret under the configured keys
+    template: statefulset.yaml
+    set:
+      auth:
+        existingSecret: my-tokens
+        adminTokenKey: root
+        userTokenKey: agent
+    asserts:
+      - contains:
+          path: spec.template.spec.volumes
+          content:
+            name: auth
+            secret:
+              secretName: my-tokens
+              items:
+                - key: root
+                  path: root
+                - key: agent
+                  path: agent
+
+  - it: names the same token files in the config as the pod mounts
+    set:
+      auth:
+        existingSecret: my-tokens
+        adminTokenKey: root
+        userTokenKey: agent
+    asserts:
+      # The file path is an agreement between the ConfigMap and the pod spec
+      # that neither owns. If they drift the server fails to boot on a missing
+      # file, which no render-time check would otherwise catch.
+      - matchRegex:
+          path: data["server.yaml"]
+          pattern: "(?m)^ *token_file: /etc/submilli/auth/root$"
+        template: configmap-config.yaml
+      - matchRegex:
+          path: data["server.yaml"]
+          pattern: "(?m)^ *token_file: /etc/submilli/auth/agent$"
+        template: configmap-config.yaml
+      - contains:
+          path: spec.template.spec.containers[0].volumeMounts
+          content:
+            name: auth
+            mountPath: /etc/submilli/auth
+            readOnly: true
+        template: statefulset.yaml
+
+  - it: mounts the generated Secret by default
+    template: statefulset.yaml
+    asserts:
+      # Only the two keys the config names are projected.
+      - contains:
+          path: spec.template.spec.volumes
+          content:
+            name: auth
+            secret:
+              secretName: RELEASE-NAME-submilli-auth
+              items:
+                - key: admin-token
+                  path: admin-token
+                - key: user-token
+                  path: user-token
+
+  - it: configures an admin and a user token by default
+    template: configmap-config.yaml
+    asserts:
+      # Multi-line so each name is pinned to its own role and file: a regex per
+      # field would pass on an admin token filed under the user role.
+      - matchRegex:
+          path: data["server.yaml"]
+          pattern: "(?m)^ *- name: admin\\n +role: admin\\n +token_file: /etc/submilli/auth/admin-token$"
+      - matchRegex:
+          path: data["server.yaml"]
+          pattern: "(?m)^ *- name: user\\n +role: user\\n +token_file: /etc/submilli/auth/user-token$"
+      # The server refuses tokens together with the opt-out, so emitting both
+      # would be a pod that never boots.
+      - notMatchRegex:
+          path: data["server.yaml"]
+          pattern: allow_unauthenticated
+
+  - it: never writes a token value into the config
+    template: configmap-config.yaml
+    asserts:
+      # A ConfigMap is readable far more widely than a Secret. The file carries
+      # paths and nothing else.
+      - notMatchRegex:
+          path: data["server.yaml"]
+          pattern: "(?m)^ *token: "
+
+  - it: serves unauthenticated only when told to
+    set:
+      auth.enabled: false
+    asserts:
+      - hasDocuments:
+          count: 0
+        template: secret-auth.yaml
+      # Without this key a server with no tokens refuses to start, so dropping
+      # the tokens alone would crash-loop the pod rather than open it.
+      - matchRegex:
+          path: data["server.yaml"]
+          pattern: "(?m)^allow_unauthenticated: true$"
+        template: configmap-config.yaml
+      - notMatchRegex:
+          path: data["server.yaml"]
+          pattern: api_tokens
+        template: configmap-config.yaml
+      # A volume naming a Secret that was never rendered leaves the pod stuck
+      # in ContainerCreating.
+      - notContains:
+          path: spec.template.spec.volumes
+          content:
+            name: auth
+          any: true
+        template: statefulset.yaml
+      - notContains:
+          path: spec.template.spec.containers[0].volumeMounts
+          content:
+            name: auth
+          any: true
+        template: statefulset.yaml
+
+  - it: points the server at the config file
+    template: statefulset.yaml
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: SUBMILLI_CONFIG
+            value: /etc/submilli/config/server.yaml
+      - contains:
+          path: spec.template.spec.containers[0].volumeMounts
+          content:
+            name: config
+            mountPath: /etc/submilli/config
+            readOnly: true
+      - contains:
+          path: spec.template.spec.volumes
+          content:
+            name: config
+            configMap:
+              name: RELEASE-NAME-submilli-config
+
+  - it: leaves only the port and the config path in the environment
+    template: statefulset.yaml
+    asserts:
+      # An explicit SUBMILLI_* variable outranks the file, so a chart setting
+      # left behind here would silently override the same key in `config:`.
+      # The port is the exception, and statefulset_test.yaml says why.
+      - lengthEqual:
+          path: spec.template.spec.containers[0].env
+          count: 2
+
+  - it: appends extraEnv after the chart's own variables
+    template: statefulset.yaml
+    set:
+      extraEnv:
+        - name: SUBMILLI_MAX_EXECUTION_TIME
+          value: "30"
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].env[2]
+          value:
+            name: SUBMILLI_MAX_EXECUTION_TIME
+            value: "30"
+
+  - it: writes the chart-owned settings into the config
+    template: configmap-config.yaml
+    asserts:
+      - matchRegex:
+          path: data["server.yaml"]
+          pattern: "(?m)^bind: 0\\.0\\.0\\.0$"
+      # SUBMILLI_HOME relocates five of the server's six state directories; the
+      # ephemeral VFS root is the sixth and still defaults to the OS temp dir.
+      # Under readOnlyRootFilesystem, omitting this breaks /v1/execute — the
+      # product — while /healthz stays green.
+      - matchRegex:
+          path: data["server.yaml"]
+          pattern: "(?m)^vfs_ephemeral_dir: /tmp$"
+      # A bare integer: the server rejects "50Mi" for this setting.
+      - matchRegex:
+          path: data["server.yaml"]
+          pattern: "(?m)^max_execution_memory: 50$"
+      - matchRegex:
+          path: data["server.yaml"]
+          pattern: "(?m)^shutdown_grace: 5$"
+      # SUBMILLI_PORT in the environment outranks the file, so a port here
+      # could only ever be a value that is ignored.
+      - notMatchRegex:
+          path: data["server.yaml"]
+          pattern: "(?m)^port:"
+      - notMatchRegex:
+          path: data["server.yaml"]
+          pattern: blueprint_seed_dir
+      - notMatchRegex:
+          path: data["server.yaml"]
+          pattern: secret_store
+
+  - it: keeps the memory limit and the execution cap in step when either moves
+    set:
+      execution.maxMemoryMB: 100
+      resources.baselineMi: 256
+    asserts:
+      # One knob feeding two documents. The limit half is also asserted in
+      # statefulset_test.yaml; pairing them here is what shows they cannot be
+      # set apart.
+      - equal:
+          path: spec.template.spec.containers[0].resources.limits.memory
+          value: 1856Mi
+        template: statefulset.yaml
+      - matchRegex:
+          path: data["server.yaml"]
+          pattern: "(?m)^max_execution_memory: 100$"
+        template: configmap-config.yaml
+
+  - it: keeps the drain budget and the termination grace in step
+    set:
+      server.shutdownGrace: 30
+    asserts:
+      - equal:
+          path: spec.template.spec.terminationGracePeriodSeconds
+          value: 33
+        template: statefulset.yaml
+      - matchRegex:
+          path: data["server.yaml"]
+          pattern: "(?m)^shutdown_grace: 30$"
+        template: configmap-config.yaml
+
+  - it: reads the secret-store key from a file
+    template: configmap-config.yaml
+    set:
+      secretStore:
+        enabled: true
+        existingSecret: submilli-store-key
+        key: store-key
+    asserts:
+      - matchRegex:
+          path: data["server.yaml"]
+          pattern: "(?m)^secret_store:\\n +key_file: /etc/submilli/secret-store/store-key$"
+
+  - it: passes config through for settings the chart has no value for
+    template: configmap-config.yaml
+    set:
+      config:
+        max_execution_time: 30
+        network:
+          allow_private: true
+    asserts:
+      - matchRegex:
+          path: data["server.yaml"]
+          pattern: "(?m)^max_execution_time: 30$"
+      - matchRegex:
+          path: data["server.yaml"]
+          pattern: "(?m)^network:\\n +allow_private: true$"
+      # Added to the chart's keys, not substituted for them.
+      - matchRegex:
+          path: data["server.yaml"]
+          pattern: "(?m)^vfs_ephemeral_dir: /tmp$"
+
+  - it: merges config.secret_store beside the chart's key file
+    template: configmap-config.yaml
+    set:
+      secretStore:
+        enabled: true
+        existingSecret: submilli-store-key
+      config:
+        secret_store:
+          dir: /var/lib/submilli/server/vault
+    asserts:
+      # One level deep. A shallow merge would replace the map and drop the key
+      # file, leaving an encrypted store with no key to open it.
+      - matchRegex:
+          path: data["server.yaml"]
+          pattern: "(?m)^secret_store:\\n +dir: /var/lib/submilli/server/vault\\n +key_file: /etc/submilli/secret-store/key$"
+
+  - it: refuses a chart-owned key in config and names the value to use
+    # Every template that includes the config helper raises the same error, and
+    # Helm reports only the first. That is the StatefulSet, which hashes the
+    # config for its rollout trigger; the refusals below are all scoped to it.
+    template: statefulset.yaml
+    set:
+      config:
+        max_execution_memory: 200
+    asserts:
+      # Accepting it would raise the server's cap while the container limit,
+      # derived from execution.maxMemoryMB, stayed put — an OOMKill by
+      # configuration.
+      - failedTemplate:
+          errorPattern: "config.max_execution_memory is owned by the chart: set execution.maxMemoryMB instead"
+
+  - it: refuses a port in config
+    template: statefulset.yaml
+    set:
+      config:
+        port: 9000
+    asserts:
+      - failedTemplate:
+          errorPattern: "config.port is owned by the chart: set server.port instead"
+
+  - it: refuses the unauthenticated opt-out in config
+    template: statefulset.yaml
+    set:
+      config:
+        allow_unauthenticated: true
+    asserts:
+      # The chart would still emit its tokens, and the server refuses the two
+      # together. auth.enabled is the single switch, and it also removes the
+      # Secret and its mount.
+      - failedTemplate:
+          errorPattern: "config.allow_unauthenticated is owned by the chart: set auth.enabled=false instead"
+
+  - it: refuses the secret-store key file in config
+    template: statefulset.yaml
+    set:
+      config:
+        secret_store:
+          key_file: /somewhere/else
+    asserts:
+      # Nothing would mount a key at a path the chart did not choose.
+      - failedTemplate:
+          errorPattern: "config.secret_store.key_file is owned by the chart"
+
+  - it: refuses extra tokens when authentication is off
+    template: statefulset.yaml
+    set:
+      auth.enabled: false
+      config:
+        api_tokens:
+          - name: ci
+            role: admin
+            token_file: /etc/submilli/secrets/ci/token
+    asserts:
+      # Dropping them silently would leave an operator believing a token was
+      # being enforced on an open server.
+      - failedTemplate:
+          errorPattern: "config.api_tokens is set while auth.enabled is false"
+
+  - it: refuses an extra token that reuses a reserved name
+    template: statefulset.yaml
+    set:
+      config:
+        api_tokens:
+          - name: admin
+            role: user
+            token_file: /etc/submilli/secrets/other/token
+    asserts:
+      - failedTemplate:
+          errorPattern: "is reserved for the chart's own token"
+
+  - it: refuses extra tokens that are not a list of named entries
+    template: statefulset.yaml
+    set:
+      config:
+        api_tokens:
+          partner:
+            role: user
+            token_file: /etc/submilli/secrets/partner/token
+    asserts:
+      # A map here is an easy slip from the list form, and would otherwise be
+      # iterated by value into a config the server refuses only at boot.
+      - failedTemplate:
+          errorPattern: config.api_tokens must be a list
+
+  - it: refuses an extra token with no name
+    template: statefulset.yaml
+    set:
+      config:
+        api_tokens:
+          - role: user
+            token_file: /etc/submilli/secrets/partner/token
+    asserts:
+      - failedTemplate:
+          errorPattern: every entry needs a name
+
+  - it: refuses an extra token whose name is not a usable string
+    template: statefulset.yaml
+    set:
+      config:
+        api_tokens:
+          - name: 5
+            role: user
+            token_file: /etc/submilli/secrets/partner/token
+    asserts:
+      # A number or a blank here would render, and the server would either
+      # refuse it at boot or log a name nobody wrote.
+      - failedTemplate:
+          errorPattern: written as a non-empty string
+
+  - it: refuses one Secret key for both roles
+    template: statefulset.yaml
+    set:
+      auth:
+        adminTokenKey: token
+        userTokenKey: token
+    asserts:
+      - failedTemplate:
+          errorPattern: "auth.adminTokenKey and auth.userTokenKey must differ"
+
+  - it: appends extra tokens after the chart's own
+    template: configmap-config.yaml
+    set:
+      config:
+        api_tokens:
+          - name: ci
+            role: admin
+            token_file: /etc/submilli/secrets/ci/token
+    asserts:
+      - matchRegex:
+          path: data["server.yaml"]
+          pattern: "(?s)- name: admin\\n.*- name: user\\n.*- name: ci\\n +role: admin\\n +token_file: /etc/submilli/secrets/ci/token"
+
+  - it: writes a large integer as an integer
+    template: configmap-config.yaml
+    set:
+      config:
+        max_execution_fuel: 10000000000
+    asserts:
+      # The server parses this as an unsigned integer and refuses `1e+10` at
+      # boot. Exponent form is how a large whole number prints once it has
+      # been through a values file as a float.
+      - matchRegex:
+          path: data["server.yaml"]
+          pattern: "(?m)^max_execution_fuel: 10000000000$"
+
+  - it: writes a whole-number float as an integer, at any depth
+    template: configmap-config.yaml
+    set:
+      config:
+        # Written as floats on purpose, to reach the conversion however this
+        # file's own integers are parsed.
+        max_execution_fuel: 1.0e+10
+        mcp_oauth:
+          providers:
+            - match: example.com
+              client_id: abc
+              scopes: [2.0]
+    asserts:
+      - matchRegex:
+          path: data["server.yaml"]
+          pattern: "(?m)^max_execution_fuel: 10000000000$"
+      - matchRegex:
+          path: data["server.yaml"]
+          pattern: "(?m)^ *- 2$"
+
+  - it: rolls the pod when the config changes
+    template: statefulset.yaml
+    asserts:
+      # The file is read once at boot, so without a rollout trigger a
+      # `helm upgrade` that changes only a setting leaves the running server on
+      # the old one.
+      #
+      # A literal digest, as configmap_test.yaml pins checksum/blueprints: it
+      # is the annotation's value that rolls the pod, so a test that merely
+      # found some digest would pass with the hash computed over nothing. It
+      # covers the config text alone, so unlike that one it needs no pinned
+      # chart version. Changing what the default config renders moves it:
+      # re-run and copy the reported `Actual:` value.
+      - equal:
+          path: spec.template.metadata.annotations["checksum/config"]
+          value: bdf38362cf16a95b806441b2b83a17e1fa2a04297a960f3f7e814a70b072a5f3
+
+  - it: produces a different rollout trigger for different config
+    template: statefulset.yaml
+    set:
+      execution.maxMemoryMB: 100
+    asserts:
+      - equal:
+          path: spec.template.metadata.annotations["checksum/config"]
+          value: 988960ef97cea0ea32b42717146b6d25e7ff8cd6af4c7ff9a6e4faac87063fc7
+
+  - it: keeps the generated names inside the DNS label limit
+    set:
+      fullnameOverride: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+    asserts:
+      # 60 characters of name plus a suffix overflows 63, which the API server
+      # rejects at install. Same hazard as the headless Service name.
+      - equal:
+          path: metadata.name
+          value: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-auth
+        template: secret-auth.yaml
+      - equal:
+          path: metadata.name
+          value: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-config
+        template: configmap-config.yaml

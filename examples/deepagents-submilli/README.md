@@ -24,7 +24,11 @@ Submilli's server speaks MCP **streamable HTTP** over a normal URL, so
 
 ```python
 client = MultiServerMCPClient({
-    "submilli": {"transport": "streamable_http", "url": ".../mcp/demo"},
+    "submilli": {
+        "transport": "streamable_http",
+        "url": ".../mcp/demo",
+        "headers": {"Authorization": f"Bearer {token}"},
+    },
 })
 async with client.session("submilli") as session:   # one session for the run
     tools = await load_mcp_tools(session)
@@ -41,6 +45,7 @@ the agent writes survive across its tool calls.
 From the repo root:
 
 ```bash
+export SUBMILLI_SERVER_TOKEN=$(openssl rand -hex 32)
 cargo run -p submilli-server
 # listens on http://127.0.0.1:8128
 ```
@@ -52,6 +57,7 @@ The server's blueprint store is managed over its REST API. Register the bundled
 
 ```bash
 curl -X PUT http://127.0.0.1:8128/v1/blueprints/demo \
+  -H "Authorization: Bearer $SUBMILLI_SERVER_TOKEN" \
   -H 'content-type: application/json' \
   -d '{"yaml": "name: demo\nvfs: per_session\ndefault: allow\n"}'
 ```
@@ -89,6 +95,7 @@ The agent prints each program it runs, the result, and the final answer.
 | `--server-url` / `SUBMILLI_SERVER_URL` | `http://127.0.0.1:8128` | running server |
 | `--model` / `SUBMILLI_EXAMPLE_MODEL` | `gemini-2.5-flash` | Gemini model id |
 | `GOOGLE_API_KEY` (or `GEMINI_API_KEY`) | — | Google AI Studio key |
+| `SUBMILLI_SERVER_TOKEN` | — | the token the server was started with |
 
 ## Notes
 
