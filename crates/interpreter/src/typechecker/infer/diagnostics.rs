@@ -147,6 +147,7 @@ impl RwOp {
 pub(super) enum ComparisonPosition {
     EqualityOperand,
     SwitchDiscriminant,
+    NullishLeftOperand,
 }
 
 impl std::fmt::Display for ComparisonPosition {
@@ -154,6 +155,7 @@ impl std::fmt::Display for ComparisonPosition {
         f.write_str(match self {
             ComparisonPosition::EqualityOperand => "an equality operand",
             ComparisonPosition::SwitchDiscriminant => "a `switch` discriminant",
+            ComparisonPosition::NullishLeftOperand => "the left side of `??`",
         })
     }
 }
@@ -186,10 +188,10 @@ impl<'a> Inferer<'a> {
     }
 
     /// A `void`/`never` expression where a value is compared rather than
-    /// tested for truthiness — a `switch` discriminant or an `===`/`!==`
-    /// operand. Worded separately from
+    /// tested for truthiness — a `switch` discriminant, an `===`/`!==`
+    /// operand, or the left side of `??`. Worded separately from
     /// [`error_non_condition_type`](Self::error_non_condition_type) because
-    /// neither position is a condition, and truthiness is not what fails.
+    /// none of these positions is a condition, and truthiness is not what fails.
     pub(super) fn error_non_comparable_type(
         &mut self,
         span: Span,

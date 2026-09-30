@@ -18,7 +18,8 @@ pub fn session_init(vfs_mode: &'static str) {
 }
 
 /// One script execution finished. `outcome` is the bounded result class
-/// (`success`, `compile_error`, `timeout`, `fuel_exhausted`, `runtime_error`).
+/// (`success`, `compile_error`, `timeout`, `fuel_exhausted`, `memory_exhausted`,
+/// `runtime_error`).
 pub fn execution(outcome: &'static str) {
     counter("submilli.server.execution", 1)
         .attribute("outcome", outcome)

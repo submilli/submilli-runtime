@@ -7,6 +7,7 @@ use super::{
 use crate::runtime::StoreData;
 use crate::runtime::host::{register_host_fn, register_host_fn_async, write_submilli_array_struct};
 use crate::runtime::prelude::collection::string_units;
+use crate::runtime::prelude::keep::KeptValues;
 use crate::runtime::prelude::{MODULE_NAME, declare_method};
 use crate::{PackageDeclaration, Param, Type};
 
@@ -162,10 +163,8 @@ async fn values(caller: &mut Caller<'_, StoreData>, object: &Val) -> wasmtime::R
         return Ok(Val::AnyRef(None));
     };
     let count = names.len(&mut *caller)?;
-    let mut result = Vec::new();
-    result
-        .try_reserve_exact(count as usize)
-        .map_err(crate::runtime::host::fatal_host_error)?;
+    // A getter's result is held by nothing while the next getter runs.
+    let mut result = KeptValues::with_capacity(caller, count as usize)?;
     for slot in 0..count {
         let name = names.get(&mut *caller, slot)?;
         let value = fields.get(&mut *caller, slot)?;
@@ -174,18 +173,18 @@ async fn values(caller: &mut Caller<'_, StoreData>, object: &Val) -> wasmtime::R
         }
         if is_accessor_slot(caller, &name)? {
             if string_units(caller, &name)?.starts_with(&[103, 101, 116, 32]) {
-                result.push(
-                    super::super::closure::read(caller, &value, "record getter")?
-                        .call_with_receiver(caller, *object, &[])
-                        .await?,
-                );
+                let got = super::super::closure::read(caller, &value, "record getter")?
+                    .call_with_receiver(caller, *object, &[])
+                    .await?;
+                result.push(caller, got)?;
             }
         } else if field_is_present(caller, &name, &value)? {
-            result.push(checked_data_value(caller, object, slot, value).await?);
+            let checked = checked_data_value(caller, object, slot, value).await?;
+            result.push(caller, checked)?;
         }
     }
     Ok(Val::AnyRef(Some(
-        write_submilli_array_struct(caller, &result)?.to_anyref(),
+        write_submilli_array_struct(caller, result.values())?.to_anyref(),
     )))
 }
 

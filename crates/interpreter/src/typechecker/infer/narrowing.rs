@@ -1091,9 +1091,8 @@ pub fn has_erased_member(ty: &Type) -> bool {
 /// (requires explicit narrowing first, spec §2.11) and the value-less
 /// `void`/`never`. `Error` is accepted to silence cascades.
 pub fn condition_compatible(ty: &Type) -> bool {
-    // `carries_void` rather than a bare `Void` match: `f() ?? 1` and
-    // `cond ? f() : 1` produce a union with a `void` member, which has no
-    // more of a runtime value than bare `void` does.
+    // `carries_void` rather than a bare `Void` match: a union with a `void`
+    // member has no more of a runtime value than bare `void` does.
     !ty.carries_void() && !matches!(ty.peel(), Type::Unknown | Type::Never)
 }
 

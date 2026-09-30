@@ -349,9 +349,13 @@ pub(super) async fn conversion_method(
     if !is_callable(caller, &getter)? {
         return Ok(None);
     }
+    // Callers bind a receiver to the method, which allocates, before they
+    // call it.
+    let kept_method = super::keep::KeptValue::new(caller)?;
     let method = super::closure::read(caller, &getter, &getter_name)?
         .call_with_receiver(caller, *value, &[])
         .await?;
+    kept_method.set(caller, method)?;
     Ok(Some(method))
 }
 

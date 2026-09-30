@@ -30,7 +30,10 @@ pub use host::{
     stdlib_package_declarations,
 };
 pub use json::JSON_MODULE_NAME;
-pub use limits::{DEFAULT_MAX_STORE_BYTES, MemoryCapExceeded, TenantLimits, install_tenant_limits};
+pub use limits::{
+    DEFAULT_MAX_STORE_BYTES, MemoryCapExceeded, MemoryExhausted, TenantLimits,
+    install_tenant_limits, is_memory_exhausted,
+};
 pub use llm::{
     DEFAULT_MAX_ALL_EXECUTIONS_TOKENS, DEFAULT_MAX_EXECUTION_TOKENS, ExecutionTokenBudget,
     FailureReason, LLM_MODULE_NAME, LlmCallError, LlmFailure, LlmLimitKind, LlmLimits, LlmModel,

@@ -730,10 +730,11 @@ fn emit_expr_value(
         // `cond ? then_: else_`. Wasm `if`-with-result lifts
         // the branch values onto the parent stack. Each branch's value
         // is coerced to the chain's result Wasm slot so both arms
-        // agree on the stack type.
+        // agree on the stack type. A `void` conditional has no result:
+        // it runs a branch for its effects.
         TypedExprKind::Ternary { cond, then_, else_ } => {
             let result_ty = expr.ty.clone();
-            let result_val = ctx.symbols.value_type(&result_ty)?;
+            let block_ty = conditional_block_type(ctx, &result_ty)?;
             let cond_ty = ctx
                 .ta
                 .try_expr(*cond)
@@ -742,28 +743,10 @@ fn emit_expr_value(
                 .clone();
             emit_expr(emitter, ctx, *cond)?;
             crate::codegen::function_emitter::cast::emit_condition_to_i32(emitter, ctx, &cond_ty)?;
-            emitter.emit_if(BlockType::Result(result_val));
-            let then_ty = ctx
-                .ta
-                .try_expr(*then_)
-                .map_err(crate::codegen::arena_failure)?
-                .ty
-                .clone();
-            emit_expr(emitter, ctx, *then_)?;
-            crate::codegen::function_emitter::cast::emit_coerce_to_slot(
-                emitter, ctx, &then_ty, &result_ty,
-            )?;
+            emitter.emit_if(block_ty);
+            emit_conditional_operand(emitter, ctx, *then_, &result_ty)?;
             emitter.emit_else();
-            let else_ty = ctx
-                .ta
-                .try_expr(*else_)
-                .map_err(crate::codegen::arena_failure)?
-                .ty
-                .clone();
-            emit_expr(emitter, ctx, *else_)?;
-            crate::codegen::function_emitter::cast::emit_coerce_to_slot(
-                emitter, ctx, &else_ty, &result_ty,
-            )?;
+            emit_conditional_operand(emitter, ctx, *else_, &result_ty)?;
             emitter.emit_end();
         }
         // `a ?? b`. `a` is evaluated once into an anonymous
@@ -776,8 +759,14 @@ fn emit_expr_value(
         // it can never be null at runtime. Infer emits a soft warning
         // for that case; codegen emits just the lhs side, skipping
         // the if-then-else entirely (the rhs branch is unreachable).
+        //
+        // A `void` right side has no result slot: see
+        // `emit_void_nullish_coalesce`.
         TypedExprKind::NullishCoalesce { lhs, rhs } => {
             let result_ty = expr.ty.clone();
+            if result_ty.is_void() {
+                return emit_void_nullish_coalesce(emitter, ctx, *lhs, *rhs);
+            }
             let result_val = ctx.symbols.value_type(&result_ty)?;
             let lhs_ty = ctx
                 .ta
@@ -793,16 +782,7 @@ fn emit_expr_value(
                 emitter.instruction(Instruction::LocalTee(tmp));
                 emitter.instruction(Instruction::RefIsNull);
                 emitter.emit_if(BlockType::Result(result_val));
-                let rhs_ty = ctx
-                    .ta
-                    .try_expr(*rhs)
-                    .map_err(crate::codegen::arena_failure)?
-                    .ty
-                    .clone();
-                emit_expr(emitter, ctx, *rhs)?;
-                crate::codegen::function_emitter::cast::emit_coerce_to_slot(
-                    emitter, ctx, &rhs_ty, &result_ty,
-                )?;
+                emit_conditional_operand(emitter, ctx, *rhs, &result_ty)?;
                 emitter.emit_else();
                 emitter.instruction(Instruction::LocalGet(tmp));
                 // The else branch knows the value isn't null; cast
@@ -899,6 +879,70 @@ fn emit_expr_value(
             )?;
         }
     };
+    Ok(())
+}
+
+/// The Wasm block type of a `?:` or `??` typed `result_ty`: none when the
+/// expression is `void`, else the result's value slot.
+fn conditional_block_type(
+    ctx: &CodegenCtx,
+    result_ty: &Type,
+) -> Result<BlockType, crate::compiler_error::CompilerFailure> {
+    if result_ty.is_void() {
+        return Ok(BlockType::Empty);
+    }
+    Ok(BlockType::Result(ctx.symbols.value_type(result_ty)?))
+}
+
+/// Emits one operand of a `?:` or `??` typed `result_ty`, leaving what the
+/// enclosing block expects: the operand coerced to the result slot, or nothing
+/// when the expression is `void`.
+fn emit_conditional_operand(
+    emitter: &mut FunctionEmitter,
+    ctx: &CodegenCtx,
+    operand: ExprId,
+    result_ty: &Type,
+) -> Result<(), crate::compiler_error::CompilerFailure> {
+    let operand_ty = ctx
+        .ta
+        .try_expr(operand)
+        .map_err(crate::codegen::arena_failure)?
+        .ty
+        .clone();
+    emit_expr(emitter, ctx, operand)?;
+    if !result_ty.is_void() {
+        return cast::emit_coerce_to_slot(emitter, ctx, &operand_ty, result_ty);
+    }
+    if !operand_ty.is_void() {
+        emitter.instruction(Instruction::Drop);
+    }
+    Ok(())
+}
+
+/// `a ?? b` where `b` is `void`: evaluates `b` for its effects when `a` is
+/// null, and leaves nothing on the stack.
+fn emit_void_nullish_coalesce(
+    emitter: &mut FunctionEmitter,
+    ctx: &CodegenCtx,
+    lhs: ExprId,
+    rhs: ExprId,
+) -> Result<(), crate::compiler_error::CompilerFailure> {
+    let lhs_ty = &ctx
+        .ta
+        .try_expr(lhs)
+        .map_err(crate::codegen::arena_failure)?
+        .ty;
+    let lhs_is_ref = matches!(ctx.symbols.value_type(lhs_ty)?, ValType::Ref(_));
+    emit_expr(emitter, ctx, lhs)?;
+    if !lhs_is_ref {
+        // A primitive slot is never null, so the right side never runs.
+        emitter.instruction(Instruction::Drop);
+        return Ok(());
+    }
+    emitter.instruction(Instruction::RefIsNull);
+    emitter.emit_if(BlockType::Empty);
+    emit_conditional_operand(emitter, ctx, rhs, &Type::Void)?;
+    emitter.emit_end();
     Ok(())
 }
 
