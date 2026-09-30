@@ -16,6 +16,38 @@ function fromReadonly(xs: readonly number[]): number {
   return [...xs].length;
 }
 
+class Bag {
+  items: number[] = [1, 2];
+
+  copy(xs: number[]): number[] {
+    return [...xs];
+  }
+
+  own(): number[] {
+    return [...this.items];
+  }
+}
+
+type Holder = { v: number[] | null };
+
+function clear(h: Holder): void {
+  h.v = null;
+}
+
+// The narrowing of `h.v` is stale once `clear` runs, so the spread must throw
+// a catchable error, as an index read of it does, rather than trap.
+function spreadStale(h: Holder): number {
+  if (h.v !== null) {
+    clear(h);
+    try {
+      return [...h.v].length;
+    } catch (e) {
+      return -1;
+    }
+  }
+  return 0;
+}
+
 function main(): void {
   const source = [3, 1, 2];
   const copied = copy(source);
@@ -25,4 +57,10 @@ function main(): void {
   assert(wrap(["a", "b"]).join("") === "<ab>", "spread between elements");
   assert(fromTuple([1, "a"]) === 2, "a tuple parameter spreads");
   assert(fromReadonly([1, 2]) === 2, "a readonly parameter spreads");
+  const bag = new Bag();
+  assert(bag.copy([4, 5, 6]).length === 3, "a method parameter spreads");
+  assert(bag.own().join(",") === "1,2", "a field spreads");
+  const escaped = copy;
+  assert(escaped([7]).length === 1, "a function used as a value spreads its parameter");
+  assert(spreadStale({ v: [1] }) === -1, "a stale narrowed source throws a catchable error");
 }

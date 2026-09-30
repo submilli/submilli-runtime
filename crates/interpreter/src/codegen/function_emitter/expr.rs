@@ -1571,7 +1571,8 @@ fn emit_literal_chunk(
         return Ok(());
     }
     // A source whose value `runtime_values` widened arrives as `(ref null
-    // $Object)`; the typechecker proved it an array, so recover the `$Array`.
+    // $Object)`, and may no longer hold what its narrowed type said, so it is
+    // checked as an index read's receiver is: a mismatch throws a `TypeError`.
     let source_ty = &ctx
         .ta
         .try_expr(element.expr_id())
@@ -1582,7 +1583,12 @@ fn emit_literal_chunk(
         heap_type: HeapType::Concrete(array),
     });
     if ctx.symbols.value_type(source_ty)? != array_type {
-        cast::emit_cast_to(emitter, ctx, &Type::Array(Box::new(Type::Unknown)))?;
+        crate::codegen::cast_check::emit_operation_cast_on_stack(
+            emitter,
+            ctx,
+            source_ty,
+            &Type::Array(Box::new(Type::Unknown)),
+        )?;
     }
     let raw_type = ValType::Ref(RefType {
         nullable: false,
@@ -2402,7 +2408,13 @@ fn emit_object_spread(
             emitter.instruction(Instruction::RefNull(HeapType::Concrete(intrinsics.object)));
         }
         if matches!(source, TypedObjectMember::Spread { by_name: true, .. }) {
-            emit_spread_mask(emitter, ctx, source_local, source_ty, shape)?;
+            // The mask names the fields the authored type has, which a
+            // widened source's `Unknown` no longer says.
+            let authored_ty = ctx
+                .ta
+                .source_type(source.expr_id())
+                .map_err(crate::codegen::arena_failure)?;
+            emit_spread_mask(emitter, ctx, source_local, authored_ty, shape)?;
         } else {
             emitter.instruction(Instruction::RefNull(HeapType::Concrete(intrinsics.object)));
         }
