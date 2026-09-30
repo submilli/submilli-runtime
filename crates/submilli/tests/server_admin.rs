@@ -29,7 +29,7 @@ fn server_command(args: &[&str], server: &str, env: &[(&str, &str)]) -> Output {
         .arg("server")
         .args(args)
         .args(["--server", server])
-        .env_remove("SUBMILLI_ADMIN_TOKEN")
+        .env_remove("SUBMILLI_SERVER_TOKEN")
         .env_remove("SUBMILLI_SERVER_TOKEN_FILE");
     for (name, value) in env {
         command.env(name, value);
@@ -149,10 +149,10 @@ async fn a_refused_token_is_reported_as_such_not_as_a_stopped_server() {
     assert!(!anonymous.status.success());
     assert!(!stdout(&anonymous).contains("stopped"));
     let message = stderr(&anonymous);
-    assert!(message.contains("SUBMILLI_ADMIN_TOKEN"), "{message}");
+    assert!(message.contains("SUBMILLI_SERVER_TOKEN"), "{message}");
     assert!(message.contains("SUBMILLI_SERVER_TOKEN_FILE"), "{message}");
 
-    let as_user = run(vec![("SUBMILLI_ADMIN_TOKEN", USER_TOKEN)])
+    let as_user = run(vec![("SUBMILLI_SERVER_TOKEN", USER_TOKEN)])
         .await
         .unwrap();
     assert!(!as_user.status.success());
@@ -178,7 +178,7 @@ async fn the_token_comes_from_the_environment_or_a_file() {
             server_command(
                 &["status"],
                 &server,
-                &[("SUBMILLI_ADMIN_TOKEN", ADMIN_TOKEN)],
+                &[("SUBMILLI_SERVER_TOKEN", ADMIN_TOKEN)],
             )
         }
     })
@@ -196,7 +196,7 @@ async fn the_token_comes_from_the_environment_or_a_file() {
             server_command(
                 &["status", "--token-file", &token_file],
                 &server,
-                &[("SUBMILLI_ADMIN_TOKEN", USER_TOKEN)],
+                &[("SUBMILLI_SERVER_TOKEN", USER_TOKEN)],
             )
         }
     })
@@ -231,7 +231,7 @@ fn exported_but_blank_settings_count_as_unset() {
             .args(["server", "status"])
             .env("SUBMILLI_SERVER_URL", blank)
             .env("SUBMILLI_SERVER_TOKEN_FILE", blank)
-            .env("SUBMILLI_ADMIN_TOKEN", blank)
+            .env("SUBMILLI_SERVER_TOKEN", blank)
             .output()
             .expect("invoke submilli server status");
         let text = format!("{}{}", stdout(&out), stderr(&out));
@@ -257,7 +257,7 @@ fn a_bad_token_source_is_reported_before_any_request() {
             empty.to_str().expect("utf-8 path"),
         ],
         "http://127.0.0.1:1",
-        &[("SUBMILLI_ADMIN_TOKEN", ADMIN_TOKEN)],
+        &[("SUBMILLI_SERVER_TOKEN", ADMIN_TOKEN)],
     );
     assert!(!out.status.success());
     assert!(stderr(&out).contains("is empty"), "{}", stderr(&out));
@@ -269,7 +269,7 @@ fn a_bad_token_source_is_reported_before_any_request() {
             .args(["server", "status", "--server", "http://127.0.0.1:1"])
             .env_remove("SUBMILLI_SERVER_TOKEN_FILE")
             .env(
-                "SUBMILLI_ADMIN_TOKEN",
+                "SUBMILLI_SERVER_TOKEN",
                 std::ffi::OsStr::from_bytes(b"\xff\xfe"),
             )
             .output()
@@ -288,7 +288,7 @@ async fn an_unsendable_token_is_an_error_not_a_stopped_server() {
     for command in ["status", "stop"] {
         let out = tokio::task::spawn_blocking({
             let (server, bad) = (server.clone(), bad.clone());
-            move || server_command(&[command], &server, &[("SUBMILLI_ADMIN_TOKEN", &bad)])
+            move || server_command(&[command], &server, &[("SUBMILLI_SERVER_TOKEN", &bad)])
         })
         .await
         .unwrap();

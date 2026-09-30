@@ -10,7 +10,7 @@ From a temporary directory, install the versions documented in
 
 ```sh
 npm install --no-save @mastra/mcp@1.18.0 @mastra/core@1.67.0
-export SUBMILLI_SERVER_URL=http://127.0.0.1:18128 SUBMILLI_USER_TOKEN=...   # the line the fixture prints
+export SUBMILLI_SERVER_URL=http://127.0.0.1:18128 SUBMILLI_SERVER_TOKEN=...   # the line the fixture prints
 node /path/to/submilli-runtime/skills/evals/harnesses/mastra/verify.mjs
 ```
 
@@ -19,7 +19,7 @@ When the temporary install is outside the repository, set
 script can resolve the adapter from that dependency directory.
 
 Run `skills/evals/harnesses/serve_fixture.py --port 18128` first; it prints
-the `export` line with the user token the script sends. The script asserts
+the `export` line with the token the script sends. The script asserts
 that a `cus_northwind` client can read its own balance, that the same client
 receives a `PermissionDeniedError` when its program requests `cus_initech`,
 that a missing binding fails for a reason other than authentication, that a

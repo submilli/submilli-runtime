@@ -180,19 +180,31 @@ token in it is not one the server accepts.
 ### More callers
 
 Extra tokens go in `config.api_tokens` and are added after the chart's two. The
-names `admin` and `user` are reserved. The token itself comes from the
-environment, from a Secret of yours:
+names `admin` and `user` are reserved. The token itself is read from a file, so
+mount a Secret of yours with the chart's `secrets:` value, which puts each key
+at `/etc/submilli/secrets/<name>/<key>`:
 
 ```yaml
 config:
   api_tokens:
     - name: ci
       role: admin
-      token_env: CI_API_TOKEN
-extraEnv:
-  - name: CI_API_TOKEN
-    valueFrom:
-      secretKeyRef: { name: ci-token, key: token }
+      token_file: /etc/submilli/secrets/ci/token
+secrets:
+  ci:
+    secretName: ci-token
+    key: token
+```
+
+The chart does not set `SUBMILLI_SERVER_TOKEN` on the server: every token it
+serves is an `api_tokens` entry. The `submilli server` CLI reads that variable
+on its own side, so to run it against the cluster, forward the port and export
+the admin token under that name:
+
+```bash
+kubectl port-forward svc/submilli 8128:8128 -n NAMESPACE &
+export SUBMILLI_SERVER_TOKEN=$(kubectl get secret submilli-auth -n NAMESPACE -o jsonpath='{.data.admin-token}' | base64 -d)
+submilli server status
 ```
 
 ### Turning it off

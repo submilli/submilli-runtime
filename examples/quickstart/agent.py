@@ -6,8 +6,8 @@ TypeScript and the server runs it under the `quickstart` blueprint. The
 customer this session is about rides along in a header, so the agent never
 sees it and cannot restate it.
 
-    export GOOGLE_API_KEY=...      # Google AI Studio
-    export SUBMILLI_USER_TOKEN=... # the server's user token, never the admin one
+    export GOOGLE_API_KEY=...        # Google AI Studio
+    export SUBMILLI_SERVER_TOKEN=... # the token the server was started with
     python agent.py
 """
 
@@ -33,16 +33,16 @@ normally.
 
 
 async def main() -> None:
-    token = os.environ.get("SUBMILLI_USER_TOKEN")
+    token = os.environ.get("SUBMILLI_SERVER_TOKEN")
     if not token:
-        raise SystemExit("SUBMILLI_USER_TOKEN is not set: export the user token the server was started with.")
+        raise SystemExit("SUBMILLI_SERVER_TOKEN is not set: export the token the server was started with.")
 
     client = MultiServerMCPClient({
         "submilli": {
             "transport": "streamable_http",
             "url": "http://127.0.0.1:8128/mcp/quickstart",
             "headers": {
-                # The application's token for the server.
+                # The API token this application was given for the server.
                 "Authorization": f"Bearer {token}",
                 # The binding your application would make per request.
                 "submilli-variables": "customerId=cus_northwind",

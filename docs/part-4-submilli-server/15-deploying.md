@@ -26,13 +26,15 @@ changes is how each setup handles the same four jobs.
 ## What every deployment has to get right
 
 **Every caller holds the right token.** The server checks a bearer token on
-every request and won't start without one configured. There are two roles.
-The `user` token runs programs against registered blueprints; it goes to your
-application, and to any agent that connects over MCP. The `admin` token also
-manages blueprints, secrets, and packages; it stays with whoever deploys.
-[Who can reach it](/docs/server#who-can-reach-it) has the full split. Each
-setup below shows where the two tokens come from and how each side gets its
-own.
+every request and won't start without one. The token it is started with, in
+`SUBMILLI_SERVER_TOKEN`, is an `admin` token: it runs programs and also
+manages blueprints, secrets, and packages. Handing that same token to your
+application is the quickest way to get going, and fine while the application
+and the server are both yours on one machine. Before an agent runs anywhere
+you don't fully trust, add a `user` token and give the application that
+instead: it runs programs against registered blueprints and can't change
+them. [Who can reach it](/docs/server#who-can-reach-it) has the full split.
+Each setup below shows both steps.
 
 **Only your application can reach the server.** The token is one layer; where
 the server sits on the network is the other. The server speaks plain HTTP, so
@@ -73,41 +75,41 @@ blueprint_seed_dir: /etc/submilli/blueprints
 secret_store:
   key_file: /etc/submilli/store.key
 api_tokens:
-  - name: ops
-    role: admin
-    token_file: /etc/submilli/admin.token
   - name: app
     role: user
-    token_file: /etc/submilli/user.token
+    token_file: /etc/submilli/app.token
 ```
 
-Generate the two tokens as files that only the server's user and the right
-caller can read: the admin token for you, the user token for your
-application.
+The server takes its own token, the admin one, from `SUBMILLI_SERVER_TOKEN`.
+Keep it in an environment file your process manager loads (systemd's
+`EnvironmentFile=`, for instance), readable only by you and the server's
+user. The `api_tokens` entry adds a `user` token for your application, read
+from a file the application's user can read as well:
 
 ```sh
-openssl rand -hex 32 > /etc/submilli/admin.token
-openssl rand -hex 32 > /etc/submilli/user.token
-chmod 600 /etc/submilli/*.token
+printf 'SUBMILLI_SERVER_TOKEN=%s\n' "$(openssl rand -hex 32)" > /etc/submilli/server.env
+openssl rand -hex 32 > /etc/submilli/app.token
+chmod 600 /etc/submilli/server.env /etc/submilli/app.token
 ```
 
 ```sh
+set -a; . /etc/submilli/server.env; set +a
 SUBMILLI_HOME=/var/lib/submilli submilli-server --config /etc/submilli/server.yaml
 ```
 
 ```text
-INFO submilli_server::auth: inbound authentication enabled tokens="ops (admin), app (user)"
+INFO submilli_server::auth: inbound authentication enabled tokens="SUBMILLI_SERVER_TOKEN (admin), app (user)"
 INFO submilli_server::serve: submilli-server listening addr=127.0.0.1:8128
 ```
 
 The first line names the tokens the server loaded and their roles, never the
 tokens themselves. If it is missing and the server exited instead, the error
-names the entry it couldn't load. Your application reads
-`/etc/submilli/user.token` and sends it as `Authorization: Bearer <token>`.
-For your own commands, point the CLI at the admin token:
+names the token it couldn't load. Your application reads
+`/etc/submilli/app.token` and sends it as `Authorization: Bearer <token>`.
+Your own commands read the server token from the same environment file:
 
 ```sh
-export SUBMILLI_SERVER_TOKEN_FILE=/etc/submilli/admin.token
+set -a; . /etc/submilli/server.env; set +a
 submilli server status
 ```
 
@@ -132,13 +134,12 @@ both binaries with the latest release; restart the server afterwards.
 
 If your application runs in containers on one host, run the server as one
 more container. Submilli publishes a `compose.yaml` that does the hard parts.
-Download it next to your own, generate the two tokens it requires into `.env`,
+Download it next to your own, generate the token it requires into `.env`,
 and start it:
 
 ```sh
 curl -fsSLO https://raw.githubusercontent.com/submilli/submilli-runtime/main/compose.yaml
-printf 'SUBMILLI_ADMIN_TOKEN=%s\nSUBMILLI_USER_TOKEN=%s\n' \
-  "$(openssl rand -hex 32)" "$(openssl rand -hex 32)" > .env
+printf 'SUBMILLI_SERVER_TOKEN=%s\n' "$(openssl rand -hex 32)" > .env
 chmod 600 .env
 docker compose up -d
 docker compose ps
@@ -150,27 +151,22 @@ myproject-submilli-1   ghcr.io/submilli/submilli-runtime:latest   "/usr/local/bi
 ```
 
 Compose reads `.env` from the directory it runs in. Keep that file out of
-source control. Without the two variables Compose stops before starting
-anything:
+source control. Without the variable Compose stops before starting anything:
 
 ```text
-error while interpolating services.submilli.environment.SUBMILLI_ADMIN_TOKEN: required variable SUBMILLI_ADMIN_TOKEN is missing a value: set SUBMILLI_ADMIN_TOKEN, for example in .env - generate one with `openssl rand -hex 32`
+error while interpolating services.submilli.environment.SUBMILLI_SERVER_TOKEN: required variable SUBMILLI_SERVER_TOKEN is missing a value: set SUBMILLI_SERVER_TOKEN, for example in .env - generate one with `openssl rand -hex 32`
 ```
 
-The server's log opens by naming the tokens it loaded:
+The server's log opens by naming the token it loaded:
 
 ```text
-submilli-1  | … INFO submilli_server::auth: inbound authentication enabled tokens="ops (admin), app (user)"
+submilli-1  | … INFO submilli_server::auth: inbound authentication enabled tokens="SUBMILLI_SERVER_TOKEN (admin)"
 ```
 
 ### How it keeps other callers out
 
-Every request needs one of the two tokens. The file's `submilli-config`
-service writes the server's config into a volume before the server starts;
-that config declares an `admin` token read from `SUBMILLI_ADMIN_TOKEN` and a
-`user` token read from `SUBMILLI_USER_TOKEN`, and the server container gets
-both variables from `.env`. The config holds no token, only the variable
-names.
+Every request needs the token. The server container gets
+`SUBMILLI_SERVER_TOKEN` from `.env` and needs no config file for it.
 
 On top of that, the server is kept off the network, because it speaks plain
 HTTP and a token sent in the clear is only as private as the network it
@@ -186,8 +182,8 @@ your whole network even on a host where `ufw` says the port is closed.
 Loopback publishing only covers the host, though. Other containers reach the
 server over Docker's networks, not the published port. So the server sits on
 its own network, `submilli-net`, and only containers you put on that network
-can reach it. Add your application to it, give it the user token, and call
-the server by its service name:
+can reach it. Add your application to it, give it the token, and call the
+server by its service name:
 
 ```yaml title="compose.yaml (your service)"
 services:
@@ -195,24 +191,71 @@ services:
     image: your-application
     environment:
       SUBMILLI_URL: http://submilli:8128
-      SUBMILLI_USER_TOKEN: ${SUBMILLI_USER_TOKEN:?}
+      SUBMILLI_SERVER_TOKEN: ${SUBMILLI_SERVER_TOKEN:?}
     networks:
       - submilli-net
 ```
 
-Your application sends that value as `Authorization: Bearer <token>`. Pass it
-the user token only: the application is what talks to the agent, and a user
-token can't change the blueprints that limit what the agent's programs do.
-Don't put anything else on `submilli-net`. A container on Docker's default
-network can't connect at all; its requests time out.
+Your application sends that value as `Authorization: Bearer <token>`. Don't
+put anything else on `submilli-net`. A container on Docker's default network
+can't connect at all; its requests time out.
 
-The admin token stays on the host. The `submilli server` commands read it from
-your shell, over the loopback port:
+The `submilli server` commands read the same variable from your shell, over
+the loopback port:
 
 ```sh
 set -a; . ./.env; set +a
 submilli server status
 ```
+
+### Giving the application a user token
+
+The token in `.env` is an admin token, and the fragment above hands it to
+your application. That is fine while every container on the host is yours.
+Before the agent's programs or its prompts come from anywhere you don't fully
+trust, give the application a `user` token instead, so that nothing on the
+application's side can rewrite the blueprint that constrains the agent.
+
+Extra tokens come from a config file, each read from a file of its own.
+Create both in a directory next to `compose.yaml`:
+
+```sh
+mkdir -p server-config
+openssl rand -hex 32 > server-config/app-token
+printf 'api_tokens:\n  - name: app\n    role: user\n    token_file: /etc/submilli/config/app-token\n' \
+  > server-config/server.yaml
+chmod 0755 server-config
+chmod 0444 server-config/server.yaml server-config/app-token
+printf 'SUBMILLI_APP_TOKEN=%s\n' "$(cat server-config/app-token)" >> .env
+```
+
+```yaml title="compose.override.yaml"
+services:
+  submilli:
+    volumes:
+      - ./server-config:/etc/submilli/config:ro
+    environment:
+      SUBMILLI_CONFIG: /etc/submilli/config/server.yaml
+  app:
+    environment:
+      SUBMILLI_SERVER_TOKEN: ${SUBMILLI_APP_TOKEN:?}
+```
+
+```sh
+docker compose up -d
+docker compose logs submilli | grep 'inbound authentication'
+```
+
+```text
+submilli-1  | … INFO submilli_server::auth: inbound authentication enabled tokens="SUBMILLI_SERVER_TOKEN (admin), app (user)"
+```
+
+The application still reads `SUBMILLI_SERVER_TOKEN`; the value it finds
+there is now the `user` token, and the admin token stays on the host. The
+`0444` is there because Docker doesn't change the owner of a bind-mounted
+file and the server runs as user 65532: a `0600` file owned by you is
+unreadable in the container, and the server refuses to start. Keep the
+directory out of source control.
 
 ### What else the file sets up
 
@@ -269,12 +312,10 @@ submilli server packages install acme/billing-package
 
 The secret store stays off until the server has a key. Give it one as a file,
 not an environment variable: environment variables show up in
-`docker inspect` and `docker compose config`. The API tokens above are
-environment variables all the same, because a token is easy to replace and the
-file permissions described below are easy to get wrong; the store key
-decrypts everything already in the store, so it gets the extra care. To keep
-the tokens in files as well, mount each as a Compose secret the same way and
-use `token_file` in place of `token_env` in the config.
+`docker inspect` and `docker compose config`. The server token above is an
+environment variable all the same, because a token is easy to replace; the
+store key decrypts everything already in the store, so it gets the extra
+care.
 
 ```sh
 head -c 32 /dev/urandom | base64 > submilli-store-key
@@ -340,9 +381,9 @@ SUBMILLI_IMAGE=ghcr.io/submilli/submilli-runtime:<version> docker compose up -d
 ```
 
 Pin a version tag rather than following `latest`, so an upgrade happens
-when you choose it. The `compose.yaml` you downloaded configures API tokens,
-so it needs a server release that has them; a release from before tokens
-rejects the `api_tokens` key and won't start. The volume carries the state across.
+when you choose it. The `compose.yaml` you downloaded relies on the server
+reading `SUBMILLI_SERVER_TOKEN`, so it needs a server release that does. The
+volume carries the state across.
 
 To back up, copy the volume while the server is stopped. Compose prefixes
 the volume name with the project name, usually the directory name;
@@ -386,14 +427,15 @@ one out when you need it:
 kubectl get secret submilli-auth -o jsonpath='{.data.admin-token}' | base64 -d
 ```
 
-Your application gets the user token from the same Secret, as an environment
-variable:
+The chart doesn't use `SUBMILLI_SERVER_TOKEN` on the server: both tokens are
+`api_tokens` entries, so your application starts out with a `user` token.
+It gets that token from the same Secret, as an environment variable:
 
 ```yaml title="your application's Deployment (fragment)"
 env:
   - name: SUBMILLI_URL
     value: http://submilli.submilli.svc:8128
-  - name: SUBMILLI_USER_TOKEN
+  - name: SUBMILLI_SERVER_TOKEN
     valueFrom:
       secretKeyRef:
         name: submilli-auth
@@ -464,7 +506,7 @@ The policy has three limits worth knowing:
   and not the admin one.
 - **`kubectl port-forward` is a separate way in.** It goes around the policy,
   and it is how you run `submilli server` commands against the cluster: forward
-  the port, put the admin token in `SUBMILLI_ADMIN_TOKEN`, and the commands
+  the port, put the admin token in `SUBMILLI_SERVER_TOKEN`, and the commands
   work as they do locally. Anyone who can read the Secret can do the same, so
   it's worth deciding who on your team has that permission.
 
@@ -619,9 +661,9 @@ the same volume. The same command applies changes to your values file. To back u
 
 - The startup log says `inbound authentication enabled` and lists the tokens
   you expect. A request with no token gets `401`.
-- Your application, and any agent that connects to the server, holds the user
-  token. The admin token is only where blueprints are deployed from. Never
-  give an agent the admin token.
+- Your application, and any agent that connects to the server, holds a
+  `user` token, not the one in the server's `SUBMILLI_SERVER_TOKEN`. The
+  admin token is only where blueprints are deployed from.
 - Only your application can reach the server. On one machine, `bind` is
   `127.0.0.1`. With Compose, the port is published on `127.0.0.1` and only
   your application shares `submilli-net`. On Kubernetes, `helm test` passes.

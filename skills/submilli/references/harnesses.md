@@ -33,35 +33,26 @@ service. Install the CLI/server using [setup](setup.md), then:
    permits only the bound customer's balance.
 4. Run `submilli build check`, `submilli build test`,
    `submilli build publish-local`, and `submilli blueprint lint blueprint.yaml`.
-5. The server refuses to start without API tokens ([setup](setup.md)). Save
-   `server.yaml`:
-
-   ```yaml
-   api_tokens:
-     - { name: ops, role: admin, token_env: SUBMILLI_ADMIN_TOKEN }
-     - { name: app, role: user, token_env: SUBMILLI_USER_TOKEN }
-   ```
-
-   Export both tokens, then start the server in the background:
+5. The server refuses to start without an API token ([setup](setup.md)).
+   Export one, then start the server in the background:
 
    ```sh
-   export SUBMILLI_ADMIN_TOKEN=$(openssl rand -hex 32)
-   export SUBMILLI_USER_TOKEN=$(openssl rand -hex 32)
-   submilli-server --config server.yaml --bind 127.0.0.1 --port 8128 &
+   export SUBMILLI_SERVER_TOKEN=$(openssl rand -hex 32)
+   submilli-server --bind 127.0.0.1 --port 8128 &
    ```
 
-   Any other shell that runs the CLI or the harness needs the same values.
+   The server, the CLI and the harness all read `SUBMILLI_SERVER_TOKEN`; any
+   other shell that runs the CLI or the harness needs the same value.
    Use the same `SUBMILLI_HOME` for the CLI and server if overriding the default:
    the server must see the package store where you published the fixture.
-6. Run `submilli server blueprint apply blueprint.yaml --server http://127.0.0.1:8128`;
-   the CLI sends `SUBMILLI_ADMIN_TOKEN`.
+6. Run `submilli server blueprint apply blueprint.yaml --server http://127.0.0.1:8128`.
    The MCP URL is now `http://127.0.0.1:8128/mcp/support-read`.
 
 Before involving a model, verify the endpoint:
 
 ```sh
 curl --fail-with-body http://127.0.0.1:8128/v1/execute \
-  -H "Authorization: Bearer $SUBMILLI_USER_TOKEN" \
+  -H "Authorization: Bearer $SUBMILLI_SERVER_TOKEN" \
   -H 'content-type: application/json' \
   -d '{"blueprint":"support-read","variables":{"customerId":"cus_northwind"},"code":"import { readBalance } from \"@acme/billing\"; function main(): number { return readBalance(\"cus_northwind\"); }"}'
 ```
@@ -89,10 +80,17 @@ discovery tools supply package and built-in declarations. Do not replace this
 with a generic “execute JavaScript” schema or assume there is only one tool.
 
 Send `Authorization: Bearer <token>` on every MCP and REST request, with the
-`user` token read from `SUBMILLI_USER_TOKEN` in the host process. The harness
-and agent never get the admin token (it could rewrite the blueprint), and no
-token goes into a prompt, tool schema, or generated code. A missing or unknown
-token is `401` before the binding is read; it is not an OAuth challenge.
+token read from `SUBMILLI_SERVER_TOKEN` in the host process. No token goes
+into a prompt, tool schema, or generated code. A missing or unknown token is
+`401` before the binding is read; it is not an OAuth challenge.
+
+The token the server reads from `SUBMILLI_SERVER_TOKEN` is an admin token.
+That is fine while the harness and server are the user's own on one machine.
+Before the agent runs anywhere less trusted, tell the user to add a
+`user`-role token with a `token_file` under `api_tokens` and give the harness
+that value in `SUBMILLI_SERVER_TOKEN` instead ([setup](setup.md)). A `user`
+token runs code and gets `403` on management routes, so it cannot rewrite the
+blueprint. The harness code is the same either way.
 
 Bind session variables before MCP initialization, from authenticated and
 authorized application state. Header format:

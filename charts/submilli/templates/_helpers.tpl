@@ -249,11 +249,11 @@ can add a caller but cannot shadow or replace the tokens NOTES.txt and
       -}}
 {{-   $extraTokens := get $extra "api_tokens" | default list -}}
 {{-   if not (kindIs "slice" $extraTokens) -}}
-{{-     fail "config.api_tokens must be a list of entries with name, role, and token_env or token_file" -}}
+{{-     fail "config.api_tokens must be a list of entries with name, role, and token_file" -}}
 {{-   end -}}
 {{-   range $entry := $extraTokens -}}
 {{-     if not (kindIs "map" $entry) -}}
-{{-       fail "config.api_tokens entries must be maps with name, role, and token_env or token_file" -}}
+{{-       fail "config.api_tokens entries must be maps with name, role, and token_file" -}}
 {{-     end -}}
 {{-     $name := get $entry "name" -}}
 {{-     if not (and (kindIs "string" $name) (trim $name)) -}}

@@ -148,30 +148,13 @@ mock_reset() { curl -sf "http://127.0.0.1:${MOCK_PORT}/reset" >/dev/null; }
 
 # ---------------------------------------------------------------- the server
 
-# The server refuses to start without API tokens. The config only names the
-# variables; the tokens themselves go to the server through its environment.
-gen_token() { python3 -c 'import secrets; print(secrets.token_hex(32))'; }
-ADMIN_TOKEN=$(gen_token)
-USER_TOKEN=$(gen_token)
-cat >"${STATE_DIR}/server.yaml" <<'YAML'
-api_tokens:
-  - name: smoke-admin
-    role: admin
-    token_env: SUBMILLI_ADMIN_TOKEN
-  - name: smoke-user
-    role: user
-    token_env: SUBMILLI_USER_TOKEN
-YAML
-
-# Registering blueprints is the only admin call here; everything else is what
-# an application does, so it goes out with the user token.
-admin_curl() { curl -H "Authorization: Bearer ${ADMIN_TOKEN}" "$@"; }
-user_curl() { curl -H "Authorization: Bearer ${USER_TOKEN}" "$@"; }
+# The server refuses to start without an API token; one admin token in its
+# environment is all these checks need, and every call sends it.
+SERVER_TOKEN=$(python3 -c 'import secrets; print(secrets.token_hex(32))')
+api_curl() { curl -H "Authorization: Bearer ${SERVER_TOKEN}" "$@"; }
 
 start_server() {
-    SUBMILLI_CONFIG="${STATE_DIR}/server.yaml" \
-    SUBMILLI_ADMIN_TOKEN="$ADMIN_TOKEN" \
-    SUBMILLI_USER_TOKEN="$USER_TOKEN" \
+    SUBMILLI_SERVER_TOKEN="$SERVER_TOKEN" \
     SUBMILLI_BIND=127.0.0.1 \
     SUBMILLI_PORT="$SERVER_PORT" \
     SUBMILLI_SESSION_STORE_DIR="${STATE_DIR}/sessions" \
@@ -209,12 +192,12 @@ BASE=""
 
 put_blueprint() {  # name yaml
     python3 -c 'import json,sys; print(json.dumps({"yaml": sys.argv[1]}))' "$2" \
-        | admin_curl -sf -X PUT "${BASE}/v1/blueprints/$1" \
+        | api_curl -sf -X PUT "${BASE}/v1/blueprints/$1" \
             -H 'content-type: application/json' -d @- >/dev/null
 }
 
 open_session() {  # blueprint -> session id
-    user_curl -sf -X POST "${BASE}/v1/sessions" -H 'content-type: application/json' \
+    api_curl -sf -X POST "${BASE}/v1/sessions" -H 'content-type: application/json' \
         -d "{\"blueprint\":\"$1\"}" | json_field session_id
 }
 
@@ -224,7 +207,7 @@ execute() {  # session key code   (empty key = unkeyed)
     local sid=$1 key=$2 code=$3 body args=()
     body=$(python3 -c 'import json,sys; print(json.dumps({"code": sys.argv[1]}))' "$code")
     [[ -n "$key" ]] && args=(-H "Idempotency-Key: ${key}")
-    user_curl -s -w $'\n%{http_code}' -X POST "${BASE}/v1/sessions/${sid}/execute" \
+    api_curl -s -w $'\n%{http_code}' -X POST "${BASE}/v1/sessions/${sid}/execute" \
         -H 'content-type: application/json' "${args[@]}" -d "$body" \
         | python3 -c 'import sys
 raw = sys.stdin.read()
@@ -333,7 +316,7 @@ step "3. A client that hangs up mid-execution"
 mock_reset
 sid=$(open_session smoke)
 body=$(python3 -c 'import json,sys; print(json.dumps({"code": sys.argv[1]}))' "$(holder 8)")
-user_curl -s --max-time 2 -X POST "${BASE}/v1/sessions/${sid}/execute" \
+api_curl -s --max-time 2 -X POST "${BASE}/v1/sessions/${sid}/execute" \
     -H 'content-type: application/json' -H 'Idempotency-Key: disconnect:1' \
     -d "$body" >/dev/null 2>&1 || true
 sleep 1
@@ -479,7 +462,7 @@ step "11. Deleting a session purges its ledger"
 sid=$(open_session smoke)
 execute "$sid" "purge:1" "$(hitter)" >/dev/null
 [[ -d "$(ledger_dir "$sid")" ]] || fail "no ledger directory to purge"
-user_curl -sf -X DELETE "${BASE}/v1/sessions/${sid}" >/dev/null
+api_curl -sf -X DELETE "${BASE}/v1/sessions/${sid}" >/dev/null
 if [[ ! -d "$(ledger_dir "$sid")" ]]; then
     ok "ledger directory removed with the session"
 else

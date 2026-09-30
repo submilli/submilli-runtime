@@ -54,35 +54,37 @@ free_port() {
 s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1]); s.close()'
 }
 
-# The server refuses to start without API tokens, so every container below gets
-# a config declaring two and the tokens themselves through the environment.
-# Exported because compose.yaml interpolates the same two names. The config is
-# mode 0444 for the reason the store key is elsewhere: Docker does not chown a
-# bind mount, and the server runs as uid 65532.
+# The server refuses to start without an API token. Every container below gets
+# an admin token the way compose.yaml hands it over, in SUBMILLI_SERVER_TOKEN
+# (exported because compose.yaml interpolates that name), plus one `user` token
+# so the role checks have something to refuse. `api_tokens` entries read their
+# token from a file, so that one is mounted beside the config; both files are
+# 0444 for the reason the store key is elsewhere: Docker does not chown a bind
+# mount, and the server runs as uid 65532.
 gen_token() { python3 -c 'import secrets; print(secrets.token_hex(32))'; }
-SUBMILLI_ADMIN_TOKEN=$(gen_token)
-SUBMILLI_USER_TOKEN=$(gen_token)
-export SUBMILLI_ADMIN_TOKEN SUBMILLI_USER_TOKEN
-cat >"${WORKDIR}/server.yaml" <<'YAML'
+SUBMILLI_SERVER_TOKEN=$(gen_token)
+export SUBMILLI_SERVER_TOKEN
+USER_TOKEN=$(gen_token)
+mkdir "${WORKDIR}/config"
+printf '%s\n' "$USER_TOKEN" >"${WORKDIR}/config/user-token"
+cat >"${WORKDIR}/config/server.yaml" <<'YAML'
 api_tokens:
-  - name: smoke-admin
-    role: admin
-    token_env: SUBMILLI_ADMIN_TOKEN
   - name: smoke-user
     role: user
-    token_env: SUBMILLI_USER_TOKEN
+    token_file: /etc/submilli/config/user-token
 YAML
-chmod 0444 "${WORKDIR}/server.yaml"
+chmod 0755 "${WORKDIR}/config"
+chmod 0444 "${WORKDIR}/config/server.yaml" "${WORKDIR}/config/user-token"
 AUTH_ARGS=(
-    -v "${WORKDIR}/server.yaml:/etc/submilli/server.yaml:ro"
-    -e SUBMILLI_CONFIG=/etc/submilli/server.yaml
-    -e SUBMILLI_ADMIN_TOKEN -e SUBMILLI_USER_TOKEN
+    -v "${WORKDIR}/config:/etc/submilli/config:ro"
+    -e SUBMILLI_CONFIG=/etc/submilli/config/server.yaml
+    -e SUBMILLI_SERVER_TOKEN
 )
 
-# Each call carries the least-privileged token that works for it: admin for
-# blueprints and status, user for running code.
-admin_curl() { curl -H "Authorization: Bearer ${SUBMILLI_ADMIN_TOKEN}" "$@"; }
-user_curl() { curl -H "Authorization: Bearer ${SUBMILLI_USER_TOKEN}" "$@"; }
+# admin_curl sends the server token; user_curl sends the `user` token, which
+# only the `docker run` containers know (compose.yaml declares none).
+admin_curl() { curl -H "Authorization: Bearer ${SUBMILLI_SERVER_TOKEN}" "$@"; }
+user_curl() { curl -H "Authorization: Bearer ${USER_TOKEN}" "$@"; }
 
 # `http_code curl URL`, `http_code user_curl URL`: the status alone.
 # A connection failure yields curl's own 000 rather than ending the script
@@ -124,17 +126,18 @@ version=$(docker run --rm "$IMAGE" --version)
 [[ -n "$version" ]] || die "--version produced no output"
 ok "--version -> ${version}"
 
-step "2. Refuses to serve without tokens"
-# The image must not ship a way around authentication: with no config it exits
-# non-zero and says what to configure, rather than serving an open API.
+step "2. Refuses to serve without a token"
+# The image must not ship a way around authentication: with no token it exits
+# non-zero and says what to set, rather than serving an open API.
 if refusal=$(docker run --rm "$IMAGE" 2>&1); then
     die "a bare \`docker run\` started a server with no API tokens"
 fi
-grep -q 'api_tokens' <<<"$refusal" || die "the refusal does not name api_tokens: ${refusal}"
-ok "a bare run exits non-zero and names api_tokens"
+grep -q 'SUBMILLI_SERVER_TOKEN' <<<"$refusal" \
+    || die "the refusal does not name SUBMILLI_SERVER_TOKEN: ${refusal}"
+ok "a bare run exits non-zero and names SUBMILLI_SERVER_TOKEN"
 
 step "3. Boots with no state mounts, and checks every caller"
-# No volumes beyond the config file: proves the image is not secretly
+# No volumes beyond the config directory: proves the image is not secretly
 # mount-dependent and that the state directories under SUBMILLI_HOME are created
 # lazily by a process running as uid 65532.
 bare_port=$(free_port)
@@ -150,6 +153,19 @@ anonymous=$(http_code curl "http://127.0.0.1:${bare_port}/v1/status")
 as_user=$(http_code user_curl "http://127.0.0.1:${bare_port}/v1/status")
 [[ "$as_user" == "403" ]] || die "/v1/status with the user token got HTTP ${as_user}, expected 403"
 ok "no token 401, user token on an admin route 403"
+
+# The user token is what an application should hold once it runs anywhere it is
+# not fully trusted: enough to run code, and not enough to touch the blueprint
+# it runs under.
+put_blueprint "$bare_port" >/dev/null
+result=$(user_curl -sf -X POST "http://127.0.0.1:${bare_port}/v1/execute" \
+    -H 'content-type: application/json' \
+    -d '{"blueprint":"demo","code":"export function main(): string { return \"user ok\"; }"}' \
+    | json_field result)
+[[ "$result" == "user ok" ]] || die "execute with the user token returned '${result}'"
+as_user=$(http_code user_curl -X DELETE "http://127.0.0.1:${bare_port}/v1/blueprints/demo")
+[[ "$as_user" == "403" ]] || die "the user token deleting a blueprint got HTTP ${as_user}, expected 403"
+ok "the user token runs code and cannot remove the blueprint it runs under"
 
 # The probe is what Docker and Compose gate on, and it runs as its own process
 # with no access to the server's flags. Checking it here rather than trusting the
@@ -208,9 +224,9 @@ ok "SUBMILLI_BLUEPRINT_DIR relocated the store"
 docker rm -f "$bpc" >/dev/null
 
 step "6. The documented compose story works end to end"
-# compose.yaml takes its two tokens from the environment exported above, and
-# writes its own config file, so this also proves that path rather than the
-# bind-mounted config the earlier steps used.
+# compose.yaml takes its one token from SUBMILLI_SERVER_TOKEN, exported above,
+# and mounts no config file, so this proves the server starts on the variable
+# alone.
 # SUBMILLI_IMAGE must point at the candidate. Without it compose resolves the
 # published reference, which on a first release does not exist and on later ones
 # silently smoke-tests the *previous* image while the candidate ships unverified
@@ -227,17 +243,14 @@ registered=$(admin_curl -sf http://127.0.0.1:8128/v1/status \
 [[ "$registered" == *demo* ]] || die "demo missing from /v1/status blueprints: ${registered}"
 ok "blueprint registered and listed"
 
-# The user token is what an application holds: enough to run code, and not
-# enough to touch the blueprint it runs under.
-result=$(user_curl -sf -X POST http://127.0.0.1:8128/v1/execute \
+# The documented setup hands the application the same token, so the execute
+# goes out with it too.
+result=$(admin_curl -sf -X POST http://127.0.0.1:8128/v1/execute \
     -H 'content-type: application/json' \
     -d '{"blueprint":"demo","code":"export function main(): string { return \"smoke ok\"; }"}' \
     | json_field result)
 [[ "$result" == "smoke ok" ]] || die "execute returned '${result}', expected 'smoke ok'"
 ok "execute round-trip returned the expected body"
-as_user=$(http_code user_curl -X DELETE http://127.0.0.1:8128/v1/blueprints/demo)
-[[ "$as_user" == "403" ]] || die "the user token deleting a blueprint got HTTP ${as_user}, expected 403"
-ok "the user token cannot remove the blueprint it runs under"
 
 step "7. Shutdown is graceful, not a SIGKILL"
 # The only end-to-end proof that the server's signal handling reached the shipped

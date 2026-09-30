@@ -226,11 +226,12 @@ pub struct Cli {
     #[arg(long, value_name = "PROMPTS")]
     max_llm_concurrency: Option<usize>,
 
-    /// Serve the API without authentication: no `api_tokens`, and every caller
-    /// that can reach the port has full access. The server otherwise refuses to
-    /// start until the config file declares at least one token. For a server
-    /// whose network already admits only its own application, and for local
-    /// experiments. Cannot be combined with `api_tokens`.
+    /// Serve the API without authentication: every caller that can reach the
+    /// port has full access. The server otherwise refuses to start until it
+    /// has a token — `$SUBMILLI_SERVER_TOKEN`, which is an admin token, or
+    /// entries under `api_tokens` in the config file. For a server whose
+    /// network already admits only its own application, and for local
+    /// experiments. Cannot be combined with either source of tokens.
     /// Env: `$SUBMILLI_ALLOW_UNAUTHENTICATED` (`1`/`true`/`yes`/`on`).
     #[arg(long)]
     allow_unauthenticated: bool,

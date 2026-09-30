@@ -8,7 +8,7 @@ import { answer } from "./agent.ts";
 import { openSession } from "./submilli.ts";
 
 const server = process.env.SUBMILLI_SERVER ?? "http://127.0.0.1:8128";
-const token = process.env.SUBMILLI_USER_TOKEN ?? "";
+const token = process.env.SUBMILLI_SERVER_TOKEN ?? "";
 const program = readFileSync(new URL("../note.ts", import.meta.url), "utf8");
 const usage = {
   inputTokens: { total: 1, noCache: 1, cacheRead: 0, cacheWrite: 0 },

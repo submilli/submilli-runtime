@@ -241,38 +241,23 @@ submilli blueprint lint blueprint.yaml
 
 Now we will join both sides of our example. On the one side, you have built a package and defined a blueprint for it. On the other side, a coding agent will use this package to perform actions.
 
-The server runs the agent's code, so it has to know who is allowed to call it. Save this as `server.yaml`, next to `blueprint.yaml`:
-
-```yaml
-# Who may call this server, and as what. Each token is read from the
-# environment variable named here, so this file holds no secret.
-api_tokens:
-- name: ops
-  role: admin
-  token_env: SUBMILLI_ADMIN_TOKEN
-- name: app
-  role: user
-  token_env: SUBMILLI_USER_TOKEN
-```
-
-There are two tokens because there are two kinds of caller. The `admin` token is yours: it manages the server, and the `submilli server` commands send it for you. The `user` token belongs to your application and the agent behind it: it can run programs, and nothing else. That split is the point. The token that sits in an agent's process must not be able to rewrite the blueprint that constrains the agent.
-
-Generate the two tokens and start the server in the background:
+The server runs the agent's code, so it only answers callers that present a token it knows. Generate one, export it, and start the server in the background:
 
 ```
-export SUBMILLI_ADMIN_TOKEN=$(openssl rand -hex 32)
-export SUBMILLI_USER_TOKEN=$(openssl rand -hex 32)
-submilli-server --config server.yaml &
+export SUBMILLI_SERVER_TOKEN=$(openssl rand -hex 32)
+submilli-server &
 ```
 
 ```
-INFO submilli_server::auth: inbound authentication enabled tokens="ops (admin), app (user)"
+INFO submilli_server::auth: inbound authentication enabled tokens="SUBMILLI_SERVER_TOKEN (admin)"
 INFO submilli_server::serve: submilli-server listening addr=127.0.0.1:8128
 ```
 
-Stay in this terminal for the rest of the chapter, because everything that follows reads those two variables. A request that arrives without a token is answered with HTTP 401, and without any `api_tokens` the server refuses to start. When you are finished, `submilli server stop` shuts it down.
+Stay in this terminal for the rest of the chapter: the server, the `submilli server` commands, and your application all read that one variable. A request that arrives without the token is answered with HTTP 401, and a server with no token at all refuses to start. When you are finished, `submilli server stop` shuts it down.
 
-Now register your blueprint policy so the server knows about it. The CLI reads `SUBMILLI_ADMIN_TOKEN` from the environment:
+The log calls it an `admin` token, and it is: it can manage the server as well as run programs. That is fine here, where the server and the application are both yours on one machine. Before an agent runs anywhere you trust less, give it a `user` token instead, which can run programs and cannot rewrite the blueprint that constrains the agent. [Who can reach it](/docs/server#who-can-reach-it) shows how; nothing in the code below changes.
+
+Now register your blueprint policy so the server knows about it:
 
 ```
 submilli server blueprint apply blueprint.yaml
@@ -293,10 +278,10 @@ import { readFileSync } from "node:fs";
 const SUBMILLI_SERVER = "http://127.0.0.1:8128";
 const BLUEPRINT_NAME = "quickstart";
 
-// The application's token for the server: it can run code, and cannot change the blueprint.
-const token = process.env.SUBMILLI_USER_TOKEN;
+// The API token this application was given for the server.
+const token = process.env.SUBMILLI_SERVER_TOKEN;
 if (!token) {
-  console.error("SUBMILLI_USER_TOKEN is not set: export the user token the server was started with.");
+  console.error("SUBMILLI_SERVER_TOKEN is not set: export the token the server was started with.");
   process.exit(1);
 }
 
@@ -335,7 +320,7 @@ Look at where `customerId` comes from: a real application reads it
 off the signed-in session, the same place it gets the user's identity. The generated code by a coding agent never sees the
 binding, cannot restate it, and cannot overwrite it.
 
-The application sends the `user` token in the `Authorization` header. That token says which application is calling; `customerId` says who it is calling for.
+The application sends its token in the `Authorization` header. The token says the caller is allowed to use the server at all; `customerId` says who this request is for.
 
 ### The job it was asked to do
 
@@ -446,19 +431,19 @@ server, same package, nothing new to configure.
 
 The agent reaches Submilli server over MCP and gets one tool: write TypeScript, and
 the server runs it. It discovers `listCharges` the same way, from the package
-your blueprint named. The `user` token and the customerId this session is about
+your blueprint named. The token and the customerId this session is about
 both travel in headers, so the model never sees either:
 
 ```python
 TICKET = ""  # the text of the support ticket above, verbatim — injection and all.
-token = os.environ["SUBMILLI_USER_TOKEN"]
+token = os.environ["SUBMILLI_SERVER_TOKEN"]
 
 client = MultiServerMCPClient({
     "submilli": {
         "transport": "streamable_http",
         "url": "http://127.0.0.1:8128/mcp/quickstart",
         "headers": {
-            # The application's token for the server.
+            # The API token this application was given for the server.
             "Authorization": f"Bearer {token}",
             # The binding your application would make per request.
             "submilli-variables": "customerId=cus_northwind",
@@ -484,7 +469,7 @@ export GOOGLE_API_KEY=...
 python agent.py
 ```
 
-The script reads `SUBMILLI_USER_TOKEN` from the terminal you started the server in. Give an agent that token and never the `admin` one.
+The script reads `SUBMILLI_SERVER_TOKEN` from the terminal you started the server in.
 
 Run it more than once. The model does not take the bait every time — that is
 the honest shape of prompt injection, and the reason the policy is where the

@@ -172,13 +172,14 @@ pub fn log_auth_posture(addr: IpAddr, auth: &AuthConfig) {
         }
         AuthConfig::Disabled if addr.is_loopback() => tracing::warn!(
             "inbound authentication is disabled: every process on this machine can run code, \
-             manage blueprints, and stop the server. Configure `api_tokens` to require a token"
+             manage blueprints, and stop the server. Set `SUBMILLI_SERVER_TOKEN` to require a \
+             token"
         ),
         AuthConfig::Disabled => tracing::warn!(
             %addr,
             "inbound authentication is disabled and the server is bound outside loopback: \
              anything that can reach this port can run code, manage blueprints, and stop the \
-             server. Configure `api_tokens` to require a token \
+             server. Set `SUBMILLI_SERVER_TOKEN` to require a token \
              (https://submilli.ai/docs/deploying/)"
         ),
     }
@@ -264,7 +265,7 @@ fn unauthorized() -> Response {
         Json(ErrorBody {
             error: "unauthorized",
             message: "missing or unrecognised API token; send `Authorization: Bearer <token>` \
-                      with one of the tokens in the server's `api_tokens`"
+                      with a token this server was started with"
                 .into(),
         }),
     )

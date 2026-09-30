@@ -17,8 +17,8 @@ The examples use a blueprint named `browse` that declares both of that
 chapter's MCP servers: Playwright's, on `localhost`, and Linear's, which
 needs a login.
 
-Every `submilli server` command here manages the server, so it sends the
-admin token, which the CLI reads from `SUBMILLI_ADMIN_TOKEN` or from
+Every `submilli server` command here manages the server, so it needs an
+admin token, which the CLI reads from `SUBMILLI_SERVER_TOKEN` or from
 `--token-file`. [Start it](/docs/server#start-it) covers both.
 
 ## Register the blueprint and check it

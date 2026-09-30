@@ -42,6 +42,6 @@ assert.match(
 await assert.rejects(answer("total", "", scripted(program)), /refused the connection/);
 
 // A token the server does not know gets no tools either.
-process.env.SUBMILLI_USER_TOKEN = "a-token-the-server-does-not-know";
+process.env.SUBMILLI_SERVER_TOKEN = "a-token-the-server-does-not-know";
 await assert.rejects(answer("total", "u_ada", scripted(program)), /refused the connection/);
 console.log("mastra: ok");

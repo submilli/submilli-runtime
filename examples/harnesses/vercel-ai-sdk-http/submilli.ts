@@ -7,7 +7,7 @@ import { z } from "zod";
 export interface SessionOptions {
   /** Base URL of submilli-server. */
   server: string;
-  /** A token the server accepts in the `user` role. It stays in your application. */
+  /** An API token the server accepts. It stays in your application. */
   token: string;
   /** The registered blueprint every program in this session runs under. */
   blueprint: string;

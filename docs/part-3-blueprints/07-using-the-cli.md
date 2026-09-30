@@ -11,7 +11,7 @@ chapter runs on your machine, with no server. It compiles and runs programs,
 looks things up, edits blueprints, and keeps a local store of packages and
 secrets. The other half, `submilli server` and the `submilli-server` binary,
 is in [Submilli server](/docs/server). Those commands talk to a running
-server and send its admin token, read from `SUBMILLI_ADMIN_TOKEN`; [start
+server and send its token, read from `SUBMILLI_SERVER_TOKEN`; [start
 it](/docs/server#start-it) shows how. Nothing in this chapter needs one.
 
 This chapter is a reference, grouped by task. Every command prints its own

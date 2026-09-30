@@ -64,10 +64,8 @@ free_port() {
 s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1]); s.close()'
 }
 
-# Each call carries the least-privileged token that works for it: admin for
-# blueprints, secrets and status, user for executions, sessions and MCP.
-admin_curl() { curl -H "Authorization: Bearer ${SUBMILLI_ADMIN_TOKEN}" "$@"; }
-user_curl() { curl -H "Authorization: Bearer ${SUBMILLI_USER_TOKEN}" "$@"; }
+# Every call carries the server token. Roles are docker-smoke.sh's subject.
+api_curl() { curl -H "Authorization: Bearer ${SUBMILLI_SERVER_TOKEN}" "$@"; }
 
 # /healthz is the one endpoint that answers without a token.
 wait_for_health() {
@@ -88,7 +86,7 @@ json_field() {
 put_blueprint() {
     python3 -c 'import json,sys; print(json.dumps({"yaml": sys.stdin.read()}))' \
         <"${REPO_ROOT}/examples/docker/blueprints/${1}.yaml" \
-        | admin_curl -sf -X PUT "http://127.0.0.1:${2}/v1/blueprints/${1}" \
+        | api_curl -sf -X PUT "http://127.0.0.1:${2}/v1/blueprints/${1}" \
             -H 'content-type: application/json' -d @- >/dev/null
 }
 
@@ -96,7 +94,7 @@ execute() {
     local port=$1 blueprint=$2 file=$3
     python3 -c 'import json,sys; print(json.dumps({"blueprint": sys.argv[1], "code": sys.stdin.read()}))' \
         "$blueprint" <"$file" \
-        | user_curl -sf -X POST "http://127.0.0.1:${port}/v1/execute" \
+        | api_curl -sf -X POST "http://127.0.0.1:${port}/v1/execute" \
             -H 'content-type: application/json' -d @-
 }
 
@@ -105,7 +103,7 @@ execute() {
 # status it reports is the guard's verdict and not the token check's.
 mcp_initialize_status() {
     local port=$1 host=$2
-    user_curl -s -o /dev/null -w '%{http_code}' -X POST "http://127.0.0.1:${port}/mcp/conformance" \
+    api_curl -s -o /dev/null -w '%{http_code}' -X POST "http://127.0.0.1:${port}/mcp/conformance" \
         -H "Host: ${host}" \
         -H 'content-type: application/json' \
         -H 'accept: application/json, text/event-stream' \
@@ -120,28 +118,11 @@ printf '%s' "$(head -c 32 /dev/urandom | base64)" >"${WORKDIR}/store-key"
 chmod 0444 "${WORKDIR}/store-key"
 docker volume create "$VOLUME" >/dev/null
 
-# The server refuses to start without API tokens. The config names the
-# environment variables they arrive in; it is 0444 for the same reason as the
-# store key above.
-gen_token() { python3 -c 'import secrets; print(secrets.token_hex(32))'; }
-SUBMILLI_ADMIN_TOKEN=$(gen_token)
-SUBMILLI_USER_TOKEN=$(gen_token)
-export SUBMILLI_ADMIN_TOKEN SUBMILLI_USER_TOKEN
-cat >"${WORKDIR}/server.yaml" <<'YAML'
-api_tokens:
-  - name: conformance-admin
-    role: admin
-    token_env: SUBMILLI_ADMIN_TOKEN
-  - name: conformance-user
-    role: user
-    token_env: SUBMILLI_USER_TOKEN
-YAML
-chmod 0444 "${WORKDIR}/server.yaml"
-AUTH_ARGS=(
-    -v "${WORKDIR}/server.yaml:/etc/submilli/server.yaml:ro"
-    -e SUBMILLI_CONFIG=/etc/submilli/server.yaml
-    -e SUBMILLI_ADMIN_TOKEN -e SUBMILLI_USER_TOKEN
-)
+# The server refuses to start without an API token; one admin token in its
+# environment is all these checks need.
+SUBMILLI_SERVER_TOKEN=$(python3 -c 'import secrets; print(secrets.token_hex(32))')
+export SUBMILLI_SERVER_TOKEN
+AUTH_ARGS=(-e SUBMILLI_SERVER_TOKEN)
 
 PORT=$(free_port)
 MAIN=$(docker run -d --read-only \
@@ -162,7 +143,7 @@ step "1. The encrypted secret store round-trips against a mounted key file"
 # Storing proves uid 65532 read a 0444 root-owned file and the cipher was built
 # from it — but it only ever *encrypts*, so on its own it cannot tell a correct
 # key from any other 32 bytes.
-admin_curl -sf -X POST "http://127.0.0.1:${PORT}/v1/secrets" -H 'content-type: application/json' \
+api_curl -sf -X POST "http://127.0.0.1:${PORT}/v1/secrets" -H 'content-type: application/json' \
     -d '{"key":"conformance_key","value":"conformance-value"}' >/dev/null \
     || die "storing a secret failed; the mounted key file was not usable"
 ok "secret stored through a file-mounted key"
@@ -190,7 +171,7 @@ step "3. The ephemeral VFS root is the tmpfs, not the volume"
 # Under a read-only root filesystem a write that landed anywhere but the tmpfs
 # would fail outright, so success plus absence from the volume pins it down.
 # shellcheck disable=SC2016  # `${...}` here is a TypeScript template literal
-scratch=$(user_curl -sf -X POST "http://127.0.0.1:${PORT}/v1/execute" -H 'content-type: application/json' \
+scratch=$(api_curl -sf -X POST "http://127.0.0.1:${PORT}/v1/execute" -H 'content-type: application/json' \
     -d '{"blueprint":"conformance-ephemeral","code":"import fs from \"submilli:fs\";\nexport function main(): string {\n  assert(fs.info().mode === \"ephemeral\", `mode ${fs.info().mode}`);\n  fs.writeText(\"/scratch-marker.txt\", \"ephemeral-ok\");\n  return fs.readText(\"/scratch-marker.txt\")!;\n}\n"}' \
     | json_field result)
 [[ "$scratch" == "ephemeral-ok" ]] || die "ephemeral write returned '${scratch}'"
@@ -211,10 +192,10 @@ refused=$(mcp_initialize_status "$PORT" evil.example.com)
 ok "configured host 200, unlisted host 403"
 
 step "5. Blueprints and session files survive a restart"
-session=$(user_curl -sf -X POST "http://127.0.0.1:${PORT}/v1/sessions" -H 'content-type: application/json' \
+session=$(api_curl -sf -X POST "http://127.0.0.1:${PORT}/v1/sessions" -H 'content-type: application/json' \
     -d '{"blueprint":"conformance"}' | json_field session_id)
 [[ -n "$session" ]] || die "could not open a session"
-user_curl -sf -X POST "http://127.0.0.1:${PORT}/v1/sessions/${session}/execute" \
+api_curl -sf -X POST "http://127.0.0.1:${PORT}/v1/sessions/${session}/execute" \
     -H 'content-type: application/json' \
     -d '{"code":"import fs from \"submilli:fs\";\nexport function main(): string {\n  fs.writeText(\"/survivor.txt\", \"before restart\");\n  return \"written\";\n}\n"}' >/dev/null \
     || die "could not write into the session VFS"
@@ -222,10 +203,10 @@ user_curl -sf -X POST "http://127.0.0.1:${PORT}/v1/sessions/${session}/execute" 
 docker restart "$MAIN" >/dev/null
 wait_for_health "$PORT" || die "the container did not come back after a restart"
 
-listed=$(admin_curl -sf "http://127.0.0.1:${PORT}/v1/status" \
+listed=$(api_curl -sf "http://127.0.0.1:${PORT}/v1/status" \
     | python3 -c 'import json,sys; print(",".join(json.load(sys.stdin)["blueprints"]))')
 [[ "$listed" == *conformance* ]] || die "blueprints did not survive the restart: ${listed}"
-survivor=$(user_curl -sf -X POST "http://127.0.0.1:${PORT}/v1/sessions/${session}/execute" \
+survivor=$(api_curl -sf -X POST "http://127.0.0.1:${PORT}/v1/sessions/${session}/execute" \
     -H 'content-type: application/json' \
     -d '{"code":"import fs from \"submilli:fs\";\nexport function main(): string {\n  return fs.readText(\"/survivor.txt\")!;\n}\n"}' \
     | json_field result)
@@ -236,7 +217,7 @@ step "6. Shutdown returns while an execution is still running"
 # The scenario an idle-container test would falsely certify. `serve()` cannot
 # cancel an interpreter loop that never yields, so this is the only check that
 # exercises the stages after the drain rather than the drain alone.
-user_curl -s -m 300 -X POST "http://127.0.0.1:${PORT}/v1/execute" -H 'content-type: application/json' \
+api_curl -s -m 300 -X POST "http://127.0.0.1:${PORT}/v1/execute" -H 'content-type: application/json' \
     -d '{"blueprint":"conformance","code":"export function main(): number {\n  let acc = 0;\n  for (let i = 0; i < 200000000; i++) {\n    acc = acc + i;\n  }\n  return acc;\n}\n"}' \
     >/dev/null 2>&1 &
 sleep 3

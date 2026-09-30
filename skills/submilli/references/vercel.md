@@ -31,8 +31,8 @@ import { generateText, stepCountIs } from "ai";
 import { openai } from "@ai-sdk/openai";
 
 const SUBMILLI_URL = process.env.SUBMILLI_SERVER_URL ?? "http://127.0.0.1:8128";
-// The server's `user` token; never the admin token.
-const SUBMILLI_TOKEN = process.env.SUBMILLI_USER_TOKEN;
+// The API token the application was given for the server.
+const SUBMILLI_TOKEN = process.env.SUBMILLI_SERVER_TOKEN;
 const BLUEPRINT = "support-read";
 const MAX_STEPS = 8;
 
@@ -45,7 +45,7 @@ function bindCustomer(customerId: string): string {
 }
 
 export async function answerForRequest(request: Request, customerId: string): Promise<string> {
-  if (SUBMILLI_TOKEN === undefined) throw new Error("SUBMILLI_USER_TOKEN is required");
+  if (SUBMILLI_TOKEN === undefined) throw new Error("SUBMILLI_SERVER_TOKEN is required");
   const client = await createMCPClient({
     transport: {
       type: "http",
@@ -101,7 +101,7 @@ if (process.argv[1] !== undefined && import.meta.url.endsWith(process.argv[1])) 
 
 The SDK default is one step; a tool call can therefore be returned without a final answer unless `stopWhen` enables more steps. Keep the bound finite and treat budget exhaustion as an explicit outcome. `stopWhen: stepCountIs(n)` is the AI SDK 5/6 replacement for the old `maxSteps` option. A raw HTTP, shell, or provider tool registered alongside these tools can bypass this boundary; remove or separately govern those tools when all business actions must pass through Submilli.
 
-Each identity needs its own MCP client and tool closures. Never mutate headers on a shared client or reuse tools created for another tenant. The server trusts the binding as caller input from any holder of the token, so keep `SUBMILLI_USER_TOKEN` server-side (never in browser code, prompts, or tool schemas), never use the admin token here, and add TLS and restricted ingress when the server is reachable beyond a trusted local network.
+Each identity needs its own MCP client and tool closures. Never mutate headers on a shared client or reuse tools created for another tenant. The server trusts the binding as caller input from any holder of the token, so keep `SUBMILLI_SERVER_TOKEN` server-side (never in browser code, prompts, or tool schemas), and add TLS and restricted ingress when the server is reachable beyond a trusted local network.
 
 ## Authenticated streaming route
 
@@ -125,7 +125,7 @@ export async function handleStream(request: Request, customerId: string): Promis
       type: "http",
       url: (process.env.SUBMILLI_SERVER_URL ?? "http://127.0.0.1:8128") + "/mcp/support-read",
       headers: {
-        Authorization: "Bearer " + process.env.SUBMILLI_USER_TOKEN,
+        Authorization: "Bearer " + process.env.SUBMILLI_SERVER_TOKEN,
         "submilli-variables": bindCustomer(customerId),
       },
     },
@@ -180,7 +180,7 @@ cd "$tmp_dir"
 npm init -y
 npm install ai @ai-sdk/mcp typescript tsx zod   # or the app's exact versions
 # write validate.ts asserting the list below, then:
-SUBMILLI_SERVER_URL=http://127.0.0.1:8128 npx tsx validate.ts   # SUBMILLI_USER_TOKEN exported
+SUBMILLI_SERVER_URL=http://127.0.0.1:8128 npx tsx validate.ts   # SUBMILLI_SERVER_TOKEN exported
 ```
 
 The validation must assert all of the following against the local fixture:

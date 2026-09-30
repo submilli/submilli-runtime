@@ -386,7 +386,7 @@ tests:
         api_tokens:
           - name: ci
             role: admin
-            token_env: CI_API_TOKEN
+            token_file: /etc/submilli/secrets/ci/token
     asserts:
       # Dropping them silently would leave an operator believing a token was
       # being enforced on an open server.
@@ -400,7 +400,7 @@ tests:
         api_tokens:
           - name: admin
             role: user
-            token_env: OTHER_TOKEN
+            token_file: /etc/submilli/secrets/other/token
     asserts:
       - failedTemplate:
           errorPattern: "is reserved for the chart's own token"
@@ -412,7 +412,7 @@ tests:
         api_tokens:
           partner:
             role: user
-            token_env: PARTNER_TOKEN
+            token_file: /etc/submilli/secrets/partner/token
     asserts:
       # A map here is an easy slip from the list form, and would otherwise be
       # iterated by value into a config the server refuses only at boot.
@@ -425,7 +425,7 @@ tests:
       config:
         api_tokens:
           - role: user
-            token_env: PARTNER_TOKEN
+            token_file: /etc/submilli/secrets/partner/token
     asserts:
       - failedTemplate:
           errorPattern: every entry needs a name
@@ -437,7 +437,7 @@ tests:
         api_tokens:
           - name: 5
             role: user
-            token_env: PARTNER_TOKEN
+            token_file: /etc/submilli/secrets/partner/token
     asserts:
       # A number or a blank here would render, and the server would either
       # refuse it at boot or log a name nobody wrote.
@@ -461,11 +461,11 @@ tests:
         api_tokens:
           - name: ci
             role: admin
-            token_env: CI_API_TOKEN
+            token_file: /etc/submilli/secrets/ci/token
     asserts:
       - matchRegex:
           path: data["server.yaml"]
-          pattern: "(?s)- name: admin\\n.*- name: user\\n.*- name: ci\\n +role: admin\\n +token_env: CI_API_TOKEN"
+          pattern: "(?s)- name: admin\\n.*- name: user\\n.*- name: ci\\n +role: admin\\n +token_file: /etc/submilli/secrets/ci/token"
 
   - it: writes a large integer as an integer
     template: configmap-config.yaml

@@ -16,8 +16,8 @@ async function runSubmilli(code, trustedCustomerId) {
   const response = await fetch("http://127.0.0.1:8128/v1/execute", {
     method: "POST",
     headers: {
-      // The `user` token; never the admin token.
-      Authorization: `Bearer ${process.env.SUBMILLI_USER_TOKEN}`,
+      // The API token the application was given for the server.
+      Authorization: `Bearer ${process.env.SUBMILLI_SERVER_TOKEN}`,
       "content-type": "application/json",
     },
     body: JSON.stringify({

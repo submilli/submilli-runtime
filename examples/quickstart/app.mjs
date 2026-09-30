@@ -3,10 +3,10 @@ import { readFileSync } from "node:fs";
 const SUBMILLI_SERVER = "http://127.0.0.1:8128";
 const BLUEPRINT_NAME = "quickstart";
 
-// The application's token for the server: it can run code, and cannot change the blueprint.
-const token = process.env.SUBMILLI_USER_TOKEN;
+// The API token this application was given for the server.
+const token = process.env.SUBMILLI_SERVER_TOKEN;
 if (!token) {
-  console.error("SUBMILLI_USER_TOKEN is not set: export the user token the server was started with.");
+  console.error("SUBMILLI_SERVER_TOKEN is not set: export the token the server was started with.");
   process.exit(1);
 }
 

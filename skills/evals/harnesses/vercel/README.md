@@ -8,7 +8,7 @@ local `support-read` fixture; only the model is `MockLanguageModelV3`. Run
 npm init -y
 npm install ai@6.0.0 @ai-sdk/mcp@2.0.0 tsx@4.19.2 zod@4.1.8
 cp /path/to/submilli-runtime/skills/evals/harnesses/vercel/validate.ts .
-export SUBMILLI_SERVER_URL=http://127.0.0.1:18128 SUBMILLI_USER_TOKEN=...   # the line the fixture prints
+export SUBMILLI_SERVER_URL=http://127.0.0.1:18128 SUBMILLI_SERVER_TOKEN=...   # the line the fixture prints
 npx tsx validate.ts
 ```
 

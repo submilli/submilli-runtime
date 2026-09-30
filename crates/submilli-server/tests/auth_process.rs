@@ -30,6 +30,7 @@ fn a_server_with_no_tokens_refuses_to_start() {
     let output = server(home.path()).output().expect("run server");
     assert!(!output.status.success());
     let error = String::from_utf8_lossy(&output.stderr);
+    assert!(error.contains("SUBMILLI_SERVER_TOKEN"), "{error}");
     assert!(error.contains("api_tokens"), "{error}");
     assert!(error.contains("--allow-unauthenticated"), "{error}");
     // Refused before the boot migration or any store touched the disk.
@@ -37,12 +38,16 @@ fn a_server_with_no_tokens_refuses_to_start() {
 }
 
 #[test]
-fn an_unset_token_variable_refuses_to_start_without_naming_a_token() {
+fn a_missing_token_file_refuses_to_start() {
     let home = tempfile::tempdir().expect("temp home");
     let config = home.path().join("server.yaml");
+    let token_file = home.path().join("absent.token");
     std::fs::write(
         &config,
-        "api_tokens:\n  - { name: ops, role: admin, token_env: OPS_TOKEN }\n",
+        format!(
+            "api_tokens:\n  - name: app\n    role: user\n    token_file: {}\n",
+            token_file.display()
+        ),
     )
     .expect("write config");
     let output = server(home.path())
@@ -52,25 +57,41 @@ fn an_unset_token_variable_refuses_to_start_without_naming_a_token() {
         .expect("run server");
     assert!(!output.status.success());
     let error = String::from_utf8_lossy(&output.stderr);
-    assert!(
-        error.contains("OPS_TOKEN") && error.contains("not set"),
-        "{error}"
-    );
+    assert!(error.contains("absent.token"), "{error}");
 }
 
+#[cfg(unix)]
+#[test]
+fn a_server_token_that_is_not_unicode_refuses_to_start() {
+    use std::os::unix::ffi::OsStrExt;
+    let home = tempfile::tempdir().expect("temp home");
+    let output = server(home.path())
+        .env(
+            "SUBMILLI_SERVER_TOKEN",
+            std::ffi::OsStr::from_bytes(b"\xff\xfe0123456789abcdef0123456789abcdef"),
+        )
+        .output()
+        .expect("run server");
+    assert!(!output.status.success());
+    let error = String::from_utf8_lossy(&output.stderr);
+    assert!(error.contains("SUBMILLI_SERVER_TOKEN"), "{error}");
+    assert!(error.contains("valid Unicode"), "{error}");
+}
+
+/// The admin token comes from `$SUBMILLI_SERVER_TOKEN` alone, the way a server
+/// and a CLI sharing a shell are set up; the user token from the config file.
 #[cfg_attr(skip_http_tests, ignore = "HTTP tests disabled")]
 #[test]
-fn tokens_from_the_config_file_are_enforced() {
+fn the_server_token_and_config_file_tokens_are_enforced() {
     let home = tempfile::tempdir().expect("temp home");
-    let admin_file = home.path().join("admin.token");
-    std::fs::write(&admin_file, format!("{ADMIN}\n")).expect("write token");
+    let user_file = home.path().join("user.token");
+    std::fs::write(&user_file, format!("{USER}\n")).expect("write token");
     let config = home.path().join("server.yaml");
     std::fs::write(
         &config,
         format!(
-            "api_tokens:\n  - name: ops\n    role: admin\n    token_file: {}\n  - name: app\n    \
-             role: user\n    token_env: APP_TOKEN\n",
-            admin_file.display()
+            "api_tokens:\n  - name: app\n    role: user\n    token_file: {}\n",
+            user_file.display()
         ),
     )
     .expect("write config");
@@ -80,7 +101,7 @@ fn tokens_from_the_config_file_are_enforced() {
         .args(["--shutdown-grace", "1"])
         .arg("--config")
         .arg(&config)
-        .env("APP_TOKEN", USER)
+        .env("SUBMILLI_SERVER_TOKEN", ADMIN)
         .stderr(Stdio::null())
         .spawn()
         .expect("spawn server");

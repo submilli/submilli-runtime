@@ -24,52 +24,37 @@ on a request, so one server carries many sessions at once, each run within the
 
 ## Start it
 
-The server checks a token on every request, and it won't start until it has at
-least one to check:
+The server checks a token on every request, and it won't start until it has
+one to check:
 
 ```sh
 submilli-server
 ```
 
 ```text
-Error: no API tokens are configured, so nothing could call this server. Declare at least one under `api_tokens:` in the config file (`--config`), or serve without authentication by setting `allow_unauthenticated: true` (`--allow-unauthenticated`, `$SUBMILLI_ALLOW_UNAUTHENTICATED=1`)
+Error: no API tokens are configured, so nothing could call this server. Set `$SUBMILLI_SERVER_TOKEN` to an admin token (for example `openssl rand -hex 32`), declare tokens under `api_tokens:` in the config file (`--config`), or serve without authentication by setting `allow_unauthenticated: true` (`--allow-unauthenticated`, `$SUBMILLI_ALLOW_UNAUTHENTICATED=1`)
 ```
 
-Tokens are declared in a config file. The file names where each token comes
-from and never holds the token itself, so it is safe to commit:
-
-```yaml title="server.yaml"
-api_tokens:
-  - name: ops
-    role: admin
-    token_env: SUBMILLI_ADMIN_TOKEN
-  - name: app
-    role: user
-    token_env: SUBMILLI_USER_TOKEN
-```
-
-Generate the two tokens and start the server with the file:
+Generate a token, put it in `SUBMILLI_SERVER_TOKEN`, and start the server:
 
 ```sh
-export SUBMILLI_ADMIN_TOKEN=$(openssl rand -hex 32)
-export SUBMILLI_USER_TOKEN=$(openssl rand -hex 32)
-submilli-server --config server.yaml
+export SUBMILLI_SERVER_TOKEN=$(openssl rand -hex 32)
+submilli-server
 ```
 
 ```text
-INFO submilli_server::auth: inbound authentication enabled tokens="ops (admin), app (user)"
+INFO submilli_server::auth: inbound authentication enabled tokens="SUBMILLI_SERVER_TOKEN (admin)"
 INFO submilli_server::serve: submilli-server listening addr=127.0.0.1:8128
 ```
 
-The admin token is yours, for operating the server. The user token is the one
-your application sends; [who can reach it](#who-can-reach-it) explains the
-split. Apart from the tokens, everything the server needs it creates on first
-use.
+That one variable is the whole setup. The server takes its token from it, and
+every caller sends the same value back. Apart from the token, everything the
+server needs it creates on first use.
 
 The `submilli` command drives a running server through its `server`
-subcommands, which are HTTP clients for the address above. They send the token
-in `SUBMILLI_ADMIN_TOKEN`, so in the shell that exported it they work as they
-are:
+subcommands, which are HTTP clients for the address above. They read
+`SUBMILLI_SERVER_TOKEN` too, so in the shell that exported it they work as
+they are:
 
 ```sh
 submilli server status
@@ -83,13 +68,15 @@ active sessions: 0
 blueprints:      (none)
 ```
 
-In another shell, or on another machine, give the command the token and the
-address. Both are options on every `submilli server` command:
+The same holds wherever a command shares the server's environment, such as
+`docker exec <container> submilli server status`. In another shell, or on
+another machine, give the command the token and the address. Both are options
+on every `submilli server` command:
 
 | Option | Environment variable | Default |
 | --- | --- | --- |
 | `--server <url>` | `SUBMILLI_SERVER_URL` | `http://127.0.0.1:8128` |
-| `--token-file <path>` | `SUBMILLI_SERVER_TOKEN_FILE` | the token in `SUBMILLI_ADMIN_TOKEN` |
+| `--token-file <path>` | `SUBMILLI_SERVER_TOKEN_FILE` | the token in `SUBMILLI_SERVER_TOKEN` |
 
 `submilli apply` has neither option and reads the same environment variables;
 it has no default address, so `SUBMILLI_SERVER_URL` must be set for it.
@@ -99,7 +86,7 @@ shell history or the process list. A command run without a token the server
 accepts says so:
 
 ```text
-error: the server did not accept this command's API token. Set `SUBMILLI_ADMIN_TOKEN` to a token from the server's `api_tokens`, or `SUBMILLI_SERVER_TOKEN_FILE` to a file holding one
+error: the server did not accept this command's API token. Set `SUBMILLI_SERVER_TOKEN` to the token the server was started with, or `SUBMILLI_SERVER_TOKEN_FILE` to a file holding one
 ```
 
 | Command | Does |
@@ -123,27 +110,10 @@ The server is a backend for your application, not a public service. Two things
 decide who can use it: a token on every request, and where the port is
 reachable from. Use both.
 
-### Tokens and roles
+### The server token
 
-Every request carries `Authorization: Bearer <token>`, and the token's role
-decides what it may call:
-
-| Role | May call |
-| --- | --- |
-| `user` | `POST /v1/execute`; everything under `/v1/sessions`; the MCP endpoint `/mcp/{blueprint}`; and the reads that describe one blueprint: `GET /v1/blueprints/{name}/prompt`, `…/packages/search`, `…/packages/docs`, `…/builtins`, and `…/builtins/docs` |
-| `admin` | Everything a `user` token may, plus registering, reading, and removing blueprints (`/v1/blueprints`), `/v1/secrets`, `/v1/packages`, `/v1/capabilities`, `/v1/volumes`, the MCP login routes under `/v1/mcp/`, `GET /v1/status`, and `POST /v1/shutdown` |
-| no token | `GET /healthz` only |
-
-The split follows from what a blueprint is: the limit on what an agent's
-programs can do. The `user` token is the one that ends up in your application
-and in every agent process that connects over MCP, so it can run programs
-against the blueprints you registered and nothing more. It can't replace a
-blueprint, read the list of secrets, install a package, or stop the server.
-Those need the `admin` token, which belongs to whoever deploys: you, your CI,
-the `submilli server` commands. Never hand the admin token to an agent; it
-could rewrite the policy that constrains it.
-
-A request with no token, or one the server doesn't know, is refused:
+Every request carries `Authorization: Bearer <token>`. A request with no
+token, or one the server doesn't know, is refused:
 
 ```sh
 curl -i http://127.0.0.1:8128/v1/status
@@ -154,10 +124,69 @@ HTTP/1.1 401 Unauthorized
 content-type: application/json
 www-authenticate: Bearer
 
-{"error":"unauthorized","message":"missing or unrecognised API token; send `Authorization: Bearer <token>` with one of the tokens in the server's `api_tokens`"}
+{"error":"unauthorized","message":"missing or unrecognised API token; send `Authorization: Bearer <token>` with a token this server was started with"}
 ```
 
-A `user` token on an `admin` endpoint gets `403`:
+The token in `SUBMILLI_SERVER_TOKEN` is an admin token: it can call the whole
+API. That is what makes the one-variable setup work, since the same value
+registers blueprints from the CLI and runs programs from your application. It
+is a fine arrangement while the application and the server are both yours, on
+one machine or one private network.
+
+It stops being fine when an agent runs somewhere you don't fully trust. An
+application holding the admin token, or an agent process that can read its
+environment, can replace the blueprint that is supposed to constrain it.
+Before that point, give the application a `user` token.
+
+### A user token for your application
+
+A token has one of two roles, and the role decides what it may call:
+
+| Role | May call |
+| --- | --- |
+| `user` | `POST /v1/execute`; everything under `/v1/sessions`; the MCP endpoint `/mcp/{blueprint}`; and the reads that describe one blueprint: `GET /v1/blueprints/{name}/prompt`, `…/packages/search`, `…/packages/docs`, `…/builtins`, and `…/builtins/docs` |
+| `admin` | Everything a `user` token may, plus registering, reading, and removing blueprints (`/v1/blueprints`), `/v1/secrets`, `/v1/packages`, `/v1/capabilities`, `/v1/volumes`, the MCP login routes under `/v1/mcp/`, `GET /v1/status`, and `POST /v1/shutdown` |
+| no token | `GET /healthz` only |
+
+A `user` token runs programs against the blueprints you registered and
+nothing more. It can't replace a blueprint, read the list of secrets, install
+a package, or stop the server.
+
+Tokens beyond the one in `SUBMILLI_SERVER_TOKEN` are declared in the config
+file, under `api_tokens`, and each is read from a file of its own. Create the
+token file, then name it in the config:
+
+```sh
+openssl rand -hex 32 > /etc/submilli/app.token
+chmod 600 /etc/submilli/app.token
+```
+
+```yaml title="server.yaml"
+api_tokens:
+  - name: app
+    role: user
+    token_file: /etc/submilli/app.token
+```
+
+```sh
+submilli-server --config server.yaml
+```
+
+```text
+INFO submilli_server::auth: inbound authentication enabled tokens="SUBMILLI_SERVER_TOKEN (admin), app (user)"
+INFO submilli_server::serve: submilli-server listening addr=127.0.0.1:8128
+```
+
+The config file holds a path and never the token, so it is safe to commit.
+The token file has to be readable by the user the server runs as. In the
+container image that is uid 65532, and a bind-mounted file keeps its owner and
+mode from the host, so a `chmod 600` file of yours is unreadable there: make
+it mode `0444`, or owned by 65532, as [deploying](/docs/deploying#giving-the-application-a-user-token)
+shows.
+
+Hand the application the contents of `app.token` in place of the admin token,
+and keep `SUBMILLI_SERVER_TOKEN` for yourself, your CI, and the `submilli
+server` commands. With the `user` token, an `admin` endpoint answers `403`:
 
 ```text
 {"error":"forbidden","message":"this endpoint needs a token with the `admin` role; the token sent has the `user` role"}
@@ -169,31 +198,28 @@ variables when it opens one, as [connecting to your
 harness](/docs/harness) shows, and the blueprint's rules take it from there.
 Everyone holding the same token has the same access.
 
-### Where tokens come from
+### Token rules and rotation
 
 Each `api_tokens` entry has a `name`, which the startup log prints, a `role`,
-and exactly one source for the token:
+and a `token_file`. The token in `SUBMILLI_SERVER_TOKEN` takes part under the
+name `SUBMILLI_SERVER_TOKEN`; a blank value counts as unset.
 
-- `token_env` names an environment variable of the server process. It needs
-  nothing on disk, which makes it the simple choice on a laptop and in
-  Compose.
-- `token_file` names a file holding the token. It is the better choice where
-  a secret manager or Kubernetes mounts secrets as files: the token stays out
-  of the process environment and out of anything that prints it.
-
-Either way the token is read once, at startup, with surrounding whitespace
-trimmed, and the server keeps only a hash of it. A token must be at least 32
-characters of letters, digits, and `-._~+/`; `openssl rand -hex 32` produces a
-good one. Names must be unique, and so must tokens. Anything else stops the
-server at startup with a message naming the entry, never the token:
+Every token is read once, at startup, with surrounding whitespace trimmed, and
+the server keeps only a hash of it. A token must be at least 32 characters of
+letters, digits, and `-._~+/`; `openssl rand -hex 32` produces a good one.
+Names must be unique, and so must tokens. Anything else stops the server at
+startup with a message naming the entry, never the token:
 
 ```text
-Error: `api_tokens` entry `ops`: environment variable `SUBMILLI_ADMIN_TOKEN` is not set
+Error: API tokens `SUBMILLI_SERVER_TOKEN` and `app` hold the same token; give each a token of its own
 ```
 
-To rotate a token, add a second entry with the same role and a new token,
-restart, move the callers over, then remove the old entry and restart again.
-Both tokens work in between, so nothing has to switch at the same moment.
+To rotate a token, add an `api_tokens` entry with the same role and a new
+token, restart, move the callers over, then retire the old one and restart
+again. For the server token that means a second `admin` entry: once the
+callers hold the new token, put it in `SUBMILLI_SERVER_TOKEN` and drop the
+entry. Both tokens work in between, so nothing has to switch at the same
+moment.
 
 ### Serving without tokens
 
@@ -203,15 +229,16 @@ Every caller that can reach the port then has the whole API, shutdown
 included, and the log says so at every start:
 
 ```text
-WARN submilli_server::auth: inbound authentication is disabled: every process on this machine can run code, manage blueprints, and stop the server. Configure `api_tokens` to require a token
+WARN submilli_server::auth: inbound authentication is disabled: every process on this machine can run code, manage blueprints, and stop the server. Set `SUBMILLI_SERVER_TOKEN` to require a token
 ```
 
 That is reasonable for an experiment on your own machine, and for a server
 whose network already admits exactly one caller. It is the wrong default for
-anything else, which is why it has to be asked for. Setting it together with
-`api_tokens` is refused, so a stray environment variable can't switch off
-tokens the file declares. Nothing is exempt by address: with tokens
-configured, a request from `127.0.0.1` needs one like any other.
+anything else, which is why it has to be asked for. Setting it while the
+server has a token, from `SUBMILLI_SERVER_TOKEN` or from `api_tokens`, is
+refused, so a stray setting can't switch off tokens you configured. Nothing is
+exempt by address: with tokens configured, a request from `127.0.0.1` needs
+one like any other.
 
 ### The network still matters
 
@@ -223,8 +250,8 @@ has to cross a network you don't control. That is why the server listens on
 [deploying](/docs/deploying) keep it private as well as requiring tokens. Run
 one server per application.
 
-Agents can also connect to the server directly, over MCP, sending the `user`
-token like any other caller. The MCP endpoint applies one more check of its
+Agents can also connect to the server directly, over MCP, sending a token
+like any other caller. The MCP endpoint applies one more check of its
 own: it accepts only requests whose `Host` header is a loopback name, which
 stops a web page open in a user's browser from reaching it through a host
 name that resolves to `127.0.0.1`. Behind a reverse proxy or a platform host
@@ -276,21 +303,18 @@ that says `telemetry: false` wins over `SUBMILLI_TELEMETRY`. And the plain
 `bind: 127.0.0.1` keeps it private.
 
 Here is a file with every setting spelled out. Apart from the paths and the
-tokens, each value is the default, so treat it as a template and delete what
+token entry, each value is the default, so treat it as a template and delete what
 you don't change:
 
 ```yaml title="server.yaml"
 bind: 127.0.0.1
 port: 8128
 
-api_tokens:
-  - name: ops
-    role: admin                       # admin | user
-    token_env: SUBMILLI_ADMIN_TOKEN   # or token_file: /etc/submilli/admin.token
+api_tokens:                           # beside the one in SUBMILLI_SERVER_TOKEN
   - name: app
-    role: user
-    token_env: SUBMILLI_USER_TOKEN
-# allow_unauthenticated: true         # instead of api_tokens, never with it
+    role: user                        # admin | user
+    token_file: /etc/submilli/app.token
+# allow_unauthenticated: true         # instead of tokens, never with them
 
 blueprint_dir: /srv/submilli/blueprints
 blueprint_seed_dir: /etc/submilli/blueprints
@@ -329,7 +353,7 @@ submilli-server --config server.yaml
 ```
 
 ```text
-INFO submilli_server::auth: inbound authentication enabled tokens="ops (admin), app (user)"
+INFO submilli_server::auth: inbound authentication enabled tokens="SUBMILLI_SERVER_TOKEN (admin), app (user)"
 INFO submilli_server::serve: submilli-server listening addr=127.0.0.1:8128
 ```
 
@@ -341,13 +365,14 @@ exception and use flat flag names: `secret_store.dir` is
 `mcp_allowed_hosts` list is a repeatable `--mcp-allowed-host`.
 
 Two settings exist only in the file. `api_tokens` and `volumes` have no flag
-and no variable, so who may call the server and which host directories
-programs can touch are each decided in one reviewable place.
-`allow_unauthenticated` does have a flag and a variable
-(`--allow-unauthenticated`, `SUBMILLI_ALLOW_UNAUTHENTICATED`); any one of the
-three turns it on, and the server refuses to start if it is on while
-`api_tokens` has entries. [Who can reach it](#who-can-reach-it) covers tokens
-and the opt-out.
+and no variable, so who else may call the server and which host directories
+programs can touch are each decided in one reviewable place. One setting
+exists only in the environment: `SUBMILLI_SERVER_TOKEN`, the server's admin
+token, which has no flag and no place in the file.
+`allow_unauthenticated` has all three forms (`--allow-unauthenticated`,
+`SUBMILLI_ALLOW_UNAUTHENTICATED`); any one of them turns it on, and the server
+refuses to start if it is on while it has a token from either source.
+[Who can reach it](#who-can-reach-it) covers tokens and the opt-out.
 
 A misspelled key stops the server from starting, rather than being quietly
 ignored. A limit you think you set but didn't is worse than a failed boot:
@@ -582,13 +607,13 @@ few seconds under the container runtime's own stop timeout.
 
 A coding agent with the [Submilli skill](/docs/skill) drives the server
 through the same `submilli server` commands. These prompts were run with
-Claude Code, a local server started with a secret store, the admin token in
-`SUBMILLI_ADMIN_TOKEN` in the agent's shell, and a project
+Claude Code, a local server started with a secret store, the server token in
+`SUBMILLI_SERVER_TOKEN` in the agent's shell, and a project
 holding the research blueprint from [connecting to your
 harness](/docs/harness#the-example-a-research-agent-with-a-notebook).
 The coding agent here is acting as you, the operator, which is why it holds
-the admin token. The rule against giving an agent that token is about the
-agent your application runs, whose programs the blueprint constrains.
+the admin token. The advice to move to a `user` token is about the agent your
+application runs, whose programs the blueprint constrains.
 
 **Put a blueprint on the server and prove it.**
 

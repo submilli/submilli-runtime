@@ -37,7 +37,7 @@ export async function answer(
         url: new URL(`${SUBMILLI_SERVER}/mcp/${BLUEPRINT}`),
         requestInit: {
           headers: {
-            Authorization: `Bearer ${userToken()}`,
+            Authorization: `Bearer ${serverToken()}`,
             "submilli-variables": `userId=${userId}`,
           },
         },
@@ -57,10 +57,10 @@ export async function answer(
   }
 }
 
-/** The application's token for the server: the `user` role, never the admin one. */
-function userToken(): string {
-  const token = process.env.SUBMILLI_USER_TOKEN;
-  if (!token) throw new Error("SUBMILLI_USER_TOKEN is not set: export the server's user token");
+/** The API token this application was given for the server. */
+function serverToken(): string {
+  const token = process.env.SUBMILLI_SERVER_TOKEN;
+  if (!token) throw new Error("SUBMILLI_SERVER_TOKEN is not set: export the token the server was started with");
   return token;
 }
 

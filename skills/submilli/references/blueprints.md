@@ -350,8 +350,8 @@ unreachable `main` rules (an earlier rule shadows a later one), on
 Register and run:
 
 ```sh
-submilli-server --config server.yaml             # separate terminal; declares api_tokens
-export SUBMILLI_ADMIN_TOKEN=...                  # the admin token that server was started with
+export SUBMILLI_SERVER_TOKEN=...                 # the token the server was started with
+submilli-server                                  # separate terminal, same variable
 submilli server packages install submilli/submilli-runtime @submilli/jina
 submilli server blueprint apply blueprint.yaml   # or: submilli apply -f dir/
 submilli server run-code --blueprint support-orders program.ts
@@ -365,10 +365,10 @@ store (`submilli build publish-local`, `submilli install`), so a package may
 work locally without being in `packages list`. `apply` doesn't check that
 packages are installed; the first program that imports a missing one fails.
 
-The server refuses to start without `api_tokens` in its config file and
-checks a bearer token on every request; [setup](setup.md) has the config,
-under "Deploying the server". `submilli server` commands send
-`SUBMILLI_ADMIN_TOKEN` (or `--token-file`), and `--server` or
+The server refuses to start without a token (`SUBMILLI_SERVER_TOKEN`, an
+admin token) and checks a bearer token on every request; [setup](setup.md)
+has the details, under "Deploying the server". `submilli server` commands send
+`SUBMILLI_SERVER_TOKEN` (or `--token-file`), and `--server` or
 `SUBMILLI_SERVER_URL` picks the address. `submilli apply` takes both from the
 environment only and needs `SUBMILLI_SERVER_URL` set.
 
@@ -384,8 +384,8 @@ printf '%s' "$ORDERS_API_TOKEN" | submilli server secret put ORDERS_API_TOKEN
 ```
 
 REST is `POST /v1/execute` with `{ "blueprint", "code", "variables", "secrets" }`
-and `Authorization: Bearer $SUBMILLI_USER_TOKEN` (the application's token; it
-cannot manage blueprints);
+and `Authorization: Bearer $SUBMILLI_SERVER_TOKEN` (or the application's
+`user` token, which cannot manage blueprints);
 the response carries `result`, `console`, and on failure `error.kind` and
 `error.message`. A missing required variable is rejected as `invalid_request`
 before compilation. MCP clients bind variables in the `submilli-variables`

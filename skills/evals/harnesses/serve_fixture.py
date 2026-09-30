@@ -2,9 +2,11 @@
 """Serve the documented billing fixture in disposable storage for SDK checks.
 
 No model or business-service credentials are needed. Build the local CLI and
-server first. The server requires API tokens, so the fixture generates an admin
-token for its own setup and a user token, which it prints for the adapter
-checks. Stop with Ctrl-C; the child server and temporary store are removed.
+server first. The server requires an API token: the fixture generates an admin
+token, which the server and the CLI read from SUBMILLI_SERVER_TOKEN, for its
+own setup. It also declares a second token in the `user` role and prints that
+one for the adapter checks, so they prove the MCP surface needs no more than
+`user`. Stop with Ctrl-C; the child server and temporary store are removed.
 """
 import argparse
 import json
@@ -19,14 +21,12 @@ from urllib.request import Request, urlopen
 
 
 REPO = Path(__file__).resolve().parents[3]
+# The admin token comes from SUBMILLI_SERVER_TOKEN; a second role needs a config.
 CONFIG = """\
 api_tokens:
-- name: ops
-  role: admin
-  token_env: SUBMILLI_ADMIN_TOKEN
 - name: app
   role: user
-  token_env: SUBMILLI_USER_TOKEN
+  token_file: {token_file}
 """
 
 
@@ -95,9 +95,9 @@ def main():
         env = {k: v for k, v in os.environ.items()
                if not k.startswith("SUBMILLI_") and k not in {"HOST", "PORT"}}
         admin_token, user_token = secrets.token_hex(32), secrets.token_hex(32)
-        # The server reads both tokens from these; the CLI sends the admin one.
+        # The server takes its admin token from this, and the CLI sends it.
         env.update(SUBMILLI_HOME=str(root / "store"), SUBMILLI_TELEMETRY="0",
-                   SUBMILLI_ADMIN_TOKEN=admin_token, SUBMILLI_USER_TOKEN=user_token)
+                   SUBMILLI_SERVER_TOKEN=admin_token)
 
         def run(*arguments):
             subprocess.run([str(cli), *arguments], cwd=root, env=env,
@@ -114,8 +114,11 @@ def main():
         blueprint = root / "blueprint.yaml"
         blueprint.write_text(first_block(references / "blueprints.md", "yaml"))
         run("blueprint", "lint", str(blueprint))
+        token_file = root / "app.token"
+        token_file.touch(mode=0o600)
+        token_file.write_text(user_token)
         config = root / "server.yaml"
-        config.write_text(CONFIG)
+        config.write_text(CONFIG.format(token_file=json.dumps(str(token_file))))
         url = f"http://127.0.0.1:{args.port}"
         with (root / "server.log").open("w+") as log:
             process = subprocess.Popen(
@@ -145,9 +148,10 @@ def main():
                 verify_auth(url, user_token)
                 verify_policy(url, user_token)
                 print("Fixture ready: blueprint=support-read. For the adapter checks:", flush=True)
-                print(f"export SUBMILLI_SERVER_URL={url} SUBMILLI_USER_TOKEN={user_token}", flush=True)
+                # The user token: enough for every adapter check, and no more.
+                print(f"export SUBMILLI_SERVER_URL={url} SUBMILLI_SERVER_TOKEN={user_token}", flush=True)
                 print("readBalance(bound customer) = 6150; other customer denied; "
-                      "no token, or an unknown one, refused. Ctrl-C to stop.", flush=True)
+                      "no token, or an unknown one, refused; user token 403 on /v1/status. Ctrl-C to stop.", flush=True)
                 process.wait()
             except KeyboardInterrupt:
                 pass

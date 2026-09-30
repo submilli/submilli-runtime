@@ -48,7 +48,7 @@ async def main() -> None:
     customer_id = trusted_customer_id()
     base_url = os.environ.get("SUBMILLI_SERVER_URL", "http://127.0.0.1:8128").rstrip("/")
     blueprint = os.environ.get("SUBMILLI_BLUEPRINT", "support-read")
-    token = os.environ["SUBMILLI_USER_TOKEN"]  # user role; never the admin token
+    token = os.environ["SUBMILLI_SERVER_TOKEN"]
     client = MultiServerMCPClient({
         "submilli": {
             "transport": "streamable_http",
@@ -155,7 +155,7 @@ async def run_with_resume(customer_id: str) -> dict[str, Any]:
         raise ValueError("demo only: customer must be authorized by the host")
     endpoint = "http://127.0.0.1:8128/mcp/support-read"
     headers = {
-        "Authorization": f"Bearer {os.environ['SUBMILLI_USER_TOKEN']}",
+        "Authorization": f"Bearer {os.environ['SUBMILLI_SERVER_TOKEN']}",
         "submilli-variables": f"customerId={customer_id}",
     }
     checkpointer = InMemorySaver()

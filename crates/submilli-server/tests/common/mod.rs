@@ -48,6 +48,7 @@ pub fn spawn_server(
         .env_remove("SUBMILLI_SECRET_STORE_KEY_FILE")
         .env_remove("SUBMILLI_SECRET_KEY")
         .env_remove("SUBMILLI_ALLOW_UNAUTHENTICATED")
+        .env_remove("SUBMILLI_SERVER_TOKEN")
         .stdout(Stdio::null())
         .stderr(Stdio::null());
     for (key, value) in extra_env {

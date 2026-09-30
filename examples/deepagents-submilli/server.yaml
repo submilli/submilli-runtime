@@ -1,9 +1,0 @@
-# Who may call this server, and as what. Each token is read from the
-# environment variable named here, so this file holds no secret.
-api_tokens:
-- name: ops
-  role: admin
-  token_env: SUBMILLI_ADMIN_TOKEN
-- name: app
-  role: user
-  token_env: SUBMILLI_USER_TOKEN

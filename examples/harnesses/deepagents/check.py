@@ -50,7 +50,7 @@ async def main() -> None:
         pass  # The server refuses the connection: the blueprint requires a user.
     else:
         raise AssertionError("a session without the user binding was accepted")
-    agent.SUBMILLI_USER_TOKEN = "a-token-the-server-does-not-know"
+    agent.SUBMILLI_SERVER_TOKEN = "a-token-the-server-does-not-know"
     try:
         await answer("total", "u_ada", scripted(PROGRAM))
     except Exception:

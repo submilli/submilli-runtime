@@ -6,7 +6,7 @@ a scripted node. Run `skills/evals/harnesses/serve_fixture.py` first, then:
 ```sh
 python3 -m venv .venv-langchain && . .venv-langchain/bin/activate
 python -m pip install -r skills/evals/harnesses/langchain/requirements.txt
-export SUBMILLI_SERVER_URL=http://127.0.0.1:18128 SUBMILLI_USER_TOKEN=...   # the line the fixture prints
+export SUBMILLI_SERVER_URL=http://127.0.0.1:18128 SUBMILLI_SERVER_TOKEN=...   # the line the fixture prints
 python skills/evals/harnesses/langchain/validate.py
 ```
 

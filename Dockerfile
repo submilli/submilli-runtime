@@ -95,8 +95,8 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
 # handlers, so the binary is a correct PID 1 on its own.
 #
 # No CMD, and a bare `docker run IMAGE` exits non-zero: the server refuses to
-# start until a config file declares `api_tokens` (mount one and point
-# $SUBMILLI_CONFIG at it, as compose.yaml does), or the operator opts out with
-# SUBMILLI_ALLOW_UNAUTHENTICATED=1. Baking either choice into the image would
-# make it the default for everyone who pulls it.
+# start until it has an API token (`-e SUBMILLI_SERVER_TOKEN`, as compose.yaml
+# does, or `api_tokens` in a config file $SUBMILLI_CONFIG points at), or the
+# operator opts out with SUBMILLI_ALLOW_UNAUTHENTICATED=1. Baking either choice
+# into the image would make it the default for everyone who pulls it.
 ENTRYPOINT ["/usr/local/bin/submilli-server"]

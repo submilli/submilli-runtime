@@ -231,10 +231,10 @@ auth:
 # two sources for one number is how those drift apart.
 #
 # `api_tokens` entries are added after the chart's `admin` and `user`, whose
-# names are reserved. An extra token has to come from the environment
-# (`token_env`, with the variable supplied through `extraEnv` and a
-# `secretKeyRef`) — never put a token value here: values are stored in plaintext
-# in the Helm release object.
+# names are reserved. An extra token is read from a file (`token_file`); mount a
+# Secret of yours through `secrets:` below and point the entry at
+# `/etc/submilli/secrets/<name>/<key>`. Never put a token value here: values are
+# stored in plaintext in the Helm release object.
 config: {}
 
 networkPolicy:
@@ -304,7 +304,7 @@ tests:
 # above its config file, so one set here beats both the chart's own settings and
 # `config:` — including the ones `config:` refuses. Prefer `config:` for
 # settings; use this for what only the environment can carry, such as a provider
-# credential or the variable a `token_env` names.
+# credential.
 extraEnv: []
 
 podAnnotations: {}

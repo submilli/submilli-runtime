@@ -20,9 +20,9 @@ import { MCPClient } from '@mastra/mcp';
 import { mastra } from './mastra';
 
 const agent = mastra.getAgent('assistant');
-// The server's `user` token; never the admin token.
-const token = process.env.SUBMILLI_USER_TOKEN;
-if (!token) throw new Error('SUBMILLI_USER_TOKEN is not set');
+// The API token the application was given for the server.
+const token = process.env.SUBMILLI_SERVER_TOKEN;
+if (!token) throw new Error('SUBMILLI_SERVER_TOKEN is not set');
 
 export async function handleRequest(prompt: string, customerId: string) {
   // Derive this value from authenticated, authorized application state.
@@ -113,9 +113,8 @@ import { MCPClient } from '@mastra/mcp';
 import { mastra } from './mastra.js';
 
 const serverUrl = process.env.SUBMILLI_SERVER_URL ?? 'http://127.0.0.1:8128';
-const token = process.env.SUBMILLI_USER_TOKEN;
-if (!token) throw new Error('SUBMILLI_USER_TOKEN is not set');
-if (!token) throw new Error('SUBMILLI_USER_TOKEN is required');
+const token = process.env.SUBMILLI_SERVER_TOKEN;
+if (!token) throw new Error('SUBMILLI_SERVER_TOKEN is not set');
 const customerId = process.env.DEMO_CUSTOMER_ID ?? 'cus_northwind';
 if (!/^cus_[a-z0-9_]+$/.test(customerId) || /[;\r\n]/.test(customerId)) {
   throw new Error('invalid DEMO_CUSTOMER_ID');
@@ -153,7 +152,7 @@ npm install
 # Set the provider key only for a real model run; this guide does not perform one.
 export OPENAI_API_KEY=...
 export SUBMILLI_SERVER_URL=http://127.0.0.1:8128
-# SUBMILLI_USER_TOKEN must already hold the server's user token.
+# SUBMILLI_SERVER_TOKEN must already hold the token the server was started with.
 npm run typecheck
 npm start
 ```
@@ -174,7 +173,7 @@ reuse it when validating this recipe rather than copying a partial scaffold.
 The blueprint must declare required `customerId`, allow
 `acme.com/balance.read` only when `customerId == ${vars.customerId}`, and use
 `default: deny`. The MCP URL is
-`http://127.0.0.1:8128/mcp/support-read`; send the `user` token as
+`http://127.0.0.1:8128/mcp/support-read`; send `SUBMILLI_SERVER_TOKEN` as
 `Authorization: Bearer …` and bind the trusted value with
 `submilli-variables: customerId=cus_northwind`.
 Variables constrain generated code; they are not authentication, and the token
@@ -208,7 +207,7 @@ Run these deterministic checks before a live model task:
 
 Common failures are an old sample using `listTools()` for per-user
 credentials, a shared client whose headers were mutated between requests, a
-missing required variable, a missing or admin token in the harness, applying the blueprint to a different server, and
+missing required variable, a missing or unknown token in the harness, applying the blueprint to a different server, and
 closing the client before a stream finishes. Current `@mastra/mcp` also has
 `listToolsetsWithErrors()` for discovery diagnostics.
 

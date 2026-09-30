@@ -10,9 +10,9 @@ const { MCPClient } = await import(
 
 const base = process.env.SUBMILLI_SERVER_URL ?? 'http://127.0.0.1:18128';
 const blueprint = `${base}/mcp/support-read`;
-// The fixture's user token; serve_fixture.py prints it.
-const token = process.env.SUBMILLI_USER_TOKEN;
-assert.ok(token, 'SUBMILLI_USER_TOKEN is required');
+// serve_fixture.py prints this. It is a `user`-role token, so a pass shows this surface needs no more.
+const token = process.env.SUBMILLI_SERVER_TOKEN;
+assert.ok(token, 'SUBMILLI_SERVER_TOKEN is required');
 
 function program(customerId) {
   return `import { readBalance } from "@acme/billing"; function main(): number { return readBalance("${customerId}"); }`;

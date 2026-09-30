@@ -12,10 +12,10 @@ use serde::de::DeserializeOwned;
 use ureq::http::header::AUTHORIZATION;
 use ureq::http::{HeaderValue, StatusCode};
 
-/// Holds the token when no `--token-file` is given. Named for the admin role
-/// because nearly every `submilli server` command manages the server; the two
-/// that only run or read (`run-code`, `docs`) accept a user token in it too.
-const ADMIN_TOKEN_ENV: &str = "SUBMILLI_ADMIN_TOKEN";
+/// Holds the token when no `--token-file` is given. The server reads the same
+/// variable as an admin token, so a CLI sharing the server's environment needs
+/// no setup of its own.
+const SERVER_TOKEN_ENV: &str = "SUBMILLI_SERVER_TOKEN";
 const TOKEN_FILE_ENV: &str = "SUBMILLI_SERVER_TOKEN_FILE";
 const DEFAULT_SERVER_URL: &str = "http://127.0.0.1:8128";
 
@@ -32,7 +32,7 @@ pub struct ServerTarget {
     server_url: String,
 
     /// File holding the API token to send. Without it the token is read from
-    /// `$SUBMILLI_ADMIN_TOKEN`; with neither, no token is sent, which only a
+    /// `$SUBMILLI_SERVER_TOKEN`; with neither, no token is sent, which only a
     /// server started with `--allow-unauthenticated` accepts. There is no flag
     /// taking the token itself, so it never lands in the process list.
     /// Env: `$SUBMILLI_SERVER_TOKEN_FILE`.
@@ -114,8 +114,9 @@ pub fn error_message(resp: ureq::http::Response<ureq::Body>) -> String {
     let status = resp.status();
     if status == StatusCode::UNAUTHORIZED {
         return format!(
-            "the server did not accept this command's API token. Set `{ADMIN_TOKEN_ENV}` to a \
-             token from the server's `api_tokens`, or `{TOKEN_FILE_ENV}` to a file holding one"
+            "the server did not accept this command's API token. Set `{SERVER_TOKEN_ENV}` to \
+             the token the server was started with, or `{TOKEN_FILE_ENV}` to a file holding \
+             one"
         );
     }
     resp.into_body().read_json::<ServerError>().map_or_else(
@@ -183,10 +184,10 @@ fn configured_token(token_file: Option<&Path>) -> Result<Option<(String, String)
             token.to_owned(),
         )));
     }
-    let Some(token) = std::env::var_os(ADMIN_TOKEN_ENV) else {
+    let Some(token) = std::env::var_os(SERVER_TOKEN_ENV) else {
         return Ok(None);
     };
-    let source = format!("`${ADMIN_TOKEN_ENV}` variable");
+    let source = format!("`${SERVER_TOKEN_ENV}` variable");
     // Not valid Unicode is not unset: sending nothing would turn a mangled
     // token into an unexplained 401.
     let token = token.into_string().map_err(|_| unsendable(&source))?;

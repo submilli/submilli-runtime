@@ -12,8 +12,8 @@ from langgraph.graph import END, START, MessagesState, StateGraph
 from langgraph.prebuilt import ToolNode
 
 URL = os.environ.get("SUBMILLI_SERVER_URL", "http://127.0.0.1:18128").rstrip("/")
-# The fixture's user token; serve_fixture.py prints it.
-TOKEN = os.environ["SUBMILLI_USER_TOKEN"]
+# serve_fixture.py prints this. It is a `user`-role token, so a pass shows this surface needs no more.
+TOKEN = os.environ["SUBMILLI_SERVER_TOKEN"]
 CODE = 'import { readBalance } from "@acme/billing"; function main(): number { return readBalance("cus_northwind"); }'
 
 

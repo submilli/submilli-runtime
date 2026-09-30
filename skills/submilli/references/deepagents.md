@@ -6,7 +6,7 @@ Read [harnesses](harnesses.md) first. Deep Agents is the model loop and orchestr
 
 For a new project, follow [setup](setup.md), then [packages](packages.md), then [blueprints](blueprints.md). The [shared harness setup](harnesses.md) builds the `@acme/billing` / `support-read` fixture these examples use. A useful first slice is a fixture package whose exported function has a `@capability` annotation and calls `check(...)`. Run `submilli build check`, `submilli build test`, and `submilli blueprint lint` before involving a model. The MCP URL is `http://127.0.0.1:8128/mcp/<blueprint-name>`.
 
-Every connection sends `Authorization: Bearer <token>` with the server's `user` token, read from `SUBMILLI_USER_TOKEN`; never give the agent process the admin token. Bind identity from authenticated application state before constructing the MCP client. The header format is `submilli-variables: customerId=cus_northwind`; validate the value and reject semicolon, carriage return, and line-feed characters. Never derive this header from chat. Make a new client/session for every identity and keep it alive for the entire agent run.
+Every connection sends `Authorization: Bearer <token>`, read from `SUBMILLI_SERVER_TOKEN` ([which token](harnesses.md#adapt-the-harness)). Bind identity from authenticated application state before constructing the MCP client. The header format is `submilli-variables: customerId=cus_northwind`; validate the value and reject semicolon, carriage return, and line-feed characters. Never derive this header from chat. Make a new client/session for every identity and keep it alive for the entire agent run.
 
 Use the versions the application already has; for a new project install the current releases. These examples were verified on 2026-09-17 with `deepagents 0.7.15` and `langchain-mcp-adapters 0.3.2` (PyPI) and `deepagents 1.13.5` with `@langchain/mcp-adapters 1.1.4` (npm); if an import or signature differs, the installed version's official API wins over this text. Deep Agents requires a tool-calling model.
 
@@ -20,7 +20,7 @@ export OPENAI_API_KEY='...'
 export SUBMILLI_SERVER_URL='http://127.0.0.1:8128'
 export SUBMILLI_BLUEPRINT='support-read'
 export SUBMILLI_CUSTOMER_ID='cus_northwind'
-# SUBMILLI_USER_TOKEN must already hold the server's user token.
+# SUBMILLI_SERVER_TOKEN must already hold the token the server was started with.
 ```
 
 Save as `agent.py` and run `python agent.py`:
@@ -56,7 +56,7 @@ async def main() -> None:
         "transport": "streamable_http",
         "url": f"{server_url}/mcp/{blueprint}",
         "headers": {
-            "Authorization": f"Bearer {required('SUBMILLI_USER_TOKEN')}",
+            "Authorization": f"Bearer {required('SUBMILLI_SERVER_TOKEN')}",
             "submilli-variables": f"customerId={customer_id}",
         },
     }})
@@ -131,7 +131,7 @@ export OPENAI_API_KEY='...'
 export SUBMILLI_SERVER_URL='http://127.0.0.1:8128'
 export SUBMILLI_BLUEPRINT='support-read'
 export SUBMILLI_CUSTOMER_ID='cus_northwind'
-# SUBMILLI_USER_TOKEN must already hold the server's user token.
+# SUBMILLI_SERVER_TOKEN must already hold the token the server was started with.
 ```
 
 `agent.ts`:
@@ -160,7 +160,7 @@ async function main(): Promise<void> {
     mcpServers: { submilli: {
       url: `${baseUrl}/mcp/${required("SUBMILLI_BLUEPRINT")}`,
       headers: {
-        Authorization: `Bearer ${required("SUBMILLI_USER_TOKEN")}`,
+        Authorization: `Bearer ${required("SUBMILLI_SERVER_TOKEN")}`,
         "submilli-variables": `customerId=${customerId}`,
       },
       automaticSSEFallback: false,
@@ -203,6 +203,6 @@ Use one request-scoped agent/client per identity. In streaming code, close the s
 
 ## Verification and troubleshooting
 
-Run in order: start the server; initialize and list tools; call an allowed operation; call with a cross-identity value; omit the variable header; then run one model task and inspect tool-call messages and final output. `connection refused` means the server or port is wrong. `401` means `SUBMILLI_USER_TOKEN` is missing or not one of the server's tokens. Missing-variable or denied calls mean the trusted header or blueprint grant is wrong. No tools or incomplete descriptions means the adapter loading path was bypassed. A model tool error means the provider/model lacks tool calling. Unexpected shell/file calls mean middleware or backend exposed capabilities outside Submilli. Leaks or hangs mean cleanup happened before stream completion.
+Run in order: start the server; initialize and list tools; call an allowed operation; call with a cross-identity value; omit the variable header; then run one model task and inspect tool-call messages and final output. `connection refused` means the server or port is wrong. `401` means `SUBMILLI_SERVER_TOKEN` is missing or not one of the server's tokens. Missing-variable or denied calls mean the trusted header or blueprint grant is wrong. No tools or incomplete descriptions means the adapter loading path was bypassed. A model tool error means the provider/model lacks tool calling. Unexpected shell/file calls mean middleware or backend exposed capabilities outside Submilli. Leaks or hangs mean cleanup happened before stream completion.
 
 Authoritative references: [Deep Agents Python quickstart](https://docs.langchain.com/oss/python/deepagents/quickstart), [Deep Agents customization](https://docs.langchain.com/oss/python/deepagents/customization), [LangChain Python MCP](https://docs.langchain.com/oss/python/langchain/mcp), [Deep Agents JavaScript customization](https://docs.langchain.com/oss/javascript/deepagents/customization), and the [LangChain JS MCP adapter](https://github.com/langchain-ai/langchainjs/tree/main/libs/langchain-mcp-adapters).

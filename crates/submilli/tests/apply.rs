@@ -24,7 +24,7 @@ fn apply(path: &Path, env: &[(&str, &str)]) -> Output {
     let mut cmd = Command::new(submilli_bin());
     cmd.args(["apply", "-f"]).arg(path);
     cmd.env_remove("SUBMILLI_SERVER_URL");
-    cmd.env_remove("SUBMILLI_ADMIN_TOKEN");
+    cmd.env_remove("SUBMILLI_SERVER_TOKEN");
     cmd.env_remove("SUBMILLI_SERVER_TOKEN_FILE");
     for (key, value) in env {
         cmd.env(key, value);
@@ -235,7 +235,7 @@ async fn apply_sends_the_admin_token_from_the_environment() {
     .unwrap();
     assert!(!refused.status.success());
     let message = stderr(&refused);
-    assert!(message.contains("SUBMILLI_ADMIN_TOKEN"), "{message}");
+    assert!(message.contains("SUBMILLI_SERVER_TOKEN"), "{message}");
 
     let accepted = tokio::task::spawn_blocking({
         let server = server.clone();
@@ -244,7 +244,7 @@ async fn apply_sends_the_admin_token_from_the_environment() {
                 &file,
                 &[
                     ("SUBMILLI_SERVER_URL", &server),
-                    ("SUBMILLI_ADMIN_TOKEN", ADMIN_TOKEN),
+                    ("SUBMILLI_SERVER_TOKEN", ADMIN_TOKEN),
                 ],
             )
         }

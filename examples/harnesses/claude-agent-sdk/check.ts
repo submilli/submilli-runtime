@@ -37,7 +37,7 @@ assert.ok(offered.includes("submilli__typescript__execute"), offered.join(", "))
 const unbound = await connect("");
 assert.equal(unbound.status, "failed");
 
-process.env.SUBMILLI_USER_TOKEN = "a-token-the-server-does-not-know";
+process.env.SUBMILLI_SERVER_TOKEN = "a-token-the-server-does-not-know";
 const unknown = await connect("u_ada");
 assert.equal(unknown.status, "failed");
 console.log("claude-agent-sdk: ok");

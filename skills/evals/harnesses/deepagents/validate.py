@@ -16,8 +16,8 @@ from langchain_mcp_adapters.client import MultiServerMCPClient
 from langchain_mcp_adapters.tools import load_mcp_tools
 
 URL = os.environ.get("SUBMILLI_SERVER_URL", "http://127.0.0.1:18128").rstrip("/")
-# The fixture's user token; serve_fixture.py prints it.
-TOKEN = os.environ["SUBMILLI_USER_TOKEN"]
+# serve_fixture.py prints this. It is a `user`-role token, so a pass shows this surface needs no more.
+TOKEN = os.environ["SUBMILLI_SERVER_TOKEN"]
 EXECUTE = "submilli__typescript__execute"
 
 
