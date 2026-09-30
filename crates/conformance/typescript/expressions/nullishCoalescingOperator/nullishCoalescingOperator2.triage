@@ -1,2 +1,2 @@
 line 15, 16, 17, 18, 19, 20, 22 type: bug SUB-1204 a literal widens to its base type where tsc keeps the literal type
-line 21 type: bug SUB-1196 (primitive to `{}`) removing `null` from `unknown` leaves `unknown`, where tsc gives `{}`
+line 21 type: bug SUB-1196 (primitive to `{}`) a primitive isn't assignable to `{}` or `Object` (removing `null` from `unknown` leaves `unknown`, where tsc gives `{}`)

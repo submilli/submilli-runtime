@@ -1,1 +1,1 @@
-line 17 type: bug SUB-1202 a type parameter with nothing to infer from stays unbound, where tsc infers `unknown`
+line 17 type: bug SUB-1202 a type parameter with nothing to infer from is an error or stays unbound, where tsc infers `unknown`

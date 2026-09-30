@@ -4,7 +4,7 @@ line 62 missed: artifact we reject `extends Object` on line 58, so the construct
 line 71 missed: artifact we reject `extends Object` on line 67, so the constructor isn't checked
 line 83 missed: artifact we reject `extends Object` on line 79, so the constructor isn't checked
 line 92 missed: artifact we reject `extends Object` on line 88, so the constructor isn't checked
-line 3, 10, 20, 58, 67, 79, 88 extra: by-design spec §2.2 a class may only extend another class; `Object` is a prelude interface and `null` is not a class
-line 63 extra: artifact tsc rejects the `super()` that isn't a top-level statement on line 62; we reject the second `super()` call here
-line 74 extra: artifact tsc rejects the `super()` that isn't a top-level statement on line 71; we reject the second `super()` call here
-line 94 extra: artifact tsc rejects the `super()` that isn't a top-level statement on line 92; we reject the second `super()` call here
+line 3, 10, 20, 58, 67, 79, 88 extra: by-design spec §2.2 a class may only extend another class, `Object` is a prelude interface and `null` is not a class
+line 63 extra: artifact tsc rejects the `super()` that isn't a top-level statement on line 62, we reject the second `super()` call here
+line 74 extra: artifact tsc rejects the `super()` that isn't a top-level statement on line 71, we reject the second `super()` call here
+line 94 extra: artifact tsc rejects the `super()` that isn't a top-level statement on line 92, we reject the second `super()` call here

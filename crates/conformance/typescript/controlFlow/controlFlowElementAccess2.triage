@@ -1,2 +1,2 @@
-line 10, 11, 14, 15 extra: bug SUB-1196 (string-keyed records) a string-keyed record read is `V | null`, so a `typeof` guard leaves `null`
+line 10, 11, 14, 15 extra: bug SUB-1196 (string-keyed records) a string-keyed record read is `V | null`
 line 9, 10, 11, 13, 14, 15 type: bug SUB-1196 (string-keyed records) a string-keyed record read is `V | null`

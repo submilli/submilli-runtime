@@ -1,3 +1,2 @@
-line 7 extra: bug SUB-1196 (function properties) a function with assigned properties isn't a callable interface
-line 15 extra: bug SUB-1196 (function properties) properties assigned onto a function
-line 7, 13, 15 type: bug SUB-1196 (function properties) properties assigned onto a function
+line 7, 15 extra: bug SUB-1196 (function properties) assigning properties onto a function is rejected, where tsc makes the function an expando object
+line 7, 13, 15 type: bug SUB-1196 (function properties) assigning properties onto a function is rejected, where tsc makes the function an expando object

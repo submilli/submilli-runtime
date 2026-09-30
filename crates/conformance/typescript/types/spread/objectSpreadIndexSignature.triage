@@ -1,1 +1,1 @@
-line 6, 9 type: bug SUB-1196 (string-keyed records) spreading a record keeps its index signature
+line 6, 9 type: bug SUB-1196 (string-keyed records) a string-keyed record read is `V | null` (a spread keeps the index signature)

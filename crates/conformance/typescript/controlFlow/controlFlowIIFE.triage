@@ -1,3 +1,2 @@
-line 38 extra: bug SUB-1200 an immediately-called function's assignment doesn't narrow after the call
-line 48 extra: bug SUB-1200 narrowing doesn't reach into an immediately-invoked arrow
+line 38, 48 extra: bug SUB-1200 narrowing doesn't reach into or out of an immediately-invoked function
 line 39, 48 type: bug SUB-1200 narrowing doesn't reach a repeated `obj[key]` or into an immediately-invoked function

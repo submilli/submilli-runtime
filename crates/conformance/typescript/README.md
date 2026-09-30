@@ -124,6 +124,17 @@ that none of ours agrees with; and `extra`, an error of ours that none of `tsc`'
 agrees with. The reason starts `bug SUB-<n>`, `by-design spec §<section>`, or
 `artifact` followed by a note.
 
+When a line diverges for more than one reason, the entry names each, joined by
+`; also `:
+
+```text
+line 47 type: bug SUB-1204 a literal widens to its base type where tsc keeps the literal type; also by-design spec §1.6 …
+```
+
+So a reason itself never contains `; `. Use one wording per issue or spec rule, so
+that searching for it finds every line. A `bug SUB-1196 (<item>)` reason names the
+item of that checklist issue it waits on.
+
 The divergences not yet explained are listed in `unexplained.txt`, one
 `<case> <line> <kind>` per line. The test fails when:
 
@@ -152,12 +163,29 @@ before comparing:
 - `tsc`'s `Uint8Array<ArrayBuffer>` and `Uint8Array<ArrayBufferLike>` read as
   `Uint8Array`: the argument names the buffer behind the array, which ours has no
   choice of.
+- `Record<string, V>` reads as `{ [key: string]: V }`, the index signature it is
+  defined as. Other key types are left alone.
+- `tsc`'s `ArrayIterator<T>` reads as our `Iterator<T>`.
+- An optional field's `undefined` is dropped: `a?: T | undefined` is `a?: T`
+  without `exactOptionalPropertyTypes`. A field typed only `undefined`,
+  `b?: undefined`, which `tsc` gives a normalized object literal for the fields
+  only other members have, is dropped whole. This is the one rule that can equate
+  slightly different types: `tsc`'s field forbids a defined `b`, and ours allows
+  it.
+- A destructured parameter, which `tsc` prints by its pattern, reads like any
+  other parameter: `([a, b]: number[]) => void` is `(number[]) => void`.
+- A literal beside its own base type in a union is dropped: `string | "a"` is
+  `string`. `tsc` prints the reduced union. A bigint literal is not a `number`.
+- For the expression `this`, `tsc`'s polymorphic `this` type matches our class
+  name. Submilli can't write `: this`, so the two can't be told apart. The rule
+  needs the expression, since the type text alone doesn't name the class.
 
 Two kinds of entry are skipped, because they are not comparable:
 
-- **A literal written in the source.** `tsc` gives `1`, `"a"` and `true` their own
-  literal types, and widens them where they are bound. We widen at the literal. Only
-  the bound type is observable, and that is compared at the binding.
+- **A literal written in the source,** signed or not (`-1`, `- 10`). `tsc` gives
+  `1`, `"a"` and `true` their own literal types, and widens them where they are
+  bound. We widen at the literal. Only the bound type is observable, and that is
+  compared at the binding.
 - **An entry whose text appears a different number of times on the line** in `tsc`'s
   entries and ours. Occurrences are paired in order, so a count mismatch would shift
   every pairing after it. This mostly drops names `tsc` reports that are not

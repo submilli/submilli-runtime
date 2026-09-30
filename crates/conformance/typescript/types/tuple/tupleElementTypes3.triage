@@ -1,2 +1,2 @@
-line 2 extra: by-design spec §1.2 an array literal's element type comes from its first element
-line 2 type: by-design spec §1.2 an array literal's element type comes from its first element
+line 2 extra: bug SUB-1196 (array pattern) an array literal destructured by an array pattern is typed as an array, not a tuple
+line 2 type: bug SUB-1196 (array pattern) an array literal destructured by an array pattern is typed as an array, not a tuple

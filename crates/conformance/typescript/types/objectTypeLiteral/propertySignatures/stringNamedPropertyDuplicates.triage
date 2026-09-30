@@ -1,4 +1,4 @@
 line 10, 15, 18 missed: artifact tsc reports a duplicate declaration at each one; we report it at the later one, on the next line
 line 3 extra: by-design spec §2.2 a required field must be initialized or assigned in the constructor
 line 5 extra: by-design spec §2.2 a static field requires an initializer
-line 14, 17 type: bug SUB-1211 our type display drops a field's `readonly` and doesn't quote a non-identifier field name
+line 14, 17 type: bug SUB-1211 our type display drops a field's `readonly` or doesn't quote a non-identifier field name

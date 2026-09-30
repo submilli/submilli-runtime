@@ -1,2 +1,2 @@
 line 34, 37, 38, 43 missed: bug SUB-1160 a `private` constructor isn't enforced
-line 37, 38, 43 type: bug SUB-1160 a private constructor isn't enforced; tsc types the rejected `new` as `any`
+line 37, 38, 43 type: by-design spec §2.2 privacy is module-scoped, so this `new` of the `private` constructor in its module is typed as the class, where tsc makes it `any`

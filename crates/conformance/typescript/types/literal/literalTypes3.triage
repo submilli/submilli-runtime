@@ -1,5 +1,5 @@
-line 15 extra: by-design spec §1.5 a case must end with `break` or `return`; no fallthrough
+line 15 extra: by-design spec §1.5 a case must end with `break` or `return`, no fallthrough
 line 34 extra: bug SUB-1208 `new Error()` without a message is rejected
-line 19 type: by-design spec §1.5 a case must end with `break` or `return`; no fallthrough
+line 19 type: by-design spec §1.5 a case must end with `break` or `return`, no fallthrough
 line 39, 45, 51 type: bug SUB-1212 `===` against a union-typed operand doesn't narrow
 line 65 type: bug SUB-1212 a `switch` default doesn't exclude matched literals from a union with a non-literal member

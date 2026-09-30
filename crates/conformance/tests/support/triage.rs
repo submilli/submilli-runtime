@@ -13,6 +13,10 @@
 //!
 //! An entry covers every divergence of its kind on its line, so a second one there
 //! passes this check; the `.divergences` diff still shows it.
+//!
+//! A line that diverges for more than one reason names each, joined by `; also `.
+//! Each starts with its own category, though only the first is checked, and a
+//! reason never contains `; `.
 use std::collections::BTreeSet;
 use std::fmt;
 use std::fs;

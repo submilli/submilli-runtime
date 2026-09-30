@@ -1,1 +1,1 @@
-line 4, 7 extra: by-design spec §Excluded-Features no prototype methods such as `hasOwnProperty`; use `Object.hasOwn`
+line 4, 7 extra: by-design spec §Excluded-Features no prototype methods such as `hasOwnProperty`, use `Object.hasOwn`

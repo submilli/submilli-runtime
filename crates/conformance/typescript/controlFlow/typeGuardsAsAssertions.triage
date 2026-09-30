@@ -1,8 +1,8 @@
-line 114, 116, 118 extra: bug SUB-1196 (member read on `never`) a member read on `never`
+line 114, 116, 118 extra: bug SUB-1196 (member read on `never`) a member read on `never` is rejected
 line 13 type: bug SUB-1196 (literal under an expected type) a literal checked against an expected type takes that type, where tsc keeps its own
 line 37, 48, 49 type: bug SUB-1199 a loop that writes the variable widens it to its declared type at the loop head
-line 38 type: bug SUB-1199 a loop that writes the variable widens it to its declared type at the loop head; also artifact the only node at `x.slice` is from an abandoned first loop pass; the retained call types correctly
-line 50 type: artifact the only node at `x.slice` is from an abandoned first loop pass; the retained call types correctly
+line 38 type: bug SUB-1199 a loop that writes the variable widens it to its declared type at the loop head; also artifact the only node at `x.slice` is from an abandoned first loop pass, the retained call types correctly
+line 50 type: artifact the only node at `x.slice` is from an abandoned first loop pass, the retained call types correctly
 line 66, 75, 86, 93, 100 type: bug SUB-1210 a narrowing that rules out every member keeps a type instead of `never`
 line 83 type: bug SUB-1196 (literals from constant expressions) `!` on an operand of known truthiness isn't a literal type
-line 114, 116, 118 type: bug SUB-1196 (member read on `never`) `x!` after `x = null` is `never`, where tsc keeps the declared type
+line 114, 116, 118 type: bug SUB-1196 (member read on `never`) a member read on `never` is rejected (`x!` after `x = null`, which tsc types by the declared type)

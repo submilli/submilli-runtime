@@ -1,3 +1,3 @@
 line 28 missed: bug SUB-1152 the rejected `ma = rt` on line 21 gave `ma` the type of `rt`
-line 22, 25, 28 type: bug SUB-1152 a rejected assignment or `++`/`--` narrows its target to the assigned type
-line 30 type: bug SUB-1152 the rejected `mt = rt` gave `mt` the type of `rt`
+line 22, 25, 28 type: bug SUB-1152 a rejected assignment still narrows its target to the assigned type
+line 30 type: bug SUB-1152 a rejected assignment still narrows its target to the assigned type (`mt = rt`)

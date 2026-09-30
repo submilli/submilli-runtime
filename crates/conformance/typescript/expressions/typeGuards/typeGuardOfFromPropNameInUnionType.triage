@@ -1,2 +1,2 @@
-line 39, 40 extra: artifact we report the mismatch again on this line; tsc reports it once, on line 38
+line 39, 40 extra: artifact we report the mismatch again on this line, tsc reports it once, on line 38
 line 36 type: artifact the entry pairs with a node we synthesize for the narrowed receiver

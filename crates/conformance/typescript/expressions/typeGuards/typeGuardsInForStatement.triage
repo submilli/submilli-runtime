@@ -1,2 +1,2 @@
-line 4, 5, 10, 11, 17, 18 type: bug SUB-1152 the rejected assignment of `null` still narrows `x` to `null`
-line 7, 14 type: bug SUB-1152 a rejected assignment or `++`/`--` narrows its target to the assigned type
+line 4, 5, 10, 11, 17, 18 type: bug SUB-1152 a rejected assignment still narrows its target to the assigned type (`x = null`)
+line 7, 14 type: bug SUB-1152 a rejected assignment still narrows its target to the assigned type

@@ -1,2 +1,2 @@
-line 19, 23, 30, 31, 33, 34, 37, 38, 40 extra: by-design spec §1.6 `-x` on a string is rejected; write `-Number(x)`
+line 19, 23, 30, 31, 33, 34, 37, 38, 40 extra: by-design spec §1.6 `-x` on a string is rejected, write `-Number(x)`
 line 20, 24, 25, 39 extra: by-design spec §1.6 unary `+`/`-` apply only to numbers and bigints (and `+` to strings)

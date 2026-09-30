@@ -1,1 +1,1 @@
-line 8, 14, 18, 19, 22, 23 type: artifact tsc prints an alias of a primitive as the primitive; we print the alias name
+line 8, 14, 18, 19, 22, 23 type: artifact tsc prints an alias of a primitive as the primitive, we print the alias name
