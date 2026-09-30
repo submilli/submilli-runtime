@@ -1,0 +1,2 @@
+line 5, 10 extra: by-design spec §2.2 there is no `this` in a static member
+line 11 extra: by-design spec §2.2 a static reaches another static through the class name, not `super`

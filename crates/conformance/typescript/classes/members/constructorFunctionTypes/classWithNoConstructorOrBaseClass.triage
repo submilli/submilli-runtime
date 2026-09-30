@@ -1,0 +1,1 @@
+line 14 extra: bug SUB-1202 a type parameter with nothing to infer from is an error, where tsc infers `unknown`

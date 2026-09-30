@@ -1,0 +1,3 @@
+line 4 extra: by-design spec §1.7 strings have a core method set without the locale methods or `substr`
+line 6, 8 extra: bug SUB-1199 the true branch of `a || b` doesn't narrow when both sides narrow the same way
+line 10 extra: by-design spec §2.2 a method reference without a call is not a value

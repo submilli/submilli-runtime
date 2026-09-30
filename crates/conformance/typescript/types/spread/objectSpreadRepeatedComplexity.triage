@@ -1,0 +1,1 @@
+line 3 extra: by-design spec §Excluded-Features a number-keyed `Record` is an index signature; use `Map`

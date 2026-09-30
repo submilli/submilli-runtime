@@ -1,0 +1,1 @@
+line 7, 13, 17, 21, 30, 33 extra: bug SUB-1200 a guard on `obj[key]` doesn't narrow a later `obj[key]`

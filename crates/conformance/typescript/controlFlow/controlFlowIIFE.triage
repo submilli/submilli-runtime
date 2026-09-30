@@ -1,0 +1,2 @@
+line 38 extra: bug SUB-1200 an immediately-called function's assignment doesn't narrow after the call
+line 48 extra: bug SUB-1200 narrowing doesn't reach into an immediately-invoked arrow

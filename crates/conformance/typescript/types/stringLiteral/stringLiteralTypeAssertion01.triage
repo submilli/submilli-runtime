@@ -1,0 +1,1 @@
+line 23, 24 extra: bug SUB-1208 a cast to a union is rejected when only one member overlaps the source

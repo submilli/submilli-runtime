@@ -1,0 +1,1 @@
+line 20, 30 extra: bug SUB-1198 `x?.kind === lit` doesn't narrow a nullable discriminated union

@@ -1,0 +1,1 @@
+line 4, 10 extra: bug SUB-1196 (static method reassignment) a static method can't be reassigned through the class name

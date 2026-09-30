@@ -1,0 +1,1 @@
+line 10, 11, 14, 15 extra: bug SUB-1196 (string-keyed records) a string-keyed record read is `V | null`, so a `typeof` guard leaves `null`

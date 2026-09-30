@@ -1,0 +1,5 @@
+line 44 extra: bug SUB-1207 `+` rejects a `never` operand
+line 62 extra: bug SUB-1199 after an exhaustive `switch` whose cases all return, the value isn't narrowed to `never`
+line 116 extra: by-design spec §1.5 a case must end with `break` or `return`; no fallthrough
+line 127, 136 extra: by-design spec §1.5 a `switch` without `default` must cover every case
+line 140 extra: bug SUB-1208 `new Error()` without a message is rejected

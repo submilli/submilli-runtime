@@ -1,0 +1,1 @@
+line 17, 18 extra: bug SUB-1208 `.toString()` is rejected on an interface value

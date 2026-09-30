@@ -1,1 +1,2 @@
 line 32, 33, 34, 35, 36, 37 missed: artifact our parser stops reporting after 20 errors (`MAX_ERRORS` in parser.rs), all on earlier lines
+line 1 extra: artifact our parser stops reporting after 20 errors, before it reaches `main`

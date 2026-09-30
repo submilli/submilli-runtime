@@ -1,0 +1,2 @@
+line 16 extra: bug SUB-1152 the rejected `b = a` on line 15 gave `b` the type `A`
+line 32 extra: bug SUB-1152 the rejected `d = c` on line 31 gave `d` the type `C`

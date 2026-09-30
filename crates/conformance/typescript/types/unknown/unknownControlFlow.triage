@@ -1,1 +1,5 @@
 line 294 missed: artifact we reject `keyof T` in `ff1`'s declaration (line 278), so its calls aren't checked against it
+line 29 extra: by-design spec §1.6 `unknown` must be narrowed before use as a condition
+line 35 extra: by-design spec §1.6 an `unknown` must be narrowed before it is used as a condition
+line 214 extra: bug SUB-1201 a nested generic call is checked against the outer callee's unbound `T`
+line 278, 279 extra: bug SUB-1205 `keyof` over a type parameter or `unknown` is rejected

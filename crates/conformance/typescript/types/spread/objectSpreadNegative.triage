@@ -1,1 +1,3 @@
 line 34, 39, 41, 43 missed: bug SUB-1153 a property a later spread always overwrites
+line 53, 55, 57, 58 extra: artifact tsc types the rejected primitive spread as `any`; we keep `{}` and report the read
+line 60 extra: by-design spec §2.5 only structural object types can be spread

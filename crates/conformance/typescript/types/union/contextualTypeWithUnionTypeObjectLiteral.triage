@@ -1,0 +1,3 @@
+line 24 extra: artifact we report the mismatch again at the property; tsc reports only the declaration, on line 23
+line 28 extra: artifact we report the mismatch again at the property; tsc reports only the declaration, on line 27
+line 59 extra: artifact we report the mismatch again at the property; tsc reports only the declaration, on line 60

@@ -1,0 +1,2 @@
+line 13, 14, 24, 25, 32, 33 extra: by-design spec §1.2 a tuple index must be a numeric literal
+line 15, 16, 26, 27, 34, 35 extra: by-design spec §1.2 a tuple index must be a numeric literal, not `"0"`

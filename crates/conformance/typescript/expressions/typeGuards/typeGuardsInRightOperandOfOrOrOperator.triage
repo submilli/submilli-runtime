@@ -1,1 +1,2 @@
 line 45 missed: bug SUB-1156 we don't narrow `x` through `(z = x) ||`, so the branch tsc proves dead is checked as `boolean`
+line 10, 14 extra: bug SUB-1204 a ternary or `||` of literals widens to the base type

@@ -1,0 +1,1 @@
+line 9 extra: by-design spec §2.2 an override's parameters are checked contravariantly, where tsc allows method bivariance

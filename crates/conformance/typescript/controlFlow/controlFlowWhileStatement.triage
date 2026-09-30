@@ -1,0 +1,1 @@
+line 94, 104 extra: bug SUB-1199 a loop that writes the variable widens it to its declared type at the loop head

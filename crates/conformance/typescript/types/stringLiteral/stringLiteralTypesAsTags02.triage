@@ -1,0 +1,1 @@
+line 24 extra: by-design spec §2.11 a type guard's body must narrow the parameter to the asserted type

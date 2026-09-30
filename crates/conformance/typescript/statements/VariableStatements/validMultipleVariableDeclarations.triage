@@ -1,0 +1,1 @@
+line 36 extra: bug SUB-1067 a cast doesn't give an empty array literal its element type

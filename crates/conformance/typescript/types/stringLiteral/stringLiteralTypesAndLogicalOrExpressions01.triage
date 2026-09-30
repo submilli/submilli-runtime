@@ -1,0 +1,1 @@
+line 8, 10 extra: bug SUB-1204 a ternary or `||` of literals widens to the base type

@@ -1,0 +1,1 @@
+line 39, 40 extra: artifact we report the mismatch again on this line; tsc reports it once, on line 38

@@ -1,0 +1,2 @@
+line 31, 127, 128, 129, 130, 131, 132, 133, 134, 135, 136, 137, 138, 139, 140, 141, 142, 143 extra: by-design spec §2.5 only structural object types can be spread
+line 46, 48, 55, 57, 64, 66 extra: bug SUB-1196 (spreading a falsy or nullable value) `...(c && {…})` or a nullable source is rejected

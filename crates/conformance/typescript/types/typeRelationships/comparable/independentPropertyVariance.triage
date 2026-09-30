@@ -1,0 +1,1 @@
+line 9 extra: bug SUB-1203 `===` requires one operand to be assignable to the other, where tsc accepts overlapping types

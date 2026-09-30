@@ -1,0 +1,1 @@
+line 24 extra: by-design spec §1.8 `throw` accepts only `Error` values

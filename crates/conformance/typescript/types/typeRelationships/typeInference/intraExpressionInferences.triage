@@ -1,0 +1,2 @@
+line 14, 19, 26, 31, 32, 56 extra: bug SUB-1201 a type parameter isn't inferred from a sibling property of the same argument
+line 174, 179, 184 extra: bug SUB-1201 inference doesn't match a generic interface parameter against an object literal argument

@@ -1,1 +1,6 @@
 line 240 missed: bug SUB-1150 a comparison that can never be true
+line 12 extra: by-design spec §1.5 code after an exhaustive `switch` is unreachable
+line 15 extra: by-design spec §1.8 `throw` accepts only `Error` values
+line 236 extra: by-design spec §1.5 a `switch` without `default` must cover every case
+line 237 extra: by-design spec §1.5 a case must end with `break` or `return`; no fallthrough
+line 241 extra: bug SUB-1199 a `switch` without `default` doesn't narrow the path that falls out

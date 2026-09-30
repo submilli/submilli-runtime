@@ -1,1 +1,2 @@
 line 3 missed: by-design spec §1.6 destructuring is only in declarations and parameters, so we reject this assignment as an invalid target
+line 3 extra: by-design spec §1.6 destructuring is only in declarations and parameters, so we reject this assignment as an invalid target
