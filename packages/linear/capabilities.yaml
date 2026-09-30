@@ -10,8 +10,10 @@ provides:
   description: Proactively create a session on an issue using the installed app's token.
   fields: {}
 - name: linear.app/createComment
-  description: Create a comment on an issue; returns the created comment.
-  fields: {}
+  description: Create a comment on an issue; returns the created comment. The issue is read first, so the check carries `teamId`, the team the issue belongs to.
+  fields:
+    teamId:
+      type: string
 - name: linear.app/createIssue
   description: Create an issue; returns the created issue.
   fields:
@@ -55,8 +57,12 @@ provides:
   description: Update session links, summary, or the complete plan.
   fields: {}
 - name: linear.app/updateIssue
-  description: Update an issue by UUID; returns the updated issue.
-  fields: {}
+  description: Update an issue by UUID; returns the updated issue. The issue is read first, so the check carries `teamId`, the team the issue belongs to. `projectId` is the project the update moves the issue to, or null when it moves it nowhere.
+  fields:
+    projectId:
+      type: string
+    teamId:
+      type: string
 requires:
 - capability: http.post
   filter: host == "api.linear.app" and path == "/graphql"

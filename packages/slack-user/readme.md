@@ -41,3 +41,14 @@ submilli build test -p @submilli/slack-user
 Put `SLACK_USER_TOKEN` in `.env` to enable live read tests. Set
 `SLACK_TEST_CHANNEL` to an approved channel name to enable the channel
 integration test.
+
+## Policy tests
+
+The scripts in `tests/policy/` run as a real `main` caller under restricted
+blueprints of the same name, without a token or network:
+
+- `user-ids.ts` shows that a blocked user ID is denied alone and inside a
+  list, and that one argument holding a comma, a space, or a line break is
+  rejected with `invalid_user_id` before the check.
+
+`cargo test -p submilli --test package_policy` runs them.

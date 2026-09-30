@@ -10,7 +10,17 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
 /// Packages that ship policy scripts under `tests/policy/`.
-const PACKAGES: &[&str] = &["firecrawl", "github", "gmail"];
+const PACKAGES: &[&str] = &[
+    "firecrawl",
+    "github",
+    "gmail",
+    "google-calendar",
+    "google-drive",
+    "jina",
+    "notion",
+    "slack-bot",
+    "slack-user",
+];
 
 #[test]
 fn policy_scripts_pass_under_their_blueprints() {

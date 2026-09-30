@@ -18,6 +18,10 @@ Write operations:
   An update sends only fields explicitly set by the caller.
 - `createComment(input)` adds a comment to an issue.
 
+`updateIssue` and `createComment` read the issue first, so the policy check
+carries the team it belongs to. An issue that does not exist throws before the
+check.
+
 Lists return a `Page<T>` with `nodes` and `pageInfo`. When
 `pageInfo.hasNextPage` is true, pass `{ after: pageInfo.endCursor }` to request
 the next page. Always keep pagination explicitly bounded.

@@ -14,6 +14,8 @@ import { parse } from "submilli:url";
 
 const READER_ENDPOINT = "https://r.jina.ai/";
 const SEARCH_ENDPOINT = "https://s.jina.ai/";
+// The largest download written to the VFS. The caller's `fs.write` check and the transfer use the same bound.
+const DOWNLOAD_MAX_BYTES = 20000000;
 
 /** Options for the Reader endpoints (`read` / `readJson`). All fields optional. */
 export interface ReaderOptions {
@@ -187,7 +189,10 @@ export function searchJson(query: string, options: SearchOptions | null = null):
  * the body never enters Wasm memory or a JSON envelope, so payload size is bound
  * by disk, not the fuel budget. Prefer this over `read` for large pages: pair it
  * with the host's batched file-read to consume the result incrementally.
+ * The file is written for the caller: its own `fs.write` rule decides whether `path` is allowed.
+ * A response over 20 MB is refused.
  * @capability jina.ai/read { host: string }
+ * @capability fs.write { path: string, max_bytes: number }
  */
 export function downloadRead(
     url: string,
@@ -212,8 +217,9 @@ export function downloadRead(
         timeout: timeout, locale: locale, tokenBudget: tokenBudget,
     });
     check("jina.ai/read", { host: parse(url).host });
+    check("fs.write", { path: path, max_bytes: DOWNLOAD_MAX_BYTES });
     authorize(headers);
-    const downloadOptions: DownloadOptions = { headers: headers };
+    const downloadOptions: DownloadOptions = { headers: headers, maxBytes: DOWNLOAD_MAX_BYTES };
     // Keep target path segments, queries, and fragments out of the Reader URL's
     // syntax so normalization cannot replace the host checked above.
     return download(READER_ENDPOINT + encodeURIComponent(url), path, downloadOptions);
@@ -224,6 +230,7 @@ export function downloadRead(
  * file, JSON-free (see `downloadRead`). Prefer this over `search` when the result
  * set is large.
  * @capability jina.ai/search {}
+ * @capability fs.write { path: string, max_bytes: number }
  */
 export function downloadSearch(
     query: string,
@@ -241,8 +248,9 @@ export function downloadSearch(
         noCache: noCache, timeout: timeout, locale: locale,
     });
     check("jina.ai/search", {});
+    check("fs.write", { path: path, max_bytes: DOWNLOAD_MAX_BYTES });
     authorize(headers);
-    const downloadOptions: DownloadOptions = { headers: headers };
+    const downloadOptions: DownloadOptions = { headers: headers, maxBytes: DOWNLOAD_MAX_BYTES };
     return download(SEARCH_ENDPOINT + "?q=" + encodeURIComponent(query), path, downloadOptions);
 }
 

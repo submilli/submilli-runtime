@@ -34,7 +34,12 @@ Spaces and tabs around an entry are removed, and no other whitespace. An
 address holds printable ASCII characters only, so an internationalized address,
 in a message or draft header as well, is refused with `invalid_recipient`. Any
 other entry throws `GmailError` with code `invalid_recipient` before anything
-is checked or sent, and the message names the field.
+is checked or sent, and the message names the field. Addresses are checked and
+sent in lowercase.
+
+`from`, when set, is one bare address too; anything else throws
+`invalid_sender`. Policy sees it as `from`, which is null when unset. An
+attachment `filename` cannot contain a double quote or a backslash.
 
 Policy sees every address a message goes to as one `recipients` list, in the
 order To, Cc, Bcc, with each address once:

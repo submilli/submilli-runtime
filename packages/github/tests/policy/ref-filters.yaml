@@ -1,0 +1,25 @@
+kind: blueprint
+name: github-ref-filters-test
+packages:
+  - '@submilli/github'
+default: deny
+permissions:
+  main:
+    - capability: github.com/contents.readFile
+      filter: owner == "allowed-org" and ref == "main"
+      action: allow
+    - capability: github.com/contents.readTextFile
+      filter: owner == "allowed-org" and ref == "main"
+      action: allow
+    - capability: github.com/contents.listDirectory
+      filter: owner == "allowed-org" and ref == "main"
+      action: allow
+    - capability: github.com/pulls.create
+      filter: owner == "allowed-org" and base == "main" and head == "feature"
+      action: allow
+    - capability: github.com/pulls.update
+      filter: owner == "allowed-org" and (base == null or base == "main")
+      action: allow
+  # Deliberate sentinel: permitted operations must reach secrets.get, which is
+  # denied here before a token can be read or a network request can happen.
+  '@submilli/github': []

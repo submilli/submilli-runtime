@@ -21,8 +21,12 @@ when the task targets a Shared Drive. `readText` reads ordinary UTF-8 text files
 and exports Google Docs as text; `downloadFile` requires an explicit export MIME
 type for other native Google files.
 
-Sharing creates one user, group, domain, or anyone permission at a time. Confirm
-the principal and role before calling it. Credentials are supplied internally;
+Sharing creates one user, group, domain, or anyone permission at a time. Set
+only the fields the type uses: `emailAddress` for a user or group, `domain` for
+a domain, neither for anyone. Any other combination throws `DriveError` with
+code `invalid_permission_principal`. An email address or domain is sent in
+lowercase. Confirm the principal and role before
+calling it. A parent folder is one Drive ID. Credentials are supplied internally;
 never request, accept, or pass an access token in package calls. Failures throw
 `DriveError`; do not blindly retry mutations when the outcome is uncertain.
 

@@ -1,9 +1,11 @@
 namespace: submilli
 provides:
 - name: submilli/google-drive.copyFile
-  description: Copy a file with an optional new name or parent.
+  description: Copy a file with an optional new name or parent. `parentId` in the check is the destination folder, or "" when the copy stays beside the source.
   fields:
     fileId:
+      type: string
+    parentId:
       type: string
 - name: submilli/google-drive.createFolder
   description: Create a folder, optionally under a parent.
@@ -61,11 +63,19 @@ provides:
   description: Search Drive files with structured filters plus an optional raw Drive query. Shared Drive searches set `driveId` and use `corpora=drive`.
   fields: {}
 - name: submilli/google-drive.shareFile
-  description: Share a file with exactly one user, group, domain, or anyone principal.
+  description: Share a file with exactly one user, group, domain, or anyone principal. `principal` is the lowercased email address for "user" and "group", the lowercased domain for "domain", and "anyone" for "anyone". An input that sets `emailAddress`, `domain`, or `allowFileDiscovery` for a type that does not use it is refused. `sendNotificationEmail` is true for a user or group unless set to false; for the other types, which Drive does not email, it is ignored and false. `allowFileDiscovery` is false when unset.
   fields:
+    allowFileDiscovery:
+      type: boolean
     fileId:
       type: string
     principal:
+      type: string
+    role:
+      type: string
+    sendNotificationEmail:
+      type: boolean
+    type:
       type: string
 - name: submilli/google-drive.trashFile
   description: Move a file to trash. This package intentionally has no permanent-delete API.
@@ -73,8 +83,10 @@ provides:
     fileId:
       type: string
 - name: submilli/google-drive.uploadFile
-  description: Upload a VFS file using Google's resumable protocol and fixed 8 MiB chunks.
+  description: Upload a VFS file using Google's resumable protocol and fixed 8 MiB chunks. `parentId` in the check is the destination folder as the caller named it, or "" when the caller names none and the file goes to My Drive root. The alias `root` names that folder too, so a rule on `parentId` lists the folders it allows.
   fields:
+    parentId:
+      type: string
     path:
       type: string
 requires:

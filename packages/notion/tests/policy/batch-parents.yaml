@@ -1,0 +1,19 @@
+kind: blueprint
+name: notion-batch-parents-test
+packages:
+  - '@submilli/notion'
+default: deny
+permissions:
+  main:
+    - capability: submilli/notion.createPage
+      filter: parentId == "11111111-1111-4111-8111-111111111111"
+      action: allow
+    - capability: submilli/notion.movePage
+      filter: parentId == "11111111-1111-4111-8111-111111111111"
+      action: allow
+    - capability: submilli/notion.movePages
+      filter: parentId == "11111111-1111-4111-8111-111111111111"
+      action: allow
+  # Deliberate sentinel: an allowed call must reach secrets.get, which is
+  # denied here before a token can be read or a request can be sent.
+  '@submilli/notion': []

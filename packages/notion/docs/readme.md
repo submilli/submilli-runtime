@@ -41,7 +41,11 @@ upload ID suitable for `FileReference { type: "file_upload", uploadId: id }`.
 
 Bulk page creation and moves are sequential. They validate every reference
 before the first mutation, stop on the first failure, and throw
-`BatchNotionError` with `completedIds` and `failedIndex`.
+`BatchNotionError` with `completedIds` and `failedIndex`. `createPages` has no
+capability of its own: each page is checked as `createPage` when its turn
+comes, so a denial can follow pages already created; it arrives as
+`PermissionDeniedError`, without the IDs of those pages. `movePages` checks every
+move, with the fields `movePage` checks, before it moves the first page.
 
 Failures throw `NotionError` with `code`, HTTP `status`, `requestId`, and
 `retryAfter`. The package does not sleep or retry automatically; use

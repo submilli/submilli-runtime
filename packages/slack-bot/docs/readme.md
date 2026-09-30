@@ -20,7 +20,9 @@ Only update or delete messages authored by the bot. The package has no
 inbound-event loop, scheduled-message API, views, file upload, or admin API.
 
 Credentials are supplied internally. Never request, accept, or pass a Slack
-token in package calls. Failures throw `SlackError` with Slack's
+token in package calls. A direct-message recipient is one Slack user ID such
+as `U012ABCDEF`; anything else throws `SlackError` with code
+`invalid_user_id`. Failures throw `SlackError` with Slack's
 machine-readable `code` and HTTP `status`. The package never sleeps or retries
 automatically.
 

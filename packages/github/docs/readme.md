@@ -3,7 +3,14 @@
 Use `@submilli/github` for typed GitHub.com work inside Submilli. Credentials are read
 internally from `GITHUB_TOKEN`; never pass tokens as function arguments.
 
-- Pass repositories as `{ owner, name }`.
+- Pass repositories as `{ owner, name }`: one owner login and one repository name. A
+  value with a space, a slash, or other syntax throws `GitHubError` with code
+  `invalid_input`.
+- A policy may limit file reads by `ref` and pull requests by `head` and `base`. Name
+  the `ref` when reading a file under such a policy; an unnamed ref is the default
+  branch and is checked as null. These fields are compared as written, and one branch has
+  several spellings (`main`, `heads/main`, a commit SHA), so such rules are written as
+  allow rules that name the permitted values.
 - Prefer `searchCode`, `searchIssues`, and `searchPullRequests` for repository-scoped
   discovery. They reject query syntax that could escape the repository policy.
 - Continue list calls with the opaque `nextPageToken`; do not interpret it.

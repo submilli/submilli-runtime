@@ -4,6 +4,8 @@ import secrets from "submilli:secrets";
 import { check } from "submilli:security";
 
 const API = "https://slack.com/api/";
+// One Slack user ID: a `U` or `W` followed by capital letters and digits.
+const USER_ID = /^[UW][A-Z0-9]+$/;
 
 /** A Slack transport or application error with a stable Slack error code. */
 export class SlackError extends Error {
@@ -266,8 +268,9 @@ export function sendMessage(input: SendMessageInput): SlackMessage {
  * @capability slack.com/bot/sendDirectMessage { userId: string }
  */
 export function sendDirectMessage(userId: string, text: string): SlackMessage {
-    check("slack.com/bot/sendDirectMessage", { userId: userId });
-    const opened = slackPost("conversations.open", { users: userId }).json() as ConversationResponse;
+    const recipientId = singleUserId(userId);
+    check("slack.com/bot/sendDirectMessage", { userId: recipientId });
+    const opened = slackPost("conversations.open", { users: recipientId }).json() as ConversationResponse;
     requireOk(opened, 200);
     const data = slackPost("chat.postMessage", { channel: opened.channel.id, text: text }).json() as MessageResponse;
     requireOk(data, 200);
@@ -285,7 +288,7 @@ export function sendDirectMessage(userId: string, text: string): SlackMessage {
  */
 export function sendGroupDirectMessage(userIds: string[], text: string): SlackMessage {
     const participantIds: string[] = [];
-    for (const userId of userIds) participantIds.push(userId);
+    for (const userId of userIds) participantIds.push(singleUserId(userId));
     check("slack.com/bot/sendGroupDirectMessage", { userIds: participantIds });
     const opened = slackPost("conversations.open", { users: participantIds.join(",") }).json() as ConversationResponse;
     requireOk(opened, 200);
@@ -452,8 +455,9 @@ interface MembersRequest { channel: string; limit?: number; cursor?: string; }
  * @capability slack.com/bot/openDirectMessage { userId }
  */
 export function openDirectMessage(userId: string): SlackConversation {
-    check("slack.com/bot/openDirectMessage", { userId: userId });
-    const data = slackPost("conversations.open", { users: userId }).json() as ConversationResponse;
+    const recipientId = singleUserId(userId);
+    check("slack.com/bot/openDirectMessage", { userId: recipientId });
+    const data = slackPost("conversations.open", { users: recipientId }).json() as ConversationResponse;
     requireOk(data, 200);
     return conversationFrom(data.channel);
 }
@@ -467,7 +471,7 @@ export function openDirectMessage(userId: string): SlackConversation {
  */
 export function openGroupDirectMessage(userIds: string[]): SlackConversation {
     const participantIds: string[] = [];
-    for (const userId of userIds) participantIds.push(userId);
+    for (const userId of userIds) participantIds.push(singleUserId(userId));
     check("slack.com/bot/openGroupDirectMessage", { userIds: participantIds });
     const data = slackPost("conversations.open", { users: participantIds.join(",") }).json() as ConversationResponse;
     requireOk(data, 200);
@@ -618,6 +622,15 @@ function authHeaders(): Map<string, string> {
     const headers = new Map<string, string>();
     headers.set("Authorization", `Bearer ${token}`);
     return headers;
+}
+
+// `conversations.open` reads `users` as a comma-separated list, so a value that is not exactly one
+// ID would address users the check never saw.
+function singleUserId(value: string): string {
+    if (!USER_ID.test(value)) {
+        throw new SlackError("invalid_user_id", "user ID must be one Slack user ID, such as U012ABCDEF", 0);
+    }
+    return value;
 }
 
 function requireOk(envelope: SlackEnvelope, status: number): void {

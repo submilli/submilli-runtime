@@ -30,9 +30,6 @@ provides:
   fields:
     parentId:
       type: string
-- name: submilli/notion.createPages
-  description: Create pages sequentially and stop on the first failure.
-  fields: {}
 - name: submilli/notion.createView
   description: Create a configured database view.
   fields:
@@ -119,8 +116,12 @@ provides:
     parentId:
       type: string
 - name: submilli/notion.movePages
-  description: Move pages sequentially and stop on the first failure.
-  fields: {}
+  description: Move pages sequentially and stop on the first failure. Every move is checked before the first page is moved.
+  fields:
+    pageId:
+      type: string
+    parentId:
+      type: string
 - name: submilli/notion.queryDataSource
   description: Query pages and nested data sources.
   fields:

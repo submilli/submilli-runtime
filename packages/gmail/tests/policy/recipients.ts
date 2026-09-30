@@ -72,6 +72,12 @@ function main(): string {
     deniedAt("submilli/gmail.sendEmail", "main", () => { sendEmail({ to: ["allowed@example.com"], bcc: [" blocked@example.com "], subject: "s", text: "t" }); });
     deniedAt("submilli/gmail.sendEmail", "main", () => { sendEmail({ to: ["allowed@example.com"], cc: ["\tblocked@example.com\t"], subject: "s", text: "t" }); });
     reachesCredentialBoundary(() => { sendEmail({ to: ["allowed@example.com"], cc: ["second@example.com"], bcc: ["third@example.com"], subject: "s", text: "t" }); });
+    // Mail systems deliver each of these spellings to blocked@example.com, so policy reads them as it.
+    for (const spelling of ["Blocked@example.com", "BLOCKED@EXAMPLE.COM", "blocked@Example.com", "blocked@example.com.", "Blocked@Example.com.."]) {
+        deniedAt("submilli/gmail.sendEmail", "main", () => { sendEmail({ to: [spelling], subject: "s", text: "t" }); });
+        deniedAt("submilli/gmail.sendEmail", "main", () => { sendEmail({ to: ["allowed@example.com"], bcc: [spelling], subject: "s", text: "t" }); });
+        deniedAt("submilli/gmail.createDraft", "main", () => { createDraft({ to: ["allowed@example.com"], cc: [spelling], subject: "s", text: "t" }); });
+    }
 
     deniedAt("submilli/gmail.createDraft", "main", () => { createDraft({ to: ["blocked@example.com"], subject: "s", text: "t" }); });
     deniedAt("submilli/gmail.createDraft", "main", () => { createDraft({ to: ["allowed@example.com"], cc: ["blocked@example.com"], subject: "s", text: "t" }); });

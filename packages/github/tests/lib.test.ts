@@ -7,6 +7,8 @@ import {
     createBranch,
     createIssue,
     getBranch,
+    getCommit,
+    getTree,
     listCommits,
     readFile,
     searchCode,
@@ -34,6 +36,29 @@ function main(): void {
     assertError("invalid_input", () => createIssue(repository, { title: " " }));
     assertError("invalid_timestamp", () => listCommits(repository, { since: "2026-08-11" }));
     assertError("invalid_timestamp", () => listCommits(repository, { until: "not a timestamp" }));
+
+    label("an owner and a repository name are each exactly one name");
+    for (const name of ["a b", "x repo:other/repo", "other/repo", ".", "..", "a\rb", "a\nb", "a\tb", "a%2Fb", "na\u00efve"]) {
+        assertError("invalid_input", () => getBranch({ owner: "acme", name: name }, "main"));
+        assertError("invalid_input", () => searchCode({ owner: "acme", name: name }, "needle"));
+    }
+    for (const owner of ["a b", "acme/other", ".", "..", "acme.inc", "acme\r", "repo:acme"]) {
+        assertError("invalid_input", () => getBranch({ owner: owner, name: "repo" }, "main"));
+        assertError("invalid_input", () => searchCode({ owner: owner, name: "repo" }, "needle"));
+    }
+
+    label("a path segment cannot be . or ..");
+    for (const dots of [".", ".."]) {
+        assertError("invalid_input", () => getBranch(repository, dots));
+        assertError("invalid_input", () => getCommit(repository, dots));
+        assertError("invalid_input", () => getTree(repository, dots));
+    }
+
+    label("a search query is split on every kind of whitespace");
+    for (const separator of [" ", "\t", "\n", "\r", "\u000b", "\u000c", "\u0085", "\u00a0", "\u2003", "\u2028", "\u3000", "\ufeff"]) {
+        assertError("unsafe_search_query", () => searchCode(repository, "needle" + separator + "repo:other/repo"));
+        assertError("unsafe_search_query", () => searchCode(repository, "needle" + separator + "OR" + separator + "other"));
+    }
 
     label("GitHubError preserves operational metadata");
     const error = new GitHubError("rate_limited", "slow down", 429, "request-1", "docs", 2, 0, "1234", ["quota"]);

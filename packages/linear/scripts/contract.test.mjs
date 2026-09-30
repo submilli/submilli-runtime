@@ -10,14 +10,19 @@ let response;
 let request;
 let denied = false;
 const capabilities = [];
+const contexts = [];
+// Every request since a test last reset this, in order; `request` is the last of them.
+let requests = [];
 globalThis.__linearHost = {
     secrets: { get: () => token },
-    check: (capability) => {
+    check: (capability, context) => {
         capabilities.push(capability);
+        contexts.push(context);
         if (denied) throw new Error('Capability denied');
     },
     post: (url, body, headers) => {
         request = { url, body, headers };
+        requests.push(request);
         return { ok: true, json: () => ({ errors: null, data: response }) };
     },
 };
@@ -98,7 +103,7 @@ test('all five activity types and signal metadata are sent intact', () => {
 
 test('comments support threaded replies; comment and activity lists preserve pagination', () => {
     const input = { issueId: 'issue', parentId: 'parent', body: 'Reply' };
-    response = { commentCreate: { success: true, comment: { id: 'reply', ...input, parent: { id: 'parent' } } } };
+    response = { issue: { team: { id: 'team' } }, commentCreate: { success: true, comment: { id: 'reply', ...input, parent: { id: 'parent' } } } };
     assert.equal(linear.createComment(input).parent.id, 'parent');
     sent('createComment', 'CommentCreateInput!', input);
     for (const [method, field, connection] of [
@@ -110,6 +115,46 @@ test('comments support threaded replies; comment and activity lists preserve pag
         assert.deepEqual(request.body.variables, { id: 'target', first: 10, after: 'cursor' });
         assert.equal(capabilities.at(-1), `linear.app/${method}`);
         queries.add(request.body.query);
+    }
+});
+
+test('an update and a comment are checked against the team of their issue', () => {
+    const issue = { id: 'issue', title: 'Renamed' };
+    // Submilli reads an absent optional field as null; plain JavaScript needs it spelled out.
+    const unset = { title: null, description: null, assigneeId: null, stateId: null, priority: null, labelIds: null, projectId: null };
+    for (const [capability, call, mutation, context] of [
+        ['updateIssue', () => linear.updateIssue('issue', { ...unset, title: 'Renamed' }), 'issueUpdate', { teamId: 'team', projectId: null }],
+        ['updateIssue', () => linear.updateIssue('issue', { ...unset, projectId: 'project' }), 'issueUpdate', { teamId: 'team', projectId: 'project' }],
+        ['createComment', () => linear.createComment({ issueId: 'issue', body: 'Note', parentId: null }), 'commentCreate', { teamId: 'team' }],
+    ]) {
+        response = {
+            issue: { team: { id: 'team' } },
+            issueUpdate: { success: true, issue },
+            commentCreate: { success: true, comment: { id: 'comment' } },
+        };
+        requests = [];
+        call();
+        assert.equal(capabilities.at(-1), `linear.app/${capability}`);
+        // The team comes from Linear's answer about the issue, not from an argument.
+        assert.deepEqual({ ...contexts.at(-1) }, context);
+        assert.equal(requests.length, 2);
+        assert.ok(requests[0].body.query.includes('team { id }'));
+        assert.deepEqual(requests[0].body.variables, { id: 'issue' });
+        assert.ok(requests[1].body.query.includes(mutation));
+        queries.add(requests[0].body.query);
+
+        // A denial follows the read and precedes the mutation.
+        denied = true;
+        requests = [];
+        assert.throws(call, /Capability denied/);
+        assert.equal(requests.length, 1);
+        assert.ok(!requests[0].body.query.includes('mutation'));
+        denied = false;
+
+        response = { issue: null };
+        requests = [];
+        assert.throws(call, /issue was not found/);
+        assert.equal(requests.length, 1);
     }
 });
 
