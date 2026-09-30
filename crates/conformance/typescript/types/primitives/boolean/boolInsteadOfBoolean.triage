@@ -1,1 +1,1 @@
-line 3, 4 type: artifact the type comes from code tsc rejects, and each side's recovery type differs (line 2)
+line 3, 4 type: artifact the type comes from code tsc rejects, and each side's recovery type differs (on line 2)
