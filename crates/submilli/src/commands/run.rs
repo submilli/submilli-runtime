@@ -14,7 +14,10 @@ use interpreter::runtime::{
     McpTransport, NetworkPolicy, ReqwestHttpClient, RuntimeConfig, SharedTokenBudget, StoreData,
     Vfs, install_package_modules_async, install_runtime_async, install_tenant_limits,
 };
-use interpreter::{BacktraceMode, Sources, dispatch_main_async, render_backtrace};
+use interpreter::{
+    BacktraceMode, Sources, dispatch_main_async, failure_message, instantiate_program_async,
+    render_backtrace,
+};
 use submilli_blueprint::{Blueprint, VarBindings, resolve_variables};
 use submilli_build::{Artifact, PackageStore};
 use submilli_shared::llm::provider::DEFAULT_MAX_CONCURRENCY;
@@ -436,8 +439,8 @@ fn execute_on_this_thread(
             .collect();
         install_runtime_async(&mut linker, &mut store).await?;
         install_package_modules_async(&mut linker, &mut store, &linked_packages).await?;
-        let instance = linker.instantiate_async(&mut store, &module).await?;
         let _watchdog = cfg.arm_timeout(&engine);
+        let instance = instantiate_program_async(&linker, &mut store, &module).await?;
         dispatch_main_async(&mut store, &instance).await
     });
     match dispatch {
@@ -450,7 +453,7 @@ fn execute_on_this_thread(
             if let Some(bt) = render_backtrace(&err, &sources, file, BacktraceMode::Full) {
                 eprint!("{bt}");
             } else {
-                eprintln!("error: {err}");
+                eprintln!("error: {}", failure_message(&err));
             }
             Ok(ExitCode::from(1))
         }

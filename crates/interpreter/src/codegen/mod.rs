@@ -3135,8 +3135,8 @@ function main(): string {
         let result = pollster::block_on(main.call_async(&mut store, ()));
         // Same uncaught-exception reshaping `dispatch_main_async` applies, so a
         // throw renders with its stashed backtrace like a trap does.
-        let err = crate::runtime::exec::map_uncaught_exception(&mut store, result)
-            .expect_err("expected main() to trap or throw");
+        let err = result.expect_err("expected main() to trap or throw");
+        let err = crate::runtime::exec::uncaught_error(&mut store, err);
         let (sources, file) = crate::Sources::single("script.subm", source).unwrap();
         crate::render_backtrace(&err, &sources, file, crate::BacktraceMode::Full)
             .expect("backtrace empty — was wasm_backtrace_details enabled?")

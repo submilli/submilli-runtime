@@ -184,6 +184,11 @@ impl Inferer<'_> {
                         && !matches!(ret.peel(), Type::Void | Type::Error)
                     {
                         self.error(span, format!("expected `return` value of type `{ret}`"));
+                    } else if let Some(collected) = self.inferred_returns.as_mut() {
+                        // A bare `return` is a `void` return: recording it lets
+                        // a value `return` beside it be reported as a conflict.
+                        // Under a declared value type it was reported just above.
+                        collected.push((Type::Void, span));
                     }
                     None
                 };

@@ -17,7 +17,7 @@ pub enum BacktraceMode {
 
 /// An uncaught thrown `Error`, carrying its `name: message` text plus the
 /// throw-site backtrace the engine attached to the escaped exception;
-/// `map_uncaught_exception` re-wraps both here so [`render`] prints a source
+/// `uncaught_error` re-wraps both here so [`render`] prints a source
 /// backtrace like a trap.
 #[derive(Debug)]
 pub struct ThrownError {
@@ -46,7 +46,7 @@ pub fn render(
 
     // A thrown `Error` carries its message plus a backtrace we captured at throw
     // time. Render a message header, then the frames in the trap layout. With no
-    // captured backtrace, return `None` so the caller falls back to `error: {err}`.
+    // captured backtrace, return `None`; the caller prints [`failure_message`].
     if let Some(thrown) = error.downcast_ref::<ThrownError>() {
         let frames = render_frames(thrown.backtrace.as_ref()?, sources, mode, "thrown here")?;
         return Some(format!("error: {}\n{frames}", thrown.message));
@@ -60,19 +60,23 @@ pub fn render(
         mode,
         trap_label_for(error),
     )?;
-    Some(format!("error: {}\n{frames}", trap_message_for(error)))
+    Some(format!("error: {}\n{frames}", failure_message(error)))
 }
 
-/// Header text for a trap. Most engine messages already say what the program did
-/// (`null reference`, `cast failure`, `out of bounds array access`) and are used
-/// verbatim. These three name an engine mechanism instead — `interrupt` and
+/// The one-line text for a run's failure: the header [`render`] puts above the
+/// frames, and what a caller prints when `render` has no frames to show (a
+/// limit reached by top-level statements has none).
+///
+/// Most engine messages already say what the program did (`null reference`,
+/// `cast failure`, `out of bounds array access`) and are used verbatim. These
+/// three name an engine mechanism instead — `interrupt` and
 /// `all fuel consumed by WebAssembly` tell a reader nothing they can act on, and
 /// leak the host into a diagnostic that is supposed to be about their code.
 ///
 /// Deliberately not the same table as [`trap_label_for`]: a stack overflow reads
 /// better as the engine's `call stack exhausted` in the header (it says what
 /// happened) and as `stack overflow` in the frame label (it names the frame).
-fn trap_message_for(error: &Error) -> String {
+pub fn failure_message(error: &Error) -> String {
     match error.downcast_ref::<Trap>() {
         Some(Trap::Interrupt) => "timeout exceeded".to_string(),
         Some(Trap::OutOfFuel) => "fuel exhausted".to_string(),
@@ -224,7 +228,7 @@ fn kept_indices(is_user: &[bool]) -> Vec<usize> {
 
 #[cfg(test)]
 mod tests {
-    use super::{kept_indices, trap_message_for};
+    use super::{failure_message, kept_indices};
     use wasmtime::{Error, Trap};
 
     #[test]
@@ -236,14 +240,14 @@ mod tests {
             (Trap::OutOfFuel, "fuel exhausted"),
             (Trap::UnreachableCodeReached, "unreachable code reached"),
         ] {
-            assert_eq!(trap_message_for(&Error::new(trap)), expected);
+            assert_eq!(failure_message(&Error::new(trap)), expected);
         }
     }
 
     #[test]
     fn uncurated_traps_keep_the_engine_message() {
         assert_eq!(
-            trap_message_for(&Error::new(Trap::NullReference)),
+            failure_message(&Error::new(Trap::NullReference)),
             "null reference",
         );
     }

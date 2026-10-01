@@ -481,7 +481,7 @@ mod test_runner {
     };
     use interpreter::{
         BacktraceMode, PackageDeclaration, Sources, compile_script_owned_by, diagnostics,
-        dispatch_main_async, render_backtrace,
+        dispatch_main_async, failure_message, instantiate_program_async, render_backtrace,
     };
     use submilli_build::{
         Artifact, BuiltPackage, DriverError, PackageName, PackageStore, build_packages,
@@ -862,9 +862,14 @@ mod test_runner {
             // The test script compiles as its own module; install its TypeInfo so
             // `JSON.stringify` of a typed object resolves against the test package.
             store.data_mut().install_type_info(type_info);
-            let instance = linker.instantiate_async(&mut store, &module).await?;
             let _watchdog = cfg.arm_timeout(engine);
-            let result = dispatch_main_async(&mut store, &instance).await;
+            // The file's top-level statements run here; their failure is the
+            // file's first segment failing, as one in `main` would be.
+            let result = async {
+                let instance = instantiate_program_async(&linker, &mut store, &module).await?;
+                dispatch_main_async(&mut store, &instance).await
+            }
+            .await;
             let labels = store.data().test_labels.borrow().clone();
             Ok::<_, anyhow::Error>((result, labels))
         });
@@ -872,8 +877,8 @@ mod test_runner {
         let (result, labels) = match outcome {
             Ok(pair) => pair,
             Err(err) => {
-                // Linking/instantiation failure is a property of the file, not
-                // a reason to abort the whole run.
+                // A setup failure is a property of the file, not a reason to
+                // abort the whole run.
                 println!("FAIL {filename}  ({err})");
                 return Ok((0, 1));
             }
@@ -884,7 +889,8 @@ mod test_runner {
 
     /// Map a finished run to (passed, failed) segment counts and print a line
     /// per segment. Segments before the open one always passed (execution
-    /// reached the next `label`); the open segment fails iff `main` threw.
+    /// reached the next `label`); the open segment fails iff the run ended in
+    /// an error, in top-level statements or in `main`.
     fn report_outcome(
         filename: &str,
         result: wasmtime::Result<Option<String>>,
@@ -916,7 +922,7 @@ mod test_runner {
                 if let Some(bt) = render_backtrace(&err, sources, file, BacktraceMode::Full) {
                     eprint!("{bt}");
                 } else {
-                    eprintln!("error: {err}");
+                    eprintln!("error: {}", failure_message(&err));
                 }
                 (passed, 1)
             }

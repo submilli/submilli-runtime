@@ -433,6 +433,61 @@ fn timeout_interrupts_infinite_loop() {
     );
 }
 
+/// Top-level statements run while the module is instantiated, before `main`.
+/// A limit they reach is reported as the same limit reached in `main` is.
+#[test]
+fn a_limit_reached_by_top_level_statements_is_named() {
+    const SPIN: &str = "let total = 0;\n\
+        while (true) { total = total + 1; }\n\
+        function main(): number { return total; }";
+    // 2^26 code units = 128 MB, against the CLI's fixed 50 MB.
+    const ALLOCATE: &str = "let s = \"x\";\n\
+        for (let i = 0; i < 26; i++) { s = s + s; }\n\
+        function main(): number { return s.length; }";
+    let unbounded_fuel = "18446744073709551615";
+    let cases: [(&str, &str, &[&str], &str); 3] = [
+        (
+            "top_level_fuel",
+            SPIN,
+            &["--fuel", "100000"],
+            "error: fuel exhausted",
+        ),
+        ("top_level_memory", ALLOCATE, &[], "error: memory exhausted"),
+        (
+            "top_level_timeout",
+            SPIN,
+            &["--timeout", "50", "--fuel", unbounded_fuel],
+            "error: timeout exceeded",
+        ),
+    ];
+    for (name, source, flags, expected) in cases {
+        let out = run_script(name, source, flags);
+        assert!(!out.status.success(), "{name} should fail");
+        let err = stderr(&out);
+        assert!(
+            err.contains(expected),
+            "{name}: expected `{expected}`, got: {err}"
+        );
+    }
+}
+
+#[test]
+fn a_top_level_throw_keeps_its_message_and_earlier_output() {
+    let out = run_script(
+        "top_level_throw",
+        "const limits: number[] = [1];\n\
+         console.log(\"before the throw\");\n\
+         if (limits.length === 1) { throw new RangeError(\"refused at the top level\"); }\n\
+         function main(): number { return 1; }",
+        &[],
+    );
+    assert!(!out.status.success());
+    assert_eq!(
+        stderr(&out),
+        "before the throw\nerror: RangeError: refused at the top level\n"
+    );
+}
+
 #[test]
 fn reaching_the_memory_limit_ends_the_run_past_a_catch() {
     // 2^26 code units = 128 MB, against the CLI's fixed 50 MB.

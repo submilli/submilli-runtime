@@ -21,7 +21,9 @@ use crate::codegen::cast_check::emit_structural_test;
 use crate::codegen::function_emitter::FunctionEmitter;
 use crate::codegen::function_emitter::cast;
 use crate::codegen::symbol_table::{MethodSlotAbi, may_hold_null};
-use crate::typechecker::infer::narrowing::{BindingId, ReferencePath, cast_info_for};
+use crate::typechecker::infer::narrowing::{
+    BindingId, ReferencePath, cast_info_for, falsy_part, truthy_part,
+};
 use crate::typed_ast::field_runtime_type_is_testable;
 use crate::{
     BinOp, ExprId, Ident, Intrinsic, Type, TypedExprKind, TypedObjectFieldSource,
@@ -3188,7 +3190,19 @@ fn emit_binary(
                 )?;
                 Ok(())
             };
+            // An LHS narrowed to always-truthy (`&&`) or always-falsy (`||`)
+            // is never the result, and the result slot has no room for it:
+            // `c && n()` under `c === true` is a bare f64.
+            let kept_lhs_ty = match op {
+                BinOp::And => falsy_part(&lhs_ty),
+                _ => truthy_part(&lhs_ty),
+            };
+            let lhs_is_never_kept = matches!(kept_lhs_ty.peel(), Type::Never);
             let emit_kept_lhs_branch = |emitter: &mut FunctionEmitter| {
+                if lhs_is_never_kept {
+                    emitter.instruction(Instruction::Unreachable);
+                    return Ok(());
+                }
                 emitter.instruction(Instruction::LocalGet(tmp));
                 if lhs_is_ref {
                     // Ref-repr LHS: cast into the result slot's form —

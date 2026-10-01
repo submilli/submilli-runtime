@@ -1022,6 +1022,43 @@ fn build_test_runs_segments_and_reports_summary() {
     );
 }
 
+/// A test file's top-level statements run before `main`; their failure fails
+/// the file with the thrown message, as a failure in `main` does.
+#[test]
+fn build_test_reports_a_top_level_failure_as_the_files_failure() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let project = tmp.path().join("project");
+    write_file(
+        &project.join("submilli.toml"),
+        "[[package]]\nname = \"@acme/util\"\nversion = \"0.1.0\"\ndescription = \"Test package.\"\n",
+    );
+    write_file(
+        &project.join("src/lib.ts"),
+        "export function answer(): number { return 42; }",
+    );
+    write_file(
+        &project.join("tests/setup.test.ts"),
+        r#"
+            import { answer } from "@acme/util";
+            if (answer() === 42) { throw new RangeError("set-up refused"); }
+            function main(): void { }
+        "#,
+    );
+
+    let out = build_test(&project, tmp.path(), &[]);
+    assert!(!out.status.success(), "stdout: {}", stdout(&out));
+    assert!(
+        stdout(&out).contains("0 passed, 1 failed across 1 files"),
+        "stdout: {}",
+        stdout(&out)
+    );
+    assert!(
+        stderr(&out).contains("error: RangeError: set-up refused"),
+        "stderr: {}",
+        stderr(&out)
+    );
+}
+
 #[test]
 fn build_test_http_skip_preserves_local_tests_and_docs() {
     let tmp = tempfile::tempdir().expect("tempdir");
