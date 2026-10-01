@@ -73,7 +73,7 @@ pub use source::{ModulePath, SourceFile, Sources};
 pub use span::{FileId, LineIndex, Span};
 pub use token::{Token, TokenKind};
 pub use type_info::{FieldInfo, TypeInfo, TypeInfoId, TypeInfoIndex, TypeInfoKind, TypeInfoTable};
-pub use typechecker::{capture, check, desugar, infer, infer_package};
+pub use typechecker::{capability_binding_type, capture, check, desugar, infer, infer_package};
 pub use typed_ast::{
     CapturedVar, ClosureBody, EnumVariantPayload, ExportEntry, ExportKind, FieldNarrowingCheck,
     FieldNarrowingTest, ForOfKind, GenericArgument, GlobalKind, InterfaceCarrier,

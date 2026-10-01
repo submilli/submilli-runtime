@@ -37,13 +37,10 @@ struct Callable<'a> {
     body: StmtId,
 }
 
-/// Every function, static methods among them, then every documented instance
-/// method.
+/// Every function, static methods among them, then every instance method.
 ///
-/// Only a function's tags reach the capability schema, so a method is not
-/// asked for tags it lacks: the ones it carries are held to its checks. A
-/// constructor or an accessor keeps no doc comment in the typed AST, and so
-/// has no tags to hold.
+/// A constructor or an accessor keeps no doc comment in the typed AST, so its
+/// tags cannot reach the capability schema and it is not asked for them.
 fn callables(ta: &TypedAst) -> impl Iterator<Item = Callable<'_>> {
     let functions = ta.functions.iter().map(|function| Callable {
         doc: function.doc.as_ref(),
@@ -61,7 +58,6 @@ fn callables(ta: &TypedAst) -> impl Iterator<Item = Callable<'_>> {
             | TypedTypeDecl::Alias(_) => None,
         })
         .flat_map(|class| &class.methods)
-        .filter(|method| method.doc.is_some())
         .map(|method| Callable {
             doc: method.doc.as_ref(),
             params: &method.params,
@@ -100,7 +96,9 @@ fn validate_param_bindings(
                 ));
                 continue;
             };
-            if let Some(missing) = missing_path_segment(declarations, &param_decl.ty, path) {
+            if let BindingTarget::Missing(missing) =
+                binding_target(declarations, &param_decl.ty, path)
+            {
                 diags.push(warning(
                     *span,
                     format!("unknown field `{missing}` in `@capability` binding `${param}`"),
@@ -110,26 +108,33 @@ fn validate_param_bindings(
     }
 }
 
-/// The first segment of `path` that names no field, walking from a value of
-/// type `ty`. `None` when the path resolves, or reaches a type whose
-/// declaration is not known.
-fn missing_path_segment(
+/// What a `@capability` binding path reads from a value.
+pub(super) enum BindingTarget {
+    Found(Type),
+    /// The first segment that names no field.
+    Missing(String),
+    /// The path reaches a type whose declaration is not known.
+    Unresolved,
+}
+
+/// Walks `path` from a value of type `ty`.
+pub(super) fn binding_target(
     declarations: &TypeDeclarations<'_>,
     ty: &Type,
     path: &[String],
-) -> Option<String> {
+) -> BindingTarget {
     if names_url_component(ty, path) {
-        return None;
+        return BindingTarget::Found(Type::String);
     }
     let mut current = ty.clone();
     for segment in path {
         match declarations.member(&current, segment) {
             Member::Found(member) => current = member,
-            Member::Missing => return Some(segment.clone()),
-            Member::Unresolved => return None,
+            Member::Missing => return BindingTarget::Missing(segment.clone()),
+            Member::Unresolved => return BindingTarget::Unresolved,
         }
     }
-    None
+    BindingTarget::Found(current)
 }
 
 /// `$url.host` and `$url.path` name a component of the URL a string holds, not
@@ -560,18 +565,32 @@ mod tests {
     }
 
     #[test]
-    fn an_undocumented_member_is_not_asked_for_tags() {
+    fn a_constructor_or_an_accessor_is_not_asked_for_tags() {
         let messages = capability_messages(messages(
             "import { check } from \"submilli:security\";\n\
              class Client {\n\
                private token: string;\n\
                constructor(token: string) { check(\"x/create\", {}); this.token = token; }\n\
                get secret(): string { check(\"x/read\", {}); return this.token; }\n\
-               helper(): void { check(\"x/helper\", {}); }\n\
              }\n\
              function main(): void { }\n",
         ));
         assert!(messages.is_empty(), "{messages:?}");
+    }
+
+    #[test]
+    fn an_undocumented_method_is_asked_for_tags() {
+        let messages = capability_messages(messages(
+            "import { check } from \"submilli:security\";\n\
+             class Client {\n\
+               helper(): void { check(\"x/helper\", {}); }\n\
+             }\n\
+             function main(): void { }\n",
+        ));
+        assert_eq!(
+            messages,
+            ["missing `@capability x/helper` for `check()` call"]
+        );
     }
 
     #[test]

@@ -11,8 +11,8 @@ use crate::typechecker::infer::narrowing::LiteralValue;
 use crate::typechecker::type_param_substitution::TypeParamSubstitution;
 use crate::types::LiteralF64;
 use crate::{
-    IndexSignature, MangledName, NamespaceSymbol, ObjectField, PackageDeclaration, Type, TypeKind,
-    TypeSymbol, TypedAst, TypedInterfaceMember, TypedTypeDecl,
+    IndexSignature, MangledName, ObjectField, PackageDeclaration, Type, TypeKind, TypeSymbol,
+    TypedAst, TypedInterfaceMember, TypedTypeDecl,
 };
 
 /// A recursive alias reaches itself again, so expanding one has to be bounded.
@@ -193,7 +193,7 @@ impl<'a> TypeDeclarations<'a> {
             .or_else(|| {
                 self.packages
                     .iter()
-                    .find_map(|package| package_declaration(package, mangled))
+                    .find_map(|package| package.type_symbol(mangled))
                     .map(Declared::Symbol)
             })
     }
@@ -331,44 +331,6 @@ fn declared_name(declaration: &TypedTypeDecl) -> &str {
         TypedTypeDecl::StringEnum(declaration) => &declaration.name.name,
         TypedTypeDecl::Alias(declaration) => &declaration.name.name,
     }
-}
-
-/// `runtime_types` holds a package's declarations from every module under the
-/// name a type refers to them by. A type re-exported from the root module is
-/// also known by its public name, which only `types` records.
-fn package_declaration<'a>(
-    package: &'a PackageDeclaration,
-    mangled: &MangledName,
-) -> Option<&'a TypeSymbol> {
-    package
-        .runtime_types
-        .get(mangled.as_str())
-        .or_else(|| symbol_named(package.types.values(), mangled))
-        .or_else(|| {
-            package
-                .namespaces
-                .values()
-                .find_map(|namespace| namespace_declaration(namespace, mangled))
-        })
-}
-
-fn namespace_declaration<'a>(
-    namespace: &'a NamespaceSymbol,
-    mangled: &MangledName,
-) -> Option<&'a TypeSymbol> {
-    symbol_named(namespace.types.values(), mangled).or_else(|| {
-        namespace
-            .namespaces
-            .values()
-            .find_map(|child| namespace_declaration(child, mangled))
-    })
-}
-
-fn symbol_named<'a>(
-    mut symbols: impl Iterator<Item = &'a TypeSymbol>,
-    mangled: &MangledName,
-) -> Option<&'a TypeSymbol> {
-    symbols.find(|symbol| symbol.mangled_name == *mangled)
 }
 
 /// A field a type declares, or what its index signature holds under any name.

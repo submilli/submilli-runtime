@@ -175,6 +175,7 @@ fn write_acme_util_package_compiled_as(store_root: &Path, module_name: &str, sou
         &declared_as_util.type_info,
         &submilli_build::derive_capability_schema(
             &declared_as_util.declaration,
+            &[],
             &declared_as_util.required_capabilities,
         ),
         &declared_as_util.declaration,
@@ -205,7 +206,11 @@ fn write_dependent_packages(store_root: &Path) {
         store_root.join("@z").join("util"),
         &util.wasm,
         &util.type_info,
-        &submilli_build::derive_capability_schema(&util.declaration, &util.required_capabilities),
+        &submilli_build::derive_capability_schema(
+            &util.declaration,
+            &[],
+            &util.required_capabilities,
+        ),
         &util.declaration,
         &ArtifactMetadata::new("@z/util", "1.0.0", Vec::new()),
     )
@@ -225,7 +230,11 @@ fn write_dependent_packages(store_root: &Path) {
         store_root.join("@a").join("app"),
         &app.wasm,
         &app.type_info,
-        &submilli_build::derive_capability_schema(&app.declaration, &app.required_capabilities),
+        &submilli_build::derive_capability_schema(
+            &app.declaration,
+            &[],
+            &app.required_capabilities,
+        ),
         &app.declaration,
         &ArtifactMetadata::new(
             "@a/app",
@@ -880,6 +889,7 @@ async fn git_transitive_imports_require_configuration_and_keep_package_attributi
         &package.type_info,
         &submilli_build::derive_capability_schema(
             &package.declaration,
+            &[],
             &package.required_capabilities,
         ),
         &package.declaration,

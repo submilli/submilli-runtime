@@ -602,7 +602,7 @@ mod tests {
             .iter()
             .map(|(name, version)| crate::ArtifactDependency::new(*name, *version))
             .collect();
-        let capabilities = crate::derive_capability_schema(&declaration, &[]);
+        let capabilities = crate::derive_capability_schema(&declaration, &[], &[]);
         let type_info = interpreter::TypeInfoTable {
             package_name: package_name.to_string(),
             types: Vec::new(),

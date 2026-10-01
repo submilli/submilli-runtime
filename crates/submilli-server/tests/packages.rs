@@ -303,6 +303,7 @@ mod blueprint_scoped {
             &package.type_info,
             &submilli_build::derive_capability_schema(
                 &package.declaration,
+                &[],
                 &package.required_capabilities,
             ),
             &package.declaration,

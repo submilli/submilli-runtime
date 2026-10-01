@@ -57,6 +57,11 @@ pub fn build_packages(
     let mut built: BTreeMap<PackageName, PackageDeclaration> = BTreeMap::new();
     let mut external_cache: BTreeMap<PackageName, ExternalArtifact> = BTreeMap::new();
     let mut results = Vec::with_capacity(order.len());
+    // Schema derivation resolves a binding path through these as the
+    // compiler does.
+    let stdlib_declarations = interpreter::runtime::stdlib_package_declarations();
+    let (prelude_declarations, host_declarations, _) =
+        interpreter::runtime::prelude::cached_runtime_package_declarations();
     for index in order {
         let package = scoped[index];
         load_external_dependencies(package, externals, &mut external_cache)?;
@@ -95,8 +100,19 @@ pub fn build_packages(
             rendered: render_diagnostics(&modules, &diags),
         })?;
 
-        let capabilities =
-            derive_capability_schema(&compiled.declaration, &compiled.required_capabilities);
+        let schema_dependencies: Vec<&PackageDeclaration> = dependency_refs
+            .iter()
+            .chain(&transitive_refs)
+            .copied()
+            .chain(&stdlib_declarations)
+            .chain(prelude_declarations)
+            .chain(host_declarations)
+            .collect();
+        let capabilities = derive_capability_schema(
+            &compiled.declaration,
+            &schema_dependencies,
+            &compiled.required_capabilities,
+        );
         built.insert(package.name.clone(), compiled.declaration.clone());
         results.push(BuiltPackage {
             name: package.name.clone(),
