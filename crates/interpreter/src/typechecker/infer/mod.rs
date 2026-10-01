@@ -132,7 +132,11 @@ pub fn infer_with_transitive_checked<'a>(
         current_super: None,
         in_constructor: false,
         super_seen: false,
-        this_before_super: false,
+        read_before_super: false,
+        in_nested_function: false,
+        super_call_is_statement: false,
+        in_super_arguments: false,
+        in_super_handler: false,
         local_class_mangles: std::collections::BTreeSet::new(),
         pending_implements: Vec::new(),
         unresolved_parents: std::collections::BTreeSet::new(),
@@ -383,7 +387,11 @@ pub fn infer_package_checked<'a>(
         current_super: None,
         in_constructor: false,
         super_seen: false,
-        this_before_super: false,
+        read_before_super: false,
+        in_nested_function: false,
+        super_call_is_statement: false,
+        in_super_arguments: false,
+        in_super_handler: false,
         local_class_mangles: BTreeSet::new(),
         pending_implements: Vec::new(),
         unresolved_parents: BTreeSet::new(),
@@ -721,10 +729,27 @@ pub(super) struct Inferer<'a> {
     /// Set when a subclass constructor body has called `super(...)`. Used to
     /// require exactly one call and reject a second.
     pub(super) super_seen: bool,
-    /// Set when `this` is accessed inside a subclass constructor *before*
-    /// `super(...)` — flagged at the next `super(...)` call (and harmless once
-    /// `super_seen`, since this-before-super is the only window that matters).
-    pub(super) this_before_super: bool,
+    /// Set when `this` or a `super` member is read inside a subclass
+    /// constructor *before* `super(...)` — flagged at the next `super(...)`
+    /// call (and harmless once `super_seen`, since before the call is the only
+    /// window that matters).
+    pub(super) read_before_super: bool,
+    /// True inside an arrow or function expression or declaration, and reset
+    /// by `check_constructor`: with `in_constructor`, it means the code is a
+    /// function nested in the constructor rather than the constructor's own
+    /// body. A `super(...)` there can run late or never.
+    pub(super) in_nested_function: bool,
+    /// Set by an expression statement that is a bare `super(...)` call, for
+    /// `infer_super_call` to take. A call inside an expression can be skipped
+    /// (`c ? super(1) : f()`), which the super-call rule can't see.
+    pub(super) super_call_is_statement: bool,
+    /// True while a `super(...)` call's arguments are inferred, when the
+    /// instance they would read through `this` isn't built yet.
+    pub(super) in_super_arguments: bool,
+    /// True in the `catch` and `finally` of a `try` whose body calls
+    /// `super(...)`: they also run when that call throws, before the instance
+    /// is built.
+    pub(super) in_super_handler: bool,
     /// Mangled names of classes declared in the *current* module. A `private`
     /// member is visible only when its class is in this set (module-scoped
     /// privacy); imported classes are absent, so their privates are hidden.

@@ -572,36 +572,29 @@ impl Inferer<'_> {
                 );
                 Ok((TypedExprKind::Null, Type::Error))
             }
-            ExprKind::This => {
-                Ok(if let Some(ty) = &self.function_this {
-                    (TypedExprKind::This, ty.clone())
-                } else if let Some(ty) = &self.current_class {
-                    // In a subclass constructor, `this` before `super(...)` reads
-                    // uninitialized parent fields — flag it for the super call.
-                    if self.in_constructor && self.current_super.is_some() && !self.super_seen {
-                        self.this_before_super = true;
-                    }
-                    (TypedExprKind::This, ty.clone())
-                } else if let Some((class, member)) = self.current_static.clone() {
-                    self.error_with_help(
-                        span,
-                        "`this` is not available in a static member".to_string(),
-                        vec![format!(
-                            "`{class}.{member}` runs without an instance; take the instance as \
-                             a parameter, or make it an instance method. To use another static, \
-                             qualify it: `{class}.<member>`"
-                        )],
-                    );
-                    (TypedExprKind::Null, Type::Error)
-                } else {
-                    self.error(
-                        span,
-                        "`this` is only valid inside a class method or constructor body"
-                            .to_string(),
-                    );
-                    (TypedExprKind::Null, Type::Error)
-                })
-            }
+            ExprKind::This => Ok(if let Some(ty) = &self.function_this {
+                (TypedExprKind::This, ty.clone())
+            } else if let Some(ty) = self.current_class.clone() {
+                self.note_read_before_super(span);
+                (TypedExprKind::This, ty)
+            } else if let Some((class, member)) = self.current_static.clone() {
+                self.error_with_help(
+                    span,
+                    "`this` is not available in a static member".to_string(),
+                    vec![format!(
+                        "`{class}.{member}` runs without an instance; take the instance as \
+                         a parameter, or make it an instance method. To use another static, \
+                         qualify it: `{class}.<member>`"
+                    )],
+                );
+                (TypedExprKind::Null, Type::Error)
+            } else {
+                self.error(
+                    span,
+                    "`this` is only valid inside a class method or constructor body".to_string(),
+                );
+                (TypedExprKind::Null, Type::Error)
+            }),
             ExprKind::Super => {
                 self.error_with_help(
                     span,
@@ -6900,6 +6893,7 @@ impl Inferer<'_> {
         // Nor can its `break`/`continue` reach a loop or switch outside it.
         let prev_loop_depth = std::mem::replace(&mut self.loop_depth, 0);
         let prev_switch_depth = std::mem::replace(&mut self.switch_depth, 0);
+        let prev_nested = std::mem::replace(&mut self.in_nested_function, true);
         let prev_predicate = std::mem::replace(
             &mut self.current_type_predicate,
             predicate
@@ -6961,6 +6955,7 @@ impl Inferer<'_> {
         self.reachable = prev_reachable;
         self.loop_depth = prev_loop_depth;
         self.switch_depth = prev_switch_depth;
+        self.in_nested_function = prev_nested;
         self.current_type_predicate = prev_predicate;
         self.inferred_returns = prev_collect;
         self.current_return = prev_return;

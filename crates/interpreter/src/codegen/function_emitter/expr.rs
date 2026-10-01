@@ -1600,8 +1600,8 @@ fn emit_literal_chunk(
     array: u32,
     raw: u32,
 ) -> Result<(), crate::compiler_error::CompilerFailure> {
-    emit_expr(emitter, ctx, element.expr_id())?;
     if let crate::TypedArrayElement::Value(value) = element {
+        emit_expr(emitter, ctx, *value)?;
         cast::emit_box(
             emitter,
             ctx,
@@ -1616,6 +1616,9 @@ fn emit_literal_chunk(
         });
         return Ok(());
     }
+    // A source `runtime_values` widened may no longer hold the array its
+    // narrowed type said; `emit_receiver` checks it as a field read's receiver.
+    emit_receiver(emitter, ctx, element.expr_id())?;
     let raw_type = ValType::Ref(RefType {
         nullable: false,
         heap_type: HeapType::Concrete(raw),
@@ -2419,14 +2422,16 @@ fn emit_object_spread(
         .expect("spread helper collected");
     emitter.instruction(Instruction::RefNull(HeapType::Concrete(intrinsics.object)));
     for (index, source) in sources.iter().enumerate() {
-        emit_expr(emitter, ctx, source.expr_id())?;
-        let source_ty = &ctx
+        // A source `runtime_values` widened may no longer hold what its
+        // narrowed type said; `emit_receiver` checks it against that type,
+        // which the stash and the mask then read in place of `unknown`.
+        emit_receiver(emitter, ctx, source.expr_id())?;
+        let narrowed_ty = ctx
             .ta
-            .try_expr(source.expr_id())
-            .map_err(crate::codegen::arena_failure)?
-            .ty;
+            .source_type(source.expr_id())
+            .map_err(crate::codegen::arena_failure)?;
         let source_local =
-            stash_receiver_as_object_shape(emitter, source_ty, intrinsics.object_shape);
+            stash_receiver_as_object_shape(emitter, narrowed_ty, intrinsics.object_shape);
         emitter.instruction(Instruction::LocalGet(source_local));
         if index + 1 == sources.len() {
             emit_spread_shape(emitter, ctx, shape);
@@ -2434,7 +2439,7 @@ fn emit_object_spread(
             emitter.instruction(Instruction::RefNull(HeapType::Concrete(intrinsics.object)));
         }
         if matches!(source, TypedObjectMember::Spread { by_name: true, .. }) {
-            emit_spread_mask(emitter, ctx, source_local, source_ty, shape)?;
+            emit_spread_mask(emitter, ctx, source_local, narrowed_ty, shape)?;
         } else {
             emitter.instruction(Instruction::RefNull(HeapType::Concrete(intrinsics.object)));
         }
@@ -2454,7 +2459,7 @@ fn emit_spread_mask(
     shape: &Type,
 ) -> Result<(), crate::compiler_error::CompilerFailure> {
     let mut fields = std::collections::BTreeMap::new();
-    collect_spread_field_types(source_ty, &mut fields);
+    collect_spread_field_types(source_ty, &mut fields)?;
     let intrinsics = ctx
         .symbols
         .intrinsic_type_indices()
@@ -2507,7 +2512,10 @@ fn emit_spread_mask(
     Ok(())
 }
 
-fn collect_spread_field_types(ty: &Type, fields: &mut std::collections::BTreeMap<String, Type>) {
+fn collect_spread_field_types(
+    ty: &Type,
+    fields: &mut std::collections::BTreeMap<String, Type>,
+) -> Result<(), crate::compiler_error::CompilerFailure> {
     match ty.peel() {
         Type::Object { fields: source, .. } => {
             for (name, field) in source {
@@ -2519,11 +2527,16 @@ fn collect_spread_field_types(ty: &Type, fields: &mut std::collections::BTreeMap
         }
         Type::Union(members) => {
             for member in members {
-                collect_spread_field_types(member, fields);
+                collect_spread_field_types(member, fields)?;
             }
         }
-        _ => unreachable!("spread source must be structural"),
+        _ => {
+            return Err(crate::codegen::internal_failure(
+                "spread mask source is not structural",
+            ));
+        }
     }
+    Ok(())
 }
 
 /// The final merge restores optional markers and writable absent slots from

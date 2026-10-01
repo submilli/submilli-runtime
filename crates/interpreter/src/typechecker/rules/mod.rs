@@ -15,6 +15,7 @@ mod fallthrough;
 mod main_required;
 mod missing_return;
 mod return_outside_function;
+mod super_call;
 mod unreachable;
 
 use crate::compiler_error::{CompileError, CompilerFailure, CompilerStage};
@@ -101,6 +102,7 @@ fn run_rules(
     return_outside_function::run(ta, diags)?;
     fallthrough::run(ta, declarations, diags)?;
     definite_assignment::run(ta, diags)?;
+    super_call::run(ta, diags)?;
     if source == Source::Script {
         // Inference reports a package that declares `main`.
         main_required::run(ta, diags);
