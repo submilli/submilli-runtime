@@ -1,4 +1,4 @@
-//! Function declarations inside a function body, which become local closures.
+//! Function declarations inside a block, which become local closures.
 //!
 //! JavaScript hoists a function declaration: its binding holds the function
 //! from the start of the enclosing block, so it can be called before the
