@@ -1,6 +1,7 @@
 //! `submilli blueprint capability {list,add,remove}` — browse every capability
-//! a blueprint can gate (stdlib, declared packages, declared MCP servers) and
-//! edit the `permissions:` block without hand-writing YAML.
+//! a blueprint can gate (stdlib, declared packages and the packages they
+//! depend on, declared MCP servers) and edit the `permissions:` block without
+//! hand-writing YAML.
 //!
 //! `add`/`remove` rewrite the file from the parsed form, so YAML comments are
 //! not preserved.
@@ -14,6 +15,7 @@ use interpreter::stdlib::capabilities;
 use submilli_blueprint::{Action, Blueprint, DefaultAction, FilterExpr, PermissionRule};
 use submilli_build::PackageStore;
 
+use super::declared_packages;
 use super::file::{blueprint_path, has_capability_rule, load, write};
 
 #[derive(Subcommand)]
@@ -50,7 +52,7 @@ pub fn execute(cmd: CapabilityCmd) -> Result<ExitCode> {
 #[derive(clap::Args)]
 pub struct ListArgs {
     /// Show one library only: a stdlib module (`submilli:fs`), a declared
-    /// package, or a declared MCP server name.
+    /// package or a package one depends on, or a declared MCP server name.
     library: Option<String>,
     /// Blueprint file to read (default: ./blueprint.yaml). Without a readable
     /// blueprint the stdlib catalog is still listed.
@@ -315,21 +317,19 @@ fn collect_sources(blueprint: Option<&Blueprint>) -> Vec<Source> {
         }
     }
 
+    // A dependency's provided capabilities are what its dependents require,
+    // so their caller lists name them too.
     if let Some(bp) = blueprint {
-        let store = PackageStore::default();
-        for package in &bp.packages {
-            match store.load(package) {
-                Ok(artifact) => sources.push(Source {
-                    name: package.clone(),
-                    entries: artifact
-                        .capabilities
-                        .provides
-                        .iter()
-                        .map(provided_entry)
-                        .collect(),
-                }),
-                Err(e) => eprintln!("warning: skipping declared package '{package}': {e}"),
-            }
+        for (package, artifact) in load_packages(bp).artifacts {
+            sources.push(Source {
+                name: package,
+                entries: artifact
+                    .capabilities
+                    .provides
+                    .iter()
+                    .map(provided_entry)
+                    .collect(),
+            });
         }
     }
 
@@ -422,7 +422,7 @@ fn add(args: &AddArgs) -> Result<String> {
 
     refuse_if_never_grantable_to_main(&args.capability, &args.caller)?;
     if !args.force {
-        validate_name(&blueprint, &args.capability)?;
+        validate_name(&blueprint, &args.caller, &args.capability)?;
     }
 
     let action = Action::from(args.action);
@@ -515,13 +515,29 @@ fn refuse_if_never_grantable_to_main(capability: &str, caller: &str) -> Result<(
     );
 }
 
-/// A capability name is accepted when the stdlib catalog, a declared package,
-/// or a declared MCP server provides it. `--force` bypasses this — the policy
-/// engine itself matches names verbatim and doesn't care.
-fn validate_name(blueprint: &Blueprint, name: &str) -> Result<()> {
-    let known = known_capabilities(blueprint);
+/// A capability name is accepted when the stdlib catalog, a declared MCP
+/// server, or a package `caller` can reach provides it: for `main`, a declared
+/// package; for a package, also a package a declared one depends on. `--force`
+/// bypasses this — the policy engine itself matches names verbatim and doesn't
+/// care.
+fn validate_name(blueprint: &Blueprint, caller: &str, name: &str) -> Result<()> {
+    let packages = load_packages(blueprint);
+    let known = known_capabilities(blueprint, &packages, caller);
     if known.iter().any(|k| k == name) {
         return Ok(());
+    }
+    if let Some(dependency) = dependency_providing(&packages, name) {
+        let callers = dependents_of(&packages, dependency)
+            .into_iter()
+            .map(|dependent| format!("`--caller {dependent}`"))
+            .collect::<Vec<_>>()
+            .join(" or ");
+        bail!(
+            "'{name}' is provided by `{dependency}`, which only the packages that depend on it \
+             can call; `{caller}` cannot import it\n  \
+             grant it to one of them with {callers}, or declare `{dependency}` \
+             with `submilli blueprint add-package {dependency}`"
+        );
     }
     let near: Vec<String> = suggestions(&known, name);
     let hint = if near.is_empty() {
@@ -536,7 +552,12 @@ fn validate_name(blueprint: &Blueprint, name: &str) -> Result<()> {
     );
 }
 
-fn known_capabilities(blueprint: &Blueprint) -> Vec<String> {
+/// Every capability name `caller` may hold a rule for.
+fn known_capabilities(
+    blueprint: &Blueprint,
+    packages: &declared_packages::DeclaredPackages,
+    caller: &str,
+) -> Vec<String> {
     let mut names: Vec<String> = capabilities::catalog()
         .iter()
         .flat_map(|g| g.capabilities)
@@ -544,22 +565,64 @@ fn known_capabilities(blueprint: &Blueprint) -> Vec<String> {
         .map(|c| c.name.to_string())
         .collect();
     names.extend(blueprint.mcp.keys().map(|server| format!("mcp.{server}")));
-    let store = PackageStore::default();
-    for package in &blueprint.packages {
-        match store.load(package) {
-            Ok(artifact) => names.extend(
-                artifact
-                    .capabilities
-                    .provides
-                    .iter()
-                    .map(|p| p.name.clone()),
-            ),
-            Err(_) => eprintln!(
-                "warning: could not load declared package '{package}' — its capabilities were not checked"
-            ),
+    // `main` imports only declared packages, so a `main` rule for what only a
+    // dependency provides could never match.
+    let reaches_dependencies = caller != interpreter::mangle::USER_PACKAGE;
+    for (package, artifact) in &packages.artifacts {
+        if packages.dependencies.contains(package) && !reaches_dependencies {
+            continue;
         }
+        names.extend(
+            artifact
+                .capabilities
+                .provides
+                .iter()
+                .map(|p| p.name.clone()),
+        );
     }
     names
+}
+
+/// The undeclared dependency that provides `name`, if any.
+fn dependency_providing<'a>(
+    packages: &'a declared_packages::DeclaredPackages,
+    name: &str,
+) -> Option<&'a str> {
+    packages
+        .artifacts
+        .iter()
+        .filter(|(package, _)| packages.dependencies.contains(*package))
+        .find(|(_, artifact)| {
+            artifact
+                .capabilities
+                .provides
+                .iter()
+                .any(|provided| provided.name == name)
+        })
+        .map(|(package, _)| package.as_str())
+}
+
+/// The loaded packages that depend on `dependency` directly.
+fn dependents_of<'a>(
+    packages: &'a declared_packages::DeclaredPackages,
+    dependency: &str,
+) -> Vec<&'a str> {
+    packages
+        .artifacts
+        .iter()
+        .filter(|(_, artifact)| declared_packages::depends_on(artifact, dependency))
+        .map(|(package, _)| package.as_str())
+        .collect()
+}
+
+/// The checks this command makes are best-effort, so a package that fails to
+/// load is a warning.
+fn load_packages(blueprint: &Blueprint) -> declared_packages::DeclaredPackages {
+    let packages = declared_packages::load(blueprint, &PackageStore::default());
+    for error in &packages.errors {
+        eprintln!("warning: {error}; listing and checking only what loaded");
+    }
+    packages
 }
 
 /// Names sharing the input's `module.` prefix, or containing it as a

@@ -111,11 +111,13 @@ revisited.
   called it a bug (one `add-package` should add the tree); filed as
   SUB-1235 in the launch project on 2026-10-01. At Doron's request the
   page is written for the fixed behavior: one `add-package @acme/support`
-  lists both packages and writes both caller lists. That output and the
-  resulting `blueprint.yaml` are expected, assembled from the two real
-  outputs of 0.1.6 (`add-package @acme/support`, then `add-package
-  @acme/billing`); the secret commands and `credited $15` are real.
-  The frontmatter says so; re-run and re-capture when SUB-1235 lands. (2) The
+  writes both caller lists. The SUB-1235 fix (2026-10-02) made it so,
+  listing only `@acme/support` under `packages:` (Doron's call: a listed
+  dependency would be importable by programs, bypassing the dependent's
+  checks); its `add-package` output and the resulting
+  `blueprint.yaml` were re-captured from the development build against
+  the book's two packages, without the Stripe run. The secret commands
+  and `credited $15` are from 0.1.6, run with both packages added. (2) The
   denial's stack prints `source context unavailable: invalid source
   position 7:44` for the `apologize` frame in the dependent package;
   noted in SUB-1235. The page trims the frame list to one line each.

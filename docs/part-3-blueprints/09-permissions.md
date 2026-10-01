@@ -184,7 +184,8 @@ code calls: standard-library operations, and operations of packages it
 imports. When an argument is fixed in the source, such as
 `get("https://billing.internal.example.com/charges")`, the entry gets the
 filter `host == "billing.internal.example.com" and path == "/charges"`.
-`add-package` turns `requires` into the package's own list.
+`add-package` turns `requires` into the package's own list, and does the same
+for each package it depends on, without listing those under `packages:`.
 
 ## Filters
 
@@ -267,11 +268,11 @@ mistake stops it before any program runs.
 
 | Finding | Level |
 | --- | --- |
-| A package requires a permission that its own list has no rule for | Error |
+| A package, or a package it depends on, requires a permission that its own list has no rule for | Error |
 | A package requires a permission that its own list grants with a different filter, or denies | Warning |
 | `default: allow` | Warning |
 | A `secrets.get` rule under `main`, which can have no effect | Warning |
-| A list for a caller that isn't among the blueprint's packages | Warning |
+| A list for a caller that is neither among the blueprint's packages nor a package they depend on | Warning |
 | A package among the blueprint's packages with no list of its own | Warning |
 
 ## Denials at run time

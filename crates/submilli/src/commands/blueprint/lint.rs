@@ -5,13 +5,16 @@
 //! well-formedness, every `secrets:` entry has a supported source, every
 //! `${secrets.X}` interpolation in `auth_proxy:` references a declared secret,
 //! the blueprint name, and that all filters parse. Package artifact validation
-//! loads each declared package's `capabilities.yaml`: missing `requires:` rules
-//! are errors. A `provides:` capability without a `main` rule is not a finding:
+//! loads each declared package's `capabilities.yaml`, and those of the packages
+//! it depends on, whose calls run as their own callers: missing `requires:`
+//! rules are errors. A dependency needs no `packages:` entry; that list is what
+//! `main` may import. A `provides:` capability without a `main` rule is not a finding:
 //! leaving it out is how a blueprint withholds it, and
 //! `blueprint capability list --unconfigured` lists those. `default: allow`
 //! parses, but inverts the security posture to allow-by-default, so it lints as
 //! a warning.
 
+use std::collections::BTreeSet;
 use std::fs;
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -20,12 +23,14 @@ use anyhow::Context;
 use submilli_blueprint::{Action, Blueprint, DefaultAction, FilterExpr, PermissionRule};
 use submilli_build::{CapabilitySchema, PackageStore};
 
-use super::file::has_capability_rule;
+use super::declared_packages;
+use super::file::{has_capability_rule, has_matching_rule};
 use super::package_secrets::missing_package_secret_warnings;
 
 #[derive(clap::Args)]
 pub struct Args {
-    /// Add the rules declared packages require for their own calls.
+    /// Add the rules declared packages and their dependencies require for
+    /// their own calls.
     #[arg(long)]
     fix: bool,
 
@@ -47,37 +52,39 @@ pub fn execute(args: Args) -> anyhow::Result<ExitCode> {
 }
 
 fn lint_blueprint(args: Args, blueprint: &mut Blueprint) -> anyhow::Result<ExitCode> {
-    let store = PackageStore::default();
-    let mut warnings = Vec::from_iter(default_allow_warning(blueprint));
-    warnings.extend(unreachable_main_rule_warnings(blueprint));
-    warnings.extend(package_permission_warnings(blueprint));
     let mut errors = Vec::new();
     let mut unfixable_errors = Vec::new();
     let mut fixes = Vec::new();
 
-    for package in &blueprint.packages {
-        match store.load(package) {
-            Ok(artifact) => {
-                warnings.extend(missing_package_secret_warnings(
-                    blueprint,
-                    package,
-                    &artifact.capabilities,
-                ));
-                collect_requires_findings(
-                    blueprint,
-                    package,
-                    &artifact.capabilities,
-                    &mut warnings,
-                    &mut errors,
-                    &mut fixes,
-                );
-            }
-            Err(err) => {
-                let error = format!("cannot validate package `{package}` capabilities: {err}");
-                errors.push(error.clone());
-                unfixable_errors.push(error);
-            }
-        }
+    let packages = declared_packages::load(blueprint, &PackageStore::default());
+    errors.extend(packages.errors.iter().cloned());
+    unfixable_errors.extend(packages.errors.iter().cloned());
+
+    let mut warnings = Vec::from_iter(default_allow_warning(blueprint));
+    warnings.extend(unreachable_main_rule_warnings(blueprint));
+    // An incomplete closure hides the dependencies past the failure, so a
+    // caller block for one of them cannot be told from a stale one.
+    if packages.errors.is_empty() {
+        warnings.extend(stale_caller_block_warnings(
+            blueprint,
+            &packages.dependencies,
+        ));
+    }
+    warnings.extend(missing_caller_block_warnings(blueprint));
+    for (package, artifact) in &packages.artifacts {
+        warnings.extend(missing_package_secret_warnings(
+            blueprint,
+            package,
+            &artifact.capabilities,
+        ));
+        collect_requires_findings(
+            blueprint,
+            package,
+            &artifact.capabilities,
+            &mut warnings,
+            &mut errors,
+            &mut fixes,
+        );
     }
 
     for warning in &warnings {
@@ -119,7 +126,7 @@ fn collect_requires_findings(
     fixes: &mut Vec<MissingRequiresRule>,
 ) {
     for required in &capabilities.requires {
-        if has_rule(
+        if has_matching_rule(
             blueprint,
             package,
             &required.capability,
@@ -153,20 +160,9 @@ fn collect_requires_findings(
     }
 }
 
-fn has_rule(blueprint: &Blueprint, caller: &str, capability: &str, filter: Option<&str>) -> bool {
-    let Some(rules) = blueprint.permissions.get(caller) else {
-        return false;
-    };
-    rules.iter().any(|rule| {
-        rule.capability == capability
-            && (rule.filter.is_none()
-                || rule.filter.as_ref().map(ToString::to_string).as_deref() == filter)
-    })
-}
-
 fn apply_fixes(blueprint: &mut Blueprint, fixes: Vec<MissingRequiresRule>) {
     for fix in fixes {
-        if has_rule(
+        if has_matching_rule(
             blueprint,
             &fix.caller,
             &fix.capability,
@@ -225,28 +221,42 @@ fn unreachable_main_rule_warnings(blueprint: &Blueprint) -> Vec<String> {
         .collect()
 }
 
-fn package_permission_warnings(blueprint: &Blueprint) -> Vec<String> {
-    let mut warnings = Vec::new();
+/// `dependencies` are the undeclared packages declared ones depend on: their
+/// caller blocks belong in the blueprint without a `packages:` entry.
+fn stale_caller_block_warnings(
+    blueprint: &Blueprint,
+    dependencies: &BTreeSet<String>,
+) -> Vec<String> {
+    blueprint
+        .permissions
+        .keys()
+        .filter(|caller| {
+            is_registry_package(caller)
+                && !blueprint.packages.contains(*caller)
+                && !dependencies.contains(*caller)
+        })
+        .map(|caller| {
+            format!(
+                "`permissions:` has a caller block for `{caller}`, but `{caller}` is neither in `packages:` nor a dependency of a package there"
+            )
+        })
+        .collect()
+}
 
-    for caller in blueprint.permissions.keys() {
-        if is_registry_package(caller) && !blueprint.packages.contains(caller) {
-            warnings.push(format!(
-                "`permissions:` has a caller block for `{caller}`, but `{caller}` is absent from `packages:`"
-            ));
-        }
+fn missing_caller_block_warnings(blueprint: &Blueprint) -> Vec<String> {
+    if !blueprint.has_permission_policy() {
+        return Vec::new();
     }
-
-    if blueprint.has_permission_policy() {
-        for package in &blueprint.packages {
-            if !blueprint.permissions.contains_key(package) {
-                warnings.push(format!(
-                    "`packages:` declares `{package}`, but `permissions:` has no `{package}` caller block"
-                ));
-            }
-        }
-    }
-
-    warnings
+    blueprint
+        .packages
+        .iter()
+        .filter(|package| !blueprint.permissions.contains_key(*package))
+        .map(|package| {
+            format!(
+                "`packages:` declares `{package}`, but `permissions:` has no `{package}` caller block"
+            )
+        })
+        .collect()
 }
 
 fn is_registry_package(caller: &str) -> bool {

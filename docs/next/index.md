@@ -35,7 +35,7 @@ cutover removes.
 1. [Start a project](/docs/next/packages/start-a-project)
 2. [Export a function](/docs/next/packages/export-a-function)
 3. [Document the package](/docs/next/packages/document-the-package)
-4. [Add a dependency](/docs/next/packages/add-a-dependency) (written for [SUB-1235](https://linear.app/submilli/issue/SUB-1235) as fixed; re-capture its add-package output then)
+4. [Add a dependency](/docs/next/packages/add-a-dependency)
 5. [Write tests](/docs/next/packages/write-tests)
 6. [Publish a package](/docs/next/packages/publish-a-package)
 

@@ -3,9 +3,6 @@ title: "Add a dependency"
 description: "How to make a package import another, from the same project, your local store, or a GitHub repository, and what the dependency adds to what the package requires and to the blueprint."
 slug: next/packages/add-a-dependency
 pagefind: false
-# Written for SUB-1235 (https://linear.app/submilli/issue/SUB-1235) as
-# fixed: the add-package output and blueprint.yaml under "What it adds to
-# the blueprint" are expected, not captured. Re-run them when it lands.
 sidebar:
   order: 4
   hidden: true
@@ -140,20 +137,18 @@ warning: blueprint.yaml: package `@acme/billing` requires secret `BILLING_API_KE
 ✓ added @acme/support to blueprint.yaml
   added 1 rules to caller `@acme/support` (default allow):
     allow acme.com/credits.apply
-✓ added @acme/billing to blueprint.yaml
-  1 provided capabilities not selected — denied by `default: deny`
+✓ added caller rules for @acme/billing, a dependency of @acme/support
   added 3 rules to caller `@acme/billing` (default allow):
     allow http.get (filter: host == "api.stripe.com")
     allow http.post (filter: host == "api.stripe.com")
     allow secrets.get (filter: name == "BILLING_API_KEY")
 ```
 
-Each package in the chain is listed and gets its own caller list from
-what it requires. `--no-capabilities` applies to the package you named:
-`main` gets no rule for `acme.com/credits.apply`, so a program can credit
-a customer only through `apologize`, which fixes the amount. Declare the
-secret the warning names, and put its value in the store if it isn't
-there yet:
+Each package in the chain gets its own caller list from what it
+requires, but only the package you named is listed under `packages:`,
+the packages a program may import. A program can credit a customer only
+through `apologize`, which fixes the amount. Declare the secret the
+warning names, and put its value in the store if it isn't there yet:
 
 ```sh
 submilli blueprint secret add BILLING_API_KEY --store billing_api_key
@@ -196,12 +191,8 @@ secrets:
     store: billing_api_key
 packages:
 - '@acme/support'
-- '@acme/billing'
 default: deny
 permissions:
-  '@acme/support':
-  - capability: acme.com/credits.apply
-    action: allow
   '@acme/billing':
   - capability: http.get
     filter: host == "api.stripe.com"
@@ -211,6 +202,9 @@ permissions:
     action: allow
   - capability: secrets.get
     filter: name == "BILLING_API_KEY"
+    action: allow
+  '@acme/support':
+  - capability: acme.com/credits.apply
     action: allow
   main: []
 ```
