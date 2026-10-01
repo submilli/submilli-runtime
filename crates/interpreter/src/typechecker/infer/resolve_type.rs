@@ -1420,6 +1420,7 @@ mod tests {
                     method_visibility: BTreeMap::new(),
                     accessors: Vec::new(),
                     constructor: vec![Param::new("v", t())],
+                    constructor_visibility: crate::Visibility::Public,
                     statics: BTreeMap::new(),
                     static_visibility: BTreeMap::new(),
                     static_fields: BTreeMap::new(),

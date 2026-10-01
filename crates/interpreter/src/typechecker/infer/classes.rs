@@ -137,7 +137,18 @@ impl<'a> Inferer<'a> {
 
         let mangled = self.mangle_top_symbol(&name.name)?;
         let extends_clause = match self.resolve_extends_target(extends.as_ref())? {
-            ExtendsTarget::Class(e) => Some(e),
+            ExtendsTarget::Class(e) => {
+                if let Some(annot) = &extends
+                    && self.reject_private_constructor(
+                        &e.parent,
+                        super::expr::ConstructorUse::Extend,
+                        annot.span,
+                    )
+                {
+                    self.hidden_parent_constructors.insert(mangled.clone());
+                }
+                Some(e)
+            }
             ExtendsTarget::Absent => None,
             ExtendsTarget::Unresolved => {
                 self.unresolved_parents.insert(mangled.clone());
@@ -160,6 +171,7 @@ impl<'a> Inferer<'a> {
         let mut static_visibility: BTreeMap<String, Visibility> = BTreeMap::new();
         let mut static_fields: BTreeMap<String, FieldSig> = BTreeMap::new();
         let mut constructor: Vec<Param> = Vec::new();
+        let mut constructor_visibility = Visibility::Public;
         let mut seen_constructor = false;
         // Each `get`/`set` is its own declaration. `(property, is_setter)` guards
         // duplicates; the property's `FieldSig` is updated incrementally below.
@@ -354,7 +366,12 @@ impl<'a> Inferer<'a> {
                     );
                     method_visibility.insert(m_name.name.clone(), modifiers.visibility);
                 }
-                ClassMember::Constructor { params, span, .. } => {
+                ClassMember::Constructor {
+                    visibility,
+                    params,
+                    span,
+                    ..
+                } => {
                     if seen_constructor {
                         self.error(
                             *span,
@@ -363,6 +380,7 @@ impl<'a> Inferer<'a> {
                         continue;
                     }
                     seen_constructor = true;
+                    constructor_visibility = *visibility;
                     constructor = self.resolve_parameter_types(params)?;
                     // Parameter properties declare a field with the param's type.
                     for (decl, resolved) in params.iter().zip(constructor.iter()) {
@@ -488,6 +506,7 @@ impl<'a> Inferer<'a> {
                 method_visibility,
                 accessors: accessor_sigs,
                 constructor,
+                constructor_visibility,
                 statics,
                 static_visibility,
                 static_fields,
@@ -967,35 +986,48 @@ impl<'a> Inferer<'a> {
             .collect::<Result<_, _>>()?;
 
         for (child_name, child) in implicit {
-            // An unresolvable parent takes its constructor signature with it:
-            // stand in a variadic one so `new Sub(…)` accepts whatever the
-            // program passes rather than reporting an arity the class never had.
-            let params = self
-                .nearest_explicit_ctor_params(&child, &explicit_ctor)
-                .or_else(|| {
-                    self.inherits_unresolved_parent(&child)
-                        .then(|| vec![erased_ctor_rest_param()])
-                });
-            if let Some(params) = params
+            // An unresolvable parent, or one whose constructor is private to
+            // another module, takes its constructor signature with it: stand in a
+            // variadic one so `new Sub(…)` accepts whatever the program passes
+            // rather than reporting an arity the class never had.
+            let inherited = if self.hidden_parent_constructors.contains(&child) {
+                Some(erased_constructor())
+            } else {
+                self.nearest_explicit_ctor(&child, &explicit_ctor)
+                    .or_else(|| {
+                        self.inherits_unresolved_parent(&child)
+                            .then(erased_constructor)
+                    })
+            };
+            if let Some((params, visibility)) = inherited
                 && let Some(sym) = self.types.lookup_mut(&child_name)
-                && let TypeKind::Class { constructor, .. } = &mut sym.kind
+                && let TypeKind::Class {
+                    constructor,
+                    constructor_visibility,
+                    ..
+                } = &mut sym.kind
             {
                 *constructor = params;
+                *constructor_visibility = visibility;
             }
         }
 
         Ok(())
     }
 
-    /// Constructor signature of the nearest ancestor of `child` that declares an
-    /// explicit constructor (cycle-guarded), substituted at the bindings the
-    /// intervening extends clauses instantiate — an implicit subclass of a
-    /// generic parent stores concrete ctor params. `None` when no ancestor does.
-    fn nearest_explicit_ctor_params(
+    /// Constructor signature and visibility of the nearest ancestor of `child`
+    /// that declares an explicit constructor (cycle-guarded), the signature
+    /// substituted at the bindings the intervening extends clauses instantiate —
+    /// an implicit subclass of a generic parent stores concrete ctor params. The
+    /// implicit constructor is the inherited one, so a `private` one stays
+    /// private, as in TypeScript. An implicit local ancestor whose own parent's
+    /// constructor is hidden from it yields the erased stand-in instead. `None`
+    /// when no ancestor declares one.
+    fn nearest_explicit_ctor(
         &self,
         child: &MangledName,
         explicit_ctor: &std::collections::BTreeSet<MangledName>,
-    ) -> Option<Vec<Param>> {
+    ) -> Option<(Vec<Param>, Visibility)> {
         use super::generic::substitute_typevars;
         self.walk_ancestors(child, |sym, bindings| {
             let p = &sym.mangled_name;
@@ -1004,12 +1036,25 @@ impl<'a> Inferer<'a> {
             // so any imported ancestor is a valid stopping point, the same way a
             // local ancestor with an explicit constructor is.
             let imported = !self.local_class_mangles.contains(p);
-            if !explicit_ctor.contains(p) && !imported {
-                return ControlFlow::Continue(());
+            if !imported && !explicit_ctor.contains(p) {
+                // An implicit local ancestor that may not use its parent's
+                // constructor stands in for it: walking past would reach the
+                // private one, and this pass may not have filled its own yet.
+                return if self.hidden_parent_constructors.contains(p) {
+                    ControlFlow::Break(Some(erased_constructor()))
+                } else {
+                    ControlFlow::Continue(())
+                };
             }
-            let TypeKind::Class { constructor, .. } = &sym.kind else {
+            let TypeKind::Class {
+                constructor,
+                constructor_visibility,
+                ..
+            } = &sym.kind
+            else {
                 return ControlFlow::Break(None);
             };
+            let visibility = *constructor_visibility;
             let params = constructor
                 .iter()
                 .map(|param| {
@@ -1019,7 +1064,11 @@ impl<'a> Inferer<'a> {
                     })
                 })
                 .collect();
-            ControlFlow::Break(self.type_limits.ok_or_record(params))
+            ControlFlow::Break(
+                self.type_limits
+                    .ok_or_record(params)
+                    .map(|params| (params, visibility)),
+            )
         })
     }
 
@@ -2393,6 +2442,16 @@ impl<'a> Inferer<'a> {
             .is_some_and(|ty| self.receiver_inherits_unresolved_parent(ty))
     }
 
+    /// True inside a class whose parent's constructor is private to another
+    /// module (see [`Inferer::hidden_parent_constructors`]).
+    fn current_class_hides_parent_constructor(&self) -> bool {
+        matches!(
+            self.current_class.as_ref().map(Type::peel),
+            Some(Type::ClassRef { mangled, .. })
+                if self.hidden_parent_constructors.contains(mangled)
+        )
+    }
+
     /// A class field visible at the current access site: it exists on the class
     /// or an ancestor, and is either public or declared in the current module
     /// (module-scoped privacy). Returns `None` for a missing or hidden field.
@@ -2886,8 +2945,12 @@ impl<'a> Inferer<'a> {
             },
             None => None,
         };
+        let ctor_params = ctor_params.filter(|_| !self.current_class_hides_parent_constructor());
         let (Some(params), Some(parent)) = (ctor_params, parent) else {
-            if self.in_constructor && !self.current_class_inherits_unresolved_parent() {
+            if self.in_constructor
+                && !self.current_class_inherits_unresolved_parent()
+                && !self.current_class_hides_parent_constructor()
+            {
                 self.error_with_help(
                     span,
                     "`super(...)` requires a parent class".to_string(),
@@ -4153,9 +4216,14 @@ fn identity_bindings(sym: &TypeSymbol) -> BTreeMap<String, Type> {
         .collect()
 }
 
-/// Stand-in constructor signature for a class that inherits from an
-/// unresolvable parent: variadic, at the type that silences argument
-/// diagnostics.
+/// Stand-in constructor for a class whose parent's constructor it can't know:
+/// the parent is unresolvable, or its constructor is private to another module.
+/// Public and variadic, at the type that silences argument diagnostics.
+fn erased_constructor() -> (Vec<Param>, Visibility) {
+    (vec![erased_ctor_rest_param()], Visibility::Public)
+}
+
+/// The parameter of [`erased_constructor`].
 fn erased_ctor_rest_param() -> Param {
     Param {
         name: "args".to_string(),

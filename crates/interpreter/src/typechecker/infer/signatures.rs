@@ -249,6 +249,7 @@ impl<'a> Inferer<'a> {
                                 method_visibility: BTreeMap::new(),
                                 accessors: Vec::new(),
                                 constructor: Vec::new(),
+                                constructor_visibility: crate::Visibility::Public,
                                 statics: BTreeMap::new(),
                                 static_visibility: BTreeMap::new(),
                                 static_fields: BTreeMap::new(),

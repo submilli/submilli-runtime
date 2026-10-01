@@ -522,10 +522,17 @@ pub enum InterfaceMember {
 }
 
 /// Member visibility. No `protected` — it is rejected at parse time.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum Visibility {
+    #[default]
     Public,
     Private,
+}
+
+impl Visibility {
+    pub fn is_public(&self) -> bool {
+        *self == Visibility::Public
+    }
 }
 
 /// Modifiers on a class field or method. `readonly`/`visibility_span` carry spans so
@@ -562,6 +569,9 @@ pub enum ClassMember {
         doc: Option<DocComment>,
     },
     Constructor {
+        /// `private constructor`: only the class's own module may call it or
+        /// extend the class.
+        visibility: Visibility,
         params: Vec<ParamDecl>,
         body: StmtId,
         span: Span,

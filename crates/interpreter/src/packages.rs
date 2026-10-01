@@ -1188,12 +1188,17 @@ fn public_surface(symbol: &TypeSymbol) -> TypeSymbol {
         methods,
         method_visibility,
         accessors,
+        constructor,
+        constructor_visibility,
         statics,
         static_visibility,
         static_fields,
         ..
     } = &mut symbol.kind
     {
+        if *constructor_visibility == crate::Visibility::Private {
+            constructor.clear();
+        }
         let is_public = |visibility: Option<&crate::Visibility>| {
             visibility != Some(&crate::Visibility::Private)
         };
@@ -1492,6 +1497,7 @@ fn render_ts_type(
             static_fields,
             accessors,
             constructor,
+            constructor_visibility,
             ..
         } => {
             // Private members are part of the in-memory class but never the public
@@ -1538,7 +1544,16 @@ fn render_ts_type(
                 let _ = writeln!(out, "{inner}{ro}{fname}{opt}: {};", ts_type(&field.ty));
             }
             render_class_accessors(out, fields, accessors, &inner, ts_type);
-            let _ = writeln!(out, "{inner}constructor({});", ts_params_str(constructor));
+            // A private constructor still renders, so a TypeScript consumer can't
+            // call an implicit public one, but as `protected`: a subclass in the
+            // class's own module is legal here, and tsc rejects `extends` of a
+            // class whose constructor is `private`. Its parameters stay hidden. The
+            // cost: tsc lets a consumer extend it, which Submilli rejects.
+            if *constructor_visibility == crate::Visibility::Private {
+                let _ = writeln!(out, "{inner}protected constructor();");
+            } else {
+                let _ = writeln!(out, "{inner}constructor({});", ts_params_str(constructor));
+            }
             for (mname, m) in methods {
                 if method_visibility.get(mname) == Some(&crate::Visibility::Private) {
                     continue;
@@ -1987,6 +2002,7 @@ fn render_type(out: &mut String, name: &str, kind: &TypeKind, indent: &str) {
             static_fields,
             accessors,
             constructor,
+            constructor_visibility,
             ..
         } => {
             // Private members exist in the class but are never callable from a
@@ -2027,7 +2043,9 @@ fn render_type(out: &mut String, name: &str, kind: &TypeKind, indent: &str) {
                 let _ = writeln!(out, "{inner}{ro}{fname}{opt}: {};", field.ty);
             }
             render_class_accessors(out, fields, accessors, &inner, ToString::to_string);
-            let _ = writeln!(out, "{inner}constructor({});", params_str(constructor));
+            if *constructor_visibility != crate::Visibility::Private {
+                let _ = writeln!(out, "{inner}constructor({});", params_str(constructor));
+            }
             for (mname, m) in methods {
                 if method_visibility.get(mname) == Some(&crate::Visibility::Private) {
                     continue;
@@ -2890,6 +2908,7 @@ mod tests {
                 method_visibility: BTreeMap::new(),
                 accessors: Vec::new(),
                 constructor: Vec::new(),
+                constructor_visibility: crate::Visibility::Public,
                 statics: BTreeMap::new(),
                 static_visibility: BTreeMap::new(),
                 static_fields: BTreeMap::new(),
@@ -3219,6 +3238,97 @@ mod tests {
         assert!(!docs.contains("@call"));
     }
 
+    fn class_with_constructor(
+        package: &str,
+        name: &str,
+        constructor: Vec<Param>,
+        constructor_visibility: crate::Visibility,
+        extends: Option<ClassExtends>,
+    ) -> TypeSymbol {
+        TypeSymbol {
+            name: name.to_string(),
+            mangled_name: crate::mangle::package_symbol(package, name),
+            declaration_span: Span::new(FileId(0), 0, 0).unwrap(),
+            kind: TypeKind::Class {
+                generics: Vec::new(),
+                fields: BTreeMap::new(),
+                narrowing_checks: BTreeMap::new(),
+                methods: BTreeMap::new(),
+                method_visibility: BTreeMap::new(),
+                accessors: Vec::new(),
+                constructor,
+                constructor_visibility,
+                statics: BTreeMap::new(),
+                static_visibility: BTreeMap::new(),
+                static_fields: BTreeMap::new(),
+                extends,
+                implements: Vec::new(),
+                doc: None,
+            },
+        }
+    }
+
+    #[test]
+    fn a_private_constructor_stays_out_of_the_docs_and_is_protected_in_d_ts() {
+        let package = "@acme/shapes";
+        let mut defs = PackageDeclaration::with_package(package);
+        let point = class_with_constructor(
+            package,
+            "Point",
+            vec![Param::new("secret", Type::String)],
+            crate::Visibility::Private,
+            None,
+        );
+        let labeled = class_with_constructor(
+            package,
+            "Labeled",
+            vec![Param::new("secret", Type::String)],
+            crate::Visibility::Private,
+            Some(ClassExtends {
+                parent: point.mangled_name.clone(),
+                args: Vec::new(),
+            }),
+        );
+        defs.types.insert("Point".to_string(), point);
+        defs.types.insert("Labeled".to_string(), labeled);
+
+        let docs = render_declarations(&defs);
+        assert!(docs.contains("class Point"), "{docs}");
+        assert!(!docs.contains("constructor"), "{docs}");
+
+        // `protected`, not `private`: tsc rejects `Labeled extends Point` when
+        // `Point`'s constructor is private, though Submilli allows it here.
+        let d_ts = render_packages_d_ts(&[&defs], &[]);
+        assert!(d_ts.contains("class Labeled extends Point"), "{d_ts}");
+        assert_eq!(
+            d_ts.matches("protected constructor();").count(),
+            2,
+            "{d_ts}"
+        );
+        assert!(!d_ts.contains("secret"), "{d_ts}");
+    }
+
+    #[test]
+    fn constructor_visibility_round_trips_and_a_public_one_is_not_written() {
+        let package = "@acme/shapes";
+        for visibility in [crate::Visibility::Private, crate::Visibility::Public] {
+            let symbol = class_with_constructor(package, "Point", Vec::new(), visibility, None);
+            let json = serde_json::to_string(&symbol.kind).unwrap();
+            assert_eq!(
+                json.contains("constructor_visibility"),
+                !visibility.is_public()
+            );
+            let TypeKind::Class {
+                constructor_visibility,
+                ..
+            } = serde_json::from_str::<TypeKind>(&json).unwrap()
+            else {
+                panic!("not a class: {json}");
+            };
+            assert_eq!(constructor_visibility, visibility);
+        }
+    }
+
     #[test]
     fn class_declarations_omit_private_members() {
         use crate::{FieldSig, MethodSig, Visibility};
@@ -3266,6 +3376,7 @@ mod tests {
                     method_visibility,
                     accessors: Vec::new(),
                     constructor: vec![Param::new("name", Type::String)],
+                    constructor_visibility: crate::Visibility::Public,
                     statics: BTreeMap::new(),
                     static_visibility: BTreeMap::new(),
                     static_fields: BTreeMap::new(),
@@ -3342,6 +3453,7 @@ mod tests {
                     method_visibility: BTreeMap::new(),
                     accessors,
                     constructor: Vec::new(),
+                    constructor_visibility: crate::Visibility::Public,
                     statics: BTreeMap::new(),
                     static_visibility: BTreeMap::new(),
                     static_fields: BTreeMap::new(),
@@ -3442,6 +3554,7 @@ mod tests {
                     method_visibility: BTreeMap::new(),
                     accessors: Vec::new(),
                     constructor: Vec::new(),
+                    constructor_visibility: crate::Visibility::Public,
                     statics,
                     static_visibility,
                     static_fields,
