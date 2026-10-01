@@ -1,367 +1,199 @@
+use super::body_walk::{self, Visitor};
 use super::control_flow::{ControlFlow, control_flow};
 use super::declarations::TypeDeclarations;
+use crate::compiler_error::CompilerFailure;
 use crate::{
-    ClosureBody, Diagnostic, ExprId, Severity, Span, StmtId, Type, TypedAst, TypedExprKind,
-    TypedStmtKind,
+    ClosureBody, Diagnostic, ExprId, Severity, Span, StmtId, Type, TypedAst, TypedClassAccessor,
+    TypedClassDecl, TypedStmtKind, TypedTypeDecl,
 };
 
+/// Named functions and class members are checked here; the closures nested
+/// anywhere in the program are found by the shared walk.
 pub(super) fn run(
     ta: &TypedAst,
     declarations: &TypeDeclarations<'_>,
     diags: &mut Vec<Diagnostic>,
-) -> Result<(), crate::compiler_error::CompilerFailure> {
+) -> Result<(), CompilerFailure> {
+    let mut rule = MissingReturn {
+        ta,
+        declarations,
+        diags,
+    };
     for f in &ta.functions {
-        let msg = format!(
-            "function `{}` does not return a value on all paths",
-            f.name.name
-        );
-        check_returns(
-            ta,
-            declarations,
-            f.body,
-            &f.return_type,
-            f.name.span,
-            msg,
-            diags,
-        )?;
-        walk_stmt(ta, declarations, f.body, diags)?;
+        let subject = format!("function `{}`", f.name.name);
+        rule.check(f.body, &f.return_type, f.name.span, &subject)?;
     }
-    for &stmt_id in &ta.top_level_statements {
-        walk_stmt(ta, declarations, stmt_id, diags)?;
+    for decl in &ta.types {
+        if let TypedTypeDecl::Class(class) = decl {
+            rule.check_class_members(class)?;
+        }
     }
-    Ok(())
+    body_walk::walk_program(ta, &mut rule)
 }
 
-fn check_returns(
-    ta: &TypedAst,
-    declarations: &TypeDeclarations<'_>,
-    body: StmtId,
-    return_type: &Type,
-    span: Span,
-    message: String,
-    diags: &mut Vec<Diagnostic>,
-) -> Result<(), crate::compiler_error::CompilerFailure> {
-    if matches!(return_type.peel(), Type::Void | Type::Error) {
-        return Ok(());
+struct MissingReturn<'a, 'd> {
+    ta: &'a TypedAst,
+    declarations: &'a TypeDeclarations<'d>,
+    diags: &'a mut Vec<Diagnostic>,
+}
+
+impl MissingReturn<'_, '_> {
+    /// Methods and getters; a constructor or setter returns no value.
+    fn check_class_members(&mut self, class: &TypedClassDecl) -> Result<(), CompilerFailure> {
+        let class_name = &class.name.name;
+        for method in &class.methods {
+            let subject = format!("method `{class_name}.{}`", method.name.name);
+            self.check(method.body, &method.return_type, method.name.span, &subject)?;
+        }
+        for accessor in &class.accessors {
+            let TypedClassAccessor::Getter {
+                name, ret_ty, body, ..
+            } = accessor
+            else {
+                continue;
+            };
+            let subject = format!("getter `{class_name}.{}`", name.name);
+            self.check(*body, ret_ty, name.span, &subject)?;
+        }
+        Ok(())
     }
-    let _: () = if control_flow(ta, declarations, body)? == ControlFlow::Falls {
-        diags.push(Diagnostic {
+
+    /// Reports `subject` — "function `f`", "method `C.m`" — when `body` can
+    /// end without returning the value `return_type` requires.
+    fn check(
+        &mut self,
+        body: StmtId,
+        return_type: &Type,
+        span: Span,
+        subject: &str,
+    ) -> Result<(), CompilerFailure> {
+        let return_type = return_type.peel();
+        if matches!(return_type, Type::Void | Type::Error) {
+            return Ok(());
+        }
+        if control_flow(self.ta, self.declarations, body)? != ControlFlow::Falls {
+            return Ok(());
+        }
+        // `unknown` admits the `undefined` that falling off the end returns
+        // (`null` here), so as in TypeScript only a body that never returns
+        // is a mistake.
+        let returns_unknown = matches!(return_type, Type::Unknown);
+        if returns_unknown && contains_return(self.ta, body)? {
+            return Ok(());
+        }
+        let (message, help) = if returns_unknown {
+            (
+                format!("{subject} returns `unknown` but has no `return`"),
+                vec![
+                    "add a `return` with a value, or a bare `return;`, which yields `null`"
+                        .to_string(),
+                ],
+            )
+        } else {
+            (
+                format!("{subject} does not return a value on all paths"),
+                vec![],
+            )
+        };
+        self.diags.push(Diagnostic {
             severity: Severity::Error,
             span,
             message,
-            help: vec![],
+            help,
             notes: vec![],
         });
-    };
-    Ok(())
+        Ok(())
+    }
 }
 
-fn walk_stmt(
-    ta: &TypedAst,
-    declarations: &TypeDeclarations<'_>,
-    stmt_id: StmtId,
-    diags: &mut Vec<Diagnostic>,
-) -> Result<(), crate::compiler_error::CompilerFailure> {
-    let _: () = match &ta
+impl Visitor for MissingReturn<'_, '_> {
+    fn visit_closure(
+        &mut self,
+        id: ExprId,
+        return_type: &Type,
+        body: &ClosureBody,
+    ) -> Result<(), CompilerFailure> {
+        let ClosureBody::Block(body) = body else {
+            return Ok(());
+        };
+        if self.ta.placeholder_closures.contains(&id) {
+            return Ok(());
+        }
+        let (span, subject) = match self.ta.nested_function_names.get(&id) {
+            Some(name) => (name.span, format!("function `{}`", name.name)),
+            None => (
+                self.ta
+                    .try_expr(id)
+                    .map_err(crate::typechecker::arena_failure)?
+                    .span,
+                "arrow function".to_string(),
+            ),
+        };
+        self.check(*body, return_type, span, &subject)
+    }
+}
+
+/// Whether `stmt_id` holds a `return` of its own body; one inside a nested
+/// closure returns from the closure instead.
+fn contains_return(ta: &TypedAst, stmt_id: StmtId) -> Result<bool, CompilerFailure> {
+    let kind = &ta
         .try_stmt(stmt_id)
         .map_err(crate::typechecker::arena_failure)?
-        .kind
-    {
-        TypedStmtKind::Let { value, .. } | TypedStmtKind::Const { value, .. } => {
-            walk_expr(ta, declarations, *value, diags)?;
-        }
+        .kind;
+    let found = match kind {
+        TypedStmtKind::Return(_) => true,
+        TypedStmtKind::Block(stmts) => any_contains_return(ta, stmts.iter().copied())?,
         TypedStmtKind::If {
-            condition,
             then_block,
             else_block,
-        } => {
-            walk_expr(ta, declarations, *condition, diags)?;
-            walk_stmt(ta, declarations, *then_block, diags)?;
-            if let Some(eb) = else_block {
-                walk_stmt(ta, declarations, *eb, diags)?;
-            }
-        }
-        TypedStmtKind::While { condition, body } => {
-            walk_expr(ta, declarations, *condition, diags)?;
-            walk_stmt(ta, declarations, *body, diags)?;
-        }
-        TypedStmtKind::For {
-            init,
-            condition,
-            update,
-            body,
-        } => {
-            if let Some(i) = init {
-                walk_stmt(ta, declarations, *i, diags)?;
-            }
-            if let Some(c) = condition {
-                walk_expr(ta, declarations, *c, diags)?;
-            }
-            if let Some(u) = update {
-                walk_stmt(ta, declarations, *u, diags)?;
-            }
-            walk_stmt(ta, declarations, *body, diags)?;
-        }
-        TypedStmtKind::ForOf { iter, body, .. } => {
-            walk_expr(ta, declarations, *iter, diags)?;
-            walk_stmt(ta, declarations, *body, diags)?;
-        }
-        TypedStmtKind::DoWhile { body, condition } => {
-            walk_stmt(ta, declarations, *body, diags)?;
-            walk_expr(ta, declarations, *condition, diags)?;
-        }
-        TypedStmtKind::Switch {
-            discriminant,
-            cases,
-            default,
             ..
-        } => {
-            walk_expr(ta, declarations, *discriminant, diags)?;
-            for case in cases {
-                walk_stmt(ta, declarations, case.body, diags)?;
-            }
-            if let Some(d) = default {
-                walk_stmt(ta, declarations, *d, diags)?;
-            }
+        } => any_contains_return(ta, std::iter::once(*then_block).chain(*else_block))?,
+        TypedStmtKind::While { body, .. }
+        | TypedStmtKind::DoWhile { body, .. }
+        | TypedStmtKind::For { body, .. }
+        | TypedStmtKind::ForOf { body, .. }
+        | TypedStmtKind::NarrowRegion { body, .. } => contains_return(ta, *body)?,
+        TypedStmtKind::Switch { cases, default, .. } => {
+            any_contains_return(ta, cases.iter().map(|case| case.body).chain(*default))?
         }
-        TypedStmtKind::Break | TypedStmtKind::Continue | TypedStmtKind::ReboxLocal { .. } => {}
-        TypedStmtKind::Return(value) => {
-            if let Some(v) = value {
-                walk_expr(ta, declarations, *v, diags)?;
-            }
-        }
-        TypedStmtKind::Expr(e) => walk_expr(ta, declarations, *e, diags)?,
-        TypedStmtKind::Block(stmts) => {
-            for &s in stmts {
-                walk_stmt(ta, declarations, s, diags)?;
-            }
-        }
-        TypedStmtKind::AssignLocal { value, .. } | TypedStmtKind::AssignGlobal { value, .. } => {
-            walk_expr(ta, declarations, *value, diags)?;
-        }
-        TypedStmtKind::AssignField {
-            receiver, value, ..
-        } => {
-            walk_expr(ta, declarations, *receiver, diags)?;
-            walk_expr(ta, declarations, *value, diags)?;
-        }
-        TypedStmtKind::AssignIndex {
-            receiver,
-            index,
-            value,
-            ..
-        } => {
-            walk_expr(ta, declarations, *receiver, diags)?;
-            walk_expr(ta, declarations, *index, diags)?;
-            walk_expr(ta, declarations, *value, diags)?;
-        }
-        TypedStmtKind::NarrowRegion { source, body, .. } => {
-            walk_expr(ta, declarations, *source, diags)?;
-            walk_stmt(ta, declarations, *body, diags)?;
-        }
-        TypedStmtKind::Throw { value } => walk_expr(ta, declarations, *value, diags)?,
         TypedStmtKind::Try {
             body,
             catches,
             finally,
         } => {
-            walk_stmt(ta, declarations, *body, diags)?;
-            for c in catches {
-                walk_stmt(ta, declarations, c.body, diags)?;
-            }
-            if let Some(f) = finally {
-                walk_stmt(ta, declarations, *f, diags)?;
-            }
+            let catches = catches.iter().map(|catch| catch.body);
+            any_contains_return(ta, std::iter::once(*body).chain(catches).chain(*finally))?
         }
+        TypedStmtKind::Let { .. }
+        | TypedStmtKind::Const { .. }
+        | TypedStmtKind::Expr(_)
+        | TypedStmtKind::Throw { .. }
+        | TypedStmtKind::Break
+        | TypedStmtKind::Continue
+        | TypedStmtKind::ReboxLocal { .. }
+        | TypedStmtKind::AssignLocal { .. }
+        | TypedStmtKind::AssignGlobal { .. }
+        | TypedStmtKind::AssignField { .. }
+        | TypedStmtKind::AssignIndex { .. } => false,
     };
-    Ok(())
+    Ok(found)
 }
 
-fn walk_expr(
+fn any_contains_return(
     ta: &TypedAst,
-    declarations: &TypeDeclarations<'_>,
-    expr_id: ExprId,
-    diags: &mut Vec<Diagnostic>,
-) -> Result<(), crate::compiler_error::CompilerFailure> {
-    let _: () = match &ta
-        .try_expr(expr_id)
-        .map_err(crate::typechecker::arena_failure)?
-        .kind
-    {
-        TypedExprKind::Closure {
-            return_type, body, ..
-        } => {
-            if ta.placeholder_closures.contains(&expr_id) {
-                return Ok(());
-            }
-            if let ClosureBody::Block(b) = body {
-                let (span, message) = match ta.nested_function_names.get(&expr_id) {
-                    Some(name) => (
-                        name.span,
-                        format!(
-                            "function `{}` does not return a value on all paths",
-                            name.name
-                        ),
-                    ),
-                    None => (
-                        ta.try_expr(expr_id)
-                            .map_err(crate::typechecker::arena_failure)?
-                            .span,
-                        "arrow function does not return a value on all paths".to_string(),
-                    ),
-                };
-                check_returns(ta, declarations, *b, return_type, span, message, diags)?;
-                walk_stmt(ta, declarations, *b, diags)?;
-            } else if let ClosureBody::Expr(inner) = body {
-                walk_expr(ta, declarations, *inner, diags)?;
-            }
+    stmts: impl IntoIterator<Item = StmtId>,
+) -> Result<bool, CompilerFailure> {
+    for stmt in stmts {
+        if contains_return(ta, stmt)? {
+            return Ok(true);
         }
-        TypedExprKind::Binary { lhs, rhs, .. } => {
-            walk_expr(ta, declarations, *lhs, diags)?;
-            walk_expr(ta, declarations, *rhs, diags)?;
-        }
-        TypedExprKind::EffectThen { effect, result } => {
-            walk_expr(ta, declarations, *effect, diags)?;
-            walk_expr(ta, declarations, *result, diags)?;
-        }
-        TypedExprKind::Sequence { stmts, result } => {
-            for &stmt in stmts {
-                walk_stmt(ta, declarations, stmt, diags)?;
-            }
-            walk_expr(ta, declarations, *result, diags)?;
-        }
-        TypedExprKind::Unary { operand, .. } => walk_expr(ta, declarations, *operand, diags)?,
-        TypedExprKind::TypeofTag { value, .. } | TypedExprKind::InstanceOf { value, .. } => {
-            walk_expr(ta, declarations, *value, diags)?;
-        }
-        TypedExprKind::Call { args, .. }
-        | TypedExprKind::McpCall { args, .. }
-        | TypedExprKind::SuperCtorCall { args, .. }
-        | TypedExprKind::SuperMethodCall { args, .. } => {
-            for &a in args {
-                walk_expr(ta, declarations, a, diags)?;
-            }
-        }
-        TypedExprKind::CallClosure { callee, args } => {
-            walk_expr(ta, declarations, *callee, diags)?;
-            for &a in args {
-                walk_expr(ta, declarations, a, diags)?;
-            }
-        }
-        TypedExprKind::GenericCall { args, .. } => {
-            for a in args {
-                walk_expr(ta, declarations, a.expr, diags)?;
-            }
-        }
-        TypedExprKind::MethodCall { receiver, args, .. } => {
-            walk_expr(ta, declarations, *receiver, diags)?;
-            for &a in args {
-                walk_expr(ta, declarations, a, diags)?;
-            }
-        }
-        TypedExprKind::GenericMethodCall { receiver, args, .. } => {
-            walk_expr(ta, declarations, *receiver, diags)?;
-            for a in args {
-                walk_expr(ta, declarations, a.expr, diags)?;
-            }
-        }
-        TypedExprKind::IntrinsicCall { args, .. } => {
-            for &a in args {
-                walk_expr(ta, declarations, a, diags)?;
-            }
-        }
-        TypedExprKind::ObjectLiteral { members, .. } => {
-            for member in members {
-                for expression in member.expressions() {
-                    walk_expr(ta, declarations, expression, diags)?;
-                }
-            }
-        }
-        TypedExprKind::ArrayLiteral { elements, .. } => {
-            for e in elements {
-                walk_expr(ta, declarations, e.expr_id(), diags)?;
-            }
-        }
-        TypedExprKind::TupleLiteral { elements, .. } => {
-            for &e in elements {
-                walk_expr(ta, declarations, e, diags)?;
-            }
-        }
-        TypedExprKind::FieldAccess { receiver, .. }
-        | TypedExprKind::InterfacePropertyAccess { receiver, .. } => {
-            walk_expr(ta, declarations, *receiver, diags)?;
-        }
-        TypedExprKind::IndexAccess { receiver, index } => {
-            walk_expr(ta, declarations, *receiver, diags)?;
-            walk_expr(ta, declarations, *index, diags)?;
-        }
-        TypedExprKind::Narrowed { source, inner, .. } => {
-            walk_expr(ta, declarations, *source, diags)?;
-            walk_expr(ta, declarations, *inner, diags)?;
-        }
-        TypedExprKind::Ternary { cond, then_, else_ } => {
-            walk_expr(ta, declarations, *cond, diags)?;
-            walk_expr(ta, declarations, *then_, diags)?;
-            walk_expr(ta, declarations, *else_, diags)?;
-        }
-        TypedExprKind::NullishCoalesce { lhs, rhs } => {
-            walk_expr(ta, declarations, *lhs, diags)?;
-            walk_expr(ta, declarations, *rhs, diags)?;
-        }
-        TypedExprKind::OptionalChain { base, parts } => {
-            walk_expr(ta, declarations, *base, diags)?;
-            for part in parts {
-                match part {
-                    crate::TypedChainPart::Index { idx, .. } => {
-                        walk_expr(ta, declarations, *idx, diags)?;
-                    }
-                    crate::TypedChainPart::Call { args, .. }
-                    | crate::TypedChainPart::MethodCall { args, .. } => {
-                        for a in args {
-                            walk_expr(ta, declarations, *a, diags)?;
-                        }
-                    }
-                    crate::TypedChainPart::Field { .. }
-                    | crate::TypedChainPart::InterfaceProperty { .. }
-                    | crate::TypedChainPart::NonNull { .. } => {}
-                }
-            }
-        }
-        TypedExprKind::PostfixUnary { target, .. } => match target {
-            crate::PostfixTarget::Field { receiver, .. } => {
-                walk_expr(ta, declarations, *receiver, diags)?;
-            }
-            crate::PostfixTarget::Index {
-                receiver, index, ..
-            } => {
-                walk_expr(ta, declarations, *receiver, diags)?;
-                walk_expr(ta, declarations, *index, diags)?;
-            }
-            crate::PostfixTarget::Local { .. } | crate::PostfixTarget::Global { .. } => {}
-        },
-        TypedExprKind::NonNullAssert { value } | TypedExprKind::Cast { value, .. } => {
-            walk_expr(ta, declarations, *value, diags)?;
-        }
-        TypedExprKind::Number(_)
-        | TypedExprKind::BigInt(_)
-        | TypedExprKind::String(_)
-        | TypedExprKind::Boolean(_)
-        | TypedExprKind::Null
-        | TypedExprKind::This
-        | TypedExprKind::Regex { .. }
-        | TypedExprKind::LocalRef { .. }
-        | TypedExprKind::LocalNarrowRef { .. }
-        | TypedExprKind::GlobalRef { .. }
-        | TypedExprKind::FunctionRef { .. }
-        | TypedExprKind::NumberEnumMember { .. }
-        | TypedExprKind::StringEnumMember { .. } => {}
-    };
-    Ok(())
+    }
+    Ok(false)
 }
 
 #[cfg(test)]
 mod tests {
-    use super::super::test_util::{infer_script_with, run, run_package};
+    use super::super::test_util::{infer_script_with, run, run_lines, run_package};
 
     #[test]
     fn void_no_return() {
@@ -584,5 +416,75 @@ mod tests {
         // Without the declaration the enum's variants are unknown.
         let unresolved = crate::check(&ta).unwrap();
         assert_eq!(unresolved.len(), 1, "{unresolved:?}");
+    }
+
+    #[test]
+    fn class_members_and_their_closures_are_checked() {
+        let source = "function main(): void { }
+class C {
+  n: number = 0;
+  readonly f: () => number = () => {
+    if (this.n > 0) {
+      return 1;
+    }
+  };
+  pick(flag: boolean): number {
+    const inner = (): number => {
+      if (flag) {
+        return 1;
+      }
+    };
+    if (flag) {
+      return inner();
+    }
+  }
+  get sign(): number {
+    if (this.n > 0) {
+      return 1;
+    }
+  }
+  set value(v: number) {
+    this.n = v;
+  }
+}
+";
+        let reported = |message: &str, line| (message.to_string(), line);
+        assert_eq!(
+            run_lines(source),
+            [
+                reported("method `C.pick` does not return a value on all paths", 9),
+                reported("getter `C.sign` does not return a value on all paths", 19),
+                reported("arrow function does not return a value on all paths", 10),
+                reported("arrow function does not return a value on all paths", 4),
+            ]
+        );
+    }
+
+    #[test]
+    fn an_unknown_body_that_returns_somewhere_may_fall_off_the_end() {
+        let diags = run(
+            "function f(flag: boolean): unknown { if (flag) { return 1; } }\n\
+             class C { m(flag: boolean): unknown { if (flag) { return 1; } } }\n\
+             const g = (flag: boolean): unknown => { if (flag) { return 1; } };\n",
+        );
+        assert!(diags.is_empty(), "{diags:?}");
+    }
+
+    #[test]
+    fn an_unknown_body_that_never_returns_diagnoses() {
+        let messages: Vec<String> = run(
+            "function f(): unknown { const g = (): number => { return 1; }; g(); }\n\
+             class C { get v(): unknown { console.log(\"x\"); } }\n",
+        )
+        .into_iter()
+        .map(|diag| diag.message)
+        .collect();
+        assert_eq!(
+            messages,
+            [
+                "function `f` returns `unknown` but has no `return`",
+                "getter `C.v` returns `unknown` but has no `return`",
+            ]
+        );
     }
 }

@@ -778,10 +778,7 @@ pub fn emit_function(
     let typed_slots: Vec<u32> = (0..params.len() as u32).collect();
     emitter.emit_boxed_param_prologue(params, &typed_slots)?;
     stmt::emit_statement(&mut emitter, ctx, body)?;
-    if !return_type.is_void() {
-        // Keeps the function statically total even when Wasm validation can't prove all paths terminate.
-        emitter.instruction(Instruction::Unreachable);
-    }
+    emit_body_end(&mut emitter, ctx, return_type)?;
     Ok(emitter.build_with_lines())
 }
 
@@ -968,9 +965,7 @@ pub fn emit_closure_function(
         }
         crate::ClosureBody::Block(b) => {
             stmt::emit_statement(&mut emitter, ctx, b)?;
-            if !meta.return_type.is_void() {
-                emitter.instruction(Instruction::Unreachable);
-            }
+            emit_body_end(&mut emitter, ctx, &meta.return_type)?;
         }
     }
 
@@ -994,6 +989,33 @@ fn closure_return_target(ctx: &CodegenCtx<'_>, ret: &Type) -> ReturnTarget {
         nullable: true,
         heap_type: wasm_encoder::HeapType::Concrete(intrinsics.object),
     }))
+}
+
+/// Ends a block body that may produce a value. Control reaches the end of a
+/// body returning `unknown` when it falls off without a `return`, which
+/// yields `null` as JavaScript yields `undefined`. The missing-return rule
+/// rejects such a body for every other value type, so there the end is
+/// unreachable; the trap keeps the function statically total for Wasm
+/// validation, which cannot prove that.
+pub(crate) fn emit_body_end(
+    emitter: &mut FunctionEmitter<'_>,
+    ctx: &CodegenCtx<'_>,
+    return_type: &Type,
+) -> Result<(), crate::compiler_error::CompilerFailure> {
+    if return_type.is_void() {
+        return Ok(());
+    }
+    if !matches!(return_type.peel(), Type::Unknown) {
+        emitter.instruction(Instruction::Unreachable);
+        return Ok(());
+    }
+    emitter.instruction(Instruction::RefNull(wasm_encoder::HeapType::Abstract {
+        shared: false,
+        ty: wasm_encoder::AbstractHeapType::None,
+    }));
+    cast::emit_coerce_to_return_slot(emitter, ctx, &Type::Null)?;
+    emitter.instruction(Instruction::Return);
+    Ok(())
 }
 
 #[cfg(test)]

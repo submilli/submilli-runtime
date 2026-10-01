@@ -2,6 +2,7 @@
 //!
 //! Read-only: produces additional diagnostics, never modifies the tree.
 
+mod body_walk;
 mod capability_consistency;
 mod check_calls;
 mod check_discipline;
@@ -149,6 +150,18 @@ mod test_util {
 
     pub fn run_raw(source: &str) -> Vec<Diagnostic> {
         pipeline(source)
+    }
+
+    /// Each diagnostic of [`run_raw`] as its message and 1-based line, so a
+    /// test can tell apart several reports that share a message.
+    pub fn run_lines(source: &str) -> Vec<(String, usize)> {
+        run_raw(source)
+            .into_iter()
+            .map(|diag| {
+                let line = source[..diag.span.start as usize].lines().count().max(1);
+                (diag.message, line)
+            })
+            .collect()
     }
 
     /// Infers a script against the runtime and the standard library, without

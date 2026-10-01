@@ -1166,7 +1166,9 @@ impl ClassPlan {
         method: &OwnMethod,
         ctx: &crate::codegen::CodegenCtx<'_>,
     ) -> Result<(Function, Vec<(u64, crate::Span)>), crate::compiler_error::CompilerFailure> {
-        use crate::codegen::function_emitter::{FunctionEmitter, ReturnTarget, stmt};
+        use crate::codegen::function_emitter::{
+            FunctionEmitter, ReturnTarget, emit_body_end, stmt,
+        };
 
         let object_idx = ctx
             .symbols
@@ -1208,10 +1210,7 @@ impl ClassPlan {
             }));
         }
         stmt::emit_statement(&mut emitter, ctx, method.body)?;
-        if !method.return_type.is_void() {
-            // Keep the function statically total even when control flow can't be proven to terminate.
-            emitter.instruction(Instruction::Unreachable);
-        }
+        emit_body_end(&mut emitter, ctx, &method.return_type)?;
         Ok(emitter.build_with_lines())
     }
 
