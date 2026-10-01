@@ -98,36 +98,52 @@ fields the caller set, and that an error names what went wrong.
 
 ## Tests that call the service
 
-`secrets.get` in a test reads the environment, or a `.env` file beside
-`submilli.toml`, with the environment winning. A name that is set nowhere
-reads as `null`, so a live test can skip itself on a machine without the key:
+Tests receive no credentials by default. Package code calling `secrets.get`
+gets `null` unless you supply the credential explicitly. Package tests run with
+the package's identity, including their `main` function. This does not grant
+ordinary script callers access to secrets.
 
 ```typescript title="packages/billing/tests/network.test.ts"
-import secrets from "submilli:secrets";
 import { latestInvoice } from "@acme/billing";
 
 function main(): void {
-    if (secrets.get("BILLING_API_KEY") === null) return;
     const invoice = latestInvoice("cus_northwind");
     assert(invoice !== null, "northwind has an invoice");
 }
 ```
 
+Run with a named process variable, or an explicitly selected file:
+
 ```sh
-BILLING_API_KEY=… submilli build test -p @acme/billing
+submilli build test -p @acme/billing --env-var BILLING_API_KEY
+submilli build test -p @acme/billing --env-file .env
 ```
 
-A skipped test is reported `ok`, since `main` returned. Keep `.env` out of
-source control, and make live tests read-only unless they have a target that
-is safe to change.
+`--env-var NAME` accepts repeated flags and comma-separated names. `--all-env`
+supplies all Unicode process environment variables. When combined, precedence
+is `--env-var` > `--env-file` > `--all-env`, regardless of argument order.
+A missing selected process variable or unreadable file fails the run and names
+it. Relative file paths use the current directory; `.env` is never read implicitly.
+In CI, inject the key into the job's environment and use the `--env-var` command.
+
+If package code returns early for a missing key, the test is reported `ok` since
+`main` returned. Packages that require the credential may instead fail the test.
+Keep `.env` out of source control, and make live tests read-only unless they
+have a target that is safe to change.
 
 Name a file that opens connections `network.test.ts` or
-`network_<something>.test.ts`. With `SUBMILLI_SKIP_HTTP_TESTS=1` those files
-aren't run at all, and the run says how many it left out:
+`network_<something>.test.ts` (the `.subm` variants are also supported).
+`--skip-network` leaves those files out anywhere under `tests/`, before they
+are compiled. The filename determines selection, not detection of network calls:
 
-```text
-1 HTTP test files skipped (SUBMILLI_SKIP_HTTP_TESTS=1)
+```sh
+submilli build test -p @acme/billing --skip-network
 ```
+
+Each skipped file is reported as `skip <path> (--skip-network)`, followed by
+`N HTTP test files skipped (--skip-network)`. Other tests and readme examples
+still run. Without the option, network files run; `SUBMILLI_SKIP_HTTP_TESTS`
+has no effect on package tests.
 
 ## Readme examples are compiled
 
@@ -179,7 +195,7 @@ path; credits for a premium and a standard customer; a zero and a negative
 amount, refused before the permission check; and `latestInvoice` with no
 key, which must fail naming `BILLING_API_KEY`. At the end of the same file
 it added a live read that runs only when the key is set. It didn't put that
-read in a `network.test.ts`, so `SUBMILLI_SKIP_HTTP_TESTS=1` doesn't skip it.
+read in a `network.test.ts`, so `--skip-network` doesn't skip it.
 
 Its first expectation for the hostile path didn't match what
 `encodeComponent` returns. It ran the function to

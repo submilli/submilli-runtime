@@ -37,8 +37,7 @@ enum BuildCmd {
     /// Compile the project's packages and install them into the local store.
     PublishLocal(CompileArgs),
     /// Compile and run the project's `tests/**/*.test.{ts,subm}` files.
-    /// Set SUBMILLI_SKIP_HTTP_TESTS=1 to skip network.test.* and network_*.test.* files.
-    Test(CompileArgs),
+    Test(TestArgs),
 }
 
 #[derive(clap::Args)]
@@ -46,6 +45,31 @@ struct CompileArgs {
     /// Compile only this package and its sibling dependencies.
     #[arg(short = 'p', long = "package")]
     package: Option<String>,
+}
+
+#[derive(clap::Args)]
+#[command(
+    after_help = "Tests receive no credentials by default. Credential precedence (highest first): --env-var > --env-file > --all-env, regardless of argument order."
+)]
+struct TestArgs {
+    #[command(flatten)]
+    compile: CompileArgs,
+
+    /// Supply all Unicode process environment variables as test credentials.
+    #[arg(long)]
+    all_env: bool,
+
+    /// Supply a process variable (repeatable or comma-separated); fail if unset or non-Unicode.
+    #[arg(long, value_name = "NAME", value_delimiter = ',')]
+    env_var: Vec<String>,
+
+    /// Read credentials from a file; relative paths use the current directory. Fail if unreadable.
+    #[arg(long, value_name = "PATH")]
+    env_file: Option<PathBuf>,
+
+    /// Skip network.test.{ts,subm} and network_*.test.{ts,subm} anywhere under tests/.
+    #[arg(long)]
+    skip_network: bool,
 }
 
 #[derive(clap::Args)]
@@ -79,11 +103,10 @@ impl Args {
 
     pub(crate) fn metric_flags(&self) -> Vec<(&'static str, bool)> {
         match &self.cmd {
-            BuildCmd::Check(compile)
-            | BuildCmd::PublishLocal(compile)
-            | BuildCmd::Test(compile) => {
+            BuildCmd::Check(compile) | BuildCmd::PublishLocal(compile) => {
                 vec![("has_package", compile.package.is_some())]
             }
+            BuildCmd::Test(test) => vec![("has_package", test.compile.package.is_some())],
             BuildCmd::Init(_) | BuildCmd::New(_) => Vec::new(),
         }
     }
@@ -489,9 +512,10 @@ mod test_runner {
     };
     use wasmtime::{Engine, Linker, Module};
 
-    use super::{CompileArgs, render_manifest_diagnostics, resolve_github_dependencies};
+    use super::{TestArgs, render_manifest_diagnostics, resolve_github_dependencies};
 
-    pub(super) fn execute_test(args: CompileArgs) -> anyhow::Result<ExitCode> {
+    pub(super) fn execute_test(args: TestArgs) -> anyhow::Result<ExitCode> {
+        let secret_provider = std::sync::Arc::new(EnvSecretProvider::load(&args)?);
         let cwd = std::env::current_dir().context("resolving current directory")?;
         let Some(manifest_path) = find_manifest_upwards(&cwd) else {
             eprintln!(
@@ -519,7 +543,7 @@ mod test_runner {
         if let Err(code) = resolve_github_dependencies(&manifest, &manifest_dir, &store) {
             return Ok(code);
         }
-        let only = args.package.map(PackageName::new);
+        let only = args.compile.package.map(PackageName::new);
         let built = match build_packages(&manifest, &manifest_dir, &store, only.as_ref()) {
             Ok(built) => built,
             Err(DriverError::Compile { rendered, .. }) => {
@@ -596,14 +620,13 @@ mod test_runner {
             linked: &linked,
             package_sources: &package_sources,
             manifest_dir: &manifest_dir,
+            secret_provider: &secret_provider,
         };
 
         let mut passed = 0usize;
         let mut failed = 0usize;
         let mut files = 0usize;
         let mut skipped = 0usize;
-        let skip_http_tests =
-            std::env::var_os("SUBMILLI_SKIP_HTTP_TESTS").is_some_and(|value| value == "1");
         for pkg in &targets {
             let Some(pkg_path) = path_by_name.get(pkg.name.as_str()) else {
                 continue;
@@ -612,8 +635,8 @@ mod test_runner {
             let test_files = discover_test_files(&tests_dir)
                 .with_context(|| format!("scanning {}", tests_dir.display()))?;
             for test_file in test_files {
-                if skip_http_tests && is_http_test_file(&test_file) {
-                    println!("skip {} (SUBMILLI_SKIP_HTTP_TESTS=1)", test_file.display());
+                if args.skip_network && is_network_test_file(&test_file) {
+                    println!("skip {} (--skip-network)", test_file.display());
                     skipped += 1;
                     continue;
                 }
@@ -636,7 +659,7 @@ mod test_runner {
         }
         println!("\n{passed} passed, {failed} failed across {files} files");
         if skipped > 0 {
-            println!("{skipped} HTTP test files skipped (SUBMILLI_SKIP_HTTP_TESTS=1)");
+            println!("{skipped} HTTP test files skipped (--skip-network)");
         }
         if failed == 0 {
             Ok(ExitCode::SUCCESS)
@@ -752,27 +775,37 @@ mod test_runner {
         linked
     }
 
-    // Test-time secret bridge: `secrets.get("NAME")` resolves `NAME` from the
-    // environment, with a `.env` file in the manifest dir loaded first (real
-    // environment variables win). So `JINA_API_KEY=… submilli build test` — or a
-    // `.env` holding it — makes a token available to tests; an unset name reads
-    // as a missing secret (`None`). Loading `.env` is test-only.
+    /// An immutable snapshot of only the credentials explicitly selected for this run.
     struct EnvSecretProvider {
         vars: std::collections::HashMap<String, String>,
     }
 
     impl EnvSecretProvider {
-        fn load(manifest_dir: &Path) -> Self {
+        fn load(args: &TestArgs) -> anyhow::Result<Self> {
             let mut vars = std::collections::HashMap::new();
-            if let Ok(text) = std::fs::read_to_string(manifest_dir.join(".env")) {
-                for line in text.lines() {
-                    if let Some((k, v)) = parse_dotenv_line(line) {
-                        vars.insert(k, v);
-                    }
-                }
+            if args.all_env {
+                vars.extend(std::env::vars_os().filter_map(|(name, value)| {
+                    Some((name.into_string().ok()?, value.into_string().ok()?))
+                }));
             }
-            vars.extend(std::env::vars());
-            Self { vars }
+            if let Some(path) = &args.env_file {
+                let text = std::fs::read_to_string(path)
+                    .with_context(|| format!("reading credential file {}", path.display()))?;
+                vars.extend(text.lines().filter_map(parse_dotenv_line));
+            }
+            for name in &args.env_var {
+                let value = match std::env::var(name) {
+                    Ok(value) => value,
+                    Err(std::env::VarError::NotPresent) => {
+                        anyhow::bail!("--env-var {name}: process variable is not set");
+                    }
+                    Err(std::env::VarError::NotUnicode(_)) => {
+                        anyhow::bail!("--env-var {name}: process variable is not valid Unicode");
+                    }
+                };
+                vars.insert(name.clone(), value);
+            }
+            Ok(Self { vars })
         }
     }
 
@@ -821,6 +854,7 @@ mod test_runner {
         linked: &'a [LinkedPackageModule<'a>],
         package_sources: &'a [(&'a str, &'a [ArtifactSource])],
         manifest_dir: &'a Path,
+        secret_provider: &'a std::sync::Arc<EnvSecretProvider>,
     }
 
     fn run_test_file(
@@ -836,6 +870,7 @@ mod test_runner {
             linked,
             package_sources,
             manifest_dir,
+            secret_provider,
         } = *ctx;
         let source = std::fs::read_to_string(test_file)
             .with_context(|| format!("reading {}", test_file.display()))?;
@@ -881,7 +916,7 @@ mod test_runner {
 
         let outcome = rt.block_on(async {
             let mut data = StoreData::with_vfs_and_cap(Vfs::tempdir()?, cfg.max_store_bytes);
-            data.secret_provider = std::sync::Arc::new(EnvSecretProvider::load(manifest_dir));
+            data.secret_provider = secret_provider.clone();
             let mut store = cfg.store_async(engine, data)?;
             install_tenant_limits(&mut store);
             let mut linker = Linker::<StoreData>::new(engine);
@@ -973,7 +1008,7 @@ mod test_runner {
         name.ends_with(".test.ts") || name.ends_with(".test.subm")
     }
 
-    fn is_http_test_file(path: &Path) -> bool {
+    fn is_network_test_file(path: &Path) -> bool {
         path.file_name()
             .and_then(|name| name.to_str())
             .and_then(|name| {

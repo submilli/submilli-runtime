@@ -12,7 +12,7 @@ the operations and their capability fields first using
 submilli build init @acme/billing packages/billing   # first package: writes submilli.toml
 submilli build new  @acme/billing packages/billing   # add to an existing submilli.toml
 submilli build check                                 # compile, derive capabilities.yaml
-submilli build test [-p @acme/billing]               # run tests/**/*.test.ts + docs examples
+submilli build test [-p @acme/billing] [--skip-network] # run tests + compile docs examples
 submilli build publish-local [-p @acme/billing]      # install into the local store
 ```
 
@@ -445,11 +445,22 @@ function main(): void {
 
 - Unit-test pure builders (query strings, filter variables, error rendering)
   without network or secrets. Export them for that purpose.
-- Gate live tests on the secret: `if (secrets.get("NAME") === null) return;`.
-  `build test` bridges `NAME` from the environment or a `.env` in the manifest
-  directory to `secrets.get`; an unset name reads as `null`. Live tests should
-  be read-only unless a disposable target is configured by an explicit
-  variable.
+- Tests receive no credentials by default. Use `--env-var NAME` (repeatable or
+  comma-separated), `--env-file PATH` (relative to the current directory), or
+  `--all-env`. Precedence is `--env-var` > `--env-file` > `--all-env`, regardless
+  of flag order. Missing selected process variables and unreadable files fail
+  the run. `.env` is read only when explicitly named.
+- Package tests, including their `main` function, run with the package's
+  identity and may read supplied secrets. Ordinary script callers remain
+  restricted. A missing-credential early return is reported `ok`; use
+  `--skip-network` when you want files explicitly reported as skipped.
+  Live tests should be read-only unless a disposable target is configured.
+- Use `--skip-network` to skip `network.test.{ts,subm}` and
+  `network_*.test.{ts,subm}` anywhere under `tests/`. Selection uses filenames,
+  not detection of network calls. Other tests and readme examples still run.
+  `SUBMILLI_SKIP_HTTP_TESTS` has no effect on package-test selection.
+- In a CI job with an injected secret, run
+  `submilli build test -p @acme/billing --env-var BILLING_API_KEY`.
 - Test that a write operation sends only the fields set, that a missing
   resource yields `null`, and that a service error surfaces its detail.
 
