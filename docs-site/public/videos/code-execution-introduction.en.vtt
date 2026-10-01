@@ -1,0 +1,39 @@
+WEBVTT
+
+00:00:00.500 --> 00:00:06.717
+Consider an agent used by a small business. The agent is asked to
+summarize yesterday's failed payments.
+
+00:00:08.033 --> 00:00:26.842
+The agent uses external tools such as APIs or MCPs to fetch failed
+payments, identify the affected accounts, and retrieve relevant
+support tickets. Each result returns to the model before it can choose
+the next request. That adds inference work and makes the next request
+wait.
+
+00:00:28.167 --> 00:00:34.279
+In this illustrative sequence, three requests and a final
+interpretation take four model rounds.
+
+00:00:35.600 --> 00:00:51.012
+Instead of sequential tool calling, the model may write a program that
+calls the three tools. Inside the program, it totals the failed
+payments, identifies the impacted accounts, and links them to three
+support tickets - without another model round.
+
+00:00:52.333 --> 00:01:03.044
+The program returns the final report. The model provides the requested
+summary, financial impact, and customer list while keeping raw records
+separate from the primary output.
+
+00:01:04.367 --> 00:01:13.927
+The process is reduced from four model rounds to two. Routine work
+runs as code, maintaining a smaller, more focused conversation
+context.
+
+00:01:15.233 --> 00:01:29.862
+Anthropic demonstrated lower context use. CodeAct improved task
+success. Cloudflare built a compact interface to thousands of API
+endpoints. These results help explain why code execution is becoming
+part of the agent stack.
+

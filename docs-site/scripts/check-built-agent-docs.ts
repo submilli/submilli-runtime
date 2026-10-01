@@ -26,4 +26,8 @@ for (const file of files.filter((file) => file.endsWith('.html'))) {
 	assert.ok(!html.includes('rel="alternate" type="text/markdown"'), file);
 	assert.ok(!html.includes('>View Markdown</a>'), file);
 }
+const executionPage = await readFile(new URL('docs/concepts/execution-model/index.html', directory), 'utf8');
+assert.ok(executionPage.includes('href="/docs/videos/"'), 'Video library is linked under the docs base');
+assert.ok(!executionPage.includes('/docs/docs/'), 'Sidebar links must not duplicate the docs base');
+assert.ok(!executionPage.includes('<video'), 'Unpublished video must not create a production player');
 console.log(`Verified exports and HTML discovery for ${chapters.length} visible chapters.`);

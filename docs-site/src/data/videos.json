@@ -1,0 +1,43 @@
+{
+  "films": [
+    {
+      "id": "code-execution-introduction",
+      "title": "Why agents execute code",
+      "description": "Follow a failed-payment investigation from sequential tool calls to a program that returns a focused report.",
+      "durationSeconds": 90.688,
+      "language": "en",
+      "status": "awaiting-publication",
+      "src": null,
+      "canonicalPath": "/docs/concepts/execution-model/",
+      "transcriptPath": "/docs/videos/code-execution-introduction/",
+      "captionsPath": "/docs/videos/code-execution-introduction.en.vtt",
+      "sha256": "d6d505ba502b08ff13274c704df27f0fe1006571f1cf489598a9a5e370a682e1",
+      "exportFile": "editor-export-1790685929055.mp4",
+      "snapshotFile": "export-51c09794-8edf-4fe8-bb28-fa7613f54e18.json"
+    },
+    {
+      "id": "helps",
+      "title": "How Submilli helps",
+      "status": "planned",
+      "destination": "Start here \u2192 Why Submilli?"
+    },
+    {
+      "id": "works",
+      "title": "How Submilli works",
+      "status": "planned",
+      "destination": "Concepts \u2192 Security and trust boundaries"
+    },
+    {
+      "id": "using",
+      "title": "Using Submilli",
+      "status": "planned",
+      "destination": "Tutorials \u2192 Build your first integration"
+    },
+    {
+      "id": "challenges",
+      "title": "Agent execution challenges",
+      "status": "planned",
+      "destination": "Concepts \u2192 Performance and tradeoffs"
+    }
+  ]
+}
