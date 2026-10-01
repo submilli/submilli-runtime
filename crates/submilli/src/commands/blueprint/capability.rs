@@ -8,13 +8,13 @@
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-use anyhow::{Result, bail};
+use anyhow::{Context, Result, bail};
 use clap::Subcommand;
 use interpreter::stdlib::capabilities;
 use submilli_blueprint::{Action, Blueprint, DefaultAction, FilterExpr, PermissionRule};
 use submilli_build::PackageStore;
 
-use super::file::{blueprint_path, load, write};
+use super::file::{blueprint_path, has_capability_rule, load, write};
 
 #[derive(Subcommand)]
 pub enum CapabilityCmd {
@@ -56,6 +56,11 @@ pub struct ListArgs {
     /// blueprint the stdlib catalog is still listed.
     #[arg(long)]
     blueprint: Option<PathBuf>,
+    /// Show only the capabilities declared packages provide that have no rule
+    /// under `main` (a filtered rule or a `deny` counts as a rule), and the
+    /// default they fall through to. Requires a readable blueprint.
+    #[arg(long)]
+    unconfigured: bool,
 }
 
 #[derive(clap::Args)]
@@ -141,6 +146,9 @@ struct Source {
 }
 
 fn list(args: &ListArgs) -> Result<String> {
+    if args.unconfigured {
+        return list_unconfigured(args);
+    }
     let path = blueprint_path(&args.blueprint);
     let blueprint = match load(&path) {
         Ok(bp) => Some(bp),
@@ -168,6 +176,99 @@ fn list(args: &ListArgs) -> Result<String> {
     };
 
     Ok(render(&sources, blueprint.as_ref()).trim_end().to_string())
+}
+
+/// Omitting a provided capability from `main` is how a blueprint withholds
+/// it, so this view lists rule presence, not what the script calls. An
+/// explicit `deny` is a rule and is not listed.
+fn list_unconfigured(args: &ListArgs) -> Result<String> {
+    let path = blueprint_path(&args.blueprint);
+    let blueprint = load(&path)?;
+    let packages: Vec<&String> = match &args.library {
+        None => blueprint.packages.iter().collect(),
+        Some(library) if blueprint.packages.contains(library) => vec![library],
+        Some(library) => bail!(
+            "'{library}' is not a package {} declares; --unconfigured lists declared packages: {}",
+            path.display(),
+            declared_packages(&blueprint)
+        ),
+    };
+    let sources = unconfigured_sources(&blueprint, &packages)?;
+
+    let mut out = format!(
+        "Provided capabilities with no rule under `main`; {}.\n\n",
+        unruled_call_outcome(blueprint.default_action)
+    );
+    if blueprint.packages.is_empty() {
+        out.push_str(&format!("none: {} declares no packages", path.display()));
+    } else if sources.is_empty() {
+        let none = match &args.library {
+            Some(library) => {
+                format!("none: `{library}` provides no capability without a rule under `main`")
+            }
+            None => "none: no declared package provides a capability without a rule under `main`"
+                .to_string(),
+        };
+        out.push_str(&none);
+    } else {
+        // Rules other callers hold for these names are not `main`'s; showing
+        // them under this heading would read as configuration.
+        out.push_str(&render(&sources, None));
+    }
+    Ok(out.trim_end().to_string())
+}
+
+/// Unlike the full listing, a package that fails to load is an error:
+/// skipping it would under-report what the blueprint leaves out.
+fn unconfigured_sources(blueprint: &Blueprint, packages: &[&String]) -> Result<Vec<Source>> {
+    let store = PackageStore::default();
+    let mut sources = Vec::new();
+    for package in packages {
+        let artifact = store
+            .load(package)
+            .with_context(|| format!("loading declared package '{package}'"))?;
+        let entries: Vec<Entry> = artifact
+            .capabilities
+            .provides
+            .iter()
+            .filter(|provided| {
+                !has_capability_rule(blueprint, interpreter::mangle::USER_PACKAGE, &provided.name)
+            })
+            .map(provided_entry)
+            .collect();
+        if !entries.is_empty() {
+            sources.push(Source {
+                name: (*package).clone(),
+                entries,
+            });
+        }
+    }
+    Ok(sources)
+}
+
+fn declared_packages(blueprint: &Blueprint) -> String {
+    if blueprint.packages.is_empty() {
+        return "none".to_string();
+    }
+    blueprint
+        .packages
+        .iter()
+        .map(String::as_str)
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+/// What a call with no matching rule resolves to. Enforcement falls through
+/// to `deny` when `default:` is unset, even with no `permissions:` block.
+pub(super) fn unruled_call_outcome(default: Option<DefaultAction>) -> &'static str {
+    match default {
+        None => "`default:` is unset, so calls to them are denied",
+        Some(DefaultAction::Deny) => "`default: deny` denies calls to them",
+        Some(DefaultAction::Allow) => "`default: allow` allows calls to them",
+        Some(DefaultAction::AskHuman) => {
+            "`default: ask-human` applies to them, which currently denies calls"
+        }
+    }
 }
 
 fn collect_sources(blueprint: Option<&Blueprint>) -> Vec<Source> {
@@ -273,7 +374,11 @@ fn render(sources: &[Source], blueprint: Option<&Blueprint>) -> String {
         }
         out.push_str(&format!("{}\n", source.name));
         for entry in &source.entries {
-            out.push_str(&format!("  {} — {}\n", entry.name, entry.summary));
+            if entry.summary.is_empty() {
+                out.push_str(&format!("  {}\n", entry.name));
+            } else {
+                out.push_str(&format!("  {} — {}\n", entry.name, entry.summary));
+            }
             if !entry.fields.is_empty() {
                 out.push_str(&format!("      fields: {}\n", entry.fields));
             }
@@ -551,6 +656,7 @@ mod tests {
         let out = list(&ListArgs {
             library: None,
             blueprint: Some(path.clone()),
+            unconfigured: false,
         })
         .unwrap();
         assert!(out.starts_with("submilli:fs\n"), "{out}");
@@ -566,6 +672,7 @@ mod tests {
         let out = list(&ListArgs {
             library: Some("submilli:fs".into()),
             blueprint: Some(path.clone()),
+            unconfigured: false,
         })
         .unwrap();
         assert!(out.contains("fs.read"), "{out}");
@@ -574,6 +681,7 @@ mod tests {
         let err = list(&ListArgs {
             library: Some("nope".into()),
             blueprint: Some(path),
+            unconfigured: false,
         })
         .unwrap_err();
         assert!(err.to_string().contains("available:"), "{err}");
@@ -585,6 +693,7 @@ mod tests {
         let out = list(&ListArgs {
             library: Some("linear".into()),
             blueprint: Some(path),
+            unconfigured: false,
         })
         .unwrap();
         assert!(out.contains("mcp.linear"), "{out}");

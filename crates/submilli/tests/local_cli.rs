@@ -234,6 +234,10 @@ path = "sdk"
             export function charge(customer: string): void {
                 check("acme.com/charge", { customer });
             }
+            /** @capability acme.com/refund { customer } */
+            export function refund(customer: string): void {
+                check("acme.com/refund", { customer });
+            }
         "#,
     );
     write_file(
@@ -280,25 +284,49 @@ path = "secrets"
     project
 }
 
+/// Leaving a provided capability out of `main` is how a blueprint withholds
+/// it; `default:` decides those calls, so lint says nothing about them.
 #[test]
-fn lint_warns_for_missing_provides_rule() {
+fn lint_ignores_omitted_provided_capabilities() {
     let home = tempfile::tempdir().expect("home tempdir");
     let _project = publish_capability_packages(home.path());
     let file = home.path().join("blueprint.yaml");
-    write_file(
-        &file,
-        "name: x\npackages:\n  - \"@acme/sdk\"\npermissions:\n  main: []\n",
-    );
+    write_file(&file, "name: x\n");
+    for (package, selection) in [
+        ("@acme/app", "--no-capabilities"),
+        ("@acme/sdk", "--capabilities=acme.com/charge"),
+    ] {
+        let out = run_with_home(
+            &[
+                os("blueprint"),
+                os("add-package"),
+                os(package),
+                os(selection),
+                os("--blueprint"),
+                file.as_os_str(),
+            ],
+            home.path(),
+        );
+        assert!(out.status.success(), "stderr: {}", stderr(&out));
+    }
+    let scaffolded = fs::read_to_string(&file).expect("read blueprint");
 
-    let out = run_with_home(
-        &[os("blueprint"), os("lint"), file.as_os_str()],
-        home.path(),
-    );
+    for flags in [&[][..], &[os("--fix")][..]] {
+        let mut args = vec![os("blueprint"), os("lint")];
+        args.extend_from_slice(flags);
+        args.push(file.as_os_str());
+        let out = run_with_home(&args, home.path());
 
-    assert!(out.status.success(), "stderr: {}", stderr(&out));
-    let err = stderr(&out);
-    assert!(err.contains("warning:"), "missing warning in {err}");
-    assert!(err.contains("provides `acme.com/charge`"), "got: {err}");
+        assert!(out.status.success(), "stderr: {}", stderr(&out));
+        let err = stderr(&out);
+        assert!(!err.contains("provides `"), "got: {err}");
+        assert!(!err.contains("warning:"), "got: {err}");
+        assert_eq!(
+            fs::read_to_string(&file).expect("read blueprint"),
+            scaffolded,
+            "lint {flags:?} must leave the blueprint as scaffolded"
+        );
+    }
 }
 
 #[test]
@@ -393,7 +421,7 @@ fn lint_keeps_a_narrowed_requires_rule() {
 }
 
 #[test]
-fn lint_fix_adds_missing_capability_rules() {
+fn lint_fix_adds_missing_requires_rules_only() {
     let home = tempfile::tempdir().expect("home tempdir");
     let _project = publish_capability_packages(home.path());
     let file = home.path().join("blueprint.yaml");
@@ -410,10 +438,10 @@ fn lint_fix_adds_missing_capability_rules() {
     assert!(out.status.success(), "stderr: {}", stderr(&out));
     let updated = fs::read_to_string(&file).expect("read fixed blueprint");
     let blueprint = submilli_blueprint::parse(&updated).expect("fixed blueprint parses");
-    let main_rules = &blueprint.permissions["main"];
-    assert!(main_rules.iter().any(|rule| {
-        rule.capability == "acme.com/charge" && rule.action == submilli_blueprint::Action::AskHuman
-    }));
+    assert!(
+        !blueprint.permissions.contains_key("main"),
+        "--fix must not grant or rule on provided capabilities: {updated}"
+    );
     let app_rules = &blueprint.permissions["@acme/app"];
     assert!(app_rules.iter().any(|rule| {
         rule.capability == "acme.com/charge"
@@ -544,7 +572,7 @@ fn add_package_without_selection_adds_no_main_rules() {
     );
     let out_text = stdout(&out);
     assert!(
-        out_text.contains("not selected — denied by `default: deny`"),
+        out_text.contains("not selected; `default: deny` denies calls to them"),
         "got: {out_text}"
     );
 
@@ -558,6 +586,328 @@ fn add_package_without_selection_adds_no_main_rules() {
         blueprint.permissions["@acme/app"]
             .iter()
             .any(|rule| rule.capability == "acme.com/charge")
+    );
+}
+
+fn capability_list_unconfigured(
+    home: &std::path::Path,
+    file: &std::path::Path,
+    library: Option<&str>,
+) -> Output {
+    let mut args = vec![os("blueprint"), os("capability"), os("list")];
+    if let Some(library) = library {
+        args.push(os(library));
+    }
+    args.extend([os("--unconfigured"), os("--blueprint"), file.as_os_str()]);
+    run_with_home(&args, home)
+}
+
+#[test]
+fn capability_list_unconfigured_shows_provided_capabilities_without_a_main_rule() {
+    let home = tempfile::tempdir().expect("home tempdir");
+    let _project = publish_capability_packages(home.path());
+    let file = home.path().join("blueprint.yaml");
+    let blueprint = "name: x\ndefault: deny\npackages:\n  - \"@acme/app\"\n  - \"@acme/sdk\"\npermissions:\n  main:\n    - capability: acme.com/run\n      action: allow\n";
+    write_file(&file, blueprint);
+
+    // The filtered view speaks for the named package, not the blueprint.
+    let out = capability_list_unconfigured(home.path(), &file, Some("@acme/app"));
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    let text = stdout(&out);
+    assert!(
+        text.contains("none: `@acme/app` provides no capability"),
+        "got: {text}"
+    );
+
+    let out = capability_list_unconfigured(home.path(), &file, None);
+
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    let text = stdout(&out);
+    assert!(text.contains("`default: deny` denies"), "got: {text}");
+    assert!(
+        text.contains("@acme/sdk\n  acme.com/charge\n      fields: customer: string\n"),
+        "got: {text}"
+    );
+    assert!(text.contains("acme.com/refund"), "got: {text}");
+    assert!(!text.contains("acme.com/run"), "got: {text}");
+    assert!(!text.contains("@acme/app"), "got: {text}");
+    assert_eq!(
+        fs::read_to_string(&file).expect("read blueprint"),
+        blueprint
+    );
+}
+
+#[test]
+fn capability_list_unconfigured_filters_to_one_declared_package() {
+    let home = tempfile::tempdir().expect("home tempdir");
+    let _project = publish_capability_packages(home.path());
+    let file = home.path().join("blueprint.yaml");
+    write_file(
+        &file,
+        "name: x\npackages:\n  - \"@acme/app\"\n  - \"@acme/sdk\"\n",
+    );
+
+    let out = capability_list_unconfigured(home.path(), &file, Some("@acme/app"));
+
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    let text = stdout(&out);
+    assert!(text.contains("`default:` is unset"), "got: {text}");
+    assert!(text.contains("@acme/app\n  acme.com/run"), "got: {text}");
+    assert!(!text.contains("acme.com/charge"), "got: {text}");
+    assert!(!text.contains("@acme/sdk"), "got: {text}");
+
+    let out = capability_list_unconfigured(home.path(), &file, Some("submilli:fs"));
+    assert!(!out.status.success());
+    let err = stderr(&out);
+    assert!(err.contains("not a package"), "got: {err}");
+    assert!(err.contains("@acme/app, @acme/sdk"), "got: {err}");
+}
+
+/// An explicit `deny` is a rule, not an omission; under `default: allow` an
+/// omitted capability is allowed, and the view must say so.
+#[test]
+fn capability_list_unconfigured_distinguishes_deny_rules_and_names_the_default() {
+    let home = tempfile::tempdir().expect("home tempdir");
+    let _project = publish_capability_packages(home.path());
+    let file = home.path().join("blueprint.yaml");
+    write_file(
+        &file,
+        "name: x\ndefault: allow\npackages:\n  - \"@acme/app\"\n  - \"@acme/sdk\"\npermissions:\n  main:\n    - capability: acme.com/charge\n      action: deny\n",
+    );
+
+    let out = capability_list_unconfigured(home.path(), &file, None);
+
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    let text = stdout(&out);
+    assert!(text.contains("`default: allow` allows"), "got: {text}");
+    assert!(text.contains("acme.com/run"), "got: {text}");
+    assert!(!text.contains("acme.com/charge"), "got: {text}");
+}
+
+#[test]
+fn capability_list_unconfigured_reports_when_nothing_is_omitted() {
+    let home = tempfile::tempdir().expect("home tempdir");
+    let _project = publish_capability_packages(home.path());
+    let file = home.path().join("blueprint.yaml");
+    write_file(
+        &file,
+        "name: x\npackages:\n  - \"@acme/sdk\"\npermissions:\n  main:\n    - capability: acme.com/charge\n      filter: customer == \"cus_1\"\n      action: allow\n    - capability: acme.com/refund\n      action: ask-human\n",
+    );
+
+    let out = capability_list_unconfigured(home.path(), &file, None);
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    let text = stdout(&out);
+    assert!(
+        text.contains("none: no declared package provides"),
+        "got: {text}"
+    );
+
+    let bare = home.path().join("bare.yaml");
+    write_file(&bare, "name: x\n");
+    let out = capability_list_unconfigured(home.path(), &bare, None);
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    assert!(
+        stdout(&out).contains("declares no packages"),
+        "got: {}",
+        stdout(&out)
+    );
+}
+
+/// `ask-human` is accepted but enforced as `deny`; rules other callers hold
+/// for an omitted name are not `main`'s and stay out of this view.
+#[test]
+fn capability_list_unconfigured_under_ask_human_hides_other_callers_rules() {
+    let home = tempfile::tempdir().expect("home tempdir");
+    let _project = publish_capability_packages(home.path());
+    let file = home.path().join("blueprint.yaml");
+    write_file(
+        &file,
+        "name: x\ndefault: ask-human\npackages:\n  - \"@acme/app\"\n  - \"@acme/sdk\"\npermissions:\n  \"@acme/app\":\n    - capability: acme.com/charge\n      action: allow\n",
+    );
+
+    let out = capability_list_unconfigured(home.path(), &file, None);
+
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    let text = stdout(&out);
+    assert!(text.contains("`default: ask-human`"), "got: {text}");
+    assert!(text.contains("currently denies"), "got: {text}");
+    assert!(text.contains("acme.com/charge"), "got: {text}");
+    assert!(!text.contains("rule["), "got: {text}");
+}
+
+#[test]
+fn capability_list_unconfigured_with_a_package_that_provides_nothing() {
+    let home = tempfile::tempdir().expect("home tempdir");
+    let _project = publish_secret_package(home.path());
+    let file = home.path().join("blueprint.yaml");
+    write_file(&file, "name: x\npackages:\n  - \"@acme/secrets\"\n");
+
+    let out = capability_list_unconfigured(home.path(), &file, Some("@acme/secrets"));
+
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    let text = stdout(&out);
+    assert!(
+        text.contains("none: `@acme/secrets` provides no capability"),
+        "got: {text}"
+    );
+}
+
+#[test]
+fn capability_list_unconfigured_fails_on_a_package_it_cannot_load() {
+    let home = tempfile::tempdir().expect("home tempdir");
+    let file = home.path().join("blueprint.yaml");
+    write_file(&file, "name: x\npackages:\n  - \"@acme/missing\"\n");
+
+    let out = capability_list_unconfigured(home.path(), &file, None);
+
+    assert!(!out.status.success(), "stdout: {}", stdout(&out));
+    assert!(
+        stderr(&out).contains("@acme/missing"),
+        "got: {}",
+        stderr(&out)
+    );
+}
+
+fn add_sdk_with_charge_selected(home: &std::path::Path, blueprint: &str) -> Output {
+    let file = home.join("blueprint.yaml");
+    write_file(&file, blueprint);
+    run_with_home(
+        &[
+            os("blueprint"),
+            os("add-package"),
+            os("@acme/sdk"),
+            os("--capabilities"),
+            os("acme.com/charge"),
+            os("--blueprint"),
+            file.as_os_str(),
+        ],
+        home,
+    )
+}
+
+/// The summary names what the blueprint's own `default:` does with the
+/// capabilities left unselected, not a fixed `default: deny`.
+#[test]
+fn add_package_summary_names_the_blueprints_default() {
+    let home = tempfile::tempdir().expect("home tempdir");
+    let _project = publish_capability_packages(home.path());
+    for (blueprint, expected) in [
+        (
+            "name: x\npermissions:\n  main: []\n",
+            "1 provided capabilities not selected; `default:` is unset, so calls to them are denied",
+        ),
+        (
+            "name: x\ndefault: ask-human\n",
+            "1 provided capabilities not selected; `default: ask-human` applies to them",
+        ),
+    ] {
+        let out = add_sdk_with_charge_selected(home.path(), blueprint);
+
+        assert!(out.status.success(), "stderr: {}", stderr(&out));
+        let text = stdout(&out);
+        assert!(text.contains(expected), "for {blueprint:?} got: {text}");
+    }
+}
+
+/// An unselected capability `main` already rules on is neither reported as
+/// falling to the default nor given a `deny` that its earlier rule shadows.
+#[test]
+fn add_package_keeps_an_existing_main_rule_for_an_unselected_capability() {
+    let home = tempfile::tempdir().expect("home tempdir");
+    let _project = publish_capability_packages(home.path());
+    for default in ["deny", "allow"] {
+        let out = add_sdk_with_charge_selected(
+            home.path(),
+            &format!(
+                "name: x\ndefault: {default}\npermissions:\n  main:\n    - capability: acme.com/refund\n      action: allow\n"
+            ),
+        );
+
+        assert!(out.status.success(), "stderr: {}", stderr(&out));
+        let text = stdout(&out);
+        assert!(
+            !text.contains("not selected"),
+            "default {default} got: {text}"
+        );
+        let updated = fs::read_to_string(home.path().join("blueprint.yaml")).expect("read");
+        let blueprint = submilli_blueprint::parse(&updated).expect("parses");
+        let refund: Vec<_> = blueprint.permissions["main"]
+            .iter()
+            .filter(|rule| rule.capability == "acme.com/refund")
+            .collect();
+        assert_eq!(refund.len(), 1, "default {default}: {updated}");
+        assert_eq!(refund[0].action, submilli_blueprint::Action::Allow);
+    }
+}
+
+/// A filtered rule decides only the calls it matches; under `default: allow`
+/// the rest are allowed unless add-package still appends its `deny`.
+#[test]
+fn add_package_denies_behind_a_filtered_main_rule_under_default_allow() {
+    let home = tempfile::tempdir().expect("home tempdir");
+    let _project = publish_capability_packages(home.path());
+    let out = add_sdk_with_charge_selected(
+        home.path(),
+        "name: x\ndefault: allow\npermissions:\n  main:\n    - capability: acme.com/refund\n      filter: customer == \"vip\"\n      action: deny\n",
+    );
+
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    let updated = fs::read_to_string(home.path().join("blueprint.yaml")).expect("read");
+    let blueprint = submilli_blueprint::parse(&updated).expect("parses");
+    let refund: Vec<_> = blueprint.permissions["main"]
+        .iter()
+        .filter(|rule| rule.capability == "acme.com/refund")
+        .collect();
+    assert_eq!(refund.len(), 2, "{updated}");
+    assert!(refund[1].filter.is_none(), "{updated}");
+    assert_eq!(refund[1].action, submilli_blueprint::Action::Deny);
+}
+
+/// Only `main`'s own rules decide `main`'s calls: another caller's unfiltered
+/// rule for the same name must not stop the protective `deny`.
+#[test]
+fn add_package_denies_despite_another_callers_rule_under_default_allow() {
+    let home = tempfile::tempdir().expect("home tempdir");
+    let _project = publish_capability_packages(home.path());
+    let out = add_sdk_with_charge_selected(
+        home.path(),
+        "name: x\ndefault: allow\npermissions:\n  \"@acme/app\":\n    - capability: acme.com/refund\n      action: allow\n",
+    );
+
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    let updated = fs::read_to_string(home.path().join("blueprint.yaml")).expect("read");
+    let blueprint = submilli_blueprint::parse(&updated).expect("parses");
+    assert!(
+        blueprint.permissions["main"].iter().any(|rule| {
+            rule.capability == "acme.com/refund"
+                && rule.filter.is_none()
+                && rule.action == submilli_blueprint::Action::Deny
+        }),
+        "{updated}"
+    );
+}
+
+/// The summary and `capability list --unconfigured` agree on what is left to
+/// the default: a capability `main` rules on only with a filter is neither.
+#[test]
+fn add_package_summary_agrees_with_unconfigured_on_filtered_rules() {
+    let home = tempfile::tempdir().expect("home tempdir");
+    let _project = publish_capability_packages(home.path());
+    let out = add_sdk_with_charge_selected(
+        home.path(),
+        "name: x\ndefault: deny\npermissions:\n  main:\n    - capability: acme.com/refund\n      filter: customer == \"vip\"\n      action: allow\n",
+    );
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    let text = stdout(&out);
+    assert!(!text.contains("not selected"), "got: {text}");
+
+    let file = home.path().join("blueprint.yaml");
+    let out = capability_list_unconfigured(home.path(), &file, Some("@acme/sdk"));
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    let text = stdout(&out);
+    assert!(
+        text.contains("none: `@acme/sdk` provides no capability"),
+        "got: {text}"
     );
 }
 
