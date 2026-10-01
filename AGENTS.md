@@ -17,9 +17,11 @@ unrelated existing violations separately.
 
 ## Conditional HTTP verification
 
-Use `SUBMILLI_SKIP_HTTP_TESTS=1` for routine Cargo and package tests. Run affected
-socket or live API tests with `SUBMILLI_SKIP_HTTP_TESTS=0` only when the changed
-behavior requires them, following [CLAUDE.md](CLAUDE.md#conditional-http-tests).
+Use `SUBMILLI_SKIP_HTTP_TESTS=1` for routine Cargo tests and `--skip-network` for
+package tests. Enable affected Rust socket tests with `SUBMILLI_SKIP_HTTP_TESTS=0`;
+for live package tests, omit `--skip-network` and explicitly supply credentials.
+Run these only when the changed behavior requires them, following
+[CLAUDE.md](CLAUDE.md#conditional-http-tests).
 Local HTTP mocks also need network access outside the sandbox. Keep in-process
 handler tests enabled and report skipped coverage separately from passing tests.
 

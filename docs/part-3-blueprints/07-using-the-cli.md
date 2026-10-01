@@ -236,3 +236,20 @@ trying something out.
 
 Next: [using MCP servers](/docs/mcp-servers), which turns tool servers you
 already have into packages.
+
+## Package test controls
+
+`submilli build test [-p @scope/package]` runs package tests and compile-checks
+readme examples. Tests receive no credentials unless explicitly supplied:
+
+| Option | Effect |
+| --- | --- |
+| `--env-var NAME` | Select a process variable; repeat the flag or separate names with commas. |
+| `--env-file PATH` | Read `NAME=value` entries from a file, relative to the current directory. |
+| `--all-env` | Supply all Unicode process environment variables. |
+| `--skip-network` | Skip `network.test.{ts,subm}` and `network_*.test.{ts,subm}` anywhere under `tests/`. |
+
+Credential precedence is `--env-var` > `--env-file` > `--all-env`, independent of
+flag order. Missing selected process variables and unreadable files fail the run.
+`.env` is read only when named. Network selection depends on filenames, and
+`SUBMILLI_SKIP_HTTP_TESTS` has no effect on this command.

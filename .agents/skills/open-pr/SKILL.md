@@ -64,10 +64,12 @@ code preparation or PR creation merely because Linear is unavailable.
    Rust build/dependency/toolchain/lint changes. Use package, chart, and docs
    checks for their respective changes; combine checks for mixed changes.
    Fix formatting before review, without modifying unrelated work.
-   For routine Submilli Cargo and package/example checks, set
-   `SUBMILLI_SKIP_HTTP_TESTS=1`, including full compiler/runtime suites. Follow
+   For routine Submilli Cargo checks, set `SUBMILLI_SKIP_HTTP_TESTS=1`, including
+   full compiler/runtime suites. For package/example checks, pass `--skip-network`
+   to `build test`; that command ignores `SUBMILLI_SKIP_HTTP_TESTS`. Follow
    `CLAUDE.md`'s conditional HTTP policy: use `SUBMILLI_SKIP_HTTP_TESTS=0` for
-   affected socket/live API tests only when the changed HTTP transport, routing,
+   affected Rust socket tests; for live package tests, omit `--skip-network` and
+   explicitly supply credentials. Enable these only when changed HTTP transport, routing,
    wire formats, authentication, proxy/SSRF policy, external API behavior, or
    relevant dependencies require them. Parser/compiler changes alone do not.
    Test-selection/build-script changes need both modes checked with synthetic
