@@ -32,9 +32,12 @@ cutover removes.
 
 ## Part 3 · Packages
 
-Stubs only, created for links from Part 1.
-
-- [Start a project](/docs/next/packages/start-a-project)
+1. [Start a project](/docs/next/packages/start-a-project)
+2. [Export a function](/docs/next/packages/export-a-function)
+3. [Document the package](/docs/next/packages/document-the-package)
+4. [Add a dependency](/docs/next/packages/add-a-dependency) (written for [SUB-1235](https://linear.app/submilli/issue/SUB-1235) as fixed; re-capture its add-package output then)
+5. [Write tests](/docs/next/packages/write-tests)
+6. [Publish a package](/docs/next/packages/publish-a-package)
 
 ## Part 4 · Server
 
@@ -45,6 +48,7 @@ Stubs only, created for links from Part 1.
 - [Register a blueprint](/docs/next/server/register-a-blueprint)
 - [Set limits](/docs/next/server/set-limits)
 - [Deploy on Kubernetes](/docs/next/server/deploy-on-kubernetes)
+- [Install private packages](/docs/next/server/install-private-packages)
 
 ## Part 5 · Tutorials
 
@@ -68,6 +72,7 @@ Stubs only, created for links from Part 1.
 
 - [Blueprint file](/docs/next/reference/blueprint-file)
 - [Curated packages](/docs/next/reference/curated-packages)
+- [Package manifest](/docs/next/reference/package-manifest)
 - [Permissions](/docs/next/reference/permissions)
 - [Standard library](/docs/next/reference/standard-library)
 - [MCP servers](/docs/next/reference/mcp-servers)

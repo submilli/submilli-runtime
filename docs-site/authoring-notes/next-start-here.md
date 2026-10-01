@@ -93,7 +93,7 @@ order; each chapter assumes only the ones before it.
   operations" (WebAssembly host functions, the `fetch` error, the
   `exfiltrate.ts` denial, the security aside) fits The server or a Part 3
   page; "The runtime knows who is asking" and "Credentials live in the
-  package" fit the Part 3 how-tos "Write an operation" and "Call a service".
+  package" fit the Part 3 how-tos "Export a function" and "Call a service".
 - **Evidence:** Assembled from `how-submilli-works` ("Generated code reaches
   the outside only through operations", "Context can include facts outside
   the request", the caller paragraph of "Trusted code and untrusted code",
