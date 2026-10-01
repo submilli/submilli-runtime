@@ -64,6 +64,9 @@ blueprints:      (none)
 | `submilli server secret put\|list\|delete` | Manage the server's secret store |
 | `submilli server mcp authenticate\|auth-status\|deauthenticate` | Authorize the OAuth MCP servers a blueprint declares |
 | `submilli server run-code <file> --blueprint <name> [--var NAME=VALUE]` | Run a program once, the way an application would |
+| `submilli server session open --blueprint <name> [--var NAME=VALUE]` | Open a session and print its id |
+| `submilli server run-code <file> --session <id>` | Run a program inside that session |
+| `submilli server session close <id>` | Close the session, discarding its files and state |
 | `submilli server stop` | Ask the server to finish in-flight requests and exit |
 
 `run-code` is the quickest check that a blueprint does what you meant: it

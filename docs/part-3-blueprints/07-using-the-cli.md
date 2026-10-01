@@ -111,6 +111,7 @@ what they print is what the model sees.
 | --- | --- |
 | `submilli search [query]` | Standard-library modules and installed packages whose name, description, or exported symbol contains the query; all of them with no query |
 | `submilli docs <name>` | One module's or package's description and declarations: `submilli:fs`, `@acme/billing`; a built-in such as `Temporal.Instant` resolves here too |
+| `submilli search` or `submilli docs` with `--blueprint <file>` | Only what programs under that blueprint can import: `submilli:git` needs its Git identity, gated modules need a rule, installed packages need a declaration. Without `--blueprint`, both show everything, even when `blueprint.yaml` is in the directory |
 | `submilli docs @mcp/<server> --blueprint <file>` | Discover one MCP server using local credentials and print its tool signatures; the file defaults to `blueprint.yaml` |
 | `submilli builtins [names…]` | The built-in catalog with no argument; one or more built-ins' declarations with names, down to a member such as `Temporal.Instant` |
 
