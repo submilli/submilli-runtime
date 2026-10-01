@@ -291,12 +291,25 @@ the upstream case has.
 ### After a change to the compiler
 
 1. Run the suite. If it fails, a case's divergences changed: read the diff it prints.
-2. When the change is intended, write the new divergences and commit them with the
-   change:
+2. When the change is intended, write the new divergences:
 
    ```sh
    UPDATE_TYPESCRIPT_EXPECTED=1 cargo test -p conformance --test typescript
    ```
+
+   Then edit the `.triage` files by hand:
+
+   - Explain each new divergence in its case's `.triage`.
+   - When the change fixes a bug, or an item of SUB-1196, find the lines that cite
+     it with `grep -rnw --include='*.triage' "SUB-<n>" crates/conformance/typescript`,
+     or by the item's wording. Remove the lines that no longer diverge from their
+     entries, and an entry once it names none; the suite reports them as stale.
+     Where a line names more than one reason, remove the fixed one too: the line
+     still diverges for its other reasons, so the suite can't tell that one is out
+     of date. For the same reason, a line that still diverges but cited only the
+     fixed reason needs a new reason.
+
+   Commit the divergences and the `.triage` edits with the change.
 
 3. If the change adds support for something, such as a syntax or a library type, the
    pruned cases can keep more, and cases that were left out may now belong. Rebuild
