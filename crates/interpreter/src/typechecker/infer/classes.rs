@@ -2285,7 +2285,7 @@ impl<'a> Inferer<'a> {
 
     /// Resolve a class symbol by its mangled name — current-module classes live
     /// in the type namespace, imported parents in the FQN registry.
-    fn class_by_mangled(&self, mangled: &MangledName) -> Option<TypeSymbol> {
+    pub(super) fn class_by_mangled(&self, mangled: &MangledName) -> Option<TypeSymbol> {
         if let Some(sym) = self.type_registry.lookup(mangled)
             && matches!(sym.kind, TypeKind::Class { .. })
         {

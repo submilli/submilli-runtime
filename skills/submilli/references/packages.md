@@ -115,6 +115,9 @@ aliased; the function calls itself. For a value that does reach a `check`:
   context. Pass the `const`s, and pass the unchecked parts of the input
   separately. Comparing, one `for...of`, and one read of an element are fine.
 - A checked array: copy it with one `for...of` into an array the package owns.
+- A module `let`, the package's own or one it imports, or a writable static
+  field: read it once into a `const`, even to compare it. The caller's code,
+  such as a getter, can call a function that reassigns it between two reads.
 
 ```ts
 import { check } from "submilli:security";

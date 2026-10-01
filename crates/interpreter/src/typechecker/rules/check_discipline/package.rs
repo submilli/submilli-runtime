@@ -7,7 +7,7 @@ use crate::compiler_error::CompilerFailure;
 use crate::typechecker::infer::narrowing::LiteralValue;
 use crate::types::LiteralF64;
 use crate::{
-    ExprId, GlobalKind, MangledName, Span, Type, TypedAst, TypedExpr, TypedExprKind, TypedParam,
+    ExprId, MangledName, Span, Type, TypedAst, TypedExpr, TypedExprKind, TypedGlobal, TypedParam,
 };
 
 /// What the whole package says about a value, whichever body uses it.
@@ -35,21 +35,40 @@ impl<'a> PackageFacts<'a> {
     /// Where a global the caller can reach is declared, when this package
     /// declares it. `None` for a global the caller cannot change.
     pub(super) fn caller_global(&self, mangled: &MangledName) -> Option<Option<Span>> {
-        let declared = self
-            .ta
-            .globals
-            .iter()
-            .find(|global| global.mangled_name == *mangled);
-        match declared {
+        match self.declared_global(mangled) {
             Some(global) => {
                 let reachable =
-                    global.kind == GlobalKind::Let || self.exported_globals.contains(mangled);
+                    self.is_rebindable(mangled) || self.exported_globals.contains(mangled);
                 reachable.then_some(Some(global.span))
             }
             // The runtime's own bindings, such as `console`, hold no state.
             // Another package's global is one the caller can import as well.
             None => (!is_runtime_symbol(mangled)).then_some(None),
         }
+    }
+
+    /// Whether `mangled` is a module `let`, this package's or another's, or a
+    /// writable static field: code the caller runs can rebind it, through a
+    /// package's functions or directly, between two reads.
+    pub(super) fn is_rebindable(&self, mangled: &MangledName) -> bool {
+        self.ta.rebindable_globals.contains_key(mangled)
+    }
+
+    /// How messages name a global, the same at every use whatever an import
+    /// renames it to: a static field with its class, as `Config.mode`.
+    pub(super) fn global_shown<'s>(&'s self, mangled: &'s MangledName) -> &'s str {
+        if let Some(shown) = self.ta.rebindable_globals.get(mangled) {
+            return shown;
+        }
+        self.declared_global(mangled)
+            .map_or_else(|| source_name(mangled), |global| global.name.name.as_str())
+    }
+
+    fn declared_global(&self, mangled: &MangledName) -> Option<&'a TypedGlobal> {
+        self.ta
+            .globals
+            .iter()
+            .find(|global| global.mangled_name == *mangled)
     }
 
     /// The read an index expression makes.

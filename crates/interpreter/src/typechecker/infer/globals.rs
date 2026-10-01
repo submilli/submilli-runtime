@@ -52,6 +52,9 @@ impl<'a> Inferer<'a> {
                         },
                     )?;
                     let mangled = self.mangle_top_symbol(&name.name)?;
+                    self.typed_ast
+                        .rebindable_globals
+                        .insert(mangled.clone(), name.name.clone());
                     self.add_typed_global(crate::TypedGlobal {
                         name: name.clone(),
                         mangled_name: mangled.clone(),
@@ -191,6 +194,11 @@ impl<'a> Inferer<'a> {
                 span: name.span,
             };
             let mangled = crate::mangle::static_member(&class_mangled, &name.name);
+            if !sig.readonly {
+                self.typed_ast
+                    .rebindable_globals
+                    .insert(mangled.clone(), ident.name.clone());
+            }
             self.add_typed_global(crate::TypedGlobal {
                 name: ident.clone(),
                 mangled_name: mangled.clone(),
