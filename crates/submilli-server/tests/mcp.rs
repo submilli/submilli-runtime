@@ -1502,17 +1502,20 @@ async fn packages_search_by_symbol_and_list_all() {
         .collect();
     assert!(names.contains(&"submilli:crypto"), "got: {names:?}");
 
-    // Empty query lists every user-facing module (security excluded).
+    // Empty query lists every module the blueprint permits (security excluded).
     let (_, _, all) = h.post(EPH, search(2, ""), Some(&session)).await;
     let count = output(&all)["results"].as_array().unwrap().len();
-    assert_eq!(count, 7, "expected 7 permitted stdlib modules: {all}");
-    assert!(
+    assert_eq!(count, 6, "expected 6 permitted stdlib modules: {all}");
+    let listed = |name: &str| {
         output(&all)["results"]
             .as_array()
             .unwrap()
             .iter()
-            .any(|entry| entry["name"] == "submilli:code")
-    );
+            .any(|entry| entry["name"] == name)
+    };
+    assert!(listed("submilli:code"));
+    // The blueprint grants FS only, so session state is hidden.
+    assert!(!listed("submilli:session"));
     let (_, _, code) = h.post(EPH, search(3, "applyPatch"), Some(&session)).await;
     assert_eq!(output(&code)["results"][0]["name"], "submilli:code");
 }
@@ -2149,7 +2152,12 @@ async fn policy_hides_libraries_from_mcp_discovery() {
         let session = h.handshake(EPH).await;
         let (_, _, tools) = h.post(EPH, tools_list(1), Some(&session)).await;
         let visible = default != "deny";
-        for name in ["submilli:http", "submilli:fs", "submilli:code"] {
+        for name in [
+            "submilli:http",
+            "submilli:fs",
+            "submilli:code",
+            "submilli:session",
+        ] {
             assert_eq!(tool_desc(&tools, EXECUTE).contains(name), visible);
             let typo = format!("{name}x");
             let (_, _, builtins) = h
