@@ -21,18 +21,18 @@
       "embedPath": "/docs/videos/embed/code-execution-introduction/"
     },
     {
-      "id": "helps",
-      "title": "How Submilli helps",
+      "id": "challenges",
+      "title": "Agent execution challenges",
       "status": "planned",
       "destination": "Start here \u2192 Why Submilli",
-      "description": "Code, context, and permissions in an agent workflow."
+      "description": "Latency, context, permissions, and recovery in agent execution."
     },
     {
-      "id": "works",
-      "title": "How Submilli works",
+      "id": "helps",
+      "title": "What Submilli is and how it helps",
       "status": "planned",
-      "destination": "Start here \u2192 Blueprints, Packages, and The server",
-      "description": "How the runtime enforces permissions on generated programs."
+      "destination": "Start here \u2192 Why Submilli",
+      "description": "What Submilli provides and where it fits in an agent workflow."
     },
     {
       "id": "using",
@@ -42,11 +42,11 @@
       "description": "Building and running a Submilli integration."
     },
     {
-      "id": "challenges",
-      "title": "Agent execution challenges",
+      "id": "works",
+      "title": "Understanding Submilli",
       "status": "planned",
-      "destination": "Start here \u2192 Why Submilli",
-      "description": "Latency, context, permissions, and recovery in agent execution."
+      "destination": "Start here \u2192 Blueprints, Packages, and The server",
+      "description": "How programs, packages, blueprints, and the runtime work together."
     }
   ]
 }

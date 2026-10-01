@@ -62,7 +62,7 @@ English captions, keyboard access, transcript navigation, mobile width, and them
 
 The separate `submilli-private/website` companion links directly to
 `/docs/videos/`. The docs own the visual gallery, with numbered planned cards and
-an inline transcript. `IntroductionPlayer.astro` is shared with contextual docs
+a separate transcript page. `IntroductionPlayer.astro` is shared with contextual docs
 pages and the standalone embed route, keeping source, captions, poster and
 publication state in one registry. Planned films have no play controls or
 invented durations. The original SVG poster uses the approved film's
@@ -96,12 +96,15 @@ the site gallery must not send ordinary readers into hidden draft pages.
 ## Library ownership and viewing
 
 `/docs/videos/` is the single visual library. Its completed introduction uses the
-shared native player, with the exact transcript in an expandable section directly
-below it. Viewers do not need to visit another article to watch or read the film.
+shared native player, with captions available on the player. The exact transcript is kept on its
+dedicated docs page, outside the main viewing flow. Viewers do not need to visit
+another article to watch the film.
 The main site links directly here; it has no second gallery or video registry.
 
 Registry array order is the series order: the approved introduction is first,
-followed provisionally by Helps, Works, Using, and Challenges. The gallery shows
+followed by Challenges, What Submilli is and how it helps, Using Submilli,
+and Understanding Submilli. This moves from concepts and the problem, through
+orientation and use, to deeper explanation. The gallery shows
 numbered cards in that order. All later films remain Planned, without players or
 invented durations. Reordering the registry changes their displayed positions;
 update the built-output order assertion with the editorial decision.

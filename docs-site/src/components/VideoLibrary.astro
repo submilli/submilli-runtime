@@ -1,5 +1,4 @@
 ---
-import transcript from '../../../docs/videos/code-execution-introduction.md?raw';
 import { films, introduction } from '../lib/videos';
 import IntroductionPlayer from './IntroductionPlayer.astro';
 import VideoDiagram from './VideoDiagram.astro';
@@ -7,8 +6,7 @@ const plannedFilms = films.filter((film) => film.status === 'planned');
 const durationSeconds = Math.round(introduction.durationSeconds ?? 0);
 const durationLabel = `${Math.floor(durationSeconds / 60)}:${String(durationSeconds % 60).padStart(2, '0')}`;
 const languageLabel = new Intl.DisplayNames(['en'], { type: 'language' }).of(introduction.language ?? 'en');
-const scenes = [...transcript.matchAll(/## (\d+:\d+) — ([^\n]+)\n\n([\s\S]*?)(?=\n## |$)/g)]
-  .map((match) => ({ time: match[1], title: match[2], text: match[3].trim() }));
+
 ---
 <section class="video-library not-content" aria-label="Video series">
   <article class="introduction" data-video-id={introduction.id}>
@@ -18,10 +16,6 @@ const scenes = [...transcript.matchAll(/## (\d+:\d+) — ([^\n]+)\n\n([\s\S]*?)(
       <span class="metadata">{durationLabel} · {languageLabel} captions</span>
     </div>
     <p>{introduction.description}</p>
-    <details class="transcript">
-      <summary>Transcript</summary>
-      {scenes.map((scene) => <section><h3>{scene.time} — {scene.title}</h3><p>{scene.text}</p></section>)}
-    </details>
   </article>
   <h2 class="planned-heading">Planned videos</h2>
   <div class="planned-grid">
@@ -46,11 +40,6 @@ const scenes = [...transcript.matchAll(/## (\d+:\d+) — ([^\n]+)\n\n([\s\S]*?)(
   .number { color: var(--sl-color-gray-2); font: .75em monospace; margin-right: .3em; }
   .metadata { color: var(--sl-color-gray-2); font-size: .8rem; }
   .introduction > p { margin: .6rem 0 1rem; }
-  .transcript { border: 1px solid var(--sl-color-hairline); border-radius: 8px; padding: .75rem 1rem; }
-  summary { cursor: pointer; font-size: .9rem; }
-  summary:focus-visible { outline: 2px solid var(--sl-color-text-accent); outline-offset: 4px; }
-  .transcript h3 { font-size: 1rem; margin-top: 1.5rem; }
-  .transcript p { font-size: .9rem; margin: .5rem 0 1rem; }
   .planned-heading { margin: 2.25rem 0 1rem; font-size: 1.2rem; }
   .planned-grid { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 1rem; }
   .planned-film { border: 1px solid var(--sl-color-hairline); border-radius: 10px; overflow: hidden; background: var(--sl-color-bg-sidebar); }

@@ -36,10 +36,11 @@ assert.ok(embedPage.includes('Video publication pending'), 'Embed names unpublis
 assert.ok(embedPage.includes('noindex, nofollow'), 'Embeds stay out of search');
 assert.ok(!embedPage.includes('<video') && !embedPage.includes('_video-preview'), 'Production embed never exposes local preview media');
 const libraryPage = await readFile(new URL('docs/videos/index.html', directory), 'utf8');
-assert.match(libraryPage, /<summary\b[^>]*>Transcript<\/summary>/, 'Library provides an inline transcript');
-assert.ok(libraryPage.includes('Consider an agent used by a small business.'), 'Library renders the approved narration');
+assert.ok(!libraryPage.includes('class="transcript"') && !libraryPage.includes('Consider an agent used by a small business.'), 'Library keeps the full transcript on its deeper docs page');
+const transcriptPage = await readFile(new URL('docs/videos/code-execution-introduction/index.html', directory), 'utf8');
+assert.ok(transcriptPage.includes('Consider an agent used by a small business.'), 'Approved transcript remains available on its dedicated page');
 assert.ok(!libraryPage.includes('Open the execution model') && !libraryPage.includes('<video'), 'Library needs no article detour or unpublished production player');
-const galleryOrder = ['code-execution-introduction', 'helps', 'works', 'using', 'challenges'];
+const galleryOrder = ['code-execution-introduction', 'challenges', 'helps', 'using', 'works'];
 let previousCard = -1;
 for (const id of galleryOrder) {
   const card = libraryPage.indexOf(`data-video-id="${id}"`);
