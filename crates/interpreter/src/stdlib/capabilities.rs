@@ -17,10 +17,63 @@ pub struct FilterField {
     pub ty: &'static str,
     /// One line on what the field carries.
     pub doc: &'static str,
+    /// How the runtime rewrites the value before the policy sees it.
+    pub normalization: FieldNormalization,
+}
+
+/// A rewrite the runtime applies to a field's value before checking it. Call-site
+/// derivation applies the same rewrite to a literal argument, so the filter it
+/// writes into `requires` names the value the policy is asked about.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FieldNormalization {
+    /// Checked exactly as the caller passed it.
+    Verbatim,
+    /// Absolute guest path with `.` and `..` collapsed, as VFS I/O resolves it.
+    VfsPath,
+    /// The serialized form of the parsed HTTPS repository URL: lowercase host,
+    /// no default port, `/` for an empty path, percent-encoded.
+    RepositoryUrl,
+}
+
+impl FieldNormalization {
+    /// The value the runtime checks for `value`, or why the runtime refuses it.
+    pub(crate) fn apply(self, value: &str) -> Result<String, String> {
+        match self {
+            Self::Verbatim => Ok(value.to_string()),
+            Self::VfsPath => {
+                crate::runtime::fs::guest_normalize("/", value).map_err(|error| error.to_string())
+            }
+            Self::RepositoryUrl => {
+                crate::stdlib::git::canonical_url(value).map_err(|error| error.to_string())
+            }
+        }
+    }
 }
 
 const fn field(name: &'static str, ty: &'static str, doc: &'static str) -> FilterField {
-    FilterField { name, ty, doc }
+    FilterField {
+        name,
+        ty,
+        doc,
+        normalization: FieldNormalization::Verbatim,
+    }
+}
+
+const fn vfs_path_field(name: &'static str, doc: &'static str) -> FilterField {
+    normalized_string_field(name, doc, FieldNormalization::VfsPath)
+}
+
+const fn normalized_string_field(
+    name: &'static str,
+    doc: &'static str,
+    normalization: FieldNormalization,
+) -> FilterField {
+    FilterField {
+        name,
+        ty: "string",
+        doc,
+        normalization,
+    }
 }
 
 /// One gated capability and the policy `filter:` surface it exposes.
@@ -68,18 +121,14 @@ pub struct CapabilityGroup {
     pub capabilities: &'static [Capability],
 }
 
-const PATH: FilterField = field(
-    "path",
-    "string",
-    "Normalized absolute VFS path the call targets",
-);
+const PATH: FilterField = vfs_path_field("path", "Normalized absolute VFS path the call targets");
 const RECURSIVE: FilterField = field(
     "recursive",
     "boolean",
     "Whether the operation applies recursively",
 );
-const FROM: FilterField = field("from", "string", "Normalized absolute source VFS path");
-const TO: FilterField = field("to", "string", "Normalized absolute destination VFS path");
+const FROM: FilterField = vfs_path_field("from", "Normalized absolute source VFS path");
+const TO: FilterField = vfs_path_field("to", "Normalized absolute destination VFS path");
 const KEY: FilterField = field("key", "string", "Session key the call targets");
 const PREFIX: FilterField = field("prefix", "string", "Session key prefix being listed");
 
@@ -143,7 +192,11 @@ const FS: &[Capability] = &[
 ];
 
 const BRANCH: FilterField = field("branch", "string", "Local or requested remote branch name");
-const REMOTE: FilterField = field("remote", "string", "Exact HTTPS repository URL");
+const REMOTE: FilterField = normalized_string_field(
+    "remote",
+    "Canonical HTTPS repository URL",
+    FieldNormalization::RepositoryUrl,
+);
 const REMOTE_NAME: FilterField = field("remoteName", "string", "Named remote, for example origin");
 const GIT: &[Capability] = &[
     Capability {
@@ -240,9 +293,8 @@ const HTTP: &[Capability] = &[
         filter_fields: &[
             field("host", "string", "Download host, without port"),
             field("url_path", "string", "URL path component"),
-            field(
+            vfs_path_field(
                 "vfs_path",
-                "string",
                 "Normalized absolute destination path in the VFS",
             ),
             field(

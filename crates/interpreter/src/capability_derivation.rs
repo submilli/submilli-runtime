@@ -1,3 +1,4 @@
+use crate::stdlib::capabilities::{self, FieldNormalization};
 use crate::{
     BinOp, Diagnostic, DocCapability, DocCapabilityBindingKind, DocCapabilityLiteral, ExprId,
     GlobalKind, MangledName, Param, Severity, Span, TypedAst, TypedExprKind, TypedStmtKind,
@@ -51,7 +52,15 @@ fn derive_filters(
     for binding in &tag.bindings {
         match &binding.kind {
             DocCapabilityBindingKind::Literal { value, .. } => {
-                filters.push(format!("{} == {}", binding.field, literal_filter(value)));
+                // The tag's span is in the callee's source, not the caller's, so a
+                // literal the runtime refuses keeps its spelling without a warning.
+                filters.push(binding_filter(
+                    tag,
+                    &binding.field,
+                    StaticValue::from(value),
+                    None,
+                    warnings,
+                ));
             }
             DocCapabilityBindingKind::Type { .. } => {}
             DocCapabilityBindingKind::Parameter { param, path, span } => {
@@ -69,15 +78,25 @@ fn derive_filters(
                     ));
                     continue;
                 };
+                let actual_span = caller_ast
+                    .try_expr(*actual)
+                    .map_err(crate::typechecker::arena_failure)?
+                    .span;
                 match literal_from_expr_path(caller_ast, *actual, path)? {
-                    Some(value) => filters.push(format!("{} == {}", binding.field, value)),
+                    Some(value) => filters.push(binding_filter(
+                        tag,
+                        &binding.field,
+                        value,
+                        Some(actual_span),
+                        warnings,
+                    )),
                     None if is_http_url_binding(tag, param, path) => {
                         if matches!(path.as_slice(), [component] if component == "host") {
-                            *unresolved_http_host_span = Some(caller_ast.try_expr(*actual).map_err(crate::typechecker::arena_failure)?.span);
+                            *unresolved_http_host_span = Some(actual_span);
                         }
                     }
                     None => warnings.push(warning(
-                        caller_ast.try_expr(*actual).map_err(crate::typechecker::arena_failure)?.span,
+                        actual_span,
                         format!(
                             "non-literal argument for `{param}`; no static capability filter for `{}`",
                             binding.field
@@ -88,6 +107,79 @@ fn derive_filters(
         }
     }
     Ok(filters)
+}
+
+/// A value known at the call site, before it becomes a filter operand.
+enum StaticValue {
+    String(String),
+    /// The number as the filter spells it.
+    Number(String),
+    Boolean(bool),
+    Null,
+}
+
+impl From<&DocCapabilityLiteral> for StaticValue {
+    fn from(value: &DocCapabilityLiteral) -> Self {
+        match value {
+            DocCapabilityLiteral::String(value) => Self::String(value.clone()),
+            DocCapabilityLiteral::Number(value) => Self::Number(value.clone()),
+            DocCapabilityLiteral::Boolean(value) => Self::Boolean(*value),
+            DocCapabilityLiteral::Null => Self::Null,
+        }
+    }
+}
+
+/// `field == value`, with a string in the form the runtime checks.
+fn binding_filter(
+    tag: &DocCapability,
+    field: &str,
+    value: StaticValue,
+    warn_at: Option<Span>,
+    warnings: &mut Vec<Diagnostic>,
+) -> String {
+    let operand = match value {
+        StaticValue::String(value) => {
+            let normalized = normalized_string(tag, field, value, warn_at, warnings);
+            format!("\"{}\"", escape(&normalized))
+        }
+        StaticValue::Number(spelling) => spelling,
+        StaticValue::Boolean(value) => value.to_string(),
+        StaticValue::Null => "null".to_string(),
+    };
+    format!("{field} == {operand}")
+}
+
+/// The string the runtime checks for `value`. A value the runtime refuses keeps
+/// its spelling, so the filter fails closed; the call cannot succeed, which a
+/// warning at `warn_at` reports when that location is in the caller's source.
+fn normalized_string(
+    tag: &DocCapability,
+    field: &str,
+    value: String,
+    warn_at: Option<Span>,
+    warnings: &mut Vec<Diagnostic>,
+) -> String {
+    field_normalization(&tag.capability, field)
+        .apply(&value)
+        .unwrap_or_else(|reason| {
+            if let Some(span) = warn_at {
+                warnings.push(warning(
+                    span,
+                    format!(
+                        "`{}` refuses `{field}` value \"{}\" at runtime: {reason}",
+                        tag.capability,
+                        escape(&value)
+                    ),
+                ));
+            }
+            value
+        })
+}
+
+fn field_normalization(capability: &str, field: &str) -> FieldNormalization {
+    capabilities::find(capability)
+        .and_then(|entry| entry.filter_fields.iter().find(|f| f.name == field))
+        .map_or(FieldNormalization::Verbatim, |f| f.normalization)
 }
 
 fn is_http_url_binding(tag: &DocCapability, param: &str, path: &[String]) -> bool {
@@ -121,7 +213,7 @@ fn literal_from_expr_path(
     ast: &TypedAst,
     expr_id: ExprId,
     path: &[String],
-) -> Result<Option<String>, crate::compiler_error::CompilerFailure> {
+) -> Result<Option<StaticValue>, crate::compiler_error::CompilerFailure> {
     if path.is_empty() {
         return literal_from_expr(ast, expr_id);
     }
@@ -134,7 +226,7 @@ fn literal_from_expr_path(
         && matches!(segment.as_str(), "host" | "path")
     {
         if let Some(url) = resolve_string_literal(ast, expr_id)? {
-            return Ok(url_component(&url, segment));
+            return Ok(url_component(&url, segment).map(StaticValue::String));
         }
         if segment == "host" {
             return url_host_from_constant_prefix(ast, expr_id);
@@ -163,7 +255,7 @@ fn literal_from_expr_path(
 fn url_host_from_constant_prefix(
     ast: &TypedAst,
     expr_id: ExprId,
-) -> Result<Option<String>, crate::compiler_error::CompilerFailure> {
+) -> Result<Option<StaticValue>, crate::compiler_error::CompilerFailure> {
     let prefix = constant_string_prefix(ast, expr_id)?;
     let authority_start = match prefix.find("://") {
         Some(value) => value,
@@ -173,7 +265,7 @@ fn url_host_from_constant_prefix(
         Some(value) => value,
         None => return Ok(None),
     } + authority_start;
-    Ok(url_component(&prefix[..=path_start], "host"))
+    Ok(url_component(&prefix[..=path_start], "host").map(StaticValue::String))
 }
 
 fn constant_string_prefix(
@@ -210,20 +302,20 @@ fn constant_string_prefix(
 fn literal_from_expr(
     ast: &TypedAst,
     expr_id: ExprId,
-) -> Result<Option<String>, crate::compiler_error::CompilerFailure> {
+) -> Result<Option<StaticValue>, crate::compiler_error::CompilerFailure> {
     Ok(
         match &ast
             .try_expr(expr_id)
             .map_err(crate::typechecker::arena_failure)?
             .kind
         {
-            TypedExprKind::String(value) => Some(format!("\"{}\"", escape(value))),
+            TypedExprKind::String(value) => Some(StaticValue::String(value.clone())),
             TypedExprKind::Binary { op: BinOp::Add, .. } => {
-                resolve_string_literal(ast, expr_id)?.map(|value| format!("\"{}\"", escape(&value)))
+                resolve_string_literal(ast, expr_id)?.map(StaticValue::String)
             }
-            TypedExprKind::Number(value) => Some(number_literal(*value)),
-            TypedExprKind::Boolean(value) => Some(value.to_string()),
-            TypedExprKind::Null => Some("null".to_string()),
+            TypedExprKind::Number(value) => Some(StaticValue::Number(number_literal(*value))),
+            TypedExprKind::Boolean(value) => Some(StaticValue::Boolean(*value)),
+            TypedExprKind::Null => Some(StaticValue::Null),
             TypedExprKind::GlobalRef { mangled, .. } => literal_from_expr(
                 ast,
                 match const_initializer(ast, mangled)? {
@@ -310,7 +402,7 @@ fn const_initializer(
         .transpose()
 }
 
-/// Parse `url` and return the requested component as a quoted filter value.
+/// Parse `url` and return the requested component.
 fn url_component(url: &str, component: &str) -> Option<String> {
     let parsed = url::Url::parse(url).ok()?;
     let value = match component {
@@ -322,20 +414,11 @@ fn url_component(url: &str, component: &str) -> Option<String> {
         "path" => parsed.path().to_string(),
         _ => return None,
     };
-    Some(format!("\"{}\"", escape(&value)))
+    Some(value)
 }
 
 fn escape(value: &str) -> String {
     value.replace('\\', "\\\\").replace('"', "\\\"")
-}
-
-fn literal_filter(value: &DocCapabilityLiteral) -> String {
-    match value {
-        DocCapabilityLiteral::String(value) => format!("\"{}\"", escape(value)),
-        DocCapabilityLiteral::Number(value) => value.clone(),
-        DocCapabilityLiteral::Boolean(value) => value.to_string(),
-        DocCapabilityLiteral::Null => "null".to_string(),
-    }
 }
 
 fn number_literal(value: f64) -> String {
@@ -580,6 +663,116 @@ mod tests {
             derived.warnings[0].help[0].contains("call the HTTP function directly"),
             "{:?}",
             derived.warnings[0].help
+        );
+    }
+
+    #[test]
+    fn repository_url_and_path_derive_the_values_the_runtime_checks() {
+        let (ta, tag, params, args) = first_doc_capability(
+            "/** @capability git.clone { path, remote: $url, remoteName: \"origin\" } */\n\
+             function callee(url: string, path: string): void { }\n\
+             function main(): void { callee(\"https://GitHub.com:443\", \"repo/./x/..\"); }\n",
+        );
+        let derived = derive_call_site_capability(&tag, &params, &ta, &args).unwrap();
+        assert_eq!(
+            derived.filter.as_deref(),
+            Some(
+                "path == \"/repo\" and remote == \"https://github.com/\" and remoteName == \"origin\""
+            )
+        );
+        assert!(derived.warnings.is_empty(), "{:?}", derived.warnings);
+    }
+
+    #[test]
+    fn vfs_path_fields_derive_normalized_paths() {
+        let (ta, tag, params, args) = first_doc_capability(
+            "/** @capability fs.move { from, to } */\n\
+             function callee(from: string, to: string): void { }\n\
+             function main(): void { callee(\"/data/../in.csv\", \"out/\"); }\n",
+        );
+        let derived = derive_call_site_capability(&tag, &params, &ta, &args).unwrap();
+        assert_eq!(
+            derived.filter.as_deref(),
+            Some("from == \"/in.csv\" and to == \"/out\"")
+        );
+        assert!(derived.warnings.is_empty(), "{:?}", derived.warnings);
+    }
+
+    #[test]
+    fn fixed_vfs_path_literal_is_normalized() {
+        let (ta, tag, params, args) = first_doc_capability(
+            "/** @capability fs.read { path: \"data\" } */\n\
+             function callee(): void { }\n\
+             function main(): void { callee(); }\n",
+        );
+        let derived = derive_call_site_capability(&tag, &params, &ta, &args).unwrap();
+        assert_eq!(derived.filter.as_deref(), Some("path == \"/data\""));
+        assert!(derived.warnings.is_empty(), "{:?}", derived.warnings);
+    }
+
+    #[test]
+    fn fixed_literal_the_runtime_refuses_keeps_its_spelling_without_a_warning() {
+        let (ta, tag, params, args) = first_doc_capability(
+            "/** @capability fs.read { path: \"/..\" } */\n\
+             function callee(): void { }\n\
+             function main(): void { callee(); }\n",
+        );
+        let derived = derive_call_site_capability(&tag, &params, &ta, &args).unwrap();
+        assert_eq!(derived.filter.as_deref(), Some("path == \"/..\""));
+        assert!(derived.warnings.is_empty(), "{:?}", derived.warnings);
+    }
+
+    #[test]
+    fn download_destination_and_const_folded_paths_are_normalized() {
+        let (ta, tag, params, args) = first_doc_capability(
+            "/** @capability http.download { host: $url.host, vfs_path: $path } */\n\
+             function callee(url: string, path: string): void { }\n\
+             const DIR: string = \"out/\";\n\
+             function main(): void { callee(\"https://Example.com/f\", DIR + \"../dl.csv\"); }\n",
+        );
+        let derived = derive_call_site_capability(&tag, &params, &ta, &args).unwrap();
+        assert_eq!(
+            derived.filter.as_deref(),
+            Some("host == \"example.com\" and vfs_path == \"/dl.csv\"")
+        );
+        assert!(derived.warnings.is_empty(), "{:?}", derived.warnings);
+    }
+
+    #[test]
+    fn same_field_name_outside_the_catalog_stays_verbatim() {
+        let (ta, tag, params, args) = first_doc_capability(
+            "/** @capability acme.com/open { path } */\n\
+             function callee(path: string): void { }\n\
+             function main(): void { callee(\"repo\"); }\n",
+        );
+        let derived = derive_call_site_capability(&tag, &params, &ta, &args).unwrap();
+        assert_eq!(derived.filter.as_deref(), Some("path == \"repo\""));
+    }
+
+    #[test]
+    fn value_the_runtime_refuses_keeps_its_spelling_and_warns() {
+        let (ta, tag, params, args) = first_doc_capability(
+            "/** @capability git.clone { path, remote: $url } */\n\
+             function callee(url: string, path: string): void { }\n\
+             function main(): void { callee(\"http://github.com/a.git\", \"/..\"); }\n",
+        );
+        let derived = derive_call_site_capability(&tag, &params, &ta, &args).unwrap();
+        assert_eq!(
+            derived.filter.as_deref(),
+            Some("path == \"/..\" and remote == \"http://github.com/a.git\"")
+        );
+        let messages = derived
+            .warnings
+            .iter()
+            .map(|warning| warning.message.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            messages,
+            [
+                "`git.clone` refuses `path` value \"/..\" at runtime: path escapes the VFS root",
+                "`git.clone` refuses `remote` value \"http://github.com/a.git\" at runtime: \
+                 git: remote must be an HTTPS repository URL without credentials, query, or fragment",
+            ]
         );
     }
 
