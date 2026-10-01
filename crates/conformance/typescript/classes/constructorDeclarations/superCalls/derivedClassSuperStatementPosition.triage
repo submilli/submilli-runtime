@@ -4,4 +4,5 @@ line 71 missed: artifact we reject `extends Object` on line 67, so the construct
 line 83 missed: artifact we reject `extends Object` on line 79, so the constructor isn't checked
 line 92 missed: artifact we reject `extends Object` on line 88, so the constructor isn't checked
 line 3, 10, 20, 58, 67, 79, 88 extra: by-design spec §2.2 a class may only extend another class, `Object` is a prelude interface and `null` is not a class
-line 63, 74, 94 extra: bug SUB-1196 (`super` in each branch) a `super(...)` in each branch of an `if`/`else` or ternary is rejected as a second call
+line 63 extra: bug SUB-1196 (`super(...)` as an expression) a `super(...)` must be a statement of its own; also bug SUB-1196 (`super` in each branch) a `super(...)` in each branch of an `if`/`else` or ternary is rejected as a second call
+line 74, 94 extra: bug SUB-1196 (`super` in each branch) a `super(...)` in each branch of an `if`/`else` or ternary is rejected as a second call
