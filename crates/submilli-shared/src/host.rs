@@ -405,6 +405,28 @@ mod tests {
     use super::*;
     use submilli_blueprint::parse;
 
+    /// Call-site derivation normalizes the same fields from the catalog, so a
+    /// derived `requires` filter names the path this check sees.
+    #[test]
+    fn normalized_policy_paths_are_vfs_path_fields_in_the_catalog() {
+        use interpreter::stdlib::capabilities::{FieldNormalization, catalog};
+        for capability in catalog().iter().flat_map(|group| group.capabilities) {
+            for field in filesystem_path_fields(capability.name) {
+                let normalization = capability
+                    .filter_fields
+                    .iter()
+                    .find(|candidate| candidate.name == *field)
+                    .map(|candidate| candidate.normalization);
+                assert_eq!(
+                    normalization,
+                    Some(FieldNormalization::VfsPath),
+                    "{}.{field}",
+                    capability.name
+                );
+            }
+        }
+    }
+
     #[test]
     fn filesystem_policy_matches_normalized_guest_paths() {
         let blueprint = parse(

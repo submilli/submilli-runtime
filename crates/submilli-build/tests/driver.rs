@@ -340,6 +340,7 @@ fn class_members_provide_and_require_capabilities() {
             export function git(): void {
                 const repository = Repository.init("/repo");
                 repository.fetch("origin", "main");
+                Repository.clone("https://GitHub.com", "clone");
             }
         "#,
     );
@@ -442,6 +443,13 @@ path = "types"
             ("acme.com/read", Some("id == \"direct\"")),
             ("acme.com/read", Some("id == \"inherited\"")),
             ("acme.com/wrap", Some("id == \"generic-static\"")),
+            (
+                "git.clone",
+                Some(
+                    "path == \"/clone\" and remote == \"https://github.com/\" \
+                     and remoteName == \"origin\""
+                )
+            ),
             ("git.fetch", Some("remoteName == \"origin\"")),
             ("git.init", Some("path == \"/repo\"")),
         ]

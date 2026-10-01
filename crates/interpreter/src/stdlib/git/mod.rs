@@ -29,6 +29,7 @@ static WORKERS: OnceLock<Arc<tokio::sync::Semaphore>> = OnceLock::new();
 
 pub const MODULE_NAME: &str = "submilli:git";
 pub use declaration::package_declaration;
+pub(crate) use transport::canonical_url;
 
 #[derive(Clone, Debug)]
 pub struct GitConfig {
