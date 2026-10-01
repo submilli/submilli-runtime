@@ -105,6 +105,18 @@ mod tests {
     }
 
     #[test]
+    fn git_needs_an_identity_and_is_hidden_unscoped() {
+        assert!(!LibraryVisibility::unscoped().allows("submilli:git"));
+        let without = submilli_blueprint::parse("name: test\ndefault: allow\n").unwrap();
+        assert!(!LibraryVisibility::for_blueprint(&without).allows("submilli:git"));
+        let with = submilli_blueprint::parse(
+            "name: test\ngit:\n  identity:\n    name: Agent\n    email: agent@example.com\n",
+        )
+        .unwrap();
+        assert!(LibraryVisibility::for_blueprint(&with).allows("submilli:git"));
+    }
+
+    #[test]
     fn llm_needs_a_model_and_a_non_deny_main_policy() {
         for config in [
             "",

@@ -764,7 +764,7 @@ async fn cancellation_keeps_resources_until_worker_cleanup() {
 
 #[test]
 fn repository_docs_expose_class_factories_and_capabilities() {
-    let docs = crate::packages::docs_with_git(MODULE_NAME, true).unwrap();
+    let docs = crate::packages::docs(MODULE_NAME).unwrap();
     for declaration in [
         "class Repository",
         "constructor(path: string)",
@@ -783,5 +783,4 @@ fn repository_docs_expose_class_factories_and_capabilities() {
         );
     }
     assert!(!docs.declarations.contains("function init("));
-    assert!(crate::packages::docs(MODULE_NAME).is_none());
 }

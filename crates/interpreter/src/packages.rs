@@ -37,16 +37,12 @@ pub struct ModuleSummary {
 }
 
 /// Documentation for a stdlib module, or `None` if `name` isn't one (callers
-/// handle `@mcp/*` and unknown names).
+/// handle `@mcp/*` and unknown names). Every module resolves, opt-in ones such
+/// as `submilli:git` included; what a caller's scope shows is its own decision.
 pub fn docs(name: &str) -> Option<ModuleDoc> {
-    docs_with_git(name, false)
-}
-
-/// Blueprint-scoped variant; Git is visible only when configured.
-pub fn docs_with_git(name: &str, git_enabled: bool) -> Option<ModuleDoc> {
     user_modules()
         .into_iter()
-        .find(|d| d.package_name == name && (git_enabled || name != "submilli:git"))
+        .find(|d| d.package_name == name)
         .map(|defs| ModuleDoc {
             name: defs.package_name.clone(),
             description: module_description(&defs.package_name).to_string(),
@@ -57,17 +53,10 @@ pub fn docs_with_git(name: &str, git_enabled: bool) -> Option<ModuleDoc> {
 /// Modules whose name, description, or an exported symbol contains `query`
 /// (case-insensitive). An empty query lists every module.
 pub fn search(query: &str) -> Vec<ModuleSummary> {
-    search_with_git(query, false)
-}
-
-/// Blueprint-scoped variant; Git is visible only when configured.
-pub fn search_with_git(query: &str, git_enabled: bool) -> Vec<ModuleSummary> {
     let q = query.trim().to_lowercase();
     user_modules()
         .iter()
-        .filter(|defs| {
-            (git_enabled || defs.package_name != "submilli:git") && matches_query(defs, &q)
-        })
+        .filter(|defs| matches_query(defs, &q))
         .map(|defs| ModuleSummary {
             name: defs.package_name.clone(),
             description: module_description(&defs.package_name).to_string(),
@@ -585,14 +574,7 @@ pub fn resolve(name: &str) -> Resolution {
 const OMITTED_GLOBALS: &[(&str, &str)] = &[("Date", "Temporal")];
 
 pub fn suggest(name: &str, extra: &[String]) -> Option<String> {
-    suggest_with_git(name, extra, false)
-}
-
-/// Blueprint-scoped variant; Git is visible only when configured.
-pub fn suggest_with_git(name: &str, extra: &[String], git_enabled: bool) -> Option<String> {
-    suggest_filtered(name, extra, |module| {
-        git_enabled || module != "submilli:git"
-    })
+    suggest_filtered(name, extra, |_| true)
 }
 
 /// Suggest only names visible to the caller, retaining built-in corrections.
@@ -601,10 +583,7 @@ pub fn suggest_filtered(
     extra: &[String],
     visible: impl Fn(&str) -> bool,
 ) -> Option<String> {
-    let mut candidates: Vec<String> = search_with_git("", true)
-        .into_iter()
-        .map(|m| m.name)
-        .collect();
+    let mut candidates: Vec<String> = search("").into_iter().map(|m| m.name).collect();
     let builtins = builtins();
     candidates.extend(builtins.types);
     candidates.extend(builtins.namespaces);
@@ -716,17 +695,12 @@ pub const SOURCE_STDLIB: &str = "stdlib";
 
 /// The stdlib catalog plus whatever `extra` sources the caller can see, capped.
 pub fn catalog(extra: Vec<CatalogEntry>) -> Catalog {
-    catalog_with_git(extra, false)
-}
-
-/// Blueprint-scoped variant; Git is visible only when configured.
-pub fn catalog_with_git(extra: Vec<CatalogEntry>, git_enabled: bool) -> Catalog {
-    catalog_filtered(extra, |module| git_enabled || module != "submilli:git")
+    catalog_filtered(extra, |_| true)
 }
 
 /// Filter before applying the catalog limit so omitted counts reflect visibility.
 pub fn catalog_filtered(extra: Vec<CatalogEntry>, visible: impl Fn(&str) -> bool) -> Catalog {
-    let mut entries: Vec<CatalogEntry> = search_with_git("", true)
+    let mut entries: Vec<CatalogEntry> = search("")
         .into_iter()
         .map(|m| CatalogEntry {
             name: m.name,

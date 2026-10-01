@@ -148,7 +148,7 @@ fn host_lookup(name: &str, visibility: LibraryVisibility) -> Option<DocLookup> {
     if !visibility.allows(name) {
         return None;
     }
-    interpreter::packages::docs_with_git(name, true).map(|doc| DocLookup::Host {
+    interpreter::packages::docs(name).map(|doc| DocLookup::Host {
         description: doc.description,
         declarations: doc.declarations,
     })
@@ -495,7 +495,7 @@ fn search_json_results(
     catalog: &McpCatalog,
     visibility: LibraryVisibility,
 ) -> Vec<Value> {
-    let mut results: Vec<Value> = interpreter::packages::search_with_git(query, true)
+    let mut results: Vec<Value> = interpreter::packages::search(query)
         .into_iter()
         .filter(|module| visibility.allows(&module.name))
         .map(|m| json!({ "name": m.name, "source": "host", "description": m.description }))
