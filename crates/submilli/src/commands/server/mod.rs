@@ -9,6 +9,7 @@ pub mod mcp;
 pub mod packages;
 pub mod run_code;
 pub mod secret;
+pub mod session;
 pub mod status;
 pub mod stop;
 
@@ -32,6 +33,9 @@ pub enum ServerCmd {
     /// Manage secrets in the server's secret store.
     #[command(subcommand)]
     Secret(secret::SecretCmd),
+    /// Open and close sessions, for `run-code --session`.
+    #[command(subcommand)]
+    Session(session::SessionCmd),
     /// Authenticate outbound OAuth MCP servers declared in a blueprint.
     #[command(subcommand)]
     Mcp(mcp::McpCmd),
@@ -46,6 +50,7 @@ pub fn execute(cmd: ServerCmd) -> Result<ExitCode> {
         ServerCmd::Stop(args) => stop::execute(args),
         ServerCmd::Blueprint(cmd) => blueprint::execute(cmd),
         ServerCmd::Secret(cmd) => secret::execute(cmd),
+        ServerCmd::Session(cmd) => session::execute(cmd),
         ServerCmd::Mcp(cmd) => mcp::execute(cmd),
     }
 }

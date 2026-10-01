@@ -78,10 +78,12 @@ fn token_file_from_env() -> Option<PathBuf> {
         .map(PathBuf::from)
 }
 
-/// The server's `{ error, message }` body; we surface only `message`.
+/// The server's `{ error, message }` body. Some rejections carry only
+/// `error`, which is then the message.
 #[derive(Debug, Deserialize)]
 struct ServerError {
-    message: String,
+    error: Option<String>,
+    message: Option<String>,
 }
 
 /// Read a 200 body as JSON, or turn a non-200 into the server's error message.
@@ -119,10 +121,11 @@ pub fn error_message(resp: ureq::http::Response<ureq::Body>) -> String {
              one"
         );
     }
-    resp.into_body().read_json::<ServerError>().map_or_else(
-        |_| format!("server returned HTTP {}", status.as_u16()),
-        |e| e.message,
-    )
+    resp.into_body()
+        .read_json::<ServerError>()
+        .ok()
+        .and_then(|e| e.message.or(e.error))
+        .unwrap_or_else(|| format!("server returned HTTP {}", status.as_u16()))
 }
 
 /// A client for a submilli-server that sends the API token, when there is one,

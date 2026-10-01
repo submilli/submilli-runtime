@@ -11,13 +11,20 @@ use serde::Deserialize;
 use serde_json::Value;
 
 use crate::commands::http::{ServerTarget, ok_or_report};
+use crate::commands::server::session::session_url;
 
 #[derive(clap::Args)]
 pub struct Args {
     script: PathBuf,
 
-    #[arg(long)]
-    blueprint: String,
+    /// Run in a fresh session bound to this registered blueprint.
+    #[arg(long, required_unless_present = "session")]
+    blueprint: Option<String>,
+
+    /// Run inside a session opened by `submilli server session open`, which
+    /// keeps its blueprint, variables, files, and session state between runs.
+    #[arg(long, conflicts_with_all = ["blueprint", "vars"])]
+    session: Option<String>,
 
     #[command(flatten)]
     target: ServerTarget,
@@ -61,22 +68,14 @@ struct LastRunResponse {
 pub fn execute(args: Args) -> Result<ExitCode> {
     let source = fs::read_to_string(&args.script)
         .with_context(|| format!("reading {}", args.script.display()))?;
-    let variables = parse_variables(&args.vars)?;
 
     let base = args.target.base();
-    let execute_url = format!("{base}/v1/execute");
+    let (execute_url, request) = execute_request(&args, base, source)?;
 
     let agent = args
         .target
         .agent_with_timeout(args.timeout.map(Duration::from_secs))?;
 
-    let mut request = serde_json::json!({
-        "code": source,
-        "blueprint": args.blueprint,
-    });
-    if !variables.is_empty() {
-        request["variables"] = serde_json::to_value(&variables)?;
-    }
     let resp = match agent.post(&execute_url).send_json(request) {
         Ok(r) => r,
         Err(err) => {
@@ -109,10 +108,10 @@ pub fn execute(args: Args) -> Result<ExitCode> {
         return Ok(ExitCode::from(1));
     }
 
-    // /v1/execute suppresses console on success; pull it from
+    // Execute suppresses console on success; pull it from
     // /v1/sessions/{session_id}/last-run so the CLI can surface it on stderr.
     if let Some(session_id) = response.session_id.as_deref() {
-        let last_run_url = format!("{base}/v1/sessions/{session_id}/last-run");
+        let last_run_url = session_url(base, session_id, &["last-run"])?;
         if let Ok(last) = agent.get(&last_run_url).call()
             && let Ok(body) = last.into_body().read_json::<LastRunResponse>()
         {
@@ -140,10 +139,29 @@ pub fn execute(args: Args) -> Result<ExitCode> {
     Ok(ExitCode::SUCCESS)
 }
 
+/// Where to post the script and the body to send: the session's own endpoint
+/// takes only the code, since the session already holds its blueprint and
+/// variables.
+fn execute_request(args: &Args, base: &str, source: String) -> Result<(String, Value)> {
+    if let Some(session) = &args.session {
+        let url = session_url(base, session, &["execute"])?;
+        return Ok((url, serde_json::json!({ "code": source })));
+    }
+    let variables = parse_variables(&args.vars)?;
+    let mut request = serde_json::json!({
+        "code": source,
+        "blueprint": args.blueprint,
+    });
+    if !variables.is_empty() {
+        request["variables"] = serde_json::to_value(&variables)?;
+    }
+    Ok((format!("{base}/v1/execute"), request))
+}
+
 /// `--var NAME=VALUE` pairs as the `variables` object of the request. The server
 /// checks them against the blueprint's declarations, so only the shape is
 /// checked here.
-fn parse_variables(raw: &[String]) -> Result<BTreeMap<String, String>> {
+pub(super) fn parse_variables(raw: &[String]) -> Result<BTreeMap<String, String>> {
     let mut variables = BTreeMap::new();
     for pair in raw {
         let (name, value) = pair
