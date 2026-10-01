@@ -44,7 +44,7 @@ pub use ast::{
     PatternOrigin, PostfixOp, Stmt, StmtId, StmtKind, SwitchCase, SwitchDefault, TypeAnnotation,
     TypeAnnotationField, TypeAnnotationKind, TypePredicateAnnotation, UnOp, Visibility,
 };
-pub use backtrace::{BacktraceMode, render as render_backtrace};
+pub use backtrace::{BacktraceMode, failure_message, render as render_backtrace};
 pub use capability_derivation::{DerivedCapability, derive_call_site_capability};
 pub use codegen::{SymbolTable, codegen};
 pub use compile::{
@@ -67,7 +67,7 @@ pub use package_declaration::{
     ValueKind, ValueSymbol,
 };
 pub use parser::parse;
-pub use runtime::{RunResult, RuntimeConfig, dispatch_main_async};
+pub use runtime::{RunResult, RuntimeConfig, dispatch_main_async, instantiate_program_async};
 pub use shape::Shape;
 pub use source::{ModulePath, SourceFile, Sources};
 pub use span::{FileId, LineIndex, Span};

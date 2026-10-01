@@ -572,36 +572,29 @@ impl Inferer<'_> {
                 );
                 Ok((TypedExprKind::Null, Type::Error))
             }
-            ExprKind::This => {
-                Ok(if let Some(ty) = &self.function_this {
-                    (TypedExprKind::This, ty.clone())
-                } else if let Some(ty) = &self.current_class {
-                    // In a subclass constructor, `this` before `super(...)` reads
-                    // uninitialized parent fields — flag it for the super call.
-                    if self.in_constructor && self.current_super.is_some() && !self.super_seen {
-                        self.this_before_super = true;
-                    }
-                    (TypedExprKind::This, ty.clone())
-                } else if let Some((class, member)) = self.current_static.clone() {
-                    self.error_with_help(
-                        span,
-                        "`this` is not available in a static member".to_string(),
-                        vec![format!(
-                            "`{class}.{member}` runs without an instance; take the instance as \
-                             a parameter, or make it an instance method. To use another static, \
-                             qualify it: `{class}.<member>`"
-                        )],
-                    );
-                    (TypedExprKind::Null, Type::Error)
-                } else {
-                    self.error(
-                        span,
-                        "`this` is only valid inside a class method or constructor body"
-                            .to_string(),
-                    );
-                    (TypedExprKind::Null, Type::Error)
-                })
-            }
+            ExprKind::This => Ok(if let Some(ty) = &self.function_this {
+                (TypedExprKind::This, ty.clone())
+            } else if let Some(ty) = self.current_class.clone() {
+                self.note_read_before_super(span);
+                (TypedExprKind::This, ty)
+            } else if let Some((class, member)) = self.current_static.clone() {
+                self.error_with_help(
+                    span,
+                    "`this` is not available in a static member".to_string(),
+                    vec![format!(
+                        "`{class}.{member}` runs without an instance; take the instance as \
+                         a parameter, or make it an instance method. To use another static, \
+                         qualify it: `{class}.<member>`"
+                    )],
+                );
+                (TypedExprKind::Null, Type::Error)
+            } else {
+                self.error(
+                    span,
+                    "`this` is only valid inside a class method or constructor body".to_string(),
+                );
+                (TypedExprKind::Null, Type::Error)
+            }),
             ExprKind::Super => {
                 self.error_with_help(
                     span,
@@ -3430,6 +3423,7 @@ impl Inferer<'_> {
                     self.check_class_callable_types(&owner, span);
                     self.check_static_privacy(field.visibility, &owner, &class_name, &member);
                     let mangled = crate::mangle::static_member(&owner, &member.name);
+                    self.note_rebindable_static(&field, &owner, &member.name);
                     let Type::Function {
                         params,
                         ret,
@@ -3521,6 +3515,7 @@ impl Inferer<'_> {
                 self.check_class_callable_types(&owner, span);
                 self.check_static_privacy(field.visibility, &owner, &class_name, &member);
                 let mangled = crate::mangle::static_member(&owner, &member.name);
+                self.note_rebindable_static(&field, &owner, &member.name);
                 (
                     TypedExprKind::GlobalRef {
                         mangled,
@@ -3556,6 +3551,29 @@ impl Inferer<'_> {
                 ],
             );
         }
+    }
+
+    /// An imported class's static fields are declared in another package, so
+    /// an access is where this package learns which of them can be rebound,
+    /// named by the class that declares the field. Its own keep the name
+    /// their declaration records.
+    pub(super) fn note_rebindable_static(
+        &mut self,
+        field: &crate::FieldSig,
+        owner: &crate::MangledName,
+        member: &str,
+    ) {
+        if field.readonly {
+            return;
+        }
+        let shown = self.class_by_mangled(owner).map_or_else(
+            || member.to_string(),
+            |class| format!("{}.{member}", class.name),
+        );
+        self.typed_ast
+            .rebindable_globals
+            .entry(crate::mangle::static_member(owner, member))
+            .or_insert(shown);
     }
 
     pub(super) fn report_missing_static(
@@ -6675,8 +6693,8 @@ impl Inferer<'_> {
     ///   diagnostic). Expression-body return type comes from the body
     ///   itself; block-body return type is unified across all `return`
     ///   paths via the `inferred_returns` collector frame this method
-    ///   pushes/pops. Conflicting block returns produce a diagnostic
-    ///   pointing at / Layer 3 union widening.
+    ///   pushes/pops. Block returns that no one return type covers
+    ///   produce a diagnostic.
     ///
     /// Also returns whether the arrow's own errors already explain a mismatch
     /// with `expected`: with a function hint its parameters line up with, a
@@ -6900,6 +6918,7 @@ impl Inferer<'_> {
         // Nor can its `break`/`continue` reach a loop or switch outside it.
         let prev_loop_depth = std::mem::replace(&mut self.loop_depth, 0);
         let prev_switch_depth = std::mem::replace(&mut self.switch_depth, 0);
+        let prev_nested = std::mem::replace(&mut self.in_nested_function, true);
         let prev_predicate = std::mem::replace(
             &mut self.current_type_predicate,
             predicate
@@ -6950,7 +6969,7 @@ impl Inferer<'_> {
                     t.clone()
                 } else {
                     let collected = self.inferred_returns.take().unwrap_or_default();
-                    self.unify_returns(&collected, span)
+                    self.unify_returns(&collected)
                 };
                 (ClosureBody::Block(id), t)
             }
@@ -6961,6 +6980,7 @@ impl Inferer<'_> {
         self.reachable = prev_reachable;
         self.loop_depth = prev_loop_depth;
         self.switch_depth = prev_switch_depth;
+        self.in_nested_function = prev_nested;
         self.current_type_predicate = prev_predicate;
         self.inferred_returns = prev_collect;
         self.current_return = prev_return;
@@ -7026,35 +7046,65 @@ impl Inferer<'_> {
     }
 
     /// Reduce the `(Type, Span)` entries collected during a block-body
-    /// arrow's walk to a single return type. Empty → `Void`. Single →
-    /// that type. Multiple compatible (all `assignable` against the
-    /// first) → the first. Mismatched → diagnostic pointing at
-    /// for the planned union-widening lift, plus `Type::Error` to keep
-    /// downstream silent.
-    fn unify_returns(&mut self, collected: &[(Type, Span)], fallback_span: Span) -> Type {
+    /// arrow's walk to a single return type. Empty → `Void`. Otherwise the
+    /// return every other one is `assignable` to, in whichever order they
+    /// appear: each returned value has to fit the closure's type. None such →
+    /// a diagnostic, plus `Type::Error` to keep downstream silent.
+    fn unify_returns(&mut self, collected: &[(Type, Span)]) -> Type {
         if collected.is_empty() {
             return Type::Void;
         }
-        let first = collected[0].0.clone();
-        let mut conflict: Option<(Type, Span)> = None;
-        for (t, s) in &collected[1..] {
-            if !assignable(t, &first, self.resolver()) && !assignable(&first, t, self.resolver()) {
-                conflict = Some((t.clone(), *s));
-                break;
-            }
+        let widest = collected.iter().find(|(candidate, _)| {
+            collected
+                .iter()
+                .all(|(other, _)| assignable(other, candidate, self.resolver()))
+        });
+        if let Some((widest, _)) = widest {
+            return widest.clone();
         }
-        if let Some((other, span)) = conflict {
+        self.report_conflicting_return(collected);
+        Type::Error
+    }
+
+    /// Report the first return that fits neither way with the widest of the
+    /// returns before it. Called only when no return covers them all.
+    fn report_conflicting_return(&mut self, collected: &[(Type, Span)]) {
+        let Some(((first, first_span), rest)) = collected.split_first() else {
+            return;
+        };
+        let mut widest_so_far = first;
+        for (other, span) in rest {
+            if assignable(other, widest_so_far, self.resolver()) {
+                continue;
+            }
+            if assignable(widest_so_far, other, self.resolver()) {
+                widest_so_far = other;
+                continue;
+            }
+            let returns_nothing = [other, widest_so_far]
+                .iter()
+                .any(|ty| matches!(ty.peel(), Type::Void));
+            let fix = if returns_nothing {
+                "return a value on every path or on none"
+            } else {
+                "annotate the closure's return type, or return one type on every path"
+            };
             self.error(
-                span,
+                *span,
                 format!(
-                    "return type `{other}` conflicts with earlier return `{first}`; \
-                     union widening lands in Layer 3 (SUB-77)"
+                    "return type `{other}` conflicts with earlier return `{widest_so_far}`; {fix}"
                 ),
             );
-            let _ = fallback_span;
-            return Type::Error;
+            return;
         }
-        first
+        // Each return fit the widest of those before it, one way or the
+        // other, yet no return covers them all. `assignable` is not transitive
+        // across an all-optional object type, so this is reachable. The closure
+        // has no type; say so rather than leave `Type::Error` undiagnosed.
+        self.error(
+            *first_span,
+            "cannot infer one return type for this closure; annotate its return type".to_string(),
+        );
     }
 
     // Statement walker (`infer_stmt`, `infer_assign`) moved to
@@ -10888,8 +10938,10 @@ function main(): void { if (result < 10) { } }
             "expected conflicting-return diagnostic, got: {diags:?}"
         );
         assert!(
-            diags.iter().any(|d| d.message.contains("SUB-77")),
-            "expected SUB-77 hint in diagnostic, got: {diags:?}"
+            diags
+                .iter()
+                .any(|d| d.message.contains("annotate the closure's return type")),
+            "expected a fix in the diagnostic, got: {diags:?}"
         );
     }
 

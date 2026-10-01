@@ -205,9 +205,9 @@ line where it was:
 2. A typed binding with no value, such as `let x: T;` or `declare const x: T;`, gets the
    value `null as unknown as (T)`.
 3. A `declare function` gets a body that returns such a value.
-4. A function declaration or class method with no return type gets the one `tsc`
-   infers for it, and so do a class field and a parameter with a default value that
-   have no type. Where `tsc` infers `any`, or a type that can't be written there (a
+4. A function declaration, class method or getter with no return type gets the one
+   `tsc` infers for it, and so do a class field and a parameter with a default value
+   that have no type. Where `tsc` infers `any`, or a type that can't be written there (a
    class expression's, or `this`), nothing is written, and a parameter with no
    default is left alone: its type comes from its context, which is what such a
    case tests. Submilli requires these types, so it infers none of them. The type

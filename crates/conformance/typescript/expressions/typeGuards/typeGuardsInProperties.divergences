@@ -1,4 +1,4 @@
-types: 38 of 66 tsc entries compared, 6 differ
+types: 38 of 66 tsc entries compared, 5 differ
 
 line 16: typeof this.pp1 === "string" && this.pp1
   tsc:  string | false
@@ -10,19 +10,12 @@ line 17: typeof this.pp2 === "string" && this.pp2
 
 line 18: typeof this.pp3 === "string" && this.pp3
   tsc:  string | false
-  ours: <error>
-
-line 18: this.pp3
-  tsc:  string | number
-  ours: <error>
+  ours: number | string | boolean
 
 line 18: this.pp3
   tsc:  string
-  ours: <error>
+  ours: number | string
 
 line 29: typeof obj1.x === "string" && obj1.x
   tsc:  string | false
   ours: string | boolean
-
-errors:
-line 18: tsc TS2322: Type 'string | false' is not assignable to type 'string | number'.   Type 'boolean' is not assignable to type 'string | number'. (we accept)

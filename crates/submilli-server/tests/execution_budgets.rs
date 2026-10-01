@@ -1,9 +1,13 @@
-//! The server's fuel and stack settings, exercised through `POST /v1/execute`.
+//! The server's fuel, stack and time settings, exercised through
+//! `POST /v1/execute`.
 //!
 //! Fuel is set on each store and the stack on the shared engine, so both have
-//! to reach the path a request takes, not only `RuntimeConfig`.
+//! to reach the path a request takes, not only `RuntimeConfig`. A limit also has
+//! to be reported under its own kind wherever the program reaches it: in `main`,
+//! in top-level statements, or under a callback a host function invoked.
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use axum::Router;
 use axum::body::Body;
@@ -109,4 +113,152 @@ fn deep_reentry_ends_the_run_on_the_servers_runtime() {
         message.contains("call stack exhausted"),
         "expected the run to end at the stack limit, got: {response}"
     );
+}
+
+const TOP_LEVEL_LOOP: &str = r#"let total = 0;
+while (true) { total = total + 1; }
+export function main(): number { return total; }"#;
+
+/// A handler around a callback that spins: reaching it would return `"caught"`.
+const CAUGHT_LOOP_IN_CALLBACK: &str = r#"export function main(): string {
+    try {
+        [1].forEach((x: number) => { while (true) { } });
+    } catch (e) {
+        return "caught";
+    }
+    return "done";
+}"#;
+
+const HEALTHY: &str = "export function main(): number { return 42; }";
+
+async fn assert_still_serves(router: &Router) {
+    let healthy = execute(router, HEALTHY).await;
+    assert_eq!(healthy["error"], Value::Null, "{healthy}");
+    assert_eq!(healthy["result"], "42", "{healthy}");
+}
+
+fn assert_failed_with(response: &Value, kind: &str, message: &str) {
+    assert_eq!(response["result"], Value::Null, "{response}");
+    assert_eq!(response["error"]["kind"], kind, "{response}");
+    let rendered = response["error"]["message"].as_str().unwrap_or_default();
+    assert!(rendered.contains(message), "{response}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn top_level_statements_out_of_fuel_report_fuel_exhausted() {
+    let limited = router(RuntimeConfig {
+        fuel: 1_000_000,
+        ..RuntimeConfig::default()
+    });
+    let response = execute(&limited, TOP_LEVEL_LOOP).await;
+    assert_failed_with(&response, "fuel_exhausted", "fuel exhausted");
+    // Points at the loop, as a limit reached in `main` points at its line.
+    assert_failed_with(&response, "fuel_exhausted", "at <top level> (");
+    assert_failed_with(
+        &response,
+        "fuel_exhausted",
+        "2 | while (true) { total = total + 1; }",
+    );
+    assert_still_serves(&limited).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn top_level_statements_past_the_memory_cap_report_memory_exhausted() {
+    const TOP_LEVEL_ALLOCATION: &str = r#"let s = "x";
+for (let i = 0; i < 25; i++) { s = s + s; }
+export function main(): number { return s.length; }"#;
+    let limited = router(RuntimeConfig {
+        max_store_bytes: 50 * 1024 * 1024,
+        ..RuntimeConfig::default()
+    });
+    let response = execute(&limited, TOP_LEVEL_ALLOCATION).await;
+    assert_failed_with(&response, "memory_exhausted", "memory exhausted");
+    assert_still_serves(&limited).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn top_level_statements_are_bounded_by_the_execution_timeout() {
+    let limited = router(RuntimeConfig {
+        timeout: Some(Duration::from_secs(1)),
+        ..RuntimeConfig::default()
+    });
+    let response = tokio::time::timeout(Duration::from_secs(15), execute(&limited, TOP_LEVEL_LOOP))
+        .await
+        .expect("the top-level loop must be interrupted");
+    assert_failed_with(&response, "timeout", "timeout exceeded");
+    assert_still_serves(&limited).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_top_level_throw_is_reported_with_its_message() {
+    const TOP_LEVEL_THROW: &str = r#"const limits: number[] = [1];
+console.log("before the throw");
+if (limits.length === 1) { throw new RangeError("refused at the top level"); }
+export function main(): number { return 1; }"#;
+    let router = router(RuntimeConfig::default());
+    let response = execute(&router, TOP_LEVEL_THROW).await;
+    assert_eq!(response["result"], Value::Null, "{response}");
+    assert_eq!(response["error"]["kind"], "runtime_error", "{response}");
+    // The same header and frame layout a throw in `main` is rendered under.
+    let message = response["error"]["message"].as_str().unwrap_or_default();
+    assert!(
+        message.starts_with("error: RangeError: refused at the top level\n  at <top level> ("),
+        "{response}"
+    );
+    assert!(
+        message.contains(
+            "3 | if (limits.length === 1) { throw new RangeError(\"refused at the top level\"); }"
+        ),
+        "the source line of the throw: {response}"
+    );
+    assert!(
+        response.to_string().contains("before the throw"),
+        "console output before the failure is kept: {response}"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn fuel_spent_under_a_callback_is_not_catchable() {
+    let limited = router(RuntimeConfig {
+        fuel: 1_000_000,
+        ..RuntimeConfig::default()
+    });
+    let response = execute(&limited, CAUGHT_LOOP_IN_CALLBACK).await;
+    assert_failed_with(&response, "fuel_exhausted", "fuel exhausted");
+    assert_still_serves(&limited).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn stack_exhaustion_under_a_callback_is_not_catchable() {
+    const CAUGHT_RECURSION_IN_CALLBACK: &str = r#"function recurse(n: number): number {
+    return recurse(n + 1) + 1;
+}
+export function main(): string {
+    try {
+        [1].forEach((x: number) => { recurse(x); });
+    } catch (e) {
+        return "caught";
+    }
+    return "done";
+}"#;
+    let router = router(RuntimeConfig::default());
+    let response = execute(&router, CAUGHT_RECURSION_IN_CALLBACK).await;
+    assert_failed_with(&response, "runtime_error", "call stack exhausted");
+    assert_still_serves(&router).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_timeout_under_a_callback_is_not_catchable() {
+    let limited = router(RuntimeConfig {
+        timeout: Some(Duration::from_secs(1)),
+        ..RuntimeConfig::default()
+    });
+    let response = tokio::time::timeout(
+        Duration::from_secs(15),
+        execute(&limited, CAUGHT_LOOP_IN_CALLBACK),
+    )
+    .await
+    .expect("the loop must be interrupted");
+    assert_failed_with(&response, "timeout", "timeout exceeded");
+    assert_still_serves(&limited).await;
 }

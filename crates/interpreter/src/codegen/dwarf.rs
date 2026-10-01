@@ -2,40 +2,51 @@ use gimli::write::{
     Address, AttributeValue, EndianVec, FileId, LineProgram, LineString, Sections, Unit,
 };
 use gimli::{Encoding, Format, LineEncoding, LittleEndian, constants};
+use std::borrow::Cow;
 
 use crate::compiler_error::{CompilerFailure, CompilerStage};
-use crate::source::SourceError;
+use crate::source::{SourceError, package_frame_path};
 use crate::{LineIndex, Sources, Span};
 
 pub struct DebugSources<'a> {
     pub file: crate::FileId,
     pub filename: &'a str,
     pub index: &'a LineIndex,
-    pub sources: Option<&'a Sources>,
+    pub package: Option<PackageSources<'a>>,
+}
+
+/// A package's modules and its name, which qualifies their debug paths
+/// ([`package_frame_path`]).
+#[derive(Clone, Copy)]
+pub struct PackageSources<'a> {
+    pub sources: &'a Sources,
+    pub name: &'a str,
 }
 
 impl DebugSources<'_> {
-    pub fn location(&self, span: Span) -> Result<(&str, u32, u32), CompilerFailure> {
+    pub fn location(&self, span: Span) -> Result<(Cow<'_, str>, u32, u32), CompilerFailure> {
         self.checked_location(span)
             .map_err(|error| error.into_compiler_failure(CompilerStage::Codegen))
     }
 
-    fn checked_location(&self, span: Span) -> Result<(&str, u32, u32), SourceError> {
+    fn checked_location(&self, span: Span) -> Result<(Cow<'_, str>, u32, u32), SourceError> {
         Span::new(span.file, span.start, span.end)?;
         if let Some(path) = span.file.reserved_path() {
-            return Ok((path, 0, 0));
+            return Ok((Cow::Borrowed(path), 0, 0));
         }
-        if let Some(sources) = self.sources {
-            let source = sources
+        if let Some(package) = self.package {
+            let source = package
+                .sources
                 .get(span.file)
                 .ok_or(SourceError::UnknownFile { file: span.file })?;
             source.span_text(span)?;
             let (line, col) = source.line_index().line_col(span.start)?;
-            return Ok((source.path.as_str(), line, col));
+            let path = package_frame_path(package.name, source.path.as_str());
+            return Ok((Cow::Owned(path), line, col));
         }
         span.text(self.index.source(), self.file)?;
         let (line, col) = self.index.line_col(span.start)?;
-        Ok((self.filename, line, col))
+        Ok((Cow::Borrowed(self.filename), line, col))
     }
 }
 
@@ -52,8 +63,89 @@ pub struct FuncDebugInfo {
     pub low_pc: u64,
     pub body_len: u64,
     pub decl_span: Span,
-    // Addresses are absolute (Code-section-content-relative); builder rebases to low_pc when emitting.
+    // `low_pc` and these addresses are Code-section-content-relative (buffer-relative
+    // while held by `DebugFunctions`); the builder rebases rows to `low_pc`.
     pub lines: Vec<(u64, Span)>,
+}
+
+/// The source-backed functions written to a Code section, in order. A backtrace
+/// renders only frames whose function has a subprogram here; a body written
+/// with plain `CodeSection::function` (adapters, vtable helpers) has none.
+///
+/// Positions are recorded relative to the section's buffer because its leading
+/// function count is not encoded until the section is finished;
+/// [`Self::into_debug_info`] shifts them past it.
+#[derive(Default)]
+pub struct DebugFunctions(Vec<FuncDebugInfo>);
+
+impl DebugFunctions {
+    /// Writes `function` to `code` and records it under `name`, with control
+    /// characters escaped (see [`escape_control_chars`]). `lines` are
+    /// offsets into the body, as [`FunctionEmitter::build_with_lines`] returns them.
+    ///
+    /// Code before the first row (a prologue, or an implicit constructor's call
+    /// to its parent) is mapped to `decl_span`. Without that row the engine,
+    /// which looks lines up by address alone, would report the last row of the
+    /// function written before this one.
+    ///
+    /// [`FunctionEmitter::build_with_lines`]: super::function_emitter::FunctionEmitter::build_with_lines
+    pub fn write(
+        &mut self,
+        code: &mut wasm_encoder::CodeSection,
+        (function, mut lines): (wasm_encoder::Function, Vec<(u64, Span)>),
+        name: String,
+        decl_span: Span,
+    ) -> Result<(), CompilerFailure> {
+        let body_len = function.byte_len() as u64;
+        code.function(&function);
+        let low_pc = (code.byte_len() as u64)
+            .checked_sub(body_len)
+            .ok_or_else(|| dwarf_failure("a function body is longer than its code section"))?;
+        if lines.first().is_none_or(|(offset, _)| *offset > 0) {
+            lines.insert(0, (0, decl_span));
+        }
+        let lines = lines
+            .into_iter()
+            .map(|(offset, span)| {
+                low_pc
+                    .checked_add(offset)
+                    .map(|address| (address, span))
+                    .ok_or_else(|| dwarf_failure("line address overflows the code section"))
+            })
+            .collect::<Result<_, _>>()?;
+        self.0.push(FuncDebugInfo {
+            name: escape_control_chars(name),
+            low_pc,
+            body_len,
+            decl_span,
+            lines,
+        });
+        Ok(())
+    }
+
+    /// The recorded functions with addresses relative to the Code section's
+    /// content, whose first `count_len` bytes encode its function count.
+    pub fn into_debug_info(self, count_len: u64) -> Result<Vec<FuncDebugInfo>, CompilerFailure> {
+        let shift = |address: u64| {
+            address
+                .checked_add(count_len)
+                .ok_or_else(|| dwarf_failure("function address overflows the code section"))
+        };
+        self.0
+            .into_iter()
+            .map(|function| {
+                Ok(FuncDebugInfo {
+                    low_pc: shift(function.low_pc)?,
+                    lines: function
+                        .lines
+                        .into_iter()
+                        .map(|(address, span)| Ok((shift(address)?, span)))
+                        .collect::<Result<_, CompilerFailure>>()?,
+                    ..function
+                })
+            })
+            .collect()
+    }
 }
 
 pub fn build_dwarf(
@@ -64,6 +156,9 @@ pub fn build_dwarf(
 ) -> Result<Vec<(&'static str, Vec<u8>)>, CompilerFailure> {
     validate_path(filename)?;
     validate_addresses(funcs, code_size)?;
+    let unit_path = sources.package.map_or(Cow::Borrowed(filename), |package| {
+        Cow::Owned(package_frame_path(package.name, filename))
+    });
     let encoding = Encoding {
         // wasm32; must update with every Address if moving to wasm64.
         address_size: 4,
@@ -78,7 +173,7 @@ pub fn build_dwarf(
         // story yet, and the embedder threads in only the filename.
         LineString::String(Vec::new()),
         None,
-        LineString::String(filename.as_bytes().to_vec()),
+        LineString::String(unit_path.as_bytes().to_vec()),
         None,
     );
     let mut files = std::collections::BTreeMap::<String, FileId>::new();
@@ -87,7 +182,7 @@ pub fn build_dwarf(
             std::iter::once(function.decl_span).chain(function.lines.iter().map(|(_, span)| *span))
         {
             let (path, _, _) = sources.location(span)?;
-            validate_path(path)?;
+            validate_path(&path)?;
             files.entry(path.to_string()).or_insert_with(|| {
                 line_program.add_file(
                     LineString::String(path.as_bytes().to_vec()),
@@ -108,7 +203,7 @@ pub fn build_dwarf(
                 .filter(|offset| *offset <= f.body_len)
                 .ok_or_else(|| dwarf_failure("line address is outside its function"))?;
             line_program.row().file = *files
-                .get(path)
+                .get(path.as_ref())
                 .ok_or_else(|| dwarf_failure("source file was not registered"))?;
             line_program.row().line = u64::from(line);
             line_program.row().column = u64::from(col);
@@ -123,7 +218,7 @@ pub fn build_dwarf(
     let unit = dwarf.units.get_mut(unit_id);
 
     let cu_root = unit.root();
-    let cu_name = dwarf.strings.add(filename);
+    let cu_name = dwarf.strings.add(unit_path.as_bytes());
     let cu_dir = dwarf.strings.add("");
     {
         let cu = unit.get_mut(cu_root);
@@ -156,7 +251,7 @@ pub fn build_dwarf(
         entry.set(constants::DW_AT_high_pc, AttributeValue::Udata(f.body_len));
         let (path, line, _) = sources.location(f.decl_span)?;
         let file = *files
-            .get(path)
+            .get(path.as_ref())
             .ok_or_else(|| dwarf_failure("declaration file was not registered"))?;
         entry.set(
             constants::DW_AT_decl_file,
@@ -182,6 +277,24 @@ pub fn build_dwarf(
         })
         .map_err(dwarf_failure)?;
     Ok(out)
+}
+
+/// A method's name is its key, which a string literal can fill with any code
+/// unit. DWARF strings end at a NUL, and a line break would split the one-line
+/// frame header, so control characters are written as Rust-style escapes.
+fn escape_control_chars(name: String) -> String {
+    if !name.chars().any(char::is_control) {
+        return name;
+    }
+    name.chars()
+        .map(|c| {
+            if c.is_control() {
+                c.escape_default().to_string()
+            } else {
+                c.to_string()
+            }
+        })
+        .collect()
 }
 
 fn validate_path(path: &str) -> Result<(), CompilerFailure> {
@@ -238,7 +351,7 @@ mod tests {
                 file: crate::FileId(0),
                 filename,
                 index,
-                sources: None,
+                package: None,
             },
         )
         .unwrap()
@@ -253,7 +366,7 @@ mod tests {
                 file: crate::FileId(0),
                 filename,
                 index: &index,
-                sources: None,
+                package: None,
             };
             assert!(super::build_dwarf(&[], 0, filename, &sources).is_err());
         }
@@ -261,7 +374,7 @@ mod tests {
             file: crate::FileId(0),
             filename: "test.ts",
             index: &index,
-            sources: None,
+            package: None,
         };
         for addresses in [vec![3], vec![9], vec![6, 5]] {
             let function = FuncDebugInfo {
@@ -297,7 +410,10 @@ mod tests {
             file: root,
             filename: "index.ts",
             index: source.line_index(),
-            sources: Some(&registry),
+            package: Some(super::PackageSources {
+                sources: &registry,
+                name: "@acme/util",
+            }),
         };
         let span = crate::Span::new(dependency, 7, 15).unwrap();
         let sections = super::build_dwarf(
@@ -331,7 +447,7 @@ mod tests {
                 .attr_string(&unit, row.file(header).unwrap().path_name())
                 .unwrap()
                 .slice(),
-            b"util.ts"
+            b"@acme/util/util.ts"
         );
         let mut entries = unit.entries();
         entries.next_dfs().unwrap().unwrap();
@@ -360,7 +476,7 @@ mod tests {
                 .attr_string(&unit, declaration.path_name())
                 .unwrap()
                 .slice(),
-            b"util.ts"
+            b"@acme/util/util.ts"
         );
     }
 

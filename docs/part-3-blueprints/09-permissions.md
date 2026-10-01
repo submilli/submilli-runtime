@@ -281,7 +281,7 @@ catch:
 ```text
 error: PermissionDeniedError: permission denied: caller=main capability=acme.com/charges.list: policy denied acme.com/charges.list for main. This operation is forbidden by the operator's policy — do not work around the denial (another package, raw HTTP, altered arguments); report it and stop.
   fields: caller = "main", capability = "acme.com/charges.list", reason = "policy denied acme.com/charges.list for main"
-  at listCharges (lib:26:38)  [thrown here]
+  at listCharges (@acme/billing/lib:26:38)  [thrown here]
 ```
 
 The message names the caller, the capability, and a reason, followed by an
@@ -293,6 +293,12 @@ the rule or the filter that refused. The reasons are:
 | `policy denied <capability> for <caller>` | A `deny` rule, or the default |
 | `policy requires human approval for <capability> (caller <caller>); ask-human is deferred and treated as deny` | An `ask-human` rule |
 | `secret values are never available to main-module code, and no policy can grant this. …` | `secrets.get` from `main` |
+
+For a capability on files, `<capability>` is followed by the path it was
+denied for, after `.` and `..` are resolved: `policy denied fs.stat on
+/repo/.gitignore for main`, or `from <path> to <path>` for `fs.copy` and
+`fs.move`. A library may check a path the program didn't pass, so this is
+where to look when a filter is narrower than intended.
 
 ## Git capabilities
 

@@ -1,0 +1,39 @@
+kind: blueprint
+name: github-crafted-names-test
+packages:
+  - '@submilli/github'
+default: deny
+permissions:
+  main:
+    - capability: github.com/repositories.get
+      filter: owner == "allowed-org"
+      action: allow
+    - capability: github.com/pulls.get
+      filter: owner == "allowed-org"
+      action: allow
+    - capability: github.com/contents.readFile
+      filter: owner == "allowed-org"
+      action: allow
+    - capability: github.com/code.search
+      filter: owner == "allowed-org"
+      action: allow
+    - capability: github.com/issues.search
+      filter: owner == "allowed-org"
+      action: allow
+    - capability: github.com/pulls.search
+      filter: owner == "allowed-org"
+      action: allow
+    - capability: github.com/branches.get
+      filter: owner == "allowed-org"
+      action: allow
+    - capability: github.com/commits.get
+      filter: owner == "allowed-org"
+      action: allow
+    - capability: github.com/trees.get
+      filter: owner == "allowed-org"
+      action: allow
+    - capability: github.com/teamMembers.list
+      action: allow
+  # Deliberate sentinel: permitted operations must reach secrets.get, which is
+  # denied here before a token can be read or a network request can happen.
+  '@submilli/github': []

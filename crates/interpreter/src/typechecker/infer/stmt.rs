@@ -184,6 +184,11 @@ impl Inferer<'_> {
                         && !matches!(ret.peel(), Type::Void | Type::Error)
                     {
                         self.error(span, format!("expected `return` value of type `{ret}`"));
+                    } else if let Some(collected) = self.inferred_returns.as_mut() {
+                        // A bare `return` is a `void` return: recording it lets
+                        // a value `return` beside it be reported as a conflict.
+                        // Under a declared value type it was reported just above.
+                        collected.push((Type::Void, span));
                     }
                     None
                 };
@@ -191,7 +196,11 @@ impl Inferer<'_> {
                 Ok(TypedStmtKind::Return(typed_value))
             }
             StmtKind::Expr(expr_id) => {
+                // `infer_super_call` takes the flag; cleared here too for a
+                // statement whose inference never reaches it.
+                self.super_call_is_statement = self.is_super_call(expr_id)?;
                 let (typed_id, _) = self.infer_expr(expr_id, None)?;
+                self.super_call_is_statement = false;
                 Ok(TypedStmtKind::Expr(typed_id))
             }
             StmtKind::Block(stmts) => {
@@ -645,8 +654,14 @@ impl Inferer<'_> {
     ) -> Result<TypedStmtKind, CompilerFailure> {
         let entry_reachable = self.reachable;
         let pending_start = self.pending_exit_counts();
+        let super_seen_before = self.super_seen;
         let body_outcome =
             self.infer_isolated_clause(body, entry_reachable, &Default::default())?;
+        // A `catch` or `finally` also runs when a `super(...)` before it in the
+        // `try` throws, so it counts as before the call. (Only the
+        // constructor's own call sets `super_seen`.)
+        let prev_super_handler = self.in_super_handler;
+        self.in_super_handler |= !super_seen_before && self.super_seen;
         let typed_body = body_outcome
             .body
             .ok_or_else(|| super::inference_failure("try body is a block"))?;
@@ -685,6 +700,9 @@ impl Inferer<'_> {
         }
 
         let mut post = join_reachable_envs(None, exits);
+        // A `super(...)` in a `catch` can throw too, so the `finally` after it
+        // counts as before the call as well.
+        self.in_super_handler |= !super_seen_before && self.super_seen;
         let typed_finally = finally
             .map(|f| {
                 let pending_end = self.pending_exit_counts();
@@ -696,6 +714,7 @@ impl Inferer<'_> {
             })
             .transpose()?
             .flatten();
+        self.in_super_handler = prev_super_handler;
         self.reachable = entry_reachable && post.is_some();
         self.merge_assigned_into_outer(all_assigned, span);
         if let Some(post) = post {
@@ -907,6 +926,7 @@ impl Inferer<'_> {
                         );
                         return Ok(StaticWrite::Rejected { receiver });
                     }
+                    self.note_rebindable_static(&field, &owner, &name.name);
                     StaticWrite::Resolved {
                         mangled: crate::mangle::static_member(&owner, &name.name),
                         ty: field.ty,

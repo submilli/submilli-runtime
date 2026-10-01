@@ -974,6 +974,15 @@ impl<'a> Parser<'a> {
             self.advance();
             Some(self.parse_type_annotation()?)
         } else {
+            // A getter's type is its return type, which, as for a method, is
+            // written rather than inferred. The body still parses, so the
+            // rest of the class is checked.
+            if kind == crate::AccessorKind::Get {
+                self.error_at_peek_with_help(
+                    "expected `:` and return type",
+                    vec!["get name(): T { … }".to_string()],
+                );
+            }
             None
         };
         let body = self.parse_class_member_body()?;
@@ -11208,6 +11217,24 @@ class Dog extends Animal {
         };
         assert_eq!(*kind, crate::AccessorKind::Get);
         assert_eq!(name.name, "value");
+    }
+
+    #[test]
+    fn getter_without_return_type_is_rejected() {
+        let (ast, diags) = parse_str("class C { get value() { return 1; } }");
+        assert_eq!(diags.len(), 1, "got: {diags:?}");
+        assert_eq!(diags[0].message, "expected `:` and return type");
+        assert_eq!(diags[0].help, vec!["get name(): T { … }".to_string()]);
+        assert!(
+            matches!(
+                &class_members(&ast)[0],
+                crate::ClassMember::Accessor {
+                    return_type: None,
+                    ..
+                }
+            ),
+            "the getter is still recovered as a member"
+        );
     }
 
     #[test]

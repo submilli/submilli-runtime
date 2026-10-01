@@ -73,14 +73,18 @@ provides:
       type: string
     path:
       type: string
+    ref:
+      type: string
     repo:
       type: string
 - name: github.com/contents.readFile
-  description: Read a repository file as bytes.
+  description: Read a repository file as bytes. `ref` in the check is the branch, tag, or commit the caller names, or null for the repository's default branch.
   fields:
     owner:
       type: string
     path:
+      type: string
+    ref:
       type: string
     repo:
       type: string
@@ -90,6 +94,8 @@ provides:
     owner:
       type: string
     path:
+      type: string
+    ref:
       type: string
     repo:
       type: string
@@ -205,6 +211,10 @@ provides:
 - name: github.com/pulls.create
   description: Create a pull request.
   fields:
+    base:
+      type: string
+    head:
+      type: string
     owner:
       type: string
     repo:
@@ -251,8 +261,10 @@ provides:
     repo:
       type: string
 - name: github.com/pulls.update
-  description: Update a pull request.
+  description: Update a pull request. `base` in the check is the branch the update retargets the pull request to, or null when it leaves the base as it is.
   fields:
+    base:
+      type: string
     number:
       type: number
     owner:

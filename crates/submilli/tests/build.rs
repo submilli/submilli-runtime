@@ -1022,6 +1022,123 @@ fn build_test_runs_segments_and_reports_summary() {
     );
 }
 
+/// A test file's top-level statements run before `main`; their failure fails
+/// the file with the thrown message, as a failure in `main` does.
+#[test]
+fn build_test_reports_a_top_level_failure_as_the_files_failure() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let project = tmp.path().join("project");
+    write_file(
+        &project.join("submilli.toml"),
+        "[[package]]\nname = \"@acme/util\"\nversion = \"0.1.0\"\ndescription = \"Test package.\"\n",
+    );
+    write_file(
+        &project.join("src/lib.ts"),
+        "export function answer(): number { return 42; }",
+    );
+    write_file(
+        &project.join("tests/setup.test.ts"),
+        r#"
+            import { answer } from "@acme/util";
+            if (answer() === 42) { throw new RangeError("set-up refused"); }
+            function main(): void { }
+        "#,
+    );
+
+    let out = build_test(&project, tmp.path(), &[]);
+    assert!(!out.status.success(), "stdout: {}", stdout(&out));
+    assert!(
+        stdout(&out).contains("0 passed, 1 failed across 1 files"),
+        "stdout: {}",
+        stdout(&out)
+    );
+    assert!(
+        stderr(&out).contains("error: RangeError: set-up refused"),
+        "stderr: {}",
+        stderr(&out)
+    );
+}
+
+/// The package's own top-level statements run when it is installed for a test
+/// file; their failure fails the file with a frame at the package's statement.
+#[test]
+fn build_test_reports_a_package_initializer_failure_with_its_statement() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let project = tmp.path().join("project");
+    write_file(
+        &project.join("submilli.toml"),
+        "[[package]]\nname = \"@acme/util\"\nversion = \"0.1.0\"\ndescription = \"Test package.\"\n",
+    );
+    write_file(
+        &project.join("src/lib.ts"),
+        "const table: number[] = [1];\nconst picked: number = table[7];\n/** The pick. */\nexport function answer(): number { return picked; }",
+    );
+    write_file(
+        &project.join("tests/setup.test.ts"),
+        "import { answer } from \"@acme/util\";\nfunction main(): void { assert(answer() === 1); }",
+    );
+
+    let out = build_test(&project, tmp.path(), &[]);
+    assert!(!out.status.success(), "stdout: {}", stdout(&out));
+    assert!(
+        stdout(&out).contains("0 passed, 1 failed across 1 files"),
+        "stdout: {}",
+        stdout(&out)
+    );
+    let err = stderr(&out);
+    assert!(
+        err.contains(
+            "error: package `@acme/util` failed to initialize: RangeError: index out of range\n  at <top level> (@acme/util/lib:2:"
+        ),
+        "stderr: {err}"
+    );
+    assert!(
+        err.contains("2 | const picked: number = table[7];\n  |"),
+        "the package's statement: {err}"
+    );
+}
+
+/// Every package's entry module is `lib`; each frame still shows its own
+/// package's source.
+#[test]
+fn build_test_package_frames_show_their_own_packages_source() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let project = tmp.path().join("project");
+    write_file(
+        &project.join("submilli.toml"),
+        "[[package]]\nname = \"@acme/base\"\nversion = \"0.1.0\"\ndescription = \"Base.\"\npath = \"packages/base\"\n\n\
+         [[package]]\nname = \"@acme/app\"\nversion = \"0.1.0\"\ndescription = \"App.\"\ndependencies = [\"@acme/base\"]\npath = \"packages/app\"\n",
+    );
+    write_file(
+        &project.join("packages/base/src/lib.ts"),
+        "// base line 1\n/** Refuses. */\nexport function refuse(): number { throw new Error(\"from base\"); }",
+    );
+    write_file(
+        &project.join("packages/app/src/lib.ts"),
+        "import { refuse } from \"@acme/base\";\nconst x: number = refuse();\n/** The value. */\nexport function value(): number { return x; }",
+    );
+    write_file(
+        &project.join("packages/app/tests/value.test.ts"),
+        "import { value } from \"@acme/app\";\nfunction main(): void { assert(value() === 1); }",
+    );
+
+    let out = build_test(&project, tmp.path(), &["-p", "@acme/app"]);
+    assert!(!out.status.success(), "stdout: {}", stdout(&out));
+    let err = stderr(&out);
+    assert!(
+        err.contains("  at refuse (@acme/base/lib:3:")
+            && err.contains(
+                "3 | export function refuse(): number { throw new Error(\"from base\"); }"
+            ),
+        "the dependency's frame and source: {err}"
+    );
+    assert!(
+        err.contains("  at <top level> (@acme/app/lib:2:")
+            && err.contains("2 | const x: number = refuse();"),
+        "the tested package's frame and source: {err}"
+    );
+}
+
 #[test]
 fn build_test_http_skip_preserves_local_tests_and_docs() {
     let tmp = tempfile::tempdir().expect("tempdir");

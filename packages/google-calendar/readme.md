@@ -47,3 +47,14 @@ submilli build test -p @submilli/google-calendar
 
 Live reads run when `.env` contains `GOOGLE_ACCESS_TOKEN`. Temporary event
 creation and cleanup additionally require `GOOGLE_LIVE_MUTATIONS=true`.
+
+## Policy tests
+
+The scripts in `tests/policy/` run as a real `main` caller under restricted
+blueprints of the same name, without a token or network:
+
+- `attendees.ts` shows that `createEvent` and `updateEvent` are held to rules
+  on `attendees` and `sendUpdates`, in whichever case an address is written,
+  and that `deleteEvent` is held to a rule on `sendUpdates`.
+
+`cargo test -p submilli --test package_policy` runs them.

@@ -570,6 +570,12 @@ impl<'a> Inferer<'a> {
                     notes: vec![(prev_span, "previously declared here".to_string())],
                 });
             } else {
+                // Another package's `let` can be rebound by its own functions.
+                if matches!(val_sym.kind, ValueKind::Let { .. }) {
+                    self.typed_ast
+                        .rebindable_globals
+                        .insert(val_sym.mangled_name.clone(), imported.to_string());
+                }
                 self.top_symbols.insert(
                     local.name.clone(),
                     ValueEntry {

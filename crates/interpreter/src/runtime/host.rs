@@ -1139,15 +1139,23 @@ pub(crate) fn throw_host_error(
     caller: &mut Caller<'_, StoreData>,
     err: wasmtime::Error,
 ) -> wasmtime::Error {
-    if err.is::<FatalHostError>()
-        || err.is::<wasmtime::ThrownException>()
-        || super::limits::is_memory_exhausted(&err)
-    {
+    if ends_the_run(&err) || err.is::<wasmtime::ThrownException>() {
         return err;
     }
     let class = builtin_class_of(&err);
     let own = own_field_texts(&err);
     throw_error_as(caller, class, &err.to_string(), &own)
+}
+
+/// Whether `err` must reach the embedder as it is instead of becoming a guest
+/// throw. An engine trap is one: a host body that re-enters guest code (an
+/// array callback, a getter under `JSON.stringify`) returns the nested call's
+/// trap, and a program that could catch it there would outlive its fuel,
+/// deadline or stack limit.
+fn ends_the_run(err: &wasmtime::Error) -> bool {
+    err.is::<FatalHostError>()
+        || err.is::<wasmtime::Trap>()
+        || super::limits::is_memory_exhausted(err)
 }
 
 fn throw_error_as(
@@ -1202,8 +1210,8 @@ pub(crate) fn string_array_type(engine: &Engine) -> ArrayType {
 /// `_deterministic` is reserved for Phase-2 durable-log wrapping; unused today.
 ///
 /// Ordinary host errors become catchable guest errors via [`throw_error`].
-/// [`FatalHostError`] and a reached memory cap bypass conversion and terminate
-/// execution. A body that already raised a throw (its `Err` is a
+/// [`FatalHostError`], an engine trap and a reached memory cap bypass conversion
+/// and terminate execution. A body that already raised a throw (its `Err` is a
 /// `ThrownException`) is passed through untouched, so the pending exception
 /// isn't clobbered. Bodies receive `&mut Caller` (not an owned `Caller`) so the
 /// wrapper can still use the caller to raise the throw after the body returns.
@@ -1365,21 +1373,39 @@ mod tests {
     use super::*;
 
     #[tokio::test]
-    async fn fatal_host_errors_bypass_guest_catch_in_both_wrappers() {
+    async fn run_ending_errors_bypass_guest_catch_in_both_wrappers() {
+        #[derive(Clone, Copy, PartialEq, Debug)]
+        enum Failure {
+            Ordinary,
+            Fatal,
+            // What a body that re-entered guest code returns when that call trapped.
+            NestedTrap(wasmtime::Trap),
+        }
+        let failures = [
+            Failure::Ordinary,
+            Failure::Fatal,
+            Failure::NestedTrap(wasmtime::Trap::StackOverflow),
+            Failure::NestedTrap(wasmtime::Trap::OutOfFuel),
+            Failure::NestedTrap(wasmtime::Trap::Interrupt),
+            Failure::NestedTrap(wasmtime::Trap::UnreachableCodeReached),
+            Failure::NestedTrap(wasmtime::Trap::CastFailure),
+            Failure::NestedTrap(wasmtime::Trap::NullReference),
+            Failure::NestedTrap(wasmtime::Trap::ArrayOutOfBounds),
+        ];
         for asynchronous in [false, true] {
-            for fatal in [false, true] {
+            for kind in failures {
                 let (engine, mut store, mut linker) = async_store();
                 crate::runtime::install_runtime_async(&mut linker, &mut store)
                     .await
                     .expect("runtime");
                 let name = crate::mangle::host(TEST_MODULE, "failure");
-                let failure = move || {
-                    if fatal {
-                        fatal_host_error("test operation: invalid state")
-                            .context("outer host context")
-                    } else {
-                        wasmtime::Error::msg("ordinary operation failure")
+                let failure = move || match kind {
+                    Failure::Fatal => fatal_host_error("test operation: invalid state")
+                        .context("outer host context"),
+                    Failure::NestedTrap(trap) => {
+                        wasmtime::Error::new(trap).context("outer host context")
                     }
+                    Failure::Ordinary => wasmtime::Error::msg("ordinary operation failure"),
                 };
                 let ty = FuncType::new(&engine, [], []);
                 if asynchronous {
@@ -1425,13 +1451,24 @@ mod tests {
                     .get_typed_func::<(), i32>(&mut store, "attempt")
                     .expect("attempt");
                 let result = attempt.call_async(&mut store, ()).await;
-                if fatal {
-                    let err =
-                        result.expect_err("fatal failure cannot enter the guest catch handler");
-                    assert!(err.is::<FatalHostError>(), "typed cause lost: {err:#}");
-                    assert!(format!("{err:#}").contains("invalid state"));
-                } else {
-                    assert_eq!(result.expect("guest catches ordinary failure"), 1);
+                match kind {
+                    Failure::Fatal => {
+                        let err =
+                            result.expect_err("fatal failure cannot enter the guest catch handler");
+                        assert!(err.is::<FatalHostError>(), "typed cause lost: {err:#}");
+                        assert!(format!("{err:#}").contains("invalid state"));
+                    }
+                    Failure::NestedTrap(trap) => {
+                        let err = result.expect_err("a trap cannot enter the guest catch handler");
+                        assert_eq!(
+                            err.downcast_ref::<wasmtime::Trap>(),
+                            Some(&trap),
+                            "trap kind lost: {err:#}"
+                        );
+                    }
+                    Failure::Ordinary => {
+                        assert_eq!(result.expect("guest catches ordinary failure"), 1);
+                    }
                 }
                 let healthy = instance
                     .get_typed_func::<(), i32>(&mut store, "healthy")

@@ -1,0 +1,35 @@
+kind: blueprint
+name: google-drive-sharing-test
+packages:
+  - '@submilli/google-drive'
+default: deny
+permissions:
+  main:
+    - capability: submilli/google-drive.shareFile
+      filter: type == "user" and role == "reader" and principal == "dana@example.com" and sendNotificationEmail == true and allowFileDiscovery == false
+      action: allow
+    - capability: submilli/google-drive.shareFile
+      filter: type == "domain" and role == "reader" and principal == "example.com" and allowFileDiscovery == false and sendNotificationEmail == false
+      action: allow
+    - capability: submilli/google-drive.uploadFile
+      filter: parentId == "allowedFolder"
+      action: allow
+    - capability: submilli/google-drive.copyFile
+      filter: parentId == "allowedFolder"
+      action: allow
+    - capability: submilli/google-drive.createFolder
+      filter: parentId == "root"
+      action: allow
+    - capability: submilli/google-drive.moveFile
+      filter: parentId == "allowedFolder"
+      action: allow
+    - capability: fs.write
+      filter: path == "/report.txt"
+      action: allow
+  # Deliberate sentinel: an allowed call must reach secrets.get, which is
+  # denied here before a token can be read or a request can be sent. An
+  # upload sizes its source first, so that one read is granted.
+  '@submilli/google-drive':
+    - capability: fs.stat
+      filter: path == "/report.txt"
+      action: allow

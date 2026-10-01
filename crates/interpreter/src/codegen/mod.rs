@@ -727,7 +727,7 @@ fn codegen_inner(
     ta: &TypedAst,
     dependencies: &[&PackageDeclaration],
     owning_package: &str,
-    sources: Option<&crate::Sources>,
+    package_sources: Option<&crate::Sources>,
 ) -> Result<GeneratedModule, CompilerFailure> {
     tree_height::check_typed(ta, CompilerStage::Codegen)?;
     u32::try_from(source.len()).map_err(|_| CompilerFailure::Limit {
@@ -742,7 +742,10 @@ fn codegen_inner(
         file,
         filename,
         index: &line_index,
-        sources,
+        package: package_sources.map(|sources| dwarf::PackageSources {
+            sources,
+            name: owning_package,
+        }),
     };
     for id in ta
         .expr_ids()
@@ -1802,14 +1805,16 @@ fn codegen_inner(
         emit_statement(&mut start_emitter, &ctx, stmt_id)?;
         ctx.check_failure()?;
     }
-    // CodeSection::byte_len excludes the leading vec-count LEB128; adjust to get Code-section-content offsets for DWARF.
-    let start_body = start_emitter.build();
-    code.function(&start_body);
+    let mut debug_functions = dwarf::DebugFunctions::default();
+    debug_functions.write(
+        &mut code,
+        start_emitter.build_with_lines(),
+        TOP_LEVEL_FRAME_NAME.to_string(),
+        crate::Span::at(ctx.file),
+    )?;
 
-    let mut user_func_ranges: Vec<(u64, u64)> = Vec::with_capacity(user_funcs.len());
-    let mut user_func_lines: Vec<Vec<(u64, crate::Span)>> = Vec::with_capacity(user_funcs.len());
     for func in &user_funcs {
-        let (built, lines) = function_emitter::emit_function(
+        let built = function_emitter::emit_function(
             &func.generics,
             &ctx,
             &func.params,
@@ -1817,11 +1822,7 @@ fn codegen_inner(
             &func.return_type,
         )?;
         ctx.check_failure()?;
-        let body_len = built.byte_len() as u64;
-        code.function(&built);
-        let low_in_buf = code.byte_len() as u64 - body_len;
-        user_func_ranges.push((low_in_buf, body_len));
-        user_func_lines.push(lines);
+        debug_functions.write(&mut code, built, func.name.clone(), func.decl_span)?;
     }
 
     if let Some(methods) = closure_methods_for_emit {
@@ -1829,9 +1830,10 @@ fn codegen_inner(
     }
 
     for meta in &closure_metas {
-        let (built, _lines) = function_emitter::emit_closure_function(&ctx, meta)?;
+        let built = function_emitter::emit_closure_function(&ctx, meta)?;
         ctx.check_failure()?;
-        code.function(&built);
+        let (name, decl_span) = closure_frame(ta, meta)?;
+        debug_functions.write(&mut code, built, name, decl_span)?;
     }
 
     function_adapters::emit_bodies(&adapter_metas, &mut code, &ctx)?;
@@ -1846,7 +1848,7 @@ fn codegen_inner(
         pkg_string_global_idx,
     )?;
 
-    class_plan.emit_bodies(&mut code, &ctx)?;
+    class_plan.emit_bodies(&mut code, &mut debug_functions, &ctx)?;
     // A failure recorded by the bodies above comes before those of the checks
     // emitted as functions of their own below.
     ctx.check_failure()?;
@@ -1889,24 +1891,7 @@ fn codegen_inner(
     let vec_count_size = leb128_u32_size(code.len()) as u64;
     let code_content_size = vec_count_size + code.byte_len() as u64;
 
-    let funcs: Vec<dwarf::FuncDebugInfo> = user_funcs
-        .iter()
-        .zip(user_func_ranges.iter())
-        .zip(user_func_lines)
-        .map(|((uf, (low_in_buf, body_len)), lines)| {
-            let abs_low = low_in_buf + vec_count_size;
-            dwarf::FuncDebugInfo {
-                name: uf.name.clone(),
-                low_pc: abs_low,
-                body_len: *body_len,
-                decl_span: uf.decl_span,
-                lines: lines
-                    .into_iter()
-                    .map(|(off, span)| (abs_low + off, span))
-                    .collect(),
-            }
-        })
-        .collect();
+    let funcs = debug_functions.into_debug_info(vec_count_size)?;
     for (sect_name, bytes) in
         dwarf::build_dwarf(&funcs, code_content_size, filename, &debug_sources)?
     {
@@ -1943,6 +1928,30 @@ fn codegen_inner(
         runtime_functions: runtime_values::signatures(ta),
         runtime_globals: runtime_values::global_types(ta),
     })
+}
+
+/// Backtrace names for functions without a source name: the start function,
+/// which runs a module's top-level statements, and an unnamed closure. Angle
+/// brackets keep them apart from any source identifier.
+const TOP_LEVEL_FRAME_NAME: &str = "<top level>";
+const ANONYMOUS_FRAME_NAME: &str = "<anonymous>";
+
+/// The backtrace name and declaration span of a closure: its own name when it is
+/// a named function expression or a nested function declaration, otherwise
+/// [`ANONYMOUS_FRAME_NAME`] at the closure expression.
+fn closure_frame(
+    ta: &TypedAst,
+    meta: &closures::ClosureMeta,
+) -> Result<(String, crate::Span), CompilerFailure> {
+    let name = meta
+        .self_name
+        .as_ref()
+        .or_else(|| ta.nested_function_names.get(&meta.expr_id));
+    if let Some(name) = name {
+        return Ok((name.name.clone(), name.span));
+    }
+    let span = ta.try_expr(meta.expr_id).map_err(arena_failure)?.span;
+    Ok((ANONYMOUS_FRAME_NAME.to_string(), span))
 }
 
 struct UserFunc {
@@ -3135,8 +3144,8 @@ function main(): string {
         let result = pollster::block_on(main.call_async(&mut store, ()));
         // Same uncaught-exception reshaping `dispatch_main_async` applies, so a
         // throw renders with its stashed backtrace like a trap does.
-        let err = crate::runtime::exec::map_uncaught_exception(&mut store, result)
-            .expect_err("expected main() to trap or throw");
+        let err = result.expect_err("expected main() to trap or throw");
+        let err = crate::runtime::exec::uncaught_error(&mut store, err);
         let (sources, file) = crate::Sources::single("script.subm", source).unwrap();
         crate::render_backtrace(&err, &sources, file, crate::BacktraceMode::Full)
             .expect("backtrace empty — was wasm_backtrace_details enabled?")
@@ -4907,9 +4916,13 @@ function main(): number { return counter + max_iterations; }"#,
     }
 
     #[test]
-    fn dwarf_skips_compiler_internal_start_function() {
+    fn dwarf_names_the_start_function_as_the_top_level() {
         let bytes = compile("function main(): void { }");
         let strs = custom_section(&bytes, ".debug_str").unwrap();
+        assert!(
+            strs.windows(11).any(|w| w == b"<top level>"),
+            "expected `<top level>` in .debug_str, got {strs:?}",
+        );
         assert!(
             !strs.windows(6).any(|w| w == b"_start"),
             "_start should not appear in .debug_str",
@@ -5118,6 +5131,68 @@ function main(): void { middle(); }
 ";
         let dump = run_main_expecting_error(src);
         insta::assert_snapshot!(dump);
+    }
+
+    #[test]
+    fn closure_method_accessor_and_constructor_frames_are_named() {
+        let src = "\
+class Refused { constructor() { assert(false, \"x\"); } }
+class Holder {
+  get refused(): Refused { return new Refused(); }
+  read(): Refused { return this.refused; }
+}
+function main(): void {
+  const named = function outer(): void {
+    [1].forEach((n: number): void => { new Holder().read(); });
+  };
+  named();
+}
+";
+        let dump = run_main_expecting_error(src);
+        insta::assert_snapshot!(dump);
+    }
+
+    #[test]
+    fn implicit_constructor_frame_points_at_its_own_class() {
+        // `Derived`'s init has no rows of its own before it calls `Base`'s; the
+        // engine looks lines up by address alone, so without a row at its start
+        // the frame would show the line of the function written before it.
+        let src = "\
+class Base {
+  constructor(n: number) { assert(n > 5, \"small\"); }
+  describe(): string { return \"unrelated\"; }
+}
+class Derived extends Base {}
+function main(): void { new Derived(1); }
+";
+        let dump = run_main_expecting_error(src);
+        assert!(
+            dump.contains("  at new Derived (script.subm:5:7)  [caller]\n"),
+            "{dump}"
+        );
+    }
+
+    #[test]
+    fn a_method_named_like_an_accessor_is_not_framed_as_one() {
+        let src = "\
+class C { \"get x\"(): void { assert(false, \"x\"); } }
+function main(): void { new C()[\"get x\"](); }
+";
+        let dump = run_main_expecting_error(src);
+        assert!(dump.contains("  at C.get x (script.subm:1:"), "{dump}");
+    }
+
+    #[test]
+    fn a_method_key_with_control_characters_compiles_and_frames_escaped() {
+        let src = "\
+class C { \"a\\u0000\\nb\"(): void { assert(false, \"x\"); } }
+function main(): void { new C()[\"a\\u0000\\nb\"](); }
+";
+        let dump = run_main_expecting_error(src);
+        assert!(
+            dump.contains("  at C.a\\u{0}\\nb (script.subm:1:"),
+            "{dump}"
+        );
     }
 
     #[test]

@@ -21,7 +21,7 @@ pub mod vfs;
 pub mod watchdog;
 
 pub use disk_quota::{DiskQuota, Holder, OpenFileGuard, QuotaCharge, QuotaExceeded};
-pub use exec::{RunResult, dispatch_main_async};
+pub use exec::{RunResult, dispatch_main_async, instantiate_program_async};
 pub use host::{
     INTERNAL_MODULE_NAME, NUMBER_MODULE_NAME, host_package_declarations,
     install_async as install_runtime_async,
@@ -268,9 +268,7 @@ fn name_the_failing_initializer(
         Ok(instance) => return Ok(instance),
         Err(err) => err,
     };
-    let Err(recovered) = exec::map_uncaught_exception(store, Err(err)) else {
-        unreachable!("mapping an Err never yields Ok")
-    };
+    let recovered = exec::uncaught_error(store, err);
     let Some(thrown) = recovered.downcast_ref::<crate::backtrace::ThrownError>() else {
         return Err(recovered);
     };
@@ -457,8 +455,8 @@ impl RuntimeConfig {
         let module = Module::new(&engine, wasm_bytes)?;
         let mut linker = Linker::<StoreData>::new(&engine);
         install_runtime_async(&mut linker, &mut store).await?;
-        let inst = linker.instantiate_async(&mut store, &module).await?;
         let _watchdog = self.arm_timeout(&engine);
+        let inst = instantiate_program_async(&linker, &mut store, &module).await?;
         let value = dispatch_main_async(&mut store, &inst).await?;
         let captured = buf.lock().unwrap().clone();
         let console = String::from_utf8(captured)

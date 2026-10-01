@@ -1,6 +1,6 @@
-//! `main` invocation and JSON-encoded result capture.
+//! Program instantiation, `main` invocation and JSON-encoded result capture.
 
-use wasmtime::{ExnRef, Instance, Rooted, Store, Val};
+use wasmtime::{ExnRef, Instance, Linker, Module, Rooted, Store, Val};
 
 use crate::runtime::{StoreData, read_submilli_string};
 
@@ -8,6 +8,19 @@ use crate::runtime::{StoreData, read_submilli_string};
 pub struct RunResult {
     pub value: Option<String>,
     pub console: String,
+}
+
+/// Instantiates the program's module. A script's top-level statements are its
+/// Wasm start function, so they run here rather than under
+/// [`dispatch_main_async`]. Arm the execution deadline before this call, and
+/// treat its error as `main`'s: it is shaped the same way.
+pub async fn instantiate_program_async(
+    linker: &Linker<StoreData>,
+    store: &mut Store<StoreData>,
+    module: &Module,
+) -> wasmtime::Result<Instance> {
+    let outcome = linker.instantiate_async(&mut *store, module).await;
+    outcome.map_err(|err| uncaught_error(store, err))
 }
 
 pub async fn dispatch_main_async(
@@ -26,47 +39,44 @@ pub async fn dispatch_main_async(
     if let Some(to_output) = instance.get_func(&mut *store, "__main_output") {
         let mut out = [Val::null_any_ref()];
         let r = to_output.call_async(&mut *store, &[], &mut out).await;
-        map_uncaught_exception(&mut *store, r)?;
+        r.map_err(|err| uncaught_error(store, err))?;
         Ok(Some(read_main_string(&mut *store, &out)?))
     } else {
         let r = main.call_async(&mut *store, &[], &mut []).await;
-        map_uncaught_exception(&mut *store, r)?;
+        r.map_err(|err| uncaught_error(store, err))?;
         Ok(None)
     }
 }
 
-/// An uncaught Submilli `throw` surfaces from `main.call` as wasmtime's opaque
+/// An uncaught Submilli `throw` surfaces from a guest call as wasmtime's opaque
 /// `ThrownException` (Display: "thrown Wasm exception") — the real message lives
 /// only in the pending exception on the store. Pull the thrown `Error`'s
 /// `name`/`message` out and re-shape the error around them, so the runtime and
 /// CLI render something actionable instead of the placeholder.
-pub(crate) fn map_uncaught_exception(
+pub(crate) fn uncaught_error(
     store: &mut Store<StoreData>,
-    result: wasmtime::Result<()>,
-) -> wasmtime::Result<()> {
-    let Err(err) = result else {
-        return Ok(());
-    };
+    err: wasmtime::Error,
+) -> wasmtime::Error {
     if err.is::<super::host::FatalHostError>() || super::limits::is_memory_exhausted(&err) {
         // A pending guest exception must not replace the actual fatal cause.
         // Memory exhaustion is named; a fatal host error passes unchanged.
         store.take_pending_exception();
-        return Err(super::limits::name_memory_exhaustion(err));
+        return super::limits::name_memory_exhaustion(err);
     }
     let Some(exn) = store.take_pending_exception() else {
-        return Err(err);
+        return err;
     };
     let Some(text) = read_thrown_error_text(store, exn) else {
-        return Err(err);
+        return err;
     };
     // The engine captures the throw-site backtrace into the exception and
     // attaches it to the escaped error (host throws get the host-call site);
     // re-wrap it so the CLI renders a source backtrace like a trap.
     let backtrace = err.downcast_ref::<wasmtime::WasmBacktrace>().cloned();
-    Err(wasmtime::Error::new(crate::backtrace::ThrownError {
+    wasmtime::Error::new(crate::backtrace::ThrownError {
         message: text,
         backtrace,
-    }))
+    })
 }
 
 /// Reads `"name: message"` from a thrown exception's `$Error` payload, plus a
@@ -536,6 +546,51 @@ mod tests {
         assert!(
             !rendered.contains("fields:"),
             "a plain Error has no extra data fields: {rendered}"
+        );
+    }
+
+    #[tokio::test]
+    async fn uncaught_top_level_throw_renders_its_statement() {
+        // Top-level statements run in the start function, during instantiation.
+        let src = "const n: number = 1;\nif (n === 1) { throw new Error(\"boom\"); }\nfunction main(): void {}";
+        let bytes = crate::codegen::tests::compile(src);
+        let err = RuntimeConfig::default()
+            .run(&bytes)
+            .await
+            .expect_err("uncaught top-level throw");
+        let (sources, file) = crate::Sources::single("script.subm", src).unwrap();
+        let rendered =
+            crate::backtrace::render(&err, &sources, file, crate::backtrace::BacktraceMode::Full)
+                .expect("a top-level throw should render a backtrace");
+        assert!(
+            rendered.starts_with(
+                "error: Error: boom\n  at <top level> (script.subm:2:32)  [thrown here]\n"
+            ),
+            "{rendered}"
+        );
+        assert!(
+            rendered.contains("2 | if (n === 1) { throw new Error(\"boom\"); }"),
+            "source context: {rendered}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_top_level_statement_is_the_entry_frame_below_its_callee() {
+        let src = "function refuse(): number { throw new Error(\"boom\"); }\nconst n: number = refuse();\nfunction main(): void {}";
+        let bytes = crate::codegen::tests::compile(src);
+        let err = RuntimeConfig::default()
+            .run(&bytes)
+            .await
+            .expect_err("uncaught top-level throw");
+        let (sources, file) = crate::Sources::single("script.subm", src).unwrap();
+        let rendered =
+            crate::backtrace::render(&err, &sources, file, crate::backtrace::BacktraceMode::Full)
+                .expect("a top-level throw should render a backtrace");
+        assert!(
+            rendered.contains("  at refuse (script.subm:1:")
+                && rendered.contains("[thrown here]")
+                && rendered.contains("  at <top level> (script.subm:2:19)  [entry]\n"),
+            "{rendered}"
         );
     }
 

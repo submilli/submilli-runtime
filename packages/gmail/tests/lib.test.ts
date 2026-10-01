@@ -194,6 +194,35 @@ function main(): void {
     assert(draftRecipients(stored).join(" ") === "lee@example.com kim@example.com", "header addresses are read without them");
     assert(replyRecipients(stored, true).to.join(" ") === "dana@example.com lee@example.com kim@example.com", "folded headers still parse");
 
+    label("an address is read in lowercase, without the dots that end its domain");
+    const spelled: Header[] = [
+        { name: "From", value: "Dana <Dana@Example.COM>" },
+        { name: "To", value: "DANA@example.com., Lee <lee@EXAMPLE.com..>, dana@example.com" },
+    ];
+    assert(draftRecipients(spelled).join(" ") === "dana@example.com lee@example.com", "spellings of one mailbox are one recipient");
+    assert(replyRecipients(spelled, true).to.join(" ") === "dana@example.com lee@example.com", "a reply reads the same spelling");
+    assert(headerFailure("dana@.") === "invalid_recipient", "a domain of dots alone is refused");
+    assert(sendFailure(unsendable(["dana@..."], [], [])).startsWith("invalid_recipient: recipient field to "), "an entry without a domain is refused");
+    assert(sendFailure(unsendable(["Dana@Example.com."], [], [])).startsWith("invalid_header: "), "other spellings are accepted");
+
+    label("from is one bare address");
+    for (const from of ["Dana <dana@example.com>", "dana@example.com, lee@example.com", "dana@example.com\r\nBcc: lee@example.com", "dana", ""]) {
+        assert(sendFailure(sentFrom(from)).startsWith("invalid_sender: "), "from refused: " + escaped(from));
+        assert(draftFailure(sentFrom(from)).startsWith("invalid_sender: "), "draft from refused: " + escaped(from));
+    }
+    assert(sendFailure(sentFrom(" Alias@Example.com ")).startsWith("invalid_header: "), "a bare address is accepted");
+
+    label("an attachment filename cannot end its quoted string");
+    for (const filename of ['report".pdf', "report\\", 'a"; name="b', "report\r\n.pdf"]) {
+        const input: EmailInput = { to: ["dana@example.com"], subject: "s", text: "", attachments: [{ path: "/absent.pdf", filename: filename }] };
+        const failure = sendFailure(input);
+        assert(failure.startsWith("invalid_attachment_filename: ") || failure.startsWith("invalid_header: "), "filename refused: " + escaped(filename) + ", got " + failure);
+    }
+    const quotedPath: EmailInput = { to: ["dana@example.com"], subject: "s", text: "", attachments: [{ path: '/re"port.pdf' }] };
+    assert(sendFailure(quotedPath).startsWith("invalid_attachment_filename: "), "a filename taken from the path is held to the same rule");
+    const plainName: EmailInput = { to: ["dana@example.com"], subject: "s", text: "", attachments: [{ path: "/absent.pdf", filename: "report (final).pdf" }] };
+    assert(sendFailure(plainName).startsWith("attachment_not_found: "), "an ordinary filename reaches the file");
+
     label("many recipients are deduplicated in first-seen order");
     const many: string[] = [];
     for (let i = 0; i < 300; i += 1) many.push("user" + (i % 200).toString() + "@example.com");
@@ -220,6 +249,10 @@ function main(): void {
 // stops before a token is read or a request is sent.
 function unsendable(to: string[], cc: string[], bcc: string[]): EmailInput {
     return { to: to, cc: cc, bcc: bcc, subject: "unit test\r\nnever sent", text: "" };
+}
+
+function sentFrom(from: string): EmailInput {
+    return { to: ["dana@example.com"], subject: "unit test\r\nnever sent", text: "", from: from };
 }
 
 // Written as comparisons so it does not repeat the pattern the package matches with. `@` is

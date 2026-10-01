@@ -65,6 +65,8 @@ struct ClassLayout {
     generics: Vec<String>,
     mangled: MangledName,
     name: String,
+    /// The class name's span, the declaration a constructor frame points at.
+    name_span: crate::Span,
     parent: Option<MangledName>,
     /// Full field list (inherited prefix then own), in object payload order.
     fields: Vec<FieldLayout>,
@@ -163,6 +165,9 @@ struct FieldLayout {
 #[derive(Clone)]
 struct OwnMethod {
     name: String,
+    name_span: crate::Span,
+    /// The backtrace name: `C.m`, or `get C.x` / `set C.x` for an accessor.
+    frame_name: String,
     params: Vec<crate::TypedParam>,
     body: crate::StmtId,
     return_type: crate::Type,
@@ -256,9 +261,13 @@ impl ClassPlan {
             // Accessors lower to internal getter/setter methods here in codegen —
             // they are not methods in the typed AST or `PackageDeclaration`.
             let synth_methods = accessor_methods(decl);
-            let mut sorted_methods: Vec<&crate::TypedClassMethod> =
-                decl.methods.iter().chain(synth_methods.iter()).collect();
-            sorted_methods.sort_by(|a, b| a.name.name.cmp(&b.name.name));
+            let mut sorted_methods: Vec<(&crate::TypedClassMethod, String)> = decl
+                .methods
+                .iter()
+                .map(|m| (m, format!("{}.{}", decl.name.name, m.name.name)))
+                .chain(synth_methods.iter().map(|(m, frame)| (m, frame.clone())))
+                .collect();
+            sorted_methods.sort_by(|(a, _), (b, _)| a.name.name.cmp(&b.name.name));
 
             inherited_fields.insert(
                 mangled.clone(),
@@ -285,7 +294,7 @@ impl ClassPlan {
             }
 
             let mut methods: Vec<SlotDraft> = parent_methods;
-            for m in &sorted_methods {
+            for (m, _) in &sorted_methods {
                 let param_tys: Vec<crate::Type> = m.params.iter().map(|p| p.ty.clone()).collect();
                 let argument_metadata = super::call_arguments::typed_metadata(&m.params)?;
                 if let Some(slot) = methods.iter_mut().find(|s| s.name == m.name.name) {
@@ -308,9 +317,11 @@ impl ClassPlan {
                 }
             }
             let own_methods: Vec<OwnMethod> = sorted_methods
-                .iter()
-                .map(|m| OwnMethod {
+                .into_iter()
+                .map(|(m, frame_name)| OwnMethod {
                     name: m.name.name.clone(),
+                    name_span: m.name.span,
+                    frame_name,
                     params: m.params.clone(),
                     body: m.body,
                     return_type: m.return_type.clone(),
@@ -368,6 +379,7 @@ impl ClassPlan {
                     .unwrap_or_default(),
                 mangled: mangled.clone(),
                 name: decl.name.name.clone(),
+                name_span: decl.name.span,
                 parent: decl.extends.clone(),
                 fields,
                 field_setup,
@@ -915,6 +927,7 @@ impl ClassPlan {
     pub fn emit_bodies(
         &self,
         code: &mut CodeSection,
+        debug: &mut super::dwarf::DebugFunctions,
         ctx: &crate::codegen::CodegenCtx<'_>,
     ) -> Result<(), crate::compiler_error::CompilerFailure> {
         if self.classes.is_empty() {
@@ -928,9 +941,25 @@ impl ClassPlan {
         }
         for class in &self.classes {
             code.function(&self.emit_ctor_body(class, ctx)?);
-            code.function(&self.emit_ctor_init(class, ctx)?);
+            // The constructor body and field initializers run in the init fn, so
+            // that is the frame a failure in them names.
+            debug.write(
+                code,
+                self.emit_ctor_init(class, ctx)?,
+                format!("new {}", class.name),
+                class.name_span,
+            )?;
             for method in &class.own_methods {
-                code.function(&self.emit_method_body(class, method, ctx)?);
+                if method.generic {
+                    code.function(&stub_body());
+                    continue;
+                }
+                debug.write(
+                    code,
+                    self.emit_method_body(class, method, ctx)?,
+                    method.frame_name.clone(),
+                    method.name_span,
+                )?;
             }
             for &i in &class.adapter_slots {
                 code.function(&self.emit_method_adapter_body(
@@ -1119,9 +1148,10 @@ impl ClassPlan {
     }
 
     /// Method body: bind `this` (`local.get 0 ; ref.cast (ref $Foo)` — the vtable
-    /// ABI's self param is `(ref $Object)`), then run the typed body. A method
-    /// with its own type parameters is rejected by the typechecker, so its
-    /// stub body is unreachable defence rather than pending work.
+    /// ABI's self param is `(ref $Object)`), then run the typed body. Returns the
+    /// body's line rows with it. A method with its own type parameters is
+    /// rejected by the typechecker, so [`Self::emit_bodies`] writes an
+    /// unreachable stub in its place as defence rather than pending work.
     ///
     /// The function's Wasm signature is the slot's — the originating ancestor's,
     /// which an override's own annotations may differ from in either direction:
@@ -1135,12 +1165,9 @@ impl ClassPlan {
         class: &ClassLayout,
         method: &OwnMethod,
         ctx: &crate::codegen::CodegenCtx<'_>,
-    ) -> Result<Function, crate::compiler_error::CompilerFailure> {
+    ) -> Result<(Function, Vec<(u64, crate::Span)>), crate::compiler_error::CompilerFailure> {
         use crate::codegen::function_emitter::{FunctionEmitter, ReturnTarget, stmt};
 
-        if method.generic {
-            return Ok(stub_body());
-        }
         let object_idx = ctx
             .symbols
             .intrinsic_type_indices()
@@ -1185,7 +1212,7 @@ impl ClassPlan {
             // Keep the function statically total even when control flow can't be proven to terminate.
             emitter.instruction(Instruction::Unreachable);
         }
-        Ok(emitter.build())
+        Ok(emitter.build_with_lines())
     }
 
     /// Entry constructor (`new Foo(...)`): `struct.new $Foo` (header globals +
@@ -1348,12 +1375,12 @@ impl ClassPlan {
     /// initializes fields on an already-allocated instance. `super(...)` lowers to
     /// a direct call of the parent's init fn (see [`expr`] codegen). A class with
     /// no declared constructor but a parent (implicit constructor) forwards all
-    /// params to the parent init.
+    /// params to the parent init. Returns the body's line rows with it.
     fn emit_ctor_init(
         &self,
         class: &ClassLayout,
         ctx: &crate::codegen::CodegenCtx<'_>,
-    ) -> Result<Function, crate::compiler_error::CompilerFailure> {
+    ) -> Result<(Function, Vec<(u64, crate::Span)>), crate::compiler_error::CompilerFailure> {
         use crate::codegen::function_emitter::{FunctionEmitter, cast, stmt};
 
         let object_idx = ctx
@@ -1433,7 +1460,7 @@ impl ClassPlan {
                 &class.mangled,
             )?;
         }
-        Ok(emitter.build())
+        Ok(emitter.build_with_lines())
     }
 
     /// `(export name, func index)` pairs for every class function a cross-package
@@ -1678,21 +1705,30 @@ pub(crate) fn shadows_inherited_field<'a>(
 /// dispatch) but exist only inside codegen — never in the typed AST or
 /// `PackageDeclaration`. Their names (`get <p>` / `set <p>`) are the runtime ABI
 /// key under which the getter/setter closure is stored in the object payload.
-fn accessor_methods(decl: &TypedClassDecl) -> Vec<crate::TypedClassMethod> {
+///
+/// Each comes with its backtrace name, `get C.x` / `set C.x`. It is built here
+/// rather than parsed back out of the internal name, which a method with a
+/// string-literal key such as `"get x"()` can share.
+fn accessor_methods(decl: &TypedClassDecl) -> Vec<(crate::TypedClassMethod, String)> {
     decl.accessors
         .iter()
         .map(|acc| {
-            let (name, params, return_type) = match acc {
-                crate::TypedClassAccessor::Getter { name, ret_ty, .. } => {
-                    (accessor_getter_name(&name.name), Vec::new(), ret_ty.clone())
-                }
+            let (kind, name, params, return_type) = match acc {
+                crate::TypedClassAccessor::Getter { name, ret_ty, .. } => (
+                    "get",
+                    accessor_getter_name(&name.name),
+                    Vec::new(),
+                    ret_ty.clone(),
+                ),
                 crate::TypedClassAccessor::Setter { name, param, .. } => (
+                    "set",
                     accessor_setter_name(&name.name),
                     vec![param.clone()],
                     crate::Type::Void,
                 ),
             };
-            crate::TypedClassMethod {
+            let frame_name = format!("{kind} {}.{}", decl.name.name, acc.name().name);
+            let method = crate::TypedClassMethod {
                 name: crate::Ident {
                     name,
                     span: acc.name().span,
@@ -1703,7 +1739,8 @@ fn accessor_methods(decl: &TypedClassDecl) -> Vec<crate::TypedClassMethod> {
                 body: acc.body(),
                 visibility: acc.visibility(),
                 doc: None,
-            }
+            };
+            (method, frame_name)
         })
         .collect()
 }
@@ -2311,6 +2348,7 @@ mod tests {
             generics: Vec::new(),
             mangled: crate::mangle::prelude("ErrorWitness"),
             name: "ErrorWitness".to_string(),
+            name_span: crate::Span::at(crate::FileId(0)),
             parent: None,
             fields: vec![
                 FieldLayout {

@@ -1,0 +1,16 @@
+kind: blueprint
+name: slack-user-user-ids-test
+packages:
+  - '@submilli/slack-user'
+default: deny
+permissions:
+  main:
+    - capability: slack.com/user/sendDirectMessage
+      filter: userId glob "UALLOWED*"
+      action: allow
+    - capability: slack.com/user/sendGroupDirectMessage
+      filter: not (userIds contains "UBLOCKED")
+      action: allow
+  # Deliberate sentinel: an allowed call must reach secrets.get, which is
+  # denied here before a token can be read or a request can be sent.
+  '@submilli/slack-user': []

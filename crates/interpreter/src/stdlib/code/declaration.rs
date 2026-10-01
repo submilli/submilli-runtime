@@ -86,7 +86,7 @@ pub fn package_declaration() -> PackageDeclaration {
             ],
             false,
         ),
-        "/** Regex search, ignoring hidden and ignored paths. Modes: matches (default), files, counts. Root defaults to /; context 0; caseSensitive true; limit 1000. Requires fs.list, fs.stat and fs.read, including ignore files. */",
+        "/** Regex search, ignoring hidden and ignored paths. Modes: matches (default), files, counts. Root defaults to /; context 0; caseSensitive true; limit 1000. Requires fs.list, fs.stat and fs.read, including ignore files; those above the root are skipped where fs.read is denied. */",
     );
     let entry = object(
         &[
@@ -113,7 +113,7 @@ pub fn package_declaration() -> PackageDeclaration {
         "tree",
         vec![string("path"), number("depth", 3.0)],
         listing,
-        "/** Ignored/hidden paths omitted; symlinks listed but never traversed. Depth defaults to 3; maximum 1000 entries. Requires fs.list, fs.stat and fs.read for ignore files. */",
+        "/** Ignored/hidden paths omitted; symlinks listed but never traversed. Depth defaults to 3; maximum 1000 entries. Requires fs.list, fs.stat and fs.read for ignore files; those above the root are skipped where fs.read is denied. */",
     );
     insert(
         &mut defs,

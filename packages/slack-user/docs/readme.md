@@ -25,7 +25,9 @@ search identifiers. The write surface is `sendMessage()`,
 `sendDirectMessage()`, `sendGroupDirectMessage()`, and `addReaction()`.
 
 Credentials are supplied internally. Never request, accept, or pass a Slack
-token in package calls. Failures throw `SlackError` with Slack's
+token in package calls. A direct-message recipient is one Slack user ID such
+as `U012ABCDEF`; anything else throws `SlackError` with code
+`invalid_user_id`. Failures throw `SlackError` with Slack's
 machine-readable `code` and HTTP `status`. The package does not sleep or retry
 on rate limits; retry only when the surrounding operation remains timely and
 safe.

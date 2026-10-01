@@ -14,7 +14,7 @@ use submilli_build::{
     write_package_artifact_with_docs_and_sources,
 };
 use submilli_server::blueprint::InMemoryBlueprintStore;
-use submilli_server::{AppState, ServerConfig, app};
+use submilli_server::{AppState, RuntimeConfig, ServerConfig, app};
 use tower::ServiceExt;
 use uuid::Uuid;
 
@@ -37,6 +37,14 @@ fn router_with_package_store(package_store_root: PathBuf) -> Router {
 }
 
 fn router_with_packages(package_store_root: PathBuf, packages: &[&str]) -> Router {
+    router_with_packages_and_runtime(package_store_root, packages, RuntimeConfig::default())
+}
+
+fn router_with_packages_and_runtime(
+    package_store_root: PathBuf,
+    packages: &[&str],
+    runtime: RuntimeConfig,
+) -> Router {
     let blueprints = Arc::new(InMemoryBlueprintStore::seed([Blueprint {
         name: BLUEPRINT_NAME.into(),
         packages: packages.iter().map(ToString::to_string).collect(),
@@ -45,6 +53,7 @@ fn router_with_packages(package_store_root: PathBuf, packages: &[&str]) -> Route
     let config = ServerConfig {
         blueprints: Some(blueprints),
         package_store_root: Some(package_store_root),
+        runtime,
         ..ServerConfig::default()
     };
     app(AppState::new(config).expect("build AppState"))
@@ -129,32 +138,51 @@ async fn apply_blueprint_on(router: &Router, yaml: &str) -> (StatusCode, Value) 
 }
 
 fn write_acme_util_package(store_root: &Path) {
-    const SOURCE: &str = "export function answer(): number { return 41; }\nexport function plusOne(n: number): number { return n + 1; }\nexport function explode(): void { assert(false, \"pkg boom\"); }";
-    let package = compile_package(
-        "@acme/util",
-        ModulePath::from("lib"),
-        &[PackageSourceModule {
-            path: ModulePath::from("lib"),
-            source: SOURCE,
-        }],
-        &[],
-    )
-    .expect("compile synthetic package");
+    write_acme_util_package_with_source(
+        store_root,
+        "export function answer(): number { return 41; }\nexport function plusOne(n: number): number { return n + 1; }\nexport function explode(): void { assert(false, \"pkg boom\"); }",
+    );
+}
+
+fn write_acme_util_package_with_source(store_root: &Path, source: &str) {
+    write_acme_util_package_compiled_as(store_root, "@acme/util", source);
+}
+
+/// Installs `source` as `@acme/util` with a module compiled under
+/// `module_name`; a different name makes a module that declares itself as
+/// another package, which the store's metadata checks do not see.
+fn write_acme_util_package_compiled_as(store_root: &Path, module_name: &str, source: &str) {
+    let compile = |name: &str| {
+        compile_package(
+            name,
+            ModulePath::from("lib"),
+            &[PackageSourceModule {
+                path: ModulePath::from("lib"),
+                source,
+            }],
+            &[],
+        )
+        .expect("compile synthetic package")
+    };
+    // Only the Wasm comes from `module_name`; everything the store checks
+    // describes `@acme/util`.
+    let installed_module = compile(module_name);
+    let declared_as_util = compile("@acme/util");
     let dir = store_root.join("@acme").join("util");
     write_package_artifact_with_docs_and_sources(
         &dir,
-        &package.wasm,
-        &package.type_info,
+        &installed_module.wasm,
+        &declared_as_util.type_info,
         &submilli_build::derive_capability_schema(
-            &package.declaration,
-            &package.required_capabilities,
+            &declared_as_util.declaration,
+            &declared_as_util.required_capabilities,
         ),
-        &package.declaration,
+        &declared_as_util.declaration,
         &ArtifactMetadata::new("@acme/util", "0.0.0-test", Vec::new()),
         "",
         &[ArtifactSource {
             path: ModulePath::from("lib"),
-            text: SOURCE.to_string(),
+            text: source.to_string(),
         }],
     )
     .expect("write synthetic package artifact");
@@ -318,12 +346,124 @@ async fn package_error_renders_package_source_context() {
     assert_eq!(body["result"], Value::Null);
     let message = body["error"]["message"].as_str().unwrap_or_default();
     assert!(message.contains("error: Error: pkg boom"), "got: {body:#}");
-    assert!(message.contains("lib:"), "missing package frame: {body:#}");
+    assert!(
+        message.contains("(@acme/util/lib:"),
+        "missing package frame: {body:#}"
+    );
     assert!(
         message.contains("export function explode(): void"),
         "missing package source: {body:#}",
     );
     assert!(message.contains("^"), "missing caret: {body:#}");
+}
+
+/// A package's top-level statements run when it is installed, before the
+/// program's: their failure is a runtime error at the package's statement, not
+/// an internal failure.
+#[tokio::test]
+async fn package_top_level_throw_is_a_runtime_error_at_its_statement() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let store_root = tmp.path().join("packages");
+    write_acme_util_package_with_source(
+        &store_root,
+        "const table: number[] = [1];\nconst picked: number = table[7];\nexport function answer(): number { return picked; }",
+    );
+    let router = router_with_package_store(store_root);
+    let code = r#"
+        import { answer } from "@acme/util";
+        function main(): number { return answer(); }
+    "#;
+
+    let (status, body) = execute_on(&router, code).await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["error"]["kind"], "runtime_error", "got: {body:#}");
+    let message = body["error"]["message"].as_str().unwrap_or_default();
+    assert!(
+        message.starts_with(
+            "error: package `@acme/util` failed to initialize: RangeError: index out of range\n  at <top level> (@acme/util/lib:2:"
+        ),
+        "got: {body:#}"
+    );
+    assert!(
+        message.contains("2 | const picked: number = table[7];"),
+        "missing package source: {body:#}"
+    );
+    assert_serves_a_program_without_the_package(&router).await;
+}
+
+/// A package install that fails for a reason other than its top-level
+/// statements is the server's failure, not the program's.
+#[tokio::test]
+async fn package_that_fails_to_link_is_an_internal_failure() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let store_root = tmp.path().join("packages");
+    write_acme_util_package_compiled_as(
+        &store_root,
+        "@acme/other",
+        "export function answer(): number { return 41; }",
+    );
+    let router = router_with_package_store(store_root);
+    let code = r#"
+        import { answer } from "@acme/util";
+        function main(): number { return answer(); }
+    "#;
+
+    let (status, body) = execute_on(&router, code).await;
+
+    assert_eq!(status, StatusCode::OK);
+    let message = body["error"]["message"].as_str().unwrap_or_default();
+    assert!(
+        message.starts_with("internal: install packages failed:"),
+        "got: {body:#}"
+    );
+    assert_serves_a_program_without_the_package(&router).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn package_top_level_statements_are_bounded_by_the_execution_timeout() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let store_root = tmp.path().join("packages");
+    write_acme_util_package_with_source(
+        &store_root,
+        "let spins = 0;\nwhile (true) { spins = spins + 1; }\nexport function answer(): number { return spins; }",
+    );
+    let router = router_with_packages_and_runtime(
+        store_root,
+        &["@acme/util"],
+        RuntimeConfig {
+            fuel: u64::MAX,
+            timeout: Some(std::time::Duration::from_millis(500)),
+            ..RuntimeConfig::default()
+        },
+    );
+    let code = r#"
+        import { answer } from "@acme/util";
+        function main(): number { return answer(); }
+    "#;
+
+    let (status, body) = tokio::time::timeout(
+        std::time::Duration::from_secs(15),
+        execute_on(&router, code),
+    )
+    .await
+    .expect("the package's top-level loop must be interrupted");
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["error"]["kind"], "timeout", "got: {body:#}");
+    let message = body["error"]["message"].as_str().unwrap_or_default();
+    assert!(
+        message.contains("at <top level> (@acme/util/lib:2:"),
+        "got: {body:#}"
+    );
+    assert_serves_a_program_without_the_package(&router).await;
+}
+
+async fn assert_serves_a_program_without_the_package(router: &Router) {
+    let (status, body) = execute_on(router, "function main(): number { return 42; }").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["error"], Value::Null, "got: {body:#}");
+    assert_eq!(body["result"], "42", "got: {body:#}");
 }
 
 #[tokio::test]
@@ -785,7 +925,7 @@ async fn configured_execution_timeout_interrupts_loop_without_expiring_early() {
     }]));
     let router = app(AppState::new(ServerConfig {
         blueprints: Some(blueprints),
-        runtime: submilli_server::RuntimeConfig {
+        runtime: RuntimeConfig {
             timeout: Some(Duration::from_secs(1)),
             ..Default::default()
         },

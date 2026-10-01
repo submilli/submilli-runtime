@@ -163,7 +163,7 @@ Names match exactly: there is no `fs.*`, so allowing `fs.write` doesn't allow
 `fs.mkdir`, and the program learns that on its first call:
 
 ```text
-error: PermissionDeniedError: permission denied: caller=main capability=fs.mkdir: policy denied fs.mkdir for main.
+error: PermissionDeniedError: permission denied: caller=main capability=fs.mkdir: policy denied fs.mkdir on /notes for main.
 ```
 
 Filters compare a field with `==`, `!=`, `<`, `<=`, `>`, `>=`, test a pattern

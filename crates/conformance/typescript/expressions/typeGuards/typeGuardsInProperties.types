@@ -32,7 +32,7 @@ class C1 {
 >    : ^^^^^^^^^^^^^^^
 
     // Inside public accessor getter
-    get pp3() {
+    get pp3(): string | number {
 >pp3 : string | number
 >    : ^^^^^^^^^^^^^^^
 

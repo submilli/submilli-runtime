@@ -1,5 +1,1 @@
 types: 5 of 20 tsc entries compared, 0 differ
-
-errors:
-line 18: tsc TS2377: Constructors for derived classes must contain a 'super' call. (we accept)
-line 19: tsc TS2337: Super calls are not permitted outside constructors or in nested functions inside constructors. (we accept)

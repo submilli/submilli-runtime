@@ -1,0 +1,18 @@
+kind: blueprint
+name: jina-download-path-test
+packages:
+  - '@submilli/jina'
+default: deny
+permissions:
+  main:
+    - capability: jina.ai/read
+      filter: host == "example.com"
+      action: allow
+    - capability: jina.ai/search
+      action: allow
+    - capability: fs.write
+      filter: path glob "/downloads/*" and max_bytes <= 20000000
+      action: allow
+  # Deliberate sentinel: an allowed download must reach secrets.get, which is
+  # denied here before a key can be read or a request can be sent.
+  '@submilli/jina': []

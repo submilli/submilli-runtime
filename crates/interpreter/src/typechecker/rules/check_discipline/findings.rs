@@ -54,7 +54,8 @@ pub(super) struct Findings<'a> {
     /// The capability argument of the body's first `check()`.
     check_anchor: Span,
     checked: &'a Checked,
-    reported_reads: BTreeSet<(Origin, ReadKey)>,
+    /// What each reported read yields.
+    reported_reads: BTreeSet<Origin>,
     diagnostics: Vec<Diagnostic>,
     usages: BTreeMap<(Origin, UsageKind), UsageFinding>,
 }
@@ -71,6 +72,7 @@ impl<'a> Findings<'a> {
         }
     }
 
+    /// A read of `key` of `receiver`, whose getter the caller may supply.
     pub(super) fn report_read(
         &mut self,
         problem: ReadProblem,
@@ -78,42 +80,71 @@ impl<'a> Findings<'a> {
         key: &ReadKey,
         span: Span,
     ) {
-        let origin = receiver.origin.after(std::slice::from_ref(key));
-        let Some(reach) = self.checked.reach(&origin, Access::Read) else {
+        let read = ReportedRead {
+            origin: receiver.origin.after(std::slice::from_ref(key)),
+            part: key.shown_on(&receiver.shown),
+            whole: &receiver.shown,
+            bound: receiver.bound,
+            changes: "the caller can return a different value on each read",
+        };
+        self.report_any_read(problem, read, span);
+    }
+
+    /// A read of a variable the package declares, which the caller's code can
+    /// reassign between reads through the package's own functions.
+    pub(super) fn report_variable_read(
+        &mut self,
+        problem: ReadProblem,
+        variable: &CallerValue,
+        span: Span,
+    ) {
+        let read = ReportedRead {
+            origin: variable.origin.clone(),
+            part: variable.shown.clone(),
+            whole: &variable.shown,
+            bound: variable.bound,
+            changes: "the caller's code can reassign it between reads",
+        };
+        self.report_any_read(problem, read, span);
+    }
+
+    fn report_any_read(&mut self, problem: ReadProblem, read: ReportedRead<'_>, span: Span) {
+        let Some(reach) = self.checked.reach(&read.origin, Access::Read) else {
             return;
         };
-        if !self
-            .reported_reads
-            .insert((receiver.origin.clone(), key.clone()))
-        {
+        if !self.reported_reads.insert(read.origin) {
             return;
         }
         let label = self.label;
-        let part = key.shown_on(&receiver.shown);
-        let whole = &receiver.shown;
+        let ReportedRead {
+            part,
+            whole,
+            bound,
+            changes,
+            ..
+        } = read;
         let diagnostic = match problem {
             ReadProblem::Repeated { first } => warning(
                 span,
                 format!("`{part}` is read more than once in `{label}`, which calls `check()`"),
-                "Read it once into a `const`; the caller can return a different value on each read",
+                &format!("Read it once into a `const`; {changes}"),
                 vec![
                     (first, "first read here".to_string()),
                     (self.check_anchor, "`check()` is called here".to_string()),
                     reach,
                 ],
             ),
-            ReadProblem::InLoop => warning(
-                span,
-                format!("`{part}` is read inside a loop in `{label}`, which calls `check()`"),
-                "Read it once before the loop",
-                vec![
-                    (
-                        receiver.bound,
-                        format!("`{whole}` is bound here, outside the loop"),
-                    ),
-                    reach,
-                ],
-            ),
+            ReadProblem::InLoop => {
+                // Another package's global is bound where it is read.
+                let outside = (bound != span)
+                    .then(|| (bound, format!("`{whole}` is bound here, outside the loop")));
+                warning(
+                    span,
+                    format!("`{part}` is read inside a loop in `{label}`, which calls `check()`"),
+                    "Read it once before the loop",
+                    outside.into_iter().chain([reach]).collect(),
+                )
+            }
             ReadProblem::ElementsRepeated { first } => warning(
                 span,
                 format!(
@@ -180,6 +211,20 @@ impl<'a> Findings<'a> {
                 .map(|finding| finding.diagnostic(label)),
         );
     }
+}
+
+/// A read to report, as messages show it.
+struct ReportedRead<'a> {
+    /// What the read yields.
+    origin: Origin,
+    /// What the read yields, as the source names it.
+    part: String,
+    /// The value read from, or the variable read.
+    whole: &'a str,
+    /// Where `whole` is bound, which a read inside a loop is told to precede.
+    bound: Span,
+    /// Why reading again may yield another value.
+    changes: &'static str,
 }
 
 pub(super) fn warning(

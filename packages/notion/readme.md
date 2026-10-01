@@ -76,3 +76,14 @@ submilli build test -p @submilli/notion
 require `NOTION_LIVE_MUTATIONS=true` and `NOTION_TEST_PARENT_PAGE_ID`. File
 upload coverage requires `NOTION_LIVE_UPLOADS=true` because uploaded file
 objects cannot be revoked.
+
+## Policy tests
+
+The scripts in `tests/policy/` run as a real `main` caller under restricted
+blueprints of the same name, without a token or network:
+
+- `batch-parents.ts` shows that `createPages` and `movePages` are held to a
+  rule on `parentId` as `createPage` and `movePage` are, and that a parent's
+  type is read once.
+
+`cargo test -p submilli --test package_policy` runs them.

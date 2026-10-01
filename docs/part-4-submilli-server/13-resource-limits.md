@@ -81,8 +81,9 @@ sessions' state.
 ## Time
 
 `max_execution_time` stops a run that takes too long. It is in seconds, off by
-default, and starts counting when `main` starts. The run ends with `timeout
-exceeded` (`kind: timeout`), and the program can't catch it.
+default, and starts counting when the program starts: the top-level statements
+of the packages it imports run first, then its own, then `main`. The run ends
+with `timeout exceeded` (`kind: timeout`), and the program can't catch it.
 
 A call the program is waiting on finishes first, so a run can go past the
 limit by as long as that call takes:

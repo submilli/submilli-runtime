@@ -813,6 +813,12 @@ pub struct TypedAst {
     stmts: Vec<TypedStmt>,
     /// Slot definitions only; initializers are `AssignGlobal` in `top_level_statements`.
     pub globals: Vec<TypedGlobal>,
+    /// The globals code can rebind after the package loads that this package
+    /// declares or imports, each with how the source names it: a module `let`,
+    /// its own or one another package exports, and a static field not declared
+    /// `readonly`, as `Class.field`. Every static field is a `GlobalKind::Const`
+    /// global, so `globals` alone cannot tell.
+    pub rebindable_globals: std::collections::BTreeMap<MangledName, String>,
     /// Top-level function declarations. Hoisted — codegen doesn't depend on source order.
     pub functions: Vec<TypedFunction>,
     /// Source-order `_start` body — currently one `AssignGlobal` per global initializer.

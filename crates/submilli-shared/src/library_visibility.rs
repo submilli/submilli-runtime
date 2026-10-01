@@ -11,6 +11,7 @@ pub struct LibraryVisibility {
     code: bool,
     git: bool,
     llm: bool,
+    session: bool,
 }
 
 impl LibraryVisibility {
@@ -22,6 +23,7 @@ impl LibraryVisibility {
             code: true,
             git: false,
             llm: true,
+            session: true,
         }
     }
 
@@ -34,6 +36,10 @@ impl LibraryVisibility {
                 .any(|capability| has_grant(blueprint, capability)),
             git: blueprint.git.is_some(),
             llm: !blueprint.llm.models.is_empty() && has_grant(blueprint, "llm.call"),
+            // A store the agent can only write, or only read, holds nothing it can use.
+            session: ["session.read", "session.write"]
+                .iter()
+                .all(|capability| has_grant(blueprint, capability)),
         }
     }
 
@@ -44,6 +50,7 @@ impl LibraryVisibility {
             "submilli:code" => self.code,
             "submilli:git" => self.git,
             "submilli:llm" => self.llm,
+            "submilli:session" => self.session,
             _ => true,
         }
     }
@@ -142,5 +149,100 @@ mod tests {
             }
         }
         assert!(LibraryVisibility::unscoped().allows("submilli:llm"));
+    }
+
+    #[test]
+    fn session_needs_both_read_and_write() {
+        let rule = |capability: &str, action: &str| {
+            format!("    - capability: {capability}\n      action: {action}\n")
+        };
+        for (policy, visible) in [
+            (String::new(), false),
+            ("default: deny\n".into(), false),
+            ("default: allow\n".into(), true),
+            ("default: ask-human\n".into(), true),
+            (
+                format!("permissions:\n  main:\n{}", rule("session.read", "allow")),
+                false,
+            ),
+            (
+                format!("permissions:\n  main:\n{}", rule("session.write", "allow")),
+                false,
+            ),
+            (
+                format!(
+                    "permissions:\n  main:\n{}{}",
+                    rule("session.read", "allow"),
+                    rule("session.write", "deny")
+                ),
+                false,
+            ),
+            (
+                format!(
+                    "permissions:\n  main:\n{}{}{}",
+                    rule("session.read", "allow"),
+                    rule("session.remove", "allow"),
+                    rule("session.list", "allow")
+                ),
+                false,
+            ),
+            (
+                format!(
+                    "permissions:\n  main:\n{}{}",
+                    rule("session.read", "ask-human"),
+                    rule("session.write", "allow")
+                ),
+                true,
+            ),
+            (
+                format!(
+                    "default: deny\npermissions:\n  main:\n{}{}",
+                    rule("session.read", "allow"),
+                    rule("session.write", "allow")
+                ),
+                true,
+            ),
+            (
+                format!(
+                    "permissions:\n  main:\n{}{}{}",
+                    rule("session.read", "allow"),
+                    rule("session.write", "deny"),
+                    rule("session.write", "allow")
+                ),
+                true,
+            ),
+            (
+                format!(
+                    "permissions:\n  main:\n{}      filter: key glob \"none/*\"\n{}      filter: key == \"none\"\n",
+                    rule("session.read", "allow"),
+                    rule("session.write", "allow")
+                ),
+                true,
+            ),
+            (
+                format!(
+                    "permissions:\n  main:\n{}  '@acme/tools':\n{}",
+                    rule("session.read", "allow"),
+                    rule("session.write", "allow")
+                ),
+                false,
+            ),
+            (
+                format!(
+                    "permissions:\n  '@acme/tools':\n{}{}",
+                    rule("session.read", "allow"),
+                    rule("session.write", "allow")
+                ),
+                false,
+            ),
+        ] {
+            let blueprint = submilli_blueprint::parse(&format!("name: test\n{policy}")).unwrap();
+            assert_eq!(
+                LibraryVisibility::for_blueprint(&blueprint).allows("submilli:session"),
+                visible,
+                "{policy}"
+            );
+        }
+        assert!(LibraryVisibility::unscoped().allows("submilli:session"));
     }
 }

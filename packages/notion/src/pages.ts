@@ -41,14 +41,6 @@ export {
     UpdatePageInput,
 } from "./types";
 
-/** One validated page creation with its parent resolved. */
-export interface PreparedPageCreation {
-    /** Resolved parent ID; "workspace" for a workspace parent. */
-    parentId: string;
-    /** The validated input. */
-    input: CreatePageInput;
-}
-
 /** One validated page move with its page and parent resolved. */
 export interface PreparedPageMove {
     /** UUID of the page to move. */
@@ -59,14 +51,11 @@ export interface PreparedPageMove {
     parentId: string;
 }
 
-/**
- * Validate a page creation input before any request is sent.
- * Returns the resolved parent ID; "workspace" stands in for a workspace parent.
- */
-export function validateCreatePageInput(input: CreatePageInput): string {
-    const parentId = parentIdFrom(input.parent.type, input.parent.id);
+/** Validate a page creation input, its parent included, before any request is sent. */
+export function validateCreatePageInput(input: CreatePageInput): void {
+    // Called for its validation; `createPage` resolves the ID again when it creates the page.
+    parentIdFrom(input.parent.type, input.parent.id);
     validatePageFields(input);
-    return parentId;
 }
 
 /** Validate the properties, content, icon, and cover of a page creation before any request is sent. */
@@ -85,33 +74,6 @@ export function createPage(parentId: string, input: CreatePageInput): NotionPage
     if (input.icon !== null) fields.push(fileField("icon", input.icon));
     if (input.cover !== null) fields.push(fileField("cover", input.cover));
     return pageFrom(notionPost("/pages", objectJson(fields)).json());
-}
-
-/** Validate every page creation and resolve its parent before the first request. */
-export function prepareCreatePages(inputs: CreatePageInput[]): PreparedPageCreation[] {
-    const creations: PreparedPageCreation[] = [];
-    for (const input of inputs) {
-        const parentId = validateCreatePageInput(input);
-        creations.push({ parentId: parentId, input: input });
-    }
-    return creations;
-}
-
-/** Create prepared pages sequentially, stopping on the first failure with completed IDs. */
-export function createPages(creations: PreparedPageCreation[]): NotionPage[] {
-    const pages: NotionPage[] = [];
-    for (let index = 0; index < creations.length; index += 1) {
-        const creation = creations[index];
-        try {
-            pages.push(createPage(creation.parentId, creation.input));
-        } catch (error) {
-            const ids: string[] = [];
-            for (const page of pages) ids.push(page.id);
-            if (error instanceof NotionError) throw new BatchNotionError(error, ids, index);
-            throw error;
-        }
-    }
-    return pages;
 }
 
 /** Update page properties, icon, cover, or apply a template. */
@@ -171,17 +133,6 @@ export function appendPageMarkdown(pageId: string, markdown: string): PageMarkdo
 export function movePage(pageId: string, parentType: string, parentId: string): NotionPage {
     const body = objectJson([parentJson(parentType, parentId)]);
     return pageFrom(notionPost("/pages/" + pathId(pageId) + "/move", body).json());
-}
-
-/** Validate every move and resolve its page and parent before the first request. */
-export function prepareMovePages(inputs: MovePageInput[]): PreparedPageMove[] {
-    const moves: PreparedPageMove[] = [];
-    for (const input of inputs) {
-        const pageId = idFromRef(input.page, "page");
-        const parentId = parentIdFrom(input.parent.type, input.parent.id);
-        moves.push({ pageId: pageId, parentType: input.parent.type, parentId: parentId });
-    }
-    return moves;
 }
 
 /** Move prepared pages sequentially, stopping on the first failure with completed IDs. */

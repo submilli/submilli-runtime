@@ -114,13 +114,19 @@ permissions:
 }
 
 fn write_acme_util_package(home: &Path) {
-    const SOURCE: &str = "export function answer(): number { return 41; }\nexport function plusOne(n: number): number { return n + 1; }\nexport function explode(): void { assert(false, \"pkg boom\"); }";
+    write_acme_util_package_with_source(
+        home,
+        "export function answer(): number { return 41; }\nexport function plusOne(n: number): number { return n + 1; }\nexport function explode(): void { assert(false, \"pkg boom\"); }",
+    );
+}
+
+fn write_acme_util_package_with_source(home: &Path, source: &str) {
     let package = compile_package(
         "@acme/util",
         ModulePath::from("lib"),
         &[PackageSourceModule {
             path: ModulePath::from("lib"),
-            source: SOURCE,
+            source,
         }],
         &[],
     )
@@ -136,7 +142,7 @@ fn write_acme_util_package(home: &Path) {
         "",
         &[ArtifactSource {
             path: ModulePath::from("lib"),
-            text: SOURCE.to_string(),
+            text: source.to_string(),
         }],
     )
     .expect("write package artifact");
@@ -317,7 +323,10 @@ fn package_error_renders_package_source_context() {
     assert!(!out.status.success(), "stdout: {}", stdout(&out));
     let err = stderr(&out);
     assert!(err.contains("error: Error: pkg boom"), "stderr: {err}");
-    assert!(err.contains("lib:"), "missing package frame in {err}");
+    assert!(
+        err.contains("(@acme/util/lib:"),
+        "missing package frame in {err}"
+    );
     assert!(
         err.contains("export function explode(): void"),
         "missing package source in {err}",
@@ -431,6 +440,175 @@ fn timeout_interrupts_infinite_loop() {
         err.contains("timeout exceeded"),
         "missing timeout label in {err}",
     );
+}
+
+/// Top-level statements run while the module is instantiated, before `main`.
+/// A limit they reach is reported as the same limit reached in `main` is.
+#[test]
+fn a_limit_reached_by_top_level_statements_is_named() {
+    const SPIN: &str = "let total = 0;\n\
+        while (true) { total = total + 1; }\n\
+        function main(): number { return total; }";
+    // 2^26 code units = 128 MB, against the CLI's fixed 50 MB.
+    const ALLOCATE: &str = "let s = \"x\";\n\
+        for (let i = 0; i < 26; i++) { s = s + s; }\n\
+        function main(): number { return s.length; }";
+    let unbounded_fuel = "18446744073709551615";
+    let cases: [(&str, &str, &[&str], &str); 3] = [
+        (
+            "top_level_fuel",
+            SPIN,
+            &["--fuel", "100000"],
+            "error: fuel exhausted",
+        ),
+        ("top_level_memory", ALLOCATE, &[], "error: memory exhausted"),
+        (
+            "top_level_timeout",
+            SPIN,
+            &["--timeout", "50", "--fuel", unbounded_fuel],
+            "error: timeout exceeded",
+        ),
+    ];
+    for (name, source, flags, expected) in cases {
+        let out = run_script(name, source, flags);
+        assert!(!out.status.success(), "{name} should fail");
+        let err = stderr(&out);
+        assert!(
+            err.contains(expected),
+            "{name}: expected `{expected}`, got: {err}"
+        );
+    }
+}
+
+#[test]
+fn a_top_level_throw_keeps_its_message_and_earlier_output() {
+    let out = run_script(
+        "top_level_throw",
+        "const limits: number[] = [1];\n\
+         console.log(\"before the throw\");\n\
+         if (limits.length === 1) { throw new RangeError(\"refused at the top level\"); }\n\
+         function main(): number { return 1; }",
+        &[],
+    );
+    assert!(!out.status.success());
+    let err = stderr(&out);
+    assert!(
+        err.starts_with("before the throw\nerror: RangeError: refused at the top level\n"),
+        "got: {err}"
+    );
+}
+
+/// A failure raised by a top-level statement points at that statement, as one
+/// raised in `main` points at its line.
+#[test]
+fn a_top_level_failure_renders_the_statement_that_raised_it() {
+    const SPIN: &str = "let total = 0;\n\
+        while (true) { total = total + 1; }\n\
+        function main(): number { return total; }";
+    let unbounded_fuel = "18446744073709551615";
+    let cases: [(&str, &str, &[&str], &str, &str); 4] = [
+        (
+            "top_level_throw_frame",
+            "const limits: number[] = [1];\n\
+             if (limits.length === 1) { throw new RangeError(\"refused\"); }\n\
+             function main(): number { return 1; }",
+            &[],
+            "[thrown here]",
+            "2 | if (limits.length === 1) { throw new RangeError(\"refused\"); }\n  |",
+        ),
+        (
+            "top_level_assert_frame",
+            "const n: number = 2;\n\
+             assert(n === 3, \"n is three\");\n\
+             function main(): number { return n; }",
+            &[],
+            "[thrown here]",
+            "2 | assert(n === 3, \"n is three\");\n  |",
+        ),
+        (
+            "top_level_fuel_frame",
+            SPIN,
+            &["--fuel", "100000"],
+            "[fuel exhausted]",
+            "2 | while (true) { total = total + 1; }\n  |",
+        ),
+        (
+            "top_level_timeout_frame",
+            SPIN,
+            &["--timeout", "50", "--fuel", unbounded_fuel],
+            "[timeout exceeded]",
+            "2 | while (true) { total = total + 1; }\n  |",
+        ),
+    ];
+    for (name, source, flags, label, context) in cases {
+        let out = run_script(name, source, flags);
+        assert!(!out.status.success(), "{name} should fail");
+        let err = stderr(&out);
+        assert!(
+            err.contains("\n  at <top level> (") && err.contains(&format!("{name}.subm:2:")),
+            "{name}: expected a top-level frame on line 2, got: {err}"
+        );
+        assert!(
+            err.contains(label),
+            "{name}: expected `{label}`, got: {err}"
+        );
+        assert!(
+            err.contains(context),
+            "{name}: expected the statement and a caret, got: {err}"
+        );
+    }
+}
+
+/// A package's top-level statements run when it is installed, before the
+/// program's. The deadline bounds them, and their failure points at the
+/// package's statement.
+#[test]
+fn a_package_top_level_failure_renders_the_packages_statement() {
+    // Seconds of spinning: well past the 200 ms deadline, yet a run the
+    // deadline does not bound still ends (out of fuel) instead of hanging.
+    let fuel_past_the_deadline = "100000000";
+    let cases: [(&str, &[&str], &str, &str); 2] = [
+        (
+            "const table: number[] = [1];\nconst picked: number = table[7];\nexport function answer(): number { return picked; }",
+            &[],
+            "error: package `@acme/util` failed to initialize: RangeError: index out of range\n  at <top level> (@acme/util/lib:2:",
+            "2 | const picked: number = table[7];\n  |",
+        ),
+        (
+            "let spins = 0;\nwhile (true) { spins = spins + 1; }\nexport function answer(): number { return spins; }",
+            &["--timeout", "200", "--fuel", fuel_past_the_deadline],
+            "error: timeout exceeded\n  at <top level> (@acme/util/lib:2:",
+            "2 | while (true) { spins = spins + 1; }\n  |",
+        ),
+    ];
+    for (package_source, flags, header, context) in cases {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        write_acme_util_package_with_source(tmp.path(), package_source);
+        let script = tmp.path().join("consumer.subm");
+        fs::write(
+            &script,
+            "import { answer } from \"@acme/util\";\nfunction main(): number { return answer(); }",
+        )
+        .expect("write script");
+        let blueprint = tmp.path().join("blueprint.yaml");
+        write_blueprint(
+            &blueprint,
+            "name: package-test\npackages:\n  - \"@acme/util\"\n",
+        );
+        let mut args: Vec<&std::ffi::OsStr> = vec!["run".as_ref()];
+        args.extend(flags.iter().map(std::ffi::OsStr::new));
+        args.extend([
+            script.as_os_str(),
+            "--blueprint".as_ref(),
+            blueprint.as_os_str(),
+        ]);
+
+        let out = run_with_submilli_home(&args, tmp.path());
+        assert!(!out.status.success(), "stdout: {}", stdout(&out));
+        let err = stderr(&out);
+        assert!(err.contains(header), "expected `{header}`, got: {err}");
+        assert!(err.contains(context), "expected the statement, got: {err}");
+    }
 }
 
 #[test]

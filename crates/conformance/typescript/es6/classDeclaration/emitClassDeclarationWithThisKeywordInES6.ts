@@ -9,7 +9,7 @@ class B {
         B.log(this.x);
     }
 
-    get X() {
+    get X(): number {
         return this.x;
     }
 

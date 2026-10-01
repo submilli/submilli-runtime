@@ -1014,7 +1014,217 @@ fn a_global_is_the_callers_when_the_caller_can_reach_or_the_package_replace_it()
         found,
         [
             "elements of `SHARED` are read more than once in `send`, which calls `check()`",
-            "elements of `current` are read more than once in `send`, which calls `check()`",
+            "`current` is read more than once in `send`, which calls `check()`",
+        ]
+    );
+}
+
+/// Code the caller runs, such as a getter of `input`, can call an exported
+/// function that reassigns a module `let` between two reads of it.
+fn acting_as(body: &str) -> String {
+    format!(
+        "let actingAs: string | null = null;\n\
+         export function actAs(user: string | null): void {{ actingAs = user; }}\n\
+         export function send(input: Input): string {{\n\
+           {body}\n\
+         }}\n"
+    )
+}
+
+#[test]
+fn a_module_variable_is_read_from_its_binding_at_each_use() {
+    let found = messages(&acting_as(
+        "if (actingAs !== null) check(\"x/impersonate\", {});\n\
+         const text = input.text;\n\
+         return (actingAs ?? \"self\") + \": \" + text;",
+    ));
+    assert_eq!(
+        found,
+        ["`actingAs` is read more than once in `send`, which calls `check()`"]
+    );
+    assert_clean(&acting_as(
+        "const user = actingAs;\n\
+         if (user !== null) check(\"x/impersonate\", {});\n\
+         const text = input.text;\n\
+         return (user ?? \"self\") + \": \" + text;",
+    ));
+    let found = messages(&acting_as(
+        "for (const tag of input.tags) {\n\
+           if (actingAs !== null) check(\"x/impersonate\", { tag });\n\
+         }\n\
+         return \"sent\";",
+    ));
+    assert_eq!(
+        found,
+        ["`actingAs` is read inside a loop in `send`, which calls `check()`"]
+    );
+}
+
+#[test]
+fn a_module_variable_is_the_callers_whatever_its_type() {
+    let found = messages(
+        "let limit = 3;\n\
+         let current: Options = { unfurl: true, notify: [] };\n\
+         export class Config { static mode: string = \"open\"; }\n\
+         export function send(input: Input): void {\n\
+           if (limit > 0) check(\"x/limit\", {});\n\
+           limit++;\n\
+           check(\"x/unfurl\", { unfurl: current.unfurl });\n\
+           post(input.channelId, current.notify.join(\",\"));\n\
+           if (Config.mode === \"closed\") check(\"x/mode\", {});\n\
+           post(Config.mode, \"a\");\n\
+         }\n",
+    );
+    assert_eq!(
+        found,
+        [
+            "`limit` is read more than once in `send`, which calls `check()`",
+            "`current` is read more than once in `send`, which calls `check()`",
+            "`Config.mode` is read more than once in `send`, which calls `check()`",
+        ]
+    );
+}
+
+#[test]
+fn a_nested_function_reads_a_module_variable_when_it_runs() {
+    let found = messages(&acting_as(
+        "const user = actingAs;\n\
+         if (user !== null) check(\"x/impersonate\", {});\n\
+         const later = (): string => actingAs ?? \"self\";\n\
+         return later();",
+    ));
+    assert_eq!(
+        found,
+        [
+            "caller-supplied `actingAs` is captured by a nested function in `send`, which calls `check()`"
+        ]
+    );
+}
+
+#[test]
+fn a_static_field_is_named_with_its_class() {
+    let found = findings(&[(
+        "lib",
+        &format!(
+            "{IMPORT}export class Cfg {{ static count: number = 0; }}\n\
+             export function send(input: Input): void {{\n\
+               Cfg.count++;\n\
+               check(\"x/count\", {{ n: Cfg.count }});\n\
+               post(input.channelId, \"a\");\n\
+             }}\n"
+        ),
+    )]);
+    let shown: Vec<_> = found
+        .iter()
+        .map(|diag| {
+            (
+                diag.message.as_str(),
+                diag.notes.last().map(|(_, note)| note.as_str()),
+            )
+        })
+        .collect();
+    assert_eq!(
+        shown,
+        [(
+            "`Cfg.count` is read more than once in `send`, which calls `check()`",
+            Some(
+                "`send` changes the global `Cfg.count` before `check()`, so every caller-supplied value in `send` is examined"
+            ),
+        )]
+    );
+}
+
+#[test]
+fn a_module_variable_that_does_not_reach_check_may_be_read_again() {
+    assert_clean(
+        "let calls = 0;\n\
+         export function send(input: Input): void {\n\
+           const { channelId } = input;\n\
+           check(\"x/send\", { channelId });\n\
+           calls++;\n\
+           post(channelId, \"call \" + String(calls));\n\
+         }\n",
+    );
+}
+
+#[test]
+fn a_module_constant_is_read_once_for_all() {
+    assert_clean(
+        "const LIMIT = 3;\n\
+         export class Limits { static readonly MAX: number = 3; }\n\
+         const TABLE: Options = { unfurl: true, notify: [] };\n\
+         export function send(input: Input): void {\n\
+           const { channelId } = input;\n\
+           if (LIMIT > 0) check(\"x/limit\", { channelId, unfurl: TABLE.unfurl });\n\
+           post(channelId, LIMIT > 1 ? \"a\" : \"b\");\n\
+           post(channelId, TABLE.notify.join(\",\"));\n\
+           if (Limits.MAX > 0) check(\"x/max\", { channelId });\n\
+           post(channelId, Limits.MAX > 1 ? \"a\" : \"b\");\n\
+           post(input.text, input.text);\n\
+         }\n",
+    );
+}
+
+#[test]
+fn another_packages_variable_is_read_from_its_binding_at_each_use() {
+    let (_, state, diags) = run_package(
+        "@test/state",
+        &[(
+            "lib",
+            "/** Whom calls act as. */\n\
+             export let actingAs: string | null = null;\n\
+             /** Chooses whom calls act as. */\n\
+             export function actAs(user: string | null): void { actingAs = user; }\n\
+             /** The most calls. */\n\
+             export const LIMIT = 3;\n\
+             /** The mode. */\n\
+             export class Mode {\n\
+               /** The current mode. */\n\
+               static current: string = \"a\";\n\
+               /** The first mode. */\n\
+               static readonly FIRST: string = \"a\";\n\
+               /** The calls so far. */\n\
+               static count: number = 0;\n\
+             }\n",
+        )],
+        &[],
+    );
+    assert!(diags.is_empty(), "{diags:#?}");
+    let (_, _, diags) = run_package(
+        "@test/package",
+        &[(
+            "lib",
+            &format!(
+                "{IMPORT}import {{ actingAs as who, LIMIT, Mode as M }} from \"@test/state\";\n\
+                 export function send(input: Input): string {{\n\
+                   if (who !== null) check(\"x/impersonate\", {{}});\n\
+                   if (M.current !== M.FIRST) check(\"x/mode\", {{}});\n\
+                   const text = input.text;\n\
+                   return (who ?? \"self\") + M.current + M.FIRST + text;\n\
+                 }}\n\
+                 export function bump(input: Input): void {{\n\
+                   if (M.count++ > LIMIT) check(\"x/count\", {{}});\n\
+                   post(input.text, String(M.count++));\n\
+                 }}\n\
+                 export function constant(input: Input): void {{\n\
+                   if (M.FIRST === \"a\" && LIMIT > 0) check(\"x/first\", {{}});\n\
+                   post(input.text, input.text);\n\
+                 }}\n"
+            ),
+        )],
+        &[state],
+    );
+    let found: Vec<_> = diags
+        .into_iter()
+        .filter(|diag| diag.message.contains("check()") && !diag.message.contains("@capability"))
+        .map(|diag| diag.message)
+        .collect();
+    assert_eq!(
+        found,
+        [
+            "`actingAs` is read more than once in `send`, which calls `check()`",
+            "`Mode.current` is read more than once in `send`, which calls `check()`",
+            "`Mode.count` is read more than once in `bump`, which calls `check()`",
         ]
     );
 }
@@ -2628,7 +2838,7 @@ fn a_static_field_that_reaches_check_is_shared_state() {
     assert_eq!(
         examined_because("check(\"x/run\", { id: Registry.ids.join(\",\") });"),
         Some(
-            "`check()` depends on `ids`, which code outside `run` can change, \
+            "`check()` depends on `Registry.ids`, which code outside `run` can change, \
              so every caller-supplied value in `run` is examined"
                 .to_string()
         )

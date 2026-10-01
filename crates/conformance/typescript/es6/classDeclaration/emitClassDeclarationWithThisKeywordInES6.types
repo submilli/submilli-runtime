@@ -51,7 +51,7 @@ class B {
 
     }
 
-    get X() {
+    get X(): number {
 >X : number
 >  : ^^^^^^
 
