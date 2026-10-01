@@ -26,10 +26,14 @@ Use only `editor-export-1790685929055.mp4`, not a later editor draft or Challeng
 pilot. Its snapshot is `export-51c09794-8edf-4fe8-bb28-fa7613f54e18.json`.
 The registry records its SHA-256 and 90.688-second container duration. Verified:
 2,720 frames at 30 fps, 1920 × 1080, H.264 with AAC audio. The transcript is
-verbatim from the snapshot. Seven scene-aligned WebVTT cues begin at each scene's
-+0.5-second audio lead and end at its recorded audio duration. They are not
-word-aligned: review caption readability and refine cue breaks against the audio
-before publication, especially the longer scenes.
+verbatim from the snapshot. The 32 phrase-length WebVTT cues preserve every spoken word. Cue boundaries
+for the first six scenes follow pauses detected in the existing audio; the last
+scene uses its saved character alignment. All include the renderer's +0.5-second
+audio lead. Each cue uses at most two lines of 42 characters, lasts 1–7 seconds,
+and stays below 20 characters per second. Tests enforce these limits and complete
+transcript coverage. No narration or production sources were changed. The pause-based
+boundaries are not word-level forced alignment; final owner listening review remains
+part of publication QA.
 
 Publication requires owner confirmation of the production ElevenLabs account's
 commercial-use license and an approved media host. No upload or new service is

@@ -24,16 +24,23 @@ test('completed film has valid canonical, transcript and caption destinations', 
   assert.equal(new Set(films.map((film) => film.id)).size, films.length);
   const captions = await readFile(new URL('../public/videos/code-execution-introduction.en.vtt', import.meta.url), 'utf8');
   assert.ok(captions.startsWith('WEBVTT\n'));
-  assert.ok(captions.includes("Consider an agent used by a small business."));
+  assert.ok(captions.replace(/\s+/g, ' ').includes("Consider an agent used by a small business."));
   assert.ok(captions.includes('agent stack.'));
   const transcript = chapters.find((chapter) => chapter.slug === 'videos/code-execution-introduction')!.body;
   const cues = captions.trim().split(/\n\n/).slice(1);
+  assert.equal(cues.length, 32);
+  const narration = [...transcript.matchAll(/## \d+:\d+ — [^\n]+\n\n([\s\S]*?)(?=\n## |$)/g)]
+    .map((match) => match[1].trim()).join(' ');
+  assert.equal(cues.map((cue) => cue.split('\n').slice(1).join(' ')).join(' '), narration);
   let previousEnd = 0;
   const seconds = (stamp: string) => stamp.split(':').reduce((sum, part) => sum * 60 + Number(part), 0);
   for (const cue of cues) {
     const [timing, ...lines] = cue.split('\n');
     const [start, end] = timing.split(' --> ').map(seconds);
     assert.ok(start >= previousEnd && end > start && end <= 90.688, timing);
+    assert.ok(end - start >= 1 && end - start <= 7, 'Readable cue duration: ' + timing);
+    assert.ok(lines.length <= 2 && lines.every((line) => line.length <= 42), 'At most two 42-character lines');
+    assert.ok(lines.join(' ').length / (end - start) <= 20, 'Caption reading speed stays below 20 characters/second');
     previousEnd = end;
     assert.ok(transcript.includes(lines.join(' ')), lines.join(' '));
   }

@@ -1,39 +1,107 @@
 WEBVTT
 
-00:00:00.500 --> 00:00:06.717
-Consider an agent used by a small business. The agent is asked to
-summarize yesterday's failed payments.
+00:00:00.500 --> 00:00:03.463
+Consider an agent used by a small
+business.
 
-00:00:08.033 --> 00:00:26.842
-The agent uses external tools such as APIs or MCPs to fetch failed
-payments, identify the affected accounts, and retrieve relevant
-support tickets. Each result returns to the model before it can choose
-the next request. That adds inference work and makes the next request
-wait.
+00:00:03.463 --> 00:00:06.717
+The agent is asked to summarize
+yesterday's failed payments.
 
-00:00:28.167 --> 00:00:34.279
-In this illustrative sequence, three requests and a final
-interpretation take four model rounds.
+00:00:08.033 --> 00:00:12.554
+The agent uses external tools such as APIs
+or MCPs
 
-00:00:35.600 --> 00:00:51.012
-Instead of sequential tool calling, the model may write a program that
-calls the three tools. Inside the program, it totals the failed
-payments, identifies the impacted accounts, and links them to three
-support tickets - without another model round.
+00:00:12.554 --> 00:00:14.306
+to fetch failed payments,
 
-00:00:52.333 --> 00:01:03.044
-The program returns the final report. The model provides the requested
-summary, financial impact, and customer list while keeping raw records
-separate from the primary output.
+00:00:14.306 --> 00:00:16.158
+identify the affected accounts,
 
-00:01:04.367 --> 00:01:13.927
-The process is reduced from four model rounds to two. Routine work
-runs as code, maintaining a smaller, more focused conversation
-context.
+00:00:16.158 --> 00:00:18.871
+and retrieve relevant support tickets.
 
-00:01:15.233 --> 00:01:29.862
-Anthropic demonstrated lower context use. CodeAct improved task
-success. Cloudflare built a compact interface to thousands of API
-endpoints. These results help explain why code execution is becoming
-part of the agent stack.
+00:00:18.871 --> 00:00:20.667
+Each result returns to the model
+
+00:00:20.667 --> 00:00:23.364
+before it can choose the next request.
+
+00:00:23.364 --> 00:00:24.814
+That adds inference work
+
+00:00:24.814 --> 00:00:26.842
+and makes the next request wait.
+
+00:00:28.167 --> 00:00:29.978
+In this illustrative sequence,
+
+00:00:29.978 --> 00:00:32.698
+three requests and a final interpretation
+
+00:00:32.698 --> 00:00:34.279
+take four model rounds.
+
+00:00:35.600 --> 00:00:37.618
+Instead of sequential tool calling,
+
+00:00:37.618 --> 00:00:41.422
+the model may write a program that calls
+the three tools.
+
+00:00:41.422 --> 00:00:44.586
+Inside the program, it totals the failed
+payments,
+
+00:00:44.586 --> 00:00:46.774
+identifies the impacted accounts,
+
+00:00:46.774 --> 00:00:49.294
+and links them to three support tickets -
+
+00:00:49.294 --> 00:00:51.012
+without another model round.
+
+00:00:52.333 --> 00:00:55.027
+The program returns the final report.
+
+00:00:55.027 --> 00:00:57.345
+The model provides the requested summary,
+
+00:00:57.345 --> 00:00:59.694
+financial impact, and customer list
+
+00:00:59.694 --> 00:01:03.044
+while keeping raw records separate from
+the primary output.
+
+00:01:04.367 --> 00:01:08.439
+The process is reduced from four model
+rounds to two.
+
+00:01:08.439 --> 00:01:10.442
+Routine work runs as code,
+
+00:01:10.442 --> 00:01:13.927
+maintaining a smaller, more focused
+conversation context.
+
+00:01:15.233 --> 00:01:18.077
+Anthropic demonstrated lower context use.
+
+00:01:18.077 --> 00:01:20.736
+CodeAct improved task success.
+
+00:01:20.736 --> 00:01:22.779
+Cloudflare built a compact interface
+
+00:01:22.779 --> 00:01:25.101
+to thousands of API endpoints.
+
+00:01:25.101 --> 00:01:27.749
+These results help explain why code
+execution
+
+00:01:27.749 --> 00:01:29.862
+is becoming part of the agent stack.
 
