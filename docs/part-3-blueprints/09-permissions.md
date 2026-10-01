@@ -281,7 +281,7 @@ catch:
 ```text
 error: PermissionDeniedError: permission denied: caller=main capability=acme.com/charges.list: policy denied acme.com/charges.list for main. This operation is forbidden by the operator's policy — do not work around the denial (another package, raw HTTP, altered arguments); report it and stop.
   fields: caller = "main", capability = "acme.com/charges.list", reason = "policy denied acme.com/charges.list for main"
-  at listCharges (lib:26:38)  [thrown here]
+  at listCharges (@acme/billing/lib:26:38)  [thrown here]
 ```
 
 The message names the caller, the capability, and a reason, followed by an

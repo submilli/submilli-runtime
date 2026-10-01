@@ -158,7 +158,7 @@ customer passes the first test and fails the second:
 
 ```text
 error: PermissionDeniedError: permission denied: caller=main capability=acme.com/credits.apply: policy denied acme.com/credits.apply for main.
-  at applyCredit (lib:31:39)  [thrown here]
+  at applyCredit (@acme/billing/lib:31:39)  [thrown here]
 30 |     const customerClass = lookUpClass(customerId);
 31 |     check("acme.com/credits.apply", { customerId, customerClass, amount });
    |                                       ^

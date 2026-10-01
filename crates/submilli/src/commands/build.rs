@@ -484,8 +484,8 @@ mod test_runner {
         dispatch_main_async, failure_message, instantiate_program_async, render_backtrace,
     };
     use submilli_build::{
-        Artifact, BuiltPackage, DriverError, PackageName, PackageStore, build_packages,
-        find_manifest_upwards, parse_manifest,
+        Artifact, ArtifactSource, BuiltPackage, DriverError, PackageName, PackageStore,
+        build_packages, find_manifest_upwards, parse_manifest,
     };
     use wasmtime::{Engine, Linker, Module};
 
@@ -568,6 +568,7 @@ mod test_runner {
         let test_decl = interpreter::stdlib::test::package_declaration();
         let declarations = declaration_refs(&externals, &built, &test_decl);
         let linked = linked_modules(&externals, &built, &package_modules);
+        let package_sources = package_sources(&externals, &built);
 
         // Tests run for the scoped package(s): `-p` narrows to one, otherwise
         // every package in the manifest. The full `built` closure is linked
@@ -593,6 +594,7 @@ mod test_runner {
             rt: &rt,
             declarations: &declarations,
             linked: &linked,
+            package_sources: &package_sources,
             manifest_dir: &manifest_dir,
         };
 
@@ -708,6 +710,24 @@ mod test_runner {
         refs
     }
 
+    /// Every linked package's name and modules, so a test's package frames
+    /// render with their source.
+    fn package_sources<'a>(
+        externals: &'a [Artifact],
+        built: &'a [BuiltPackage],
+    ) -> Vec<(&'a str, &'a [ArtifactSource])> {
+        let externals = externals.iter().map(|artifact| {
+            (
+                artifact.package_declaration.package_name.as_str(),
+                artifact.sources.as_slice(),
+            )
+        });
+        let built = built
+            .iter()
+            .map(|pkg| (pkg.name.as_str(), pkg.sources.as_slice()));
+        externals.chain(built).collect()
+    }
+
     fn linked_modules<'a>(
         externals: &'a [Artifact],
         built: &'a [BuiltPackage],
@@ -799,6 +819,7 @@ mod test_runner {
         rt: &'a tokio::runtime::Runtime,
         declarations: &'a [&'a PackageDeclaration],
         linked: &'a [LinkedPackageModule<'a>],
+        package_sources: &'a [(&'a str, &'a [ArtifactSource])],
         manifest_dir: &'a Path,
     }
 
@@ -813,6 +834,7 @@ mod test_runner {
             rt,
             declarations,
             linked,
+            package_sources,
             manifest_dir,
         } = *ctx;
         let source = std::fs::read_to_string(test_file)
@@ -822,7 +844,7 @@ mod test_runner {
             .unwrap_or(test_file)
             .to_string_lossy()
             .into_owned();
-        let (sources, file) = Sources::single(filename.clone(), source.clone())?;
+        let (mut sources, file) = Sources::single(filename.clone(), source.clone())?;
 
         let (bytes, type_info) = match compile_script_owned_by(
             package_name,
@@ -847,6 +869,13 @@ mod test_runner {
             }
         };
 
+        // After compiling, so the file's diagnostics resolve against it alone.
+        for &(package, modules) in package_sources {
+            for module in modules {
+                sources.add_package_module(package, module.path.as_str(), &module.text)?;
+            }
+        }
+
         let module = Module::new(engine, &bytes)
             .map_err(|err| anyhow::anyhow!("compiling {filename}: {err}"))?;
 
@@ -858,14 +887,14 @@ mod test_runner {
             let mut linker = Linker::<StoreData>::new(engine);
             install_runtime_async(&mut linker, &mut store).await?;
             interpreter::stdlib::test::install(&mut linker)?;
-            install_package_modules_async(&mut linker, &mut store, linked).await?;
-            // The test script compiles as its own module; install its TypeInfo so
-            // `JSON.stringify` of a typed object resolves against the test package.
-            store.data_mut().install_type_info(type_info);
             let _watchdog = cfg.arm_timeout(engine);
-            // The file's top-level statements run here; their failure is the
-            // file's first segment failing, as one in `main` would be.
+            // The packages' top-level statements, then the file's, run here; their
+            // failure is the file's first segment failing, as one in `main` would be.
             let result = async {
+                install_package_modules_async(&mut linker, &mut store, linked).await?;
+                // The test script compiles as its own module; install its TypeInfo so
+                // `JSON.stringify` of a typed object resolves against the test package.
+                store.data_mut().install_type_info(type_info);
                 let instance = instantiate_program_async(&linker, &mut store, &module).await?;
                 dispatch_main_async(&mut store, &instance).await
             }

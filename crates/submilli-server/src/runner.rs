@@ -239,7 +239,8 @@ async fn run_inner(
         Err(err) => return internal_failure(&format!("store init failed: {err}")),
     };
     // The shared ticker must not interrupt setup using RuntimeConfig's
-    // single-watchdog deadline. Arm this store only when the program begins.
+    // single-watchdog deadline. Arm this store only when guest code begins
+    // (the packages' top-level statements, then the program's).
     store.set_epoch_deadline(u64::MAX);
     let execution = async {
         // Without this the store has no `ResourceLimiter`, and the engine falls back
@@ -273,28 +274,36 @@ async fn run_inner(
         }
         rt.link_runtime = phase_start.elapsed();
 
-        let phase_start = Instant::now();
-        if let Err(err) =
-            install_package_modules_async(&mut linker, &mut store, &package_modules).await
-        {
-            return internal_failure(&format!("install packages failed: {err}"));
-        }
-        rt.link_packages = phase_start.elapsed();
-
-        // Instantiation runs the program's top-level statements, so the deadline
-        // covers it and its failure is reported as one in `main` is.
+        // Installing a package runs its top-level statements, and instantiation
+        // runs the program's, so the deadline covers both and their failure is
+        // reported as one in `main` is.
         crate::execution_timeout::arm(&mut store, runtime.config.timeout);
         let phase_start = Instant::now();
-        let instantiated = instantiate_program_async(&linker, &mut store, &module).await;
-        rt.instantiate = phase_start.elapsed();
+        let installed =
+            install_package_modules_async(&mut linker, &mut store, &package_modules).await;
+        rt.link_packages = phase_start.elapsed();
 
-        let phase_start = Instant::now();
-        let dispatch = match instantiated {
-            Ok(instance) => dispatch_main_async(&mut store, &instance).await,
-            Err(err) if raised_by_top_level_statements(&err) => Err(err),
-            Err(err) => return internal_failure(&format!("instantiate_async failed: {err}")),
+        let dispatch = 'program: {
+            match installed {
+                Ok(()) => {}
+                Err(err) if raised_by_top_level_statements(&err) => break 'program Err(err),
+                Err(err) => return internal_failure(&format!("install packages failed: {err}")),
+            }
+
+            let phase_start = Instant::now();
+            let instantiated = instantiate_program_async(&linker, &mut store, &module).await;
+            rt.instantiate = phase_start.elapsed();
+            let instance = match instantiated {
+                Ok(instance) => instance,
+                Err(err) if raised_by_top_level_statements(&err) => break 'program Err(err),
+                Err(err) => return internal_failure(&format!("instantiate_async failed: {err}")),
+            };
+
+            let phase_start = Instant::now();
+            let returned = dispatch_main_async(&mut store, &instance).await;
+            rt.execute = phase_start.elapsed();
+            returned
         };
-        rt.execute = phase_start.elapsed();
         crate::metrics::runtime_phases(&rt);
         log_phase_breakdown(&compiled.timings, &rt);
         let console_raw = String::from_utf8_lossy(&buf.lock().unwrap()).into_owned();
@@ -414,10 +423,11 @@ fn classify_runtime_error(err: &wasmtime::Error, sources: &Sources, file: FileId
     }
 }
 
-/// Whether an instantiation error was raised once the program's top-level
-/// statements were running, as opposed to the module failing to link. These are
-/// the shapes `instantiate_program_async` yields from the start function: a
-/// trap, a shaped throw, a fatal host error, and memory exhaustion.
+/// Whether an instantiation error was raised once top-level statements (the
+/// program's or a package's) were running, as opposed to a module failing to
+/// link. These are the shapes `instantiate_program_async` and
+/// `install_package_modules_async` yield from a start function: a trap, a shaped
+/// throw, a fatal host error, and memory exhaustion.
 fn raised_by_top_level_statements(err: &wasmtime::Error) -> bool {
     err.is::<Trap>()
         || err.is::<interpreter::backtrace::ThrownError>()
@@ -425,10 +435,9 @@ fn raised_by_top_level_statements(err: &wasmtime::Error) -> bool {
         || is_memory_exhausted(err)
 }
 
-/// Top-level statements have no frames to render, so a trap or an uncaught
-/// throw raised there gets only the header a rendered failure has. Any other
-/// failure keeps its whole cause chain, which is what reaches the caller for a
-/// host or setup failure.
+/// A trap or an uncaught throw with no frame to render gets only the header a
+/// rendered failure has. Any other failure keeps its whole cause chain, which is
+/// what reaches the caller for a host or setup failure.
 fn unframed_message(err: &wasmtime::Error) -> String {
     if err.is::<Trap>() || err.is::<interpreter::backtrace::ThrownError>() {
         return format!("error: {}", failure_message(err));
@@ -478,13 +487,15 @@ fn log_phase_breakdown(
     );
 }
 
+/// Registers every package module so its frames render with their source.
 fn register_package_sources(
     sources: &mut Sources,
     packages: &PreparedBlueprintPackages,
 ) -> Result<(), interpreter::source::SourceError> {
     for package in &packages.modules {
+        let name = &package.declaration.package_name;
         for source in &package.sources {
-            sources.add(source.path.clone(), &source.text)?;
+            sources.add_package_module(name, source.path.as_str(), &source.text)?;
         }
     }
     Ok(())

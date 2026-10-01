@@ -1,13 +1,19 @@
 ---
 source: crates/interpreter/src/codegen/mod.rs
+assertion_line: 5058
 expression: dump
 ---
-sequence start=0x6 end=0xb
+sequence start=0x2 end=0x4
+  addr=0x2 file=1 line=1 col=Column(1) stmt=true
+  addr=0x4 file=1 line=1 col=Column(1) stmt=true end_sequence
+sequence start=0x5 end=0xb
+  addr=0x5 file=1 line=1 col=Column(10) stmt=true
   addr=0x6 file=1 line=1 col=Column(25) stmt=true
   addr=0x6 file=1 line=2 col=Column(3) stmt=true
   addr=0x6 file=1 line=2 col=Column(10) stmt=true
   addr=0xb file=1 line=2 col=Column(10) stmt=true end_sequence
-sequence start=0xd end=0x19
+sequence start=0xc end=0x19
+  addr=0xc file=1 line=4 col=Column(10) stmt=true
   addr=0xd file=1 line=4 col=Column(27) stmt=true
   addr=0xd file=1 line=5 col=Column(3) stmt=true
   addr=0xd file=1 line=5 col=Column(10) stmt=true

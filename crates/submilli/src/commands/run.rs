@@ -438,8 +438,10 @@ fn execute_on_this_thread(
             })
             .collect();
         install_runtime_async(&mut linker, &mut store).await?;
-        install_package_modules_async(&mut linker, &mut store, &linked_packages).await?;
+        // Installing a package runs its top-level statements, so the deadline
+        // covers them as it covers the program's.
         let _watchdog = cfg.arm_timeout(&engine);
+        install_package_modules_async(&mut linker, &mut store, &linked_packages).await?;
         let instance = instantiate_program_async(&linker, &mut store, &module).await?;
         dispatch_main_async(&mut store, &instance).await
     });
@@ -520,13 +522,15 @@ fn compile_package_modules(
         .collect()
 }
 
+/// Registers every package module so its frames render with their source.
 fn register_package_sources(
     sources: &mut Sources,
     artifacts: &[Artifact],
 ) -> Result<(), interpreter::source::SourceError> {
     for artifact in artifacts {
+        let name = &artifact.package_declaration.package_name;
         for source in &artifact.sources {
-            sources.add(source.path.clone(), source.text.clone())?;
+            sources.add_package_module(name, source.path.as_str(), &source.text)?;
         }
     }
     Ok(())

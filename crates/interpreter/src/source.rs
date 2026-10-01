@@ -179,6 +179,15 @@ impl SourceFile {
     }
 }
 
+/// The path a backtrace frame in a package module carries, e.g. `@acme/util/lib`.
+/// Module paths such as `lib` repeat across packages and a frame finds its
+/// source by path, so codegen qualifies a package's debug paths with its name
+/// and embedders register the package's sources under the same paths
+/// ([`Sources::add_package_module`]). Compile diagnostics keep the module path.
+pub(crate) fn package_frame_path(package: &str, module: &str) -> String {
+    format!("{package}/{module}")
+}
+
 /// Registry of every source file in a compilation, indexed by [`FileId`].
 #[derive(Default)]
 pub struct Sources {
@@ -205,6 +214,17 @@ impl Sources {
             line_index,
         });
         Ok(id)
+    }
+
+    /// Register a package module under the path its backtrace frames carry
+    /// ([`package_frame_path`]), so they render with its source.
+    pub fn add_package_module(
+        &mut self,
+        package: &str,
+        module: &str,
+        text: impl AsRef<str>,
+    ) -> Result<FileId, SourceError> {
+        self.add(package_frame_path(package, module), text)
     }
 
     pub fn get(&self, id: FileId) -> Option<&SourceFile> {
