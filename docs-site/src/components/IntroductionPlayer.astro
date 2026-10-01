@@ -1,0 +1,31 @@
+---
+import { introduction, videoSource } from '../lib/videos';
+const source = videoSource(introduction, import.meta.env.DEV, import.meta.env.SUBMILLI_VIDEO_PREVIEW_PATH);
+const languageLabel = new Intl.DisplayNames(['en'], { type: 'language' }).of(introduction.language ?? 'en');
+---
+<div class="player" aria-label={introduction.title}>
+  {source ? (
+    <video controls playsinline preload="metadata" poster={introduction.posterPath} aria-label={introduction.title}>
+      <source src={source} type="video/mp4" />
+      <track kind="captions" src={introduction.captionsPath} srclang={introduction.language} label={languageLabel} default />
+      Your browser does not support video. <a href={introduction.transcriptPath} target="_top">Read the transcript</a>.
+    </video>
+  ) : (
+    <div class="pending">
+      <img src={introduction.posterPath} alt="A program connects payments, accounts, and support to produce a focused report." width="1600" height="900" />
+      <p><span class="status-dot" aria-hidden="true"></span>Video publication pending <a href={introduction.transcriptPath} target="_top">Read transcript ↗</a></p>
+    </div>
+  )}
+</div>
+<style>
+  .player { width: 100%; aspect-ratio: 16 / 9; background: #131313; overflow: hidden; }
+  video, .pending, img { display: block; width: 100%; height: 100%; }
+  video { object-fit: contain; }
+  .pending { position: relative; }
+  img { object-fit: cover; }
+  p { position: absolute; bottom: 0; left: 0; right: 0; margin: 0; padding: 14px 20px; display: flex; align-items: center; flex-wrap: wrap; gap: 8px 12px; background: #131313f5; border-top: 1px solid #ffffff20; color: #b6b6b6; font: 500 13px/1.4 "SF Pro Rounded",Nunito,Arial,sans-serif; }
+  a { color: #c4e4f9; margin-left: auto; text-underline-offset: 3px; }
+  a:focus-visible { outline: 2px solid #88e5ff; outline-offset: 4px; }
+  .status-dot { width: 6px; height: 6px; border-radius: 50%; background: #929292; }
+  @media(max-width: 480px) { p { padding: 8px 12px; font-size: 11px; gap: 6px; } }
+</style>

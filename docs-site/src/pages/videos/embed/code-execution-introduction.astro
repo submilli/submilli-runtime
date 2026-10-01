@@ -1,0 +1,19 @@
+---
+import IntroductionPlayer from '../../../components/IntroductionPlayer.astro';
+import { introduction } from '../../../lib/videos';
+---
+<!doctype html>
+<html lang={introduction.language}>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="robots" content="noindex, nofollow" />
+    <title>{introduction.title} — Submilli</title>
+    <link rel="canonical" href={`https://submilli.ai${introduction.canonicalPath}`} />
+  </head>
+  <body><IntroductionPlayer /></body>
+</html>
+<style is:global>
+  html, body { margin: 0; padding: 0; background: #131313; }
+  * { box-sizing: border-box; }
+</style>

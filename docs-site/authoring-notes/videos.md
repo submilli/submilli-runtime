@@ -60,9 +60,14 @@ English captions, keyboard access, transcript navigation, mobile width, and them
 
 ## Companion site and analytics
 
-The separate `submilli-private/website` companion links to the canonical home and
-index. It must not duplicate the registry, transcript, or player. Deploy and verify
-the docs routes before making site links live. This draft authorizes no deployment.
+The separate `submilli-private/website` companion is a visual viewing gallery.
+Its featured iframe uses `/docs/videos/embed/code-execution-introduction/`, which
+shares `IntroductionPlayer.astro` with the docs page and index. This keeps source, captions,
+poster and publication state in one registry. Site cards for future films are
+editorial previews without play controls or invented durations. The original SVG
+poster uses the approved film's tool→program→report motif and brand palette.
+Deploy and verify the docs embed route before making the site gallery live.
+This draft authorizes no deployment.
 
 Analytics impact: new docs routes and site-to-docs links. No new events or player
 tracking. Preserve existing site consent, attribution, and booking semantics.

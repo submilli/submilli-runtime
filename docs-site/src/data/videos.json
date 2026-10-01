@@ -13,7 +13,9 @@
       "captionsPath": "/docs/videos/code-execution-introduction.en.vtt",
       "sha256": "d6d505ba502b08ff13274c704df27f0fe1006571f1cf489598a9a5e370a682e1",
       "exportFile": "editor-export-1790685929055.mp4",
-      "snapshotFile": "export-51c09794-8edf-4fe8-bb28-fa7613f54e18.json"
+      "snapshotFile": "export-51c09794-8edf-4fe8-bb28-fa7613f54e18.json",
+      "posterPath": "/docs/videos/code-execution-introduction.svg",
+      "embedPath": "/docs/videos/embed/code-execution-introduction/"
     },
     {
       "id": "helps",

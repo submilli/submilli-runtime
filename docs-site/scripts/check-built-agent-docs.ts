@@ -30,4 +30,9 @@ const executionPage = await readFile(new URL('docs/concepts/execution-model/inde
 assert.ok(executionPage.includes('href="/docs/videos/"'), 'Video library is linked under the docs base');
 assert.ok(!executionPage.includes('/docs/docs/'), 'Sidebar links must not duplicate the docs base');
 assert.ok(!executionPage.includes('<video'), 'Unpublished video must not create a production player');
+const embedPage = await readFile(new URL('docs/videos/embed/code-execution-introduction/index.html', directory), 'utf8');
+assert.ok(embedPage.includes('/docs/videos/code-execution-introduction.svg'), 'Embed renders the registered poster');
+assert.ok(embedPage.includes('Video publication pending'), 'Embed names unpublished state');
+assert.ok(embedPage.includes('noindex, nofollow'), 'Embeds stay out of search');
+assert.ok(!embedPage.includes('<video') && !embedPage.includes('_video-preview'), 'Production embed never exposes local preview media');
 console.log(`Verified exports and HTML discovery for ${chapters.length} visible chapters.`);

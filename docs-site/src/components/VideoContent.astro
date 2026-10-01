@@ -1,31 +1,23 @@
 ---
 import DefaultContent from '@astrojs/starlight/components/MarkdownContent.astro';
-import { introduction, videoSource } from '../lib/videos';
+import { introduction } from '../lib/videos';
+import IntroductionPlayer from './IntroductionPlayer.astro';
 
 const path = Astro.url.pathname.replace(/\/$/, '');
-const isIntroduction = path === introduction.canonicalPath?.replace(/\/$/, '');
+const isVideoPage = path === introduction.canonicalPath?.replace(/\/$/, '') || path === '/docs/videos';
 const durationSeconds = Math.round(introduction.durationSeconds ?? 0);
 const durationLabel = `${Math.floor(durationSeconds / 60)} min ${durationSeconds % 60} sec`;
 const languageLabel = new Intl.DisplayNames(['en'], { type: 'language' }).of(introduction.language ?? 'en');
-const source = videoSource(introduction, import.meta.env.DEV, import.meta.env.SUBMILLI_VIDEO_PREVIEW_PATH);
 ---
 
 <DefaultContent>
-  {isIntroduction && (
+  {isVideoPage && (
     <figure class="video-introduction" aria-label={introduction.title}>
       <div class="video-heading">
         <strong>{introduction.title}</strong>
         <span>{durationLabel} · {languageLabel}</span>
       </div>
-      {source ? (
-        <video controls playsinline preload="metadata" aria-label={introduction.title}>
-          <source src={source} type="video/mp4" />
-          <track kind="captions" src={introduction.captionsPath} srclang={introduction.language} label={languageLabel} default />
-          Your browser does not support video. <a href={introduction.transcriptPath}>Read the transcript</a>.
-        </video>
-      ) : (
-        <p class="video-pending">Video publication is pending. The complete transcript is available below.</p>
-      )}
+      <div class="video-frame"><IntroductionPlayer /></div>
       <figcaption>
         {introduction.description}
         <a href={introduction.transcriptPath}>Read the complete transcript</a>
@@ -45,8 +37,7 @@ const source = videoSource(introduction, import.meta.env.DEV, import.meta.env.SU
   }
   .video-heading { display: flex; flex-wrap: wrap; gap: 0.5rem 1rem; justify-content: space-between; }
   .video-heading span { font-size: 0.875rem; color: var(--sl-color-gray-2); }
-  video { display: block; width: 100%; aspect-ratio: 16 / 9; margin-top: 1rem; border-radius: 8px; background: #000; }
+  .video-frame { margin-top: 1rem; border-radius: 8px; overflow: hidden; }
   figcaption { font-size: 0.9375rem; margin-top: 1rem; }
   figcaption a { display: block; margin-top: 0.5rem; }
-  .video-pending { margin-block: 1rem; }
 </style>

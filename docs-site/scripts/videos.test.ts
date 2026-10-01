@@ -19,6 +19,10 @@ test('completed film has valid canonical, transcript and caption destinations', 
   const paths = chapters.map((chapter) => `/docs/${chapter.slug}/`);
   assert.ok(paths.includes(introduction.canonicalPath!));
   assert.ok(paths.includes(introduction.transcriptPath!));
+  const poster = await readFile(new URL('../public/videos/code-execution-introduction.svg', import.meta.url), 'utf8');
+  assert.ok(poster.includes('<svg'));
+  assert.equal(introduction.posterPath, '/docs/videos/code-execution-introduction.svg');
+  assert.equal(introduction.embedPath, '/docs/videos/embed/code-execution-introduction/');
   assert.equal(introduction.durationSeconds, 90.688);
   assert.equal(introduction.sha256, 'd6d505ba502b08ff13274c704df27f0fe1006571f1cf489598a9a5e370a682e1');
   assert.equal(new Set(films.map((film) => film.id)).size, films.length);
