@@ -189,6 +189,9 @@ secret_store:
   dir: /srv/submilli/secrets
   key_file: /etc/submilli/store.key   # or key_env: SUBMILLI_SECRET_KEY
 
+package_ssh_key_file: /etc/submilli/package-ssh/id_ed25519   # private packages
+# package_ssh_known_hosts_file: /etc/submilli/known_hosts    # default: GitHub's keys
+
 network:
   allow_localhost: false
   allow_private: false
@@ -225,9 +228,10 @@ exception and use flat flag names: `secret_store.dir` is
 `--secret-store-dir`, `network.allow_private` is `--allow-private`, and the
 `mcp_allowed_hosts` list is a repeatable `--mcp-allowed-host`.
 
-Two settings exist only in the file. `api_tokens` and `volumes` have no flag
-and no variable, so who else may call the server and which host directories
-programs can touch are each decided in one reviewable place.
+A few settings exist only in the file. `api_tokens`, `volumes`, and the
+`package_ssh_*` pair have no flag and no variable, so who else may call the
+server, which host directories programs can touch, and which GitHub identity
+installs packages are each decided in one reviewable place.
 `SUBMILLI_SERVER_TOKEN` is the reverse: it exists only in the environment.
 
 A misspelled key stops the server from starting, rather than being quietly
@@ -307,6 +311,46 @@ tag, or branch. A package already installed at the same commit is reported
 unless `--upgrade` is given, which replaces it. `list` prints what is
 installed and `uninstall <name>` removes one. Packages are compiled
 at install time, so nothing is built per request.
+
+A private repository is installed over SSH with the server's own key, never
+the caller's. The URL forms are the same as for [`submilli
+install`](/docs/cli#install-a-package):
+
+```sh
+submilli server packages install git@github.com:acme/billing-private.git
+```
+
+The key is the file `package_ssh_key_file` names: an unencrypted OpenSSH
+key, or the PKCS#8 ed25519 key the Helm chart generates. The server reads it
+at startup and refuses to start if it can't use it. Without the setting,
+public packages still install and SSH installs are refused. Print the
+public half and add it to the repository as a read-only deploy key:
+
+```sh
+submilli server packages ssh-key
+```
+
+```text
+ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIK9…
+fingerprint SHA256:Qm0v7wQq…
+```
+
+The key goes to stdout alone, so `submilli server packages ssh-key | gh repo
+deploy-key add - --repo acme/billing-private` registers it in one step.
+GitHub accepts a key as a deploy key on one repository only, so the server
+installs private packages from that one repository; public packages and
+public dependencies install as before.
+
+The server checks GitHub's host key against GitHub's published keys, built
+in. If GitHub rotates them before you upgrade, point
+`package_ssh_known_hosts_file` at a known_hosts file with the new ones.
+
+| The error says | Do this |
+| --- | --- |
+| `this server has no SSH key for package installs` | Set `package_ssh_key_file` and restart |
+| `SSH authentication to github.com failed` | Add the `ssh-key` output to the repository as a deploy key |
+| `was not found, or the server's package SSH key has no access to it` | Check the name, then the deploy key's repository |
+| `does not match` or `not a known SSH host` | Compare with [GitHub's key fingerprints](https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/githubs-ssh-key-fingerprints), then set `package_ssh_known_hosts_file` |
 
 ## Register blueprints
 

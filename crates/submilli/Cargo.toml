@@ -18,6 +18,7 @@ interpreter = { path = "../interpreter" }
 submilli-blueprint = { path = "../submilli-blueprint" }
 submilli-build = { path = "../submilli-build" }
 submilli-shared = { path = "../submilli-shared" }
+zeroize = "1"
 clap = { workspace = true }
 anyhow = { workspace = true }
 wasmtime = { workspace = true }

@@ -34,6 +34,18 @@ ureq = { workspace = true }
 flate2 = { workspace = true }
 tar = { workspace = true }
 tempfile = { workspace = true }
+git2 = { version = "0.21", default-features = false, features = ["ssh", "vendored-libgit2"] }
+# For GIT_OPT_SET_HOMEDIR, which git2 does not wrap; the version git2 0.21 uses.
+libgit2-sys = "0.18"
+ssh-key = { version = "0.6.7", default-features = false, features = ["std", "ed25519", "ecdsa"] }
+hmac = "0.12"
+sha1 = "0.10"
+zeroize = "1"
+
+# libssh2 uses WinCNG on Windows; elsewhere it needs OpenSSL, vendored so the
+# static musl release binaries carry it.
+[target.'cfg(not(windows))'.dependencies]
+git2 = { version = "0.21", default-features = false, features = ["vendored-openssl"] }
 
 [dev-dependencies]
 httpmock = { workspace = true }

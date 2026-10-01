@@ -20,6 +20,8 @@ use submilli_build::{
 };
 use submilli_shared::github::GithubRepoFetcher;
 
+use super::ssh_identity::LocalSsh;
+
 #[derive(clap::Args)]
 pub struct Args {
     #[command(subcommand)]
@@ -330,14 +332,18 @@ fn resolve_github_dependencies(
         }
     };
 
-    let closure =
-        match resolve_github_closure(store, manifest, &GithubRepoFetcher, existing_lock.as_ref()) {
-            Ok(closure) => closure,
-            Err(err) => {
-                render_resolve_error(&err);
-                return Err(ExitCode::from(1));
-            }
-        };
+    let ssh = LocalSsh::new();
+    let identities = ssh.identities();
+    let fetcher = GithubRepoFetcher {
+        auth: ssh.auth(&identities),
+    };
+    let closure = match resolve_github_closure(store, manifest, &fetcher, existing_lock.as_ref()) {
+        Ok(closure) => closure,
+        Err(err) => {
+            render_resolve_error(&err);
+            return Err(ExitCode::from(1));
+        }
+    };
     if let Err(err) = install_plan(store, &closure.plan, true) {
         crate::commands::install::render_install_error(&err);
         return Err(ExitCode::from(1));

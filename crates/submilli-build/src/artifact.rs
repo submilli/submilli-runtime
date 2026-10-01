@@ -76,6 +76,26 @@ pub struct GithubSource {
     /// field existed read back as `None`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source_hash: Option<String>,
+    /// How the source was fetched. Additive: artifacts installed before SSH
+    /// support read back as HTTPS, and HTTPS installs omit the field.
+    #[serde(default, skip_serializing_if = "GithubTransport::is_https")]
+    pub transport: GithubTransport,
+}
+
+/// How a GitHub source is fetched: anonymous HTTPS (API + codeload tarball) or
+/// the git protocol over SSH with the installing process's credentials.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum GithubTransport {
+    #[default]
+    Https,
+    Ssh,
+}
+
+impl GithubTransport {
+    pub fn is_https(&self) -> bool {
+        *self == GithubTransport::Https
+    }
 }
 
 impl ArtifactMetadata {

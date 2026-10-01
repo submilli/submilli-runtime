@@ -5,6 +5,12 @@
 //!
 //! Gated: they only run when `SUBMILLI_E2E_GITHUB=1` is set, because they need
 //! network access and the repo to exist. CI leaves them skipped.
+//!
+//! The SSH tests run only with `SUBMILLI_E2E_GITHUB_SSH=1` and use the
+//! invoking user's ssh-agent or `~/.ssh` keys, with github.com in
+//! `~/.ssh/known_hosts`. `SUBMILLI_E2E_PRIVATE_REPO=<org/repo>` points them at
+//! a private mirror of `submilli/test-packages` (`git push --mirror` keeps the
+//! commit the fixture pins); without it they fetch the public repo over SSH.
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
@@ -144,4 +150,117 @@ fn copy_dir(src: &Path, dst: &Path) {
             std::fs::copy(&from, &to).expect("copy file");
         }
     }
+}
+
+fn ssh_enabled() -> bool {
+    std::env::var("SUBMILLI_E2E_GITHUB_SSH").is_ok_and(|v| v == "1")
+}
+
+/// The SSH URL of the (ideally private) mirror of the test repo.
+fn ssh_repo_url() -> String {
+    let repo = std::env::var("SUBMILLI_E2E_PRIVATE_REPO")
+        .unwrap_or_else(|_| "submilli/test-packages".to_string());
+    format!("git@github.com:{repo}.git")
+}
+
+#[test]
+fn install_over_ssh_with_the_local_identity() {
+    if !ssh_enabled() {
+        return;
+    }
+    let home = TempDir::new().unwrap();
+    let url = ssh_repo_url();
+    let out = install(home.path(), &[&url]);
+    assert!(
+        out.status.success(),
+        "install failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(installed(home.path(), "@submilli/greet"));
+    let metadata =
+        std::fs::read_to_string(home.path().join("packages/@submilli/greet/metadata.json"))
+            .unwrap();
+    let metadata: serde_json::Value = serde_json::from_str(&metadata).unwrap();
+    assert_eq!(
+        metadata["source"]["github"]["transport"], "ssh",
+        "provenance records SSH: {metadata}"
+    );
+}
+
+/// A dependency declared by SSH URL is fetched at its pinned commit, locked
+/// verbatim, and satisfied from the lock on the next build.
+#[test]
+fn build_resolves_ssh_dependency_and_reuses_the_lock() {
+    if !ssh_enabled() {
+        return;
+    }
+    let home = TempDir::new().unwrap();
+    let project = TempDir::new().unwrap();
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/github-dep");
+    copy_dir(&fixture, project.path());
+    let manifest_path = project.path().join("submilli.toml");
+    let manifest = std::fs::read_to_string(&manifest_path).unwrap();
+    let url = ssh_repo_url();
+    std::fs::write(
+        &manifest_path,
+        manifest.replace(&format!("\"{TEST_REPO}\""), &format!("\"{url}\"")),
+    )
+    .unwrap();
+
+    let build = || {
+        Command::new(submilli_bin())
+            .args(["build", "check"])
+            .current_dir(project.path())
+            .env("SUBMILLI_HOME", home.path())
+            .output()
+            .expect("invoke submilli build check")
+    };
+    let out = build();
+    assert!(
+        out.status.success(),
+        "build failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let lock = std::fs::read_to_string(project.path().join("submilli.lock")).unwrap();
+    assert!(lock.contains(&url), "lock keeps the SSH URL:\n{lock}");
+    assert!(lock.contains(GITHUB_DEP_SHA), "lock pins the SHA:\n{lock}");
+
+    let again = build();
+    assert!(
+        again.status.success(),
+        "second build failed: {}",
+        String::from_utf8_lossy(&again.stderr)
+    );
+    assert_eq!(
+        std::fs::read_to_string(project.path().join("submilli.lock")).unwrap(),
+        lock,
+        "the lock is reused unchanged"
+    );
+}
+
+/// With no agent and no key files, an SSH install fails at once with the fix
+/// instead of waiting on a prompt.
+#[test]
+fn ssh_install_without_an_identity_fails_fast() {
+    if !ssh_enabled() {
+        return;
+    }
+    let home = TempDir::new().unwrap();
+    let user_home = TempDir::new().unwrap();
+    let started = std::time::Instant::now();
+    let out = Command::new(submilli_bin())
+        .args(["install", &ssh_repo_url()])
+        .env("SUBMILLI_HOME", home.path())
+        .env("HOME", user_home.path())
+        .env("SSH_AUTH_SOCK", "")
+        .stdin(std::process::Stdio::null())
+        .output()
+        .expect("invoke submilli install");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success());
+    assert!(
+        stderr.contains("no SSH identity was available"),
+        "names the missing identity: {stderr}"
+    );
+    assert!(started.elapsed() < std::time::Duration::from_secs(30));
 }

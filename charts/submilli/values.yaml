@@ -212,6 +212,26 @@ auth:
   # -- Key in the Secret holding the `user` token.
   userTokenKey: user-token
 
+packageSsh:
+  # -- Existing Secret holding the SSH private key `server packages install`
+  # authenticates to GitHub with for private repositories, instead of the
+  # ed25519 key the chart generates. An unencrypted OpenSSH key, or a PKCS#8
+  # ed25519 key. Print its public half with `submilli server packages ssh-key`
+  # and add it to the repository as a deploy key.
+  #
+  # Required when the chart is rendered without cluster access — Argo CD, or
+  # any `helm template | kubectl apply` flow. The generated Secret keeps its key
+  # across upgrades by reading the live one back, and there is no live one to
+  # read there, so the key, and the deploy key registered for it, would change
+  # on every render.
+  #
+  # The key is read at boot. After changing the Secret, restart the pod:
+  # `kubectl rollout restart statefulset/<name>`.
+  existingSecret: ""
+  # -- Key in the Secret holding the private key. Also its file name under
+  # /etc/submilli/package-ssh.
+  key: id_ed25519
+
 # -- Extra keys merged into the server's config file (server.yaml), for settings
 # the chart has no dedicated value for. Keys are the server's own, in its units;
 # it rejects a key it does not know and refuses to boot, so a typo here surfaces

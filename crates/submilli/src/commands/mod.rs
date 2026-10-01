@@ -14,4 +14,5 @@ pub mod search;
 pub mod secret;
 pub mod server;
 pub mod skill;
+mod ssh_identity;
 pub mod upgrade;

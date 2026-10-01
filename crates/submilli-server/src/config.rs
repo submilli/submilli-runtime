@@ -5,6 +5,7 @@ use std::sync::Arc;
 
 use interpreter::runtime::{LlmLimits, NetworkPolicy, RuntimeConfig, SessionKvLimits};
 
+use submilli_shared::github::{KnownHosts, ServerSshKey};
 use submilli_shared::llm::ModelDispatch;
 use submilli_shared::secret_store::SecretStore;
 
@@ -78,6 +79,10 @@ pub struct ServerConfig {
     /// The binary points it at the CLI's store so a locally published package
     /// resolves without a second install; `None` means no fallback.
     pub package_fallback_root: Option<PathBuf>,
+    /// The SSH identity `POST /v1/packages/install` fetches private GitHub
+    /// repositories with. `None` leaves SSH installs disabled: they fail with
+    /// a message naming `package_ssh_key_file`, and HTTPS installs still work.
+    pub package_ssh: Option<PackageSshConfig>,
     /// `Host` headers the MCP streamable-HTTP endpoint accepts (rmcp's
     /// DNS-rebinding guard). `None` keeps rmcp's loopback-only default; `Some`
     /// replaces it wholesale, so the binary boundary pre-composes the loopback
@@ -203,6 +208,15 @@ pub fn default_cli_package_store_dir() -> PathBuf {
 /// blueprint never names a host directory of its own.
 pub type VolumeTable = BTreeMap<String, PathBuf>;
 
+/// The server's package-install SSH identity, loaded and validated at boot.
+#[derive(Clone, Debug)]
+pub struct PackageSshConfig {
+    pub key: Arc<ServerSshKey>,
+    pub known_hosts: Arc<KnownHosts>,
+    /// Where the host keys came from; `None` means GitHub's built-in keys.
+    pub known_hosts_file: Option<PathBuf>,
+}
+
 /// The directories the server reads or writes that [`validate_volumes`]
 /// guards. Callers pass
 /// *effective* values — after defaults are applied — because a volume that
@@ -227,6 +241,10 @@ pub struct ServerDirectories {
     /// The files `api_tokens` entries read their tokens from. Like the key
     /// file, they never reach [`ServerConfig`], which holds only digests.
     pub api_token_files: Vec<PathBuf>,
+    /// The private key package installs authenticate to GitHub with.
+    pub package_ssh_key_file: Option<PathBuf>,
+    /// The known_hosts override package installs trust GitHub's host keys from.
+    pub package_ssh_known_hosts_file: Option<PathBuf>,
     pub session_storage_root: Option<PathBuf>,
     /// The durable session store — lifecycle records plus the idempotency
     /// ledger in a subdirectory of it. A different directory from
@@ -265,6 +283,14 @@ impl ServerDirectories {
             secret_store_dir: None,
             secret_store_key_file: None,
             api_token_files: Vec::new(),
+            package_ssh_key_file: config
+                .package_ssh
+                .as_ref()
+                .map(|ssh| ssh.key.path().to_path_buf()),
+            package_ssh_known_hosts_file: config
+                .package_ssh
+                .as_ref()
+                .and_then(|ssh| ssh.known_hosts_file.clone()),
             // Neither the secret store's paths, the token files', nor the config
             // file's survive into `ServerConfig`; an embedder that wants them
             // guarded fills them in.
@@ -607,7 +633,7 @@ fn guarded_dirs(dirs: &ServerDirectories) -> Vec<GuardedDir> {
         .ephemeral_storage_root
         .clone()
         .unwrap_or_else(std::env::temp_dir);
-    let rows: [(&'static str, Option<PathBuf>, Direction, &'static str); 14] = [
+    let rows: [(&'static str, Option<PathBuf>, Direction, &'static str); 16] = [
         (
             "secret store",
             dirs.secret_store_dir.clone(),
@@ -619,6 +645,19 @@ fn guarded_dirs(dirs: &ServerDirectories) -> Vec<GuardedDir> {
             dirs.secret_store_key_file.clone(),
             Direction::VolumeContains,
             "a guest read would reach the store's decryption key",
+        ),
+        (
+            "package SSH key file",
+            dirs.package_ssh_key_file.clone(),
+            Direction::VolumeContains,
+            "a guest read would reach the private key the server authenticates to GitHub with",
+        ),
+        (
+            "package SSH known_hosts file",
+            dirs.package_ssh_known_hosts_file.clone(),
+            Direction::VolumeContains,
+            "a guest write would replace the host keys package installs trust for GitHub, \
+             letting another host serve package sources",
         ),
         (
             "blueprint store",

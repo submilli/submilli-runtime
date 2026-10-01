@@ -15,8 +15,9 @@ use std::path::{Path, PathBuf};
 
 use crate::resolve::PlannedInstall;
 use crate::{
-    BuildDiagnostic, DriverError, PackageName, PackageSource, PackageStore, PackageStoreError,
-    PackageVersion, build_packages, install_packages, load_manifest,
+    BuildDiagnostic, DriverError, GithubSource, GithubTransport, PackageName, PackageSource,
+    PackageStore, PackageStoreError, PackageVersion, build_packages, install_packages,
+    load_manifest,
 };
 
 /// What an install wrote and skipped.
@@ -125,8 +126,13 @@ pub fn install_from_dir(
             Err(err) if err.is_incomplete_artifact() => to_install.push(package),
             Err(err) => return Err(InstallError::Store(err)),
             Ok(artifact) => match artifact.metadata.source {
-                Some(PackageSource::Github(existing)) if existing.sha == github.sha => {
+                Some(PackageSource::Github(existing)) if is_same_install(&existing, github) => {
                     up_to_date.push(package.name.clone());
+                }
+                // Same commit fetched another way: refresh the provenance, or
+                // the lock's hash and the store's would disagree forever.
+                Some(PackageSource::Github(existing)) if existing.sha == github.sha => {
+                    to_install.push(package);
                 }
                 existing if upgrade => {
                     let _ = existing;
@@ -186,6 +192,17 @@ pub fn install_plan(
     Ok(())
 }
 
+/// Whether `existing` is the install `incoming` would make: the same commit
+/// over the same transport, with the same source hash when one is known.
+fn is_same_install(existing: &GithubSource, incoming: &GithubSource) -> bool {
+    existing.sha == incoming.sha
+        && existing.transport == incoming.transport
+        && incoming
+            .source_hash
+            .as_ref()
+            .is_none_or(|hash| existing.source_hash.as_ref() == Some(hash))
+}
+
 fn scope_of(name: &str) -> &str {
     submilli_blueprint::validate_scoped_name(name)
         .map(|(org, _)| org)
@@ -195,7 +212,11 @@ fn scope_of(name: &str) -> &str {
 fn describe_source(source: Option<&PackageSource>) -> String {
     match source {
         Some(PackageSource::Github(gh)) => {
-            format!("github.com/{}/{}@{}", gh.org, gh.repo, short_sha(&gh.sha))
+            let host = match gh.transport {
+                GithubTransport::Https => "github.com/",
+                GithubTransport::Ssh => "git@github.com:",
+            };
+            format!("{host}{}/{}@{}", gh.org, gh.repo, short_sha(&gh.sha))
         }
         None => "a local build".to_string(),
     }

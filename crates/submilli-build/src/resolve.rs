@@ -20,8 +20,8 @@ use std::path::{Path, PathBuf};
 
 use crate::lockfile::{LockedPackage, Lockfile};
 use crate::{
-    BuildDiagnostic, DependencyKind, DependencySource, GithubSource, PackageManifest, PackageName,
-    PackageSource, PackageStore, ProjectManifest, load_manifest,
+    BuildDiagnostic, DependencyKind, DependencySource, GithubSource, GithubTransport,
+    PackageManifest, PackageName, PackageSource, PackageStore, ProjectManifest, load_manifest,
 };
 
 /// A repo fetched at a pinned commit, ready to install from.
@@ -34,6 +34,8 @@ pub struct FetchedRepo {
     pub root: PathBuf,
     /// sha256 of the downloaded source tarball.
     pub source_hash: String,
+    /// How the repo was fetched, recorded as package provenance.
+    pub transport: GithubTransport,
     /// Keeps any backing temp storage alive for as long as this value lives.
     pub keep_alive: Option<Box<dyn Any + Send>>,
 }
@@ -46,12 +48,23 @@ pub trait RepoFetcher {
 #[derive(Debug)]
 pub struct FetchError {
     pub message: String,
+    /// The fetch needed an SSH identity the installer does not have, as
+    /// opposed to one that failed; servers answer it as a configuration error.
+    pub missing_ssh_identity: bool,
 }
 
 impl FetchError {
     pub fn new(message: impl Into<String>) -> Self {
         Self {
             message: message.into(),
+            missing_ssh_identity: false,
+        }
+    }
+
+    pub fn ssh_not_configured(message: impl Into<String>) -> Self {
+        Self {
+            message: message.into(),
+            missing_ssh_identity: true,
         }
     }
 }
@@ -225,6 +238,7 @@ pub fn resolve_github_closure(
 
     let mut resolver = Resolver {
         fetcher,
+        root_sources: root_sources(&seeds),
         visited: BTreeMap::new(),
         in_progress: Vec::new(),
         plan: Vec::new(),
@@ -237,6 +251,25 @@ pub fn resolve_github_closure(
         plan: resolver.plan,
         locked: resolver.locked,
     })
+}
+
+/// How the root manifest pins one of its GitHub dependencies.
+struct RootSource {
+    url: String,
+    sha: String,
+}
+
+fn root_sources(seeds: &[Seed]) -> BTreeMap<PackageName, RootSource> {
+    seeds
+        .iter()
+        .map(|seed| {
+            let source = RootSource {
+                url: seed.url.clone(),
+                sha: seed.sha.clone(),
+            };
+            (seed.name.clone(), source)
+        })
+        .collect()
 }
 
 struct Seed {
@@ -253,6 +286,12 @@ struct VisitedNode {
 
 struct Resolver<'a> {
     fetcher: &'a dyn RepoFetcher,
+    /// The GitHub dependencies the root's packages use. At the same commit,
+    /// the root's URL is fetched and locked even when a dependency reaches
+    /// the package first under another spelling, so the transport the
+    /// project chose is the one used and `lock_satisfies` finds the URL it
+    /// compares against.
+    root_sources: BTreeMap<PackageName, RootSource>,
     visited: BTreeMap<PackageName, VisitedNode>,
     in_progress: Vec<PackageName>,
     plan: Vec<PlannedInstall>,
@@ -284,6 +323,10 @@ impl Resolver<'_> {
             path.push(name);
             return Err(ResolveError::Cycle { path });
         }
+        let url = match self.root_sources.get(&name) {
+            Some(root) if root.sha == sha => root.url.clone(),
+            _ => url,
+        };
 
         self.in_progress.push(name.clone());
 
@@ -330,6 +373,7 @@ impl Resolver<'_> {
             repo: fetched.repo.clone(),
             sha: sha.clone(),
             source_hash: Some(fetched.source_hash.clone()),
+            transport: fetched.transport,
         });
         self.locked.push(LockedPackage {
             name: name.as_str().to_string(),

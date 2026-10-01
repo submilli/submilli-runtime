@@ -1,7 +1,8 @@
 //! `submilli server packages install <url> [package] [--sha <sha>] [--upgrade]` — ask a
 //! running submilli-server to fetch a GitHub package, compile it, and install it
 //! into the server's package store. The fetch + compile happen server-side; the
-//! CLI only relays the request.
+//! CLI only relays the request, so SSH specs use the server's key, never the
+//! local user's.
 
 use std::process::ExitCode;
 
@@ -12,7 +13,11 @@ use crate::commands::http::{ServerTarget, error_message};
 
 #[derive(clap::Args)]
 pub struct Args {
-    /// GitHub repo: `org/repo`, `github.com/org/repo`, or a full URL.
+    /// GitHub repo: `org/repo`, `github.com/org/repo`, or a full URL for a
+    /// public repo; `git@github.com:org/repo.git`,
+    /// `ssh://git@github.com/org/repo.git`, or `git://github.com/org/repo`
+    /// (Submilli shorthand for SSH) for a private one, fetched with the
+    /// server's SSH key.
     url: String,
 
     /// Install only this package (`@org/name`). Omit to install every package

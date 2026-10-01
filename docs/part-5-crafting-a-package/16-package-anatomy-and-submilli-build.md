@@ -342,10 +342,19 @@ dependencies = ["@acme/billing", "@submilli/jina"]
 | Another package in the project | In the package's `dependencies` |
 | A package in the local store | There, and in `[dependencies]` with its version |
 | A package in a GitHub repository | There, and in `[dependencies]` as `{ github = "github.com/org/repo", rev = "<commit>" }` |
+| A package in a private GitHub repository | The same, with the SSH URL: `{ github = "git@github.com:org/repo.git", rev = "<commit>" }` |
 
 A GitHub dependency is fetched into the local store by the build, which
-records the commits it used in `submilli.lock`. A name that isn't declared
-stops the build:
+records the commits it used in `submilli.lock`.
+
+A private one is fetched over SSH by whoever builds or installs: your keys on
+your machine, the server's key on a server. Each URL picks its own transport,
+so declare every private repository with its SSH URL, including the ones your
+dependencies depend on. A server's key is a deploy key on a single repository,
+so a server can install a private package only if no other private repository
+is in its dependencies.
+
+A name that isn't declared stops the build:
 
 ```text
 error: declare dependency "@acme/missing" as a sibling [[package]] or in top-level [dependencies]
@@ -397,7 +406,8 @@ credited 1500 cents
 Other machines install from source. Push the project to GitHub, then
 `submilli install org/repo` on a developer's machine or [`submilli server
 packages install`](/docs/server#install-packages) on a server builds it
-there, pinned to a commit.
+there, pinned to a commit. For a private repository, use
+`git@github.com:org/repo.git` instead of `org/repo`.
 
 ## With a coding agent
 

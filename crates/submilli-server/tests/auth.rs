@@ -106,6 +106,7 @@ fn every_route_declares_the_access_it_requires() {
         ("/v1/packages", Admin),
         ("/v1/packages/{*name}", Admin),
         ("/v1/packages/install", Admin),
+        ("/v1/packages/ssh-key", Admin),
         ("/v1/blueprints/{name}/packages/search", User),
         ("/v1/blueprints/{name}/packages/docs", User),
         ("/v1/blueprints/{name}/builtins", User),

@@ -5,8 +5,8 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use submilli_build::{
-    FetchError, FetchedRepo, Lockfile, PackageStore, RepoFetcher, ResolveError, install_plan,
-    load_manifest, resolve_github_closure,
+    FetchError, FetchedRepo, GithubTransport, Lockfile, PackageSource, PackageStore, RepoFetcher,
+    ResolveError, install_plan, load_manifest, resolve_github_closure,
 };
 use tempfile::TempDir;
 
@@ -33,6 +33,11 @@ impl RepoFetcher for FakeFetcher {
             repo: repo.clone(),
             root: dir.clone(),
             source_hash: format!("sha256:{sha}"),
+            transport: if url.starts_with("git@") {
+                GithubTransport::Ssh
+            } else {
+                GithubTransport::Https
+            },
             keep_alive: None,
         })
     }
@@ -344,6 +349,72 @@ fn satisfied_lock_skips_fetching() {
         1,
         "no additional fetch when the lock is satisfied"
     );
+}
+
+#[test]
+fn ssh_dependency_is_locked_verbatim_and_reused() {
+    let url = "git@github.com:acme/private.git";
+    let repo_a = package("@acme/a", "1.0.0", &[]);
+    let root = format!(
+        "[dependencies]\n{}\n{}",
+        dep("@acme/a", url, SHA_A),
+        package("@me/app", "0.1.0", &["@acme/a"])
+    );
+    let world = world(&[(url, "acme", "private", &repo_a)], &root);
+
+    let closure = resolve(&world, None).expect("first resolve");
+    assert_eq!(closure[0].github, url, "lock keeps the SSH URL");
+    let Some(PackageSource::Github(installed)) = world
+        .store
+        .load("@acme/a")
+        .expect("installed")
+        .metadata
+        .source
+    else {
+        panic!("installed package has GitHub provenance");
+    };
+    assert_eq!(installed.transport, GithubTransport::Ssh);
+
+    let lock = Lockfile::new(closure);
+    resolve(&world, Some(&lock)).expect("second resolve");
+    assert_eq!(
+        world.fetcher.fetches.load(Ordering::SeqCst),
+        1,
+        "a satisfied lock skips the SSH fetch"
+    );
+}
+
+/// A dependency that names a package the root also declares, at the same
+/// commit but under another URL, does not change how the root fetches it.
+#[test]
+fn the_root_manifest_url_wins_at_the_same_commit() {
+    let repo_b = package("@acme/b", "1.0.0", &[]);
+    let repo_a = format!(
+        "[dependencies]\n{}\n{}",
+        dep("@acme/b", "git@github.com:acme/b.git", SHA_B),
+        package("@acme/a", "1.0.0", &["@acme/b"])
+    );
+    let root = format!(
+        "[dependencies]\n{}{}\n{}",
+        dep("@acme/a", "github.com/acme/a", SHA_A),
+        dep("@acme/b", "github.com/acme/b", SHA_B),
+        package("@me/app", "0.1.0", &["@acme/a", "@acme/b"])
+    );
+    // Only the root's spelling of b exists in the fake, so fetching the
+    // dependency's SSH URL would fail.
+    let world = world(
+        &[
+            ("github.com/acme/a", "acme", "a", &repo_a),
+            ("github.com/acme/b", "acme", "b", &repo_b),
+        ],
+        &root,
+    );
+    let closure = resolve(&world, None).expect("resolve");
+    let b = closure
+        .iter()
+        .find(|p| p.name == "@acme/b")
+        .expect("b locked");
+    assert_eq!(b.github, "github.com/acme/b");
 }
 
 #[test]

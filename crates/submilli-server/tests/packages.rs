@@ -665,3 +665,101 @@ mod blueprint_scoped {
         assert!(body.contains("function ping("), "got: {body}");
     }
 }
+
+/// A Helm-style PKCS#8 ed25519 key with a fixed, test-only seed.
+fn package_ssh(dir: &std::path::Path) -> submilli_server::config::PackageSshConfig {
+    use base64::Engine;
+    let mut der = vec![
+        0x30, 0x2e, 0x02, 0x01, 0x00, 0x30, 0x05, 0x06, 0x03, 0x2b, 0x65, 0x70, 0x04, 0x22, 0x04,
+        0x20,
+    ];
+    der.extend_from_slice(&[7u8; 32]);
+    let pem = format!(
+        "-----BEGIN PRIVATE KEY-----\n{}\n-----END PRIVATE KEY-----\n",
+        base64::engine::general_purpose::STANDARD.encode(der)
+    );
+    let path = dir.join("id_ed25519");
+    std::fs::write(&path, pem).unwrap();
+    submilli_server::config::PackageSshConfig {
+        key: std::sync::Arc::new(submilli_shared::github::ServerSshKey::load(&path).unwrap()),
+        known_hosts: std::sync::Arc::new(submilli_shared::github::KnownHosts::github_builtin()),
+        known_hosts_file: None,
+    }
+}
+
+async fn send(
+    state: AppState,
+    method: &str,
+    uri: &str,
+    body: Option<Value>,
+) -> (StatusCode, Value) {
+    let req = Request::builder()
+        .method(method)
+        .uri(uri)
+        .header("content-type", "application/json")
+        .body(body.map_or_else(Body::empty, |body| Body::from(body.to_string())))
+        .unwrap();
+    let resp = app(state).oneshot(req).await.unwrap();
+    let status = resp.status();
+    let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+    (
+        status,
+        serde_json::from_slice(&bytes).unwrap_or(Value::Null),
+    )
+}
+
+#[tokio::test]
+async fn ssh_key_endpoint_returns_only_the_public_key() {
+    let dir = tempfile::tempdir().unwrap();
+    let ssh = package_ssh(dir.path());
+    let fingerprint = ssh.key.fingerprint().to_string();
+    let state = AppState::new(ServerConfig {
+        package_store_root: Some(dir.path().join("packages")),
+        package_ssh: Some(ssh),
+        ..ServerConfig::default()
+    })
+    .expect("AppState");
+    let (status, body) = send(state, "GET", "/v1/packages/ssh-key", None).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert!(
+        body["public_key"]
+            .as_str()
+            .unwrap()
+            .starts_with("ssh-ed25519 AAAA")
+    );
+    assert_eq!(body["fingerprint"], fingerprint.as_str());
+    assert!(!body.to_string().contains("PRIVATE"), "{body}");
+}
+
+#[tokio::test]
+async fn without_a_key_ssh_key_is_404_and_ssh_installs_name_the_setting() {
+    let dir = tempfile::tempdir().unwrap();
+    let state = || {
+        AppState::new(ServerConfig {
+            package_store_root: Some(dir.path().join("packages")),
+            ..ServerConfig::default()
+        })
+        .expect("AppState")
+    };
+    let (status, body) = send(state(), "GET", "/v1/packages/ssh-key", None).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(body["error"], "ssh_not_configured");
+
+    // No network: with no identity the SSH fetch fails before connecting.
+    let (status, body) = send(
+        state(),
+        "POST",
+        "/v1/packages/install",
+        Some(serde_json::json!({ "url": "git@github.com:acme/private.git" })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert_eq!(body["error"], "ssh_not_configured");
+    assert!(
+        body["message"]
+            .as_str()
+            .unwrap()
+            .contains("package_ssh_key_file"),
+        "{body}"
+    );
+}

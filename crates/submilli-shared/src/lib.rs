@@ -18,7 +18,7 @@ pub mod oauth_provider;
 pub mod prompt;
 pub mod secret_store;
 
-pub use github::{FetchedRepo, GithubError, GithubSpec, ResolvedRepo};
+pub use github::{FetchAuth, FetchedRepo, GithubError, GithubSpec, ResolvedRepo};
 pub use host::{BlueprintAuthProxy, BlueprintSecretProvider, EnvFileSecretResolver, PolicyCheck};
 pub use oauth_provider::OAuthProvider;
 

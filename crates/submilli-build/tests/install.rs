@@ -8,7 +8,7 @@ use std::fs;
 use std::path::Path;
 
 use submilli_build::{
-    GithubSource, InstallError, PackageSource, PackageStore, install_from_dir,
+    GithubSource, GithubTransport, InstallError, PackageSource, PackageStore, install_from_dir,
     read_package_artifact,
 };
 use tempfile::TempDir;
@@ -41,6 +41,7 @@ fn github(org: &str, repo: &str, sha: &str) -> PackageSource {
         repo: repo.to_string(),
         sha: sha.to_string(),
         source_hash: None,
+        transport: GithubTransport::Https,
     })
 }
 
@@ -92,6 +93,66 @@ fn reinstall_at_same_sha_is_a_no_op() {
     assert!(report.installed.is_empty());
     assert_eq!(report.up_to_date.len(), 1);
     assert_eq!(report.up_to_date[0].as_str(), "@acme/widget");
+}
+
+/// Switching a package between HTTPS and SSH at the same commit reinstalls it
+/// without `--upgrade`, so the provenance and source hash the lockfile checks
+/// against describe how it was actually fetched.
+#[test]
+fn same_sha_over_another_transport_refreshes_provenance() {
+    let repo = write_repo("@acme/widget");
+    let store_root = TempDir::new().unwrap();
+    let store = PackageStore::new(store_root.path());
+    let https = GithubSource {
+        source_hash: Some("sha256:codeload".to_string()),
+        ..match github("acme", "widget", SHA_A) {
+            PackageSource::Github(source) => source,
+        }
+    };
+    let ssh = GithubSource {
+        source_hash: Some("sha256:tree".to_string()),
+        transport: GithubTransport::Ssh,
+        ..https.clone()
+    };
+
+    install_from_dir(
+        &store,
+        repo.path(),
+        None,
+        &PackageSource::Github(https),
+        false,
+    )
+    .expect("HTTPS install");
+    let report = install_from_dir(
+        &store,
+        repo.path(),
+        None,
+        &PackageSource::Github(ssh.clone()),
+        false,
+    )
+    .expect("SSH install at the same commit");
+    assert_eq!(
+        report.installed.len(),
+        1,
+        "reinstalled, not reported up to date"
+    );
+
+    let dir = store.package_dir("@acme/widget").unwrap();
+    let artifact = read_package_artifact(&dir).expect("artifact readable");
+    assert_eq!(
+        artifact.metadata.source,
+        Some(PackageSource::Github(ssh.clone()))
+    );
+
+    let again = install_from_dir(
+        &store,
+        repo.path(),
+        None,
+        &PackageSource::Github(ssh),
+        false,
+    )
+    .expect("repeat SSH install");
+    assert_eq!(again.up_to_date.len(), 1);
 }
 
 #[test]

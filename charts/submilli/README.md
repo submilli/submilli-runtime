@@ -161,6 +161,34 @@ its key comes from a different trust domain than the data it protects; a key kep
 a Kubernetes Secret beside the volume buys very little. Turn it on when you have a
 KMS or CSI-driver key source.
 
+## Private packages
+
+The chart generates an ed25519 key in the Secret `<release>-package-ssh`,
+mounts it at `/etc/submilli/package-ssh/id_ed25519`, and sets
+`package_ssh_key_file` to it; `config.package_ssh_key_file` is refused.
+`server packages install git@github.com:org/repo.git` authenticates to GitHub
+with it. Print the public half and add it to the repository as a
+deploy key:
+
+```sh
+submilli server packages ssh-key
+```
+
+Like the generated API tokens, the key is created once and carried forward
+with `lookup`, and the Secret is kept on `helm uninstall`. Under
+`helm template` and Argo CD, `lookup` sees nothing and the key would be
+regenerated on every render, so those flows set `packageSsh.existingSecret`
+(and `packageSsh.key`, the key inside it) to a Secret they manage:
+
+```sh
+ssh-keygen -t ed25519 -N "" -C submilli-server -f id_ed25519
+kubectl create secret generic submilli-package-ssh --from-file=id_ed25519
+```
+
+Renaming `packageSsh.key` keeps the generated key. GitHub's host keys are
+built into the server; to trust others, mount a known_hosts file through
+`secrets:` and set `config.package_ssh_known_hosts_file` to its path.
+
 ## Memory
 
 One knob, `execution.maxMemoryMB`, feeds both the server's per-execution cap and

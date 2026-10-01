@@ -44,6 +44,9 @@ submilli install submilli/submilli-runtime@v0.1.6 @submilli/jina
 ```
 
 Add `--upgrade` to replace a package already installed at another commit.
+A private repository installs over SSH with your own keys: give its SSH URL,
+`git@github.com:acme/billing-package.git`, instead of `owner/repo`
+([Install a package](/docs/cli#install-a-package)).
 Every [curated package](/docs/next/reference/curated-packages) comes from
 that repository.
 

@@ -130,7 +130,8 @@ mod tests {
             LockedPackage {
                 name: "@acme/slack".to_string(),
                 version: "0.3.1".to_string(),
-                github: "github.com/acme/slack".to_string(),
+                // SSH dependencies are locked by their URL verbatim.
+                github: "git@github.com:acme/slack.git".to_string(),
                 sha: "0000000000000000000000000000000000000000".to_string(),
                 source_hash: "sha256:aaaa".to_string(),
             },

@@ -24,8 +24,8 @@ use toml::Spanned;
 
 pub use artifact::{
     ARTIFACT_SCHEMA_VERSION, Artifact, ArtifactDependency, ArtifactError, ArtifactMetadata,
-    ArtifactSource, GithubSource, PackageSource, read_package_artifact, write_capabilities_file,
-    write_package_artifact, write_package_artifact_with_docs,
+    ArtifactSource, GithubSource, GithubTransport, PackageSource, read_package_artifact,
+    write_capabilities_file, write_package_artifact, write_package_artifact_with_docs,
     write_package_artifact_with_docs_and_sources,
 };
 pub use capabilities::{
@@ -498,7 +498,8 @@ fn validate_github_dependency(github: &str, rev: &str) -> Result<(), String> {
     }
     if !is_github_url(github) {
         return Err(format!(
-            "point github {github:?} at a github.com repository (e.g. \"github.com/org/repo\")"
+            "point github {github:?} at a github.com repository: \"github.com/org/repo\" for a \
+             public repo, or \"git@github.com:org/repo.git\" to fetch over SSH"
         ));
     }
     Ok(())
@@ -508,7 +509,18 @@ fn is_commit_sha(rev: &str) -> bool {
     rev.len() == 40 && rev.chars().all(|c| c.is_ascii_hexdigit())
 }
 
+/// Mirrors the host forms `submilli_shared::github::parse_spec` accepts for
+/// dependency URLs; the fetcher does the full parse.
 fn is_github_url(url: &str) -> bool {
+    const SSH_PREFIXES: [&str; 4] = [
+        "git@github.com:",
+        "ssh://git@github.com/",
+        "ssh://git@github.com:22/",
+        "git://github.com/",
+    ];
+    if SSH_PREFIXES.iter().any(|prefix| url.starts_with(prefix)) {
+        return true;
+    }
     let host = url
         .trim_start_matches("https://")
         .trim_start_matches("http://");
@@ -830,6 +842,29 @@ dependencies = ["@acme/slack"]
             "unexpected diagnostics: {:?}",
             messages(&diags)
         );
+    }
+
+    #[test]
+    fn github_dependency_urls_accept_ssh_forms_on_github_only() {
+        for url in [
+            "github.com/acme/stripe",
+            "https://github.com/acme/stripe",
+            "git@github.com:acme/stripe.git",
+            "ssh://git@github.com/acme/stripe.git",
+            "ssh://git@github.com:22/acme/stripe",
+            "git://github.com/acme/stripe",
+        ] {
+            assert!(is_github_url(url), "{url} should be accepted");
+        }
+        for url in [
+            "gitlab.com/acme/stripe",
+            "git@gitlab.com:acme/stripe.git",
+            "ssh://git@github.com:2222/acme/stripe",
+            "ssh://deploy@github.com/acme/stripe",
+            "git://gitlab.com/acme/stripe",
+        ] {
+            assert!(!is_github_url(url), "{url} should be rejected");
+        }
     }
 
     #[test]

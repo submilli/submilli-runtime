@@ -110,6 +110,27 @@ services:
     #
     # Without a key the secret store is simply off and the server boots normally.
 
+    # Installing private GitHub packages (`submilli server packages install
+    # git@github.com:org/repo.git`) needs an SSH key the server authenticates
+    # with, named by `package_ssh_key_file` in a config file. The same
+    # ownership rule applies: 0444, or owner 65532:65532 with 0400. Merge these
+    # into the blocks above after creating the files, then add the public key
+    # (`docker compose exec submilli submilli server packages ssh-key`) to the
+    # repository as a deploy key:
+    #
+    #   ssh-keygen -t ed25519 -N "" -C submilli-server -f submilli-package-ssh
+    #   chmod 0444 submilli-package-ssh
+    #   echo 'package_ssh_key_file: /run/secrets/submilli-package-ssh' > server.yaml
+    #
+    #   environment:
+    #     SUBMILLI_CONFIG: /etc/submilli/server.yaml
+    #   volumes:
+    #     - ./server.yaml:/etc/submilli/server.yaml:ro
+    #   secrets:
+    #     - submilli-package-ssh
+    #
+    # Without a key, public packages still install; SSH installs are refused.
+
 volumes:
   submilli-state:
 
@@ -119,3 +140,5 @@ networks:
 # secrets:
 #   submilli-store-key:
 #     file: ./submilli-store-key
+#   submilli-package-ssh:
+#     file: ./submilli-package-ssh

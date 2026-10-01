@@ -28,7 +28,7 @@ use crate::ServerConfig;
 use crate::auth::{Access, AuthConfig, Guard};
 use crate::blueprint::{BlueprintStore, FileBlueprintStore, InMemoryBlueprintStore};
 use crate::blueprint_seed::seed_blueprints;
-use crate::config::{OAuthProvider, VolumeTable};
+use crate::config::{OAuthProvider, PackageSshConfig, VolumeTable};
 use crate::idempotency::Coordinator;
 use crate::idempotency_store::{FileIdempotencyStore, IdempotencyStore, InMemoryIdempotencyStore};
 use crate::mcp::{
@@ -93,6 +93,7 @@ struct AppStateInner {
     mcp_catalogs: Mutex<HashMap<String, Arc<McpCatalog>>>,
     mcp_catalog_generation: AtomicU64,
     package_store: PackageStore,
+    package_ssh: Option<PackageSshConfig>,
     prepared_packages: Mutex<HashMap<String, Arc<PreparedBlueprintPackages>>>,
     /// Bumped by every eviction. A prepare snapshots it before reading the
     /// store and only caches its result if no eviction happened in between:
@@ -227,6 +228,7 @@ impl AppState {
                     config.package_store_root,
                     config.package_fallback_root,
                 ),
+                package_ssh: config.package_ssh,
                 prepared_packages: Mutex::new(HashMap::new()),
                 prepared_generation: AtomicU64::new(0),
                 shutdown: Arc::new(Notify::new()),
@@ -490,6 +492,10 @@ impl AppState {
 
     pub(crate) fn package_store(&self) -> &PackageStore {
         &self.inner.package_store
+    }
+
+    pub(crate) fn package_ssh(&self) -> Option<&PackageSshConfig> {
+        self.inner.package_ssh.as_ref()
     }
 
     fn cached_prepared_packages(&self, key: &str) -> Option<Arc<PreparedBlueprintPackages>> {
@@ -828,6 +834,11 @@ fn routes(auth: Arc<AuthConfig>) -> Routes {
             "/v1/packages/install",
             Access::Admin,
             post(packages::install),
+        )
+        .route(
+            "/v1/packages/ssh-key",
+            Access::Admin,
+            get(packages::ssh_key),
         )
         .route(
             "/v1/blueprints/{name}/packages/search",

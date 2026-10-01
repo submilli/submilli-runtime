@@ -1,0 +1,132 @@
+suite: package ssh key
+templates:
+  - secret-package-ssh.yaml
+  - statefulset.yaml
+  - configmap-config.yaml
+tests:
+  - it: always generates a key that survives upgrades and uninstall
+    template: secret-package-ssh.yaml
+    asserts:
+      - equal:
+          path: metadata.name
+          value: RELEASE-NAME-submilli-package-ssh
+      # A key that rotated would revoke every deploy key it was registered as.
+      - equal:
+          path: metadata.annotations["helm.sh/resource-policy"]
+          value: keep
+      # Random, so only its presence and shape can be asserted.
+      - exists:
+          path: data.id_ed25519
+
+  - it: carries an existing key forward instead of minting a new one
+    template: secret-package-ssh.yaml
+    kubernetesProvider:
+      scheme:
+        "v1/Secret":
+          gvr:
+            version: "v1"
+            resource: "secrets"
+          namespaced: true
+      objects:
+        - apiVersion: v1
+          kind: Secret
+          metadata:
+            name: RELEASE-NAME-submilli-package-ssh
+            namespace: NAMESPACE
+          data:
+            id_ed25519: ZXhpc3Rpbmc=
+    asserts:
+      - equal:
+          path: data.id_ed25519
+          value: ZXhpc3Rpbmc=
+
+  - it: keeps the existing key when packageSsh.key is renamed
+    template: secret-package-ssh.yaml
+    set:
+      packageSsh:
+        key: deploy-key
+    kubernetesProvider:
+      scheme:
+        "v1/Secret":
+          gvr:
+            version: "v1"
+            resource: "secrets"
+          namespaced: true
+      objects:
+        - apiVersion: v1
+          kind: Secret
+          metadata:
+            name: RELEASE-NAME-submilli-package-ssh
+            namespace: NAMESPACE
+          data:
+            id_ed25519: ZXhpc3Rpbmc=
+    asserts:
+      - equal:
+          path: data["deploy-key"]
+          value: ZXhpc3Rpbmc=
+
+  - it: mounts only the key, read-only, where the config names it
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].volumeMounts
+          content:
+            name: package-ssh
+            mountPath: /etc/submilli/package-ssh
+            readOnly: true
+        template: statefulset.yaml
+      - contains:
+          path: spec.template.spec.volumes
+          content:
+            name: package-ssh
+            secret:
+              secretName: RELEASE-NAME-submilli-package-ssh
+              items:
+                - key: id_ed25519
+                  path: id_ed25519
+        template: statefulset.yaml
+      - matchRegex:
+          path: data["server.yaml"]
+          pattern: '(?m)^package_ssh_key_file: /etc/submilli/package-ssh/id_ed25519$'
+        template: configmap-config.yaml
+
+  - it: mounts an operator-managed Secret instead of generating one
+    set:
+      packageSsh:
+        existingSecret: github-deploy-key
+        key: ssh-privatekey
+    asserts:
+      - hasDocuments:
+          count: 0
+        template: secret-package-ssh.yaml
+      - contains:
+          path: spec.template.spec.volumes
+          content:
+            name: package-ssh
+            secret:
+              secretName: github-deploy-key
+              items:
+                - key: ssh-privatekey
+                  path: ssh-privatekey
+        template: statefulset.yaml
+      - matchRegex:
+          path: data["server.yaml"]
+          pattern: '(?m)^package_ssh_key_file: /etc/submilli/package-ssh/ssh-privatekey$'
+        template: configmap-config.yaml
+
+  - it: refuses a config override of the chart-owned key path
+    template: statefulset.yaml
+    set:
+      config:
+        package_ssh_key_file: /elsewhere
+    asserts:
+      - failedTemplate:
+          errorPattern: "config.package_ssh_key_file is owned by the chart"
+
+  - it: keeps the generated name inside the DNS label limit
+    template: secret-package-ssh.yaml
+    set:
+      fullnameOverride: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+    asserts:
+      - equal:
+          path: metadata.name
+          value: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-package-ssh

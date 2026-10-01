@@ -515,7 +515,7 @@ tests:
       # re-run and copy the reported `Actual:` value.
       - equal:
           path: spec.template.metadata.annotations["checksum/config"]
-          value: bdf38362cf16a95b806441b2b83a17e1fa2a04297a960f3f7e814a70b072a5f3
+          value: 63f2d6d828d7b17bba979f3650a721409acc6d5a7632a28ddda89c1d9da6f9f8
 
   - it: produces a different rollout trigger for different config
     template: statefulset.yaml
@@ -524,7 +524,7 @@ tests:
     asserts:
       - equal:
           path: spec.template.metadata.annotations["checksum/config"]
-          value: 988960ef97cea0ea32b42717146b6d25e7ff8cd6af4c7ff9a6e4faac87063fc7
+          value: e7bf29fc814f99bc6303cc9376913ea48527b46ce61f09a7f51282e1e7abdb30
 
   - it: keeps the generated names inside the DNS label limit
     set:

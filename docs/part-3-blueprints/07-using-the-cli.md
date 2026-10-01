@@ -213,6 +213,30 @@ default branch, and `--upgrade` replaces a package already installed at another
 commit. `search` and `docs` see the package as soon as it is installed;
 `blueprint add-package` is how a blueprint gets it.
 
+A private repository is fetched over SSH, as you:
+
+```sh
+submilli install git@github.com:acme/billing-private.git
+```
+
+`ssh://git@github.com/acme/billing-private.git` works too, and so does
+`git://github.com/acme/billing-private`, which Submilli reads as SSH; git's
+own unauthenticated `git://` protocol is never used. `install` offers GitHub
+the keys in your ssh-agent, then `~/.ssh/id_ed25519`, `id_ecdsa`, and
+`id_rsa`, and asks for a key's passphrase at the terminal. GitHub's host key
+has to be in `~/.ssh/known_hosts`; anything you have cloned over SSH put it
+there. When it fails:
+
+| The error says | Do this |
+| --- | --- |
+| `no SSH identity was available` | Load a key with `ssh-add`, or create one with `ssh-keygen -t ed25519` |
+| `SSH authentication to github.com failed … tried …` | Add the public key to your GitHub account |
+| `was not found, or your SSH identity has no access to it` | Check the name, then your access to the repository |
+| `not a known SSH host` or `does not match` | Check [GitHub's key fingerprints](https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/githubs-ssh-key-fingerprints), then `ssh-keyscan github.com >> ~/.ssh/known_hosts` |
+
+A passphrase-protected key with no terminal to ask at, as in CI, is skipped;
+load it into ssh-agent first.
+
 ## Where the CLI keeps things
 
 Everything above lives under one directory, `~/.submilli` by default, or

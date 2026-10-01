@@ -173,6 +173,9 @@ spec:
             - name: config
               mountPath: {{ include "submilli.configMountPath" . }}
               readOnly: true
+            - name: package-ssh
+              mountPath: {{ include "submilli.packageSshMountPath" . }}
+              readOnly: true
             {{- if .Values.auth.enabled }}
             - name: auth
               mountPath: {{ include "submilli.authMountPath" . }}
@@ -256,6 +259,12 @@ spec:
         - name: config
           configMap:
             name: {{ include "submilli.configName" . }}
+        - name: package-ssh
+          secret:
+            secretName: {{ include "submilli.packageSshSecretName" . }}
+            items:
+              - key: {{ .Values.packageSsh.key | quote }}
+                path: {{ .Values.packageSsh.key | quote }}
         {{- if .Values.auth.enabled }}
         # Only the two keys the config file names, so an operator's own Secret
         # can hold other things without them landing in the pod.

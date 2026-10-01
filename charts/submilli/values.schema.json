@@ -252,6 +252,20 @@
         }
       }
     },
+    "packageSsh": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "existingSecret": {
+          "type": "string"
+        },
+        "key": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "^[-._a-zA-Z0-9]+$"
+        }
+      }
+    },
     "config": {
       "type": "object",
       "description": "Extra keys merged into the server's config file. Free-form here because the server owns the key set and rejects unknown keys at boot; the chart's template refuses the keys it sets itself."

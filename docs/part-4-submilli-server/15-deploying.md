@@ -180,6 +180,15 @@ command as on a laptop. The server fetches and builds them itself:
 submilli server packages install acme/billing-package
 ```
 
+Private packages need the server's own SSH key. `compose.yaml` has the
+commented blocks: generate a key, name it in a config file as
+`package_ssh_key_file`, and mount both. Then add the key's public half to
+the repository ([install packages](/docs/server#install-packages)):
+
+```sh
+submilli server packages ssh-key
+```
+
 ### The secret store's key
 
 The secret store stays off until the server has a key. Give it one as a file,
@@ -387,6 +396,33 @@ protects the volume only if the key lives somewhere the volume doesn't, and
 a Kubernetes Secret in the same namespace usually doesn't qualify. Turn it on
 (`secretStore.enabled`) when the key comes from a KMS or a CSI secrets
 driver.
+
+### Private packages
+
+The chart generates an SSH key for installing private packages, keeps it in
+the Secret `<release>-package-ssh`, and sets `package_ssh_key_file`, so
+every replica uses the same key. The Secret survives upgrades and
+`helm uninstall`, so the deploy key you register keeps working. Add the
+public half to the private repository as a deploy key; GitHub accepts a key
+on one repository ([install packages](/docs/server#install-packages)):
+
+```sh
+submilli server packages ssh-key
+```
+
+Argo CD and other flows that apply `helm template` output render without
+reading the cluster, so they would generate a new key on every sync. Manage
+the Secret yourself there, as with `auth.existingSecret`:
+
+```sh
+ssh-keygen -t ed25519 -N "" -C submilli-server -f id_ed25519
+kubectl create secret generic submilli-package-ssh --from-file=id_ed25519
+```
+
+```yaml title="values.yaml"
+packageSsh:
+  existingSecret: submilli-package-ssh
+```
 
 ### Calling your internal services
 

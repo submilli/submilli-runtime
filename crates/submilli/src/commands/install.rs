@@ -1,9 +1,10 @@
 //! `submilli install <url> [package]` — download a package source from GitHub,
 //! compile it, and place it in the local package store, pinned to the resolved
-//! commit SHA. Writes nothing to the manifest or any blueprint: the store is the
-//! only thing it touches. The fetch lives in `submilli-shared`; the
-//! compile-and-store core is shared with `server packages install` via
-//! `submilli_build::install_from_dir`.
+//! commit SHA. SSH specs (`git@github.com:org/repo.git`) authenticate as the
+//! local user; see [`super::ssh_identity`]. Writes nothing to the manifest or
+//! any blueprint: the store is the only thing it touches. The fetch lives in
+//! `submilli-shared`; the compile-and-store core is shared with `server
+//! packages install` via `submilli_build::install_from_dir`.
 
 use std::path::Path;
 use std::process::ExitCode;
@@ -17,10 +18,16 @@ use submilli_build::{
 use submilli_shared::github;
 use submilli_shared::github::GithubRepoFetcher;
 
+use super::ssh_identity::LocalSsh;
+
 #[derive(clap::Args)]
 pub struct Args {
     /// GitHub repo to install from: `org/repo`, `github.com/org/repo`, or a full
-    /// URL — optionally pinned with `@<ref>` (branch, tag, or commit SHA).
+    /// URL for a public repo; `git@github.com:org/repo.git`,
+    /// `ssh://git@github.com/org/repo.git`, or `git://github.com/org/repo`
+    /// (Submilli shorthand for SSH) for a private one, fetched with your
+    /// ssh-agent or ~/.ssh keys. Optionally pinned with `@<ref>` (branch, tag,
+    /// or commit SHA).
     url: String,
 
     /// Install only this package (`@org/name`). Omit to install every package
@@ -42,7 +49,10 @@ impl Args {
 }
 
 pub fn execute(args: Args) -> anyhow::Result<ExitCode> {
-    let fetched = match github::fetch(&args.url) {
+    let ssh = LocalSsh::new();
+    let identities = ssh.identities();
+    let auth = ssh.auth(&identities);
+    let fetched = match github::fetch(&args.url, &auth) {
         Ok(fetched) => fetched,
         Err(err) => {
             eprintln!("error: {err}");
@@ -51,9 +61,8 @@ pub fn execute(args: Args) -> anyhow::Result<ExitCode> {
     };
     let resolved = &fetched.resolved;
     eprintln!(
-        "fetched github.com/{}/{} at {}",
-        resolved.org,
-        resolved.repo,
+        "fetched {} at {}",
+        resolved.display_url(),
         &resolved.sha[..resolved.sha.len().min(12)]
     );
 
@@ -64,6 +73,7 @@ pub fn execute(args: Args) -> anyhow::Result<ExitCode> {
         repo: resolved.repo.clone(),
         sha: resolved.sha.clone(),
         source_hash: None,
+        transport: resolved.transport,
     });
 
     // Resolve the repo's GitHub-dependency closure (network), install it
@@ -82,7 +92,7 @@ pub fn execute(args: Args) -> anyhow::Result<ExitCode> {
     let closure = match resolve_github_closure(
         &store,
         &manifest,
-        &GithubRepoFetcher,
+        &GithubRepoFetcher { auth },
         existing_lock.as_ref(),
     ) {
         Ok(closure) => closure,

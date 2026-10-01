@@ -32,7 +32,7 @@ use anyhow::{Context, Result};
 use ipnet::IpNet;
 use serde::Deserialize;
 use submilli_server::config::{
-    OAuthProvider, ServerDirectories, VolumeTable, default_blueprint_dir,
+    OAuthProvider, PackageSshConfig, ServerDirectories, VolumeTable, default_blueprint_dir,
     default_cli_package_store_dir, default_package_store_dir, default_secret_store_dir,
     default_session_storage_root, default_session_store_dir, validate_volumes,
 };
@@ -40,6 +40,7 @@ use submilli_server::{
     ApiToken, AuthConfig, DEFAULT_MAX_EXECUTION_TOKENS, DEFAULT_MAX_STORE_BYTES, FileSecretStore,
     KeySource, LlmLimits, NetworkPolicy, Role, RuntimeConfig, ServerConfig,
 };
+use submilli_shared::github::{KnownHosts, ServerSshKey};
 use submilli_shared::secret_store::SecretStore;
 use submilli_shared::secret_store::check_key;
 
@@ -70,6 +71,13 @@ pub struct FileConfig {
     pub vfs_session_dir: Option<PathBuf>,
     pub vfs_ephemeral_dir: Option<PathBuf>,
     pub package_store_dir: Option<PathBuf>,
+    /// Private key `server packages install` authenticates to GitHub with
+    /// for SSH specs (`git@github.com:org/repo.git`). Unset disables SSH
+    /// installs. Config-file only: it names a secret, like `api_tokens`.
+    pub package_ssh_key_file: Option<PathBuf>,
+    /// known_hosts file to trust GitHub's SSH host keys from, replacing the
+    /// built-in GitHub keys. Requires `package_ssh_key_file`.
+    pub package_ssh_known_hosts_file: Option<PathBuf>,
     /// Seconds. `deny_unknown_fields` means omitting this would turn a
     /// `shutdown_grace:` key into a boot failure, contradicting `--config`'s
     /// promise to supply "values for the options below".
@@ -438,6 +446,7 @@ fn preflight(cli: &Cli, file: &FileConfig, env: &EnvConfig) -> Result<()> {
     max_execution_llm_tokens(cli, file, env)?;
     max_llm_concurrency(cli, file, env)?;
     resolve_auth(cli, file, env)?;
+    resolve_package_ssh(file)?;
     if let Some(key) = secret_key_source(cli, file, env) {
         check_key(&key).map_err(|e| anyhow::anyhow!("checking the secret-store key: {e}"))?;
     }
@@ -486,6 +495,8 @@ fn guarded_directories(cli: &Cli, file: &FileConfig, env: &EnvConfig) -> ServerD
             .iter()
             .map(|token| token.token_file.clone())
             .collect(),
+        package_ssh_key_file: file.package_ssh_key_file.clone(),
+        package_ssh_known_hosts_file: file.package_ssh_known_hosts_file.clone(),
         session_storage_root: Some(
             explicit(
                 cli.vfs_session_dir.clone(),
@@ -850,6 +861,7 @@ fn merge(cli: Cli, file: FileConfig, env: EnvConfig) -> Result<(SocketAddr, Serv
     let network_policy = resolve_network_policy(&cli, &file, &env)?;
     let auth = resolve_auth(&cli, &file, &env)?;
     let secret_store = resolve_secret_store(&cli, &file, &env)?;
+    let package_ssh = resolve_package_ssh(&file)?;
     let mcp_allowed_hosts = resolve_mcp_allowed_hosts(&cli, &file, &env);
     let runtime = RuntimeConfig {
         max_store_bytes: max_execution_memory(&cli, &file, &env)?,
@@ -929,6 +941,7 @@ fn merge(cli: Cli, file: FileConfig, env: EnvConfig) -> Result<(SocketAddr, Serv
         // it because a locally published package resolving on the dev server is
         // the point, and production stores are simply empty there.
         package_fallback_root: Some(default_cli_package_store_dir()),
+        package_ssh,
         network_policy,
         secret_store,
         mcp_allowed_hosts,
@@ -941,6 +954,33 @@ fn merge(cli: Cli, file: FileConfig, env: EnvConfig) -> Result<(SocketAddr, Serv
         ..ServerConfig::default()
     };
     Ok((addr, config))
+}
+
+/// Load the package-install SSH key and the host keys it trusts. A key that is
+/// missing, unreadable, encrypted, or in an unsupported format refuses the
+/// boot, rather than surfacing on the first private install.
+fn resolve_package_ssh(file: &FileConfig) -> Result<Option<PackageSshConfig>> {
+    let Some(key_file) = &file.package_ssh_key_file else {
+        if file.package_ssh_known_hosts_file.is_some() {
+            anyhow::bail!(
+                "`package_ssh_known_hosts_file` is set without `package_ssh_key_file`; set both, \
+                 or remove the known_hosts override"
+            );
+        }
+        return Ok(None);
+    };
+    let key = ServerSshKey::load(key_file).context("loading `package_ssh_key_file`")?;
+    let known_hosts = match &file.package_ssh_known_hosts_file {
+        Some(path) => {
+            KnownHosts::load_file(path).context("loading `package_ssh_known_hosts_file`")?
+        }
+        None => KnownHosts::github_builtin(),
+    };
+    Ok(Some(PackageSshConfig {
+        key: Arc::new(key),
+        known_hosts: Arc::new(known_hosts),
+        known_hosts_file: file.package_ssh_known_hosts_file.clone(),
+    }))
 }
 
 /// The MCP `Host` allowlist, additive across all three sources (CLI flag, config
@@ -1275,6 +1315,8 @@ network:
             secret_store_dir: Some(root.join("secrets")),
             secret_store_key_file: Some(root.join("keys/secret.b64")),
             api_token_files: vec![root.join("tokens/admin"), root.join("tokens/user")],
+            package_ssh_key_file: Some(root.join("ssh/id_ed25519")),
+            package_ssh_known_hosts_file: Some(root.join("ssh/known_hosts")),
             session_storage_root: Some(root.join("vfs/sessions")),
             session_store_dir: Some(root.join("sessions")),
             ephemeral_storage_root: Some(root.join("scratch")),
@@ -1295,6 +1337,8 @@ network:
             secret_store_dir,
             secret_store_key_file,
             api_token_files,
+            package_ssh_key_file,
+            package_ssh_known_hosts_file,
             session_storage_root,
             session_store_dir,
             ephemeral_storage_root,
@@ -1307,6 +1351,8 @@ network:
             (package_fallback_root, "fallback package store"),
             (secret_store_dir, "secret store"),
             (secret_store_key_file, "secret-store key file"),
+            (package_ssh_key_file, "package SSH key file"),
+            (package_ssh_known_hosts_file, "package SSH known_hosts file"),
             (session_storage_root, "per-session VFS root"),
             (session_store_dir, "durable session store"),
             (ephemeral_storage_root, "ephemeral storage root"),
@@ -1621,6 +1667,103 @@ network:
                 .unwrap()
                 .is_none()
         );
+    }
+
+    fn write_package_ssh_key(dir: &std::path::Path) -> PathBuf {
+        use base64::Engine as _;
+        let mut der = vec![
+            0x30, 0x2e, 0x02, 0x01, 0x00, 0x30, 0x05, 0x06, 0x03, 0x2b, 0x65, 0x70, 0x04, 0x22,
+            0x04, 0x20,
+        ];
+        der.extend_from_slice(&[9u8; 32]);
+        let path = dir.join("id_ed25519");
+        std::fs::write(
+            &path,
+            format!(
+                "-----BEGIN PRIVATE KEY-----\n{}\n-----END PRIVATE KEY-----\n",
+                base64::engine::general_purpose::STANDARD.encode(der)
+            ),
+        )
+        .unwrap();
+        path
+    }
+
+    #[test]
+    fn package_ssh_is_optional_and_loaded_at_boot() {
+        let tmp = tempfile::tempdir().unwrap();
+        let config = merge_file(FileConfig::default()).unwrap();
+        assert!(config.package_ssh.is_none(), "no key, no SSH installs");
+
+        let key = write_package_ssh_key(tmp.path());
+        let config = merge_file(FileConfig {
+            package_ssh_key_file: Some(key.clone()),
+            ..FileConfig::default()
+        })
+        .unwrap();
+        let ssh = config.package_ssh.expect("key loaded");
+        assert_eq!(ssh.key.path(), key);
+        assert!(ssh.known_hosts_file.is_none(), "built-in GitHub host keys");
+
+        let known_hosts = tmp.path().join("known_hosts");
+        std::fs::write(
+            &known_hosts,
+            "github.com ssh-ed25519 \
+             AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl\n",
+        )
+        .unwrap();
+        let config = merge_file(FileConfig {
+            package_ssh_key_file: Some(key),
+            package_ssh_known_hosts_file: Some(known_hosts.clone()),
+            ..FileConfig::default()
+        })
+        .unwrap();
+        assert_eq!(
+            config.package_ssh.and_then(|ssh| ssh.known_hosts_file),
+            Some(known_hosts)
+        );
+    }
+
+    #[test]
+    fn package_ssh_refuses_a_bad_key_or_a_lone_known_hosts_file() {
+        let tmp = tempfile::tempdir().unwrap();
+        let missing = merge_err(FileConfig {
+            package_ssh_key_file: Some(tmp.path().join("missing")),
+            ..FileConfig::default()
+        });
+        assert!(missing.contains("package_ssh_key_file"), "{missing}");
+
+        let junk = tmp.path().join("junk");
+        std::fs::write(&junk, "not a key").unwrap();
+        let junk = merge_err(FileConfig {
+            package_ssh_key_file: Some(junk),
+            ..FileConfig::default()
+        });
+        assert!(junk.contains("package_ssh_key_file"), "{junk}");
+
+        // An override with no github.com key would refuse every fetch.
+        let other_host = tmp.path().join("other_host");
+        std::fs::write(
+            &other_host,
+            "gitlab.com ssh-ed25519 \
+             AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl\n",
+        )
+        .unwrap();
+        let Err(other_host) = merge_file(FileConfig {
+            package_ssh_key_file: Some(write_package_ssh_key(tmp.path())),
+            package_ssh_known_hosts_file: Some(other_host),
+            ..FileConfig::default()
+        }) else {
+            panic!("an override without a github.com key must be refused");
+        };
+        let other_host = format!("{other_host:#}");
+        // "no key" here, "no RSA key" on Windows.
+        assert!(other_host.contains("for github.com"), "{other_host}");
+
+        let lone = merge_err(FileConfig {
+            package_ssh_known_hosts_file: Some(tmp.path().join("known_hosts")),
+            ..FileConfig::default()
+        });
+        assert!(lone.contains("without `package_ssh_key_file`"), "{lone}");
     }
 
     fn write_key_file(dir: &std::path::Path, fill: u8) -> PathBuf {

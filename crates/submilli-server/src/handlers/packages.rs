@@ -27,10 +27,11 @@ use submilli_build::{
     install_from_dir, install_plan, load_manifest, resolve_github_closure,
 };
 use submilli_shared::github;
-use submilli_shared::github::GithubRepoFetcher;
+use submilli_shared::github::{FetchAuth, GithubError, GithubRepoFetcher, SSH_NOT_CONFIGURED_HINT};
 
 use crate::app::AppState;
 use crate::compiler_thread;
+use crate::config::PackageSshConfig;
 use crate::packages::{self, DocLookup};
 
 #[derive(Debug, Serialize)]
@@ -296,7 +297,10 @@ fn install_err(status: StatusCode, error: &'static str, message: String) -> Inst
 
 #[derive(Debug, Deserialize)]
 pub struct InstallRequest {
-    /// GitHub repo: `org/repo`, `github.com/org/repo`, or a full URL.
+    /// GitHub repo: `org/repo`, `github.com/org/repo`, or a full URL for a
+    /// public repo; `git@github.com:org/repo.git`,
+    /// `ssh://git@github.com/org/repo.git`, or `git://github.com/org/repo` to
+    /// fetch over SSH with the server's `package_ssh_key_file`.
     pub url: String,
     /// Pin to this commit (or ref). Resolved from the URL's default branch when
     /// omitted.
@@ -326,9 +330,10 @@ pub async fn install(
     Json(req): Json<InstallRequest>,
 ) -> Result<Json<InstallResponse>, InstallFailure> {
     let store = state.package_store().clone();
+    let ssh = state.package_ssh().cloned();
     let installer_state = state.clone();
     tokio::task::spawn_blocking(move || {
-        let outcome = match compiler_thread::run(|| install_blocking(&store, req)) {
+        let outcome = match compiler_thread::run(|| install_blocking(&store, ssh.as_ref(), req)) {
             Ok(outcome) => outcome,
             Err(error) => Err(internal_install_error(error)),
         };
@@ -346,6 +351,33 @@ pub async fn install(
     .map(Json)
 }
 
+#[derive(Debug, Serialize)]
+pub struct SshKeyResponse {
+    /// OpenSSH public-key line, ready to paste as a GitHub deploy key.
+    pub public_key: String,
+    /// `SHA256:…`, as GitHub lists deploy keys.
+    pub fingerprint: String,
+}
+
+/// `GET /v1/packages/ssh-key` — the public half of the key private package
+/// installs authenticate with. The private key never leaves the server.
+/// Errors share the install routes' `{ error, message }` shape.
+pub async fn ssh_key(
+    State(state): State<AppState>,
+) -> Result<Json<SshKeyResponse>, InstallFailure> {
+    let Some(ssh) = state.package_ssh() else {
+        return Err(install_err(
+            StatusCode::NOT_FOUND,
+            "ssh_not_configured",
+            format!("this server has no SSH key for package installs; {SSH_NOT_CONFIGURED_HINT}"),
+        ));
+    };
+    Ok(Json(SshKeyResponse {
+        public_key: ssh.key.public_key().to_string(),
+        fingerprint: ssh.key.fingerprint().to_string(),
+    }))
+}
+
 fn internal_install_error(error: impl std::fmt::Display) -> InstallFailure {
     install_err(
         StatusCode::INTERNAL_SERVER_ERROR,
@@ -356,25 +388,34 @@ fn internal_install_error(error: impl std::fmt::Display) -> InstallFailure {
 
 fn install_blocking(
     store: &submilli_build::PackageStore,
+    ssh: Option<&PackageSshConfig>,
     req: InstallRequest,
 ) -> Result<InstallResponse, InstallFailure> {
+    let auth = match ssh {
+        Some(ssh) => FetchAuth::Server {
+            key: &ssh.key,
+            known_hosts: &ssh.known_hosts,
+        },
+        None => FetchAuth::Unconfigured,
+    };
     let mut spec = github::parse_spec(&req.url)
         .map_err(|err| install_err(StatusCode::BAD_REQUEST, "invalid_url", err.to_string()))?;
     if let Some(sha) = req.sha {
         spec.git_ref = Some(sha);
     }
     let resolved = spec
-        .resolve()
-        .map_err(|err| install_err(StatusCode::BAD_GATEWAY, "resolve_failed", err.to_string()))?;
+        .resolve(&auth)
+        .map_err(|err| map_fetch_error(err, "resolve_failed"))?;
     let dir = resolved
-        .download()
-        .map_err(|err| install_err(StatusCode::BAD_GATEWAY, "download_failed", err.to_string()))?;
+        .download(&auth)
+        .map_err(|err| map_fetch_error(err, "download_failed"))?;
 
     let source = PackageSource::Github(GithubSource {
         org: resolved.org.clone(),
         repo: resolved.repo.clone(),
         sha: resolved.sha.clone(),
         source_hash: None,
+        transport: resolved.transport,
     });
 
     // Resolve the repo's GitHub-dependency closure (network), install it
@@ -392,9 +433,13 @@ fn install_blocking(
         )
     })?;
     let existing_lock = Lockfile::read(dir.path()).ok().flatten();
-    let closure =
-        resolve_github_closure(store, &manifest, &GithubRepoFetcher, existing_lock.as_ref())
-            .map_err(map_resolve_error)?;
+    let closure = resolve_github_closure(
+        store,
+        &manifest,
+        &GithubRepoFetcher { auth },
+        existing_lock.as_ref(),
+    )
+    .map_err(map_resolve_error)?;
     install_plan(store, &closure.plan, req.upgrade).map_err(map_install_error)?;
 
     let only = req.package.map(PackageName::new);
@@ -416,8 +461,34 @@ fn install_blocking(
     })
 }
 
+/// `fallback_code` names the stage for failures that are not about SSH.
+fn map_fetch_error(err: GithubError, fallback_code: &'static str) -> InstallFailure {
+    match err {
+        GithubError::InvalidSpec(message) => {
+            install_err(StatusCode::BAD_REQUEST, "invalid_url", message)
+        }
+        GithubError::SshNotConfigured(message) => {
+            install_err(StatusCode::BAD_REQUEST, "ssh_not_configured", message)
+        }
+        GithubError::Auth(message) => {
+            install_err(StatusCode::BAD_GATEWAY, "ssh_auth_failed", message)
+        }
+        GithubError::HostKey(message) => {
+            install_err(StatusCode::BAD_GATEWAY, "ssh_host_key_rejected", message)
+        }
+        GithubError::Resolve(message) | GithubError::Download(message) => {
+            install_err(StatusCode::BAD_GATEWAY, fallback_code, message)
+        }
+    }
+}
+
 fn map_resolve_error(err: ResolveError) -> InstallFailure {
     match err {
+        ResolveError::Fetch { ref source, .. } if source.missing_ssh_identity => install_err(
+            StatusCode::BAD_REQUEST,
+            "ssh_not_configured",
+            err.to_string(),
+        ),
         ResolveError::Fetch { .. } => install_err(
             StatusCode::BAD_GATEWAY,
             "dependency_fetch_failed",

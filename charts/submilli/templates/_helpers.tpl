@@ -164,6 +164,28 @@ under it, so the ConfigMap and the pod spec must agree on this path.
 {{- end -}}
 
 {{/*
+Name of the Secret holding the key private package installs authenticate to
+GitHub with: the operator's when `packageSsh.existingSecret` is set, otherwise
+the one templates/secret-package-ssh.yaml generates. Truncated before the
+suffix for the same reason as `submilli.headlessName`.
+*/}}
+{{- define "submilli.packageSshSecretName" -}}
+{{- if .Values.packageSsh.existingSecret -}}
+{{- .Values.packageSsh.existingSecret -}}
+{{- else -}}
+{{- printf "%s-package-ssh" (include "submilli.fullname" . | trunc 51 | trimSuffix "-") -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
+Directory the package SSH key is mounted in. The config file names the key
+under it, so the ConfigMap and the pod spec must agree on this path.
+*/}}
+{{- define "submilli.packageSshMountPath" -}}
+/etc/submilli/package-ssh
+{{- end -}}
+
+{{/*
 The server's config file (server.yaml), as YAML text.
 
 Chart-owned keys come from dedicated values; everything else passes through from
@@ -193,6 +215,7 @@ and would do nothing.
       "shutdown_grace" "set server.shutdownGrace instead; terminationGracePeriodSeconds is derived from it"
       "blueprint_seed_dir" "the chart sets it when blueprints is non-empty"
       "allow_unauthenticated" "set auth.enabled=false instead"
+      "package_ssh_key_file" "the chart mounts the key; set packageSsh.existingSecret and packageSsh.key to supply your own"
     -}}
 {{- range $key, $instead := $owned -}}
 {{-   if hasKey $extra $key -}}
@@ -220,6 +243,11 @@ Omitting this breaks /v1/execute — the product — while /healthz stays green,
 which is why the chart's own test exercises execute rather than health alone.
 */ -}}
 {{- $_ := set $config "vfs_ephemeral_dir" "/tmp" -}}
+{{- /*
+Always set: a key is always mounted, the operator's or the generated one, so
+installs from private repositories work once its public key is added to GitHub.
+*/ -}}
+{{- $_ := set $config "package_ssh_key_file" (printf "%s/%s" (include "submilli.packageSshMountPath" .) .Values.packageSsh.key) -}}
 {{- if .Values.blueprints -}}
 {{- /*
 The read-only source the server reconciles from at boot. A different directory
