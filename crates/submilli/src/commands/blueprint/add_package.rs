@@ -4,7 +4,8 @@
 //! Which of the package's *provided* capabilities get `allow` rules under
 //! `main` is a selection: `--capabilities` / `--all-capabilities` /
 //! `--no-capabilities`, or an interactive multi-select on a TTY. Everything
-//! unselected is covered by `default: deny` and needs no rule.
+//! unselected falls through to the blueprint's `default:` and needs no rule,
+//! except under `default: allow`, where it gets an explicit `deny`.
 
 use std::fs;
 use std::io::IsTerminal;
@@ -15,7 +16,8 @@ use anyhow::{Context, Result, bail};
 use submilli_blueprint::{Action, DefaultAction, FilterExpr, PermissionRule};
 use submilli_build::{CapabilitySchema, PackageStore, ProvidedCapability};
 
-use super::capability::action_label;
+use super::capability::{action_label, unruled_call_outcome};
+use super::file::{has_capability_rule, has_unfiltered_capability_rule};
 use super::package_secrets::missing_package_secret_warnings;
 
 const DEFAULT_FILE: &str = "blueprint.yaml";
@@ -32,7 +34,8 @@ pub struct Args {
     /// Allow every capability the package provides.
     #[arg(long)]
     all_capabilities: bool,
-    /// Allow none of the provided capabilities (`default: deny` covers them).
+    /// Allow none of the provided capabilities (the blueprint's `default:`
+    /// decides them; under `default: allow` they get explicit `deny` rules).
     #[arg(long)]
     no_capabilities: bool,
     /// Blueprint file to edit (default: ./blueprint.yaml).
@@ -91,7 +94,14 @@ fn run(args: &Args) -> Result<String> {
     }
     let default_allows = blueprint.default_action.unwrap_or_default() == DefaultAction::Allow;
 
-    let main_rules = selected_provided_rules(&capabilities, &selection, default_allows);
+    let main_decides = |name: &str| {
+        has_unfiltered_capability_rule(&blueprint, interpreter::mangle::USER_PACKAGE, name)
+    };
+    let main_rules =
+        selected_provided_rules(&capabilities, &selection, default_allows, main_decides);
+    let main_has_rule =
+        |name: &str| has_capability_rule(&blueprint, interpreter::mangle::USER_PACKAGE, name);
+    let left_to_default = count_left_to_default(&capabilities, &main_rules, main_has_rule);
     let package_rules = required_rules(&capabilities)?;
 
     if !main_rules.is_empty() {
@@ -119,13 +129,13 @@ fn run(args: &Args) -> Result<String> {
         eprintln!("warning: {}: {warning}", path.display());
     }
 
-    let not_selected = capabilities.provides.len() - main_rules.len();
     Ok(summary(
         &args.package,
         &path,
         &main_rules,
         &package_rules,
-        not_selected,
+        left_to_default,
+        blueprint.default_action,
     ))
 }
 
@@ -205,13 +215,17 @@ fn reject_versioned_spec(package: &str) -> Result<()> {
 }
 
 /// The `main` rules the selection produces: selected → `allow`. Unselected
-/// capabilities normally need no rule (`default: deny` covers them), but when
+/// capabilities normally need no rule (the `default:` covers them), but when
 /// the blueprint's effective default is `allow`, leaving them ruleless would
-/// silently grant them — so they get explicit `deny` rules instead.
+/// silently grant them — so they get explicit `deny` rules instead. An
+/// unselected capability `main` already has an unfiltered rule for keeps
+/// that rule: a `deny` appended behind it would never match. A filtered rule
+/// leaves the calls it doesn't match to the default, so those still get one.
 fn selected_provided_rules(
     capabilities: &CapabilitySchema,
     selection: &Selection,
     default_allows: bool,
+    main_decides: impl Fn(&str) -> bool,
 ) -> Vec<PermissionRule> {
     capabilities
         .provides
@@ -224,7 +238,7 @@ fn selected_provided_rules(
             };
             let action = if selected {
                 Action::Allow
-            } else if default_allows {
+            } else if default_allows && !main_decides(&provided.name) {
                 Action::Deny
             } else {
                 return None;
@@ -236,6 +250,28 @@ fn selected_provided_rules(
             })
         })
         .collect()
+}
+
+/// Provided capabilities `main` has no rule for, neither one this command
+/// adds nor an existing one: every call to them falls through to the
+/// blueprint's `default:`. Matches what `capability list --unconfigured`
+/// lists; a capability with only filtered rules is not claimed for the
+/// default, since its matching calls are decided by those rules.
+fn count_left_to_default(
+    capabilities: &CapabilitySchema,
+    main_rules: &[PermissionRule],
+    main_has_rule: impl Fn(&str) -> bool,
+) -> usize {
+    capabilities
+        .provides
+        .iter()
+        .filter(|provided| {
+            !main_has_rule(&provided.name)
+                && !main_rules
+                    .iter()
+                    .any(|rule| rule.capability == provided.name)
+        })
+        .count()
 }
 
 fn required_rules(capabilities: &CapabilitySchema) -> Result<Vec<PermissionRule>> {
@@ -335,7 +371,8 @@ fn summary(
     path: &std::path::Path,
     main_rules: &[PermissionRule],
     package_rules: &[PermissionRule],
-    not_selected: usize,
+    left_to_default: usize,
+    default: Option<DefaultAction>,
 ) -> String {
     let mut message = format!("added {package} to {}", path.display());
     if !main_rules.is_empty() {
@@ -351,9 +388,10 @@ fn summary(
             ));
         }
     }
-    if not_selected > 0 {
+    if left_to_default > 0 {
         message.push_str(&format!(
-            "\n  {not_selected} provided capabilities not selected — denied by `default: deny`"
+            "\n  {left_to_default} provided capabilities not selected; {}",
+            unruled_call_outcome(default)
         ));
     }
     message.push_str(&format!(
@@ -415,16 +453,17 @@ mod tests {
             provided("acme.com/refund"),
         ]);
 
-        let all = selected_provided_rules(&schema, &Selection::All, false);
+        let all = selected_provided_rules(&schema, &Selection::All, false, |_| false);
         assert_eq!(all.len(), 2);
         assert!(all.iter().all(|r| r.action == Action::Allow));
 
-        assert!(selected_provided_rules(&schema, &Selection::None, false).is_empty());
+        assert!(selected_provided_rules(&schema, &Selection::None, false, |_| false).is_empty());
 
         let some = selected_provided_rules(
             &schema,
             &Selection::Some(vec!["acme.com/charge".to_string()]),
             false,
+            |_| false,
         );
         assert_eq!(some.len(), 1);
         assert_eq!(some[0].capability, "acme.com/charge");
@@ -441,11 +480,47 @@ mod tests {
             &schema,
             &Selection::Some(vec!["acme.com/charge".to_string()]),
             true,
+            |_| false,
         );
         assert_eq!(rules.len(), 2);
         assert_eq!(rules[0].action, Action::Allow);
         assert_eq!(rules[1].capability, "acme.com/refund");
         assert_eq!(rules[1].action, Action::Deny);
+    }
+
+    #[test]
+    fn unselected_with_an_existing_main_rule_get_no_shadowed_deny() {
+        let schema = schema(vec![
+            provided("acme.com/charge"),
+            provided("acme.com/refund"),
+        ]);
+        let rules = selected_provided_rules(&schema, &Selection::None, true, |name| {
+            name == "acme.com/refund"
+        });
+        assert_eq!(rules.len(), 1);
+        assert_eq!(rules[0].capability, "acme.com/charge");
+        assert_eq!(rules[0].action, Action::Deny);
+    }
+
+    /// A filtered rule decides only the calls it matches; the rest would reach
+    /// `default: allow` without the appended `deny`.
+    #[test]
+    fn unselected_with_only_a_filtered_main_rule_still_get_a_deny() {
+        let blueprint: submilli_blueprint::Blueprint =
+            submilli_blueprint::parse(
+                "name: x\ndefault: allow\npermissions:\n  main:\n    - capability: acme.com/refund\n      filter: customer == \"vip\"\n      action: deny\n",
+            )
+            .expect("parses");
+        let schema = schema(vec![provided("acme.com/refund")]);
+        let main_decides = |name: &str| {
+            has_unfiltered_capability_rule(&blueprint, interpreter::mangle::USER_PACKAGE, name)
+        };
+
+        let rules = selected_provided_rules(&schema, &Selection::None, true, main_decides);
+
+        assert_eq!(rules.len(), 1);
+        assert_eq!(rules[0].capability, "acme.com/refund");
+        assert_eq!(rules[0].action, Action::Deny);
     }
 
     #[test]

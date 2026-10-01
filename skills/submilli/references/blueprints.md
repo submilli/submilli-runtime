@@ -331,7 +331,8 @@ submilli blueprint capability add acme.com/orders.list \
 submilli blueprint capability add acme.com/orders.cancel \
   --filter 'customerId == ${vars.customerId} and totalCents <= 5000' --action ask-human
 submilli blueprint auth-proxy add --host status.acme.com --bearer STATUS_TOKEN
-submilli blueprint lint blueprint.yaml          # --fix adds missing package rules
+submilli blueprint lint blueprint.yaml          # --fix adds rules packages require
+submilli blueprint capability list --unconfigured  # provided operations main has no rule for
 submilli blueprint prompt                       # what the model will be told
 ```
 
@@ -344,8 +345,9 @@ each operation the program may call is then one explicit `capability add`.
 which lint cannot catch (a misspelled name is a rule that never matches). Add `variables`, `vfs`,
 `idle_timeout` and `llm` by editing the file; the CLI editors rewrite YAML
 and drop comments, so keep hand-written commentary elsewhere. Lint warns on
-unreachable `main` rules (an earlier rule shadows a later one), on
-`default: allow`, and on provided capabilities with no `main` rule.
+`main` rules the runtime never consults (such as `secrets.get`) and on
+`default: allow`. A provided capability with no `main` rule is withheld, not
+a finding; `submilli blueprint capability list --unconfigured` lists them.
 
 Register and run:
 

@@ -109,7 +109,9 @@ A capability comes from one of three places:
 
 `submilli blueprint capability list` prints every capability the blueprint
 can use, from the standard library, its packages, and its MCP servers, with
-their fields and the rules already written for each.
+their fields and the rules already written for each. With `--unconfigured` it
+prints only the capabilities the blueprint's packages provide that `main` has
+no rule for, and the `default` those calls fall through to.
 
 ### The standard library
 
@@ -265,7 +267,6 @@ mistake stops it before any program runs.
 
 | Finding | Level |
 | --- | --- |
-| A package provides an operation that `main` has no rule for | Warning |
 | A package requires a permission that its own list has no rule for | Error |
 | A package requires a permission that its own list grants with a different filter, or denies | Warning |
 | `default: allow` | Warning |

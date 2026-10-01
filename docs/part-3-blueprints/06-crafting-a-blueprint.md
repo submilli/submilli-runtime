@@ -60,7 +60,7 @@ submilli blueprint add-package @acme/billing --no-capabilities
 ```text
 warning: blueprint.yaml: package `@acme/billing` requires secret `BILLING_API_KEY`, but `secrets:` does not declare it
 ✓ added @acme/billing to blueprint.yaml
-  2 provided capabilities not selected — denied by `default: deny`
+  2 provided capabilities not selected; `default: deny` denies calls to them
   added 2 rules to caller `@acme/billing` (default allow):
     allow http.get (filter: host == "billing.internal.example.com")
     allow secrets.get (filter: name == "BILLING_API_KEY")
@@ -394,17 +394,32 @@ submilli blueprint lint blueprint.yaml
 ```
 
 ```text
-warning: blueprint.yaml: package `@acme/billing` provides `acme.com/invoices.latest`, but `permissions.main` has no matching rule
 ✓ blueprint.yaml is valid
 ```
 
 `lint` parses the file and checks it against the packages installed locally: a
-package that needs an operation its own list doesn't allow, a secret a package
-reads that `secrets` doesn't declare, an operation a package provides that
-`main` has no rule for. The warning here is deliberate; this agent doesn't
-fetch invoices. `lint --fix` adds the missing package rules. A misspelled
-capability name is a rule that never matches, and `lint` doesn't catch it;
-`capability add` refuses a name it doesn't know.
+package that needs an operation its own list doesn't allow, or a secret a
+package reads that `secrets` doesn't declare. `lint --fix` adds the rules a
+package needs for its own calls. A misspelled capability name is a rule that
+never matches, and `lint` doesn't catch it; `capability add` refuses a name it
+doesn't know.
+
+An operation a package provides that `main` has no rule for is not a finding:
+leaving it out is how this blueprint withholds `acme.com/invoices.latest`, and
+`default: deny` refuses it. `capability list --unconfigured` shows what was
+left out, for every package or for the one you name:
+
+```sh
+submilli blueprint capability list --unconfigured
+```
+
+```text
+Provided capabilities with no rule under `main`; `default: deny` denies calls to them.
+
+@acme/billing
+  acme.com/invoices.latest — Fetch the size of a customer's latest invoice from the billing service.
+      fields: customerId: string
+```
 
 The blueprint also shapes what the agent is told. The description of the tool
 that runs code is assembled from it: which hosts the program may reach, what

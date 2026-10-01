@@ -329,13 +329,14 @@ Look up the installed package's declarations and capability filter fields:
 submilli search jina
 submilli docs @submilli/jina
 submilli blueprint capability list @submilli/jina
-submilli blueprint lint blueprint.yaml
+submilli blueprint capability list @submilli/jina --unconfigured
 ```
 
 The declarations show function signatures and descriptions; the capability
-list shows what the blueprint can restrict. In this example, lint warns that
-search has no grant for `main`. That is intentional: the blueprint permits
-reading one host, not searching the web.
+list shows what the blueprint can restrict. `--unconfigured` narrows it to the
+operations `main` has no rule for. In this example, search is one of them.
+That is intentional: the blueprint permits reading one host, not searching the
+web, and `default: deny` refuses the rest.
 
 The agent can retrieve package documentation through `packages.search` and
 `packages.docs`, the lookup tools introduced in

@@ -5,10 +5,12 @@
 //! well-formedness, every `secrets:` entry has a supported source, every
 //! `${secrets.X}` interpolation in `auth_proxy:` references a declared secret,
 //! the blueprint name, and that all filters parse. Package artifact validation
-//! loads each declared package's `capabilities.yaml`: missing `provides:` rules
-//! are warnings; missing `requires:` rules are errors. `default: allow` parses,
-//! but inverts the security posture to allow-by-default, so it lints as a
-//! warning.
+//! loads each declared package's `capabilities.yaml`: missing `requires:` rules
+//! are errors. A `provides:` capability without a `main` rule is not a finding:
+//! leaving it out is how a blueprint withholds it, and
+//! `blueprint capability list --unconfigured` lists those. `default: allow`
+//! parses, but inverts the security posture to allow-by-default, so it lints as
+//! a warning.
 
 use std::fs;
 use std::path::PathBuf;
@@ -18,11 +20,12 @@ use anyhow::Context;
 use submilli_blueprint::{Action, Blueprint, DefaultAction, FilterExpr, PermissionRule};
 use submilli_build::{CapabilitySchema, PackageStore};
 
+use super::file::has_capability_rule;
 use super::package_secrets::missing_package_secret_warnings;
 
 #[derive(clap::Args)]
 pub struct Args {
-    /// Add missing package capability rules to the blueprint file.
+    /// Add the rules declared packages require for their own calls.
     #[arg(long)]
     fix: bool,
 
@@ -60,7 +63,7 @@ fn lint_blueprint(args: Args, blueprint: &mut Blueprint) -> anyhow::Result<ExitC
                     package,
                     &artifact.capabilities,
                 ));
-                collect_capability_findings(
+                collect_requires_findings(
                     blueprint,
                     package,
                     &artifact.capabilities,
@@ -99,38 +102,22 @@ fn lint_blueprint(args: Args, blueprint: &mut Blueprint) -> anyhow::Result<ExitC
     }
 }
 
+/// A rule a package's `requires:` needs for its own calls; `--fix` grants it.
 #[derive(Clone, Debug, PartialEq)]
-struct MissingRule {
+struct MissingRequiresRule {
     caller: String,
     capability: String,
     filter: Option<String>,
-    action: Action,
 }
 
-fn collect_capability_findings(
+fn collect_requires_findings(
     blueprint: &Blueprint,
     package: &str,
     capabilities: &CapabilitySchema,
     warnings: &mut Vec<String>,
     errors: &mut Vec<String>,
-    fixes: &mut Vec<MissingRule>,
+    fixes: &mut Vec<MissingRequiresRule>,
 ) {
-    for provided in &capabilities.provides {
-        if has_capability_rule(blueprint, "main", &provided.name) {
-            continue;
-        }
-        warnings.push(format!(
-            "package `{package}` provides `{}`, but `permissions.main` has no matching rule",
-            provided.name
-        ));
-        fixes.push(MissingRule {
-            caller: "main".to_string(),
-            capability: provided.name.clone(),
-            filter: None,
-            action: Action::AskHuman,
-        });
-    }
-
     for required in &capabilities.requires {
         if has_rule(
             blueprint,
@@ -158,11 +145,10 @@ fn collect_capability_findings(
             "package `{package}` requires `{}`{filter}, but `permissions.{package}` has no matching rule",
             required.capability
         ));
-        fixes.push(MissingRule {
+        fixes.push(MissingRequiresRule {
             caller: package.to_string(),
             capability: required.capability.clone(),
             filter: required.filter.clone(),
-            action: Action::Allow,
         });
     }
 }
@@ -178,14 +164,7 @@ fn has_rule(blueprint: &Blueprint, caller: &str, capability: &str, filter: Optio
     })
 }
 
-fn has_capability_rule(blueprint: &Blueprint, caller: &str, capability: &str) -> bool {
-    blueprint
-        .permissions
-        .get(caller)
-        .is_some_and(|rules| rules.iter().any(|rule| rule.capability == capability))
-}
-
-fn apply_fixes(blueprint: &mut Blueprint, fixes: Vec<MissingRule>) {
+fn apply_fixes(blueprint: &mut Blueprint, fixes: Vec<MissingRequiresRule>) {
     for fix in fixes {
         if has_rule(
             blueprint,
@@ -207,7 +186,7 @@ fn apply_fixes(blueprint: &mut Blueprint, fixes: Vec<MissingRule>) {
                     .map(parse_filter)
                     .transpose()
                     .expect("compiler-emitted capability filters must parse as blueprint filters"),
-                action: fix.action,
+                action: Action::Allow,
             });
     }
 }

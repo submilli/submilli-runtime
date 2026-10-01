@@ -28,3 +28,29 @@ pub(super) fn write(path: &Path, blueprint: &submilli_blueprint::Blueprint) -> R
         .context("the resulting blueprint is invalid — not written")?;
     fs::write(path, &updated).with_context(|| format!("writing {}", path.display()))
 }
+
+/// Whether `caller` has any rule for `capability`, whatever its filter or action.
+pub(super) fn has_capability_rule(
+    blueprint: &submilli_blueprint::Blueprint,
+    caller: &str,
+    capability: &str,
+) -> bool {
+    blueprint
+        .permissions
+        .get(caller)
+        .is_some_and(|rules| rules.iter().any(|rule| rule.capability == capability))
+}
+
+/// Whether `caller` has a rule for `capability` with no filter: one that
+/// decides every call earlier rules leave, so none reaches `default:`.
+pub(super) fn has_unfiltered_capability_rule(
+    blueprint: &submilli_blueprint::Blueprint,
+    caller: &str,
+    capability: &str,
+) -> bool {
+    blueprint.permissions.get(caller).is_some_and(|rules| {
+        rules
+            .iter()
+            .any(|rule| rule.capability == capability && rule.filter.is_none())
+    })
+}
