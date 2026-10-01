@@ -6965,10 +6965,19 @@ impl Inferer<'_> {
                     super::inference_failure("arrow block body is a Block, never a type-only decl")
                 })?;
                 let id = self.wrap_narrow_regions(id, &narrow_seed, span)?;
+                let collected = self.inferred_returns.take().unwrap_or_default();
+                let returns_into_unknown = ret_hint
+                    .as_ref()
+                    .is_some_and(|hint| matches!(hint.peel(), Type::Unknown));
                 let t = if let Some(t) = &annotated_ret {
                     t.clone()
+                } else if returns_into_unknown && !collected.is_empty() {
+                    // Any return fits an `unknown` context, so the returns need
+                    // not agree and the body may fall off the end, as an
+                    // annotated `unknown` body may. A body with no `return`
+                    // stays `void`.
+                    Type::Unknown
                 } else {
-                    let collected = self.inferred_returns.take().unwrap_or_default();
                     self.unify_returns(&collected)
                 };
                 (ClosureBody::Block(id), t)
