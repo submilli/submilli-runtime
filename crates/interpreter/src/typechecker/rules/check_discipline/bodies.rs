@@ -160,13 +160,17 @@ pub(super) fn is_module_const(ta: &TypedAst, mangled: &MangledName) -> bool {
         .globals
         .iter()
         .any(|global| global.mangled_name == *mangled && global.kind == GlobalKind::Const);
-    let is_static_field = classes(ta).any(|class| {
+    is_const && !is_static_field(ta, mangled)
+}
+
+/// Whether `mangled` names a static field of one of the package's classes.
+pub(super) fn is_static_field(ta: &TypedAst, mangled: &MangledName) -> bool {
+    classes(ta).any(|class| {
         mangled
             .as_str()
             .strip_prefix(class.mangled_name.as_str())
             .is_some_and(|member| member.starts_with(crate::mangle::SEP))
-    });
-    is_const && !is_static_field
+    })
 }
 
 fn member_bodies(class: &TypedClassDecl, class_is_public: bool) -> Vec<Body<'_>> {

@@ -34,6 +34,7 @@ pub(super) fn analyse(
         closure_depth: 0,
         loop_depth: 0,
         reads: Vec::new(),
+        variable_reads: BTreeMap::new(),
         evaluated: BTreeMap::new(),
         findings,
     };
@@ -77,6 +78,8 @@ struct Walker<'a, 'f, 'l> {
     closure_depth: u32,
     loop_depth: u32,
     reads: Vec<Read>,
+    /// Where each variable the body reads is first read.
+    variable_reads: BTreeMap<MangledName, Span>,
     /// A node two parents share is evaluated once at run time, as the receiver
     /// of a compound assignment is: its reads count once.
     evaluated: BTreeMap<ExprId, Yield>,
@@ -452,8 +455,8 @@ impl<'a> Walker<'a, '_, '_> {
             TypedExprKind::LocalRef { ident, .. } => {
                 self.local(&ident.name, span, yields_primitive)
             }
-            TypedExprKind::GlobalRef { mangled, name } => {
-                self.global(mangled, &name.name, span, yields_primitive)
+            TypedExprKind::GlobalRef { mangled, .. } => {
+                self.global(mangled, span, yields_primitive)
             }
             TypedExprKind::LocalNarrowRef { path, .. } => {
                 self.narrowed_reference(path, span, yields_primitive)
@@ -628,26 +631,61 @@ impl<'a> Walker<'a, '_, '_> {
         self.unless_captured(value, declared_at, span)
     }
 
-    fn global(
-        &mut self,
-        mangled: &MangledName,
-        name: &str,
-        span: Span,
-        yields_primitive: bool,
-    ) -> Yield {
+    fn global(&mut self, mangled: &MangledName, span: Span, yields_primitive: bool) -> Yield {
+        if self.package.is_rebindable(mangled) {
+            return self.variable(mangled, span, yields_primitive);
+        }
         if yields_primitive {
             return stable();
         }
         let Some(bound) = self.package.caller_global(mangled) else {
             return stable();
         };
-        let value = CallerValue {
-            origin: Origin::of(ValueRoot::Global(mangled.clone())),
-            shown: name.to_string(),
-            loop_depth: 0,
-            bound: bound.unwrap_or(span),
-        };
+        let value = self.global_value(mangled, bound.unwrap_or(span));
         self.unless_captured(value, 0, span)
+    }
+
+    /// A variable is read from its binding at each use, primitive or not, as
+    /// [`Walker::read_at`] reads a property: a read inside a loop, or after
+    /// another, is reported and yields a stable value.
+    fn variable(&mut self, mangled: &MangledName, span: Span, yields_primitive: bool) -> Yield {
+        let Some(bound) = self.package.caller_global(mangled) else {
+            return stable();
+        };
+        let value = self.global_value(mangled, bound.unwrap_or(span));
+        let Some(variable) = self.unless_captured(value, 0, span).pop() else {
+            return stable();
+        };
+        if let Some(problem) = self.variable_problem(mangled, &variable) {
+            self.findings.report_variable_read(problem, &variable, span);
+            return stable();
+        }
+        self.variable_reads.insert(mangled.clone(), span);
+        if yields_primitive {
+            return stable();
+        }
+        vec![variable]
+    }
+
+    fn variable_problem(
+        &self,
+        mangled: &MangledName,
+        variable: &CallerValue,
+    ) -> Option<ReadProblem> {
+        if self.loop_depth > variable.loop_depth {
+            return Some(ReadProblem::InLoop);
+        }
+        let first = *self.variable_reads.get(mangled)?;
+        Some(ReadProblem::Repeated { first })
+    }
+
+    fn global_value(&self, mangled: &MangledName, bound: Span) -> CallerValue {
+        CallerValue {
+            origin: Origin::of(ValueRoot::Global(mangled.clone())),
+            shown: self.package.global_shown(mangled).to_string(),
+            loop_depth: 0,
+            bound,
+        }
     }
 
     /// A reference from a nested function runs when the function does, which
@@ -669,7 +707,7 @@ impl<'a> Walker<'a, '_, '_> {
     ) -> Yield {
         let root = match &path.root {
             BindingId::Local { name, .. } => self.local(name, span, false),
-            BindingId::Global(mangled) => self.global(mangled, source_name(mangled), span, false),
+            BindingId::Global(mangled) => self.global(mangled, span, false),
             BindingId::This => self.this(span, false),
         };
         let mut current = self.single(root, span);
@@ -885,7 +923,12 @@ impl<'a> Walker<'a, '_, '_> {
 
     fn postfix(&mut self, target: &PostfixTarget, span: Span) -> Result<(), CompilerFailure> {
         let (receiver, key) = match target {
-            PostfixTarget::Local { .. } | PostfixTarget::Global { .. } => return Ok(()),
+            PostfixTarget::Local { .. } => return Ok(()),
+            // `count++` reads the variable before it writes it.
+            PostfixTarget::Global { mangled, .. } => {
+                let _read = self.global(mangled, span, true);
+                return Ok(());
+            }
             PostfixTarget::Field { receiver, name, .. } => {
                 (*receiver, ReadKey::Property(name.name.clone()))
             }
@@ -989,7 +1032,10 @@ impl<'a> Walker<'a, '_, '_> {
             },
             ValueRoot::Global(mangled) => RootNote {
                 span: value.bound,
-                message: format!("the caller can reach the global `{}`", source_name(mangled)),
+                message: format!(
+                    "the caller can reach the global `{}`",
+                    self.package.global_shown(mangled)
+                ),
             },
             ValueRoot::Unresolved(name) => RootNote {
                 span: used,

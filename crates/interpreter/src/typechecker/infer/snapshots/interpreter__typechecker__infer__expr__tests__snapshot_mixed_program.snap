@@ -353,6 +353,11 @@ TypedAst {
             },
         },
     ],
+    rebindable_globals: {
+        MangledName(
+            "main#result",
+        ): "result",
+    },
     functions: [
         TypedFunction {
             name: Ident {

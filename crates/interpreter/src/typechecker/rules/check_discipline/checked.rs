@@ -29,9 +29,10 @@
 //! back. A body is complex when:
 //!
 //! 1. what reaches `check()` is read from shared state, which code outside
-//!    the body can change: `this`, a module `let`, a static field, a global
-//!    of another package, or a name with no binding. A module `const` cannot
-//!    be rebound, so it is not shared state.
+//!    the body can change: `this`, a module `let`, a writable static field, a
+//!    global of another package, or a name with no binding. A module `const`
+//!    or a `readonly` static field cannot be rebound, so it is not shared
+//!    state.
 //! 2. a container the body built (an array, object, `Map` or `Set` in a
 //!    local, made new, or a call's result made from nothing the caller
 //!    supplied) reaches `check()` and is shared. A local made from a value
@@ -115,7 +116,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use super::super::check_calls::{CheckCall, SearchRoot};
-use super::bodies::{Body, is_module_const};
+use super::bodies::{Body, is_module_const, is_static_field};
 use super::origin::{Origin, ParameterId, ReadKey, ValueRoot};
 use super::package::{PackageFacts, is_runtime_symbol, parameter_shown, source_name};
 use super::scope::Scopes;
@@ -664,9 +665,10 @@ impl<'a> Walker<'a, '_> {
             TypedStmtKind::Expr(value) => {
                 self.eval(*value)?;
             }
-            TypedStmtKind::AssignGlobal { ident, value, .. } => {
+            TypedStmtKind::AssignGlobal { mangled, value, .. } => {
                 self.eval(*value)?;
-                self.foreign_write(format!("the global `{}`", ident.name), stmt.span);
+                let global = self.package.global_shown(mangled);
+                self.foreign_write(format!("the global `{global}`"), stmt.span);
             }
             TypedStmtKind::Throw { value } => {
                 self.eval(*value)?;
@@ -1527,10 +1529,12 @@ impl<'a> Walker<'a, '_> {
         Flow::from([Term::of(source)])
     }
 
-    /// A global that may hold anything. A primitive constant cannot change,
-    /// and the runtime's own bindings hold nothing.
+    /// A global that may hold anything. A primitive no code can rebind, a
+    /// constant of this package or another, cannot change, and the runtime's
+    /// own bindings hold nothing.
     fn global(&self, mangled: &MangledName, expr: &TypedExpr) -> Flow {
-        if is_runtime_symbol(mangled) || self.is_module_const(mangled) && is_primitive(&expr.ty) {
+        let constant = is_primitive(&expr.ty) && !self.package.is_rebindable(mangled);
+        if is_runtime_symbol(mangled) || constant {
             return Flow::new();
         }
         Flow::from([Term::of(Source::Caller(ValueRoot::Global(mangled.clone())))])
@@ -1717,8 +1721,9 @@ impl<'a> Walker<'a, '_> {
                 }
                 flow
             }
-            PostfixTarget::Global { name, mangled, .. } => {
-                self.foreign_write(format!("the global `{}`", name.name), span);
+            PostfixTarget::Global { mangled, .. } => {
+                let global = self.package.global_shown(mangled);
+                self.foreign_write(format!("the global `{global}`"), span);
                 Flow::from([Term::of(Source::Caller(ValueRoot::Global(mangled.clone())))])
             }
             PostfixTarget::Field { receiver, name, .. } => {
@@ -2238,12 +2243,15 @@ impl Walker<'_, '_> {
     }
 
     /// Whether code outside the body can change what `root` names: `this`,
-    /// a module `let`, a static field, another package's global, or a name
-    /// with no binding.
+    /// a module `let`, a writable static field, another package's global, or
+    /// a name with no binding.
     fn is_shared_root(&self, root: &ValueRoot) -> bool {
         match root {
             ValueRoot::Parameter(_) => false,
             ValueRoot::This | ValueRoot::Unresolved(_) => true,
+            ValueRoot::Global(mangled) if is_static_field(self.package.ta, mangled) => {
+                self.package.is_rebindable(mangled)
+            }
             ValueRoot::Global(mangled) => !self.is_module_const(mangled),
         }
     }
@@ -2392,7 +2400,7 @@ impl Walker<'_, '_> {
                 .get(parameter)
                 .map_or("a parameter", String::as_str),
             ValueRoot::This => "this",
-            ValueRoot::Global(mangled) => source_name(mangled),
+            ValueRoot::Global(mangled) => self.package.global_shown(mangled),
             ValueRoot::Unresolved(name) => name,
         };
         origin

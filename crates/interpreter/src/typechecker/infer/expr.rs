@@ -3423,6 +3423,7 @@ impl Inferer<'_> {
                     self.check_class_callable_types(&owner, span);
                     self.check_static_privacy(field.visibility, &owner, &class_name, &member);
                     let mangled = crate::mangle::static_member(&owner, &member.name);
+                    self.note_rebindable_static(&field, &owner, &member.name);
                     let Type::Function {
                         params,
                         ret,
@@ -3514,6 +3515,7 @@ impl Inferer<'_> {
                 self.check_class_callable_types(&owner, span);
                 self.check_static_privacy(field.visibility, &owner, &class_name, &member);
                 let mangled = crate::mangle::static_member(&owner, &member.name);
+                self.note_rebindable_static(&field, &owner, &member.name);
                 (
                     TypedExprKind::GlobalRef {
                         mangled,
@@ -3549,6 +3551,29 @@ impl Inferer<'_> {
                 ],
             );
         }
+    }
+
+    /// An imported class's static fields are declared in another package, so
+    /// an access is where this package learns which of them can be rebound,
+    /// named by the class that declares the field. Its own keep the name
+    /// their declaration records.
+    pub(super) fn note_rebindable_static(
+        &mut self,
+        field: &crate::FieldSig,
+        owner: &crate::MangledName,
+        member: &str,
+    ) {
+        if field.readonly {
+            return;
+        }
+        let shown = self.class_by_mangled(owner).map_or_else(
+            || member.to_string(),
+            |class| format!("{}.{member}", class.name),
+        );
+        self.typed_ast
+            .rebindable_globals
+            .entry(crate::mangle::static_member(owner, member))
+            .or_insert(shown);
     }
 
     pub(super) fn report_missing_static(

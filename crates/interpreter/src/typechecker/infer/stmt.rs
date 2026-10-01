@@ -926,6 +926,7 @@ impl Inferer<'_> {
                         );
                         return Ok(StaticWrite::Rejected { receiver });
                     }
+                    self.note_rebindable_static(&field, &owner, &name.name);
                     StaticWrite::Resolved {
                         mangled: crate::mangle::static_member(&owner, &name.name),
                         ty: field.ty,
