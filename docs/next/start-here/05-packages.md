@@ -28,7 +28,7 @@ directly, returns typed values, and tells the runtime what each call means.
 A package can be one you write for an internal system, one you write for a
 third-party service you consume, or one someone else published: any package
 in a Git repository
-[installs straight from it](/docs/next/blueprints/install-a-package).
+[installs straight from it](/docs/next/blueprints/start-a-blueprint).
 Submilli publishes
 [curated packages](/docs/next/reference/curated-packages) that way for
 common services, GitHub, Slack, Google Drive, Linear, Notion, and others,

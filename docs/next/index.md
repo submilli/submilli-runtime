@@ -23,10 +23,12 @@ cutover removes.
 
 ## Part 2 · Blueprints
 
-Stubs only, created for links from Part 1.
-
-- [Start a blueprint](/docs/next/blueprints/start-a-blueprint)
-- [Install a package](/docs/next/blueprints/install-a-package)
+1. [Start a blueprint](/docs/next/blueprints/start-a-blueprint)
+2. [HTTP and credentials](/docs/next/blueprints/http-and-credentials)
+3. [Keep files and state](/docs/next/blueprints/keep-files-and-state)
+4. [Allow Git](/docs/next/blueprints/allow-git)
+5. [Allow model calls](/docs/next/blueprints/allow-model-calls)
+6. [Add an MCP server](/docs/next/blueprints/add-an-mcp-server)
 
 ## Part 3 · Packages
 
@@ -39,6 +41,9 @@ Stubs only, created for links from Part 1.
 Stubs only, created for links from Part 1.
 
 - [Run the server](/docs/next/server/run-the-server)
+- [Connect the CLI](/docs/next/server/connect-the-cli)
+- [Register a blueprint](/docs/next/server/register-a-blueprint)
+- [Set limits](/docs/next/server/set-limits)
 - [Deploy on Kubernetes](/docs/next/server/deploy-on-kubernetes)
 
 ## Part 5 · Tutorials
@@ -46,10 +51,23 @@ Stubs only, created for links from Part 1.
 Stubs only, created for links from Part 1.
 
 - [Build a package](/docs/next/tutorials/build-a-package)
-- [Connect Mastra](/docs/next/tutorials/connect-mastra)
+- [Connect a harness](/docs/next/tutorials/connect-a-harness) (sub-tree index)
+  - [Connect Mastra](/docs/next/tutorials/connect-mastra)
+  - [Connect deepagents](/docs/next/tutorials/connect-deepagents)
+  - [Connect OpenAI Agents](/docs/next/tutorials/connect-openai-agents)
+  - [Connect Claude Agent SDK](/docs/next/tutorials/connect-claude-agent-sdk)
+  - [Use the HTTP API](/docs/next/tutorials/use-the-http-api)
+- [Diagnose a denial](/docs/next/tutorials/diagnose-a-denial)
+- [Verify in CI](/docs/next/tutorials/verify-in-ci)
+- [Manage blueprints in Git](/docs/next/tutorials/manage-blueprints-in-git)
+- [Add the GitHub MCP server](/docs/next/tutorials/add-the-github-mcp-server)
 
 ## Part 6 · Reference
 
 Stubs only, created for links from Part 1.
 
+- [Blueprint file](/docs/next/reference/blueprint-file)
 - [Curated packages](/docs/next/reference/curated-packages)
+- [Permissions](/docs/next/reference/permissions)
+- [Standard library](/docs/next/reference/standard-library)
+- [MCP servers](/docs/next/reference/mcp-servers)
