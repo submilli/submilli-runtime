@@ -1,1 +1,11 @@
-line 294 missed: artifact we reject `keyof T` in `ff1`'s declaration (line 278), so its calls aren't checked against it
+line 294 missed: bug SUB-1205 `keyof` over a type parameter or `unknown` is rejected (on line 278, so `ff1`'s calls aren't checked against it)
+line 29, 35 extra: by-design spec §1.6 an `unknown` must be narrowed before it is used as a condition
+line 214 extra: bug SUB-1201 a nested generic call is checked against the outer callee's unbound `T`
+line 278, 279 extra: bug SUB-1205 `keyof` over a type parameter or `unknown` is rejected
+line 30, 39 type: by-design spec §1.6 an `unknown` must be narrowed before it is used as a condition
+line 45, 54, 102, 108, 113, 114, 120, 126, 168, 171, 174, 177, 189, 192, 195, 253, 256, 259, 270 type: bug SUB-1196 (narrowing a type parameter) narrowing a `T` keeps `T`, where tsc gives `NonNullable<T>` or `T & object`
+line 69, 75, 80, 81, 87, 93, 382, 402 type: bug SUB-1196 (primitive to `{}`) a primitive isn't assignable to `{}` or `Object` (removing `null` from `unknown` leaves `unknown`, where tsc gives `{}`)
+line 183 type: bug SUB-1196 (primitive to `{}`) a primitive isn't assignable to `{}` or `Object`
+line 191 type: bug SUB-1196 (narrowing a type parameter) narrowing a `T` keeps `T`, where tsc gives `NonNullable<T>` or `T & object`; also by-design spec §1.6 `&&` keeps a type parameter in its falsy part, since a `T` can be falsy
+line 194 type: bug SUB-1196 (narrowing a type parameter) narrowing a `T` keeps `T`, where tsc gives `NonNullable<T>` or `T & object`; also by-design spec §1.6 `&&` keeps `number` and `boolean` whole in its falsy part, where tsc narrows to `0` or `false`
+line 206, 210 type: bug SUB-1196 (literals from constant expressions) `!` on an operand of known truthiness isn't a literal type

@@ -1,9 +1,1 @@
-types: 7 of 20 tsc entries compared, 2 differ
-
-line 12: this
-  tsc:  this
-  ours: Broken
-
-line 14: this
-  tsc:  this
-  ours: Broken
+types: 7 of 20 tsc entries compared, 0 differ

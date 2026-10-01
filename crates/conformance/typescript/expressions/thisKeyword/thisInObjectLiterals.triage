@@ -1,1 +1,3 @@
 line 18 missed: artifact we reject the method for its `this` on line 19, which the spec excludes outside classes
+line 11 type: artifact tsc prints the polymorphic `this` type, we print the enclosing class
+line 17 type: by-design spec §Excluded-Features `this` is excluded outside classes, so the method's return is an error type

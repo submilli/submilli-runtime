@@ -1,1 +1,3 @@
-line 46 missed: by-design spec §1.6 assignment narrowing: after `a = b` on line 45, `a` has `b`'s type, where tsc keeps `AList2`
+line 46 missed: by-design spec §1.6 after an assignment the variable has the assigned value's type, where tsc keeps the declared one (`a = b` on line 45)
+line 81, 87, 95, 102, 110 extra: by-design spec §1.2 a method member is a function-typed property, so its parameters aren't bivariant as tsc's methods are
+line 46 type: by-design spec §1.6 after an assignment the variable has the assigned value's type, where tsc keeps the declared one (`a = b` on line 45)

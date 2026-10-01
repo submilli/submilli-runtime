@@ -1,0 +1,1 @@
+line 9, 15, 25, 31 extra: by-design spec §Excluded-Features the `arguments` object is excluded, use rest parameters

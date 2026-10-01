@@ -2,7 +2,7 @@
 //! `.divergences`, one entry per line:
 //!
 //! ```text
-//! line 12 type: by-design spec §1.2 an array literal's element type comes from its first element
+//! line 12 type: by-design spec §1.2 arrays are homogeneous, so an array literal's elements must share one type
 //! line 14, 17 extra: bug SUB-1026 construct signatures read as a method
 //! line 30 missed: artifact pruning removed the assignment that narrowed `x`
 //! ```
@@ -13,6 +13,10 @@
 //!
 //! An entry covers every divergence of its kind on its line, so a second one there
 //! passes this check; the `.divergences` diff still shows it.
+//!
+//! A line that diverges for more than one reason names each, joined by `; also `.
+//! Each starts with its own category, though only the first is checked, and a
+//! reason never contains `; also ` itself.
 use std::collections::BTreeSet;
 use std::fmt;
 use std::fs;

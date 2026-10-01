@@ -1,0 +1,2 @@
+line 12 extra: by-design spec §1.4 a rest parameter's type must be written as an array, not an alias or tuple
+line 25 type: bug SUB-1196 (literal under an expected type) a literal checked against an expected type takes that type, where tsc keeps its own

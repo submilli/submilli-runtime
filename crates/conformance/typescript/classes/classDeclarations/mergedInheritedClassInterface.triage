@@ -1,2 +1,5 @@
 line 17 missed: artifact we reject the class merging with an interface, on line 16
 line 25 missed: artifact we reject the class merging with an interface, on line 24
+line 16, 24 extra: by-design spec §2.3 a name has a single declaration site, so a class can't merge with an interface
+line 28 extra: artifact we reject the class merging with an interface on line 24, so `ChildNoBaseClass` names the interface
+line 33, 34, 35, 36, 37, 38, 39 extra: artifact we reject the class merging with an interface on line 16, so `Child` lacks its members

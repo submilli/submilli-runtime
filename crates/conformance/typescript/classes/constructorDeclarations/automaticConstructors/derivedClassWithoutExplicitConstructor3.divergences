@@ -1,17 +1,1 @@
-types: 14 of 65 tsc entries compared, 4 differ
-
-line 6: this
-  tsc:  this
-  ours: Base
-
-line 13: this
-  tsc:  this
-  ours: Derived
-
-line 28: this
-  tsc:  this
-  ours: Base2<T>
-
-line 35: this
-  tsc:  this
-  ours: D<T>
+types: 14 of 65 tsc entries compared, 0 differ

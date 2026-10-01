@@ -1,0 +1,1 @@
+line 13, 41, 42 extra: bug SUB-1205 `typeof` of a class or enum name is unresolved

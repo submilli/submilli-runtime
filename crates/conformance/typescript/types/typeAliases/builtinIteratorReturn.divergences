@@ -1,32 +1,8 @@
-types: 18 of 34 tsc entries compared, 7 differ
+types: 18 of 34 tsc entries compared, 1 differ
 
 line 9: array[Symbol.iterator]
   tsc:  () => ArrayIterator<number>
   ours: number
-
-line 10: i1
-  tsc:  ArrayIterator<number>
-  ours: Iterator<number>
-
-line 10: array.values()
-  tsc:  ArrayIterator<number>
-  ours: Iterator<number>
-
-line 11: i2
-  tsc:  ArrayIterator<number>
-  ours: Iterator<number>
-
-line 11: array.keys()
-  tsc:  ArrayIterator<number>
-  ours: Iterator<number>
-
-line 12: i3
-  tsc:  ArrayIterator<[number, number]>
-  ours: Iterator<[number, number]>
-
-line 12: array.entries()
-  tsc:  ArrayIterator<[number, number]>
-  ours: Iterator<[number, number]>
 
 errors:
 line 9: ours: unresolved identifier `Symbol` (tsc accepts)

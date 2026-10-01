@@ -1,0 +1,5 @@
+line 118 extra: bug SUB-1204 a literal widens to its base type where tsc keeps the literal type; also by-design spec §1.6 `&&` keeps `number` and `boolean` whole in its falsy part, where tsc narrows to `0` or `false`
+line 125 extra: by-design spec §1.6 `&&` keeps `number` and `boolean` whole in its falsy part, where tsc narrows to `0` or `false`
+line 118 type: bug SUB-1204 a literal widens to its base type where tsc keeps the literal type; also by-design spec §1.6 `&&` keeps `number` and `boolean` whole in its falsy part, where tsc narrows to `0` or `false`
+line 119, 121 type: bug SUB-1204 a literal widens to its base type where tsc keeps the literal type
+line 123, 125 type: by-design spec §1.6 `&&` keeps `number` and `boolean` whole in its falsy part, where tsc narrows to `0` or `false`

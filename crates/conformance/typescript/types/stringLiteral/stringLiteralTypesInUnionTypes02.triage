@@ -1,0 +1,1 @@
+line 8, 14, 18, 19, 22, 23 type: artifact one side prints a type alias (or `keyof`) by name and the other expands it (tsc expands it to the primitive `string`)

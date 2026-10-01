@@ -159,6 +159,10 @@ or conformance coverage is affected. For public book changes, use the
 documentation-site checks below. For agent instructions, commands, and skills,
 validate their frontmatter, referenced paths, and workflow consistency.
 
+When a compiler change alters what the TypeScript conformance suite finds, update
+its committed divergences, and edit their `.triage` explanations by hand, including
+those citing a bug it fixes; see [After a change to the compiler](crates/conformance/typescript/README.md#after-a-change-to-the-compiler).
+
 Use focused tests while iterating. Interpreter fixtures use assertions to verify
 runtime behavior; compile-error fixtures use `// expect-error: <substring>`.
 Keep snapshots when the rendered diagnostic or declaration is the contract under test.

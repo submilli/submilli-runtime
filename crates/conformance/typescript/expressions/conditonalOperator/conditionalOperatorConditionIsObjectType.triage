@@ -1,1 +1,2 @@
 line 30, 31, 32, 34, 53, 54, 55, 57 missed: bug SUB-1154 tsc rejects a condition that is always truthy or always falsy
+line 18 extra: by-design spec §2.2 a static field requires an initializer

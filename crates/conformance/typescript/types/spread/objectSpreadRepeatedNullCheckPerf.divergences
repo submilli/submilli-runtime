@@ -1,8 +1,4 @@
-types: 213 of 378 tsc entries compared, 107 differ
-
-line 32: config
-  tsc:  Record<string, number>
-  ours: { [key: string]: number }
+types: 213 of 378 tsc entries compared, 53 differ
 
 line 33: { ...config.a !== null && { a: config.a.toString() }, ...config.b !== null && { b: config.b.toString() }, ...config.c !== null && { c: config.c.toString() }, ...config.d !== null && { d: config.d.toString() }, ...config.e !== null && { e: config.e.toString() }, ...config.f !== null && { f: config.f.toString() }, ...config.g !== null && { g: config.g.toString() }, ...config.h !== null && { h: config.h.toString() }, ...config.i !== null && { i: config.i.toString() }, ...config.j !== null && { j: config.j.toString() }, ...config.k !== null && { k: config.k.toString() }, ...config.l !== null && { l: config.l.toString() }, ...config.m !== null && { m: config.m.toString() }, ...config.n !== null && { n: config.n.toString() }, ...config.o !== null && { o: config.o.toString() }, ...config.p !== null && { p: config.p.toString() }, ...config.q !== null && { q: config.q.toString() }, ...config.r !== null && { r: config.r.toString() }, ...config.s !== null && { s: config.s.toString() }, ...config.t !== null && { t: config.t.toString() }, ...config.u !== null && { u: config.u.toString() }, ...config.v !== null && { v: config.v.toString() }, ...config.w !== null && { w: config.w.toString() }, ...config.x !== null && { x: config.x.toString() }, ...config.y !== null && { y: config.y.toString() }, ...config.z !== null && { z: config.z.toString() } }
   tsc:  { z?: string | undefined; y?: string | undefined; x?: string | undefined; w?: string | undefined; v?: string | undefined; u?: string | undefined; t?: string | undefined; s?: string | undefined; r?: string | undefined; q?: string | undefined; p?: string | undefined; o?: string | undefined; n?: string | undefined; m?: string | undefined; l?: string | undefined; k?: string | undefined; j?: string | undefined; i?: string | undefined; h?: string | undefined; g?: string | undefined; f?: string | undefined; e?: string | undefined; d?: string | undefined; c?: string | undefined; b?: string | undefined; a?: string | undefined; }
@@ -16,14 +12,6 @@ line 34: config.a
   tsc:  number
   ours: number | null
 
-line 34: config
-  tsc:  Record<string, number>
-  ours: { [key: string]: number }
-
-line 34: config
-  tsc:  Record<string, number>
-  ours: { [key: string]: number }
-
 line 35: config.b !== null && { b: config.b.toString() }
   tsc:  false | { b: string; }
   ours: boolean | { b: string }
@@ -31,14 +19,6 @@ line 35: config.b !== null && { b: config.b.toString() }
 line 35: config.b
   tsc:  number
   ours: number | null
-
-line 35: config
-  tsc:  Record<string, number>
-  ours: { [key: string]: number }
-
-line 35: config
-  tsc:  Record<string, number>
-  ours: { [key: string]: number }
 
 line 36: config.c !== null && { c: config.c.toString() }
   tsc:  false | { c: string; }
@@ -48,14 +28,6 @@ line 36: config.c
   tsc:  number
   ours: number | null
 
-line 36: config
-  tsc:  Record<string, number>
-  ours: { [key: string]: number }
-
-line 36: config
-  tsc:  Record<string, number>
-  ours: { [key: string]: number }
-
 line 37: config.d !== null && { d: config.d.toString() }
   tsc:  false | { d: string; }
   ours: boolean | { d: string }
@@ -63,14 +35,6 @@ line 37: config.d !== null && { d: config.d.toString() }
 line 37: config.d
   tsc:  number
   ours: number | null
-
-line 37: config
-  tsc:  Record<string, number>
-  ours: { [key: string]: number }
-
-line 37: config
-  tsc:  Record<string, number>
-  ours: { [key: string]: number }
 
 line 38: config.e !== null && { e: config.e.toString() }
   tsc:  false | { e: string; }
@@ -80,14 +44,6 @@ line 38: config.e
   tsc:  number
   ours: number | null
 
-line 38: config
-  tsc:  Record<string, number>
-  ours: { [key: string]: number }
-
-line 38: config
-  tsc:  Record<string, number>
-  ours: { [key: string]: number }
-
 line 39: config.f !== null && { f: config.f.toString() }
   tsc:  false | { f: string; }
   ours: boolean | { f: string }
@@ -95,14 +51,6 @@ line 39: config.f !== null && { f: config.f.toString() }
 line 39: config.f
   tsc:  number
   ours: number | null
-
-line 39: config
-  tsc:  Record<string, number>
-  ours: { [key: string]: number }
-
-line 39: config
-  tsc:  Record<string, number>
-  ours: { [key: string]: number }
 
 line 40: config.g !== null && { g: config.g.toString() }
   tsc:  false | { g: string; }
@@ -112,14 +60,6 @@ line 40: config.g
   tsc:  number
   ours: number | null
 
-line 40: config
-  tsc:  Record<string, number>
-  ours: { [key: string]: number }
-
-line 40: config
-  tsc:  Record<string, number>
-  ours: { [key: string]: number }
-
 line 41: config.h !== null && { h: config.h.toString() }
   tsc:  false | { h: string; }
   ours: boolean | { h: string }
@@ -127,14 +67,6 @@ line 41: config.h !== null && { h: config.h.toString() }
 line 41: config.h
   tsc:  number
   ours: number | null
-
-line 41: config
-  tsc:  Record<string, number>
-  ours: { [key: string]: number }
-
-line 41: config
-  tsc:  Record<string, number>
-  ours: { [key: string]: number }
 
 line 42: config.i !== null && { i: config.i.toString() }
   tsc:  false | { i: string; }
@@ -144,14 +76,6 @@ line 42: config.i
   tsc:  number
   ours: number | null
 
-line 42: config
-  tsc:  Record<string, number>
-  ours: { [key: string]: number }
-
-line 42: config
-  tsc:  Record<string, number>
-  ours: { [key: string]: number }
-
 line 43: config.j !== null && { j: config.j.toString() }
   tsc:  false | { j: string; }
   ours: boolean | { j: string }
@@ -159,14 +83,6 @@ line 43: config.j !== null && { j: config.j.toString() }
 line 43: config.j
   tsc:  number
   ours: number | null
-
-line 43: config
-  tsc:  Record<string, number>
-  ours: { [key: string]: number }
-
-line 43: config
-  tsc:  Record<string, number>
-  ours: { [key: string]: number }
 
 line 44: config.k !== null && { k: config.k.toString() }
   tsc:  false | { k: string; }
@@ -176,14 +92,6 @@ line 44: config.k
   tsc:  number
   ours: number | null
 
-line 44: config
-  tsc:  Record<string, number>
-  ours: { [key: string]: number }
-
-line 44: config
-  tsc:  Record<string, number>
-  ours: { [key: string]: number }
-
 line 45: config.l !== null && { l: config.l.toString() }
   tsc:  false | { l: string; }
   ours: boolean | { l: string }
@@ -191,14 +99,6 @@ line 45: config.l !== null && { l: config.l.toString() }
 line 45: config.l
   tsc:  number
   ours: number | null
-
-line 45: config
-  tsc:  Record<string, number>
-  ours: { [key: string]: number }
-
-line 45: config
-  tsc:  Record<string, number>
-  ours: { [key: string]: number }
 
 line 46: config.m !== null && { m: config.m.toString() }
   tsc:  false | { m: string; }
@@ -208,14 +108,6 @@ line 46: config.m
   tsc:  number
   ours: number | null
 
-line 46: config
-  tsc:  Record<string, number>
-  ours: { [key: string]: number }
-
-line 46: config
-  tsc:  Record<string, number>
-  ours: { [key: string]: number }
-
 line 47: config.n !== null && { n: config.n.toString() }
   tsc:  false | { n: string; }
   ours: boolean | { n: string }
@@ -223,14 +115,6 @@ line 47: config.n !== null && { n: config.n.toString() }
 line 47: config.n
   tsc:  number
   ours: number | null
-
-line 47: config
-  tsc:  Record<string, number>
-  ours: { [key: string]: number }
-
-line 47: config
-  tsc:  Record<string, number>
-  ours: { [key: string]: number }
 
 line 48: config.o !== null && { o: config.o.toString() }
   tsc:  false | { o: string; }
@@ -240,14 +124,6 @@ line 48: config.o
   tsc:  number
   ours: number | null
 
-line 48: config
-  tsc:  Record<string, number>
-  ours: { [key: string]: number }
-
-line 48: config
-  tsc:  Record<string, number>
-  ours: { [key: string]: number }
-
 line 49: config.p !== null && { p: config.p.toString() }
   tsc:  false | { p: string; }
   ours: boolean | { p: string }
@@ -255,14 +131,6 @@ line 49: config.p !== null && { p: config.p.toString() }
 line 49: config.p
   tsc:  number
   ours: number | null
-
-line 49: config
-  tsc:  Record<string, number>
-  ours: { [key: string]: number }
-
-line 49: config
-  tsc:  Record<string, number>
-  ours: { [key: string]: number }
 
 line 50: config.q !== null && { q: config.q.toString() }
   tsc:  false | { q: string; }
@@ -272,14 +140,6 @@ line 50: config.q
   tsc:  number
   ours: number | null
 
-line 50: config
-  tsc:  Record<string, number>
-  ours: { [key: string]: number }
-
-line 50: config
-  tsc:  Record<string, number>
-  ours: { [key: string]: number }
-
 line 51: config.r !== null && { r: config.r.toString() }
   tsc:  false | { r: string; }
   ours: boolean | { r: string }
@@ -287,14 +147,6 @@ line 51: config.r !== null && { r: config.r.toString() }
 line 51: config.r
   tsc:  number
   ours: number | null
-
-line 51: config
-  tsc:  Record<string, number>
-  ours: { [key: string]: number }
-
-line 51: config
-  tsc:  Record<string, number>
-  ours: { [key: string]: number }
 
 line 52: config.s !== null && { s: config.s.toString() }
   tsc:  false | { s: string; }
@@ -304,14 +156,6 @@ line 52: config.s
   tsc:  number
   ours: number | null
 
-line 52: config
-  tsc:  Record<string, number>
-  ours: { [key: string]: number }
-
-line 52: config
-  tsc:  Record<string, number>
-  ours: { [key: string]: number }
-
 line 53: config.t !== null && { t: config.t.toString() }
   tsc:  false | { t: string; }
   ours: boolean | { t: string }
@@ -319,14 +163,6 @@ line 53: config.t !== null && { t: config.t.toString() }
 line 53: config.t
   tsc:  number
   ours: number | null
-
-line 53: config
-  tsc:  Record<string, number>
-  ours: { [key: string]: number }
-
-line 53: config
-  tsc:  Record<string, number>
-  ours: { [key: string]: number }
 
 line 54: config.u !== null && { u: config.u.toString() }
   tsc:  false | { u: string; }
@@ -336,14 +172,6 @@ line 54: config.u
   tsc:  number
   ours: number | null
 
-line 54: config
-  tsc:  Record<string, number>
-  ours: { [key: string]: number }
-
-line 54: config
-  tsc:  Record<string, number>
-  ours: { [key: string]: number }
-
 line 55: config.v !== null && { v: config.v.toString() }
   tsc:  false | { v: string; }
   ours: boolean | { v: string }
@@ -351,14 +179,6 @@ line 55: config.v !== null && { v: config.v.toString() }
 line 55: config.v
   tsc:  number
   ours: number | null
-
-line 55: config
-  tsc:  Record<string, number>
-  ours: { [key: string]: number }
-
-line 55: config
-  tsc:  Record<string, number>
-  ours: { [key: string]: number }
 
 line 56: config.w !== null && { w: config.w.toString() }
   tsc:  false | { w: string; }
@@ -368,14 +188,6 @@ line 56: config.w
   tsc:  number
   ours: number | null
 
-line 56: config
-  tsc:  Record<string, number>
-  ours: { [key: string]: number }
-
-line 56: config
-  tsc:  Record<string, number>
-  ours: { [key: string]: number }
-
 line 57: config.x !== null && { x: config.x.toString() }
   tsc:  false | { x: string; }
   ours: boolean | { x: string }
@@ -383,14 +195,6 @@ line 57: config.x !== null && { x: config.x.toString() }
 line 57: config.x
   tsc:  number
   ours: number | null
-
-line 57: config
-  tsc:  Record<string, number>
-  ours: { [key: string]: number }
-
-line 57: config
-  tsc:  Record<string, number>
-  ours: { [key: string]: number }
 
 line 58: config.y !== null && { y: config.y.toString() }
   tsc:  false | { y: string; }
@@ -400,14 +204,6 @@ line 58: config.y
   tsc:  number
   ours: number | null
 
-line 58: config
-  tsc:  Record<string, number>
-  ours: { [key: string]: number }
-
-line 58: config
-  tsc:  Record<string, number>
-  ours: { [key: string]: number }
-
 line 59: config.z !== null && { z: config.z.toString() }
   tsc:  false | { z: string; }
   ours: boolean | { z: string }
@@ -415,18 +211,6 @@ line 59: config.z !== null && { z: config.z.toString() }
 line 59: config.z
   tsc:  number
   ours: number | null
-
-line 59: config
-  tsc:  Record<string, number>
-  ours: { [key: string]: number }
-
-line 59: config
-  tsc:  Record<string, number>
-  ours: { [key: string]: number }
-
-line 63: parseWithSpread
-  tsc:  (config: Record<string, number>) => Props
-  ours: (arg0: { [key: string]: number }) => Props
 
 errors:
 line 34: ours: cannot spread `boolean` into an object literal (tsc accepts)

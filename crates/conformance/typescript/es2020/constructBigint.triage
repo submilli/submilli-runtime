@@ -1,0 +1,1 @@
+line 5, 7 extra: by-design spec §1.6 `BigInt` takes only a `string` or a `number`

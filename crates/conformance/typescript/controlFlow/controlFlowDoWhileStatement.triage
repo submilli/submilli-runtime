@@ -1,0 +1,2 @@
+line 23 type: bug SUB-1199 a loop that writes the variable widens it to its declared type at the loop head
+line 25 type: bug SUB-1152 a rejected assignment, `++` or `--` still narrows its target (`x = null`)

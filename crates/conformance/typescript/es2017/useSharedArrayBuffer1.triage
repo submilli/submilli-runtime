@@ -1,0 +1,2 @@
+line 4 extra: bug SUB-1196 (library globals) `Intl`, `SharedArrayBuffer` and `globalThis` aren't provided
+line 5, 6 type: bug SUB-1196 (library globals) `Intl`, `SharedArrayBuffer` and `globalThis` aren't provided

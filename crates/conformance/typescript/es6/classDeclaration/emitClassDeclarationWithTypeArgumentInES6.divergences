@@ -1,17 +1,1 @@
-types: 7 of 26 tsc entries compared, 4 differ
-
-line 5: this
-  tsc:  this
-  ours: B<T>
-
-line 7: this
-  tsc:  this
-  ours: B<T>
-
-line 10: this
-  tsc:  this
-  ours: B<T>
-
-line 13: this
-  tsc:  this
-  ours: B<T>
+types: 7 of 26 tsc entries compared, 0 differ

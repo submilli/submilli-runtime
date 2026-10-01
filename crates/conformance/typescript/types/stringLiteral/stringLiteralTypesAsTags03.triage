@@ -1,0 +1,3 @@
+line 31 type: bug SUB-1196 (literal under an expected type) a literal checked against an expected type takes that type, where tsc keeps its own
+line 36, 43 type: by-design spec §2.11 a type predicate is not part of a function's type
+line 40, 44 type: bug SUB-1210 a narrowing that rules out every member keeps a type instead of `never`

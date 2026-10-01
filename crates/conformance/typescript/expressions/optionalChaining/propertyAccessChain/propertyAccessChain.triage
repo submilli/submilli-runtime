@@ -1,0 +1,1 @@
+line 24 type: bug SUB-1204 a literal widens to its base type where tsc keeps the literal type; also artifact tsc types the member name in an optional chain as the chain's result

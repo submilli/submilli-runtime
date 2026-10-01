@@ -1,0 +1,4 @@
+line 4, 6 extra: bug SUB-1199 the true branch of `a || b` doesn't narrow when both sides narrow the same way (here the false branch of `a && b`); also by-design spec §1.7 strings have a core method set without the locale methods or `substr`
+line 8, 10 extra: bug SUB-1199 the true branch of `a || b` doesn't narrow when both sides narrow the same way; also by-design spec §2.2 a method reference without a call is not a value
+line 4, 6 type: bug SUB-1199 the true branch of `a || b` doesn't narrow when both sides narrow the same way (here the false branch of `a && b`)
+line 8, 10 type: bug SUB-1199 the true branch of `a || b` doesn't narrow when both sides narrow the same way

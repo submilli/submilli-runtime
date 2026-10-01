@@ -1,0 +1,7 @@
+line 31, 127, 128, 129, 130, 131, 132, 133, 134, 135, 136, 137, 138, 139, 140, 141, 142, 143 extra: by-design spec §2.5 only structural object types can be spread
+line 46, 48, 55, 57, 64, 66 extra: bug SUB-1196 (spreading a falsy or nullable value) spreading `c && {…}` or a nullable value is rejected
+line 8, 10, 14, 20 type: bug SUB-1204 a literal widens to its base type where tsc keeps the literal type
+line 46, 55 type: by-design spec §1.6 `&&` keeps `number` and `boolean` whole in its falsy part, where tsc narrows to `0` or `false`
+line 48, 57 type: bug SUB-1196 (spreading a falsy or nullable value) spreading `c && {…}` or a nullable value is rejected; also by-design spec §1.6 `&&` keeps `number` and `boolean` whole in its falsy part, where tsc narrows to `0` or `false`
+line 66 type: bug SUB-1196 (spreading a falsy or nullable value) spreading `c && {…}` or a nullable value is rejected
+line 127, 128, 129, 130, 131, 132, 133, 134, 135, 136, 137, 138, 139, 140, 141, 142, 143 type: by-design spec §2.5 only structural object types can be spread

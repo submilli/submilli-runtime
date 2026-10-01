@@ -1,0 +1,1 @@
+line 13, 24, 35 type: bug SUB-1196 (enum member types) an enum member has its enum's type, where tsc gives it a member literal type

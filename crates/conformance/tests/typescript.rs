@@ -491,7 +491,7 @@ fn compare_types(
                     text: text.to_string(),
                     tsc: tsc_ty.to_string(),
                 });
-                if normalize_type(tsc_ty) != normalize_type(our_ty) {
+                if !same_type(text, tsc_ty, our_ty) {
                     divergences.push(TypeDivergence {
                         line: *line,
                         text: text.to_string(),
@@ -848,8 +848,14 @@ fn group_by_text(entries: &[Entry]) -> Vec<(&str, Vec<&str>)> {
 /// binding, so the literal's own entry is skipped.
 fn is_literal(text: &str) -> bool {
     matches!(text, "true" | "false" | "null")
-        || is_number_literal(text.strip_prefix(['-', '+']).unwrap_or(text))
+        || is_signed_number_literal(text)
         || is_string_literal(text)
+}
+
+/// A numeric literal with an optional sign, which `tsc` may print spaced from it:
+/// `-1`, `+1`, `- 10`.
+fn is_signed_number_literal(text: &str) -> bool {
+    is_number_literal(text.strip_prefix(['-', '+']).map_or(text, str::trim_start))
 }
 
 /// One numeric literal token: `1`, `1.5`, `.5`, `1e-3`, `0x10`, `1_000`, `10n`.
@@ -933,10 +939,76 @@ fn is_identifier(text: &str) -> bool {
             .all(|c| c.is_alphanumeric() || matches!(c, '_' | '$'))
 }
 
+/// Whether `tsc`'s and our types for the expression `text` are the same type.
+///
+/// `tsc` types `this` in an instance member as the polymorphic `this` type, where
+/// we give it the enclosing class. Submilli can't write `: this`, so nothing can
+/// tell the two apart; the type text alone doesn't name the class, hence a rule
+/// on the expression. Ours must still be a class's name: `unknown`, a union or
+/// an error there is a real difference.
+fn same_type(text: &str, tsc_ty: &str, our_ty: &str) -> bool {
+    if text == "this" && tsc_ty == "this" && names_a_class(our_ty) {
+        return true;
+    }
+    normalize_type(tsc_ty) == normalize_type(our_ty)
+}
+
+/// Whether `ty` is a single named type, `Name` or `Name<…>`, that isn't a
+/// built-in one: what we print for a class. `A<B> | C<D>` is two types.
+fn names_a_class(ty: &str) -> bool {
+    let (name, arguments_close) = match ty.split_once('<') {
+        Some((name, arguments)) => (name, closes_at_end(arguments)),
+        None => (ty, true),
+    };
+    let is_builtin = matches!(
+        name,
+        "unknown"
+            | "never"
+            | "null"
+            | "undefined"
+            | "void"
+            | "any"
+            | "object"
+            | "symbol"
+            | "this"
+            | "number"
+            | "string"
+            | "boolean"
+            | "bigint"
+    );
+    is_identifier(name) && !is_builtin && arguments_close
+}
+
+/// Whether the type arguments after a generic's `<` close exactly at the end of
+/// the text, so nothing (`| C<D>`, `[]`) follows them. The `>` of a function
+/// type's `=>` closes nothing.
+fn closes_at_end(arguments: &str) -> bool {
+    let mut depth = 1usize;
+    let mut previous = None;
+    for (i, c) in arguments.char_indices() {
+        let is_arrow = previous == Some('=');
+        previous = Some(c);
+        match c {
+            '<' => depth += 1,
+            '>' if !is_arrow => {
+                depth -= 1;
+                if depth == 0 {
+                    return i + 1 == arguments.len();
+                }
+            }
+            _ => {}
+        }
+    }
+    false
+}
+
 /// A type's text in a canonical form, so that two spellings of the same type
-/// compare equal: union members and object fields sorted, parameter names
-/// dropped (`tsc` prints the declared name, we print `arg0`), method signatures
-/// read as function-typed fields, and no `;` before an object's `}`.
+/// compare equal: union members and object fields sorted, parameter names and
+/// binding patterns dropped (`tsc` prints the declared name, we print `arg0`),
+/// method signatures read as function-typed fields, and no `;` before an
+/// object's `}`. A few spellings only `tsc` uses read as ours; each is noted
+/// where it is read (`canonical_generic`, `drop_literals_beside_their_base`,
+/// `optional_field_type`).
 /// Text the reader does not understand is compared as written.
 fn normalize_type(ty: &str) -> String {
     let text = collapse_whitespace(ty);
@@ -980,6 +1052,28 @@ impl TypeText<'_> {
         while self.eat(" | ") {
             members.push(self.postfix()?);
         }
+        Self::join_members(members)
+    }
+
+    /// An optional field's type, without the `undefined` its `?` already implies:
+    /// `a?: T | undefined` is `a?: T` without `exactOptionalPropertyTypes`.
+    fn optional_field_type(&mut self) -> Option<FieldType> {
+        let mut members = Vec::new();
+        loop {
+            if !self.eat_word("undefined") {
+                members.push(self.postfix()?);
+            }
+            if !self.eat(" | ") {
+                break;
+            }
+        }
+        if members.is_empty() {
+            return Some(FieldType::Absent);
+        }
+        Some(FieldType::Typed(Self::join_members(members)?.text))
+    }
+
+    fn join_members(mut members: Vec<CanonicalType>) -> Option<CanonicalType> {
         if members.len() == 1 {
             return members.pop();
         }
@@ -995,6 +1089,7 @@ impl TypeText<'_> {
             .collect();
         texts.sort();
         texts.dedup();
+        drop_literals_beside_their_base(&mut texts);
         Some(CanonicalType::plain(texts.join(" | ")))
     }
 
@@ -1051,14 +1146,7 @@ impl TypeText<'_> {
         }
         if self.eat("<") {
             let args = self.list(">", Self::union_text)?;
-            // `tsc`'s `Uint8Array` names the buffer behind it, which ours has no
-            // choice of.
-            if name == "Uint8Array"
-                && matches!(args.as_slice(), [b] if b == "ArrayBuffer" || b == "ArrayBufferLike")
-            {
-                return Some(CanonicalType::plain(name));
-            }
-            return Some(CanonicalType::plain(format!("{name}<{}>", args.join(", "))));
+            return Some(CanonicalType::plain(canonical_generic(&name, &args)));
         }
         Some(CanonicalType::plain(name))
     }
@@ -1084,7 +1172,11 @@ impl TypeText<'_> {
 
     fn parameter(&mut self) -> Option<String> {
         let rest = if self.eat("...") { "..." } else { "" };
-        self.word()?;
+        // `tsc` prints a destructured parameter by its pattern, `([a, b]: T) => R`;
+        // like a name, the pattern doesn't change the parameter's type.
+        if !self.eat_binding_pattern() {
+            self.word()?;
+        }
         let optional = if self.eat("?") { "?" } else { "" };
         if !self.eat(": ") {
             return None;
@@ -1103,20 +1195,9 @@ impl TypeText<'_> {
             };
             let name = self.object_member_name()?;
             let optional = if self.eat("?") { "?" } else { "" };
-            let ty = if self.rest().starts_with('(') {
-                // A method signature, `m(a: T): R`, is the field `m: (a: T) => R`.
-                self.eat("(");
-                let params = self.list(")", Self::parameter)?;
-                if !self.eat(": ") {
-                    return None;
-                }
-                format!("({}) => {}", params.join(", "), self.union_text()?)
-            } else if self.eat(": ") {
-                self.union_text()?
-            } else {
-                return None;
-            };
-            fields.push(format!("{readonly}{name}{optional}: {ty}"));
+            if let FieldType::Typed(ty) = self.field_type(!optional.is_empty())? {
+                fields.push(format!("{readonly}{name}{optional}: {ty}"));
+            }
             let separated = self.eat(";") || self.eat(",");
             self.eat(" ");
             if !separated && !self.rest().starts_with('}') {
@@ -1129,6 +1210,29 @@ impl TypeText<'_> {
         } else {
             format!("{{ {} }}", fields.join("; "))
         })
+    }
+
+    /// A member's type after its name: `: T`, or a method signature's `(a: T): R`,
+    /// which is the field `m: (a: T) => R`.
+    fn field_type(&mut self, is_optional: bool) -> Option<FieldType> {
+        if self.eat("(") {
+            let params = self.list(")", Self::parameter)?;
+            if !self.eat(": ") {
+                return None;
+            }
+            let ret = self.union_text()?;
+            return Some(FieldType::Typed(format!(
+                "({}) => {ret}",
+                params.join(", ")
+            )));
+        }
+        if !self.eat(": ") {
+            return None;
+        }
+        if is_optional {
+            return self.optional_field_type();
+        }
+        self.union_text().map(FieldType::Typed)
     }
 
     /// Index parameter names are labels; their key types remain significant.
@@ -1176,15 +1280,49 @@ impl TypeText<'_> {
     /// A name, keyword, or number: everything up to the next delimiter.
     fn word(&mut self) -> Option<String> {
         let rest = self.rest();
-        let len = rest
-            .find(|c: char| !(c.is_alphanumeric() || matches!(c, '_' | '$' | '.' | '-')))
-            .unwrap_or(rest.len());
+        let len = rest.find(|c| !is_word_char(c)).unwrap_or(rest.len());
         if len == 0 {
             return None;
         }
         let word = rest[..len].to_string();
         self.pos += len;
         Some(word)
+    }
+
+    /// A balanced `[…]` or `{…}` binding pattern, skipped whole.
+    fn eat_binding_pattern(&mut self) -> bool {
+        let rest = self.rest();
+        if !rest.starts_with(['[', '{']) {
+            return false;
+        }
+        let mut depth = 0usize;
+        for (i, c) in rest.char_indices() {
+            match c {
+                '[' | '{' => depth += 1,
+                ']' | '}' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        self.pos += i + 1;
+                        return true;
+                    }
+                }
+                _ => {}
+            }
+        }
+        false
+    }
+
+    /// `word` as a whole type: not the start of a longer name, an array (`[]`)
+    /// or a generic (`<`).
+    fn eat_word(&mut self, word: &str) -> bool {
+        let rest = self.rest();
+        let whole = rest.strip_prefix(word).is_some_and(|after| {
+            !after.starts_with(|c: char| is_word_char(c) || matches!(c, '[' | '<'))
+        });
+        if whole {
+            self.pos += word.len();
+        }
+        whole
     }
 
     fn eat(&mut self, token: &str) -> bool {
@@ -1198,6 +1336,56 @@ impl TypeText<'_> {
     fn rest(&self) -> &str {
         &self.text[self.pos..]
     }
+}
+
+/// What an object member's type reads as.
+enum FieldType {
+    Typed(String),
+    /// An optional field typed only `undefined`: `tsc`'s `b?: undefined`, for a
+    /// field only some members of a normalized union have. It adds nothing to
+    /// the object, so it is dropped.
+    Absent,
+}
+
+/// A generic type's canonical text. Three spellings only `tsc` uses read as ours:
+/// - `Uint8Array<ArrayBuffer>`: `tsc` names the buffer behind it, which ours has
+///   no choice of;
+/// - `Record<string, V>`: defined as the index signature we print;
+/// - `ArrayIterator<T>`: `tsc`'s name for an array's iterator, which is our
+///   `Iterator<T>`.
+fn canonical_generic(name: &str, args: &[String]) -> String {
+    match (name, args) {
+        ("Uint8Array", [buffer]) if buffer == "ArrayBuffer" || buffer == "ArrayBufferLike" => {
+            name.to_string()
+        }
+        ("Record", [key, value]) if key == "string" => format!("{{ [key: string]: {value} }}"),
+        ("ArrayIterator", _) => format!("Iterator<{}>", args.join(", ")),
+        _ => format!("{name}<{}>", args.join(", ")),
+    }
+}
+
+/// Drops each union member that is a literal of a base type the union also has:
+/// `string | "a"` is `string`. `tsc` prints the reduced union; ours may not
+/// reduce it. A bigint literal (`1n`) is not a `number`.
+fn drop_literals_beside_their_base(members: &mut Vec<String>) {
+    let has = |base: &str| members.iter().any(|m| m == base);
+    let (has_string, has_number, has_bigint, has_boolean) =
+        (has("string"), has("number"), has("bigint"), has("boolean"));
+    members.retain(|m| {
+        let is_numeric = is_signed_number_literal(m);
+        let is_bigint = is_numeric && m.ends_with('n');
+        // `tsc` prints a string literal type double-quoted.
+        let absorbed = has_string && m.starts_with('"') && is_string_literal(m)
+            || has_number && is_numeric && !is_bigint
+            || has_bigint && is_bigint
+            || has_boolean && matches!(m.as_str(), "true" | "false");
+        !absorbed
+    });
+}
+
+/// A character of a name, keyword or number as the type reader reads one.
+fn is_word_char(c: char) -> bool {
+    c.is_alphanumeric() || matches!(c, '_' | '$' | '.' | '-')
 }
 
 fn span_text(source: &str, span: Span) -> Option<&str> {
@@ -1305,6 +1493,136 @@ fn normalizing_index_signatures_ignores_only_parameter_names() {
     }
 }
 
+/// `(rule, tsc's text, ours)`, asserted equal after normalizing.
+const TSC_ONLY_SPELLINGS: &[(&str, &str, &str)] = &[
+    (
+        "Record<string, V>",
+        "Record<string, number | null>",
+        "{ [key: string]: null | number }",
+    ),
+    ("ArrayIterator", "ArrayIterator<number>", "Iterator<number>"),
+    (
+        "optional undefined",
+        "{ sn?: string | number | undefined; }",
+        "{ sn?: number | string }",
+    ),
+    (
+        "b?: undefined",
+        "{ a: number; b?: undefined; } | { a: number; b: string; }",
+        "{ a: number } | { a: number; b: string }",
+    ),
+    (
+        "binding pattern",
+        "([a, { b }, ...c]: number[]) => void",
+        "(arg0: number[]) => void",
+    ),
+    (
+        "literal beside its base",
+        r#"string | "bar" | number | 1 | -2 | 1_000 | .5 | boolean | true | bigint | -1n"#,
+        "bigint | boolean | number | string",
+    ),
+    (
+        "readonly b?: undefined",
+        "{ readonly b?: undefined; a: number }",
+        "{ a: number }",
+    ),
+];
+
+/// `(rule, tsc's text, ours)`, which must stay different after normalizing.
+const DISTINCT_SPELLINGS: &[(&str, &str, &str)] = &[
+    (
+        "Record with a number key",
+        "Record<number, string>",
+        "{ [key: number]: string }",
+    ),
+    (
+        "Record with three arguments",
+        "Record<string, string, number>",
+        "{ [key: string]: string }",
+    ),
+    (
+        "optional null",
+        "{ sn?: number | string }",
+        "{ sn?: null | number | string }",
+    ),
+    (
+        "required field",
+        "{ sn: number | string }",
+        "{ sn?: number | string }",
+    ),
+    (
+        "our null for tsc's undefined field",
+        "{ b?: undefined }",
+        "{ b?: null }",
+    ),
+    ("undefined array", "{ a?: undefined[] }", "{}"),
+    ("a bigint literal isn't a number", "number | 1n", "number"),
+    (
+        "a string literal isn't a number",
+        r#"number | "1""#,
+        "number",
+    ),
+    (
+        "a string literal isn't a boolean",
+        r#"boolean | "true""#,
+        "boolean",
+    ),
+    ("a literal without its base", r#""bar" | number"#, "number"),
+    (
+        "a negative bigint literal isn't a number",
+        "number | -1n",
+        "number",
+    ),
+    (
+        "a hex bigint literal isn't a number",
+        "number | 0x1n",
+        "number",
+    ),
+    (
+        "a grouped union isn't a literal",
+        r#"string | ("a" | number)"#,
+        "string",
+    ),
+    ("a longer name isn't undefined", "{ a?: undefinedX }", "{}"),
+];
+
+#[test]
+fn normalizing_reads_tsc_only_spellings_as_ours() {
+    for (rule, tsc, ours) in TSC_ONLY_SPELLINGS {
+        assert_eq!(normalize_type(tsc), normalize_type(ours), "{rule}");
+    }
+}
+
+#[test]
+fn normalizing_keeps_distinct_types_distinct() {
+    for (rule, tsc, ours) in DISTINCT_SPELLINGS {
+        assert_ne!(normalize_type(tsc), normalize_type(ours), "{rule}");
+    }
+}
+
+#[test]
+fn only_this_as_this_counts_as_its_class() {
+    assert!(same_type("this", "this", "Base2<T>"));
+    assert!(same_type("this", "this", "Derived"));
+    assert!(same_type("this", "this", "Box<Map<K, V>>"));
+    assert!(same_type("this", "this", "Box<() => void>"));
+    assert!(!same_type("x", "this", "Base2<T>"));
+    for not_a_class in [
+        "<error>",
+        "unknown",
+        "any",
+        "number",
+        "A | B",
+        "A<B> | C<D>",
+        "A<B> & C<D>",
+        "A<B>[]",
+        "{ x: number }",
+        "() => void",
+    ] {
+        assert!(!same_type("this", "this", not_a_class), "{not_a_class}");
+    }
+}
+
 #[test]
 fn normalizing_keeps_readonly_distinct() {
     assert_ne!(
@@ -1337,6 +1655,7 @@ fn only_a_single_literal_is_skipped() {
         "+1",
         "1e-5",
         "-1E+5",
+        "- 10000000000000",
         "1",
         "-1",
         "1.5",
@@ -1367,6 +1686,9 @@ fn only_a_single_literal_is_skipped() {
         "NaN",
         "Infinity",
         "x",
+        "- x",
+        "-(1)",
+        "- 1 + 2",
     ] {
         assert!(!is_literal(expression), "{expression}");
     }

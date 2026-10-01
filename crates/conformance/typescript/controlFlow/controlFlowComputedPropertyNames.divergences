@@ -1,60 +1,20 @@
-types: 60 of 92 tsc entries compared, 22 differ
-
-line 5: obj
-  tsc:  Record<string, unknown>
-  ours: { [key: string]: unknown }
-
-line 6: obj
-  tsc:  Record<string, unknown>
-  ours: { [key: string]: unknown }
+types: 60 of 92 tsc entries compared, 12 differ
 
 line 7: obj[key]
   tsc:  string
   ours: unknown
 
-line 7: obj
-  tsc:  Record<string, unknown>
-  ours: { [key: string]: unknown }
-
-line 11: obj
-  tsc:  Record<string, string | null>
-  ours: { [key: string]: string | null }
-
-line 12: obj
-  tsc:  Record<string, string | null>
-  ours: { [key: string]: string | null }
-
 line 13: obj[key]
   tsc:  string
   ours: string | null
-
-line 13: obj
-  tsc:  Record<string, string | null>
-  ours: { [key: string]: string | null }
-
-line 16: obj
-  tsc:  Record<string, string | null>
-  ours: { [key: string]: string | null }
 
 line 17: obj[key2]
   tsc:  string
   ours: string | null
 
-line 17: obj
-  tsc:  Record<string, string | null>
-  ours: { [key: string]: string | null }
-
-line 20: obj
-  tsc:  Record<string, string | null>
-  ours: { [key: string]: string | null }
-
 line 21: obj[key3]
   tsc:  string
   ours: string | null
-
-line 21: obj
-  tsc:  Record<string, string | null>
-  ours: { [key: string]: string | null }
 
 line 27: key
   tsc:  keyof Thing

@@ -1,0 +1,2 @@
+line 7, 8, 11, 16, 17, 18, 21, 24, 25, 42 extra: bug SUB-1196 (function properties) assigning properties onto a function is rejected, where tsc makes the function an expando object
+line 7, 8, 11, 13, 16, 17, 18, 21, 23, 24, 25, 42 type: bug SUB-1196 (function properties) assigning properties onto a function is rejected, where tsc makes the function an expando object

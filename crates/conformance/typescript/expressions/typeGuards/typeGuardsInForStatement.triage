@@ -1,0 +1,2 @@
+line 4, 5, 10, 11, 17, 18 type: bug SUB-1152 a rejected assignment, `++` or `--` still narrows its target (`x = null`)
+line 7, 14 type: bug SUB-1152 a rejected assignment, `++` or `--` still narrows its target

@@ -1,1 +1,2 @@
 line 4, 7, 10 missed: artifact tsc reports a duplicate declaration at each one; we report it at the later one, on the next line
+line 5, 8, 11 type: by-design spec §2.5 a spread of a union merges its members into one object type with optional fields

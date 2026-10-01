@@ -1,1 +1,2 @@
 line 34, 37, 38, 43 missed: by-design spec §2.2 privacy is module-scoped, and these uses of the `private` constructor are in its module
+line 37, 38, 43 type: by-design spec §2.2 privacy is module-scoped, so this `new` of the `private` constructor in its module is typed as the class, where tsc makes it `any`

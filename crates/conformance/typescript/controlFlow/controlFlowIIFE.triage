@@ -1,0 +1,2 @@
+line 38, 48 extra: bug SUB-1200 narrowing doesn't reach into or out of an immediately-invoked function, or a repeated `obj[key]` (an immediately-invoked function)
+line 39, 48 type: bug SUB-1200 narrowing doesn't reach into or out of an immediately-invoked function, or a repeated `obj[key]` (an immediately-invoked function)

@@ -1,4 +1,4 @@
-types: 24 of 61 tsc entries compared, 8 differ
+types: 24 of 61 tsc entries compared, 6 differ
 
 line 17: true ? {} : 1
   tsc:  {} | 1
@@ -12,10 +12,6 @@ line 19: true ? {} : 1
   tsc:  1 | {}
   ours: number | {}
 
-line 20: result3
-  tsc:  { a: number; b?: undefined; } | { a: number; b: string; }
-  ours: { a: number } | { a: number; b: string }
-
 line 32: true ? 1 : {}
   tsc:  1 | {}
   ours: number | {}
@@ -27,7 +23,3 @@ line 34: result6
 line 34: true ? 1 : {}
   tsc:  1 | {}
   ours: number | {}
-
-line 35: result7
-  tsc:  { a: number; b: string; } | { a: number; b?: undefined; }
-  ours: { a: number } | { a: number; b: string }

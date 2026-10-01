@@ -1,1 +1,2 @@
 line 17, 26 missed: bug SUB-1150 a comparison that can never be true
+line 21, 24 type: bug SUB-1196 (enum member types) an enum member has its enum's type, where tsc gives it a member literal type

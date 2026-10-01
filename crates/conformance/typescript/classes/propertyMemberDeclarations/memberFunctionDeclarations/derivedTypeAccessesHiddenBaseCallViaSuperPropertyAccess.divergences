@@ -1,8 +1,4 @@
-types: 10 of 43 tsc entries compared, 1 differ
-
-line 16: this
-  tsc:  this
-  ours: Derived
+types: 10 of 43 tsc entries compared, 0 differ
 
 errors:
 line 9: ours: override of method `foo` is not compatible with the inherited signature (tsc accepts)

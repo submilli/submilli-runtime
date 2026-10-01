@@ -3,3 +3,5 @@ line 6 missed: artifact tsc reports the circular reference at the declaration; w
 line 9, 10 missed: artifact tsc reports the circular reference at the declaration; we report it at the type alias, on line 11
 line 20, 21 missed: artifact the circular reference runs through `ReturnType`, which we reject as unsupported on line 20
 line 27, 28 missed: artifact the circular reference runs through `ReturnType`, which we reject as unsupported on line 27
+line 20, 27 extra: by-design spec §Appendix utility types such as `ReturnType` are deferred
+line 4, 6, 10 type: artifact tsc types the circular declaration as `any` and reports it there, we report the cycle at the type alias

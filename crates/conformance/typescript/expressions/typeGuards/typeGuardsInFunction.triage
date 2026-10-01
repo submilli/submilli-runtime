@@ -1,0 +1,1 @@
+line 11, 15, 18, 88 type: by-design spec §1.6 `&&` keeps `number` and `boolean` whole in its falsy part, where tsc narrows to `0` or `false`

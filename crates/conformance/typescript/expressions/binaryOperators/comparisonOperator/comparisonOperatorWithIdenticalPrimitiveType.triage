@@ -1,0 +1,1 @@
+line 12, 21, 30, 39 extra: by-design spec §1.6 `<`, `>`, `<=`, `>=` compare only two numbers or two strings

@@ -1,9 +1,1 @@
-types: 2 of 13 tsc entries compared, 2 differ
-
-line 6: this
-  tsc:  this
-  ours: LoggerAdapter
-
-line 6: this
-  tsc:  this
-  ours: LoggerAdapter
+types: 2 of 13 tsc entries compared, 0 differ

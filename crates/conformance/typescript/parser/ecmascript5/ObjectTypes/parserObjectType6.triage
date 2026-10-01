@@ -1,1 +1,2 @@
 line 4, 7 missed: bug SUB-1162 we read `a: B` and `[]` on the next line as `a: B[]`
+line 2, 5 type: bug SUB-1162 we read `a: B` and `[]` on the next line as `a: B[]`

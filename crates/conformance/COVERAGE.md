@@ -49,7 +49,7 @@ Upstream: 4463 single-file TypeScript tests. Suite: 448 TypeScript cases, 657 te
 | `readonly` arrays and tuples | §1.2 | done | 24 | 5 | 19 | 0 | 43 | 1 of 1 | — | — |  |
 | Union types (`A | B`) | §1.2 | done | 458 | 159 | 299 | 0 | 1583 | 1 of 1 | — | — |  |
 | Type aliases (`type X = …`) | §1.2 | done | 267 | 48 | 219 | 0 | 328 | 1 of 1 | — | — |  |
-| Literal types (`"foo"`, `42`, `true`) | §1.2 | done | 258 | 66 | 192 | 0 | 845 | 2 of 2 | — | — |  |
+| Literal types (`"foo"`, `42`, `true`) | §1.2 | done | 258 | 66 | 192 | 0 | 843 | 2 of 2 | — | — |  |
 
 ## Declarations
 

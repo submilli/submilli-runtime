@@ -1,4 +1,4 @@
-types: 270 of 512 tsc entries compared, 51 differ
+types: 270 of 512 tsc entries compared, 46 differ
 
 line 10: x
   tsc:  string
@@ -156,37 +156,17 @@ line 212: obj
   tsc:  { kind: "bar"; bar: number; }
   ours: { bar: number; kind: "bar" } | { foo: string; kind: "foo" }
 
-line 219: this
-  tsc:  this
-  ours: C10
-
 line 223: this.x
   tsc:  string
   ours: number | string
-
-line 223: this
-  tsc:  this
-  ours: C10
 
 line 224: x
   tsc:  string
   ours: number | string
 
-line 231: this
-  tsc:  this
-  ours: C11
-
 line 236: this.x
   tsc:  string
   ours: number | string
-
-line 236: this
-  tsc:  this
-  ours: C11
-
-line 240: this
-  tsc:  this
-  ours: C11
 
 line 251: obj
   tsc:  { kind: "foo"; foo?: string; }

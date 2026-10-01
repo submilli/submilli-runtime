@@ -1,4 +1,4 @@
-types: 97 of 220 tsc entries compared, 55 differ
+types: 97 of 220 tsc entries compared, 53 differ
 
 line 6: a1
   tsc:  { a: number; b?: undefined; c?: undefined; } | { a: number; b: string; c?: undefined; } | { a: number; b: string; c: boolean; }
@@ -136,17 +136,9 @@ line 33: !true
   tsc:  false
   ours: boolean
 
-line 34: c3
-  tsc:  { a: number; b: number; } | { a?: undefined; b?: undefined; }
-  ours: {} | { a: number; b: number }
-
 line 34: !true
   tsc:  false
   ours: boolean
-
-line 35: c4
-  tsc:  { a?: undefined; b?: undefined; } | { a: number; b: number; }
-  ours: {} | { a: number; b: number }
 
 line 35: !true
   tsc:  false

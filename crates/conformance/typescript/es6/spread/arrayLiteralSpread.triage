@@ -1,0 +1,3 @@
+line 17 extra: by-design spec §1.2 arrays are homogeneous, so an array literal's elements must share one type
+line 22 extra: bug SUB-1196 (empty array literal) an empty array literal with no expected type is rejected
+line 17 type: by-design spec §1.2 arrays are homogeneous, so an array literal's elements must share one type

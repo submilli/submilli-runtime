@@ -1,0 +1,4 @@
+line 4 extra: bug SUB-1196 (library globals) `Intl`, `SharedArrayBuffer` and `globalThis` aren't provided
+line 6 extra: by-design spec §Excluded-Features `Symbol` is excluded
+line 8 extra: bug SUB-1196 (library globals) `Intl`, `SharedArrayBuffer` and `globalThis` aren't provided; also by-design spec §Excluded-Features `Symbol` is excluded
+line 5, 7 type: bug SUB-1196 (library globals) `Intl`, `SharedArrayBuffer` and `globalThis` aren't provided

@@ -55,8 +55,8 @@ suite when:
   the port makes every case strict).
 
 The cases ported before pruning existed are whole. Some of them reject a line where
-Submilli differs from TypeScript by design (an array literal's element type comes
-from its first element, for instance).
+Submilli differs from TypeScript by design (an array literal's elements must share
+one type, for instance).
 
 Every upstream case that fails one of these is in `EXCLUDED.md`, with one of these
 reasons and a detail:
@@ -114,7 +114,7 @@ artifact of how the case was ported. A case's `.triage` gives it, one entry per 
 of the case, for one kind of divergence on it:
 
 ```text
-line 12 type: by-design spec §1.2 an array literal's element type comes from its first element
+line 12 type: by-design spec §1.2 arrays are homogeneous, so an array literal's elements must share one type
 line 14, 17 extra: bug SUB-1026 construct signatures read as a method named `new`
 line 30 missed: artifact pruning removed the assignment that narrowed `x`
 ```
@@ -123,6 +123,18 @@ The kinds are `type`, a type we infer differently; `missed`, an error `tsc` repo
 that none of ours agrees with; and `extra`, an error of ours that none of `tsc`'s
 agrees with. The reason starts `bug SUB-<n>`, `by-design spec §<section>`, or
 `artifact` followed by a note.
+
+When a line diverges for more than one reason, the entry names each, joined by
+`; also `:
+
+```text
+line 47 type: bug SUB-1204 a literal widens to its base type where tsc keeps the literal type; also by-design spec §1.6 …
+```
+
+So a reason itself never contains `; also `. Reuse the wording other entries give
+the same issue or spec rule, with anything particular to the line in parentheses
+after it, so that searching for it finds every line. A `bug SUB-1196 (<item>)`
+reason names the item of that checklist issue it waits on.
 
 The divergences not yet explained are listed in `unexplained.txt`, one
 `<case> <line> <kind>` per line. The test fails when:
@@ -152,12 +164,29 @@ before comparing:
 - `tsc`'s `Uint8Array<ArrayBuffer>` and `Uint8Array<ArrayBufferLike>` read as
   `Uint8Array`: the argument names the buffer behind the array, which ours has no
   choice of.
+- `Record<string, V>` reads as `{ [key: string]: V }`, the index signature it is
+  defined as. Other key types are left alone.
+- `tsc`'s `ArrayIterator<T>` reads as our `Iterator<T>`.
+- An optional field's `undefined` is dropped: `a?: T | undefined` is `a?: T`
+  without `exactOptionalPropertyTypes`. A field typed only `undefined`,
+  `b?: undefined`, which `tsc` gives a normalized object literal for the fields
+  only other members have, is dropped whole. This is the one rule that can equate
+  slightly different types: `tsc`'s field forbids a defined `b`, and ours allows
+  it.
+- A destructured parameter, which `tsc` prints by its pattern, reads like any
+  other parameter: `([a, b]: number[]) => void` is `(number[]) => void`.
+- A literal beside its own base type in a union is dropped: `string | "a"` is
+  `string`. `tsc` prints the reduced union. A bigint literal is not a `number`.
+- For the expression `this`, `tsc`'s polymorphic `this` type matches our class
+  name. Submilli can't write `: this`, so the two can't be told apart. The rule
+  needs the expression, since the type text alone doesn't name the class.
 
 Two kinds of entry are skipped, because they are not comparable:
 
-- **A literal written in the source.** `tsc` gives `1`, `"a"` and `true` their own
-  literal types, and widens them where they are bound. We widen at the literal. Only
-  the bound type is observable, and that is compared at the binding.
+- **A literal written in the source,** signed or not (`-1`, `- 10`). `tsc` gives
+  `1`, `"a"` and `true` their own literal types, and widens them where they are
+  bound. We widen at the literal. Only the bound type is observable, and that is
+  compared at the binding.
 - **An entry whose text appears a different number of times on the line** in `tsc`'s
   entries and ours. Occurrences are paired in order, so a count mismatch would shift
   every pairing after it. This mostly drops names `tsc` reports that are not
@@ -262,12 +291,25 @@ the upstream case has.
 ### After a change to the compiler
 
 1. Run the suite. If it fails, a case's divergences changed: read the diff it prints.
-2. When the change is intended, write the new divergences and commit them with the
-   change:
+2. When the change is intended, write the new divergences:
 
    ```sh
    UPDATE_TYPESCRIPT_EXPECTED=1 cargo test -p conformance --test typescript
    ```
+
+   Then edit the `.triage` files by hand:
+
+   - Explain each new divergence in its case's `.triage`.
+   - When the change fixes a bug, or an item of SUB-1196, find the lines that cite
+     it with `grep -rnw --include='*.triage' "SUB-<n>" crates/conformance/typescript`,
+     or by the item's wording. Remove the lines that no longer diverge from their
+     entries, and an entry once it names none; the suite reports them as stale.
+     Where a line names more than one reason, remove the fixed one too: the line
+     still diverges for its other reasons, so the suite can't tell that one is out
+     of date. For the same reason, a line that still diverges but cited only the
+     fixed reason needs a new reason.
+
+   Commit the divergences and the `.triage` edits with the change.
 
 3. If the change adds support for something, such as a syntax or a library type, the
    pruned cases can keep more, and cases that were left out may now belong. Rebuild

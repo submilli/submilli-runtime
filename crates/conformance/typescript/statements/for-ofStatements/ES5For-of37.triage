@@ -1,0 +1,1 @@
+line 15 type: by-design spec §1.8 `catch (e)` is sugar for `catch (e: Error)`, where tsc makes it `unknown`
