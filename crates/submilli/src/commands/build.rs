@@ -135,6 +135,8 @@ fn execute_init(args: InitArgs) -> anyhow::Result<ExitCode> {
     };
     eprintln!("created {}", scaffolded.manifest_path.display());
     eprintln!("created {}", scaffolded.entrypoint.display());
+    eprintln!("created {}", scaffolded.docs_readme.display());
+    eprintln!("created {}", scaffolded.readme.display());
     eprintln!("created {}", scaffolded.test_file.display());
     eprintln!(
         "add packages with `submilli build new <@scope/name> <path>`; compile and install with `submilli build publish-local`; run tests with `submilli build test`"
@@ -158,6 +160,8 @@ fn execute_new(args: NewArgs) -> anyhow::Result<ExitCode> {
         scaffolded.manifest_path.display()
     );
     eprintln!("created {}", scaffolded.entrypoint.display());
+    eprintln!("created {}", scaffolded.docs_readme.display());
+    eprintln!("created {}", scaffolded.readme.display());
     eprintln!("created {}", scaffolded.test_file.display());
     Ok(ExitCode::SUCCESS)
 }
