@@ -509,7 +509,12 @@ mod blueprint_scoped {
     async fn policy_hides_libraries_from_rest_discovery() {
         let store = tempfile::tempdir().unwrap();
         let router = router(store.path());
-        for name in ["submilli:http", "submilli:fs", "submilli:code"] {
+        for name in [
+            "submilli:http",
+            "submilli:fs",
+            "submilli:code",
+            "submilli:session",
+        ] {
             for query in ["", name, "nothingmatchesthis"] {
                 let (status, body) = get_from(
                     router.clone(),

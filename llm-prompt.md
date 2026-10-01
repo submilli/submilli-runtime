@@ -134,16 +134,7 @@ an array, or a data-only `interface` you declare (no methods) — and
 combinations like `Issue[]`.{mcp_packages}{git_package}
 
 {sandbox}
-{http_access}
-
-Session state (`submilli:session`): a key-value store scoped to this
-session — `set(key, value)` writes, `get<T>(key)` reads it back checked
-against `T` (throws a catchable `TypeError` on a shape mismatch),
-`has`/`remove`/`list` round it out. There is no `set<T>`; the value's
-type is inferred. It is **memory-only**: it does not survive a server
-restart, so a key you wrote on an earlier call may legitimately be
-missing. Read a key that may be absent as `get<T | null>(key)` and
-handle the `null`.
+{http_access}{session_guidance}
 
 {llm_guidance}
 
@@ -170,6 +161,7 @@ resolved values.
 | `{http_guidance}` | HTTP credential guidance, only when HTTP is visible | same visibility rule |
 | `{builtins}` | comma-separated catalog of in-scope built-in types + namespaces | prelude (`interpreter::packages::builtins`) |
 | `{mcp_packages}` | empty when no MCP servers; else a note on the available `@mcp/<server>` packages | policy `mcp:` block |
+| `{session_guidance}` | session-state guidance only when `main` has potential `session.read` and `session.write` permission | policy default and `permissions:` rules |
 | `{llm_guidance}` | model-call guidance only when at least one model is declared and `main` has potential `llm.call` permission | policy `llm.models`, default, and `permissions:` rules |
 | `{git_package}` | empty unless Git is configured; otherwise a pointer to its package docs | policy `git:` block |
 
@@ -180,7 +172,10 @@ default means `deny`. Filters and rule shadowing do not affect discovery;
 `fs.read`, `fs.write`, `fs.stat`, and `fs.list` with FS. Other callers' grants
 do not advertise these libraries to `main`. LLM additionally requires at least
 one declared model and uses the same non-deny rule for `llm.call`. A provider
-without models is not enough to advertise LLM. Git visibility depends only on
+without models is not enough to advertise LLM. Session uses the same non-deny
+rule but needs both `session.read` and `session.write`: a store the agent can
+only write or only read holds nothing it can use, and `session.remove` and
+`session.list` do not count. Git visibility depends only on
 the presence of its `git:` configuration.
 
 Add new placeholders here when the resolved value is policy-dependent

@@ -122,6 +122,14 @@ pub fn execute_tool_description(blueprint: &Blueprint, surface: PromptSurface) -
                 ""
             },
         )
+        .replace(
+            "{session_guidance}",
+            if visibility.allows("submilli:session") {
+                SESSION_GUIDANCE
+            } else {
+                ""
+            },
+        )
         .replace("{builtins}", &builtins_phrase())
         .replace("{mcp_packages}", &mcp_packages_phrase(blueprint))
         .replace("{t_search}", search)
@@ -149,6 +157,17 @@ counts may be `null`: indeterminate, not free. `batch` is
 bounded-concurrent, one result per prompt, positionally. Models are
 operator-declared — `models()` lists them, and `contextWindow` /
 `description` are `null` when undeclared, so filtering drops those."#;
+
+const SESSION_GUIDANCE: &str = r#"
+
+Session state (`submilli:session`): a key-value store scoped to this
+session — `set(key, value)` writes, `get<T>(key)` reads it back checked
+against `T` (throws a catchable `TypeError` on a shape mismatch),
+`has`/`remove`/`list` round it out. There is no `set<T>`; the value's
+type is inferred. It is **memory-only**: it does not survive a server
+restart, so a key you wrote on an earlier call may legitimately be
+missing. Read a key that may be absent as `get<T | null>(key)` and
+handle the `null`."#;
 
 impl PromptSurface {
     fn discovery_tools(self) -> [&'static str; 3] {
@@ -510,6 +529,39 @@ mod tests {
                 assert_eq!(prompt.contains(text), visible, "{text}: {prompt}");
             }
             assert!(!prompt.contains("{llm_guidance}"));
+        }
+    }
+
+    #[test]
+    fn session_prompt_guidance_requires_read_and_write() {
+        let rule =
+            |capability: &str| format!("    - capability: {capability}\n      action: allow\n");
+        for (policy, visible) in [
+            (String::new(), false),
+            (
+                format!("permissions:\n  main:\n{}", rule("session.read")),
+                false,
+            ),
+            (
+                format!("permissions:\n  main:\n{}", rule("session.write")),
+                false,
+            ),
+            ("default: allow\n".into(), true),
+            (
+                format!(
+                    "permissions:\n  main:\n{}{}",
+                    rule("session.read"),
+                    rule("session.write")
+                ),
+                true,
+            ),
+        ] {
+            let blueprint = submilli_blueprint::parse(&format!("name: test\n{policy}")).unwrap();
+            let prompt = execute_tool_description(&blueprint, PromptSurface::Mcp);
+            for text in ["submilli:session", "Session state", "memory-only"] {
+                assert_eq!(prompt.contains(text), visible, "{policy}: {text}: {prompt}");
+            }
+            assert!(!prompt.contains("{session_guidance}"));
         }
     }
 

@@ -641,24 +641,32 @@ mod policy_visibility_tests {
         let store = PackageStore::new(directory.path());
         let catalog = McpCatalog::empty();
         for (policy, expected) in [
-            ("", [false, false, false, false]),
-            ("default: allow", [true, true, true, false]),
-            ("default: ask-human", [true, true, true, false]),
+            ("", [false, false, false, false, false]),
+            ("default: allow", [true, true, true, false, true]),
+            ("default: ask-human", [true, true, true, false, true]),
             (
                 "permissions:\n  main:\n    - capability: http.get\n      action: ask-human",
-                [true, false, false, false],
+                [true, false, false, false, false],
             ),
             (
                 "permissions:\n  main:\n    - capability: fs.mkdir\n      action: allow",
-                [false, true, false, false],
+                [false, true, false, false, false],
             ),
             (
                 "permissions:\n  main:\n    - capability: fs.read\n      action: allow",
-                [false, true, true, false],
+                [false, true, true, false, false],
             ),
             (
                 "default: allow\nllm:\n  providers:\n    test:\n      type: anthropic\n  models:\n    test-model:\n      provider: test",
-                [true, true, true, true],
+                [true, true, true, true, true],
+            ),
+            (
+                "permissions:\n  main:\n    - capability: session.read\n      action: allow",
+                [false, false, false, false, false],
+            ),
+            (
+                "permissions:\n  main:\n    - capability: session.read\n      action: allow\n    - capability: session.write\n      action: ask-human",
+                [false, false, false, false, true],
             ),
         ] {
             let blueprint = submilli_blueprint::parse(&format!("name: test\n{policy}\n")).unwrap();
@@ -667,6 +675,7 @@ mod policy_visibility_tests {
                 "submilli:fs",
                 "submilli:code",
                 "submilli:llm",
+                "submilli:session",
             ]
             .into_iter()
             .zip(expected)
@@ -676,6 +685,7 @@ mod policy_visibility_tests {
                         "submilli:http" => "download",
                         "submilli:fs" => "readText",
                         "submilli:llm" => "models",
+                        "submilli:session" => "remove",
                         _ => "diffText",
                     };
                     for query in ["", name, symbol, "nothingmatchesthis"] {
