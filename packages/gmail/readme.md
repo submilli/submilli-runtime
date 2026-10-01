@@ -67,9 +67,16 @@ Replies take the bare addresses from the original message's headers and drop
 display names. The message headers are written from the same lists the check
 reported.
 
-A filter compares each address exactly as the message carries it, including
-letter case: `Legal@example.com` does not equal `legal@example.com`, although
-most mail systems deliver both to one mailbox.
+Every address is lowercased and loses any dot after its domain, in the check
+and in the message alike, so `Legal@Example.com.` is checked and sent as
+`legal@example.com`. Write the addresses in a filter in lowercase. Addresses
+that a provider treats as one mailbox in other ways, such as `+tag` suffixes or
+dots in a Gmail local part, remain different addresses to a filter.
+
+`sendEmail` and `createDraft` also report `from`: the one bare address the
+caller set, normalized the same way, or null when the message is sent as the
+account itself. A `from` that is not one bare address is rejected with
+`invalid_sender`.
 
 `sendDraft` sends the draft Gmail stores, so its check reads that draft's
 headers. A draft whose To, Cc, or Bcc header is not a plain list of `address`
@@ -94,9 +101,13 @@ restricted blueprints. Each script has a blueprint of the same name:
 
 - `recipients.ts` shows that a blocked address is denied in To, in Cc, and in
   Bcc; that an allowed message reaches a deliberately denied credential
-  boundary; that an entry holding a comma, a line break, or a display name is
-  rejected; and that `to` is read once even when it answers differently on each
+  boundary; that an address in another case or with a dot after its domain is
+  the same address; that an entry holding a comma, a line break, or a display
+  name is rejected; and that `to` is read once even when it answers differently on each
   read.
+- `sender.ts` shows that `sendEmail` and `createDraft` are held to a rule on
+  `from`, that a value holding a second address is rejected, and that `from`
+  is read once.
 - `request-values.ts` shows that the message the package builds goes to the
   recipients the policy approved. The package holds a placeholder token from
   `fake-token.txt`, and the blueprint tells the message to the allowed list

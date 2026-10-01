@@ -55,6 +55,12 @@ restricted blueprints. Each script has a blueprint of the same name:
   when `owner` answers differently on each read. Allowed cases must reach a
   deliberately denied credential boundary; denied cases must stop at the named
   business capability before reading credentials.
+- `crafted-names.ts` shows that an owner or name holding search syntax, a
+  slash, or a dot segment is rejected with `invalid_input` before the check,
+  and that a scope qualifier in a search query is refused whatever whitespace
+  precedes it.
+- `ref-filters.ts` shows that file reads are held to a rule on `ref`, and pull
+  request creation and retargeting to rules on `head` and `base`.
 - `request-values.ts` shows that the request the package builds names the
   repository the policy approved. The package holds a placeholder token from
   `fake-token.txt`, and the blueprint refuses the request with a reason that

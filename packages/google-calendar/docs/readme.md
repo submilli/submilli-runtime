@@ -12,7 +12,13 @@ The read surface is `listCalendars`, `listEvents`, `getEvent`, `agenda`,
 `updateEvent`, `respondToEvent`, and `deleteEvent`. The default calendar is
 `primary`; pass an explicit calendar ID when operating elsewhere.
 
-`updateEvent` is a patch: omitted fields remain unchanged. Follow the
+An attendee's `email` is one bare address such as `dana@example.com`; it is
+sent in lowercase. `sendUpdates` is `all`, `externalOnly`, or `none`, and
+`none` when unset.
+
+`updateEvent` is a patch: omitted fields remain unchanged. When the patch has
+no `attendees`, the event is read first so the policy check covers the
+attendees it already has; a missing event throws `not_found`. Follow the
 declaration's explicit clear flags when intentionally removing optional values.
 `respondToEvent` updates the authenticated attendee's response. Treat
 `deleteEvent` as a deliberate destructive action even though deleting an

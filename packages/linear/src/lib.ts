@@ -546,8 +546,10 @@ export function createIssue(input: IssueCreateInput): Issue {
 }
 
 /**
- * Update an issue by UUID; returns the updated issue.
- * @capability linear.app/updateIssue {}
+ * Update an issue by UUID; returns the updated issue. The issue is read first, so the check
+ * carries `teamId`, the team the issue belongs to. `projectId` is the project the update moves
+ * the issue to, or null when it moves it nowhere.
+ * @capability linear.app/updateIssue { teamId: string, projectId: string }
  */
 export function updateIssue(id: string, input: IssueUpdateInput): Issue {
     const title = input.title;
@@ -571,15 +573,17 @@ export function updateIssue(id: string, input: IssueUpdateInput): Issue {
     if (priority !== null) issueInput.priority = priority;
     if (labelIds !== null) issueInput.labelIds = labelIds;
     if (projectId !== null) issueInput.projectId = projectId;
-    check("linear.app/updateIssue", {});
+    const teamId = issueTeamId(id);
+    check("linear.app/updateIssue", { teamId: teamId, projectId: projectId });
     const vars: UpdateIssueVars = { id: id, input: issueInput };
     const envelope = graphqlPost(UPDATE_ISSUE_QUERY, vars).json() as GraphQlResponse<IssueUpdateData>;
     return requirePayloadIssue(requireData(envelope).issueUpdate);
 }
 
 /**
- * Create a comment on an issue; returns the created comment.
- * @capability linear.app/createComment {}
+ * Create a comment on an issue; returns the created comment. The issue is read first, so the
+ * check carries `teamId`, the team the issue belongs to.
+ * @capability linear.app/createComment { teamId: string }
  */
 export function createComment(input: CommentCreateInput): Comment {
     const issueId = input.issueId;
@@ -587,7 +591,8 @@ export function createComment(input: CommentCreateInput): Comment {
     const parentId = input.parentId;
     const commentInput: CommentCreateInput = { issueId: issueId, body: body };
     if (parentId !== null) commentInput.parentId = parentId;
-    check("linear.app/createComment", {});
+    const teamId = issueTeamId(issueId);
+    check("linear.app/createComment", { teamId: teamId });
     const vars: CreateCommentVars = { input: commentInput };
     const envelope = graphqlPost(CREATE_COMMENT_QUERY, vars)
         .json() as GraphQlResponse<CommentCreateData>;
@@ -597,6 +602,16 @@ export function createComment(input: CommentCreateInput): Comment {
         throw new Error("Linear commentCreate did not succeed");
     }
     return comment;
+}
+
+// The team an issue belongs to, read from Linear and never taken from the caller, so a rule on
+// `teamId` holds for an operation that names only the issue.
+function issueTeamId(issueId: string): string {
+    const vars: IdVars = { id: issueId };
+    const envelope = graphqlPost(ISSUE_TEAM_QUERY, vars).json() as GraphQlResponse<IssueTeamData>;
+    const issue = requireData(envelope).issue;
+    if (issue === null) throw new Error("Linear issue was not found");
+    return issue.team.id;
 }
 
 /** Read comments, including parent IDs for threaded replies.
@@ -902,6 +917,15 @@ interface ViewerData {
 interface IssueData {
     issue: Issue | null;
 }
+interface IssueTeamData {
+    issue: IssueTeam | null;
+}
+interface IssueTeam {
+    team: TeamId;
+}
+interface TeamId {
+    id: string;
+}
 interface ListIssuesData {
     issues: Page<Issue>;
 }
@@ -994,6 +1018,7 @@ const ISSUE_FIELDS =
 
 const VIEWER_QUERY = "query { viewer { id name email active } }";
 const GET_ISSUE_QUERY = `query($id: String!) { issue(id: $id) { ${ISSUE_FIELDS} } }`;
+const ISSUE_TEAM_QUERY = "query($id: String!) { issue(id: $id) { team { id } } }";
 const LIST_ISSUES_QUERY = `query($first: Int, $after: String, $filter: IssueFilter) { issues(first: $first, after: $after, filter: $filter) { nodes { ${ISSUE_FIELDS} } pageInfo { hasNextPage endCursor } } }`;
 const GET_TEAM_QUERY = "query($id: String!) { team(id: $id) { id key name } }";
 const LIST_TEAMS_QUERY = "query($first: Int, $after: String) { teams(first: $first, after: $after) { nodes { id key name } pageInfo { hasNextPage endCursor } } }";

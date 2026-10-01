@@ -9,6 +9,14 @@ const API_VERSION = "2026-03-10";
 const DEFAULT_LIMIT = 30;
 const MAX_LIMIT = 100;
 const MAX_FILE_BYTES = 10485760;
+// The characters GitHub allows in an owner login and in a repository name. A name outside them
+// could be read as search syntax or as a second path segment.
+const OWNER_NAME = /^[A-Za-z0-9_-]+$/;
+const REPOSITORY_NAME = /^[A-Za-z0-9._-]+$/;
+// What ends a word of a search query: whitespace of any kind, a control or zero-width character,
+// or a parenthesis. They are listed because `\s` matches only the ASCII spaces here, and because
+// how GitHub splits on the others is not documented.
+const SEARCH_WORD_END = /[\u0000-\u0020\u007f-\u00a0\u1680\u180e\u2000-\u200d\u2028\u2029\u202f\u205f\u2060\u3000\ufeff()]/;
 
 /** Identifies a repository by owner and name. */
 export interface RepositoryRef {
@@ -1252,12 +1260,15 @@ interface RepositoryCapabilityContext {
     path?: string;
     ref?: string;
     treeSha?: string;
+    head?: string;
+    base?: string;
 }
 
 interface RepositoryNumberCapabilityContext {
     owner: string;
     repo: string;
     number: number;
+    base?: string;
 }
 
 interface PageRequest {
@@ -1411,8 +1422,7 @@ export function getBranch(repository: RepositoryRef, branch: string): Branch | n
     const { owner, name } = repository;
     const context = repositoryContext(owner, name, "branch", branch);
     check("github.com/branches.get", context);
-    requireText(branch, "branch");
-    const response = githubGetNullable(repositoryPath(owner, name) + "/branches/" + encodeComponent(branch));
+    const response = githubGetNullable(repositoryPath(owner, name) + "/branches/" + segment(branch, "branch"));
     return response === null ? null : branchFrom(response.json() as ApiBranch);
 }
 
@@ -1466,8 +1476,7 @@ export function getCommit(repository: RepositoryRef, ref: string, detail: Commit
     const { owner, name } = repository;
     const context = repositoryContext(owner, name, "ref", ref);
     check("github.com/commits.get", context);
-    requireText(ref, "commit ref");
-    const response = githubGetNullable(repositoryPath(owner, name) + "/commits/" + encodeComponent(ref));
+    const response = githubGetNullable(repositoryPath(owner, name) + "/commits/" + segment(ref, "commit ref"));
     return response === null ? null : commitFrom(response.json() as ApiCommit, detail === null ? "stats" : detail);
 }
 
@@ -1498,26 +1507,29 @@ export function getLatestRelease(repository: RepositoryRef): Release | null {
     return response === null ? null : releaseFrom(response.json() as ApiRelease);
 }
 
-/** Read a repository file as bytes.
- * @capability github.com/contents.readFile { owner: string, repo: string, path: string }
+/** Read a repository file as bytes. `ref` in the check is the branch, tag, or commit the caller
+ * names, or null for the repository's default branch.
+ * @capability github.com/contents.readFile { owner: string, repo: string, path: string, ref: string }
  */
 export function readFile(repository: RepositoryRef, path: string, options: FileReadOptions | null = null): RepositoryFile | null {
     const { owner, name } = repository;
     const ref = options === null ? null : options.ref;
     const maxBytes = options === null ? null : options.maxBytes;
     const context = repositoryContext(owner, name, "path", path);
+    context.ref = namedRef(ref);
     check("github.com/contents.readFile", context);
     return readFileUnchecked(owner, name, path, { ref: ref, maxBytes: maxBytes });
 }
 
 /** Read a repository file as strict UTF-8 text.
- * @capability github.com/contents.readTextFile { owner: string, repo: string, path: string }
+ * @capability github.com/contents.readTextFile { owner: string, repo: string, path: string, ref: string }
  */
 export function readTextFile(repository: RepositoryRef, path: string, options: FileReadOptions | null = null): RepositoryTextFile | null {
     const { owner, name } = repository;
     const ref = options === null ? null : options.ref;
     const maxBytes = options === null ? null : options.maxBytes;
     const context = repositoryContext(owner, name, "path", path);
+    context.ref = namedRef(ref);
     check("github.com/contents.readTextFile", context);
     const file = readFileUnchecked(owner, name, path, { ref: ref, maxBytes: maxBytes });
     if (file === null) return null;
@@ -1531,12 +1543,13 @@ export function readTextFile(repository: RepositoryRef, path: string, options: F
 }
 
 /** List direct entries in a repository directory.
- * @capability github.com/contents.listDirectory { owner: string, repo: string, path: string }
+ * @capability github.com/contents.listDirectory { owner: string, repo: string, path: string, ref: string }
  */
 export function listDirectory(repository: RepositoryRef, path: string, options: DirectoryOptions | null = null): DirectoryEntry[] {
     const { owner, name } = repository;
     const ref = options === null ? null : options.ref;
     const context = repositoryContext(owner, name, "path", path);
+    context.ref = namedRef(ref);
     check("github.com/contents.listDirectory", context);
     const cleanPath = path.length === 0 ? "" : repositoryFilePath(path);
     const query = new Map<string, string>();
@@ -1564,10 +1577,9 @@ export function getTree(repository: RepositoryRef, treeSha: string, recursive: b
     const { owner, name } = repository;
     const context = repositoryContext(owner, name, "treeSha", treeSha);
     check("github.com/trees.get", context);
-    requireText(treeSha, "tree SHA");
     const query = new Map<string, string>();
     if (recursive) query.set("recursive", "1");
-    const response = githubGetNullable(repositoryPath(owner, name) + "/git/trees/" + encodeComponent(treeSha), query);
+    const response = githubGetNullable(repositoryPath(owner, name) + "/git/trees/" + segment(treeSha, "tree SHA"), query);
     if (response === null) return null;
     const data = response.json() as ApiTree;
     const entries: TreeEntry[] = [];
@@ -1606,7 +1618,7 @@ export function deleteBranch(repository: RepositoryRef, branch: string): void {
     const context = repositoryContext(owner, repo, "branch", branch);
     check("github.com/branches.delete", context);
     const name = branchName(branch);
-    githubDelete(repositoryPath(owner, repo) + "/git/refs/heads/" + encodeComponent(name));
+    githubDelete(repositoryPath(owner, repo) + "/git/refs/heads/" + segment(name, "branch"));
 }
 
 /** Commit multiple file writes and deletions with optimistic branch concurrency.
@@ -1621,12 +1633,12 @@ export function commitFiles(repository: RepositoryRef, input: CommitFilesInput):
     requireSha(expectedHeadSha, "expected head SHA");
     requireText(message, "commit message");
     validateChanges(changes);
-    const current = githubGet(repositoryPath(owner, name) + "/git/ref/heads/" + encodeComponent(branch)).json() as ApiGitRef;
+    const current = githubGet(repositoryPath(owner, name) + "/git/ref/heads/" + segment(branch, "branch")).json() as ApiGitRef;
     const currentSha = current.object === null ? "" : str(current.object.sha);
     if (currentSha !== expectedHeadSha) {
         throw validationError("branch_moved", "Branch head no longer matches expectedHeadSha");
     }
-    const parent = githubGet(repositoryPath(owner, name) + "/git/commits/" + encodeComponent(expectedHeadSha)).json() as ApiGitCommit;
+    const parent = githubGet(repositoryPath(owner, name) + "/git/commits/" + segment(expectedHeadSha, "expected head SHA")).json() as ApiGitCommit;
     const parentTree = parent.tree === null ? "" : str(parent.tree.sha);
     if (parentTree.length === 0) throw validationError("missing_tree", "Expected commit does not include a tree SHA");
     const treeItems: GitTreeItemBody[] = [];
@@ -1656,7 +1668,7 @@ export function commitFiles(repository: RepositoryRef, input: CommitFilesInput):
     const createdCommit = githubPost(repositoryPath(owner, name) + "/git/commits", commitBody).json() as ApiCreatedSha;
     const createdSha = str(createdCommit.sha);
     const updateBody: GitUpdateRefBody = { sha: createdSha, force: false };
-    const update = githubPatchRaw(repositoryPath(owner, name) + "/git/refs/heads/" + encodeComponent(branch), updateBody);
+    const update = githubPatchRaw(repositoryPath(owner, name) + "/git/refs/heads/" + segment(branch, "branch"), updateBody);
     if (!update.ok) {
         if (update.status === 409 || update.status === 422) {
             throw githubError(update, "branch_moved", "Branch moved while the commit was being created");
@@ -1940,16 +1952,18 @@ export function searchPullRequests(repository: RepositoryRef, query: string, opt
 }
 
 /** Create a pull request.
- * @capability github.com/pulls.create { owner: string, repo: string }
+ * @capability github.com/pulls.create { owner: string, repo: string, head: string, base: string }
  */
 export function createPullRequest(repository: RepositoryRef, input: CreatePullRequestInput): PullRequest {
     const { owner, name } = repository;
     const { title, head, base, body: description, draft, maintainerCanModify } = input;
-    const context = checkedRepository(owner, name);
-    check("github.com/pulls.create", context);
     requireText(title, "pull request title");
     requireText(head, "pull request head");
     requireText(base, "pull request base");
+    const context = checkedRepository(owner, name);
+    context.head = head;
+    context.base = base;
+    check("github.com/pulls.create", context);
     const fields: string[] = [
         jsonProperty("title", JSON.stringify(title)),
         jsonProperty("head", JSON.stringify(head)),
@@ -1964,13 +1978,15 @@ export function createPullRequest(repository: RepositoryRef, input: CreatePullRe
     return pullRequestFrom(githubPost(repositoryPath(owner, name) + "/pulls", body).json() as ApiPullRequest);
 }
 
-/** Update a pull request.
- * @capability github.com/pulls.update { owner: string, repo: string, number: number }
+/** Update a pull request. `base` in the check is the branch the update retargets the pull
+ * request to, or null when it leaves the base as it is.
+ * @capability github.com/pulls.update { owner: string, repo: string, number: number, base: string }
  */
 export function updatePullRequest(repository: RepositoryRef, number: number, input: UpdatePullRequestInput): PullRequest {
     const { owner, name } = repository;
     const { title, body: description, clearBody, base, state, maintainerCanModify } = input;
     const context = repositoryNumberContext(owner, name, number);
+    context.base = base;
     check("github.com/pulls.update", context);
     const fields: string[] = [];
     if (title !== null) fields.push(jsonProperty("title", JSON.stringify(title)));
@@ -2390,7 +2406,7 @@ function scopedSearch(query: string, owner: string, name: string, kind: string):
             continue;
         }
         if (quoted) continue;
-        if (char === " " || char === "\t" || char === "\n" || char === "(" || char === ")") {
+        if (SEARCH_WORD_END.test(char)) {
             if (word.length > 0) {
                 words.push(word);
                 word = "";
@@ -2417,9 +2433,17 @@ function scopedSearch(query: string, owner: string, name: string, kind: string):
     return query + " repo:" + owner + "/" + name + suffix;
 }
 
+// The owner and name the check reads are put in paths and search queries as they are, so each
+// must be exactly one owner and one repository there too.
 function checkedRepository(owner: string, name: string): RepositoryCapabilityContext {
     requireText(owner, "repository owner");
     requireText(name, "repository name");
+    if (!OWNER_NAME.test(owner)) {
+        throw validationError("invalid_input", "repository owner may contain only letters, digits, hyphens, and underscores");
+    }
+    if (!REPOSITORY_NAME.test(name) || name === "." || name === "..") {
+        throw validationError("invalid_input", "repository name may contain only letters, digits, hyphens, underscores, and periods, and cannot be . or ..");
+    }
     return { owner: owner, repo: name };
 }
 
@@ -2443,8 +2467,17 @@ function repositoryPath(owner: string, name: string): string {
     return "/repos/" + encodeComponent(owner) + "/" + encodeComponent(name);
 }
 
+// The ref a contents request names. An empty ref is not sent, so it is the default branch, which
+// the check reports as null.
+function namedRef(ref: string | null): string | null {
+    return ref === null || ref.length === 0 ? null : ref;
+}
+
+// One path segment. `.` and `..` are refused: a URL parser reads them, escaped or not, as the
+// current and the parent segment, and the request would go to another path.
 function segment(value: string, label: string): string {
     requireText(value, label);
+    if (value === "." || value === "..") throw validationError("invalid_input", label + " cannot be . or ..");
     return encodeComponent(value);
 }
 
@@ -2934,6 +2967,6 @@ function rateResourceFrom(data: ApiRateResource | null): RateLimitResource {
 }
 
 function getCommitUnchecked(owner: string, name: string, ref: string, detail: CommitDetail): Commit | null {
-    const response = githubGetNullable(repositoryPath(owner, name) + "/commits/" + encodeComponent(ref));
+    const response = githubGetNullable(repositoryPath(owner, name) + "/commits/" + segment(ref, "commit ref"));
     return response === null ? null : commitFrom(response.json() as ApiCommit, detail);
 }

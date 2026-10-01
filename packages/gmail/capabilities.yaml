@@ -3,6 +3,8 @@ provides:
 - name: submilli/gmail.createDraft
   description: Create a draft from structured headers, bodies, and VFS attachments.
   fields:
+    from:
+      type: string
     recipients:
       type: string[]
 - name: submilli/gmail.createLabel
@@ -63,6 +65,8 @@ provides:
 - name: submilli/gmail.sendEmail
   description: Send a new email.
   fields:
+    from:
+      type: string
     recipients:
       type: string[]
 - name: submilli/gmail.triage

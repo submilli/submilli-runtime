@@ -42,3 +42,14 @@ Put `SLACK_BOT_TOKEN` in `.env` to enable live read tests.
 `SLACK_TEST_CHANNEL` enables the message-lifecycle test in an approved channel.
 `SLACK_TEST_DM_USER_ID` enables the 1:1 DM test, and the comma-separated
 `SLACK_TEST_GROUP_DM_USER_IDS` enables the group-DM test.
+
+## Policy tests
+
+The scripts in `tests/policy/` run as a real `main` caller under restricted
+blueprints of the same name, without a token or network:
+
+- `user-ids.ts` shows that a blocked user ID is denied alone and inside a
+  list, and that one argument holding a comma, a space, or a line break is
+  rejected with `invalid_user_id` before the check.
+
+`cargo test -p submilli --test package_policy` runs them.

@@ -10,6 +10,8 @@ when raw response bytes, headers, or general HTTP behavior are required.
   structured result objects.
 - `downloadRead` and `downloadSearch` stream large results directly to the VFS.
   Prefer them when bringing the whole response into Wasm memory is unnecessary.
+  The file is written for the caller, so the blueprint's `fs.write` rule for
+  `main` must allow the path. A response over 20 MB is refused.
 
 Set only the options needed for the task. Reader options can control selectors,
 links, images, generated alt text, and cache behavior. Search options can bound

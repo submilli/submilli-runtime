@@ -4,14 +4,20 @@ provides:
   description: Build a bounded chronological agenda across explicit calendars or up to ten visible calendars.
   fields: {}
 - name: submilli/google-calendar.createEvent
-  description: Create a Calendar event and optionally request a Google Meet conference.
+  description: Create a Calendar event and optionally request a Google Meet conference. `attendees` in the check holds each attendee's address once, in lowercase. `sendUpdates` is "none" when unset.
+  fields:
+    attendees:
+      type: string[]
+    calendarId:
+      type: string
+    sendUpdates:
+      type: string
+- name: submilli/google-calendar.deleteEvent
+  description: Delete an event. This is idempotent when the event is already absent. `sendUpdates` in the check is "none" when unset.
   fields:
     calendarId:
       type: string
-- name: submilli/google-calendar.deleteEvent
-  description: Delete an event. This is idempotent when the event is already absent.
-  fields:
-    calendarId:
+    sendUpdates:
       type: string
 - name: submilli/google-calendar.findFreeTime
   description: Find bounded candidate slots by merging busy intervals from multiple calendars.
@@ -44,9 +50,13 @@ provides:
     response:
       type: string
 - name: submilli/google-calendar.updateEvent
-  description: Patch an event. Omitted fields remain unchanged; empty attendees clears attendees.
+  description: 'Patch an event. Omitted fields remain unchanged; empty attendees clears attendees. `attendees` in the check holds the address of each attendee the event has after the update, once, in lowercase: the replacement list, or the event''s current attendees when the patch has none. The event is read for that before the check. `sendUpdates` is "none" when unset.'
   fields:
+    attendees:
+      type: string[]
     calendarId:
+      type: string
+    sendUpdates:
       type: string
 requires:
 - capability: http.delete

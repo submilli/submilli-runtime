@@ -14,6 +14,9 @@ const MAX_ATTACHMENT_BYTES = 10485760;
 // list, a group, a comment or a quoted name where policy saw one address.
 const BARE_ADDRESS = /^[!#-'*+\-.\/0-9=?A-Z^_`a-z{|}~]+@[!#-'*+\-.\/0-9=?A-Z^_`a-z{|}~]+$/;
 
+// The dots that end a fully qualified domain. The address is the same mailbox without them.
+const TRAILING_DOTS = /\.+$/;
+
 // A line break, CRLF or LF, and the space or tab that makes it folding.
 const FOLD = /\r?\n([ \t])/g;
 
@@ -166,7 +169,10 @@ export interface OutgoingAttachment {
 
 /** Input for a new email or draft. */
 export interface EmailInput {
-    /** Recipient addresses, one bare address such as "dana@example.com" per entry; at least one is required. */
+    /**
+     * Recipient addresses, one bare address such as "dana@example.com" per entry; at least one is
+     * required. Every address is checked and sent in lowercase, without a dot after the domain.
+     */
     to: string[];
     /** Message subject. */
     subject: string;
@@ -178,7 +184,7 @@ export interface EmailInput {
     bcc?: string[];
     /** HTML body, sent as a multipart/alternative alongside the text body. */
     html?: string;
-    /** From header value; defaults to the authenticated account. */
+    /** One bare address to send from, such as a send-as alias; defaults to the authenticated account. */
     from?: string;
     /** VFS files to attach; combined contents must stay under 10 MiB. */
     attachments?: OutgoingAttachment[];
@@ -459,7 +465,7 @@ export function getDraft(draftId: string): Draft | null {
 
 /**
  * Create a draft from structured headers, bodies, and VFS attachments.
- * @capability submilli/gmail.createDraft { recipients: string[] }
+ * @capability submilli/gmail.createDraft { recipients: string[], from: string }
  */
 export function createDraft(input: EmailInput): Draft {
     const { to: requestedTo, subject, text, cc: requestedCc, bcc: requestedBcc, html, from } = input;
@@ -487,7 +493,7 @@ export function createDraft(input: EmailInput): Draft {
         html: html,
         from: from,
     });
-    check("submilli/gmail.createDraft", { recipients: messageRecipients(mail) });
+    check("submilli/gmail.createDraft", { recipients: messageRecipients(mail), from: mail.from });
     const raw = composeEmail(mail, attachments);
     const response = post(API + "/drafts", { message: { raw: raw } }, authHeaders());
     requireOk(response);
@@ -529,7 +535,7 @@ export function deleteDraft(draftId: string): void {
 
 /**
  * Send a new email.
- * @capability submilli/gmail.sendEmail { recipients: string[] }
+ * @capability submilli/gmail.sendEmail { recipients: string[], from: string }
  */
 export function sendEmail(input: EmailInput): Message {
     const { to: requestedTo, subject, text, cc: requestedCc, bcc: requestedBcc, html, from } = input;
@@ -557,7 +563,7 @@ export function sendEmail(input: EmailInput): Message {
         html: html,
         from: from,
     });
-    check("submilli/gmail.sendEmail", { recipients: messageRecipients(mail) });
+    check("submilli/gmail.sendEmail", { recipients: messageRecipients(mail), from: mail.from });
     const response = post(API + "/messages/send", { raw: composeEmail(mail, attachments) }, authHeaders());
     requireOk(response);
     return messageFrom(response.json() as ApiMessage);
@@ -783,7 +789,7 @@ function composeInput(fields: EmailFields): ComposeInput {
     if (cc !== null) result.cc = bareAddresses(cc, "cc");
     if (bcc !== null) result.bcc = bareAddresses(bcc, "bcc");
     if (html !== null) result.html = html;
-    if (from !== null) result.from = from;
+    if (from !== null) result.from = senderAddress(from);
     return result;
 }
 
@@ -805,10 +811,7 @@ function composeEmail(input: ComposeInput, requestedAttachments: OutgoingAttachm
     let headers = addressHeader("To", input.to, "to");
     if (input.cc !== null && input.cc.length > 0) headers += addressHeader("Cc", input.cc, "cc");
     if (input.bcc !== null && input.bcc.length > 0) headers += addressHeader("Bcc", input.bcc, "bcc");
-    if (input.from !== null) {
-        validateHeader(input.from);
-        headers += "From: " + input.from + "\r\n";
-    }
+    if (input.from !== null) headers += addressHeader("From", [input.from], "from");
     headers += "Subject: " + encodeHeader(input.subject) + "\r\n";
     if (input.inReplyTo !== null && input.inReplyTo.length > 0) {
         validateHeader(input.inReplyTo);
@@ -846,16 +849,16 @@ function composeEmail(input: ComposeInput, requestedAttachments: OutgoingAttachm
     for (const attachment of attachments) {
         // One read of the path, so the size checked is the size of the file sent.
         const path = attachment.path;
+        const filename = attachment.filename !== null ? attachment.filename : basename(path);
+        const mimeType = attachment.mimeType !== null ? attachment.mimeType : "application/octet-stream";
+        validateFilename(filename);
+        validateHeader(mimeType);
         const metadata = stat(path);
         if (metadata === null || metadata.kind !== "file") throw new GmailError("attachment_not_found", "attachment is not a VFS file: " + path, 0);
         total += metadata.size;
         if (total > MAX_ATTACHMENT_BYTES) throw new GmailError("attachments_too_large", "combined attachment contents exceed 10 MiB", 0);
         const bytes = read(path);
         if (bytes === null) throw new GmailError("attachment_unreadable", "attachment exceeds the VFS whole-read limit", 0);
-        const filename = attachment.filename !== null ? attachment.filename : basename(path);
-        const mimeType = attachment.mimeType !== null ? attachment.mimeType : "application/octet-stream";
-        validateHeader(filename);
-        validateHeader(mimeType);
         mime += "--" + boundary + "\r\nContent-Type: " + mimeType + "; name=\"" + filename + "\"\r\n";
         mime += "Content-Disposition: attachment; filename=\"" + filename + "\"\r\nContent-Transfer-Encoding: base64\r\n\r\n";
         mime += bytes.toBase64() + "\r\n";
@@ -1087,9 +1090,10 @@ function headerAddresses(headers: Header[], name: string): string[] {
 function addressList(value: string, header: string): string[] {
     const addresses: string[] = [];
     for (const mailbox of addressSyntax(unfoldAddresses(value, header), header).split(",")) {
-        const address = mailboxAddress(mailbox, header);
-        if (address === null) continue;
-        if (!isBareAddress(address)) throw unresolvedHeader(header);
+        const written = mailboxAddress(mailbox, header);
+        if (written === null) continue;
+        const address = normalizedAddress(written);
+        if (address === null) throw unresolvedHeader(header);
         addresses.push(address);
     }
     return addresses;
@@ -1201,11 +1205,29 @@ function isEmptyGroup(text: string): boolean {
 function bareAddresses(entries: string[], field: string): string[] {
     const addresses: string[] = [];
     for (const entry of entries) {
-        const address = trimSpacesAndTabs(entry);
-        if (!isBareAddress(address)) throw invalidRecipient(field);
+        const address = normalizedAddress(trimSpacesAndTabs(entry));
+        if (address === null) throw invalidRecipient(field);
         addresses.push(address);
     }
     return addresses;
+}
+
+function senderAddress(from: string): string {
+    const address = normalizedAddress(trimSpacesAndTabs(from));
+    if (address === null) {
+        throw new GmailError("invalid_sender", "from must hold one bare email address, such as dana@example.com, without a display name", 0);
+    }
+    return address;
+}
+
+// The one spelling of a bare address that policy reads and the header carries, or null when the
+// value is not a bare address. Mail systems deliver to a mailbox whatever the case of its address
+// and whether or not a dot ends its domain, so a rule naming one spelling would let another past.
+function normalizedAddress(value: string): string | null {
+    if (!isBareAddress(value)) return null;
+    const address = value.toLowerCase().replace(TRAILING_DOTS, "");
+    if (address.endsWith("@")) return null;
+    return address;
 }
 
 // Removes the ASCII space and tab at either end, and nothing else. `trim` also removes line
@@ -1346,6 +1368,14 @@ function str(value: string | null): string {
 function basename(path: string): string {
     const parts = path.split("/");
     return parts.length === 0 ? "attachment" : parts[parts.length - 1];
+}
+
+// The name sits inside a quoted string, where a `"` would end it and a `\` would escape what follows.
+function validateFilename(filename: string): void {
+    validateHeader(filename);
+    if (filename.includes("\"") || filename.includes("\\")) {
+        throw new GmailError("invalid_attachment_filename", "attachment filenames must not contain a double quote or a backslash", 0);
+    }
 }
 
 function validateHeader(value: string): void {

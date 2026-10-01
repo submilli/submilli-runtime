@@ -1,0 +1,16 @@
+kind: blueprint
+name: gmail-sender-test
+packages:
+  - '@submilli/gmail'
+default: deny
+permissions:
+  main:
+    - capability: submilli/gmail.sendEmail
+      filter: from == "alias@example.com"
+      action: allow
+    - capability: submilli/gmail.createDraft
+      filter: from == "alias@example.com"
+      action: allow
+  # Deliberate sentinel: an allowed message must reach secrets.get, which is
+  # denied here before a token can be read or a request can be sent.
+  '@submilli/gmail': []

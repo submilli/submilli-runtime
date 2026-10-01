@@ -4,6 +4,12 @@ import secrets from "submilli:secrets";
 import { check } from "submilli:security";
 
 const API = "https://www.googleapis.com/calendar/v3";
+// Exactly one `@` between two runs of printable ASCII, without the characters RFC 5322 reserves
+// for address syntax, `()<>[]:;\,"`. Anything else could be read as a list or a named address
+// where policy saw one attendee, or be drawn like an address policy refuses.
+const BARE_ADDRESS = /^[!#-'*+\-.\/0-9=?A-Z^_`a-z{|}~]+@[!#-'*+\-.\/0-9=?A-Z^_`a-z{|}~]+$/;
+// The dots that end a fully qualified domain. The address is the same mailbox without them.
+const TRAILING_DOTS = /\.+$/;
 
 /** A Google Calendar API error with stable machine-readable fields. */
 export class CalendarError extends Error {
@@ -86,7 +92,7 @@ interface EventTimeFields {
 
 /** An event attendee. */
 export interface Attendee {
-    /** Attendee email address. */
+    /** Attendee email address, one bare address such as "dana@example.com". It is checked and sent in lowercase. */
     email: string;
     /** Attendee display name. */
     displayName?: string;
@@ -488,16 +494,32 @@ function fetchEvent(eventId: string, calendarId: string): Event | null {
 }
 
 /**
- * Create a Calendar event and optionally request a Google Meet conference.
- * @capability submilli/google-calendar.createEvent { calendarId: string }
+ * Create a Calendar event and optionally request a Google Meet conference. `attendees` in the
+ * check holds each attendee's address once, in lowercase. `sendUpdates` is "none" when unset.
+ * @capability submilli/google-calendar.createEvent { calendarId: string, attendees: string[], sendUpdates: string }
  */
 export function createEvent(input: EventCreateInput, calendarId: string = "primary"): Event {
-    const { summary, description, location, visibility, createGoogleMeet, sendUpdates } = input;
+    const { summary, description, location, visibility, createGoogleMeet, sendUpdates: requestedSendUpdates } = input;
+    const sendUpdates = sendUpdatesMode(requestedSendUpdates);
     const requestedStart = input.start;
     const start: EventTimeFields = { date: requestedStart.date, dateTime: requestedStart.dateTime, timeZone: requestedStart.timeZone };
     const requestedEnd = input.end;
     const end: EventTimeFields = { date: requestedEnd.date, dateTime: requestedEnd.dateTime, timeZone: requestedEnd.timeZone };
-    const attendees = input.attendees;
+    const requestedAttendees = input.attendees;
+    const attendees: Attendee[] = [];
+    if (requestedAttendees !== null) {
+        // Each attendee is copied with its address in the one spelling policy reads, so the
+        // list the check approves is the list the request sends.
+        for (const item of requestedAttendees) {
+            const { email, displayName, optional, responseStatus, comment } = item;
+            const attendee: Attendee = { email: validAttendeeAddress(email) };
+            if (displayName !== null) attendee.displayName = displayName;
+            if (optional !== null) attendee.optional = optional;
+            if (responseStatus !== null) attendee.responseStatus = responseStatus;
+            if (comment !== null) attendee.comment = comment;
+            attendees.push(attendee);
+        }
+    }
     const requestedRecurrence = input.recurrence;
     let recurrence: string[] | null = null;
     if (requestedRecurrence !== null) {
@@ -506,16 +528,16 @@ export function createEvent(input: EventCreateInput, calendarId: string = "prima
         recurrence = copied;
     }
     const reminders = input.reminders;
-    check("submilli/google-calendar.createEvent", { calendarId: calendarId });
+    check("submilli/google-calendar.createEvent", { calendarId: calendarId, attendees: distinctAddresses(attendees), sendUpdates: sendUpdates });
     const body: EventCreateBody = { summary: summary, start: normalizeEventTime(start), end: normalizeEventTime(end) };
     if (description !== null) body.description = description;
     if (location !== null) body.location = location;
-    if (attendees !== null) body.attendees = attendees;
+    if (attendees.length > 0) body.attendees = attendees;
     if (recurrence !== null) body.recurrence = recurrence;
     if (reminders !== null) body.reminders = reminders;
     if (visibility !== null) body.visibility = visibility;
     const query = new Map<string, string>();
-    putQuery(query, "sendUpdates", sendUpdates);
+    query.set("sendUpdates", sendUpdates);
     if (createGoogleMeet === true) {
         query.set("conferenceDataVersion", "1");
         body.conferenceData = {
@@ -531,11 +553,15 @@ export function createEvent(input: EventCreateInput, calendarId: string = "prima
 }
 
 /**
- * Patch an event. Omitted fields remain unchanged; empty attendees clears attendees.
- * @capability submilli/google-calendar.updateEvent { calendarId: string }
+ * Patch an event. Omitted fields remain unchanged; empty attendees clears attendees. `attendees`
+ * in the check holds the address of each attendee the event has after the update, once, in
+ * lowercase: the replacement list, or the event's current attendees when the patch has none.
+ * The event is read for that before the check. `sendUpdates` is "none" when unset.
+ * @capability submilli/google-calendar.updateEvent { calendarId: string, attendees: string[], sendUpdates: string }
  */
 export function updateEvent(eventId: string, input: EventUpdateInput, calendarId: string = "primary"): Event {
-    const { summary, description, location, clearDescription, clearLocation, visibility, sendUpdates } = input;
+    const { summary, description, location, clearDescription, clearLocation, visibility, sendUpdates: requestedSendUpdates } = input;
+    const sendUpdates = sendUpdatesMode(requestedSendUpdates);
     const requestedStart = input.start;
     let start: EventTimeFields | null = null;
     if (requestedStart !== null) {
@@ -546,7 +572,21 @@ export function updateEvent(eventId: string, input: EventUpdateInput, calendarId
     if (requestedEnd !== null) {
         end = { date: requestedEnd.date, dateTime: requestedEnd.dateTime, timeZone: requestedEnd.timeZone };
     }
-    const attendees = input.attendees;
+    const requestedAttendees = input.attendees;
+    let attendees: Attendee[] | null = null;
+    if (requestedAttendees !== null) {
+        const copied: Attendee[] = [];
+        for (const item of requestedAttendees) {
+            const { email, displayName, optional, responseStatus, comment } = item;
+            const attendee: Attendee = { email: validAttendeeAddress(email) };
+            if (displayName !== null) attendee.displayName = displayName;
+            if (optional !== null) attendee.optional = optional;
+            if (responseStatus !== null) attendee.responseStatus = responseStatus;
+            if (comment !== null) attendee.comment = comment;
+            copied.push(attendee);
+        }
+        attendees = copied;
+    }
     const requestedRecurrence = input.recurrence;
     let recurrence: string[] | null = null;
     if (requestedRecurrence !== null) {
@@ -555,7 +595,8 @@ export function updateEvent(eventId: string, input: EventUpdateInput, calendarId
         recurrence = copied;
     }
     const reminders = input.reminders;
-    check("submilli/google-calendar.updateEvent", { calendarId: calendarId });
+    const attendeesAfterUpdate = attendees !== null ? distinctAddresses(attendees) : currentAttendeeAddresses(eventId, calendarId);
+    check("submilli/google-calendar.updateEvent", { calendarId: calendarId, attendees: attendeesAfterUpdate, sendUpdates: sendUpdates });
     const body: EventUpdateBody = {};
     if (summary !== null) body.summary = summary;
     if (start !== null) body.start = normalizeEventTime(start);
@@ -575,7 +616,7 @@ export function updateEvent(eventId: string, input: EventUpdateInput, calendarId
     if (reminders !== null) body.reminders = reminders;
     if (visibility !== null) body.visibility = visibility;
     const query = new Map<string, string>();
-    putQuery(query, "sendUpdates", sendUpdates);
+    query.set("sendUpdates", sendUpdates);
     const path = "/calendars/" + encodeComponent(calendarId) + "/events/" + encodeComponent(eventId);
     const response = patch(API + calendarPath(path, query), body, authHeaders());
     requireOk(response);
@@ -614,19 +655,77 @@ export function respondToEvent(eventId: string, response: string, calendarId: st
 }
 
 /**
- * Delete an event. This is idempotent when the event is already absent.
- * @capability submilli/google-calendar.deleteEvent { calendarId: string }
+ * Delete an event. This is idempotent when the event is already absent. `sendUpdates` in the
+ * check is "none" when unset.
+ * @capability submilli/google-calendar.deleteEvent { calendarId: string, sendUpdates: string }
  */
 export function deleteEvent(eventId: string, options: EventDeleteOptions | null = null): void {
     const requestedCalendar = options === null ? null : options.calendarId;
-    const sendUpdates = options === null ? null : options.sendUpdates;
+    const sendUpdates = sendUpdatesMode(options === null ? null : options.sendUpdates);
     const calendarId = requestedCalendar === null ? "primary" : requestedCalendar;
-    check("submilli/google-calendar.deleteEvent", { calendarId: calendarId });
+    check("submilli/google-calendar.deleteEvent", { calendarId: calendarId, sendUpdates: sendUpdates });
     const query = new Map<string, string>();
-    putQuery(query, "sendUpdates", sendUpdates);
+    query.set("sendUpdates", sendUpdates);
     const path = "/calendars/" + encodeComponent(calendarId) + "/events/" + encodeComponent(eventId);
     const response = delete(API + calendarPath(path, query), authHeaders());
     if (response.status !== 404) requireOk(response);
+}
+
+// A patch without `attendees` leaves the event's attendees in place, and they are the ones
+// `sendUpdates` notifies, so they are read from the event for the check.
+function currentAttendeeAddresses(eventId: string, calendarId: string): string[] {
+    const current = fetchEvent(eventId, calendarId);
+    if (current === null) throw new CalendarError("not_found", "Calendar event was not found", 404);
+    const addresses: string[] = [];
+    for (const attendee of current.attendees) {
+        const email = attendee.email;
+        // Calendar can list an attendee without an address; there is nobody to notify.
+        if (email !== null) addresses.push(oneSpelling(email));
+    }
+    return distinct(addresses);
+}
+
+function distinctAddresses(attendees: Attendee[]): string[] {
+    const addresses: string[] = [];
+    for (const attendee of attendees) addresses.push(attendee.email);
+    return distinct(addresses);
+}
+
+function validAttendeeAddress(email: string): string {
+    if (!BARE_ADDRESS.test(email)) throw invalidAttendee();
+    const address = oneSpelling(email);
+    if (address.endsWith("@")) throw invalidAttendee();
+    return address;
+}
+
+// Mail systems deliver to a mailbox whatever the case of its address and whether or not a dot
+// ends its domain, so a rule naming one spelling would let another past.
+function oneSpelling(address: string): string {
+    return address.toLowerCase().replace(TRAILING_DOTS, "");
+}
+
+function invalidAttendee(): CalendarError {
+    return new CalendarError("invalid_attendee", "an attendee email must be one bare address, such as dana@example.com", 0);
+}
+
+function distinct(values: string[]): string[] {
+    const seen = new Set<string>();
+    const result: string[] = [];
+    for (const value of values) {
+        if (seen.has(value)) continue;
+        seen.add(value);
+        result.push(value);
+    }
+    return result;
+}
+
+// Calendar sends no email when `sendUpdates` is absent, which is "none".
+function sendUpdatesMode(requested: string | null): string {
+    if (requested === null) return "none";
+    if (requested !== "all" && requested !== "externalOnly" && requested !== "none") {
+        throw new CalendarError("invalid_send_updates", "sendUpdates must be all, externalOnly, or none", 0);
+    }
+    return requested;
 }
 
 /**

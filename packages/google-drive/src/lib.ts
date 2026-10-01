@@ -18,6 +18,14 @@ const GOOGLE_API = "https://www.googleapis.com/";
 const API = GOOGLE_API + "drive/v3";
 const UPLOAD_API = GOOGLE_API + "upload/drive/v3";
 const CHUNK_SIZE = 8388608;
+// Exactly one `@` between two runs of printable ASCII, without the characters RFC 5322 reserves
+// for address syntax, `()<>[]:;\,"`, so one value names one account.
+const BARE_ADDRESS = /^[!#-'*+\-.\/0-9=?A-Z^_`a-z{|}~]+@[!#-'*+\-.\/0-9=?A-Z^_`a-z{|}~]+$/;
+const DOMAIN_NAME = /^[A-Za-z0-9.-]+$/;
+// The dots that end a fully qualified domain. The name is the same without them.
+const TRAILING_DOTS = /\.+$/;
+// One Drive file or folder ID, or an alias such as `root`.
+const DRIVE_ID = /^[A-Za-z0-9_-]+$/;
 const FILE_FIELDS = "id,name,mimeType,size,createdTime,modifiedTime,webViewLink,webContentLink,parents,trashed,starred,driveId,description";
 
 /** A Google Drive API or file-transfer error with stable fields. */
@@ -227,7 +235,7 @@ export interface ShareFileInput {
     domain?: string;
     /** For domain/anyone permissions, let the file appear in search results. */
     allowFileDiscovery?: boolean;
-    /** Email the grantee about the share; defaults to true. */
+    /** Email a user or group about the share; defaults to true. Ignored for domain and anyone. */
     sendNotificationEmail?: boolean;
 }
 
@@ -379,17 +387,21 @@ export function downloadFile(fileId: string, path: string, options: FileDownload
 
 /**
  * Upload a VFS file using Google's resumable protocol and fixed 8 MiB chunks.
- * @capability submilli/google-drive.uploadFile { path: string }
+ * `parentId` in the check is the destination folder as the caller named it, or "" when the caller
+ * names none and the file goes to My Drive root. The alias `root` names that folder too, so a rule
+ * on `parentId` lists the folders it allows.
+ * @capability submilli/google-drive.uploadFile { path: string, parentId: string }
  */
 export function uploadFile(sourcePath: string, options: FileUploadOptions): DriveFile {
-    const { name, mimeType, parentId, driveId } = options;
-    check("submilli/google-drive.uploadFile", { path: sourcePath });
+    const { name, mimeType, parentId: requestedParentId, driveId } = options;
+    const parentId = destinationFolderId(requestedParentId);
+    check("submilli/google-drive.uploadFile", { path: sourcePath, parentId: parentId });
     const source = stat(sourcePath);
     if (source === null) throw new DriveError("source_not_found", "upload source is not a VFS file", 0);
     if (source.kind !== "file") throw new DriveError("source_not_found", "upload source is not a VFS file", 0);
     const sourceSize = source.size;
     const metadata: FileUploadMetadata = { name: name };
-    if (parentId !== null) metadata.parents = [parentId];
+    if (parentId.length > 0) metadata.parents = [parentId];
     const query = new Map<string, string>();
     query.set("uploadType", "resumable");
     query.set("fields", FILE_FIELDS);
@@ -435,12 +447,13 @@ export function uploadFile(sourcePath: string, options: FileUploadOptions): Driv
  * @capability submilli/google-drive.createFolder { parentId: string }
  */
 export function createFolder(name: string, parentId: string = ""): DriveFile {
-    check("submilli/google-drive.createFolder", { parentId: parentId });
+    const folderId = destinationFolderId(parentId);
+    check("submilli/google-drive.createFolder", { parentId: folderId });
     const body: FileCreateBody = {
         name: name,
         mimeType: "application/vnd.google-apps.folder",
     };
-    if (parentId.length > 0) body.parents = [parentId];
+    if (folderId.length > 0) body.parents = [folderId];
     const query = new Map<string, string>();
     query.set("fields", FILE_FIELDS);
     query.set("supportsAllDrives", "true");
@@ -450,16 +463,17 @@ export function createFolder(name: string, parentId: string = ""): DriveFile {
 }
 
 /**
- * Copy a file with an optional new name or parent.
- * @capability submilli/google-drive.copyFile { fileId: string }
+ * Copy a file with an optional new name or parent. `parentId` in the check is the destination
+ * folder, or "" when the copy stays beside the source.
+ * @capability submilli/google-drive.copyFile { fileId: string, parentId: string }
  */
 export function copyFile(fileId: string, options: FileCopyOptions | null = null): DriveFile {
     const name = options === null ? null : options.name;
-    const parentId = options === null ? null : options.parentId;
-    check("submilli/google-drive.copyFile", { fileId: fileId });
+    const parentId = destinationFolderId(options === null ? null : options.parentId);
+    check("submilli/google-drive.copyFile", { fileId: fileId, parentId: parentId });
     const body: FileCopyBody = {};
     if (name !== null) body.name = name;
-    if (parentId !== null) body.parents = [parentId];
+    if (parentId.length > 0) body.parents = [parentId];
     const query = mutationQuery();
     const response = post(API + "/files/" + encodeComponent(fileId) + "/copy?" + encodeQuery(query), body, authHeaders());
     requireOk(response);
@@ -480,11 +494,13 @@ export function renameFile(fileId: string, name: string): DriveFile {
  * @capability submilli/google-drive.moveFile { fileId: string, parentId: string }
  */
 export function moveFile(fileId: string, parentId: string): DriveFile {
-    check("submilli/google-drive.moveFile", { fileId: fileId, parentId: parentId });
+    const folderId = destinationFolderId(parentId);
+    if (folderId.length === 0) throw new DriveError("invalid_parent", "moveFile requires a parent folder ID", 0);
+    check("submilli/google-drive.moveFile", { fileId: fileId, parentId: folderId });
     const current = fetchFile(fileId);
     if (current === null) throw new DriveError("not_found", "Drive file was not found", 404);
     const query = mutationQuery();
-    query.set("addParents", parentId);
+    query.set("addParents", folderId);
     if (current.parents.length > 0) query.set("removeParents", current.parents.join(","));
     const response = patch(API + "/files/" + encodeComponent(fileId) + "?" + encodeQuery(query), {}, authHeaders());
     requireOk(response);
@@ -525,30 +541,86 @@ export function listPermissions(fileId: string): Permission[] {
 }
 
 /**
- * Share a file with exactly one user, group, domain, or anyone principal.
- * @capability submilli/google-drive.shareFile { fileId: string, principal: string }
+ * Share a file with exactly one user, group, domain, or anyone principal. `principal` is the
+ * lowercased email address for "user" and "group", the lowercased domain for "domain", and
+ * "anyone" for "anyone". An input that sets `emailAddress`, `domain`, or `allowFileDiscovery`
+ * for a type that does not use it is refused. `sendNotificationEmail` is true for a user or
+ * group unless set to false; for the other types, which Drive does not email, it is ignored and
+ * false. `allowFileDiscovery` is false when unset.
+ * @capability submilli/google-drive.shareFile { fileId: string, principal: string, type: string, role: string, sendNotificationEmail: boolean, allowFileDiscovery: boolean }
  */
 export function shareFile(fileId: string, input: ShareFileInput): Permission {
     const { type: principalType, role, emailAddress, domain, allowFileDiscovery, sendNotificationEmail } = input;
-    const principal = emailAddress !== null ? emailAddress : domain !== null ? domain : principalType;
-    check("submilli/google-drive.shareFile", { fileId: fileId, principal: principal });
-    if (principalType !== "user" && principalType !== "group" && principalType !== "domain" && principalType !== "anyone") {
-        throw new DriveError("invalid_permission_type", "permission type must be user, group, domain, or anyone", 0);
-    }
+    const principal = sharePrincipal(principalType, emailAddress, domain);
+    const byEmail = takesEmailAddress(principalType);
     if (role !== "reader" && role !== "commenter" && role !== "writer") {
         throw new DriveError("invalid_permission_role", "permission role must be reader, commenter, or writer", 0);
     }
+    if (byEmail && allowFileDiscovery !== null) {
+        throw new DriveError("invalid_permission_principal", principalType + " permission does not take allowFileDiscovery", 0);
+    }
+    const discoverable = allowFileDiscovery === true;
+    // Drive emails only a user or a group, so no other share is reported or sent as notifying.
+    const notify = byEmail && sendNotificationEmail !== false;
+    check("submilli/google-drive.shareFile", {
+        fileId: fileId, principal: principal, type: principalType, role: role,
+        sendNotificationEmail: notify, allowFileDiscovery: discoverable,
+    });
     const body: PermissionCreateBody = { type: principalType, role: role };
-    if (emailAddress !== null) body.emailAddress = emailAddress;
-    if (domain !== null) body.domain = domain;
-    if (allowFileDiscovery !== null) body.allowFileDiscovery = allowFileDiscovery;
     const query = new Map<string, string>();
     query.set("fields", "id,type,role,emailAddress,domain,displayName,allowFileDiscovery,expirationTime");
     query.set("supportsAllDrives", "true");
-    query.set("sendNotificationEmail", sendNotificationEmail === false ? "false" : "true");
+    if (byEmail) {
+        body.emailAddress = principal;
+        query.set("sendNotificationEmail", notify ? "true" : "false");
+    } else {
+        body.allowFileDiscovery = discoverable;
+    }
+    if (principalType === "domain") body.domain = principal;
     const response = post(API + "/files/" + encodeComponent(fileId) + "/permissions?" + encodeQuery(query), body, authHeaders());
     requireOk(response);
     return permissionFrom(response.json() as ApiPermission);
+}
+
+// The one principal a permission of this type names, in the one spelling policy reads. A field
+// the type does not use is refused rather than dropped: sent beside the checked principal, it
+// would name a second one.
+function sharePrincipal(principalType: string, emailAddress: string | null, domain: string | null): string {
+    if (takesEmailAddress(principalType)) {
+        if (domain !== null) throw invalidPrincipal(principalType + " permission does not take a domain");
+        if (emailAddress === null || !BARE_ADDRESS.test(emailAddress)) {
+            throw invalidPrincipal(principalType + " permission requires emailAddress, one bare address such as dana@example.com");
+        }
+        const address = oneSpelling(emailAddress);
+        if (address.endsWith("@")) throw invalidPrincipal(principalType + " permission requires emailAddress with a domain");
+        return address;
+    }
+    if (principalType === "domain") {
+        if (emailAddress !== null) throw invalidPrincipal("domain permission does not take emailAddress");
+        if (domain === null || !DOMAIN_NAME.test(domain)) throw invalidPrincipal("domain permission requires domain, such as example.com");
+        const name = oneSpelling(domain);
+        if (name.length === 0) throw invalidPrincipal("domain permission requires domain, such as example.com");
+        return name;
+    }
+    if (principalType === "anyone") {
+        if (emailAddress !== null || domain !== null) throw invalidPrincipal("anyone permission takes neither emailAddress nor domain");
+        return "anyone";
+    }
+    throw new DriveError("invalid_permission_type", "permission type must be user, group, domain, or anyone", 0);
+}
+
+function takesEmailAddress(principalType: string): boolean {
+    return principalType === "user" || principalType === "group";
+}
+
+// A name is the same whatever its case and whether or not a dot ends its domain, so a rule naming
+// one spelling would let another past.
+function oneSpelling(name: string): string {
+    return name.toLowerCase().replace(TRAILING_DOTS, "");
+}
+
+function invalidPrincipal(message: string): DriveError {
+    return new DriveError("invalid_permission_principal", message, 0);
 }
 
 /**
@@ -564,6 +636,15 @@ export function removePermission(fileId: string, permissionId: string): void {
         authHeaders(),
     );
     if (response.status !== 404) requireOk(response);
+}
+
+// The folder a file is placed in: one Drive ID, or "" when the caller names none. Drive reads
+// `addParents` as a comma-separated list, so anything but one ID could name a folder the check
+// never saw.
+function destinationFolderId(parentId: string | null): string {
+    if (parentId === null || parentId.length === 0) return "";
+    if (!DRIVE_ID.test(parentId)) throw new DriveError("invalid_parent", "parent must be one Drive folder ID", 0);
+    return parentId;
 }
 
 function fetchFile(fileId: string): DriveFile | null {

@@ -1,7 +1,14 @@
 namespace: submilli
 provides:
+- name: fs.write
+  description: 'Read a URL through the Reader and stream the markdown straight to a VFS file — the body never enters Wasm memory or a JSON envelope, so payload size is bound by disk, not the fuel budget. Prefer this over `read` for large pages: pair it with the host''s batched file-read to consume the result incrementally. The file is written for the caller: its own `fs.write` rule decides whether `path` is allowed. A response over 20 MB is refused.'
+  fields:
+    max_bytes:
+      type: number
+    path:
+      type: string
 - name: jina.ai/read
-  description: 'Read a URL through the Reader and stream the markdown straight to a VFS file — the body never enters Wasm memory or a JSON envelope, so payload size is bound by disk, not the fuel budget. Prefer this over `read` for large pages: pair it with the host''s batched file-read to consume the result incrementally.'
+  description: 'Read a URL through the Reader and stream the markdown straight to a VFS file — the body never enters Wasm memory or a JSON envelope, so payload size is bound by disk, not the fuel budget. Prefer this over `read` for large pages: pair it with the host''s batched file-read to consume the result incrementally. The file is written for the caller: its own `fs.write` rule decides whether `path` is allowed. A response over 20 MB is refused.'
   fields:
     host:
       type: string

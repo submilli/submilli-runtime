@@ -1,12 +1,13 @@
 import { check } from "submilli:security";
 import discovery from "./discovery";
 import pages from "./pages";
+import { PreparedPageMove } from "./pages";
 import data from "./data";
 import views from "./views";
 import collaboration from "./collaboration";
 import blocks from "./blocks";
 import uploads from "./uploads";
-import { idFromRef, resolvePageContext } from "./transport";
+import { BatchNotionError, NotionError, idFromRef, resolvePageContext } from "./transport";
 
 // Public interfaces live here so generated package declarations retain their
 // fields; types.ts mirrors them for internal feature modules.
@@ -814,13 +815,25 @@ export function createPage(input: CreatePageInput): NotionPage {
     return pages.createPage(parentId, page);
 }
 
-/** Create pages sequentially and stop on the first failure.
- * @capability submilli/notion.createPages {}
+/**
+ * Create pages sequentially and stop on the first failure. Each page is created as `createPage`
+ * creates it and is checked as `submilli/notion.createPage` when its turn comes, so a denial can
+ * follow pages already created. Every input is validated before the first page is created.
  */
 export function createPages(inputs: CreatePageInput[]): NotionPage[] {
-    const creations = pages.prepareCreatePages(inputs);
-    check("submilli/notion.createPages", {});
-    return pages.createPages(creations);
+    for (const input of inputs) pages.validateCreatePageInput(input);
+    const created: NotionPage[] = [];
+    for (let index = 0; index < inputs.length; index += 1) {
+        try {
+            created.push(createPage(inputs[index]));
+        } catch (error) {
+            const ids: string[] = [];
+            for (const page of created) ids.push(page.id);
+            if (error instanceof NotionError) throw new BatchNotionError(error, ids, index);
+            throw error;
+        }
+    }
+    return created;
 }
 
 /** Update page properties, icon, cover, or template.
@@ -880,12 +893,20 @@ export function movePage(ref: string, parent: PageParent): NotionPage {
     return pages.movePage(pageId, parentType, parentId);
 }
 
-/** Move pages sequentially and stop on the first failure.
- * @capability submilli/notion.movePages {}
+/** Move pages sequentially and stop on the first failure. Every move is checked before the first page is moved.
+ * @capability submilli/notion.movePages { pageId: string, parentId: string }
  */
 export function movePages(inputs: MovePageInput[]): NotionPage[] {
-    const moves = pages.prepareMovePages(inputs);
-    check("submilli/notion.movePages", {});
+    const moves: PreparedPageMove[] = [];
+    for (const input of inputs) {
+        const { page, parent } = input;
+        // One read of the parent type: it selects both how the ID is resolved and the parent sent.
+        const { type: parentType, id: parentRef } = parent;
+        const pageId = idFromRef(page, "page");
+        const parentId = pages.parentIdFrom(parentType, parentRef);
+        moves.push({ pageId: pageId, parentType: parentType, parentId: parentId });
+    }
+    for (const move of moves) check("submilli/notion.movePages", { pageId: move.pageId, parentId: move.parentId });
     return pages.movePages(moves);
 }
 
