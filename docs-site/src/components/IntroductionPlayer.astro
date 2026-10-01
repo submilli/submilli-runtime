@@ -1,5 +1,7 @@
 ---
 import { introduction, videoSource } from '../lib/videos';
+interface Props { showTranscriptLink?: boolean; }
+const { showTranscriptLink = true } = Astro.props;
 const source = videoSource(introduction, import.meta.env.DEV, import.meta.env.SUBMILLI_VIDEO_PREVIEW_PATH);
 const languageLabel = new Intl.DisplayNames(['en'], { type: 'language' }).of(introduction.language ?? 'en');
 ---
@@ -13,7 +15,7 @@ const languageLabel = new Intl.DisplayNames(['en'], { type: 'language' }).of(int
   ) : (
     <div class="pending">
       <img src={introduction.posterPath} alt="A program connects payments, accounts, and support to produce a focused report." width="1600" height="900" />
-      <p><span class="status-dot" aria-hidden="true"></span>Video publication pending <a href={introduction.transcriptPath} target="_top">Read transcript ↗</a></p>
+      <p><span class="status-dot" aria-hidden="true"></span>Video publication pending {showTranscriptLink && <a href={introduction.transcriptPath} target="_top">Read transcript ↗</a>}</p>
     </div>
   )}
 </div>

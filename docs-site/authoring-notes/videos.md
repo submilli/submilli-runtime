@@ -60,14 +60,14 @@ English captions, keyboard access, transcript navigation, mobile width, and them
 
 ## Companion site and analytics
 
-The separate `submilli-private/website` companion is a visual viewing gallery.
-Its featured iframe uses `/docs/videos/embed/code-execution-introduction/`, which
-shares `IntroductionPlayer.astro` with the docs page and index. This keeps source, captions,
-poster and publication state in one registry. Site cards for future films are
-editorial previews without play controls or invented durations. The original SVG
-poster uses the approved film's tool→program→report motif and brand palette.
-Deploy and verify the docs embed route before making the site gallery live.
-This draft authorizes no deployment.
+The separate `submilli-private/website` companion links directly to
+`/docs/videos/`. The docs own the visual gallery, with numbered planned cards and
+an inline transcript. `IntroductionPlayer.astro` is shared with contextual docs
+pages and the standalone embed route, keeping source, captions, poster and
+publication state in one registry. Planned films have no play controls or
+invented durations. The original SVG poster uses the approved film's
+tool→program→report motif and brand palette. Verify the docs library route
+before making the homepage link live. This draft authorizes no deployment.
 
 Analytics impact: new docs routes and site-to-docs links. No new events or player
 tracking. Preserve existing site consent, attribution, and booking semantics.
@@ -92,3 +92,16 @@ page stays as a supplementary deep link or redirects into Why, and whether its
 separate sidebar group is retained. Do not make that book-wide decision in this
 video PR. Existing canonical, transcript and embed URLs stay stable meanwhile;
 the site gallery must not send ordinary readers into hidden draft pages.
+
+## Library ownership and viewing
+
+`/docs/videos/` is the single visual library. Its completed introduction uses the
+shared native player, with the exact transcript in an expandable section directly
+below it. Viewers do not need to visit another article to watch or read the film.
+The main site links directly here; it has no second gallery or video registry.
+
+Registry array order is the series order: the approved introduction is first,
+followed provisionally by Helps, Works, Using, and Challenges. The gallery shows
+numbered cards in that order. All later films remain Planned, without players or
+invented durations. Reordering the registry changes their displayed positions;
+update the built-output order assertion with the editorial decision.

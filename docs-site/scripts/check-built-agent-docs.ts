@@ -35,6 +35,17 @@ assert.ok(embedPage.includes('/docs/videos/code-execution-introduction.svg'), 'E
 assert.ok(embedPage.includes('Video publication pending'), 'Embed names unpublished state');
 assert.ok(embedPage.includes('noindex, nofollow'), 'Embeds stay out of search');
 assert.ok(!embedPage.includes('<video') && !embedPage.includes('_video-preview'), 'Production embed never exposes local preview media');
+const libraryPage = await readFile(new URL('docs/videos/index.html', directory), 'utf8');
+assert.match(libraryPage, /<summary\b[^>]*>Transcript<\/summary>/, 'Library provides an inline transcript');
+assert.ok(libraryPage.includes('Consider an agent used by a small business.'), 'Library renders the approved narration');
+assert.ok(!libraryPage.includes('Open the execution model') && !libraryPage.includes('<video'), 'Library needs no article detour or unpublished production player');
+const galleryOrder = ['code-execution-introduction', 'helps', 'works', 'using', 'challenges'];
+let previousCard = -1;
+for (const id of galleryOrder) {
+  const card = libraryPage.indexOf(`data-video-id="${id}"`);
+  assert.ok(card > previousCard, `Series order preserves ${id}`);
+  previousCard = card;
+}
 const nextWhy = await readFile(new URL('docs/next/why/index.html', directory), 'utf8');
 assert.ok(nextWhy.includes('Why agents execute code') && nextWhy.includes('Video publication pending'), 'Draft Why chapter includes the existing introduction');
 assert.ok(!nextWhy.includes('<video') && !nextWhy.includes('_video-preview'), 'Draft chapter preserves the publication gate');
