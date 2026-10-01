@@ -192,6 +192,100 @@ async fn permissions_and_no_partial_write() {
         );
     }
 }
+/// Allows `fs.*` only on `root` and below, plus the `also` paths, as a
+/// blueprint narrowed to one workspace does.
+struct Within {
+    root: &'static str,
+    also: &'static [&'static str],
+}
+impl crate::runtime::SecurityCheck for Within {
+    fn check(
+        &self,
+        _caller: &str,
+        _capability: &str,
+        ctx: &serde_json::Value,
+    ) -> crate::runtime::security::CheckOutcome {
+        let path = ctx["path"].as_str().unwrap_or_default();
+        let inside = path
+            .strip_prefix(self.root)
+            .is_some_and(|rest| rest.is_empty() || rest.starts_with('/'));
+        if inside || self.also.contains(&path) {
+            crate::runtime::security::CheckOutcome::Allow
+        } else {
+            crate::runtime::security::CheckOutcome::Deny {
+                reason: format!("outside {}: {path}", self.root),
+            }
+        }
+    }
+}
+#[tokio::test]
+async fn grants_narrowed_to_a_nested_root() {
+    let vfs = crate::runtime::Vfs::tempdir().unwrap();
+    std::fs::create_dir_all(vfs.root().join("work/repo")).unwrap();
+    for (path, text) in [
+        (".gitignore", "*.ts\n"),
+        ("work/.ignore", "*.ts\n"),
+        ("work/repo/.gitignore", "*.tmp\n"),
+        ("work/repo/a.ts", "hello"),
+        ("work/repo/b.tmp", "hello"),
+    ] {
+        std::fs::write(vfs.root().join(path), text).unwrap();
+    }
+    let mut data = crate::runtime::StoreData::with_vfs(vfs.clone());
+    data.security_check = std::sync::Arc::new(Within {
+        root: "/work/repo",
+        also: &[],
+    });
+    // Ancestor ignore files the policy denies are not consulted; the root's own still is.
+    run(
+        r#"import { search, tree } from "submilli:code";
+    function main(): void {
+        const found = search("hello", {path:"/work/repo",mode:"files"});
+        assert(found.files.length === 1);
+        assert(found.files[0] === "/work/repo/a.ts");
+        assert(tree("/work/repo",1).entries.length === 1);
+    }"#,
+        data,
+    )
+    .await
+    .unwrap();
+    let mut data = crate::runtime::StoreData::with_vfs(vfs);
+    data.security_check = std::sync::Arc::new(Within {
+        root: "/work/repo",
+        also: &["/.gitignore"],
+    });
+    // A granted ancestor ignore file is still honored beside a denied one.
+    run(
+        r#"import { search } from "submilli:code";
+    function main(): void {
+        assert(search("hello", {path:"/work/repo",mode:"files"}).files.length === 0);
+    }"#,
+        data,
+    )
+    .await
+    .unwrap();
+}
+#[tokio::test]
+async fn ancestor_errors_name_only_the_root() {
+    let vfs = crate::runtime::Vfs::tempdir().unwrap();
+    std::fs::create_dir_all(vfs.root().join("work/real/sub")).unwrap();
+    std::os::unix::fs::symlink("real", vfs.root().join("work/link")).unwrap();
+    for (root, message) in [
+        ("/work/nope/x", "tree /work/nope/x: "),
+        (
+            "/work/link/sub",
+            "navigation root /work/link/sub must not traverse a symlink",
+        ),
+    ] {
+        let mut data = crate::runtime::StoreData::with_vfs(vfs.clone());
+        data.security_check = std::sync::Arc::new(Within { root, also: &[] });
+        let source = format!(
+            "import {{ tree }} from 'submilli:code'; function main(): void {{ tree('{root}', 1); }}"
+        );
+        let error = run(&source, data).await.unwrap_err().to_string();
+        assert!(error.contains(message), "{root}: {error}");
+    }
+}
 #[tokio::test]
 async fn invalid_utf8_limits_and_disabled_vfs() {
     let source = "import { read } from 'submilli:code'; function main(): void { read('/file'); }";
@@ -459,7 +553,9 @@ async fn navigation_root_rejects_symlink_components() {
                 .await
                 .unwrap_err();
             assert!(
-                error.to_string().contains("must not traverse symlink"),
+                error.to_string().contains(&format!(
+                    "navigation root {path} must not traverse a symlink"
+                )),
                 "{expression}: {error}"
             );
         }

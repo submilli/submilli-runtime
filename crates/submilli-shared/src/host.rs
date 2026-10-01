@@ -76,15 +76,45 @@ impl SecurityCheck for PolicyCheck {
         {
             Action::Allow => CheckOutcome::Allow,
             Action::Deny => CheckOutcome::Deny {
-                reason: format!("policy denied {capability} for {caller}"),
+                reason: format!(
+                    "policy denied {capability}{} for {caller}",
+                    filesystem_target(capability, &context)
+                ),
             },
             Action::AskHuman => CheckOutcome::Deny {
                 reason: format!(
-                    "policy requires human approval for {capability} (caller {caller}); \
-                     ask-human is deferred and treated as deny"
+                    "policy requires human approval for {capability}{} (caller {caller}); \
+                     ask-human is deferred and treated as deny",
+                    filesystem_target(capability, &context)
                 ),
             },
         }
+    }
+}
+
+/// The normalized VFS paths a denial was for, so a narrowed filter can be fixed
+/// from the message. The library may have probed a path on the program's
+/// behalf, as `submilli:code` does for ignore files, so the program's own
+/// arguments do not always name it. Empty for capabilities without VFS paths.
+fn filesystem_target(capability: &str, context: &serde_json::Value) -> String {
+    let path = |field: &&str| context.get(*field).and_then(serde_json::Value::as_str);
+    match filesystem_path_fields(capability) {
+        [single] => path(single).map_or_else(String::new, |path| format!(" on {path}")),
+        [from, to] => match (path(from), path(to)) {
+            (Some(from), Some(to)) => format!(" from {from} to {to}"),
+            _ => String::new(),
+        },
+        _ => String::new(),
+    }
+}
+
+/// The context fields of a capability that hold VFS paths.
+fn filesystem_path_fields(capability: &str) -> &'static [&'static str] {
+    match capability {
+        "fs.read" | "fs.write" | "fs.stat" | "fs.list" | "fs.mkdir" | "fs.remove" => &["path"],
+        "fs.copy" | "fs.move" => &["from", "to"],
+        "http.download" => &["vfs_path"],
+        _ => &[],
     }
 }
 
@@ -95,12 +125,7 @@ fn filesystem_policy_context<'a>(
     capability: &str,
     context: &'a serde_json::Value,
 ) -> Result<Cow<'a, serde_json::Value>, String> {
-    let fields: &[&str] = match capability {
-        "fs.read" | "fs.write" | "fs.stat" | "fs.list" | "fs.mkdir" | "fs.remove" => &["path"],
-        "fs.copy" | "fs.move" => &["from", "to"],
-        "http.download" => &["vfs_path"],
-        _ => return Ok(Cow::Borrowed(context)),
-    };
+    let fields = filesystem_path_fields(capability);
     let mut normalized_context = Cow::Borrowed(context);
     for &field in fields {
         let path = context
@@ -499,6 +524,52 @@ permissions:
                 allowed
             );
         }
+    }
+
+    #[test]
+    fn filesystem_denials_name_the_normalized_path() {
+        let policy = PolicyCheck::new(Arc::new(
+            parse(
+                r#"
+name: closed
+permissions:
+  main:
+    - capability: fs.write
+      action: ask-human
+"#,
+            )
+            .unwrap(),
+        ));
+        let reason = |capability: &str, context: serde_json::Value| match policy
+            .check("main", capability, &context)
+        {
+            CheckOutcome::Deny { reason } => reason,
+            _ => panic!("{capability} not denied"),
+        };
+        assert_eq!(
+            reason(
+                "fs.stat",
+                serde_json::json!({"path": "/repo/../.gitignore"})
+            ),
+            "policy denied fs.stat on /.gitignore for main"
+        );
+        assert_eq!(
+            reason("fs.write", serde_json::json!({"path": "notes/a.md"})),
+            "policy requires human approval for fs.write on /notes/a.md (caller main); \
+             ask-human is deferred and treated as deny"
+        );
+        assert_eq!(
+            reason("fs.move", serde_json::json!({"from": "a", "to": "/b/./c"})),
+            "policy denied fs.move from /a to /b/c for main"
+        );
+        assert_eq!(
+            reason("http.download", serde_json::json!({"vfs_path": "dl"})),
+            "policy denied http.download on /dl for main"
+        );
+        assert_eq!(
+            reason("secrets.get", serde_json::json!({"name": "token"})),
+            "policy denied secrets.get for main"
+        );
     }
 
     #[test]
