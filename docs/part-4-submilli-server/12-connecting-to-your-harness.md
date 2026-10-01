@@ -196,7 +196,7 @@ The volume's root holds every user's directory, and the blueprint allows
 `u_ada` only her own. The execute tool answers:
 
 ```text
-error: PermissionDeniedError: permission denied: caller=main capability=fs.list: policy denied fs.list for main. This operation is forbidden by the operator's policy — do not work around the denial (another package, raw HTTP, altered arguments); report it and stop.
+error: PermissionDeniedError: permission denied: caller=main capability=fs.list: policy denied fs.list on / for main. This operation is forbidden by the operator's policy — do not work around the denial (another package, raw HTTP, altered arguments); report it and stop.
 ```
 
 The model moves on to the directory it was given, finds it empty, and
@@ -300,7 +300,7 @@ whatever the program logged before it stopped:
   "console": [],
   "error": {
     "kind": "runtime_error",
-    "message": "error: PermissionDeniedError: permission denied: caller=main capability=fs.list: policy denied fs.list for main. …"
+    "message": "error: PermissionDeniedError: permission denied: caller=main capability=fs.list: policy denied fs.list on / for main. …"
   }
 }
 ```

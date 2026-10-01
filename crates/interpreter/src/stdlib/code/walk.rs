@@ -4,12 +4,15 @@ use super::{
     budget::{Budget, OutputBudget},
     gate, normalize, read_contents, read_file, text,
 };
+use crate::runtime::fs::resolve_link;
 use crate::runtime::{
     StoreData,
     host::read_boxed_number,
     prelude::collection::{object_field, read_array_vals, unbox_bool},
 };
-use crate::stdlib::shared::{contain_trap, resolve_content_or_trap, resolve_link_or_trap};
+use crate::stdlib::shared::{
+    DEFAULT_CWD, contain_trap, resolve_content_or_trap, resolve_link_or_trap,
+};
 use globset::{GlobBuilder, GlobSet, GlobSetBuilder};
 use ignore::gitignore::{Gitignore, GitignoreBuilder};
 use regex::{Regex, RegexBuilder};
@@ -229,7 +232,14 @@ fn walk(
             continue;
         }
         gate(caller, "fs.list", &dir.path)?;
-        load_ignores(caller, budget, &dir.path, op, &mut dir.ignores)?;
+        load_ignores(
+            caller,
+            budget,
+            &dir.path,
+            IgnoreScope::Traversed,
+            op,
+            &mut dir.ignores,
+        )?;
         let resolved = resolve_content_or_trap(caller.data(), &dir.path, op)?;
         for item in resolved
             .entries()
@@ -263,17 +273,22 @@ fn walk(
     Ok(entries)
 }
 fn validate_root(caller: &mut Caller<'_, StoreData>, root: &str, op: &str) -> Result<()> {
+    // `/` has no components to stat; the walk's fs.list gate covers it.
+    if root != "/" {
+        gate(caller, "fs.stat", root)?;
+    }
+    // Ancestors are inspected without a policy check, so a grant narrowed to
+    // the root still works. Errors name the root, never an ancestor, so the
+    // check discloses nothing about paths outside the grant.
     let mut path = String::new();
     for component in root.split('/').filter(|component| !component.is_empty()) {
         path.push('/');
         path.push_str(component);
-        gate(caller, "fs.stat", &path)?;
-        let resolved = resolve_link_or_trap(caller.data(), &path, op)?;
-        let metadata = resolved
-            .symlink_metadata()
-            .map_err(|e| contain_trap(op, &path, &e))?;
+        let metadata = resolve_link(&caller.data().vfs, DEFAULT_CWD, &path)
+            .and_then(|resolved| resolved.symlink_metadata())
+            .map_err(|e| contain_trap(op, root, &e))?;
         if metadata.file_type().is_symlink() {
-            bail!("code.{op}: navigation root must not traverse symlink {path}");
+            bail!("code.{op}: navigation root {root} must not traverse a symlink");
         }
     }
     Ok(())
@@ -292,7 +307,14 @@ fn ancestor_ignores(
     }
     let mut inherited = IgnoreRules::default();
     for parent in parents.into_iter().rev() {
-        load_ignores(caller, budget, &parent, op, &mut inherited)?;
+        load_ignores(
+            caller,
+            budget,
+            &parent,
+            IgnoreScope::Ancestor,
+            op,
+            &mut inherited,
+        )?;
     }
     Ok(inherited)
 }
@@ -353,16 +375,27 @@ fn ignored(ignores: &IgnoreRules, path: &str, directory: bool) -> bool {
     }
     false
 }
+/// Where an ignore file sits relative to the traversal root.
+#[derive(Clone, Copy)]
+enum IgnoreScope {
+    /// Above the root: consulted for its rules, outside what the caller asked for.
+    Ancestor,
+    /// The root or a directory the walk lists.
+    Traversed,
+}
 fn load_ignores(
     caller: &mut Caller<'_, StoreData>,
     budget: &mut Budget,
     dir: &str,
+    scope: IgnoreScope,
     op: &str,
     ignores: &mut IgnoreRules,
 ) -> Result<()> {
     for name in [".gitignore", ".ignore"] {
         let path = format!("{}/{}", dir.trim_end_matches('/'), name);
-        gate(caller, "fs.stat", &path)?;
+        if !may_probe_ignore(caller, &path, scope)? {
+            continue;
+        }
         let resolved = resolve_link_or_trap(caller.data(), &path, op)?;
         let metadata = match resolved.symlink_metadata() {
             Ok(metadata) => metadata,
@@ -390,6 +423,33 @@ fn load_ignores(
         rules.push(builder.build()?);
     }
     Ok(())
+}
+/// Whether an ignore file may be looked for. Inside the root, an fs.stat
+/// denial fails the call. Ancestors need read access, the only reason to touch
+/// them, and a grant narrowed to the root need not cover them: a policy denial
+/// means the file is not consulted, and since nothing is read, nothing about it
+/// leaks. Only the policy's own answer filters; an invariant denial means the
+/// check could not be made and still fails the call.
+fn may_probe_ignore(
+    caller: &Caller<'_, StoreData>,
+    path: &str,
+    scope: IgnoreScope,
+) -> Result<bool> {
+    match scope {
+        IgnoreScope::Traversed => {
+            gate(caller, "fs.stat", path)?;
+            Ok(true)
+        }
+        IgnoreScope::Ancestor => {
+            let Err(err) = gate(caller, "fs.read", path) else {
+                return Ok(true);
+            };
+            match err.downcast_ref::<crate::runtime::host::PermissionDenied>() {
+                Some(denial) if denial.is_policy() => Ok(false),
+                _ => Err(err),
+            }
+        }
+    }
 }
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum SearchMode {

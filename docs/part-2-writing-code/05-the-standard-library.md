@@ -412,7 +412,9 @@ resource error asking for a more specific anchor.
 
 Traversal respects nested `.gitignore` and `.ignore` files, excludes hidden
 entries, and never follows discovered symlinks. Ignore files themselves require
-read permission. Global host ignore configuration is not consulted. Search
+read permission; those in directories above the search root are skipped when
+reading them is denied, so a grant narrowed to the root still works. Global
+host ignore configuration is not consulted. Search
 skips NUL-containing binary files and rejects invalid UTF-8. Includes/excludes
 are relative to the search root; `*` stays within one directory and `**` crosses
 directories. Results default to at most 1000 records;
