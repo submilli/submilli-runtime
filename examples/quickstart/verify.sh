@@ -206,7 +206,7 @@ expect_contains "$injected" "policy denied" "the denial names a reason"
 expect_missing "$injected" "[result]" "the injected run returns nothing to the caller"
 
 if [[ -n "${SUBMILLI_QUICKSTART_CHAPTER:-}" ]]; then
-  frame="$(grep -o 'at listCharges (lib:[0-9]*:[0-9]*)' "$SUBMILLI_QUICKSTART_CHAPTER" | head -1)"
+  frame="$(grep -o 'at listCharges (@acme/billing/lib:[0-9]*:[0-9]*)' "$SUBMILLI_QUICKSTART_CHAPTER" | head -1)"
   [[ -n "$frame" ]] || fail "could not find the chapter's denial frame to check"
   expect_contains "$injected" "$frame" "the chapter's printed denial frame still matches the runtime"
 fi

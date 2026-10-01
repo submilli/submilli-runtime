@@ -152,6 +152,13 @@ async fn top_level_statements_out_of_fuel_report_fuel_exhausted() {
     });
     let response = execute(&limited, TOP_LEVEL_LOOP).await;
     assert_failed_with(&response, "fuel_exhausted", "fuel exhausted");
+    // Points at the loop, as a limit reached in `main` points at its line.
+    assert_failed_with(&response, "fuel_exhausted", "at <top level> (");
+    assert_failed_with(
+        &response,
+        "fuel_exhausted",
+        "2 | while (true) { total = total + 1; }",
+    );
     assert_still_serves(&limited).await;
 }
 
@@ -192,10 +199,17 @@ export function main(): number { return 1; }"#;
     let response = execute(&router, TOP_LEVEL_THROW).await;
     assert_eq!(response["result"], Value::Null, "{response}");
     assert_eq!(response["error"]["kind"], "runtime_error", "{response}");
-    // The same header a throw in `main` is rendered under.
-    assert_eq!(
-        response["error"]["message"], "error: RangeError: refused at the top level",
+    // The same header and frame layout a throw in `main` is rendered under.
+    let message = response["error"]["message"].as_str().unwrap_or_default();
+    assert!(
+        message.starts_with("error: RangeError: refused at the top level\n  at <top level> ("),
         "{response}"
+    );
+    assert!(
+        message.contains(
+            "3 | if (limits.length === 1) { throw new RangeError(\"refused at the top level\"); }"
+        ),
+        "the source line of the throw: {response}"
     );
     assert!(
         response.to_string().contains("before the throw"),

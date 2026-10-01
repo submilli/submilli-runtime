@@ -550,6 +550,51 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn uncaught_top_level_throw_renders_its_statement() {
+        // Top-level statements run in the start function, during instantiation.
+        let src = "const n: number = 1;\nif (n === 1) { throw new Error(\"boom\"); }\nfunction main(): void {}";
+        let bytes = crate::codegen::tests::compile(src);
+        let err = RuntimeConfig::default()
+            .run(&bytes)
+            .await
+            .expect_err("uncaught top-level throw");
+        let (sources, file) = crate::Sources::single("script.subm", src).unwrap();
+        let rendered =
+            crate::backtrace::render(&err, &sources, file, crate::backtrace::BacktraceMode::Full)
+                .expect("a top-level throw should render a backtrace");
+        assert!(
+            rendered.starts_with(
+                "error: Error: boom\n  at <top level> (script.subm:2:32)  [thrown here]\n"
+            ),
+            "{rendered}"
+        );
+        assert!(
+            rendered.contains("2 | if (n === 1) { throw new Error(\"boom\"); }"),
+            "source context: {rendered}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_top_level_statement_is_the_entry_frame_below_its_callee() {
+        let src = "function refuse(): number { throw new Error(\"boom\"); }\nconst n: number = refuse();\nfunction main(): void {}";
+        let bytes = crate::codegen::tests::compile(src);
+        let err = RuntimeConfig::default()
+            .run(&bytes)
+            .await
+            .expect_err("uncaught top-level throw");
+        let (sources, file) = crate::Sources::single("script.subm", src).unwrap();
+        let rendered =
+            crate::backtrace::render(&err, &sources, file, crate::backtrace::BacktraceMode::Full)
+                .expect("a top-level throw should render a backtrace");
+        assert!(
+            rendered.contains("  at refuse (script.subm:1:")
+                && rendered.contains("[thrown here]")
+                && rendered.contains("  at <top level> (script.subm:2:19)  [entry]\n"),
+            "{rendered}"
+        );
+    }
+
+    #[tokio::test]
     async fn uncaught_class_error_renders_data_fields() {
         let src = r#"class ApiError extends Error {
             code: string;

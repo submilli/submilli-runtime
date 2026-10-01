@@ -398,7 +398,7 @@ node app.mjs total-injected.ts
 [program] 2 charges, 6150 cents
 [denied]  error: PermissionDeniedError: permission denied: caller=main capability=acme.com/charges.list: policy denied acme.com/charges.list for main. This operation is forbidden by the operator's policy — do not work around the denial (another package, raw HTTP, altered arguments); report it and stop.
   fields: caller = "main", capability = "acme.com/charges.list", reason = "policy denied acme.com/charges.list for main"
-  at listCharges (lib:26:38)  [thrown here]
+  at listCharges (@acme/billing/lib:26:38)  [thrown here]
 25 | export function listCharges(customerId: string): Charge[] {
 26 |     check("acme.com/charges.list", { customerId });
    |                                      ^

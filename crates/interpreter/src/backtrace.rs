@@ -64,8 +64,7 @@ pub fn render(
 }
 
 /// The one-line text for a run's failure: the header [`render`] puts above the
-/// frames, and what a caller prints when `render` has no frames to show (a
-/// limit reached by top-level statements has none).
+/// frames, and what a caller prints when `render` has no frames to show.
 ///
 /// Most engine messages already say what the program did (`null reference`,
 /// `cast failure`, `out of bounds array access`) and are used verbatim. These
