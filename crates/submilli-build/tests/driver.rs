@@ -37,7 +37,7 @@ fn write_external_dep(store_root: &Path) {
         store_root.join("@ext").join("dep"),
         &package.wasm,
         &package.type_info,
-        &derive_capability_schema(&package.declaration, &package.required_capabilities),
+        &derive_capability_schema(&package.declaration, &[], &package.required_capabilities),
         &package.declaration,
         &ArtifactMetadata::new("@ext/dep", "1.0.0", Vec::new()),
     )
@@ -219,6 +219,233 @@ path = "sdk"
     install_packages(&target, &built).expect("install succeeds");
     let reloaded = target.load("@acme/app").expect("app reloads");
     assert_eq!(reloaded.capabilities, app.capabilities);
+}
+
+#[test]
+fn class_members_provide_and_require_capabilities() {
+    let project = TempDir::new().expect("project tempdir");
+    write_module(
+        project.path(),
+        "types/src/lib.ts",
+        r#"
+            import { check } from "submilli:security";
+            /** What a request acts for. */
+            export interface Owner {
+                /** Owning team. */
+                teamId: string;
+            }
+            /** Shared behavior. */
+            export class Base {
+                /**
+                 * Read an item.
+                 * @param id Item id.
+                 * @capability acme.com/read { id }
+                 */
+                read(id: string): void { check("acme.com/read", { id }); }
+            }
+        "#,
+    );
+    write_module(
+        project.path(),
+        "sdk/src/lib.ts",
+        r#"
+            import { check } from "submilli:security";
+            import { Base, Owner } from "@acme/types";
+            /** A client. */
+            export class Client extends Base {
+                /**
+                 * Open a client.
+                 * @param host Target host.
+                 * @capability acme.com/open { host }
+                 */
+                static open(host: string): Client {
+                    check("acme.com/open", { host });
+                    return new Client();
+                }
+                /**
+                 * Open a client holding a value.
+                 * @capability acme.com/wrap { id }
+                 */
+                static wrap<T>(id: string, value: T): Box<T> {
+                    check("acme.com/wrap", { id });
+                    return new Box<T>(value);
+                }
+                /**
+                 * Delete an item.
+                 * @capability acme.com/delete { owner: $owner.teamId }
+                 */
+                remove(owner: Owner): void { check("acme.com/delete", { owner: owner.teamId }); }
+                /**
+                 * Copy from another client.
+                 * @capability acme.com/copy { id: $other.id }
+                 */
+                copy(other: Client): void { check("acme.com/copy", { id: "" }); }
+                /**
+                 * Never reaches the schema.
+                 * @capability acme.com/hidden { id }
+                 */
+                private hidden(id: string): void { check("acme.com/hidden", { id }); }
+                /**
+                 * Never reaches the schema.
+                 * @capability acme.com/secret { id }
+                 */
+                private static secret(id: string): void { check("acme.com/secret", { id }); }
+            }
+            /** Holds a value. */
+            export class Box<T> {
+                private value: T;
+                constructor(value: T) { this.value = value; }
+                /**
+                 * Replace the value.
+                 * @capability acme.com/put { id }
+                 */
+                put(id: string, value: T): void { check("acme.com/put", { id }); this.value = value; }
+            }
+        "#,
+    );
+    write_module(
+        project.path(),
+        "app/src/lib.ts",
+        r#"
+            import { check } from "submilli:security";
+            import { Client } from "@acme/sdk";
+            import { Repository } from "submilli:git";
+            // A consumer could not use `Audited` (SUB-1169), so only the
+            // package without consumers declares a hidden ancestor.
+            class Hidden {
+                /**
+                 * Audit an item.
+                 * @param id Item id.
+                 * @capability acme.com/audit { id }
+                 */
+                audit(id: string): void { check("acme.com/audit", { id }); }
+            }
+            /** Audits through its ancestor. */
+            export class Audited extends Hidden {}
+            /** Overrides `remove` without a check of its own. */
+            export class Wrapped extends Client {
+                remove(owner: { teamId: string }): void { super.remove({ teamId: "via-super" }); }
+            }
+            /** Calls every kind of class member. */
+            export function run(maybe: Client | null, wrapped: Wrapped): void {
+                const client = Client.open("example.com");
+                client.read("direct");
+                wrapped.read("inherited");
+                wrapped.remove({ teamId: "overridden" });
+                maybe?.read("chained");
+                Wrapped.open("inherited.example.com");
+                Client.wrap<number>("generic-static", 1).put("generic-method", 2);
+            }
+            /** Calls the standard library's class members. */
+            export function git(): void {
+                const repository = Repository.init("/repo");
+                repository.fetch("origin", "main");
+            }
+        "#,
+    );
+    for package in ["app", "sdk", "types"] {
+        write_docs(project.path(), package, "# Package\n");
+    }
+    let manifest = r#"
+[[package]]
+name = "@acme/app"
+version = "0.1.0"
+description = "App package."
+path = "app"
+dependencies = ["@acme/sdk"]
+
+[[package]]
+name = "@acme/sdk"
+version = "0.1.0"
+description = "SDK package."
+path = "sdk"
+dependencies = ["@acme/types"]
+
+[[package]]
+name = "@acme/types"
+version = "0.1.0"
+description = "Types package."
+path = "types"
+"#;
+    let externals = PackageStore::new(project.path().join("store"));
+
+    let built = build(project.path(), &externals, manifest, None).expect("build succeeds");
+    let package = |name: &str| {
+        built
+            .iter()
+            .find(|package| package.name.as_str() == name)
+            .expect("package built")
+    };
+    let provides = |name: &str| -> Vec<(String, Vec<(String, String)>)> {
+        package(name)
+            .capabilities
+            .provides
+            .iter()
+            .map(|cap| {
+                let fields = cap
+                    .fields
+                    .iter()
+                    .map(|(name, field)| (name.clone(), field.ty.clone()))
+                    .collect();
+                (cap.name.clone(), fields)
+            })
+            .collect()
+    };
+    let owned = |entries: &[(&str, &[(&str, &str)])]| -> Vec<(String, Vec<(String, String)>)> {
+        entries
+            .iter()
+            .map(|(name, fields)| {
+                let fields = fields
+                    .iter()
+                    .map(|(field, ty)| (field.to_string(), ty.to_string()))
+                    .collect();
+                (name.to_string(), fields)
+            })
+            .collect()
+    };
+    // A method a same-package ancestor declares is provided; one from another
+    // package's class is that package's to provide.
+    assert_eq!(
+        provides("@acme/app"),
+        owned(&[("acme.com/audit", &[("id", "string")])])
+    );
+    assert_eq!(
+        provides("@acme/types"),
+        owned(&[("acme.com/read", &[("id", "string")])])
+    );
+    // A path through a class does not resolve, so its type is unknown.
+    assert_eq!(
+        provides("@acme/sdk"),
+        owned(&[
+            ("acme.com/copy", &[("id", "unknown")]),
+            ("acme.com/delete", &[("owner", "string")]),
+            ("acme.com/open", &[("host", "string")]),
+            ("acme.com/put", &[("id", "string")]),
+            ("acme.com/wrap", &[("id", "string")]),
+        ])
+    );
+
+    let requires: Vec<(&str, Option<&str>)> = package("@acme/app")
+        .capabilities
+        .requires
+        .iter()
+        .map(|required| (required.capability.as_str(), required.filter.as_deref()))
+        .collect();
+    assert_eq!(
+        requires,
+        [
+            ("acme.com/delete", Some("owner == \"via-super\"")),
+            ("acme.com/open", Some("host == \"example.com\"")),
+            ("acme.com/open", Some("host == \"inherited.example.com\"")),
+            ("acme.com/put", Some("id == \"generic-method\"")),
+            ("acme.com/read", Some("id == \"chained\"")),
+            ("acme.com/read", Some("id == \"direct\"")),
+            ("acme.com/read", Some("id == \"inherited\"")),
+            ("acme.com/wrap", Some("id == \"generic-static\"")),
+            ("git.fetch", Some("remoteName == \"origin\"")),
+            ("git.init", Some("path == \"/repo\"")),
+        ]
+    );
 }
 
 #[test]

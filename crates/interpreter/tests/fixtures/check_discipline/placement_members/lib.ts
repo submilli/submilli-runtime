@@ -63,12 +63,20 @@ export class Client extends Base {
     return this.token;
   }
 
+  /**
+   * Approves the send.
+   * @capability test.com/guard { channelId: string }
+   */
   private guard(channelId: string): void {
     check("test.com/guard", { channelId: channelId });
   }
 }
 
 class Hidden {
+  /**
+   * Sends without a client.
+   * @capability test.com/hidden { channelId: string }
+   */
   send(channelId: string): void {
     check("test.com/hidden", { channelId: channelId });
   }

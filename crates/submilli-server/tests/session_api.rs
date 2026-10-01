@@ -84,6 +84,7 @@ fn write_secret_package(store_root: &Path) {
         &package.type_info,
         &submilli_build::derive_capability_schema(
             &package.declaration,
+            &[],
             &package.required_capabilities,
         ),
         &package.declaration,

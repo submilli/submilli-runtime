@@ -3,8 +3,9 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use interpreter::{
-    DerivedCapability, DocCapabilityBindingKind, DocCapabilityLiteral, PackageDeclaration, Param,
-    Type, ValueKind,
+    DerivedCapability, DocCapabilityBindingKind, DocCapabilityLiteral, DocComment, MangledName,
+    MethodSig, PackageDeclaration, Param, Type, TypeKind, ValueKind, Visibility,
+    capability_binding_type,
 };
 use serde::{Deserialize, Serialize};
 
@@ -38,11 +39,14 @@ pub struct RequiredCapability {
     pub filter: Option<String>,
 }
 
+/// `dependencies` are the packages `declaration` was compiled against; a
+/// binding path can read through a type one of them declares.
 pub fn derive_capability_schema(
     declaration: &PackageDeclaration,
+    dependencies: &[&PackageDeclaration],
     requires: &[DerivedCapability],
 ) -> CapabilitySchema {
-    let provides = provided_capabilities(declaration);
+    let provides = provided_capabilities(declaration, dependencies);
 
     let mut seen_requires = BTreeSet::new();
     let mut requires = requires
@@ -64,17 +68,16 @@ pub fn derive_capability_schema(
     }
 }
 
-/// One entry per capability *name*. Several functions typically provide the
+/// One entry per capability *name*. Several callables typically provide the
 /// same capability (`read`/`readJson`/`readToVfs` all provide `jina.ai/read`),
 /// so entries merge: fields union across providers, and the description comes
-/// from the first providing function in name order.
-fn provided_capabilities(declaration: &PackageDeclaration) -> Vec<ProvidedCapability> {
+/// from the first provider in [`providers`] order.
+fn provided_capabilities(
+    declaration: &PackageDeclaration,
+    dependencies: &[&PackageDeclaration],
+) -> Vec<ProvidedCapability> {
     let mut merged: BTreeMap<String, ProvidedCapability> = BTreeMap::new();
-    for value in declaration.values.values() {
-        let ValueKind::Function { params, doc, .. } = &value.kind else {
-            continue;
-        };
-        let Some(doc) = doc else { continue };
+    for Provider { params, doc } in providers(declaration) {
         let param_descriptions = doc
             .params
             .iter()
@@ -98,7 +101,7 @@ fn provided_capabilities(declaration: &PackageDeclaration) -> Vec<ProvidedCapabi
                     .fields
                     .entry(binding.field.clone())
                     .or_insert_with(|| ProvidedField {
-                        ty: binding_type(&binding.kind, params),
+                        ty: binding_type(&binding.kind, params, declaration, dependencies),
                         description: None,
                     });
                 if field.description.is_none() {
@@ -108,6 +111,85 @@ fn provided_capabilities(declaration: &PackageDeclaration) -> Vec<ProvidedCapabi
         }
     }
     merged.into_values().collect()
+}
+
+/// A documented callable a caller of the package can reach.
+struct Provider<'a> {
+    params: &'a [Param],
+    doc: &'a DocComment,
+}
+
+/// Exported functions in name order, then each exported class in name order:
+/// its public statics, then the public instance methods it declares or
+/// inherits from a class of this package.
+fn providers(declaration: &PackageDeclaration) -> Vec<Provider<'_>> {
+    let functions = declaration.values.values().filter_map(|value| {
+        let ValueKind::Function { params, doc, .. } = &value.kind else {
+            return None;
+        };
+        doc.as_ref().map(|doc| Provider { params, doc })
+    });
+    let mut providers: Vec<_> = functions.collect();
+    for class in declaration.types.values() {
+        let TypeKind::Class {
+            statics,
+            static_visibility,
+            ..
+        } = &class.kind
+        else {
+            continue;
+        };
+        providers.extend(public_members(statics, static_visibility));
+        providers.extend(instance_methods(declaration, &class.mangled_name));
+    }
+    providers
+}
+
+fn public_members<'a>(
+    members: &'a BTreeMap<String, MethodSig>,
+    visibility: &'a BTreeMap<String, Visibility>,
+) -> impl Iterator<Item = Provider<'a>> {
+    members
+        .iter()
+        .filter(|(name, _)| visibility.get(*name) != Some(&Visibility::Private))
+        .filter_map(|(_, method)| {
+            method.doc.as_ref().map(|doc| Provider {
+                params: &method.params,
+                doc,
+            })
+        })
+}
+
+/// The public instance methods of `class` and of each ancestor this package
+/// declares, nearest first. An ancestor from another package provides its own
+/// capabilities.
+fn instance_methods<'a>(
+    declaration: &'a PackageDeclaration,
+    class: &MangledName,
+) -> Vec<Provider<'a>> {
+    let mut providers = Vec::new();
+    let mut current = declaration.type_symbol(class);
+    // Each step visits another class, so a longer walk has met a cycle.
+    let max_steps = declaration
+        .runtime_types
+        .len()
+        .saturating_add(declaration.types.len());
+    for _ in 0..=max_steps {
+        let Some(TypeKind::Class {
+            methods,
+            method_visibility,
+            extends,
+            ..
+        }) = current.map(|symbol| &symbol.kind)
+        else {
+            break;
+        };
+        providers.extend(public_members(methods, method_visibility));
+        current = extends
+            .as_ref()
+            .and_then(|extends| declaration.type_symbol(&extends.parent));
+    }
+    providers
 }
 
 fn binding_description(
@@ -122,35 +204,27 @@ fn binding_description(
         .and_then(|description| non_empty(description).map(str::to_string))
 }
 
-fn binding_type(kind: &DocCapabilityBindingKind, params: &[Param]) -> String {
+fn binding_type(
+    kind: &DocCapabilityBindingKind,
+    params: &[Param],
+    declaration: &PackageDeclaration,
+    dependencies: &[&PackageDeclaration],
+) -> String {
     match kind {
         DocCapabilityBindingKind::Parameter { param, path, .. } => params
             .iter()
             .find(|candidate| candidate.name == *param)
-            .map_or_else(
-                || "unknown".to_string(),
-                |param| type_at_path(&param.ty, path),
-            ),
+            .and_then(|param| capability_binding_type(declaration, dependencies, &param.ty, path))
+            .map_or_else(|| "unknown".to_string(), |ty| field_type(&ty)),
         DocCapabilityBindingKind::Type { name, .. } => name.clone(),
         DocCapabilityBindingKind::Literal { value, .. } => literal_type(value).to_string(),
     }
 }
 
-// Renders the bound field's type for the provided-capability schema, stripping
-// type-aliases (via `peel`) so a policy filter sees the underlying primitive
-// (e.g. `string`) rather than an alias label that can't be matched against.
-fn type_at_path(ty: &Type, path: &[String]) -> String {
-    let mut current = ty;
-    for segment in path {
-        let Type::Object { fields, .. } = current.peel() else {
-            return current.peel().to_string();
-        };
-        let Some(field) = fields.get(segment) else {
-            return current.peel().to_string();
-        };
-        current = &field.ty;
-    }
-    current.peel().to_string()
+/// Strips type aliases so a policy filter sees the underlying primitive (e.g.
+/// `string`) rather than an alias label it can't match against.
+fn field_type(ty: &Type) -> String {
+    ty.peel().to_string()
 }
 
 fn literal_type(value: &DocCapabilityLiteral) -> &'static str {
@@ -204,7 +278,7 @@ mod tests {
             },
         );
 
-        let schema = derive_capability_schema(&declaration, &[]);
+        let schema = derive_capability_schema(&declaration, &[], &[]);
 
         assert_eq!(schema.namespace, "stripe");
         assert_eq!(schema.provides.len(), 1);
@@ -249,7 +323,7 @@ mod tests {
             );
         }
 
-        let schema = derive_capability_schema(&declaration, &[]);
+        let schema = derive_capability_schema(&declaration, &[], &[]);
 
         assert_eq!(schema.provides.len(), 1);
         let cap = &schema.provides[0];
@@ -296,7 +370,7 @@ mod tests {
             },
         );
 
-        let schema = derive_capability_schema(&declaration, &[]);
+        let schema = derive_capability_schema(&declaration, &[], &[]);
         assert_eq!(schema.provides[0].fields["id"].ty, "string");
     }
 
@@ -322,7 +396,7 @@ mod tests {
             },
         );
 
-        let schema = derive_capability_schema(&declaration, &[]);
+        let schema = derive_capability_schema(&declaration, &[], &[]);
         assert_eq!(schema.provides[0].fields["recipients"].ty, "string[]");
     }
 }

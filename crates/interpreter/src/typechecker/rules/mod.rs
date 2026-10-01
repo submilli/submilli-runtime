@@ -19,7 +19,7 @@ mod super_call;
 mod unreachable;
 
 use crate::compiler_error::{CompileError, CompilerFailure, CompilerStage};
-use crate::{Diagnostic, ExportEntry, PackageDeclaration, TypedAst, tree_height};
+use crate::{Diagnostic, ExportEntry, PackageDeclaration, Type, TypedAst, tree_height};
 
 use super::infer::module_symbols::ModuleSymbols;
 use declarations::TypeDeclarations;
@@ -44,6 +44,23 @@ pub fn check_script(
         fatal: Some(fatal),
     })?;
     Ok(diags)
+}
+
+/// The type a `@capability` binding path reads from a parameter of type `ty`
+/// in `package`, resolved as the capability-consistency rule resolves it.
+/// `None` when a segment names no field or reaches an unknown declaration.
+pub fn capability_binding_type(
+    package: &PackageDeclaration,
+    dependencies: &[&PackageDeclaration],
+    ty: &Type,
+    path: &[String],
+) -> Option<Type> {
+    let declarations = TypeDeclarations::for_package(package, dependencies);
+    match capability_consistency::binding_target(&declarations, ty, path) {
+        capability_consistency::BindingTarget::Found(ty) => Some(ty),
+        capability_consistency::BindingTarget::Missing(_)
+        | capability_consistency::BindingTarget::Unresolved => None,
+    }
 }
 
 pub(in crate::typechecker) struct PackageModuleSurface<'a> {
