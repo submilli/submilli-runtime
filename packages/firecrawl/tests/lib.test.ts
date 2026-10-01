@@ -28,7 +28,7 @@ function main(): void {
     assert(crawl.includes('"scrapeOptions":{"formats":["markdown","html"]}'), "nested scrape options");
 
     label("invalid input is rejected locally");
-    for (const url of ["relative", "file:///tmp/a", "https://user:pass@example.com", " https://example.com", "https://example.com\\@evil.example"]) {
+    for (const url of ["relative", "file:///tmp/a", "https://user:pass@example.com", " https://example.com", "https://example.com\\@evil.example", "https://./", "https://../a"]) {
         rejects("invalid_argument", () => { buildScrapeBody(url); });
     }
     rejects("invalid_argument", () => { buildBatchBody([]); });

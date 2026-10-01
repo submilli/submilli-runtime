@@ -34,6 +34,7 @@ use crate::stdlib::abi::{
     self, backing_receiver, backing_struct, f64_field, i32_field, install_field_getters,
     nullable_object_field, string_field,
 };
+use crate::stdlib::dot_segments::refuse_dot_segments;
 use crate::stdlib::shared::{check_security, contain_trap, quota_refusal, resolve_content_or_trap};
 use redirect_guard::{
     CapabilityGuard, DownloadTarget, GuardedRequest, host_and_path, verb_context,
@@ -340,6 +341,9 @@ async fn perform_request(
     body_val: &Val,
     headers_val: &Val,
 ) -> wasmtime::Result<Val> {
+    // Before the body, whose `toJson` may run guest code, so a refused URL has no effects.
+    refuse_dot_segments(url)
+        .map_err(|refusal| refusal.into_error(&format!("http {}", method.to_ascii_uppercase())))?;
     let body = read_request_body(caller, body_val).await?;
     let mut headers = read_headers(caller, headers_val)?;
 
@@ -539,6 +543,7 @@ async fn perform_download(
     params: &[Val],
 ) -> wasmtime::Result<Val> {
     let url = read_string_arg(&mut *caller, &params[0], "http.download (url)")?;
+    refuse_dot_segments(&url).map_err(|refusal| refusal.into_error("http.download"))?;
     let guest_path = read_string_arg(&mut *caller, &params[1], "http.download (path)")?;
     let options = read_download_options(caller, &params[2])?;
 

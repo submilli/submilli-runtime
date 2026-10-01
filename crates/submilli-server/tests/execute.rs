@@ -757,6 +757,34 @@ async fn uncaught_throw_returns_runtime_error() {
     );
 }
 
+/// A URL with a dot segment is refused as an ordinary `TypeError`, not as an
+/// internal failure, and the server goes on serving.
+#[tokio::test]
+async fn http_dot_segment_is_an_ordinary_runtime_error() {
+    let router = router();
+    let (status, body) = execute_on(
+        &router,
+        r#"import { get } from "submilli:http";
+        function main(): void { get("https://example.com/customers/%2E%2E/admin"); }"#,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        body["error"]["kind"],
+        json!("runtime_error"),
+        "got: {body:#}"
+    );
+    let message = body["error"]["message"].as_str().unwrap_or_default();
+    assert!(
+        message.contains("TypeError") && message.contains("dot segment \"%2E%2E\""),
+        "got: {body:#}"
+    );
+
+    let (status, body) = execute_on(&router, r#"function main(): string { return "ok"; }"#).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["result"], json!("ok"), "got: {body:#}");
+}
+
 #[tokio::test]
 async fn uncaught_throw_in_nonvoid_main_returns_runtime_error() {
     let (status, body) =

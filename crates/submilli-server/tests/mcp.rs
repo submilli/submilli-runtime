@@ -444,6 +444,32 @@ async fn execute_reports_memory_exhaustion_as_its_own_kind() {
     assert_eq!(output(&rpc)["result"], json!("2"), "got: {rpc}");
 }
 
+/// A URL with a dot segment is refused as an ordinary `TypeError`, not as an
+/// internal failure, and leaves the session usable.
+#[tokio::test]
+async fn execute_reports_http_dot_segment_as_a_runtime_error() {
+    const DOT_SEGMENT: &str = r#"import { get } from "submilli:http";
+        function main(): void { get("https://example.com/customers/../admin"); }"#;
+    let h = Harness::new();
+    let session = h.handshake(EPH).await;
+
+    let (status, _, rpc) = h
+        .post(EPH, tools_call(1, DOT_SEGMENT), Some(&session))
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    let out = output(&rpc);
+    assert_eq!(out["error"]["kind"], json!("runtime_error"), "got: {rpc}");
+    let message = out["error"]["message"].as_str().unwrap_or_default();
+    assert!(
+        message.contains("TypeError") && message.contains("dot segment \"..\""),
+        "got: {rpc}"
+    );
+
+    let (_, _, rpc) = h.post(EPH, tools_call(2, SUM), Some(&session)).await;
+    assert!(output(&rpc)["error"].is_null(), "got: {rpc}");
+    assert_eq!(output(&rpc)["result"], json!("2"), "got: {rpc}");
+}
+
 // ---- Session variables (`${vars.NAME}` bound at initialize) --------------
 
 const VARBP: &str = "varbp";

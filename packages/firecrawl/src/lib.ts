@@ -528,7 +528,7 @@ export function urlHost(url: string): string {
         if (url.length > 8192 || url.trim() !== url || /[\s\\]/.test(url)) throw invalidArgument("Invalid URL");
         if (!/^https?:\/\/[^/?#@]+([/?#]|$)/.test(url)) throw invalidArgument("Invalid URL");
         const parts = parse(url);
-        if ((parts.protocol !== "https" && parts.protocol !== "http") || parts.host.length === 0) throw invalidArgument("Invalid URL");
+        if ((parts.protocol !== "https" && parts.protocol !== "http") || /^\.*$/.test(parts.host)) throw invalidArgument("Invalid URL");
         return parts.host;
     } catch (cause) { throw invalidArgument("Expected an absolute HTTP(S) URL without credentials or whitespace"); }
 }
