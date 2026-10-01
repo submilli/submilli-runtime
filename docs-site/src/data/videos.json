@@ -9,6 +9,7 @@
       "status": "awaiting-publication",
       "src": null,
       "canonicalPath": "/docs/concepts/execution-model/",
+      "contextualPaths": ["/docs/next/why/"],
       "transcriptPath": "/docs/videos/code-execution-introduction/",
       "captionsPath": "/docs/videos/code-execution-introduction.en.vtt",
       "sha256": "d6d505ba502b08ff13274c704df27f0fe1006571f1cf489598a9a5e370a682e1",

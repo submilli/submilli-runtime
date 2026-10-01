@@ -35,4 +35,8 @@ assert.ok(embedPage.includes('/docs/videos/code-execution-introduction.svg'), 'E
 assert.ok(embedPage.includes('Video publication pending'), 'Embed names unpublished state');
 assert.ok(embedPage.includes('noindex, nofollow'), 'Embeds stay out of search');
 assert.ok(!embedPage.includes('<video') && !embedPage.includes('_video-preview'), 'Production embed never exposes local preview media');
+const nextWhy = await readFile(new URL('docs/next/why/index.html', directory), 'utf8');
+assert.ok(nextWhy.includes('Why agents execute code') && nextWhy.includes('Video publication pending'), 'Draft Why chapter includes the existing introduction');
+assert.ok(!nextWhy.includes('<video') && !nextWhy.includes('_video-preview'), 'Draft chapter preserves the publication gate');
+assert.ok(!chapters.some((chapter) => chapter.slug.startsWith('next/')), 'Draft chapters remain outside agent exports');
 console.log(`Verified exports and HTML discovery for ${chapters.length} visible chapters.`);

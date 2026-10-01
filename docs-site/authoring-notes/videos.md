@@ -75,3 +75,20 @@ The inspected docs layout has no analytics collector; playback measurement and
 joined journeys are unverified. After separately authorized deployment, the
 publishing owner should verify route coverage and cross-site continuity in the
 existing analytics stack, without assuming it from the site's SDK alone.
+
+## October 1 draft-book compatibility
+
+The newer `/docs/next/` book on main supersedes the earlier structural proposal:
+Part 1 is Start here/explanation, Parts 2–4 are Blueprint, Package and Server
+how-tos, Part 5 is Tutorials, and Part 6 is Reference. Its `next/why` chapter
+already explains the same failed-payment program and evidence as this film.
+The introduction registry therefore includes `/docs/next/why/` as a contextual
+placement. The shared content override adds the film without changing Doron's
+chapter source, sidebar visibility, search settings, or agent-export exclusion.
+
+At cutover, coordinate changing this contextual path to `/docs/why/`. The draft
+book has no Concepts section: decide with Doron whether the current execution-model
+page stays as a supplementary deep link or redirects into Why, and whether its
+separate sidebar group is retained. Do not make that book-wide decision in this
+video PR. Existing canonical, transcript and embed URLs stay stable meanwhile;
+the site gallery must not send ordinary readers into hidden draft pages.

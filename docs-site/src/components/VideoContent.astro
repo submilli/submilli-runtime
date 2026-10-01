@@ -4,7 +4,8 @@ import { introduction } from '../lib/videos';
 import IntroductionPlayer from './IntroductionPlayer.astro';
 
 const path = Astro.url.pathname.replace(/\/$/, '');
-const isVideoPage = path === introduction.canonicalPath?.replace(/\/$/, '') || path === '/docs/videos';
+const videoPaths = [introduction.canonicalPath, '/docs/videos/', ...(introduction.contextualPaths ?? [])];
+const isVideoPage = videoPaths.some((videoPath) => videoPath?.replace(/\/$/, '') === path);
 const durationSeconds = Math.round(introduction.durationSeconds ?? 0);
 const durationLabel = `${Math.floor(durationSeconds / 60)} min ${durationSeconds % 60} sec`;
 const languageLabel = new Intl.DisplayNames(['en'], { type: 'language' }).of(introduction.language ?? 'en');
