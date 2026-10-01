@@ -261,8 +261,13 @@ export function normalizeContextJson(body: string): ContextResult {
     }
 }
 
-/** Map HTTP failures without including provider bodies or credentials. */
-export function braveHttpError(status: number, retryAfter: string | null = null): BraveSearchError {
+interface ApiError {
+    type?: string;
+    error?: { detail?: string };
+}
+
+/** Map HTTP failures, preserving the provider's error type and detail when available. */
+export function braveHttpError(status: number, retryAfter: string | null = null, body: string = ""): BraveSearchError {
     let code = "http_error";
     let message = "Brave Search request failed: HTTP " + status.toString();
     if (status === 401) {
@@ -275,7 +280,23 @@ export function braveHttpError(status: number, retryAfter: string | null = null)
         code = "rate_limited";
         message = "Brave Search rate limit exceeded; retry later";
     }
+    const detail = braveErrorDetail(body);
+    if (detail.length > 0) message += ": " + detail;
     return new BraveSearchError(code, message, status, retryAfter);
+}
+
+function braveErrorDetail(body: string): string {
+    try {
+        const data = JSON.parse(body) as ApiError;
+        const parts: string[] = [];
+        if (data.type !== null && data.type.length > 0) parts.push(data.type);
+        if (data.error !== null && data.error.detail !== null && data.error.detail.length > 0) {
+            parts.push(data.error.detail);
+        }
+        return parts.join(": ");
+    } catch (cause) {
+        return "";
+    }
 }
 
 function request(path: string, params: string): string {
@@ -288,7 +309,7 @@ function request(path: string, params: string): string {
     headers.set("Accept", "application/json");
     // Keep the authority and its trailing slash static for capability derivation.
     const response = get("https://api.search.brave.com/res/v1/" + path + params, headers);
-    if (!response.ok) throw braveHttpError(response.status, response.headers.get("retry-after"));
+    if (!response.ok) throw braveHttpError(response.status, response.headers.get("retry-after"), response.body);
     return response.body;
 }
 

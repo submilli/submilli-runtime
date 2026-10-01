@@ -89,4 +89,21 @@ function main(): void {
     const rate = braveHttpError(429, "10");
     assert(rate.code === "rate_limited" && rate.status === 429 && rate.retryAfter === "10", "retry metadata");
     assert(braveHttpError(503).code === "http_error" && braveHttpError(503).retryAfter === null, "generic failure");
+
+    label("HTTP errors preserve Brave type and detail");
+    const validation = braveHttpError(422, null,
+        '{"type":"ErrorResponse","error":{"id":"request-id","status":422,"detail":"Unable to validate request parameter(s)","meta":{},"code":"VALIDATION"},"time":0}');
+    assert(validation.message === "Brave Search request failed: HTTP 422: ErrorResponse: Unable to validate request parameter(s)", "validation diagnostics");
+    assert(validation.code === "http_error" && validation.status === 422 && validation.retryAfter === null, "validation metadata");
+    const limited = braveHttpError(429, "10", '{"type":"ErrorResponse","error":{"detail":"Quota exceeded"}}');
+    assert(limited.message.includes("ErrorResponse: Quota exceeded"), "other statuses preserve provider diagnostics");
+    assert(limited.code === "rate_limited" && limited.status === 429 && limited.retryAfter === "10", "provider details preserve retry metadata");
+    assert(braveHttpError(422, null, '{"type":"ErrorResponse"}').message.endsWith(": ErrorResponse"), "type without detail");
+    assert(braveHttpError(422, null, '{"error":{"detail":"Invalid query"}}').message.endsWith(": Invalid query"), "detail without type");
+    for (const invalid of ["", "<html>bad gateway</html>", "{broken", "null", "[]", "{}",
+        '{"type":7}', '{"error":{"detail":[]}}', '{"type":"","error":{"detail":""}}']) {
+        const fallback = braveHttpError(422, "5", invalid);
+        assert(fallback.message === "Brave Search request failed: HTTP 422", "malformed or empty body keeps HTTP message");
+        assert(fallback.status === 422 && fallback.retryAfter === "5", "fallback keeps HTTP metadata");
+    }
 }
