@@ -374,6 +374,9 @@ Runtime rules that shape package code:
 - Use `submilli:url` for `encodeComponent`, `encodeQuery`, and `parse`. Take a
   capability's `host` field from `parse(url).host`: it is lower-case with no
   trailing dot, the spelling `http.*` rules see.
+- `encodeComponent` does not validate. `submilli:http` and `build` throw
+  `TypeError` for a path with a `.` or `..` segment, so validate an id you put
+  in a path for a clearer error, not for safety.
 - No npm imports, `async`/`await`, `any`, `process.env`, `fetch`, or `Date`
   (use `Temporal`). Explicit return types on every function.
 - Pagination: return a page type with items and a cursor or token, accept a

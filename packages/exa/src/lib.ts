@@ -203,7 +203,7 @@ export function contentsHosts(urls: string[]): string[] {
         if (url.length > 2048 || url.trim() !== url) throw invalidArgument("URLs must be at most 2048 characters with no surrounding whitespace");
         try {
             const parsed = parse(url);
-            if ((parsed.protocol !== "https" && parsed.protocol !== "http") || parsed.host.length === 0) {
+            if ((parsed.protocol !== "https" && parsed.protocol !== "http") || /^\.*$/.test(parsed.host)) {
                 throw invalidArgument("URLs must be absolute HTTP or HTTPS URLs");
             }
             hosts.push(parsed.host);

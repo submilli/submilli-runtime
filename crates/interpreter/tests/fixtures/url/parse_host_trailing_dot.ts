@@ -13,9 +13,17 @@ function main(): void {
   assert(parse("https://a.b.evil.test/").host === "a.b.evil.test", "inner dots are kept");
   assert(parse("https://127.0.0.1./").host === "127.0.0.1", "IPv4 literal");
   assert(parse("https://[::1]/").host === "[::1]", "IPv6 literal is unchanged");
-  assert(parse("https://./").host === "", "a host of only dots is empty");
+  // Without its dots this host would be empty or invalid, so it keeps them.
+  assert(parse("https://./").host === ".", "a host of only dots keeps them");
+  assert(parse("https://.1../").host === ".1..", "a host that would be invalid keeps them");
 
   const parsed = parse("https://evil.test.:8443/a?x=1");
   const rebuilt = build(parsed.protocol, parsed.host, parsed.port, parsed.path, parsed.query, parsed.fragment);
   assert(rebuilt === "https://evil.test:8443/a?x=1", "rebuilding uses the normalized host");
+
+  for (const url of ["http://./", "http://.1../x", "https://..:8443/a"]) {
+    const p = parse(url);
+    const again = build(p.protocol, p.host, p.port, p.path, p.query, p.fragment);
+    assert(parse(again).host === p.host && parse(again).path === p.path, url + " rebuilds as " + again);
+  }
 }
