@@ -52,6 +52,14 @@ A server setting has the three forms every server setting has. In the
 `SUBMILLI_MAX_EXECUTION_FUEL`. A flag beats a variable, and a variable beats
 the file.
 
+Fuel and model-token counts accept decimal `K`, `M`, `B`, and `T` suffixes
+(thousand, million, billion, trillion) in the file, flags, and environment.
+For example, `max_execution_fuel: 10B`, `max_llm_tokens: 20M`, and
+`max_execution_llm_tokens: 1M`. Suffixes are case-insensitive and immediately
+follow a whole number; fractions and scientific notation are not accepted.
+Underscores may separate digits: `10_000_000_000` is also valid. On these
+count settings, `B` means billion; byte sizes keep their own units.
+
 ## Memory
 
 Each run is its own WebAssembly instance, and `max_execution_memory` caps the

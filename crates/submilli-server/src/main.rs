@@ -7,6 +7,7 @@ use clap::Parser;
 use ipnet::IpNet;
 use submilli_server::serve;
 
+mod count;
 mod file_config;
 mod migrate;
 
@@ -183,7 +184,8 @@ pub struct Cli {
     /// program that runs out ends with `fuel exhausted`. The backstop for a
     /// runaway loop when no execution time is set. [default: 1000000000000]
     /// Env: `$SUBMILLI_MAX_EXECUTION_FUEL`, which outranks the config file.
-    #[arg(long, value_name = "FUEL")]
+    /// Accepts decimal K/M/B/T suffixes and digit separators, e.g. 1T or 10_000.
+    #[arg(long, value_name = "FUEL", value_parser = count::parse_count)]
     max_execution_fuel: Option<u64>,
 
     /// Wasm stack one execution may use, in kibibytes; deeper recursion ends
@@ -207,14 +209,16 @@ pub struct Cli {
     /// output before dispatch, so a call that would push the server past this is
     /// refused rather than billed. [default: 20000000]
     /// Env: `$SUBMILLI_MAX_LLM_TOKENS`, which outranks the config file.
-    #[arg(long, value_name = "TOKENS")]
+    /// Accepts decimal K/M/B/T suffixes and digit separators, e.g. 20M or 10_000.
+    #[arg(long, value_name = "TOKENS", value_parser = count::parse_count)]
     max_llm_tokens: Option<u64>,
 
     /// Tokens a *single* execution's `submilli:llm` calls may spend. Bounds one
     /// run where `--max-llm-tokens` bounds the process, so one program cannot
     /// consume the whole server's budget. [default: 1000000]
     /// Env: `$SUBMILLI_MAX_EXECUTION_LLM_TOKENS`, which outranks the config file.
-    #[arg(long, value_name = "TOKENS")]
+    /// Accepts decimal K/M/B/T suffixes and digit separators, e.g. 1M or 10_000.
+    #[arg(long, value_name = "TOKENS", value_parser = count::parse_count)]
     max_execution_llm_tokens: Option<u64>,
 
     /// Prompts one `llm.batch` dispatches at once. Bounded deliberately:
