@@ -348,6 +348,21 @@ refused there, with a message naming the value to use. Entries under
 that a `secrets:` mount provides. `extraEnv` still overrides the file,
 because the server ranks a `SUBMILLI_*` variable above it.
 
+The chart automatically allows MCP requests addressed to its Service's short
+name, namespace-qualified name, `.svc` name, and `.svc.cluster.local` name,
+using `service.port`. It also allows each pod's headless DNS names using
+`server.port`, and hosts from `ingress.hosts` when the Ingress is enabled.
+Loopback access remains available for port-forwarding.
+
+Add other names under `config.mcp_allowed_hosts`; these extend the generated
+list. For example, use `["submilli.agents.svc.corp.example:8128"]` for a custom
+cluster DNS domain. Wildcard Ingress rules need concrete hostnames in this
+list: the MCP host check does not expand wildcards. Ingress host entries omit
+the port, so the server accepts those names on any port. When `service.port`
+or `server.port` is 80, the corresponding DNS names also get bare-host entries
+because HTTP clients omit the default port; those entries likewise accept any
+port for those specific names.
+
 ## Values
 
 `values.yaml` documents every key inline, and `values.schema.json` validates them on

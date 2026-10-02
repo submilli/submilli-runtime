@@ -259,9 +259,47 @@ can add a caller but cannot shadow or replace the tokens NOTES.txt and
 {{-     $_ := set $config $key $value -}}
 {{-   end -}}
 {{- end -}}
+{{- $_ := set $config "mcp_allowed_hosts" (include "submilli.mcpAllowedHosts" . | fromYamlArray) -}}
 {{- $box := dict "v" $config -}}
 {{- include "submilli.normalizeNumbers" $box -}}
 {{- toYaml $box.v -}}
+{{- end -}}
+
+{{/*
+MCP validates the request's Host header. Service names use the Service port;
+headless pod DNS resolves directly to the pod and uses the container port.
+Operator entries extend the generated list, including for custom cluster DNS.
+HTTP clients omit port 80, so those names also need a bare-host entry (which
+the server's matcher accepts on any port).
+*/}}
+{{- define "submilli.mcpAllowedHosts" -}}
+{{- $fullname := include "submilli.fullname" . -}}
+{{- $headless := include "submilli.headlessName" . -}}
+{{- $suffixes := list "" (printf ".%s" .Release.Namespace) (printf ".%s.svc" .Release.Namespace) (printf ".%s.svc.cluster.local" .Release.Namespace) -}}
+{{- $hosts := list -}}
+{{- range $suffix := $suffixes -}}
+{{-   $hosts = append $hosts (printf "%s%s:%d" $fullname $suffix (int $.Values.service.port)) -}}
+{{-   if eq (int $.Values.service.port) 80 -}}
+{{-     $hosts = append $hosts (printf "%s%s" $fullname $suffix) -}}
+{{-   end -}}
+{{- end -}}
+{{- range $ordinal := until (int .Values.replicaCount) -}}
+{{-   range $suffix := $suffixes -}}
+{{-     $hosts = append $hosts (printf "%s-%d.%s%s:%d" $fullname $ordinal $headless $suffix (int $.Values.server.port)) -}}
+{{-     if eq (int $.Values.server.port) 80 -}}
+{{-       $hosts = append $hosts (printf "%s-%d.%s%s" $fullname $ordinal $headless $suffix) -}}
+{{-     end -}}
+{{-   end -}}
+{{- end -}}
+{{- if .Values.ingress.enabled -}}
+{{-   range .Values.ingress.hosts -}}
+{{-     if .host -}}
+{{-       $hosts = append $hosts .host -}}
+{{-     end -}}
+{{-   end -}}
+{{- end -}}
+{{- $extra := .Values.config.mcp_allowed_hosts | default list -}}
+{{- toYaml (concat $hosts $extra | uniq) -}}
 {{- end -}}
 
 {{/*

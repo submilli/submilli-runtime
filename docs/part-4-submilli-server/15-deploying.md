@@ -100,6 +100,10 @@ myproject-submilli-1   ghcr.io/submilli/submilli-runtime:latest   "/usr/local/bi
 ```
 
 Compose reads the token from `.env` and refuses to start without it.
+It also sets `SUBMILLI_MCP_ALLOWED_HOSTS: submilli:8128`, so containers on
+`submilli-net` can use `/mcp/<blueprint>` by service name. Update that value if
+you rename the service or change its container port. Loopback MCP access from
+the host remains available.
 
 ### How it keeps other callers out
 
@@ -290,6 +294,13 @@ helm install submilli oci://ghcr.io/submilli/charts/submilli -f values.yaml
 `values.yaml` holds your settings; the sections below build it up, and an
 empty file is a valid start. Add `--version` to pin a chart version, so
 upgrades happen when you choose them.
+
+The chart configures MCP access for the Service's short and namespace-qualified
+DNS names, including `.svc` and `.svc.cluster.local`, with `service.port`.
+It also includes each pod's headless DNS names with `server.port` and enabled
+Ingress hosts. Add custom DNS names under `config.mcp_allowed_hosts`; they
+extend the generated list. For a wildcard Ingress, add the concrete hostnames
+clients use there.
 
 This gives you one server pod, a Service called `submilli`, a persistent
 volume for its state, and a network policy that lets nothing reach it yet.
