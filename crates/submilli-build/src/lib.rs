@@ -5,6 +5,7 @@
 //! steps live here rather than in the interpreter.
 
 pub mod artifact;
+pub mod blueprint_validation;
 pub mod capabilities;
 pub mod doc_examples;
 pub mod driver;

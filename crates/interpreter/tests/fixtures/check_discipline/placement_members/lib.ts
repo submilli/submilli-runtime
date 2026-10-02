@@ -31,6 +31,7 @@ function post(channelId: string, text: string): void {}
 class Base {
   /**
    * Archives a conversation.
+   * @param channelId Conversation to target.
    * @capability test.com/archive { channelId: string }
    */
   archive(channelId: string): void {
@@ -50,6 +51,8 @@ export class Client extends Base {
 
   /**
    * Sends the message.
+   * @param channelId Conversation to post in.
+   * @param text Message text.
    * @capability test.com/send { channelId: string }
    */
   send(channelId: string, text: string): void {
@@ -65,6 +68,7 @@ export class Client extends Base {
 
   /**
    * Approves the send.
+   * @param channelId Conversation to target.
    * @capability test.com/guard { channelId: string }
    */
   private guard(channelId: string): void {
@@ -75,6 +79,7 @@ export class Client extends Base {
 class Hidden {
   /**
    * Sends without a client.
+   * @param channelId Conversation to target.
    * @capability test.com/hidden { channelId: string }
    */
   send(channelId: string): void {

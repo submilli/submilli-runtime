@@ -1924,3 +1924,40 @@ fn build_test_empty_project_reports_no_test_files() {
         assert!(!stdout(&out).contains("HTTP test files skipped"));
     }
 }
+
+#[test]
+fn docs_render_destructured_parameter_names() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let project = tmp.path().join("project");
+    let home = tmp.path().join("home");
+    write_file(
+        &project.join("submilli.toml"),
+        "[[package]]\nname = \"@acme/patterns\"\nversion = \"0.1.0\"\ndescription = \"Pattern documentation.\"\n",
+    );
+    write_file(
+        &project.join("src/lib.ts"),
+        r#"
+/** Adds.
+ * @param pair Numbers.
+ * @returns Sum.
+ */
+export function add({a, b}: {a: number; b: number}): number { return a + b; }
+/** Service. */
+export interface Svc {
+    /** Runs.
+     * @param opts Options.
+     * @returns Number.
+     */
+    run({a}: {a: number}): number;
+}
+"#,
+    );
+    let built = build(&project, &home, &[]);
+    assert!(built.status.success(), "{}", stderr(&built));
+    let docs = run_with_home(&[OsStr::new("docs"), OsStr::new("@acme/patterns")], &home);
+    assert!(docs.status.success(), "{}", stderr(&docs));
+    let text = stdout(&docs);
+    assert!(text.contains("function add(pair:"), "{text}");
+    assert!(text.contains("run(opts:"), "{text}");
+    assert!(!text.contains("#pattern_p_"), "{text}");
+}

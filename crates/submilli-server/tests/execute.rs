@@ -538,15 +538,20 @@ async fn prepared_package_cache_only_evicts_when_blueprint_packages_change() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let store_root = tmp.path().join("packages");
     write_acme_util_package(&store_root);
-    let artifact_wasm = store_root.join("@acme").join("util").join("pkg.wasm");
-    let router = router_with_package_store(store_root);
+    write_dependent_packages(&store_root);
+    let router = router_with_package_store(store_root.clone());
     let code = r#"
         import { answer, plusOne } from "@acme/util";
         function main(): number { return plusOne(answer()); }
     "#;
 
     let (_, first) = execute_on(&router, code).await;
-    std::fs::remove_file(artifact_wasm).expect("remove package wasm after prepare");
+    // Registration needs valid artifacts; change the on-disk result to distinguish
+    // reuse of the prepared module from reloading it after a package-list change.
+    write_acme_util_package_with_source(
+        &store_root,
+        "export function answer(): number { return 99; } export function plusOne(n: number): number { return n + 1; }",
+    );
 
     let (status, _) = apply_blueprint_on(
         &router,
@@ -567,7 +572,7 @@ vfs: none
 name: test
 packages:
   - "@acme/util"
-  - "@acme/other"
+  - "@a/app"
 vfs: none
 "#,
     )
@@ -582,8 +587,8 @@ vfs: none
         "got: {after_non_package_update:#}"
     );
     assert_eq!(
-        after_package_update["error"]["kind"],
-        json!("package_resolution"),
+        after_package_update["result"],
+        json!("100"),
         "got: {after_package_update:#}"
     );
 }
@@ -935,7 +940,7 @@ async fn git_transitive_imports_require_configuration_and_keep_package_attributi
             .contains("blueprint git block"),
         "{disabled}"
     );
-    let yaml = "name: test\npackages: ['@acme/util']\ngit:\n  identity: {name: Agent, email: agent@example.com}\npermissions:\n  main:\n    - {capability: git.init, action: allow}\n";
+    let yaml = "name: test\npackages: ['@acme/util']\ngit:\n  identity: {name: Agent, email: agent@example.com}\npermissions:\n  main:\n    - {capability: git.init, action: allow}\n  '@acme/util':\n    - {capability: git.init, action: deny}\n    - {capability: git.commit, action: deny}\n";
     let (status, applied) = apply_blueprint_on(&router, yaml).await;
     assert_eq!(status, StatusCode::OK, "{applied}");
     let (_, denied) = execute_on(&router, code).await;
@@ -944,8 +949,9 @@ async fn git_transitive_imports_require_configuration_and_keep_package_attributi
         message.contains("caller=@acme/util") && message.contains("git.init"),
         "{denied}"
     );
-    let yaml = "name: test\npackages: ['@acme/util']\ngit:\n  identity: {name: Agent, email: agent@example.com}\npermissions:\n  main:\n    - {capability: git.commit, action: allow}\n  '@acme/util':\n    - {capability: git.init, action: allow}\n";
-    apply_blueprint_on(&router, yaml).await;
+    let yaml = "name: test\npackages: ['@acme/util']\ngit:\n  identity: {name: Agent, email: agent@example.com}\npermissions:\n  main:\n    - {capability: git.commit, action: allow}\n  '@acme/util':\n    - {capability: git.init, action: allow}\n    - {capability: git.commit, action: deny}\n";
+    let (status, applied) = apply_blueprint_on(&router, yaml).await;
+    assert_eq!(status, StatusCode::OK, "{applied}");
     let (_, denied) = execute_on(&router, code).await;
     let message = denied["error"]["message"].as_str().unwrap();
     assert!(

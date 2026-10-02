@@ -781,3 +781,130 @@ async fn unnamed_modes_are_unaffected_by_the_volume_check() {
         assert_eq!(status, StatusCode::OK, "{name}: got {body}");
     }
 }
+
+#[tokio::test]
+async fn registration_rejects_missing_packages() {
+    let owned = tempfile::tempdir().expect("owned store");
+    let fallback = tempfile::tempdir().expect("fallback store");
+    let router = app(AppState::new(ServerConfig {
+        package_store_root: Some(owned.path().to_path_buf()),
+        package_fallback_root: Some(fallback.path().to_path_buf()),
+        ..ServerConfig::default()
+    })
+    .expect("state"));
+    let (status, body) = post(
+        &router,
+        "/v1/blueprints",
+        json!({
+            "yaml": "name: ghost\npackages: [\"@acme/ghost\"]\n"
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert_eq!(body["error"], "package_missing");
+    assert!(
+        body["message"]
+            .as_str()
+            .expect("message")
+            .contains("submilli server packages install <org/repo> @acme/ghost")
+    );
+}
+
+fn install_validation_package(
+    root: &std::path::Path,
+    name: &str,
+    dependencies: &[&str],
+    required: bool,
+) {
+    use submilli_build::{
+        ArtifactDependency, ArtifactMetadata, CapabilitySchema, RequiredCapability,
+    };
+    let declaration = interpreter::PackageDeclaration::with_package(name);
+    let mut capabilities: CapabilitySchema =
+        submilli_build::derive_capability_schema(&declaration, &[], &[]);
+    if required {
+        capabilities.requires.push(RequiredCapability {
+            capability: "http.get".to_string(),
+            filter: Some("host == \"example.com\"".to_string()),
+        });
+    }
+    let metadata = ArtifactMetadata::new(
+        name,
+        "0.1.0",
+        dependencies
+            .iter()
+            .map(|dep| ArtifactDependency::new(*dep, "0.1.0"))
+            .collect(),
+    );
+    submilli_build::write_package_artifact(
+        root.join(name),
+        b"\0asm\x01\0\0\0",
+        &interpreter::TypeInfoTable {
+            package_name: name.to_string(),
+            types: Vec::new(),
+        },
+        &capabilities,
+        &declaration,
+        &metadata,
+    )
+    .expect("install test package");
+}
+
+#[tokio::test]
+async fn registration_checks_dependency_requirements_and_preserves_existing_blueprint() {
+    let owned = tempfile::tempdir().expect("owned");
+    let fallback = tempfile::tempdir().expect("fallback");
+    install_validation_package(owned.path(), "@acme/root", &["@acme/dep"], false);
+    let router = app(AppState::new(ServerConfig {
+        package_store_root: Some(owned.path().to_path_buf()),
+        package_fallback_root: Some(fallback.path().to_path_buf()),
+        ..ServerConfig::default()
+    })
+    .expect("state"));
+    let original = json!({"yaml": "name: demo\n"});
+    assert_eq!(
+        post(&router, "/v1/blueprints", original).await.0,
+        StatusCode::OK
+    );
+    let package_yaml = "name: demo\npackages: [\"@acme/root\"]\n";
+    let (status, body) = put(
+        &router,
+        "/v1/blueprints/demo",
+        json!({"yaml": package_yaml}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert_eq!(body["error"], "package_missing");
+    assert!(body["message"].as_str().unwrap().contains("@acme/dep"));
+    install_validation_package(fallback.path(), "@acme/dep", &[], true);
+    let (status, body) = put(
+        &router,
+        "/v1/blueprints/demo",
+        json!({"yaml": package_yaml}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert_eq!(body["error"], "invalid_packages");
+    assert!(
+        body["message"]
+            .as_str()
+            .unwrap()
+            .contains("permissions.@acme/dep")
+    );
+    let (_, stored) = get(&router, "/v1/blueprints/demo").await;
+    assert!(
+        !stored["yaml"].as_str().unwrap().contains("@acme/root"),
+        "{stored}"
+    );
+    // An explicit deny is a valid operator choice, as it is for local lint.
+    let valid = format!(
+        "{package_yaml}permissions:\n  '@acme/dep':\n    - capability: http.get\n      action: deny\n"
+    );
+    let (status, body) = put(&router, "/v1/blueprints/demo", json!({"yaml": valid})).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    // A broken owned copy shadows an otherwise valid fallback package.
+    std::fs::create_dir_all(owned.path().join("@acme/dep")).unwrap();
+    let (status, body) = put(&router, "/v1/blueprints/demo", json!({"yaml": valid})).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert_eq!(body["error"], "invalid_packages");
+}

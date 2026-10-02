@@ -5,7 +5,10 @@ use crate::{
     TypedParam, TypedTypeDecl,
 };
 
-pub(super) fn run(ta: &TypedAst, diags: &mut Vec<Diagnostic>) {
+pub(super) fn run(
+    ta: &TypedAst,
+    diags: &mut Vec<Diagnostic>,
+) -> Result<(), crate::compiler_error::CompilerFailure> {
     for f in &ta.functions {
         if let Some(doc) = &f.doc {
             validate_callable(
@@ -22,8 +25,11 @@ pub(super) fn run(ta: &TypedAst, diags: &mut Vec<Diagnostic>) {
     for ty_decl in &ta.types {
         let iface = match ty_decl {
             TypedTypeDecl::Interface(iface) => iface,
-            TypedTypeDecl::Class(_)
-            | TypedTypeDecl::NumberEnum(_)
+            TypedTypeDecl::Class(class) => {
+                validate_class(class, diags);
+                continue;
+            }
+            TypedTypeDecl::NumberEnum(_)
             | TypedTypeDecl::StringEnum(_)
             | TypedTypeDecl::Alias(_) => continue,
         };
@@ -56,6 +62,101 @@ pub(super) fn run(ta: &TypedAst, diags: &mut Vec<Diagnostic>) {
             }
         }
     }
+    validate_global_arrows(ta, diags)?;
+    Ok(())
+}
+
+fn validate_class(class: &crate::TypedClassDecl, diags: &mut Vec<Diagnostic>) {
+    for method in &class.methods {
+        if let Some(doc) = &method.doc {
+            validate_callable(
+                doc,
+                method.name.span,
+                &method.params,
+                &method.return_type,
+                "method parameter",
+                diags,
+            );
+        }
+    }
+    if let Some(constructor) = &class.constructor
+        && let Some(doc) = &constructor.doc
+    {
+        validate_callable(
+            doc,
+            constructor.span,
+            &constructor.params,
+            &Type::Void,
+            "constructor parameter",
+            diags,
+        );
+    }
+}
+
+fn validate_global_arrows(
+    ta: &TypedAst,
+    diags: &mut Vec<Diagnostic>,
+) -> Result<(), crate::compiler_error::CompilerFailure> {
+    let globals: BTreeMap<_, _> = ta
+        .globals
+        .iter()
+        .filter(|global| global.kind == crate::GlobalKind::Const)
+        .filter_map(|global| {
+            global
+                .doc
+                .as_ref()
+                .map(|doc| (&global.mangled_name, (global, doc)))
+        })
+        .collect();
+    for statement in &ta.top_level_statements {
+        let crate::TypedStmtKind::AssignGlobal { mangled, value, .. } = &ta
+            .try_stmt(*statement)
+            .map_err(crate::typechecker::arena_failure)?
+            .kind
+        else {
+            continue;
+        };
+        let Some((global, doc)) = globals.get(mangled) else {
+            continue;
+        };
+        let initializer = arrow_initializer(ta, *value)?;
+        let crate::TypedExprKind::Closure {
+            params,
+            return_type,
+            ..
+        } = &initializer.kind
+        else {
+            continue;
+        };
+        validate_callable(
+            doc,
+            global.name.span,
+            params,
+            return_type,
+            "parameter",
+            diags,
+        );
+    }
+    Ok(())
+}
+
+fn arrow_initializer(
+    ta: &TypedAst,
+    mut id: crate::ExprId,
+) -> Result<&crate::TypedExpr, crate::compiler_error::CompilerFailure> {
+    for _ in 0..ta.exprs_len() {
+        let expression = ta.try_expr(id).map_err(crate::typechecker::arena_failure)?;
+        match &expression.kind {
+            crate::TypedExprKind::Cast { value, .. }
+            | crate::TypedExprKind::NonNullAssert { value } => id = *value,
+            _ => return Ok(expression),
+        }
+    }
+    Err(crate::compiler_error::CompilerFailure::Internal {
+        stage: crate::compiler_error::CompilerStage::Infer,
+        span: None,
+        message: "cycle in documented arrow initializer".to_string(),
+    })
 }
 
 fn validate_callable(
@@ -75,7 +176,12 @@ fn validate_callable(
 
     let mut seen: BTreeMap<&str, &crate::DocParam> = BTreeMap::new();
     let mut doc_indices: Vec<(usize, &crate::DocParam)> = Vec::new();
-    for (tag_index, dp) in doc.params.iter().enumerate() {
+    for (tag_index, dp) in doc
+        .params
+        .iter()
+        .filter(|p| !p.name.contains('.'))
+        .enumerate()
+    {
         if let Some(prev) = seen.get(dp.name.as_str()) {
             diags.push(Diagnostic {
                 severity: Severity::Warning,
@@ -105,8 +211,9 @@ fn validate_callable(
     }
 
     for w in doc_indices.windows(2) {
-        let (prev_idx, _) = w[0];
-        let (cur_idx, cur_dp) = w[1];
+        let [(prev_idx, _), (cur_idx, cur_dp)] = w else {
+            continue;
+        };
         if cur_idx < prev_idx {
             diags.push(warning(
                 cur_dp.tag_span,
@@ -247,6 +354,78 @@ mod tests {
             examples: vec![],
             unknown_tags: vec![],
         }
+    }
+
+    #[test]
+    fn wrapped_arrow_docs_are_checked() {
+        let diagnostics = super::super::test_util::run(
+            r#"
+            /** Cast. */
+            const cast = ((n: number): number => n) as (n: number) => number;
+            /** Non-null. */
+            const nonnull = (((n: number): number => n) as (n: number) => number)!;
+            /** Annotation. */
+            const annotated: (n: number) => number = (n: number): number => n;
+        "#,
+        );
+        assert_eq!(
+            diagnostics
+                .iter()
+                .filter(|d| d.message.contains("`n` is undocumented"))
+                .count(),
+            3,
+            "{diagnostics:?}"
+        );
+        assert_eq!(
+            diagnostics
+                .iter()
+                .filter(|d| d.message.contains("missing `@returns`"))
+                .count(),
+            3,
+            "{diagnostics:?}"
+        );
+    }
+
+    #[test]
+    fn class_and_arrow_docs_are_checked() {
+        let diagnostics = super::super::test_util::run(
+            r#"
+            class Counter {
+                /** Construct. */
+                constructor(n: number) {}
+                /** Run. */
+                run(n: number): number { return n; }
+                /** Static. */
+                static run(n: number): number { return n; }
+            }
+            /** Arrow. */
+            const arrow = (n: number): number => n;
+        "#,
+        );
+        let undocumented = diagnostics
+            .iter()
+            .filter(|d| d.message.contains("`n` is undocumented"))
+            .count();
+        assert_eq!(undocumented, 4, "{diagnostics:?}");
+        let returns = diagnostics
+            .iter()
+            .filter(|d| d.message.contains("missing `@returns`"))
+            .count();
+        assert_eq!(returns, 3, "{diagnostics:?}");
+    }
+
+    #[test]
+    fn dotted_tags_do_not_shift_destructured_positions() {
+        let mut diagnostics = Vec::new();
+        validate_callable(
+            &make_doc(&["opts", "opts.a", "pair"], true),
+            span(),
+            &[param("opts"), param("#pattern_p_0")],
+            &Type::Number,
+            "parameter",
+            &mut diagnostics,
+        );
+        assert!(diagnostics.is_empty(), "{diagnostics:?}");
     }
 
     #[test]

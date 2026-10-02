@@ -1189,6 +1189,8 @@ impl TypedClassDecl {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct TypedClassConstructor {
+    pub doc: Option<Box<crate::DocComment>>,
+    pub span: Span,
     pub params: Vec<TypedParam>,
     pub body: StmtId,
 }

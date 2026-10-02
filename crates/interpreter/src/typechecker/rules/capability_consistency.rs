@@ -39,8 +39,8 @@ struct Callable<'a> {
 
 /// Every function, static methods among them, then every instance method.
 ///
-/// A constructor or an accessor keeps no doc comment in the typed AST, so its
-/// tags cannot reach the capability schema and it is not asked for them.
+/// Constructor and accessor tags do not reach the capability schema, so those
+/// bodies are not asked for them.
 fn callables(ta: &TypedAst) -> impl Iterator<Item = Callable<'_>> {
     let functions = ta.functions.iter().map(|function| Callable {
         doc: function.doc.as_ref(),

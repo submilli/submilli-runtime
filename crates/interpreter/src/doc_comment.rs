@@ -387,21 +387,14 @@ fn read_tag_name(text: &str) -> (&str, usize) {
 
 /// Returns (name, bytes_including_trailing_ws); name chars: `[alnum_$]+`.
 fn read_param_name(body: &str) -> (&str, usize) {
-    let mut end = 0;
-    for (i, c) in body.char_indices() {
-        if c.is_alphanumeric() || c == '_' || c == '$' {
-            end = i + c.len_utf8();
-        } else {
-            break;
-        }
-    }
-    let name = &body[..end];
-    // Include trailing ws so the caller's description starts at the first non-space.
-    let mut tail = end;
-    let bytes = body.as_bytes();
-    while tail < bytes.len() && (bytes[tail] == b' ' || bytes[tail] == b'\t') {
-        tail += 1;
-    }
+    let end = body
+        .char_indices()
+        .take_while(|(_, c)| c.is_alphanumeric() || matches!(c, '_' | '$' | '.'))
+        .map(|(i, c)| i + c.len_utf8())
+        .last()
+        .unwrap_or(0);
+    let (name, rest) = body.split_at(end);
+    let tail = body.len() - rest.trim_start_matches([' ', '\t']).len();
     (name, tail)
 }
 
@@ -761,6 +754,14 @@ mod tests {
             span: Span::new(crate::FileId(0), 0, text.len() as u32).unwrap(),
         })
         .unwrap()
+    }
+
+    #[test]
+    fn dotted_param_name_is_preserved() {
+        let d = parse("/** @param opts.a Nested property. */");
+        assert_eq!(d.params[0].name, "opts.a");
+        assert_eq!(d.params[0].description, "Nested property.");
+        assert_eq!(d.params[0].name_span.end - d.params[0].name_span.start, 6);
     }
 
     #[test]

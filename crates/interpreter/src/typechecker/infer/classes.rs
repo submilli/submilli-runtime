@@ -3538,8 +3538,13 @@ impl<'a> Inferer<'a> {
         ctor_params: &[Param],
         class_inst: &BTreeMap<String, Type>,
     ) -> Result<Option<TypedClassConstructor>, CompilerFailure> {
-        let Some((params, body)) = members.iter().find_map(|m| match m {
-            ClassMember::Constructor { params, body, .. } => Some((params, *body)),
+        let Some((params, body, doc, span)) = members.iter().find_map(|m| match m {
+            ClassMember::Constructor {
+                params,
+                body,
+                doc,
+                span,
+            } => Some((params, *body, doc, *span)),
             _ => None,
         }) else {
             return Ok(None);
@@ -3589,6 +3594,8 @@ impl<'a> Inferer<'a> {
         self.scopes.pop();
 
         Ok(Some(TypedClassConstructor {
+            doc: doc.clone().map(Box::new),
+            span,
             params: typed_params,
             body: body_id,
         }))

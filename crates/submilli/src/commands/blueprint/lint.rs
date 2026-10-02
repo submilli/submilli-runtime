@@ -152,10 +152,11 @@ fn collect_requires_findings(
             ));
             continue;
         }
-        errors.push(format!(
-            "package `{package}` requires `{}`{filter}, but `permissions.{package}` has no matching rule",
-            required.capability
-        ));
+        if let Some(message) = submilli_build::blueprint_validation::missing_required_rule(
+            blueprint, package, required,
+        ) {
+            errors.push(message);
+        }
         fixes.push(MissingRequiresRule {
             caller: package.to_string(),
             capability: required.capability.clone(),
