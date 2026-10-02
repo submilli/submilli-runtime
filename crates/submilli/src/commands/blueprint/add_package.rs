@@ -496,6 +496,15 @@ fn required_rules(
             }
             continue;
         }
+        // An unfiltered requirement already granted decides every call to the
+        // capability; a narrower rule behind it would never match.
+        let granted_whole = changes
+            .appended
+            .iter()
+            .any(|rule| rule.capability == required.capability && rule.filter.is_none());
+        if granted_whole {
+            continue;
+        }
         let filter = required
             .filter
             .as_deref()
@@ -654,6 +663,31 @@ mod tests {
     use submilli_build::{ProvidedCapability, ProvidedField, RequiredCapability};
 
     use super::*;
+
+    /// A package that calls a capability both with a literal and with a
+    /// computed argument requires it unfiltered and filtered; the filtered rule
+    /// behind the unfiltered one would never match.
+    #[test]
+    fn required_rules_skip_what_an_unfiltered_rule_already_grants() {
+        let schema = CapabilitySchema {
+            requires: vec![
+                RequiredCapability {
+                    capability: "secrets.get".to_string(),
+                    filter: None,
+                },
+                RequiredCapability {
+                    capability: "secrets.get".to_string(),
+                    filter: Some("name == \"A_KEY\"".to_string()),
+                },
+            ],
+            ..CapabilitySchema::default()
+        };
+
+        let rules = required_rules(&schema, |_| false).expect("filters parse");
+
+        assert_eq!(rules.appended.len(), 1);
+        assert!(rules.appended[0].filter.is_none());
+    }
 
     #[test]
     fn rejects_versioned_package_specs() {

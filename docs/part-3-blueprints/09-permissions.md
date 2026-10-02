@@ -272,6 +272,7 @@ mistake stops it before any program runs.
 | A package requires a permission that its own list grants with a different filter, or denies | Warning |
 | `default: allow` | Warning |
 | A `secrets.get` rule under `main`, which can have no effect | Warning |
+| A rule after a rule with no filter for the same capability in the same list, which never matches | Warning |
 | A list for a caller that is neither among the blueprint's packages nor a package they depend on | Warning |
 | A package among the blueprint's packages with no list of its own | Warning |
 

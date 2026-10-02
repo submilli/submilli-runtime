@@ -12,9 +12,11 @@
 //! leaving it out is how a blueprint withholds it, and
 //! `blueprint capability list --unconfigured` lists those. `default: allow`
 //! parses, but inverts the security posture to allow-by-default, so it lints as
-//! a warning.
+//! a warning. So does a rule that follows an unfiltered rule for the same
+//! capability under the same caller: the first match decides, so it never
+//! matches.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -23,6 +25,7 @@ use anyhow::Context;
 use submilli_blueprint::{Action, Blueprint, DefaultAction, FilterExpr, PermissionRule};
 use submilli_build::{CapabilitySchema, PackageStore};
 
+use super::capability::action_label;
 use super::declared_packages;
 use super::file::{has_capability_rule, has_matching_rule};
 use super::package_secrets::missing_package_secret_warnings;
@@ -62,6 +65,7 @@ fn lint_blueprint(args: Args, blueprint: &mut Blueprint) -> anyhow::Result<ExitC
 
     let mut warnings = Vec::from_iter(default_allow_warning(blueprint));
     warnings.extend(unreachable_main_rule_warnings(blueprint));
+    warnings.extend(shadowed_rule_warnings(blueprint));
     // An incomplete closure hides the dependencies past the failure, so a
     // caller block for one of them cannot be told from a stale one.
     if packages.errors.is_empty() {
@@ -219,6 +223,48 @@ fn unreachable_main_rule_warnings(blueprint: &Blueprint) -> Vec<String> {
             ))
         })
         .collect()
+}
+
+/// A caller's first rule matching a call decides it, so a rule with no filter
+/// decides every call to its capability, and a later rule for that capability
+/// under the same caller never matches, whatever either action is. Rules for
+/// a capability the runtime refuses to `main` are never consulted there at
+/// all, which `unreachable_main_rule_warnings` reports instead.
+fn shadowed_rule_warnings(blueprint: &Blueprint) -> Vec<String> {
+    let mut warnings = Vec::new();
+    for (caller, rules) in &blueprint.permissions {
+        let mut deciding: BTreeMap<&str, (usize, Action)> = BTreeMap::new();
+        for (position, rule) in (1..).zip(rules) {
+            if caller == interpreter::mangle::USER_PACKAGE && is_refused_to_main(&rule.capability) {
+                continue;
+            }
+            if let Some((first, action)) = deciding.get(rule.capability.as_str()) {
+                warnings.push(format!(
+                    "`permissions.{caller}` rule {position} for `{}` ({}) never matches: rule \
+                     {first} (`{}`, no filter) decides every call to it first",
+                    rule.capability,
+                    describe_rule(rule),
+                    action_label(*action)
+                ));
+            } else if rule.filter.is_none() {
+                deciding.insert(&rule.capability, (position, rule.action));
+            }
+        }
+    }
+    warnings
+}
+
+fn is_refused_to_main(capability: &str) -> bool {
+    interpreter::stdlib::capabilities::find(capability)
+        .is_some_and(|known| known.main_denial.is_some())
+}
+
+/// The rule's action and filter, as a reader finds it in the file.
+fn describe_rule(rule: &PermissionRule) -> String {
+    match &rule.filter {
+        Some(filter) => format!("`{}` with filter `{filter}`", action_label(rule.action)),
+        None => format!("`{}`, no filter", action_label(rule.action)),
+    }
 }
 
 /// `dependencies` are the undeclared packages declared ones depend on: their

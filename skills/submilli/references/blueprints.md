@@ -351,9 +351,11 @@ provides for `main` (which cannot import it), unless `--force` is given,
 which lint cannot catch (a misspelled name is a rule that never matches). Add `variables`, `vfs`,
 `idle_timeout` and `llm` by editing the file; the CLI editors rewrite YAML
 and drop comments, so keep hand-written commentary elsewhere. Lint warns on
-`main` rules the runtime never consults (such as `secrets.get`) and on
-`default: allow`, and checks the `requires` of listed packages' dependencies
-like those of the packages themselves. A provided capability with no `main` rule is withheld, not
+`main` rules the runtime never consults (such as `secrets.get`), on a rule
+that follows an unfiltered rule for the same capability and caller (it never
+matches; `capability add` warns when it writes one), and on `default: allow`,
+and checks the `requires` of listed packages' dependencies like those of the
+packages themselves. A provided capability with no `main` rule is withheld, not
 a finding; `submilli blueprint capability list --unconfigured` lists them.
 
 Register and run:

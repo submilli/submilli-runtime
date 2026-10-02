@@ -1647,6 +1647,69 @@ fn capability_add_refuses_a_dependencys_capability_for_main() {
     );
 }
 
+/// SUB-1258: the first matching rule decides, so a rule behind an unfiltered
+/// rule for the same capability and caller never matches.
+#[test]
+fn lint_warns_on_a_rule_behind_an_unfiltered_rule() {
+    let file = write_temp(
+        "submilli-lint-shadowed.yaml",
+        "name: x\ndefault: deny\npermissions:\n  main:\n    - capability: fs.read\n      filter: path == \"/a\"\n      action: allow\n    - capability: fs.read\n      action: deny\n    - capability: fs.write\n      action: allow\n    - capability: fs.read\n      filter: path == \"/x\"\n      action: allow\n  \"@acme/util\":\n    - capability: fs.read\n      action: allow\n    - capability: http.get\n      action: allow\n    - capability: http.get\n      action: deny\n",
+    );
+
+    let out = run(&[os("blueprint"), os("lint"), file.as_os_str()]);
+
+    assert!(
+        out.status.success(),
+        "a warning, not an error: {}",
+        stderr(&out)
+    );
+    let err = stderr(&out);
+    assert!(
+        err.contains("`permissions.main` rule 4 for `fs.read` (`allow` with filter `path == \"/x\"`) never matches: rule 2 (`deny`, no filter) decides every call to it first"),
+        "got: {err}"
+    );
+    assert!(
+        err.contains("`permissions.@acme/util` rule 3 for `http.get` (`deny`, no filter) never matches: rule 2 (`allow`, no filter) decides every call to it first"),
+        "got: {err}"
+    );
+    assert_eq!(err.matches("never matches").count(), 2, "got: {err}");
+}
+
+/// The runtime refuses `secrets.get` to `main` outright, which lint reports
+/// on its own; no rule there decides anything.
+#[test]
+fn lint_does_not_call_rules_refused_to_main_shadowed() {
+    let file = write_temp(
+        "submilli-lint-shadowed-secrets.yaml",
+        "name: x\ndefault: deny\npermissions:\n  main:\n    - capability: secrets.get\n      action: allow\n    - capability: secrets.get\n      action: deny\n",
+    );
+
+    let out = run(&[os("blueprint"), os("lint"), file.as_os_str()]);
+
+    let err = stderr(&out);
+    assert!(err.contains("has no effect"), "got: {err}");
+    assert!(!err.contains("never matches"), "got: {err}");
+}
+
+/// A filtered rule decides only the calls it matches, so the rules after it
+/// still apply to the rest.
+#[test]
+fn lint_accepts_rules_behind_a_filtered_rule() {
+    let file = write_temp(
+        "submilli-lint-filtered-first.yaml",
+        "name: x\ndefault: deny\npermissions:\n  main:\n    - capability: fs.read\n      filter: path == \"/x\"\n      action: deny\n    - capability: fs.read\n      action: allow\n",
+    );
+
+    let out = run(&[os("blueprint"), os("lint"), file.as_os_str()]);
+
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    assert!(
+        !stderr(&out).contains("never matches"),
+        "got: {}",
+        stderr(&out)
+    );
+}
+
 // ---- submilli run --blueprint --------------------------------------------
 
 const FS_WRITE_SCRIPT: &str = r#"import { writeText } from "submilli:fs"; function main(): void { writeText("/x.txt", "hi"); }"#;
