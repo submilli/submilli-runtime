@@ -18,9 +18,9 @@ Only `SUBMILLI_CONFORMANCE_TEST=1` enables them (`true`, `yes`, and `on`,
 case-insensitive, are also accepted). Filters and baseline-update settings do not
 opt in. Harness unit tests and metadata checks remain available without the flag.
 
-The Conformance workflow runs nightly at 02:00 UTC and can be dispatched manually
-against a candidate ref. The [release skill](../../.agents/skills/release/SKILL.md)
-requires both complete suites on the final release candidate before publication,
+The Conformance workflow runs nightly at 02:00 UTC. The
+[release skill](../../.agents/skills/release/SKILL.md) runs both complete suites
+locally on the operator machine against the final candidate before publication,
 with inherited filters and baseline-update settings cleared. The release workflow
 is unchanged.
 

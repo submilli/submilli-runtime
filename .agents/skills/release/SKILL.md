@@ -95,8 +95,10 @@ change range; ordinary development and PR checks do not satisfy this gate.
   same candidate and environment. Enable required affected HTTP tests and
   explicitly supply credentials for live package tests. Report skipped coverage
   separately.
-- Run both complete conformance suites on the final release candidate before
-  tagging, pushing, or publishing. This is the explicit pre-release exception
+- Run both complete conformance suites locally on the operator machine, from
+  the final release candidate checkout, before tagging, pushing, or publishing.
+  Do not dispatch a GitHub Actions conformance run for release verification;
+  the conformance workflow is for nightly checks only. This is the explicit pre-release exception
   to keeping conformance disabled during development and PR verification.
   `SUBMILLI_FULL_TEST` does not enable conformance. Clear inherited filters and
   baseline-update/output settings and opt in with the dedicated flag:
@@ -113,7 +115,7 @@ change range; ordinary development and PR checks do not satisfy this gate.
   regenerate expected baselines to make release verification green. Record the
   candidate revision, any preparation diff, command, and both suite results.
   Failures or unavailable checks block release publication. Nightly results for
-  another revision do not substitute for the release candidate's results.
+  any revision do not substitute for this local pre-release verification.
 - Check/build the documentation site for book changes. Run
   `helm unittest charts/submilli` for chart changes and relevant additional checks
   from `.github/workflows/chart-ci.yml` for behavioral chart changes.
@@ -187,7 +189,8 @@ does not trigger another workflow through a release event.
 Before retrying mutations, inspect remote main, the tag, release, assets, and
 workflow runs. Reuse matching state; stop on tag/commit mismatches. If the tag
 exists but no release does, require recorded successful conformance results for
-that exact candidate, or run both suites on its tagged source before publication.
+that exact candidate from the operator machine, or run both suites locally on
+its tagged source before publication.
 Then continue at creation after the remaining verification. Inspect and
 publish an existing draft rather than creating another release. Do not recreate
 a published release.

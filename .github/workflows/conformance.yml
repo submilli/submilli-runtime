@@ -3,13 +3,6 @@ name: Conformance
 on:
   schedule:
     - cron: '0 2 * * *'
-  workflow_dispatch:
-    inputs:
-      ref:
-        description: Commit, branch, or tag to check before publishing a release
-        required: true
-        default: main
-        type: string
 
 permissions:
   contents: read
@@ -26,8 +19,6 @@ jobs:
       CARGO_PROFILE_TEST_DEBUG: "0"
     steps:
       - uses: actions/checkout@v4
-        with:
-          ref: ${{ inputs.ref || github.sha }}
       - uses: dtolnay/rust-toolchain@1.98.1
       - uses: Swatinem/rust-cache@v2
       - name: ECMA-262 conformance
