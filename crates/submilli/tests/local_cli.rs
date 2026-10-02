@@ -403,7 +403,7 @@ fn lint_keeps_a_narrowed_requires_rule() {
     let home = tempfile::tempdir().expect("home tempdir");
     let _project = publish_capability_packages(home.path());
     let file = home.path().join("blueprint.yaml");
-    let blueprint = "name: x\npackages:\n  - \"@acme/app\"\npermissions:\n  \"@acme/app\":\n    - capability: acme.com/charge\n      filter: customer == \"cus_123\" and amount < 500\n      action: allow\n";
+    let blueprint = "name: x\npackages:\n  - \"@acme/app\"\npermissions:\n  \"@acme/app\":\n    - capability: acme.com/charge\n      filter: customer glob \"cus_1*\"\n      action: allow\n";
     write_file(&file, blueprint);
 
     let out = run_with_home(
@@ -1706,6 +1706,145 @@ fn lint_accepts_rules_behind_a_filtered_rule() {
     assert!(out.status.success(), "stderr: {}", stderr(&out));
     assert!(
         !stderr(&out).contains("never matches"),
+        "got: {}",
+        stderr(&out)
+    );
+}
+
+/// SUB-1283: a condition on a field the check doesn't report is false for
+/// every call, so the `allow` rule never matches and the `not` form matches
+/// every call.
+#[test]
+fn lint_rejects_a_package_filter_on_a_field_the_operation_does_not_report() {
+    let home = tempfile::tempdir().expect("home tempdir");
+    let _project = publish_capability_packages(home.path());
+    let file = home.path().join("blueprint.yaml");
+    write_file(
+        &file,
+        "name: x\ndefault: deny\npackages:\n  - '@acme/sdk'\npermissions:\n  main:\n    - capability: acme.com/charge\n      filter: customer == \"cus_1\" and customerClass == \"premium\"\n      action: allow\n    - capability: acme.com/refund\n      filter: customer == \"cus_1\" and not (customerClass == \"standard\")\n      action: allow\n  '@acme/sdk': []\n",
+    );
+
+    let out = run_with_home(
+        &[os("blueprint"), os("lint"), file.as_os_str()],
+        home.path(),
+    );
+
+    assert_eq!(out.status.code(), Some(1), "stderr: {}", stderr(&out));
+    let err = stderr(&out);
+    for (position, capability) in [(1, "acme.com/charge"), (2, "acme.com/refund")] {
+        assert!(
+            err.contains(&format!("error: {}: `permissions.main` rule {position} for `{capability}` tests `customerClass`, which the operation doesn't report, so a condition on it is false for every call, and true under `not`; its fields are: customer", file.display())),
+            "got: {err}"
+        );
+    }
+    assert!(!err.contains("is valid"), "got: {err}");
+}
+
+#[test]
+fn lint_rejects_stdlib_and_mcp_filters_on_unreported_fields() {
+    let file = write_temp(
+        "submilli-lint-unreported-fields.yaml",
+        "name: x\ndefault: deny\nmcp:\n  linear:\n    url: https://example.com/mcp\npermissions:\n  main:\n    - capability: fs.write\n      filter: host == \"x\" or host == \"y\"\n      action: allow\n    - capability: mcp.linear\n      filter: tool == \"save_issue\" and server == \"linear\"\n      action: allow\n",
+    );
+
+    let out = run(&[os("blueprint"), os("lint"), file.as_os_str()]);
+
+    assert_eq!(out.status.code(), Some(1), "stderr: {}", stderr(&out));
+    let err = stderr(&out);
+    assert!(
+        err.contains("`permissions.main` rule 1 for `fs.write` tests `host`, which the operation doesn't report, so a condition on it is false for every call, and true under `not`; its fields are: diff, length, max_bytes, path"),
+        "got: {err}"
+    );
+    assert_eq!(err.matches("tests `host`").count(), 1, "got: {err}");
+    assert!(
+        err.contains("`permissions.main` rule 2 for `mcp.linear` tests `server`, which the operation doesn't report, so a condition on it is false for every call, and true under `not`; its fields are: tool, transport"),
+        "got: {err}"
+    );
+}
+
+/// A package that checks a standard-library name itself reports its own
+/// context, so its fields count alongside the catalog's.
+#[test]
+fn lint_accepts_a_field_a_package_reports_for_a_stdlib_capability() {
+    let home = tempfile::tempdir().expect("home tempdir");
+    let project = tempfile::tempdir().expect("project tempdir");
+    write_file(
+        &project.path().join("submilli.toml"),
+        "[[package]]\nname = \"@acme/saver\"\nversion = \"0.1.0\"\ndescription = \"Saver package.\"\npath = \"saver\"\n",
+    );
+    write_file(
+        &project.path().join("saver/src/lib.ts"),
+        r#"
+            import { check } from "submilli:security";
+            /** @capability fs.write { path, purpose } */
+            export function save(path: string, purpose: string): void {
+                check("fs.write", { path, purpose });
+            }
+        "#,
+    );
+    let out = run_in_with_home(
+        &[os("build"), os("publish-local")],
+        project.path(),
+        home.path(),
+    );
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    let file = home.path().join("blueprint.yaml");
+    write_file(
+        &file,
+        "name: x\ndefault: deny\npackages:\n  - '@acme/saver'\npermissions:\n  main:\n    - capability: fs.write\n      filter: purpose == \"notes\" and path glob \"/out/*\"\n      action: allow\n    - capability: fs.write\n      filter: owner == \"ops\"\n      action: allow\n  '@acme/saver': []\n",
+    );
+
+    let out = run_with_home(
+        &[os("blueprint"), os("lint"), file.as_os_str()],
+        home.path(),
+    );
+
+    let err = stderr(&out);
+    assert!(!err.contains("tests `purpose`"), "got: {err}");
+    assert!(
+        err.contains("rule 2 for `fs.write` tests `owner`, which the operation doesn't report, so a condition on it is false for every call, and true under `not`; its fields are: diff, length, max_bytes, path, purpose"),
+        "got: {err}"
+    );
+}
+
+/// A package that fails to load could report the field itself, so lint
+/// reports the load failure and leaves the field lists unjudged.
+#[test]
+fn lint_skips_field_checks_when_a_package_fails_to_load() {
+    let home = tempfile::tempdir().expect("home tempdir");
+    let file = home.path().join("blueprint.yaml");
+    write_file(
+        &file,
+        "name: x\ndefault: deny\npackages:\n  - '@acme/missing'\npermissions:\n  main:\n    - capability: fs.write\n      filter: purpose == \"notes\"\n      action: allow\n  '@acme/missing': []\n",
+    );
+
+    let out = run_with_home(
+        &[os("blueprint"), os("lint"), file.as_os_str()],
+        home.path(),
+    );
+
+    assert_eq!(out.status.code(), Some(1), "stderr: {}", stderr(&out));
+    let err = stderr(&out);
+    assert!(err.contains("@acme/missing"), "got: {err}");
+    assert!(!err.contains("doesn't report"), "got: {err}");
+}
+
+/// Fields only some calls supply are still reported, and only the first
+/// segment of a dotted path is checked: `path.length` can't match a string
+/// `path`, but nothing records what a field contains. A capability nothing
+/// provides is SUB-940's to report.
+#[test]
+fn lint_accepts_filters_on_reported_fields() {
+    let file = write_temp(
+        "submilli-lint-reported-fields.yaml",
+        "name: x\ndefault: deny\npermissions:\n  main:\n    - capability: fs.write\n      filter: path glob \"/out/*\" and length < 1000\n      action: allow\n    - capability: fs.read\n      filter: path.length == 3\n      action: allow\n    - capability: acme.com/unknown\n      filter: anything == 1\n      action: allow\n",
+    );
+
+    let out = run(&[os("blueprint"), os("lint"), file.as_os_str()]);
+
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    assert!(
+        !stderr(&out).contains("doesn't report"),
         "got: {}",
         stderr(&out)
     );

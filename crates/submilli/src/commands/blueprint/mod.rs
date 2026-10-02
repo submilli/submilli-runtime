@@ -13,6 +13,7 @@ pub mod auth_proxy;
 pub mod capability;
 mod declared_packages;
 mod file;
+mod filter_fields;
 pub mod git;
 pub mod init;
 pub mod lint;

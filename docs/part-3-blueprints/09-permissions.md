@@ -117,9 +117,9 @@ no rule for, and the `default` those calls fall through to.
 
 | Capability | Checked by | Fields |
 | --- | --- | --- |
-| `fs.read` | `read`, `readText`, `readBytes`, `lines`, `bytes` | `path` |
-| `fs.write` | `write`, `writeText`, `append`, `appendText`, `writer`, and `download` for its destination | `path` |
-| `fs.stat` | `stat`, `exists`, `size`, `peek` | `path` |
+| `fs.read` | `read`, `readText`, `readBytes`, `lines`, `bytes` | `path`; `length` from `readBytes`, `chunkSize` from `bytes`, and `recursive` (always true) from the code module |
+| `fs.write` | `write`, `writeText`, `append`, `appendText`, `writer`, and `download` for its destination | `path`; `length` from `write`, `writeText`, `append`, `appendText`, and code edits, `max_bytes` from `download` and packages that stream a download to a file, and `diff` from code edits |
+| `fs.stat` | `stat`, `exists`, `size`, `peek` | `path`; `recursive` (always true) from the code module |
 | `fs.list` | `list` | `path`, `recursive` |
 | `fs.mkdir` | `mkdir` | `path`, `recursive` |
 | `fs.remove` | `remove` | `path`, `recursive` |
@@ -272,6 +272,7 @@ mistake stops it before any program runs.
 | A package requires a permission that its own list grants with a different filter, or denies | Warning |
 | `default: allow` | Warning |
 | A `secrets.get` rule under `main`, which can have no effect | Warning |
+| A filter that tests a field the capability doesn't report, such as `customerClass` on an operation whose only field is `customerId` | Error |
 | A rule after a rule with no filter for the same capability in the same list, which never matches | Warning |
 | A list for a caller that is neither among the blueprint's packages nor a package they depend on | Warning |
 | A package among the blueprint's packages with no list of its own | Warning |

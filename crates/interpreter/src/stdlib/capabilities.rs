@@ -129,6 +129,12 @@ const RECURSIVE: FilterField = field(
 );
 const FROM: FilterField = vfs_path_field("from", "Normalized absolute source VFS path");
 const TO: FilterField = vfs_path_field("to", "Normalized absolute destination VFS path");
+/// The code module checks workspace access as recursive.
+const CODE_RECURSIVE: FilterField = field(
+    "recursive",
+    "boolean",
+    "Always true; supplied by the code module only",
+);
 const KEY: FilterField = field("key", "string", "Session key the call targets");
 const PREFIX: FilterField = field("prefix", "string", "Session key prefix being listed");
 
@@ -137,21 +143,52 @@ const FS: &[Capability] = &[
         name: "fs.read",
         main_denial: None,
         summary: "Read files and code workspace content (including search and ignore rules)",
-        filter_fields: &[PATH],
+        filter_fields: &[
+            PATH,
+            field(
+                "length",
+                "number",
+                "Bytes requested; supplied by `readBytes` only",
+            ),
+            field(
+                "chunkSize",
+                "number",
+                "Chunk size in bytes; supplied by `bytes` only",
+            ),
+            CODE_RECURSIVE,
+        ],
         example_filter: "path glob \"*.csv\"",
     },
     Capability {
         name: "fs.write",
         main_denial: None,
         summary: "Create, write, append, or apply code edits to files",
-        filter_fields: &[PATH],
+        filter_fields: &[
+            PATH,
+            field(
+                "length",
+                "number",
+                "Content size in bytes; supplied by `write`, `writeText`, `append`, \
+                 `appendText`, and code edits",
+            ),
+            field(
+                "max_bytes",
+                "number",
+                "Requested download size cap in bytes; supplied by `http.download` and packages that stream downloads",
+            ),
+            field(
+                "diff",
+                "string",
+                "Unified diff of the edit; supplied by code edits only",
+            ),
+        ],
         example_filter: "path glob \"/out/*\"",
     },
     Capability {
         name: "fs.stat",
         main_denial: None,
         summary: "Inspect metadata (including code workspace discovery)",
-        filter_fields: &[PATH],
+        filter_fields: &[PATH, CODE_RECURSIVE],
         example_filter: "path glob \"/data/*\"",
     },
     Capability {

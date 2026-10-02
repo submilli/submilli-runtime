@@ -14,7 +14,9 @@
 //! parses, but inverts the security posture to allow-by-default, so it lints as
 //! a warning. So does a rule that follows an unfiltered rule for the same
 //! capability under the same caller: the first match decides, so it never
-//! matches.
+//! matches. A filter that tests a field the capability's check doesn't report
+//! is an error: a condition on a missing field is false for every call, and
+//! true under `not`, whatever the call's arguments.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
@@ -23,11 +25,12 @@ use std::process::ExitCode;
 
 use anyhow::Context;
 use submilli_blueprint::{Action, Blueprint, DefaultAction, FilterExpr, PermissionRule};
-use submilli_build::{CapabilitySchema, PackageStore};
+use submilli_build::{Artifact, CapabilitySchema, PackageStore};
 
 use super::capability::action_label;
 use super::declared_packages;
 use super::file::{has_capability_rule, has_matching_rule};
+use super::filter_fields::{reported_fields, unreported_field_problem, unreported_fields};
 use super::package_secrets::missing_package_secret_warnings;
 
 #[derive(clap::Args)]
@@ -60,8 +63,13 @@ fn lint_blueprint(args: Args, blueprint: &mut Blueprint) -> anyhow::Result<ExitC
     let mut fixes = Vec::new();
 
     let packages = declared_packages::load(blueprint, &PackageStore::default());
-    errors.extend(packages.errors.iter().cloned());
     unfixable_errors.extend(packages.errors.iter().cloned());
+    // A package that failed to load may report fields of its own, even for a
+    // standard-library name, so no field list is known to be complete.
+    if packages.errors.is_empty() {
+        unfixable_errors.extend(unreported_field_errors(blueprint, &packages.artifacts));
+    }
+    errors.extend(unfixable_errors.iter().cloned());
 
     let mut warnings = Vec::from_iter(default_allow_warning(blueprint));
     warnings.extend(unreachable_main_rule_warnings(blueprint));
@@ -111,6 +119,34 @@ fn lint_blueprint(args: Args, blueprint: &mut Blueprint) -> anyhow::Result<ExitC
         }
         Ok(ExitCode::from(1))
     }
+}
+
+/// One error per field a rule's filter tests that its capability's check
+/// doesn't report. A rule for a capability nothing loaded provides has no
+/// field list to check against, so it is skipped.
+fn unreported_field_errors(
+    blueprint: &Blueprint,
+    artifacts: &BTreeMap<String, Artifact>,
+) -> Vec<String> {
+    let mut errors = Vec::new();
+    for (caller, rules) in &blueprint.permissions {
+        for (position, rule) in (1..).zip(rules) {
+            let Some(filter) = &rule.filter else {
+                continue;
+            };
+            let Some(reported) = reported_fields(blueprint, artifacts, &rule.capability) else {
+                continue;
+            };
+            for field in unreported_fields(filter, &reported) {
+                errors.push(format!(
+                    "`permissions.{caller}` rule {position} for `{}` {}",
+                    rule.capability,
+                    unreported_field_problem(field, &reported)
+                ));
+            }
+        }
+    }
+    errors
 }
 
 /// A rule a package's `requires:` needs for its own calls; `--fix` grants it.
