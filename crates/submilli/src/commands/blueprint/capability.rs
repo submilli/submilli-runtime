@@ -1,6 +1,7 @@
 //! `submilli blueprint capability {list,add,remove}` — browse every capability
-//! a blueprint can gate (stdlib, declared packages, declared MCP servers) and
-//! edit the `permissions:` block without hand-writing YAML.
+//! a blueprint can gate (stdlib, declared packages and the packages they
+//! depend on, declared MCP servers) and edit the `permissions:` block without
+//! hand-writing YAML.
 //!
 //! `add`/`remove` rewrite the file from the parsed form, so YAML comments are
 //! not preserved.
@@ -14,6 +15,7 @@ use interpreter::stdlib::capabilities;
 use submilli_blueprint::{Action, Blueprint, DefaultAction, FilterExpr, PermissionRule};
 use submilli_build::PackageStore;
 
+use super::declared_packages;
 use super::file::{blueprint_path, has_capability_rule, load, write};
 
 #[derive(Subcommand)]
@@ -50,7 +52,7 @@ pub fn execute(cmd: CapabilityCmd) -> Result<ExitCode> {
 #[derive(clap::Args)]
 pub struct ListArgs {
     /// Show one library only: a stdlib module (`submilli:fs`), a declared
-    /// package, or a declared MCP server name.
+    /// package or a package one depends on, or a declared MCP server name.
     library: Option<String>,
     /// Blueprint file to read (default: ./blueprint.yaml). Without a readable
     /// blueprint the stdlib catalog is still listed.
@@ -315,21 +317,19 @@ fn collect_sources(blueprint: Option<&Blueprint>) -> Vec<Source> {
         }
     }
 
+    // A dependency's provided capabilities are what its dependents require,
+    // so their caller lists name them too.
     if let Some(bp) = blueprint {
-        let store = PackageStore::default();
-        for package in &bp.packages {
-            match store.load(package) {
-                Ok(artifact) => sources.push(Source {
-                    name: package.clone(),
-                    entries: artifact
-                        .capabilities
-                        .provides
-                        .iter()
-                        .map(provided_entry)
-                        .collect(),
-                }),
-                Err(e) => eprintln!("warning: skipping declared package '{package}': {e}"),
-            }
+        for (package, artifact) in load_packages(bp).artifacts {
+            sources.push(Source {
+                name: package,
+                entries: artifact
+                    .capabilities
+                    .provides
+                    .iter()
+                    .map(provided_entry)
+                    .collect(),
+            });
         }
     }
 
@@ -422,7 +422,7 @@ fn add(args: &AddArgs) -> Result<String> {
 
     refuse_if_never_grantable_to_main(&args.capability, &args.caller)?;
     if !args.force {
-        validate_name(&blueprint, &args.capability)?;
+        validate_name(&blueprint, &args.caller, &args.capability)?;
     }
 
     let action = Action::from(args.action);
@@ -457,6 +457,8 @@ fn add(args: &AddArgs) -> Result<String> {
     let shadowed = rules[..position]
         .iter()
         .any(|r| r.capability == args.capability);
+    let unreachable =
+        unreachable_after_insert(rules, position, &rule, &args.caller, &remove_command(args));
     rules.insert(position, rule.clone());
     if !had_policy {
         blueprint.default_action = Some(DefaultAction::Deny);
@@ -488,13 +490,80 @@ fn add(args: &AddArgs) -> Result<String> {
             ));
         }
     }
-    if shadowed {
-        message.push_str(&format!(
+    match unreachable {
+        Some(warning) => message.push_str(&format!("\n  warning: {warning}")),
+        None if shadowed => message.push_str(&format!(
             "\n  note: earlier rules for '{}' exist under '{}' — the first matching rule wins",
             args.capability, args.caller
-        ));
+        )),
+        None => {}
     }
     Ok(message)
+}
+
+/// What inserting `rule` at index `position` leaves unable to match, if
+/// anything: the first matching rule decides, so a rule after an unfiltered
+/// rule for the same capability never matches. Rule numbers in the warning are
+/// 1-based positions after the insert, as lint reports them.
+fn unreachable_after_insert(
+    rules: &[PermissionRule],
+    position: usize,
+    rule: &PermissionRule,
+    caller: &str,
+    remove_command: &str,
+) -> Option<String> {
+    let same_capability = |other: &PermissionRule| other.capability == rule.capability;
+    let (before, after) = rules.split_at(position.min(rules.len()));
+    let fix = format!(
+        "delete or narrow it in the file, or run `{remove_command}` and add the rules again in \
+         order"
+    );
+    if let Some((number, deciding)) = (1..)
+        .zip(before)
+        .find(|(_, other)| same_capability(other) && other.filter.is_none())
+    {
+        return Some(format!(
+            "`permissions.{caller}` rule {number} for `{}` (`{}`, no filter) decides every call \
+             first, so this rule never matches; {fix}",
+            rule.capability,
+            action_label(deciding.action)
+        ));
+    }
+    if rule.filter.is_some() {
+        return None;
+    }
+    // After the insert, the rules that followed `position` sit one further on.
+    let later: Vec<String> = (before.len() + 2..)
+        .zip(after)
+        .filter(|(_, other)| same_capability(other))
+        .map(|(number, _)| number.to_string())
+        .collect();
+    let (noun, verb) = if later.len() == 1 {
+        ("rule", "matches")
+    } else {
+        ("rules", "match")
+    };
+    (!later.is_empty()).then(|| {
+        format!(
+            "this rule has no filter, so `permissions.{caller}` {noun} {} for `{}` after it never \
+             {verb}; {fix}",
+            later.join(", "),
+            rule.capability
+        )
+    })
+}
+
+/// The `capability remove` invocation that edits the same file and caller as
+/// this `capability add`.
+fn remove_command(args: &AddArgs) -> String {
+    let mut command = format!("submilli blueprint capability remove {}", args.capability);
+    if args.caller != interpreter::mangle::USER_PACKAGE {
+        command.push_str(&format!(" --caller {}", args.caller));
+    }
+    if let Some(path) = &args.blueprint {
+        command.push_str(&format!(" --blueprint {}", path.display()));
+    }
+    command
 }
 
 /// Refuses a rule the runtime would never consult. Checked ahead of, and
@@ -515,13 +584,29 @@ fn refuse_if_never_grantable_to_main(capability: &str, caller: &str) -> Result<(
     );
 }
 
-/// A capability name is accepted when the stdlib catalog, a declared package,
-/// or a declared MCP server provides it. `--force` bypasses this — the policy
-/// engine itself matches names verbatim and doesn't care.
-fn validate_name(blueprint: &Blueprint, name: &str) -> Result<()> {
-    let known = known_capabilities(blueprint);
+/// A capability name is accepted when the stdlib catalog, a declared MCP
+/// server, or a package `caller` can reach provides it: for `main`, a declared
+/// package; for a package, also a package a declared one depends on. `--force`
+/// bypasses this — the policy engine itself matches names verbatim and doesn't
+/// care.
+fn validate_name(blueprint: &Blueprint, caller: &str, name: &str) -> Result<()> {
+    let packages = load_packages(blueprint);
+    let known = known_capabilities(blueprint, &packages, caller);
     if known.iter().any(|k| k == name) {
         return Ok(());
+    }
+    if let Some(dependency) = dependency_providing(&packages, name) {
+        let callers = dependents_of(&packages, dependency)
+            .into_iter()
+            .map(|dependent| format!("`--caller {dependent}`"))
+            .collect::<Vec<_>>()
+            .join(" or ");
+        bail!(
+            "'{name}' is provided by `{dependency}`, which only the packages that depend on it \
+             can call; `{caller}` cannot import it\n  \
+             grant it to one of them with {callers}, or declare `{dependency}` \
+             with `submilli blueprint add-package {dependency}`"
+        );
     }
     let near: Vec<String> = suggestions(&known, name);
     let hint = if near.is_empty() {
@@ -536,7 +621,12 @@ fn validate_name(blueprint: &Blueprint, name: &str) -> Result<()> {
     );
 }
 
-fn known_capabilities(blueprint: &Blueprint) -> Vec<String> {
+/// Every capability name `caller` may hold a rule for.
+fn known_capabilities(
+    blueprint: &Blueprint,
+    packages: &declared_packages::DeclaredPackages,
+    caller: &str,
+) -> Vec<String> {
     let mut names: Vec<String> = capabilities::catalog()
         .iter()
         .flat_map(|g| g.capabilities)
@@ -544,22 +634,64 @@ fn known_capabilities(blueprint: &Blueprint) -> Vec<String> {
         .map(|c| c.name.to_string())
         .collect();
     names.extend(blueprint.mcp.keys().map(|server| format!("mcp.{server}")));
-    let store = PackageStore::default();
-    for package in &blueprint.packages {
-        match store.load(package) {
-            Ok(artifact) => names.extend(
-                artifact
-                    .capabilities
-                    .provides
-                    .iter()
-                    .map(|p| p.name.clone()),
-            ),
-            Err(_) => eprintln!(
-                "warning: could not load declared package '{package}' — its capabilities were not checked"
-            ),
+    // `main` imports only declared packages, so a `main` rule for what only a
+    // dependency provides could never match.
+    let reaches_dependencies = caller != interpreter::mangle::USER_PACKAGE;
+    for (package, artifact) in &packages.artifacts {
+        if packages.dependencies.contains(package) && !reaches_dependencies {
+            continue;
         }
+        names.extend(
+            artifact
+                .capabilities
+                .provides
+                .iter()
+                .map(|p| p.name.clone()),
+        );
     }
     names
+}
+
+/// The undeclared dependency that provides `name`, if any.
+fn dependency_providing<'a>(
+    packages: &'a declared_packages::DeclaredPackages,
+    name: &str,
+) -> Option<&'a str> {
+    packages
+        .artifacts
+        .iter()
+        .filter(|(package, _)| packages.dependencies.contains(*package))
+        .find(|(_, artifact)| {
+            artifact
+                .capabilities
+                .provides
+                .iter()
+                .any(|provided| provided.name == name)
+        })
+        .map(|(package, _)| package.as_str())
+}
+
+/// The loaded packages that depend on `dependency` directly.
+fn dependents_of<'a>(
+    packages: &'a declared_packages::DeclaredPackages,
+    dependency: &str,
+) -> Vec<&'a str> {
+    packages
+        .artifacts
+        .iter()
+        .filter(|(_, artifact)| declared_packages::depends_on(artifact, dependency))
+        .map(|(package, _)| package.as_str())
+        .collect()
+}
+
+/// The checks this command makes are best-effort, so a package that fails to
+/// load is a warning.
+fn load_packages(blueprint: &Blueprint) -> declared_packages::DeclaredPackages {
+    let packages = declared_packages::load(blueprint, &PackageStore::default());
+    for error in &packages.errors {
+        eprintln!("warning: {error}; listing and checking only what loaded");
+    }
+    packages
 }
 
 /// Names sharing the input's `module.` prefix, or containing it as a
@@ -802,8 +934,10 @@ mod tests {
     #[test]
     fn duplicate_rule_is_rejected_and_shadowing_is_noted() {
         let (_tmp, path) = temp_blueprint("name: t\n");
-        add(&add_args("fs.read", &path)).unwrap();
-        let err = add(&add_args("fs.read", &path)).unwrap_err();
+        let mut filtered = add_args("fs.read", &path);
+        filtered.filter = Some("path == \"/x\"".into());
+        add(&filtered).unwrap();
+        let err = add(&filtered).unwrap_err();
         assert!(err.to_string().contains("identical rule"), "{err}");
 
         let mut deny = add_args("fs.read", &path);
@@ -811,6 +945,70 @@ mod tests {
         let message = add(&deny).unwrap();
         assert!(message.contains("first matching rule wins"), "{message}");
         assert_eq!(reload(&path).permissions["main"].len(), 2);
+    }
+
+    /// SUB-1258: the rule is still written, but the output says it can never
+    /// match, as `blueprint lint` will.
+    #[test]
+    fn a_rule_behind_an_unfiltered_rule_is_warned_about() {
+        let (_tmp, path) = temp_blueprint("name: t\n");
+        add(&add_args("fs.read", &path)).unwrap();
+
+        let mut narrowed = add_args("fs.read", &path);
+        narrowed.filter = Some("path == \"/x\"".into());
+        narrowed.action = ActionArg::Deny;
+        let message = add(&narrowed).unwrap();
+
+        assert!(
+            message.contains(
+                "warning: `permissions.main` rule 1 for `fs.read` (`allow`, no filter) decides every call first, so this rule never matches"
+            ),
+            "{message}"
+        );
+        assert_eq!(reload(&path).permissions["main"].len(), 2);
+    }
+
+    /// The suggested `remove` edits the same caller and file as the `add`.
+    #[test]
+    fn the_unreachable_warning_names_the_callers_remove_command() {
+        let (_tmp, path) = temp_blueprint("name: t\n");
+        let mut whole = add_args("fs.read", &path);
+        whole.caller = "@acme/x".into();
+        add(&whole).unwrap();
+
+        let mut narrowed = add_args("fs.read", &path);
+        narrowed.caller = "@acme/x".into();
+        narrowed.filter = Some("path == \"/x\"".into());
+        let message = add(&narrowed).unwrap();
+
+        assert!(
+            message.contains(&format!(
+                "`permissions.@acme/x` rule 1 for `fs.read` (`allow`, no filter) decides every call first, so this rule never matches; delete or narrow it in the file, or run `submilli blueprint capability remove fs.read --caller @acme/x --blueprint {}`",
+                path.display()
+            )),
+            "{message}"
+        );
+    }
+
+    /// The MCP grant goes ahead of the scaffolded `deny`, which it then shadows.
+    #[test]
+    fn an_unfiltered_mcp_grant_warns_about_the_rules_it_shadows() {
+        let (_tmp, path) = temp_blueprint(
+            "name: t\nmcp:\n  srv:\n    transport: streamable_http\n    url: https://example.invalid/mcp\npermissions:\n  main:\n    - capability: mcp.srv\n      action: deny\n",
+        );
+
+        let message = add(&add_args("mcp.srv", &path)).unwrap();
+
+        assert!(
+            message.contains(
+                "warning: this rule has no filter, so `permissions.main` rule 2 for `mcp.srv` after it never matches"
+            ),
+            "{message}"
+        );
+        assert_eq!(
+            reload(&path).permissions["main"][0].action,
+            submilli_blueprint::Action::Allow
+        );
     }
 
     #[test]

@@ -978,6 +978,738 @@ fn add_package_reports_missing_package() {
     assert!(stderr(&out).contains("package `@acme/missing` was not found"));
 }
 
+/// `@acme/desk` imports `@acme/support`, which imports `@acme/billing`;
+/// billing reads a secret and provides the capability support requires.
+fn publish_dependency_chain(home: &std::path::Path) -> tempfile::TempDir {
+    let project = tempfile::tempdir().expect("project tempdir");
+    write_file(
+        &project.path().join("submilli.toml"),
+        r#"
+[[package]]
+name = "@acme/desk"
+version = "0.1.0"
+description = "Desk package."
+path = "desk"
+dependencies = ["@acme/support"]
+
+[[package]]
+name = "@acme/support"
+version = "0.1.0"
+description = "Support package."
+path = "support"
+dependencies = ["@acme/billing"]
+
+[[package]]
+name = "@acme/billing"
+version = "0.1.0"
+description = "Billing package."
+path = "billing"
+"#,
+    );
+    write_file(
+        &project.path().join("billing/src/lib.ts"),
+        r#"
+            import { check } from "submilli:security";
+            import secrets from "submilli:secrets";
+            import { get } from "submilli:http";
+            /** @capability acme.com/credits.apply { customer } */
+            export function applyCredit(customer: string): string {
+                check("acme.com/credits.apply", { customer });
+                return secrets.get("BILLING_API_KEY") ?? "no key";
+            }
+            /** Never called by the tests: it adds an `http.get` requirement. */
+            export function ping(): number {
+                return get("https://billing.example.com/ping").status;
+            }
+        "#,
+    );
+    write_file(
+        &project.path().join("desk/src/lib.ts"),
+        r#"
+            import { apologize } from "@acme/support";
+            export function escalate(customer: string): string {
+                return apologize(customer);
+            }
+        "#,
+    );
+    write_file(
+        &project.path().join("support/src/lib.ts"),
+        r#"
+            import { applyCredit } from "@acme/billing";
+            export function apologize(customer: string): string {
+                return applyCredit(customer);
+            }
+        "#,
+    );
+    let out = run_in_with_home(&[os("build"), os("publish-local")], project.path(), home);
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    project
+}
+
+fn add_package(home: &std::path::Path, file: &std::path::Path, args: &[&str]) -> Output {
+    let mut command = vec![os("blueprint"), os("add-package")];
+    command.extend(args.iter().map(|arg| os(arg)));
+    command.extend([os("--blueprint"), file.as_os_str()]);
+    run_with_home(&command, home)
+}
+
+fn run_script(home: &std::path::Path, blueprint: &std::path::Path, source: &str) -> Output {
+    let script = home.join("script.ts");
+    write_file(&script, source);
+    Command::new(submilli_bin())
+        .args([
+            os("run"),
+            os("--blueprint"),
+            blueprint.as_os_str(),
+            script.as_os_str(),
+        ])
+        .env("SUBMILLI_HOME", home)
+        .env("BILLING_API_KEY", "sk_test")
+        .output()
+        .expect("invoke submilli")
+}
+
+fn declare_billing_secret(home: &std::path::Path, file: &std::path::Path) {
+    let out = run_with_home(
+        &[
+            os("blueprint"),
+            os("secret"),
+            os("add"),
+            os("BILLING_API_KEY"),
+            os("--env"),
+            os("BILLING_API_KEY"),
+            os("--blueprint"),
+            file.as_os_str(),
+        ],
+        home,
+    );
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+}
+
+/// SUB-1235: one `add-package` yields a blueprint the whole chain runs under.
+#[test]
+fn add_package_adds_caller_rules_for_the_dependency_chain() {
+    let home = tempfile::tempdir().expect("home tempdir");
+    let _project = publish_dependency_chain(home.path());
+    let file = home.path().join("blueprint.yaml");
+    write_file(&file, "name: x\n");
+
+    let out = add_package(home.path(), &file, &["@acme/support", "--no-capabilities"]);
+
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    let text = stdout(&out);
+    assert!(
+        text.contains("✓ added caller rules for @acme/billing, a dependency of @acme/support"),
+        "got: {text}"
+    );
+    assert!(
+        stderr(&out).contains("package `@acme/billing` requires secret `BILLING_API_KEY`"),
+        "got: {}",
+        stderr(&out)
+    );
+    let updated = fs::read_to_string(&file).expect("read blueprint");
+    let blueprint = submilli_blueprint::parse(&updated).expect("parses");
+    assert!(
+        !blueprint.packages.contains("@acme/billing"),
+        "only the named package is importable: {updated}"
+    );
+    assert!(
+        blueprint.permissions["@acme/billing"]
+            .iter()
+            .any(|rule| rule.capability == "secrets.get"),
+        "{updated}"
+    );
+    assert!(!blueprint.permissions.contains_key("main"), "{updated}");
+
+    declare_billing_secret(home.path(), &file);
+    let lint = run_with_home(
+        &[os("blueprint"), os("lint"), file.as_os_str()],
+        home.path(),
+    );
+    assert!(lint.status.success(), "stderr: {}", stderr(&lint));
+    assert!(
+        !stderr(&lint).contains("warning:"),
+        "got: {}",
+        stderr(&lint)
+    );
+
+    let run = run_script(
+        home.path(),
+        &file,
+        r#"import { apologize } from "@acme/support"; function main(): string { return apologize("cus_1"); }"#,
+    );
+    assert!(run.status.success(), "stderr: {}", stderr(&run));
+    assert!(stdout(&run).contains("sk_test"), "got: {}", stdout(&run));
+}
+
+/// A program reaches a dependency only through the package that uses it, so
+/// the dependency's grants never serve the program's own calls.
+#[test]
+fn add_package_keeps_dependencies_out_of_main_imports() {
+    let home = tempfile::tempdir().expect("home tempdir");
+    let _project = publish_dependency_chain(home.path());
+    let file = home.path().join("blueprint.yaml");
+    write_file(&file, "name: x\ndefault: allow\n");
+
+    let out = add_package(home.path(), &file, &["@acme/support", "--all-capabilities"]);
+
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    let updated = fs::read_to_string(&file).expect("read blueprint");
+    let blueprint = submilli_blueprint::parse(&updated).expect("parses");
+    assert!(!blueprint.permissions.contains_key("main"), "{updated}");
+    declare_billing_secret(home.path(), &file);
+    let run = run_script(
+        home.path(),
+        &file,
+        r#"import { applyCredit } from "@acme/billing"; function main(): string { return applyCredit("cus_1"); }"#,
+    );
+    assert!(!run.status.success(), "stdout: {}", stdout(&run));
+    assert!(
+        stderr(&run).contains("package `@acme/billing` is not a dependency of `main`"),
+        "got: {}",
+        stderr(&run)
+    );
+}
+
+/// A dependency the blueprint already declares keeps the operator's rules.
+#[test]
+fn add_package_leaves_an_already_declared_dependency_alone() {
+    let home = tempfile::tempdir().expect("home tempdir");
+    let _project = publish_dependency_chain(home.path());
+    let file = home.path().join("blueprint.yaml");
+    write_file(
+        &file,
+        "name: x\ndefault: deny\npackages:\n  - \"@acme/billing\"\npermissions:\n  \"@acme/billing\":\n    - capability: secrets.get\n      action: deny\n",
+    );
+
+    let out = add_package(home.path(), &file, &["@acme/support", "--no-capabilities"]);
+
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    assert!(
+        !stdout(&out).contains("@acme/billing,"),
+        "got: {}",
+        stdout(&out)
+    );
+    let blueprint =
+        submilli_blueprint::parse(&fs::read_to_string(&file).expect("read")).expect("parses");
+    let billing = &blueprint.permissions["@acme/billing"];
+    assert_eq!(billing.len(), 1);
+    assert_eq!(billing[0].action, submilli_blueprint::Action::Deny);
+}
+
+/// A dependency's caller list from an earlier `add-package` (or written by
+/// hand) is the operator's: kept, with what it lacks named.
+#[test]
+fn add_package_keeps_a_dependencys_existing_caller_rules() {
+    let home = tempfile::tempdir().expect("home tempdir");
+    let _project = publish_dependency_chain(home.path());
+    let file = home.path().join("blueprint.yaml");
+    write_file(
+        &file,
+        "name: x\ndefault: deny\npermissions:\n  \"@acme/billing\":\n    - capability: http.get\n      action: deny\n",
+    );
+
+    let out = add_package(home.path(), &file, &["@acme/support", "--no-capabilities"]);
+
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    assert!(
+        stdout(&out).contains(
+            "✓ kept the existing caller rules for @acme/billing, a dependency of @acme/support\n  they don't cover 1 capabilities it requires; `submilli blueprint lint` reports them:\n    secrets.get"
+        ),
+        "got: {}",
+        stdout(&out)
+    );
+    assert!(
+        stderr(&out).contains("package `@acme/billing` requires secret `BILLING_API_KEY`"),
+        "got: {}",
+        stderr(&out)
+    );
+    let blueprint =
+        submilli_blueprint::parse(&fs::read_to_string(&file).expect("read")).expect("parses");
+    assert_eq!(blueprint.permissions["@acme/billing"].len(), 1);
+}
+
+/// A rule with another filter leaves the dependency's own calls outside it
+/// denied, as lint warns, so it does not cover the requirement.
+#[test]
+fn add_package_reports_a_dependencys_differently_filtered_rule() {
+    let home = tempfile::tempdir().expect("home tempdir");
+    let _project = publish_dependency_chain(home.path());
+    let file = home.path().join("blueprint.yaml");
+    write_file(
+        &file,
+        "name: x\ndefault: deny\npermissions:\n  \"@acme/billing\":\n    - capability: http.get\n      action: allow\n    - capability: secrets.get\n      filter: name == \"OTHER\"\n      action: allow\n",
+    );
+
+    let out = add_package(home.path(), &file, &["@acme/support", "--no-capabilities"]);
+
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    assert!(
+        stdout(&out).contains("they don't cover 1 capabilities it requires; `submilli blueprint lint` reports them:\n    secrets.get"),
+        "got: {}",
+        stdout(&out)
+    );
+}
+
+/// A complete caller list, such as the one an earlier `add-package` of a
+/// dependent wrote, is not reported again.
+#[test]
+fn add_package_is_silent_about_a_dependencys_complete_caller_rules() {
+    let home = tempfile::tempdir().expect("home tempdir");
+    let _project = publish_dependency_chain(home.path());
+    let file = home.path().join("blueprint.yaml");
+    write_file(&file, "name: x\n");
+    let out = add_package(home.path(), &file, &["@acme/support", "--no-capabilities"]);
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+
+    let out = add_package(home.path(), &file, &["@acme/desk", "--no-capabilities"]);
+
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    assert!(
+        !stdout(&out).contains("@acme/billing"),
+        "got: {}",
+        stdout(&out)
+    );
+    assert!(
+        !stderr(&out).contains("@acme/billing"),
+        "got: {}",
+        stderr(&out)
+    );
+}
+
+/// A caller list left behind by an earlier removal keeps its rules; the
+/// package's broad rule appended behind them would match what they leave out.
+#[test]
+fn add_package_keeps_a_callers_existing_rule_for_a_required_capability() {
+    let home = tempfile::tempdir().expect("home tempdir");
+    let _project = publish_dependency_chain(home.path());
+    let file = home.path().join("blueprint.yaml");
+    write_file(
+        &file,
+        "name: x\ndefault: deny\npermissions:\n  \"@acme/billing\":\n    - capability: secrets.get\n      filter: name == \"OTHER\"\n      action: allow\n",
+    );
+
+    let out = add_package(home.path(), &file, &["@acme/billing", "--no-capabilities"]);
+
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    let text = stdout(&out);
+    assert!(
+        text.contains(
+            "added 1 rules to caller `@acme/billing` (default allow):\n    allow http.get"
+        ),
+        "got: {text}"
+    );
+    assert!(
+        text.contains("`@acme/billing` already has rules for 1 required capabilities; kept them:\n    secrets.get"),
+        "got: {text}"
+    );
+    let blueprint =
+        submilli_blueprint::parse(&fs::read_to_string(&file).expect("read")).expect("parses");
+    assert_eq!(blueprint.permissions["@acme/billing"].len(), 2);
+}
+
+/// The whole closure must load before anything is written.
+#[test]
+fn add_package_writes_nothing_when_a_dependency_is_missing() {
+    let home = tempfile::tempdir().expect("home tempdir");
+    let _project = publish_dependency_chain(home.path());
+    fs::remove_dir_all(home.path().join("packages/@acme/billing")).expect("remove billing");
+    let file = home.path().join("blueprint.yaml");
+    write_file(&file, "name: x\n");
+
+    let out = add_package(home.path(), &file, &["@acme/support", "--no-capabilities"]);
+
+    assert!(!out.status.success(), "stdout: {}", stdout(&out));
+    assert!(
+        stderr(&out).contains("`@acme/billing` (required by `@acme/support`)"),
+        "got: {}",
+        stderr(&out)
+    );
+    assert_eq!(fs::read_to_string(&file).expect("read"), "name: x\n");
+}
+
+/// The hint names the command that grants an already-declared package.
+#[test]
+fn add_package_rejection_of_a_declared_package_points_to_capability_add() {
+    let home = tempfile::tempdir().expect("home tempdir");
+    let _project = publish_dependency_chain(home.path());
+    let file = home.path().join("blueprint.yaml");
+    write_file(&file, "name: x\npackages:\n  - \"@acme/billing\"\n");
+
+    let out = add_package(home.path(), &file, &["@acme/billing", "--all-capabilities"]);
+
+    assert!(!out.status.success());
+    assert!(
+        stderr(&out).contains("submilli blueprint capability add <name>"),
+        "got: {}",
+        stderr(&out)
+    );
+}
+
+/// A selected capability `main` rules on only with a filter still gets its
+/// `allow`, for the calls the filter leaves.
+#[test]
+fn add_package_allows_behind_a_filtered_main_rule() {
+    let home = tempfile::tempdir().expect("home tempdir");
+    let _project = publish_capability_packages(home.path());
+    let out = add_sdk_with_charge_selected(
+        home.path(),
+        "name: x\ndefault: deny\npermissions:\n  main:\n    - capability: acme.com/charge\n      filter: customer == \"vip\"\n      action: deny\n",
+    );
+
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    let updated = fs::read_to_string(home.path().join("blueprint.yaml")).expect("read");
+    let blueprint = submilli_blueprint::parse(&updated).expect("parses");
+    let main = &blueprint.permissions["main"];
+    assert_eq!(main.len(), 2, "{updated}");
+    assert!(main[1].filter.is_none(), "{updated}");
+    assert_eq!(main[1].action, submilli_blueprint::Action::Allow);
+}
+
+/// SUB-1228: an `allow` behind the operator's unfiltered rule never matches,
+/// so the summary reports the kept rule instead of claiming a grant.
+#[test]
+fn add_package_keeps_an_existing_main_rule_for_a_selected_capability() {
+    let home = tempfile::tempdir().expect("home tempdir");
+    let _project = publish_capability_packages(home.path());
+    let out = add_sdk_with_charge_selected(
+        home.path(),
+        "name: x\ndefault: deny\npermissions:\n  main:\n    - capability: acme.com/charge\n      action: deny\n",
+    );
+
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    let text = stdout(&out);
+    assert!(!text.contains("allow acme.com/charge"), "got: {text}");
+    assert!(
+        text.contains("`main` already has rules for 1 selected capabilities; kept them, since the first matching rule wins:\n    acme.com/charge"),
+        "got: {text}"
+    );
+    let updated = fs::read_to_string(home.path().join("blueprint.yaml")).expect("read");
+    let blueprint = submilli_blueprint::parse(&updated).expect("parses");
+    assert_eq!(blueprint.permissions["main"].len(), 1, "{updated}");
+    assert_eq!(
+        blueprint.permissions["main"][0].action,
+        submilli_blueprint::Action::Deny
+    );
+    assert!(!updated.contains("provides:"), "{updated}");
+}
+
+/// The `provides` comments go above the rules add-package wrote, not above an
+/// earlier operator rule for another of the package's capabilities.
+#[test]
+fn add_package_annotates_only_the_rules_it_adds() {
+    let home = tempfile::tempdir().expect("home tempdir");
+    let _project = publish_capability_packages(home.path());
+    let out = add_sdk_with_charge_selected(
+        home.path(),
+        "name: x\ndefault: deny\npermissions:\n  main:\n    - capability: acme.com/refund\n      action: deny\n",
+    );
+
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    let updated = fs::read_to_string(home.path().join("blueprint.yaml")).expect("read");
+    assert!(
+        updated.contains(
+            "  main:\n  - capability: acme.com/refund\n    action: deny\n    # @acme/sdk provides:\n    # acme.com/charge\n"
+        ),
+        "{updated}"
+    );
+    assert!(!updated.contains("# acme.com/refund"), "{updated}");
+}
+
+/// A dependency's calls run as its own caller: lint checks its `requires`
+/// like a declared package's, `--fix` adds them, and its caller block needs no
+/// `packages:` entry.
+#[test]
+fn lint_checks_and_fixes_a_dependencys_rules() {
+    let home = tempfile::tempdir().expect("home tempdir");
+    let _project = publish_dependency_chain(home.path());
+    let file = home.path().join("blueprint.yaml");
+    write_file(
+        &file,
+        "name: x\ndefault: deny\nsecrets:\n  BILLING_API_KEY:\n    env: BILLING_API_KEY\npackages:\n  - \"@acme/support\"\npermissions:\n  \"@acme/support\":\n    - capability: acme.com/credits.apply\n      action: allow\n",
+    );
+
+    let out = run_with_home(
+        &[os("blueprint"), os("lint"), file.as_os_str()],
+        home.path(),
+    );
+
+    assert!(!out.status.success(), "stdout: {}", stdout(&out));
+    assert!(
+        stderr(&out).contains(
+            "package `@acme/billing` requires `secrets.get` with filter `name == \"BILLING_API_KEY\"`, but `permissions.@acme/billing` has no matching rule"
+        ),
+        "got: {}",
+        stderr(&out)
+    );
+
+    let fixed = run_with_home(
+        &[os("blueprint"), os("lint"), os("--fix"), file.as_os_str()],
+        home.path(),
+    );
+    assert!(fixed.status.success(), "stderr: {}", stderr(&fixed));
+    let out = run_with_home(
+        &[os("blueprint"), os("lint"), file.as_os_str()],
+        home.path(),
+    );
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    assert!(!stderr(&out).contains("warning:"), "got: {}", stderr(&out));
+}
+
+/// Once nothing declared depends on it, a dependency's caller block is stale.
+#[test]
+fn lint_warns_for_a_caller_block_outside_every_closure() {
+    let home = tempfile::tempdir().expect("home tempdir");
+    let _project = publish_dependency_chain(home.path());
+    let file = home.path().join("blueprint.yaml");
+    write_file(
+        &file,
+        "name: x\ndefault: deny\npermissions:\n  \"@acme/billing\":\n    - capability: secrets.get\n      action: allow\n",
+    );
+
+    let out = run_with_home(
+        &[os("blueprint"), os("lint"), file.as_os_str()],
+        home.path(),
+    );
+
+    assert!(
+        stderr(&out).contains(
+            "caller block for `@acme/billing`, but `@acme/billing` is neither in `packages:` nor a dependency of a package there"
+        ),
+        "got: {}",
+        stderr(&out)
+    );
+}
+
+/// A dependency that fails to load is an error, but the declared package and
+/// every dependency that does load keep their checks, and the missing one's
+/// block is not stale.
+#[test]
+fn lint_checks_what_loads_when_a_dependency_is_missing() {
+    let home = tempfile::tempdir().expect("home tempdir");
+    let _project = publish_dependency_chain(home.path());
+    fs::remove_dir_all(home.path().join("packages/@acme/billing")).expect("remove billing");
+    let file = home.path().join("blueprint.yaml");
+    write_file(
+        &file,
+        "name: x\ndefault: deny\npackages:\n  - \"@acme/desk\"\npermissions:\n  \"@acme/desk\": []\n  \"@acme/billing\":\n    - capability: secrets.get\n      action: allow\n",
+    );
+
+    let out = run_with_home(
+        &[os("blueprint"), os("lint"), file.as_os_str()],
+        home.path(),
+    );
+
+    assert!(!out.status.success(), "stdout: {}", stdout(&out));
+    let err = stderr(&out);
+    assert!(
+        err.contains("cannot validate package `@acme/desk` capabilities"),
+        "got: {err}"
+    );
+    assert!(
+        err.contains("package `@acme/support` requires `acme.com/credits.apply`"),
+        "got: {err}"
+    );
+    assert!(!err.contains("neither in `packages:`"), "got: {err}");
+}
+
+/// Past a missing package, lint cannot tell a dependency's caller block from a
+/// stale one, so it does not call it stale.
+#[test]
+fn lint_does_not_call_blocks_stale_past_a_missing_dependency() {
+    let home = tempfile::tempdir().expect("home tempdir");
+    let _project = publish_dependency_chain(home.path());
+    fs::remove_dir_all(home.path().join("packages/@acme/support")).expect("remove support");
+    let file = home.path().join("blueprint.yaml");
+    write_file(
+        &file,
+        "name: x\ndefault: deny\npackages:\n  - \"@acme/desk\"\npermissions:\n  \"@acme/desk\": []\n  \"@acme/billing\":\n    - capability: secrets.get\n      action: allow\n",
+    );
+
+    let out = run_with_home(
+        &[os("blueprint"), os("lint"), file.as_os_str()],
+        home.path(),
+    );
+
+    assert!(!out.status.success(), "stdout: {}", stdout(&out));
+    let err = stderr(&out);
+    assert!(
+        err.contains("cannot validate package `@acme/desk` capabilities"),
+        "got: {err}"
+    );
+    assert!(!err.contains("neither in `packages:`"), "got: {err}");
+}
+
+/// Adding a dependency by name after its dependent lists it for `main` and
+/// keeps the caller list its dependent's `add-package` wrote.
+#[test]
+fn add_package_lists_a_dependency_added_after_its_dependent() {
+    let home = tempfile::tempdir().expect("home tempdir");
+    let _project = publish_dependency_chain(home.path());
+    let file = home.path().join("blueprint.yaml");
+    write_file(&file, "name: x\n");
+    let out = add_package(home.path(), &file, &["@acme/support", "--no-capabilities"]);
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+
+    let out = add_package(home.path(), &file, &["@acme/billing", "--all-capabilities"]);
+
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    let text = stdout(&out);
+    assert!(
+        text.contains("`@acme/billing` already has rules for every capability it requires; kept them:\n    http.get\n    secrets.get"),
+        "got: {text}"
+    );
+    assert!(!text.contains("added 0 rules"), "got: {text}");
+    let blueprint =
+        submilli_blueprint::parse(&fs::read_to_string(&file).expect("read")).expect("parses");
+    assert!(blueprint.packages.contains("@acme/billing"));
+    assert_eq!(blueprint.permissions["@acme/billing"].len(), 2);
+    assert_eq!(blueprint.permissions["main"].len(), 1);
+}
+
+/// A dependent's caller list names its dependency's provided capabilities,
+/// so `capability add` knows them without `--force`.
+#[test]
+fn capability_add_knows_a_dependencys_provided_capabilities() {
+    let home = tempfile::tempdir().expect("home tempdir");
+    let _project = publish_dependency_chain(home.path());
+    let file = home.path().join("blueprint.yaml");
+    write_file(&file, "name: x\n");
+    let out = add_package(home.path(), &file, &["@acme/support", "--no-capabilities"]);
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+
+    let out = run_with_home(
+        &[
+            os("blueprint"),
+            os("capability"),
+            os("add"),
+            os("acme.com/credits.apply"),
+            os("--caller"),
+            os("@acme/support"),
+            os("--filter"),
+            os("customer == \"cus_1\""),
+            os("--blueprint"),
+            file.as_os_str(),
+        ],
+        home.path(),
+    );
+
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    let list = run_with_home(
+        &[
+            os("blueprint"),
+            os("capability"),
+            os("list"),
+            os("@acme/billing"),
+            os("--blueprint"),
+            file.as_os_str(),
+        ],
+        home.path(),
+    );
+    assert!(list.status.success(), "stderr: {}", stderr(&list));
+    assert!(
+        stdout(&list).contains("acme.com/credits.apply"),
+        "got: {}",
+        stdout(&list)
+    );
+}
+
+/// `main` cannot import a dependency, so a `main` rule for what only a
+/// dependency provides could never match.
+#[test]
+fn capability_add_refuses_a_dependencys_capability_for_main() {
+    let home = tempfile::tempdir().expect("home tempdir");
+    let _project = publish_dependency_chain(home.path());
+    let file = home.path().join("blueprint.yaml");
+    write_file(&file, "name: x\n");
+    let out = add_package(home.path(), &file, &["@acme/support", "--no-capabilities"]);
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+
+    let out = run_with_home(
+        &[
+            os("blueprint"),
+            os("capability"),
+            os("add"),
+            os("acme.com/credits.apply"),
+            os("--blueprint"),
+            file.as_os_str(),
+        ],
+        home.path(),
+    );
+
+    assert!(!out.status.success(), "stdout: {}", stdout(&out));
+    assert!(
+        stderr(&out).contains(
+            "'acme.com/credits.apply' is provided by `@acme/billing`, which only the packages that depend on it can call; `main` cannot import it\n  grant it to one of them with `--caller @acme/support`"
+        ),
+        "got: {}",
+        stderr(&out)
+    );
+}
+
+/// SUB-1258: the first matching rule decides, so a rule behind an unfiltered
+/// rule for the same capability and caller never matches.
+#[test]
+fn lint_warns_on_a_rule_behind_an_unfiltered_rule() {
+    let file = write_temp(
+        "submilli-lint-shadowed.yaml",
+        "name: x\ndefault: deny\npermissions:\n  main:\n    - capability: fs.read\n      filter: path == \"/a\"\n      action: allow\n    - capability: fs.read\n      action: deny\n    - capability: fs.write\n      action: allow\n    - capability: fs.read\n      filter: path == \"/x\"\n      action: allow\n  \"@acme/util\":\n    - capability: fs.read\n      action: allow\n    - capability: http.get\n      action: allow\n    - capability: http.get\n      action: deny\n",
+    );
+
+    let out = run(&[os("blueprint"), os("lint"), file.as_os_str()]);
+
+    assert!(
+        out.status.success(),
+        "a warning, not an error: {}",
+        stderr(&out)
+    );
+    let err = stderr(&out);
+    assert!(
+        err.contains("`permissions.main` rule 4 for `fs.read` (`allow` with filter `path == \"/x\"`) never matches: rule 2 (`deny`, no filter) decides every call to it first"),
+        "got: {err}"
+    );
+    assert!(
+        err.contains("`permissions.@acme/util` rule 3 for `http.get` (`deny`, no filter) never matches: rule 2 (`allow`, no filter) decides every call to it first"),
+        "got: {err}"
+    );
+    assert_eq!(err.matches("never matches").count(), 2, "got: {err}");
+}
+
+/// The runtime refuses `secrets.get` to `main` outright, which lint reports
+/// on its own; no rule there decides anything.
+#[test]
+fn lint_does_not_call_rules_refused_to_main_shadowed() {
+    let file = write_temp(
+        "submilli-lint-shadowed-secrets.yaml",
+        "name: x\ndefault: deny\npermissions:\n  main:\n    - capability: secrets.get\n      action: allow\n    - capability: secrets.get\n      action: deny\n",
+    );
+
+    let out = run(&[os("blueprint"), os("lint"), file.as_os_str()]);
+
+    let err = stderr(&out);
+    assert!(err.contains("has no effect"), "got: {err}");
+    assert!(!err.contains("never matches"), "got: {err}");
+}
+
+/// A filtered rule decides only the calls it matches, so the rules after it
+/// still apply to the rest.
+#[test]
+fn lint_accepts_rules_behind_a_filtered_rule() {
+    let file = write_temp(
+        "submilli-lint-filtered-first.yaml",
+        "name: x\ndefault: deny\npermissions:\n  main:\n    - capability: fs.read\n      filter: path == \"/x\"\n      action: deny\n    - capability: fs.read\n      action: allow\n",
+    );
+
+    let out = run(&[os("blueprint"), os("lint"), file.as_os_str()]);
+
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    assert!(
+        !stderr(&out).contains("never matches"),
+        "got: {}",
+        stderr(&out)
+    );
+}
+
 // ---- submilli run --blueprint --------------------------------------------
 
 const FS_WRITE_SCRIPT: &str = r#"import { writeText } from "submilli:fs"; function main(): void { writeText("/x.txt", "hi"); }"#;

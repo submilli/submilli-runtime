@@ -4,8 +4,8 @@
 //! The default scaffold is minimal: deny-by-default with an empty `main` rule
 //! list and pointers to `submilli blueprint capability list`/`add`. `--full`
 //! instead lists every stdlib capability the runtime can gate (from
-//! [`interpreter::stdlib::capabilities`]) as a commented deny rule with a
-//! `filter:` example — the exhaustive template. Either way, `submilli server
+//! [`interpreter::stdlib::capabilities`]) as an unfiltered deny rule with a
+//! commented `filter:` example — the exhaustive template. Either way, `submilli server
 //! blueprint add ./blueprint.yaml` applies the result to a server.
 
 use std::fs::OpenOptions;

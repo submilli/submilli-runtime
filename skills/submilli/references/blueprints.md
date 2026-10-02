@@ -336,17 +336,26 @@ submilli blueprint capability list --unconfigured  # provided operations main ha
 submilli blueprint prompt                       # what the model will be told
 ```
 
-`add-package` lists the package so imports resolve and writes the package's
-own derived `requires` grants; it warns about undeclared secrets. With
+`add-package` lists the package so imports resolve and writes its own derived
+`requires` grants, plus those of the packages it depends on (which stay out
+of `packages:`, so the program reaches them only through it); it warns about
+undeclared secrets. The first matching rule wins, so an existing rule is
+kept: an unfiltered `main` rule for a selected capability, any rule in the
+package's own caller list for a capability it requires, and a dependency's
+whole caller list if it has one (lint reports what that list lacks). With
 `--no-capabilities` it grants `main` nothing, which is the right first step:
 each operation the program may call is then one explicit `capability add`.
 `--capabilities NAME,...` and `--all-capabilities` are the shortcuts.
-`capability add` refuses a name it does not know unless `--force` is given,
+`capability add` refuses a name it does not know, or one only a dependency
+provides for `main` (which cannot import it), unless `--force` is given,
 which lint cannot catch (a misspelled name is a rule that never matches). Add `variables`, `vfs`,
 `idle_timeout` and `llm` by editing the file; the CLI editors rewrite YAML
 and drop comments, so keep hand-written commentary elsewhere. Lint warns on
-`main` rules the runtime never consults (such as `secrets.get`) and on
-`default: allow`. A provided capability with no `main` rule is withheld, not
+`main` rules the runtime never consults (such as `secrets.get`), on a rule
+that follows an unfiltered rule for the same capability and caller (it never
+matches; `capability add` warns when it writes one), and on `default: allow`,
+and checks the `requires` of listed packages' dependencies like those of the
+packages themselves. A provided capability with no `main` rule is withheld, not
 a finding; `submilli blueprint capability list --unconfigured` lists them.
 
 Register and run:
