@@ -309,6 +309,18 @@ The model reads the message as it would any tool result, so it can correct a
 compile error and try again, and can accept a denial instead of retrying it,
 as it did in the run above.
 
+The two file tools also answer a denial, or a path that does not exist, as a
+result the model reads. It holds only `error`, and is marked as a failed call:
+
+```json
+{
+  "error": {
+    "kind": "permission_denied",
+    "message": "permission denied: caller=main capability=fs.list: policy denied fs.list on / for main"
+  }
+}
+```
+
 ## Mastra
 
 ```sh

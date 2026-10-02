@@ -1018,7 +1018,7 @@ async fn files_read_rejects_path_escape() {
     );
     let (_, _, rpc) = h.post(SESS, call, Some(&session)).await;
     assert!(
-        !rpc["error"].is_null() || rpc["result"]["isError"] == json!(true),
+        refuses_with(&rpc, ESCAPE_DIAGNOSTIC),
         "path escape must be rejected: {rpc}"
     );
 }
@@ -1075,20 +1075,102 @@ async fn files_list_enumerates_the_workspace() {
     assert_eq!(out["count"], json!(1));
 }
 
-/// A tool call fails either as a JSON-RPC error or as an `isError` result; the
-/// file tools use the former, but callers must not depend on which.
-fn is_tool_error(rpc: &Value) -> bool {
-    !rpc["error"].is_null() || rpc["result"]["isError"] == json!(true)
+/// A file tool's per-call failure: an `isError` result whose `error.message` the
+/// model reads, never a JSON-RPC error. Clients such as `langchain-mcp-adapters`
+/// raise on a JSON-RPC error, which crashes the agent instead of telling the model.
+fn tool_error_message(rpc: &Value) -> Option<&str> {
+    if !rpc["error"].is_null() || rpc["result"]["isError"] != json!(true) {
+        return None;
+    }
+    output(rpc)["error"]["message"].as_str()
 }
 
 /// A refusal that names `reason`, not merely any error.
 ///
-/// `is_tool_error` alone is satisfied by a transport-level error such as "tool not
-/// found", so a containment test resting on it keeps passing when the call never
-/// reaches the tool — which is how a renamed tool once left the escape assertions
-/// green while proving nothing.
+/// A transport-level error such as "tool not found" is a JSON-RPC error, not a
+/// tool result, so a containment test resting on this cannot pass when the call
+/// never reaches the tool — which is how a renamed tool once left the escape
+/// assertions green while proving nothing.
 fn refuses_with(rpc: &Value, reason: &str) -> bool {
-    is_tool_error(rpc) && rpc.to_string().contains(reason)
+    tool_error_message(rpc).is_some_and(|message| message.contains(reason))
+}
+
+/// A per-call failure reaches the model as a tool result carrying a
+/// `{ kind, message }` error like execute's: a policy denial as
+/// `permission_denied`; a path that is missing, a directory, or outside the VFS
+/// as `file_error`. A JSON-RPC error stays for protocol problems.
+#[tokio::test]
+async fn files_tools_answer_failures_as_tool_results() {
+    let h = Harness::from_blueprints(vec![
+        submilli_blueprint::parse(
+            "name: eph\npermissions:\n  main:\n    - capability: fs.read\n      filter: 'path == \"/missing.txt\" or path == \"/\"'\n      action: allow\n    - capability: fs.list\n      filter: 'path == \"/missing\"'\n      action: allow\n",
+        )
+        .unwrap(),
+    ]);
+    let session = h.handshake(EPH).await;
+    for (id, tool, args, kind, message) in [
+        (
+            2,
+            "submilli__files__list",
+            json!({ "path": "/" }),
+            "permission_denied",
+            "permission denied: caller=main capability=fs.list",
+        ),
+        (
+            3,
+            "submilli__files__read",
+            json!({ "path": "/a.txt" }),
+            "permission_denied",
+            "permission denied: caller=main capability=fs.read",
+        ),
+        (
+            4,
+            "submilli__files__read",
+            json!({ "path": "/missing.txt" }),
+            "file_error",
+            "/missing.txt: ",
+        ),
+        (
+            5,
+            "submilli__files__list",
+            json!({ "path": "/missing" }),
+            "file_error",
+            "/missing: ",
+        ),
+        (
+            6,
+            "submilli__files__read",
+            json!({ "path": "/" }),
+            "file_error",
+            "/: ",
+        ),
+        (
+            7,
+            "submilli__files__read",
+            json!({ "path": "/../etc/passwd" }),
+            "file_error",
+            ESCAPE_DIAGNOSTIC,
+        ),
+        (
+            8,
+            "submilli__files__list",
+            json!({ "path": ".." }),
+            "file_error",
+            ESCAPE_DIAGNOSTIC,
+        ),
+    ] {
+        let (status, _, rpc) = h.post(EPH, rpc_call(id, tool, args), Some(&session)).await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(refuses_with(&rpc, message), "{tool}: {rpc}");
+        assert_eq!(output(&rpc)["error"]["kind"], json!(kind), "{rpc}");
+        let text = text_output(&rpc);
+        assert!(text.contains(message), "unstructured clients see: {text}");
+    }
+
+    // Malformed arguments are a protocol problem, answered as one.
+    let call = rpc_call(9, "submilli__files__read", json!({ "path": 1 }));
+    let (_, _, rpc) = h.post(EPH, call, Some(&session)).await;
+    assert!(!rpc["error"].is_null(), "{rpc}");
 }
 
 const ESCAPE_DIAGNOSTIC: &str = "path escapes the VFS root";
