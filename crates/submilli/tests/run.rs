@@ -807,6 +807,15 @@ fn report_is_opt_in_and_keeps_the_result_on_stdout() {
     assert_eq!(stdout(&reported), "42\n");
     let line = stderr(&reported);
     assert!(line.starts_with("fuel: "), "{line}");
+    let (total, split) = line
+        .trim_start_matches("fuel: ")
+        .split_once(" (wasm ")
+        .unwrap();
+    let (wasm, rest) = split.split_once(", host ").unwrap();
+    let (host, _) = rest.split_once(')').unwrap();
+    let number = |grouped: &str| -> u64 { grouped.replace(',', "").parse().unwrap() };
+    assert_eq!(number(total), number(wasm) + number(host), "{line}");
+    assert!(number(wasm) > 0, "{line}");
     assert!(line.contains("memory peak:"), "{line}");
     assert!(line.contains(" ms (compile "), "{line}");
     assert!(line.contains(" ms, run "), "{line}");

@@ -364,6 +364,8 @@ fn log_execution(blueprint: &str, session: &str, started: Instant, outcome: &Run
         target: "submilli_server::execute",
         blueprint, session,
         fuel = outcome.usage.fuel,
+        wasm_fuel = outcome.usage.wasm_fuel,
+        host_fuel = outcome.usage.host_fuel,
         memory_peak = outcome.usage.memory_peak,
         wall_ms = started.elapsed().as_millis(),
         outcome = status,

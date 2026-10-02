@@ -5,6 +5,7 @@ pub mod blocking;
 pub mod disk_quota;
 pub mod exec;
 pub mod fs;
+pub mod fuel;
 pub mod gc_singleton;
 pub mod host;
 pub mod intrinsic_types;
@@ -126,6 +127,9 @@ pub struct StoreData {
     /// Defaults to [`NoopMetricsSink`]; the server installs a Sentry-backed one.
     pub metrics: Arc<dyn metrics::MetricsSink>,
     pub tenant_limits: TenantLimits,
+    /// Fuel charged by host functions for their own work; the rest of the fuel
+    /// spent went to Wasm instructions. See [`fuel::charge_host_fuel`].
+    pub host_fuel: u64,
     /// Test-segment labels recorded by `submilli:test.label`, in call order.
     /// Only the test runner installs that host fn; an ordinary run leaves this
     /// empty. The runner reads it after `main()` returns to attribute the
@@ -203,6 +207,7 @@ impl StoreData {
             session_kv: None,
             metrics: Arc::new(metrics::NoopMetricsSink),
             tenant_limits: TenantLimits::new(max_store_bytes),
+            host_fuel: 0,
             test_labels: RefCell::new(Vec::new()),
             host_abi: None,
             intrinsic_types: None,

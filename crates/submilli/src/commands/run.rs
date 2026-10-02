@@ -481,8 +481,10 @@ fn execute_on_this_thread(
     if args.report {
         let usage = ExecutionUsage::capture(&store, cfg.fuel)?;
         eprintln!(
-            "fuel: {}   memory peak: {:.1} MB   wall: {} ms (compile {} ms, run {} ms)",
+            "fuel: {} (wasm {}, host {})   memory peak: {:.1} MB   wall: {} ms (compile {} ms, run {} ms)",
             grouped_fuel(usage.fuel),
+            grouped_fuel(usage.wasm_fuel),
+            grouped_fuel(usage.host_fuel),
             usage.memory_peak as f64 / 1_000_000.0,
             (compile_elapsed + run_elapsed).as_millis(),
             compile_elapsed.as_millis(),

@@ -1,10 +1,11 @@
 //! Scoped accounting for native working buffers and bounded host work.
 use crate::runtime::StoreData;
+use crate::runtime::fuel::charge_host_fuel;
 use std::sync::{
     Arc,
     atomic::{AtomicU64, Ordering},
 };
-use wasmtime::{Caller, Result, Trap, bail};
+use wasmtime::{Caller, Result, bail};
 
 pub(super) struct Budget {
     counter: Arc<AtomicU64>,
@@ -32,12 +33,7 @@ impl Budget {
         Ok(())
     }
     pub fn work(caller: &mut Caller<'_, StoreData>, units: usize) -> Result<()> {
-        let remaining = caller.get_fuel()?;
-        let Some(remaining) = remaining.checked_sub(units as u64) else {
-            caller.set_fuel(0)?;
-            return Err(Trap::OutOfFuel.into());
-        };
-        caller.set_fuel(remaining)
+        charge_host_fuel(caller, units as u64)
     }
     pub fn check_size(&self, bytes: usize) -> Result<()> {
         if bytes > self.max_bytes {
