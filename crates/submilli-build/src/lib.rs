@@ -42,8 +42,8 @@ pub use package_store::{
     LocatedPackage, PackageStore, PackageStoreError, default_data_root, default_package_store_dir,
 };
 pub use resolve::{
-    FetchError, FetchedRepo, GithubClosure, PlannedInstall, RepoFetcher, ResolveError,
-    resolve_github_closure,
+    FetchError, FetchErrorKind, FetchedRepo, GithubClosure, PlannedInstall, RepoFetcher,
+    ResolveError, resolve_github_closure,
 };
 pub use scaffold::{
     ScaffoldError, ScaffoldedPackage, add_package, init_project, is_valid_package_name,

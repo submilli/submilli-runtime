@@ -15,12 +15,15 @@ use submilli_build::{
     resolve_github_closure,
 };
 use submilli_shared::github;
-use submilli_shared::github::GithubRepoFetcher;
+
+use crate::commands::github::retry::{self, LazyAuth};
 
 #[derive(clap::Args)]
 pub struct Args {
     /// GitHub repo to install from: `org/repo`, `github.com/org/repo`, or a full
-    /// URL — optionally pinned with `@<ref>` (branch, tag, or commit SHA).
+    /// URL — optionally pinned with `@<ref>` (branch, tag, or commit SHA). A
+    /// private repository needs a GitHub token: see `submilli github
+    /// authenticate`.
     url: String,
 
     /// Install only this package (`@org/name`). Omit to install every package
@@ -42,7 +45,11 @@ impl Args {
 }
 
 pub fn execute(args: Args) -> anyhow::Result<ExitCode> {
-    let fetched = match github::fetch(&args.url) {
+    retry::with_authentication_retry(|auth| install(&args, auth))
+}
+
+fn install(args: &Args, auth: &LazyAuth) -> anyhow::Result<ExitCode> {
+    let fetched = match github::fetch(&args.url, auth.get()) {
         Ok(fetched) => fetched,
         Err(err) => {
             eprintln!("error: {err}");
@@ -58,7 +65,7 @@ pub fn execute(args: Args) -> anyhow::Result<ExitCode> {
     );
 
     let store = PackageStore::default();
-    let only = args.package.map(PackageName::new);
+    let only = args.package.clone().map(PackageName::new);
     let source = PackageSource::Github(GithubSource {
         org: resolved.org.clone(),
         repo: resolved.repo.clone(),
@@ -79,18 +86,14 @@ pub fn execute(args: Args) -> anyhow::Result<ExitCode> {
         }
     };
     let existing_lock = Lockfile::read(fetched.dir.path()).ok().flatten();
-    let closure = match resolve_github_closure(
-        &store,
-        &manifest,
-        &GithubRepoFetcher,
-        existing_lock.as_ref(),
-    ) {
-        Ok(closure) => closure,
-        Err(err) => {
-            render_resolve_error(&err);
-            return Ok(ExitCode::from(1));
-        }
-    };
+    let closure =
+        match resolve_github_closure(&store, &manifest, &auth.fetcher(), existing_lock.as_ref()) {
+            Ok(closure) => closure,
+            Err(err) => {
+                render_resolve_error(&err);
+                return Ok(ExitCode::from(1));
+            }
+        };
     if let Err(err) = install_plan(&store, &closure.plan, args.upgrade) {
         render_install_error(&err);
         return Ok(ExitCode::from(1));

@@ -193,6 +193,7 @@ and would do nothing.
       "shutdown_grace" "set server.shutdownGrace instead; terminationGracePeriodSeconds is derived from it"
       "blueprint_seed_dir" "the chart sets it when blueprints is non-empty"
       "allow_unauthenticated" "set auth.enabled=false instead"
+      "github_token_file" "set githubToken.existingSecret and githubToken.key instead, which also mount the token"
     -}}
 {{- range $key, $instead := $owned -}}
 {{-   if hasKey $extra $key -}}
@@ -234,6 +235,9 @@ A file, never an env var holding the key itself: environment is readable
 through /proc/self/environ.
 */ -}}
 {{-   $_ := set $config "secret_store" (dict "key_file" (printf "/etc/submilli/secret-store/%s" .Values.secretStore.key)) -}}
+{{- end -}}
+{{- if .Values.githubToken.existingSecret -}}
+{{-   $_ := set $config "github_token_file" (printf "/etc/submilli/github/%s" .Values.githubToken.key) -}}
 {{- end -}}
 {{- if .Values.auth.enabled -}}
 {{- /*

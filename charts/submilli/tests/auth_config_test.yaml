@@ -296,6 +296,34 @@ tests:
           path: data["server.yaml"]
           pattern: "(?m)^secret_store:\\n +key_file: /etc/submilli/secret-store/store-key$"
 
+  - it: reads the GitHub token from a file
+    template: configmap-config.yaml
+    set:
+      githubToken:
+        existingSecret: submilli-github
+        key: pat
+    asserts:
+      - matchRegex:
+          path: data["server.yaml"]
+          pattern: "(?m)^github_token_file: /etc/submilli/github/pat$"
+
+  - it: names no GitHub token file by default
+    template: configmap-config.yaml
+    asserts:
+      - notMatchRegex:
+          path: data["server.yaml"]
+          pattern: "github_token_file"
+
+  - it: refuses the GitHub token file in config
+    template: statefulset.yaml
+    set:
+      config:
+        github_token_file: /somewhere/else
+    asserts:
+      # Nothing would mount a token at a path the chart did not choose.
+      - failedTemplate:
+          errorPattern: "config.github_token_file is owned by the chart"
+
   - it: passes config through for settings the chart has no value for
     template: configmap-config.yaml
     set:

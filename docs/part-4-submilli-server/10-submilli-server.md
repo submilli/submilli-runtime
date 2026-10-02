@@ -177,6 +177,7 @@ api_tokens:                           # beside the one in SUBMILLI_SERVER_TOKEN
     role: user                        # admin | user
     token_file: /etc/submilli/app.token
 # allow_unauthenticated: true         # instead of tokens, never with them
+# github_token_file: /etc/submilli/github.token   # for private packages
 
 blueprint_dir: /srv/submilli/blueprints
 blueprint_seed_dir: /etc/submilli/blueprints
@@ -225,9 +226,10 @@ exception and use flat flag names: `secret_store.dir` is
 `--secret-store-dir`, `network.allow_private` is `--allow-private`, and the
 `mcp_allowed_hosts` list is a repeatable `--mcp-allowed-host`.
 
-Two settings exist only in the file. `api_tokens` and `volumes` have no flag
-and no variable, so who else may call the server and which host directories
-programs can touch are each decided in one reviewable place.
+Three settings exist only in the file. `api_tokens`, `volumes`, and
+`github_token_file` have no flag and no variable, so who else may call the
+server, which host directories programs can touch, and the server's GitHub
+credential are each decided in one reviewable place.
 `SUBMILLI_SERVER_TOKEN` is the reverse: it exists only in the environment.
 
 A misspelled key stops the server from starting, rather than being quietly
@@ -307,6 +309,21 @@ tag, or branch. A package already installed at the same commit is reported
 unless `--upgrade` is given, which replaces it. `list` prints what is
 installed and `uninstall <name>` removes one. Packages are compiled
 at install time, so nothing is built per request.
+
+The server fetches with its own GitHub token, never the caller's, so out of
+the box it reaches public repositories only. For private ones, put [a GitHub
+token](/docs/cli#install-a-package) that can read the package repositories in
+a file, and name it in the config file:
+
+```yaml title="server.yaml"
+github_token_file: /etc/submilli/github.token
+```
+
+The server refuses to start if the file is missing or empty, and reads it
+again on every install, so replacing the file rotates the token. An install
+of a repository the token can't read fails with `github_access` and says
+what the token needs; one that hits GitHub's rate limit fails with
+`github_rate_limited`.
 
 ## Register blueprints
 

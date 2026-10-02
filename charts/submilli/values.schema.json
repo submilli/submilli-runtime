@@ -226,6 +226,22 @@
         }
       }
     },
+    "githubToken": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "existingSecret": {
+          "type": "string",
+          "maxLength": 253,
+          "description": "Existing Secret holding a GitHub token for installing packages from private repositories: a fine-grained token with Contents: Read-only on them. Empty means installs reach public repositories only."
+        },
+        "key": {
+          "type": "string",
+          "pattern": "^[-._a-zA-Z0-9]+$",
+          "maxLength": 253
+        }
+      }
+    },
     "auth": {
       "type": "object",
       "additionalProperties": false,

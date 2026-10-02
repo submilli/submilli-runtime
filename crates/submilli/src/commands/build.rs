@@ -18,7 +18,8 @@ use submilli_build::{
     is_valid_package_name, parse_manifest, refresh_dependency_types, refresh_editor_files,
     resolve_github_closure, write_capabilities_file,
 };
-use submilli_shared::github::GithubRepoFetcher;
+
+use crate::commands::github::retry;
 
 #[derive(clap::Args)]
 pub struct Args {
@@ -330,14 +331,13 @@ fn resolve_github_dependencies(
         }
     };
 
-    let closure =
-        match resolve_github_closure(store, manifest, &GithubRepoFetcher, existing_lock.as_ref()) {
-            Ok(closure) => closure,
-            Err(err) => {
-                render_resolve_error(&err);
-                return Err(ExitCode::from(1));
-            }
-        };
+    let resolved = retry::with_authentication_retry(|auth| {
+        resolve_github_closure(store, manifest, &auth.fetcher(), existing_lock.as_ref())
+            .inspect_err(render_resolve_error)
+    });
+    let Ok(closure) = resolved else {
+        return Err(ExitCode::from(1));
+    };
     if let Err(err) = install_plan(store, &closure.plan, true) {
         crate::commands::install::render_install_error(&err);
         return Err(ExitCode::from(1));

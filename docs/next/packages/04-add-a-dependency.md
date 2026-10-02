@@ -63,7 +63,7 @@ error: package `@acme/billing` not found
 | Another package in the project | In the package's `dependencies` |
 | A package in the local store | There, and in `[dependencies]` with its version |
 | A package in a GitHub repository | There, and in `[dependencies]` as `{ github = "github.com/org/repo", rev = "<commit>" }` |
-| A package in a private GitHub repository | The same, with the SSH URL: `{ github = "git@github.com:org/repo.git", rev = "<commit>" }` |
+| A package in a private GitHub repository | The same; whoever builds needs a GitHub token that can read it |
 
 The billing package is a sibling, so one line in the support package's
 block declares it:
@@ -92,7 +92,7 @@ package from the local store or from GitHub is declared at the top of
 ```toml title="submilli.toml (fragment)"
 [dependencies]
 "@submilli/jina" = "0.1.0"
-"@acme/crm" = { github = "git@github.com:acme/crm-package.git", rev = "9c1f2e4a7d3b" }
+"@acme/crm" = { github = "github.com/acme/crm-package", rev = "9c1f2e4a7d3b06e15a8c4f2d7b9e1a3c5f7d9b2e" }
 
 [[package]]
 name = "@acme/support"
@@ -102,15 +102,14 @@ dependencies = ["@acme/billing", "@submilli/jina", "@acme/crm"]
 ```
 
 A GitHub dependency is fetched into the local store by the build, which
-records the commits it used in `submilli.lock`. A private one, such as
-`@acme/crm` above, is fetched over SSH by whoever builds or installs:
-your keys on your machine, the server's deploy key on a server. Each URL
-picks its own transport, so declare every private repository with its SSH
-URL, including the ones your dependencies depend on. A server's key is a
-deploy key on a single repository, so a server can install a private
-package only if no other private repository is in its dependencies; refer
-to [Install private packages](/docs/next/server/install-private-packages)
-for the server's key.
+records the commits it used in `submilli.lock`. `rev` is the full
+40-character commit SHA; a branch, tag, or short SHA is refused. A private
+one, such as `@acme/crm` above, is fetched with the GitHub token of whoever
+builds or installs: yours on your machine (`submilli github authenticate`),
+the server's own on a server; refer to [Install private
+packages](/docs/next/server/install-private-packages). The token needs
+Contents: Read-only on every private repository in the dependencies,
+including the ones your dependencies depend on.
 
 ## What it adds to the blueprint
 

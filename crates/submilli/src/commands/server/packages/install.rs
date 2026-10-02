@@ -1,7 +1,7 @@
 //! `submilli server packages install <url> [package] [--sha <sha>] [--upgrade]` — ask a
 //! running submilli-server to fetch a GitHub package, compile it, and install it
 //! into the server's package store. The fetch + compile happen server-side; the
-//! CLI only relays the request.
+//! CLI only relays the request, and never sends its own GitHub token.
 
 use std::process::ExitCode;
 
@@ -12,7 +12,9 @@ use crate::commands::http::{ServerTarget, error_message};
 
 #[derive(clap::Args)]
 pub struct Args {
-    /// GitHub repo: `org/repo`, `github.com/org/repo`, or a full URL.
+    /// GitHub repo: `org/repo`, `github.com/org/repo`, or a full URL. A private
+    /// repository needs the server's own GitHub token (`github_token_file` in
+    /// its config file); this command never sends yours.
     url: String,
 
     /// Install only this package (`@org/name`). Omit to install every package

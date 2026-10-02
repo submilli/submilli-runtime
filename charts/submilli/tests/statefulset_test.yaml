@@ -277,6 +277,38 @@ tests:
             name: SUBMILLI_SECRET_STORE_KEY_FILE
           any: true
 
+  - it: mounts the GitHub token from an existing Secret
+    set:
+      githubToken:
+        existingSecret: submilli-github
+        key: pat
+    asserts:
+      # The config file names this path as `github_token_file`; that half is
+      # asserted in auth_config_test.yaml.
+      - contains:
+          path: spec.template.spec.containers[0].volumeMounts
+          content:
+            name: github-token
+            mountPath: /etc/submilli/github
+            readOnly: true
+      - contains:
+          path: spec.template.spec.volumes
+          content:
+            name: github-token
+            secret:
+              secretName: submilli-github
+              items:
+                - key: pat
+                  path: pat
+
+  - it: mounts no GitHub token by default
+    asserts:
+      - notContains:
+          path: spec.template.spec.volumes
+          content:
+            name: github-token
+          any: true
+
   - it: defaults to a single server
     asserts:
       # Replicas are independent servers sharing nothing, so more than one is a

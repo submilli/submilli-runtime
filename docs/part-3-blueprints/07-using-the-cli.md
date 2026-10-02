@@ -213,6 +213,45 @@ default branch, and `--upgrade` replaces a package already installed at another
 commit. `search` and `docs` see the package as soon as it is installed;
 `blueprint add-package` is how a blueprint gets it.
 
+A private repository needs a GitHub token. Without one, `install` reports
+that it found no public repository by that name and, at a terminal, offers to
+store a token. To store one ahead of time:
+
+```sh
+submilli github authenticate
+```
+
+It asks for the token, checks it with GitHub, and keeps it in
+`~/.submilli/github_token`. [Create a fine-grained
+token](https://github.com/settings/personal-access-tokens/new?name=submilli&contents=read&expires_in=90)
+with these settings:
+
+- **Repository access:** Only select repositories, the package repositories.
+- **Repository permissions:** Contents → Read-only. GitHub adds Metadata →
+  Read-only itself.
+
+A classic token with the `repo` scope works too, but it can also write to
+every repository you can.
+
+`build` sends the same token to fetch private dependencies. `GH_TOKEN` or
+`GITHUB_TOKEN`, as set in CI, wins over the stored token, and with none of
+them the GitHub CLI's token (`gh auth token`) is used.
+
+- `submilli github auth-status` shows which token applies and when it
+  expires.
+- `submilli github deauthenticate` removes the stored token.
+
+| Error | Fix |
+| --- | --- |
+| no public repository `org/repo`, or no public commit in it | Check the name and commit; if the repository is private, run `submilli github authenticate`. |
+| no repository `org/repo`, or no commit in it, that the token can read | Give the token Contents: Read-only on that repository, have the organization approve it, or check the name. |
+| no such branch, tag, or commit in `org/repo` | Check the ref after `@`. |
+| GitHub refused the token for `org/repo` | Give it Contents: Read-only there; otherwise the organization must approve it or allows only another kind of token. |
+| GitHub rejected the token (expired or revoked) | Create a new one and authenticate again. |
+| uses SAML single sign-on: authorize … for it | Open the link in the message, or Configure SSO on the token. |
+| GitHub won't identify this token (from `submilli github authenticate`) | It is a GitHub App or Actions token: set it in `GH_TOKEN` or `GITHUB_TOKEN` instead. |
+| GitHub's rate limit is used up | Wait the time the message gives. Without a token the limit is far lower. |
+
 ## Where the CLI keeps things
 
 Everything above lives under one directory, `~/.submilli` by default, or
@@ -223,6 +262,7 @@ Everything above lives under one directory, `~/.submilli` by default, or
 | `packages/` | Installed packages, one directory per `@org/name` |
 | `secrets/` | The local secret store |
 | `mcp_oauth.yaml` | OAuth provider registrations |
+| `github_token` | The GitHub token for private packages |
 | `server/` | A local `submilli-server`'s own state; the CLI never touches it |
 
 A server on the same machine reads the packages in `packages/` too, so a

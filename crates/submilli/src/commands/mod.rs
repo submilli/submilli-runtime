@@ -5,6 +5,7 @@ pub mod builtins;
 pub mod check;
 mod discovery;
 pub mod docs;
+pub mod github;
 pub mod http;
 pub mod install;
 pub mod local;

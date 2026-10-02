@@ -23,11 +23,13 @@ use axum::response::IntoResponse;
 use serde::{Deserialize, Serialize};
 
 use submilli_build::{
-    DriverError, GithubSource, InstallError, Lockfile, PackageName, PackageSource, ResolveError,
-    install_from_dir, install_plan, load_manifest, resolve_github_closure,
+    DriverError, FetchErrorKind, GithubSource, InstallError, Lockfile, PackageName, PackageSource,
+    ResolveError, install_from_dir, install_plan, load_manifest, resolve_github_closure,
 };
 use submilli_shared::github;
-use submilli_shared::github::GithubRepoFetcher;
+use submilli_shared::github::{
+    GithubAuth, GithubError, GithubRepoFetcher, GithubToken, TokenSource,
+};
 
 use crate::app::AppState;
 use crate::compiler_thread;
@@ -326,9 +328,11 @@ pub async fn install(
     Json(req): Json<InstallRequest>,
 ) -> Result<Json<InstallResponse>, InstallFailure> {
     let store = state.package_store().clone();
+    let token_file = state.github_token_file().map(std::path::Path::to_path_buf);
     let installer_state = state.clone();
     tokio::task::spawn_blocking(move || {
-        let outcome = match compiler_thread::run(|| install_blocking(&store, req)) {
+        let install = || install_with_server_token(&store, req, token_file);
+        let outcome = match compiler_thread::run(install) {
             Ok(outcome) => outcome,
             Err(error) => Err(internal_install_error(error)),
         };
@@ -354,9 +358,44 @@ fn internal_install_error(error: impl std::fmt::Display) -> InstallFailure {
     )
 }
 
+/// Install with the server's own GitHub token, saying in the log when GitHub
+/// rejected it and the fetch went on without.
+fn install_with_server_token(
+    store: &submilli_build::PackageStore,
+    req: InstallRequest,
+    token_file: Option<std::path::PathBuf>,
+) -> Result<InstallResponse, InstallFailure> {
+    let auth = github_auth(token_file)?;
+    let outcome = install_blocking(store, req, &auth);
+    if auth.token_rejected() {
+        tracing::warn!(
+            "GitHub rejected {} (expired or revoked); packages were fetched without it",
+            auth.source().describe()
+        );
+    }
+    outcome
+}
+
+/// The server's own GitHub token, read fresh so a replaced file rotates it.
+/// Never the caller's: an install request carries no credential.
+fn github_auth(token_file: Option<std::path::PathBuf>) -> Result<GithubAuth, InstallFailure> {
+    let Some(path) = token_file else {
+        return Ok(GithubAuth::new(None, TokenSource::ServerUnconfigured));
+    };
+    let token = GithubToken::read_file(&path).map_err(|err| {
+        install_err(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "github_token_unavailable",
+            err.to_string(),
+        )
+    })?;
+    Ok(GithubAuth::new(Some(token), TokenSource::ServerFile(path)))
+}
+
 fn install_blocking(
     store: &submilli_build::PackageStore,
     req: InstallRequest,
+    auth: &GithubAuth,
 ) -> Result<InstallResponse, InstallFailure> {
     let mut spec = github::parse_spec(&req.url)
         .map_err(|err| install_err(StatusCode::BAD_REQUEST, "invalid_url", err.to_string()))?;
@@ -364,11 +403,11 @@ fn install_blocking(
         spec.git_ref = Some(sha);
     }
     let resolved = spec
-        .resolve()
-        .map_err(|err| install_err(StatusCode::BAD_GATEWAY, "resolve_failed", err.to_string()))?;
+        .resolve(auth)
+        .map_err(|err| map_github_error(err, "resolve_failed"))?;
     let dir = resolved
-        .download()
-        .map_err(|err| install_err(StatusCode::BAD_GATEWAY, "download_failed", err.to_string()))?;
+        .download(auth)
+        .map_err(|err| map_github_error(err, "download_failed"))?;
 
     let source = PackageSource::Github(GithubSource {
         org: resolved.org.clone(),
@@ -392,9 +431,13 @@ fn install_blocking(
         )
     })?;
     let existing_lock = Lockfile::read(dir.path()).ok().flatten();
-    let closure =
-        resolve_github_closure(store, &manifest, &GithubRepoFetcher, existing_lock.as_ref())
-            .map_err(map_resolve_error)?;
+    let closure = resolve_github_closure(
+        store,
+        &manifest,
+        &GithubRepoFetcher::new(auth),
+        existing_lock.as_ref(),
+    )
+    .map_err(map_resolve_error)?;
     install_plan(store, &closure.plan, req.upgrade).map_err(map_install_error)?;
 
     let only = req.package.map(PackageName::new);
@@ -416,13 +459,35 @@ fn install_blocking(
     })
 }
 
+/// A GitHub fetch failure. `upstream_failure_code` is the code for a failed
+/// transfer or an unexpected answer from GitHub.
+fn map_github_error(err: GithubError, upstream_failure_code: &'static str) -> InstallFailure {
+    let (status, code) = match &err {
+        GithubError::InvalidSpec(_) => (StatusCode::BAD_REQUEST, "invalid_url"),
+        GithubError::Access(_)
+        | GithubError::RateLimited(_)
+        | GithubError::Resolve(_)
+        | GithubError::Download(_) => github_failure(err.kind(), upstream_failure_code),
+    };
+    install_err(status, code, err.to_string())
+}
+
+/// The status and code for a GitHub failure of `kind`, the same for the
+/// repository being installed and for any of its dependencies.
+fn github_failure(kind: FetchErrorKind, failed_code: &'static str) -> (StatusCode, &'static str) {
+    match kind {
+        FetchErrorKind::Access => (StatusCode::BAD_REQUEST, "github_access"),
+        FetchErrorKind::RateLimited => (StatusCode::SERVICE_UNAVAILABLE, "github_rate_limited"),
+        FetchErrorKind::Failed => (StatusCode::BAD_GATEWAY, failed_code),
+    }
+}
+
 fn map_resolve_error(err: ResolveError) -> InstallFailure {
     match err {
-        ResolveError::Fetch { .. } => install_err(
-            StatusCode::BAD_GATEWAY,
-            "dependency_fetch_failed",
-            err.to_string(),
-        ),
+        ResolveError::Fetch { ref source, .. } => {
+            let (status, code) = github_failure(source.kind, "dependency_fetch_failed");
+            install_err(status, code, err.to_string())
+        }
         ResolveError::ShaConflict { .. } => {
             install_err(StatusCode::CONFLICT, "dependency_conflict", err.to_string())
         }
@@ -494,5 +559,62 @@ fn map_install_error(err: InstallError) -> InstallFailure {
             "store_error",
             err.to_string(),
         ),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn github_failures_map_to_their_codes() {
+        let code = |err, failed| map_github_error(err, failed).1.0.error;
+        assert_eq!(
+            code(GithubError::Access("private".into()), "resolve_failed"),
+            "github_access"
+        );
+        assert_eq!(
+            code(GithubError::RateLimited("later".into()), "resolve_failed"),
+            "github_rate_limited"
+        );
+        assert_eq!(
+            code(GithubError::Download("reset".into()), "download_failed"),
+            "download_failed"
+        );
+    }
+
+    #[test]
+    fn a_dependency_fetch_keeps_its_kind() {
+        let fetch = |kind| ResolveError::Fetch {
+            name: PackageName::new("@acme/crm"),
+            url: "github.com/acme/crm".into(),
+            sha: "0".repeat(40),
+            source: submilli_build::FetchError::with_kind(kind, "message"),
+        };
+        let code = |kind| map_resolve_error(fetch(kind)).1.0.error;
+        assert_eq!(code(FetchErrorKind::Access), "github_access");
+        assert_eq!(code(FetchErrorKind::RateLimited), "github_rate_limited");
+        assert_eq!(code(FetchErrorKind::Failed), "dependency_fetch_failed");
+    }
+
+    #[test]
+    fn the_server_token_is_read_from_its_file_on_each_install() {
+        let unconfigured = github_auth(None).unwrap();
+        assert_eq!(unconfigured.source(), &TokenSource::ServerUnconfigured);
+        assert!(unconfigured.token().is_none());
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("token");
+        let missing = github_auth(Some(path.clone())).unwrap_err();
+        assert_eq!(missing.0, StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(missing.1.0.error, "github_token_unavailable");
+
+        std::fs::write(&path, "ghp_first\n").unwrap();
+        let first = github_auth(Some(path.clone())).unwrap();
+        assert_eq!(first.token().unwrap().secret(), "ghp_first");
+        std::fs::write(&path, "ghp_rotated\n").unwrap();
+        let rotated = github_auth(Some(path.clone())).unwrap();
+        assert_eq!(rotated.token().unwrap().secret(), "ghp_rotated");
+        assert_eq!(rotated.source(), &TokenSource::ServerFile(path));
     }
 }

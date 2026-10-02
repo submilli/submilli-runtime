@@ -1,7 +1,7 @@
 use std::collections::{BTreeSet, HashMap};
 use std::fmt;
 use std::net::SocketAddr;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
@@ -93,6 +93,9 @@ struct AppStateInner {
     mcp_catalogs: Mutex<HashMap<String, Arc<McpCatalog>>>,
     mcp_catalog_generation: AtomicU64,
     package_store: PackageStore,
+    /// Where package installs read the GitHub token from; read on each
+    /// install so a replaced file takes effect without a restart.
+    github_token_file: Option<PathBuf>,
     prepared_packages: Mutex<HashMap<String, Arc<PreparedBlueprintPackages>>>,
     /// Bumped by every eviction. A prepare snapshots it before reading the
     /// store and only caches its result if no eviction happened in between:
@@ -227,6 +230,7 @@ impl AppState {
                     config.package_store_root,
                     config.package_fallback_root,
                 ),
+                github_token_file: config.github_token_file,
                 prepared_packages: Mutex::new(HashMap::new()),
                 prepared_generation: AtomicU64::new(0),
                 shutdown: Arc::new(Notify::new()),
@@ -490,6 +494,10 @@ impl AppState {
 
     pub(crate) fn package_store(&self) -> &PackageStore {
         &self.inner.package_store
+    }
+
+    pub(crate) fn github_token_file(&self) -> Option<&Path> {
+        self.inner.github_token_file.as_deref()
     }
 
     fn cached_prepared_packages(&self, key: &str) -> Option<Arc<PreparedBlueprintPackages>> {
