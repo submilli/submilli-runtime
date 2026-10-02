@@ -5,7 +5,8 @@ use std::sync::Arc;
 
 use crate::runtime::fs::{ContainError, ContentPath, LinkPath, resolve_content, resolve_link};
 use crate::runtime::host::{
-    permission_denied, permission_denied_invariant, permission_denied_read_only, range_error,
+    permission_denied, permission_denied_invariant, permission_denied_read_only,
+    quota_exceeded_error,
 };
 use crate::runtime::security::{CheckOutcome, SecurityCheck};
 use crate::runtime::vfs::{Access, Placement};
@@ -209,14 +210,14 @@ pub fn write_target_trap(op: &str, guest_path: &str, err: &ContainError) -> wasm
     }
 }
 
-/// A write refused because it would pass the VFS's size limit, as a `RangeError`
+/// A write refused because it would pass the VFS's size limit, as a `QuotaExceededError`
 /// the program can catch.
 pub(crate) fn quota_refusal(
     op: &str,
     guest_path: &str,
     exceeded: QuotaExceeded,
 ) -> wasmtime::Error {
-    range_error(format!("{op} {guest_path}: {exceeded}"))
+    quota_exceeded_error(format!("{op} {guest_path}: {exceeded}"))
 }
 
 /// No program code runs before the rename, so the write draws on the size of the file it

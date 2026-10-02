@@ -1,5 +1,5 @@
 //! Gix only sees a private metadata copy; VFS paths never become ambient paths.
-use crate::runtime::host::range_error;
+use crate::runtime::host::quota_exceeded_error;
 use crate::runtime::{DiskQuota, measure_with_held};
 use cap_std::fs::Dir;
 use gix::bstr::ByteSlice;
@@ -198,7 +198,7 @@ impl Snapshot {
                 let growth = staged.saturating_sub(self.freed_bytes(quota)?);
                 quota
                     .reserve(growth)
-                    .map_err(|exceeded| range_error(format!("git: {exceeded}")))?;
+                    .map_err(|exceeded| quota_exceeded_error(format!("git: {exceeded}")))?;
                 growth
             }
             None => 0,
@@ -356,7 +356,7 @@ impl Drop for Snapshot {
 /// A VFS git can't measure, too large or nested too deep, can't have a change
 /// counted against its size limit: refused as a write past the limit is.
 pub(super) fn measure_error(err: std::io::Error) -> wasmtime::Error {
-    range_error(format!(
+    quota_exceeded_error(format!(
         "git: the VFS couldn't be measured against its size limit: {err}"
     ))
 }
@@ -903,9 +903,9 @@ mod tests {
         assert!(error.to_string().contains("size limit"), "{error}");
         assert!(
             error
-                .downcast_ref::<crate::runtime::host::RangeError>()
+                .downcast_ref::<crate::runtime::host::QuotaExceededError>()
                 .is_some(),
-            "a refusal is a RangeError the program can catch"
+            "a refusal is a QuotaExceededError the program can catch"
         );
         assert_eq!(quota.used(), used, "a refused publication claims nothing");
 

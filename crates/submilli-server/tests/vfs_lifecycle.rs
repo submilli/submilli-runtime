@@ -169,7 +169,7 @@ async fn per_session_size_limit_spans_the_session() {
     let (_, second) = h.execute(&write("b.txt"), Some(&session)).await;
     let message = second["error"]["message"].as_str().unwrap_or_default();
     assert!(
-        message.contains("RangeError") && message.contains("size limit of 100 bytes"),
+        message.contains("QuotaExceededError") && message.contains("size limit of 100 bytes"),
         "the second program starts from the first one's 60 bytes: {second}"
     );
 }

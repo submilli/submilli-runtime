@@ -70,7 +70,7 @@ pub struct Args {
     vars: Vec<String>,
 
     /// Tokens this run's `submilli:llm` calls may spend in total. A run that
-    /// asks for more raises a catchable `RangeError` rather than being billed.
+    /// asks for more raises a catchable `QuotaExceededError` rather than being billed.
     ///
     /// Finite by default, deliberately: unlike `submilli:session`, whose state
     /// is memory-only, a blueprint-configured provider spends real money against
@@ -700,7 +700,7 @@ function main(): string {
         // a ceiling of 10 cannot cover it.
         let f = fixture("llm_over", Some(10));
         let code = execute_with_dispatch(f.args, Some(Arc::new(AlwaysOk(Arc::clone(&calls)))))
-            .expect("a caught RangeError still exits cleanly");
+            .expect("a caught QuotaExceededError still exits cleanly");
 
         assert_eq!(code, ExitCode::SUCCESS, "the guest caught the refusal");
         assert_eq!(

@@ -150,8 +150,8 @@ variable beats file). A blueprint can't raise them.
 | `max_execution_time` (s) | off | Run ends `timeout exceeded`; counts from `main`, checked once a second, doesn't interrupt a pending HTTP/MCP/model/Git call |
 | `max_execution_fuel` | 10¹² | Run ends `fuel exhausted`; deterministic, a backstop |
 | `max_execution_stack` (KiB, ≤ 16384) | 512 | Run ends `call stack exhausted` |
-| `max_execution_llm_tokens` / `max_llm_tokens` | 1M / 20M | Catchable `RangeError` before the prompt is billed |
-| `max_session_state_memory` (MB) | 1024 | Catchable `RangeError` |
+| `max_execution_llm_tokens` / `max_llm_tokens` | 1M / 20M | Catchable `QuotaExceededError` before the prompt is billed |
+| `max_session_state_memory` (MB) | 1024 | Catchable `QuotaExceededError` |
 
 Without `max_execution_time` a runaway loop runs until its fuel is gone, far
 longer than any caller waits: set it a few seconds under the caller's own

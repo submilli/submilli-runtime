@@ -211,11 +211,11 @@ vfs:
 `size_limit` takes a byte count or a size such as `500KB`, `100MB`, or
 `1GB`, and the CLI writes it back as bytes. Under `per_session` it covers
 all the session's files. A write that would pass it is refused with a
-`RangeError` the program can catch; with a `1KB` limit, writing 2,000
+`QuotaExceededError` the program can catch; with a `1KB` limit, writing 2,000
 bytes gets:
 
 ```text
-error: RangeError: fs.writeText /notes/big.md: the filesystem's size limit of 1024 bytes would be exceeded: 0 bytes are in use and this needs 2000 more
+error: QuotaExceededError: fs.writeText /notes/big.md: the filesystem's size limit of 1024 bytes would be exceeded: 0 bytes are in use and this needs 2000 more
 ```
 
 Deleting files frees the space. A `persistent` volume takes no

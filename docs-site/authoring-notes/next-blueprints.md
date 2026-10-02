@@ -71,7 +71,8 @@ reuse one example blueprint, the support agent's, but each stands alone.
   ("Filesystem"). Every output is from one scratch replay with CLI 0.1.6:
   the `docs` excerpts are trimmed signature lists; the path-escape denial
   was run (`/notes/../secrets.md` refused under `fs.write`); the
-  `RangeError` is from a copy of the file with `size_limit: 1KB`; the
+  original `RangeError` came from a copy with `size_limit: 1KB` (the chapter
+  now names it `QuotaExceededError`, per SUB-1128); the
   whole file is as the CLI rewrote it after a hand edit (`1h` to
   `'3600s'`, `100MB` to `104857600`).
 - **Session section:** run for real against `submilli-server` 0.1.6

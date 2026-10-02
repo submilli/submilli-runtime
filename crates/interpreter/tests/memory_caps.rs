@@ -504,7 +504,7 @@ function main(): void {
   try {
     download("https://example.test/big.bin", "/big.bin", { maxBytes: 8388608 });
   } catch (e) {
-    refused = e instanceof RangeError;
+    refused = e instanceof QuotaExceededError && e instanceof Error && !((e as unknown) instanceof RangeError);
   }
   assert(refused, "a 4 MB download under a 1 MB limit is refused");
   assert(!exists("/big.bin"), "nothing is left behind");

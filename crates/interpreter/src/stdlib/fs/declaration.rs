@@ -388,7 +388,7 @@ fn insert_info_interface(defs: &mut PackageDeclaration) {
         &mut properties,
         "sizeLimit",
         Type::Number,
-        "/** The most bytes the files in the root may hold, or `-1` when no limit applies. A write that would pass it throws a `RangeError`. A named volume's limit is shared with every session and blueprint that uses it. */",
+        "/** The most bytes the files in the root may hold, or `-1` when no limit applies. A write that would pass it throws a `QuotaExceededError`. A named volume's limit is shared with every session and blueprint that uses it. */",
     );
     insert_property(
         &mut properties,

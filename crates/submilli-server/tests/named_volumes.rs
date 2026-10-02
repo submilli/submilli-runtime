@@ -228,7 +228,7 @@ vfs:
             "two",
             r#"import { writeText } from "submilli:fs";
 function main(): boolean {
-    try { writeText("/b/c/y.txt", "y".repeat(60)); return false; } catch (e) { return e instanceof RangeError; }
+    try { writeText("/b/c/y.txt", "y".repeat(60)); return false; } catch (e) { return e instanceof QuotaExceededError; }
 }"#,
         )
         .await;

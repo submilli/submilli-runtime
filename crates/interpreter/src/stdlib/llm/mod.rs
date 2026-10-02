@@ -30,8 +30,8 @@ use wasmtime::{FuncType, HeapType, Linker, RefType, StructType, Val, ValType};
 
 use crate::runtime::StoreData;
 use crate::runtime::host::{
-    range_error, read_string_arg, register_host_fn_async, type_error, write_boxed_number_struct,
-    write_submilli_string_struct,
+    quota_exceeded_error, range_error, read_string_arg, register_host_fn_async, type_error,
+    write_boxed_number_struct, write_submilli_string_struct,
 };
 use crate::runtime::intrinsic_types::{IntrinsicTypes, build_intrinsic_types};
 use crate::runtime::llm::{
@@ -530,13 +530,13 @@ fn budget(caller: &wasmtime::Caller<'_, StoreData>) -> Option<Arc<ExecutionToken
 /// impls already exclude prompt and completion text, so the message passes
 /// through whole.
 ///
-/// A ceiling is something a program can catch and adapt to — retry with a
-/// smaller batch, split the work across executions — so it arrives as a
-/// `RangeError` a `catch` can branch on rather than an opaque trap. Everything
-/// else is a plain error, because retrying smaller cannot fix it.
+/// Token budgets are quota errors; prompt size/count bounds are argument range
+/// errors. Other failures retain their base error type.
 fn throw(op: &str, error: LlmCallError) -> wasmtime::Error {
     let message = format!("llm.{op}: {error}");
     if error.is_budget_exceeded() {
+        quota_exceeded_error(message)
+    } else if matches!(error, LlmCallError::PromptBoundsExceeded { .. }) {
         range_error(message)
     } else {
         wasmtime::Error::msg(message)
@@ -1161,11 +1161,11 @@ mod tests {
     }
 
     /// A ceiling is something a program can catch and adapt to — retry with a
-    /// smaller batch, split across executions — so it arrives as a `RangeError`
+    /// smaller batch, split across executions — so it arrives as a `QuotaExceededError`
     /// a `catch` can branch on rather than an opaque trap. This is the mapping
     /// U2 deliberately left to this boundary.
     #[tokio::test]
-    async fn a_budget_refusal_is_a_catchable_range_error() {
+    async fn a_budget_refusal_is_a_catchable_quota_exceeded_error() {
         let (provider, _) = MockProvider::new(Vec::new(), Vec::new());
         let out = Harness::new()
             .provider(provider)
@@ -1182,22 +1182,22 @@ mod tests {
                      try {
                        llm.call("m", "p");
                        return "no refusal";
-                     } catch (e: RangeError) {
-                       return "range: " + e.message;
+                     } catch (e: QuotaExceededError) {
+                       return "quota: " + e.message;
                      }
                    }"#,
             )
             .await
             .expect("program completes");
 
-        assert!(out.starts_with("range: "), "{out}");
+        assert!(out.starts_with("quota: "), "{out}");
         assert!(
             out.contains("this execution may spend"),
             "the refusal names which ceiling: {out}"
         );
     }
 
-    /// A prompt-bound refusal is a quota too, so it takes the same catchable
+    /// A prompt-bound refusal rejects an oversized argument, so it keeps the catchable
     /// `RangeError` arm. If it threw a plain error, a program handling one
     /// class of refusal would miss the other.
     #[tokio::test]

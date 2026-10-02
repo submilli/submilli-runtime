@@ -32,16 +32,17 @@ call by call with filters. It can't raise an operator's limit.
 | Time | none | `max_execution_time`, seconds | The run ends: `timeout exceeded` |
 | Fuel | 10¹² | `max_execution_fuel` | The run ends: `fuel exhausted` |
 | Stack | 512 KB | `max_execution_stack`, KB, at most 16,384 | The run ends: `call stack exhausted` |
-| Filesystem size | none | the blueprint's `vfs.size_limit`; a named volume's `size_limit` in the server config | `RangeError` |
-| Model tokens, one run | 1,000,000 | `max_execution_llm_tokens` | `RangeError` |
-| Model tokens, all runs | 20,000,000 | `max_llm_tokens` | `RangeError` |
+| Filesystem size | none | the blueprint's `vfs.size_limit`; a named volume's `size_limit` in the server config | `QuotaExceededError` |
+| Model tokens, one run | 1,000,000 | `max_execution_llm_tokens` | `QuotaExceededError` |
+| Model tokens, all runs | 20,000,000 | `max_llm_tokens` | `QuotaExceededError` |
 | Prompts in flight | 4 | `max_llm_concurrency` | Further prompts wait |
-| Session state, all sessions | 1,024 MB | `max_session_state_memory`, MB | `RangeError` |
+| Session state, one session | 16 MB / 1,024 keys | fixed | `QuotaExceededError` |
+| Session state, all sessions | 1,024 MB | `max_session_state_memory`, MB | `QuotaExceededError` |
 
 "The run ends" means the program can't catch it: the caller gets the error
 in place of a result. Memory, time and fuel each have a `kind` of their own
 (`memory_exhausted`, `timeout`, `fuel_exhausted`), which tells the limit from
-a fault in the program. A `RangeError` is an ordinary error the program can
+a fault in the program. A `QuotaExceededError` is an ordinary error the program can
 catch with `try` and act on. Sizes in this chapter are binary, as
 the settings count them: a KB is 1,024 bytes and an MB is 1,024 KB.
 
@@ -124,13 +125,19 @@ vfs:
 `size_limit` takes a byte count or a size such as `500KB`, `100MB`, or `1GB`.
 Under `per_session` it covers all the session's files, not each program's.
 
-A write that would pass the limit is refused with a `RangeError` the program
+A write that would pass the limit is refused with a `QuotaExceededError` the program
 can catch, and deleting files frees the space again. `fs.info().sizeLimit`
 tells the program its limit, and is `-1` when there is none. A [named
 volume](/docs/server#volumes) takes no `size_limit` in the blueprint: the
 operator sets one where the server declares it, and that one limit covers
 every session and blueprint using the volume. `fs.info().mounts` reports each
-mounted volume's limit.
+mounted volume's limit. Git writes and `http.download` count against the same
+quota; `fs.remove` frees space for later writes. An unmeasured filesystem is
+treated as full and refuses writes with `QuotaExceededError`.
+
+```text
+QuotaExceededError: fs.writeText /notes/big.md: the filesystem's size limit of 1024 bytes would be exceeded: 0 bytes are in use and this needs 2000 more
+```
 
 ## Model spending
 
@@ -138,7 +145,7 @@ A program's `submilli:llm` calls spend tokens against three limits. Before a
 prompt is sent, its size and the output reserved for it are counted against
 the run's budget, `max_execution_llm_tokens`, and against the server's,
 `max_llm_tokens`. A prompt that wouldn't fit is refused before it is sent,
-with a `RangeError` naming the budget, so it is never billed. The server's
+with a `QuotaExceededError` naming the budget, so it is never billed. The server's
 budget is your ceiling on the provider credential across every running
 program.
 
@@ -155,7 +162,7 @@ llm:
 
 `max_llm_concurrency` bounds how many of one `llm.batch`'s prompts are in
 flight at once; the rest wait their turn. A batch takes at most 128 prompts,
-and a prompt at most 256 KB.
+and a prompt at most 256 KB. Those per-request bounds throw `RangeError`.
 
 ## Session state
 
@@ -164,7 +171,8 @@ session may hold 16 MB, in at most 1,024 keys, each value at most 1 MB and
 each key at most 256 characters. Across every open session,
 `max_session_state_memory` bounds the total, so a server with many sessions
 can't be filled by them. A `set` that would pass either is refused with a
-`RangeError`, and nothing another session holds is evicted to make room.
+`QuotaExceededError`, and nothing another session holds is evicted to make room.
+Individual key and value size caps remain `RangeError`.
 
 A session nobody has used for its blueprint's `idle_timeout`, 24 hours by
 default, is closed, and its state and `per_session` files are deleted.
@@ -233,7 +241,7 @@ Cap the files this agent keeps in its session at 100 MB.
 
 The agent adds `size_limit: 100MB` to the blueprint's `vfs` block and tests
 it with `submilli run`: a program that grows a file a megabyte at a time is
-refused at the limit with a `RangeError` it can catch. It points out that
+refused at the limit with a `QuotaExceededError` it can catch. It points out that
 `100MB` is 104,857,600 bytes, in case you meant the decimal figure. It also
 says what it didn't test: two programs in one session, which needs a server,
 and Jina's downloads, which would mean real calls to Jina.

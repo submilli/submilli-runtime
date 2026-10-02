@@ -101,6 +101,7 @@ fn install_prelude(
         error_subclass_type,
         error_vtable: error_host.vtable,
         range_error_vtable: error_host.range_vtable,
+        quota_exceeded_vtable: error_host.quota_exceeded_vtable,
         type_error_vtable: error_host.type_vtable,
         syntax_error_vtable: error_host.syntax_vtable,
         permission_denied_vtable: error_host.permission_denied_vtable,
@@ -654,6 +655,7 @@ pub struct HostAbi {
     pub(crate) error_subclass_type: StructType,
     pub(crate) error_vtable: Global,
     pub(crate) range_error_vtable: Global,
+    pub(crate) quota_exceeded_vtable: Global,
     pub(crate) type_error_vtable: Global,
     pub(crate) syntax_error_vtable: Global,
     pub(crate) permission_denied_vtable: Global,
@@ -669,6 +671,7 @@ pub(crate) struct HostAbiHandles {
     pub object_fields_type: ArrayType,
     pub error_vtable: Global,
     pub range_error_vtable: Global,
+    pub quota_exceeded_vtable: Global,
     pub type_error_vtable: Global,
     pub syntax_error_vtable: Global,
     pub permission_denied_vtable: Global,
@@ -688,6 +691,7 @@ pub(crate) fn error_abi(caller: &Caller<'_, StoreData>) -> wasmtime::Result<Host
         object_fields_type: abi.object_fields_type.clone(),
         error_vtable: abi.error_vtable,
         range_error_vtable: abi.range_error_vtable,
+        quota_exceeded_vtable: abi.quota_exceeded_vtable,
         type_error_vtable: abi.type_error_vtable,
         syntax_error_vtable: abi.syntax_error_vtable,
         permission_denied_vtable: abi.permission_denied_vtable,
@@ -940,6 +944,27 @@ pub fn range_error(message: impl Into<String>) -> wasmtime::Error {
 }
 
 /// Marker for a host failure that should surface to the guest as the built-in
+/// `QuotaExceededError` subclass rather than a base `Error`. Return
+/// `Err(quota_exceeded_error(...))` from a host-fn body; the `register_host_fn` wrapper
+/// downcasts for it when converting the `Err` into a guest throw. The message
+/// is the guest-visible `e.message`.
+#[derive(Debug)]
+pub struct QuotaExceededError(pub String);
+
+impl std::fmt::Display for QuotaExceededError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for QuotaExceededError {}
+
+/// A host failure that throws the built-in `QuotaExceededError` at the guest boundary.
+pub fn quota_exceeded_error(message: impl Into<String>) -> wasmtime::Error {
+    wasmtime::Error::new(QuotaExceededError(message.into()))
+}
+
+/// Marker for a host failure that should surface to the guest as the built-in
 /// `SyntaxError` subclass — same contract as [`RangeError`].
 #[derive(Debug)]
 pub struct SyntaxError(pub String);
@@ -1101,6 +1126,8 @@ fn denied(
 fn builtin_class_of(err: &wasmtime::Error) -> super::prelude::error::BuiltinErrorClass {
     if err.downcast_ref::<RangeError>().is_some() {
         super::prelude::error::BuiltinErrorClass::Range
+    } else if err.downcast_ref::<QuotaExceededError>().is_some() {
+        super::prelude::error::BuiltinErrorClass::QuotaExceeded
     } else if err.downcast_ref::<TypeError>().is_some() {
         super::prelude::error::BuiltinErrorClass::Type
     } else if err.downcast_ref::<SyntaxError>().is_some() {

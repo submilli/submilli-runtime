@@ -29,7 +29,7 @@ use crate::runtime::fs::{
 };
 use crate::runtime::gc_singleton::singleton_struct;
 use crate::runtime::host::{
-    range_error, read_string_arg, read_uint8_array_arg, register_host_fn,
+    quota_exceeded_error, read_string_arg, read_uint8_array_arg, register_host_fn,
     write_submilli_string_struct, write_submilli_uint8array_struct,
 };
 use crate::runtime::intrinsic_types::{IntrinsicTypes, build_intrinsic_types, intrinsic_types};
@@ -1319,11 +1319,11 @@ fn install_file_writer_methods(
     Ok(())
 }
 
-/// A size-limit refusal is a `RangeError` the program can catch, like every other
+/// A size-limit refusal is a `QuotaExceededError` the program can catch, like every other
 /// write that would pass it.
 fn write_error(op: &str, err: WriteError) -> wasmtime::Error {
     match err {
-        WriteError::Full(exceeded) => range_error(format!("{op}: {exceeded}")),
+        WriteError::Full(exceeded) => quota_exceeded_error(format!("{op}: {exceeded}")),
         WriteError::Io(e) => wasmtime::Error::msg(format!("{op}: {e}")),
         WriteError::Contain(e) => wasmtime::Error::msg(format!("{op}: {e}")),
     }
@@ -2190,7 +2190,7 @@ function main(): void {
         let source = r#"
             import { writeText, readText, append, info } from "submilli:fs";
             function refused(write: () => void): boolean {
-                try { write(); return false; } catch (e) { return e instanceof RangeError; }
+                try { write(); return false; } catch (e) { return e instanceof QuotaExceededError && e instanceof Error && !((e as unknown) instanceof RangeError); }
             }
             function main(): void {
                 assert(info().sizeLimit === 100, "limit surfaced");
@@ -2216,7 +2216,7 @@ function main(): void {
                 const w = writer("/log.txt");
                 w.writeLine("x".repeat(40));
                 let refused = false;
-                try { w.writeLine("y".repeat(80)); } catch (e) { refused = e instanceof RangeError; }
+                try { w.writeLine("y".repeat(80)); } catch (e) { refused = e instanceof QuotaExceededError && e instanceof Error && !((e as unknown) instanceof RangeError); }
                 assert(refused, "the writer stops at the limit");
                 w.close();
                 assert(exists("/log.txt"), "what was written before the limit is kept");
@@ -2236,7 +2236,7 @@ function main(): void {
                 writeText("/a.txt", "x".repeat(40));
                 copy("/a.txt", "/b.txt", false);
                 let refused = false;
-                try { copy("/a.txt", "/c.txt", false); } catch (e) { refused = e instanceof RangeError; }
+                try { copy("/a.txt", "/c.txt", false); } catch (e) { refused = e instanceof QuotaExceededError && e instanceof Error && !((e as unknown) instanceof RangeError); }
                 assert(refused, "a third copy passes the limit");
                 assert(!exists("/c.txt"), "the refused copy leaves nothing");
                 copy("/b.txt", "/a.txt", false);
@@ -2252,7 +2252,7 @@ function main(): void {
         let source = r#"
             import { writeText, remove, move } from "submilli:fs";
             function refused(write: () => void): boolean {
-                try { write(); return false; } catch (e) { return e instanceof RangeError; }
+                try { write(); return false; } catch (e) { return e instanceof QuotaExceededError && e instanceof Error && !((e as unknown) instanceof RangeError); }
             }
             function main(): void {
                 writeText("/a.txt", "x".repeat(60));
@@ -2275,7 +2275,7 @@ function main(): void {
         let source = r#"
             import { writer, writeText } from "submilli:fs";
             function refused(write: () => void): boolean {
-                try { write(); return false; } catch (e) { return e instanceof RangeError; }
+                try { write(); return false; } catch (e) { return e instanceof QuotaExceededError && e instanceof Error && !((e as unknown) instanceof RangeError); }
             }
             function main(): void {
                 writeText("/a.txt", "x".repeat(90));
@@ -2301,7 +2301,7 @@ function main(): void {
                 first.writeBytes(new Uint8Array(30));
                 const second = writer("/a.txt");
                 let refused = false;
-                try { second.writeBytes(new Uint8Array(30)); } catch (e) { refused = e instanceof RangeError; }
+                try { second.writeBytes(new Uint8Array(30)); } catch (e) { refused = e instanceof QuotaExceededError && e instanceof Error && !((e as unknown) instanceof RangeError); }
                 assert(refused, "two open writers' bytes both count");
                 first.close();
                 second.close();
@@ -2347,7 +2347,7 @@ function main(): void {
                 try { w.close(); } catch (e) { failed = true; }
                 assert(failed, "close notices its temp file was moved");
                 let refused = false;
-                try { writeText("/x.txt", "y".repeat(50)); } catch (e) { refused = e instanceof RangeError; }
+                try { writeText("/x.txt", "y".repeat(50)); } catch (e) { refused = e instanceof QuotaExceededError && e instanceof Error && !((e as unknown) instanceof RangeError); }
                 assert(refused, "the moved bytes still count");
             }
         "#;
@@ -2393,7 +2393,7 @@ function main(): void {
                 writeText("/empty.txt", "");
                 remove("/empty.txt", false);
                 try { writeText("/a.txt", "x"); return "allowed"; }
-                catch (e) { return (e instanceof RangeError ? "true " : "false ") + (e as Error).message; }
+                catch (e) { return (e instanceof QuotaExceededError && e instanceof Error && !((e as unknown) instanceof RangeError) ? "true " : "false ") + (e as Error).message; }
             }
         "#;
         let result = run_with(source, StoreData::with_vfs(vfs))
@@ -2426,7 +2426,7 @@ function main(): void {
         let source = r#"
             import { writeText, bytes, remove } from "submilli:fs";
             function refused(write: () => void): boolean {
-                try { write(); return false; } catch (e) { return e instanceof RangeError; }
+                try { write(); return false; } catch (e) { return e instanceof QuotaExceededError && e instanceof Error && !((e as unknown) instanceof RangeError); }
             }
             function main(): void {
                 writeText("/f.bin", "x".repeat(90));
@@ -2448,7 +2448,7 @@ function main(): void {
         let source = r#"
             import { writer, list, writeText } from "submilli:fs";
             function refused(write: () => void): boolean {
-                try { write(); return false; } catch (e) { return e instanceof RangeError; }
+                try { write(); return false; } catch (e) { return e instanceof QuotaExceededError && e instanceof Error && !((e as unknown) instanceof RangeError); }
             }
             function main(): void {
                 const w = writer("/a.bin");
@@ -2473,7 +2473,7 @@ function main(): void {
         let source = r#"
             import { writeText, bytes } from "submilli:fs";
             function refused(write: () => void): boolean {
-                try { write(); return false; } catch (e) { return e instanceof RangeError; }
+                try { write(); return false; } catch (e) { return e instanceof QuotaExceededError && e instanceof Error && !((e as unknown) instanceof RangeError); }
             }
             function main(): void {
                 writeText("/f.bin", "x".repeat(40000));
@@ -2495,7 +2495,7 @@ function main(): void {
         let source = r#"
             import { writeText, copy, bytes } from "submilli:fs";
             function refused(write: () => void): boolean {
-                try { write(); return false; } catch (e) { return e instanceof RangeError; }
+                try { write(); return false; } catch (e) { return e instanceof QuotaExceededError && e instanceof Error && !((e as unknown) instanceof RangeError); }
             }
             function main(): void {
                 writeText("/f.bin", "x".repeat(40000));
@@ -2540,7 +2540,7 @@ function main(): void {
         let source = r#"
             import { writeText, writer, list, copy, mkdir } from "submilli:fs";
             function refused(write: () => void): boolean {
-                try { write(); return false; } catch (e) { return e instanceof RangeError; }
+                try { write(); return false; } catch (e) { return e instanceof QuotaExceededError && e instanceof Error && !((e as unknown) instanceof RangeError); }
             }
             function main(): void {
                 writeText("/empty", "");
@@ -2819,7 +2819,7 @@ function main(): void {
             function main(): void {
                 assert(readText("/two/a.txt")!.length === 60, "the other alias sees it");
                 let refused = false;
-                try { writeText("/two/b.txt", "y".repeat(60)); } catch (e) { refused = e instanceof RangeError; }
+                try { writeText("/two/b.txt", "y".repeat(60)); } catch (e) { refused = e instanceof QuotaExceededError && e instanceof Error && !((e as unknown) instanceof RangeError); }
                 assert(refused, "the shared limit refuses the second write");
             }
         "#;

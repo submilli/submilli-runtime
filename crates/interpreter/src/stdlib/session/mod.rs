@@ -432,8 +432,14 @@ fn cursor_trap(error: cursor::CursorError) -> wasmtime::Error {
 fn trap(error: &SessionKvError) -> wasmtime::Error {
     match error {
         SessionKvError::InvalidKey { .. } => crate::runtime::host::type_error(error.to_string()),
+        SessionKvError::LimitExceeded {
+            limit:
+                crate::runtime::session_kv::SessionKvLimitKind::KeyUnits { .. }
+                | crate::runtime::session_kv::SessionKvLimitKind::ValueBytes { .. },
+            ..
+        } => crate::runtime::host::range_error(error.to_string()),
         SessionKvError::LimitExceeded { .. } => {
-            crate::runtime::host::range_error(error.to_string())
+            crate::runtime::host::quota_exceeded_error(error.to_string())
         }
         SessionKvError::Backend { .. } => wasmtime::Error::msg(error.to_string()),
     }
@@ -573,6 +579,72 @@ function main(): void {
             }
         "#;
         run(source, None).await.expect("program completes");
+    }
+
+    #[tokio::test]
+    async fn session_budgets_throw_quota_exceeded_error() {
+        use crate::runtime::session_kv::SharedKvBudget;
+
+        let defaults = SessionKvLimits::default();
+        let stores = [
+            InMemorySessionKv::new(SessionKvLimits {
+                max_entries: 0,
+                ..defaults
+            }),
+            InMemorySessionKv::new(SessionKvLimits {
+                max_session_bytes: 1,
+                ..defaults
+            }),
+            InMemorySessionKv::with_shared_budget(defaults, SharedKvBudget::new(1)),
+        ];
+        for kv in stores {
+            let source = r#"
+                import session from "submilli:session";
+                function main(): void {
+                    let caught = false;
+                    try { session.set("k", "value"); }
+                    catch (e: QuotaExceededError) {
+                        caught = e instanceof Error && !((e as unknown) instanceof RangeError);
+                        assert(e.name === "QuotaExceededError", "quota name");
+                    }
+                    assert(caught, "session budget refusal is a quota error");
+                    assert(!session.has("k"), "refused write leaves no value");
+                }
+            "#;
+            run(source, Some(Arc::new(kv)))
+                .await
+                .expect("catch quota refusal");
+        }
+    }
+
+    #[tokio::test]
+    async fn session_argument_bounds_remain_range_errors() {
+        let defaults = SessionKvLimits::default();
+        for limits in [
+            SessionKvLimits {
+                max_key_units: 1,
+                ..defaults
+            },
+            SessionKvLimits {
+                max_value_bytes: 1,
+                ..defaults
+            },
+        ] {
+            let source = r#"
+                import session from "submilli:session";
+                function main(): void {
+                    let caught = false;
+                    try { session.set("key", "value"); }
+                    catch (e: RangeError) {
+                        caught = !((e as unknown) instanceof QuotaExceededError);
+                    }
+                    assert(caught, "individual key/value caps remain argument errors");
+                }
+            "#;
+            run(source, Some(Arc::new(InMemorySessionKv::new(limits))))
+                .await
+                .expect("catch argument bounds");
+        }
     }
 
     /// A quota refusal names the limit and the key, and never the value — the

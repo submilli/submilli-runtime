@@ -3,7 +3,7 @@ use super::{Job, operations, storage, transport};
 use std::collections::HashSet;
 
 use crate::runtime::fs::{ContainError, FileIdentity, check_repository_clear_of_mounts};
-use crate::runtime::host::{permission_denied_read_only, range_error};
+use crate::runtime::host::{permission_denied_read_only, quota_exceeded_error};
 use crate::runtime::vfs::Access;
 use crate::runtime::{DiskQuota, measure_dir, measure_with_held};
 use cap_std::fs::Dir;
@@ -193,7 +193,7 @@ fn refuse_read_only_repository(
 /// when the operation wrote before publishing. What publication frees depends on
 /// what it replaced, so the change is measured rather than tracked; git work is
 /// rare enough to afford the walk. A VFS that couldn't be measured is refused with
-/// a `RangeError`, as every other writer refuses it.
+/// a `QuotaExceededError`, as every other writer refuses it.
 fn publish_counted(
     snapshot: storage::Snapshot,
     root: &Dir,
@@ -207,7 +207,7 @@ fn publish_counted(
         let refused = crate::runtime::QuotaExceeded::Unmeasured {
             limit: quota.limit(),
         };
-        return Err(range_error(format!("git: {refused}")));
+        return Err(quota_exceeded_error(format!("git: {refused}")));
     }
     // A file a handle holds stays on disk when publication replaces its name, but
     // the measurement stops seeing it; note which ones to count again.

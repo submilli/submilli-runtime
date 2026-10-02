@@ -286,17 +286,10 @@ impl LlmCallError {
         }
     }
 
-    /// Whether this refusal is a quota, and so reaches the guest as a catchable
-    /// `RangeError` rather than a plain host error — the rule
-    /// [`SessionKvError::LimitExceeded`](crate::runtime::session_kv::SessionKvError::LimitExceeded)
-    /// follows. A ceiling is something a program can catch and adapt to, so the
-    /// stdlib boundary maps it to a subclass a `catch` can branch on instead of
-    /// an opaque trap.
+    /// Token-budget refusals become catchable `QuotaExceededError`s at the
+    /// stdlib boundary. Prompt size/count bounds remain `RangeError`s.
     pub fn is_budget_exceeded(&self) -> bool {
-        matches!(
-            self,
-            Self::BudgetExceeded { .. } | Self::PromptBoundsExceeded { .. }
-        )
+        matches!(self, Self::BudgetExceeded { .. })
     }
 }
 
@@ -1278,16 +1271,13 @@ mod tests {
     }
 
     /// A ceiling is something a program can catch and adapt to, so it reaches the
-    /// guest as a catchable `RangeError` — the rule session-KV's `LimitExceeded`
-    /// follows. A dispatch that failed for a reason retrying smaller cannot fix
+    /// guest as a catchable `QuotaExceededError`. A dispatch that failed for
+    /// a reason retrying smaller cannot fix
     /// must not masquerade as one.
     #[test]
-    fn only_quota_refusals_are_classified_as_range_errors() {
+    fn only_quota_refusals_are_classified_as_quota_exceeded_errors() {
         for error in every_variant() {
-            let expected = matches!(
-                error,
-                LlmCallError::BudgetExceeded { .. } | LlmCallError::PromptBoundsExceeded { .. }
-            );
+            let expected = matches!(error, LlmCallError::BudgetExceeded { .. });
             assert_eq!(
                 error.is_budget_exceeded(),
                 expected,
