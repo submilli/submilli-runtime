@@ -12,6 +12,36 @@ use crate::runtime::host::write_submilli_string_struct_units;
 use crate::runtime::prelude::iterator::as_struct;
 use crate::runtime::prelude::vtable::read_string_units;
 
+/// Bucket indices are signed in the insertion ledger and use a power-of-two mask.
+pub(super) fn probe_capacity(capacity: u32) -> wasmtime::Result<i32> {
+    if !capacity.is_power_of_two() || capacity > i32::MAX as u32 {
+        return Err(wasmtime::Error::msg("Invalid collection bucket capacity"));
+    }
+    Ok(capacity as i32)
+}
+
+/// The ledger retains every insertion since rehash, including deleted entries.
+/// Its length therefore bounds live buckets plus tombstones from above, even
+/// when an insertion reuses a tombstone. Rebuilding it also clears tombstones.
+pub(super) fn rehash_capacity(
+    capacity: u32,
+    size: i32,
+    order_len: i32,
+) -> wasmtime::Result<Option<i32>> {
+    let capacity = probe_capacity(capacity)?;
+    if size < 0 || order_len < size || order_len > capacity {
+        return Err(wasmtime::Error::msg("Invalid collection entry counts"));
+    }
+    let load_limit = i64::from(capacity) * 3 / 4;
+    if i64::from(size) + 1 > load_limit {
+        return capacity
+            .checked_mul(2)
+            .map(Some)
+            .ok_or_else(|| wasmtime::Error::msg("Collection capacity limit exceeded"));
+    }
+    Ok((i64::from(order_len) + 1 > load_limit).then_some(capacity))
+}
+
 /// Whether `val` is (non-null and) an instance of struct type `ty`.
 pub(crate) fn is_a(
     caller: &mut Caller<'_, StoreData>,
@@ -159,5 +189,29 @@ pub(crate) fn is_null_key(caller: &mut Caller<'_, StoreData>, key: &Val) -> wasm
     match (key, sentinel) {
         (Val::AnyRef(Some(a)), Val::AnyRef(Some(b))) => wasmtime::Rooted::ref_eq(&*caller, a, &b),
         _ => Ok(false),
+    }
+}
+
+#[cfg(test)]
+mod table_capacity_tests {
+    use super::{probe_capacity, rehash_capacity};
+
+    #[test]
+    fn reclaim_at_current_capacity_before_growing() {
+        assert_eq!(rehash_capacity(8, 2, 5).unwrap(), None);
+        assert_eq!(rehash_capacity(8, 2, 6).unwrap(), Some(8));
+        assert_eq!(rehash_capacity(8, 6, 6).unwrap(), Some(16));
+        assert_eq!(rehash_capacity(8, 0, 8).unwrap(), Some(8));
+    }
+
+    #[test]
+    fn reject_invalid_counts_and_capacity_overflow() {
+        for capacity in [0, 3, 1 << 31] {
+            assert!(probe_capacity(capacity).is_err());
+        }
+        for (size, order_len) in [(-1, 0), (2, 1), (0, 9)] {
+            assert!(rehash_capacity(8, size, order_len).is_err());
+        }
+        assert!(rehash_capacity(1 << 30, 1 << 30, 1 << 30).is_err());
     }
 }
