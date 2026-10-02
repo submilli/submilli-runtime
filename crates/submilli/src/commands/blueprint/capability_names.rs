@@ -120,16 +120,62 @@ fn dependents_of<'a>(packages: &'a DeclaredPackages, dependency: &str) -> Vec<&'
         .collect()
 }
 
-/// Names sharing the input's `module.` prefix, or containing it as a
-/// substring — enough to catch a typo such as `fs.raed`.
+/// Nearby names, ignoring case; the module prefix breaks equal-distance ties.
 fn suggestions(known: &[String], input: &str) -> Vec<String> {
-    let prefix = input.split('.').next().unwrap_or(input);
-    known
+    let input = input.to_lowercase();
+    if input.is_empty() {
+        return Vec::new();
+    }
+    let prefix = format!("{}.", input.split('.').next().unwrap_or(&input));
+    let mut ranked: Vec<_> = known
         .iter()
-        .filter(|k| k.starts_with(&format!("{prefix}.")) || k.contains(input))
+        .filter_map(|name| {
+            let normalized = name.to_lowercase();
+            let distance = nearby_edit_distance(&input, &normalized)?;
+            Some((distance, !normalized.starts_with(&prefix), name))
+        })
+        .collect();
+    ranked.sort_unstable();
+    ranked.dedup();
+    ranked
+        .into_iter()
         .take(5)
-        .cloned()
+        .map(|(_, _, name)| name.clone())
         .collect()
+}
+
+/// Distances above three are not useful spelling hints. Saturating cells at
+/// four also keeps arithmetic bounded regardless of capability-name length.
+fn nearby_edit_distance(input: &str, candidate: &str) -> Option<usize> {
+    const LIMIT: usize = 3;
+    let input_len = input.chars().count();
+    let candidate_len = candidate.chars().count();
+    if input_len.abs_diff(candidate_len) > LIMIT {
+        return None;
+    }
+    let mut row: Vec<_> = (0..=candidate_len).map(|n| n.min(LIMIT + 1)).collect();
+    for (position, input_char) in input.chars().enumerate() {
+        let mut cells = row.iter_mut();
+        let first = cells.next()?;
+        let mut diagonal = *first;
+        *first = position.saturating_add(1).min(LIMIT + 1);
+        let mut left = *first;
+        let mut minimum = left;
+        for (cell, candidate_char) in cells.zip(candidate.chars()) {
+            let above = *cell;
+            *cell = (diagonal + usize::from(input_char != candidate_char))
+                .min(above + 1)
+                .min(left + 1)
+                .min(LIMIT + 1);
+            diagonal = above;
+            left = *cell;
+            minimum = minimum.min(left);
+        }
+        if minimum > LIMIT {
+            return None;
+        }
+    }
+    row.last().copied().filter(|distance| *distance <= LIMIT)
 }
 
 /// What a rule for an `http.<method>` name the catalog lacks matches, worded
@@ -156,27 +202,12 @@ fn misspelled_http_operation(name: &str) -> Option<&'static str> {
         .iter()
         .flat_map(|group| group.capabilities)
         .filter(|capability| capability.name.starts_with("http.") && !capability.is_template())
-        .map(|capability| (edit_distance(name, capability.name), capability.name))
+        .filter_map(|capability| {
+            nearby_edit_distance(name, capability.name).map(|distance| (distance, capability.name))
+        })
         .filter(|(distance, _)| *distance <= 2)
         .min_by_key(|(distance, _)| *distance)
         .map(|(_, intended)| intended)
-}
-
-/// Levenshtein distance over bytes; capability names are ASCII.
-fn edit_distance(a: &str, b: &str) -> usize {
-    let mut previous: Vec<usize> = (0..=b.len()).collect();
-    for (row, left) in (1..).zip(a.bytes()) {
-        let mut current = Vec::with_capacity(previous.len());
-        current.push(row);
-        for (right, pair) in b.bytes().zip(previous.windows(2)) {
-            let &[diagonal, above] = pair else { continue };
-            let before = current.last().copied().unwrap_or(row);
-            let substitution = diagonal + usize::from(left != right);
-            current.push(substitution.min(above + 1).min(before + 1));
-        }
-        previous = current;
-    }
-    previous.last().copied().unwrap_or(0)
 }
 
 /// A clause offering `near` as corrections, or nothing when there are none.
@@ -213,11 +244,51 @@ mod tests {
     }
 
     #[test]
-    fn edit_distance_counts_insertions_deletions_and_substitutions() {
-        assert_eq!(edit_distance("", ""), 0);
-        assert_eq!(edit_distance("abc", ""), 3);
-        assert_eq!(edit_distance("", "abc"), 3);
-        assert_eq!(edit_distance("kitten", "sitting"), 3);
-        assert_eq!(edit_distance("http.get", "http.get"), 0);
+    fn suggestions_rank_catalog_typos_first() {
+        let blueprint = submilli_blueprint::parse("name: t\n").unwrap();
+        let packages =
+            declared_packages::load(&blueprint, &submilli_build::PackageStore::default());
+        let known = known_capabilities(&blueprint, &packages, "main");
+        for (input, expected) in [
+            ("fs.cpy", "fs.copy"),
+            ("http.downlod", "http.download"),
+            ("FS.Write", "fs.write"),
+            ("htp.download", "http.download"),
+            ("fs.raed", "fs.read"),
+        ] {
+            let hints = suggestions(&known, input);
+            assert_eq!(hints.first().map(String::as_str), Some(expected), "{input}");
+            assert!(hints.len() <= 5);
+        }
+    }
+
+    #[test]
+    fn suggestions_bound_distance_and_break_ties() {
+        let known = ["gs.cat", "fs.cbt", "fs.car", "fs.car", "fs.zzzzzzzz"].map(String::from);
+        assert_eq!(
+            suggestions(&known, "fs.cat"),
+            ["fs.car", "fs.cbt", "gs.cat"]
+        );
+        assert!(suggestions(&known, "").is_empty());
+        assert!(suggestions(&known, "unrelated.name").is_empty());
+        assert!(suggestions(&[], "fs.cat").is_empty());
+        let known = ["fs.ca", "fs.cb", "fs.cc", "fs.cd", "fs.ce", "fs.cf"].map(String::from);
+        assert_eq!(suggestions(&known, "fs.cx"), known[..5]);
+    }
+
+    #[test]
+    fn nearby_distance_handles_threshold_and_unicode() {
+        for (input, candidate, expected) in [
+            ("", "", Some(0)),
+            ("", "abc", Some(3)),
+            ("abc", "", Some(3)),
+            ("abcd", "", None),
+            ("abc", "xyz", Some(3)),
+            ("abcd", "wxyz", None),
+            ("kitten", "sitting", Some(3)),
+            ("mcp.猫", "mcp.犬", Some(1)),
+        ] {
+            assert_eq!(nearby_edit_distance(input, candidate), expected);
+        }
     }
 }
