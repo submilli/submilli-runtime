@@ -534,21 +534,15 @@ pub fn read_string_array_arg(
             )));
         }
     };
-    // `$Array` struct → field 1 is the `$rawArray` backing of object refs.
-    let raw = match any
+    let object = any
         .as_struct(&mut *caller)?
-        .ok_or_else(|| type_error(format!("{name}: expected $Array struct")))?
-        .field(&mut *caller, 1)?
-    {
-        Val::AnyRef(Some(inner)) => inner.unwrap_array(&mut *caller)?,
-        other => {
-            return Err(wasmtime::Error::msg(format!(
-                "{name}: malformed $Array backing {other:?}"
-            )));
-        }
-    };
-    let len = raw.len(&mut *caller)?;
-    let mut out = Vec::with_capacity(len as usize);
+        .ok_or_else(|| type_error(format!("{name}: expected $Array struct")))?;
+    let storage = super::array_storage::ArrayStorage::from_struct(caller, object)?;
+    let raw = storage.backing;
+    let len = storage.len;
+    let mut out = Vec::new();
+    out.try_reserve_exact(len as usize)
+        .map_err(fatal_host_error)?;
     for i in 0..len {
         match raw.get(&mut *caller, i)? {
             Val::AnyRef(Some(elem)) => out.push(read_string_from_anyref(caller, elem, name)?),
@@ -899,6 +893,7 @@ pub fn write_submilli_array_struct(
     caller: &mut Caller<'_, StoreData>,
     elements: &[Val],
 ) -> wasmtime::Result<Rooted<StructRef>> {
+    let len = super::array_storage::checked_length(elements.len())?;
     let (array_type, raw_array_type) = {
         let abi = caller
             .data()
@@ -914,7 +909,11 @@ pub fn write_submilli_array_struct(
     StructRef::new(
         &mut *caller,
         &pre,
-        &[vtable, Val::AnyRef(Some(raw.to_anyref()))],
+        &[
+            vtable,
+            Val::AnyRef(Some(raw.to_anyref())),
+            Val::I32(len as i32),
+        ],
     )
 }
 

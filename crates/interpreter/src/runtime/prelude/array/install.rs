@@ -193,9 +193,18 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         ft(vec![array.clone(), elem.clone()], vec![num.clone()]),
         true,
         |caller, params, results| {
-            let elements = super::read_array(caller, &params[0], "Array#push")?;
-            let n = super::push(caller, &params[0], elements, params[1])?;
-            results[0] = Val::F64(n.to_bits());
+            let [receiver, element] = params else {
+                return Err(crate::runtime::host::fatal_host_error(
+                    "invalid Array#push arguments",
+                ));
+            };
+            let [result] = results else {
+                return Err(crate::runtime::host::fatal_host_error(
+                    "invalid Array#push result slot",
+                ));
+            };
+            let n = super::push(caller, receiver, *element)?;
+            *result = Val::F64(n.to_bits());
             Ok(())
         },
     )?;

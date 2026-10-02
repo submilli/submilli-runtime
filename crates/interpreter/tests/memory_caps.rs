@@ -202,7 +202,7 @@ function main(): void {
 }
 "#;
 
-    // 64 KB: well under a single array-push's doubled backing allocation.
+    // 64 KB: retained elements and geometric backing growth exceed this cap.
     let err = cap_run(src, 64 * 1024).expect_err("cap should reject growth");
     let msg = format!("{err:#}");
     assert!(

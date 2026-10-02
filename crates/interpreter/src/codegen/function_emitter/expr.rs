@@ -16,7 +16,9 @@
 //! time — the typed AST never reaches them in current fixtures.
 
 use crate::codegen::CodegenCtx;
-use crate::codegen::bounds::{emit_checked_index, stash_index_operand};
+use crate::codegen::bounds::{
+    emit_checked_index, emit_checked_index_with_length, stash_array_length, stash_index_operand,
+};
 use crate::codegen::cast_check::emit_structural_test;
 use crate::codegen::function_emitter::FunctionEmitter;
 use crate::codegen::function_emitter::cast;
@@ -405,9 +407,9 @@ fn emit_expr_value(
                 emitter.instruction(Instruction::GlobalGet(global_idx));
                 return Ok(());
             }
-            if let Some(struct_idx) = inline_length_struct_idx(ctx, iface, &name.name) {
+            if let Some(struct_idx) = inline_length_struct_idx(ctx, iface, &name.name)? {
                 emit_receiver(emitter, ctx, *receiver)?;
-                emit_inline_length(emitter, struct_idx);
+                emit_inline_length(emitter, ctx, struct_idx);
                 return Ok(());
             }
             let func_idx = ctx
@@ -438,103 +440,11 @@ fn emit_expr_value(
             }
             emitter.instruction(Instruction::Call(func_idx));
         }
-        TypedExprKind::ArrayLiteral {
-            elements,
-            element_ty: _,
-        } => {
-            // two codegen paths depending on whether any
-            // element is a spread. With no spreads, the fast path
-            // mirrors the original recipe:
-            //   global.get $array_vtable
-            //   <each element pushed + emit_box(elem.ty)>
-            //   array.new_fixed $rawArray N
-            //   struct.new $Array
-            // With spreads, mirror the `Array#concat` two-pass
-            // shape inline: measure total length across fixed + spread
-            // sources, allocate via `array.new_default`, then walk in
-            // order copying spread chunks with `array.copy` and
-            // setting fixed elements with `array.set`.
-            //
-            // Box per *each element's actual type*, not the container's
-            // `element_ty`. When the literal flows into a generic-arg
-            // position with hint `T[]`, `element_ty` is `Type::Var("T")`
-            // (the unresolved hint propagated through
-            // `infer_array_literal`); each element is still a concrete
-            // primitive on the stack — boxing has to happen by the
-            // actual type or the slot type mismatch trips the validator.
-            let array_idx = ctx
-                .symbols
-                .array_type_idx()
-                .expect("Type::Array requires intrinsic types declared");
-            let raw_array_idx = ctx
-                .symbols
-                .raw_array_type_idx()
-                .expect("Type::Array requires intrinsic types declared");
-            let array_vtable_global = ctx
-                .symbols
-                .prelude_global_idx("array_vtable")
-                .expect("array_vtable imported from prelude");
-
-            let has_spread = elements
-                .iter()
-                .any(|e| matches!(e, crate::TypedArrayElement::Spread(_)));
-
-            if has_spread {
-                emit_spread_array_literal(emitter, ctx, elements)?;
-            } else {
-                emitter.instruction(Instruction::GlobalGet(array_vtable_global));
-                for el in elements {
-                    let elem_id = el.expr_id();
-                    emit_expr(emitter, ctx, elem_id)?;
-                    let elem_ty = ctx
-                        .ta
-                        .try_expr(elem_id)
-                        .map_err(crate::codegen::arena_failure)?
-                        .ty
-                        .clone();
-                    crate::codegen::function_emitter::cast::emit_box(emitter, ctx, &elem_ty)?;
-                }
-                emitter.instruction(Instruction::ArrayNewFixed {
-                    array_type_index: raw_array_idx,
-                    array_size: elements.len() as u32,
-                });
-                emitter.instruction(Instruction::StructNew(array_idx));
-            }
+        TypedExprKind::ArrayLiteral { elements, .. } => {
+            emit_array_literal(emitter, ctx, elements)?;
         }
-        TypedExprKind::TupleLiteral {
-            elements,
-            element_types: _,
-        } => {
-            // Tuple storage is erased, so box the value actually on the stack.
-            let array_idx = ctx
-                .symbols
-                .array_type_idx()
-                .expect("Type::Array requires intrinsic types declared");
-            let raw_array_idx = ctx
-                .symbols
-                .raw_array_type_idx()
-                .expect("Type::Array requires intrinsic types declared");
-            let array_vtable_global = ctx
-                .symbols
-                .prelude_global_idx("array_vtable")
-                .expect("array_vtable imported from prelude");
-            emitter.instruction(Instruction::GlobalGet(array_vtable_global));
-            for &elem_id in elements {
-                emit_expr(emitter, ctx, elem_id)?;
-                crate::codegen::function_emitter::cast::emit_box(
-                    emitter,
-                    ctx,
-                    &ctx.ta
-                        .try_expr(elem_id)
-                        .map_err(crate::codegen::arena_failure)?
-                        .ty,
-                )?;
-            }
-            emitter.instruction(Instruction::ArrayNewFixed {
-                array_type_index: raw_array_idx,
-                array_size: elements.len() as u32,
-            });
-            emitter.instruction(Instruction::StructNew(array_idx));
+        TypedExprKind::TupleLiteral { elements, .. } => {
+            emit_tuple_literal(emitter, ctx, elements)?;
         }
         TypedExprKind::IndexAccess { receiver, index } => {
             // Uint8Array uses a different storage shape than
@@ -1529,16 +1439,129 @@ fn unbox_if_boxed(
     payload
 }
 
+// Keep literal construction outside the recursive expression dispatcher's
+// debug stack frame, including its fallible lookup/conversion temporaries.
+fn emit_array_literal(
+    emitter: &mut FunctionEmitter,
+    ctx: &CodegenCtx,
+    elements: &[crate::TypedArrayElement],
+) -> Result<(), crate::compiler_error::CompilerFailure> {
+    // two codegen paths depending on whether any
+    // element is a spread. With no spreads, the fast path
+    // mirrors the original recipe:
+    //   global.get $array_vtable
+    //   <each element pushed + emit_box(elem.ty)>
+    //   array.new_fixed $rawArray N
+    //   struct.new $Array
+    // With spreads, mirror the `Array#concat` two-pass
+    // shape inline: measure total length across fixed + spread
+    // sources, allocate via `array.new_default`, then walk in
+    // order copying spread chunks with `array.copy` and
+    // setting fixed elements with `array.set`.
+    //
+    // Box per *each element's actual type*, not the container's
+    // `element_ty`. When the literal flows into a generic-arg
+    // position with hint `T[]`, `element_ty` is `Type::Var("T")`
+    // (the unresolved hint propagated through
+    // `infer_array_literal`); each element is still a concrete
+    // primitive on the stack — boxing has to happen by the
+    // actual type or the slot type mismatch trips the validator.
+    let array_idx = ctx.symbols.array_type_idx().ok_or_else(|| {
+        crate::codegen::internal_failure("Type::Array requires intrinsic types declared")
+    })?;
+    let raw_array_idx = ctx.symbols.raw_array_type_idx().ok_or_else(|| {
+        crate::codegen::internal_failure("Type::Array requires intrinsic types declared")
+    })?;
+    let array_vtable_global = ctx
+        .symbols
+        .prelude_global_idx("array_vtable")
+        .ok_or_else(|| crate::codegen::internal_failure("array_vtable imported from prelude"))?;
+
+    let has_spread = elements
+        .iter()
+        .any(|e| matches!(e, crate::TypedArrayElement::Spread(_)));
+
+    if has_spread {
+        emit_spread_array_literal(emitter, ctx, elements)?;
+    } else {
+        emitter.instruction(Instruction::GlobalGet(array_vtable_global));
+        for el in elements {
+            let elem_id = el.expr_id();
+            emit_expr(emitter, ctx, elem_id)?;
+            let elem_ty = ctx
+                .ta
+                .try_expr(elem_id)
+                .map_err(crate::codegen::arena_failure)?
+                .ty
+                .clone();
+            crate::codegen::function_emitter::cast::emit_box(emitter, ctx, &elem_ty)?;
+        }
+        emitter.instruction(Instruction::ArrayNewFixed {
+            array_type_index: raw_array_idx,
+            array_size: elements.len() as u32,
+        });
+        emitter.instruction(Instruction::I32Const(
+            i32::try_from(elements.len())
+                .map_err(|_| crate::codegen::internal_failure("array literal too large"))?,
+        ));
+        emitter.instruction(Instruction::StructNew(array_idx));
+    }
+    Ok(())
+}
+
+fn emit_tuple_literal(
+    emitter: &mut FunctionEmitter,
+    ctx: &CodegenCtx,
+    elements: &[ExprId],
+) -> Result<(), crate::compiler_error::CompilerFailure> {
+    // Tuple storage is erased, so box the value actually on the stack.
+    let array_idx = ctx.symbols.array_type_idx().ok_or_else(|| {
+        crate::codegen::internal_failure("Type::Array requires intrinsic types declared")
+    })?;
+    let raw_array_idx = ctx.symbols.raw_array_type_idx().ok_or_else(|| {
+        crate::codegen::internal_failure("Type::Array requires intrinsic types declared")
+    })?;
+    let array_vtable_global = ctx
+        .symbols
+        .prelude_global_idx("array_vtable")
+        .ok_or_else(|| crate::codegen::internal_failure("array_vtable imported from prelude"))?;
+    emitter.instruction(Instruction::GlobalGet(array_vtable_global));
+    for &elem_id in elements {
+        emit_expr(emitter, ctx, elem_id)?;
+        crate::codegen::function_emitter::cast::emit_box(
+            emitter,
+            ctx,
+            &ctx.ta
+                .try_expr(elem_id)
+                .map_err(crate::codegen::arena_failure)?
+                .ty,
+        )?;
+    }
+    emitter.instruction(Instruction::ArrayNewFixed {
+        array_type_index: raw_array_idx,
+        array_size: elements.len() as u32,
+    });
+    emitter.instruction(Instruction::I32Const(
+        i32::try_from(elements.len())
+            .map_err(|_| crate::codegen::internal_failure("array literal too large"))?,
+    ));
+    emitter.instruction(Instruction::StructNew(array_idx));
+    Ok(())
+}
+
 fn emit_spread_array_literal(
     emitter: &mut FunctionEmitter,
     ctx: &CodegenCtx,
     elements: &[crate::TypedArrayElement],
 ) -> Result<(), crate::compiler_error::CompilerFailure> {
-    let array = ctx.symbols.array_type_idx().expect("Array declared");
+    let array = ctx
+        .symbols
+        .array_type_idx()
+        .ok_or_else(|| crate::codegen::internal_failure("Array declared"))?;
     let raw = ctx
         .symbols
         .raw_array_type_idx()
-        .expect("raw Array declared");
+        .ok_or_else(|| crate::codegen::internal_failure("raw Array declared"))?;
     let raw_type = ValType::Ref(RefType {
         nullable: false,
         heap_type: HeapType::Concrete(raw),
@@ -1586,9 +1609,10 @@ fn emit_spread_array_literal(
     emitter.instruction(Instruction::GlobalGet(
         ctx.symbols
             .prelude_global_idx("array_vtable")
-            .expect("array vtable declared"),
+            .ok_or_else(|| crate::codegen::internal_failure("array vtable declared"))?,
     ));
     emitter.instruction(Instruction::LocalGet(destination));
+    emitter.instruction(Instruction::LocalGet(total));
     emitter.instruction(Instruction::StructNew(array));
     Ok(())
 }
@@ -1625,19 +1649,19 @@ fn emit_literal_chunk(
     });
     let source = emitter.add_anonymous_local(raw_type);
     let snapshot = emitter.add_anonymous_local(raw_type);
+    let length = stash_array_length(emitter, array);
     emitter.instruction(Instruction::StructGet {
         struct_type_index: array,
         field_index: 1,
     });
-    emitter.instruction(Instruction::LocalTee(source));
-    emitter.instruction(Instruction::ArrayLen);
+    emitter.instruction(Instruction::LocalSet(source));
+    emitter.instruction(Instruction::LocalGet(length));
     emitter.instruction(Instruction::ArrayNewDefault(raw));
     emitter.instruction(Instruction::LocalTee(snapshot));
     emitter.instruction(Instruction::I32Const(0));
     emitter.instruction(Instruction::LocalGet(source));
     emitter.instruction(Instruction::I32Const(0));
-    emitter.instruction(Instruction::LocalGet(source));
-    emitter.instruction(Instruction::ArrayLen);
+    emitter.instruction(Instruction::LocalGet(length));
     emitter.instruction(Instruction::ArrayCopy {
         array_type_index_dst: raw,
         array_type_index_src: raw,
@@ -1884,18 +1908,20 @@ fn emit_index_location(
         (
             ctx.symbols
                 .uint8_array_type_idx()
-                .expect("Uint8Array declared"),
+                .ok_or_else(|| crate::codegen::internal_failure("Uint8Array declared"))?,
             ctx.symbols
                 .raw_uint8_array_type_idx()
-                .expect("raw Uint8Array declared"),
+                .ok_or_else(|| crate::codegen::internal_failure("raw Uint8Array declared"))?,
             Type::Uint8Array,
         )
     } else {
         (
-            ctx.symbols.array_type_idx().expect("Array declared"),
+            ctx.symbols
+                .array_type_idx()
+                .ok_or_else(|| crate::codegen::internal_failure("Array declared"))?,
             ctx.symbols
                 .raw_array_type_idx()
-                .expect("raw Array declared"),
+                .ok_or_else(|| crate::codegen::internal_failure("raw Array declared"))?,
             Type::Array(Box::new(Type::Unknown)),
         )
     };
@@ -1904,6 +1930,7 @@ fn emit_index_location(
     emitter.instruction(Instruction::LocalGet(key));
     emit_index_number(emitter, ctx, key_ty)?;
     let operand = stash_index_operand(emitter);
+    let length = (!is_uint8).then(|| stash_array_length(emitter, container));
     emitter.instruction(Instruction::StructGet {
         struct_type_index: container,
         field_index: 1,
@@ -1913,7 +1940,10 @@ fn emit_index_location(
         heap_type: HeapType::Concrete(raw),
     }));
     emitter.instruction(Instruction::LocalSet(backing));
-    let position = emit_checked_index(emitter, ctx, backing, operand);
+    let position = match length {
+        Some(length) => emit_checked_index_with_length(emitter, ctx, length, operand),
+        None => emit_checked_index(emitter, ctx, backing, operand),
+    };
     Ok((backing, position, raw))
 }
 
@@ -2264,11 +2294,11 @@ fn emit_live_member_on_stack(
     let intr = ctx
         .symbols
         .intrinsic_type_indices()
-        .expect("intrinsics declared");
+        .ok_or_else(|| crate::codegen::internal_failure("intrinsics declared"))?;
     emitter.instruction(Instruction::GlobalGet(
         ctx.symbols
             .prelude_global_idx("array_vtable")
-            .expect("array vtable"),
+            .ok_or_else(|| crate::codegen::internal_failure("array vtable"))?,
     ));
     for &arg in args {
         emit_expr(emitter, ctx, arg)?;
@@ -2285,53 +2315,54 @@ fn emit_live_member_on_stack(
         array_type_index: intr.raw_array,
         array_size: args.len() as u32,
     });
+    emitter.instruction(Instruction::I32Const(i32::try_from(args.len()).map_err(
+        |_| crate::codegen::internal_failure("argument array too large"),
+    )?));
     emitter.instruction(Instruction::StructNew(intr.array));
     emitter.instruction(Instruction::Call(
         ctx.symbols
             .prelude_func_idx("__value_invoke")
-            .expect("live invocation collected"),
+            .ok_or_else(|| crate::codegen::internal_failure("live invocation collected"))?,
     ));
     Ok(())
 }
 
-/// The inline lowering table for `intrinsic`-declared properties: members the
-/// declaration marks as codegen-owned (see `PropertySig::intrinsic`) have no
-/// getter import; this maps each to its receiver struct type for the payload
-/// `struct.get` + `array.len` sequence. Declaring a member intrinsic without a
-/// row here is a bug — the lookup panics rather than silently importing.
+/// Intrinsic length properties have no host getter. Arrays store their logical
+/// length; strings derive it from their packed code-unit backing.
 fn inline_length_struct_idx(
     ctx: &CodegenCtx<'_>,
     iface: &crate::MangledName,
     prop: &str,
-) -> Option<u32> {
+) -> Result<Option<u32>, crate::compiler_error::CompilerFailure> {
     let key = crate::mangle::extend(iface, prop);
     if !ctx.symbols.is_intrinsic_member(&key) {
-        return None;
+        return Ok(None);
     }
-    if *iface == crate::mangle::prelude("String") && prop == "length" {
-        Some(
-            ctx.symbols
-                .string_type_idx()
-                .expect("String#length requires intrinsic types declared"),
-        )
+    let index = if *iface == crate::mangle::prelude("String") && prop == "length" {
+        ctx.symbols.string_type_idx()
     } else if *iface == crate::mangle::prelude("Array") && prop == "length" {
-        Some(
-            ctx.symbols
-                .array_type_idx()
-                .expect("Array#length requires intrinsic types declared"),
-        )
+        ctx.symbols.array_type_idx()
     } else {
-        unreachable!("no inline lowering for intrinsic member `{}`", key.as_str())
-    }
+        return Err(crate::codegen::internal_failure(format!(
+            "no inline lowering for intrinsic member `{}`",
+            key.as_str()
+        )));
+    };
+    index
+        .map(Some)
+        .ok_or_else(|| crate::codegen::internal_failure("length receiver intrinsic missing"))
 }
 
 /// Receiver (concrete `$string`/`$Array`) on stack → its element count as f64.
-fn emit_inline_length(emitter: &mut FunctionEmitter<'_>, struct_idx: u32) {
+fn emit_inline_length(emitter: &mut FunctionEmitter<'_>, ctx: &CodegenCtx<'_>, struct_idx: u32) {
+    let is_array = ctx.symbols.array_type_idx() == Some(struct_idx);
     emitter.instruction(Instruction::StructGet {
         struct_type_index: struct_idx,
-        field_index: 1,
+        field_index: if is_array { 2 } else { 1 },
     });
-    emitter.instruction(Instruction::ArrayLen);
+    if !is_array {
+        emitter.instruction(Instruction::ArrayLen);
+    }
     emitter.instruction(Instruction::F64ConvertI32U);
 }
 
@@ -2769,8 +2800,8 @@ fn emit_chain_access(
             // exactly this part's `result_ty` — `?.` adds `| null` once,
             // to the whole chain, never to a step's own result. So the
             // value already sits in the slot the next step expects.
-            if let Some(struct_idx) = inline_length_struct_idx(ctx, iface, &name.name) {
-                emit_inline_length(emitter, struct_idx);
+            if let Some(struct_idx) = inline_length_struct_idx(ctx, iface, &name.name)? {
+                emit_inline_length(emitter, ctx, struct_idx);
                 return Ok(());
             }
             let key = crate::mangle::extend(iface, &name.name);
@@ -3884,14 +3915,12 @@ fn emit_bounds_checked_index_with_receiver_on_stack(
     idx: ExprId,
     result_ty: &Type,
 ) -> Result<(), crate::compiler_error::CompilerFailure> {
-    let array_idx = ctx
-        .symbols
-        .array_type_idx()
-        .expect("Type::Array requires intrinsic types declared");
-    let raw_array_idx = ctx
-        .symbols
-        .raw_array_type_idx()
-        .expect("Type::Array requires intrinsic types declared");
+    let array_idx = ctx.symbols.array_type_idx().ok_or_else(|| {
+        crate::codegen::internal_failure("Type::Array requires intrinsic types declared")
+    })?;
+    let raw_array_idx = ctx.symbols.raw_array_type_idx().ok_or_else(|| {
+        crate::codegen::internal_failure("Type::Array requires intrinsic types declared")
+    })?;
     let raw_arr_local = emitter.add_anonymous_local(ValType::Ref(RefType {
         nullable: false,
         heap_type: HeapType::Concrete(raw_array_idx),
@@ -3925,12 +3954,13 @@ fn emit_bounds_checked_index_with_receiver_on_stack(
             .ty,
     )?;
     let idx_f64_local = stash_index_operand(emitter);
+    let length = stash_array_length(emitter, array_idx);
     emitter.instruction(Instruction::StructGet {
         struct_type_index: array_idx,
         field_index: 1,
     });
     emitter.instruction(Instruction::LocalSet(raw_arr_local));
-    let idx_local = emit_checked_index(emitter, ctx, raw_arr_local, idx_f64_local);
+    let idx_local = emit_checked_index_with_length(emitter, ctx, length, idx_f64_local);
     emitter.instruction(Instruction::LocalGet(raw_arr_local));
     emitter.instruction(Instruction::LocalGet(idx_local));
     emitter.instruction(Instruction::ArrayGet(raw_array_idx));

@@ -9,11 +9,8 @@
 //! [`Closure`](crate::runtime::prelude::closure::Closure) handles callbacks.
 //! This file is the iteration and the element math.
 //!
-//! In-place mutators (`push`/`splice`/`sort`/…) never mutate the `$rawArray`
-//! element-wise; they recompute the element list and swap the receiver struct's
-//! mutable field 1 via [`set_backing`]. Callers hold the `$Array` struct, not
-//! the backing, so the change is observed — and the snapshot read up front lets
-//! a callback mutate the source mid-iteration without disturbing us.
+//! Mutators retain the receiver's identity and spare backing capacity. Methods
+//! that call guest code snapshot and root their inputs before callbacks run.
 
 mod install;
 mod sort;
@@ -22,7 +19,7 @@ pub(crate) use install::declare_types;
 pub use install::{declare, install};
 pub(crate) use sort::{Order, merge_sort};
 
-use wasmtime::{ArrayRef, ArrayRefPre, Caller, Rooted, StructRef, StructRefPre, Val};
+use wasmtime::{Caller, Rooted, StructRef, StructRefPre, Val};
 
 use crate::runtime::StoreData;
 use crate::runtime::host::{
@@ -30,7 +27,7 @@ use crate::runtime::host::{
 };
 use crate::runtime::intrinsic_types::intrinsic_types;
 use crate::runtime::prelude::closure::Closure;
-use crate::runtime::prelude::iterator::{IterKind, as_struct, make_index_iterator};
+use crate::runtime::prelude::iterator::{IterKind, make_index_iterator};
 use crate::runtime::prelude::keep::{KeptValue, KeptValues, keep_all};
 use crate::runtime::prelude::vtable::{dispatch_vtable_slot, read_string_units, string_length};
 
@@ -43,30 +40,9 @@ use crate::runtime::prelude::vtable::{dispatch_vtable_slot, read_string_units, s
 pub(super) fn read_array(
     caller: &mut Caller<'_, StoreData>,
     val: &Val,
-    name: &str,
+    _name: &str,
 ) -> wasmtime::Result<Vec<Val>> {
-    let Val::AnyRef(Some(any)) = val else {
-        return Err(wasmtime::Error::msg(format!(
-            "{name} expects an array, got {val:?}"
-        )));
-    };
-    let st = any
-        .as_struct(&mut *caller)?
-        .ok_or_else(|| wasmtime::Error::msg(format!("{name}: expected an $Array struct")))?;
-    let backing = match st.field(&mut *caller, 1)? {
-        Val::AnyRef(Some(arr)) => arr.unwrap_array(&mut *caller)?,
-        other => {
-            return Err(wasmtime::Error::msg(format!(
-                "{name}: malformed $Array backing {other:?}"
-            )));
-        }
-    };
-    let len = backing.len(&mut *caller)?;
-    let mut elements = Vec::with_capacity(len as usize);
-    for i in 0..len {
-        elements.push(backing.get(&mut *caller, i)?);
-    }
-    Ok(elements)
+    crate::runtime::array_storage::ArrayStorage::read(caller, val)?.snapshot(caller)
 }
 
 /// [`read_array`] for a method that runs the program's code while it holds
@@ -90,19 +66,13 @@ fn build_array(caller: &mut Caller<'_, StoreData>, elements: &[Val]) -> wasmtime
     Ok(Val::AnyRef(Some(st.to_anyref())))
 }
 
-/// Replace the receiver `$Array`'s backing (field 1) with a fresh `$rawArray`
-/// built from `elements` — the in-place primitive for every mutator.
-fn set_backing(
+/// Replace the live elements, retaining capacity and clearing removed slots.
+fn replace_elements(
     caller: &mut Caller<'_, StoreData>,
     receiver: &Val,
     elements: &[Val],
 ) -> wasmtime::Result<()> {
-    let raw_ty = intrinsic_types(&mut *caller)?.raw_array.clone();
-    let pre = ArrayRefPre::new(&mut *caller, raw_ty);
-    let raw = ArrayRef::new_fixed(&mut *caller, &pre, elements)?;
-    let st = as_struct(caller, receiver, "array mutate receiver")?;
-    st.set_field(&mut *caller, 1, Val::AnyRef(Some(raw.to_anyref())))?;
-    Ok(())
+    crate::runtime::array_storage::ArrayStorage::read(caller, receiver)?.replace(caller, elements)
 }
 
 /// Box an `f64` into a `$boxed_number` object (for iterator indices).
@@ -340,19 +310,11 @@ async fn join(
 }
 
 // ---------------------------------------------------------------------------
-// Mutators (recompute + swap the receiver backing)
+// Mutators (snapshot transforms preserve receiver identity)
 // ---------------------------------------------------------------------------
 
-fn push(
-    caller: &mut Caller<'_, StoreData>,
-    receiver: &Val,
-    mut elements: Vec<Val>,
-    elem: Val,
-) -> wasmtime::Result<f64> {
-    elements.push(elem);
-    let n = elements.len() as f64;
-    set_backing(caller, receiver, &elements)?;
-    Ok(n)
+fn push(caller: &mut Caller<'_, StoreData>, receiver: &Val, elem: Val) -> wasmtime::Result<f64> {
+    crate::runtime::array_storage::ArrayStorage::read(caller, receiver)?.push(caller, elem)
 }
 
 fn pop(
@@ -362,7 +324,7 @@ fn pop(
 ) -> wasmtime::Result<Val> {
     match elements.pop() {
         Some(last) => {
-            set_backing(caller, receiver, &elements)?;
+            replace_elements(caller, receiver, &elements)?;
             Ok(last)
         }
         None => Ok(Val::null_any_ref()),
@@ -378,7 +340,7 @@ fn shift(
         return Ok(Val::null_any_ref());
     }
     let first = elements.remove(0);
-    set_backing(caller, receiver, &elements)?;
+    replace_elements(caller, receiver, &elements)?;
     Ok(first)
 }
 
@@ -390,7 +352,7 @@ fn unshift(
 ) -> wasmtime::Result<f64> {
     items.extend(elements);
     let n = items.len() as f64;
-    set_backing(caller, receiver, &items)?;
+    replace_elements(caller, receiver, &items)?;
     Ok(n)
 }
 
@@ -400,7 +362,7 @@ fn reverse(
     mut elements: Vec<Val>,
 ) -> wasmtime::Result<Val> {
     elements.reverse();
-    set_backing(caller, receiver, &elements)?;
+    replace_elements(caller, receiver, &elements)?;
     Ok(*receiver)
 }
 
@@ -418,7 +380,7 @@ fn fill(
     for slot in elements.iter_mut().take(ei as usize).skip(si as usize) {
         *slot = value;
     }
-    set_backing(caller, receiver, &elements)?;
+    replace_elements(caller, receiver, &elements)?;
     Ok(*receiver)
 }
 
@@ -444,7 +406,7 @@ fn copy_within(
     for (k, v) in src.into_iter().enumerate() {
         elements[ti as usize + k] = v;
     }
-    set_backing(caller, receiver, &elements)?;
+    replace_elements(caller, receiver, &elements)?;
     Ok(*receiver)
 }
 
@@ -484,7 +446,7 @@ fn splice(
     // Built while the receiver still holds the removed elements: once they are
     // swapped out nothing else does, and an allocation may collect.
     let removed = build_array(caller, &removed)?;
-    set_backing(caller, receiver, &result)?;
+    replace_elements(caller, receiver, &result)?;
     Ok(removed)
 }
 
@@ -495,7 +457,7 @@ async fn sort(
     cmp: Option<Closure>,
 ) -> wasmtime::Result<Val> {
     sort_elems(caller, &mut elements, cmp.as_ref()).await?;
-    set_backing(caller, receiver, &elements)?;
+    replace_elements(caller, receiver, &elements)?;
     Ok(*receiver)
 }
 
@@ -864,8 +826,9 @@ fn array_step(
     payload: &Val,
     pos: i32,
 ) -> wasmtime::Result<Option<(Val, Val)>> {
-    let backing = array_backing(caller, payload)?;
-    if pos >= backing.len(&mut *caller)? as i32 {
+    let storage = crate::runtime::array_storage::ArrayStorage::read(caller, payload)?;
+    let backing = storage.backing;
+    if pos < 0 || pos as u32 >= storage.len {
         return Ok(None);
     }
     let elem = backing.get(&mut *caller, pos as u32)?;
@@ -883,20 +846,6 @@ fn keys(caller: &mut Caller<'_, StoreData>, array: &Val) -> wasmtime::Result<Val
 
 fn entries(caller: &mut Caller<'_, StoreData>, array: &Val) -> wasmtime::Result<Val> {
     make_index_iterator(caller, *array, IterKind::Entries, array_step)
-}
-
-/// The `$rawArray` backing of an `$Array` (field 1).
-fn array_backing(
-    caller: &mut Caller<'_, StoreData>,
-    array: &Val,
-) -> wasmtime::Result<Rooted<ArrayRef>> {
-    let st = as_struct(caller, array, "array iterator receiver")?;
-    match st.field(&mut *caller, 1)? {
-        Val::AnyRef(Some(arr)) => arr.unwrap_array(&mut *caller),
-        other => Err(wasmtime::Error::msg(format!(
-            "array iterator: malformed $Array backing {other:?}"
-        ))),
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -936,8 +885,9 @@ pub(super) async fn from(
         // mid-iteration is observed — snapshotting would drop those elements.
         let mut pos: u32 = 0;
         loop {
-            let backing = array_backing(caller, src)?;
-            if pos >= backing.len(&mut *caller)? {
+            let storage = crate::runtime::array_storage::ArrayStorage::read(caller, src)?;
+            let backing = storage.backing;
+            if pos >= storage.len {
                 break;
             }
             out.reserve(caller, 1)?;

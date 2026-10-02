@@ -916,24 +916,12 @@ fn read_number_array(
     val: &Val,
     name: &str,
 ) -> wasmtime::Result<Vec<f64>> {
-    let Val::AnyRef(Some(any)) = val else {
-        return Err(wasmtime::Error::msg(format!(
-            "{name} expects an array, got {val:?}"
-        )));
-    };
-    let st = any
-        .as_struct(&mut *caller)?
-        .ok_or_else(|| wasmtime::Error::msg(format!("{name}: expected an $Array struct")))?;
-    let backing = match st.field(&mut *caller, 1)? {
-        Val::AnyRef(Some(arr)) => arr.unwrap_array(&mut *caller)?,
-        other => {
-            return Err(wasmtime::Error::msg(format!(
-                "{name}: malformed $Array backing {other:?}"
-            )));
-        }
-    };
-    let len = backing.len(&mut *caller)?;
-    let mut nums = Vec::with_capacity(len as usize);
+    let storage = crate::runtime::array_storage::ArrayStorage::read(caller, val)?;
+    let backing = storage.backing;
+    let len = storage.len;
+    let mut nums = Vec::new();
+    nums.try_reserve_exact(len as usize)
+        .map_err(crate::runtime::host::fatal_host_error)?;
     for i in 0..len {
         let boxed = match backing.get(&mut *caller, i)? {
             Val::AnyRef(Some(b)) => b

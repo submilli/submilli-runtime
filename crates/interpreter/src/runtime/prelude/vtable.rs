@@ -1595,19 +1595,9 @@ fn build_string(
 fn read_array_backing(
     caller: &mut Caller<'_, StoreData>,
     val: &Val,
-    name: &str,
+    _name: &str,
 ) -> wasmtime::Result<Vec<Val>> {
-    let st = as_struct(caller, val, name)?;
-    let raw = match st.field(&mut *caller, 1)? {
-        Val::AnyRef(Some(any)) => any.unwrap_array(&mut *caller)?,
-        other => wasmtime::bail!("{name}: malformed $Array backing {other:?}"),
-    };
-    let len = raw.len(&mut *caller)?;
-    let mut out = Vec::with_capacity(len as usize);
-    for i in 0..len {
-        out.push(raw.get(&mut *caller, i)?);
-    }
-    Ok(out)
+    crate::runtime::array_storage::ArrayStorage::read(caller, val)?.snapshot(caller)
 }
 
 /// Guest structural bodies share the host walk budget and unwind it on throws.

@@ -1,5 +1,7 @@
 use crate::codegen::CodegenCtx;
-use crate::codegen::bounds::{emit_checked_index, stash_index_operand};
+use crate::codegen::bounds::{
+    emit_checked_index, emit_checked_index_with_length, stash_array_length, stash_index_operand,
+};
 use crate::codegen::function_emitter::FunctionEmitter;
 use crate::{
     EnumVariantPayload, ExprId, Ident, StmtId, Type, TypedStmtKind, TypedSwitchCase,
@@ -669,18 +671,16 @@ fn emit_array_index_store(
     value: ExprId,
     _elem_ty: &Type,
 ) -> Result<(), crate::compiler_error::CompilerFailure> {
-    let raw_array_idx = ctx
-        .symbols
-        .raw_array_type_idx()
-        .expect("Type::Array requires intrinsic types declared");
-    let array_idx = ctx
-        .symbols
-        .array_type_idx()
-        .expect("Type::Array requires intrinsic types declared");
+    let raw_array_idx = ctx.symbols.raw_array_type_idx().ok_or_else(|| {
+        crate::codegen::internal_failure("Type::Array requires intrinsic types declared")
+    })?;
+    let array_idx = ctx.symbols.array_type_idx().ok_or_else(|| {
+        crate::codegen::internal_failure("Type::Array requires intrinsic types declared")
+    })?;
     let object_idx = ctx
         .symbols
         .intrinsic_type_indices()
-        .expect("intrinsics declared")
+        .ok_or_else(|| crate::codegen::internal_failure("intrinsics declared"))?
         .object;
     let recv_local = emit_operand_once(emitter, ctx, receiver)?;
     let key = emit_operand_once(emitter, ctx, index)?;
@@ -729,12 +729,13 @@ fn emit_array_index_store(
             .ty,
     )?;
     let idx_f64_local = stash_index_operand(emitter);
+    let length = stash_array_length(emitter, array_idx);
     emitter.instruction(Instruction::StructGet {
         struct_type_index: array_idx,
         field_index: 1,
     });
     emitter.instruction(Instruction::LocalSet(raw_arr_local));
-    let idx_local = emit_checked_index(emitter, ctx, raw_arr_local, idx_f64_local);
+    let idx_local = emit_checked_index_with_length(emitter, ctx, length, idx_f64_local);
     emitter.instruction(Instruction::LocalGet(raw_arr_local));
     emitter.instruction(Instruction::LocalGet(idx_local));
     emitter.instruction(Instruction::LocalGet(value_local));

@@ -39,14 +39,43 @@ pub fn emit_checked_index(
     raw_arr_local: u32,
     idx_f64_local: u32,
 ) -> u32 {
+    let len = emitter.add_anonymous_local(ValType::I32);
+    emitter.instruction(Instruction::LocalGet(raw_arr_local));
+    emitter.instruction(Instruction::ArrayLen);
+    emitter.instruction(Instruction::LocalSet(len));
+    emit_checked_index_with_length(emitter, ctx, len, idx_f64_local)
+}
+
+/// Capture the logical length while leaving the array receiver on the stack.
+pub fn stash_array_length(emitter: &mut FunctionEmitter, array_type: u32) -> u32 {
+    let receiver = emitter.add_anonymous_local(ValType::Ref(wasm_encoder::RefType {
+        nullable: false,
+        heap_type: wasm_encoder::HeapType::Concrete(array_type),
+    }));
+    let len = emitter.add_anonymous_local(ValType::I32);
+    emitter.instruction(Instruction::LocalTee(receiver));
+    emitter.instruction(Instruction::StructGet {
+        struct_type_index: array_type,
+        field_index: 2,
+    });
+    emitter.instruction(Instruction::LocalSet(len));
+    emitter.instruction(Instruction::LocalGet(receiver));
+    len
+}
+
+pub fn emit_checked_index_with_length(
+    emitter: &mut FunctionEmitter,
+    ctx: &CodegenCtx,
+    len: u32,
+    idx_f64_local: u32,
+) -> u32 {
     // idx >= 0
     emitter.instruction(Instruction::LocalGet(idx_f64_local));
     emitter.instruction(Instruction::F64Const(0.0.into()));
     emitter.instruction(Instruction::F64Ge);
     // && idx < len
     emitter.instruction(Instruction::LocalGet(idx_f64_local));
-    emitter.instruction(Instruction::LocalGet(raw_arr_local));
-    emitter.instruction(Instruction::ArrayLen);
+    emitter.instruction(Instruction::LocalGet(len));
     emitter.instruction(Instruction::F64ConvertI32U);
     emitter.instruction(Instruction::F64Lt);
     emitter.instruction(Instruction::I32And);
@@ -77,10 +106,13 @@ fn emit_index_oob_throw(emitter: &mut FunctionEmitter, ctx: &CodegenCtx) {
         return;
     }
 
-    let new_idx = ctx
-        .symbols
-        .prelude_func_idx("RangeError#constructor")
-        .expect("RangeError#constructor imported from prelude");
+    let Some(new_idx) = ctx.latch(
+        ctx.symbols
+            .prelude_func_idx("RangeError#constructor")
+            .ok_or_else(|| crate::codegen::internal_failure("RangeError constructor missing")),
+    ) else {
+        return;
+    };
     emitter.instruction(Instruction::Call(new_idx));
 
     crate::codegen::throw::emit_error_throw(emitter, ctx);
