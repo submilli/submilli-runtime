@@ -3,7 +3,7 @@ name: auth-demo
 
 secrets:
   DEMO_TOKEN:
-    env: SUB_E2E_AUTHPROXY_TOKEN
+    store: api/token
 
 auth_proxy:
   - allow_insecure_http: true

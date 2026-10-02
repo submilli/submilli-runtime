@@ -1,6 +1,6 @@
 ---
 title: "Manage blueprints in Git"
-description: "Blueprints in a repository, applied to the server from the pipeline or loaded from a seed directory."
+description: "Blueprints in a repository, applied to the server from the pipeline using an admin token."
 slug: next/tutorials/manage-blueprints-in-git
 pagefind: false
 sidebar:

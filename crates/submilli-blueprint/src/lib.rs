@@ -2107,14 +2107,6 @@ permissions:
     }
 
     #[test]
-    fn parses_env_and_file_secrets() {
-        let b = parse("name: x\nsecrets:\n  A: { env: A_VAR }\n  B: { file: /run/secrets/b }\n")
-            .unwrap();
-        assert_eq!(b.secrets["A"], SecretSource::Env("A_VAR".into()));
-        assert_eq!(b.secrets["B"], SecretSource::File("/run/secrets/b".into()));
-    }
-
-    #[test]
     fn parses_store_secret() {
         let b = parse("name: x\nsecrets:\n  A: { store: prod/a }\n").unwrap();
         assert_eq!(b.secrets["A"], SecretSource::Store("prod/a".into()));
@@ -2137,14 +2129,38 @@ permissions:
 
     #[test]
     fn unknown_secret_source_is_parse_error() {
-        let err = parse("name: x\nsecrets:\n  A: { vault: x }\n").unwrap_err();
-        assert!(matches!(err, BlueprintError::Parse(_)), "got {err:?}");
+        for source in ["vault", "env", "file"] {
+            let yaml = format!("name: x\nsecrets:\n  A: {{ {source}: x }}\n");
+            let err = parse(&yaml).unwrap_err();
+            let fault = err.fault().unwrap();
+            assert!(fault.message.contains("unknown field"), "{err}");
+            assert_eq!(fault.path, Some(yaml_path!["secrets", "A", source]));
+            assert!(fault.location.is_some());
+        }
+    }
+
+    #[test]
+    fn secret_needs_exactly_one_source() {
+        for declaration in [
+            "{}",
+            "{ store: null }",
+            "{ harness: null }",
+            "{ store: key, harness: {} }",
+        ] {
+            let yaml = format!("name: x\nsecrets:\n  A: {declaration}\n");
+            let err = parse(&yaml).unwrap_err();
+            assert!(
+                err.to_string()
+                    .contains("exactly one source: store / harness"),
+                "{err}"
+            );
+        }
     }
 
     #[test]
     fn parses_auth_proxy_rule() {
         let b = parse(
-            "name: x\nsecrets:\n  K: { env: K }\nauth_proxy:\n  - host: api.example.com\n    headers:\n      Authorization: \"Bearer ${secrets.K}\"\n",
+            "name: x\nsecrets:\n  K: { store: K }\nauth_proxy:\n  - host: api.example.com\n    headers:\n      Authorization: \"Bearer ${secrets.K}\"\n",
         )
         .unwrap();
         assert_eq!(b.auth_proxy.len(), 1);
@@ -2175,7 +2191,7 @@ permissions:
     #[test]
     fn auth_proxy_round_trips_through_yaml() {
         let original = parse(
-            "name: x\nsecrets:\n  K: { env: K_VAR }\nauth_proxy:\n  - host: api.example.com\n    headers:\n      Authorization: \"Bearer ${secrets.K}\"\n    query:\n      appid: \"${secrets.K}\"\n",
+            "name: x\nsecrets:\n  K: { store: K_VAR }\nauth_proxy:\n  - host: api.example.com\n    headers:\n      Authorization: \"Bearer ${secrets.K}\"\n    query:\n      appid: \"${secrets.K}\"\n",
         )
         .unwrap();
         let reparsed = parse(&to_yaml(&original)).unwrap();

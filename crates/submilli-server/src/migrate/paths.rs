@@ -77,7 +77,6 @@ fn moving_directories(layout: &LegacyLayout) -> Vec<PathBuf> {
 fn dependency_paths(directories: &ServerDirectories) -> Vec<(&'static str, &Path)> {
     let ServerDirectories {
         blueprint_dir,
-        blueprint_seed_dir,
         package_store_root,
         package_fallback_root,
         secret_store_dir,
@@ -92,7 +91,6 @@ fn dependency_paths(directories: &ServerDirectories) -> Vec<(&'static str, &Path
     } = directories;
     [
         ("blueprint store", blueprint_dir),
-        ("blueprint seed directory", blueprint_seed_dir),
         ("package store", package_store_root),
         ("fallback package store", package_fallback_root),
         ("secret store", secret_store_dir),
@@ -179,11 +177,11 @@ mod tests {
         }
     }
 
-    fn check_seed(layout: &LegacyLayout, path: PathBuf) -> Result<()> {
+    fn check_package_root(layout: &LegacyLayout, path: PathBuf) -> Result<()> {
         validate_dependencies(
             layout,
             &ServerDirectories {
-                blueprint_seed_dir: Some(path),
+                package_store_root: Some(path),
                 ..Default::default()
             },
             &VolumeTable::new(),
@@ -195,10 +193,10 @@ mod tests {
         let home = tempfile::tempdir().unwrap();
         fs::create_dir(home.path().join(SESSIONS)).unwrap();
         let layout = layout(home.path());
-        let result = check_seed(&layout, home.path().join("sessions/missing/seed"));
-        assert!(result.unwrap_err().to_string().contains("blueprint seed"));
-        check_seed(&layout, home.path().join("server/blueprints")).unwrap();
-        check_seed(&layout, home.path().join("unrelated/seed")).unwrap();
+        let result = check_package_root(&layout, home.path().join("sessions/missing/packages"));
+        assert!(result.unwrap_err().to_string().contains("package store"));
+        check_package_root(&layout, home.path().join("server/blueprints")).unwrap();
+        check_package_root(&layout, home.path().join("unrelated/packages")).unwrap();
         assert!(!home.path().join(STAGING_DIR).exists());
     }
 
@@ -208,7 +206,7 @@ mod tests {
         fs::create_dir(home.path().join(SESSIONS)).unwrap();
         let mut layout = layout(home.path());
         layout.sessions = false;
-        check_seed(&layout, home.path().join("sessions/seed")).unwrap();
+        check_package_root(&layout, home.path().join("sessions/packages")).unwrap();
     }
 
     #[test]
@@ -217,15 +215,15 @@ mod tests {
         let staged = home.path().join("server.migrating/sessions");
         fs::create_dir_all(&staged).unwrap();
         let layout = layout(home.path());
-        let error = check_seed(&layout, staged.join("seed"))
+        let error = check_package_root(&layout, staged.join("packages"))
             .unwrap_err()
             .to_string();
         assert!(error.contains("relocate this dependency"));
         assert!(!error.contains("pin it"));
         fs::create_dir(home.path().join(SERVER_DIR)).unwrap();
-        assert!(check_seed(&layout, staged.join("seed")).is_err());
+        assert!(check_package_root(&layout, staged.join("packages")).is_err());
         fs::create_dir(home.path().join("server/sessions")).unwrap();
-        check_seed(&layout, staged.join("seed")).unwrap();
+        check_package_root(&layout, staged.join("packages")).unwrap();
     }
 
     #[test]
@@ -284,9 +282,13 @@ mod tests {
         symlink(sessions.join("missing"), home.path().join("dangling")).unwrap();
         symlink(&outside, sessions.join("link")).unwrap();
         let layout = layout(home.path());
-        for path in ["alias/seed", "dangling/seed", "sessions/link/seed"] {
+        for path in [
+            "alias/packages",
+            "dangling/packages",
+            "sessions/link/packages",
+        ] {
             assert!(
-                check_seed(&layout, home.path().join(path)).is_err(),
+                check_package_root(&layout, home.path().join(path)).is_err(),
                 "{path}"
             );
         }
@@ -302,7 +304,7 @@ mod tests {
             return; // This filesystem distinguishes the two spellings.
         }
 
-        assert!(check_seed(&layout(home.path()), alias.join("missing/seed")).is_err());
+        assert!(check_package_root(&layout(home.path()), alias.join("missing/packages")).is_err());
         assert!(sessions.is_dir());
     }
 
@@ -315,7 +317,7 @@ mod tests {
             .path()
             .strip_prefix(&cwd)
             .unwrap()
-            .join("sessions/seed");
-        assert!(check_seed(&layout(home.path()), path).is_err());
+            .join("sessions/packages");
+        assert!(check_package_root(&layout(home.path()), path).is_err());
     }
 }

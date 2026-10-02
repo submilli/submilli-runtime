@@ -36,7 +36,11 @@ fn router(policy_yaml: &str, package_store_root: Option<&Path>) -> Router {
 }
 
 async fn send(router: Router, code: &str) -> (StatusCode, Value) {
-    let body = json!({ "code": code, "blueprint": BLUEPRINT_NAME }).to_string();
+    send_with_secrets(router, code, json!({})).await
+}
+
+async fn send_with_secrets(router: Router, code: &str, secrets: Value) -> (StatusCode, Value) {
+    let body = json!({ "code": code, "blueprint": BLUEPRINT_NAME, "secrets": secrets }).to_string();
     let req = Request::builder()
         .method("POST")
         .uri("/v1/execute")
@@ -204,30 +208,25 @@ permissions:
 /// not a transport failure.
 #[tokio::test]
 async fn secrets_get_is_refused_to_main_even_with_an_explicit_allow_rule() {
-    let tmp = tempfile::tempdir().expect("tempdir");
-    let secret_path = tmp.path().join("token.txt");
-    std::fs::write(&secret_path, "tok-file-123\n").expect("write secret");
-    let policy = format!(
-        "\
+    let policy = "\
 name: policy
 default: deny
 secrets:
   TOKEN:
-    file: {}
+    harness: {}
 permissions:
   main:
     - capability: secrets.get
       filter: name == \"TOKEN\"
       action: allow
-",
-        secret_path.display()
-    );
+";
     let script = r#"
 import { get } from "submilli:secrets";
 function main(): string | null { return get("TOKEN"); }
 "#;
 
-    let (status, body) = execute(&policy, script).await;
+    let (status, body) =
+        send_with_secrets(router(policy, None), script, json!({"TOKEN": "tok-123"})).await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body["result"], Value::Null);
     assert_eq!(body["error"]["kind"], json!("runtime_error"));
@@ -310,37 +309,36 @@ fn write_secrets_package(store_root: &Path) {
 
 #[tokio::test]
 async fn a_package_still_resolves_a_declared_secret_and_gets_null_for_an_undeclared_one() {
-    let tmp = tempfile::tempdir().expect("tempdir");
-    let secret_path = tmp.path().join("token.txt");
-    std::fs::write(&secret_path, "tok-file-123\n").expect("write secret");
     let store = tempfile::tempdir().expect("store tempdir");
     write_secrets_package(store.path());
-    let policy = format!(
-        "\
+    let policy = "\
 name: policy
 default: deny
 packages:
   - \"@acme/secrets\"
 secrets:
   TOKEN:
-    file: {}
+    harness: {}
 permissions:
   \"@acme/secrets\":
     - capability: secrets.get
       action: allow
-",
-        secret_path.display()
-    );
+";
     let script = r#"
 import { secretMatches, secretIsAbsent } from "@acme/secrets";
 function main(): string {
-    const found = secretMatches("TOKEN", "tok-file-123");
+    const found = secretMatches("TOKEN", "tok-123");
     const absent = secretIsAbsent("MISSING");
     return found.toString() + "/" + absent.toString();
 }
 "#;
 
-    let (status, body) = execute_with_packages(&policy, store.path(), script).await;
+    let (status, body) = send_with_secrets(
+        router(policy, Some(store.path())),
+        script,
+        json!({"TOKEN": "tok-123"}),
+    )
+    .await;
     assert_eq!(status, StatusCode::OK, "body: {body}");
     assert_eq!(body["error"], Value::Null, "body: {body}");
     assert_eq!(body["result"], json!("true/true"));

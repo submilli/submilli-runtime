@@ -14,7 +14,7 @@ use std::sync::Arc;
 use anyhow::{Context, Result, anyhow, bail};
 use interpreter::runtime::{HttpClient, NetworkPolicy, ReqwestHttpClient};
 use submilli_blueprint::{Blueprint, McpAuth, interpolate};
-use submilli_shared::EnvFileSecretResolver;
+use submilli_shared::BlueprintSecretResolver;
 use submilli_shared::mcp::oauth as mcp_oauth;
 use submilli_shared::mcp_auth::{OAuthCredential, blueprint_auth_state, write_credential};
 use submilli_shared::secret_store::SecretStore;
@@ -72,7 +72,7 @@ async fn run(args: &Args) -> Result<String> {
     let store = local::open_secret_store()?;
     let http =
         Arc::new(ReqwestHttpClient::new(Arc::new(NetworkPolicy::default()))) as Arc<dyn HttpClient>;
-    let resolver = EnvFileSecretResolver::new(Some(store.clone()));
+    let resolver = BlueprintSecretResolver::new(Some(store.clone()));
 
     // Bind the loopback redirect first; its URL is what DCR registers as the
     // callback. The port is pinned so a provider's pre-registered callback
@@ -236,7 +236,7 @@ async fn resolve_configured_ref(
 async fn opt_interpolate(
     value: &Option<String>,
     blueprint: &Blueprint,
-    resolver: &EnvFileSecretResolver,
+    resolver: &BlueprintSecretResolver,
 ) -> Result<Option<String>> {
     match value {
         Some(v) => Ok(Some(

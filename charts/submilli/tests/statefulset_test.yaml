@@ -208,44 +208,6 @@ tests:
           path: spec.template.spec.containers[0].startupProbe.timeoutSeconds
           value: 3
 
-  - it: does not mount a seed directory when no blueprints are configured
-    asserts:
-      - notContains:
-          path: spec.template.spec.containers[0].volumeMounts
-          content:
-            name: blueprints
-          any: true
-      - notExists:
-          path: spec.template.metadata.annotations["checksum/blueprints"]
-
-  - it: mounts a referenced Secret at the path blueprints must name
-    set:
-      secrets:
-        stripe:
-          secretName: stripe-credentials
-          key: api-key
-    asserts:
-      # This path is a contract between two separate values maps — a blueprint's
-      # `file:` source has to name the same place — not an implementation
-      # detail.
-      - contains:
-          path: spec.template.spec.containers[0].volumeMounts
-          content:
-            name: secret-stripe
-            mountPath: /etc/submilli/secrets/stripe
-            readOnly: true
-      # Projects only the named key, so the file lands at exactly
-      # <mountPath>/<key> and not under some other name.
-      - contains:
-          path: spec.template.spec.volumes
-          content:
-            name: secret-stripe
-            secret:
-              secretName: stripe-credentials
-              items:
-                - key: api-key
-                  path: api-key
-
   - it: reads the secret-store key from a file, never the environment
     set:
       secretStore:
@@ -339,17 +301,3 @@ tests:
       - equal:
           path: spec.podManagementPolicy
           value: Parallel
-
-  - it: refuses secret material in values
-    set:
-      secrets:
-        stripe:
-          secretName: stripe-credentials
-          key: api-key
-          value: sk_live_actual_secret
-    asserts:
-      # Anything in values.yaml is stored in plaintext in the Helm release
-      # object and echoed by `helm get values`. The schema is what stops a
-      # well-meaning operator from putting a live key there.
-      - failedTemplate:
-          errorPattern: value

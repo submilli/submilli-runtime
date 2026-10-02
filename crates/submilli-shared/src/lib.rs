@@ -19,7 +19,7 @@ pub mod prompt;
 pub mod secret_store;
 
 pub use github::{FetchedRepo, GithubError, GithubSpec, ResolvedRepo};
-pub use host::{BlueprintAuthProxy, BlueprintSecretProvider, EnvFileSecretResolver, PolicyCheck};
+pub use host::{BlueprintAuthProxy, BlueprintSecretProvider, BlueprintSecretResolver, PolicyCheck};
 pub use oauth_provider::OAuthProvider;
 
 /// Resolve operator-owned Git identity against the session's variable bindings.

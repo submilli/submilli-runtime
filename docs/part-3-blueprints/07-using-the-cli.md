@@ -152,7 +152,7 @@ don't survive.
 | `blueprint add-package <name> [--capabilities a,b \| --all-capabilities \| --no-capabilities]` | List an installed package and write its own rules and those of the packages it depends on; optionally grant its operations to `main` |
 | `blueprint add-mcp <name> <url> [--oauth …]` | Declare an MCP server, importable as `@mcp/<name>` |
 | `blueprint variable add\|list\|remove` | The `variables` block |
-| `blueprint secret add\|list\|remove` | The `secrets` block: `--store`, `--harness`, `--env`, or `--file` |
+| `blueprint secret add\|list\|remove` | The `secrets` block: `--store` or `--harness` |
 | `blueprint git set\|show\|remove` | Manage the blueprint's [Git configuration](#configure-git) |
 | `blueprint auth-proxy add\|list\|remove` | Credentials the runtime adds by host; `add --allow-insecure-http` opts that rule into HTTP, requiring a separate top-level YAML opt-in |
 | `blueprint capability list [library] [--unconfigured]` | Every capability a rule can name, with its filter fields and any rules already present; `--unconfigured` shows only what the blueprint's packages provide that `main` has no rule for |

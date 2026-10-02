@@ -32,12 +32,6 @@ pub struct ServerConfig {
     /// `blueprints` is `None`; when both are `None`, `AppState::new` installs an
     /// in-memory store.
     pub blueprint_dir: Option<PathBuf>,
-    /// Read-only directory of blueprint YAML reconciled into the store at boot.
-    /// A declarative *source* (a Kubernetes ConfigMap mount, a bind-mounted git
-    /// checkout); the store stays the authority. Distinct from `blueprint_dir`,
-    /// which is the writable revision log — pointing both at one path would make
-    /// the store read-only forever. `None` disables seeding.
-    pub blueprint_seed_dir: Option<PathBuf>,
     /// Explicit durable session store. Takes precedence over `session_store_dir`;
     /// mainly for tests and embedded callers that inject their own store.
     pub session_store: Option<Arc<dyn DurableSessionStore>>,
@@ -446,7 +440,6 @@ pub enum SizeLimit {
 #[derive(Clone, Debug, Default)]
 pub struct ServerDirectories {
     pub blueprint_dir: Option<PathBuf>,
-    pub blueprint_seed_dir: Option<PathBuf>,
     pub package_store_root: Option<PathBuf>,
     /// The read-only package root the server falls back to; executable
     /// artifacts are loaded from it just like from the owned store.
@@ -490,7 +483,6 @@ impl ServerDirectories {
                     .clone()
                     .unwrap_or_else(default_blueprint_dir),
             ),
-            blueprint_seed_dir: config.blueprint_seed_dir.clone(),
             package_store_root: Some(
                 config
                     .package_store_root
@@ -972,7 +964,7 @@ fn guarded_dirs(dirs: &ServerDirectories) -> Vec<GuardedDir> {
         .ephemeral_storage_root
         .clone()
         .unwrap_or_else(std::env::temp_dir);
-    let rows: [(&'static str, Option<PathBuf>, Direction, &'static str); 17] = [
+    let rows: [(&'static str, Option<PathBuf>, Direction, &'static str); 16] = [
         (
             "secret store",
             dirs.secret_store_dir.clone(),
@@ -997,12 +989,6 @@ fn guarded_dirs(dirs: &ServerDirectories) -> Vec<GuardedDir> {
             Direction::VolumeContains,
             "a guest write would reach the blueprint index, letting a program grant itself \
              capabilities",
-        ),
-        (
-            "blueprint seed directory",
-            dirs.blueprint_seed_dir.clone(),
-            Direction::VolumeContains,
-            "a guest write would reach the seed documents the store is reconciled against",
         ),
         (
             "package store",

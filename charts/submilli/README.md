@@ -82,84 +82,37 @@ Three things the NetworkPolicy does **not** do, worth knowing before you rely on
   server, so anyone with `pods/portforward` permission reaches the server whatever
   the policy says.
 
-## Blueprints
+## Blueprints and secrets
 
-Supply them declaratively through `values.yaml`; they are rendered into a ConfigMap,
-mounted read-only, and reconciled into the server's store on every pod start.
+The encrypted secret store is enabled by default. The chart generates its
+32-byte encryption key in a Kubernetes Secret, reuses it across upgrades, and
+retains it on uninstall alongside the persistent data. Back up both the key
+Secret and the volume: restoring one without the other cannot recover secrets.
 
-```yaml
-blueprints:
-  demo: |
-    name: demo
-    default: deny
-    vfs:
-      mode: ephemeral
-    permissions:
-      main:
-        - capability: http.get
-          action: allow
-          filter: host == "api.example.com"
+Populate application secrets with the CLI, then apply blueprints from your
+checkout or deployment job. Connect the CLI to the server with an admin token:
+
+```sh
+printf '%s' "$STRIPE_KEY" | submilli server secret put stripe-key
+submilli server blueprint apply ./blueprints/billing.yaml
 ```
 
-Two behaviours that surprise people:
-
-- **The files win.** Editing or deleting one of these blueprints through the API is
-  undone on the next pod restart. To change one, change `values.yaml` and run
-  `helm upgrade`. The overwritten version is kept on disk as a revision, so the
-  revert is auditable rather than silent.
-- **The chart never deletes.** Blueprints you registered through the API and did not
-  list here are left alone — nothing can tell "removed from source control" apart
-  from "created deliberately at runtime".
-
-Reconciling on *every* start, rather than once at install, is what makes this
-survive a pod restart on ephemeral storage. It is why the chart does not use a Helm
-install hook: hooks fire on release events, and the failure that has to be survived
-is a pod-start event.
-
-## Secrets
-
-Reference existing Kubernetes Secrets. Never put secret values in `values.yaml` —
-they land in plaintext in the Helm release object and in every `helm get values`
-output.
-
-```yaml
+```yaml title="blueprints/billing.yaml"
+name: billing
+default: deny
 secrets:
-  stripe:
-    secretName: stripe-credentials
-    key: api-key
+  STRIPE_KEY: { store: stripe-key }
 ```
 
-Each entry mounts at `/etc/submilli/secrets/<name>/<key>`, which is the path a
-blueprint reads with a `file:` source:
+Application-supplied, session-scoped credentials use `harness:` declarations.
+Secret values do not belong in blueprint files or chart values.
 
-```yaml
-blueprints:
-  billing: |
-    name: billing
-    secrets:
-      STRIPE_KEY: { file: /etc/submilli/secrets/stripe/api-key }
-```
-
-That path is a contract between the two maps, not an implementation detail — the
-chart chooses where the Secret lands and the blueprint has to name the same place.
-`helm test` cross-checks the two and fails if they drift, because nothing else
-does: the server seeds a blueprint whose secret cannot resolve rather than
-refusing it, so the mistake surfaces on the first real request instead of at
-deploy time.
-
-**`file:` sources work only for blueprints supplied here.** A blueprint you
-register at runtime through `POST`/`PUT /v1/blueprints` is rejected with
-`forbidden_secret_source` if it declares an `env:` or `file:` secret. That is
-deliberate: over the wire those sources would let an API caller read the
-server's own environment and files — including the secret-store key. Blueprints in `blueprints:` are supplied locally by the
-operator, so they are not subject to it. For runtime-registered blueprints, use
-a `store:` secret.
-
-The server's own encrypted-at-rest store (`secretStore.enabled`) is **off by
-default**. It protects the volume against offline disclosure and only earns that if
-its key comes from a different trust domain than the data it protects; a key kept in
-a Kubernetes Secret beside the volume buys very little. Turn it on when you have a
-KMS or CSI-driver key source.
+To supply your own encryption key, set `secretStore.existingSecret` and
+`secretStore.key` (default `key`). The referenced Kubernetes Secret entry must
+contain base64 text encoding exactly 32 random bytes. For GitOps and offline
+rendering, supply this Secret explicitly: those renderers cannot look up the
+existing generated key and would otherwise generate a different one each time.
+Set `secretStore.enabled: false` only when the server does not need stored secrets.
 
 ### Private packages
 
@@ -254,7 +207,6 @@ before raising the number:
 
 | | Consistent across servers? |
 |---|---|
-| Blueprints from `blueprints:` | **Yes** — one ConfigMap, seeded into every pod at boot |
 | Blueprints registered through the API | **No** — only on the pod that served the request |
 | Sessions, secrets, installed packages | **No** — same |
 
@@ -389,7 +341,7 @@ config:
 ```
 
 Keys the chart sets from its own values (`bind`, `port`, `max_execution_memory`,
-`shutdown_grace`, `vfs_ephemeral_dir`, `blueprint_seed_dir`,
+`shutdown_grace`, `vfs_ephemeral_dir`,
 `secret_store.key_file`, `allow_unauthenticated`, `github_token_file`) are
 refused there, with a message naming the value to use. Entries under
 `config.api_tokens` are added after the chart's two, each with a `token_file`

@@ -390,8 +390,11 @@ async fn env_secret_source_rejected_over_the_api() {
     )
     .await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
-    assert_eq!(body["error"], json!("forbidden_secret_source"));
-    assert_eq!(body["diagnostics"][0]["path"], json!(["secrets", "KEY"]));
+    assert_eq!(body["error"], json!("parse_error"));
+    assert_eq!(
+        body["diagnostics"][0]["path"],
+        json!(["secrets", "KEY", "env"])
+    );
 }
 
 #[tokio::test]
@@ -404,7 +407,7 @@ async fn file_secret_source_rejected_over_the_api() {
     )
     .await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
-    assert_eq!(body["error"], json!("forbidden_secret_source"));
+    assert_eq!(body["error"], json!("parse_error"));
 }
 
 #[tokio::test]
@@ -672,9 +675,7 @@ async fn remove_missing_is_not_found() {
 
 #[tokio::test]
 async fn auth_proxy_with_harness_secret_accepted() {
-    // env/file secret sources are rejected over the API (see the forbidden-
-    // source tests above); an auth_proxy header referencing a declared harness
-    // secret is the allowed shape.
+    // Harness values bind at execution time, not blueprint registration.
     let router = router();
     let yaml = "name: ap-ok\nsecrets:\n  K:\n    harness:\n      required: true\nauth_proxy:\n  - host: api.example.com\n    headers:\n      Authorization: \"Bearer ${secrets.K}\"\n";
     let (status, body) = post(&router, "/v1/blueprints", json!({ "yaml": yaml })).await;

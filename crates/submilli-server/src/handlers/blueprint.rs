@@ -5,7 +5,7 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 use submilli_blueprint::{self, Blueprint, BlueprintError, SecretSource, YamlPath, yaml_path};
-use submilli_shared::EnvFileSecretResolver;
+use submilli_shared::BlueprintSecretResolver;
 
 use crate::app::AppState;
 use crate::blueprint::{StoreError, StoredBlueprint};
@@ -113,13 +113,13 @@ fn parse_blueprint(yaml: &str) -> Result<Blueprint, (StatusCode, Json<ErrorRespo
 }
 
 /// Verify, at apply/add time, that every declared secret currently resolves on
-/// this server (env var set / file present / present in the secret store).
+/// this server (present in the secret store).
 /// Point-in-time only — see `submilli_blueprint::verify_secrets`.
 async fn verify_secrets(
     state: &AppState,
     blueprint: &Blueprint,
 ) -> Result<(), (StatusCode, Json<ErrorResponse>)> {
-    let resolver = EnvFileSecretResolver::new(state.secret_store().cloned());
+    let resolver = BlueprintSecretResolver::new(state.secret_store().cloned());
     submilli_blueprint::verify_secrets(blueprint, &resolver)
         .await
         .map_err(|err| {
@@ -145,38 +145,6 @@ async fn verify_secrets(
         })
 }
 
-/// Reject a blueprint registered over the API that reads the server's own
-/// environment or filesystem for a secret. `env:`/`file:` sources are honored
-/// only for blueprints loaded locally by an operator; over the wire — where the
-/// server has no inbound auth of its own — they would let a caller read the
-/// server's env and files (including the secret-store key), so require a
-/// `store:` or `harness:` source instead.
-fn reject_local_secret_sources(
-    blueprint: &Blueprint,
-) -> Result<(), (StatusCode, Json<ErrorResponse>)> {
-    for (name, source) in &blueprint.secrets {
-        if matches!(source, SecretSource::Env(_) | SecretSource::File(_)) {
-            let message = format!(
-                "secret '{name}' uses an `{}` source, which is not allowed for a blueprint \
-                 registered over the API; use a `store:` secret or a `harness:` source",
-                source.kind()
-            );
-            return Err((
-                StatusCode::BAD_REQUEST,
-                Json(
-                    ErrorResponse::named(
-                        "forbidden_secret_source",
-                        message.clone(),
-                        blueprint.name.clone(),
-                    )
-                    .diagnostic(Some(yaml_path!["secrets", name]), message),
-                ),
-            ));
-        }
-    }
-    Ok(())
-}
-
 /// A blueprint's reference to a named volume that no session could mount, with
 /// where in the blueprint it sits.
 #[derive(Debug)]
@@ -189,11 +157,6 @@ pub(crate) struct VolumeReferenceProblem {
 /// Reject a blueprint naming a volume the operator has not declared, or asking
 /// for more access than the declaration allows, so the store never holds one no
 /// session could mount as written. Checks the `named` root and every mount.
-///
-/// Unlike [`reject_local_secret_sources`] this is not an HTTP-only rule: the
-/// message is built here but every registration channel calls it, the seed
-/// directory included. A channel that skipped it would accept a form its twin
-/// rejects, which is the gap this exists to close.
 pub(crate) fn check_volume_references(
     blueprint: &Blueprint,
     volumes: &VolumeTable,
@@ -240,7 +203,6 @@ pub async fn add(
     Json(req): Json<AddRequest>,
 ) -> Result<(StatusCode, Json<AddResponse>), (StatusCode, Json<ErrorResponse>)> {
     let blueprint = parse_blueprint(&req.yaml)?;
-    reject_local_secret_sources(&blueprint)?;
     reject_unusable_volume_reference(&blueprint, state.session_manager().volumes())?;
     verify_secrets(&state, &blueprint).await?;
     let name = blueprint.name.clone();
@@ -281,7 +243,6 @@ pub async fn apply(
     Json(req): Json<AddRequest>,
 ) -> Result<(StatusCode, Json<ApplyResponse>), (StatusCode, Json<ErrorResponse>)> {
     let blueprint = parse_blueprint(&req.yaml)?;
-    reject_local_secret_sources(&blueprint)?;
     reject_unusable_volume_reference(&blueprint, state.session_manager().volumes())?;
     verify_secrets(&state, &blueprint).await?;
     let packages_changed = state

@@ -37,22 +37,20 @@ fn post(port: u16, path: &str, body: &str) -> String {
 #[test]
 fn deep_reentry_under_a_raised_stack_leaves_the_server_running() {
     let home = tempfile::tempdir().expect("temp home");
-    let seeds = tempfile::tempdir().expect("seed dir");
-    std::fs::write(seeds.path().join("t.yaml"), "kind: blueprint\nname: t\n").expect("seed");
     let port = free_port();
     let mut server = spawn_server(
         home.path(),
         port,
         1,
-        &[
-            ("SUBMILLI_MAX_EXECUTION_STACK", "1024"),
-            (
-                "SUBMILLI_BLUEPRINT_SEED_DIR",
-                seeds.path().to_str().expect("utf-8 path"),
-            ),
-        ],
+        &[("SUBMILLI_MAX_EXECUTION_STACK", "1024")],
     );
     wait_ready(port);
+    let registration = post(
+        port,
+        "/v1/blueprints",
+        &serde_json::json!({"yaml": "name: t\n"}).to_string(),
+    );
+    assert!(registration.starts_with("HTTP/1.1 200"), "{registration}");
 
     let body = serde_json::json!({ "blueprint": "t", "code": REENTRY }).to_string();
     let response = post(port, "/v1/execute", &body);

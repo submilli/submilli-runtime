@@ -19,7 +19,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Duration;
 
-use crate::host::EnvFileSecretResolver;
+use crate::host::BlueprintSecretResolver;
 use http::{HeaderName, HeaderValue};
 use interpreter::runtime::{McpCallError, McpTransport};
 use interpreter::stdlib::http::{NetworkPolicy, describe_error_chain};
@@ -85,7 +85,7 @@ impl StreamableHttpTransport {
         &self,
         server: &McpServer,
     ) -> Result<HashMap<HeaderName, HeaderValue>, McpCallError> {
-        let resolver = EnvFileSecretResolver::with_harness(
+        let resolver = BlueprintSecretResolver::with_harness(
             self.secret_store.clone(),
             Arc::clone(&self.harness_secrets),
         );

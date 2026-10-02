@@ -186,7 +186,7 @@ secrets:
 
 A secret entry is a name and where the runtime finds the value: `--store` for
 the secret store, `--harness` for a value the application supplies per
-session, `--env` for an environment variable, `--file` for a file. The
+session. The
 blueprint holds the name only. The value goes into the store:
 
 ```sh
@@ -371,7 +371,8 @@ above and declare the fixed secret name `GIT_TOKEN`. Grant cloning for
 the repository the agent may access:
 
 ```sh
-submilli blueprint secret add GIT_TOKEN --env GIT_TOKEN
+submilli blueprint secret add GIT_TOKEN --store GIT_TOKEN
+submilli secret put GIT_TOKEN
 submilli blueprint capability add git.clone \
   --filter 'path == "/repo" and remote == "https://github.com/acme/project.git"'
 ```

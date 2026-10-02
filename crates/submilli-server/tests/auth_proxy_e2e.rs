@@ -2,7 +2,7 @@
 //!
 //! A real `.subm` script (`fixtures/auth_proxy/script.subm`) calls `http.get`;
 //! a real blueprint (`fixtures/auth_proxy/blueprint.yaml`) injects an
-//! `Authorization` header from an env secret. The script runs through the full
+//! `Authorization` header from a store secret. The script runs through the full
 //! server `/v1/execute` path — blueprint → `BlueprintAuthProxy` → the real
 //! `ureq` client → the mock server, which validates the header on the wire.
 
@@ -21,11 +21,8 @@ use submilli_server::blueprint::InMemoryBlueprintStore;
 use submilli_server::{AppState, FileSecretStore, KeySource, SecretStore, ServerConfig, app};
 use tower::ServiceExt;
 
-/// Build a router with `yaml` pre-seeded into the blueprint store. `env:`/`file:`
-/// secret sources are rejected over the HTTP add path (they read the server's
-/// own environment/files), so an env-secret auth_proxy blueprint reaches the
-/// runtime the way a real deployment provides it — placed, not applied.
-fn router_seeded(config_base: ServerConfig, yaml: &str) -> Router {
+/// Build a router with a preloaded blueprint store.
+fn router_with_blueprint(config_base: ServerConfig, yaml: &str) -> Router {
     let blueprint = submilli_blueprint::parse(yaml).expect("valid blueprint");
     let store = Arc::new(InMemoryBlueprintStore::seed([blueprint]));
     app(AppState::new(ServerConfig {
@@ -37,12 +34,12 @@ fn router_seeded(config_base: ServerConfig, yaml: &str) -> Router {
 
 const SCRIPT: &str = include_str!("fixtures/auth_proxy/script.subm");
 const BLUEPRINT: &str = include_str!("fixtures/auth_proxy/blueprint.yaml");
-const TOKEN_ENV: &str = "SUB_E2E_AUTHPROXY_TOKEN";
+const TOKEN_KEY: &str = "api/token";
 const TOKEN: &str = "s3cr3t-xyz";
 const STORE_TOKEN: &str = "store-tok-789";
-const BEARER_ENV: &str = "SUB_E2E_AUTHPROXY_BEARER";
+const BEARER_KEY: &str = "api/bearer";
 const BEARER_TOKEN: &str = "bearer-tok-456";
-const BASIC_ENV: &str = "SUB_E2E_AUTHPROXY_BASIC_PW";
+const BASIC_KEY: &str = "api/basic";
 const BASIC_PASSWORD: &str = "hunter2";
 
 /// A secret store over a fresh temp dir, with a single key pre-loaded.
@@ -149,11 +146,16 @@ async fn post(router: &Router, path: &str, body: Value) -> (StatusCode, Value) {
 #[cfg_attr(skip_http_tests, ignore = "HTTP tests disabled")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn auth_proxy_injects_header_to_real_server() {
-    // SAFETY: a unique var name keeps this isolated from other tests' env.
-    unsafe { std::env::set_var(TOKEN_ENV, TOKEN) };
+    let store = store_with(TOKEN_KEY, TOKEN).await;
     let (port, captured) = spawn_mock(format!("Bearer {TOKEN}"));
 
-    let router = router_seeded(ServerConfig::default(), BLUEPRINT);
+    let router = router_with_blueprint(
+        ServerConfig {
+            secret_store: Some(store),
+            ..ServerConfig::default()
+        },
+        BLUEPRINT,
+    );
 
     // Run the real script against the mock, with the dynamic port substituted in.
     let code = SCRIPT.replace("__PORT__", &port.to_string());
@@ -172,7 +174,7 @@ async fn auth_proxy_injects_header_to_real_server() {
         "script did not get 200: {body}"
     );
 
-    // The header arrived on the wire, resolved from the env secret.
+    // The header arrived on the wire, resolved from the store secret.
     assert_eq!(
         captured.lock().unwrap().as_deref(),
         Some(format!("Bearer {TOKEN}").as_str()),
@@ -221,14 +223,19 @@ async fn auth_proxy_injects_store_secret_to_real_server() {
 #[cfg_attr(skip_http_tests, ignore = "HTTP tests disabled")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn auth_proxy_bearer_method_injects_header() {
-    // SAFETY: a unique var name keeps this isolated from other tests' env.
-    unsafe { std::env::set_var(BEARER_ENV, BEARER_TOKEN) };
+    let store = store_with(BEARER_KEY, BEARER_TOKEN).await;
     let (port, captured) = spawn_mock(format!("Bearer {BEARER_TOKEN}"));
 
     let blueprint = format!(
-        "name: auth-bearer-demo\nallow_insecure_http: true\nsecrets:\n  TOK:\n    env: {BEARER_ENV}\nauth_proxy:\n  - host: 127.0.0.1\n    allow_insecure_http: true\n    auth:\n      bearer: TOK\npermissions:\n  main:\n    - capability: http.get\n      action: allow\n"
+        "name: auth-bearer-demo\nallow_insecure_http: true\nsecrets:\n  TOK:\n    store: {BEARER_KEY}\nauth_proxy:\n  - host: 127.0.0.1\n    allow_insecure_http: true\n    auth:\n      bearer: TOK\npermissions:\n  main:\n    - capability: http.get\n      action: allow\n"
     );
-    let router = router_seeded(ServerConfig::default(), &blueprint);
+    let router = router_with_blueprint(
+        ServerConfig {
+            secret_store: Some(store),
+            ..ServerConfig::default()
+        },
+        &blueprint,
+    );
 
     let code = SCRIPT.replace("__PORT__", &port.to_string());
     let (status, body) = post(
@@ -255,8 +262,7 @@ async fn auth_proxy_bearer_method_injects_header() {
 #[cfg_attr(skip_http_tests, ignore = "HTTP tests disabled")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn auth_proxy_basic_method_injects_base64_header() {
-    // SAFETY: a unique var name keeps this isolated from other tests' env.
-    unsafe { std::env::set_var(BASIC_ENV, BASIC_PASSWORD) };
+    let store = store_with(BASIC_KEY, BASIC_PASSWORD).await;
     let expected = format!(
         "Basic {}",
         base64::engine::general_purpose::STANDARD.encode(format!("alice:{BASIC_PASSWORD}"))
@@ -264,9 +270,15 @@ async fn auth_proxy_basic_method_injects_base64_header() {
     let (port, captured) = spawn_mock(expected.clone());
 
     let blueprint = format!(
-        "name: auth-basic-demo\nallow_insecure_http: true\nsecrets:\n  PW:\n    env: {BASIC_ENV}\nauth_proxy:\n  - host: 127.0.0.1\n    allow_insecure_http: true\n    auth:\n      basic:\n        username: alice\n        password: PW\npermissions:\n  main:\n    - capability: http.get\n      action: allow\n"
+        "name: auth-basic-demo\nallow_insecure_http: true\nsecrets:\n  PW:\n    store: {BASIC_KEY}\nauth_proxy:\n  - host: 127.0.0.1\n    allow_insecure_http: true\n    auth:\n      basic:\n        username: alice\n        password: PW\npermissions:\n  main:\n    - capability: http.get\n      action: allow\n"
     );
-    let router = router_seeded(ServerConfig::default(), &blueprint);
+    let router = router_with_blueprint(
+        ServerConfig {
+            secret_store: Some(store),
+            ..ServerConfig::default()
+        },
+        &blueprint,
+    );
 
     let code = SCRIPT.replace("__PORT__", &port.to_string());
     let (status, body) = post(
@@ -294,9 +306,9 @@ async fn auth_proxy_basic_method_injects_base64_header() {
 async fn plain_http_denials_reach_execute_without_touching_the_network() {
     for (blueprint, rule) in [(false, false), (false, true), (true, false)] {
         let yaml = format!(
-            "name: gates\ndefault: allow\nallow_insecure_http: {blueprint}\nsecrets:\n  K: {{ file: /nonexistent/sub1105-secret }}\nauth_proxy:\n- host: 127.0.0.1\n  allow_insecure_http: {rule}\n  auth: {{ bearer: K }}\n"
+            "name: gates\ndefault: allow\nallow_insecure_http: {blueprint}\nsecrets:\n  K: {{ harness: {{}} }}\nauth_proxy:\n- host: 127.0.0.1\n  allow_insecure_http: {rule}\n  auth: {{ bearer: K }}\n"
         );
-        let router = router_seeded(ServerConfig::default(), &yaml);
+        let router = router_with_blueprint(ServerConfig::default(), &yaml);
         for operation in [
             "get(\"http://127.0.0.1:1/?token=never-print-this\");",
             "download(\"http://127.0.0.1:1/?token=never-print-this\", \"/payload\");",

@@ -203,11 +203,10 @@ required HTTP check cannot run, report it as blocked rather than passed.
 ### Other checks
 
 The chart has its own suite, not covered by `cargo test`: `helm unittest
-charts/submilli`. Its `checksum/blueprints` tests assert literal digests of the
-rendered `configmap-blueprints.yaml`, so editing that template or
-`submilli.labels` moves them — re-run and copy the reported `Actual:` values.
-Chart `version` and `appVersion` are pinned there so release bumps don't;
-anything else that varies per release needs pinning too.
+charts/submilli`. Its `checksum/config` tests assert literal digests of the
+rendered server configuration, so changing the default configuration moves them —
+re-run and copy the reported `Actual:` values. Encryption-key tests also cover
+key generation, retention, and reuse through mocked Kubernetes lookups.
 
 ## Documentation site
 

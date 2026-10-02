@@ -23,7 +23,7 @@ reuse one example blueprint, the support agent's, but each stands alone.
 - **Starting point:** Part 1; a package in the local store.
 - **Boundaries:** No filter grammar beyond one paragraph (permissions
   reference). Fields and blocks are the blueprint file reference. How the
-  server commands reach a server is Connect the CLI (Part 4). Seeding,
+  server commands reach a server is Connect the CLI (Part 4). Applying,
   replacing, and removing registered blueprints are Part 4; how a harness
   supplies harness secrets is the Connect a harness tutorials (Part 5).
 - **Evidence:** Assembled from `blueprints` ("Start from nothing allowed",
@@ -31,9 +31,7 @@ reuse one example blueprint, the support agent's, but each stands alone.
   it", "The whole file"), `curated-packages` and `cli` ("Install a
   package", "Author a blueprint", "Keep secrets locally"), `harness`
   ("Credentials that belong to the session", one sentence), `server`
-  ("Secrets", "Install packages", "Register blueprints"). The `env:` and
-  `file:` secret sources are left to the blueprint file and server
-  references. New sentences:
+  ("Secrets", "Install packages", "Register blueprints"). New sentences:
   the opening, the `--all-capabilities` sentence, the secret-store
   definition, the "test both directions" closing.
 

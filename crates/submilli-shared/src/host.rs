@@ -168,7 +168,7 @@ impl std::error::Error for SecretStoreError {}
 
 /// Backend for credential-shaped state behind the blueprint `store:` secret
 /// source. The concrete implementation (encrypted file store, KMS, …) is the
-/// embedder's; this trait is the contract [`EnvFileSecretResolver`] resolves
+/// embedder's; this trait is the contract [`BlueprintSecretResolver`] resolves
 /// `store:` lookups through.
 #[async_trait]
 pub trait SecretStore: Send + Sync + 'static {
@@ -178,15 +178,15 @@ pub trait SecretStore: Send + Sync + 'static {
     async fn list(&self, prefix: Option<&str>) -> Result<Vec<String>, SecretStoreError>;
 }
 
-/// Resolves declared secrets from the environment, mounted files, the
-/// configured [`SecretStore`], or a session's trusted harness bindings.
+/// Resolves declared secrets from the configured [`SecretStore`] or a session's
+/// trusted harness bindings.
 /// [`Self::new`] installs an empty harness binding set for local/operator flows.
-pub struct EnvFileSecretResolver {
+pub struct BlueprintSecretResolver {
     store: Option<Arc<dyn SecretStore>>,
     harness: Arc<HarnessSecretBindings>,
 }
 
-impl EnvFileSecretResolver {
+impl BlueprintSecretResolver {
     pub fn new(store: Option<Arc<dyn SecretStore>>) -> Self {
         Self::with_harness(store, Arc::new(HarnessSecretBindings::new()))
     }
@@ -200,15 +200,9 @@ impl EnvFileSecretResolver {
 }
 
 #[async_trait]
-impl SecretResolver for EnvFileSecretResolver {
+impl SecretResolver for BlueprintSecretResolver {
     async fn resolve(&self, name: &str, source: &SecretSource) -> Result<String, AuthError> {
         match source {
-            SecretSource::Env(var) => {
-                std::env::var(var).map_err(|_| AuthError::MissingSecret(name.to_string()))
-            }
-            SecretSource::File(path) => std::fs::read_to_string(path)
-                .map(|s| s.trim().to_string())
-                .map_err(|_| AuthError::MissingSecret(name.to_string())),
             // On-demand decrypt: reads + opens the one sealed file, awaited so the
             // executor isn't blocked.
             SecretSource::Store(key) => match &self.store {
@@ -235,7 +229,7 @@ impl SecretResolver for EnvFileSecretResolver {
 /// Blueprint-backed provider for script-visible `submilli:secrets.get`.
 pub struct BlueprintSecretProvider {
     blueprint: Arc<Blueprint>,
-    resolver: EnvFileSecretResolver,
+    resolver: BlueprintSecretResolver,
 }
 
 impl BlueprintSecretProvider {
@@ -250,7 +244,7 @@ impl BlueprintSecretProvider {
     ) -> Self {
         Self {
             blueprint,
-            resolver: EnvFileSecretResolver::with_harness(store, harness),
+            resolver: BlueprintSecretResolver::with_harness(store, harness),
         }
     }
 }
@@ -284,7 +278,7 @@ pub struct BlueprintAuthProxy {
     transport_policy: Arc<HttpTransportPolicy>,
     authenticated_policy: Arc<HttpTransportPolicy>,
     blueprint: Arc<Blueprint>,
-    resolver: EnvFileSecretResolver,
+    resolver: BlueprintSecretResolver,
 }
 
 impl BlueprintAuthProxy {
@@ -314,7 +308,7 @@ impl BlueprintAuthProxy {
             transport_policy: Arc::new(transport_policy),
             authenticated_policy,
             blueprint,
-            resolver: EnvFileSecretResolver::with_harness(store, harness),
+            resolver: BlueprintSecretResolver::with_harness(store, harness),
         }
     }
 }
@@ -659,11 +653,13 @@ permissions:
         }
     }
 
-    fn header_proxy(env_var: &str) -> BlueprintAuthProxy {
-        let yaml = format!(
-            "name: x\nsecrets:\n  K: {{ env: {env_var} }}\nauth_proxy:\n  - host: api.example.com\n    headers:\n      Authorization: \"Bearer ${{secrets.K}}\"\n"
-        );
-        BlueprintAuthProxy::new(Arc::new(parse(&yaml).unwrap()), None)
+    fn header_proxy(value: Option<&str>) -> BlueprintAuthProxy {
+        let yaml = "name: x\nsecrets:\n  K: { harness: {} }\nauth_proxy:\n  - host: api.example.com\n    headers:\n      Authorization: \"Bearer ${secrets.K}\"\n";
+        let bindings = value
+            .map(|value| ("K".into(), value.into()))
+            .into_iter()
+            .collect();
+        BlueprintAuthProxy::with_harness(Arc::new(parse(yaml).unwrap()), None, Arc::new(bindings))
     }
 
     fn header_value<'a>(req: &'a HttpRequest, name: &str) -> Option<&'a str> {
@@ -675,11 +671,11 @@ permissions:
 
     #[tokio::test]
     async fn insecure_http_requires_both_flags_before_resolving_secrets() {
-        // An unreadable file proves denial occurs before secret resolution.
+        // An unbound harness secret proves denial occurs before secret resolution.
         for blueprint in [false, true] {
             for rule in [false, true] {
                 let yaml = format!(
-                    "name: gates\nallow_insecure_http: {blueprint}\nsecrets:\n  K: {{ file: /nonexistent/sub1105-secret }}\nauth_proxy:\n- host: example.com\n  allow_insecure_http: {rule}\n  auth: {{ bearer: K }}\n"
+                    "name: gates\nallow_insecure_http: {blueprint}\nsecrets:\n  K: {{ harness: {{}} }}\nauth_proxy:\n- host: example.com\n  allow_insecure_http: {rule}\n  auth: {{ bearer: K }}\n"
                 );
                 let proxy = BlueprintAuthProxy::new(Arc::new(parse(&yaml).unwrap()), None);
                 for caller in ["main", "@test/package"] {
@@ -754,9 +750,7 @@ permissions:
 
     #[tokio::test]
     async fn injects_resolved_header_for_main() {
-        // SAFETY: unique var name per test; reads happen on this thread only.
-        unsafe { std::env::set_var("SUB_AP_TEST_INJECT", "sekret") };
-        let proxy = header_proxy("SUB_AP_TEST_INJECT");
+        let proxy = header_proxy(Some("sekret"));
         let out = proxy
             .transform(req("https://api.example.com/x", vec![]), "main")
             .await
@@ -766,8 +760,7 @@ permissions:
 
     #[tokio::test]
     async fn skips_non_main_caller() {
-        unsafe { std::env::set_var("SUB_AP_TEST_LIB", "sekret") };
-        let proxy = header_proxy("SUB_AP_TEST_LIB");
+        let proxy = header_proxy(Some("sekret"));
         let out = proxy
             .transform(req("https://api.example.com/x", vec![]), "submilli:http")
             .await
@@ -777,8 +770,7 @@ permissions:
 
     #[tokio::test]
     async fn no_rule_for_host_passes_through() {
-        unsafe { std::env::set_var("SUB_AP_TEST_NOHOST", "sekret") };
-        let proxy = header_proxy("SUB_AP_TEST_NOHOST");
+        let proxy = header_proxy(Some("sekret"));
         let out = proxy
             .transform(req("https://other.host/x", vec![]), "main")
             .await
@@ -788,8 +780,7 @@ permissions:
 
     #[tokio::test]
     async fn injected_header_overrides_script_header() {
-        unsafe { std::env::set_var("SUB_AP_TEST_OVERRIDE", "sekret") };
-        let proxy = header_proxy("SUB_AP_TEST_OVERRIDE");
+        let proxy = header_proxy(Some("sekret"));
         let out = proxy
             .transform(
                 req(
@@ -810,9 +801,8 @@ permissions:
     }
 
     #[tokio::test]
-    async fn missing_env_secret_errors() {
-        unsafe { std::env::remove_var("SUB_AP_TEST_ABSENT") };
-        let proxy = header_proxy("SUB_AP_TEST_ABSENT");
+    async fn missing_harness_secret_errors() {
+        let proxy = header_proxy(None);
         let err = proxy
             .transform(req("https://api.example.com/x", vec![]), "main")
             .await
@@ -841,9 +831,12 @@ permissions:
 
     #[tokio::test]
     async fn injects_query_param_overriding_script() {
-        unsafe { std::env::set_var("SUB_AP_TEST_QUERY", "qval") };
-        let yaml = "name: x\nsecrets:\n  K: { env: SUB_AP_TEST_QUERY }\nauth_proxy:\n  - host: api.example.com\n    query:\n      appid: \"${secrets.K}\"\n";
-        let proxy = BlueprintAuthProxy::new(Arc::new(parse(yaml).unwrap()), None);
+        let yaml = "name: x\nsecrets:\n  K: { harness: {} }\nauth_proxy:\n  - host: api.example.com\n    query:\n      appid: \"${secrets.K}\"\n";
+        let proxy = BlueprintAuthProxy::with_harness(
+            Arc::new(parse(yaml).unwrap()),
+            None,
+            Arc::new(BTreeMap::from([("K".into(), "qval".into())])),
+        );
         let out = proxy
             .transform(
                 req("https://api.example.com/x?appid=script&keep=1", vec![]),

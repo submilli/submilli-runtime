@@ -19,7 +19,7 @@ spec:
   clusterIP: None
   # Not `publishNotReadyAddresses`. Resolving a pod that has not passed its
   # readiness probe would hand callers a server still replaying its blueprint
-  # seed, and nothing here needs peer discovery during startup.
+  # state, and nothing here needs peer discovery during startup.
   ports:
     - name: http
       port: {{ .Values.service.port }}

@@ -64,16 +64,6 @@ pub struct Cli {
     #[arg(long)]
     blueprint_dir: Option<PathBuf>,
 
-    /// Read-only directory of blueprint YAML reconciled into the store on every
-    /// start. Use it to deploy blueprints declaratively — a Kubernetes ConfigMap
-    /// mount, a bind-mounted git checkout, `/etc/submilli/blueprints`. The files
-    /// win: a blueprint seeded from here is restored on the next start if it was
-    /// edited or removed through the API. Blueprints the directory does not name
-    /// are left alone. Distinct from `--blueprint-dir`, which is the writable
-    /// store. Off by default. Env: `$SUBMILLI_BLUEPRINT_SEED_DIR`
-    #[arg(long)]
-    blueprint_seed_dir: Option<PathBuf>,
-
     /// Directory the session lifecycle store persists to and loads from on
     /// startup — the bookkeeping that makes resume and idle reaping survive a
     /// restart. Mount on durable storage. [default: ~/.submilli/server/sessions]
