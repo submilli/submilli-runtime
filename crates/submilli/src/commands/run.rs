@@ -5,7 +5,9 @@ use std::fs;
 use std::path::PathBuf;
 use std::process::ExitCode;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
+
+use interpreter::runtime::limits::ExecutionUsage;
 
 use anyhow::{Context, anyhow};
 use interpreter::diagnostics;
@@ -38,6 +40,10 @@ pub struct Args {
     /// `RuntimeConfig::default()` value.
     #[arg(long)]
     fuel: Option<u64>,
+
+    /// Print fuel, peak accounted memory, and timings to stderr after execution.
+    #[arg(long)]
+    report: bool,
 
     /// Maximum wasm stack in bytes.
     #[arg(long = "max-stack")]
@@ -165,6 +171,7 @@ impl Args {
     pub(crate) fn metric_flags(&self) -> Vec<(&'static str, bool)> {
         vec![
             ("has_fuel", self.fuel.is_some()),
+            ("report", self.report),
             ("has_max_stack", self.max_stack.is_some()),
             ("has_timeout", self.timeout.is_some()),
             ("has_vfs", self.vfs.is_some()),
@@ -214,6 +221,7 @@ fn execute_on_this_thread(
     args: Args,
     llm_dispatch: Option<Arc<dyn ModelDispatch>>,
 ) -> anyhow::Result<ExitCode> {
+    let started = Instant::now();
     let (llm_limits, llm_concurrency) = llm_settings(&args)?;
     let source = fs::read_to_string(&args.script)
         .with_context(|| format!("reading {}", args.script.display()))?;
@@ -433,6 +441,8 @@ fn execute_on_this_thread(
     let module = Module::new(&engine, &compiled.wasm)?;
     let mut linker = Linker::<StoreData>::new(&engine);
 
+    let compile_elapsed = started.elapsed();
+    let run_started = Instant::now();
     let dispatch = rt.block_on(async {
         let linked_packages: Vec<_> = package_modules
             .iter()
@@ -451,7 +461,9 @@ fn execute_on_this_thread(
         let instance = instantiate_program_async(&linker, &mut store, &module).await?;
         dispatch_main_async(&mut store, &instance).await
     });
-    match dispatch {
+    rt.block_on(store.data_mut().blocking_work.finish());
+    let run_elapsed = run_started.elapsed();
+    let exit = match dispatch {
         Ok(Some(json)) => {
             println!("{json}");
             Ok(ExitCode::SUCCESS)
@@ -465,7 +477,31 @@ fn execute_on_this_thread(
             }
             Ok(ExitCode::from(1))
         }
+    };
+    if args.report {
+        let usage = ExecutionUsage::capture(&store, cfg.fuel)?;
+        eprintln!(
+            "fuel: {}   memory peak: {:.1} MB   wall: {} ms (compile {} ms, run {} ms)",
+            grouped_fuel(usage.fuel),
+            usage.memory_peak as f64 / 1_000_000.0,
+            (compile_elapsed + run_elapsed).as_millis(),
+            compile_elapsed.as_millis(),
+            run_elapsed.as_millis(),
+        );
     }
+    exit
+}
+
+fn grouped_fuel(fuel: u64) -> String {
+    let digits = fuel.to_string();
+    let mut out = String::new();
+    for (index, digit) in digits.chars().enumerate() {
+        if index > 0 && (digits.len() - index).is_multiple_of(3) {
+            out.push(',');
+        }
+        out.push(digit);
+    }
+    out
 }
 
 struct LocalPackageModule {
@@ -633,6 +669,7 @@ function main(): string {
             args: Args {
                 script,
                 fuel: None,
+                report: false,
                 max_stack: None,
                 timeout: None,
                 vfs: None,

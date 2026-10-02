@@ -11,6 +11,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use interpreter::diagnostics::{self, Severity};
+use interpreter::runtime::limits::ExecutionUsage;
 use interpreter::runtime::{
     AuthProxy, ExecutionTokenBudget, HttpClient, LinkedPackageModule, LlmProvider, McpTransport,
     RuntimeConfig, SecretProvider, SecurityCheck, SessionKvStore, StoreData, Vfs, VfsInfo,
@@ -31,6 +32,7 @@ use crate::error::{DiagnosticNote, DiagnosticPayload, ErrorKind, ExecuteError};
 use crate::mcp::McpCatalog;
 
 pub struct RunOutcome {
+    pub usage: ExecutionUsage,
     /// Already-JSON-encoded `main` return.
     pub value: Option<String>,
     pub console_raw: String,
@@ -101,6 +103,8 @@ pub(crate) struct RunnerImports<'a> {
 }
 
 pub(crate) struct RunnerRuntime<'a> {
+    pub blueprint: &'a str,
+    pub session: &'a str,
     pub engine: &'a Engine,
     pub base_linker: &'a Linker<StoreData>,
     pub config: &'a RuntimeConfig,
@@ -119,6 +123,9 @@ pub(crate) async fn run(
     services: HostServices,
     imports: RunnerImports<'_>,
 ) -> RunOutcome {
+    let started = Instant::now();
+    let blueprint = runtime.blueprint.to_owned();
+    let session = runtime.session.to_owned();
     let owned_code = code.to_owned();
     let engine = runtime.engine.clone();
     let linker = runtime.base_linker.clone();
@@ -129,10 +136,12 @@ pub(crate) async fn run(
     // This task owns the store independently of the request. Dropping the
     // request signals cancellation; the owner drains workers before exiting.
     let owner = tokio::spawn(async move {
-        run_inner(
+        let outcome = run_inner(
             &owned_code,
             parsed,
             RunnerRuntime {
+                blueprint: &blueprint,
+                session: &session,
                 engine: &engine,
                 base_linker: &linker,
                 config: &config,
@@ -145,7 +154,9 @@ pub(crate) async fn run(
             },
             cancelled,
         )
-        .await
+        .await;
+        log_execution(&blueprint, &session, started, &outcome);
+        outcome
     });
     let outcome = match owner.await {
         Ok(outcome) => outcome,
@@ -306,16 +317,21 @@ async fn run_inner(
         };
         crate::metrics::runtime_phases(&rt);
         log_phase_breakdown(&compiled.timings, &rt);
-        let console_raw = String::from_utf8_lossy(&buf.lock().unwrap()).into_owned();
+        let console_raw = match buf.lock() {
+            Ok(buffer) => String::from_utf8_lossy(&buffer).into_owned(),
+            Err(_) => return internal_failure("console buffer lock poisoned"),
+        };
 
         match dispatch {
             Ok(value) => RunOutcome {
+                usage: ExecutionUsage::default(),
                 value,
                 console_raw,
                 error: None,
                 discovery_warnings,
             },
             Err(err) => RunOutcome {
+                usage: ExecutionUsage::default(),
                 value: None,
                 error: Some(classify_runtime_error(&err, &parsed.sources, parsed.file)),
                 console_raw,
@@ -323,13 +339,36 @@ async fn run_inner(
             },
         }
     };
-    let outcome = tokio::select! {
+    let mut outcome = tokio::select! {
         biased;
         _ = &mut cancelled => internal_failure("execution cancelled"),
         outcome = execution => outcome,
     };
     store.data_mut().blocking_work.finish().await;
+    match ExecutionUsage::capture(&store, runtime.config.fuel) {
+        Ok(usage) => outcome.usage = usage,
+        Err(error) => return internal_failure(&format!("usage capture failed: {error}")),
+    }
     outcome
+}
+
+fn log_execution(blueprint: &str, session: &str, started: Instant, outcome: &RunOutcome) {
+    let status = match outcome.error.as_ref().map(|error| error.kind) {
+        None => "ok",
+        Some(ErrorKind::FuelExhausted) => "fuel_exhausted",
+        Some(ErrorKind::MemoryExhausted) => "memory_exhausted",
+        Some(ErrorKind::Timeout) => "timeout",
+        Some(_) => "error",
+    };
+    tracing::info!(
+        target: "submilli_server::execute",
+        blueprint, session,
+        fuel = outcome.usage.fuel,
+        memory_peak = outcome.usage.memory_peak,
+        wall_ms = started.elapsed().as_millis(),
+        outcome = status,
+        "execution finished",
+    );
 }
 
 fn compile_failure(
@@ -380,6 +419,7 @@ fn compile_failure(
         }
     };
     RunOutcome {
+        usage: ExecutionUsage::default(),
         value: None,
         console_raw: String::new(),
         error: Some(ExecuteError {
@@ -574,6 +614,7 @@ fn sentry_extras(
 
 fn internal_failure(msg: &str) -> RunOutcome {
     RunOutcome {
+        usage: ExecutionUsage::default(),
         value: None,
         console_raw: String::new(),
         error: Some(ExecuteError {
@@ -589,7 +630,10 @@ struct Sink(Arc<Mutex<Vec<u8>>>);
 
 impl Write for Sink {
     fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-        self.0.lock().unwrap().write(buf)
+        self.0
+            .lock()
+            .map_err(|_| std::io::Error::other("console buffer lock poisoned"))?
+            .write(buf)
     }
     fn flush(&mut self) -> std::io::Result<()> {
         Ok(())
@@ -773,6 +817,8 @@ mod tests {
             code,
             parse(code).unwrap(),
             RunnerRuntime {
+                blueprint: "test",
+                session: "test-session",
                 engine: &engine,
                 base_linker: &linker,
                 config: &config,

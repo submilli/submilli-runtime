@@ -794,3 +794,33 @@ fn run_help_lists_flags() {
         assert!(text.contains(flag), "help missing {flag}: {text}");
     }
 }
+
+#[test]
+fn report_is_opt_in_and_keeps_the_result_on_stdout() {
+    let source = "function main(): number { return 42; }";
+    let plain = run_script("usage-plain", source, &[]);
+    assert!(plain.status.success());
+    assert_eq!(stdout(&plain), "42\n");
+    assert!(!stderr(&plain).contains("fuel:"));
+    let reported = run_script("usage-report", source, &["--report"]);
+    assert!(reported.status.success(), "{}", stderr(&reported));
+    assert_eq!(stdout(&reported), "42\n");
+    let line = stderr(&reported);
+    assert!(line.starts_with("fuel: "), "{line}");
+    assert!(line.contains("memory peak:"), "{line}");
+    assert!(line.contains(" ms (compile "), "{line}");
+    assert!(line.contains(" ms, run "), "{line}");
+}
+
+#[test]
+fn report_captures_fuel_exhaustion_in_top_level_code() {
+    let out = run_script(
+        "usage-top-level",
+        "while (true) {} function main(): void {}",
+        &["--report", "--fuel", "100000"],
+    );
+    assert!(!out.status.success());
+    assert!(stdout(&out).is_empty());
+    assert!(stderr(&out).contains("fuel exhausted"), "{}", stderr(&out));
+    assert!(stderr(&out).contains("fuel: 100,000"), "{}", stderr(&out));
+}

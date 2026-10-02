@@ -369,6 +369,8 @@ impl SubmilliMcp {
             &args.code,
             parsed,
             runner::RunnerRuntime {
+                blueprint: &self.blueprint_name,
+                session: session_id.as_deref().unwrap_or(""),
                 engine: self.state.engine(),
                 base_linker: self.state.base_linker(),
                 config: self.state.runtime(),

@@ -310,6 +310,8 @@ pub(crate) async fn execute_core(state: &AppState, inputs: ExecuteInputs<'_>) ->
         code,
         parsed,
         runner::RunnerRuntime {
+            blueprint: blueprint_name,
+            session: session_id,
             engine: state.engine(),
             base_linker: state.base_linker(),
             config: state.runtime(),

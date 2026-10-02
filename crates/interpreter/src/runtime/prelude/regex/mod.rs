@@ -189,17 +189,19 @@ pub(super) fn construct(
     Ok(Val::AnyRef(Some(st.to_anyref())))
 }
 
-/// Build a fresh `$RegExpMatchBox` from a match snapshot over `input`.
+/// Build a fresh match box, retaining the immutable input value without copying it.
 fn build_match_box(
     caller: &mut Caller<'_, StoreData>,
     input: &str,
+    input_value: &Val,
     snapshot: &ExecSnapshot,
 ) -> wasmtime::Result<Val> {
     let intr = intrinsic_types(&mut *caller)?;
 
-    let match_str =
-        write_submilli_string_struct(caller, &input[snapshot.match_start..snapshot.match_end])?;
-    let input_str = write_submilli_string_struct(caller, input)?;
+    let matched = input
+        .get(snapshot.match_start..snapshot.match_end)
+        .ok_or_else(|| wasmtime::Error::msg("RegExp: invalid match span"))?;
+    let match_str = write_submilli_string_struct(caller, matched)?;
 
     let mut numbered: Vec<Val> = Vec::with_capacity(snapshot.numbered.len());
     for slot in &snapshot.numbered {
@@ -207,7 +209,7 @@ fn build_match_box(
     }
     let numbered_arr = capture_array(caller, &intr, &numbered)?;
 
-    let mut named: Vec<Val> = Vec::with_capacity(snapshot.named.len() * 2);
+    let mut named: Vec<Val> = Vec::new();
     for (name, slot) in &snapshot.named {
         let raw = write_submilli_string(&mut *caller, name)?;
         named.push(Val::AnyRef(Some(raw.to_anyref())));
@@ -223,8 +225,11 @@ fn build_match_box(
         &[
             vtable,
             Val::AnyRef(Some(match_str.to_anyref())),
-            Val::I32(snapshot.match_start as i32),
-            Val::AnyRef(Some(input_str.to_anyref())),
+            Val::I32(
+                i32::try_from(snapshot.match_start)
+                    .map_err(|_| wasmtime::Error::msg("RegExp: match index exceeds i32"))?,
+            ),
+            *input_value,
             Val::AnyRef(Some(numbered_arr.to_anyref())),
             Val::AnyRef(Some(named_arr.to_anyref())),
         ],
@@ -241,7 +246,10 @@ fn capture_slot(
 ) -> wasmtime::Result<Val> {
     match slot {
         Some((s, e)) => {
-            let raw = write_submilli_string(&mut *caller, &input[s..e])?;
+            let capture = input
+                .get(s..e)
+                .ok_or_else(|| wasmtime::Error::msg("RegExp: invalid capture span"))?;
+            let raw = write_submilli_string(&mut *caller, capture)?;
             Ok(Val::AnyRef(Some(raw.to_anyref())))
         }
         None => Ok(Val::null_any_ref()),
@@ -312,6 +320,9 @@ pub(super) fn test(caller: &mut Caller<'_, StoreData>, params: &[Val]) -> wasmti
 }
 
 pub(super) fn exec(caller: &mut Caller<'_, StoreData>, params: &[Val]) -> wasmtime::Result<Val> {
+    let params: &[Val; 2] = params
+        .try_into()
+        .map_err(|_| wasmtime::Error::msg("exec: invalid argument count"))?;
     let st = as_struct(caller, &params[0], "RegExp#exec")?;
     let bits = flag_bits(caller, &st)?;
     let input = read_string_arg(&mut *caller, &params[1], "RegExp#exec(input)")?;
@@ -328,7 +339,7 @@ pub(super) fn exec(caller: &mut Caller<'_, StoreData>, params: &[Val]) -> wasmti
         snapshot.as_ref().map(|s| s.next_last_index),
     )?;
     match snapshot {
-        Some(s) => build_match_box(caller, &input, &s),
+        Some(s) => build_match_box(caller, &input, &params[1], &s),
         None => Ok(Val::null_any_ref()),
     }
 }
@@ -447,10 +458,13 @@ pub(super) fn string_match(
     caller: &mut Caller<'_, StoreData>,
     params: &[Val],
 ) -> wasmtime::Result<Val> {
+    let params: &[Val; 2] = params
+        .try_into()
+        .map_err(|_| wasmtime::Error::msg("string_match: invalid argument count"))?;
     let input = read_string_arg(&mut *caller, &params[0], "String#match(input)")?;
     let st = as_struct(caller, &params[1], "String#match(regex)")?;
     match exec_at(caller, &st, &input, 0)? {
-        Some(s) => build_match_box(caller, &input, &s),
+        Some(s) => build_match_box(caller, &input, &params[0], &s),
         None => Ok(Val::null_any_ref()),
     }
 }
@@ -474,17 +488,21 @@ pub(super) fn string_match_all(
     caller: &mut Caller<'_, StoreData>,
     params: &[Val],
 ) -> wasmtime::Result<Val> {
+    let params: &[Val; 2] = params
+        .try_into()
+        .map_err(|_| wasmtime::Error::msg("string_match_all: invalid argument count"))?;
     let input = read_string_arg(&mut *caller, &params[0], "String#matchAll(input)")?;
     let st = as_struct(caller, &params[1], "String#matchAll(regex)")?;
     let mut boxes: Vec<Val> = Vec::new();
     let mut pos = 0usize;
     while let Some(s) = exec_at(caller, &st, &input, pos)? {
         let next = if s.next_last_index == pos {
-            pos + 1
+            pos.checked_add(1)
+                .ok_or_else(|| wasmtime::Error::msg("RegExp: match position overflow"))?
         } else {
             s.next_last_index
         };
-        boxes.push(build_match_box(caller, &input, &s)?);
+        boxes.push(build_match_box(caller, &input, &params[0], &s)?);
         pos = next;
     }
     let arr = write_submilli_array_struct(caller, &boxes)?;
