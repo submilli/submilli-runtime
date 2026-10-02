@@ -112,6 +112,11 @@ export class TypeSafeError extends Error {
 }
 
 /** Evaluate one yes/no judgment in one HTTP call; returns probability of yes.
+ * @param state Evidence for the judgment: text or a JSON object/array. The call does not fetch missing evidence.
+ * @param instructions The full question, as a string or a JSON object/array; must not be blank.
+ * @param criteria Optional descriptions of the outcomes, keyed `"true"` and `"false"`; `null` omits them.
+ * @param options Optional call settings (such as `model`); `null` uses the default model `jev-latest`.
+ * @returns The probability of yes, from zero to one.
  * @capability typesafe.ai/systemone {}
  */
 export function noul(state: unknown, instructions: unknown, criteria: Map<string, unknown> | null = null,
@@ -124,6 +129,11 @@ export function noul(state: unknown, instructions: unknown, criteria: Map<string
 }
 
 /** Select one known option in one HTTP call, preserving probabilities and confidence.
+ * @param state Evidence for the judgment: text or a JSON object/array. The call does not fetch missing evidence.
+ * @param instructions The full question, as a string or a JSON object/array; must not be blank.
+ * @param criteria Option names mapped to their JSON descriptions; 1-255 options.
+ * @param options Optional call settings (such as `model`); `null` uses the default model `jev-latest`.
+ * @returns The highest-probability option, the probability of every option, and the confidence.
  * @capability typesafe.ai/systemone {}
  */
 export function choice(state: unknown, instructions: unknown, criteria: Map<string, unknown>,
@@ -136,6 +146,11 @@ export function choice(state: unknown, instructions: unknown, criteria: Map<stri
 }
 
 /** Rate one dimension in one HTTP call, preserving probabilities, legend, and confidence.
+ * @param state Evidence for the judgment: text or a JSON object/array. The call does not fetch missing evidence.
+ * @param instructions The full question, as a string or a JSON object/array; must not be blank.
+ * @param criteria Ordered descriptions of 2-10 levels; level indices start at zero.
+ * @param options Optional call settings (such as `model`); `null` uses the default model `jev-latest`.
+ * @returns The fractional score, the legend of level descriptions, per-level probabilities and the confidence.
  * @capability typesafe.ai/systemone {}
  */
 export function score(state: unknown, instructions: unknown, criteria: unknown[],
@@ -147,7 +162,12 @@ export function score(state: unknown, instructions: unknown, criteria: unknown[]
     return answer;
 }
 
-/** Build a yes/no question without HTTP. Optional criteria keys are true and false. */
+/**
+ * Build a yes/no question without HTTP. Optional criteria keys are true and false.
+ * @param instructions The full proposition to judge, as a string or a JSON object/array.
+ * @param criteria Optional descriptions keyed `"true"` and `"false"`; `null` omits them.
+ * @returns A validated yes/no question for use in a `batch` request.
+ */
 export function noulQuestion(instructions: unknown, criteria: Map<string, unknown> | null = null): NoulQuestion {
     const question: NoulQuestion = { type: "noul", instructions: instructions };
     if (criteria !== null) question.criteria = criteria;
@@ -155,14 +175,24 @@ export function noulQuestion(instructions: unknown, criteria: Map<string, unknow
     return question;
 }
 
-/** Build a selection question without HTTP; include an other/no-match option when needed. */
+/**
+ * Build a selection question without HTTP; include an other/no-match option when needed.
+ * @param instructions The complete selection question, as a string or a JSON object/array.
+ * @param criteria Option names mapped to their JSON descriptions; 1-255 options.
+ * @returns A validated selection question for use in a `batch` request.
+ */
 export function choiceQuestion(instructions: unknown, criteria: Map<string, unknown>): ChoiceQuestion {
     const question: ChoiceQuestion = { type: "choice", instructions: instructions, criteria: criteria };
     validateQuestion(question);
     return question;
 }
 
-/** Build a rating question without HTTP using 2–10 concrete, independently meaningful levels. */
+/**
+ * Build a rating question without HTTP using 2–10 concrete, independently meaningful levels.
+ * @param instructions The complete rating question, as a string or a JSON object/array.
+ * @param criteria Ordered descriptions of 2-10 levels; level indices start at zero.
+ * @returns A validated rating question for use in a `batch` request.
+ */
 export function scoreQuestion(instructions: unknown, criteria: unknown[]): ScoreQuestion {
     const question: ScoreQuestion = { type: "score", instructions: instructions, criteria: criteria };
     validateQuestion(question);
@@ -170,6 +200,8 @@ export function scoreQuestion(instructions: unknown, criteria: unknown[]): Score
 }
 
 /** Evaluate independent semantic judgments together; code owns subsequent actions.
+ * @param request The shared state, the questions keyed by caller-chosen IDs, and an optional model.
+ * @returns The answering model, one answer per question ID, and token usage for the whole request.
  * @capability typesafe.ai/systemone {}
  */
 export function batch(request: BatchRequest): BatchResponse {
@@ -177,17 +209,29 @@ export function batch(request: BatchRequest): BatchResponse {
     return evaluate(request);
 }
 
-/** Narrow an already-decoded answer to NoulAnswer; returns false for null. */
+/**
+ * Narrow an already-decoded answer to NoulAnswer; returns false for null.
+ * @param answer A decoded answer, or `null`.
+ * @returns `true` when `answer` is a `NoulAnswer`.
+ */
 export function isNoulAnswer(answer: Answer | null): answer is NoulAnswer {
     return answer !== null && answer.type === "noul";
 }
 
-/** Narrow an already-decoded answer to ChoiceAnswer; returns false for null. */
+/**
+ * Narrow an already-decoded answer to ChoiceAnswer; returns false for null.
+ * @param answer A decoded answer, or `null`.
+ * @returns `true` when `answer` is a `ChoiceAnswer`.
+ */
 export function isChoiceAnswer(answer: Answer | null): answer is ChoiceAnswer {
     return answer !== null && answer.type === "choice";
 }
 
-/** Narrow an already-decoded answer to ScoreAnswer; returns false for null. */
+/**
+ * Narrow an already-decoded answer to ScoreAnswer; returns false for null.
+ * @param answer A decoded answer, or `null`.
+ * @returns `true` when `answer` is a `ScoreAnswer`.
+ */
 export function isScoreAnswer(answer: Answer | null): answer is ScoreAnswer {
     return answer !== null && answer.type === "score";
 }
@@ -209,7 +253,11 @@ function evaluate(request: BatchRequest): BatchResponse {
     return decodeResponse(response.body, request.questions);
 }
 
-/** Build and validate the payload without credentials or HTTP. */
+/**
+ * Build and validate the payload without credentials or HTTP.
+ * @param request The batch request to serialize.
+ * @returns The JSON request body.
+ */
 function buildRequestBody(request: BatchRequest): string {
     requireDescription(request.state, "state");
     const model = request.model ?? "jev-latest";
@@ -225,7 +273,12 @@ function buildRequestBody(request: BatchRequest): string {
         ",\"questions\":{" + fields.join(",") + "}}";
 }
 
-/** Parse typed answers and verify they match the requested IDs and criteria. */
+/**
+ * Parse typed answers and verify they match the requested IDs and criteria.
+ * @param body The raw JSON response body.
+ * @param questions The questions that were sent, used to verify the answers.
+ * @returns The decoded batch response.
+ */
 function decodeResponse(body: string, questions: Map<string, Question>): BatchResponse {
     try {
         const wire = JSON.parse(body) as { model: string; answers: unknown; usage: Usage };
@@ -247,7 +300,12 @@ function decodeResponse(body: string, questions: Map<string, Question>): BatchRe
     }
 }
 
-/** Map HTTP failures without exposing request state, provider bodies, or credentials. */
+/**
+ * Map HTTP failures without exposing request state, provider bodies, or credentials.
+ * @param status The HTTP status code of the failed response.
+ * @param retryAfter The `retry-after` response header value, or `null` when absent.
+ * @returns A `TypeSafeError` carrying a code derived from the status.
+ */
 function typesafeHttpError(status: number, retryAfter: string | null = null): TypeSafeError {
     let code = "http_error";
     if (status === 400 || status === 422) code = "invalid_request";

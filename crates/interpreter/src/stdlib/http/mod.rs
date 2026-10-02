@@ -1277,7 +1277,11 @@ function main(): void {
             &[(
                 "lib",
                 r#"
-                /** Pass-through JSON encoder. */
+                /**
+                 * Pass-through JSON encoder.
+                 * @param value Value to encode.
+                 * @returns `value` as JSON.
+                 */
                 export function passthrough(value: unknown): string {
                     return JSON.stringify(value);
                 }

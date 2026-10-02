@@ -2524,7 +2524,7 @@ function main(): string {
             "test:pkg",
             &[(
                 "lib",
-                "/** Identity. */\nexport function noop(x: number): number { return x; }",
+                "/** Identity.\n * @param x Value to return.\n * @returns `x`. */\nexport function noop(x: number): number { return x; }",
             )],
             &[],
         );
@@ -2611,7 +2611,11 @@ function main(): string {
             &[(
                 "lib",
                 r#"
-                /** Pass-through JSON encoder. */
+                /**
+                 * Pass-through JSON encoder.
+                 * @param value Value to encode.
+                 * @returns `value` as JSON.
+                 */
                 export function passthrough(value: unknown): string {
                     return JSON.stringify(value);
                 }
@@ -2796,7 +2800,11 @@ function main(): string {
             &[(
                 "lib",
                 r#"
-                /** Pass-through JSON encoder for a collection. */
+                /**
+                 * Pass-through JSON encoder for a collection.
+                 * @param values Values to encode.
+                 * @returns `values` as JSON.
+                 */
                 export function passthroughAll(values: unknown[]): string {
                     return JSON.stringify(values);
                 }
@@ -2907,7 +2915,10 @@ function main(): string {
 
                 const TOKEN: string | null = get("TOKEN");
 
-                /** Reports whether the module-level read succeeded. */
+                /**
+                 * Reports whether the module-level read succeeded.
+                 * @returns Whether the read succeeded.
+                 */
                 export function loaded(): boolean {
                     return TOKEN !== null;
                 }
@@ -3485,7 +3496,7 @@ function main(): string {
                 ),
                 (
                     "util",
-                    "/** Inner function. */\nexport function inner(): number { return 1; }",
+                    "/** Inner function.\n * @returns One. */\nexport function inner(): number { return 1; }",
                 ),
             ],
             &[],

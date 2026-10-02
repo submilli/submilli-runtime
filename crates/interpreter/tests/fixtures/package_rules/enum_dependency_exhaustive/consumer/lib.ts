@@ -1,6 +1,10 @@
 import { Level } from "@test/levels";
 
-/** Names a level. */
+/**
+ * Names a level.
+ * @param level Level to describe.
+ * @returns The level name.
+ */
 export function describe(level: Level): string {
   switch (level) {
     case Level.Low:

@@ -360,7 +360,7 @@ export interface AgentSessionCreateOnCommentInput {
 export interface PageInfo {
     /** True when another page exists. */
     hasNextPage: boolean;
-    /** Cursor to pass as `after` for the next page; null when there is no next page. */
+    /** Cursor of the page's last item, to pass as `after` for the next page when `hasNextPage`; null when the page is empty. */
     endCursor: string | null;
 }
 
@@ -404,6 +404,7 @@ export interface IssueFilter {
 
 /**
  * Fetch the authenticated user (whoever owns the API token).
+ * @returns The user that owns the API token.
  * @capability linear.app/getViewer {}
  */
 export function getViewer(): User {
@@ -414,6 +415,8 @@ export function getViewer(): User {
 
 /**
  * Fetch one issue by UUID; null when not found.
+ * @param id Issue UUID (not the `ENG-123` identifier).
+ * @returns The issue, or `null` when no issue has that ID.
  * @capability linear.app/getIssue {}
  */
 export function getIssue(id: string): Issue | null {
@@ -425,6 +428,9 @@ export function getIssue(id: string): Issue | null {
 
 /**
  * List issues, optionally filtered and paginated.
+ * @param filter Optional filters (team, assignee, state category, timestamps); `null` applies none. `teamId` is also checked against capability rules.
+ * @param page Optional `first` (page size, default 50, max 250) and `after` cursor; `null` requests the first 50 items.
+ * @returns One page of issues in `nodes`; while `pageInfo.hasNextPage` is true, pass `pageInfo.endCursor` as `after` for the next page.
  * @capability linear.app/listIssues { teamId: string }
  */
 export function listIssues(
@@ -460,6 +466,8 @@ export function listIssues(
 
 /**
  * Fetch one team by UUID; null when not found.
+ * @param id Team UUID.
+ * @returns The team, or `null` when no team has that ID.
  * @capability linear.app/getTeam { teamId: $id }
  */
 export function getTeam(id: string): Team | null {
@@ -471,6 +479,8 @@ export function getTeam(id: string): Team | null {
 
 /**
  * List teams, paginated.
+ * @param page Optional `first` (page size, default 50, max 250) and `after` cursor; `null` requests the first 50 items.
+ * @returns One page of teams in `nodes`; while `pageInfo.hasNextPage` is true, pass `pageInfo.endCursor` as `after` for the next page.
  * @capability linear.app/listTeams {}
  */
 export function listTeams(page: PageOptions | null = null): Page<Team> {
@@ -484,6 +494,8 @@ export function listTeams(page: PageOptions | null = null): Page<Team> {
 
 /**
  * List projects, paginated.
+ * @param page Optional `first` (page size, default 50, max 250) and `after` cursor; `null` requests the first 50 items.
+ * @returns One page of projects in `nodes`; while `pageInfo.hasNextPage` is true, pass `pageInfo.endCursor` as `after` for the next page.
  * @capability linear.app/listProjects {}
  */
 export function listProjects(page: PageOptions | null = null): Page<Project> {
@@ -497,6 +509,8 @@ export function listProjects(page: PageOptions | null = null): Page<Project> {
 
 /**
  * List users, paginated.
+ * @param page Optional `first` (page size, default 50, max 250) and `after` cursor; `null` requests the first 50 items.
+ * @returns One page of users in `nodes`; while `pageInfo.hasNextPage` is true, pass `pageInfo.endCursor` as `after` for the next page.
  * @capability linear.app/listUsers {}
  */
 export function listUsers(page: PageOptions | null = null): Page<User> {
@@ -514,6 +528,8 @@ export function listUsers(page: PageOptions | null = null): Page<User> {
 
 /**
  * Create an issue; returns the created issue.
+ * @param input New issue fields; `teamId` is required and unset optional fields are omitted from the request.
+ * @returns The created issue.
  * @capability linear.app/createIssue { teamId: string }
  */
 export function createIssue(input: IssueCreateInput): Issue {
@@ -549,6 +565,9 @@ export function createIssue(input: IssueCreateInput): Issue {
  * Update an issue by UUID; returns the updated issue. The issue is read first, so the check
  * carries `teamId`, the team the issue belongs to. `projectId` is the project the update moves
  * the issue to, or null when it moves it nowhere.
+ * @param id UUID of the issue to update.
+ * @param input Fields to change; unset fields are left as they are. Throws if the issue does not exist.
+ * @returns The issue after the update.
  * @capability linear.app/updateIssue { teamId: string, projectId: string }
  */
 export function updateIssue(id: string, input: IssueUpdateInput): Issue {
@@ -583,6 +602,8 @@ export function updateIssue(id: string, input: IssueUpdateInput): Issue {
 /**
  * Create a comment on an issue; returns the created comment. The issue is read first, so the
  * check carries `teamId`, the team the issue belongs to.
+ * @param input Target `issueId`, Markdown `body`, and optional `parentId` for a threaded reply. Throws if the issue does not exist.
+ * @returns The created comment.
  * @capability linear.app/createComment { teamId: string }
  */
 export function createComment(input: CommentCreateInput): Comment {
@@ -615,6 +636,9 @@ function issueTeamId(issueId: string): string {
 }
 
 /** Read comments, including parent IDs for threaded replies.
+ * @param issueId UUID of the issue whose comments to read.
+ * @param page Optional `first` (page size, default 50, max 250) and `after` cursor; `null` requests the first 50 items.
+ * @returns One page of comments in `nodes`; while `pageInfo.hasNextPage` is true, pass `pageInfo.endCursor` as `after` for the next page.
  * @capability linear.app/listComments {}
  */
 export function listComments(issueId: string, page: PageOptions | null = null): Page<Comment> {
@@ -627,6 +651,8 @@ export function listComments(issueId: string, page: PageOptions | null = null): 
 }
 
 /** Fetch a Linear agent session by UUID.
+ * @param id Agent session UUID.
+ * @returns The agent session.
  * @capability linear.app/getAgentSession {}
  */
 export function getAgentSession(id: string): AgentSession {
@@ -637,6 +663,9 @@ export function getAgentSession(id: string): AgentSession {
 }
 
 /** Read a page of session activities, including user prompts and stop signals.
+ * @param id Agent session UUID.
+ * @param page Optional `first` (page size, default 50, max 250) and `after` cursor; `null` requests the first 50 items.
+ * @returns One page of session activities, including user prompts in `nodes`; while `pageInfo.hasNextPage` is true, pass `pageInfo.endCursor` as `after` for the next page.
  * @capability linear.app/listAgentActivities {}
  */
 export function listAgentActivities(id: string, page: PageOptions | null = null): Page<AgentActivity> {
@@ -649,6 +678,8 @@ export function listAgentActivities(id: string, page: PageOptions | null = null)
 }
 
 /** Emit progress, a question, a final response, or an error.
+ * @param input Target session UUID and the activity content to emit.
+ * @returns The recorded activity.
  * @capability linear.app/createAgentActivity {}
  */
 export function createAgentActivity(input: AgentActivityCreateInput): AgentActivity {
@@ -663,6 +694,9 @@ export function createAgentActivity(input: AgentActivityCreateInput): AgentActiv
 }
 
 /** Update session links, summary, or the complete plan.
+ * @param id Agent session UUID.
+ * @param input Partial update; omitted fields remain unchanged, and `externalUrls` replaces the whole list.
+ * @returns The session after the update.
  * @capability linear.app/updateAgentSession {}
  */
 export function updateAgentSession(id: string, input: AgentSessionUpdateInput): AgentSession {
@@ -673,6 +707,8 @@ export function updateAgentSession(id: string, input: AgentSessionUpdateInput): 
 }
 
 /** Proactively create a session on an issue using the installed app's token.
+ * @param input Target issue UUID and optional external links.
+ * @returns The newly created agent session.
  * @capability linear.app/createAgentSessionOnIssue {}
  */
 export function createAgentSessionOnIssue(input: AgentSessionCreateOnIssueInput): AgentSession {
@@ -683,6 +719,8 @@ export function createAgentSessionOnIssue(input: AgentSessionCreateOnIssueInput)
 }
 
 /** Proactively create a session on an existing comment using the app's token.
+ * @param input Target comment UUID and optional external links.
+ * @returns The newly created agent session.
  * @capability linear.app/createAgentSessionOnComment {}
  */
 export function createAgentSessionOnComment(input: AgentSessionCreateOnCommentInput): AgentSession {
@@ -731,7 +769,11 @@ function stripZoneAnnotation(timestamp: string): string {
     return timestamp.slice(0, bracket);
 }
 
-/** Translate a curated `IssueFilter` into Linear's nested filter variable. */
+/**
+ * Translate a curated `IssueFilter` into Linear's nested filter variable.
+ * @param filter Curated issue filter, or `null` for no filtering.
+ * @returns Linear filter variable containing only the supplied constraints; empty when `filter` is `null`. Timestamps lose any bracketed zone annotation.
+ */
 export function buildIssueFilter(filter: IssueFilter | null): IssueFilterVar {
     const out: IssueFilterVar = {};
     if (filter === null) {
@@ -778,7 +820,11 @@ export function buildIssueFilter(filter: IssueFilter | null): IssueFilterVar {
 // would otherwise send `{ after }` and every page past the first would fail.
 const DEFAULT_PAGE_SIZE = 50;
 
-/** Build the `first`/`after` variables for a paginated list call. */
+/**
+ * Build the `first`/`after` variables for a paginated list call.
+ * @param page Optional pagination; `null` or an unset `first` uses the default page size of 50.
+ * @returns `first`/`after` variables; `after` is present only when a cursor was given.
+ */
 export function buildPageVars(page: PageOptions | null): PageVars {
     const out: PageVars = { first: DEFAULT_PAGE_SIZE };
     if (page !== null) {
@@ -794,7 +840,12 @@ export function buildPageVars(page: PageOptions | null): PageVars {
     return out;
 }
 
-/** Build the variables for `listIssues` — pagination plus an optional filter. */
+/**
+ * Build the variables for `listIssues` — pagination plus an optional filter.
+ * @param filter Optional issue filter; `null` adds no filter variable.
+ * @param page Optional pagination; `null` or an unset `first` uses the default page size of 50.
+ * @returns Variables for the issues query: `first`, optional `after`, and optional `filter`.
+ */
 export function buildListIssuesVars(
     filter: IssueFilter | null,
     page: PageOptions | null,
@@ -1064,7 +1115,13 @@ interface GraphQlErrorEnvelope {
 // Linear sends a GraphQL `errors` body even on 4xx/5xx (auth failures,
 // variable-validation 400s), so render it instead of the bare status line —
 // the status alone tells a caller nothing actionable.
-/** Render a non-2xx response into one actionable message. Exported for unit tests. */
+/**
+ * Render a non-2xx response into one actionable message. Exported for unit tests.
+ * @param status HTTP status code of the failed response.
+ * @param statusText HTTP status text, used in the fallback message.
+ * @param body Raw response body; GraphQL `errors` in it are rendered when present.
+ * @returns The rendered GraphQL errors, or `Linear request failed: HTTP <status> <statusText>` when the body has none.
+ */
 export function httpFailureMessage(status: number, statusText: string, body: string): string {
     try {
         const envelope = JSON.parse(body) as GraphQlErrorEnvelope;
@@ -1092,7 +1149,11 @@ function requireData<T>(envelope: GraphQlResponse<T>): T {
     return data;
 }
 
-/** Render Linear's GraphQL `errors` into one actionable message. Exported for unit tests. */
+/**
+ * Render Linear's GraphQL `errors` into one actionable message. Exported for unit tests.
+ * @param errors GraphQL errors from a response.
+ * @returns One message prefixed `Linear GraphQL error:` with each error's message, code, and details joined by `;`.
+ */
 export function graphqlErrorMessage(errors: GraphQlError[]): string {
     const parts: string[] = [];
     for (const err of errors) {

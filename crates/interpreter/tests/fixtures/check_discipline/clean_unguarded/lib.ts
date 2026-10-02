@@ -24,7 +24,11 @@ export interface Options {
 
 function post(channelId: string, text: string): void {}
 
-/** Sends the message without a check of its own. */
+/**
+ * Sends the message without a check of its own.
+ * @param input Message and where to send it.
+ * @returns The message that was sent.
+ */
 export function send(input: Input): Input {
   post(input.channelId, input.text);
   post(input.channelId, input.tags.join(","));

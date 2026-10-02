@@ -1173,7 +1173,8 @@ fn another_packages_variable_is_read_from_its_binding_at_each_use() {
             "lib",
             "/** Whom calls act as. */\n\
              export let actingAs: string | null = null;\n\
-             /** Chooses whom calls act as. */\n\
+             /** Chooses whom calls act as.\n\
+              * @param user Whom calls act as; `null` for the caller. */\n\
              export function actAs(user: string | null): void { actingAs = user; }\n\
              /** The most calls. */\n\
              export const LIMIT = 3;\n\

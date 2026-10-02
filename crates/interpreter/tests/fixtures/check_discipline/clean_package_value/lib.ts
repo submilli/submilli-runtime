@@ -33,6 +33,8 @@ const LIMITS = { attempts: 3 };
 
 /**
  * Sends the message.
+ * @param channelId Conversation to post in.
+ * @param text Message text.
  * @capability test.com/send { channelId: string }
  */
 export function send(channelId: string, text: string): void {

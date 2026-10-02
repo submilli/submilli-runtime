@@ -54,12 +54,21 @@ interface ApiSearchItem {
     title?: unknown[];
 }
 
-/** Extract and validate a Notion ID from an ID, URL, or collection:// reference. */
+/**
+ * Extract and validate a Notion ID from an ID, URL, or collection:// reference.
+ *
+ * @param ref Notion ID, Notion URL, or `collection://` data source reference.
+ * @returns The validated Notion ID.
+ */
 export function notionId(ref: string): string {
     return idFromRef(ref);
 }
 
-/** Retrieve the integration bot user. */
+/**
+ * Retrieve the integration bot user.
+ *
+ * @returns The bot user the access token belongs to.
+ */
 export function getSelf(): NotionUser {
     return userFrom(notionGet("/users/me").json());
 }
@@ -80,7 +89,12 @@ export interface SearchRequest {
     startCursor: string | null;
 }
 
-/** Search titles visible to the connection. */
+/**
+ * Search titles visible to the connection.
+ *
+ * @param request Search text, filter, sort, and pagination fields; `null` fields use the Notion defaults.
+ * @returns One page of matching pages and data sources; an empty `results` means nothing matched.
+ */
 export function search(request: SearchRequest): PageResult<SearchResult> {
     const query = request.query;
     const kind = request.kind;
@@ -109,7 +123,13 @@ export function search(request: SearchRequest): PageResult<SearchResult> {
     };
 }
 
-/** Fetch one resource of an explicit kind by its resolved ID. */
+/**
+ * Fetch one resource of an explicit kind by its resolved ID.
+ *
+ * @param kind Kind of resource to fetch, which selects the API endpoint.
+ * @param id Resolved Notion ID or reference of the resource.
+ * @returns The resource converted to the type matching `kind`.
+ */
 export function fetch(kind: ResourceKind, id: string): FetchedResource {
     if (kind === "page") return pageFrom(notionGet("/pages/" + pathId(id)).json());
     if (kind === "database") return databaseFrom(notionGet("/databases/" + pathId(id)).json());
@@ -119,27 +139,53 @@ export function fetch(kind: ResourceKind, id: string): FetchedResource {
     return userFrom(notionGet("/users/" + pathId(id)).json());
 }
 
-/** Retrieve a page by its resolved ID. */
+/**
+ * Retrieve a page by its resolved ID.
+ *
+ * @param id Resolved Notion ID or reference of the page.
+ * @returns The page.
+ */
 export function fetchPage(id: string): NotionPage {
     return pageFrom(notionGet("/pages/" + pathId(id)).json());
 }
 
-/** Retrieve a database container by its resolved ID. */
+/**
+ * Retrieve a database container by its resolved ID.
+ *
+ * @param id Resolved Notion ID or reference of the database.
+ * @returns The database with its data source references.
+ */
 export function fetchDatabase(id: string): NotionDatabase {
     return databaseFrom(notionGet("/databases/" + pathId(id)).json());
 }
 
-/** Retrieve a data source by its resolved ID. */
+/**
+ * Retrieve a data source by its resolved ID.
+ *
+ * @param id Resolved Notion ID or reference of the data source.
+ * @returns The data source with its property schema.
+ */
 export function fetchDataSource(id: string): NotionDataSource {
     return dataSourceFrom(notionGet("/data_sources/" + pathId(id)).json());
 }
 
-/** Retrieve a workspace user by its resolved ID. */
+/**
+ * Retrieve a workspace user by its resolved ID.
+ *
+ * @param id Resolved Notion ID or reference of the user.
+ * @returns The user.
+ */
 export function getUser(id: string): NotionUser {
     return userFrom(notionGet("/users/" + pathId(id)).json());
 }
 
-/** List users visible to the connection. */
+/**
+ * List users visible to the connection.
+ *
+ * @param requestedSize Users per page, 1 to 100; `null` uses 100.
+ * @param startCursor Cursor from a previous page's `nextCursor`; `null` starts at the first user.
+ * @returns One page of users with pagination state.
+ */
 export function listUsers(requestedSize: number | null, startCursor: string | null): PageResult<NotionUser> {
     const query = new Map<string, string>();
     putQuery(query, "start_cursor", startCursor);

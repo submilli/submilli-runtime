@@ -28,6 +28,9 @@ function post(channelId: string, text: string): void {}
 
 /**
  * Sends the message.
+ * @param channelId Conversation to post in.
+ * @param options Delivery settings.
+ * @param fallback Settings used when options is null.
  * @capability test.com/send { channelId: string, unfurl: boolean }
  */
 export function send(channelId: string, options: Options | null, fallback: Options): void {

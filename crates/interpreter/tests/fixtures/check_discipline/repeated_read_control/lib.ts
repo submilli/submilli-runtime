@@ -28,6 +28,8 @@ function post(channelId: string, text: string): void {}
 
 /**
  * Sends the message, or replies in its thread.
+ * @param channelId Conversation to post in.
+ * @param input Message and where to send it.
  * @capability test.com/send { channelId: string }
  * @capability test.com/reply { channelId: string }
  */

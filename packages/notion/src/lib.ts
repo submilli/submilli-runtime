@@ -706,12 +706,19 @@ export { NotionError, BatchNotionError } from "./transport";
 // needs, calls check, and only then hands those same values to a feature
 // module, which assumes the operation is authorized.
 
-/** Extract and validate a Notion ID from an ID, URL, or collection reference. */
+/**
+ * Extract and validate a Notion ID from an ID, URL, or collection reference.
+ *
+ * @param ref Notion ID, Notion URL, or `collection://` data source reference.
+ * @returns The validated Notion ID, usable as a `ref` elsewhere in this package.
+ */
 export function notionId(ref: string): string {
     return discovery.notionId(ref);
 }
 
 /** Retrieve the integration bot user.
+ *
+ * @returns The bot user that owns the access token.
  * @capability submilli/notion.getSelf {}
  */
 export function getSelf(): NotionUser {
@@ -720,6 +727,9 @@ export function getSelf(): NotionUser {
 }
 
 /** Search titles visible to the connection.
+ *
+ * @param options Optional title text, kind filter, sort, `pageSize`, and `startCursor`; `null` lists everything visible, unsorted.
+ * @returns One page of matching pages and data sources; an empty `results` means nothing matched, and `nextCursor` continues when `hasMore` is true.
  * @capability submilli/notion.search {}
  */
 export function search(options: SearchOptions | null = null): PageResult<SearchResult> {
@@ -741,6 +751,9 @@ export function search(options: SearchOptions | null = null): PageResult<SearchR
 }
 
 /** Fetch one resource using its explicit kind.
+ *
+ * @param resource Resource kind plus its ID or Notion URL; the kind selects the endpoint.
+ * @returns The resource as the type matching its kind.
  * @capability submilli/notion.fetch { kind: string, id: string }
  */
 export function fetch(resource: ResourceRef): FetchedResource {
@@ -751,6 +764,9 @@ export function fetch(resource: ResourceRef): FetchedResource {
 }
 
 /** Retrieve a page by ID or Notion URL.
+ *
+ * @param ref Page ID or Notion URL.
+ * @returns The page, with its properties as raw Notion values.
  * @capability submilli/notion.fetchPage { pageId: string }
  */
 export function fetchPage(ref: string): NotionPage {
@@ -760,6 +776,9 @@ export function fetchPage(ref: string): NotionPage {
 }
 
 /** Retrieve a database container by ID or Notion URL.
+ *
+ * @param ref Database ID or Notion URL.
+ * @returns The database, including references to its data sources.
  * @capability submilli/notion.fetchDatabase { databaseId: string }
  */
 export function fetchDatabase(ref: string): NotionDatabase {
@@ -769,6 +788,9 @@ export function fetchDatabase(ref: string): NotionDatabase {
 }
 
 /** Retrieve a data source by ID, URL, or collection reference.
+ *
+ * @param ref Data source ID, Notion URL, or `collection://` reference.
+ * @returns The data source, including its property schema.
  * @capability submilli/notion.fetchDataSource { dataSourceId: string }
  */
 export function fetchDataSource(ref: string): NotionDataSource {
@@ -778,6 +800,9 @@ export function fetchDataSource(ref: string): NotionDataSource {
 }
 
 /** Retrieve a workspace user.
+ *
+ * @param ref User ID.
+ * @returns The user.
  * @capability submilli/notion.getUser { userId: string }
  */
 export function getUser(ref: string): NotionUser {
@@ -787,6 +812,9 @@ export function getUser(ref: string): NotionUser {
 }
 
 /** List users visible to the connection.
+ *
+ * @param options Optional `pageSize` (1 to 100, default 100) and `startCursor`; `null` reads the first page of 100.
+ * @returns One page of users; use `nextCursor` while `hasMore` is true.
  * @capability submilli/notion.listUsers {}
  */
 export function listUsers(options: PageOptions | null = null): PageResult<NotionUser> {
@@ -797,6 +825,9 @@ export function listUsers(options: PageOptions | null = null): PageResult<Notion
 }
 
 /** Create a page with properties and one content strategy.
+ *
+ * @param input Parent, optional properties, one content strategy, icon, and cover.
+ * @returns The created page.
  * @capability submilli/notion.createPage { parentId: string }
  */
 export function createPage(input: CreatePageInput): NotionPage {
@@ -819,6 +850,9 @@ export function createPage(input: CreatePageInput): NotionPage {
  * Create pages sequentially and stop on the first failure. Each page is created as `createPage`
  * creates it and is checked as `submilli/notion.createPage` when its turn comes, so a denial can
  * follow pages already created. Every input is validated before the first page is created.
+ *
+ * @param inputs Page creation inputs, created in order.
+ * @returns The created pages in input order; a failure throws a `BatchNotionError` listing the IDs already created.
  */
 export function createPages(inputs: CreatePageInput[]): NotionPage[] {
     for (const input of inputs) pages.validateCreatePageInput(input);
@@ -837,6 +871,10 @@ export function createPages(inputs: CreatePageInput[]): NotionPage[] {
 }
 
 /** Update page properties, icon, cover, or template.
+ *
+ * @param ref Page ID or Notion URL.
+ * @param input Fields to change; at least one must be set.
+ * @returns The updated page.
  * @capability submilli/notion.updatePage { pageId: string }
  */
 export function updatePage(ref: string, input: UpdatePageInput): NotionPage {
@@ -846,6 +884,10 @@ export function updatePage(ref: string, input: UpdatePageInput): NotionPage {
 }
 
 /** Retrieve a page as enhanced Markdown.
+ *
+ * @param ref Page ID or Notion URL.
+ * @param includeTranscript Whether to include meeting transcripts; defaults to false.
+ * @returns The page content as enhanced Markdown, with `truncated` and `unknownBlockIds` flagging incomplete rendering.
  * @capability submilli/notion.readPageMarkdown { pageId: string }
  */
 export function readPageMarkdown(ref: string, includeTranscript: boolean = false): PageMarkdown {
@@ -855,6 +897,10 @@ export function readPageMarkdown(ref: string, includeTranscript: boolean = false
 }
 
 /** Replace matching enhanced Markdown content.
+ *
+ * @param ref Page ID or Notion URL.
+ * @param update Existing text to find, its replacement, and whether to replace every match.
+ * @returns The page Markdown after the update.
  * @capability submilli/notion.updatePageMarkdown { pageId: string }
  */
 export function updatePageMarkdown(ref: string, update: MarkdownUpdate): PageMarkdown {
@@ -865,6 +911,11 @@ export function updatePageMarkdown(ref: string, update: MarkdownUpdate): PageMar
 }
 
 /** Replace all page content with enhanced Markdown.
+ *
+ * @param ref Page ID or Notion URL.
+ * @param markdown New enhanced Markdown content for the whole page.
+ * @param allowDeletingContent Whether the replacement may delete child pages or databases; defaults to false.
+ * @returns The page Markdown after replacement.
  * @capability submilli/notion.replacePageMarkdown { pageId: string }
  */
 export function replacePageMarkdown(ref: string, markdown: string, allowDeletingContent: boolean = false): PageMarkdown {
@@ -874,6 +925,10 @@ export function replacePageMarkdown(ref: string, markdown: string, allowDeleting
 }
 
 /** Append enhanced Markdown to a page.
+ *
+ * @param ref Page ID or Notion URL.
+ * @param markdown Enhanced Markdown to add at the end of the page.
+ * @returns The page Markdown after the append.
  * @capability submilli/notion.appendPageMarkdown { pageId: string }
  */
 export function appendPageMarkdown(ref: string, markdown: string): PageMarkdown {
@@ -883,6 +938,10 @@ export function appendPageMarkdown(ref: string, markdown: string): PageMarkdown 
 }
 
 /** Move a page under another page or data source.
+ *
+ * @param ref Page ID or Notion URL of the page to move.
+ * @param parent Destination parent; a workspace parent needs no ID.
+ * @returns The moved page.
  * @capability submilli/notion.movePage { pageId: string, parentId: string }
  */
 export function movePage(ref: string, parent: PageParent): NotionPage {
@@ -894,6 +953,9 @@ export function movePage(ref: string, parent: PageParent): NotionPage {
 }
 
 /** Move pages sequentially and stop on the first failure. Every move is checked before the first page is moved.
+ *
+ * @param inputs Page and destination parent pairs, moved in order.
+ * @returns The moved pages in input order; a failure throws a `BatchNotionError` listing the IDs already moved.
  * @capability submilli/notion.movePages { pageId: string, parentId: string }
  */
 export function movePages(inputs: MovePageInput[]): NotionPage[] {
@@ -911,6 +973,10 @@ export function movePages(inputs: MovePageInput[]): NotionPage[] {
 }
 
 /** Retrieve one page property item.
+ *
+ * @param pageRef Page ID or Notion URL.
+ * @param propertyId Notion property ID; must not be empty.
+ * @returns Raw Notion property item, or a paginated list of items for multi-value properties.
  * @capability submilli/notion.getPageProperty { pageId: string }
  */
 export function getPageProperty(pageRef: string, propertyId: string): unknown {
@@ -920,6 +986,9 @@ export function getPageProperty(pageRef: string, propertyId: string): unknown {
 }
 
 /** Move a page to trash.
+ *
+ * @param ref Page ID or Notion URL.
+ * @returns The page with `inTrash` true.
  * @capability submilli/notion.trashPage { pageId: string }
  */
 export function trashPage(ref: string): NotionPage {
@@ -929,6 +998,9 @@ export function trashPage(ref: string): NotionPage {
 }
 
 /** Restore a page from trash.
+ *
+ * @param ref Page ID or Notion URL.
+ * @returns The page with `inTrash` false.
  * @capability submilli/notion.restorePage { pageId: string }
  */
 export function restorePage(ref: string): NotionPage {
@@ -938,6 +1010,9 @@ export function restorePage(ref: string): NotionPage {
 }
 
 /** Create a database and its initial data source.
+ *
+ * @param input Parent page, title, optional description, inline flag, and the initial property schema (must not be empty).
+ * @returns The created database, including its initial data source.
  * @capability submilli/notion.createDatabase { parentId: string }
  */
 export function createDatabase(input: CreateDatabaseInput): NotionDatabase {
@@ -952,6 +1027,10 @@ export function createDatabase(input: CreateDatabaseInput): NotionDatabase {
 }
 
 /** Update a data source title, schema, or parent.
+ *
+ * @param ref Data source ID, Notion URL, or `collection://` reference.
+ * @param input Title, property schema changes, or destination database; at least one must be set.
+ * @returns The updated data source.
  * @capability submilli/notion.updateDataSource { dataSourceId: string }
  */
 export function updateDataSource(ref: string, input: UpdateDataSourceInput): NotionDataSource {
@@ -964,6 +1043,10 @@ export function updateDataSource(ref: string, input: UpdateDataSourceInput): Not
 }
 
 /** Query pages and nested data sources.
+ *
+ * @param ref Data source ID, Notion URL, or `collection://` reference.
+ * @param options Optional filter, sorts, result type, trash flag, property projection, and pagination; `null` returns the first 100 results unfiltered.
+ * @returns One page of matching pages and nested data sources; an empty `results` means nothing matched.
  * @capability submilli/notion.queryDataSource { dataSourceId: string }
  */
 export function queryDataSource(
@@ -976,6 +1059,10 @@ export function queryDataSource(
 }
 
 /** List page templates available to a data source.
+ *
+ * @param ref Data source ID, Notion URL, or `collection://` reference.
+ * @param options Optional template `name` filter, `pageSize`, and `startCursor`; `null` lists all templates.
+ * @returns One page of templates; an empty `results` means the data source defines none.
  * @capability submilli/notion.listDataSourceTemplates { dataSourceId: string }
  */
 export function listDataSourceTemplates(
@@ -991,6 +1078,9 @@ export function listDataSourceTemplates(
 }
 
 /** Move a database to trash.
+ *
+ * @param ref Database ID or Notion URL.
+ * @returns The database with `inTrash` true.
  * @capability submilli/notion.trashDatabase { databaseId: string }
  */
 export function trashDatabase(ref: string): NotionDatabase {
@@ -1000,6 +1090,9 @@ export function trashDatabase(ref: string): NotionDatabase {
 }
 
 /** Restore a database from trash.
+ *
+ * @param ref Database ID or Notion URL.
+ * @returns The database with `inTrash` false.
  * @capability submilli/notion.restoreDatabase { databaseId: string }
  */
 export function restoreDatabase(ref: string): NotionDatabase {
@@ -1009,6 +1102,9 @@ export function restoreDatabase(ref: string): NotionDatabase {
 }
 
 /** Create a configured database view.
+ *
+ * @param input Database, data source, view name and type, plus optional filter, sorts, configuration, and position.
+ * @returns The created view.
  * @capability submilli/notion.createView { databaseId: string, dataSourceId: string }
  */
 export function createView(input: CreateViewInput): NotionView {
@@ -1025,6 +1121,10 @@ export function createView(input: CreateViewInput): NotionView {
 }
 
 /** Update a view's saved query or presentation.
+ *
+ * @param ref View ID or Notion URL.
+ * @param input Fields to change; at least one must be set, and the clear flags remove the saved filter, sorts, or quick filters.
+ * @returns The updated view.
  * @capability submilli/notion.updateView { viewId: string }
  */
 export function updateView(ref: string, input: UpdateViewInput): NotionView {
@@ -1034,6 +1134,10 @@ export function updateView(ref: string, input: UpdateViewInput): NotionView {
 }
 
 /** List views belonging to a database.
+ *
+ * @param databaseRef Database ID or Notion URL.
+ * @param options Optional `pageSize` (1 to 100, default 100) and `startCursor`; `null` reads the first page of 100.
+ * @returns One page of views; an empty `results` means the database has none.
  * @capability submilli/notion.listViews { databaseId: string }
  */
 export function listViews(databaseRef: string, options: PageOptions | null = null): PageResult<NotionView> {
@@ -1045,6 +1149,10 @@ export function listViews(databaseRef: string, options: PageOptions | null = nul
 }
 
 /** Execute a view's saved filters and sorts.
+ *
+ * @param ref View ID or Notion URL.
+ * @param resultPageSize Results in the first page, 1 to 100; defaults to 100.
+ * @returns The cached query with its ID, first page of results, total count, and expiry time; pass its ID to `continueViewQuery`.
  * @capability submilli/notion.queryView { viewId: string }
  */
 export function queryView(ref: string, resultPageSize: number = 100): ViewQuery {
@@ -1054,6 +1162,12 @@ export function queryView(ref: string, resultPageSize: number = 100): ViewQuery 
 }
 
 /** Continue a cached view query.
+ *
+ * @param viewRef View ID or Notion URL.
+ * @param queryRef ID of the cached query returned by `queryView`.
+ * @param startCursor Cursor from the previous page's `nextCursor`; empty starts at the beginning.
+ * @param resultPageSize Results per page, 1 to 100; defaults to 100.
+ * @returns One page of page and data source references; fetch them for full objects.
  * @capability submilli/notion.continueViewQuery { viewId: string }
  */
 export function continueViewQuery(
@@ -1068,6 +1182,9 @@ export function continueViewQuery(
 }
 
 /** Create a Markdown comment.
+ *
+ * @param input Comment target, Markdown text, and optional attachments (at most three).
+ * @returns The created comment.
  * @capability submilli/notion.createComment { pageId: string }
  */
 export function createComment(input: CreateCommentInput): NotionComment {
@@ -1089,6 +1206,10 @@ export function createComment(input: CreateCommentInput): NotionComment {
 }
 
 /** List open comments for a page or block.
+ *
+ * @param ref Page or block ID, or a Notion URL.
+ * @param options Optional `pageSize` (1 to 100, default 100) and `startCursor`; `null` reads the first page of 100.
+ * @returns One page of open comments; an empty `results` means there are none.
  * @capability submilli/notion.getComments { pageId: string }
  */
 export function getComments(ref: string, options: PageOptions | null = null): PageResult<NotionComment> {
@@ -1100,6 +1221,9 @@ export function getComments(ref: string, options: PageOptions | null = null): Pa
 }
 
 /** Query meeting-note blocks visible to the integration user.
+ *
+ * @param options Optional filter, sorts, and limit (1 to 50, default 50); `null` uses the API defaults.
+ * @returns Matching meeting-note blocks and whether more exist.
  * @capability submilli/notion.queryMeetingNotes {}
  */
 export function queryMeetingNotes(options: MeetingNotesOptions | null = null): MeetingNotesResult {
@@ -1108,6 +1232,9 @@ export function queryMeetingNotes(options: MeetingNotesOptions | null = null): M
 }
 
 /** Retrieve one block.
+ *
+ * @param ref Block or page ID, or a Notion URL.
+ * @returns The block.
  * @capability submilli/notion.getBlock { pageId: string }
  */
 export function getBlock(ref: string): NotionBlock {
@@ -1117,6 +1244,10 @@ export function getBlock(ref: string): NotionBlock {
 }
 
 /** List direct children of a block or page.
+ *
+ * @param ref Parent block or page ID, or a Notion URL.
+ * @param options Optional `pageSize` (1 to 100, default 100) and `startCursor`; `null` reads the first page of 100.
+ * @returns One page of child blocks; an empty `results` means there are no children.
  * @capability submilli/notion.listBlockChildren { pageId: string }
  */
 export function listBlockChildren(ref: string, options: PageOptions | null = null): PageResult<NotionBlock> {
@@ -1128,6 +1259,10 @@ export function listBlockChildren(ref: string, options: PageOptions | null = nul
 }
 
 /** Append block children at an optional position.
+ *
+ * @param ref Parent block or page ID, or a Notion URL.
+ * @param input JSON-encoded child blocks (1 to 100) and an optional JSON-encoded position; `null` position appends at the end.
+ * @returns The newly appended blocks.
  * @capability submilli/notion.appendBlockChildren { pageId: string }
  */
 export function appendBlockChildren(ref: string, input: AppendBlockChildrenInput): PageResult<NotionBlock> {
@@ -1141,6 +1276,10 @@ export function appendBlockChildren(ref: string, input: AppendBlockChildrenInput
 }
 
 /** Update fields on a block.
+ *
+ * @param ref Block ID or Notion URL.
+ * @param fields Changed fields keyed by Notion block property name, such as `paragraph`; must not be empty.
+ * @returns The updated block.
  * @capability submilli/notion.updateBlock { pageId: string }
  */
 export function updateBlock(ref: string, fields: Map<string, unknown>): NotionBlock {
@@ -1151,6 +1290,9 @@ export function updateBlock(ref: string, fields: Map<string, unknown>): NotionBl
 }
 
 /** Move a block to trash.
+ *
+ * @param ref Block ID or Notion URL.
+ * @returns The block with `inTrash` true.
  * @capability submilli/notion.trashBlock { pageId: string }
  */
 export function trashBlock(ref: string): NotionBlock {
@@ -1160,6 +1302,9 @@ export function trashBlock(ref: string): NotionBlock {
 }
 
 /** Restore a block from trash.
+ *
+ * @param ref Block ID or Notion URL.
+ * @returns The block with `inTrash` false.
  * @capability submilli/notion.restoreBlock { pageId: string }
  */
 export function restoreBlock(ref: string): NotionBlock {
@@ -1169,6 +1314,10 @@ export function restoreBlock(ref: string): NotionBlock {
 }
 
 /** Upload a VFS file using automatic single- or multipart mode.
+ *
+ * @param sourcePath Path of a file in the virtual filesystem; files over 20 MiB use a multipart upload.
+ * @param options Filename, content type, and optional multipart chunk size (5 to 20 MiB).
+ * @returns The completed file upload, whose ID can be attached to pages, blocks, or comments.
  * @capability submilli/notion.uploadFile { path: string }
  */
 export function uploadFile(sourcePath: string, options: FileUploadOptions): FileUpload {
@@ -1182,6 +1331,9 @@ export function uploadFile(sourcePath: string, options: FileUploadOptions): File
 }
 
 /** Retrieve one file upload.
+ *
+ * @param ref File upload ID.
+ * @returns The file upload with its current status.
  * @capability submilli/notion.getFileUpload { uploadId: string }
  */
 export function getFileUpload(ref: string): FileUpload {
@@ -1191,6 +1343,9 @@ export function getFileUpload(ref: string): FileUpload {
 }
 
 /** List file uploads owned by this connection.
+ *
+ * @param options Optional `pageSize` (1 to 100, default 100) and `startCursor`; `null` reads the first page of 100.
+ * @returns One page of file uploads created by this connection.
  * @capability submilli/notion.listFileUploads {}
  */
 export function listFileUploads(options: PageOptions | null = null): PageResult<FileUpload> {
