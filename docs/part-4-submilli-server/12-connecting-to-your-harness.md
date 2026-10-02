@@ -49,7 +49,7 @@ packages:
 - '@submilli/jina'
 
 vfs:
-  mode: persistent
+  mode: named
   volume: notes
 
 default: deny
@@ -78,8 +78,8 @@ permissions:
 ```
 
 `@submilli/jina` is the [curated package](/docs/curated-packages) for web
-search and page reading. The `notes` volume is a directory on the server that
-outlives sessions.
+search and page reading. The `notes` [named volume](/docs/server#volumes) is
+a directory on the server that outlives sessions.
 
 The five file rules carry one filter, which confines a program to the
 directory named after the user the session was opened for. The filter has two
@@ -104,7 +104,7 @@ package. From `examples/harnesses/`:
 
 ```sh
 mkdir -p "$HOME/submilli-notes"
-printf 'volumes:\n  notes: %s\n' "$HOME/submilli-notes" > server.yaml
+printf 'volumes:\n  notes:\n    kind: local-path\n    path: %s\n    size_limit: unlimited\n' "$HOME/submilli-notes" > server.yaml
 head -c 32 /dev/urandom | base64 > store.key
 export SUBMILLI_SERVER_TOKEN=$(openssl rand -hex 32)
 
@@ -1022,7 +1022,7 @@ steps. Tools loaded without a session open a new MCP session for every call.
 Under `per_session`, each program therefore gets a new, empty filesystem.
 Its fix is the one in the [deepagents](#langchain-deepagents) section: one
 session, held open for the whole run. It adds that files still won't survive
-between separate runs of the script, which takes a `persistent` volume.
+between separate runs of the script, which takes a named volume.
 
 Next: [resource limits](/docs/resource-limits), which bound what one
 program's run can use.

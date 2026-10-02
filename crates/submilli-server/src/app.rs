@@ -181,7 +181,12 @@ impl AppState {
         let session_manager = Arc::new(SessionManager::new(
             session_root,
             config.ephemeral_storage_root,
-            Arc::new(config.volumes),
+            Arc::new(crate::volumes::VolumeRegistry::new(
+                config.volumes,
+                config
+                    .managed_volume_root
+                    .unwrap_or_else(crate::config::default_managed_volume_root),
+            )),
             http_client_factory,
             Arc::clone(&session_store),
             Arc::clone(&idempotency_store),
@@ -247,6 +252,7 @@ impl AppState {
     /// does this, and any embedded host that bypasses `serve` should too.
     pub async fn boot(&self) {
         self.inner.session_manager.boot().await;
+        self.inner.session_manager.volume_registry().prepare();
         if let Some(dir) = &self.inner.blueprint_seed_dir {
             let resolver = EnvFileSecretResolver::new(self.secret_store().cloned());
             seed_blueprints(

@@ -35,7 +35,10 @@ use crate::stdlib::abi::{
     nullable_object_field, string_field,
 };
 use crate::stdlib::dot_segments::refuse_dot_segments;
-use crate::stdlib::shared::{check_security, contain_trap, quota_refusal, resolve_content_or_trap};
+use crate::stdlib::shared::{
+    check_security, contain_trap, quota_refusal, refuse_volume_root, require_writable,
+    resolve_content_or_trap,
+};
 use redirect_guard::{
     CapabilityGuard, DownloadTarget, GuardedRequest, host_and_path, verb_context,
 };
@@ -573,6 +576,10 @@ async fn perform_download(
     // Resolution follows the policy checks, matching every `fs` module's ordering: no
     // filesystem work happens until the call is authorized.
     let resolved = resolve_content_or_trap(caller.data(), &guest_path, "http.download")?;
+    // Before the request goes out, so a target that can never be written costs no
+    // network traffic.
+    require_writable(&*caller, resolved.placement(), "fs.write", &guest_path)?;
+    refuse_volume_root(&resolved, "http.download", &guest_path)?;
 
     if !options.overwrite
         && resolved
@@ -583,6 +590,11 @@ async fn perform_download(
             "http.download {guest_path}: file exists (pass {{ overwrite: true }} to clobber)"
         );
     }
+    // The checks the final rename runs, so a target spelled by an alias of a
+    // mount point is refused before the request rather than after the body.
+    resolved
+        .check_rename_end()
+        .map_err(|err| contain_trap("http.download", &guest_path, &err))?;
 
     let (who, guard) = request_principal(caller, GuardedRequest::Download(target));
     let req = HttpRequest {
@@ -610,7 +622,10 @@ async fn perform_download(
     let start = std::time::Instant::now();
     // No program code runs while the download streams, so an overwrite draws on the
     // size of the file it replaces and reserves only what goes beyond it.
-    let disk_charge = QuotaCharge::new(caller.data().vfs.quota().cloned(), resolved.regular_file());
+    let disk_charge = QuotaCharge::new(
+        resolved.placement().quota().cloned(),
+        resolved.regular_file(),
+    );
     let streamed = stream_to_temp(caller, &req, &tmp, &guest_path, disk_charge).await;
     // A filesystem failure has no transport outcome to record.
     match &streamed {
@@ -1881,6 +1896,78 @@ function main(): void {
                 0
             );
         }
+    }
+
+    #[tokio::test]
+    async fn download_into_a_read_only_mount_is_refused_before_any_request() {
+        struct CountingClient(std::sync::atomic::AtomicUsize);
+        #[async_trait::async_trait]
+        impl HttpClient for CountingClient {
+            async fn send(&self, _: &HttpRequest) -> Result<HttpResponse, HttpError> {
+                self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                Err(HttpError::Network("unexpected".into()))
+            }
+            async fn download(
+                &self,
+                _: &HttpRequest,
+                _: &mut (dyn std::io::Write + Send),
+            ) -> Result<DownloadMeta, HttpError> {
+                self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                Err(HttpError::Network("unexpected".into()))
+            }
+        }
+        let source = r#"
+            import { download } from "submilli:http";
+            function main(): string {
+                let mountPoint = "allowed";
+                try { download("https://example.com/", "/rw", { overwrite: true }); }
+                catch (e) { mountPoint = String(e).includes("mount point") ? "refused" : String(e); }
+                try { download("https://example.com/", "/ro/payload"); }
+                catch (e: PermissionDeniedError) { return e.capability + "|" + mountPoint; }
+                return "allowed";
+            }
+        "#;
+        let volume = tempfile::tempdir().unwrap();
+        let writable = tempfile::tempdir().unwrap();
+        let vfs = Vfs::tempdir()
+            .unwrap()
+            .with_mount(crate::runtime::vfs::MountSpec {
+                guest_path: "/ro".into(),
+                host: volume.path().to_path_buf(),
+                volume: "ro".into(),
+                access: crate::runtime::vfs::Access::ReadOnly,
+                quota: None,
+            })
+            .unwrap()
+            .with_mount(crate::runtime::vfs::MountSpec {
+                guest_path: "/rw".into(),
+                host: writable.path().to_path_buf(),
+                volume: "rw".into(),
+                access: crate::runtime::vfs::Access::ReadWrite,
+                quota: None,
+            })
+            .unwrap();
+        let compiled = compile_script(source, "test.ts", crate::FileId(0), &[], &[]).unwrap();
+        let cfg = RuntimeConfig::default();
+        let engine = cfg.engine().unwrap();
+        let client = Arc::new(CountingClient(std::sync::atomic::AtomicUsize::new(0)));
+        let mut data = StoreData::with_vfs(vfs);
+        data.http_client = client.clone();
+        let mut store = cfg.store(&engine, data).unwrap();
+        let module = wasmtime::Module::new(&engine, &compiled.wasm).unwrap();
+        let mut linker = wasmtime::Linker::<StoreData>::new(&engine);
+        install_runtime_async(&mut linker, &mut store)
+            .await
+            .unwrap();
+        let instance = linker.instantiate_async(&mut store, &module).await.unwrap();
+        let value = dispatch_main_async(&mut store, &instance).await.unwrap();
+        assert!(
+            format!("{value:?}").contains("fs.write|refused"),
+            "{value:?}"
+        );
+        assert_eq!(client.0.load(std::sync::atomic::Ordering::SeqCst), 0);
+        assert_eq!(std::fs::read_dir(volume.path()).unwrap().count(), 0);
+        assert_eq!(std::fs::read_dir(writable.path()).unwrap().count(), 0);
     }
 
     #[tokio::test]

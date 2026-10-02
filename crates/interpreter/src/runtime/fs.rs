@@ -17,6 +17,7 @@ use cap_fs_ext::{DirExt, OpenOptionsSyncExt};
 use cap_std::fs::{Dir, File, Metadata, OpenOptions, ReadDir};
 
 use crate::runtime::Vfs;
+use crate::runtime::vfs::{Access, Mount, Placement};
 
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub enum ResolveError {
@@ -70,6 +71,11 @@ pub enum ContainError {
     UnsupportedPrefix,
     /// The VFS backs no directory (`vfs: none`).
     Disabled,
+    /// The path lives in a volume mounted read-only; carries its mount point.
+    ReadOnly(Arc<str>),
+    /// The change would remove, replace or write through a mount point;
+    /// carries the mount point.
+    MountPoint(Arc<str>),
     /// A genuine filesystem failure that is not an escape.
     Io(io::Error),
 }
@@ -81,6 +87,12 @@ impl fmt::Display for ContainError {
             Self::EmbeddedNul => f.write_str("path contains a NUL byte"),
             Self::UnsupportedPrefix => f.write_str("Windows-style path prefixes are not supported"),
             Self::Disabled => f.write_str("filesystem is disabled (vfs mode: none)"),
+            Self::ReadOnly(mount) => write!(f, "the volume mounted at {mount} is read-only"),
+            Self::MountPoint(mount) => write!(
+                f,
+                "{mount} is a mount point; mount points and the directories above them \
+                 cannot be removed, moved, replaced or written through"
+            ),
             Self::Io(e) => write!(f, "{e}"),
         }
     }
@@ -133,6 +145,7 @@ pub fn is_escape(err: &io::Error) -> bool {
 pub struct ContentPath {
     dir: Arc<Dir>,
     rel: PathBuf,
+    placement: Placement,
 }
 
 impl fmt::Debug for ContentPath {
@@ -144,15 +157,60 @@ impl fmt::Debug for ContentPath {
 }
 
 impl ContentPath {
-    pub(crate) fn new(dir: Arc<Dir>, rel: PathBuf) -> Self {
-        Self { dir, rel }
+    pub(crate) fn new(dir: Arc<Dir>, rel: PathBuf, placement: Placement) -> Self {
+        Self {
+            dir,
+            rel,
+            placement,
+        }
+    }
+
+    /// The volume this path lives in.
+    pub fn placement(&self) -> &Placement {
+        &self.placement
+    }
+
+    /// The mounts strictly below this directory, each as its path relative to
+    /// this one and the handle of the volume behind it: what a recursive walk
+    /// descends into in place of the empty mount point in the root.
+    pub fn mounts_below(&self) -> Vec<(PathBuf, Arc<Dir>)> {
+        let base = if self.rel == Path::new(".") {
+            Path::new("")
+        } else {
+            self.rel.as_path()
+        };
+        self.placement
+            .nested()
+            .iter()
+            .filter_map(|mount| {
+                let rest = mount.rel().strip_prefix(base).ok()?;
+                (!rest.as_os_str().is_empty())
+                    .then(|| (rest.to_path_buf(), Arc::clone(mount.dir())))
+            })
+            .collect()
+    }
+
+    /// Refuse when the volume is mounted read-only. Every mutation below checks
+    /// this too; host functions call it first so the refusal comes before any
+    /// other work and carries the caller.
+    pub fn writable(&self) -> Result<(), ContainError> {
+        match self.placement.access() {
+            Access::ReadWrite => Ok(()),
+            Access::ReadOnly => Err(ContainError::ReadOnly(Arc::from(
+                self.placement.mount_point(),
+            ))),
+        }
     }
 
     fn check_mutation(&self, recursive: bool) -> Result<(), ContainError> {
+        self.writable()?;
+        check_mount_points(&self.dir, &self.rel, &self.placement, recursive, true)?;
         check_metadata_mutation(&self.dir, &self.rel, recursive, true)
     }
 
     fn check_link_mutation(&self, recursive: bool) -> Result<(), ContainError> {
+        self.writable()?;
+        check_mount_points(&self.dir, &self.rel, &self.placement, recursive, false)?;
         check_metadata_mutation(&self.dir, &self.rel, recursive, false)
     }
 
@@ -241,7 +299,18 @@ impl ContentPath {
         Ok(self.dir.create_dir(&self.rel)?)
     }
 
+    /// Whether a directory is already here, links followed. `mkdir -p` of one
+    /// changes nothing, so it succeeds even in a read-only volume.
+    pub fn is_existing_dir(&self) -> bool {
+        self.dir.metadata(&self.rel).is_ok_and(|meta| meta.is_dir())
+    }
+
+    /// Like `mkdir -p`: a directory that already exists is success without any
+    /// change, even in a read-only volume; see [`is_existing_dir`](Self::is_existing_dir).
     pub fn create_dir_all(&self) -> Result<(), ContainError> {
+        if self.is_existing_dir() {
+            return Ok(());
+        }
         self.check_mutation(false)?;
         Ok(self.dir.create_dir_all(&self.rel)?)
     }
@@ -262,14 +331,24 @@ impl ContentPath {
     /// Rename onto `dest`. Neither side's final component is followed, so this cannot
     /// be redirected by a link swapped in after resolution.
     pub fn rename_to(&self, dest: &Self) -> Result<(), ContainError> {
-        self.check_mutation(true)?;
-        dest.check_mutation(true)?;
+        self.check_rename_end()?;
+        dest.check_rename_end()?;
         Ok(self.dir.rename(&self.rel, &dest.dir, &dest.rel)?)
     }
 
-    /// Whether this is the VFS root itself. Writes and removes name it as a mistake
-    /// rather than acting on it — `remove` in particular would otherwise drain the root
-    /// and then fail on the self-unlink, destroying a volume and reporting a failure.
+    /// The checks for one end of a rename. A rename replaces a link rather than
+    /// writing through it, so the mount-point guard looks at the final component
+    /// where it sits; the Git metadata guard keeps following it, as it always has.
+    pub(crate) fn check_rename_end(&self) -> Result<(), ContainError> {
+        self.writable()?;
+        check_mount_points(&self.dir, &self.rel, &self.placement, true, false)?;
+        check_metadata_mutation(&self.dir, &self.rel, true, true)
+    }
+
+    /// Whether this is the root of its volume: the VFS root or a mount point.
+    /// Writes and removes name it as a mistake rather than acting on it — `remove`
+    /// in particular would otherwise drain the root and then fail on the
+    /// self-unlink, destroying a volume and reporting a failure.
     pub fn is_root(&self) -> bool {
         self.rel == Path::new(".")
     }
@@ -287,6 +366,7 @@ impl ContentPath {
         Self {
             dir: Arc::clone(&self.dir),
             rel,
+            placement: self.placement.clone(),
         }
     }
 }
@@ -391,17 +471,12 @@ pub enum LinkKind {
 }
 
 impl LinkPath {
-    pub(crate) fn new(parent: Arc<Dir>, name: OsString) -> Self {
-        let guard = ContentPath::new(Arc::clone(&parent), PathBuf::from(&name));
-        Self {
-            parent,
-            name,
-            guard,
-        }
-    }
-
     pub(crate) fn child(&self, parent: Arc<Dir>, name: OsString) -> Self {
-        let guard = ContentPath::new(Arc::clone(&self.guard.dir), self.guard.rel.join(&name));
+        let guard = ContentPath::new(
+            Arc::clone(&self.guard.dir),
+            self.guard.rel.join(&name),
+            self.guard.placement.clone(),
+        );
         Self {
             parent,
             name,
@@ -409,9 +484,56 @@ impl LinkPath {
         }
     }
 
-    /// Whether this names the VFS root itself rather than an entry inside it.
+    /// Whether this names the root of its volume — the VFS root or a mount
+    /// point — rather than an entry inside it.
     pub fn is_root(&self) -> bool {
         self.name == OsStr::new(".")
+    }
+
+    /// The volume this path lives in.
+    pub fn placement(&self) -> &Placement {
+        &self.guard.placement
+    }
+
+    /// See [`ContentPath::writable`].
+    pub fn writable(&self) -> Result<(), ContainError> {
+        self.guard.writable()
+    }
+
+    /// A mount point strictly below this path, as written or where it lands
+    /// through the root's links: copying or moving it as one tree would take a
+    /// hidden placeholder instead of the volume.
+    pub fn contains_mount_point(&self) -> Result<Option<Arc<str>>, ContainError> {
+        let placement = &self.guard.placement;
+        if placement.nested().is_empty() {
+            return Ok(None);
+        }
+        if let Some(mount) = mount_below(&self.guard.rel, placement) {
+            return Ok(Some(mount));
+        }
+        let real = real_location(&self.guard.dir, &self.guard.rel, false, placement)?;
+        Ok(mount_below(&real, placement))
+    }
+
+    /// A collision-safe sibling to stage a move between volumes in, resolved
+    /// through the same parent handle so the final rename cannot be redirected.
+    pub fn temp_sibling(&self) -> Self {
+        let mut name = self.name.clone();
+        name.push(temp_suffix());
+        let rel = self
+            .guard
+            .rel
+            .parent()
+            .map_or_else(|| PathBuf::from(&name), |parent| parent.join(&name));
+        Self {
+            parent: Arc::clone(&self.parent),
+            name,
+            guard: ContentPath::new(
+                Arc::clone(&self.guard.dir),
+                rel,
+                self.guard.placement.clone(),
+            ),
+        }
     }
 
     pub fn symlink_metadata(&self) -> Result<Metadata, ContainError> {
@@ -488,8 +610,15 @@ impl LinkPath {
     }
 
     pub fn remove_dir_all(&self) -> Result<(), ContainError> {
-        self.guard.check_link_mutation(true)?;
+        self.check_removable()?;
         Ok(self.parent.remove_dir_all(&self.name)?)
+    }
+
+    /// The checks a removal of this entry with everything below it, or either
+    /// end of a rename, has to pass, run without changing anything; the
+    /// counterpart of [`ContentPath::check_rename_end`] for a link path.
+    pub fn check_removable(&self) -> Result<(), ContainError> {
+        self.guard.check_link_mutation(true)
     }
 
     pub fn create_dir_all(&self) -> Result<(), ContainError> {
@@ -535,8 +664,8 @@ impl LinkPath {
     /// Rename onto `dest`. Neither final component is followed, so this relocates a
     /// link rather than its target.
     pub fn rename_to(&self, dest: &Self) -> Result<(), ContainError> {
-        self.guard.check_link_mutation(true)?;
-        dest.guard.check_link_mutation(true)?;
+        self.check_removable()?;
+        dest.check_removable()?;
         Ok(self.parent.rename(&self.name, &dest.parent, &dest.name)?)
     }
 }
@@ -564,11 +693,11 @@ pub fn resolve_content(
     cwd: &str,
     guest_path: &str,
 ) -> Result<ContentPath, ContainError> {
-    let dir = vfs.dir().ok_or(ContainError::Disabled)?;
-    Ok(ContentPath::new(
-        Arc::clone(dir),
-        relative(cwd, guest_path)?,
-    ))
+    // `Disabled` takes precedence over a malformed path, as it always has.
+    vfs.dir().ok_or(ContainError::Disabled)?;
+    let rel = relative(cwd, guest_path)?;
+    let (dir, rel, placement) = vfs.locate(&rel).ok_or(ContainError::Disabled)?;
+    Ok(ContentPath::new(dir, rel, placement))
 }
 
 /// Resolve a guest path for an operation that acts on the link itself.
@@ -576,22 +705,34 @@ pub fn resolve_content(
 /// Opens the parent directory, so a parent component that escapes is refused here.
 /// The VFS root itself resolves to the root handle with a `.` name: it is not a link,
 /// so nothing is followed, and removing it fails at the OS as it should.
+///
+/// A mount point resolves the same way, to its volume's handle with a `.` name, so it
+/// can be neither removed nor renamed like an entry of its parent.
 pub fn resolve_link(vfs: &Vfs, cwd: &str, guest_path: &str) -> Result<LinkPath, ContainError> {
-    let root = vfs.dir().ok_or(ContainError::Disabled)?;
+    // `Disabled` takes precedence over a malformed path, as it always has.
+    vfs.dir().ok_or(ContainError::Disabled)?;
     let rel = relative(cwd, guest_path)?;
+    let (root, rel, placement) = vfs.locate(&rel).ok_or(ContainError::Disabled)?;
     let Some(name) = rel.file_name() else {
-        return Ok(LinkPath::new(Arc::clone(root), OsString::from(".")));
+        let name = OsString::from(".");
+        let guard = ContentPath::new(Arc::clone(&root), PathBuf::from(&name), placement);
+        return Ok(LinkPath {
+            parent: root,
+            name,
+            guard,
+        });
     };
+    let name = name.to_os_string();
     let parent_rel = rel.parent().unwrap_or(Path::new(""));
     let parent = if parent_rel.as_os_str().is_empty() {
-        Arc::clone(root)
+        Arc::clone(&root)
     } else {
         Arc::new(root.open_dir(parent_rel)?)
     };
     Ok(LinkPath {
         parent,
-        name: name.to_os_string(),
-        guard: ContentPath::new(Arc::clone(root), rel),
+        name,
+        guard: ContentPath::new(root, rel, placement),
     })
 }
 
@@ -642,7 +783,7 @@ fn relative(cwd: &str, guest_path: &str) -> Result<PathBuf, ResolveError> {
     Ok(out)
 }
 
-fn protected_metadata(path: &Path) -> bool {
+pub(crate) fn protected_metadata(path: &Path) -> bool {
     path.components().any(|part| {
         let name = part.as_os_str().to_string_lossy();
         let options = gix::validate::path::component::Options {
@@ -659,6 +800,216 @@ fn protected_metadata(path: &Path) -> bool {
                 .eq_ignore_ascii_case(".git")
             || name.to_ascii_lowercase().starts_with(".git-submilli-")
     })
+}
+
+/// Refuse a repository at the root-relative `path` that would overlap a mount:
+/// one the path is inside of (an alias of a mount point leads into its hidden
+/// placeholder), or one at or below it, judged by spelling and by where the path
+/// lands. Git publishes by renaming every entry of the repository directory, which
+/// would carry a mount point's placeholder away.
+pub(crate) fn check_repository_clear_of_mounts(
+    root: &Dir,
+    path: &Path,
+    placement: &Placement,
+) -> Result<(), ContainError> {
+    check_mount_points(root, path, placement, true, true)
+}
+
+/// Refuse a change to the root volume that would reach a mount point.
+///
+/// A recursive change (remove, rename, copy onto) to a mount point or one of its
+/// ancestors would take the mount point with it, and any change inside a mount
+/// point's directory in the root would land in the hidden placeholder rather
+/// than the volume. Both are checked on the path as written and on where it
+/// lands once the root's links are followed, so a link to an ancestor cannot
+/// spell its way past the guard.
+fn check_mount_points(
+    root: &Dir,
+    path: &Path,
+    placement: &Placement,
+    recursive: bool,
+    follow_final: bool,
+) -> Result<(), ContainError> {
+    if placement.nested().is_empty() {
+        return Ok(());
+    }
+    if let Some(mount) = mount_at_or_below(path, placement, recursive) {
+        return Err(ContainError::MountPoint(mount));
+    }
+    let real = real_location(root, path, follow_final, placement)?;
+    if let Some(mount) = mount_at_or_below(&real, placement, recursive) {
+        return Err(ContainError::MountPoint(mount));
+    }
+    Ok(())
+}
+
+/// Where `path` lands in the root once links are followed, resolved one
+/// component at a time. A link's target is substituted lexically, so a dangling
+/// link resolves to where a write through it would create the file; the walk
+/// stops following links below the first component that does not exist. When
+/// `follow_final` is false a link as the last component stays as written, since
+/// a link operation acts on the link where it sits. An absolute or upward-escaping
+/// target is reported as an escape, which is what opening it would report.
+///
+/// A directory on the way to a mount point is named as the mount spells it,
+/// whatever spelling reached it: a case-insensitive filesystem opens it under
+/// others too, some not ASCII, and only its identity says which directory it is.
+fn real_location(
+    root: &Dir,
+    path: &Path,
+    follow_final: bool,
+    placement: &Placement,
+) -> Result<PathBuf, ContainError> {
+    let mut pending: Vec<OsString> = Vec::new();
+    push_reversed(&mut pending, path);
+    let mut resolved = PathBuf::new();
+    let mut missing = false;
+    let mut hops = 0usize;
+    while let Some(name) = pending.pop() {
+        if name == OsStr::new(".") {
+            continue;
+        }
+        if name == OsStr::new("..") {
+            if !resolved.pop() {
+                return Err(ContainError::Escape);
+            }
+            continue;
+        }
+        let candidate = resolved.join(&name);
+        if missing {
+            resolved = candidate;
+            continue;
+        }
+        let follow_this = follow_final || !pending.is_empty();
+        match root.symlink_metadata(&candidate) {
+            Ok(meta) if meta.file_type().is_symlink() && follow_this => {
+                hops += 1;
+                if hops > MAX_LINK_HOPS {
+                    return Err(ContainError::Io(io::Error::other(
+                        "too many levels of symbolic links",
+                    )));
+                }
+                let target = root.read_link_contents(&candidate)?;
+                if target.has_root() {
+                    return Err(ContainError::Escape);
+                }
+                push_reversed(&mut pending, &target);
+            }
+            Ok(meta) => match placeholder_name(placement, root, &candidate, &resolved, &meta) {
+                Ok(Some(exact)) => resolved.push(exact),
+                Ok(None) => resolved = candidate,
+                // Removed since it was stat'ed: as missing as if never found.
+                Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                    missing = true;
+                    resolved = candidate;
+                }
+                Err(error) => return Err(error.into()),
+            },
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                missing = true;
+                resolved = candidate;
+            }
+            Err(error) => return Err(error.into()),
+        }
+    }
+    Ok(resolved)
+}
+
+/// The exact name of the mount-point directory (or one on the way to it) that
+/// `meta` describes, found in `parent`, if it is one. The match needs the parent
+/// as well as the identity, so a filesystem whose inode numbers are not unique
+/// can at worst misname an entry beside a mount point, never one elsewhere. The
+/// identity is read only for a directory beside a placeholder, and one that can't
+/// be read is an error rather than "not a placeholder", as it is when the mount is
+/// prepared.
+fn placeholder_name<'a>(
+    placement: &'a Placement,
+    root: &Dir,
+    path: &Path,
+    parent: &Path,
+    meta: &Metadata,
+) -> io::Result<Option<&'a OsStr>> {
+    if !meta.is_dir() {
+        return Ok(None);
+    }
+    let mut beside = placement
+        .nested()
+        .iter()
+        .flat_map(Mount::placeholders)
+        .filter(|placeholder| placeholder.parent == parent)
+        .peekable();
+    if beside.peek().is_none() {
+        return Ok(None);
+    }
+    let identity = dir_identity(root, path, meta)?;
+    Ok(beside
+        .find(|placeholder| placeholder.identity == identity)
+        .map(|placeholder| placeholder.name.as_os_str()))
+}
+
+/// The identity of the directory at `path`, whose metadata is `meta`. Windows
+/// reports one only for metadata read through an open handle, so that is the
+/// fallback.
+pub(crate) fn dir_identity(root: &Dir, path: &Path, meta: &Metadata) -> io::Result<FileIdentity> {
+    match FileIdentity::of(meta) {
+        Ok(identity) => Ok(identity),
+        Err(_) => FileIdentity::of(&root.open_dir(path)?.dir_metadata()?),
+    }
+}
+
+/// Queue `path`'s components so that popping yields them in order.
+fn push_reversed(pending: &mut Vec<OsString>, path: &Path) {
+    pending.extend(
+        path.components()
+            .rev()
+            .map(|part| part.as_os_str().to_os_string()),
+    );
+}
+
+/// How many links [`real_location`] follows before giving up, as the kernel does.
+const MAX_LINK_HOPS: usize = 40;
+
+/// The mount `path` is inside of, or — when `recursive` — one at or below it.
+fn mount_at_or_below(path: &Path, placement: &Placement, recursive: bool) -> Option<Arc<str>> {
+    placement.nested().iter().find_map(|mount| {
+        let inside = starts_with_component(path, mount.rel());
+        let above = recursive && starts_with_component(mount.rel(), path);
+        (inside || above).then(|| Arc::from(mount.guest_path()))
+    })
+}
+
+/// A mount strictly below `path`.
+fn mount_below(path: &Path, placement: &Placement) -> Option<Arc<str>> {
+    placement.nested().iter().find_map(|mount| {
+        let below = starts_with_component(mount.rel(), path) && mount.rel() != path;
+        below.then(|| Arc::from(mount.guest_path()))
+    })
+}
+
+/// Whether `path` is `prefix` or below it, comparing whole components. The root
+/// `.` is above everything. Case is folded on hosts whose filesystems usually
+/// fold it, so `/Memory/x` cannot reach the placeholder behind `/memory`.
+fn starts_with_component(path: &Path, prefix: &Path) -> bool {
+    if prefix == Path::new(".") {
+        return true;
+    }
+    let mut parts = path.components().filter(|c| *c != Component::CurDir);
+    for want in prefix.components().filter(|c| *c != Component::CurDir) {
+        match parts.next() {
+            Some(have) if same_component(have.as_os_str(), want.as_os_str()) => {}
+            _ => return false,
+        }
+    }
+    true
+}
+
+fn same_component(a: &OsStr, b: &OsStr) -> bool {
+    if cfg!(any(target_os = "macos", windows)) {
+        a.to_string_lossy()
+            .eq_ignore_ascii_case(&b.to_string_lossy())
+    } else {
+        a == b
+    }
 }
 
 fn metadata_denied() -> ContainError {

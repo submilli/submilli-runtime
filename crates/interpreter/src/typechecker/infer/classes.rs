@@ -1926,6 +1926,7 @@ impl<'a> Inferer<'a> {
                 ("submilli:fs", "Peek") => Some(crate::InterfaceCarrier::FsPeek),
                 ("submilli:fs", "DirEntry") => Some(crate::InterfaceCarrier::FsDirEntry),
                 ("submilli:fs", "Info") => Some(crate::InterfaceCarrier::FsInfo),
+                ("submilli:fs", "MountInfo") => Some(crate::InterfaceCarrier::FsMountInfo),
                 ("submilli:fs", "FileWriter") => Some(crate::InterfaceCarrier::FsFileWriter),
                 ("submilli:http", "Response") => Some(crate::InterfaceCarrier::HttpResponse),
                 ("submilli:http", "DownloadResult") => {

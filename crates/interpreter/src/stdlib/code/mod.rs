@@ -13,7 +13,9 @@ use crate::runtime::{
     intrinsic_types::build_intrinsic_types,
     prelude::collection::string_units,
 };
-use crate::stdlib::shared::{atomic_write, check_security, contain_trap, resolve_content_or_trap};
+use crate::stdlib::shared::{
+    atomic_write, check_security, contain_trap, require_writable, resolve_content_or_trap,
+};
 use budget::{Budget, OutputBudget};
 use serde_json::{Value, json};
 use std::io::Read;
@@ -221,11 +223,12 @@ fn mutate(
     let result = encode(caller, budget, &result)?;
     if changed {
         let resolved = resolve_content_or_trap(caller.data(), path, op)?;
+        require_writable(&*caller, resolved.placement(), "fs.write", path)?;
         let permissions = resolved
             .metadata()
             .map_err(|e| contain_trap(op, path, &e))?
             .permissions();
-        let quota = caller.data().vfs.quota().cloned();
+        let quota = resolved.placement().quota().cloned();
         atomic_write(
             &resolved,
             change.text.as_bytes(),

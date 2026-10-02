@@ -14,7 +14,7 @@ chapter "Connecting to your harness".
 | `vercel-ai-sdk-http/` | Vercel AI SDK (TypeScript) | The HTTP API; `submilli.ts` builds the tools |
 
 `blueprint.yaml` is the policy they all run under: the `@submilli/jina`
-package for search and reading, a persistent `notes` volume, and file rules
+package for search and reading, a named `notes` volume, and file rules
 that give the user named by the `userId` variable one directory of it.
 `note.ts` is a small program the checks run in a model's place.
 
@@ -25,7 +25,7 @@ package. From this directory:
 
 ```sh
 mkdir -p "$HOME/submilli-notes"
-printf 'volumes:\n  notes: %s\n' "$HOME/submilli-notes" > server.yaml
+printf 'volumes:\n  notes:\n    kind: local-path\n    path: %s\n    size_limit: unlimited\n' "$HOME/submilli-notes" > server.yaml
 head -c 32 /dev/urandom | base64 > store.key
 export SUBMILLI_SERVER_TOKEN=$(openssl rand -hex 32)
 

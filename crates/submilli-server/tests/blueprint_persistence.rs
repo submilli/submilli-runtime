@@ -235,13 +235,13 @@ mcp:
     );
 }
 
-/// A blueprint stored before `path:` was retired in favour of `volume:`. Its
-/// current revision no longer parses, which is the upgrade case R23 covers.
+/// A blueprint stored before the `persistent` vfs mode was replaced by `named`.
+/// Its current revision no longer parses, which is the upgrade case R23 covers.
 const RETIRED_FORM: &str = "\
 name: tenant-alpha
 vfs:
   mode: persistent
-  path: /srv/tenants/alpha
+  volume: tenant-alpha
 ";
 
 /// Plant `<name>.000001.yaml` + an index pointing at it, the on-disk shape a
@@ -275,9 +275,9 @@ async fn retired_form_blueprint_keeps_its_name_reserved() {
 }
 
 /// The diagnostic an execute against a reserved name renders instead of
-/// "unknown blueprint": it has to name the retired key and its replacement.
+/// "unknown blueprint": it has to name the retired mode and its replacement.
 #[tokio::test]
-async fn retired_form_blueprint_reports_the_retired_key_and_its_replacement() {
+async fn retired_form_blueprint_reports_the_retired_mode_and_its_replacement() {
     let dir = temp_dir();
     plant_revision(&dir, "tenant-alpha", RETIRED_FORM);
     let store = FileBlueprintStore::new(dir).expect("new store");
@@ -288,11 +288,11 @@ async fn retired_form_blueprint_reports_the_retired_key_and_its_replacement() {
         .expect("a reason, not silence");
     assert!(reason.contains("tenant-alpha"), "{reason}");
     assert!(
-        reason.contains("the `path` key is retired"),
+        reason.contains("`persistent` was removed"),
         "names the retired form: {reason}"
     );
     assert!(
-        reason.contains("Use `volume: <name>`"),
+        reason.contains("write `mode: named`"),
         "names the replacement: {reason}"
     );
 

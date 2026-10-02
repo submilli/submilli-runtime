@@ -53,6 +53,7 @@ pub struct IntrinsicTypeIndices {
     pub http_download_result: u32,
     pub session_entry: u32,
     pub session_page: u32,
+    pub fs_mount_info: u32,
 
     pub temporal_plain_date: u32,
     pub temporal_plain_time: u32,
@@ -63,7 +64,7 @@ pub struct IntrinsicTypeIndices {
 
 /// Number of types [`declare_intrinsic_types`] emits — the first free type index
 /// in every module.
-pub const INTRINSIC_TYPE_COUNT: u32 = 50;
+pub const INTRINSIC_TYPE_COUNT: u32 = 51;
 
 pub fn declare_intrinsic_types(types: &mut TypeSection) -> IntrinsicTypeIndices {
     let raw_string = 0u32;
@@ -137,6 +138,7 @@ pub fn declare_intrinsic_types(types: &mut TypeSection) -> IntrinsicTypeIndices 
     let http_download_result = 47u32;
     let session_entry = 48u32;
     let session_page = 49u32;
+    let fs_mount_info = 50u32;
 
     let temporal_plain_date = 36u32;
     let temporal_plain_time = 37u32;
@@ -859,6 +861,9 @@ pub fn declare_intrinsic_types(types: &mut TypeSection) -> IntrinsicTypeIndices 
                 fieldtype_ref(vtable),
                 fieldtype_ref(string),
                 host_f64,
+                fieldtype_ref(string),
+                fieldtype_ref(string),
+                fieldtype_ref(array),
                 host_i64,
             ],
             Some(object),
@@ -917,6 +922,22 @@ pub fn declare_intrinsic_types(types: &mut TypeSection) -> IntrinsicTypeIndices 
             Some(object),
         )
     });
+    // fs_mount_info
+    types.ty().subtype(&SubType {
+        is_final: true,
+        ..substruct(
+            vec![
+                fieldtype_ref(vtable),
+                fieldtype_ref(string),
+                fieldtype_ref(string),
+                fieldtype_ref(string),
+                fieldtype_ref(string),
+                host_f64,
+                temporal_i32,
+            ],
+            Some(object),
+        )
+    });
 
     IntrinsicTypeIndices {
         raw_string,
@@ -964,6 +985,7 @@ pub fn declare_intrinsic_types(types: &mut TypeSection) -> IntrinsicTypeIndices 
         http_download_result,
         session_entry,
         session_page,
+        fs_mount_info,
         temporal_plain_date,
         temporal_plain_time,
         temporal_plain_date_time,
@@ -1012,6 +1034,7 @@ pub(crate) fn intrinsic_supertypes(
         (indices.http_download_result, indices.object),
         (indices.session_entry, indices.object),
         (indices.session_page, indices.object),
+        (indices.fs_mount_info, indices.object),
         (indices.temporal_plain_date, indices.object),
         (indices.temporal_plain_time, indices.object),
         (indices.temporal_plain_date_time, indices.object),
@@ -1187,6 +1210,7 @@ mod tests {
         assert_eq!(indices.temporal_plain_date_time, 38);
         assert_eq!(indices.temporal_plain_year_month, 39);
         assert_eq!(indices.temporal_plain_month_day, 40);
-        assert_eq!(super::INTRINSIC_TYPE_COUNT, 50);
+        assert_eq!(indices.fs_mount_info, 50);
+        assert_eq!(super::INTRINSIC_TYPE_COUNT, 51);
     }
 }

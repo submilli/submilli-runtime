@@ -2,8 +2,9 @@
 use super::{Job, operations, storage, transport};
 use std::collections::HashSet;
 
-use crate::runtime::fs::FileIdentity;
-use crate::runtime::host::range_error;
+use crate::runtime::fs::{ContainError, FileIdentity, check_repository_clear_of_mounts};
+use crate::runtime::host::{permission_denied_read_only, range_error};
+use crate::runtime::vfs::Access;
 use crate::runtime::{DiskQuota, measure_dir, measure_with_held};
 use cap_std::fs::Dir;
 use serde_json::{Value, json};
@@ -21,21 +22,24 @@ pub(super) fn run(
     op: &str,
     args: &[Value],
 ) -> Result<Output> {
-    let root = vfs
-        .dir()
-        .ok_or_else(|| wasmtime::Error::msg("git: VFS is disabled"))?;
+    let (root, relative, placement) = locate_repository(vfs, job)?;
     let branch = requested_branch(op, args)?;
     authorize_operation(job, op, args, branch)?;
+    let creates = matches!(op, "init" | "clone");
+    if creates {
+        refuse_read_only_repository(job, op, &placement)?;
+    }
+    let quota = placement.quota();
     // Creating a repository writes its `.git` skeleton before publication, so the
     // measurement it is counted against has to come first. An unmeasured VFS isn't
     // measured here: `publish_counted` refuses it.
-    let before_create = match vfs.quota() {
-        Some(quota) if !quota.is_unmeasured() && matches!(op, "init" | "clone") => {
-            Some(measure_dir(root).map_err(storage::measure_error)?)
+    let before_create = match quota {
+        Some(quota) if !quota.is_unmeasured() && creates => {
+            Some(measure_existing_repository(&root, &relative)?)
         }
         _ => None,
     };
-    let mut snapshot = open_snapshot(root, job, op, branch)?;
+    let mut snapshot = open_snapshot(&root, &relative, job, op, creates, branch)?;
     snapshot.remotes()?;
     let mut changed = op == "init";
     let result = match op {
@@ -114,17 +118,82 @@ pub(super) fn run(
         _ => operations::read(&snapshot, op, args)?,
     };
     if changed {
-        publish_counted(snapshot, root, vfs.quota().map(Arc::as_ref), before_create)?;
+        // The operation's own capability checks ran while it worked in scratch
+        // space; nothing has reached the volume yet.
+        refuse_read_only_repository(job, op, &placement)?;
+        let repo = Arc::clone(&snapshot.dir);
+        publish_counted(snapshot, &repo, quota.map(Arc::as_ref), before_create)?;
     }
     Ok(Output::Json(result))
 }
 
-/// Publish, then count the change it made to the files under `root` against the
-/// size limit, measured from `before_create` when the operation wrote before
-/// publishing. What publication frees depends on what it replaced, so the change
-/// is measured rather than tracked; git work is rare enough to afford the walk. A
-/// VFS that couldn't be measured is refused with a `RangeError`, as every other
-/// writer refuses it.
+/// The volume holding the repository at `job.path`, the repository's path within
+/// it, and the volume's placement. A repository that overlaps a mount point — one
+/// below it, or reaching into it through an alias — is refused; see
+/// [`check_repository_clear_of_mounts`].
+fn locate_repository(
+    vfs: &crate::runtime::Vfs,
+    job: &Job,
+) -> Result<(Arc<Dir>, std::path::PathBuf, crate::runtime::vfs::Placement)> {
+    let relative = std::path::Path::new(job.path.trim_start_matches('/'));
+    let relative = if relative.as_os_str().is_empty() {
+        std::path::Path::new(".")
+    } else {
+        relative
+    };
+    let (root, relative, placement) = vfs
+        .locate(relative)
+        .ok_or_else(|| wasmtime::Error::msg("git: VFS is disabled"))?;
+    match check_repository_clear_of_mounts(&root, &relative, &placement) {
+        Ok(()) => {}
+        Err(ContainError::MountPoint(mount)) => bail!(
+            "git: repository {} overlaps the mount point {mount}; use a directory that \
+             holds no mount point, and spell a path inside the mount exactly as {mount}/…",
+            job.path
+        ),
+        Err(err) => bail!("git: repository {}: {err}", job.path),
+    }
+    Ok((root, relative, placement))
+}
+
+/// What a repository's directory holds before an operation creates the
+/// repository there, or 0 if the directory doesn't exist yet. Only that directory
+/// is measured: publication changes nothing outside it, and other writers to a
+/// shared volume charge their own writes.
+fn measure_existing_repository(root: &Dir, relative: &std::path::Path) -> Result<u64> {
+    match root.open_dir(relative) {
+        Ok(repo) => Ok(measure_dir(&repo).map_err(storage::measure_error)?),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(0),
+        Err(error) => Err(error.into()),
+    }
+}
+
+/// Refuse a change to a repository in a volume mounted read-only.
+fn refuse_read_only_repository(
+    job: &Job,
+    op: &str,
+    placement: &crate::runtime::vfs::Placement,
+) -> Result<()> {
+    if placement.access() == Access::ReadWrite {
+        return Ok(());
+    }
+    Err(permission_denied_read_only(
+        &job.caller,
+        format!("git.{op}"),
+        format!(
+            "repository {} is in the volume mounted read-only at {}",
+            job.path,
+            placement.mount_point()
+        ),
+    ))
+}
+
+/// Publish, then count the change it made to the files under `root`, the
+/// repository's directory, against the size limit, measured from `before_create`
+/// when the operation wrote before publishing. What publication frees depends on
+/// what it replaced, so the change is measured rather than tracked; git work is
+/// rare enough to afford the walk. A VFS that couldn't be measured is refused with
+/// a `RangeError`, as every other writer refuses it.
 fn publish_counted(
     snapshot: storage::Snapshot,
     root: &Dir,
@@ -223,17 +292,18 @@ fn authorize_operation(job: &Job, op: &str, args: &[Value], branch: &str) -> Res
     }
 }
 
+/// `relative` is the repository's path within the volume `root` holds, `.` for
+/// the volume's own root.
 fn open_snapshot(
     root: &cap_std::fs::Dir,
+    relative: &std::path::Path,
     job: &Job,
     op: &str,
+    create: bool,
     branch: &str,
 ) -> Result<storage::Snapshot> {
-    let relative = job.path.trim_start_matches('/');
-    let relative = if relative.is_empty() { "." } else { relative };
-    let create = op == "init" || op == "clone";
     let mut prefix = std::path::PathBuf::new();
-    for component in std::path::Path::new(relative).components() {
+    for component in relative.components() {
         prefix.push(component);
         match root.symlink_metadata(&prefix) {
             Ok(meta) if meta.file_type().is_symlink() => {
@@ -248,8 +318,8 @@ fn open_snapshot(
         root.create_dir_all(relative)?;
     }
     let canonical = root.canonicalize(relative)?;
-    if canonical != std::path::Path::new(relative)
-        && !(relative == "." && canonical.as_os_str().is_empty())
+    if canonical != relative
+        && !(relative == std::path::Path::new(".") && canonical.as_os_str().is_empty())
     {
         bail!("git: repository paths must not contain symlinks; use the canonical VFS path");
     }

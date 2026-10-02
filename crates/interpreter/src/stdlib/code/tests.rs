@@ -657,3 +657,34 @@ async fn edits_are_counted_against_the_size_limit() {
         .await
         .unwrap();
 }
+#[tokio::test]
+async fn edits_in_a_read_only_mount_are_refused_and_searches_still_work() {
+    let volume = tempfile::tempdir().unwrap();
+    std::fs::write(volume.path().join("a.ts"), "hello\n").unwrap();
+    let vfs = crate::runtime::Vfs::tempdir()
+        .unwrap()
+        .with_mount(crate::runtime::vfs::MountSpec {
+            guest_path: "/ro".into(),
+            host: volume.path().to_path_buf(),
+            volume: "ro".into(),
+            access: crate::runtime::vfs::Access::ReadOnly,
+            quota: None,
+        })
+        .unwrap();
+    run(
+        r#"import { edit, search } from "submilli:code";
+    function main(): void {
+        assert(search("hello", {path:"/ro"}).matches.length === 1);
+        let denied = false;
+        try { edit("/ro/a.ts", "hello", "bye"); } catch (e: PermissionDeniedError) { denied = true; }
+        assert(denied);
+    }"#,
+        crate::runtime::StoreData::with_vfs(vfs),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        std::fs::read_to_string(volume.path().join("a.ts")).unwrap(),
+        "hello\n"
+    );
+}

@@ -287,7 +287,7 @@ idle_timeout: 1h
 | `none` | Nothing; every `submilli:fs` call fails |
 | `ephemeral` (the default) | A scratch directory created for the run and deleted after it |
 | `per_session` | A directory that lasts as long as the session |
-| `persistent` | A [volume](/docs/server#volumes) the server's operator declared, kept across sessions and restarts |
+| `named` | A [named volume](/docs/server#volumes) the server's operator declared, kept across sessions and restarts and shared with other blueprints that name it |
 
 A **session** is what the application or harness opens for one conversation
 with the agent, and then runs each program inside. Everything under
@@ -300,6 +300,38 @@ harness](/docs/harness) shows how a session is opened.
 With this blueprint, a program that writes `/notes/northwind.md` and sets a
 session key is followed by one that reads both back, and a program in a new
 session finds neither.
+
+A named volume can also sit beside the session's files, mounted at a path
+under `vfs.mounts`. Here the session directory is `/`, a shared memory
+volume is `/memory`, and the company handbook is readable at `/handbook`:
+
+```yaml title="blueprint.yaml (fragment)"
+vfs:
+  mode: per_session
+  mounts:
+    /memory:
+      mode: named
+      volume: project-memory
+      access: read_write
+    /handbook:
+      mode: named
+      volume: company-handbook
+      access: read_only
+```
+
+Each mount names a volume the operator declared. `access` can only narrow what
+the operator allows: asking for `read_write` on a volume declared `read_only`
+is refused when the blueprint is registered, and leaving `access` out takes
+the operator's setting. A write under a read-only mount throws a catchable
+`PermissionDeniedError`. A volume's size limit is the operator's too, and one
+limit covers every session and blueprint that uses the volume. Mount points
+cannot be removed or moved, and mounts may not nest. A mount path is made of
+ASCII letters, digits, `.`, `_` and `-`, and no part of it ends in `.`. A named volume can also
+be the root itself: `vfs: {mode: named, volume: project-memory}`.
+
+`fs.info()` tells the program what it has: the root's `mode`, `access` and
+`sizeLimit`, and a `mounts` list with each mount's `path`, `volume`, `access`
+and `sizeLimit`.
 
 ## Let the program commit
 

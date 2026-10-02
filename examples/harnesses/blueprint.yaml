@@ -16,7 +16,7 @@ secrets:
 # Notes outlive the conversation: every session shares the `notes` volume, and
 # the rules below give each user one directory of it.
 vfs:
-  mode: persistent
+  mode: named
   volume: notes
 
 default: deny

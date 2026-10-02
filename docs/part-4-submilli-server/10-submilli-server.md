@@ -136,10 +136,12 @@ and what losing each piece would cost you.
 | Open sessions | `sessions/`, `vfs/sessions/` | Your users' sessions end: reconnecting clients get `404 unknown session`, and files the agent wrote in them are gone. There's nothing to rebuild them from. |
 | Secrets | `secrets/` | Blueprints that read `store:` secrets fail until every value is put back. Keep the key file safe too: without it the store can't be read. |
 | Packages | `packages/` | Imports fail until you reinstall. The same install commands bring them back. |
+| Managed volumes | `volumes/`, or `volume_dir` | Whatever programs kept in [named volumes](#volumes): agent memory, shared notes. Like session files, nothing can rebuild them. |
 | Per-run scratch space | the OS temp dir, or `vfs_ephemeral_dir` | Nothing. Each run gets its own directory, deleted when the run ends. |
 
 The simplest setup is one persistent volume for `$SUBMILLI_HOME`. Back up the
-sessions and the secrets, and keep the key somewhere separate from the store.
+sessions, the managed volumes and the secrets, and keep the key somewhere
+separate from the store.
 Blueprints and packages can be rebuilt from source. If you need to split
 things up, for example to put sessions on faster disk, each directory has its
 own setting (`session_store_dir` and its siblings in the template below).
@@ -185,6 +187,7 @@ session_store_dir: /srv/submilli/sessions
 vfs_session_dir: /srv/submilli/vfs
 package_store_dir: /srv/submilli/packages
 vfs_ephemeral_dir: /tmp/submilli
+volume_dir: /srv/submilli/volumes
 
 secret_store:
   dir: /srv/submilli/secrets
@@ -228,7 +231,7 @@ exception and use flat flag names: `secret_store.dir` is
 
 Three settings exist only in the file. `api_tokens`, `volumes`, and
 `github_token_file` have no flag and no variable, so who else may call the
-server, which host directories programs can touch, and the server's GitHub
+server, which volumes programs can name, and the server's GitHub
 credential are each decided in one reviewable place.
 `SUBMILLI_SERVER_TOKEN` is the reverse: it exists only in the environment.
 
@@ -358,8 +361,9 @@ credited 1500 cents
 
 Registration checks the blueprint, so a mistake fails here rather than on the
 first program: the YAML and every filter must parse, every `store:` secret
-must exist in the server's store, and a `persistent` filesystem must name a
-volume the server declares.
+must exist in the server's store, and every named volume, as the root or
+under `mounts`, must be one the server declares, with no more access than it
+allows.
 
 Over the API, `env:` and `file:` secret sources are refused: a caller who can
 register a blueprint could otherwise read the server's environment and files.
@@ -383,23 +387,64 @@ you think is registered isn't.
 
 ## Volumes
 
-A blueprint whose `vfs` is `persistent` names a volume, and the server maps
-that name to a directory on its host. The map lives in the config file only:
+A named volume is storage that outlives sessions. A blueprint names it as its
+filesystem root (`vfs: {mode: named, volume: <name>}`) or mounts it at a path
+beside the session's files (`vfs.mounts`), and the server decides where it
+lives, who may write it, and how big it may grow. The declarations live in
+the config file only:
 
 ```yaml title="server.yaml (fragment)"
 volumes:
-  shared: /srv/submilli/volumes/shared
+  project-memory:
+    kind: managed-local
+    size_limit: 1GiB
+  company-handbook:
+    kind: local-path
+    path: /srv/company-handbook
+    access: read_only
+    size_limit: unlimited
 ```
 
-Every session of every blueprint that names a volume shares that one
-directory, read and write; the blueprint's filesystem rules are the only thing
-separating one program's files from another's.
+There are two kinds:
 
-Two checks guard the map. Registration refuses a blueprint that names a volume
-the map doesn't have. Boot refuses a map that would let a program reach the
+| Kind | Where its files live |
+| --- | --- |
+| `managed-local` | `<volume_dir>/<name>`, created the first time a program uses it. `volume_dir` defaults to `$SUBMILLI_HOME/server/volumes`; `--volume-dir` and `SUBMILLI_VOLUME_DIR` set it too. |
+| `local-path` | The absolute `path` you give. The server never creates or deletes it. |
+
+`size_limit` is required: a size such as `10GB`, or `unlimited`. One limit
+covers the volume however many sessions and blueprints use it at once, so a
+blueprint can't escape it by mounting the volume at a second path. The count
+starts from what the directory holds the first time a program that may write
+opens it, and files changed outside Submilli aren't counted until the next
+restart. `access` is `read_write` unless you say `read_only`, and a blueprint
+can only narrow it.
+
+Every session of every blueprint that names a volume shares that one
+directory; within the access you allow, the blueprint's filesystem rules are
+the only thing separating one program's files from another's.
+
+Nothing the server does deletes a volume's files. Ending a session or deleting
+a blueprint leaves them, and removing a volume from the config only stops
+blueprints from naming it: declare it again and its files are still there. To
+remove a managed volume for good, delete its directory under `volume_dir`
+while the server is stopped.
+
+Two checks guard the declarations. Registration refuses a blueprint that names
+a volume the server doesn't declare, or asks for `read_write` on one declared
+`read_only`. Boot refuses declarations that would let a program reach the
 server's own state: a relative path, a volume that contains or sits inside a
-directory the server owns, two names for one directory, or one volume nested
-in another. Each refusal says what collided and why.
+directory the server owns, a `volume_dir` that overlaps one, two names for one
+directory, one volume nested in another, or a managed volume name that isn't a
+plain directory name. Each refusal says what collided and why.
+
+Earlier versions mapped a name straight to a directory (`shared:
+/srv/submilli/volumes/shared`) for blueprints with `vfs: {mode: persistent}`.
+Both forms are now refused with the edit that fixes them: the declaration
+becomes `shared: {kind: local-path, path: /srv/submilli/volumes/shared,
+size_limit: unlimited}`, which keeps using the same directory, and the
+blueprint's `mode: persistent` becomes `mode: named`. A blueprint stored with
+the old mode stays registered but can't run until you apply the new form.
 
 ## Outbound network
 

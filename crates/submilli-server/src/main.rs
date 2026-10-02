@@ -95,6 +95,14 @@ pub struct Cli {
     #[arg(long)]
     vfs_ephemeral_dir: Option<PathBuf>,
 
+    /// Root for `managed-local` named volumes, one directory per volume name.
+    /// Mount on durable storage: named volumes outlive sessions and restarts.
+    /// The server creates a volume's directory on first use and never deletes
+    /// it. [default: ~/.submilli/server/volumes]
+    /// Env: `$SUBMILLI_VOLUME_DIR`.
+    #[arg(long)]
+    volume_dir: Option<PathBuf>,
+
     /// Directory backing the encrypted secret store (one sealed file per
     /// secret). Dev-only — encrypted at rest, but no rotation or audit. Not the
     /// CLI's plaintext store at ~/.submilli/secrets, which `submilli secret put`

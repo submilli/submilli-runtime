@@ -219,10 +219,16 @@ default — and measure steady-state RSS under sustained load, not RSS at startu
 ## Storage
 
 `persistence.enabled` defaults to **true**. Blueprints registered through the API,
-sessions, installed packages, and secrets all live on the volume, under its
-`server/` subdirectory, and the failure mode of `false` is silent data loss on
-reschedule while the failure mode of `true` is a loud unbound-PVC error at
-install. Prefer the loud one.
+sessions, installed packages, secrets, and `managed-local` named volumes all live
+on the volume, under its `server/` subdirectory, and the failure mode of `false`
+is silent data loss on reschedule while the failure mode of `true` is a loud
+unbound-PVC error at install. Prefer the loud one.
+
+Named volumes are declared under `config.volumes` (see `values.yaml`). A
+`managed-local` volume is stored under `server/volumes/` on this claim, so it
+needs nothing else; a custom `config.volume_dir` must also sit on durable storage.
+A `local-path` volume names a directory inside the container, which you mount
+yourself, for example from a Secret or ConfigMap through `secrets:`.
 
 A volume written by a server that kept those directories at the top level of the
 volume is moved under `server/` on the first boot of a server that does not,

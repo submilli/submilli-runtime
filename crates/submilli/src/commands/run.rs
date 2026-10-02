@@ -227,7 +227,13 @@ fn execute_on_this_thread(
             let yaml =
                 fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
             match submilli_blueprint::parse(&yaml) {
-                Ok(bp) => Some(Arc::new(bp)),
+                Ok(bp) => {
+                    if let Some(message) = named_volume_refusal(&bp) {
+                        eprintln!("error: {}: {message}", path.display());
+                        return Ok(ExitCode::from(1));
+                    }
+                    Some(Arc::new(bp))
+                }
                 Err(err) => {
                     eprintln!("error: {}: {err}", path.display());
                     return Ok(ExitCode::from(1));
@@ -497,6 +503,22 @@ fn bind_variables(blueprint: &Blueprint, raw: &[String]) -> anyhow::Result<VarBi
         .map_err(|err| anyhow!("invalid variables: {err}"))
 }
 
+/// Why a blueprint cannot run locally: named volumes are declared in a server's
+/// config, and a local run has no server to resolve them through.
+fn named_volume_refusal(blueprint: &Blueprint) -> Option<String> {
+    let reference = blueprint.vfs.named_references().into_iter().next()?;
+    let place = match reference.mount {
+        None => "as its vfs root".to_string(),
+        Some(path) => format!("at `{path}`"),
+    };
+    Some(format!(
+        "blueprint '{}' uses named volume '{}' {place}; named volumes are declared in a server \
+         config, so run it on `submilli-server`, or drop the volume for local runs (use \
+         `--vfs <dir>` to give the program a directory)",
+        blueprint.name, reference.volume
+    ))
+}
+
 fn load_blueprint_packages(blueprint: &Blueprint) -> anyhow::Result<Vec<Artifact>> {
     let store = PackageStore::default();
     store
@@ -620,6 +642,27 @@ function main(): string {
                 max_llm_concurrency: None,
             },
         }
+    }
+
+    #[test]
+    fn a_blueprint_with_named_volumes_is_refused_locally() {
+        for (yaml, expected) in [
+            (
+                "name: x\nvfs:\n  mode: named\n  volume: notes\n",
+                "named volume 'notes' as its vfs root",
+            ),
+            (
+                "name: x\nvfs:\n  mounts:\n    /memory: {mode: named, volume: memory}\n",
+                "named volume 'memory' at `/memory`",
+            ),
+        ] {
+            let blueprint = submilli_blueprint::parse(yaml).unwrap();
+            let message = named_volume_refusal(&blueprint).expect(yaml);
+            assert!(message.contains(expected), "{message}");
+            assert!(message.contains("submilli-server"), "{message}");
+        }
+        let plain = submilli_blueprint::parse("name: x\nvfs: per_session\n").unwrap();
+        assert_eq!(named_volume_refusal(&plain), None);
     }
 
     /// `submilli run` with a blueprint-configured provider executes a call.

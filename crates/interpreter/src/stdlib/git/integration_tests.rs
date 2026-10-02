@@ -653,3 +653,172 @@ async fn git_refuses_a_change_that_does_not_grow_an_unmeasured_vfs() {
         "{error}"
     );
 }
+
+fn mounted(vfs: Vfs, volume: &Path, access: crate::runtime::vfs::Access) -> Vfs {
+    vfs.with_mount(crate::runtime::vfs::MountSpec {
+        guest_path: "/memory".into(),
+        host: volume.to_path_buf(),
+        volume: "memory".into(),
+        access,
+        quota: Some(Arc::new(crate::runtime::DiskQuota::new(1 << 20, 0))),
+    })
+    .unwrap()
+}
+
+fn job_at(vfs: &Vfs, op: &str, path: &str) -> Job {
+    let mut job = job(vfs, op);
+    job.path = path.into();
+    job
+}
+
+#[tokio::test]
+async fn mount_repository_lives_in_the_volume_and_charges_it() {
+    let volume = tempfile::tempdir().unwrap();
+    let vfs = mounted(
+        Vfs::tempdir().unwrap().with_size_limit(1 << 20),
+        volume.path(),
+        crate::runtime::vfs::Access::ReadWrite,
+    );
+    let mount_quota = vfs.mounts()[0].quota().unwrap().clone();
+    let root_quota = vfs.quota().unwrap().clone();
+    worker::run(
+        &vfs,
+        &job_at(&vfs, "init", "/memory/repo"),
+        "init",
+        &[json!({ "branch": "main" })],
+    )
+    .unwrap();
+    assert!(volume.path().join("repo/.git/HEAD").is_file());
+    assert!(mount_quota.used() > 0, "the volume is charged");
+    assert_eq!(root_quota.used(), 0, "the root is not");
+}
+
+#[tokio::test]
+async fn mount_point_inside_a_repository_is_refused() {
+    let volume = tempfile::tempdir().unwrap();
+    let vfs = mounted(
+        Vfs::tempdir().unwrap(),
+        volume.path(),
+        crate::runtime::vfs::Access::ReadWrite,
+    );
+    let error = worker::run(
+        &vfs,
+        &job_at(&vfs, "init", "/"),
+        "init",
+        &[json!({ "branch": "main" })],
+    )
+    .err()
+    .unwrap()
+    .to_string();
+    assert!(
+        error.contains("overlaps the mount point /memory"),
+        "{error}"
+    );
+    assert!(!vfs.root().join(".git").exists());
+}
+
+#[tokio::test]
+async fn mount_read_only_refuses_repository_changes_but_not_reads() {
+    let volume = tempfile::tempdir().unwrap();
+    let writable = mounted(
+        Vfs::tempdir().unwrap(),
+        volume.path(),
+        crate::runtime::vfs::Access::ReadWrite,
+    );
+    worker::run(
+        &writable,
+        &job_at(&writable, "init", "/memory"),
+        "init",
+        &[json!({ "branch": "main" })],
+    )
+    .unwrap();
+    std::fs::write(volume.path().join("note.txt"), "note").unwrap();
+    worker::run(
+        &writable,
+        &job_at(&writable, "add", "/memory"),
+        "add",
+        &[json!(["note.txt"])],
+    )
+    .unwrap();
+    std::fs::write(volume.path().join("other.txt"), "other").unwrap();
+    let before = storage::read_files(
+        &Dir::open_ambient_dir(volume.path(), cap_std::ambient_authority()).unwrap(),
+        true,
+        &AtomicBool::new(false),
+        storage::MAX_BYTES,
+    )
+    .unwrap();
+    let vfs = mounted(
+        Vfs::tempdir().unwrap(),
+        volume.path(),
+        crate::runtime::vfs::Access::ReadOnly,
+    );
+    for (op, args) in [
+        ("add", vec![json!(["other.txt"])]),
+        ("commit", vec![json!("message")]),
+    ] {
+        let error = worker::run(&vfs, &job_at(&vfs, op, "/memory"), op, &args)
+            .err()
+            .unwrap();
+        let denied = error
+            .downcast_ref::<crate::runtime::host::PermissionDenied>()
+            .unwrap_or_else(|| panic!("{op}: {error}"));
+        assert_eq!(denied.capability, format!("git.{op}"));
+    }
+    let error = worker::run(
+        &vfs,
+        &job_at(&vfs, "init", "/memory/nested"),
+        "init",
+        &[json!({ "branch": "main" })],
+    )
+    .err()
+    .unwrap();
+    assert!(
+        error
+            .downcast_ref::<crate::runtime::host::PermissionDenied>()
+            .is_some()
+    );
+    assert!(!volume.path().join("nested").exists());
+    worker::run(&vfs, &job_at(&vfs, "status", "/memory"), "status", &[]).unwrap();
+    let after = storage::read_files(
+        &Dir::open_ambient_dir(volume.path(), cap_std::ambient_authority()).unwrap(),
+        true,
+        &AtomicBool::new(false),
+        storage::MAX_BYTES,
+    )
+    .unwrap();
+    assert_eq!(before, after, "nothing in the volume changed");
+}
+
+#[cfg(target_os = "macos")]
+#[tokio::test]
+async fn mount_non_ascii_alias_cannot_host_a_repository() {
+    let volume = tempfile::tempdir().unwrap();
+    let vfs = Vfs::tempdir()
+        .unwrap()
+        .with_mount(crate::runtime::vfs::MountSpec {
+            guest_path: "/skills".into(),
+            host: volume.path().to_path_buf(),
+            volume: "skills".into(),
+            access: crate::runtime::vfs::Access::ReadWrite,
+            quota: None,
+        })
+        .unwrap();
+    // U+017F (long s) folds to `s` on a case-insensitive APFS volume.
+    let error = worker::run(
+        &vfs,
+        &job_at(&vfs, "init", "/\u{17F}kills"),
+        "init",
+        &[json!({ "branch": "main" })],
+    )
+    .err()
+    .unwrap()
+    .to_string();
+    assert!(error.contains("mount point /skills"), "{error}");
+    assert_eq!(
+        std::fs::read_dir(vfs.root().join("skills"))
+            .unwrap()
+            .count(),
+        0
+    );
+}

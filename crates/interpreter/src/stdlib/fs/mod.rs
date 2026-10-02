@@ -14,6 +14,7 @@
 pub mod declaration;
 pub mod handles;
 
+use std::collections::HashSet;
 use std::io::{BufReader, Read, Seek, SeekFrom, Write};
 use std::sync::Arc;
 
@@ -40,8 +41,8 @@ use crate::stdlib::abi::{
     self, backing_struct, externref_field, f64_field, install_field_getters, string_field,
 };
 use crate::stdlib::shared::{
-    DEFAULT_CWD, atomic_write, check_security, contain_trap, quota_refusal,
-    resolve_content_or_trap, resolve_link_or_trap, write_target_trap,
+    DEFAULT_CWD, atomic_write, check_security, contain_trap, quota_refusal, refuse_volume_root,
+    require_writable, resolve_content_or_trap, resolve_link_or_trap, write_target_trap,
 };
 use handles::{
     ChargedByteReader, ChargedDirIter, ChargedFileWriter, ChargedLineReader, ContainedWalk,
@@ -72,6 +73,16 @@ const ENTRY_SIZE: usize = 4;
 // `$InfoBacking` field indices.
 const INFO_MODE: usize = 1;
 const INFO_SIZE_LIMIT: usize = 2;
+const INFO_ACCESS: usize = 3;
+const INFO_VOLUME: usize = 4;
+const INFO_MOUNTS: usize = 5;
+
+// `$MountInfoBacking` field indices.
+const MOUNT_PATH: usize = 1;
+const MOUNT_MODE: usize = 2;
+const MOUNT_VOLUME: usize = 3;
+const MOUNT_ACCESS: usize = 4;
+const MOUNT_SIZE_LIMIT: usize = 5;
 
 // `$FileWriterBacking`: vtable + the externref handle.
 const WRITER_HANDLE: usize = 1;
@@ -124,9 +135,28 @@ fn info_backing_struct(engine: &wasmtime::Engine) -> wasmtime::Result<StructType
         engine,
         &intr,
         vec![
-            string_field(&intr), // mode
-            f64_field(),         // sizeLimit
+            string_field(&intr),     // mode
+            f64_field(),             // sizeLimit
+            string_field(&intr),     // access
+            string_field(&intr),     // volume
+            abi::array_field(&intr), // mounts
             wasmtime::FieldType::new(Mutability::Const, StorageType::ValType(ValType::I64)), // nominal marker
+        ],
+    )
+}
+
+fn mount_info_backing_struct(engine: &wasmtime::Engine) -> wasmtime::Result<StructType> {
+    let intr = build_intrinsic_types(engine)?;
+    backing_struct(
+        engine,
+        &intr,
+        vec![
+            string_field(&intr), // path
+            string_field(&intr), // mode
+            string_field(&intr), // volume
+            string_field(&intr), // access
+            f64_field(),         // sizeLimit
+            wasmtime::FieldType::new(Mutability::Const, StorageType::ValType(ValType::I32)), // nominal marker
         ],
     )
 }
@@ -383,10 +413,9 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
                     }),
                 )?;
                 let resolved = resolve_content_or_trap(caller.data(), &path, &ctx)?;
-                if resolved.is_root() {
-                    wasmtime::bail!("{ctx} {}: the VFS root is a directory, not a file", path);
-                }
-                let quota = caller.data().vfs.quota().cloned();
+                require_writable(&*caller, resolved.placement(), "fs.write", &path)?;
+                refuse_volume_root(&resolved, &ctx, &path)?;
+                let quota = resolved.placement().quota().cloned();
                 if atomic {
                     atomic_write(&resolved, &bytes, None, &path, &ctx, quota)
                 } else {
@@ -411,6 +440,9 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
                 serde_json::json!({ "path": &path, "recursive": recursive }),
             )?;
             let resolved = resolve_content_or_trap(caller.data(), &path, "fs.mkdir")?;
+            if !(recursive && resolved.is_existing_dir()) {
+                require_writable(&*caller, resolved.placement(), "fs.mkdir", &path)?;
+            }
             let res = if recursive {
                 resolved.create_dir_all()
             } else {
@@ -436,41 +468,30 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
                 serde_json::json!({ "path": &path, "recursive": recursive }),
             )?;
             let resolved = resolve_link_or_trap(caller.data(), &path, "fs.remove")?;
+            require_writable(&*caller, resolved.placement(), "fs.remove", &path)?;
             // `remove_dir_all(".")` drains the root and only then fails on the self-unlink,
             // so without this the guest destroys the operator's volume and is told the call
-            // failed. Refuse before touching anything.
+            // failed. Refuse before touching anything. A mount point is the root of its
+            // volume and is refused the same way.
             if resolved.is_root() {
                 wasmtime::bail!(
-                    "fs.remove {}: cannot remove the VFS root itself; remove its entries instead",
+                    "fs.remove {}: cannot remove the VFS root or a mount point itself; \
+                     remove its entries instead",
                     path
                 );
             }
             let meta = resolved
                 .symlink_metadata()
                 .map_err(|e| contain_trap("fs.remove", &path, &e))?;
-            let quota = caller.data().vfs.quota().cloned();
-            let freed = match quota {
-                Some(_) => files_freed_by_remove(&resolved, meta.is_dir(), recursive),
-                None => Vec::new(),
-            };
             // `is_dir` on link metadata is false for a symlink to a directory, so an
             // escaping link is unlinked rather than followed and recursively deleted.
-            let res = if meta.is_dir() {
-                if recursive {
-                    resolved.remove_dir_all()
-                } else {
-                    resolved.remove_dir()
-                }
-            } else {
-                resolved.remove_file()
-            };
-            res.map_err(|e| contain_trap("fs.remove", &path, &e))?;
-            if let Some(quota) = quota {
-                for (file, bytes) in freed {
-                    quota.release_file(file, bytes);
-                }
-            }
-            Ok(())
+            remove_releasing(
+                &resolved,
+                meta.is_dir(),
+                recursive,
+                resolved.placement().quota(),
+            )
+            .map_err(|e| contain_trap("fs.remove", &path, &e))
         },
     )?;
 
@@ -490,6 +511,20 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
             )?;
             let from_resolved = resolve_link_or_trap(caller.data(), &from, "fs.move")?;
             let to_resolved = resolve_link_or_trap(caller.data(), &to, "fs.move")?;
+            require_writable(&*caller, from_resolved.placement(), "fs.move", &from)?;
+            require_writable(&*caller, to_resolved.placement(), "fs.move", &to)?;
+            let pair = format!("{from} -> {to}");
+            if from_resolved.is_root() || to_resolved.is_root() {
+                wasmtime::bail!(
+                    "fs.move {pair}: the VFS root and mount points cannot be moved or replaced"
+                );
+            }
+            if !from_resolved
+                .placement()
+                .same_volume(to_resolved.placement())
+            {
+                return move_across(&from_resolved, &to_resolved, &pair);
+            }
             // A file moved over another frees the one it replaced; a move onto the same
             // file, under any spelling, frees nothing.
             let moved = from_resolved.regular_file().map(|(file, _)| file);
@@ -498,8 +533,9 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
                 .filter(|(file, _)| Some(*file) != moved);
             from_resolved
                 .rename_to(&to_resolved)
-                .map_err(|e| contain_trap("fs.move", &format!("{from} -> {to}"), &e))?;
-            if let (Some(quota), Some((file, bytes))) = (caller.data().vfs.quota(), replaced) {
+                .map_err(|e| contain_trap("fs.move", &pair, &e))?;
+            if let (Some(quota), Some((file, bytes))) = (to_resolved.placement().quota(), replaced)
+            {
                 quota.release_file(file, bytes);
             }
             Ok(())
@@ -526,6 +562,20 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
                 }),
             )?;
             let from_resolved = resolve_link_or_trap(caller.data(), &from, "fs.copy")?;
+            let pair = format!("{from} -> {to}");
+            let mount = from_resolved
+                .contains_mount_point()
+                .map_err(|e| contain_trap("fs.copy", &pair, &e))?;
+            if let Some(mount) = mount {
+                wasmtime::bail!(
+                    "fs.copy {pair}: {from} contains the mount point {mount}; copy the \
+                     mount's contents separately"
+                );
+            }
+            // The content path routes to the same volume as the link path, and resolves
+            // even when the destination's parent does not exist yet.
+            let to_volume = resolve_content_or_trap(caller.data(), &to, "fs.copy")?;
+            require_writable(&*caller, to_volume.placement(), "fs.copy", &to)?;
             // A recursive copy used to reach `create_dir_all(to)`, which built the whole
             // destination chain. Resolving the destination now opens its parent, so that
             // chain has to exist first or a working call starts failing.
@@ -534,19 +584,22 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
                     .symlink_metadata()
                     .is_ok_and(|meta| meta.is_dir())
             {
-                resolve_content_or_trap(caller.data(), &to, "fs.copy")?
+                to_volume
                     .create_dir_all()
                     .map_err(|e| write_target_trap("fs.copy", &to, &e))?;
             }
             let to_resolved = resolve_link_or_trap(caller.data(), &to, "fs.copy")?;
-            let quota = caller.data().vfs.quota().cloned();
+            let quota = to_resolved.placement().quota().cloned();
             copy_recursive(
                 &from_resolved,
                 &to_resolved,
-                recursive,
-                &from,
-                &to,
-                quota.as_ref(),
+                &CopyRun {
+                    recursive,
+                    links: LinkCopies::BestEffort,
+                    op: "fs.copy",
+                    pair: &pair,
+                    quota: quota.as_ref(),
+                },
             )
         },
     )?;
@@ -578,7 +631,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
             let file = resolved
                 .open()
                 .map_err(|e| contain_trap("fs.lines", &path, &e))?;
-            let held = hold_for_reading(caller.data(), &file);
+            let held = hold_for_reading(resolved.placement().quota(), &file);
             let reader = ChargedLineReader::new(
                 BufReader::new(file.into_std()),
                 &caller.data().tenant_limits,
@@ -622,7 +675,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
             let file = resolved
                 .open()
                 .map_err(|e| contain_trap("fs.bytes", &path, &e))?;
-            let held = hold_for_reading(caller.data(), &file);
+            let held = hold_for_reading(resolved.placement().quota(), &file);
             let reader = ChargedByteReader::new(
                 file.into_std(),
                 chunk_size as usize,
@@ -670,7 +723,12 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
                     .open_dir()
                     .map_err(|e| contain_trap("fs.list", &path, &e))?,
             );
-            let walk = ContainedWalk::new(base, list_prefix(&path)?, recursive)
+            let mounts = if recursive {
+                resolved.mounts_below()
+            } else {
+                Vec::new()
+            };
+            let walk = ContainedWalk::new(base, list_prefix(&path)?, recursive, mounts)
                 .map_err(|e| contain_trap("fs.list", &path, &ContainError::from(e)))?;
             let dir = ChargedDirIter::new(walk, &caller.data().tenant_limits)
                 .map_err(|e| wasmtime::Error::new(e).context(format!("fs.list {path}")))?;
@@ -696,12 +754,26 @@ fn build_info(caller: &mut Caller<'_, StoreData>) -> wasmtime::Result<Val> {
         crate::runtime::VfsMode::None => "none",
         crate::runtime::VfsMode::Ephemeral => "ephemeral",
         crate::runtime::VfsMode::PerSession => "per_session",
-        crate::runtime::VfsMode::Persistent => "persistent",
+        crate::runtime::VfsMode::Named => "named",
     };
-    // -1 sentinel = "no limit / not applicable" (none + persistent modes);
-    // the language has no `undefined`, so the field is always present.
-    let size_limit = info.size_limit.map_or(-1.0, |v| v as f64);
+    let vfs = &caller.data().vfs;
+    let root_limit = vfs.quota().map(|quota| quota.limit());
+    let access = vfs.access().as_str();
+    let volume = vfs.volume().unwrap_or_default().to_string();
+    // Cloned out of the store, which the string writes below borrow mutably.
+    let mounts = vfs.mounts().to_vec();
+    let mount_ty = mount_info_backing_struct(caller.engine())?;
+    let mut built = Vec::with_capacity(mounts.len());
+    for mount in &mounts {
+        built.push(build_mount_info(caller, &mount_ty, mount)?);
+    }
+    let mounts = abi::new_array(caller, &built)?;
+    // A named root's limit is the volume's, which the server shares in rather
+    // than writes into the info.
+    let size_limit = size_limit_number(info.size_limit.or(root_limit));
     let mode = write_submilli_string_struct(caller, mode)?.to_anyref();
+    let access = write_submilli_string_struct(caller, access)?.to_anyref();
+    let volume = write_submilli_string_struct(caller, &volume)?.to_anyref();
     let ty = info_backing_struct(caller.engine())?;
     abi::new_backing(
         caller,
@@ -709,9 +781,43 @@ fn build_info(caller: &mut Caller<'_, StoreData>) -> wasmtime::Result<Val> {
         &[
             Val::AnyRef(Some(mode)),
             Val::F64(size_limit.to_bits()),
+            Val::AnyRef(Some(access)),
+            Val::AnyRef(Some(volume)),
+            mounts,
             Val::I64(0),
         ],
     )
+}
+
+/// One `info().mounts` entry as a `$MountInfoBacking`, fields in `MOUNT_*` order.
+fn build_mount_info(
+    caller: &mut Caller<'_, StoreData>,
+    ty: &StructType,
+    mount: &crate::runtime::vfs::Mount,
+) -> wasmtime::Result<Val> {
+    let path = write_submilli_string_struct(caller, mount.guest_path())?.to_anyref();
+    let mode = write_submilli_string_struct(caller, "named")?.to_anyref();
+    let volume = write_submilli_string_struct(caller, mount.volume())?.to_anyref();
+    let access = write_submilli_string_struct(caller, mount.access().as_str())?.to_anyref();
+    let size_limit = size_limit_number(mount.quota().map(|quota| quota.limit()));
+    abi::new_backing(
+        caller,
+        ty.clone(),
+        &[
+            Val::AnyRef(Some(path)),
+            Val::AnyRef(Some(mode)),
+            Val::AnyRef(Some(volume)),
+            Val::AnyRef(Some(access)),
+            Val::F64(size_limit.to_bits()),
+            Val::I32(0),
+        ],
+    )
+}
+
+/// `-1` stands for "no limit": the language has no `undefined`, so the field
+/// is always present.
+fn size_limit_number(limit: Option<u64>) -> f64 {
+    limit.map_or(-1.0, |v| v as f64)
 }
 
 /// `stat(path)`: a `$StatBacking`, or null when the path does not exist.
@@ -881,19 +987,15 @@ fn read_byte_range(
 /// a `$FileWriterBacking`.
 fn open_writer(caller: &mut Caller<'_, StoreData>, path: &str) -> wasmtime::Result<Val> {
     let resolved = resolve_content_or_trap(caller.data(), path, "fs.writer")?;
-    if resolved.is_root() {
-        wasmtime::bail!(
-            "fs.writer {}: the VFS root is a directory, not a file",
-            path
-        );
-    }
+    require_writable(&*caller, resolved.placement(), "fs.write", path)?;
+    refuse_volume_root(&resolved, "fs.writer", path)?;
     let tmp = resolved.temp_sibling();
     let file = tmp
         .create_new()
         .map_err(|e| write_target_trap("fs.writer", path, &e))?;
     let temp = TempFile::created(tmp, &file)
         .map_err(|e| wasmtime::Error::msg(format!("fs.writer {path}: {e}")))?;
-    let quota = caller.data().vfs.quota().cloned();
+    let quota = resolved.placement().quota().cloned();
     let writer = ChargedFileWriter::new(
         file.into_std(),
         temp,
@@ -1084,6 +1186,10 @@ fn install_getters(
             HeapType::ConcreteStruct(intr.string.clone()),
         ))
     };
+    let array = ValType::Ref(RefType::new(
+        false,
+        HeapType::ConcreteStruct(intr.array.clone()),
+    ));
     install_field_getters(
         linker,
         MODULE_NAME,
@@ -1131,6 +1237,23 @@ fn install_getters(
         &[
             ("mode", INFO_MODE, string()),
             ("sizeLimit", INFO_SIZE_LIMIT, ValType::F64),
+            ("access", INFO_ACCESS, string()),
+            ("volume", INFO_VOLUME, string()),
+            ("mounts", INFO_MOUNTS, array),
+        ],
+    )?;
+    install_field_getters(
+        linker,
+        MODULE_NAME,
+        "MountInfo",
+        engine,
+        &receiver,
+        &[
+            ("path", MOUNT_PATH, string()),
+            ("mode", MOUNT_MODE, string()),
+            ("volume", MOUNT_VOLUME, string()),
+            ("access", MOUNT_ACCESS, string()),
+            ("sizeLimit", MOUNT_SIZE_LIMIT, ValType::F64),
         ],
     )?;
     Ok(())
@@ -1334,60 +1457,244 @@ fn files_freed_by_remove(
         .unwrap_or_default()
 }
 
+/// The regular files still under `target` after a removal stopped partway, or
+/// `None` when that can't be told.
+fn files_left_after(
+    target: &LinkPath,
+    is_dir: bool,
+    recursive: bool,
+) -> Option<HashSet<FileIdentity>> {
+    if !is_dir {
+        return Some(
+            target
+                .regular_file()
+                .map(|(file, _)| file)
+                .into_iter()
+                .collect(),
+        );
+    }
+    if !recursive {
+        // A directory removed on its own frees no regular file.
+        return Some(HashSet::new());
+    }
+    let dir = match target.open_dir() {
+        Ok(dir) => dir,
+        Err(ContainError::Io(error)) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Some(HashSet::new());
+        }
+        Err(_) => return None,
+    };
+    let files = regular_files(&dir, MAX_REMOVE_ENTRIES).ok()?;
+    Some(files.into_iter().map(|(file, _)| file).collect())
+}
+
 /// Register a file a reader opens, so a removal of its name keeps its bytes
 /// counted until the reader closes.
-fn hold_for_reading(data: &StoreData, file: &cap_std::fs::File) -> Option<OpenFileGuard> {
-    let quota = data.vfs.quota()?;
+fn hold_for_reading(
+    quota: Option<&Arc<DiskQuota>>,
+    file: &cap_std::fs::File,
+) -> Option<OpenFileGuard> {
+    let quota = quota?;
     let metadata = file.metadata().ok()?;
     Some(quota.hold(FileIdentity::of(&metadata).ok()?, Holder::Reader))
+}
+
+/// A move between two volumes, which no rename can make: copy into a temporary
+/// sibling of the destination (charged to the destination's limit), rename it into
+/// place, then remove the source (released from the source's limit).
+///
+/// Until the rename, a failure removes the temporary copy and leaves the source
+/// untouched. Once the destination is in place it is kept; if the source then
+/// cannot be removed, the call fails saying both copies may exist. A link the copy
+/// cannot reproduce fails the move, since the source is removed after.
+fn move_across(from: &LinkPath, to: &LinkPath, pair: &str) -> wasmtime::Result<()> {
+    let meta = from
+        .symlink_metadata()
+        .map_err(|e| contain_trap("fs.move", pair, &e))?;
+    let is_dir = meta.is_dir();
+    // The source is removed last, so a tree too deep or too large to remove, or
+    // one holding a mount point, is refused now, before a copy of it lands in the
+    // destination. The destination gets the checks its rename will run, so a
+    // move that must fail does no copying first.
+    from.check_removable()
+        .map_err(|e| contain_trap("fs.move", pair, &e))?;
+    to.check_removable()
+        .map_err(|e| contain_trap("fs.move", pair, &e))?;
+    refuse_unfitting_destination(to, is_dir, pair)?;
+    let to_quota = to.placement().quota().cloned();
+    let staged = to.temp_sibling();
+    let run = CopyRun {
+        recursive: true,
+        links: LinkCopies::Required,
+        op: "fs.move",
+        pair,
+        quota: to_quota.as_ref(),
+    };
+    let copied = copy_recursive(from, &staged, &run).and_then(|()| {
+        let replaced = to.regular_file();
+        staged
+            .rename_to(to)
+            .map_err(|e| contain_trap("fs.move", pair, &e))?;
+        if let (Some(quota), Some((file, bytes))) = (to_quota.as_ref(), replaced) {
+            quota.release_file(file, bytes);
+        }
+        Ok(())
+    });
+    if let Err(err) = copied {
+        // Best effort: what cannot be removed stays charged, so the count errs
+        // toward refusing a later write.
+        if let Ok(meta) = staged.symlink_metadata() {
+            let _ = remove_releasing(&staged, meta.is_dir(), true, to_quota.as_ref());
+        }
+        return Err(err);
+    }
+    remove_releasing(from, is_dir, true, from.placement().quota()).map_err(|e| {
+        wasmtime::Error::msg(format!(
+            "fs.move {pair}: moved to the destination but could not remove the source, \
+             so both may now exist: {e}"
+        ))
+    })
+}
+
+/// Refuse a destination a rename of the source could not replace — a directory
+/// in place of a file, a file in place of a directory, or a directory that isn't
+/// empty — as a rename within one volume would, before any copying.
+fn refuse_unfitting_destination(
+    to: &LinkPath,
+    moving_dir: bool,
+    pair: &str,
+) -> wasmtime::Result<()> {
+    let existing = match to.symlink_metadata() {
+        Ok(existing) => existing,
+        Err(ContainError::Io(err)) if err.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(());
+        }
+        Err(err) => return Err(contain_trap("fs.move", pair, &err)),
+    };
+    let replacing_dir = existing.is_dir();
+    if replacing_dir != moving_dir {
+        let (what, onto) = if moving_dir {
+            ("a directory", "something that is not a directory")
+        } else {
+            ("a file", "a directory")
+        };
+        wasmtime::bail!("fs.move {pair}: cannot move {what} onto {onto}");
+    }
+    if !replacing_dir {
+        return Ok(());
+    }
+    let has_entries = to
+        .entries()
+        .map_err(|e| contain_trap("fs.move", pair, &e))?
+        .next()
+        .is_some();
+    if has_entries {
+        wasmtime::bail!("fs.move {pair}: the destination directory is not empty");
+    }
+    Ok(())
+}
+
+/// Remove `target` and release from `quota` every file that is gone afterwards:
+/// all of them on success, and only those actually removed when the removal stops
+/// partway, so the count neither keeps a file that is gone nor frees one that
+/// is still there.
+fn remove_releasing(
+    target: &LinkPath,
+    is_dir: bool,
+    recursive: bool,
+    quota: Option<&Arc<DiskQuota>>,
+) -> Result<(), ContainError> {
+    let freed = match quota {
+        Some(_) => files_freed_by_remove(target, is_dir, recursive),
+        None => Vec::new(),
+    };
+    let removed = match (is_dir, recursive) {
+        (true, true) => target.remove_dir_all(),
+        (true, false) => target.remove_dir(),
+        (false, _) => target.remove_file(),
+    };
+    let Some(quota) = quota else {
+        return removed;
+    };
+    let left: HashSet<FileIdentity> = match removed {
+        Ok(()) => HashSet::new(),
+        Err(_) => match files_left_after(target, is_dir, recursive) {
+            Some(left) => left,
+            // What is left can't be told, so nothing is released: a count kept
+            // too high refuses a later write rather than allowing one past it.
+            None => return removed,
+        },
+    };
+    for (file, bytes) in freed {
+        if !left.contains(&file) {
+            quota.release_file(file, bytes);
+        }
+    }
+    removed
+}
+
+/// How one copy walk treats its tree.
+#[derive(Clone, Copy)]
+struct CopyRun<'a> {
+    recursive: bool,
+    links: LinkCopies,
+    /// `fs.copy` or `fs.move`, for diagnostics.
+    op: &'a str,
+    /// `from -> to` as the program wrote them, for diagnostics.
+    pair: &'a str,
+    /// The destination volume's limit.
+    quota: Option<&'a Arc<DiskQuota>>,
+}
+
+/// What a copy does with a link inside the tree that the platform will not
+/// reproduce, such as an absolute one.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum LinkCopies {
+    /// Skip it: a copy leaves the source in place, so nothing is lost.
+    BestEffort,
+    /// Fail: a move removes the source afterwards, which would lose the link.
+    Required,
 }
 
 /// Preserves symlinks as links rather than dereferencing — prevents exfiltrating targets
 /// outside the VFS. `cap_std::fs::Dir::copy` follows the source link and would write a
 /// regular file, so the walk stays manual.
-fn copy_recursive(
-    from: &LinkPath,
-    to: &LinkPath,
-    recursive: bool,
-    guest_from: &str,
-    guest_to: &str,
-    quota: Option<&Arc<DiskQuota>>,
-) -> wasmtime::Result<()> {
-    let pair = format!("{guest_from} -> {guest_to}");
+fn copy_recursive(from: &LinkPath, to: &LinkPath, run: &CopyRun<'_>) -> wasmtime::Result<()> {
+    let CopyRun {
+        recursive,
+        links,
+        op,
+        pair,
+        quota,
+    } = *run;
     let meta = from
         .symlink_metadata()
-        .map_err(|e| contain_trap("fs.copy", &pair, &e))?;
+        .map_err(|e| contain_trap(op, pair, &e))?;
     let ft = meta.file_type();
     if ft.is_symlink() {
-        copy_link(from, to).map_err(|e| contain_trap("fs.copy", &pair, &e))?;
+        copy_link(from, to).map_err(|e| contain_trap(op, pair, &e))?;
     } else if ft.is_dir() {
         if !recursive {
-            wasmtime::bail!(
-                "fs.copy {} -> {}: source is a directory (use {{ recursive: true }})",
-                guest_from,
-                guest_to
-            );
+            wasmtime::bail!("{op} {pair}: source is a directory (use {{ recursive: true }})");
         }
         to.create_dir_all()
-            .map_err(|e| contain_trap("fs.copy", &pair, &e))?;
-        let from_dir = Arc::new(
-            from.open_dir()
-                .map_err(|e| contain_trap("fs.copy", &pair, &e))?,
-        );
-        let to_dir = Arc::new(
-            to.open_dir()
-                .map_err(|e| contain_trap("fs.copy", &pair, &e))?,
-        );
+            .map_err(|e| contain_trap(op, pair, &e))?;
+        let from_dir = Arc::new(from.open_dir().map_err(|e| contain_trap(op, pair, &e))?);
+        let to_dir = Arc::new(to.open_dir().map_err(|e| contain_trap(op, pair, &e))?);
         let entries = from_dir
             .entries()
-            .map_err(|e| contain_trap("fs.copy", &pair, &ContainError::from(e)))?;
+            .map_err(|e| contain_trap(op, pair, &ContainError::from(e)))?;
+        let nested = CopyRun {
+            recursive: true,
+            ..*run
+        };
         for entry in entries {
-            let entry =
-                entry.map_err(|e| contain_trap("fs.copy", &pair, &ContainError::from(e)))?;
+            let entry = entry.map_err(|e| contain_trap(op, pair, &ContainError::from(e)))?;
             let name = entry.file_name();
             let child_from = from.child(Arc::clone(&from_dir), name.clone());
             let child_to = to.child(Arc::clone(&to_dir), name);
-            if entry.file_type().is_ok_and(|ft| ft.is_symlink()) {
+            if entry.file_type().is_ok_and(|ft| ft.is_symlink()) && links == LinkCopies::BestEffort
+            {
                 // A `.venv/bin/python -> /usr/bin/python3` is one the platform may refuse to
                 // reproduce, and that must not fail a whole checkout copy. Scoped to the link
                 // reproduction itself: recursing and swallowing every error would report
@@ -1396,7 +1703,7 @@ fn copy_recursive(
                 let _ = copy_link(&child_from, &child_to);
                 continue;
             }
-            copy_recursive(&child_from, &child_to, true, guest_from, guest_to, quota)?;
+            copy_recursive(&child_from, &child_to, &nested)?;
         }
     } else {
         // Each file is reserved as the walk reaches it, so a copy that would pass the
@@ -1406,16 +1713,17 @@ fn copy_recursive(
         let mut disk_charge = QuotaCharge::in_place(quota.cloned(), to.copied_onto_file());
         disk_charge
             .reserve(meta.len())
-            .map_err(|exceeded| quota_refusal("fs.copy", &pair, exceeded))?;
+            .map_err(|exceeded| quota_refusal(op, pair, exceeded))?;
         if let Err(e) = from.copy_to(to) {
             // The copy may have truncated the destination and landed part of it.
             disk_charge.settle_at(to.copied_onto_file().map_or(0, |(_, bytes)| bytes));
-            return Err(contain_trap("fs.copy", &pair, &e));
+            return Err(contain_trap(op, pair, &e));
         }
         disk_charge.commit();
     }
     Ok(())
 }
+
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
@@ -1447,7 +1755,7 @@ mod tests {
     #[tokio::test]
     async fn narrowed_host_carriers() {
         let source = r#"
-import { info, stat, peek, list, writer, writeText, Info, Stat, Peek, DirEntry, FileWriter } from "submilli:fs";
+import { info, stat, peek, list, writer, writeText, Info, MountInfo, Stat, Peek, DirEntry, FileWriter } from "submilli:fs";
 
 class Parent { value: unknown = null; reset(value: unknown): void { this.value = value; } }
 function rejects(read: () => void): void {
@@ -1461,6 +1769,7 @@ class StatField extends Parent { value: Stat | null = null; }
 class PeekField extends Parent { value: Peek | null = null; }
 class EntryField extends Parent { value: DirEntry | null = null; }
 class WriterField extends Parent { value: FileWriter | null = null; }
+class MountField extends Parent { value: MountInfo | null = null; }
 function main(): void {
  writeText("/input.txt", "text");
  const i = new InfoField(); assert(i.value.mode.length > 0, "Info");
@@ -1469,15 +1778,27 @@ function main(): void {
  s.reset(info()); rejects(() => { const v = s.value; });
  const p = new PeekField(); p.reset(peek("/input.txt")); assert(p.value!.size === 4, "Peek");
  const e = new EntryField();
- for (const entry of list("/", false)) { e.reset(entry); }
+ for (const entry of list("/", false)) { if (entry.name === "input.txt") e.reset(entry); }
  assert(e.value!.name === "input.txt", "DirEntry");
  p.reset(e.value); rejects(() => { const v = p.value; });
  e.reset(peek("/input.txt")); rejects(() => { const v = e.value; });
  const w = new WriterField(); w.reset(writer("/output.txt")); w.value!.close();
  w.reset(info()); rejects(() => { const v = w.value; });
+ const m = new MountField(); m.reset(info().mounts[0]); assert(m.value!.path === "/m", "MountInfo");
+ m.reset(info()); rejects(() => { const v = m.value; });
+ i.reset(info().mounts[0]); rejects(() => { const v = i.value; });
 }
 "#;
-        run_with(source, StoreData::with_vfs(Vfs::tempdir().unwrap()))
+        let volume = tempfile::tempdir().unwrap();
+        let vfs = mount_volume(
+            Vfs::tempdir().unwrap(),
+            "/m",
+            volume.path(),
+            "m",
+            crate::runtime::vfs::Access::ReadWrite,
+            None,
+        );
+        run_with(source, StoreData::with_vfs(vfs))
             .await
             .expect("host guards");
     }
@@ -2243,5 +2564,746 @@ function main(): void {
         run_with(source, limited(100000))
             .await
             .expect("the writer's temp file is freed once, when the writer discards it");
+    }
+
+    fn mount_volume(
+        vfs: Vfs,
+        guest: &str,
+        host: &std::path::Path,
+        volume: &str,
+        access: crate::runtime::vfs::Access,
+        quota: Option<Arc<crate::runtime::DiskQuota>>,
+    ) -> Vfs {
+        vfs.with_mount(crate::runtime::vfs::MountSpec {
+            guest_path: guest.to_string(),
+            host: host.to_path_buf(),
+            volume: volume.to_string(),
+            access,
+            quota,
+        })
+        .expect("mount")
+    }
+
+    #[tokio::test]
+    async fn mount_routes_its_paths_to_the_volume() {
+        let volume = tempfile::tempdir().expect("volume");
+        std::fs::write(volume.path().join("kept.txt"), "kept").expect("seed");
+        let session = tempfile::tempdir().expect("session");
+        let vfs = mount_volume(
+            Vfs::external_with_mode(session.path().to_path_buf(), VfsMode::PerSession)
+                .expect("root"),
+            "/data/memory",
+            volume.path(),
+            "project-memory",
+            crate::runtime::vfs::Access::ReadWrite,
+            Some(Arc::new(crate::runtime::DiskQuota::new(1000, 4))),
+        );
+        let root = vfs.root().to_path_buf();
+        let source = r#"
+            import { info, readText, writeText, list, stat, exists } from "submilli:fs";
+            function main(): void {
+                assert(readText("/data/memory/kept.txt") === "kept", "reads the volume");
+                writeText("/data/memory/new.txt", "fresh");
+                assert(readText("/data/memory/../memory/new.txt") === "fresh", ".. resolves before routing");
+                assert(!exists("/data/memoryx/new.txt"), "a sibling prefix is not the mount");
+                assert(stat("/data/memory")!.kind === "directory", "the mount point is a directory");
+                const names: string[] = [];
+                for (const entry of list("/data", false)) { names.push(entry.name); }
+                assert(names.length === 1 && names[0] === "memory", "the parent lists the mount point");
+                const paths: string[] = [];
+                for (const entry of list("/", true)) { paths.push(entry.path); }
+                assert(paths.includes("/data/memory/kept.txt"), "a recursive walk descends into the volume");
+                assert(paths.includes("/data/memory/new.txt"), "and sees new files");
+                const fs = info();
+                assert(fs.access === "read_write" && fs.volume === "", "root info");
+                assert(fs.mounts.length === 1, "one mount");
+                const mount = fs.mounts[0];
+                assert(mount.path === "/data/memory" && mount.mode === "named", "mount path and mode");
+                assert(mount.volume === "project-memory" && mount.access === "read_write", "mount volume and access");
+                assert(mount.sizeLimit === 1000, "mount size limit");
+            }
+        "#;
+        let data = StoreData::with_vfs(vfs);
+        let quota = data.vfs.mounts()[0].quota().cloned().expect("quota");
+        run_with(source, data).await.expect("mount asserts hold");
+        assert_eq!(
+            std::fs::read_to_string(volume.path().join("new.txt")).expect("in the volume"),
+            "fresh"
+        );
+        let placeholder = std::fs::read_dir(root.join("data/memory")).expect("placeholder");
+        assert_eq!(placeholder.count(), 0, "the root's mount point stays empty");
+        assert_eq!(quota.used(), 9, "the write is charged to the volume");
+    }
+
+    #[tokio::test]
+    async fn mount_read_only_refuses_every_write() {
+        let volume = tempfile::tempdir().expect("volume");
+        std::fs::create_dir(volume.path().join("dir")).expect("seed dir");
+        std::fs::write(volume.path().join("dir/a.txt"), "a").expect("seed");
+        let vfs = mount_volume(
+            Vfs::tempdir().expect("tempdir"),
+            "/handbook",
+            volume.path(),
+            "company-handbook",
+            crate::runtime::vfs::Access::ReadOnly,
+            None,
+        );
+        let source = r#"
+            import { info, readText, writeText, append, writer, mkdir, remove, move, copy, list } from "submilli:fs";
+            function denied(op: () => void): string {
+                try { op(); } catch (e: PermissionDeniedError) { return e.capability; }
+                return "allowed";
+            }
+            function main(): void {
+                writeText("/local.txt", "l");
+                assert(readText("/handbook/dir/a.txt") === "a", "reads work");
+                let count = 0;
+                for (const entry of list("/handbook", true)) { count++; }
+                assert(count === 2, "listing works");
+                assert(denied(() => writeText("/handbook/b.txt", "b")) === "fs.write", "write");
+                assert(denied(() => append("/handbook/dir/a.txt", new Uint8Array(1))) === "fs.write", "append");
+                assert(denied(() => writer("/handbook/c.txt")) === "fs.write", "writer");
+                assert(denied(() => mkdir("/handbook/new", false)) === "fs.mkdir", "mkdir");
+                mkdir("/handbook/dir", true);
+                assert(denied(() => remove("/handbook/dir/a.txt", false)) === "fs.remove", "remove");
+                assert(denied(() => move("/handbook/dir/a.txt", "/moved.txt")) === "fs.move", "move out");
+                assert(denied(() => move("/local.txt", "/handbook/l.txt")) === "fs.move", "move in");
+                assert(denied(() => copy("/local.txt", "/handbook/l.txt", false)) === "fs.copy", "copy in");
+                copy("/handbook/dir/a.txt", "/copied.txt", false);
+                assert(readText("/copied.txt") === "a", "copy out works");
+                assert(info().mounts[0].access === "read_only", "info reports read-only");
+            }
+        "#;
+        run_with(source, StoreData::with_vfs(vfs))
+            .await
+            .expect("read-only asserts hold");
+        assert!(!volume.path().join("b.txt").exists());
+        assert!(volume.path().join("dir/a.txt").exists());
+    }
+
+    #[tokio::test]
+    async fn mount_policy_denial_comes_before_the_read_only_refusal() {
+        let volume = tempfile::tempdir().expect("volume");
+        let vfs = mount_volume(
+            Vfs::tempdir().expect("tempdir"),
+            "/ro",
+            volume.path(),
+            "ro",
+            crate::runtime::vfs::Access::ReadOnly,
+            None,
+        );
+        let source = r#"
+            import { writeText } from "submilli:fs";
+            function main(): string {
+                try { writeText("/ro/x.txt", "hi"); } catch (e: PermissionDeniedError) { return e.reason; }
+                return "not denied";
+            }
+        "#;
+        let mut data = StoreData::with_vfs(vfs);
+        data.security_check = Arc::new(DenyAllFs);
+        let value = run_with(source, data).await.expect("caught");
+        assert_eq!(value.as_deref(), Some("denied fs.write in test"));
+    }
+
+    #[tokio::test]
+    async fn mount_read_only_root_refuses_writes_and_needs_existing_mount_points() {
+        let root = tempfile::tempdir().expect("root");
+        let volume = tempfile::tempdir().expect("volume");
+        let read_only = || {
+            Vfs::external_with_mode(root.path().to_path_buf(), VfsMode::Named)
+                .expect("root")
+                .with_access(crate::runtime::vfs::Access::ReadOnly)
+        };
+        let missing = read_only().with_mount(crate::runtime::vfs::MountSpec {
+            guest_path: "/rw".to_string(),
+            host: volume.path().to_path_buf(),
+            volume: "rw".to_string(),
+            access: crate::runtime::vfs::Access::ReadWrite,
+            quota: None,
+        });
+        assert!(
+            matches!(
+                missing,
+                Err(crate::runtime::vfs::MountError::MountPointUnavailable { .. })
+            ),
+            "a read-only root is never written, so the mount point must exist"
+        );
+        assert!(!root.path().join("rw").exists());
+        std::fs::create_dir(root.path().join("rw")).expect("mount point");
+        let vfs = mount_volume(
+            read_only(),
+            "/rw",
+            volume.path(),
+            "rw",
+            crate::runtime::vfs::Access::ReadWrite,
+            None,
+        );
+        let source = r#"
+            import { writeText, info } from "submilli:fs";
+            function main(): void {
+                let denied = false;
+                try { writeText("/x.txt", "x"); } catch (e: PermissionDeniedError) { denied = true; }
+                assert(denied, "the root is read-only");
+                writeText("/rw/x.txt", "x");
+                assert(info().access === "read_only", "root access surfaced");
+            }
+        "#;
+        run_with(source, StoreData::with_vfs(vfs))
+            .await
+            .expect("read-only root asserts hold");
+        assert!(volume.path().join("x.txt").exists());
+    }
+
+    #[tokio::test]
+    async fn mount_points_cannot_be_removed_moved_or_copied_through() {
+        let volume = tempfile::tempdir().expect("volume");
+        std::fs::write(volume.path().join("v.txt"), "v").expect("seed");
+        let vfs = mount_volume(
+            Vfs::tempdir().expect("tempdir"),
+            "/a/m",
+            volume.path(),
+            "m",
+            crate::runtime::vfs::Access::ReadWrite,
+            None,
+        );
+        let source = r#"
+            import { remove, move, copy, writeText, mkdir, exists } from "submilli:fs";
+            function fails(op: () => void): boolean {
+                try { op(); return false; } catch (e) { return true; }
+            }
+            function main(): void {
+                writeText("/a/sibling.txt", "s");
+                mkdir("/a", true);
+                assert(fails(() => remove("/a/m", true)), "remove the mount point");
+                assert(fails(() => remove("/a", true)), "remove an ancestor");
+                assert(fails(() => move("/a/m", "/b")), "move the mount point");
+                assert(fails(() => move("/a", "/b")), "move an ancestor");
+                assert(fails(() => move("/a/sibling.txt", "/a/m")), "replace the mount point");
+                assert(fails(() => copy("/a", "/b", true)), "copy an ancestor");
+                assert(fails(() => copy("/", "/a/m/all", true)), "copy the root into a mount");
+                assert(exists("/a/m/v.txt"), "the volume is intact");
+                remove("/a/sibling.txt", false);
+            }
+        "#;
+        run_with(source, StoreData::with_vfs(vfs))
+            .await
+            .expect("mount-point asserts hold");
+        assert!(volume.path().join("v.txt").exists());
+    }
+
+    #[tokio::test]
+    async fn mount_shared_volume_quota_spans_every_vfs_that_mounts_it() {
+        let volume = tempfile::tempdir().expect("volume");
+        let quota = Arc::new(crate::runtime::DiskQuota::new(100, 0));
+        let mount = |vfs: Vfs, guest: &str| {
+            mount_volume(
+                vfs,
+                guest,
+                volume.path(),
+                "shared",
+                crate::runtime::vfs::Access::ReadWrite,
+                Some(Arc::clone(&quota)),
+            )
+        };
+        let first = mount(Vfs::tempdir().expect("tempdir"), "/one");
+        let second = mount(Vfs::tempdir().expect("tempdir"), "/two");
+        let write = r#"
+            import { writeText } from "submilli:fs";
+            function main(): void { writeText("/one/a.txt", "x".repeat(60)); }
+        "#;
+        run_with(write, StoreData::with_vfs(first))
+            .await
+            .expect("first write fits");
+        let refuse = r#"
+            import { writeText, readText } from "submilli:fs";
+            function main(): void {
+                assert(readText("/two/a.txt")!.length === 60, "the other alias sees it");
+                let refused = false;
+                try { writeText("/two/b.txt", "y".repeat(60)); } catch (e) { refused = e instanceof RangeError; }
+                assert(refused, "the shared limit refuses the second write");
+            }
+        "#;
+        run_with(refuse, StoreData::with_vfs(second))
+            .await
+            .expect("second alias shares the limit");
+        assert_eq!(quota.used(), 60);
+    }
+
+    #[tokio::test]
+    async fn mount_move_between_volumes_copies_then_removes_and_moves_the_charge() {
+        let volume = tempfile::tempdir().expect("volume");
+        let mount_quota = Arc::new(crate::runtime::DiskQuota::new(1000, 0));
+        let vfs = mount_volume(
+            Vfs::tempdir().expect("tempdir").with_size_limit(1000),
+            "/memory",
+            volume.path(),
+            "memory",
+            crate::runtime::vfs::Access::ReadWrite,
+            Some(Arc::clone(&mount_quota)),
+        );
+        let root_quota = vfs.quota().cloned().expect("root quota");
+        let source = r#"
+            import { writeText, readText, move, mkdir, exists } from "submilli:fs";
+            function main(): void {
+                writeText("/a.txt", "x".repeat(10));
+                mkdir("/tree/sub", true);
+                writeText("/tree/sub/b.txt", "y".repeat(20));
+                move("/a.txt", "/memory/a.txt");
+                move("/tree", "/memory/tree");
+                assert(!exists("/a.txt") && !exists("/tree"), "sources removed");
+                assert(readText("/memory/a.txt")!.length === 10, "file moved");
+                assert(readText("/memory/tree/sub/b.txt")!.length === 20, "tree moved");
+                move("/memory/a.txt", "/back.txt");
+                assert(readText("/back.txt")!.length === 10, "moved back");
+            }
+        "#;
+        run_with(source, StoreData::with_vfs(vfs))
+            .await
+            .expect("cross-volume move asserts hold");
+        assert_eq!(root_quota.used(), 10, "the root holds only back.txt");
+        assert_eq!(mount_quota.used(), 20, "the volume holds the tree");
+        let leftovers: Vec<_> = std::fs::read_dir(volume.path())
+            .expect("volume")
+            .map(|entry| entry.expect("entry").file_name())
+            .collect();
+        assert_eq!(
+            leftovers,
+            vec![std::ffi::OsString::from("tree")],
+            "no staging left"
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn mount_link_to_an_ancestor_cannot_reach_a_mount_point() {
+        let session = tempfile::tempdir().expect("session");
+        let volume = tempfile::tempdir().expect("volume");
+        std::fs::write(volume.path().join("v.txt"), "v").expect("seed");
+        let vfs = mount_volume(
+            Vfs::external_with_mode(session.path().to_path_buf(), VfsMode::PerSession)
+                .expect("root"),
+            "/a/m",
+            volume.path(),
+            "m",
+            crate::runtime::vfs::Access::ReadWrite,
+            None,
+        );
+        std::os::unix::fs::symlink("a", session.path().join("lnk")).expect("link");
+        std::fs::create_dir(session.path().join("r")).expect("dir");
+        std::os::unix::fs::symlink("..", session.path().join("r/up")).expect("link");
+        std::os::unix::fs::symlink("a/m/x", session.path().join("dangling")).expect("link");
+        std::os::unix::fs::symlink(".", session.path().join("here")).expect("link");
+        let source = r#"
+            import { remove, move, copy, writeText, readText, mkdir, append } from "submilli:fs";
+            function refused(op: () => void): boolean {
+                try { op(); return false; } catch (e) { return String(e).includes("mount point"); }
+            }
+            function main(): void {
+                assert(refused(() => remove("/lnk/m", false)), "remove the placeholder through a link");
+                assert(refused(() => remove("/lnk/m", true)), "recursive remove through a link");
+                assert(refused(() => writeText("/lnk/m", "x")), "replace the placeholder through a link");
+                assert(refused(() => writeText("/lnk/m/x.txt", "x")), "write inside the placeholder");
+                assert(refused(() => move("/r/up/a", "/z")), "move an ancestor through a link");
+                assert(refused(() => remove("/r/up/a", true)), "remove an ancestor through a link");
+                assert(refused(() => copy("/r/up/a", "/copy", true)), "copy an ancestor through a link");
+                copy("/lnk", "/linkcopy", false);
+                assert(refused(() => mkdir("/lnk/m/new", false)), "mkdir inside the placeholder");
+                assert(refused(() => append("/dangling", new Uint8Array(1))), "append through a dangling link");
+                writeText("/plain.txt", "p");
+                assert(refused(() => copy("/plain.txt", "/dangling", false)), "copy through a dangling link");
+                writeText("/here", "replaced");
+                assert(readText("/here") === "replaced", "a write replaces a link to the root rather than refusing");
+            }
+        "#;
+        run_with(source, StoreData::with_vfs(vfs))
+            .await
+            .expect("link asserts hold");
+        assert!(
+            session.path().join("a/m").is_dir(),
+            "the placeholder survives"
+        );
+        assert_eq!(
+            std::fs::read_dir(session.path().join("a/m"))
+                .expect("placeholder")
+                .count(),
+            0,
+            "nothing landed in the placeholder"
+        );
+        assert!(volume.path().join("v.txt").exists());
+        assert!(!session.path().join("copy").exists());
+        assert!(
+            std::fs::symlink_metadata(session.path().join("linkcopy"))
+                .expect("copied")
+                .file_type()
+                .is_symlink(),
+            "copying the link copies the link itself, never the tree behind it"
+        );
+    }
+
+    #[tokio::test]
+    async fn mount_move_too_deep_to_remove_is_refused_before_copying() {
+        let volume = tempfile::tempdir().expect("volume");
+        let quota = Arc::new(crate::runtime::DiskQuota::new(1 << 20, 0));
+        let vfs = mount_volume(
+            Vfs::tempdir().expect("tempdir"),
+            "/memory",
+            volume.path(),
+            "memory",
+            crate::runtime::vfs::Access::ReadWrite,
+            Some(Arc::clone(&quota)),
+        );
+        let source = r#"
+            import { mkdir, writeText, move, exists } from "submilli:fs";
+            function main(): void {
+                const deep = "/deep" + "/d".repeat(70);
+                mkdir(deep, true);
+                writeText(deep + "/f.txt", "x");
+                let failed = false;
+                try { move("/deep", "/memory/deep"); } catch (e) { failed = true; }
+                assert(failed, "the move is refused");
+                assert(exists(deep + "/f.txt"), "the source is untouched");
+            }
+        "#;
+        run_with(source, StoreData::with_vfs(vfs))
+            .await
+            .expect("deep move asserts hold");
+        assert_eq!(
+            std::fs::read_dir(volume.path()).expect("volume").count(),
+            0,
+            "no staging copy is left behind"
+        );
+        assert_eq!(quota.used(), 0, "nothing stays charged");
+    }
+
+    #[cfg(any(target_os = "macos", windows))]
+    #[test]
+    fn mount_case_variant_directory_cannot_stand_in_as_a_mount_point() {
+        use crate::runtime::vfs::{Access, MountError, MountSpec};
+        let session = tempfile::tempdir().expect("session");
+        let volume = tempfile::tempdir().expect("volume");
+        std::fs::create_dir(session.path().join("Memory")).expect("variant");
+        let result = Vfs::external_with_mode(session.path().to_path_buf(), VfsMode::PerSession)
+            .expect("root")
+            .with_mount(MountSpec {
+                guest_path: "/memory".to_string(),
+                host: volume.path().to_path_buf(),
+                volume: "memory".to_string(),
+                access: Access::ReadWrite,
+                quota: None,
+            });
+        assert!(
+            matches!(result, Err(MountError::MountPointUnavailable { .. })),
+            "a case variant is refused"
+        );
+    }
+
+    #[tokio::test]
+    async fn mount_move_between_volumes_onto_existing_entries() {
+        let volume = tempfile::tempdir().expect("volume");
+        let quota = Arc::new(crate::runtime::DiskQuota::new(1000, 0));
+        let vfs = mount_volume(
+            Vfs::tempdir().expect("tempdir"),
+            "/memory",
+            volume.path(),
+            "memory",
+            crate::runtime::vfs::Access::ReadWrite,
+            Some(Arc::clone(&quota)),
+        );
+        let source = r#"
+            import { writeText, readText, move, mkdir, exists } from "submilli:fs";
+            function failure(op: () => void): string {
+                try { op(); return "ok"; } catch (e) { return String(e); }
+            }
+            function main(): void {
+                writeText("/memory/old.txt", "o".repeat(30));
+                writeText("/new.txt", "n".repeat(10));
+                move("/new.txt", "/memory/old.txt");
+                assert(readText("/memory/old.txt")!.length === 10, "the file is replaced");
+                mkdir("/dir", false);
+                writeText("/file.txt", "f");
+                assert(failure(() => move("/file.txt", "/memory")).includes("mount point"), "onto the mount point");
+                mkdir("/memory/full", false);
+                writeText("/memory/full/x.txt", "x");
+                assert(failure(() => move("/dir", "/memory/full")).includes("not empty"), "onto a non-empty directory");
+                assert(failure(() => move("/file.txt", "/memory/full")).includes("onto a directory"), "a file onto a directory");
+                assert(exists("/dir") && exists("/file.txt"), "the sources are untouched");
+            }
+        "#;
+        run_with(source, StoreData::with_vfs(vfs))
+            .await
+            .expect("existing-destination asserts hold");
+        assert_eq!(
+            quota.used(),
+            11,
+            "the replaced file is released; only new files count"
+        );
+        let staged: Vec<_> = std::fs::read_dir(volume.path())
+            .expect("volume")
+            .map(|entry| entry.expect("entry").file_name())
+            .filter(|name| name.to_string_lossy().ends_with(".tmp"))
+            .collect();
+        assert!(staged.is_empty(), "{staged:?}");
+    }
+
+    #[cfg(target_os = "macos")]
+    #[tokio::test]
+    async fn mount_non_ascii_alias_of_a_mount_point_is_refused() {
+        let session = tempfile::tempdir().expect("session");
+        let volume = tempfile::tempdir().expect("volume");
+        let vfs = mount_volume(
+            Vfs::external_with_mode(session.path().to_path_buf(), VfsMode::PerSession)
+                .expect("root"),
+            "/skills",
+            volume.path(),
+            "skills",
+            crate::runtime::vfs::Access::ReadWrite,
+            None,
+        );
+        // U+017F (long s) folds to `s` on a case-insensitive APFS volume.
+        let source = r#"
+            import { writeText, remove, move } from "submilli:fs";
+            function refused(op: () => void): boolean {
+                try { op(); return false; } catch (e) { return String(e).includes("mount point"); }
+            }
+            function main(): void {
+                assert(refused(() => writeText("/ſkills/x.txt", "x")), "write through the alias");
+                assert(refused(() => remove("/ſkills", true)), "remove the mount point by its alias");
+                assert(refused(() => move("/ſkills", "/elsewhere")), "move the mount point by its alias");
+            }
+        "#;
+        run_with(source, StoreData::with_vfs(vfs))
+            .await
+            .expect("alias asserts hold");
+        assert_eq!(
+            std::fs::read_dir(session.path().join("skills"))
+                .expect("placeholder")
+                .count(),
+            0
+        );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[tokio::test]
+    async fn mount_nested_non_ascii_aliases_of_a_mount_path_are_refused() {
+        let session = tempfile::tempdir().expect("session");
+        let volume = tempfile::tempdir().expect("volume");
+        let vfs = mount_volume(
+            Vfs::external_with_mode(session.path().to_path_buf(), VfsMode::PerSession)
+                .expect("root"),
+            "/sets/skills",
+            volume.path(),
+            "skills",
+            crate::runtime::vfs::Access::ReadWrite,
+            None,
+        );
+        // U+017F (long s) folds to `s` on a case-insensitive APFS volume, in the
+        // parent as well as in the mount point.
+        let source = r#"
+            import { writeText, remove, move } from "submilli:fs";
+            function refused(op: () => void): boolean {
+                try { op(); return false; } catch (e) { return String(e).includes("mount point"); }
+            }
+            function main(): void {
+                assert(refused(() => writeText("/\u017Fets/\u017Fkills/x.txt", "x")), "both components aliased");
+                assert(refused(() => writeText("/Sets/\u017Fkills/x.txt", "x")), "case and Unicode aliases");
+                assert(refused(() => remove("/\u017Fets", true)), "remove an aliased ancestor");
+                assert(refused(() => move("/\u017Fets", "/elsewhere")), "move an aliased ancestor");
+                writeText("/\u017Fets/beside.txt", "beside");
+            }
+        "#;
+        run_with(source, StoreData::with_vfs(vfs))
+            .await
+            .expect("nested alias asserts hold");
+        assert_eq!(
+            std::fs::read_dir(session.path().join("sets/skills"))
+                .expect("placeholder")
+                .count(),
+            0
+        );
+        assert!(
+            session.path().join("sets/beside.txt").exists(),
+            "siblings stay writable"
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn mount_root_link_loops_and_absolute_links_fail_cleanly() {
+        let session = tempfile::tempdir().expect("session");
+        let volume = tempfile::tempdir().expect("volume");
+        let vfs = mount_volume(
+            Vfs::external_with_mode(session.path().to_path_buf(), VfsMode::PerSession)
+                .expect("root"),
+            "/memory",
+            volume.path(),
+            "memory",
+            crate::runtime::vfs::Access::ReadWrite,
+            None,
+        );
+        std::os::unix::fs::symlink("loop", session.path().join("loop")).expect("link");
+        std::os::unix::fs::symlink("/etc", session.path().join("abs")).expect("link");
+        let source = r#"
+            import { writeText, append } from "submilli:fs";
+            function message(op: () => void): string {
+                try { op(); return "ok"; } catch (e) { return String(e); }
+            }
+            function main(): void {
+                assert(message(() => append("/loop/x", new Uint8Array(1))) !== "ok", "a loop fails");
+                assert(message(() => append("/abs/x", new Uint8Array(1))).includes("escapes"), "an absolute link escapes");
+                writeText("/fine.txt", "fine");
+            }
+        "#;
+        run_with(source, StoreData::with_vfs(vfs))
+            .await
+            .expect("loop asserts hold");
+    }
+
+    #[tokio::test]
+    async fn mount_move_onto_a_mount_ancestor_is_refused_before_copying() {
+        let volume = tempfile::tempdir().expect("volume");
+        let other = tempfile::tempdir().expect("other");
+        let quota = Arc::new(crate::runtime::DiskQuota::new(1 << 20, 0));
+        let root = tempfile::tempdir().expect("root");
+        let vfs = mount_volume(
+            mount_volume(
+                Vfs::external_with_mode(root.path().to_path_buf(), VfsMode::PerSession)
+                    .expect("root")
+                    .with_size_limit(1 << 20),
+                "/memory",
+                volume.path(),
+                "memory",
+                crate::runtime::vfs::Access::ReadWrite,
+                None,
+            ),
+            "/sub/inner",
+            other.path(),
+            "inner",
+            crate::runtime::vfs::Access::ReadWrite,
+            Some(Arc::clone(&quota)),
+        );
+        let source = r#"
+            import { writeText, move, exists } from "submilli:fs";
+            function main(): void {
+                writeText("/memory/tree.txt", "t");
+                let failed = false;
+                try { move("/memory/tree.txt", "/sub"); } catch (e) { failed = String(e).includes("mount point"); }
+                assert(failed, "the move onto a mount's ancestor is refused");
+                assert(exists("/memory/tree.txt"), "the source is untouched");
+            }
+        "#;
+        run_with(source, StoreData::with_vfs(vfs))
+            .await
+            .expect("ancestor move asserts hold");
+        assert_eq!(quota.used(), 0);
+        let staged: Vec<_> = std::fs::read_dir(root.path())
+            .expect("root")
+            .map(|entry| entry.expect("entry").file_name())
+            .filter(|name| name.to_string_lossy().ends_with(".tmp"))
+            .collect();
+        assert!(
+            staged.is_empty(),
+            "nothing was staged in the root: {staged:?}"
+        );
+    }
+
+    /// Mounting reads an identity for every directory on the mount path and fails
+    /// if it can't, so this passing means the host supplies them.
+    #[test]
+    fn mount_reads_an_identity_for_each_directory_on_its_path() {
+        let volume = tempfile::tempdir().expect("volume");
+        let vfs = mount_volume(
+            Vfs::tempdir().expect("tempdir"),
+            "/data/memory",
+            volume.path(),
+            "memory",
+            crate::runtime::vfs::Access::ReadWrite,
+            None,
+        );
+        let names: Vec<_> = vfs.mounts()[0]
+            .placeholders()
+            .iter()
+            .map(|placeholder| placeholder.name.to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(
+            names,
+            ["data", "memory"],
+            "every directory on the mount path got a placeholder"
+        );
+    }
+
+    #[test]
+    fn mount_paths_are_plain_ascii() {
+        use crate::runtime::vfs::{Access, MountError, MountSpec};
+        let volume = tempfile::tempdir().expect("volume");
+        for bad in ["/mémoire", "/a b", "/a\\b", "/memory.", "/..."] {
+            let result = Vfs::tempdir().expect("tempdir").with_mount(MountSpec {
+                guest_path: bad.to_string(),
+                host: volume.path().to_path_buf(),
+                volume: "v".to_string(),
+                access: Access::ReadWrite,
+                quota: None,
+            });
+            assert!(matches!(result, Err(MountError::BadPath(_))), "{bad}");
+        }
+    }
+
+    #[test]
+    fn mounts_reject_ambiguous_tables() {
+        use crate::runtime::vfs::{Access, MountError, MountSpec};
+        let volume = tempfile::tempdir().expect("volume");
+        let spec = |guest: &str, name: &str| MountSpec {
+            guest_path: guest.to_string(),
+            host: volume.path().to_path_buf(),
+            volume: name.to_string(),
+            access: Access::ReadWrite,
+            quota: None,
+        };
+        assert!(matches!(
+            Vfs::none().with_mount(spec("/a", "a")),
+            Err(MountError::RootDisabled)
+        ));
+        let base = || Vfs::tempdir().expect("tempdir");
+        for bad in ["a", "/a/", "/a//b", "/a/./b", "/a/../b", ""] {
+            assert!(
+                matches!(
+                    base().with_mount(spec(bad, "a")),
+                    Err(MountError::BadPath(_))
+                ),
+                "{bad:?} is not a normalized absolute path"
+            );
+        }
+        assert!(matches!(
+            base().with_mount(spec("/", "a")),
+            Err(MountError::AtRoot)
+        ));
+        assert!(matches!(
+            base().with_mount(spec("/x/.git", "a")),
+            Err(MountError::ProtectedPath(_))
+        ));
+        let one = base().with_mount(spec("/a", "a")).expect("first");
+        assert!(matches!(
+            one.clone().with_mount(spec("/a/b", "b")),
+            Err(MountError::Nested { .. })
+        ));
+        assert!(matches!(
+            one.clone().with_mount(spec("/c", "a")),
+            Err(MountError::DuplicateVolume { .. })
+        ));
+        let root = one.root().to_path_buf();
+        std::fs::write(root.join("file"), "f").expect("file");
+        assert!(matches!(
+            one.clone().with_mount(spec("/file/x", "c")),
+            Err(MountError::MountPointUnavailable { .. })
+        ));
+        let mut many = base();
+        for index in 0..crate::runtime::vfs::MAX_MOUNTS {
+            many = many
+                .with_mount(spec(&format!("/m{index}"), &format!("v{index}")))
+                .expect("within the cap");
+        }
+        assert!(matches!(
+            many.with_mount(spec("/extra", "extra")),
+            Err(MountError::TooMany)
+        ));
     }
 }

@@ -394,6 +394,7 @@ fn narrowing_check_types(check: &crate::FieldNarrowingCheck, visit: &mut dyn FnM
                     | crate::InterfaceCarrier::FsPeek
                     | crate::InterfaceCarrier::FsDirEntry
                     | crate::InterfaceCarrier::FsInfo
+                    | crate::InterfaceCarrier::FsMountInfo
                     | crate::InterfaceCarrier::FsFileWriter
                     | crate::InterfaceCarrier::HttpResponse
                     | crate::InterfaceCarrier::HttpDownloadResult

@@ -51,7 +51,10 @@ pub use session_kv::{
     InMemorySessionKv, SessionKvEntry, SessionKvError, SessionKvLimitKind, SessionKvLimits,
     SessionKvPage, SessionKvStore, SharedKvBudget,
 };
-pub use vfs::{Vfs, VfsMode, measure_dir, measure_with_held, regular_files};
+pub use vfs::{
+    Access, MountError, MountSpec, Vfs, VfsMode, measure_dir, measure_host_dir, measure_with_held,
+    regular_files,
+};
 pub use watchdog::Watchdog;
 
 pub use crate::stdlib::http::{

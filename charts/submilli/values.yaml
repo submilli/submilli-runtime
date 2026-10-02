@@ -232,6 +232,10 @@ auth:
 #     max_execution_fuel: 10000000000
 #     network:
 #       allow_private: true
+#     volumes:                      # named volumes blueprints mount by name
+#       project-memory:
+#         kind: managed-local       # stored on the persistence claim
+#         size_limit: 1GiB
 #
 # Keys the chart sets itself are refused here, with an error naming the value to
 # use instead: `bind`, `port`, `vfs_ephemeral_dir`, `max_execution_memory`,

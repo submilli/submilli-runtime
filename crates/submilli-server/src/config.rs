@@ -130,12 +130,16 @@ pub struct ServerConfig {
     /// A deployment that configures no model still gets a catchable error (R12),
     /// raised from the blueprint as the undeclared-model refusal.
     pub llm_dispatch: Option<Arc<dyn ModelDispatch>>,
-    /// Operator-declared volumes a blueprint's `persistent` VFS mode resolves
-    /// through, name → host directory. Config-file only: no CLI flag and no
-    /// environment variable, so the mapping lives in one reviewable place.
+    /// Operator-declared named volumes a blueprint's `vfs` root or `mounts`
+    /// resolve through, by name. Config-file only: no CLI flag and no
+    /// environment variable, so the declarations live in one reviewable place.
     /// [`validate_volumes`] refuses a declaration that overlaps a server-owned
     /// directory; it runs on the config-file path, not here.
     pub volumes: VolumeTable,
+    /// Where `managed-local` volumes are stored, one directory per volume name.
+    /// Defaults to [`default_managed_volume_root`]. Mount it on **durable**
+    /// storage: a named volume is meant to outlive sessions and restarts.
+    pub managed_volume_root: Option<PathBuf>,
     /// The file holding the GitHub token package installs send. Kept as a
     /// path and read on every install, so replacing the file rotates the
     /// token without a restart.
@@ -171,6 +175,12 @@ pub fn default_blueprint_dir() -> PathBuf {
     default_server_root().join("blueprints")
 }
 
+/// Default root for `managed-local` volumes: `<server root>/volumes`, one
+/// directory per volume name.
+pub fn default_managed_volume_root() -> PathBuf {
+    default_server_root().join("volumes")
+}
+
 /// Default durable root for `per_session` VFS directories.
 pub fn default_session_storage_root() -> PathBuf {
     default_server_root().join("vfs/sessions")
@@ -202,10 +212,225 @@ pub fn default_cli_package_store_dir() -> PathBuf {
     submilli_build::default_package_store_dir()
 }
 
-/// An operator-declared volume table: name → host directory. A blueprint's
-/// `vfs: { mode: persistent, volume: <name> }` resolves through this table, so a
-/// blueprint never names a host directory of its own.
-pub type VolumeTable = BTreeMap<String, PathBuf>;
+/// An operator-declared volume table: name → declaration. A blueprint's
+/// `vfs: { mode: named, volume: <name> }` and every entry under `vfs.mounts`
+/// resolve through this table, so a blueprint never names a host directory of
+/// its own.
+pub type VolumeTable = BTreeMap<String, VolumeSpec>;
+
+pub use submilli_blueprint::Access;
+
+/// One named volume the server declares.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VolumeSpec {
+    pub kind: VolumeKind,
+    /// The most a blueprint may do with the volume; a blueprint's own `access`
+    /// can only narrow it.
+    pub access: Access,
+    /// One limit shared by every session and blueprint that uses the volume.
+    pub size_limit: SizeLimit,
+}
+
+impl VolumeSpec {
+    /// An operator-owned directory, read-write, with no size limit.
+    pub fn local_path(path: impl Into<PathBuf>) -> Self {
+        Self {
+            kind: VolumeKind::LocalPath { path: path.into() },
+            access: Access::ReadWrite,
+            size_limit: SizeLimit::Unlimited,
+        }
+    }
+
+    /// A directory Submilli allocates under the managed volume root.
+    pub fn managed(size_limit: SizeLimit) -> Self {
+        Self {
+            kind: VolumeKind::ManagedLocal,
+            access: Access::ReadWrite,
+            size_limit,
+        }
+    }
+
+    pub fn with_access(mut self, access: Access) -> Self {
+        self.access = access;
+        self
+    }
+}
+
+/// Reads the config file's `volumes:` table. Hand-written so each refusal names
+/// the volume and the edit that fixes it, including the retired
+/// `name: /host/dir` form, which needs a `kind` and a `size_limit` now.
+pub fn deserialize_volume_table<'de, D>(deserializer: D) -> Result<VolumeTable, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    deserializer.deserialize_map(VolumeTableVisitor)
+}
+
+struct VolumeTableVisitor;
+
+impl<'de> serde::de::Visitor<'de> for VolumeTableVisitor {
+    type Value = VolumeTable;
+
+    fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("a map from volume name to `{kind, path?, access?, size_limit}`")
+    }
+
+    fn visit_unit<E: serde::de::Error>(self) -> Result<VolumeTable, E> {
+        Ok(VolumeTable::new())
+    }
+
+    fn visit_map<A: serde::de::MapAccess<'de>>(self, mut map: A) -> Result<VolumeTable, A::Error> {
+        let mut table = VolumeTable::new();
+        while let Some(name) = map.next_key::<String>()? {
+            if table.contains_key(&name) {
+                return Err(serde::de::Error::custom(format!(
+                    "volume '{name}' is declared twice under `volumes:`; delete one"
+                )));
+            }
+            let spec = map.next_value_seed(VolumeSpecSeed { name: &name })?;
+            table.insert(name, spec);
+        }
+        Ok(table)
+    }
+}
+
+struct VolumeSpecSeed<'a> {
+    name: &'a str,
+}
+
+impl<'de> serde::de::DeserializeSeed<'de> for VolumeSpecSeed<'_> {
+    type Value = VolumeSpec;
+
+    fn deserialize<D: serde::Deserializer<'de>>(
+        self,
+        deserializer: D,
+    ) -> Result<VolumeSpec, D::Error> {
+        deserializer.deserialize_any(self)
+    }
+}
+
+/// A size in bytes, or a size string such as `10GB`, or `unlimited`.
+#[derive(serde::Deserialize)]
+#[serde(untagged)]
+enum SizeLimitRepr {
+    Bytes(u64),
+    Text(String),
+}
+
+impl<'de> serde::de::Visitor<'de> for VolumeSpecSeed<'_> {
+    type Value = VolumeSpec;
+
+    fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "a declaration for volume '{}', such as `{{kind: managed-local, size_limit: 1GB}}`",
+            self.name
+        )
+    }
+
+    fn visit_str<E: serde::de::Error>(self, path: &str) -> Result<VolumeSpec, E> {
+        let name = self.name;
+        Err(E::custom(format!(
+            "volume '{name}' uses the retired `{name}: {path}` form; write `{name}: {{kind: \
+             local-path, path: {path}, size_limit: unlimited}}` to keep using that directory, or \
+             `{name}: {{kind: managed-local, size_limit: <size>}}` to let Submilli store the \
+             volume under `volume_dir`"
+        )))
+    }
+
+    fn visit_map<A: serde::de::MapAccess<'de>>(self, mut map: A) -> Result<VolumeSpec, A::Error> {
+        use serde::de::Error;
+        let name = self.name;
+        let mut kind: Option<String> = None;
+        let mut path: Option<PathBuf> = None;
+        let mut access: Option<Access> = None;
+        let mut size_limit: Option<SizeLimitRepr> = None;
+        let mut seen = std::collections::BTreeSet::new();
+        while let Some(key) = map.next_key::<String>()? {
+            if !seen.insert(key.clone()) {
+                return Err(A::Error::custom(format!(
+                    "volume '{name}' sets `{key}` twice; delete one"
+                )));
+            }
+            match key.as_str() {
+                "kind" => kind = Some(map.next_value()?),
+                "path" => path = Some(map.next_value()?),
+                "access" => access = Some(map.next_value()?),
+                "size_limit" => size_limit = Some(map.next_value()?),
+                other => {
+                    return Err(A::Error::custom(format!(
+                        "unknown field `{other}` in volume '{name}', expected `kind`, `path`, \
+                         `access` or `size_limit`"
+                    )));
+                }
+            }
+        }
+        let kind = match (kind.as_deref(), path) {
+            (None, _) => {
+                return Err(A::Error::custom(format!(
+                    "volume '{name}' needs a `kind`: `managed-local` (stored by Submilli under \
+                     `volume_dir`) or `local-path` (a directory you name with `path`)"
+                )));
+            }
+            (Some("managed-local"), None) => VolumeKind::ManagedLocal,
+            (Some("managed-local"), Some(_)) => {
+                return Err(A::Error::custom(format!(
+                    "`path` is only valid for `kind: local-path`; managed-local volume '{name}' \
+                     is stored under `volume_dir`/{name}"
+                )));
+            }
+            (Some("local-path"), Some(path)) => VolumeKind::LocalPath { path },
+            (Some("local-path"), None) => {
+                return Err(A::Error::custom(format!(
+                    "local-path volume '{name}' needs a `path`: the absolute host directory it \
+                     exposes"
+                )));
+            }
+            (Some(other), _) => {
+                return Err(A::Error::custom(format!(
+                    "volume '{name}' has unknown kind `{other}`; use `managed-local` or \
+                     `local-path`"
+                )));
+            }
+        };
+        let size_limit = match size_limit {
+            None => {
+                return Err(A::Error::custom(format!(
+                    "volume '{name}' needs an explicit `size_limit`: a size such as `10GB`, or \
+                     `unlimited`. The limit is shared by every session and blueprint using it"
+                )));
+            }
+            Some(SizeLimitRepr::Bytes(bytes)) => SizeLimit::Bytes(bytes),
+            Some(SizeLimitRepr::Text(text)) if text == "unlimited" => SizeLimit::Unlimited,
+            Some(SizeLimitRepr::Text(text)) => submilli_blueprint::parse_size(&text)
+                .map(SizeLimit::Bytes)
+                .map_err(|err| A::Error::custom(format!("volume '{name}' `size_limit`: {err}")))?,
+        };
+        Ok(VolumeSpec {
+            kind,
+            access: access.unwrap_or(Access::ReadWrite),
+            size_limit,
+        })
+    }
+}
+
+/// Where a named volume's files live.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum VolumeKind {
+    /// `<managed volume root>/<name>`, created by the server on first use and
+    /// never deleted by it.
+    ManagedLocal,
+    /// A directory the operator owns. The server neither creates nor deletes it.
+    LocalPath { path: PathBuf },
+}
+
+/// A volume's size limit. Declared explicitly, so no volume is unbounded by
+/// accident.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SizeLimit {
+    Bytes(u64),
+    Unlimited,
+}
 
 /// The directories the server reads or writes that [`validate_volumes`]
 /// guards. Callers pass
@@ -241,6 +466,11 @@ pub struct ServerDirectories {
     /// `None` means the OS temp directory, which is where ephemeral scratch
     /// lands when the operator configures no root.
     pub ephemeral_storage_root: Option<PathBuf>,
+    /// Where `managed-local` volumes live. Always guarded against `local-path`
+    /// volumes; checked against the other server-owned directories only when
+    /// some volume is managed, since otherwise the server never creates it.
+    /// `None` means [`default_managed_volume_root`].
+    pub managed_volume_root: Option<PathBuf>,
     /// The config file this server was started from, when it was started from one.
     /// It is not reachable from [`ServerConfig`] — the file is consumed during
     /// resolution and nothing keeps the path — so only the config-file channel can
@@ -289,6 +519,12 @@ impl ServerDirectories {
                     .unwrap_or_else(default_session_store_dir),
             ),
             ephemeral_storage_root: config.ephemeral_storage_root.clone(),
+            managed_volume_root: Some(
+                config
+                    .managed_volume_root
+                    .clone()
+                    .unwrap_or_else(default_managed_volume_root),
+            ),
         }
     }
 }
@@ -325,6 +561,12 @@ pub enum VolumeError {
         second: String,
         target: PathBuf,
     },
+    /// A `managed-local` volume name that cannot be used as one directory name
+    /// under the managed root.
+    BadManagedName { name: String },
+    /// The managed volume root overlaps a directory the server owns. Managed
+    /// volumes are created by name beneath it, so either direction is unsafe.
+    ManagedRootOverlap(ManagedRootOverlap),
 }
 
 /// One volume declaration overlapping one server-owned directory, in the
@@ -342,6 +584,17 @@ pub struct Overlap {
     pub reason: &'static str,
 }
 
+/// The managed volume root overlapping one server-owned directory.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ManagedRootOverlap {
+    pub root: PathBuf,
+    pub owned: &'static str,
+    pub owned_path: PathBuf,
+    /// Whether the root contains the owned directory or sits inside it.
+    pub direction: Direction,
+    pub reason: &'static str,
+}
+
 /// Which way containment is unsafe. The two directions fail for different
 /// reasons, and a directory can be guarded in both: the `per_session` VFS root
 /// leaks outward and loses data inward, while the package store and the durable
@@ -353,6 +606,16 @@ pub enum Direction {
     VolumeContains,
     /// The volume is at or below the server-owned directory.
     VolumeInside,
+}
+
+impl Direction {
+    /// How a refusal names the containment, with the volume or root as subject.
+    fn verb(self) -> &'static str {
+        match self {
+            Direction::VolumeContains => "contains",
+            Direction::VolumeInside => "is inside",
+        }
+    }
 }
 
 impl fmt::Display for VolumeError {
@@ -378,10 +641,7 @@ impl fmt::Display for VolumeError {
                  Point the volume at a directory outside it, or move the {owned} elsewhere",
                 name = o.name,
                 target = o.target.display(),
-                direction = match o.direction {
-                    Direction::VolumeContains => "contains",
-                    Direction::VolumeInside => "is inside",
-                },
+                direction = o.direction.verb(),
                 owned = o.owned,
                 owned_path = o.owned_path.display(),
                 reason = o.reason,
@@ -410,6 +670,22 @@ impl fmt::Display for VolumeError {
                  own directory, or declare one name and reference it from both blueprints",
                 target = target.display(),
             ),
+            VolumeError::BadManagedName { name } => write!(
+                f,
+                "managed-local volume name {name:?} is stored as a directory of that name, so it \
+                 must be 1-64 characters of letters, digits, `.`, `_` and `-`, starting with a \
+                 letter or digit"
+            ),
+            VolumeError::ManagedRootOverlap(o) => write!(
+                f,
+                "the managed volume root ({root}) {direction} the {owned} ({owned_path}): \
+                 {reason}. Set `volume_dir` to a directory outside it",
+                root = o.root.display(),
+                direction = o.direction.verb(),
+                owned = o.owned,
+                owned_path = o.owned_path.display(),
+                reason = o.reason,
+            ),
         }
     }
 }
@@ -427,17 +703,99 @@ impl std::error::Error for VolumeError {}
 /// Comparison runs over both the written and the symlink-resolved target (see
 /// [`Shape`]), so an overlap that appears only once a link is followed and one
 /// that appears only in the operator's spelling are both refused.
+///
+/// A `managed-local` volume lives at `<managed root>/<name>`: its name must be
+/// a plain directory name, and the managed root itself must stay clear of every
+/// server-owned directory.
 pub fn validate_volumes(
     volumes: &VolumeTable,
     dirs: &ServerDirectories,
 ) -> Result<(), VolumeError> {
     let guarded = guarded_dirs(dirs);
+    let managed_root = dirs
+        .managed_volume_root
+        .clone()
+        .unwrap_or_else(default_managed_volume_root);
+    let has_managed = volumes
+        .values()
+        .any(|spec| spec.kind == VolumeKind::ManagedLocal);
+    if has_managed {
+        let ephemeral = dirs
+            .ephemeral_storage_root
+            .clone()
+            .unwrap_or_else(std::env::temp_dir);
+        // Every guarded directory but the managed root itself.
+        let others = guarded_dirs(&ServerDirectories {
+            managed_volume_root: None,
+            ..dirs.clone()
+        });
+        check_managed_root(&managed_root, &ephemeral, &others)?;
+    }
     let mut checked: Vec<Volume> = Vec::new();
-    for (name, target) in volumes {
-        let volume = prepare_volume(name, target)?;
-        check_against_guarded_dirs(&volume, &guarded)?;
+    for (name, spec) in volumes {
+        let volume = match &spec.kind {
+            VolumeKind::LocalPath { path } => {
+                let volume = prepare_volume(name, path)?;
+                check_against_guarded_dirs(&volume, &guarded)?;
+                volume
+            }
+            VolumeKind::ManagedLocal => {
+                validate_name(name)?;
+                if !is_managed_name(name) {
+                    return Err(VolumeError::BadManagedName {
+                        name: name.to_string(),
+                    });
+                }
+                let target = managed_root.join(name);
+                Volume {
+                    name: name.to_string(),
+                    shape: Shape::of(&target),
+                    target,
+                }
+            }
+        };
         check_against_other_volumes(&volume, &checked)?;
         checked.push(volume);
+    }
+    Ok(())
+}
+
+/// Whether `name` can be a managed volume's directory name on every platform.
+pub fn is_managed_name(name: &str) -> bool {
+    let mut chars = name.chars();
+    chars.next().is_some_and(|c| c.is_ascii_alphanumeric())
+        && name.len() <= 64
+        && chars.all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
+}
+
+/// Refuse a managed volume root that overlaps a server-owned directory in either
+/// direction. A root inside the ephemeral root, the OS temp dir by default, is
+/// allowed: that is the operator's choice, as it is for a `local-path` volume.
+fn check_managed_root(
+    root: &Path,
+    ephemeral: &Path,
+    guarded: &[GuardedDir],
+) -> Result<(), VolumeError> {
+    let shape = Shape::of(root);
+    let ephemeral = Shape::of(ephemeral);
+    for guard in guarded {
+        let direction = if guard.shape.beneath(&shape) {
+            Direction::VolumeContains
+        } else if shape.beneath(&guard.shape) {
+            if guard.shape.same_as(&ephemeral) {
+                continue;
+            }
+            Direction::VolumeInside
+        } else {
+            continue;
+        };
+        return Err(VolumeError::ManagedRootOverlap(ManagedRootOverlap {
+            root: root.to_path_buf(),
+            owned: guard.owned,
+            owned_path: guard.path.clone(),
+            direction,
+            reason: guard.reason,
+        }));
     }
     Ok(())
 }
@@ -614,7 +972,7 @@ fn guarded_dirs(dirs: &ServerDirectories) -> Vec<GuardedDir> {
         .ephemeral_storage_root
         .clone()
         .unwrap_or_else(std::env::temp_dir);
-    let rows: [(&'static str, Option<PathBuf>, Direction, &'static str); 15] = [
+    let rows: [(&'static str, Option<PathBuf>, Direction, &'static str); 17] = [
         (
             "secret store",
             dirs.secret_store_dir.clone(),
@@ -701,6 +1059,19 @@ fn guarded_dirs(dirs: &ServerDirectories) -> Vec<GuardedDir> {
             Direction::VolumeInside,
             "orphan reconciliation deletes unclaimed directories under that root on every boot, \
              so the volume's contents would be wiped",
+        ),
+        (
+            "managed volume root",
+            dirs.managed_volume_root.clone(),
+            Direction::VolumeContains,
+            "the volume would expose every managed volume, whatever access each declares",
+        ),
+        (
+            "managed volume root",
+            dirs.managed_volume_root.clone(),
+            Direction::VolumeInside,
+            "managed volumes are created by name under that root, so the volume would share a \
+             directory with one of them",
         ),
         (
             "ephemeral storage root",

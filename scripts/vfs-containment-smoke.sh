@@ -24,7 +24,7 @@ cleanup() { [ -f "$V/pid" ] && kill "$(cat "$V/pid")" 2>/dev/null
 trap cleanup EXIT
 
 ok()   { pass=$((pass+1)); printf '  \033[32mPASS\033[0m  %s\n' "$1"; }
-bad()  { fail=$((fail+1)); printf '  \033[31mFAIL\033[0m  %s\n         got: %s\n' "$1" "${2:0:200}"; }
+bad()  { fail=$((fail+1)); printf '  \033[31mFAIL\033[0m  %s\n         got: %s\n' "$1" "${2:0:600}"; }
 # expect_in <needle> <haystack> <label>
 expect_in() { case "$2" in *"$1"*) ok "$3";; *) bad "$3" "$2";; esac; }
 expect_not() { case "$2" in *"$1"*) bad "$3" "$2";; *) ok "$3";; esac; }
@@ -56,11 +56,27 @@ volumes:
 $1
 EOF
 }
-# boot <config-file> -> prints the refusal, or "STARTED" if the server came up
+# boot <config-file> -> prints the refusal (with its causes, on one line),
+# "STARTED (no refusal)" if the server came up, or a TIMEOUT / EXITED marker when
+# it neither refused nor started. Waits for the server to exit or start
+# listening, up to 10s, so a slow first start of a fresh binary isn't mistaken for
+# silence. The log and the child's pid live in $V, so an interrupted run still
+# cleans both up.
 boot() {
-  local out; out=$("$SRV" --config "$1" 2>&1 &
-                   p=$!; sleep 2.5; kill $p 2>/dev/null; wait $p 2>/dev/null)
-  case "$out" in *"listening"*) echo "STARTED (no refusal)";; *) echo "$out" | grep -i "^Error" | head -1;; esac
+  local log="$V/boot.log"
+  : > "$log"   # exists before the first poll; the child opens it only once forked
+  "$SRV" --config "$1" > "$log" 2>&1 & local p=$!
+  echo $p > "$V/pid"
+  local waited=0
+  while kill -0 $p 2>/dev/null && ! grep -q listening "$log" && [ $waited -lt 40 ]; do
+    sleep 0.25; waited=$((waited+1))
+  done
+  local hung=""; kill -0 $p 2>/dev/null && ! grep -q listening "$log" && hung=yes
+  kill $p 2>/dev/null; wait $p 2>/dev/null; rm -f "$V/pid"
+  local out; out=$(cat "$log"); rm -f "$log"
+  if [ -n "$hung" ]; then echo "TIMEOUT after 10s (no exit, no \"listening\")"; return; fi
+  if [ -z "$out" ]; then echo "EXITED with no output"; return; fi
+  case "$out" in *"listening"*) echo "STARTED (no refusal)";; *) echo "$out" | grep -v '^$' | tr '\n' ' ' | tr -s ' ';; esac
 }
 put() { # put <port> <name> <yaml>  -> "<code> <message-or-body>"
   python3 - "$1" "$2" "$3" <<'PY'
@@ -134,19 +150,22 @@ SRV=./target/debug/submilli-server
 
 # ---------------------------------------------------------------- boot refusals
 echo; echo "=== Boot refusals (the server must not come up) ==="
-config "  work: $V/home" > "$V/c1.yaml"
+config "  work: {kind: local-path, path: $V/home, size_limit: unlimited}" > "$V/c1.yaml"
 expect_in "contains the secret store" "$(boot "$V/c1.yaml")" "a volume containing a server directory"
 
-config "  work: relative/dir" > "$V/c2.yaml"
+config "  work: {kind: local-path, path: relative/dir, size_limit: unlimited}" > "$V/c2.yaml"
 expect_in "give an absolute path" "$(boot "$V/c2.yaml")" "a relative volume target"
 
+config "  work: $W" > "$V/c5.yaml"
+expect_in "uses the retired" "$(boot "$V/c5.yaml")" "the old name-to-directory form is refused with its migration"
+
 ln -sfn "$V/elsewhere" "$W/alias"
-config "  work: $W
-  inner: $W/alias" > "$V/c3.yaml"
+config "  work: {kind: local-path, path: $W, size_limit: unlimited}
+  inner: {kind: local-path, path: $W/alias, size_limit: unlimited}" > "$V/c3.yaml"
 expect_in "is inside volume 'work'" "$(boot "$V/c3.yaml")" "a volume at a symlink inside another volume  (NEW)"
 rm -f "$W/alias"
 
-config "  work: $V/STATE" "$V/state/blueprints" > "$V/c4.yaml"
+config "  work: {kind: local-path, path: $V/STATE, size_limit: unlimited}" "$V/state/blueprints" > "$V/c4.yaml"
 if [ "$(uname)" = "Darwin" ]; then
   expect_in "blueprint store" "$(boot "$V/c4.yaml")" "a case alias of a guarded directory  (NEW, macOS/Windows)"
 else
@@ -155,26 +174,32 @@ fi
 
 # ---------------------------------------------------------------- live server
 echo; echo "=== Registration ==="
-config "  work: $W" > "$V/ok.yaml"
+config "  work: {kind: local-path, path: $W, size_limit: unlimited}" > "$V/ok.yaml"
 "$SRV" --config "$V/ok.yaml" > "$V/server.log" 2>&1 & echo $! > "$V/pid"
 for _ in $(seq 40); do grep -q listening "$V/server.log" && break; sleep 0.25; done
 grep -q listening "$V/server.log" || { echo "server did not start:"; cat "$V/server.log"; exit 1; }
 
 expect_in "the \`path\` key is retired" "$(put $PORT attack "name: attack
 vfs:
-  mode: persistent
+  mode: named
   path: /
 $ALLOW")" "the original attack -- \`path: /\` is refused at registration"
 
-expect_in "is not declared on this server" "$(put $PORT ghost "name: ghost
+expect_in "\`persistent\` was removed" "$(put $PORT legacy "name: legacy
 vfs:
   mode: persistent
+  volume: work
+$ALLOW")" "the removed \`persistent\` mode is refused with its migration"
+
+expect_in "is not declared on this server" "$(put $PORT ghost "name: ghost
+vfs:
+  mode: named
   volume: nope
 $ALLOW")" "an undeclared volume name is refused, and the declared ones are listed"
 
 expect_in "200" "$(put $PORT good "name: good
 vfs:
-  mode: persistent
+  mode: named
   volume: work
 $ALLOW")" "a declared volume is accepted"
 expect_in "200" "$(put $PORT none "name: none
@@ -209,7 +234,7 @@ echo; echo "=== MCP file tools ==="
 expect_in "escapes the VFS root" "$(mcp $PORT good submilli__files__read '{"path":"/escape/secret.txt"}')" "files.read through the escaping link"
 expect_in "escapes the VFS root" "$(mcp $PORT good submilli__files__list '{"path":"/escape"}')"            "files.list of the escaping link"
 expect_in "filesystem is disabled" "$(mcp $PORT none submilli__files__read '{"path":"/Cargo.toml"}')"      "\`vfs: none\` really has no filesystem"
-expect_in "PERSISTED" "$(mcp $PORT good submilli__files__read '{"path":"/hello.txt"}')"                    "files.read works against a persistent volume"
+expect_in "PERSISTED" "$(mcp $PORT good submilli__files__read '{"path":"/hello.txt"}')"                    "files.read works against a named volume"
 
 echo; echo "=== CLI ==="
 printf 'import { readText } from "submilli:fs";\nfunction main(): string { const t = readText("/escape/secret.txt"); return t === null ? "null" : t; }\n' > "$V/esc.ts"
