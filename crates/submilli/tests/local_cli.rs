@@ -1568,6 +1568,38 @@ fn add_package_lists_a_dependency_added_after_its_dependent() {
     assert_eq!(blueprint.permissions["main"].len(), 1);
 }
 
+#[test]
+fn capability_add_suggests_closest_name_without_changing_blueprint() {
+    let home = tempfile::tempdir().expect("home tempdir");
+    let file = home.path().join("blueprint.yaml");
+    let original = "name: typo\ndefault: deny\n";
+    write_file(&file, original);
+    for (input, expected) in [
+        ("fs.cpy", "did you mean: fs.copy"),
+        (
+            "http.downlod",
+            "looks like a misspelling of `http.download`",
+        ),
+        ("FS.Write", "did you mean: fs.write"),
+    ] {
+        let out = run_with_home(
+            &[
+                os("blueprint"),
+                os("capability"),
+                os("add"),
+                os(input),
+                os("--blueprint"),
+                file.as_os_str(),
+            ],
+            home.path(),
+        );
+        assert!(!out.status.success());
+        let message = stderr(&out);
+        assert!(message.contains(expected), "{message}");
+        assert_eq!(fs::read_to_string(&file).expect("read blueprint"), original);
+    }
+}
+
 /// A dependent's caller list names its dependency's provided capabilities,
 /// so `capability add` knows them without `--force`.
 #[test]
@@ -2471,4 +2503,26 @@ fn blueprint_secret_add_accepts_only_store_or_harness_sources() {
             required: true
         })
     );
+}
+
+#[test]
+fn lint_suggests_closest_capability_names_without_changing_blueprint() {
+    let home = tempfile::tempdir().expect("home tempdir");
+    let file = home.path().join("blueprint.yaml");
+    let original = "name: typo\ndefault: deny\npermissions:\n  main:\n    - capability: fs.cpy\n      action: allow\n    - capability: http.downlod\n      action: deny\n    - capability: FS.Write\n      action: allow\n";
+    write_file(&file, original);
+    let out = run_with_home(
+        &[os("blueprint"), os("lint"), file.as_os_str()],
+        home.path(),
+    );
+    assert!(out.status.success(), "{}", stderr(&out));
+    let message = stderr(&out);
+    for expected in [
+        "did you mean: fs.copy",
+        "looks like a misspelling of `http.download`",
+        "did you mean: fs.write",
+    ] {
+        assert!(message.contains(expected), "{message}");
+    }
+    assert_eq!(fs::read_to_string(&file).expect("read blueprint"), original);
 }
