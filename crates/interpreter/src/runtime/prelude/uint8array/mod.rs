@@ -21,6 +21,7 @@ use base64::engine::general_purpose::{GeneralPurpose, GeneralPurposeConfig, NO_P
 use wasmtime::{ArrayRef, Caller, Rooted, StructRef, StructRefPre, Val};
 
 use crate::runtime::StoreData;
+use crate::runtime::fuel;
 use crate::runtime::host::{
     fatal_host_error, host_boxed_number_vtable, read_uint8_array_arg,
     write_submilli_uint8array_struct,
@@ -63,6 +64,7 @@ fn store_bytes(
     bytes: &[u8],
 ) -> wasmtime::Result<()> {
     let raw = backing(caller, receiver)?;
+    fuel::charge(&mut *caller, fuel::COPY, bytes.len() as u64)?;
     raw.write_i8(&mut *caller, 0, bytes)
 }
 

@@ -19,7 +19,7 @@ use std::io::{BufReader, Read, Seek, SeekFrom, Write};
 use std::sync::Arc;
 
 use wasmtime::{
-    Caller, ExternRef, FieldType, Finality, Func, FuncType, HeapType, Linker, Mutability, RefType,
+    Caller, ExternRef, FieldType, Finality, FuncType, HeapType, Linker, Mutability, RefType,
     Rooted, StorageType, StructRef, StructRefPre, StructType, Val, ValType,
 };
 
@@ -27,6 +27,7 @@ use crate::runtime::fs::{
     ContainError, ContentPath, FileIdentity, LinkPath, MAX_REMOVE_ENTRIES, guest_normalize,
     resolve_link,
 };
+use crate::runtime::fuel::host_func;
 use crate::runtime::gc_singleton::singleton_struct;
 use crate::runtime::host::{
     quota_exceeded_error, read_string_arg, read_uint8_array_arg, register_host_fn,
@@ -1013,7 +1014,7 @@ fn open_writer(caller: &mut Caller<'_, StoreData>, path: &str) -> wasmtime::Resu
 // Iterators
 // ---------------------------------------------------------------------------
 
-type IterCallback = fn(Caller<'_, StoreData>, &[Val], &mut [Val]) -> wasmtime::Result<()>;
+type IterCallback = fn(&mut Caller<'_, StoreData>, &[Val], &mut [Val]) -> wasmtime::Result<()>;
 
 /// Wrap a charged handle in a closable iterator: the handle rides an
 /// `externref` inside a host-private env struct; `next_step` / `close_step`
@@ -1032,8 +1033,8 @@ fn make_handle_iterator(
     let intr = intrinsic_types(&mut *caller)?;
     let (next_ty, _) = next_closure_type(caller.engine(), &intr)?;
     let (close_ty, _) = void_closure_type(caller.engine(), &intr)?;
-    let next_fn = Func::new(&mut *caller, next_ty, next_step);
-    let close_fn = Func::new(&mut *caller, close_ty, close_step);
+    let next_fn = host_func(&mut *caller, next_ty, next_step);
+    let close_fn = host_func(&mut *caller, close_ty, close_step);
     build_closable_iterator(
         caller,
         next_fn,
@@ -1071,11 +1072,10 @@ fn handle_payload<'a, T: 'static>(
 }
 
 fn lines_next(
-    mut caller: Caller<'_, StoreData>,
+    caller: &mut Caller<'_, StoreData>,
     params: &[Val],
     results: &mut [Val],
 ) -> wasmtime::Result<()> {
-    let caller = &mut caller;
     let Some(handle) = env_handle(caller, &params[0])? else {
         results[0] = iter_done(caller)?;
         return Ok(());
@@ -1094,11 +1094,10 @@ fn lines_next(
 }
 
 fn bytes_next(
-    mut caller: Caller<'_, StoreData>,
+    caller: &mut Caller<'_, StoreData>,
     params: &[Val],
     results: &mut [Val],
 ) -> wasmtime::Result<()> {
-    let caller = &mut caller;
     let Some(handle) = env_handle(caller, &params[0])? else {
         results[0] = iter_done(caller)?;
         return Ok(());
@@ -1117,11 +1116,10 @@ fn bytes_next(
 }
 
 fn list_next(
-    mut caller: Caller<'_, StoreData>,
+    caller: &mut Caller<'_, StoreData>,
     params: &[Val],
     results: &mut [Val],
 ) -> wasmtime::Result<()> {
-    let caller = &mut caller;
     let Some(handle) = env_handle(caller, &params[0])? else {
         results[0] = iter_done(caller)?;
         return Ok(());
@@ -1155,11 +1153,10 @@ fn list_next(
 /// externref is a no-op — `for…of` fires `close` unconditionally, so a
 /// double close must not trap.
 fn close_handle_of<T: handles::Closable + 'static>(
-    mut caller: Caller<'_, StoreData>,
+    caller: &mut Caller<'_, StoreData>,
     params: &[Val],
     _results: &mut [Val],
 ) -> wasmtime::Result<()> {
-    let caller = &mut caller;
     if let Some(handle) = env_handle(caller, &params[0])?
         && let Some(payload) = handle
             .data_mut(&mut *caller)?

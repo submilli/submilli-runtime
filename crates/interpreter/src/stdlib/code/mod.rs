@@ -7,6 +7,7 @@ mod tests;
 mod text;
 mod walk;
 
+use crate::runtime::fuel;
 use crate::runtime::{
     StoreData,
     host::{register_host_fn, write_submilli_string_struct_units},
@@ -180,7 +181,8 @@ fn mutate(
 ) -> Result<Val> {
     let original = read_file(caller, budget, path, op)?;
     budget.charge(caller, original.len().saturating_mul(64))?;
-    Budget::work(caller, original.len().saturating_mul(4))?;
+    // Splicing the change back into the original rewrites the whole text.
+    fuel::charge(&mut *caller, fuel::SCAN, original.len() as u64)?;
     let change = match op {
         "edit" => prepare_edit(caller, budget, &original, params)?,
         "insertAt" => text::insert(
@@ -191,10 +193,13 @@ fn mutate(
         "applyPatch" => {
             let patch = argument(caller, budget, &params[1])?;
             budget.charge(caller, patch.len().saturating_mul(32))?;
-            Budget::work(
-                caller,
-                original.len().saturating_mul(patch.lines().count().max(1)),
+            // Each hunk is located by scanning the original.
+            fuel::charge(
+                &mut *caller,
+                fuel::SCAN,
+                (original.len() as u64).saturating_mul(patch.lines().count().max(1) as u64),
             )?;
+            fuel::charge(&mut *caller, fuel::PARSE, patch.len() as u64)?;
             patch::apply(&original, &patch)?
         }
         _ => unreachable!(),
@@ -248,7 +253,12 @@ fn prepare_edit(
 ) -> Result<text::Edit> {
     let old = argument(caller, budget, &params[1])?;
     let new = argument(caller, budget, &params[2])?;
-    Budget::work(caller, original.len().saturating_mul(old.len().max(1)))?;
+    // Naive substring search: every position against the whole needle.
+    fuel::charge(
+        &mut *caller,
+        fuel::SCAN,
+        (original.len() as u64).saturating_mul(old.len().max(1) as u64),
+    )?;
     if old.is_empty() {
         bail!("code.edit: oldString must not be empty; use insertAt");
     }
@@ -320,7 +330,8 @@ fn read_contents(
     let len = usize::try_from(metadata.len())?;
     budget.check_size(len)?;
     budget.charge(caller, len.saturating_mul(8).saturating_add(1024))?;
-    Budget::work(caller, len)?;
+    fuel::charge(&mut *caller, fuel::IO, len as u64)?;
+    fuel::charge(&mut *caller, fuel::SCAN, len as u64)?;
     let mut bytes = Vec::with_capacity(len);
     file.take((len as u64).saturating_add(1))
         .read_to_end(&mut bytes)?;
@@ -351,13 +362,17 @@ fn diff(
     b: &[u16],
 ) -> Result<Vec<u16>> {
     budget.charge(caller, (a.len() + b.len()).saturating_mul(16))?;
-    let na = a.iter().filter(|&&u| u == 10).count() + 1;
-    let nb = b.iter().filter(|&&u| u == 10).count() + 1;
+    let na = text::line_count(a);
+    let nb = text::line_count(b);
     budget.charge(caller, (na + nb).saturating_mul(96))?;
-    Budget::work(
-        caller,
-        na.saturating_mul(nb).saturating_add(a.len() + b.len()),
+    text::check_diff_size(na, nb)?;
+    // Line-based LCS: a cell per line pair, plus a scan of both texts.
+    fuel::charge(
+        &mut *caller,
+        fuel::PARSE,
+        (na as u64).saturating_mul(nb as u64),
     )?;
+    fuel::charge(&mut *caller, fuel::SCAN, (a.len() + b.len()) as u64)?;
     let result = text::diff(a, b)?;
     budget.check_size(result.len().saturating_mul(2))?;
     Ok(result)

@@ -13,6 +13,7 @@ use wasmtime::{
 };
 
 use crate::runtime::StoreData;
+use crate::runtime::fuel::host_func_async;
 use crate::runtime::host::{read_string_arg, register_host_fn, write_submilli_string_struct};
 use crate::runtime::intrinsic_types::IntrinsicTypes;
 use crate::runtime::prelude::collection::object_field;
@@ -307,7 +308,7 @@ fn plain_vtable_slots(
     let hash_ty = intr.hash_fn.clone();
 
     let st_ty = ty.clone();
-    let to_string = Func::new_async(
+    let to_string = host_func_async(
         &mut *store,
         to_string_ty,
         move |mut caller, params, results| {
@@ -323,7 +324,7 @@ fn plain_vtable_slots(
     );
 
     let st_ty = ty.clone();
-    let to_json = Func::new_async(
+    let to_json = host_func_async(
         &mut *store,
         to_json_ty,
         move |mut caller, params, results| {
@@ -344,7 +345,7 @@ fn plain_vtable_slots(
     );
 
     let st_ty = ty.clone();
-    let equals = Func::new_async(
+    let equals = host_func_async(
         &mut *store,
         equals_ty,
         move |mut caller, params, results| {
@@ -361,7 +362,7 @@ fn plain_vtable_slots(
         },
     );
 
-    let hash = Func::new_async(&mut *store, hash_ty, move |_caller, _params, results| {
+    let hash = host_func_async(&mut *store, hash_ty, move |_caller, _params, results| {
         Box::new(async move {
             results[0] = Val::I32(0);
             Ok(())

@@ -1,6 +1,5 @@
-//! Scoped accounting for native working buffers and bounded host work.
+//! Scoped accounting for native working buffers.
 use crate::runtime::StoreData;
-use crate::runtime::fuel::charge_host_fuel;
 use std::sync::{
     Arc,
     atomic::{AtomicU64, Ordering},
@@ -31,9 +30,6 @@ impl Budget {
             .map_err(|refused| wasmtime::Error::msg(format!("code: {refused}")))?;
         self.charged += bytes as u64;
         Ok(())
-    }
-    pub fn work(caller: &mut Caller<'_, StoreData>, units: usize) -> Result<()> {
-        charge_host_fuel(caller, units as u64)
     }
     pub fn check_size(&self, bytes: usize) -> Result<()> {
         if bytes > self.max_bytes {

@@ -183,6 +183,12 @@ impl ExecutionUsage {
         let fuel = initial_fuel
             .checked_sub(remaining)
             .ok_or_else(|| wasmtime::Error::msg("remaining fuel exceeds initial budget"))?;
+        // Batched host charges the engine has not seen yet; a run that Wasm
+        // exhausted with a batch pending overran the budget by that much, and
+        // the report stays within the budget.
+        let fuel = fuel
+            .saturating_add(store.data().host_fuel_pending)
+            .min(initial_fuel);
         let host_fuel = store.data().host_fuel;
         let wasm_fuel = fuel
             .checked_sub(host_fuel)

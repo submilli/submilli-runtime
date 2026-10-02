@@ -5,6 +5,7 @@ use super::{
     ctor_key, field_array, field_is_present, field_is_private, is_accessor_slot, shape_arrays,
 };
 use crate::runtime::StoreData;
+use crate::runtime::fuel;
 use crate::runtime::host::{register_host_fn, register_host_fn_async, write_submilli_array_struct};
 use crate::runtime::prelude::collection::FIELD_NAME;
 use crate::runtime::prelude::keep::KeptValues;
@@ -30,7 +31,9 @@ fn find(
             crate::runtime::host::type_error("property receiver must be an object"),
         ));
     };
-    for slot in 0..names.len(&mut *caller)? {
+    let count = names.len(&mut *caller)?;
+    fuel::charge(&mut *caller, fuel::ELEM, u64::from(count))?;
+    for slot in 0..count {
         let name = names.get(&mut *caller, slot)?;
         if is_accessor_slot(caller, &name)? == accessor
             && !field_is_private(caller, &name)?

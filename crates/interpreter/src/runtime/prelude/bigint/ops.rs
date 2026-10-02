@@ -10,7 +10,7 @@ use crate::runtime::host::{
     range_error, read_string_arg, register_host_fn, type_error, write_submilli_string,
 };
 use crate::runtime::intrinsic_types::intrinsic_types;
-use crate::runtime::{NUMBER_MODULE_NAME, StoreData};
+use crate::runtime::{NUMBER_MODULE_NAME, StoreData, fuel};
 
 pub const BIGINT_MODULE_NAME: &str = "submilli:bigint";
 
@@ -422,6 +422,7 @@ fn read_limbs_arg(
         }
     };
     let len = arr.len(&mut *caller)?;
+    fuel::charge(&mut *caller, fuel::ELEM, u64::from(len))?;
     let mut out = Vec::with_capacity(len as usize);
     for i in 0..len {
         let elem = arr.get(&mut *caller, i)?;
@@ -439,9 +440,10 @@ fn read_limbs_arg(
 }
 
 pub(crate) fn write_limbs(
-    mut ctx: impl AsContextMut,
+    mut ctx: impl AsContextMut<Data = StoreData>,
     limbs: &[u64],
 ) -> wasmtime::Result<Rooted<ArrayRef>> {
+    fuel::charge(&mut ctx, fuel::ELEM, limbs.len() as u64)?;
     let array_ty = limbs_array_type(ctx.as_context().engine());
     let pre = ArrayRefPre::new(&mut ctx, array_ty);
     let units: Vec<Val> = limbs.iter().map(|w| Val::I64(*w as i64)).collect();

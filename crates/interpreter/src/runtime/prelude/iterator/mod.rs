@@ -22,6 +22,7 @@ use wasmtime::{
 };
 
 use crate::runtime::StoreData;
+use crate::runtime::fuel::host_func;
 use crate::runtime::gc_singleton::{singleton_func, singleton_struct};
 use crate::runtime::host::{
     host_boxed_boolean_vtable, host_closure_vtable, host_object_vtable,
@@ -374,8 +375,8 @@ pub(crate) fn make_index_iterator(
     let intr = intrinsic_types(&mut *caller)?;
     let cursor = make_cursor(caller, payload)?;
     let (next_ty, next_struct) = next_closure_type(caller.engine(), &intr)?;
-    let next = Func::new(&mut *caller, next_ty, move |mut caller, params, results| {
-        index_step(&mut caller, params, results, kind, step)
+    let next = host_func(&mut *caller, next_ty, move |caller, params, results| {
+        index_step(caller, params, results, kind, step)
     });
     build_iterator(caller, next_struct, next, cursor)
 }
@@ -390,7 +391,7 @@ pub(crate) fn make_string_iterator(
     let intr = intrinsic_types(&mut *caller)?;
     let cursor = make_cursor(caller, string)?;
     let (next_ty, next_struct) = next_closure_type(caller.engine(), &intr)?;
-    let next = Func::new(&mut *caller, next_ty, string_step);
+    let next = host_func(&mut *caller, next_ty, string_step);
     build_iterator(caller, next_struct, next, cursor)
 }
 
@@ -398,11 +399,10 @@ pub(crate) fn make_string_iterator(
 /// the payload `$string`'s backing, yield it as a fresh 1–2 unit `$string`, and
 /// advance by however many units it spanned.
 fn string_step(
-    mut caller: Caller<'_, StoreData>,
+    caller: &mut Caller<'_, StoreData>,
     params: &[Val],
     results: &mut [Val],
 ) -> wasmtime::Result<()> {
-    let caller = &mut caller;
     let cursor = as_struct(caller, &params[0], "string iterator env")?;
     let Val::I32(pos) = cursor.field(&mut *caller, 0)? else {
         return Err(wasmtime::Error::msg(

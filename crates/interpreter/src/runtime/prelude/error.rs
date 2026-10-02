@@ -33,6 +33,7 @@ use wasmtime::{
 use super::MODULE_NAME;
 use super::vtable::{as_struct, read_string_units};
 use crate::runtime::StoreData;
+use crate::runtime::fuel::host_func_async;
 use crate::runtime::host::{
     register_host_fn, write_submilli_string, write_submilli_string_struct_units,
 };
@@ -393,7 +394,7 @@ fn build_error_vtable(
     intr: &IntrinsicTypes,
     class: BuiltinErrorClass,
 ) -> wasmtime::Result<[Func; 4]> {
-    let to_string = Func::new_async(
+    let to_string = host_func_async(
         &mut *store,
         intr.to_string_fn.clone(),
         |mut caller, params, results| {
@@ -418,7 +419,7 @@ fn build_error_vtable(
         },
     );
 
-    let to_json = Func::new_async(
+    let to_json = host_func_async(
         &mut *store,
         intr.to_json_fn.clone(),
         |mut caller, _params, results| {
@@ -431,7 +432,7 @@ fn build_error_vtable(
         },
     );
 
-    let equals = Func::new_async(
+    let equals = host_func_async(
         &mut *store,
         intr.equals_fn.clone(),
         move |mut caller, params, results| {
@@ -442,7 +443,7 @@ fn build_error_vtable(
         },
     );
 
-    let hash = Func::new_async(
+    let hash = host_func_async(
         &mut *store,
         intr.hash_fn.clone(),
         |_caller, _params, results| {

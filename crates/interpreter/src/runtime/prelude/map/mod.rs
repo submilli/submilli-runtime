@@ -25,12 +25,13 @@ pub(crate) use install::declare_types;
 pub use install::{declare, install};
 
 use wasmtime::{
-    ArrayRef, ArrayRefPre, ArrayType, Caller, FieldType, Finality, Func, Global, GlobalType,
-    HeapType, Mutability, RefType, Rooted, StorageType, Store, StructRef, StructRefPre, StructType,
-    Val, ValType,
+    ArrayRef, ArrayRefPre, ArrayType, Caller, FieldType, Finality, Global, GlobalType, HeapType,
+    Mutability, RefType, Rooted, StorageType, Store, StructRef, StructRefPre, StructType, Val,
+    ValType,
 };
 
 use crate::runtime::StoreData;
+use crate::runtime::fuel::{self, host_func};
 use crate::runtime::gc_singleton::{singleton_array, singleton_struct};
 use crate::runtime::host::{host_map_tombstone, host_object_vtable, write_submilli_array_struct};
 use crate::runtime::intrinsic_types::{IntrinsicTypes, intrinsic_types};
@@ -192,6 +193,8 @@ async fn hash(caller: &mut Caller<'_, StoreData>, key: &Val) -> wasmtime::Result
     if is_null_key(caller, key)? {
         return Ok(0);
     }
+    // One probe step; the hook charges its own walk.
+    fuel::charge(&mut *caller, fuel::ELEM, 1)?;
     match dispatch_vtable_slot(caller, key, 3, &[]).await? {
         Val::I32(h) => Ok(h),
         other => Err(wasmtime::Error::msg(format!(
@@ -211,6 +214,8 @@ async fn equals(
     if left_null || right_null {
         return Ok(left_null && right_null);
     }
+    // One probe step; the hook charges its own walk.
+    fuel::charge(&mut *caller, fuel::ELEM, 1)?;
     match dispatch_vtable_slot(caller, key, 2, &[*slot]).await? {
         Val::I32(b) => Ok(b != 0),
         other => Err(wasmtime::Error::msg(format!(
@@ -432,6 +437,14 @@ async fn rehash(
     let old_vals = field_array(caller, b, F_VALUES)?;
     let old_order = field_array(caller, b, F_ORDER)?;
     let old_order_len = field_i32(caller, b, F_ORDER_LEN)?;
+    // Fresh keys and values arrays, then one reinsertion per ledger entry.
+    fuel::charge(
+        &mut *caller,
+        fuel::ELEM,
+        (new_cap as u64)
+            .saturating_mul(2)
+            .saturating_add(old_order_len as u64),
+    )?;
 
     let new_keys = new_raw_array(caller, new_cap)?;
     let new_vals = new_raw_array(caller, new_cap)?;
@@ -548,8 +561,8 @@ fn make_map_iterator(
 
     let intr = intrinsic_types(&mut *caller)?;
     let (next_ty, next_struct) = next_closure_type(caller.engine(), &intr)?;
-    let next = Func::new(&mut *caller, next_ty, move |mut caller, params, results| {
-        map_next_step(&mut caller, params, results, kind)
+    let next = host_func(&mut *caller, next_ty, move |caller, params, results| {
+        map_next_step(caller, params, results, kind)
     });
     build_iterator(caller, next_struct, next, cursor)
 }

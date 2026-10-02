@@ -8,6 +8,7 @@
 use wasmtime::{Caller, StructType, Val};
 
 use crate::runtime::StoreData;
+use crate::runtime::fuel;
 use crate::runtime::host::write_submilli_string_struct_units;
 use crate::runtime::prelude::iterator::as_struct;
 use crate::runtime::prelude::vtable::read_string_units;
@@ -114,7 +115,9 @@ fn object_field_kind(
         _ => return Ok(None),
     };
     let target: Vec<u16> = name.encode_utf16().collect();
-    for i in 0..names.len(&mut *caller)? {
+    let count = names.len(&mut *caller)?;
+    fuel::charge(&mut *caller, fuel::ELEM, u64::from(count))?;
+    for i in 0..count {
         let nm = names.get(&mut *caller, i)?;
         if read_string_units(caller, &nm, FIELD_NAME)? == target
             && super::object::is_accessor_slot(caller, &nm)? == accessor

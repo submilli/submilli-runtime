@@ -118,14 +118,32 @@ pub(super) fn insert(text: &str, line: usize, new: &str) -> Result<Edit> {
     )))
 }
 
-/// Slice on LF without decoding UTF-16, preserving lone surrogates and final newlines.
-pub(super) fn diff(a: &[u16], b: &[u16]) -> Result<Vec<u16>> {
-    let old: Vec<_> = a.split_inclusive(|&u| u == 10).collect();
-    let new: Vec<_> = b.split_inclusive(|&u| u == 10).collect();
-    // Myers worst-case work is quadratic. Refuse before native work can monopolize a store.
-    if old.len().saturating_mul(new.len()) > 4_000_000 {
+/// The lines `diff` compares: LF-terminated, the last one unterminated when
+/// the text does not end in LF, and none at all for an empty text.
+fn lines_inclusive(text: &[u16]) -> impl Iterator<Item = &[u16]> {
+    text.split_inclusive(|&u| u == 10)
+}
+
+/// How many lines `diff` would compare for `text`.
+pub(super) fn line_count(text: &[u16]) -> usize {
+    lines_inclusive(text).count()
+}
+
+/// Myers worst-case work is quadratic in the line counts. Refuse before native
+/// work can monopolize a store; callers check this before charging fuel for
+/// the comparison, so a refused diff costs nothing.
+pub(super) fn check_diff_size(old_lines: usize, new_lines: usize) -> Result<()> {
+    if old_lines.saturating_mul(new_lines) > 4_000_000 {
         bail!("code.diff: comparison exceeds line-work limit; compare smaller sections");
     }
+    Ok(())
+}
+
+/// Slice on LF without decoding UTF-16, preserving lone surrogates and final newlines.
+pub(super) fn diff(a: &[u16], b: &[u16]) -> Result<Vec<u16>> {
+    let old: Vec<_> = lines_inclusive(a).collect();
+    let new: Vec<_> = lines_inclusive(b).collect();
+    check_diff_size(old.len(), new.len())?;
     let groups = group_diff_ops(diff_line_ops(&old, &new), 3);
     let mut output = Vec::new();
     if groups.is_empty() {
