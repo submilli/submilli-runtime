@@ -127,6 +127,7 @@ no rule for, and the `default` those calls fall through to.
 | `fs.copy` | `copy` | `from`, `to`, `recursive` |
 | `http.get`, `http.post`, `http.put`, `http.patch`, `http.delete`, `http.head`, `http.options` | The request of that method | `host`, `path`, `body_size`, `timeout_ms` |
 | `http.download` | `download` | `host`, `url_path`, `vfs_path`, `max_bytes`, `overwrite`, `decompress` |
+| `http.<method>`, such as `http.trace` | `request` with any other method, in lowercase | `host`, `path`, `body_size`, `timeout_ms` |
 | `llm.call` | `call`, `batch`, `models` | `model`, `prompt_count` |
 | `secrets.get` | `get` | `name` |
 | `session.read` | `get` and `has`; `list` checks it once for each key it would return, and leaves out the keys refused | `key` |
@@ -273,6 +274,9 @@ mistake stops it before any program runs.
 | `default: allow` | Warning |
 | A `secrets.get` rule under `main`, which can have no effect | Warning |
 | A filter that tests a field the capability doesn't report, such as `customerClass` on an operation whose only field is `customerId` | Error |
+| A rule for a capability name nothing the caller can reach provides, such as `fs.wrte`, which never matches | Warning |
+| A rule for an HTTP method with no operation of its own, such as `http.trace`, which matches only `http.request` calls with that method | Warning |
+| A rule for a near miss of an HTTP operation, such as `http.dlete`, which matches only `http.request` calls with that method, so a misspelled `deny` lets the operation through | Warning |
 | A rule after a rule with no filter for the same capability in the same list, which never matches | Warning |
 | A list for a caller that is neither among the blueprint's packages nor a package they depend on | Warning |
 | A package among the blueprint's packages with no list of its own | Warning |

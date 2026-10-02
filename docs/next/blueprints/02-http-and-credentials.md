@@ -24,7 +24,8 @@ request and sees the response, never the header.
 
 ## Allow the request
 
-`submilli:http` has one capability per verb, plus one for downloads. List
+`submilli:http` has one capability per verb, plus one for downloads, and
+`http.<method>` for any other method `http.request` sends. List
 them, with the fields a filter can test and the rules the blueprint already
 has for each:
 
@@ -58,6 +59,9 @@ submilli:http
   http.download — Download a URL straight to the VFS
       fields: host: string, url_path: string, vfs_path: string, max_bytes: number, overwrite: boolean, decompress: boolean
       example filter: host == "cdn.example.com" and overwrite == false
+  http.<method> — Any other HTTP method, through `http.request`: `http.trace` gates TRACE
+      fields: host: string, path: string, body_size: number, timeout_ms: number
+      example filter: host == "api.example.com"
 ```
 
 Grant the verb the program needs, narrowed to the host:

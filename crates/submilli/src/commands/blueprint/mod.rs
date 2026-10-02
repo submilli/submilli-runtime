@@ -11,6 +11,7 @@ pub mod add_mcp;
 pub mod add_package;
 pub mod auth_proxy;
 pub mod capability;
+mod capability_names;
 mod declared_packages;
 mod file;
 mod filter_fields;

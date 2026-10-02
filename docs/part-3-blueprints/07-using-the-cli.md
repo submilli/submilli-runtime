@@ -156,7 +156,7 @@ don't survive.
 | `blueprint git set\|show\|remove` | Manage the blueprint's [Git configuration](#configure-git) |
 | `blueprint auth-proxy add\|list\|remove` | Credentials the runtime adds by host; `add --allow-insecure-http` opts that rule into HTTP, requiring a separate top-level YAML opt-in |
 | `blueprint capability list [library] [--unconfigured]` | Every capability a rule can name, with its filter fields and any rules already present; `--unconfigured` shows only what the blueprint's packages provide that `main` has no rule for |
-| `blueprint capability add <name> [--filter …] [--action allow\|deny] [--caller <id>]` | Append a rule, warning when a rule with no filter leaves the new rule or a later one unable to match, or when the filter tests a field the capability doesn't report; refuses a capability name nothing provides, or one only a dependency provides for `main`, unless `--force` |
+| `blueprint capability add <name> [--filter …] [--action allow\|deny] [--caller <id>]` | Append a rule, warning when a rule with no filter leaves the new rule or a later one unable to match, or when the filter tests a field the capability doesn't report; refuses a capability name nothing provides, or one only a dependency provides for `main`, unless `--force`; adds a rule for any other HTTP method as `http.<method>`, such as `http.trace`, warning that it matches only `http.request` calls with that method, and refuses a near miss of an HTTP operation, such as `http.dlete`, unless `--force` |
 | `blueprint capability remove <name> [--caller <id>]` | Drop every rule for a capability |
 | `blueprint prompt` | Print the tool description the agent receives, with this blueprint's policy filled in |
 
