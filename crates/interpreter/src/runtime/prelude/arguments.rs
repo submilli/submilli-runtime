@@ -1,8 +1,9 @@
 //! Apply defaults and rest packing after a dynamic call resolves its target.
 use super::member::box_result;
+use crate::runtime::intrinsic_types::intrinsic_types;
 use crate::{
     DefaultValue,
-    runtime::{StoreData, host, intrinsic_types::build_intrinsic_types},
+    runtime::{StoreData, host},
 };
 use wasmtime::{
     Caller, FieldType, Finality, HeapType, RefType, StorageType, StructType, Val, ValType,
@@ -10,8 +11,20 @@ use wasmtime::{
 
 pub(super) type Parameters = Vec<(Option<DefaultValue>, bool)>;
 
-pub(super) fn metadata_type(engine: &wasmtime::Engine) -> wasmtime::Result<StructType> {
-    let intr = build_intrinsic_types(engine)?;
+pub(super) fn metadata_type(caller: &mut Caller<'_, StoreData>) -> wasmtime::Result<StructType> {
+    if let Some(ty) = &caller.data().call_metadata_type {
+        return Ok(ty.clone());
+    }
+    let string = intrinsic_types(&mut *caller)?.string.clone();
+    let ty = build_metadata_type(caller.engine(), string)?;
+    caller.data_mut().call_metadata_type = Some(ty.clone());
+    Ok(ty)
+}
+
+fn build_metadata_type(
+    engine: &wasmtime::Engine,
+    string: StructType,
+) -> wasmtime::Result<StructType> {
     crate::runtime::gc_singleton::singleton_struct(
         engine,
         Finality::Final,
@@ -25,7 +38,7 @@ pub(super) fn metadata_type(engine: &wasmtime::Engine) -> wasmtime::Result<Struc
                 wasmtime::Mutability::Const,
                 StorageType::ValType(ValType::Ref(RefType::new(
                     false,
-                    HeapType::ConcreteStruct(intr.string),
+                    HeapType::ConcreteStruct(string),
                 ))),
             ),
         ],
@@ -42,11 +55,13 @@ pub(super) fn metadata(
     let Some(object) = reference.as_struct(&mut *caller)? else {
         return Ok(None);
     };
-    if object.matches_ty(&*caller, &super::closure::receiver_type(caller.engine())?)? {
+    let receiver_type = super::closure::receiver_type(caller)?;
+    if object.matches_ty(&*caller, &receiver_type)? {
         let inner = object.field(&mut *caller, 0)?;
         return metadata(caller, &inner);
     }
-    if !object.matches_ty(&*caller, &metadata_type(caller.engine())?)? {
+    let metadata_type = metadata_type(caller)?;
+    if !object.matches_ty(&*caller, &metadata_type)? {
         return Ok(None);
     }
     let encoded = object.field(&mut *caller, 1)?;
@@ -114,10 +129,10 @@ fn default_value(
 }
 
 fn empty_object(caller: &mut Caller<'_, StoreData>) -> wasmtime::Result<Val> {
-    let intr = build_intrinsic_types(caller.engine())?;
-    let names = wasmtime::ArrayRefPre::new(&mut *caller, intr.field_names);
-    let fields = wasmtime::ArrayRefPre::new(&mut *caller, intr.object_fields);
-    let object = wasmtime::StructRefPre::new(&mut *caller, intr.object_shape);
+    let intr = intrinsic_types(&mut *caller)?;
+    let names = wasmtime::ArrayRefPre::new(&mut *caller, intr.field_names.clone());
+    let fields = wasmtime::ArrayRefPre::new(&mut *caller, intr.object_fields.clone());
+    let object = wasmtime::StructRefPre::new(&mut *caller, intr.object_shape.clone());
     let names = wasmtime::ArrayRef::new_fixed(&mut *caller, &names, &[])?;
     let fields = wasmtime::ArrayRef::new_fixed(&mut *caller, &fields, &[])?;
     let vtable = host::host_object_vtable(caller)?;

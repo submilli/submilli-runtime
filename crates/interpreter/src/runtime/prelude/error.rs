@@ -31,9 +31,11 @@ use wasmtime::{
 };
 
 use super::MODULE_NAME;
-use super::vtable::{as_struct, read_units_val};
+use super::vtable::{as_struct, read_string_units};
 use crate::runtime::StoreData;
-use crate::runtime::host::{register_host_fn, write_submilli_string_struct_units};
+use crate::runtime::host::{
+    register_host_fn, write_submilli_string, write_submilli_string_struct_units,
+};
 use crate::runtime::intrinsic_types::IntrinsicTypes;
 
 const MESSAGE_SLOT: u32 = 0;
@@ -229,10 +231,7 @@ pub(crate) fn install_store_bound(
         |store: &mut Store<StoreData>, names: &[&str]| -> wasmtime::Result<Global> {
             let mut name_vals = Vec::with_capacity(names.len());
             for text in names {
-                let units: Vec<u16> = text.encode_utf16().collect();
-                let unit_vals: Vec<Val> = units.iter().map(|&u| Val::I32(i32::from(u))).collect();
-                let pre = ArrayRefPre::new(&mut *store, intr.raw_string.clone());
-                let raw = ArrayRef::new_fixed(&mut *store, &pre, &unit_vals)?;
+                let raw = write_submilli_string(&mut *store, text)?;
                 let pre = StructRefPre::new(&mut *store, intr.string.clone());
                 let st = StructRef::new(
                     &mut *store,
@@ -720,7 +719,7 @@ fn payload_units(
 ) -> wasmtime::Result<Vec<u16>> {
     let payload = payload_array(caller, receiver, name)?;
     let val = payload.get(&mut *caller, slot)?;
-    read_units_val(caller, &val, name)
+    read_string_units(caller, &val, name)
 }
 
 /// The type/interface surface this module implements — its slice of the

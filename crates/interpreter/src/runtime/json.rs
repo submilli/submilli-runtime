@@ -19,6 +19,7 @@ use crate::runtime::host::{
     host_string_vtable, read_string_arg, register_host_fn, register_host_fn_async,
     write_submilli_string,
 };
+use crate::runtime::intrinsic_types::intrinsic_types;
 use crate::{PackageDeclaration, Param, Span, Type, ValueKind, ValueSymbol};
 
 pub const JSON_MODULE_NAME: &str = "submilli:json";
@@ -175,7 +176,7 @@ pub(super) fn install_json_module(
                         )));
                     }
                 };
-                let intr = crate::runtime::intrinsic_types::build_intrinsic_types(caller.engine())?;
+                let intr = intrinsic_types(&mut *caller)?;
                 let json = if contains_dynamic_object(caller, &params[2], &intr, 0)? {
                     let serialized = crate::runtime::prelude::vtable::object_to_json(
                         caller,

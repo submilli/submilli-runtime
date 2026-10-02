@@ -1,10 +1,12 @@
 //! Lookup members on live receivers before evaluating call arguments.
 
+use super::arguments::Parameters;
 use super::{MODULE_NAME, declare_method, value};
-use crate::runtime::intrinsic_types::build_intrinsic_types;
+use crate::runtime::intrinsic_types::{build_intrinsic_types, intrinsic_types};
 use crate::runtime::{StoreData, host};
 use crate::{PackageDeclaration, Param, Type};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
+use std::sync::LazyLock;
 use wasmtime::{Caller, Func, FuncType, HeapType, Linker, RefType, Store, Val, ValType};
 
 pub(crate) fn functions(
@@ -180,7 +182,7 @@ async fn call_builtin(
 ) -> wasmtime::Result<Val> {
     let params = builtin_parameters(key);
     let args = if let Some(params) = params {
-        super::arguments::bind(caller, &params, args)?
+        super::arguments::bind(caller, params, args)?
     } else {
         args.to_vec()
     };
@@ -226,7 +228,7 @@ async fn coerce(
         ValType::I32 => Ok(Val::I32(value::truthy(caller, &input)? as i32)),
         ValType::Ref(reference)
             if reference.heap_type()
-                == &HeapType::ConcreteStruct(build_intrinsic_types(caller.engine())?.string) =>
+                == &HeapType::ConcreteStruct(intrinsic_types(&mut *caller)?.string.clone()) =>
         {
             let units = value::string(value::primitive_with_hint(caller, &input, true).await?);
             Ok(Val::AnyRef(Some(
@@ -237,24 +239,30 @@ async fn coerce(
     }
 }
 
-fn builtin_parameters(key: &str) -> Option<super::arguments::Parameters> {
-    let defs = super::prelude_package_declaration();
-    let (interface, method) = key.rsplit_once('#')?;
-    let symbol = defs
-        .types
-        .values()
-        .find(|symbol| symbol.mangled_name.as_str() == interface)?;
-    let crate::TypeKind::Interface { methods, .. } = &symbol.kind else {
-        return None;
-    };
-    Some(
-        methods
-            .get(method)?
-            .params
-            .iter()
-            .map(|param| (param.default.clone(), param.rest))
-            .collect(),
-    )
+/// Builtin method parameters keyed `Interface#method`. Deriving them builds the
+/// whole prelude declaration, so they are collected once rather than per call.
+static BUILTIN_PARAMETERS: LazyLock<HashMap<String, Parameters>> = LazyLock::new(|| {
+    let mut parameters = HashMap::new();
+    for symbol in super::prelude_package_declaration().types.into_values() {
+        let crate::TypeKind::Interface { methods, .. } = symbol.kind else {
+            continue;
+        };
+        for (method, signature) in methods {
+            let key = format!("{}#{method}", symbol.mangled_name.as_str());
+            parameters.entry(key).or_insert_with(|| {
+                signature
+                    .params
+                    .iter()
+                    .map(|param| (param.default.clone(), param.rest))
+                    .collect()
+            });
+        }
+    }
+    parameters
+});
+
+fn builtin_parameters(key: &str) -> Option<&'static Parameters> {
+    BUILTIN_PARAMETERS.get(key)
 }
 
 pub(super) fn box_result(caller: &mut Caller<'_, StoreData>, result: Val) -> wasmtime::Result<Val> {
@@ -321,17 +329,17 @@ fn receiver_interface(
     let Some(object) = reference.as_struct(&mut *caller)? else {
         return Ok(None);
     };
-    let intr = build_intrinsic_types(caller.engine())?;
+    let intr = intrinsic_types(&mut *caller)?;
     for (ty, name) in [
-        (intr.string, "String"),
-        (intr.boxed_number, "Number"),
-        (intr.boxed_boolean, "Boolean"),
-        (intr.array, "Array"),
-        (intr.uint8_array, "Uint8Array"),
-        (intr.bigint, "BigInt"),
-        (intr.regex, "RegExp"),
+        (&intr.string, "String"),
+        (&intr.boxed_number, "Number"),
+        (&intr.boxed_boolean, "Boolean"),
+        (&intr.array, "Array"),
+        (&intr.uint8_array, "Uint8Array"),
+        (&intr.bigint, "BigInt"),
+        (&intr.regex, "RegExp"),
     ] {
-        if object.matches_ty(&*caller, &ty)? {
+        if object.matches_ty(&*caller, ty)? {
             return Ok(Some(crate::mangle::prelude(name).as_str().to_owned()));
         }
     }
@@ -355,7 +363,7 @@ fn box_boolean(
     caller: &mut Caller<'_, StoreData>,
     value: bool,
 ) -> wasmtime::Result<wasmtime::Rooted<wasmtime::StructRef>> {
-    let ty = build_intrinsic_types(caller.engine())?.boxed_boolean;
+    let ty = intrinsic_types(&mut *caller)?.boxed_boolean.clone();
     let vtable = host::host_boxed_boolean_vtable(caller)?;
     let pre = wasmtime::StructRefPre::new(&mut *caller, ty);
     wasmtime::StructRef::new(&mut *caller, &pre, &[vtable, Val::I32(value as i32)])

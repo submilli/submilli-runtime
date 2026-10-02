@@ -4,8 +4,8 @@
 //! module — this file is the wasmtime boundary they're kept clear of.
 
 use wasmtime::{
-    ArrayRef, ArrayRefPre, ArrayType, Caller, FuncType, HeapType, Linker, RefType, Rooted,
-    StructRef, StructRefPre, StructType, Val, ValType,
+    ArrayRef, ArrayRefPre, ArrayType, Caller, FuncType, HeapType, Linker, RefType, StructRef,
+    StructRefPre, StructType, Val, ValType,
 };
 
 use super::{
@@ -16,10 +16,10 @@ use super::{
 };
 use crate::runtime::StoreData;
 use crate::runtime::host::{
-    intrinsic_string_type, register_host_fn, register_host_fn_async, string_array_type,
-    write_submilli_string_struct, write_submilli_string_struct_units,
+    intrinsic_string_type, read_code_units, register_host_fn, register_host_fn_async,
+    string_array_type, write_submilli_string_struct, write_submilli_string_struct_units,
 };
-use crate::runtime::intrinsic_types::build_intrinsic_types;
+use crate::runtime::intrinsic_types::{build_intrinsic_types, intrinsic_types};
 use crate::runtime::prelude::{MODULE_NAME, declare_method};
 use crate::{MangledName, PackageDeclaration, Param, Type};
 
@@ -860,7 +860,7 @@ impl StringAbi {
         };
         Ok(Receiver {
             vtable,
-            value: Str::from_units(read_code_units(caller, payload, name)?),
+            value: Str::from_units(read_code_units(&mut *caller, payload, name)?),
         })
     }
 
@@ -871,8 +871,7 @@ impl StringAbi {
         s: &Str,
     ) -> wasmtime::Result<Val> {
         let pre = ArrayRefPre::new(&mut *caller, self.payload_ty.clone());
-        let units: Vec<Val> = s.units().iter().map(|&u| Val::I32(u as i32)).collect();
-        let payload = ArrayRef::new_fixed(&mut *caller, &pre, &units)?;
+        let payload = ArrayRef::new_from_i16_slice(&mut *caller, &pre, s.units())?;
         let pre = StructRefPre::new(&mut *caller, self.string_ty.clone());
         let st = StructRef::new(
             &mut *caller,
@@ -881,28 +880,6 @@ impl StringAbi {
         )?;
         Ok(Val::AnyRef(Some(st.to_anyref())))
     }
-}
-
-/// Decode a `$rawString` payload into code units. `i16` elements come back as
-/// zero-extended `Val::I32`.
-fn read_code_units(
-    caller: &mut Caller<'_, StoreData>,
-    payload: Rooted<ArrayRef>,
-    name: &str,
-) -> wasmtime::Result<Vec<u16>> {
-    let len = payload.len(&mut *caller)?;
-    let mut units = Vec::with_capacity(len as usize);
-    for i in 0..len {
-        match payload.get(&mut *caller, i)? {
-            Val::I32(unit) => units.push(unit as u16),
-            other => {
-                return Err(wasmtime::Error::msg(format!(
-                    "{name}: code unit {i} is {other:?}, not i32"
-                )));
-            }
-        }
-    }
-    Ok(units)
 }
 
 /// Read a `$Array` of boxed numbers (the packed rest args of a `fromCharCode` /
@@ -917,7 +894,7 @@ async fn string_ctor_call(
     let Val::AnyRef(Some(any)) = value else {
         return Err(wasmtime::Error::msg("String(value): value is null"));
     };
-    let intr = build_intrinsic_types(caller.engine())?;
+    let intr = intrinsic_types(&mut *caller)?;
     if let Some(st) = any.as_struct(&mut *caller)?
         && StructType::eq(&st.ty(&*caller)?, &intr.bigint)
     {

@@ -10,7 +10,8 @@ use crate::runtime::host::{
     intrinsic_array_type, intrinsic_string_type, intrinsic_uint8_array_type, register_host_fn,
     register_host_fn_async, write_submilli_string_struct, write_submilli_string_struct_units,
 };
-use crate::runtime::intrinsic_types::{IntrinsicTypes, build_intrinsic_types};
+use crate::runtime::intrinsic_types::{IntrinsicTypes, build_intrinsic_types, intrinsic_types};
+use crate::runtime::prelude::vtable::read_string_units;
 use crate::runtime::prelude::{MODULE_NAME, closure, declare_method};
 use crate::{MangledName, PackageDeclaration, Param, Type};
 
@@ -186,7 +187,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         true,
         |caller, params, results| {
             let bytes = super::read_bytes(caller, &params[0], "Uint8Array#join")?;
-            let sep = super::read_string_units(caller, &params[1])?;
+            let sep = read_string_units(caller, &params[1], "Uint8Array#join separator")?;
             let out = super::join(&bytes, &sep);
             results[0] = {
                 let st = write_submilli_string_struct_units(caller, &out)?;
@@ -564,7 +565,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         ft(vec![object_nonnull], vec![uint8.clone()]),
         true,
         |caller, params, results| {
-            let intr = build_intrinsic_types(caller.engine())?;
+            let intr = intrinsic_types(&mut *caller)?;
             let bytes =
                 if crate::runtime::prelude::collection::is_a(caller, &params[0], &intr.array)? {
                     super::read_number_array(caller, &params[0], "Uint8Array.new")?
@@ -611,7 +612,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         ft(vec![string.clone(), obj.clone()], vec![uint8.clone()]),
         true,
         |caller, params, results| {
-            let units = super::read_string_units(caller, &params[0])?;
+            let units = read_string_units(caller, &params[0], "Uint8Array.fromBase64")?;
             let s = String::from_utf16_lossy(&units);
             let (url_safe, _) = super::read_base64_options(caller, &params[1])?;
             let bytes = super::decode_base64(&s, url_safe)?;
@@ -626,7 +627,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         ft(vec![string.clone()], vec![uint8.clone()]),
         true,
         |caller, params, results| {
-            let units = super::read_string_units(caller, &params[0])?;
+            let units = read_string_units(caller, &params[0], "Uint8Array.fromHex")?;
             let bytes = super::from_hex(&units)?;
             results[0] = super::build(caller, &bytes)?;
             Ok(())

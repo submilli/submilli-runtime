@@ -5,6 +5,7 @@ use wasmtime::{Caller, FuncType, Global, GlobalType, Linker, Mutability, Store, 
 
 use crate::runtime::StoreData;
 use crate::runtime::host::register_host_fn;
+use crate::runtime::intrinsic_types::intrinsic_types;
 use crate::runtime::prelude::MODULE_NAME;
 use crate::{
     MangledName, NamespaceSymbol, PackageDeclaration, Param, Span, Type, ValueKind, ValueSymbol,
@@ -296,8 +297,7 @@ fn read_variadic_numbers(
     name: &str,
 ) -> wasmtime::Result<Vec<f64>> {
     let elements = crate::runtime::prelude::collection::read_array_vals(caller, val)?;
-    let boxed_number =
-        crate::runtime::intrinsic_types::build_intrinsic_types(caller.engine())?.boxed_number;
+    let boxed_number = intrinsic_types(&mut *caller)?.boxed_number.clone();
     let mut out = Vec::with_capacity(elements.len());
     for element in elements {
         let Val::AnyRef(Some(any)) = element else {

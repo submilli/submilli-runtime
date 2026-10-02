@@ -32,7 +32,7 @@ use crate::runtime::host::{
     range_error, read_string_arg, read_uint8_array_arg, register_host_fn,
     write_submilli_string_struct, write_submilli_uint8array_struct,
 };
-use crate::runtime::intrinsic_types::{IntrinsicTypes, build_intrinsic_types};
+use crate::runtime::intrinsic_types::{IntrinsicTypes, build_intrinsic_types, intrinsic_types};
 use crate::runtime::prelude::iterator::{
     as_struct, build_closable_iterator, iter_done, iter_yield, next_closure_type, void_closure_type,
 };
@@ -1029,7 +1029,7 @@ fn make_handle_iterator(
     let pre = StructRefPre::new(&mut *caller, env_ty);
     let env = StructRef::new(&mut *caller, &pre, &[Val::ExternRef(Some(handle))])?;
 
-    let intr = build_intrinsic_types(caller.engine())?;
+    let intr = intrinsic_types(&mut *caller)?;
     let (next_ty, _) = next_closure_type(caller.engine(), &intr)?;
     let (close_ty, _) = void_closure_type(caller.engine(), &intr)?;
     let next_fn = Func::new(&mut *caller, next_ty, next_step);

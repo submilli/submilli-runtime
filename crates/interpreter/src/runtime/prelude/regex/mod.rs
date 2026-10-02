@@ -32,7 +32,8 @@ use crate::runtime::host::{
     write_submilli_array_struct, write_submilli_string, write_submilli_string_struct,
     write_submilli_string_struct_units,
 };
-use crate::runtime::intrinsic_types::{IntrinsicTypes, build_intrinsic_types};
+use crate::runtime::intrinsic_types::{IntrinsicTypes, intrinsic_types};
+use crate::runtime::prelude::vtable::read_string_units;
 use engine::{ChargedRegex, ExecSnapshot, FlagSet, compile_charged, exec_snapshot};
 
 /// `g | y` — the two flags whose presence makes matching consult and advance
@@ -170,7 +171,7 @@ pub(super) fn construct(
     let bits = i32::from(charged.flag_bits());
     let extern_ref = ExternRef::new(&mut *caller, charged)?;
 
-    let regex_ty = build_intrinsic_types(caller.engine())?.regex;
+    let regex_ty = intrinsic_types(&mut *caller)?.regex.clone();
     let vtable = host_regex_vtable(caller)?;
     let pre = StructRefPre::new(&mut *caller, regex_ty);
     let st = StructRef::new(
@@ -194,7 +195,7 @@ fn build_match_box(
     input: &str,
     snapshot: &ExecSnapshot,
 ) -> wasmtime::Result<Val> {
-    let intr = build_intrinsic_types(caller.engine())?;
+    let intr = intrinsic_types(&mut *caller)?;
 
     let match_str =
         write_submilli_string_struct(caller, &input[snapshot.match_start..snapshot.match_end])?;
@@ -262,7 +263,7 @@ fn wrap_raw_string(
     caller: &mut Caller<'_, StoreData>,
     raw: wasmtime::Rooted<wasmtime::AnyRef>,
 ) -> wasmtime::Result<Val> {
-    let string_ty = build_intrinsic_types(caller.engine())?.string;
+    let string_ty = intrinsic_types(&mut *caller)?.string.clone();
     let vtable = host_string_vtable(caller)?;
     let pre = StructRefPre::new(&mut *caller, string_ty);
     let st = StructRef::new(&mut *caller, &pre, &[vtable, Val::AnyRef(Some(raw))])?;
@@ -430,7 +431,7 @@ pub(super) async fn named_groups(
 /// Distinguish the `string | RegExp` arg: a `$string` receiver takes the literal
 /// arm; anything else is a `$regex`.
 fn arg_is_string(caller: &mut Caller<'_, StoreData>, val: &Val) -> wasmtime::Result<bool> {
-    let string_ty = build_intrinsic_types(caller.engine())?.string;
+    let string_ty = intrinsic_types(&mut *caller)?.string.clone();
     match val {
         Val::AnyRef(Some(any)) => match any.as_struct(&mut *caller)? {
             Some(st) => Ok(wasmtime::StructType::eq(&st.ty(&caller)?, &string_ty)),
@@ -498,9 +499,9 @@ pub(super) fn string_replace(
     params: &[Val],
 ) -> wasmtime::Result<Val> {
     if arg_is_string(caller, &params[1])? {
-        let input = read_units(caller, &params[0], "String#replace(input)")?;
-        let search = read_units(caller, &params[1], "String#replace(search)")?;
-        let repl = read_units(caller, &params[2], "String#replace(replacement)")?;
+        let input = read_string_units(caller, &params[0], "String#replace(input)")?;
+        let search = read_string_units(caller, &params[1], "String#replace(search)")?;
+        let repl = read_string_units(caller, &params[2], "String#replace(replacement)")?;
         let out = replace_literal(&input, &search, &repl, false);
         let st = write_submilli_string_struct_units(caller, &out)?;
         return Ok(Val::AnyRef(Some(st.to_anyref())));
@@ -527,9 +528,9 @@ pub(super) fn string_replace_all(
     params: &[Val],
 ) -> wasmtime::Result<Val> {
     if arg_is_string(caller, &params[1])? {
-        let input = read_units(caller, &params[0], "String#replaceAll(input)")?;
-        let search = read_units(caller, &params[1], "String#replaceAll(search)")?;
-        let repl = read_units(caller, &params[2], "String#replaceAll(replacement)")?;
+        let input = read_string_units(caller, &params[0], "String#replaceAll(input)")?;
+        let search = read_string_units(caller, &params[1], "String#replaceAll(search)")?;
+        let repl = read_string_units(caller, &params[2], "String#replaceAll(replacement)")?;
         let out = replace_literal(&input, &search, &repl, true);
         let st = write_submilli_string_struct_units(caller, &out)?;
         return Ok(Val::AnyRef(Some(st.to_anyref())));
@@ -559,8 +560,8 @@ pub(super) fn string_split(
         }
     };
     let parts: Vec<Vec<u16>> = if arg_is_string(caller, &params[1])? {
-        let input = read_units(caller, &params[0], "String#split(input)")?;
-        let sep = read_units(caller, &params[1], "String#split(separator)")?;
+        let input = read_string_units(caller, &params[0], "String#split(input)")?;
+        let sep = read_string_units(caller, &params[1], "String#split(separator)")?;
         split_literal(&input, &sep, limit)
     } else {
         let st = as_struct(caller, &params[1], "String#split(regex)")?;
@@ -577,29 +578,6 @@ pub(super) fn string_split(
     }
     let arr = write_submilli_array_struct(caller, &elements)?;
     Ok(Val::AnyRef(Some(arr.to_anyref())))
-}
-
-/// Read a `$string` receiver/arg into its UTF-16 code units (the literal string
-/// arm works in code-unit space; the regex arm works on the UTF-8 decode).
-fn read_units(
-    caller: &mut Caller<'_, StoreData>,
-    val: &Val,
-    name: &str,
-) -> wasmtime::Result<Vec<u16>> {
-    let st = as_struct(caller, val, name)?;
-    let raw = match st.field(&mut *caller, 1)? {
-        Val::AnyRef(Some(any)) => any.unwrap_array(&mut *caller)?,
-        other => wasmtime::bail!("{name}: malformed $string payload {other:?}"),
-    };
-    let len = raw.len(&mut *caller)?;
-    let mut units = Vec::with_capacity(len as usize);
-    for i in 0..len {
-        match raw.get(&mut *caller, i)? {
-            Val::I32(u) => units.push(u as u16),
-            other => wasmtime::bail!("{name}: code unit {i} is {other:?}"),
-        }
-    }
-    Ok(units)
 }
 
 // ---------------------------------------------------------------------------

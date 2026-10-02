@@ -7,8 +7,8 @@ use wasmtime::{
 
 use super::MODULE_NAME;
 use crate::runtime::StoreData;
-use crate::runtime::host::register_host_fn_async;
-use crate::runtime::intrinsic_types::{IntrinsicTypes, build_intrinsic_types};
+use crate::runtime::host::{register_host_fn_async, write_submilli_string};
+use crate::runtime::intrinsic_types::{IntrinsicTypes, build_intrinsic_types, intrinsic_types};
 use crate::runtime::prelude::iterator::as_struct;
 
 #[derive(Clone)]
@@ -183,12 +183,7 @@ fn make_field_names(store: &mut Store<StoreData>, intr: &IntrinsicTypes) -> Resu
         .expect("prelude installed")
         .string_vtable;
     let vtable = string_vtable.get(&mut *store);
-    let pre = ArrayRefPre::new(&mut *store, intr.raw_string.clone());
-    let units = "path"
-        .encode_utf16()
-        .map(|unit| Val::I32(i32::from(unit)))
-        .collect::<Vec<_>>();
-    let raw = ArrayRef::new_fixed(&mut *store, &pre, &units)?;
+    let raw = write_submilli_string(&mut *store, "path")?;
     let name_type = private_field_name_type(store.engine(), intr)?;
     let pre = StructRefPre::new(&mut *store, name_type);
     let name = StructRef::new(
@@ -395,8 +390,8 @@ fn new_instance(
     class: &RepositoryClass,
     path: Val,
 ) -> Result<Val> {
-    let intr = build_intrinsic_types(caller.engine())?;
-    let pre = ArrayRefPre::new(&mut *caller, intr.object_fields);
+    let intr = intrinsic_types(&mut *caller)?;
+    let pre = ArrayRefPre::new(&mut *caller, intr.object_fields.clone());
     let fields = ArrayRef::new_fixed(&mut *caller, &pre, &[path])?;
     let vtable = class.vtable.get(&mut *caller);
     let names = class.field_names.get(&mut *caller);
