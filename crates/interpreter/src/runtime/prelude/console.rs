@@ -12,7 +12,7 @@ use wasmtime::{Caller, FuncType, HeapType, Linker, RefType, Val, ValType};
 use crate::runtime::StoreData;
 use crate::runtime::host::{intrinsic_array_type, register_host_fn_async};
 use crate::runtime::intrinsic_types::build_intrinsic_types;
-use crate::runtime::prelude::vtable::{dispatch_vtable_slot, read_units_val};
+use crate::runtime::prelude::vtable::{dispatch_vtable_slot, read_string_units};
 use crate::runtime::prelude::{MODULE_NAME, declare_method};
 use crate::{MangledName, PackageDeclaration, Param, Type};
 
@@ -60,7 +60,7 @@ async fn to_string_units(
     match val {
         Val::AnyRef(Some(_)) => {
             let s = dispatch_vtable_slot(caller, val, 0, &[]).await?;
-            read_units_val(caller, &s, "console.log")
+            read_string_units(caller, &s, "console.log")
         }
         // `console.log` takes `unknown`, so a nullable value holding `null` reaches here.
         // It has no vtable to dispatch through; it prints as `null`, as in JavaScript.

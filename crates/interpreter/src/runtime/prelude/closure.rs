@@ -238,9 +238,25 @@ pub(crate) fn read(
     Ok(Closure { func, env })
 }
 
-pub(super) fn receiver_type(engine: &wasmtime::Engine) -> wasmtime::Result<wasmtime::StructType> {
+pub(super) fn receiver_type(
+    caller: &mut Caller<'_, StoreData>,
+) -> wasmtime::Result<wasmtime::StructType> {
+    if let Some(ty) = &caller.data().closure_receiver_type {
+        return Ok(ty.clone());
+    }
+    let object = crate::runtime::intrinsic_types::intrinsic_types(&mut *caller)?
+        .object
+        .clone();
+    let ty = build_receiver_type(caller.engine(), object)?;
+    caller.data_mut().closure_receiver_type = Some(ty.clone());
+    Ok(ty)
+}
+
+fn build_receiver_type(
+    engine: &wasmtime::Engine,
+    object: wasmtime::StructType,
+) -> wasmtime::Result<wasmtime::StructType> {
     use wasmtime::{FieldType, Finality, HeapType, Mutability, RefType, StorageType, ValType};
-    let intr = crate::runtime::intrinsic_types::build_intrinsic_types(engine)?;
     crate::runtime::gc_singleton::singleton_struct(
         engine,
         Finality::Final,
@@ -254,7 +270,7 @@ pub(super) fn receiver_type(engine: &wasmtime::Engine) -> wasmtime::Result<wasmt
                 Mutability::Const,
                 StorageType::ValType(ValType::Ref(RefType::new(
                     true,
-                    HeapType::ConcreteStruct(intr.object),
+                    HeapType::ConcreteStruct(object),
                 ))),
             ),
         ],
@@ -272,7 +288,7 @@ fn bind_receiver(
     let Some(object) = reference.as_struct(&mut *caller)? else {
         return Ok(env);
     };
-    let ty = receiver_type(caller.engine())?;
+    let ty = receiver_type(caller)?;
     if !object.matches_ty(&*caller, &ty)? {
         return Ok(env);
     }

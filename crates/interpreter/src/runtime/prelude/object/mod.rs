@@ -19,10 +19,10 @@ use crate::runtime::host::{
     host_object_vtable, intrinsic_array_type, intrinsic_string_type, register_host_fn,
     register_host_fn_async, write_submilli_array_struct,
 };
-use crate::runtime::intrinsic_types::build_intrinsic_types;
-use crate::runtime::prelude::collection::{is_a, string_units};
+use crate::runtime::intrinsic_types::{build_intrinsic_types, intrinsic_types};
+use crate::runtime::prelude::collection::{FIELD_NAME, is_a};
 use crate::runtime::prelude::iterator::as_struct;
-use crate::runtime::prelude::vtable::dispatch_vtable_slot;
+use crate::runtime::prelude::vtable::{dispatch_vtable_slot, read_string_units};
 use crate::runtime::prelude::{MODULE_NAME, declare_method};
 use crate::{PackageDeclaration, Param, Type};
 
@@ -59,7 +59,7 @@ fn shape_arrays(
     let Some(st) = any.as_struct(&mut *caller)? else {
         return Ok(None);
     };
-    let shape = build_intrinsic_types(caller.engine())?.object_shape;
+    let shape = intrinsic_types(&mut *caller)?.object_shape.clone();
     if !st.matches_ty(&*caller, &shape)? {
         return Ok(None);
     }
@@ -91,7 +91,7 @@ pub(crate) fn field_is_present(
         return Ok(true);
     }
     let name = as_struct(caller, name, "field name")?;
-    let string = build_intrinsic_types(caller.engine())?.string;
+    let string = intrinsic_types(&mut *caller)?.string.clone();
     if StructType::eq(&name.ty(&*caller)?, &string) {
         return Ok(true);
     }
@@ -143,7 +143,7 @@ pub(crate) fn is_accessor_slot(
     name: &Val,
 ) -> wasmtime::Result<bool> {
     let name = as_struct(caller, name, "field name")?;
-    let string = build_intrinsic_types(caller.engine())?.string;
+    let string = intrinsic_types(&mut *caller)?.string.clone();
     if StructType::eq(&name.ty(&*caller)?, &string) {
         return Ok(false);
     }
@@ -172,7 +172,7 @@ fn spread(
     shape: &Val,
     mask: &Val,
 ) -> wasmtime::Result<Val> {
-    let intr = build_intrinsic_types(caller.engine())?;
+    let intr = intrinsic_types(&mut *caller)?;
     let mut entries = std::collections::BTreeMap::new();
     let omitted = spread_omitted_fields(caller, mask)?;
     for (source_index, object) in [target, source].into_iter().enumerate() {
@@ -185,7 +185,7 @@ fn spread(
             if !field_is_present(caller, &name, &value)? || is_accessor_slot(caller, &name)? {
                 continue;
             }
-            let units = string_units(caller, &name)?;
+            let units = read_string_units(caller, &name, FIELD_NAME)?;
             if source_index == 1 && omitted.contains(&units) {
                 continue;
             }
@@ -195,16 +195,16 @@ fn spread(
     if let Some((names, _)) = shape_arrays(caller, shape)? {
         for index in 0..names.len(&mut *caller)? {
             let name = names.get(&mut *caller, index)?;
-            let units = string_units(caller, &name)?;
+            let units = read_string_units(caller, &name, FIELD_NAME)?;
             if let std::collections::btree_map::Entry::Vacant(entry) = entries.entry(units) {
                 entry.insert((copy_field_name(caller, name, false)?, Val::AnyRef(None)));
             }
         }
     }
     let (names, values): (Vec<_>, Vec<_>) = entries.into_values().unzip();
-    let names_pre = ArrayRefPre::new(&mut *caller, intr.field_names);
-    let values_pre = ArrayRefPre::new(&mut *caller, intr.object_fields);
-    let shape_pre = StructRefPre::new(&mut *caller, intr.object_shape);
+    let names_pre = ArrayRefPre::new(&mut *caller, intr.field_names.clone());
+    let values_pre = ArrayRefPre::new(&mut *caller, intr.object_fields.clone());
+    let shape_pre = StructRefPre::new(&mut *caller, intr.object_shape.clone());
     let names = ArrayRef::new_fixed(&mut *caller, &names_pre, &names)?;
     let values = ArrayRef::new_fixed(&mut *caller, &values_pre, &values)?;
     let vtable = host_object_vtable(caller)?;
@@ -226,12 +226,12 @@ fn copy_field_name(
     present: bool,
 ) -> wasmtime::Result<Val> {
     let object = as_struct(caller, &name, "field name")?;
-    let string = build_intrinsic_types(caller.engine())?.string;
+    let string = intrinsic_types(&mut *caller)?.string.clone();
     if StructType::eq(&object.ty(&*caller)?, &string) {
         return Ok(name);
     }
     let ty = if present {
-        build_intrinsic_types(caller.engine())?.string
+        string
     } else {
         object.ty(&*caller)?
     };
@@ -303,9 +303,9 @@ fn insert_field(
         new_values.push(Val::AnyRef(None));
         new_values.push(values.get(&mut *caller, row_start + named_len)?);
     }
-    let intr = build_intrinsic_types(caller.engine())?;
-    let names_pre = ArrayRefPre::new(&mut *caller, intr.field_names);
-    let values_pre = ArrayRefPre::new(&mut *caller, intr.object_fields);
+    let intr = intrinsic_types(&mut *caller)?;
+    let names_pre = ArrayRefPre::new(&mut *caller, intr.field_names.clone());
+    let values_pre = ArrayRefPre::new(&mut *caller, intr.object_fields.clone());
     let names = ArrayRef::new_fixed(&mut *caller, &names_pre, &new_names)?;
     let values = ArrayRef::new_fixed(&mut *caller, &values_pre, &new_values)?;
     object.set_field(&mut *caller, 1, Val::AnyRef(Some(names.to_anyref())))?;
@@ -317,7 +317,7 @@ fn insert_field(
 /// static shape no longer describes all of this object's fields.
 fn inserted_field_name(caller: &mut Caller<'_, StoreData>, name: &Val) -> wasmtime::Result<Val> {
     use wasmtime::{FieldType, Finality, Mutability, StorageType};
-    let intr = build_intrinsic_types(caller.engine())?;
+    let intr = intrinsic_types(&mut *caller)?;
     let mut fields: Vec<_> = intr.string.fields().collect();
     fields.push(FieldType::new(
         Mutability::Var,
@@ -326,7 +326,7 @@ fn inserted_field_name(caller: &mut Caller<'_, StoreData>, name: &Val) -> wasmti
     let ty = crate::runtime::gc_singleton::singleton_struct(
         caller.engine(),
         Finality::Final,
-        Some(intr.string),
+        Some(intr.string.clone()),
         fields,
     )?;
     let name = as_struct(caller, name, "inserted field name")?;
@@ -346,7 +346,7 @@ pub(crate) fn field_was_inserted(
     name: &Val,
 ) -> wasmtime::Result<bool> {
     let name = as_struct(caller, name, "field name")?;
-    let string = build_intrinsic_types(caller.engine())?.string;
+    let string = intrinsic_types(&mut *caller)?.string.clone();
     if StructType::eq(&name.ty(&*caller)?, &string) {
         return Ok(false);
     }
@@ -363,7 +363,7 @@ fn spread_omitted_fields(
         for index in 0..names.len(&mut *caller)? {
             if !matches!(values.get(&mut *caller, index)?, Val::AnyRef(None)) {
                 let name = names.get(&mut *caller, index)?;
-                omitted.insert(string_units(caller, &name)?);
+                omitted.insert(read_string_units(caller, &name, FIELD_NAME)?);
             }
         }
     }
@@ -377,10 +377,10 @@ fn has_own(caller: &mut Caller<'_, StoreData>, obj: &Val, key: &Val) -> wasmtime
     let Some((names, values)) = shape_arrays(caller, obj)? else {
         return Ok(false);
     };
-    let target = string_units(caller, key)?;
+    let target = read_string_units(caller, key, FIELD_NAME)?;
     for i in 0..names.len(&mut *caller)? {
         let name = names.get(&mut *caller, i)?;
-        if string_units(caller, &name)? == target {
+        if read_string_units(caller, &name, FIELD_NAME)? == target {
             let value = values.get(&mut *caller, i)?;
             return Ok(
                 field_is_present(caller, &name, &value)? && !is_accessor_slot(caller, &name)?
@@ -420,7 +420,7 @@ async fn same_value(
     // The number arm must run before vtable dispatch: the boxed-number `equals`
     // slot is `===` (`0 === -0`, `NaN !== NaN`), while SameValue distinguishes
     // both.
-    let boxed_number = build_intrinsic_types(caller.engine())?.boxed_number;
+    let boxed_number = intrinsic_types(&mut *caller)?.boxed_number.clone();
     if is_a(caller, a, &boxed_number)? && is_a(caller, b, &boxed_number)? {
         let (a_bits, b_bits) = (boxed_number_bits(caller, a)?, boxed_number_bits(caller, b)?);
         return Ok(same_value_bits(a_bits, b_bits));
@@ -519,7 +519,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         true,
         |caller, params, results| {
             Box::pin(async move {
-                let intr = build_intrinsic_types(caller.engine())?;
+                let intr = intrinsic_types(&mut *caller)?;
                 results[0] = super::vtable::object_to_json(
                     caller,
                     &params[0],

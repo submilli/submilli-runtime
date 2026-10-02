@@ -320,20 +320,12 @@ pub(crate) fn read_uint8_array_arg(
     } else {
         any.unwrap_array(&mut *caller)?
     };
-    let len = arr.len(&mut *caller)?;
-    let mut out = Vec::with_capacity(len as usize);
-    for i in 0..len {
-        let elem = arr.get(&mut *caller, i)?;
-        let byte = match elem {
-            Val::I32(v) => (v & 0xff) as u8,
-            other => {
-                return Err(type_error(format!(
-                    "{name} element {i}: expected i32, got {other:?}"
-                )));
-            }
-        };
-        out.push(byte);
-    }
+    let len = usize::try_from(arr.len(&mut *caller)?).map_err(fatal_host_error)?;
+    let mut out = Vec::new();
+    out.try_reserve_exact(len).map_err(fatal_host_error)?;
+    out.resize(len, 0);
+    arr.copy_to_i8_slice(&mut *caller, &mut out)
+        .map_err(|error| type_error(format!("{name}: {error}")))?;
     Ok(out)
 }
 
@@ -574,13 +566,41 @@ pub fn read_string_array_arg(
 /// Encodes a Rust string as a Submilli packed-UTF-16 `(array (mut i16))` —
 /// the bare `$rawString` payload, without the `$string` object wrapper.
 pub fn write_submilli_string(
-    mut ctx: impl AsContextMut,
+    ctx: impl AsContextMut,
     s: &str,
+) -> wasmtime::Result<Rooted<ArrayRef>> {
+    let units: Vec<u16> = s.encode_utf16().collect();
+    write_code_units(ctx, &units)
+}
+
+/// Builds a `$rawString` payload from UTF-16 code units in one pass.
+pub(crate) fn write_code_units(
+    mut ctx: impl AsContextMut,
+    units: &[u16],
 ) -> wasmtime::Result<Rooted<ArrayRef>> {
     let array_ty = string_array_type(ctx.as_context().engine());
     let pre = ArrayRefPre::new(&mut ctx, array_ty);
-    let units: Vec<Val> = s.encode_utf16().map(|u| Val::I32(u as i32)).collect();
-    ArrayRef::new_fixed(&mut ctx, &pre, &units)
+    ArrayRef::new_from_i16_slice(&mut ctx, &pre, units)
+}
+
+/// A `$rawString` payload's UTF-16 code units, copied in one pass rather than
+/// one `get` per unit: string host functions call this on every receiver.
+///
+/// A payload that is not an `i16` array is a catchable error labelled `name`:
+/// a program can reach this with a non-string, through a `toJson` inserted
+/// into a `Record`.
+pub(crate) fn read_code_units(
+    mut ctx: impl AsContextMut,
+    raw: Rooted<ArrayRef>,
+    name: &str,
+) -> wasmtime::Result<Vec<u16>> {
+    let len = usize::try_from(raw.len(&mut ctx)?).map_err(fatal_host_error)?;
+    let mut units = Vec::new();
+    units.try_reserve_exact(len).map_err(fatal_host_error)?;
+    units.resize(len, 0);
+    raw.copy_to_i16_slice(&mut ctx, &mut units)
+        .map_err(|error| wasmtime::Error::msg(format!("{name}: {error}")))?;
+    Ok(units)
 }
 
 /// Runtime handles host functions use to build *real* `$Object`-subtype structs
@@ -790,10 +810,7 @@ pub fn write_submilli_string_struct_units(
     caller: &mut Caller<'_, StoreData>,
     units: &[u16],
 ) -> wasmtime::Result<Rooted<StructRef>> {
-    let array_ty = string_array_type(caller.engine());
-    let pre = ArrayRefPre::new(&mut *caller, array_ty);
-    let vals: Vec<Val> = units.iter().map(|&u| Val::I32(u as i32)).collect();
-    let raw = ArrayRef::new_fixed(&mut *caller, &pre, &vals)?;
+    let raw = write_code_units(&mut *caller, units)?;
     let string_type = {
         let abi = caller
             .data()

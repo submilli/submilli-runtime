@@ -11,6 +11,7 @@ use crate::runtime::host::{
     write_submilli_string_struct_units,
 };
 use crate::runtime::intrinsic_types::{IntrinsicTypes, build_intrinsic_types};
+use crate::runtime::prelude::vtable::read_string_units;
 use crate::runtime::prelude::{MODULE_NAME, closure, declare_method};
 use crate::{MangledName, PackageDeclaration, Param, Type};
 
@@ -121,7 +122,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         |caller, params, results| {
             Box::pin(async move {
                 let elements = super::read_kept_array(caller, &params[0], "Array#join")?;
-                let sep = super::read_string_units(caller, &params[1])?;
+                let sep = read_string_units(caller, &params[1], "Array#join separator")?;
                 let out = super::join(caller, elements, sep).await?;
                 let st = write_submilli_string_struct_units(caller, &out)?;
                 results[0] = Val::AnyRef(Some(st.to_anyref()));

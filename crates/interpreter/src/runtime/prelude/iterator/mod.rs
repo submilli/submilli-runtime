@@ -27,7 +27,7 @@ use crate::runtime::host::{
     host_boxed_boolean_vtable, host_closure_vtable, host_object_vtable,
     write_submilli_array_struct, write_submilli_string_struct,
 };
-use crate::runtime::intrinsic_types::{IntrinsicTypes, build_intrinsic_types};
+use crate::runtime::intrinsic_types::{IntrinsicTypes, intrinsic_types};
 
 /// The `$closure_0_value` func + struct types: `next: () => IteratorResult<T>`
 /// under the closure ABI — funcref `(ref any) -> (ref null $object)`, struct a
@@ -154,7 +154,7 @@ pub(crate) fn iterator_result_struct(
 
 /// Build `{ done: false, value }` (an `IteratorYieldResult`).
 pub(crate) fn iter_yield(caller: &mut Caller<'_, StoreData>, value: Val) -> wasmtime::Result<Val> {
-    let intr = build_intrinsic_types(caller.engine())?;
+    let intr = intrinsic_types(&mut *caller)?;
     let vtable = host_object_vtable(caller)?;
     let done = box_boolean(caller, false)?;
     let names = field_names_array(caller, &intr, &["done", "value"])?;
@@ -164,7 +164,7 @@ pub(crate) fn iter_yield(caller: &mut Caller<'_, StoreData>, value: Val) -> wasm
 
 /// Build `{ done: true }` (an `IteratorReturnResult`).
 pub(crate) fn iter_done(caller: &mut Caller<'_, StoreData>) -> wasmtime::Result<Val> {
-    let intr = build_intrinsic_types(caller.engine())?;
+    let intr = intrinsic_types(&mut *caller)?;
     let vtable = host_object_vtable(caller)?;
     let done = box_boolean(caller, true)?;
     let names = field_names_array(caller, &intr, &["done"])?;
@@ -174,7 +174,7 @@ pub(crate) fn iter_done(caller: &mut Caller<'_, StoreData>) -> wasmtime::Result<
 
 /// Box a `bool` into a `$boxed_boolean` object (the `done` field's value).
 fn box_boolean(caller: &mut Caller<'_, StoreData>, b: bool) -> wasmtime::Result<Val> {
-    let boxed = build_intrinsic_types(caller.engine())?.boxed_boolean;
+    let boxed = intrinsic_types(&mut *caller)?.boxed_boolean.clone();
     let vtable = host_boxed_boolean_vtable(caller)?;
     let pre = StructRefPre::new(&mut *caller, boxed);
     let st = StructRef::new(&mut *caller, &pre, &[vtable, Val::I32(b as i32)])?;
@@ -231,7 +231,7 @@ pub(crate) fn build_iterator(
     next_fn: Func,
     env: Val,
 ) -> wasmtime::Result<Val> {
-    let intr = build_intrinsic_types(caller.engine())?;
+    let intr = intrinsic_types(&mut *caller)?;
     let closure_vtable = host_closure_vtable(caller)?;
     let object_vtable = host_object_vtable(caller)?;
 
@@ -286,7 +286,7 @@ pub(crate) fn build_closable_iterator(
     close_fn: Func,
     env: Val,
 ) -> wasmtime::Result<Val> {
-    let intr = build_intrinsic_types(caller.engine())?;
+    let intr = intrinsic_types(&mut *caller)?;
     let closure_vtable = host_closure_vtable(caller)?;
     let object_vtable = host_object_vtable(caller)?;
 
@@ -371,7 +371,7 @@ pub(crate) fn make_index_iterator(
     kind: IterKind,
     step: IndexStep,
 ) -> wasmtime::Result<Val> {
-    let intr = build_intrinsic_types(caller.engine())?;
+    let intr = intrinsic_types(&mut *caller)?;
     let cursor = make_cursor(caller, payload)?;
     let (next_ty, next_struct) = next_closure_type(caller.engine(), &intr)?;
     let next = Func::new(&mut *caller, next_ty, move |mut caller, params, results| {
@@ -387,7 +387,7 @@ pub(crate) fn make_string_iterator(
     caller: &mut Caller<'_, StoreData>,
     string: Val,
 ) -> wasmtime::Result<Val> {
-    let intr = build_intrinsic_types(caller.engine())?;
+    let intr = intrinsic_types(&mut *caller)?;
     let cursor = make_cursor(caller, string)?;
     let (next_ty, next_struct) = next_closure_type(caller.engine(), &intr)?;
     let next = Func::new(&mut *caller, next_ty, string_step);
@@ -694,6 +694,7 @@ mod tests {
     use super::*;
     use crate::codegen::closures::{ClosureSig, emit_arity_closures};
     use crate::codegen::intrinsics::declare_intrinsic_types;
+    use crate::runtime::intrinsic_types::build_intrinsic_types;
     use wasm_encoder::{
         CompositeInnerType, CompositeType, ConstExpr, ExportKind, ExportSection,
         FieldType as EncFieldType, GlobalSection, GlobalType, HeapType as EncHeapType, Module,

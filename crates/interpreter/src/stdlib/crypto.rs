@@ -10,7 +10,7 @@ use crate::runtime::StoreData;
 use crate::runtime::host::{
     read_string_arg, read_uint8_array_arg, register_host_fn, write_submilli_uint8array_struct,
 };
-use crate::runtime::intrinsic_types::build_intrinsic_types;
+use crate::runtime::intrinsic_types::{build_intrinsic_types, intrinsic_types};
 use crate::runtime::prelude::collection::is_a;
 use crate::{PackageDeclaration, Param, Span, Type, ValueKind, ValueSymbol};
 
@@ -93,7 +93,7 @@ fn read_string_or_bytes(
     val: &Val,
     context: &str,
 ) -> wasmtime::Result<Vec<u8>> {
-    let string_ty = build_intrinsic_types(caller.engine())?.string;
+    let string_ty = intrinsic_types(&mut *caller)?.string.clone();
     if is_a(caller, val, &string_ty)? {
         Ok(read_string_arg(caller, val, context)?.into_bytes())
     } else {

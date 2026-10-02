@@ -23,10 +23,10 @@ use wasmtime::{
 
 use crate::runtime::StoreData;
 use crate::runtime::host::{
-    host_string_vtable, read_uint8_array_arg, write_submilli_string_struct,
-    write_submilli_string_struct_units,
+    fatal_host_error, host_string_vtable, read_code_units, read_uint8_array_arg,
+    write_submilli_string_struct, write_submilli_string_struct_units,
 };
-use crate::runtime::intrinsic_types::{IntrinsicTypes, build_intrinsic_types};
+use crate::runtime::intrinsic_types::{IntrinsicTypes, build_intrinsic_types, intrinsic_types};
 use crate::runtime::number::format_number_js;
 use crate::runtime::prelude::keep::{KeptValue, keep_all};
 
@@ -253,7 +253,7 @@ fn build_string_vtable(
         intr.hash_fn.clone(),
         |mut caller, params, results| {
             Box::new(async move {
-                let units = read_units_val(&mut caller, &params[0], "String#hash")?;
+                let units = read_string_units(&mut caller, &params[0], "String#hash")?;
                 results[0] = Val::I32(fnv_hash_units(&units) as i32);
                 Ok(())
             })
@@ -290,7 +290,7 @@ fn string_equals(
     if !StructType::eq(&other_st.ty(&caller)?, string_ty) {
         return Ok(false);
     }
-    let recv_units = read_units_val(caller, recv, "String#equals receiver")?;
+    let recv_units = read_string_units(caller, recv, "String#equals receiver")?;
     let other_units = read_struct_units(caller, &other_st, "String#equals other")?;
     Ok(recv_units == other_units)
 }
@@ -384,7 +384,7 @@ async fn array_to_string(
         match elem {
             Val::AnyRef(Some(_)) => {
                 let s = dispatch_vtable_slot(caller, elem, 0, &[]).await?;
-                out.extend(read_units_val(caller, &s, "Array#toString element")?);
+                out.extend(read_string_units(caller, &s, "Array#toString element")?);
             }
             Val::AnyRef(None) => {}
             other => wasmtime::bail!("Array#toString: invalid element {other:?}"),
@@ -417,7 +417,7 @@ async fn array_to_json(
         match elem {
             Val::AnyRef(Some(_)) => {
                 let s = dispatch_vtable_slot(caller, elem, 1, &[]).await?;
-                out.extend(read_units_val(caller, &s, "Array#toJson element")?);
+                out.extend(read_string_units(caller, &s, "Array#toJson element")?);
             }
             Val::AnyRef(None) => out.extend("null".encode_utf16()),
             other => wasmtime::bail!("Array#toJson: invalid element {other:?}"),
@@ -557,7 +557,7 @@ async fn object_override(
     recv: &Val,
     name: &str,
 ) -> wasmtime::Result<Option<Val>> {
-    let intr = build_intrinsic_types(caller.engine())?;
+    let intr = intrinsic_types(&mut *caller)?;
     if !super::collection::is_a(caller, recv, &intr.object_shape)? {
         return Ok(None);
     }
@@ -621,7 +621,11 @@ pub(crate) async fn object_to_json(
         match value {
             Val::AnyRef(Some(_)) => {
                 let json = dispatch_vtable_slot(caller, value, 1, &[]).await?;
-                out.extend(read_units_val(caller, &json, "Object#toJson field value")?);
+                out.extend(read_string_units(
+                    caller,
+                    &json,
+                    "Object#toJson field value",
+                )?);
             }
             Val::AnyRef(None) => out.extend("null".encode_utf16()),
             other => wasmtime::bail!("Object#toJson: invalid field value {other:?}"),
@@ -649,7 +653,7 @@ fn json_property_slots(
             continue;
         }
         let getter = super::object::is_accessor_slot(caller, &name)?;
-        let mut units = read_units_val(caller, &name, "JSON property name")?;
+        let mut units = read_string_units(caller, &name, "JSON property name")?;
         if getter {
             let getter_prefix = [
                 u16::from(b'g'),
@@ -792,7 +796,7 @@ pub(crate) fn read_object_entries(
         {
             continue;
         }
-        let field_name = read_units_val(caller, &field_name, name)?;
+        let field_name = read_string_units(caller, &field_name, name)?;
         entries.push((field_name, value));
     }
     Ok(entries)
@@ -1224,9 +1228,13 @@ fn regex_to_string(caller: &mut Caller<'_, StoreData>, recv: &Val) -> wasmtime::
     let source = st.field(&mut *caller, 3)?;
     let flags = st.field(&mut *caller, 4)?;
     let mut out = vec![u16::from(b'/')];
-    out.extend(read_units_val(caller, &source, "RegExp#toString source")?);
+    out.extend(read_string_units(
+        caller,
+        &source,
+        "RegExp#toString source",
+    )?);
     out.push(u16::from(b'/'));
-    out.extend(read_units_val(caller, &flags, "RegExp#toString flags")?);
+    out.extend(read_string_units(caller, &flags, "RegExp#toString flags")?);
     let st = write_submilli_string_struct_units(caller, &out)?;
     Ok(Val::AnyRef(Some(st.to_anyref())))
 }
@@ -1519,28 +1527,41 @@ fn as_opt_struct(
 }
 
 /// Read a `$string`/`$Object` struct's field-1 `(array i16)` payload into code
-/// units (zero-extended `i32` elements).
+/// units.
 fn read_struct_units(
     caller: &mut Caller<'_, StoreData>,
     st: &Rooted<StructRef>,
     name: &str,
 ) -> wasmtime::Result<Vec<u16>> {
-    let arr = match st.field(&mut *caller, 1)? {
-        Val::AnyRef(Some(any)) => any.unwrap_array(&mut *caller)?,
-        other => wasmtime::bail!("{name}: malformed payload {other:?}"),
-    };
-    let len = arr.len(&mut *caller)?;
-    let mut units = Vec::with_capacity(len as usize);
-    for i in 0..len {
-        match arr.get(&mut *caller, i)? {
-            Val::I32(unit) => units.push(unit as u16),
-            other => wasmtime::bail!("{name}: code unit {i} is {other:?}"),
-        }
-    }
-    Ok(units)
+    let payload = string_payload(caller, st, name)?;
+    read_code_units(&mut *caller, payload, name)
 }
 
-pub(super) fn read_units_val(
+/// A `$string` value's length in code units, without copying them.
+pub(crate) fn string_length(
+    caller: &mut Caller<'_, StoreData>,
+    val: &Val,
+    name: &str,
+) -> wasmtime::Result<usize> {
+    let st = as_struct(caller, val, name)?;
+    let payload = string_payload(caller, &st, name)?;
+    usize::try_from(payload.len(&mut *caller)?).map_err(fatal_host_error)
+}
+
+/// A `$string` struct's field-1 `$rawString` payload.
+fn string_payload(
+    caller: &mut Caller<'_, StoreData>,
+    st: &Rooted<StructRef>,
+    name: &str,
+) -> wasmtime::Result<Rooted<ArrayRef>> {
+    match st.field(&mut *caller, 1)? {
+        Val::AnyRef(Some(any)) => any.unwrap_array(&mut *caller),
+        other => wasmtime::bail!("{name}: malformed payload {other:?}"),
+    }
+}
+
+/// A `$string` value's code units. `name` labels a malformed value in the error.
+pub(crate) fn read_string_units(
     caller: &mut Caller<'_, StoreData>,
     val: &Val,
     name: &str,
@@ -1559,8 +1580,7 @@ fn build_string(
     units: &[u16],
 ) -> wasmtime::Result<Val> {
     let pre = ArrayRefPre::new(&mut *caller, raw_string.clone());
-    let vals: Vec<Val> = units.iter().map(|&u| Val::I32(i32::from(u))).collect();
-    let raw = ArrayRef::new_fixed(&mut *caller, &pre, &vals)?;
+    let raw = ArrayRef::new_from_i16_slice(&mut *caller, &pre, units)?;
     let pre = StructRefPre::new(&mut *caller, string_ty.clone());
     let st = StructRef::new(
         &mut *caller,
@@ -1626,7 +1646,7 @@ pub(crate) fn declare_walk_guards(defs: &mut crate::PackageDeclaration) {
 }
 
 fn is_function(caller: &mut Caller<'_, StoreData>, value: &Val) -> wasmtime::Result<bool> {
-    let closure = build_intrinsic_types(caller.engine())?.closure;
+    let closure = intrinsic_types(&mut *caller)?.closure.clone();
     super::collection::is_a(caller, value, &closure)
 }
 

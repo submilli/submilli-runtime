@@ -15,6 +15,7 @@ use crate::runtime::StoreData;
 use crate::runtime::host::{
     intrinsic_string_type, read_string_arg, register_host_fn, write_submilli_string_struct,
 };
+use crate::runtime::intrinsic_types::intrinsic_types;
 use crate::runtime::number::{
     format_number_js, parse_float_js, parse_int_js, to_exponential_js, to_fixed_js,
     to_precision_js, to_string_radix_js,
@@ -65,7 +66,7 @@ fn number_ctor_call(caller: &mut Caller<'_, StoreData>, value: &Val) -> wasmtime
             "Number(value): value is null",
         ));
     };
-    let intr = crate::runtime::intrinsic_types::build_intrinsic_types(caller.engine())?;
+    let intr = intrinsic_types(&mut *caller)?;
     let Some(st) = any.as_struct(&mut *caller)? else {
         return Err(crate::runtime::host::type_error(
             "Number(value): not a struct value",

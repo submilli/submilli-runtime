@@ -15,7 +15,7 @@ use crate::runtime::host::{
     read_uint8_array_arg, register_host_fn, write_submilli_string_struct,
     write_submilli_uint8array_struct,
 };
-use crate::runtime::intrinsic_types::build_intrinsic_types;
+use crate::runtime::intrinsic_types::{build_intrinsic_types, intrinsic_types};
 use crate::runtime::prelude::{MODULE_NAME, declare_method};
 use crate::{MangledName, PackageDeclaration, Param, Type};
 
@@ -41,7 +41,7 @@ fn ref_to(struct_ty: wasmtime::StructType) -> ValType {
 
 /// Build a fresh stateless instance: an empty `$ObjectShape { object_vtable, [], [] }`.
 fn new_instance(caller: &mut Caller<'_, StoreData>) -> wasmtime::Result<Val> {
-    let intr = build_intrinsic_types(caller.engine())?;
+    let intr = intrinsic_types(&mut *caller)?;
     let vtable = host_object_vtable(caller)?;
     let names = {
         let pre = ArrayRefPre::new(&mut *caller, intr.field_names.clone());

@@ -10,7 +10,7 @@ use crate::runtime::host::{
     range_error, register_host_fn_async, type_error, write_boxed_number_struct,
     write_submilli_string_struct_units,
 };
-use crate::runtime::intrinsic_types::build_intrinsic_types;
+use crate::runtime::intrinsic_types::{build_intrinsic_types, intrinsic_types};
 use crate::runtime::number::{format_number_js, string_to_number_js};
 use crate::runtime::prelude::bigint::ops::{
     limbs_to_bigint, make_bigint_struct, read_bigint_struct,
@@ -338,7 +338,7 @@ pub(super) async fn conversion_method(
     let Some(vtable) = vtable.as_struct(&mut *caller)? else {
         return Ok(None);
     };
-    let intr = build_intrinsic_types(caller.engine())?;
+    let intr = intrinsic_types(&mut *caller)?;
     if !vtable.matches_ty(&*caller, &intr.class_vtable)? {
         return Ok(None);
     }
@@ -369,7 +369,7 @@ pub(super) fn is_callable(
     let Some(object) = reference.as_struct(&mut *caller)? else {
         return Ok(false);
     };
-    let closure = build_intrinsic_types(caller.engine())?.closure;
+    let closure = intrinsic_types(&mut *caller)?.closure.clone();
     object.matches_ty(&*caller, &closure)
 }
 
@@ -401,7 +401,7 @@ fn read_primitive(
     let Some(object) = reference.as_struct(&mut *caller)? else {
         return Ok(None);
     };
-    let intr = build_intrinsic_types(caller.engine())?;
+    let intr = intrinsic_types(&mut *caller)?;
     if object.matches_ty(&*caller, &intr.boxed_number)? {
         let Val::F64(bits) = object.field(&mut *caller, 1)? else {
             unreachable!("boxed number payload")
@@ -415,8 +415,10 @@ fn read_primitive(
         return Ok(Some(Primitive::Boolean(value != 0)));
     }
     if object.matches_ty(&*caller, &intr.string)? {
-        return Ok(Some(Primitive::String(super::array::read_string_units(
-            caller, value,
+        return Ok(Some(Primitive::String(super::vtable::read_string_units(
+            caller,
+            value,
+            "string primitive",
         )?)));
     }
     if object.matches_ty(&*caller, &intr.bigint)? {
@@ -558,7 +560,7 @@ pub(super) async fn search_string(
     caller: &mut Caller<'_, StoreData>,
     value: &Val,
 ) -> wasmtime::Result<Vec<u16>> {
-    let intr = build_intrinsic_types(caller.engine())?;
+    let intr = intrinsic_types(&mut *caller)?;
     if let Val::AnyRef(Some(reference)) = value
         && let Some(object) = reference.as_struct(&mut *caller)?
         && object.matches_ty(&*caller, &intr.regex)?

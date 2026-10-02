@@ -10,6 +10,7 @@ use wasmtime::{Caller, StructType, Val};
 use crate::runtime::StoreData;
 use crate::runtime::host::write_submilli_string_struct_units;
 use crate::runtime::prelude::iterator::as_struct;
+use crate::runtime::prelude::vtable::read_string_units;
 
 /// Whether `val` is (non-null and) an instance of struct type `ty`.
 pub(crate) fn is_a(
@@ -99,7 +100,7 @@ fn object_field_kind(
     let target: Vec<u16> = name.encode_utf16().collect();
     for i in 0..names.len(&mut *caller)? {
         let nm = names.get(&mut *caller, i)?;
-        if string_units(caller, &nm)? == target
+        if read_string_units(caller, &nm, FIELD_NAME)? == target
             && super::object::is_accessor_slot(caller, &nm)? == accessor
         {
             return Ok(Some(fields.get(&mut *caller, i)?));
@@ -108,32 +109,8 @@ fn object_field_kind(
     Ok(None)
 }
 
-/// Read a `$string`'s packed UTF-16 backing into code units.
-pub(crate) fn string_units(
-    caller: &mut Caller<'_, StoreData>,
-    val: &Val,
-) -> wasmtime::Result<Vec<u16>> {
-    let st = as_struct(caller, val, "object field name")?;
-    let raw = match st.field(&mut *caller, 1)? {
-        Val::AnyRef(Some(a)) => a.unwrap_array(&mut *caller)?,
-        other => {
-            return Err(wasmtime::Error::msg(format!(
-                "object field name: malformed $string backing {other:?}"
-            )));
-        }
-    };
-    let len = raw.len(&mut *caller)?;
-    let mut units = Vec::new();
-    units
-        .try_reserve_exact(len as usize)
-        .map_err(crate::runtime::host::fatal_host_error)?;
-    for i in 0..len {
-        if let Val::I32(c) = raw.get(&mut *caller, i)? {
-            units.push(c as u16);
-        }
-    }
-    Ok(units)
-}
+/// Labels an object field name that is not a well-formed `$string`.
+pub(crate) const FIELD_NAME: &str = "object field name";
 
 /// Split a `$string` into its code points as one-element-per-code-point
 /// `$string`s, matching `String#iterator`: a high+low surrogate pair is one code
@@ -143,7 +120,7 @@ pub(crate) fn string_code_points(
     caller: &mut Caller<'_, StoreData>,
     val: &Val,
 ) -> wasmtime::Result<Vec<Val>> {
-    let units = string_units(caller, val)?;
+    let units = read_string_units(caller, val, "String iterator")?;
     let mut out = Vec::new();
     let mut i = 0;
     while i < units.len() {

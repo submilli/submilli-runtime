@@ -16,9 +16,9 @@ use wasmtime::{ArrayRef, ArrayRefPre, Caller, Rooted, StructRef, StructRefPre, S
 use crate::runtime::StoreData;
 use crate::runtime::host::{
     host_array_vtable, host_boxed_boolean_vtable, host_boxed_number_vtable, host_object_vtable,
-    host_opaque_vtable, type_error, write_submilli_string_struct_units,
+    host_opaque_vtable, read_code_units, type_error, write_submilli_string_struct_units,
 };
-use crate::runtime::intrinsic_types::build_intrinsic_types;
+use crate::runtime::intrinsic_types::intrinsic_types;
 
 /// Bounds the pre-check walk. `toJson` has its own bound, but this pass runs
 /// first, so a cycle must be caught here or it recurses on the native stack.
@@ -92,20 +92,20 @@ struct Shapes {
 
 impl Shapes {
     fn recover(caller: &mut Caller<'_, StoreData>) -> wasmtime::Result<Self> {
-        let intr = build_intrinsic_types(caller.engine())?;
+        let intr = intrinsic_types(&mut *caller)?;
         let (map_backing, set_backing) = {
             let abi = host_abi(caller)?;
             (abi.map_backing_type.clone(), abi.set_backing_type.clone())
         };
         Ok(Self {
-            closure: intr.closure,
-            regex: intr.regex,
-            regex_match: intr.regex_match,
-            regex_match_box: intr.regex_match_box,
+            closure: intr.closure.clone(),
+            regex: intr.regex.clone(),
+            regex_match: intr.regex_match.clone(),
+            regex_match_box: intr.regex_match_box.clone(),
             map_backing,
             set_backing,
-            array: intr.array,
-            object_shape: intr.object_shape,
+            array: intr.array.clone(),
+            object_shape: intr.object_shape.clone(),
             opaque_vtable: host_opaque_vtable(caller)?,
         })
     }
@@ -533,14 +533,5 @@ pub(super) fn read_units(
         },
         None => any.unwrap_array(&mut *caller)?,
     };
-    let len = payload.len(&mut *caller)?;
-    let mut units = Vec::with_capacity(len as usize);
-    for i in 0..len {
-        let unit = payload
-            .get(&mut *caller, i)?
-            .i32()
-            .ok_or_else(|| wasmtime::Error::msg(format!("{name}: malformed code unit at {i}")))?;
-        units.push(unit as u16);
-    }
-    Ok(units)
+    read_code_units(&mut *caller, payload, name)
 }

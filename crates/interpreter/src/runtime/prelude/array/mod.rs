@@ -16,19 +16,23 @@
 //! a callback mutate the source mid-iteration without disturbing us.
 
 mod install;
+mod sort;
 
 pub(crate) use install::declare_types;
 pub use install::{declare, install};
+pub(crate) use sort::{Order, merge_sort};
 
 use wasmtime::{ArrayRef, ArrayRefPre, Caller, Rooted, StructRef, StructRefPre, Val};
 
 use crate::runtime::StoreData;
-use crate::runtime::host::{host_boxed_number_vtable, write_submilli_array_struct};
-use crate::runtime::intrinsic_types::build_intrinsic_types;
+use crate::runtime::host::{
+    host_boxed_number_vtable, write_submilli_array_struct, write_submilli_string_struct,
+};
+use crate::runtime::intrinsic_types::intrinsic_types;
 use crate::runtime::prelude::closure::Closure;
 use crate::runtime::prelude::iterator::{IterKind, as_struct, make_index_iterator};
 use crate::runtime::prelude::keep::{KeptValue, KeptValues, keep_all};
-use crate::runtime::prelude::vtable::dispatch_vtable_slot;
+use crate::runtime::prelude::vtable::{dispatch_vtable_slot, read_string_units, string_length};
 
 // ---------------------------------------------------------------------------
 // Marshalling helpers
@@ -93,7 +97,7 @@ fn set_backing(
     receiver: &Val,
     elements: &[Val],
 ) -> wasmtime::Result<()> {
-    let raw_ty = build_intrinsic_types(caller.engine())?.raw_array;
+    let raw_ty = intrinsic_types(&mut *caller)?.raw_array.clone();
     let pre = ArrayRefPre::new(&mut *caller, raw_ty);
     let raw = ArrayRef::new_fixed(&mut *caller, &pre, elements)?;
     let st = as_struct(caller, receiver, "array mutate receiver")?;
@@ -103,7 +107,7 @@ fn set_backing(
 
 /// Box an `f64` into a `$boxed_number` object (for iterator indices).
 fn box_number(caller: &mut Caller<'_, StoreData>, n: f64) -> wasmtime::Result<Val> {
-    let boxed = build_intrinsic_types(caller.engine())?.boxed_number;
+    let boxed = intrinsic_types(&mut *caller)?.boxed_number.clone();
     let vtable = host_boxed_number_vtable(caller)?;
     let pre = StructRefPre::new(&mut *caller, boxed);
     let st = StructRef::new(&mut *caller, &pre, &[vtable, Val::F64(n.to_bits())])?;
@@ -118,39 +122,12 @@ pub(super) fn is_array(caller: &mut Caller<'_, StoreData>, val: &Val) -> wasmtim
     let Some(st) = any.as_struct(&mut *caller)? else {
         return Ok(false);
     };
-    let array_ty = build_intrinsic_types(caller.engine())?.array;
+    let array_ty = intrinsic_types(&mut *caller)?.array.clone();
     st.matches_ty(&*caller, &array_ty)
 }
 
 fn is_null(v: &Val) -> bool {
     matches!(v, Val::AnyRef(None))
-}
-
-/// Read a `$string` `Val`'s packed UTF-16 backing into code units.
-pub(super) fn read_string_units(
-    caller: &mut Caller<'_, StoreData>,
-    val: &Val,
-) -> wasmtime::Result<Vec<u16>> {
-    let st = as_struct(caller, val, "array element toString result")?;
-    let raw = match st.field(&mut *caller, 1)? {
-        Val::AnyRef(Some(arr)) => arr.unwrap_array(&mut *caller)?,
-        other => {
-            return Err(wasmtime::Error::msg(format!(
-                "array element toString: malformed $string backing {other:?}"
-            )));
-        }
-    };
-    let len = raw.len(&mut *caller)?;
-    let mut units = Vec::with_capacity(len as usize);
-    for i in 0..len {
-        let Val::I32(u) = raw.get(&mut *caller, i)? else {
-            return Err(wasmtime::Error::msg(
-                "array element toString: non-i32 code unit",
-            ));
-        };
-        units.push(u as u16);
-    }
-    Ok(units)
 }
 
 /// The element's `toString()` (vtable slot 0) as code units — `join` and the
@@ -164,7 +141,7 @@ async fn element_to_string(
         return Err(wasmtime::Error::msg("array element toString: null element"));
     }
     let s = dispatch_vtable_slot(caller, &elem, 0, &[]).await?;
-    read_string_units(caller, &s)
+    read_string_units(caller, &s, "array element toString result")
 }
 
 /// An element's text in `join`: `null` joins as the empty string, as in JavaScript
@@ -172,15 +149,6 @@ async fn element_to_string(
 async fn join_text(caller: &mut Caller<'_, StoreData>, elem: Val) -> wasmtime::Result<Vec<u16>> {
     if is_null(&elem) {
         return Ok(Vec::new());
-    }
-    element_to_string(caller, elem).await
-}
-
-/// An element's key in the default `sort` order: `null` sorts as the string
-/// `"null"`, as in JavaScript (`[null, "a"].sort()` is `["a", null]`).
-async fn sort_key(caller: &mut Caller<'_, StoreData>, elem: Val) -> wasmtime::Result<Vec<u16>> {
-    if is_null(&elem) {
-        return Ok("null".encode_utf16().collect());
     }
     element_to_string(caller, elem).await
 }
@@ -520,39 +488,6 @@ fn splice(
     Ok(removed)
 }
 
-/// Insertion sort that re-enters the guest comparator (or compares element
-/// `toString()`s for the default order). Matches the Wasm body's adjacent-swap
-/// shape, so it is stable.
-async fn sort_elems(
-    caller: &mut Caller<'_, StoreData>,
-    elements: &mut [Val],
-    cmp: Option<&Closure>,
-) -> wasmtime::Result<()> {
-    let n = elements.len();
-    let mut i = 1;
-    while i < n {
-        let mut j = i;
-        while j > 0 {
-            let a = elements[j - 1];
-            let b = elements[j];
-            let greater = if let Some(c) = cmp {
-                c.compare(caller, a, b).await? > 0.0
-            } else {
-                let sa = sort_key(caller, a).await?;
-                let sb = sort_key(caller, b).await?;
-                sa > sb
-            };
-            if !greater {
-                break;
-            }
-            elements.swap(j - 1, j);
-            j -= 1;
-        }
-        i += 1;
-    }
-    Ok(())
-}
-
 async fn sort(
     caller: &mut Caller<'_, StoreData>,
     receiver: &Val,
@@ -580,6 +515,116 @@ async fn to_sorted(
 ) -> wasmtime::Result<Vec<Val>> {
     sort_elems(caller, &mut elements, cmp.as_ref()).await?;
     Ok(elements)
+}
+
+/// Stable sort by the program's comparator, or by element `toString()` for the
+/// default order.
+async fn sort_elems(
+    caller: &mut Caller<'_, StoreData>,
+    elements: &mut Vec<Val>,
+    cmp: Option<&Closure>,
+) -> wasmtime::Result<()> {
+    match cmp {
+        Some(cmp) => {
+            merge_sort(caller, elements, &Order::Comparator(cmp), |_, elem| {
+                Ok(elem)
+            })
+            .await
+        }
+        None => sort_by_string(caller, elements).await,
+    }
+}
+
+/// The default order: elements compare by their string form, and none is
+/// computed for fewer than two elements, which never compare. Each element's
+/// `toString()` normally runs once and its string is kept for every comparison;
+/// past [`SORT_KEY_BUDGET_UNITS`] the strings are released and each comparison
+/// computes its two instead, as JavaScript does.
+async fn sort_by_string(
+    caller: &mut Caller<'_, StoreData>,
+    elements: &mut Vec<Val>,
+) -> wasmtime::Result<()> {
+    if elements.len() < 2 {
+        return Ok(());
+    }
+    let Some(keys) = kept_string_forms(caller, elements).await? else {
+        return merge_sort(caller, elements, &Order::StringPerComparison, |_, elem| {
+            Ok(elem)
+        })
+        .await;
+    };
+    let mut keyed: Vec<(Val, Val)> = keys
+        .values()
+        .iter()
+        .copied()
+        .zip(elements.iter().copied())
+        .collect();
+    merge_sort(caller, &mut keyed, &Order::KeptStrings, |_, (key, _)| {
+        Ok(key)
+    })
+    .await?;
+    *elements = keyed.into_iter().map(|(_, elem)| elem).collect();
+    Ok(())
+}
+
+/// Every element's string form (see [`string_form_units`]), kept alive
+/// together, or `None` once they pass [`SORT_KEY_BUDGET_UNITS`].
+async fn kept_string_forms(
+    caller: &mut Caller<'_, StoreData>,
+    elements: &[Val],
+) -> wasmtime::Result<Option<KeptValues>> {
+    let mut keys = KeptValues::with_capacity(caller, elements.len())?;
+    // One shared string for every `null`: whatever the host allocates stays
+    // alive until the sort returns.
+    let null_key = write_submilli_string_struct(caller, "null")?;
+    let null_key = Val::AnyRef(Some(null_key.to_anyref()));
+    let mut kept_units = 0usize;
+    for &elem in elements {
+        let key = if is_null(&elem) {
+            null_key
+        } else {
+            dispatch_vtable_slot(caller, &elem, 0, &[]).await?
+        };
+        keys.push(caller, key)?;
+        // A string element is its own string form, and every `null` shares one
+        // key, so keeping those costs nothing extra.
+        if is_null(&elem) || same_object(caller, &key, &elem)? {
+            continue;
+        }
+        kept_units = kept_units.saturating_add(string_length(caller, &key, "sort key")?);
+        if kept_units > SORT_KEY_BUDGET_UNITS {
+            keys.clear(caller)?;
+            return Ok(None);
+        }
+    }
+    Ok(Some(keys))
+}
+
+/// Whether `a` and `b` are the same GC object.
+fn same_object(caller: &mut Caller<'_, StoreData>, a: &Val, b: &Val) -> wasmtime::Result<bool> {
+    match (a, b) {
+        (Val::AnyRef(Some(a)), Val::AnyRef(Some(b))) => Rooted::ref_eq(&*caller, a, b),
+        _ => Ok(false),
+    }
+}
+
+/// How many code units of `toString()` results the default sort keeps alive at
+/// once (8 MiB) before it computes them per comparison instead.
+const SORT_KEY_BUDGET_UNITS: usize = 4 * 1024 * 1024;
+
+/// An element's string form in the default order: its `toString()`, or `"null"`
+/// for `null`, as in JavaScript (`[null, "a"].sort()` is `["a", null]`). Read
+/// as soon as `toString()` returns; `null` allocates nothing, since whatever the
+/// host allocates stays alive until the sort returns. [`kept_string_forms`]
+/// builds the same strings as values.
+pub(super) async fn string_form_units(
+    caller: &mut Caller<'_, StoreData>,
+    elem: Val,
+) -> wasmtime::Result<Vec<u16>> {
+    if is_null(&elem) {
+        return Ok("null".encode_utf16().collect());
+    }
+    element_to_string(caller, elem).await
 }
 
 /// `null` when `index` is out of range — [`install`] raises the catchable
@@ -882,7 +927,7 @@ pub(super) async fn from(
         Some(c) => Some(ElementCallback::new(caller, c, None)?),
         None => None,
     };
-    let intr = build_intrinsic_types(caller.engine())?;
+    let intr = intrinsic_types(&mut *caller)?;
     let mut out = KeptValues::with_capacity(caller, 0)?;
 
     if is_a(caller, src, &intr.array)? {

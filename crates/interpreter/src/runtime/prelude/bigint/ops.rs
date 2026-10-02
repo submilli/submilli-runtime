@@ -9,6 +9,7 @@ use wasmtime::{
 use crate::runtime::host::{
     range_error, read_string_arg, register_host_fn, type_error, write_submilli_string,
 };
+use crate::runtime::intrinsic_types::intrinsic_types;
 use crate::runtime::{NUMBER_MODULE_NAME, StoreData};
 
 pub const BIGINT_MODULE_NAME: &str = "submilli:bigint";
@@ -453,9 +454,9 @@ pub(crate) fn make_bigint_struct(
 ) -> wasmtime::Result<Val> {
     let (sign, magnitude) = value.into_parts();
     let limbs = write_limbs(&mut *caller, &magnitude.to_u64_digits())?;
-    let intr = crate::runtime::intrinsic_types::build_intrinsic_types(caller.engine())?;
+    let intr = intrinsic_types(&mut *caller)?;
     let vtable = crate::runtime::host::host_bigint_vtable(caller)?;
-    let pre = StructRefPre::new(&mut *caller, intr.bigint);
+    let pre = StructRefPre::new(&mut *caller, intr.bigint.clone());
     let st = StructRef::new(
         &mut *caller,
         &pre,

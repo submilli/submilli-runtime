@@ -18,11 +18,14 @@
 //! codegen types. Map, Set, and host backing mirrors are rebuilt by their owning
 //! runtime modules from the same canonical layouts.
 
+use std::sync::Arc;
+
 use wasmtime::{
-    ArrayType, Engine, FieldType, Finality, FuncType, Mutability, RecGroupBuilder, RefType,
-    StorageType, StructType, ValType,
+    ArrayType, AsContextMut, Engine, FieldType, Finality, FuncType, Mutability, RecGroupBuilder,
+    RefType, StorageType, StructType, ValType,
 };
 
+use crate::runtime::StoreData;
 use crate::runtime::gc_singleton::{singleton_array, singleton_struct};
 
 /// Canonical handles for the intrinsic types, in `IntrinsicTypeIndices` order.
@@ -63,6 +66,21 @@ pub(crate) struct IntrinsicTypes {
     pub temporal_instant: StructType,
     pub temporal_duration: StructType,
     pub temporal_zdt: StructType,
+}
+
+/// The intrinsic types for `store`'s engine. Building them interns every rec
+/// group with the engine, which costs far more than the host call that needs
+/// them, so a store builds them once and its host functions share the result.
+pub(crate) fn intrinsic_types(
+    mut store: impl AsContextMut<Data = StoreData>,
+) -> wasmtime::Result<Arc<IntrinsicTypes>> {
+    let mut ctx = store.as_context_mut();
+    if let Some(types) = &ctx.data().intrinsic_types {
+        return Ok(Arc::clone(types));
+    }
+    let types = Arc::new(build_intrinsic_types(ctx.engine())?);
+    ctx.data_mut().intrinsic_types = Some(Arc::clone(&types));
+    Ok(types)
 }
 
 /// Build the full intrinsic type set against `engine`, mirroring

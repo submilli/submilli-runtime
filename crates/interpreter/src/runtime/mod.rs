@@ -68,7 +68,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use wasmtime::{
-    ArrayRef, AsContextMut, Config, Engine, Instance, Linker, Module, OptLevel, Rooted, Store, Val,
+    ArrayRef, AsContextMut, Config, Engine, Instance, Linker, Module, OptLevel, Rooted, Store,
     WasmBacktraceDetails,
 };
 
@@ -133,6 +133,15 @@ pub struct StoreData {
     /// raw arrays. `None` until the prelude instantiates; set by
     /// `install_prelude_async`. See [`crate::runtime::host::HostAbi`].
     pub host_abi: Option<crate::runtime::host::HostAbi>,
+    /// This store's intrinsic types, built on first use; see
+    /// [`crate::runtime::intrinsic_types::intrinsic_types`].
+    pub(crate) intrinsic_types: Option<Arc<crate::runtime::intrinsic_types::IntrinsicTypes>>,
+    /// The bound-receiver closure environment type, built on first use for the
+    /// same reason as [`Self::intrinsic_types`].
+    pub(crate) closure_receiver_type: Option<wasmtime::StructType>,
+    /// The call-metadata closure environment type, built on first use for the
+    /// same reason as [`Self::intrinsic_types`].
+    pub(crate) call_metadata_type: Option<wasmtime::StructType>,
     /// Runtime type metadata keyed by package name.
     pub type_info: std::collections::BTreeMap<String, TypeInfoTable>,
     /// Depth of the in-flight universal-vtable walk; see
@@ -191,6 +200,9 @@ impl StoreData {
             tenant_limits: TenantLimits::new(max_store_bytes),
             test_labels: RefCell::new(Vec::new()),
             host_abi: None,
+            intrinsic_types: None,
+            closure_receiver_type: None,
+            call_metadata_type: None,
             type_info: std::collections::BTreeMap::new(),
             vtable_walk_depth: 0,
         }
@@ -469,18 +481,11 @@ impl RuntimeConfig {
 }
 
 /// Decode a Submilli `(ref $string)` (packed UTF-16) into a Rust `String`.
-/// Wasmtime returns each `i16` element as `Val::I32` zero-extended.
 pub(crate) fn read_submilli_string(
-    mut ctx: impl AsContextMut,
+    ctx: impl AsContextMut,
     msg: Rooted<ArrayRef>,
 ) -> wasmtime::Result<String> {
-    let len = msg.len(&mut ctx)?;
-    let mut units = Vec::with_capacity(len as usize);
-    for i in 0..len {
-        match msg.get(&mut ctx, i)? {
-            Val::I32(v) => units.push(v as u16),
-            other => wasmtime::bail!("expected i16 array element, got {other:?}"),
-        }
-    }
-    Ok(String::from_utf16_lossy(&units))
+    Ok(String::from_utf16_lossy(&host::read_code_units(
+        ctx, msg, "string",
+    )?))
 }

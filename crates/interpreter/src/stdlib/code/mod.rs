@@ -11,7 +11,7 @@ use crate::runtime::{
     StoreData,
     host::{register_host_fn, write_submilli_string_struct_units},
     intrinsic_types::build_intrinsic_types,
-    prelude::collection::string_units,
+    prelude::vtable::read_string_units,
 };
 use crate::stdlib::shared::{
     atomic_write, check_security, contain_trap, require_writable, resolve_content_or_trap,
@@ -339,7 +339,7 @@ fn argument(caller: &mut Caller<'_, StoreData>, budget: &mut Budget, val: &Val) 
     })
 }
 fn units(caller: &mut Caller<'_, StoreData>, budget: &mut Budget, val: &Val) -> Result<Vec<u16>> {
-    let value = string_units(caller, val)?;
+    let value = read_string_units(caller, val, "code argument")?;
     budget.check_size(value.len().saturating_mul(2))?;
     budget.charge(caller, value.len().saturating_mul(4))?;
     Ok(value)

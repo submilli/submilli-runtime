@@ -15,6 +15,7 @@ use crate::runtime::StoreData;
 use crate::runtime::host::{
     intrinsic_bigint_type, intrinsic_string_type, register_host_fn, write_submilli_string_struct,
 };
+use crate::runtime::intrinsic_types::intrinsic_types;
 use crate::runtime::prelude::bigint::ops::{limbs_to_bigint, read_bigint_struct};
 use crate::runtime::prelude::{MODULE_NAME, declare_method};
 use crate::{MangledName, PackageDeclaration, Param, Type};
@@ -109,7 +110,7 @@ fn bigint_ctor_call(caller: &mut Caller<'_, StoreData>, value: &Val) -> wasmtime
     let Val::AnyRef(Some(any)) = value else {
         return Err(wasmtime::Error::msg("BigInt(value): value is null"));
     };
-    let intr = crate::runtime::intrinsic_types::build_intrinsic_types(caller.engine())?;
+    let intr = intrinsic_types(&mut *caller)?;
     let Some(st) = any.as_struct(&mut *caller)? else {
         return Err(wasmtime::Error::msg("BigInt(value): not a struct value"));
     };

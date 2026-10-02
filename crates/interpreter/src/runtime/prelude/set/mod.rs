@@ -29,7 +29,7 @@ use wasmtime::{
 use crate::runtime::StoreData;
 use crate::runtime::gc_singleton::singleton_struct;
 use crate::runtime::host::{host_map_tombstone, host_object_vtable, write_submilli_array_struct};
-use crate::runtime::intrinsic_types::{IntrinsicTypes, build_intrinsic_types};
+use crate::runtime::intrinsic_types::{IntrinsicTypes, intrinsic_types};
 use crate::runtime::prelude::closure::{self, Closure};
 use crate::runtime::prelude::collection::{decode_key, encode_key, is_null_key};
 use crate::runtime::prelude::collection::{is_a, object_field, read_array_vals, unbox_bool};
@@ -179,7 +179,7 @@ async fn equals(
 
 /// A fresh `$rawArray` of `n` null slots.
 fn new_raw_array(caller: &mut Caller<'_, StoreData>, n: i32) -> wasmtime::Result<Rooted<ArrayRef>> {
-    let raw = build_intrinsic_types(caller.engine())?.raw_array;
+    let raw = intrinsic_types(&mut *caller)?.raw_array.clone();
     let pre = ArrayRefPre::new(&mut *caller, raw);
     let nulls = vec![Val::null_any_ref(); n.max(0) as usize];
     ArrayRef::new_fixed(&mut *caller, &pre, &nulls)
@@ -461,7 +461,7 @@ fn make_set_iterator(
     let order_len = field_i32(caller, &b, F_ORDER_LEN)?;
     let cursor = make_set_cursor(caller, &elements, &order, order_len)?;
 
-    let intr = build_intrinsic_types(caller.engine())?;
+    let intr = intrinsic_types(&mut *caller)?;
     let (next_ty, next_struct) = next_closure_type(caller.engine(), &intr)?;
     let next = Func::new(&mut *caller, next_ty, move |mut caller, params, results| {
         set_next_step(&mut caller, params, results, kind)
@@ -787,7 +787,7 @@ pub(super) async fn construct(
         return Ok(coll);
     }
 
-    let intr = build_intrinsic_types(caller.engine())?;
+    let intr = intrinsic_types(&mut *caller)?;
     if is_a(caller, init, &intr.array)? {
         for elem in read_array_vals(caller, init)? {
             add(caller, &coll, &elem).await?;
@@ -834,7 +834,7 @@ pub(super) async fn construct(
 
 /// A fresh empty `$SetBacking` carrying the host object vtable.
 fn build_empty(caller: &mut Caller<'_, StoreData>) -> wasmtime::Result<Val> {
-    let intr = build_intrinsic_types(caller.engine())?;
+    let intr = intrinsic_types(&mut *caller)?;
     let ty = set_backing_struct(caller.engine(), &intr)?;
     let vtable = host_object_vtable(caller)?;
     let elements = new_raw_array(caller, INITIAL_CAPACITY)?;
@@ -858,6 +858,7 @@ fn build_empty(caller: &mut Caller<'_, StoreData>) -> wasmtime::Result<Val> {
 mod tests {
     use super::*;
     use crate::codegen::intrinsics::declare_intrinsic_types;
+    use crate::runtime::intrinsic_types::build_intrinsic_types;
     use wasm_encoder::{
         ConstExpr, ExportKind, ExportSection, GlobalSection, GlobalType as EncGlobalType,
         HeapType as EncHeapType, Module, RefType as EncRefType, StorageType as EncStorageType,

@@ -24,7 +24,7 @@ use crate::runtime::host::{
     read_boxed_number, read_string_arg, read_uint8_array_arg, register_host_fn,
     register_host_fn_async, write_submilli_string_struct,
 };
-use crate::runtime::intrinsic_types::{IntrinsicTypes, build_intrinsic_types};
+use crate::runtime::intrinsic_types::{IntrinsicTypes, build_intrinsic_types, intrinsic_types};
 use crate::runtime::metrics::{HttpMetric, MetricsSink};
 use crate::runtime::prelude::collection::{is_a, object_field, unbox_bool};
 use crate::runtime::prelude::map;
@@ -277,7 +277,7 @@ async fn read_request_body(
     if matches!(val, Val::AnyRef(None)) {
         return Ok(RequestBody::Empty);
     }
-    let intr = build_intrinsic_types(caller.engine())?;
+    let intr = intrinsic_types(&mut *caller)?;
     if is_a(caller, val, &intr.string)? {
         let text = read_string_arg(caller, val, "http (body)")?;
         return Ok(RequestBody::Text(text.into_bytes()));
