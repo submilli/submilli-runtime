@@ -347,11 +347,15 @@ whole caller list if it has one (lint reports what that list lacks). With
 each operation the program may call is then one explicit `capability add`.
 `--capabilities NAME,...` and `--all-capabilities` are the shortcuts.
 `capability add` refuses a name it does not know, or one only a dependency
-provides for `main` (which cannot import it), unless `--force` is given,
-which lint cannot catch (a misspelled name is a rule that never matches). Add `variables`, `vfs`,
-`idle_timeout` and `llm` by editing the file; the CLI editors rewrite YAML
-and drop comments, so keep hand-written commentary elsewhere. Lint warns on
-`main` rules the runtime never consults (such as `secrets.get`), on a rule
+provides for `main` (which cannot import it), unless `--force` is given. It
+accepts any other HTTP method as `http.<method>` (`http.request("TRACE", …)`
+checks `http.trace`) and warns that the rule matches only that method, but
+refuses a near miss of a cataloged operation such as `http.dlete`. Add
+`variables`, `vfs`, `idle_timeout` and `llm` by editing the file; the CLI
+editors rewrite YAML and drop comments, so keep hand-written commentary
+elsewhere. Lint warns on the names `capability add` refuses or warns about (a
+name nothing provides never matches), on `main` rules the runtime never
+consults (such as `secrets.get`), on a rule
 that follows an unfiltered rule for the same capability and caller (it never
 matches; `capability add` warns when it writes one), and on `default: allow`,
 and checks the `requires` of listed packages' dependencies like those of the

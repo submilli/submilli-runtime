@@ -213,8 +213,10 @@ to the package, and the program gets what the package returns.
 
 HTTP capability filters expose `host`, `path`, `body_size`, and `timeout_ms`.
 The verb is encoded in the capability name (`http.get`, `http.post`, etc.),
-including calls through `http.request(method, …)`. There is no `method` field
-in the capability context. When upgrading an existing blueprint, remove
+including calls through `http.request(method, …)`: any other method is
+`http.<method>` in lowercase, so `http.request("TRACE", …)` checks
+`http.trace`. There is no `method` field in the capability context. When
+upgrading an existing blueprint, remove
 redundant `method == "GET"` / `method == "POST"` clauses (and equivalents for
 other verbs), and rebuild packages to refresh their generated capabilities.
 Filters referencing the removed field will no longer match.
@@ -435,7 +437,7 @@ package that needs an operation its own list doesn't allow, a secret a
 package reads that `secrets` doesn't declare, or a filter on a field the
 operation doesn't report. `lint --fix` adds the rules a
 package needs for its own calls. A misspelled capability name is a rule that
-never matches, and `lint` doesn't catch it; `capability add` refuses a name it
+never matches: `lint` warns about it, and `capability add` refuses a name it
 doesn't know.
 
 An operation a package provides that `main` has no rule for is not a finding:

@@ -354,6 +354,19 @@ const HTTP: &[Capability] = &[
     },
 ];
 
+/// Every other method `http.request` takes, gated as `http.<method>` with the
+/// method lowercased: `http.request("TRACE", …)` checks `http.trace`. Kept
+/// out of [`CATALOG`], whose consumers read a templated name as
+/// `mcp.<server>` and concretize it per declared server; see
+/// [`uncataloged_http_method`].
+pub const HTTP_OTHER_METHOD: Capability = Capability {
+    name: "http.<method>",
+    main_denial: None,
+    summary: "Any other HTTP method, through `http.request`: `http.trace` gates TRACE",
+    filter_fields: HTTP_VERB_FIELDS,
+    example_filter: "host == \"api.example.com\"",
+};
+
 /// Outbound MCP calls — one capability per declared server, `mcp.<server>` (the
 /// `<server>` placeholder is filled in per blueprint, whose `mcp:` block names its
 /// servers). The tool being called is in the filter context, so a rule can allow a
@@ -488,6 +501,28 @@ pub fn find(name: &str) -> Option<&'static Capability> {
         .find(|cap| cap.name == name)
 }
 
+/// The method of a name that fills [`HTTP_OTHER_METHOD`]: `http.` and a method
+/// token in the lowercase form the runtime checks, which the catalog has no
+/// entry for.
+pub fn uncataloged_http_method(name: &str) -> Option<&str> {
+    let method = name.strip_prefix("http.")?;
+    (is_lowercase_http_token(method) && find(name).is_none()).then_some(method)
+}
+
+/// The entry describing `name`: its catalog entry, or [`HTTP_OTHER_METHOD`]
+/// for a name that fills it.
+pub fn find_gating(name: &str) -> Option<&'static Capability> {
+    find(name).or_else(|| uncataloged_http_method(name).map(|_| &HTTP_OTHER_METHOD))
+}
+
+/// An RFC 9110 method token, the set `http.request` accepts, in lowercase.
+fn is_lowercase_http_token(method: &str) -> bool {
+    !method.is_empty()
+        && method.bytes().all(|byte| {
+            byte.is_ascii_lowercase() || byte.is_ascii_digit() || b"!#$%&'*+-.^_`|~".contains(&byte)
+        })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -590,6 +625,30 @@ mod tests {
             summary.contains("models()"),
             "the summary must say narrowing `model` narrows discovery: {summary}"
         );
+    }
+
+    #[test]
+    fn uncataloged_http_methods_fill_the_template() {
+        assert_eq!(uncataloged_http_method("http.trace"), Some("trace"));
+        assert_eq!(uncataloged_http_method("http.propfind"), Some("propfind"));
+        // Cataloged, the template itself, uppercase (the runtime lowercases),
+        // empty, or not a token.
+        for name in [
+            "http.get",
+            "http.<method>",
+            "http.TRACE",
+            "http.",
+            "http.a b",
+            "fs.trace",
+        ] {
+            assert!(uncataloged_http_method(name).is_none(), "{name}");
+        }
+        assert!(HTTP_OTHER_METHOD.is_template());
+        assert_eq!(
+            find_gating("http.trace").map(|c| c.name),
+            Some("http.<method>")
+        );
+        assert_eq!(find_gating("http.get").map(|c| c.name), Some("http.get"));
     }
 
     #[test]

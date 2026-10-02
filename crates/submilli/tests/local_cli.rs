@@ -1762,6 +1762,26 @@ fn lint_rejects_stdlib_and_mcp_filters_on_unreported_fields() {
     );
 }
 
+/// A method only `http.request` takes reports the same fields as the
+/// cataloged verbs.
+#[test]
+fn lint_checks_fields_of_an_uncataloged_http_method() {
+    let file = write_temp(
+        "submilli-lint-http-method-fields.yaml",
+        "name: x\ndefault: deny\npermissions:\n  main:\n    - capability: http.trace\n      filter: host == \"a.com\"\n      action: allow\n    - capability: http.propfind\n      filter: owner == \"ops\"\n      action: deny\n",
+    );
+
+    let out = run(&[os("blueprint"), os("lint"), file.as_os_str()]);
+
+    assert_eq!(out.status.code(), Some(1), "stderr: {}", stderr(&out));
+    let err = stderr(&out);
+    assert!(!err.contains("tests `host`"), "got: {err}");
+    assert!(
+        err.contains("`permissions.main` rule 2 for `http.propfind` tests `owner`, which the operation doesn't report, so a condition on it is false for every call, and true under `not`; its fields are: body_size, host, path, timeout_ms"),
+        "got: {err}"
+    );
+}
+
 /// A package that checks a standard-library name itself reports its own
 /// context, so its fields count alongside the catalog's.
 #[test]
@@ -1832,7 +1852,7 @@ fn lint_skips_field_checks_when_a_package_fails_to_load() {
 /// Fields only some calls supply are still reported, and only the first
 /// segment of a dotted path is checked: `path.length` can't match a string
 /// `path`, but nothing records what a field contains. A capability nothing
-/// provides is SUB-940's to report.
+/// provides has no field list; lint warns about its name instead.
 #[test]
 fn lint_accepts_filters_on_reported_fields() {
     let file = write_temp(
@@ -1843,11 +1863,143 @@ fn lint_accepts_filters_on_reported_fields() {
     let out = run(&[os("blueprint"), os("lint"), file.as_os_str()]);
 
     assert!(out.status.success(), "stderr: {}", stderr(&out));
+    let err = stderr(&out);
+    assert!(!err.contains("doesn't report"), "got: {err}");
     assert!(
-        !stderr(&out).contains("doesn't report"),
+        err.contains("rule 3 for `acme.com/unknown` never matches"),
+        "got: {err}"
+    );
+}
+
+/// A misspelled name is a rule that never matches. It stays a warning: the
+/// policy engine matches names verbatim, so the file is still valid. An
+/// uncataloged HTTP method matches `http.request` calls with that method, so
+/// its warning says so rather than "never matches".
+#[test]
+fn lint_warns_on_a_capability_name_nothing_lists() {
+    let file = write_temp(
+        "submilli-lint-unknown-capability.yaml",
+        "name: x\ndefault: deny\npermissions:\n  main:\n    - capability: fs.wrte\n      action: allow\n    - capability: mcp.linear\n      action: deny\n    - capability: http.trace\n      action: deny\n    - capability: http.request\n      action: deny\n    - capability: http.dlete\n      action: deny\n  '@acme/util':\n    - capability: acme.com/charge\n      action: allow\nmcp:\n  linear:\n    url: https://example.com/mcp\n",
+    );
+
+    let out = run(&[os("blueprint"), os("lint"), file.as_os_str()]);
+
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    let err = stderr(&out);
+    assert!(
+        err.contains("`permissions.main` rule 1 for `fs.wrte` never matches: no standard-library operation, declared package, or declared MCP server provides it; did you mean: "),
+        "got: {err}"
+    );
+    assert!(err.contains("fs.write"), "got: {err}");
+    // `http.request` gates any method, so the rule matches a `TRACE` call.
+    assert!(
+        err.contains("`permissions.main` rule 3 for `http.trace` matches only `http.request` calls with method `TRACE`, through `http.<method>`\n"),
+        "got: {err}"
+    );
+    // The function's name is not a catch-all: it is checked per method too.
+    assert!(
+        err.contains("rule 4 for `http.request` matches only `http.request` calls with method `REQUEST`, through `http.<method>`"),
+        "got: {err}"
+    );
+    // A near miss of a cataloged operation: a misspelled `deny` lets it through.
+    assert!(
+        err.contains("rule 5 for `http.dlete` looks like a misspelling of `http.delete`; as written it matches only `http.request` calls with method `DLETE`"),
+        "got: {err}"
+    );
+    // A stale caller block's own warning covers its rules.
+    assert!(err.contains("caller block for `@acme/util`"), "got: {err}");
+    assert_eq!(err.matches("never matches").count(), 1, "got: {err}");
+}
+
+/// Names the catalog, a declared MCP server, or a declared package provide
+/// are known, under `main` and under a package.
+#[test]
+fn lint_accepts_capability_names_something_provides() {
+    let home = tempfile::tempdir().expect("home tempdir");
+    let _project = publish_dependency_chain(home.path());
+    let file = home.path().join("blueprint.yaml");
+    write_file(
+        &file,
+        "name: x\ndefault: deny\nmcp:\n  linear:\n    url: https://example.com/mcp\npackages:\n  - \"@acme/support\"\npermissions:\n  main:\n    - capability: llm.call\n      action: allow\n    - capability: mcp.linear\n      action: allow\n  \"@acme/support\":\n    - capability: acme.com/credits.apply\n      action: allow\n",
+    );
+
+    let out = run_with_home(
+        &[os("blueprint"), os("lint"), file.as_os_str()],
+        home.path(),
+    );
+
+    assert!(
+        !stderr(&out).contains("never matches"),
         "got: {}",
         stderr(&out)
     );
+
+    let _sdk = publish_capability_packages(home.path());
+    write_file(
+        &file,
+        "name: x\ndefault: deny\npackages:\n  - \"@acme/sdk\"\npermissions:\n  main:\n    - capability: acme.com/charge\n      action: allow\n  \"@acme/sdk\":\n    - capability: acme.com/chrage\n      action: allow\n",
+    );
+
+    let out = run_with_home(
+        &[os("blueprint"), os("lint"), file.as_os_str()],
+        home.path(),
+    );
+
+    let err = stderr(&out);
+    assert!(
+        !err.contains("`acme.com/charge` never matches"),
+        "got: {err}"
+    );
+    assert!(
+        err.contains("`permissions.@acme/sdk` rule 1 for `acme.com/chrage` never matches"),
+        "got: {err}"
+    );
+}
+
+/// `main` imports only declared packages, so a `main` rule for what only an
+/// undeclared dependency provides never matches; the packages that can call
+/// it can hold the rule.
+#[test]
+fn lint_warns_on_a_main_rule_for_a_dependency_only_capability() {
+    let home = tempfile::tempdir().expect("home tempdir");
+    let _project = publish_dependency_chain(home.path());
+    let file = home.path().join("blueprint.yaml");
+    write_file(
+        &file,
+        "name: x\ndefault: deny\npackages:\n  - \"@acme/desk\"\npermissions:\n  main:\n    - capability: acme.com/credits.apply\n      action: allow\n",
+    );
+
+    let out = run_with_home(
+        &[os("blueprint"), os("lint"), file.as_os_str()],
+        home.path(),
+    );
+
+    let err = stderr(&out);
+    assert!(
+        err.contains("`permissions.main` rule 1 for `acme.com/credits.apply` never matches: `@acme/billing` provides it, and only the packages that depend on it can call it; move the rule under `permissions.@acme/support`, or add `@acme/billing` to `packages:`"),
+        "got: {err}"
+    );
+}
+
+/// A package that fails to load may provide the name, so lint reports the
+/// load failure and leaves names unjudged.
+#[test]
+fn lint_skips_name_checks_when_a_package_fails_to_load() {
+    let home = tempfile::tempdir().expect("home tempdir");
+    let file = home.path().join("blueprint.yaml");
+    write_file(
+        &file,
+        "name: x\ndefault: deny\npackages:\n  - '@acme/missing'\npermissions:\n  main:\n    - capability: acme.com/charge\n      action: allow\n  '@acme/missing': []\n",
+    );
+
+    let out = run_with_home(
+        &[os("blueprint"), os("lint"), file.as_os_str()],
+        home.path(),
+    );
+
+    let err = stderr(&out);
+    assert!(err.contains("@acme/missing"), "got: {err}");
+    assert!(!err.contains("never matches"), "got: {err}");
 }
 
 // ---- submilli run --blueprint --------------------------------------------

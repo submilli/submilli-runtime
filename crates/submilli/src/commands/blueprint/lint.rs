@@ -14,9 +14,12 @@
 //! parses, but inverts the security posture to allow-by-default, so it lints as
 //! a warning. So does a rule that follows an unfiltered rule for the same
 //! capability under the same caller: the first match decides, so it never
-//! matches. A filter that tests a field the capability's check doesn't report
-//! is an error: a condition on a missing field is false for every call, and
-//! true under `not`, whatever the call's arguments.
+//! matches. So does a rule for a capability name nothing the caller can
+//! reach provides, such as a misspelling; an `http.<method>` name the catalog
+//! lacks is told apart, since `http.request` gates it. A filter that tests a
+//! field the capability's check doesn't report is an error: a condition on a
+//! missing field is false for every call, and true under `not`, whatever the
+//! call's arguments.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
@@ -28,7 +31,10 @@ use submilli_blueprint::{Action, Blueprint, DefaultAction, FilterExpr, Permissio
 use submilli_build::{Artifact, CapabilitySchema, PackageStore};
 
 use super::capability::action_label;
-use super::declared_packages;
+use super::capability_names::{
+    UnlistedName, did_you_mean, http_method_scope, http_misspelling, unlisted_name,
+};
+use super::declared_packages::{self, DeclaredPackages};
 use super::file::{has_capability_rule, has_matching_rule};
 use super::filter_fields::{reported_fields, unreported_field_problem, unreported_fields};
 use super::package_secrets::missing_package_secret_warnings;
@@ -75,12 +81,14 @@ fn lint_blueprint(args: Args, blueprint: &mut Blueprint) -> anyhow::Result<ExitC
     warnings.extend(unreachable_main_rule_warnings(blueprint));
     warnings.extend(shadowed_rule_warnings(blueprint));
     // An incomplete closure hides the dependencies past the failure, so a
-    // caller block for one of them cannot be told from a stale one.
+    // caller block for one of them cannot be told from a stale one, and a
+    // name the missing package provides cannot be told from a misspelling.
     if packages.errors.is_empty() {
         warnings.extend(stale_caller_block_warnings(
             blueprint,
             &packages.dependencies,
         ));
+        warnings.extend(unlisted_capability_warnings(blueprint, &packages));
     }
     warnings.extend(missing_caller_block_warnings(blueprint));
     for (package, artifact) in &packages.artifacts {
@@ -313,17 +321,71 @@ fn stale_caller_block_warnings(
     blueprint
         .permissions
         .keys()
-        .filter(|caller| {
-            is_registry_package(caller)
-                && !blueprint.packages.contains(*caller)
-                && !dependencies.contains(*caller)
-        })
+        .filter(|caller| is_stale_caller(blueprint, dependencies, caller))
         .map(|caller| {
             format!(
                 "`permissions:` has a caller block for `{caller}`, but `{caller}` is neither in `packages:` nor a dependency of a package there"
             )
         })
         .collect()
+}
+
+fn is_stale_caller(blueprint: &Blueprint, dependencies: &BTreeSet<String>, caller: &str) -> bool {
+    is_registry_package(caller)
+        && !blueprint.packages.contains(caller)
+        && !dependencies.contains(caller)
+}
+
+/// Rules for a name nothing lists for the caller never match, except an HTTP
+/// method `http.request` gates, which matches only that method. A warning
+/// rather than an error, like `capability add --force`: the policy engine
+/// matches names verbatim, so the rule stays valid. A stale caller block's
+/// rules are left to its own warning: its package's names are unknown once it
+/// is gone.
+fn unlisted_capability_warnings(blueprint: &Blueprint, packages: &DeclaredPackages) -> Vec<String> {
+    let mut warnings = Vec::new();
+    for (caller, rules) in &blueprint.permissions {
+        if is_stale_caller(blueprint, &packages.dependencies, caller) {
+            continue;
+        }
+        for (position, rule) in (1..).zip(rules) {
+            let Some(unlisted) = unlisted_name(blueprint, packages, caller, &rule.capability)
+            else {
+                continue;
+            };
+            let rule_label = format!(
+                "`permissions.{caller}` rule {position} for `{}`",
+                rule.capability
+            );
+            warnings.push(match unlisted {
+                UnlistedName::DependencyOnly {
+                    dependency,
+                    dependents,
+                } => format!(
+                    "{rule_label} never matches: `{dependency}` provides it, and only the \
+                     packages that depend on it can call it; move the rule under {}, or add \
+                     `{dependency}` to `packages:`",
+                    dependents
+                        .iter()
+                        .map(|dependent| format!("`permissions.{dependent}`"))
+                        .collect::<Vec<_>>()
+                        .join(" or ")
+                ),
+                UnlistedName::UncatalogedHttpMethod { method } => {
+                    format!("{rule_label} {}", http_method_scope(&method))
+                }
+                UnlistedName::MisspelledHttpOperation { intended, method } => {
+                    format!("{rule_label} {}", http_misspelling(intended, &method))
+                }
+                UnlistedName::Unknown { near } => format!(
+                    "{rule_label} never matches: no standard-library operation, declared \
+                     package, or declared MCP server provides it{}",
+                    did_you_mean(&near)
+                ),
+            });
+        }
+    }
+    warnings
 }
 
 fn missing_caller_block_warnings(blueprint: &Blueprint) -> Vec<String> {
