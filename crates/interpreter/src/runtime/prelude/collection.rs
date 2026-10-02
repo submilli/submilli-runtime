@@ -32,21 +32,7 @@ pub(crate) fn read_array_vals(
     caller: &mut Caller<'_, StoreData>,
     val: &Val,
 ) -> wasmtime::Result<Vec<Val>> {
-    let st = as_struct(caller, val, "iterable entries array")?;
-    let backing = match st.field(&mut *caller, 1)? {
-        Val::AnyRef(Some(a)) => a.unwrap_array(&mut *caller)?,
-        other => {
-            return Err(wasmtime::Error::msg(format!(
-                "iterable entries: malformed array backing {other:?}"
-            )));
-        }
-    };
-    let len = backing.len(&mut *caller)?;
-    let mut out = Vec::with_capacity(len as usize);
-    for i in 0..len {
-        out.push(backing.get(&mut *caller, i)?);
-    }
-    Ok(out)
+    crate::runtime::array_storage::ArrayStorage::read(caller, val)?.snapshot(caller)
 }
 
 /// Read a named field from an `$ObjectShape` (the structural getter): scan

@@ -15,8 +15,8 @@ use wasmtime::{ArrayRef, ArrayRefPre, Caller, Rooted, StructRef, StructRefPre, S
 
 use crate::runtime::StoreData;
 use crate::runtime::host::{
-    host_array_vtable, host_boxed_boolean_vtable, host_boxed_number_vtable, host_object_vtable,
-    host_opaque_vtable, read_code_units, type_error, write_submilli_string_struct_units,
+    host_boxed_boolean_vtable, host_boxed_number_vtable, host_object_vtable, host_opaque_vtable,
+    read_code_units, type_error, write_submilli_string_struct_units,
 };
 use crate::runtime::intrinsic_types::intrinsic_types;
 
@@ -448,19 +448,7 @@ pub(super) fn build_array(
     caller: &mut Caller<'_, StoreData>,
     elements: Vec<Val>,
 ) -> wasmtime::Result<Val> {
-    let (array_ty, raw_ty) = {
-        let abi = host_abi(caller)?;
-        (abi.array_type.clone(), abi.raw_array_type.clone())
-    };
-    let vtable = host_array_vtable(caller)?;
-    let raw_pre = ArrayRefPre::new(&mut *caller, raw_ty);
-    let raw = ArrayRef::new_fixed(&mut *caller, &raw_pre, &elements)?;
-    let pre = StructRefPre::new(&mut *caller, array_ty);
-    let st = StructRef::new(
-        &mut *caller,
-        &pre,
-        &[vtable, Val::AnyRef(Some(raw.to_anyref()))],
-    )?;
+    let st = crate::runtime::host::write_submilli_array_struct(caller, &elements)?;
     Ok(Val::AnyRef(Some(st.to_anyref())))
 }
 

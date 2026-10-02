@@ -249,7 +249,12 @@ fn contains_dynamic_object(
         return Ok(false);
     };
     let values = values.unwrap_array(&mut *caller)?;
-    for index in 0..values.len(&mut *caller)? {
+    let len = if object.matches_ty(&*caller, &intr.array)? {
+        super::array_storage::ArrayStorage::from_struct(caller, object)?.len
+    } else {
+        values.len(&mut *caller)?
+    };
+    for index in 0..len {
         let value = values.get(&mut *caller, index)?;
         if contains_dynamic_object(caller, &value, intr, depth + 1)? {
             return Ok(true);
@@ -426,9 +431,13 @@ fn stringify_array(
     element: crate::TypeInfoId,
     val: Val,
 ) -> wasmtime::Result<serde_json::Value> {
-    let raw = boxed_array_raw(caller, val, "array")?;
-    let len = raw.len(&mut *caller)?;
-    let mut values = Vec::with_capacity(len as usize);
+    let storage = super::array_storage::ArrayStorage::read(caller, &val)?;
+    let raw = storage.backing;
+    let len = storage.len;
+    let mut values = Vec::new();
+    values
+        .try_reserve_exact(len as usize)
+        .map_err(super::host::fatal_host_error)?;
     for index in 0..len {
         let elem = raw.get(&mut *caller, index)?;
         values.push(stringify_type_info_val(caller, package, element, elem)?);
@@ -442,15 +451,19 @@ fn stringify_tuple(
     elements: &[crate::TypeInfoId],
     val: Val,
 ) -> wasmtime::Result<serde_json::Value> {
-    let raw = boxed_array_raw(caller, val, "tuple")?;
-    let len = raw.len(&mut *caller)?;
+    let storage = super::array_storage::ArrayStorage::read(caller, &val)?;
+    let raw = storage.backing;
+    let len = storage.len;
     if len as usize != elements.len() {
         return Err(wasmtime::Error::msg(format!(
             "JSON.stringify: tuple length mismatch, expected {}, got {len}",
             elements.len()
         )));
     }
-    let mut values = Vec::with_capacity(elements.len());
+    let mut values = Vec::new();
+    values
+        .try_reserve_exact(elements.len())
+        .map_err(super::host::fatal_host_error)?;
     for (index, element) in elements.iter().enumerate() {
         let elem = raw.get(&mut *caller, index as u32)?;
         values.push(stringify_type_info_val(caller, package, *element, elem)?);
@@ -474,20 +487,6 @@ fn json_number(n: f64) -> wasmtime::Result<serde_json::Number> {
     }
     serde_json::Number::from_f64(n)
         .ok_or_else(|| wasmtime::Error::msg("JSON.stringify: non-finite number"))
-}
-
-fn boxed_array_raw(
-    caller: &mut Caller<'_, StoreData>,
-    val: Val,
-    name: &str,
-) -> wasmtime::Result<Rooted<ArrayRef>> {
-    let s = boxed_struct(caller, val, name)?;
-    match s.field(&mut *caller, 1)? {
-        Val::AnyRef(Some(any)) => any.unwrap_array(&mut *caller),
-        other => Err(wasmtime::Error::msg(format!(
-            "JSON.stringify: boxed {name} raw field got {other:?}"
-        ))),
-    }
 }
 
 /// Parse `text` as JSON and materialize it as an `unknown`-shaped guest value,
@@ -708,7 +707,11 @@ impl JsonUnknownAllocator {
                 let object = StructRef::new(
                     &mut *ctx,
                     &self.array_pre,
-                    &[self.array_vtable, Val::AnyRef(Some(raw.to_anyref()))],
+                    &[
+                        self.array_vtable,
+                        Val::AnyRef(Some(raw.to_anyref())),
+                        Val::I32(super::array_storage::checked_length(elements.len())? as i32),
+                    ],
                 )?;
                 Ok(Val::AnyRef(Some(object.to_anyref())))
             }

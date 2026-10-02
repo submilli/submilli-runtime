@@ -822,16 +822,16 @@ fn build_empty(caller: &mut Caller<'_, StoreData>) -> wasmtime::Result<Val> {
 
 /// Read a `[k, v]` tuple (`$Array` of two elements).
 fn read_pair(caller: &mut Caller<'_, StoreData>, tuple: &Val) -> wasmtime::Result<(Val, Val)> {
-    let st = as_struct(caller, tuple, "Map ctor entry pair")?;
-    let backing = match st.field(&mut *caller, 1)? {
-        Val::AnyRef(Some(a)) => a.unwrap_array(&mut *caller)?,
-        other => {
-            return Err(wasmtime::Error::msg(format!(
-                "Map ctor: entry is not a [key, value] tuple {other:?}"
-            )));
-        }
-    };
-    Ok((backing.get(&mut *caller, 0)?, backing.get(&mut *caller, 1)?))
+    let storage = crate::runtime::array_storage::ArrayStorage::read(caller, tuple)?;
+    if storage.len < 2 {
+        return Err(crate::runtime::host::type_error(
+            "Map ctor: entry needs a key and value",
+        ));
+    }
+    Ok((
+        storage.backing.get(&mut *caller, 0)?,
+        storage.backing.get(&mut *caller, 1)?,
+    ))
 }
 
 #[cfg(test)]

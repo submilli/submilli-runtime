@@ -1,5 +1,6 @@
 //! Wasmtime engine configuration for Submilli.
 
+pub(crate) mod array_storage;
 pub mod blocking;
 pub mod disk_quota;
 pub mod exec;
@@ -84,6 +85,8 @@ pub struct VfsInfo {
 }
 
 pub struct StoreData {
+    #[cfg(test)]
+    pub(crate) array_growth: array_storage::GrowthStats,
     /// After cancelling a host call, the execution owner drains this before
     /// reusing or releasing the store. Blocking work may still be cleaning up.
     pub blocking_work: blocking::BlockingWork,
@@ -181,6 +184,8 @@ impl StoreData {
             size_limit: None,
         };
         Self {
+            #[cfg(test)]
+            array_growth: array_storage::GrowthStats::default(),
             console: Box::new(std::io::stderr()),
             vfs,
             vfs_info,

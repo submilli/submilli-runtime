@@ -297,7 +297,7 @@ pub fn declare_intrinsic_types(types: &mut TypeSection) -> IntrinsicTypeIndices 
         true,
     );
 
-    // $Array field 1 is mutable — push/pop swap in a new $rawArray since WasmGC arrays aren't growable.
+    // $Array retains spare backing capacity; field 2 is its logical length.
     types.ty().subtype(&SubType {
         is_final: false,
         supertype_idx: Some(object),
@@ -307,6 +307,10 @@ pub fn declare_intrinsic_types(types: &mut TypeSection) -> IntrinsicTypeIndices 
                     fieldtype_ref(vtable),
                     FieldType {
                         element_type: StorageType::Val(ref_to(raw_array)),
+                        mutable: true,
+                    },
+                    FieldType {
+                        element_type: StorageType::Val(ValType::I32),
                         mutable: true,
                     },
                 ]

@@ -294,15 +294,18 @@ async fn property(caller: &mut Caller<'_, StoreData>, params: &[Val]) -> wasmtim
             .contains(&name)
         })
     {
-        let Val::AnyRef(Some(reference)) = params[0] else {
-            unreachable!("classified receiver")
+        let len = if interface.as_deref() == Some("submilli:prelude#Array") {
+            crate::runtime::array_storage::ArrayStorage::read(caller, &params[0])?.len
+        } else {
+            let Val::AnyRef(Some(reference)) = params[0] else {
+                return Err(host::fatal_host_error("invalid intrinsic length receiver"));
+            };
+            let object = reference.unwrap_struct(&mut *caller)?;
+            let Val::AnyRef(Some(backing)) = object.field(&mut *caller, 1)? else {
+                return Err(host::fatal_host_error("invalid intrinsic backing"));
+            };
+            backing.unwrap_array(&mut *caller)?.len(&mut *caller)?
         };
-        let object = reference.unwrap_struct(&mut *caller)?;
-        let Val::AnyRef(Some(backing)) = object.field(&mut *caller, 1)? else {
-            unreachable!("intrinsic backing")
-        };
-        let backing = backing.unwrap_array(&mut *caller)?;
-        let len = backing.len(&mut *caller)?;
         return box_result(caller, Val::F64((len as f64).to_bits()));
     }
     let token = lookup(caller, params).await?;

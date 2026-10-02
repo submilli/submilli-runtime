@@ -242,6 +242,7 @@ fn emit_default_adapter_call(
         array_type_index: intr.raw_array,
         array_size: u32::from(target.arity),
     });
+    body.instruction(&Instruction::I32Const(i32::from(target.arity)));
     body.instruction(&Instruction::StructNew(intr.array));
     body.instruction(&Instruction::Call(
         ctx.symbols

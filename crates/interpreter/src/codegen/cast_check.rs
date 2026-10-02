@@ -483,11 +483,11 @@ fn emit_structural_test_inner(
             let intr = ctx
                 .symbols
                 .intrinsic_type_indices()
-                .expect("intrinsics declared");
+                .ok_or_else(|| crate::codegen::internal_failure("intrinsics declared"))?;
             let array_idx = ctx
                 .symbols
                 .array_type_idx()
-                .expect("$Array intrinsic registered");
+                .ok_or_else(|| crate::codegen::internal_failure("$Array intrinsic registered"))?;
             emitter.instruction(Instruction::LocalGet(value_local));
             emitter.instruction(Instruction::RefTestNonNull(HeapType::Concrete(array_idx)));
             emitter.emit_if(i32_block);
@@ -510,8 +510,12 @@ fn emit_structural_test_inner(
             emitter.instruction(Instruction::LocalSet(acc));
             emitter.instruction(Instruction::I32Const(0));
             emitter.instruction(Instruction::LocalSet(i));
-            emitter.instruction(Instruction::LocalGet(raw_local));
-            emitter.instruction(Instruction::ArrayLen);
+            emitter.instruction(Instruction::LocalGet(value_local));
+            emitter.instruction(Instruction::RefCastNonNull(HeapType::Concrete(array_idx)));
+            emitter.instruction(Instruction::StructGet {
+                struct_type_index: array_idx,
+                field_index: 2,
+            });
             emitter.instruction(Instruction::LocalSet(len));
             emitter.emit_block(BlockType::Empty);
             emitter.emit_loop(BlockType::Empty);
@@ -552,11 +556,11 @@ fn emit_structural_test_inner(
             let intr = ctx
                 .symbols
                 .intrinsic_type_indices()
-                .expect("intrinsics declared");
+                .ok_or_else(|| crate::codegen::internal_failure("intrinsics declared"))?;
             let array_idx = ctx
                 .symbols
                 .array_type_idx()
-                .expect("$Array intrinsic registered");
+                .ok_or_else(|| crate::codegen::internal_failure("$Array intrinsic registered"))?;
             emitter.instruction(Instruction::LocalGet(value_local));
             emitter.instruction(Instruction::RefTestNonNull(HeapType::Concrete(array_idx)));
             emitter.emit_if(i32_block);
@@ -572,8 +576,12 @@ fn emit_structural_test_inner(
             });
             emitter.instruction(Instruction::LocalSet(raw_local));
             // Length must match before indexing slots (else array.get would trap).
-            emitter.instruction(Instruction::LocalGet(raw_local));
-            emitter.instruction(Instruction::ArrayLen);
+            emitter.instruction(Instruction::LocalGet(value_local));
+            emitter.instruction(Instruction::RefCastNonNull(HeapType::Concrete(array_idx)));
+            emitter.instruction(Instruction::StructGet {
+                struct_type_index: array_idx,
+                field_index: 2,
+            });
             emitter.instruction(Instruction::I32Const(elems.len() as i32));
             emitter.instruction(Instruction::I32Eq);
             emitter.emit_if(i32_block);
