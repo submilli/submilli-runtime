@@ -31,7 +31,9 @@ use crate::runtime::gc_singleton::singleton_struct;
 use crate::runtime::host::{host_map_tombstone, host_object_vtable, write_submilli_array_struct};
 use crate::runtime::intrinsic_types::{IntrinsicTypes, intrinsic_types};
 use crate::runtime::prelude::closure::{self, Closure};
-use crate::runtime::prelude::collection::{decode_key, encode_key, is_null_key};
+use crate::runtime::prelude::collection::{
+    decode_key, encode_key, is_null_key, probe_capacity, rehash_capacity,
+};
 use crate::runtime::prelude::collection::{is_a, object_field, read_array_vals, unbox_bool};
 use crate::runtime::prelude::iterator::{
     IterKind, as_struct, build_iterator, iter_done, iter_yield, next_closure_type,
@@ -181,8 +183,9 @@ async fn equals(
 fn new_raw_array(caller: &mut Caller<'_, StoreData>, n: i32) -> wasmtime::Result<Rooted<ArrayRef>> {
     let raw = intrinsic_types(&mut *caller)?.raw_array.clone();
     let pre = ArrayRefPre::new(&mut *caller, raw);
-    let nulls = vec![Val::null_any_ref(); n.max(0) as usize];
-    ArrayRef::new_fixed(&mut *caller, &pre, &nulls)
+    let capacity =
+        u32::try_from(n).map_err(|_| wasmtime::Error::msg("Negative collection capacity"))?;
+    ArrayRef::new(&mut *caller, &pre, &Val::null_any_ref(), capacity)
 }
 
 /// A fresh `$rawIndexArray` of `n` zero slots.
@@ -192,8 +195,9 @@ fn new_index_array(
 ) -> wasmtime::Result<Rooted<ArrayRef>> {
     let ty = raw_index_array_type(caller.engine())?;
     let pre = ArrayRefPre::new(&mut *caller, ty);
-    let zeros = vec![Val::I32(0); n.max(0) as usize];
-    ArrayRef::new_fixed(&mut *caller, &pre, &zeros)
+    let capacity =
+        u32::try_from(n).map_err(|_| wasmtime::Error::msg("Negative collection capacity"))?;
+    ArrayRef::new(&mut *caller, &pre, &Val::I32(0), capacity)
 }
 
 // ---------------------------------------------------------------------------
@@ -213,21 +217,23 @@ pub(super) async fn add(
     let b = backing(caller, recv)?;
 
     let size = field_i32(caller, &b, F_SIZE)?;
-    let cap0 = field_array(caller, &b, F_ELEMENTS)?.len(&mut *caller)? as i32;
-    if (size + 1) * 4 > cap0 * 3 {
-        resize(caller, &b).await?;
-    } else {
-        compact_order_in_place(caller, &b)?;
+    let cap0 = field_array(caller, &b, F_ELEMENTS)?.len(&mut *caller)?;
+    let order_len = field_i32(caller, &b, F_ORDER_LEN)?;
+    if let Some(capacity) = rehash_capacity(cap0, size, order_len)? {
+        if find_slot(caller, &b, value).await?.is_some() {
+            return Ok(*recv);
+        }
+        rehash(caller, &b, capacity).await?;
     }
 
     let elements = field_array(caller, &b, F_ELEMENTS)?;
     let order = field_array(caller, &b, F_ORDER)?;
     let order_len = field_i32(caller, &b, F_ORDER_LEN)?;
-    let cap = elements.len(&mut *caller)? as i32;
+    let cap = probe_capacity(elements.len(&mut *caller)?)?;
 
     let mut i = hash(caller, value).await? & (cap - 1);
     let mut first_tomb: i32 = -1;
-    loop {
+    for _ in 0..cap {
         let slot = elements.get(&mut *caller, i as u32)?;
         if is_null(&slot) {
             let ins = if first_tomb == -1 { i } else { first_tomb };
@@ -246,6 +252,7 @@ pub(super) async fn add(
         }
         i = (i + 1) & (cap - 1);
     }
+    Err(wasmtime::Error::msg("Set insertion found no empty bucket"))
 }
 
 /// `Set#has(self, value) -> boolean`.
@@ -255,21 +262,30 @@ pub(super) async fn has(
     value: &Val,
 ) -> wasmtime::Result<bool> {
     let encoded_key = encode_key(caller, value)?;
-    let value = &encoded_key;
     let b = backing(caller, recv)?;
-    let elements = field_array(caller, &b, F_ELEMENTS)?;
-    let cap = elements.len(&mut *caller)? as i32;
-    let mut i = hash(caller, value).await? & (cap - 1);
-    loop {
+    Ok(find_slot(caller, &b, &encoded_key).await?.is_some())
+}
+
+/// Search at most one full probe cycle, including tables with no empty bucket.
+async fn find_slot(
+    caller: &mut Caller<'_, StoreData>,
+    b: &Rooted<StructRef>,
+    key: &Val,
+) -> wasmtime::Result<Option<u32>> {
+    let elements = field_array(caller, b, F_ELEMENTS)?;
+    let cap = probe_capacity(elements.len(&mut *caller)?)?;
+    let mut i = hash(caller, key).await? & (cap - 1);
+    for _ in 0..cap {
         let slot = elements.get(&mut *caller, i as u32)?;
         if is_null(&slot) {
-            return Ok(false);
+            return Ok(None);
         }
-        if !is_tombstone(caller, &slot)? && equals(caller, value, &slot).await? {
-            return Ok(true);
+        if !is_tombstone(caller, &slot)? && equals(caller, key, &slot).await? {
+            return Ok(Some(i as u32));
         }
         i = (i + 1) & (cap - 1);
     }
+    Ok(None)
 }
 
 /// `Set#delete(self, value) -> boolean`. Tombstones the slot and marks its
@@ -285,11 +301,11 @@ pub(super) async fn delete(
     let elements = field_array(caller, &b, F_ELEMENTS)?;
     let order = field_array(caller, &b, F_ORDER)?;
     let order_len = field_i32(caller, &b, F_ORDER_LEN)?;
-    let cap = elements.len(&mut *caller)? as i32;
+    let cap = probe_capacity(elements.len(&mut *caller)?)?;
     let tomb = host_map_tombstone(caller)?;
 
     let mut i = hash(caller, value).await? & (cap - 1);
-    loop {
+    for _ in 0..cap {
         let slot = elements.get(&mut *caller, i as u32)?;
         if is_null(&slot) {
             return Ok(false);
@@ -305,11 +321,16 @@ pub(super) async fn delete(
                 }
             }
             let size = field_i32(caller, &b, F_SIZE)?;
-            b.set_field(&mut *caller, F_SIZE, Val::I32(size - 1))?;
+            let remaining = size
+                .checked_sub(1)
+                .filter(|n| *n >= 0)
+                .ok_or_else(|| wasmtime::Error::msg("Invalid collection size on deletion"))?;
+            b.set_field(&mut *caller, F_SIZE, Val::I32(remaining))?;
             return Ok(true);
         }
         i = (i + 1) & (cap - 1);
     }
+    Ok(false)
 }
 
 /// `Set#clear(self) -> void`. Swaps in fresh empty backing arrays.
@@ -336,13 +357,16 @@ pub(super) fn size(caller: &mut Caller<'_, StoreData>, recv: &Val) -> wasmtime::
     Ok(Val::F64((n as f64).to_bits()))
 }
 
-/// Double the capacity and rehash live elements into a fresh array, rebuilding
+/// Rehash live elements into a fresh array at the requested capacity, rebuilding
 /// the insertion-order ledger from the old one (skipping `-1` tombstones).
-async fn resize(caller: &mut Caller<'_, StoreData>, b: &Rooted<StructRef>) -> wasmtime::Result<()> {
+async fn rehash(
+    caller: &mut Caller<'_, StoreData>,
+    b: &Rooted<StructRef>,
+    new_cap: i32,
+) -> wasmtime::Result<()> {
     let old_elements = field_array(caller, b, F_ELEMENTS)?;
     let old_order = field_array(caller, b, F_ORDER)?;
     let old_order_len = field_i32(caller, b, F_ORDER_LEN)?;
-    let new_cap = (old_elements.len(&mut *caller)? as i32) << 1;
 
     let new_elements = new_raw_array(caller, new_cap)?;
     let new_order = new_index_array(caller, new_cap)?;
@@ -350,21 +374,26 @@ async fn resize(caller: &mut Caller<'_, StoreData>, b: &Rooted<StructRef>) -> wa
 
     for o in 0..old_order_len {
         let Val::I32(probe_idx) = old_order.get(&mut *caller, o as u32)? else {
-            continue;
+            return Err(wasmtime::Error::msg("Invalid collection ledger entry"));
         };
         if probe_idx == -1 {
             continue;
         }
         let elem = old_elements.get(&mut *caller, probe_idx as u32)?;
         let mut k = hash(caller, &elem).await? & (new_cap - 1);
-        loop {
+        let mut inserted = false;
+        for _ in 0..new_cap {
             if is_null(&new_elements.get(&mut *caller, k as u32)?) {
                 new_elements.set(&mut *caller, k as u32, elem)?;
                 new_order.set(&mut *caller, new_order_len as u32, Val::I32(k))?;
                 new_order_len += 1;
+                inserted = true;
                 break;
             }
             k = (k + 1) & (new_cap - 1);
+        }
+        if !inserted {
+            return Err(wasmtime::Error::msg("Set rehash found no empty bucket"));
         }
     }
 
@@ -379,31 +408,6 @@ async fn resize(caller: &mut Caller<'_, StoreData>, b: &Rooted<StructRef>) -> wa
         Val::AnyRef(Some(new_order.to_anyref())),
     )?;
     b.set_field(&mut *caller, F_ORDER_LEN, Val::I32(new_order_len))?;
-    Ok(())
-}
-
-/// In-place ledger compaction: when the ledger has grown to capacity from
-/// delete-then-reinsert churn (without crossing the resize line), drop the `-1`
-/// holes so fresh inserts have room. Read head never overtakes the write head.
-fn compact_order_in_place(
-    caller: &mut Caller<'_, StoreData>,
-    b: &Rooted<StructRef>,
-) -> wasmtime::Result<()> {
-    let order = field_array(caller, b, F_ORDER)?;
-    let order_len = field_i32(caller, b, F_ORDER_LEN)?;
-    let cap = order.len(&mut *caller)? as i32;
-    if order_len < cap {
-        return Ok(());
-    }
-    let mut new_len: i32 = 0;
-    for i in 0..order_len {
-        let entry = order.get(&mut *caller, i as u32)?;
-        if !matches!(entry, Val::I32(-1)) {
-            order.set(&mut *caller, new_len as u32, entry)?;
-            new_len += 1;
-        }
-    }
-    b.set_field(&mut *caller, F_ORDER_LEN, Val::I32(new_len))?;
     Ok(())
 }
 
