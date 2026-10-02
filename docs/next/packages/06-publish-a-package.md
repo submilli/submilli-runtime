@@ -149,11 +149,12 @@ submilli install acme/billing-package @acme/billing
 
 The first argument is the repository, `owner/repo`, with `@<ref>` to pin
 a branch, tag, or commit; the second is the package, since one repository
-can hold several. A private repository is fetched over SSH, as you, with
-the keys in your ssh-agent or under `~/.ssh`:
+can hold several. A private repository installs the same way once the CLI
+has a GitHub token that can read it:
 
 ```sh
-submilli install git@github.com:acme/billing-package.git @acme/billing
+submilli github authenticate
+submilli install acme/billing-package @acme/billing
 ```
 
 ## Put it on a server

@@ -161,6 +161,30 @@ its key comes from a different trust domain than the data it protects; a key kep
 a Kubernetes Secret beside the volume buys very little. Turn it on when you have a
 KMS or CSI-driver key source.
 
+### Private packages
+
+Package installs fetch from GitHub with the server's own token, never the
+caller's. Without one they reach public repositories only. Give the server a
+fine-grained personal access token with **Repository permissions → Contents:
+Read-only** on the package repositories (GitHub adds Metadata: Read-only), in
+a Secret:
+
+```sh
+kubectl create secret generic submilli-github --from-file=token=./github-token
+```
+
+```yaml
+githubToken:
+  existingSecret: submilli-github
+  key: token
+```
+
+The chart mounts it at `/etc/submilli/github/<key>` and sets
+`github_token_file`. The server reads the file on every install, so updating
+the Secret rotates the token without a restart, once the kubelet refreshes the
+mount. A fine-grained token covers one owner's repositories; a classic token
+with the `repo` scope also works but can write to every repository you can.
+
 ## Memory
 
 One knob, `execution.maxMemoryMB`, feeds both the server's per-execution cap and
@@ -360,11 +384,11 @@ config:
 
 Keys the chart sets from its own values (`bind`, `port`, `max_execution_memory`,
 `shutdown_grace`, `vfs_ephemeral_dir`, `blueprint_seed_dir`,
-`secret_store.key_file`, `allow_unauthenticated`) are refused there, with a
-message naming the value to use. Entries under `config.api_tokens` are added
-after the chart's two, each with a `token_file` that a `secrets:` mount
-provides. `extraEnv` still overrides the file, because the server ranks a
-`SUBMILLI_*` variable above it.
+`secret_store.key_file`, `allow_unauthenticated`, `github_token_file`) are
+refused there, with a message naming the value to use. Entries under
+`config.api_tokens` are added after the chart's two, each with a `token_file`
+that a `secrets:` mount provides. `extraEnv` still overrides the file,
+because the server ranks a `SUBMILLI_*` variable above it.
 
 ## Values
 

@@ -40,6 +40,7 @@ use submilli_server::{
     ApiToken, AuthConfig, DEFAULT_MAX_EXECUTION_TOKENS, DEFAULT_MAX_STORE_BYTES, FileSecretStore,
     KeySource, LlmLimits, NetworkPolicy, Role, RuntimeConfig, ServerConfig,
 };
+use submilli_shared::github::GithubToken;
 use submilli_shared::secret_store::SecretStore;
 use submilli_shared::secret_store::check_key;
 
@@ -119,6 +120,11 @@ pub struct FileConfig {
     /// `allow_unauthenticated` is set.
     #[serde(default)]
     pub api_tokens: Vec<ApiTokenFileConfig>,
+    /// A file holding the GitHub token package installs send, which lets them
+    /// reach private repositories. Read again on every install, so replacing
+    /// the file rotates the token. File-only, like `api_tokens`: the server's
+    /// own credential stays in one reviewable place.
+    pub github_token_file: Option<PathBuf>,
     /// Serve without authentication. Additive with `--allow-unauthenticated`
     /// and `$SUBMILLI_ALLOW_UNAUTHENTICATED`, and refused alongside
     /// `api_tokens`, so no source can switch off tokens another configured.
@@ -438,6 +444,9 @@ fn preflight(cli: &Cli, file: &FileConfig, env: &EnvConfig) -> Result<()> {
     max_execution_llm_tokens(cli, file, env)?;
     max_llm_concurrency(cli, file, env)?;
     resolve_auth(cli, file, env)?;
+    if let Some(path) = &file.github_token_file {
+        GithubToken::read_file(path).map_err(|e| anyhow::anyhow!("`github_token_file`: {e}"))?;
+    }
     if let Some(key) = secret_key_source(cli, file, env) {
         check_key(&key).map_err(|e| anyhow::anyhow!("checking the secret-store key: {e}"))?;
     }
@@ -486,6 +495,7 @@ fn guarded_directories(cli: &Cli, file: &FileConfig, env: &EnvConfig) -> ServerD
             .iter()
             .map(|token| token.token_file.clone())
             .collect(),
+        github_token_file: file.github_token_file.clone(),
         session_storage_root: Some(
             explicit(
                 cli.vfs_session_dir.clone(),
@@ -938,6 +948,7 @@ fn merge(cli: Cli, file: FileConfig, env: EnvConfig) -> Result<(SocketAddr, Serv
         max_llm_tokens,
         max_llm_concurrency,
         volumes: file.volumes,
+        github_token_file: file.github_token_file,
         ..ServerConfig::default()
     };
     Ok((addr, config))
@@ -1275,6 +1286,7 @@ network:
             secret_store_dir: Some(root.join("secrets")),
             secret_store_key_file: Some(root.join("keys/secret.b64")),
             api_token_files: vec![root.join("tokens/admin"), root.join("tokens/user")],
+            github_token_file: Some(root.join("github/token")),
             session_storage_root: Some(root.join("vfs/sessions")),
             session_store_dir: Some(root.join("sessions")),
             ephemeral_storage_root: Some(root.join("scratch")),
@@ -1295,6 +1307,7 @@ network:
             secret_store_dir,
             secret_store_key_file,
             api_token_files,
+            github_token_file,
             session_storage_root,
             session_store_dir,
             ephemeral_storage_root,
@@ -1307,6 +1320,7 @@ network:
             (package_fallback_root, "fallback package store"),
             (secret_store_dir, "secret store"),
             (secret_store_key_file, "secret-store key file"),
+            (github_token_file, "GitHub token file"),
             (session_storage_root, "per-session VFS root"),
             (session_store_dir, "durable session store"),
             (ephemeral_storage_root, "ephemeral storage root"),
@@ -2820,6 +2834,21 @@ api_tokens:
             PathBuf::from("/run/secrets/user")
         );
         assert!(FileConfig::default().api_tokens.is_empty());
+    }
+
+    #[test]
+    fn github_token_file_parses_and_reaches_the_server_config() {
+        let cfg: FileConfig =
+            serde_yml::from_str("github_token_file: /run/secrets/github\n").unwrap();
+        assert_eq!(
+            cfg.github_token_file,
+            Some(PathBuf::from("/run/secrets/github"))
+        );
+        assert_eq!(
+            guarded_directories(&empty_cli(), &cfg, &EnvConfig::default()).github_token_file,
+            Some(PathBuf::from("/run/secrets/github"))
+        );
+        assert!(FileConfig::default().github_token_file.is_none());
     }
 
     #[test]

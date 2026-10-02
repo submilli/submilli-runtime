@@ -180,6 +180,15 @@ secretStore:
   existingSecret: ""
   key: "key"
 
+githubToken:
+  # -- Existing Secret holding a GitHub token, so package installs reach private
+  # repositories. Use a fine-grained token with Repository permissions →
+  # Contents: Read-only on the package repositories. Mounted as a file and read
+  # on every install, so updating the Secret rotates the token. Empty: installs
+  # reach public repositories only.
+  existingSecret: ""
+  key: "token"
+
 auth:
   # -- Require a bearer token on the API. **On by default**; the server refuses
   # to start without tokens unless told to serve unauthenticated, and `false`

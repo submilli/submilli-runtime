@@ -1,6 +1,7 @@
 //! Shared plumbing for the server-free local commands (`submilli secret …`,
-//! `submilli mcp …`, and `submilli run`'s blueprint path): the local plaintext
-//! secret store and a current-thread `block_on` for their async surface.
+//! `submilli mcp …`, `submilli github …`, and `submilli run`'s blueprint
+//! path): reading a secret without echoing it, the local plaintext secret
+//! store, and a current-thread `block_on` for their async surface.
 
 use std::future::Future;
 use std::io::{IsTerminal, Read};
@@ -9,19 +10,25 @@ use std::sync::Arc;
 use anyhow::{Context, Result, bail};
 use submilli_shared::secret_store::{PlaintextFileSecretStore, SecretStore};
 
-/// Read a secret value for `key` without it ever appearing in an argument list.
-/// At a terminal, prompt with echo off so a pasted value doesn't land in the
-/// scrollback; otherwise take the whole of stdin, minus one trailing newline so
-/// `echo secret | …` stores `secret`.
+/// Read a secret value for `key`, prompting "Value for '<key>'".
 pub fn read_secret_value(key: &str) -> Result<String> {
+    read_hidden(&format!("Value for '{key}'"), &format!("'{key}'"))
+}
+
+/// Read a secret without it ever appearing in an argument list. At a
+/// terminal, prompt with `prompt` and echo off, so a pasted value doesn't land
+/// in the scrollback, and refuse an empty answer, naming `name`; otherwise take
+/// the whole of stdin, minus one trailing newline so `echo secret | …` reads
+/// `secret`.
+pub fn read_hidden(prompt: &str, name: &str) -> Result<String> {
     let stdin = std::io::stdin();
     if stdin.is_terminal() {
         let value = dialoguer::Password::new()
-            .with_prompt(format!("Value for '{key}'"))
+            .with_prompt(prompt)
             .interact()
             .context("reading secret value")?;
         if value.is_empty() {
-            bail!("no value entered for '{key}'");
+            bail!("no value entered for {name}");
         }
         return Ok(value);
     }

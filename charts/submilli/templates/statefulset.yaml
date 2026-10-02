@@ -170,6 +170,11 @@ spec:
               mountPath: /etc/submilli/secret-store
               readOnly: true
             {{- end }}
+            {{- if .Values.githubToken.existingSecret }}
+            - name: github-token
+              mountPath: /etc/submilli/github
+              readOnly: true
+            {{- end }}
             - name: config
               mountPath: {{ include "submilli.configMountPath" . }}
               readOnly: true
@@ -252,6 +257,16 @@ spec:
             items:
               - key: {{ .Values.secretStore.key }}
                 path: {{ .Values.secretStore.key }}
+        {{- end }}
+        {{- if .Values.githubToken.existingSecret }}
+        # A Secret volume, so replacing the Secret rotates the token: the server
+        # reads it again on every package install.
+        - name: github-token
+          secret:
+            secretName: {{ .Values.githubToken.existingSecret }}
+            items:
+              - key: {{ .Values.githubToken.key }}
+                path: {{ .Values.githubToken.key }}
         {{- end }}
         - name: config
           configMap:

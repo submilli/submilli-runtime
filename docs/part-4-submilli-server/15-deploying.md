@@ -180,6 +180,39 @@ command as on a laptop. The server fetches and builds them itself:
 submilli server packages install acme/billing-package
 ```
 
+The server fetches with its own GitHub token, not yours, so it reaches public
+repositories until you give it one. Create [a GitHub
+token](/docs/cli#install-a-package) that can read the package repositories,
+and hand the server the token and a config file that names it, both as files:
+
+```sh
+printf '%s' "$GITHUB_TOKEN" > github-token
+printf 'github_token_file: /run/secrets/github-token\n' > server.yaml
+chmod 0444 github-token server.yaml
+```
+
+```yaml title="compose.override.yaml (added to the same file)"
+services:
+  submilli:
+    environment:
+      SUBMILLI_CONFIG: /run/secrets/submilli-config
+    secrets:
+      - github-token
+      - submilli-config
+
+secrets:
+  github-token:
+    file: ./github-token
+  submilli-config:
+    file: ./server.yaml
+```
+
+The `0444` is needed for the reason given for [the secret store's
+key](#the-secret-stores-key). The server reads the token again on every
+install, so overwriting `github-token` in place (`printf … > github-token`)
+rotates it. Compose mounts that one file, so an editor that saves by
+replacing the file doesn't reach the container.
+
 ### The secret store's key
 
 The secret store stays off until the server has a key. Give it one as a file,
@@ -387,6 +420,22 @@ protects the volume only if the key lives somewhere the volume doesn't, and
 a Kubernetes Secret in the same namespace usually doesn't qualify. Turn it on
 (`secretStore.enabled`) when the key comes from a KMS or a CSI secrets
 driver.
+
+To install packages from private repositories, put [a GitHub
+token](/docs/cli#install-a-package) that can read them in a Secret and name it
+in `githubToken`:
+
+```sh
+kubectl create secret generic submilli-github --from-file=token=./github-token
+```
+
+```yaml title="values.yaml"
+githubToken:
+  existingSecret: submilli-github
+```
+
+The chart mounts it and sets `github_token_file`. Updating the Secret rotates
+the token once the kubelet refreshes the mount; no restart is needed.
 
 ### Calling your internal services
 

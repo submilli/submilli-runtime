@@ -351,6 +351,11 @@ stops the build:
 error: declare dependency "@acme/missing" as a sibling [[package]] or in top-level [dependencies]
 ```
 
+A dependency in a private repository is declared the same way. Whoever builds
+or installs it needs a GitHub token that can read it: [on a
+machine](/docs/cli#install-a-package), or
+[`github_token_file`](/docs/server#install-packages) on a server.
+
 What a package uses of another shows up in its `requires`. `@acme/support`
 calls `applyCredit`, so it requires `acme.com/credits.apply`, and a blueprint
 grants that to `@acme/support` as it would to a program.
@@ -397,7 +402,8 @@ credited 1500 cents
 Other machines install from source. Push the project to GitHub, then
 `submilli install org/repo` on a developer's machine or [`submilli server
 packages install`](/docs/server#install-packages) on a server builds it
-there, pinned to a commit.
+there, pinned to a commit. A private repository works the same, given a
+GitHub token that can read it.
 
 ## With a coding agent
 

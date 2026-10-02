@@ -136,6 +136,10 @@ pub struct ServerConfig {
     /// [`validate_volumes`] refuses a declaration that overlaps a server-owned
     /// directory; it runs on the config-file path, not here.
     pub volumes: VolumeTable,
+    /// The file holding the GitHub token package installs send. Kept as a
+    /// path and read on every install, so replacing the file rotates the
+    /// token without a restart.
+    pub github_token_file: Option<PathBuf>,
 }
 
 pub use submilli_shared::OAuthProvider;
@@ -227,6 +231,8 @@ pub struct ServerDirectories {
     /// The files `api_tokens` entries read their tokens from. Like the key
     /// file, they never reach [`ServerConfig`], which holds only digests.
     pub api_token_files: Vec<PathBuf>,
+    /// The file the GitHub token for package installs is read from.
+    pub github_token_file: Option<PathBuf>,
     pub session_storage_root: Option<PathBuf>,
     /// The durable session store — lifecycle records plus the idempotency
     /// ledger in a subdirectory of it. A different directory from
@@ -265,6 +271,7 @@ impl ServerDirectories {
             secret_store_dir: None,
             secret_store_key_file: None,
             api_token_files: Vec::new(),
+            github_token_file: config.github_token_file.clone(),
             // Neither the secret store's paths, the token files', nor the config
             // file's survive into `ServerConfig`; an embedder that wants them
             // guarded fills them in.
@@ -607,7 +614,7 @@ fn guarded_dirs(dirs: &ServerDirectories) -> Vec<GuardedDir> {
         .ephemeral_storage_root
         .clone()
         .unwrap_or_else(std::env::temp_dir);
-    let rows: [(&'static str, Option<PathBuf>, Direction, &'static str); 14] = [
+    let rows: [(&'static str, Option<PathBuf>, Direction, &'static str); 15] = [
         (
             "secret store",
             dirs.secret_store_dir.clone(),
@@ -619,6 +626,12 @@ fn guarded_dirs(dirs: &ServerDirectories) -> Vec<GuardedDir> {
             dirs.secret_store_key_file.clone(),
             Direction::VolumeContains,
             "a guest read would reach the store's decryption key",
+        ),
+        (
+            "GitHub token file",
+            dirs.github_token_file.clone(),
+            Direction::VolumeContains,
+            "a guest read would reach the token the server fetches private packages with",
         ),
         (
             "blueprint store",
