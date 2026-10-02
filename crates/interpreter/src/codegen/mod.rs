@@ -2869,7 +2869,9 @@ function main(): string {
                     token: string;
                     constructor() { this.token = "none"; }
 
-                    /** Reads the token. */
+                    /** Reads the token.
+                     * @returns The credential, or "none" when it is absent.
+                     */
                     load(): string {
                         const t = get("TOKEN");
                         return t === null ? "none" : t;

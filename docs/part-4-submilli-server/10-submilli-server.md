@@ -366,9 +366,15 @@ allows.
 
 Blueprint secrets use `store:` for values provisioned in the server's secret
 store or `harness:` for values supplied per session. Provision store values
-before applying the blueprint. Registration does not check that the packages
-in `packages:` are installed; a missing package fails the first program that
-imports it, and the error names the directories it searched.
+before applying the blueprint.
+
+Registration also checks that every package in `packages:` and its dependencies
+can be loaded from the server's package store or the CLI fallback store. A missing
+package is refused with an install command. Required capabilities need caller
+rules, just as with `submilli blueprint lint`; an explicit deny or a narrower rule
+remains an operator choice. This is a registration-time check: uninstalling a
+package later can still make a program's import fail.
+
 
 Keep blueprints in source control and run `submilli server blueprint apply`
 from your deploy job with an admin token.

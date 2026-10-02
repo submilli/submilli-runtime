@@ -198,6 +198,34 @@ fn reject_unusable_volume_reference(
     })
 }
 
+fn verify_packages(
+    state: &AppState,
+    blueprint: &Blueprint,
+) -> Result<(), (StatusCode, Json<ErrorResponse>)> {
+    use submilli_build::{
+        PackageStoreError,
+        blueprint_validation::{self, PackageValidationError},
+    };
+
+    blueprint_validation::validate_packages(blueprint, state.package_store()).map_err(|error| {
+        let (code, detail) = match &error {
+            PackageValidationError::Store(
+                PackageStoreError::MissingPackage { name, .. }
+                | PackageStoreError::MissingDependency { name, .. },
+            ) => (
+                "package_missing",
+                format!("package `{name}` is not installed; install it with `submilli server packages install <org/repo> {name}`"),
+            ),
+            _ => ("invalid_packages", error.to_string()),
+        };
+        let message = format!("package check failed: {detail}");
+        (StatusCode::BAD_REQUEST, Json(
+            ErrorResponse::named(code, message.clone(), blueprint.name.clone())
+                .diagnostic(Some(yaml_path!["packages"]), message),
+        ))
+    })
+}
+
 pub async fn add(
     State(state): State<AppState>,
     Json(req): Json<AddRequest>,
@@ -205,6 +233,7 @@ pub async fn add(
     let blueprint = parse_blueprint(&req.yaml)?;
     reject_unusable_volume_reference(&blueprint, state.session_manager().volumes())?;
     verify_secrets(&state, &blueprint).await?;
+    verify_packages(&state, &blueprint)?;
     let name = blueprint.name.clone();
     state
         .blueprints()
@@ -245,6 +274,7 @@ pub async fn apply(
     let blueprint = parse_blueprint(&req.yaml)?;
     reject_unusable_volume_reference(&blueprint, state.session_manager().volumes())?;
     verify_secrets(&state, &blueprint).await?;
+    verify_packages(&state, &blueprint)?;
     let packages_changed = state
         .blueprints()
         .get(&name)

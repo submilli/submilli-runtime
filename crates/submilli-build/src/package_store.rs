@@ -6,6 +6,9 @@ use std::path::{Path, PathBuf};
 
 use crate::{Artifact, ArtifactError, read_package_artifact};
 
+// Bound recursive dependency traversal before it can exhaust the host stack.
+const MAX_DEPENDENCY_DEPTH: usize = 128;
+
 /// An on-disk package store: one `@scope/name` directory per artifact under a
 /// root the store owns, optionally layered over read-only fallback roots.
 ///
@@ -183,11 +186,17 @@ impl PackageStore {
             }
             Some(ClosureMark::Visiting) => {
                 let start = stack.iter().position(|n| n == name).unwrap_or(0);
-                let mut cycle = stack[start..].to_vec();
+                let mut cycle: Vec<_> = stack.iter().skip(start).cloned().collect();
                 cycle.push(name.to_string());
                 return Err(PackageStoreError::DependencyCycle { cycle });
             }
             None => {}
+        }
+        if stack.len() >= MAX_DEPENDENCY_DEPTH {
+            return Err(PackageStoreError::DependencyDepthExceeded {
+                name: name.to_string(),
+                limit: MAX_DEPENDENCY_DEPTH,
+            });
         }
         let artifact = self.load(name).map_err(|err| match (err, required_by) {
             (
@@ -370,6 +379,10 @@ pub enum PackageStoreError {
     DependencyCycle {
         cycle: Vec<String>,
     },
+    DependencyDepthExceeded {
+        name: String,
+        limit: usize,
+    },
     DependencyVersionMismatch {
         name: String,
         required_by: String,
@@ -428,6 +441,10 @@ impl fmt::Display for PackageStoreError {
                 )?;
                 write_available(f, available)
             }
+            PackageStoreError::DependencyDepthExceeded { name, limit } => write!(
+                f,
+                "package dependency depth exceeds {limit} at `{name}`; reduce the dependency chain"
+            ),
             PackageStoreError::DependencyCycle { cycle } => write!(
                 f,
                 "circular package dependency in the store: {}; rebuild the packages involved",
@@ -543,6 +560,40 @@ mod tests {
     use crate::{ArtifactMetadata, write_package_artifact};
 
     use super::*;
+
+    #[test]
+    fn dependency_depth_is_bounded() {
+        let dir = tempfile::tempdir().unwrap();
+        for index in 0..MAX_DEPENDENCY_DEPTH {
+            let name = format!("@depth/p{index}");
+            let next = format!("@depth/p{}", index + 1);
+            let dependencies = if index + 1 < MAX_DEPENDENCY_DEPTH {
+                vec![(next.as_str(), "0.0.0-test")]
+            } else {
+                Vec::new()
+            };
+            write_package_with_deps(dir.path(), &name, &name, "0.0.0-test", &dependencies);
+        }
+        let store = PackageStore::new(dir.path());
+        assert_eq!(
+            store.load_closure(["@depth/p0"]).unwrap().len(),
+            MAX_DEPENDENCY_DEPTH
+        );
+        write_package_with_deps(
+            dir.path(),
+            "@depth/root",
+            "@depth/root",
+            "0.0.0-test",
+            &[("@depth/p0", "0.0.0-test")],
+        );
+        assert!(matches!(
+            store.load_closure(["@depth/root"]),
+            Err(PackageStoreError::DependencyDepthExceeded {
+                limit: MAX_DEPENDENCY_DEPTH,
+                ..
+            })
+        ));
+    }
 
     #[test]
     fn scoped_package_maps_under_store_root() {

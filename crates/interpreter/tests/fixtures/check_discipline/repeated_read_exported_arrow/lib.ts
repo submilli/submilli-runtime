@@ -26,7 +26,9 @@ export interface Options {
 
 function post(channelId: string, text: string): void {}
 
-/** Sends the message. */
+/** Sends the message.
+ * @param input Message and delivery settings.
+ */
 export const send = (input: Input): void => {
   check("test.com/send", { channelId: input.channelId });
   post(input.channelId, "hello");
