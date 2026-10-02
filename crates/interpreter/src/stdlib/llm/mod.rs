@@ -3,7 +3,7 @@
 //! Rust host functions registered directly under the package name. Each op runs
 //! `check_security` before anything leaves the process; the one gated
 //! capability is `llm.call`, cataloged in [`crate::stdlib::capabilities`] —
-//! keep it in sync when adding or removing a gate (see CLAUDE.md).
+//! keep it in sync when adding or removing a gate (see AGENTS.md).
 //!
 //! Dispatch is the embedder's: [`StoreData::llm_provider`] holds the provider.
 //! A runtime with none configured refuses every op rather than inventing a

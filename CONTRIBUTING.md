@@ -42,7 +42,7 @@ Keep the change focused, explain the problem it solves, and link any related
 issue or discussion. For behavior changes, include a test that demonstrates the
 fix or feature and describe how you verified it.
 
-See [CLAUDE.md](CLAUDE.md) for the repository's development conventions and
+See [AGENTS.md](AGENTS.md) for the repository's development conventions and
 verification commands, and [docs-site/README.md](docs-site/README.md) for working
 on the documentation website.
 

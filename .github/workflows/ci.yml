@@ -10,6 +10,7 @@ permissions:
 
 env:
   SUBMILLI_TELEMETRY: "0"
+  SUBMILLI_CONFORMANCE_TEST: "0"
   CARGO_TERM_COLOR: always
   # Keep test binaries small enough for hosted runners' disks.
   CARGO_PROFILE_DEV_DEBUG: "0"
