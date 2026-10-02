@@ -9326,7 +9326,7 @@ impl Inferer<'_> {
     /// underlying `RegexBuilder::new` call at compile time so
     /// unsupported features (lookarounds, backreferences) and
     /// malformed patterns surface as `Diagnostic`s with source
-    /// caret, not runtime traps — matches CLAUDE.md "LLM-native
+    /// caret, not runtime traps — matches AGENTS.md "LLM-native
     /// errors" §1 + §3 (always show source context; name the fix).
     ///
     /// On success the type currently resolves to `Type::Error` as a
@@ -9338,7 +9338,7 @@ impl Inferer<'_> {
         // at compile time, so lookarounds / backreferences /
         // malformed patterns surface as `Diagnostic`s with source
         // caret + a self-contained `help:` block explaining the
-        // Submilli subset and the rewrite path. Per CLAUDE.md
+        // Submilli subset and the rewrite path. Per AGENTS.md
         // "LLM-native errors" §1 + §3: the help is enough for an
         // LLM to fix the regex in one shot without any external
         // reference.
@@ -9362,7 +9362,7 @@ impl Inferer<'_> {
 /// unions — every member must be supported.
 /// per-variant help for regex-translation errors. Built so
 /// an LLM (the primary consumer of compile diagnostics — see
-/// CLAUDE.md "LLM-native errors") can fix the regex in one shot
+/// AGENTS.md "LLM-native errors") can fix the regex in one shot
 /// without any external documentation reference.
 ///
 /// Each variant returns a multi-line `help:` block that:

@@ -15,7 +15,7 @@ take precedence; create a ready PR unless draft is requested.
 
 ## Establish the proposed change
 
-1. Resolve the active checkout and read `AGENTS.md` and `CLAUDE.md`. Record the
+1. Resolve the active checkout and read `AGENTS.md`. Record the
    branch, status, staged/unstaged changes, untracked files, and remotes. Preserve
    unrelated work and staging; do not stash, reset, or discard it.
 2. Determine the intended base repository/branch and writable head remote from
@@ -54,8 +54,11 @@ code preparation or PR creation merely because Linear is unavailable.
 
 ## Review and verify
 
-1. Select focused and final checks using the Verification section of `CLAUDE.md`
-   and the entire proposed diff. Explain whether compiler/runtime implementation,
+1. Plan focused and final checks using the Verification section of `AGENTS.md`
+   and the entire proposed diff. Before rebasing, run only affected-area checks
+   needed for implementation or review fixes, reusing valid results. Do not run
+   full suites until the post-rebase verification step below. Explain whether
+   compiler/runtime implementation,
    behavior, inputs, dependencies, or conformance coverage changed. Run
    `SUBMILLI_FULL_TEST=1 cargo test --workspace` only when that impact requires it.
    Other Rust changes use `SUBMILLI_FULL_TEST=0 cargo test -p <affected-crate>`
@@ -67,7 +70,7 @@ code preparation or PR creation merely because Linear is unavailable.
    For routine Submilli Cargo checks, set `SUBMILLI_SKIP_HTTP_TESTS=1`, including
    full compiler/runtime suites. For package/example checks, pass `--skip-network`
    to `build test`; that command ignores `SUBMILLI_SKIP_HTTP_TESTS`. Follow
-   `CLAUDE.md`'s conditional HTTP policy: use `SUBMILLI_SKIP_HTTP_TESTS=0` for
+   `AGENTS.md`'s conditional HTTP policy: use `SUBMILLI_SKIP_HTTP_TESTS=0` for
    affected Rust socket tests; for live package tests, omit `--skip-network` and
    explicitly supply credentials. Enable these only when changed HTTP transport, routing,
    wire formats, authentication, proxy/SSRF policy, external API behavior, or
@@ -79,13 +82,23 @@ code preparation or PR creation merely because Linear is unavailable.
    the sandbox; request that access only for selected required checks. Report
    skipped/ignored HTTP coverage separately from passing tests and explain the
    selection. In-process handler tests remain enabled.
-2. Read and run `.agents/skills/launch-review-agents-loop/SKILL.md` for all three
-   review roles, triage, repeat rounds, and final verification. The review skill
-   leaves changes uncommitted; this outer workflow resumes after it passes.
+2. Read `.agents/skills/launch-review-agents-loop/SKILL.md` and check for a
+   completed review in the current conversation or handoff, including one run by
+   `fix-issue`. Reuse it when its scope covers the proposed changes and its
+   completion criteria were met, including the low-priority-only exit. Do not
+   launch review cycles again just because `open-pr` was invoked or reviewed
+   content was committed. If no completed review covers the change, run that
+   skill. New implementation changes or conflict resolutions require renewed
+   review; parent-checked final low-priority fixes do not. Record the review
+   evidence reused. Reviewers default to reading code, with narrow tests only
+   for concrete hypotheses or edge cases. This outer workflow owns full
+   verification after rebasing.
 3. Reuse completed check results for the same content, scope, base, and relevant
-   environment. Do not repeat full suites just because the review skill returned.
-   A rebase onto a changed base requires fresh verification as described below.
-   If fixes or hooks alter the diff, rerun the review loop and affected checks.
+   environment. Review completion does not trigger full suites. Full verification
+   is required at the post-rebase gate below when selected by impact; it cannot be
+   skipped merely because pre-rebase focused checks passed.
+   If fixes or hooks introduce unreviewed implementation changes, rerun the
+   review loop and affected checks under its completion and reuse rules.
    A blocked required check, unresolved in-scope finding, or non-converged review
    blocks PR creation, including drafts. Never weaken checks.
 
@@ -128,15 +141,22 @@ attempts if the base advances. Use the selected PR base, not a hard-coded remote
    their intent; stage resolutions explicitly and continue. Ask about non-obvious
    semantic choices. If progress is impossible, abort this workflow's rebase and
    report the blocker; never abort a pre-existing user operation.
-3. Reassess the whole PR diff and verification selection after rebasing. If the
-   base or content changed, run the review loop again and all selected final
-   checks on the integrated result. Keep full tests conditional on compiler/runtime
-   impact, including relevant changes in the newly integrated base. Reassess the
-   HTTP-test selection too; retain the skip setting unless the integrated diff
-   requires the affected HTTP checks. A no-op rebase
-   with identical base/content can reuse prior results. If fixes are necessary,
-   commit them with the relevant IDs and repeat review/verification. Amend only
-   this workflow's own unpublished commits, never base commits.
+3. Reassess the whole PR diff and verification selection after rebasing. A
+   rebase without conflicts reuses the completed review; do not run review cycles
+   again solely because the base, commit SHAs, or diff context changed. If there
+   were conflicts, review the resolved result using the review-loop skill. New
+   implementation fixes also require renewed review under that skill's rules.
+   Resolve findings with only affected-area checks before selected final checks on
+   the integrated result. This is the full-suite gate: run required full tests
+   here, even after a no-op rebase if no valid post-rebase full results exist.
+   Keep full tests conditional on compiler/runtime impact, including relevant
+   changes in the newly integrated base. Reassess HTTP-test selection too; retain
+   the skip setting unless the integrated diff requires affected HTTP checks.
+   Reuse completed post-rebase results only for identical content, scope, base,
+   and relevant environment. If final checks expose a regression, fix it, run
+   affected checks, and repeat review before rerunning invalidated final checks.
+   Commit fixes with relevant IDs; amend only this workflow's own unpublished
+   commits, never base commits.
 4. Inspect final status, commit contents, and the full PR diff. Record the verified
    head with `git rev-parse HEAD`. Refresh the base again; if it advanced, restart
    from step 2 and re-verify. Stop after five attempts with an explicit blocker.
@@ -157,7 +177,8 @@ attempts if the base advances. Use the selected PR base, not a hard-coded remote
 
 1. Follow any repository PR template. Describe the concrete problem and resulting
    behavior, link every associated Linear issue by ID and URL when available,
-   and include scope, review rounds, finding dispositions, checks/results, why
+   and include scope, review rounds (new or reused), the completion reason,
+   finding dispositions, checks/results, why
    full tests ran or were skipped, and unrelated outstanding findings or disclosed
    independent-review fallback. Do not claim unavailable checks passed.
 2. Create the PR with explicit base repository/branch and head, or update the

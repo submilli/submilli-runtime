@@ -3,7 +3,7 @@
 //! Pure Rust host functions registered directly under the package name. Each
 //! gated op runs `check_security` before touching the disk; the set of gated
 //! capabilities is cataloged in [`crate::stdlib::capabilities`] — keep it in
-//! sync when adding or removing a gate (see CLAUDE.md).
+//! sync when adding or removing a gate (see AGENTS.md).
 //!
 //! `Stat` / `Peek` / `DirEntry` / `Info` are host-built backing structs the
 //! guest holds opaquely and reads through the registered getters. `FileWriter`

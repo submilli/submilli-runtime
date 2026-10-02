@@ -6,7 +6,7 @@
 //!
 //! **Keep in sync with the host functions.** When a host fn in `stdlib::fs` /
 //! `stdlib::http` (or a new gated module) starts or stops gating a capability,
-//! update the matching entry here — see CLAUDE.md. The `capabilities` test in
+//! update the matching entry here — see AGENTS.md. The `capabilities` test in
 //! the `submilli` CLI asserts every `example_filter` below parses.
 
 /// One context field a capability's `filter:` expression can match on.

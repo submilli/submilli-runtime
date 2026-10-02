@@ -3,7 +3,7 @@
 //! Rust host functions registered directly under the package name. Each op runs
 //! `check_security` before touching the store; the gated capabilities are
 //! cataloged in [`crate::stdlib::capabilities`] — keep it in sync when adding
-//! or removing a gate (see CLAUDE.md).
+//! or removing a gate (see AGENTS.md).
 //!
 //! Storage is the embedder's: [`StoreData::session_kv`] holds the provider. A
 //! runtime with none configured refuses every op rather than inventing state,

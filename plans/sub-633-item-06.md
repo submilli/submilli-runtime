@@ -121,7 +121,7 @@ cross-file spans, unknown files, Unicode boundaries, mismatched indexes, reserve
 IDs and end-to-end script/package/direct-API propagation tests.
 
 Compiler implementation changes require formatting, workspace clippy, full
-workspace tests and package checks from `CLAUDE.md`. Set
+workspace tests and package checks from `AGENTS.md`. Set
 `SUBMILLI_SKIP_HTTP_TESTS=1`; this work does not change HTTP transport. TypeScript
 language semantics are unchanged by stage 1, so a TypeScript/Node differential
 oracle is not applicable to that stage.

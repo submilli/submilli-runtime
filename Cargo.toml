@@ -103,7 +103,7 @@ manual_let_else = "deny"
 items_after_statements = "deny"
 semicolon_if_nothing_returned = "deny"
 
-# Ratchet (tracked, NOT gated — see the CI step and CLAUDE.md). Both are
+# Ratchet (tracked, NOT gated — see the CI step and AGENTS.md). Both are
 # structural; they shrink via hotspot Linear issues, not lint-grinding. Promote to a
 # deny above if one ever reaches zero:
 #   too_many_lines  cognitive_complexity
@@ -111,7 +111,7 @@ semicolon_if_nothing_returned = "deny"
 # Evaluated and intentionally NOT tracked — both fire mostly on deliberate patterns
 # here, not real debt:
 #   match_same_arms — ~75% are exhaustive AST-visitor dispatch arms (walk_expr/
-#     walk_stmt/…), the "big match dispatcher" carve-out in CLAUDE.md.
+#     walk_stmt/…), the "big match dispatcher" carve-out in AGENTS.md.
 #   needless_pass_by_value — 38/56 are owned args threaded through the &mut self
 #     inference chain (cloned once at the head regardless); the rest are fn-pointer
 #     map_err mappers and idiomatic by-value CLI handlers.

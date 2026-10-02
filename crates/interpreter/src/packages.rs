@@ -157,7 +157,7 @@ pub fn builtin_lookup(name: &str) -> BuiltinLookup {
         return BuiltinLookup::Unknown;
     }
     // A trailing or doubled dot is a typo the path walk can absorb rather than
-    // reject (see the forgiveness principle in CLAUDE.md).
+    // reject (see the forgiveness principle in AGENTS.md).
     let segments: Vec<&str> = name.split('.').filter(|s| !s.is_empty()).collect();
     let Some((head, rest)) = segments.split_first() else {
         return BuiltinLookup::Unknown;
