@@ -13,8 +13,8 @@ use rmcp::handler::server::router::tool::ToolRouter;
 use rmcp::handler::server::tool::{Extension, ToolCallContext};
 use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::{
-    CallToolRequestParams, CallToolResult, Content, ListToolsResult, PaginatedRequestParams,
-    ServerCapabilities, ServerInfo, Tool,
+    CallToolRequestParams, CallToolResult, Content, ErrorCode, ListToolsResult,
+    PaginatedRequestParams, ServerCapabilities, ServerInfo, Tool,
 };
 use rmcp::service::RequestContext;
 use rmcp::{ErrorData, RoleServer, ServerHandler, schemars, tool, tool_router};
@@ -674,7 +674,7 @@ impl SubmilliMcp {
 /// carrying a `{ kind, message }` error like the one `execute` reports, because
 /// clients such as `langchain-mcp-adapters` raise on a JSON-RPC error and end the
 /// agent run. JSON-RPC errors stay for protocol problems: no session, unknown tool,
-/// malformed arguments.
+/// malformed request envelopes.
 #[derive(Serialize)]
 struct FileToolError {
     kind: FileToolErrorKind,
@@ -875,7 +875,7 @@ fn read_window(
 
 // Hand-written rather than `#[tool_handler]` so `list_tools` can serve a
 // per-blueprint description (the canonical prompt with `{vfs_mode}` resolved).
-// `call_tool` / `get_tool` mirror exactly what the macro would generate.
+// Argument normalization and tool failures are handled before returning to clients.
 impl ServerHandler for SubmilliMcp {
     fn get_info(&self) -> ServerInfo {
         ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
@@ -884,11 +884,18 @@ impl ServerHandler for SubmilliMcp {
 
     async fn call_tool(
         &self,
-        request: CallToolRequestParams,
+        mut request: CallToolRequestParams,
         context: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, ErrorData> {
+        let tool = self
+            .tool_router
+            .get(&request.name)
+            .ok_or_else(|| ErrorData::invalid_params("tool not found", None))?;
+        if let Some(arguments) = request.arguments.as_mut() {
+            normalize_tool_arguments(arguments, &tool.input_schema);
+        }
         let tcc = ToolCallContext::new(self, request, context);
-        self.tool_router.call(tcc).await
+        self.tool_router.call(tcc).await.or_else(tool_call_failure)
     }
 
     async fn list_tools(
@@ -927,5 +934,91 @@ impl ServerHandler for SubmilliMcp {
 
     fn get_tool(&self, name: &str) -> Option<Tool> {
         self.tool_router.get(name).cloned()
+    }
+}
+
+fn tool_call_failure(error: ErrorData) -> Result<CallToolResult, ErrorData> {
+    // rmcp also uses INVALID_PARAMS for missing internal extensions.
+    // Only parameter deserialization failures are correctable by the model.
+    if error.code != ErrorCode::INVALID_PARAMS
+        || !error
+            .message
+            .starts_with("failed to deserialize parameters:")
+    {
+        return Err(error);
+    }
+    Ok(CallToolResult::structured_error(serde_json::json!({
+        "error": {
+            "kind": "invalid_arguments",
+            "message": error.message,
+        }
+    })))
+}
+
+// Only coerce declared scalar parameters; strings such as source code and paths
+// must retain their original values. Serde still validates ranges and required fields.
+fn normalize_tool_arguments(
+    arguments: &mut serde_json::Map<String, serde_json::Value>,
+    schema: &serde_json::Map<String, serde_json::Value>,
+) {
+    let Some(properties) = schema
+        .get("properties")
+        .and_then(serde_json::Value::as_object)
+    else {
+        return;
+    };
+    for (name, value) in arguments {
+        let Some(text) = value.as_str() else {
+            continue;
+        };
+        let Some(property) = properties.get(name) else {
+            continue;
+        };
+        let replacement = match scalar_parameter_type(property) {
+            Some("boolean") => text.parse::<bool>().ok().map(serde_json::Value::Bool),
+            Some("integer" | "number") => text
+                .parse::<serde_json::Number>()
+                .ok()
+                .map(serde_json::Value::Number),
+            _ => None,
+        };
+        if let Some(replacement) = replacement {
+            *value = replacement;
+        }
+    }
+}
+
+fn scalar_parameter_type(schema: &serde_json::Value) -> Option<&str> {
+    let kind = schema.get("type")?;
+    if let Some(kind) = kind.as_str() {
+        return Some(kind);
+    }
+    // Optional parameters use a type array containing the scalar and null.
+    // Ambiguous unions must retain the supplied value.
+    let mut kinds = kind
+        .as_array()?
+        .iter()
+        .filter(|kind| kind.as_str() != Some("null"));
+    let scalar = kinds.next()?.as_str()?;
+    if kinds.next().is_some() {
+        return None;
+    }
+    Some(scalar)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tool_call_failure_preserves_protocol_and_internal_errors() {
+        for error in [
+            ErrorData::invalid_params("Missing extension: HTTP request parts", None),
+            ErrorData::invalid_params("tool not found", None),
+            ErrorData::invalid_request("missing mcp-session-id", None),
+            ErrorData::internal_error("failed to deserialize parameters: internal failure", None),
+        ] {
+            assert_eq!(tool_call_failure(error.clone()).unwrap_err(), error);
+        }
     }
 }
