@@ -10,7 +10,7 @@ request to release authorizes the commit, tag, direct push, and publication;
 do not ask for the same permission again. Editing this skill or preparing a
 release without publishing does not authorize publication.
 
-Read `CLAUDE.md` and `.github/workflows/release.yml` first. The current workflow
+Read `AGENTS.md` and `.github/workflows/release.yml` first. The current workflow
 starts when a GitHub release is **published**, not when a tag is pushed. It builds
 binaries, validates and publishes the container, then attaches release assets.
 Treat the workflow as the authority if its behavior changes. Do not invoke
@@ -82,17 +82,38 @@ notes can supplement the curated notes. Update notes if the candidate changes.
 
 ## 4. Verify the candidate
 
-Select checks using `CLAUDE.md` and the entire release range, including preparation
+Select checks using `AGENTS.md` and the entire release range, including preparation
 changes. Version-only preparation does not erase runtime changes since the prior
-release. Record why full tests run or are skipped.
+release. Conformance is mandatory for every runtime release, regardless of the
+change range; ordinary development and PR checks do not satisfy this gate.
 
 - Run Rust formatting and workspace clippy for manifest/build changes. Check both
   release binaries with `--version` against the selected version.
-- Run full workspace/package tests for compiler/runtime-impacting ranges using
-  `SUBMILLI_SKIP_HTTP_TESTS=1`, `SUBMILLI_FULL_TEST=1`, and package `--skip-network`
-  as documented in `CLAUDE.md`. Otherwise run affected checks with full tests
-  disabled. Enable required affected HTTP tests and explicitly supply credentials
-  for live package tests. Report skipped coverage separately.
+- Run workspace/package verification with `SUBMILLI_SKIP_HTTP_TESTS=1`,
+  `SUBMILLI_FULL_TEST=1`, `SUBMILLI_CONFORMANCE_TEST=0`, and package
+  `--skip-network` as documented in `AGENTS.md`. Reuse completed results for the
+  same candidate and environment. Enable required affected HTTP tests and
+  explicitly supply credentials for live package tests. Report skipped coverage
+  separately.
+- Run both complete conformance suites on the final release candidate before
+  tagging, pushing, or publishing. This is the explicit pre-release exception
+  to keeping conformance disabled during development and PR verification.
+  `SUBMILLI_FULL_TEST` does not enable conformance. Clear inherited filters and
+  baseline-update/output settings and opt in with the dedicated flag:
+
+  ```sh
+  env -u CONFORMANCE_FILTER -u UPDATE_TYPESCRIPT_EXPECTED \
+    -u TYPESCRIPT_PORTED_CASES -u TYPESCRIPT_CHECKS_OUT \
+    SUBMILLI_SKIP_HTTP_TESTS=1 SUBMILLI_CONFORMANCE_TEST=1 \
+    cargo test --locked -p conformance --test conformance --test typescript -- --nocapture
+  ```
+
+  Require successful results for both the ECMA-262 and TypeScript suite bodies;
+  a skipped suite, filtered run, or harness-only check is not a pass. Do not
+  regenerate expected baselines to make release verification green. Record the
+  candidate revision, any preparation diff, command, and both suite results.
+  Failures or unavailable checks block release publication. Nightly results for
+  another revision do not substitute for the release candidate's results.
 - Check/build the documentation site for book changes. Run
   `helm unittest charts/submilli` for chart changes and relevant additional checks
   from `.github/workflows/chart-ci.yml` for behavioral chart changes.
@@ -105,7 +126,9 @@ release. Record why full tests run or are skipped.
 Stage only intended release files, inspect the staged diff, and commit with
 `Release vX.Y.Z` (include relevant issue IDs if applicable). Fetch main again.
 If it advanced, integrate the new commits before tagging, reassess the range and
-notes, and rerun affected verification. Confirm the candidate fast-forwards remote
+notes, and rerun affected verification plus both complete conformance suites on
+the integrated candidate. Any candidate changes after conformance verification
+invalidate that gate; rerun both suites before tagging. Confirm the candidate fast-forwards remote
 main and the release worktree is clean.
 
 Set `release_remote`, `release_tag`, and `release_commit` to the verified canonical
@@ -163,7 +186,9 @@ does not trigger another workflow through a release event.
 
 Before retrying mutations, inspect remote main, the tag, release, assets, and
 workflow runs. Reuse matching state; stop on tag/commit mismatches. If the tag
-exists but no release does, continue at creation after verification. Inspect and
+exists but no release does, require recorded successful conformance results for
+that exact candidate, or run both suites on its tagged source before publication.
+Then continue at creation after the remaining verification. Inspect and
 publish an existing draft rather than creating another release. Do not recreate
 a published release.
 

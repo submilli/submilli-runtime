@@ -19,9 +19,10 @@ case-insensitive, are also accepted). Filters and baseline-update settings do no
 opt in. Harness unit tests and metadata checks remain available without the flag.
 
 The Conformance workflow runs nightly at 02:00 UTC and can be dispatched manually
-against a candidate ref. Pre-release execution belongs to the release skill
-(to be added separately); the release workflow is unchanged. The command for
-that skill is `SUBMILLI_CONFORMANCE_TEST=1 cargo test --locked -p conformance`.
+against a candidate ref. The [release skill](../../.agents/skills/release/SKILL.md)
+requires both complete suites on the final release candidate before publication,
+with inherited filters and baseline-update settings cleared. The release workflow
+is unchanged.
 
 ## test262
 

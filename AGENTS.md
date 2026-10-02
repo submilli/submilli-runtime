@@ -146,7 +146,8 @@ cargo clippy --workspace --all-targets -- -D warnings
 Conformance suites (ECMA-262 and TypeScript) are excluded from development and
 post-rebase PR verification. `SUBMILLI_FULL_TEST` does not enable them. Both need
 `SUBMILLI_CONFORMANCE_TEST=1`, including filtered or baseline-update runs. Nightly
-CI enables this flag; pre-release execution will be handled by the release skill.
+CI enables this flag; the [release skill](.agents/skills/release/SKILL.md) requires
+both suites on the final release candidate before publication.
 Do not enable it during routine development or review.
 
 At the single post-rebase, pre-PR full-test gate, run:
