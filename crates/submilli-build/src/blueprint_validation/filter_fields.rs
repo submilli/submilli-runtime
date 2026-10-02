@@ -4,9 +4,9 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use crate::Artifact;
 use interpreter::stdlib::capabilities::{self, Capability};
 use submilli_blueprint::{Blueprint, FilterExpr};
-use submilli_build::Artifact;
 
 /// The context fields `capability`'s check reports: from the catalog for the
 /// standard library, a declared MCP server, or an HTTP method only
@@ -14,7 +14,7 @@ use submilli_build::Artifact;
 /// that provides it. A package may check a standard library name itself, with
 /// its own context, so the two sources combine.
 /// `None` when nothing known provides `capability`.
-pub(super) fn reported_fields<'a>(
+pub fn reported_fields<'a>(
     blueprint: &Blueprint,
     artifacts: &'a BTreeMap<String, Artifact>,
     capability: &str,
@@ -51,10 +51,7 @@ pub(super) fn reported_fields<'a>(
 /// The fields `filter` tests that are not in `reported`, once each, in source
 /// order. Only the first segment of a field path is checked: the catalog and
 /// `capabilities.yaml` don't describe what an object field contains.
-pub(super) fn unreported_fields<'f>(
-    filter: &'f FilterExpr,
-    reported: &BTreeSet<&str>,
-) -> Vec<&'f str> {
+pub fn unreported_fields<'f>(filter: &'f FilterExpr, reported: &BTreeSet<&str>) -> Vec<&'f str> {
     let mut unreported = Vec::new();
     for field in filter.top_level_fields() {
         if !reported.contains(field) && !unreported.contains(&field) {
@@ -66,7 +63,7 @@ pub(super) fn unreported_fields<'f>(
 
 /// What is wrong with a filter testing `field`, which is not in `reported`,
 /// worded to follow the rule it belongs to.
-pub(super) fn unreported_field_problem(field: &str, reported: &BTreeSet<&str>) -> String {
+pub fn unreported_field_problem(field: &str, reported: &BTreeSet<&str>) -> String {
     format!(
         "tests `{field}`, which the operation doesn't report, so a condition on it is false \
          for every call, and true under `not`; {}",

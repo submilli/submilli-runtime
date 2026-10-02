@@ -1208,6 +1208,8 @@ pub struct TypedClassMethod {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct TypedInterfaceDecl {
+    /// Complete property names, including inherited properties, for payload validation.
+    pub property_names: std::collections::BTreeSet<String>,
     pub index: Option<crate::IndexSignature>,
     pub name: Ident,
     pub generics: Vec<String>,

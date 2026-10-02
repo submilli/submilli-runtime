@@ -30,7 +30,7 @@ function post(channelId: string, text: string): void {}
 /**
  * Sends the message.
  * @param input Message and where to send it.
- * @capability test.com/send { channelId: string }
+ * @capability test.com/send { channelId: string, text: $input.text, threadTs: $input.threadTs, tags: $input.tags, options: $input.options }
  */
 export function send(input: Input): void {
   check("test.com/send", input);

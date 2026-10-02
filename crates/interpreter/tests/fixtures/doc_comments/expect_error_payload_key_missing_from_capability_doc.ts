@@ -1,4 +1,4 @@
-// expect-warning: payload key `extra` missing from `@capability` binding
+// expect-error: payload key `extra` missing from `@capability` binding
 import { check } from "submilli:security";
 
 /**

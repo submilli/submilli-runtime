@@ -480,6 +480,7 @@ impl<'a> Inferer<'a> {
         }
         self.pop_signature_generics();
         let typed_decl = crate::TypedTypeDecl::Interface(crate::TypedInterfaceDecl {
+            property_names: property_sigs.keys().cloned().collect(),
             name: name.clone(),
             generics: generic_names.clone(),
             members: typed_members,

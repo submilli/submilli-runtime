@@ -1361,7 +1361,7 @@ export function searchRepositories(query: string, options: SearchOptions | null 
  * @param query Non-empty GitHub search query for code, which may use qualifiers such as `language:rust`. The search is scoped to this repository automatically; `repo:`, `org:`, `user:`, `is:issue`, `is:pr` and `OR` are rejected.
  * @param options Sort field, order, page size and `pageToken`; `null` uses best-match order, the first page and 30 items.
  * @returns One page of code hits, each with file name, path, SHA and repository, plus `totalCount` and `incompleteResults`; `nextPageToken` is "" on the last page.
- * @capability github.com/code.search { owner: string, repo: string }
+ * @capability github.com/code.search { owner: string, repo: string, branch: string, path: string, ref: string, treeSha: string, head: string, base: string }
  */
 export function searchCode(repository: RepositoryRef, query: string, options: SearchOptions | null = null): SearchPageResult<CodeSearchHit> {
     const { owner, name } = repository;
@@ -1425,7 +1425,7 @@ export function getRateLimit(): RateLimit {
 /** Retrieve repository metadata, or null when it does not exist.
  * @param repository Owner and name of the repository.
  * @returns The repository metadata, or `null` when it does not exist or is not visible to the token.
- * @capability github.com/repositories.get { owner: string, repo: string }
+ * @capability github.com/repositories.get { owner: string, repo: string, branch: string, path: string, ref: string, treeSha: string, head: string, base: string }
  */
 export function getRepository(repository: RepositoryRef): Repository | null {
     const { owner, name } = repository;
@@ -1439,7 +1439,7 @@ export function getRepository(repository: RepositoryRef): Repository | null {
  * @param repository Owner and name of the repository.
  * @param branch Branch name.
  * @returns The branch with its head commit SHA, or `null` when it does not exist.
- * @capability github.com/branches.get { owner: string, repo: string, branch: string }
+ * @capability github.com/branches.get { owner: string, repo: string, branch: string, path: string, ref: string, treeSha: string, head: string, base: string }
  */
 export function getBranch(repository: RepositoryRef, branch: string): Branch | null {
     const { owner, name } = repository;
@@ -1453,7 +1453,7 @@ export function getBranch(repository: RepositoryRef, branch: string): Branch | n
  * @param repository Owner and name of the repository.
  * @param options Page size and `pageToken`; `null` uses the API defaults (first page, 30 items).
  * @returns One page of branches; `nextPageToken` is "" on the last page.
- * @capability github.com/branches.list { owner: string, repo: string }
+ * @capability github.com/branches.list { owner: string, repo: string, branch: string, path: string, ref: string, treeSha: string, head: string, base: string }
  */
 export function listBranches(repository: RepositoryRef, options: PageOptions | null = null): PageResult<Branch> {
     const { owner, name } = repository;
@@ -1472,7 +1472,7 @@ export function listBranches(repository: RepositoryRef, options: PageOptions | n
  * @param repository Owner and name of the repository.
  * @param options Filters (`sha`, `path`, `author`, `since`, `until`) and pagination; `null` lists the default branch's recent commits, 30 per page.
  * @returns One page of commits without stats or file lists; `nextPageToken` is "" on the last page.
- * @capability github.com/commits.list { owner: string, repo: string }
+ * @capability github.com/commits.list { owner: string, repo: string, branch: string, path: string, ref: string, treeSha: string, head: string, base: string }
  */
 export function listCommits(repository: RepositoryRef, options: ListCommitsOptions | null = null): PageResult<Commit> {
     const { owner, name } = repository;
@@ -1503,7 +1503,7 @@ export function listCommits(repository: RepositoryRef, options: ListCommitsOptio
  * @param ref Commit SHA, branch or tag name.
  * @param detail `"none"`, `"stats"` or `"patch"`; `null` means `"stats"`.
  * @returns The commit at the requested detail level, or `null` when the ref does not exist.
- * @capability github.com/commits.get { owner: string, repo: string, ref: string }
+ * @capability github.com/commits.get { owner: string, repo: string, ref: string, branch: string, path: string, treeSha: string, head: string, base: string }
  */
 export function getCommit(repository: RepositoryRef, ref: string, detail: CommitDetail | null = null): Commit | null {
     const { owner, name } = repository;
@@ -1517,7 +1517,7 @@ export function getCommit(repository: RepositoryRef, ref: string, detail: Commit
  * @param repository Owner and name of the repository.
  * @param options Page size and `pageToken`; `null` uses the API defaults (first page, 30 items).
  * @returns One page of releases; `nextPageToken` is "" on the last page.
- * @capability github.com/releases.list { owner: string, repo: string }
+ * @capability github.com/releases.list { owner: string, repo: string, branch: string, path: string, ref: string, treeSha: string, head: string, base: string }
  */
 export function listReleases(repository: RepositoryRef, options: PageOptions | null = null): PageResult<Release> {
     const { owner, name } = repository;
@@ -1535,7 +1535,7 @@ export function listReleases(repository: RepositoryRef, options: PageOptions | n
 /** Retrieve the latest release, or null when the repository has none.
  * @param repository Owner and name of the repository.
  * @returns The latest published release, or `null` when the repository has none.
- * @capability github.com/releases.getLatest { owner: string, repo: string }
+ * @capability github.com/releases.getLatest { owner: string, repo: string, branch: string, path: string, ref: string, treeSha: string, head: string, base: string }
  */
 export function getLatestRelease(repository: RepositoryRef): Release | null {
     const { owner, name } = repository;
@@ -1551,7 +1551,7 @@ export function getLatestRelease(repository: RepositoryRef): Release | null {
  * @param path Repository-relative file path, without a leading slash.
  * @param options `ref` (branch, tag or commit SHA) and `maxBytes`; `null` reads the default branch with the 10485760-byte limit.
  * @returns The file with its raw `bytes`, SHA and size, or `null` when the path does not exist.
- * @capability github.com/contents.readFile { owner: string, repo: string, path: string, ref: string }
+ * @capability github.com/contents.readFile { owner: string, repo: string, path: string, ref: string, branch: string, treeSha: string, head: string, base: string }
  */
 export function readFile(repository: RepositoryRef, path: string, options: FileReadOptions | null = null): RepositoryFile | null {
     const { owner, name } = repository;
@@ -1568,7 +1568,7 @@ export function readFile(repository: RepositoryRef, path: string, options: FileR
  * @param path Repository-relative file path, without a leading slash.
  * @param options `ref` (branch, tag or commit SHA) and `maxBytes`; `null` reads the default branch with the 10485760-byte limit.
  * @returns The file with its decoded `text`, SHA and size, or `null` when the path does not exist.
- * @capability github.com/contents.readTextFile { owner: string, repo: string, path: string, ref: string }
+ * @capability github.com/contents.readTextFile { owner: string, repo: string, path: string, ref: string, branch: string, treeSha: string, head: string, base: string }
  */
 export function readTextFile(repository: RepositoryRef, path: string, options: FileReadOptions | null = null): RepositoryTextFile | null {
     const { owner, name } = repository;
@@ -1593,7 +1593,7 @@ export function readTextFile(repository: RepositoryRef, path: string, options: F
  * @param path Repository-relative directory path; "" lists the repository root.
  * @param options `ref` (branch, tag or commit SHA); `null` lists the default branch.
  * @returns The direct entries of the directory, each with its type, name, path, SHA and size.
- * @capability github.com/contents.listDirectory { owner: string, repo: string, path: string, ref: string }
+ * @capability github.com/contents.listDirectory { owner: string, repo: string, path: string, ref: string, branch: string, treeSha: string, head: string, base: string }
  */
 export function listDirectory(repository: RepositoryRef, path: string, options: DirectoryOptions | null = null): DirectoryEntry[] {
     const { owner, name } = repository;
@@ -1625,7 +1625,7 @@ export function listDirectory(repository: RepositoryRef, path: string, options: 
  * @param treeSha SHA of the Git tree (for example a commit's tree SHA).
  * @param recursive True to include entries of all subtrees; `false` lists only the top level.
  * @returns The tree with its SHA, entries and a `truncated` flag, or `null` when the tree does not exist.
- * @capability github.com/trees.get { owner: string, repo: string, treeSha: string }
+ * @capability github.com/trees.get { owner: string, repo: string, treeSha: string, branch: string, path: string, ref: string, head: string, base: string }
  */
 export function getTree(repository: RepositoryRef, treeSha: string, recursive: boolean = false): RepositoryTree | null {
     const { owner, name } = repository;
@@ -1653,7 +1653,7 @@ export function getTree(repository: RepositoryRef, treeSha: string, recursive: b
  * @param repository Owner and name of the repository.
  * @param input New branch `name` and the `fromSha` commit it starts at.
  * @returns The created branch with its name and starting SHA.
- * @capability github.com/branches.create { owner: string, repo: string, branch: string }
+ * @capability github.com/branches.create { owner: string, repo: string, branch: string, path: string, ref: string, treeSha: string, head: string, base: string }
  */
 export function createBranch(repository: RepositoryRef, input: CreateBranchInput): Branch {
     const { owner, name: repo } = repository;
@@ -1670,7 +1670,7 @@ export function createBranch(repository: RepositoryRef, input: CreateBranchInput
 /** Delete a repository branch.
  * @param repository Owner and name of the repository.
  * @param branch Branch name to delete.
- * @capability github.com/branches.delete { owner: string, repo: string, branch: string }
+ * @capability github.com/branches.delete { owner: string, repo: string, branch: string, path: string, ref: string, treeSha: string, head: string, base: string }
  */
 export function deleteBranch(repository: RepositoryRef, branch: string): void {
     const { owner, name: repo } = repository;
@@ -1684,7 +1684,7 @@ export function deleteBranch(repository: RepositoryRef, branch: string): void {
  * @param repository Owner and name of the repository.
  * @param input Target `branch`, its current `expectedHeadSha`, commit `message` and the file `changes` to write or delete.
  * @returns The created commit, including its stats and per-file patches.
- * @capability github.com/commits.create { owner: string, repo: string, branch: string }
+ * @capability github.com/commits.create { owner: string, repo: string, branch: string, path: string, ref: string, treeSha: string, head: string, base: string }
  */
 export function commitFiles(repository: RepositoryRef, input: CommitFilesInput): Commit {
     const { owner, name } = repository;
@@ -1746,7 +1746,7 @@ export function commitFiles(repository: RepositoryRef, input: CommitFilesInput):
  * @param repository Owner and name of the repository.
  * @param number Issue number within the repository.
  * @returns The issue, or `null` when the number does not exist; throws if the number is a pull request.
- * @capability github.com/issues.get { owner: string, repo: string, number: number }
+ * @capability github.com/issues.get { owner: string, repo: string, number: number, base: string }
  */
 export function getIssue(repository: RepositoryRef, number: number): Issue | null {
     const { owner, name } = repository;
@@ -1765,7 +1765,7 @@ export function getIssue(repository: RepositoryRef, number: number): Issue | nul
  * @param repository Owner and name of the repository.
  * @param options State, labels, ordering and pagination; `null` lists open and closed issues by most recently updated, 30 per page.
  * @returns One page of issues, excluding pull requests; `nextPageToken` is "" on the last page.
- * @capability github.com/issues.list { owner: string, repo: string }
+ * @capability github.com/issues.list { owner: string, repo: string, branch: string, path: string, ref: string, treeSha: string, head: string, base: string }
  */
 export function listIssues(repository: RepositoryRef, options: ListIssuesOptions | null = null): PageResult<Issue> {
     const { owner, name } = repository;
@@ -1828,7 +1828,7 @@ export function listIssues(repository: RepositoryRef, options: ListIssuesOptions
  * @param query Non-empty GitHub search query for issues, which may use qualifiers such as `is:open`. `is:issue` and the repository scope are added automatically; `repo:`, `org:`, `user:`, `is:issue`, `is:pr` and `OR` are rejected.
  * @param options Sort field, order, page size and `pageToken`; `null` uses best-match order, the first page and 30 items.
  * @returns One page of issues with `totalCount` and `incompleteResults`; `nextPageToken` is "" on the last page.
- * @capability github.com/issues.search { owner: string, repo: string }
+ * @capability github.com/issues.search { owner: string, repo: string, branch: string, path: string, ref: string, treeSha: string, head: string, base: string }
  */
 export function searchIssues(repository: RepositoryRef, query: string, options: SearchOptions | null = null): SearchPageResult<Issue> {
     const { owner, name } = repository;
@@ -1845,7 +1845,7 @@ export function searchIssues(repository: RepositoryRef, query: string, options: 
  * @param repository Owner and name of the repository.
  * @param input Issue `title` and optional `body`, `assignees`, `labels` and `milestone`.
  * @returns The created issue.
- * @capability github.com/issues.create { owner: string, repo: string }
+ * @capability github.com/issues.create { owner: string, repo: string, branch: string, path: string, ref: string, treeSha: string, head: string, base: string }
  */
 export function createIssue(repository: RepositoryRef, input: CreateIssueInput): Issue {
     const { owner, name } = repository;
@@ -1885,7 +1885,7 @@ export function createIssue(repository: RepositoryRef, input: CreateIssueInput):
  * @param number Issue number within the repository.
  * @param input Fields to change; at least one must be set, omitted fields are left as they are.
  * @returns The updated issue.
- * @capability github.com/issues.update { owner: string, repo: string, number: number }
+ * @capability github.com/issues.update { owner: string, repo: string, number: number, base: string }
  */
 export function updateIssue(repository: RepositoryRef, number: number, input: UpdateIssueInput): Issue {
     const { owner, name } = repository;
@@ -1934,7 +1934,7 @@ export function updateIssue(repository: RepositoryRef, number: number, input: Up
  * @param number Issue number within the repository.
  * @param options Page size and `pageToken`; `null` uses the API defaults (first page, 30 items).
  * @returns One page of comments on the issue; `nextPageToken` is "" on the last page.
- * @capability github.com/issueComments.list { owner: string, repo: string, number: number }
+ * @capability github.com/issueComments.list { owner: string, repo: string, number: number, base: string }
  */
 export function listIssueComments(repository: RepositoryRef, number: number, options: PageOptions | null = null): PageResult<Comment> {
     const { owner, name } = repository;
@@ -1950,7 +1950,7 @@ export function listIssueComments(repository: RepositoryRef, number: number, opt
  * @param number Issue number within the repository.
  * @param body Comment text (Markdown).
  * @returns The created comment.
- * @capability github.com/issueComments.create { owner: string, repo: string, number: number }
+ * @capability github.com/issueComments.create { owner: string, repo: string, number: number, base: string }
  */
 export function addIssueComment(repository: RepositoryRef, number: number, body: string): Comment {
     const { owner, name } = repository;
@@ -1963,7 +1963,7 @@ export function addIssueComment(repository: RepositoryRef, number: number, body:
  * @param repository Owner and name of the repository.
  * @param options Page size and `pageToken`; `null` uses the API defaults (first page, 30 items).
  * @returns One page of labels defined in the repository; `nextPageToken` is "" on the last page.
- * @capability github.com/labels.list { owner: string, repo: string }
+ * @capability github.com/labels.list { owner: string, repo: string, branch: string, path: string, ref: string, treeSha: string, head: string, base: string }
  */
 export function listLabels(repository: RepositoryRef, options: PageOptions | null = null): PageResult<Label> {
     const { owner, name } = repository;
@@ -1982,7 +1982,7 @@ export function listLabels(repository: RepositoryRef, options: PageOptions | nul
  * @param repository Owner and name of the repository.
  * @param number Pull request number within the repository.
  * @returns The pull request, or `null` when the number does not exist or is not a pull request.
- * @capability github.com/pulls.get { owner: string, repo: string, number: number }
+ * @capability github.com/pulls.get { owner: string, repo: string, number: number, base: string }
  */
 export function getPullRequest(repository: RepositoryRef, number: number): PullRequest | null {
     const { owner, name } = repository;
@@ -1995,7 +1995,7 @@ export function getPullRequest(repository: RepositoryRef, number: number): PullR
  * @param repository Owner and name of the repository.
  * @param options State, head and base filters, sorting and pagination; `null` lists open pull requests, 30 per page.
  * @returns One page of pull requests; `nextPageToken` is "" on the last page.
- * @capability github.com/pulls.list { owner: string, repo: string }
+ * @capability github.com/pulls.list { owner: string, repo: string, branch: string, path: string, ref: string, treeSha: string, head: string, base: string }
  */
 export function listPullRequests(repository: RepositoryRef, options: ListPullRequestsOptions | null = null): PageResult<PullRequest> {
     const { owner, name } = repository;
@@ -2026,7 +2026,7 @@ export function listPullRequests(repository: RepositoryRef, options: ListPullReq
  * @param query Non-empty GitHub search query for pull requests, which may use qualifiers such as `is:open`. `is:pr` and the repository scope are added automatically; `repo:`, `org:`, `user:`, `is:issue`, `is:pr` and `OR` are rejected.
  * @param options Sort field, order, page size and `pageToken`; `null` uses best-match order, the first page and 30 items.
  * @returns One page of pull requests with `totalCount` and `incompleteResults`; `nextPageToken` is "" on the last page.
- * @capability github.com/pulls.search { owner: string, repo: string }
+ * @capability github.com/pulls.search { owner: string, repo: string, branch: string, path: string, ref: string, treeSha: string, head: string, base: string }
  */
 export function searchPullRequests(repository: RepositoryRef, query: string, options: SearchOptions | null = null): SearchPageResult<PullRequest> {
     const { owner, name } = repository;
@@ -2055,7 +2055,7 @@ export function searchPullRequests(repository: RepositoryRef, query: string, opt
  * @param repository Owner and name of the repository.
  * @param input Pull request `title`, `head` and `base` branches and optional `body`, `draft` and `maintainerCanModify`.
  * @returns The created pull request.
- * @capability github.com/pulls.create { owner: string, repo: string, head: string, base: string }
+ * @capability github.com/pulls.create { owner: string, repo: string, head: string, base: string, branch: string, path: string, ref: string, treeSha: string }
  */
 export function createPullRequest(repository: RepositoryRef, input: CreatePullRequestInput): PullRequest {
     const { owner, name } = repository;
@@ -2114,7 +2114,7 @@ export function updatePullRequest(repository: RepositoryRef, number: number, inp
  * @param number Pull request number within the repository.
  * @param input Merge `method`, commit title and message and `expectedHeadSha`; `null` uses GitHub's defaults.
  * @returns The merge result with `merged`, GitHub's `message` and the merge commit `sha`.
- * @capability github.com/pulls.merge { owner: string, repo: string, number: number }
+ * @capability github.com/pulls.merge { owner: string, repo: string, number: number, base: string }
  */
 export function mergePullRequest(repository: RepositoryRef, number: number, input: MergePullRequestInput | null = null): MergeResult {
     const { owner, name } = repository;
@@ -2138,7 +2138,7 @@ export function mergePullRequest(repository: RepositoryRef, number: number, inpu
  * @param repository Owner and name of the repository.
  * @param number Pull request number within the repository.
  * @returns The unified diff of the whole pull request as text.
- * @capability github.com/pulls.diff { owner: string, repo: string, number: number }
+ * @capability github.com/pulls.diff { owner: string, repo: string, number: number, base: string }
  */
 export function getPullRequestDiff(repository: RepositoryRef, number: number): string {
     const { owner, name } = repository;
@@ -2153,7 +2153,7 @@ export function getPullRequestDiff(repository: RepositoryRef, number: number): s
  * @param number Pull request number within the repository.
  * @param options Page size and `pageToken`; `null` uses the API defaults (first page, 30 items).
  * @returns One page of files changed by the pull request; `nextPageToken` is "" on the last page.
- * @capability github.com/pullFiles.list { owner: string, repo: string, number: number }
+ * @capability github.com/pullFiles.list { owner: string, repo: string, number: number, base: string }
  */
 export function listPullRequestFiles(repository: RepositoryRef, number: number, options: PageOptions | null = null): PageResult<PullRequestFile> {
     const { owner, name } = repository;
@@ -2173,7 +2173,7 @@ export function listPullRequestFiles(repository: RepositoryRef, number: number, 
  * @param number Pull request number within the repository.
  * @param options Page size and `pageToken`; `null` uses the API defaults (first page, 30 items).
  * @returns One page of reviews of the pull request; `nextPageToken` is "" on the last page.
- * @capability github.com/pullReviews.list { owner: string, repo: string, number: number }
+ * @capability github.com/pullReviews.list { owner: string, repo: string, number: number, base: string }
  */
 export function listPullRequestReviews(repository: RepositoryRef, number: number, options: PageOptions | null = null): PageResult<PullRequestReview> {
     const { owner, name } = repository;
@@ -2193,7 +2193,7 @@ export function listPullRequestReviews(repository: RepositoryRef, number: number
  * @param number Pull request number within the repository.
  * @param input Review `event`, optional `body`, `commitId` and inline `comments`; `body` is required for `REQUEST_CHANGES`.
  * @returns The created review.
- * @capability github.com/pullReviews.create { owner: string, repo: string, number: number }
+ * @capability github.com/pullReviews.create { owner: string, repo: string, number: number, base: string }
  */
 export function createPullRequestReview(repository: RepositoryRef, number: number, input: CreateReviewInput): PullRequestReview {
     const { owner, name } = repository;
@@ -2229,7 +2229,7 @@ export function createPullRequestReview(repository: RepositoryRef, number: numbe
  * @param number Pull request number within the repository.
  * @param options Page size and `pageToken`; `null` uses the API defaults (first page, 30 items).
  * @returns One page of general (non-inline) comments on the pull request; `nextPageToken` is "" on the last page.
- * @capability github.com/pullComments.list { owner: string, repo: string, number: number }
+ * @capability github.com/pullComments.list { owner: string, repo: string, number: number, base: string }
  */
 export function listPullRequestComments(repository: RepositoryRef, number: number, options: PageOptions | null = null): PageResult<Comment> {
     const { owner, name } = repository;
@@ -2245,7 +2245,7 @@ export function listPullRequestComments(repository: RepositoryRef, number: numbe
  * @param number Pull request number within the repository.
  * @param body Comment text (Markdown).
  * @returns The created comment.
- * @capability github.com/pullComments.create { owner: string, repo: string, number: number }
+ * @capability github.com/pullComments.create { owner: string, repo: string, number: number, base: string }
  */
 export function addPullRequestComment(repository: RepositoryRef, number: number, body: string): Comment {
     const { owner, name } = repository;

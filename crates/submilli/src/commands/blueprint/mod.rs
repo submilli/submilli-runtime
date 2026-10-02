@@ -14,7 +14,6 @@ pub mod capability;
 mod capability_names;
 mod declared_packages;
 mod file;
-mod filter_fields;
 pub mod git;
 pub mod init;
 pub mod lint;
