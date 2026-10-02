@@ -117,17 +117,23 @@ within the PR's scope.
 
 Choose checks from the entire proposed PR diff, including committed changes,
 based on behavior affected rather than file extensions alone. Combine the checks
-for mixed changes. Record why full tests are required or skipped.
+for mixed changes. The timing rule below applies to every development task.
 
 During development and after review fixes, run only checks for affected areas
 and directly affected callers; reuse still-valid results. Review cycles default
 to reading code and existing evidence without running tests. Reviewers may run a
 narrow test or reproduction to resolve a concrete hypothesis or edge case, but
 must not run full suites. Neither `fix-issue` nor `launch-review-agents-loop`
-runs full suites at handoff. Reserve full verification for `open-pr`, after
-rebasing onto main (or the selected PR base) and resolving review findings on the
-integrated result. The check selection below defines that post-rebase gate;
-it does not require repeating broad checks during development or review.
+runs full suites at handoff.
+
+Run full tests exactly once, after the final rebase onto main (or the selected
+PR base) and before opening the pull request. Finish implementation, review,
+and review fixes before that run. Only a subsequent rebase that integrates new
+base changes permits another full run. A no-op rebase, review round, fix,
+commit/amend, or repeated `open-pr` invocation does not. After a full run exposes
+a failure, fix it and rerun only the affected tests; retain the full-run result
+and the focused follow-up results in the handoff. Do not rerun the whole suite
+just to obtain a new all-green summary.
 
 For Rust source changes or changes to Rust build/dependency/toolchain/lint
 configuration, run from the repository root:
@@ -137,31 +143,27 @@ cargo fmt --all --check
 cargo clippy --workspace --all-targets -- -D warnings
 ```
 
-Run the full tests only when the change affects the compiler/runtime or inputs
-that can change their behavior or conformance coverage. This includes interpreter
-implementation, standard library host functions, language fixtures and snapshots,
-conformance tests/harness/data, and relevant dependency, feature, build, or
-toolchain changes. Changes in CLI/build/shared/server code require full tests
-when they alter compilation, generated artifacts, execution, or runtime integration;
-an isolated CLI message or server routing change does not by itself require them.
-Inspect dependency and build-input relationships for configuration-only changes.
-When impact is uncertain, investigate those relationships and explain the decision.
+Conformance suites (ECMA-262 and TypeScript) are excluded from development and
+post-rebase PR verification. `SUBMILLI_FULL_TEST` does not enable them. Both need
+`SUBMILLI_CONFORMANCE_TEST=1`, including filtered or baseline-update runs. Nightly
+CI enables this flag; pre-release execution will be handled by the release skill.
+Do not enable it during routine development or review.
 
-For compiler/runtime-impacting changes, run:
+At the single post-rebase, pre-PR full-test gate, run:
 
 ```sh
-SUBMILLI_SKIP_HTTP_TESTS=1 SUBMILLI_FULL_TEST=1 cargo test --workspace
+SUBMILLI_SKIP_HTTP_TESTS=1 SUBMILLI_CONFORMANCE_TEST=0 SUBMILLI_FULL_TEST=1 cargo test --workspace
 cargo run -p submilli -- build test --skip-network
 ```
 
-For other Rust changes, run affected crates' tests with full tests explicitly
+During development, run affected Rust tests with full tests explicitly
 disabled, for example
 `SUBMILLI_SKIP_HTTP_TESTS=1 SUBMILLI_FULL_TEST=0 cargo test -p submilli-server`.
 Include affected callers/integration tests when shared code changes. Do not use
 `SUBMILLI_FULL_TEST=1` merely because a `.rs` file changed.
 
-For TypeScript package-only changes, run the affected packages' tests and
-documentation examples instead:
+During TypeScript package development, run the affected packages' tests and
+documentation examples:
 
 ```sh
 cargo run -p submilli -- build test --skip-network -p @submilli/<package>
@@ -169,10 +171,11 @@ cargo run -p submilli -- build test --skip-network -p @submilli/<package>
 
 Run any additional package-specific checks documented by those packages, such as
 blueprint policy tests. Ordinary TypeScript package or documentation edits do not
-require Rust formatting, clippy, or the workspace test suite. Embedded/build-input
-documentation (such as `llm-prompt.md` and package `docs/readme.md`) also needs its
-owning build/example checks; use the full suite only if compiler/runtime behavior
-or conformance coverage is affected. For public book changes, use the
+require Rust formatting or clippy. During development, documentation changes need
+only affected documentation checks. Embedded/build-input documentation (such as
+`llm-prompt.md` and package `docs/readme.md`) also needs its owning build/example
+checks. These focused checks do not trigger an early full run or replace the
+single post-rebase, pre-PR full-test gate. For public book changes, use the
 documentation-site checks below. For agent instructions, commands, and skills,
 validate their frontmatter, referenced paths, and workflow consistency.
 

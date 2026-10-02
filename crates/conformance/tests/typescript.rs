@@ -14,8 +14,14 @@
 //! divergences differ from it, in either direction, so a fixed divergence and a
 //! new one both show up in review. `UPDATE_TYPESCRIPT_EXPECTED=1` rewrites it.
 //!
+//! Suite execution requires `SUBMILLI_CONFORMANCE_TEST=1`; filters and update
+//! settings alone do not opt in. `SUBMILLI_FULL_TEST` does not enable this suite.
+//!
 //! Each divergence is explained in the case's `<case>.triage`, or listed in
 //! `unexplained.txt` until it is; `support/triage.rs` has the rules.
+
+#[path = "support/conformance_gate.rs"]
+mod conformance_gate;
 
 #[path = "support/case_errors.rs"]
 mod case_errors;
@@ -41,6 +47,10 @@ const UNEXPLAINED: &str = "unexplained.txt";
 
 #[test]
 fn typescript_baselines() {
+    if !conformance_gate::requested() {
+        eprintln!("typescript: skipped; set SUBMILLI_CONFORMANCE_TEST=1 to run");
+        return;
+    }
     let root = Path::new(ROOT).join("typescript");
     let update = std::env::var("UPDATE_TYPESCRIPT_EXPECTED").is_ok_and(|v| v != "0");
     let mut failures = orphaned_case_files(&root, update);

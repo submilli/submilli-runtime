@@ -388,7 +388,7 @@ function codeOf(file) {
  * leave a half-ported suite. */
 async function checkSuitePasses() {
   try {
-    await run("cargo", ["test", "--release", "-p", "conformance", "--test", "typescript"], { maxBuffer: 1 << 26 });
+    await run("cargo", ["test", "--release", "-p", "conformance", "--test", "typescript"], { env: { ...process.env, SUBMILLI_CONFORMANCE_TEST: "1" }, maxBuffer: 1 << 26 });
   } catch (e) {
     console.error(`the suite must pass before porting; fix it first:\n${e.stdout?.slice(-4000) ?? ""}`);
     process.exit(1);
@@ -400,7 +400,7 @@ async function checkSuitePasses() {
 async function updateDivergences(portedList) {
   try {
     await run("cargo", ["test", "--release", "-p", "conformance", "--test", "typescript"], {
-      env: { ...process.env, UPDATE_TYPESCRIPT_EXPECTED: "1", TYPESCRIPT_PORTED_CASES: portedList },
+      env: { ...process.env, SUBMILLI_CONFORMANCE_TEST: "1", UPDATE_TYPESCRIPT_EXPECTED: "1", TYPESCRIPT_PORTED_CASES: portedList },
       maxBuffer: 1 << 26,
     });
   } catch (e) {
