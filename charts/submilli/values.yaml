@@ -209,6 +209,9 @@ auth:
 # Secret of yours through `secrets:` below and point the entry at
 # `/etc/submilli/secrets/<name>/<key>`. Never put a token value here: values are
 # stored in plaintext in the Helm release object.
+# `mcp_allowed_hosts` extends the generated Service, pod, and enabled Ingress
+# host list. Use it for additional names or a cluster DNS suffix other than
+# cluster.local. The server also keeps its loopback defaults.
 config: {}
 
 networkPolicy:

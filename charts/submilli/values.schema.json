@@ -235,6 +235,13 @@
     },
     "config": {
       "type": "object",
+      "properties": {
+        "mcp_allowed_hosts": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 },
+          "description": "Additional MCP hosts, merged with the chart's Service, pod, and enabled Ingress names."
+        }
+      },
       "description": "Extra keys merged into the server's config file. Free-form here because the server owns the key set and rejects unknown keys at boot; the chart's template refuses the keys it sets itself."
     },
     "networkPolicy": {

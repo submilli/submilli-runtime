@@ -88,6 +88,8 @@ services:
     environment:
       SUBMILLI_BIND: 0.0.0.0
       SUBMILLI_PORT: 8128
+      # Update this host and port if you rename the service or change its container port.
+      SUBMILLI_MCP_ALLOWED_HOSTS: submilli:8128
       SUBMILLI_SERVER_TOKEN: ${SUBMILLI_SERVER_TOKEN:?set SUBMILLI_SERVER_TOKEN in .env, for example with `openssl rand -hex 32`}
 
     # Supply the secret-store key as a file, not as an environment variable: an
