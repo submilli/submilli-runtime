@@ -67,7 +67,6 @@ pub struct FileConfig {
     pub bind: Option<IpAddr>,
     pub port: Option<u16>,
     pub blueprint_dir: Option<PathBuf>,
-    pub blueprint_seed_dir: Option<PathBuf>,
     pub session_store_dir: Option<PathBuf>,
     pub vfs_session_dir: Option<PathBuf>,
     pub vfs_ephemeral_dir: Option<PathBuf>,
@@ -230,7 +229,6 @@ pub(crate) struct EnvConfig {
     max_execution_llm_tokens: Option<String>,
     max_llm_concurrency: Option<String>,
     blueprint_dir: Option<PathBuf>,
-    blueprint_seed_dir: Option<PathBuf>,
     session_store_dir: Option<PathBuf>,
     vfs_session_dir: Option<PathBuf>,
     vfs_ephemeral_dir: Option<PathBuf>,
@@ -313,7 +311,6 @@ impl EnvConfig {
             max_execution_llm_tokens: var("SUBMILLI_MAX_EXECUTION_LLM_TOKENS"),
             max_llm_concurrency: var("SUBMILLI_MAX_LLM_CONCURRENCY"),
             blueprint_dir: path("SUBMILLI_BLUEPRINT_DIR"),
-            blueprint_seed_dir: path("SUBMILLI_BLUEPRINT_SEED_DIR"),
             session_store_dir: path("SUBMILLI_SESSION_STORE_DIR"),
             vfs_session_dir: path("SUBMILLI_VFS_SESSION_DIR"),
             vfs_ephemeral_dir: path("SUBMILLI_VFS_EPHEMERAL_DIR"),
@@ -482,11 +479,6 @@ fn guarded_directories(cli: &Cli, file: &FileConfig, env: &EnvConfig) -> ServerD
                 file.blueprint_dir.clone(),
             )
             .unwrap_or_else(default_blueprint_dir),
-        ),
-        blueprint_seed_dir: explicit(
-            cli.blueprint_seed_dir.clone(),
-            env.blueprint_seed_dir.clone(),
-            file.blueprint_seed_dir.clone(),
         ),
         package_store_root: Some(
             explicit(
@@ -898,13 +890,6 @@ fn merge(cli: Cli, file: FileConfig, env: EnvConfig) -> Result<(SocketAddr, Serv
 
     let blueprint_dir = explicit(cli.blueprint_dir, env.blueprint_dir, file.blueprint_dir)
         .unwrap_or_else(default_blueprint_dir);
-    // No default: seeding is opt-in, and a default path would silently revert
-    // API-managed blueprints the moment someone created that directory.
-    let blueprint_seed_dir = explicit(
-        cli.blueprint_seed_dir,
-        env.blueprint_seed_dir,
-        file.blueprint_seed_dir,
-    );
     let session_storage_root = explicit(
         cli.vfs_session_dir,
         env.vfs_session_dir,
@@ -949,7 +934,6 @@ fn merge(cli: Cli, file: FileConfig, env: EnvConfig) -> Result<(SocketAddr, Serv
         // open.
         auth,
         blueprint_dir: Some(blueprint_dir),
-        blueprint_seed_dir,
         session_store_dir: Some(session_store_dir),
         session_storage_root: Some(session_storage_root),
         ephemeral_storage_root,
@@ -1186,7 +1170,6 @@ mod tests {
             bind: None,
             port: None,
             blueprint_dir: None,
-            blueprint_seed_dir: None,
             session_store_dir: None,
             vfs_session_dir: None,
             vfs_ephemeral_dir: None,
@@ -1302,7 +1285,6 @@ network:
     fn dirs_under(root: &std::path::Path) -> ServerDirectories {
         ServerDirectories {
             blueprint_dir: Some(root.join("blueprints")),
-            blueprint_seed_dir: Some(root.join("seed")),
             package_store_root: Some(root.join("packages")),
             package_fallback_root: Some(root.join("cli-packages")),
             secret_store_dir: Some(root.join("secrets")),
@@ -1333,7 +1315,6 @@ network:
     fn guarded_paths(dirs: &ServerDirectories) -> Vec<(PathBuf, &'static str)> {
         let ServerDirectories {
             blueprint_dir,
-            blueprint_seed_dir,
             package_store_root,
             package_fallback_root,
             secret_store_dir,
@@ -1348,7 +1329,6 @@ network:
         } = dirs.clone();
         [
             (blueprint_dir, "blueprint store"),
-            (blueprint_seed_dir, "blueprint seed directory"),
             (package_store_root, "package store"),
             (package_fallback_root, "fallback package store"),
             (secret_store_dir, "secret store"),
@@ -2130,47 +2110,6 @@ network:
             config.package_store_root.unwrap(),
             PathBuf::from("/env/packages")
         );
-    }
-
-    #[test]
-    fn blueprint_seed_dir_walks_the_ladder() {
-        let file = FileConfig {
-            blueprint_seed_dir: Some("/file/seed".into()),
-            ..FileConfig::default()
-        };
-        let (_, config) = merge(empty_cli(), file, EnvConfig::default()).unwrap();
-        assert_eq!(
-            config.blueprint_seed_dir.unwrap(),
-            PathBuf::from("/file/seed")
-        );
-
-        let file = FileConfig {
-            blueprint_seed_dir: Some("/file/seed".into()),
-            ..FileConfig::default()
-        };
-        let env = env_from(&[("SUBMILLI_BLUEPRINT_SEED_DIR", "/env/seed")]);
-        let (_, config) = merge(empty_cli(), file, env).unwrap();
-        assert_eq!(
-            config.blueprint_seed_dir.unwrap(),
-            PathBuf::from("/env/seed")
-        );
-
-        let cli = Cli {
-            blueprint_seed_dir: Some("/cli/seed".into()),
-            ..empty_cli()
-        };
-        let env = env_from(&[("SUBMILLI_BLUEPRINT_SEED_DIR", "/env/seed")]);
-        let (_, config) = merge(cli, FileConfig::default(), env).unwrap();
-        assert_eq!(
-            config.blueprint_seed_dir.unwrap(),
-            PathBuf::from("/cli/seed")
-        );
-    }
-
-    #[test]
-    fn blueprint_seed_dir_has_no_default() {
-        let (_, config) = merge(empty_cli(), FileConfig::default(), EnvConfig::default()).unwrap();
-        assert!(config.blueprint_seed_dir.is_none());
     }
 
     #[test]

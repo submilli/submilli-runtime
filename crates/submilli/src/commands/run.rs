@@ -56,8 +56,8 @@ pub struct Args {
 
     /// Apply a blueprint's policy (capability gating, deny-by-default) and
     /// `auth_proxy:` secret injection to this local run. Without it, the run is
-    /// unrestricted (allow-all). `env` / `file` / `store` secret sources all
-    /// resolve (`store:` from the local secret store), and authenticated
+    /// unrestricted (allow-all). `store:` secrets resolve from the local
+    /// secret store, and authenticated
     /// `@mcp/<server>` servers are called in-process — no running server needed.
     #[arg(long)]
     blueprint: Option<PathBuf>,

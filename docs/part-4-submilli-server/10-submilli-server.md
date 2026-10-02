@@ -132,7 +132,7 @@ and what losing each piece would cost you.
 
 | What | Where, under `$SUBMILLI_HOME/server` | If it's lost |
 | --- | --- | --- |
-| Registered blueprints | `blueprints/` | Every program is refused until you register them again. That's quick if they live in source control and the server seeds from them ([register blueprints](#register-blueprints)). |
+| Registered blueprints | `blueprints/` | Every program is refused until you register them again. That's quick if they live in source control and your deploy job applies them ([register blueprints](#register-blueprints)). |
 | Open sessions | `sessions/`, `vfs/sessions/` | Your users' sessions end: reconnecting clients get `404 unknown session`, and files the agent wrote in them are gone. There's nothing to rebuild them from. |
 | Secrets | `secrets/` | Blueprints that read `store:` secrets fail until every value is put back. Keep the key file safe too: without it the store can't be read. |
 | Packages | `packages/` | Imports fail until you reinstall. The same install commands bring them back. |
@@ -182,7 +182,6 @@ api_tokens:                           # beside the one in SUBMILLI_SERVER_TOKEN
 # github_token_file: /etc/submilli/github.token   # for private packages
 
 blueprint_dir: /srv/submilli/blueprints
-blueprint_seed_dir: /etc/submilli/blueprints
 session_store_dir: /srv/submilli/sessions
 vfs_session_dir: /srv/submilli/vfs
 package_store_dir: /srv/submilli/packages
@@ -365,25 +364,14 @@ must exist in the server's store, and every named volume, as the root or
 under `mounts`, must be one the server declares, with no more access than it
 allows.
 
-Over the API, `env:` and `file:` secret sources are refused: a caller who can
-register a blueprint could otherwise read the server's environment and files.
-Use `store:` or `harness:` instead, or seed the blueprint from a directory, as
-described next. Registration does not check that the packages in `packages:`
-are installed. A missing package fails the first program that imports it, and
-the error names the directories it searched.
+Blueprint secrets use `store:` for values provisioned in the server's secret
+store or `harness:` for values supplied per session. Provision store values
+before applying the blueprint. Registration does not check that the packages
+in `packages:` are installed; a missing package fails the first program that
+imports it, and the error names the directories it searched.
 
-For a deployment that keeps blueprints in source control, `--blueprint-seed-dir`
-names a read-only directory of blueprint YAML that the server registers on
-every start, so nobody runs `apply` after a deploy. The directory is the source
-of truth: a seeded blueprint edited or removed over the API returns to its
-seeded form at the next start, and blueprints the directory doesn't name are
-left alone. Because the operator controls the directory, seeded blueprints may
-use `env:` and `file:` secrets. A seeded blueprint whose `store:` secret
-doesn't exist yet is still registered, so you can add secrets after the first
-deploy; programs that need the missing one fail until you do. A file that fails
-to register is logged and counted, not fatal, so read the `blueprint seed
-reconcile complete` line after a deploy: a nonzero `failed=` means a blueprint
-you think is registered isn't.
+Keep blueprints in source control and run `submilli server blueprint apply`
+from your deploy job with an admin token.
 
 ## Volumes
 

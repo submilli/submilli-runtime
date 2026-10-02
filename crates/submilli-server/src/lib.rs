@@ -3,7 +3,6 @@
 pub mod app;
 pub mod auth;
 pub mod blueprint;
-pub mod blueprint_seed;
 mod compiler_thread;
 pub mod config;
 pub mod error;

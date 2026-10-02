@@ -13,7 +13,7 @@ use std::collections::{BTreeSet, HashMap, HashSet};
 use std::sync::Arc;
 use std::time::Duration;
 
-use crate::host::EnvFileSecretResolver;
+use crate::host::BlueprintSecretResolver;
 use http::{HeaderName, HeaderValue};
 use interpreter::PackageDeclaration;
 use interpreter::packages::ModuleSummary;
@@ -353,9 +353,9 @@ async fn resolve_auth(
 
     let resolver = match auth.harness_secrets {
         Some(secrets) => {
-            EnvFileSecretResolver::with_harness(auth.secret_store.cloned(), Arc::clone(secrets))
+            BlueprintSecretResolver::with_harness(auth.secret_store.cloned(), Arc::clone(secrets))
         }
-        None => EnvFileSecretResolver::new(auth.secret_store.cloned()),
+        None => BlueprintSecretResolver::new(auth.secret_store.cloned()),
     };
     let mut headers = HashMap::with_capacity(server.headers.len());
     for (name, value) in &server.headers {

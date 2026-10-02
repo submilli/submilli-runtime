@@ -76,7 +76,7 @@ mod tests {
     #[test]
     fn declared_secret_suppresses_warning() {
         let blueprint = submilli_blueprint::parse(
-            "name: test\nsecrets:\n  STRIPE_API_KEY: { env: STRIPE_API_KEY }\n",
+            "name: test\nsecrets:\n  STRIPE_API_KEY: { store: STRIPE_API_KEY }\n",
         )
         .expect("blueprint parses");
         let capabilities = CapabilitySchema {

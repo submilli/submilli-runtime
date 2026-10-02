@@ -186,7 +186,7 @@ tests:
           path: spec.selector["app.kubernetes.io/instance"]
           value: RELEASE-NAME
       # Resolving a pod that has not passed readiness would hand callers a server
-      # still replaying its blueprint seed.
+      # still loading its persisted state.
       - notExists:
           path: spec.publishNotReadyAddresses
 

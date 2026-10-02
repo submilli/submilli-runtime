@@ -4,7 +4,7 @@ packages:
   - '@submilli/google-calendar'
 secrets:
   # A placeholder: a refused request never sends it, and an accepted one stops at http.delete.
-  GOOGLE_ACCESS_TOKEN: { file: packages/google-calendar/tests/policy/fake-token.txt }
+  GOOGLE_ACCESS_TOKEN: { store: policy-token }
 default: deny
 permissions:
   main:

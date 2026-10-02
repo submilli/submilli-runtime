@@ -3,7 +3,7 @@
 //! Mirrors [`crate::mcp::transport::StreamableHttpTransport`] — the same job on
 //! the other capability. It holds the blueprint and the secret store, resolves
 //! its own `${secrets.X}` credential through the same
-//! [`interpolate`]/[`EnvFileSecretResolver`] path, and makes its own outbound
+//! [`interpolate`]/[`BlueprintSecretResolver`] path, and makes its own outbound
 //! call. Nothing above it ever sees the key.
 //!
 //! **What this file does not do: classify.** [`super::provider`] owns the whole
@@ -41,7 +41,7 @@ use interpreter::stdlib::http::{NetworkPolicy, describe_error_chain};
 use serde_json::Value;
 use submilli_blueprint::{Blueprint, HarnessSecretBindings, LlmProviderDecl, interpolate};
 
-use crate::host::EnvFileSecretResolver;
+use crate::host::BlueprintSecretResolver;
 use crate::secret_store::SecretStore;
 
 use super::provider::{ModelDispatch, ModelRequest, ProviderFailure, ProviderResponse};
@@ -155,7 +155,7 @@ impl HttpModelDispatch {
         let Some(reference) = &decl.api_key else {
             return Ok(None);
         };
-        let resolver = EnvFileSecretResolver::with_harness(
+        let resolver = BlueprintSecretResolver::with_harness(
             self.secret_store.clone(),
             Arc::clone(&self.harness_secrets),
         );

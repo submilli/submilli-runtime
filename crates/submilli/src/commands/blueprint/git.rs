@@ -102,7 +102,7 @@ mod tests {
     fn configure_update_and_remove_preserve_other_fields() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("blueprint.yaml");
-        std::fs::write(&path, "name: test\nsecrets:\n  GIT_TOKEN: {env: TOKEN}\n").unwrap();
+        std::fs::write(&path, "name: test\nsecrets:\n  GIT_TOKEN: {store: TOKEN}\n").unwrap();
         for username in [Some("git".into()), None] {
             run(GitCmd::Set(SetArgs {
                 name: "Agent".into(),

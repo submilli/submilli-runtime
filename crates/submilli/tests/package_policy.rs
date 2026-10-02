@@ -6,8 +6,9 @@
 //! credentials or network: each blueprint denies the package its secret or its
 //! HTTP calls, so an allowed call stops at that gated operation.
 
+use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output};
+use std::process::{Command, Output, Stdio};
 
 /// Packages that ship policy scripts under `tests/policy/`.
 const PACKAGES: &[&str] = &[
@@ -25,6 +26,26 @@ const PACKAGES: &[&str] = &[
 #[test]
 fn policy_scripts_pass_under_their_blueprints() {
     let home = tempfile::tempdir().expect("package store");
+    let mut put = Command::new(env!("CARGO_BIN_EXE_submilli"))
+        .args(["secret", "put", "policy-token"])
+        .env("SUBMILLI_HOME", home.path())
+        .env("SUBMILLI_TELEMETRY", "0")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("put policy token");
+    put.stdin
+        .take()
+        .unwrap()
+        .write_all(b"policy-placeholder")
+        .unwrap();
+    let result = put.wait_with_output().unwrap();
+    assert!(
+        result.status.success(),
+        "{}",
+        String::from_utf8_lossy(&result.stderr)
+    );
     let mut failures = Vec::new();
     for package in PACKAGES {
         let published = submilli(

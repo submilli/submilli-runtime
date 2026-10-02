@@ -97,7 +97,7 @@ fn run(args: &Args) -> Result<String> {
     {
         bail!(
             "--authorization-bearer references secret '{secret}', not declared in {}.\n  \
-             Declare it first, e.g.: submilli blueprint secret add {secret} --env <ENV_VAR>",
+             Declare it first, e.g.: submilli blueprint secret add {secret} --store <KEY>",
             path.display()
         );
     }
@@ -396,7 +396,7 @@ mod tests {
         let (_tmp, path) = temp_blueprint();
         fs::write(
             &path,
-            "name: test\nsecrets:\n  LINEAR_API_KEY: { env: LINEAR_API_KEY }\n",
+            "name: test\nsecrets:\n  LINEAR_API_KEY: { store: LINEAR_API_KEY }\n",
         )
         .unwrap();
         let mut a = args("linear", "https://mcp.linear.app/mcp", &path);
@@ -423,7 +423,7 @@ mod tests {
     #[test]
     fn authorization_bearer_conflicts_with_explicit_authorization_header() {
         let (_tmp, path) = temp_blueprint();
-        fs::write(&path, "name: test\nsecrets:\n  K: { env: K }\n").unwrap();
+        fs::write(&path, "name: test\nsecrets:\n  K: { store: K }\n").unwrap();
         let mut a = args("linear", "https://mcp.linear.app/mcp", &path);
         a.headers = vec!["Authorization: Bearer x".into()];
         a.authorization_bearer = Some("K".into());

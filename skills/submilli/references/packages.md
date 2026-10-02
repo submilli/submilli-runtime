@@ -394,7 +394,7 @@ Three routes, in order of preference:
 
 1. **Package reads the secret** with `secrets.get("NAME")` using a literal
    name, so the derived `secrets.get` filter is static. The blueprint declares
-   `NAME` under `secrets:` with an `env`, `file`, `store`, or `harness` source.
+   `NAME` under `secrets:` with a `store` or `harness` source.
    Generated code can never call `secrets.get`; no policy can grant it.
 2. **Secret name as an argument** when one package serves several accounts:
    `sendMail(secretName, input)`. The package still resolves the value and

@@ -432,4 +432,4 @@ credited 1500 cents
 
 Applications name the blueprint the same way when they open a session.
 Refer to [Register a blueprint](/docs/next/server/register-a-blueprint) for
-seeding blueprints from a directory, replacing them, and removing them.
+applying blueprints, replacing them, and removing them.

@@ -90,25 +90,6 @@ partway through, which is the outcome `shutdownGrace` exists to avoid.
 {{- add .Values.server.shutdownGrace 3 -}}
 {{- end -}}
 
-{{/*
-Mount path for a referenced Kubernetes Secret. A blueprint's `secrets:` block
-names this exact path in a `file:` source, so it is a contract between two
-separate values maps rather than an implementation detail — changing it breaks
-every blueprint that reads a secret.
-*/}}
-{{- define "submilli.secretMountPath" -}}
-/etc/submilli/secrets
-{{- end -}}
-
-{{/*
-Read-only directory the server reconciles blueprints from at boot. Distinct from
-the writable store on the volume; pointing both at one path would make the store
-read-only forever.
-*/}}
-{{- define "submilli.seedPath" -}}
-/etc/submilli/blueprints
-{{- end -}}
-
 {{- define "submilli.homePath" -}}
 /var/lib/submilli
 {{- end -}}
@@ -191,7 +172,6 @@ and would do nothing.
       "vfs_ephemeral_dir" "the chart fixes it at /tmp, the only writable path outside the state volume"
       "max_execution_memory" "set execution.maxMemoryMB instead; the pod's memory limit is derived from it"
       "shutdown_grace" "set server.shutdownGrace instead; terminationGracePeriodSeconds is derived from it"
-      "blueprint_seed_dir" "the chart sets it when blueprints is non-empty"
       "allow_unauthenticated" "set auth.enabled=false instead"
       "github_token_file" "set githubToken.existingSecret and githubToken.key instead, which also mount the token"
     -}}
@@ -221,15 +201,7 @@ Omitting this breaks /v1/execute — the product — while /healthz stays green,
 which is why the chart's own test exercises execute rather than health alone.
 */ -}}
 {{- $_ := set $config "vfs_ephemeral_dir" "/tmp" -}}
-{{- if .Values.blueprints -}}
-{{- /*
-The read-only source the server reconciles from at boot. A different directory
-from the writable store on the state volume — pointing both at one path would
-make the store read-only forever.
-*/ -}}
-{{-   $_ := set $config "blueprint_seed_dir" (include "submilli.seedPath" .) -}}
-{{- end -}}
-{{- if and .Values.secretStore.enabled .Values.secretStore.existingSecret -}}
+{{- if .Values.secretStore.enabled -}}
 {{- /*
 A file, never an env var holding the key itself: environment is readable
 through /proc/self/environ.
@@ -325,5 +297,14 @@ rather than edited because a template cannot assign to a list element.
 {{-   if and (eq (floor $value) $value) (lt $value 9e18) (gt $value -9e18) -}}
 {{-     $_ := set . "v" (int64 $value) -}}
 {{-   end -}}
+{{- end -}}
+{{- end -}}
+
+{{/* The generated encryption-key Secret and the pod must use the same name. */}}
+{{- define "submilli.secretStoreSecretName" -}}
+{{- if .Values.secretStore.existingSecret -}}
+{{- .Values.secretStore.existingSecret -}}
+{{- else -}}
+{{- printf "%s-secret-store" (include "submilli.fullname" . | trunc 50 | trimSuffix "-") -}}
 {{- end -}}
 {{- end -}}

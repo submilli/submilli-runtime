@@ -250,9 +250,9 @@ tests:
       - notMatchRegex:
           path: data["server.yaml"]
           pattern: blueprint_seed_dir
-      - notMatchRegex:
+      - matchRegex:
           path: data["server.yaml"]
-          pattern: secret_store
+          pattern: "(?m)^secret_store:"
 
   - it: keeps the memory limit and the execution cap in step when either moves
     set:
@@ -535,15 +535,15 @@ tests:
       # `helm upgrade` that changes only a setting leaves the running server on
       # the old one.
       #
-      # A literal digest, as configmap_test.yaml pins checksum/blueprints: it
+      # A literal digest: it
       # is the annotation's value that rolls the pod, so a test that merely
       # found some digest would pass with the hash computed over nothing. It
-      # covers the config text alone, so unlike that one it needs no pinned
+      # covers the config text alone, so it needs no pinned
       # chart version. Changing what the default config renders moves it:
       # re-run and copy the reported `Actual:` value.
       - equal:
           path: spec.template.metadata.annotations["checksum/config"]
-          value: bdf38362cf16a95b806441b2b83a17e1fa2a04297a960f3f7e814a70b072a5f3
+          value: f38b63c658bf8a3dc95fc3f2f4fd40201020b21a85ba6610a9766652abde8ce6
 
   - it: produces a different rollout trigger for different config
     template: statefulset.yaml
@@ -552,7 +552,7 @@ tests:
     asserts:
       - equal:
           path: spec.template.metadata.annotations["checksum/config"]
-          value: 988960ef97cea0ea32b42717146b6d25e7ff8cd6af4c7ff9a6e4faac87063fc7
+          value: c1843add54b11e3c50d1a529dec477c09f84ac66475889d84f78d2aa8d6ccb3c
 
   - it: keeps the generated names inside the DNS label limit
     set:

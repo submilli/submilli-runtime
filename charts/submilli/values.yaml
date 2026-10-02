@@ -8,8 +8,7 @@
 # -- Number of independent servers. Each gets its own volume and shares nothing
 # with the others: no clustering, no leader, no replication.
 #
-# Blueprints listed under `blueprints:` below are seeded into every one of them
-# and agree across them. Anything registered through the API — blueprints,
+# Anything registered through the API — blueprints,
 # sessions, secrets, packages — lives only on the pod that served the request, so
 # a client must address a specific server rather than the load-balanced Service:
 #
@@ -132,51 +131,13 @@ persistence:
   # existing deployment.
   accessMode: ReadWriteOncePod
 
-# -- Blueprints to deploy declaratively, as a map of name to YAML. Rendered into
-# a ConfigMap and mounted read-only; the server reconciles them into its store on
-# every start.
-#
-# These files own the blueprints they name: editing or deleting one through the
-# API is undone on the next pod restart. To change one, change it here. Blueprints
-# not named here are left alone — the chart never deletes.
-#
-# Example:
-#   blueprints:
-#     demo: |
-#       name: demo
-#       default: deny
-#       vfs:
-#         mode: ephemeral
-blueprints: {}
-
-# -- Kubernetes Secrets to mount for blueprints to read, as a map of a local name
-# to an existing Secret reference. Secret *values* never appear here — only
-# references — because anything in values.yaml is stored in plaintext in the Helm
-# release object and echoed by `helm get values`.
-#
-# Each entry mounts at /etc/submilli/secrets/<name>/<key>, which is the path a
-# blueprint's `secrets:` block references with a `file:` source:
-#
-#   secrets:
-#     stripe:
-#       secretName: stripe-credentials
-#       key: api-key
-#
-#   # ...then, in a blueprint above:
-#   #   secrets:
-#   #     STRIPE_KEY: { file: /etc/submilli/secrets/stripe/api-key }
-secrets: {}
-
 secretStore:
-  # -- Enable the server's encrypted-at-rest secret store. Off by default. It
-  # protects the volume against offline disclosure, and only earns that if its
-  # key comes from a different trust domain than the data — a key kept in a
-  # Kubernetes Secret beside the volume it protects buys very little. Turn this
-  # on when you have a KMS or CSI-driver key source, not before.
-  enabled: false
-  # -- Existing Secret holding the base64-encoded 32-byte key, mounted as a file.
-  # A file rather than an env var deliberately: env is readable through
-  # /proc/self/environ.
+  # -- Enable the encrypted secret store. Users populate it with
+  # `submilli server secret put`; blueprints reference values with `store:`.
+  enabled: true
+  # -- Existing Secret holding the base64-encoded 32-byte encryption key.
+  # Empty: generate a Secret once and reuse it on upgrades. Use an existing
+  # Secret for GitOps/offline rendering, which cannot look up the generated key.
   existingSecret: ""
   key: "key"
 
@@ -239,7 +200,7 @@ auth:
 #
 # Keys the chart sets itself are refused here, with an error naming the value to
 # use instead: `bind`, `port`, `vfs_ephemeral_dir`, `max_execution_memory`,
-# `shutdown_grace`, `blueprint_seed_dir`, `allow_unauthenticated`, and
+# `shutdown_grace`, `allow_unauthenticated`, and
 # `secret_store.key_file`. Most of them also size something in the pod spec, and
 # two sources for one number is how those drift apart.
 #

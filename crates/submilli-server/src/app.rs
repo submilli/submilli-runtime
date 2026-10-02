@@ -18,7 +18,6 @@ use interpreter::runtime::{
 use interpreter::{PackageDeclaration, ScriptImports};
 use submilli_blueprint::Blueprint;
 use submilli_build::{ArtifactMetadata, PackageStore, PackageStoreError};
-use submilli_shared::EnvFileSecretResolver;
 use submilli_shared::llm::{BlueprintLlmProvider, HttpModelDispatch, ModelDispatch};
 use submilli_shared::secret_store::SecretStore;
 use tokio::sync::Notify;
@@ -27,7 +26,6 @@ use wasmtime::{Engine, Linker, Module};
 use crate::ServerConfig;
 use crate::auth::{Access, AuthConfig, Guard};
 use crate::blueprint::{BlueprintStore, FileBlueprintStore, InMemoryBlueprintStore};
-use crate::blueprint_seed::seed_blueprints;
 use crate::config::{OAuthProvider, VolumeTable};
 use crate::idempotency::Coordinator;
 use crate::idempotency_store::{FileIdempotencyStore, IdempotencyStore, InMemoryIdempotencyStore};
@@ -65,8 +63,6 @@ struct AppStateInner {
     runtime: RuntimeConfig,
     sessions: Arc<dyn SessionStore>,
     blueprints: Arc<dyn BlueprintStore>,
-    /// See [`ServerConfig::blueprint_seed_dir`].
-    blueprint_seed_dir: Option<PathBuf>,
     secret_store: Option<Arc<dyn SecretStore>>,
     /// Mints/rotates `@mcp/<server>` OAuth access tokens. `Some` only when a
     /// secret store is configured (OAuth refresh tokens have nowhere to live
@@ -219,7 +215,6 @@ impl AppState {
                 runtime,
                 sessions,
                 blueprints,
-                blueprint_seed_dir: config.blueprint_seed_dir,
                 secret_store,
                 oauth_tokens,
                 session_manager,
@@ -245,24 +240,11 @@ impl AppState {
         })
     }
 
-    /// Rehydrate persisted sessions, sweep orphan directories, and reconcile the
-    /// blueprint store against the seed directory. Must be awaited once before
-    /// serving so a reconnect resolves, stale `per_session` directories are
-    /// reclaimed, and seeded blueprints are present on the first request; `serve`
-    /// does this, and any embedded host that bypasses `serve` should too.
+    /// Rehydrate persisted sessions and sweep orphan directories. Await once
+    /// before serving so reconnects resolve and stale directories are reclaimed.
     pub async fn boot(&self) {
         self.inner.session_manager.boot().await;
         self.inner.session_manager.volume_registry().prepare();
-        if let Some(dir) = &self.inner.blueprint_seed_dir {
-            let resolver = EnvFileSecretResolver::new(self.secret_store().cloned());
-            seed_blueprints(
-                self.inner.blueprints.as_ref(),
-                &resolver,
-                dir,
-                self.inner.session_manager.volumes(),
-            )
-            .await;
-        }
     }
 
     /// Handle `serve` awaits for graceful shutdown; `POST /v1/shutdown` signals it.

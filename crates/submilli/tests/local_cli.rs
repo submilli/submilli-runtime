@@ -360,7 +360,7 @@ fn lint_accepts_declared_package_secret() {
     let file = home.path().join("blueprint.yaml");
     write_file(
         &file,
-        "name: x\nsecrets:\n  STRIPE_API_KEY: { env: STRIPE_API_KEY }\npackages:\n  - \"@acme/secrets\"\npermissions:\n  \"@acme/secrets\":\n    - capability: secrets.get\n      filter: name == \"STRIPE_API_KEY\"\n      action: allow\n",
+        "name: x\nsecrets:\n  STRIPE_API_KEY: { store: STRIPE_API_KEY }\npackages:\n  - \"@acme/secrets\"\npermissions:\n  \"@acme/secrets\":\n    - capability: secrets.get\n      filter: name == \"STRIPE_API_KEY\"\n      action: allow\n",
     );
 
     let out = run_with_home(
@@ -1064,7 +1064,6 @@ fn run_script(home: &std::path::Path, blueprint: &std::path::Path, source: &str)
             script.as_os_str(),
         ])
         .env("SUBMILLI_HOME", home)
-        .env("BILLING_API_KEY", "sk_test")
         .output()
         .expect("invoke submilli")
 }
@@ -1076,7 +1075,7 @@ fn declare_billing_secret(home: &std::path::Path, file: &std::path::Path) {
             os("secret"),
             os("add"),
             os("BILLING_API_KEY"),
-            os("--env"),
+            os("--store"),
             os("BILLING_API_KEY"),
             os("--blueprint"),
             file.as_os_str(),
@@ -1122,6 +1121,8 @@ fn add_package_adds_caller_rules_for_the_dependency_chain() {
     assert!(!blueprint.permissions.contains_key("main"), "{updated}");
 
     declare_billing_secret(home.path(), &file);
+    let put = secret_put(home.path(), "BILLING_API_KEY", "sk_test");
+    assert!(put.status.success(), "{}", stderr(&put));
     let lint = run_with_home(
         &[os("blueprint"), os("lint"), file.as_os_str()],
         home.path(),
@@ -1426,7 +1427,7 @@ fn lint_checks_and_fixes_a_dependencys_rules() {
     let file = home.path().join("blueprint.yaml");
     write_file(
         &file,
-        "name: x\ndefault: deny\nsecrets:\n  BILLING_API_KEY:\n    env: BILLING_API_KEY\npackages:\n  - \"@acme/support\"\npermissions:\n  \"@acme/support\":\n    - capability: acme.com/credits.apply\n      action: allow\n",
+        "name: x\ndefault: deny\nsecrets:\n  BILLING_API_KEY:\n    store: BILLING_API_KEY\npackages:\n  - \"@acme/support\"\npermissions:\n  \"@acme/support\":\n    - capability: acme.com/credits.apply\n      action: allow\n",
     );
 
     let out = run_with_home(
@@ -2124,5 +2125,59 @@ fn deep_reentry_under_a_raised_stack_ends_the_run_cleanly() {
         stderr(&out).contains("call stack exhausted"),
         "stderr: {}",
         stderr(&out)
+    );
+}
+
+#[test]
+fn blueprint_secret_add_accepts_only_store_or_harness_sources() {
+    let home = tempfile::tempdir().unwrap();
+    let blueprint = home.path().join("blueprint.yaml");
+    let original = "name: secret-sources\n";
+    fs::write(&blueprint, original).unwrap();
+    for args in [
+        vec!["--env", "KEY"],
+        vec!["--file", "key.txt"],
+        vec![],
+        vec!["--store", "key", "--harness"],
+    ] {
+        let mut command = vec![
+            os("blueprint"),
+            os("secret"),
+            os("add"),
+            os("TOKEN"),
+            os("--blueprint"),
+            blueprint.as_os_str(),
+        ];
+        command.extend(args.iter().map(|arg| os(arg)));
+        let out = run_with_home(&command, home.path());
+        assert!(!out.status.success(), "accepted {args:?}");
+        assert_eq!(fs::read_to_string(&blueprint).unwrap(), original);
+    }
+    for (name, args) in [
+        ("STORED", vec!["--store", "key"]),
+        ("BOUND", vec!["--harness", "--required"]),
+    ] {
+        let mut command = vec![
+            os("blueprint"),
+            os("secret"),
+            os("add"),
+            os(name),
+            os("--blueprint"),
+            blueprint.as_os_str(),
+        ];
+        command.extend(args.iter().map(|arg| os(arg)));
+        let out = run_with_home(&command, home.path());
+        assert!(out.status.success(), "{}", stderr(&out));
+    }
+    let parsed = submilli_blueprint::parse(&fs::read_to_string(&blueprint).unwrap()).unwrap();
+    assert_eq!(
+        parsed.secrets["STORED"],
+        submilli_blueprint::SecretSource::Store("key".into())
+    );
+    assert_eq!(
+        parsed.secrets["BOUND"],
+        submilli_blueprint::SecretSource::Harness(submilli_blueprint::HarnessSecret {
+            required: true
+        })
     );
 }

@@ -52,7 +52,7 @@ Every top-level key, all optional except `name`:
 | `name` | Registered name; the REST `blueprint` field and the MCP path `/mcp/<name>` |
 | `variables` | Session variables. Each has `required: true` or `default: "value"`, never both. Referenced as `${vars.NAME}` in filters |
 | `packages` | Packages the program may import. Unlisted packages do not exist for it |
-| `secrets` | Declared secret names and sources: `{ env: VAR }`, `{ file: /path }`, `{ store: key }`, or `{ harness: { required: true } }` for a value the trusted application binds per session. A server accepts only `store` and `harness` sources in a blueprint registered over its API (see Workflow) |
+| `secrets` | Declared secret names and sources: `{ store: key }` or `{ harness: { required: true } }` for a value the trusted application binds per session. |
 | `allow_insecure_http` | Defaults to `false`: script HTTP (including packages/downloads) requires HTTPS. Does not govern MCP/LLM connections or inbound server HTTP |
 | `auth_proxy` | Host-keyed credential injection for direct HTTP: `host`, optional `allow_insecure_http: true` (also requires the blueprint flag), then `auth: { bearer: X }`, `auth: { basic: { username, password } }`, `headers`, or `query` |
 | `default` | Fall-through action: `deny` (the default and the norm), `allow`, or `ask-human` |
@@ -149,7 +149,7 @@ variables:
 
 secrets:
   ORDERS_API_TOKEN:
-    env: ORDERS_API_TOKEN
+    store: ORDERS_API_TOKEN
 
 packages:
   - '@acme/orders'
@@ -379,11 +379,8 @@ packages are installed; the first program that imports a missing one fails.
 The server and the `submilli server` commands share one token,
 `SUBMILLI_SERVER_TOKEN`; see [setup](setup.md).
 
-`apply` rejects a blueprint whose secrets use `env:` or `file:` with "not
-allowed for a blueprint registered over the API": those sources would let an
-API caller read the server's environment or filesystem. They work only for local runs (`submilli run --blueprint`). For a
-server, declare the secret with `--store` and provision the value into the
-server's secret store, or use a `harness` source bound per session:
+Declare a secret with `--store` and provision its value into the server's
+secret store, or use a `harness` source bound per session:
 
 ```sh
 submilli blueprint secret add ORDERS_API_TOKEN --store ORDERS_API_TOKEN

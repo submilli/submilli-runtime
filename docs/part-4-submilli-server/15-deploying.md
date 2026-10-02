@@ -38,11 +38,10 @@ open sessions, installed packages, and secrets all live under
 explains what losing each one costs. On a machine that's a directory; in a
 container it has to be a volume, or it's gone at the next deploy.
 
-**Blueprints and secrets arrive without manual steps.** Keep blueprints in
-source control and let the server load them at startup from a [seed
-directory](/docs/server#register-blueprints). Keep secret values out
-of source control and out of anywhere they'd be printed, such as command
-lines and environment dumps.
+**Provision secrets and apply blueprints through the CLI.** Keep blueprints in
+source control and apply them from your deploy job with an admin token. Put
+secret values into the server's store before applying blueprints that reference
+them. Keep values out of source control and command-line arguments.
 
 ## On one machine
 
@@ -59,7 +58,6 @@ state somewhere durable:
 
 ```yaml title="/etc/submilli/server.yaml"
 bind: 127.0.0.1
-blueprint_seed_dir: /etc/submilli/blueprints
 secret_store:
   key_file: /etc/submilli/store.key
 ```
@@ -149,29 +147,13 @@ requests time out.
 
 ### Blueprints and packages
 
-Keep blueprints in a directory next to `compose.yaml` and mount it as the
-seed directory, so every start loads them:
-
-```yaml title="compose.override.yaml"
-services:
-  submilli:
-    volumes:
-      - ./blueprints:/etc/submilli/blueprints:ro
-    environment:
-      SUBMILLI_BLUEPRINT_SEED_DIR: /etc/submilli/blueprints
-```
+Apply blueprints from the host after provisioning their store secrets:
 
 ```sh
-docker compose up -d
-docker compose logs submilli | grep 'seed reconcile'
+submilli server blueprint apply ./blueprints/billing.yaml
 ```
 
-```text
-submilli-1  | … INFO submilli_server::blueprint_seed: blueprint seed reconcile complete dir=/etc/submilli/blueprints seeded=1 skipped=0 failed=0 unresolved_secrets=0
-```
-
-Compose reads `compose.override.yaml` automatically, so the shipped file
-stays untouched.
+Use an admin token for these deployment commands.
 
 Packages install over the published port, from the host, with the same
 command as on a laptop. The server fetches and builds them itself:
@@ -372,70 +354,42 @@ The policy has three limits worth knowing:
 
 ### Blueprints and secrets
 
-Blueprints go in your values file. The chart puts them in a ConfigMap,
-mounts it as the seed directory, and the server loads them on every pod
-start:
+The chart enables the encrypted secret store by default and generates its
+encryption-key Secret when no existing Secret is configured. Helm reuses the
+key on upgrades and retains it on uninstall. Back up this Secret along with
+the persistent volume.
 
-```yaml title="values.yaml"
-blueprints:
-  billing: |
-    name: billing
-    default: deny
-    secrets:
-      STRIPE_KEY: { file: /etc/submilli/secrets/stripe/api-key }
-    permissions:
-      main:
-        - capability: http.post
-          action: allow
-          filter: host == "api.stripe.com"
-
-secrets:
-  stripe:
-    secretName: stripe-credentials
-    key: api-key
-```
-
-Secret values stay in ordinary Kubernetes Secrets. The `secrets:` map mounts
-each one at `/etc/submilli/secrets/<name>/<key>`, and the blueprint reads it
-from that path with a `file:` source. Only blueprints from the values file
-may do that; a blueprint registered over the API can't read files. Never put
-secret values in `values.yaml` itself: Helm stores them in plain text and
-prints them in `helm get values`.
-
-The two maps have to agree on the path, and the server won't stop you if
-they don't. It registers the blueprint anyway, logs a warning, and counts it
-in `unresolved_secrets=1` on the reconcile line; the first program that needs
-the secret fails. `helm test` catches it before that:
-
-```text
-FAIL: a blueprint declares a secret at /etc/submilli/secrets/stripe/apikey, but the chart does not mount anything there. Paths the chart mounts: /etc/submilli/secrets/stripe/api-key
-```
-
-Run `helm test submilli` after every install and upgrade. It registers a
-small blueprint of its own, `submilli-helmtest-exec`, to run a program
-through the server, so expect to see it in `submilli server blueprint list`.
-
-The server's own encrypted secret store is off in the chart. Its encryption
-protects the volume only if the key lives somewhere the volume doesn't, and
-a Kubernetes Secret in the same namespace usually doesn't qualify. Turn it on
-(`secretStore.enabled`) when the key comes from a KMS or a CSI secrets
-driver.
-
-To install packages from private repositories, put [a GitHub
-token](/docs/cli#install-a-package) that can read them in a Secret and name it
-in `githubToken`:
+Users put application secrets into the store through the CLI, then register
+blueprints from source control. Connect the CLI with an admin token:
 
 ```sh
-kubectl create secret generic submilli-github --from-file=token=./github-token
+printf '%s' "$STRIPE_KEY" | submilli server secret put stripe-key
+submilli server blueprint apply ./blueprints/billing.yaml
 ```
 
-```yaml title="values.yaml"
-githubToken:
-  existingSecret: submilli-github
+```yaml title="blueprints/billing.yaml"
+name: billing
+default: deny
+secrets:
+  STRIPE_KEY: { store: stripe-key }
+permissions:
+  main:
+    - capability: http.post
+      action: allow
+      filter: host == "api.stripe.com"
 ```
 
-The chart mounts it and sets `github_token_file`. Updating the Secret rotates
-the token once the kubelet refreshes the mount; no restart is needed.
+Use `harness:` for credentials the application supplies per session. With
+multiple independent server replicas, provision and apply to each server
+through its headless-service address.
+
+For GitOps or offline Helm rendering, set `secretStore.existingSecret` to a
+Secret you provision separately; the renderer cannot look up a generated key.
+Its `secretStore.key` entry (default `key`) must hold base64 text encoding a
+32-byte encryption key. Set `secretStore.enabled: false` to disable the store.
+
+Run `helm test submilli` after each install and upgrade. It registers a probe
+blueprint through the API, executes a program, and removes the blueprint on exit.
 
 ### Calling your internal services
 
@@ -524,8 +478,8 @@ the same volume. The same command applies changes to your values file. To back u
   it](/docs/server#who-can-reach-it).
 - `$SUBMILLI_HOME` is on storage that survives a redeploy, and it's backed
   up.
-- Blueprints come from source control through the seed directory, and the
-  startup log shows `failed=0`.
+- Secrets are provisioned and blueprints are applied from source control through
+  the CLI; each command completes successfully.
 - The secret store's key, if you use one, is stored and backed up separately
   from the volume.
 - The server's limits suit your workload, with `max_execution_time` set.
