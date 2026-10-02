@@ -124,10 +124,8 @@ fn run_rules(
     if source == Source::Script {
         // Inference reports a package that declares `main`.
         main_required::run(ta, diags);
-        // First-party packages leave parameters and results undocumented, so
-        // packages are not held to this yet.
-        doc_consistency::run(ta, diags);
     }
+    doc_consistency::run(ta, diags);
     capability_consistency::run(ta, declarations, diags)
 }
 

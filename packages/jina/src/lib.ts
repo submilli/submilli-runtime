@@ -92,6 +92,9 @@ export interface SearchResult {
 
 /**
  * Read a URL through the Reader, returning Jina's LLM-friendly markdown.
+ * @param url Absolute URL of the page to read.
+ * @param options Optional Reader settings; `null` uses Jina's defaults.
+ * @returns The page content as markdown text.
  * @capability jina.ai/read { host: string }
  */
 export function read(url: string, options: ReaderOptions | null = null): string {
@@ -120,6 +123,9 @@ export function read(url: string, options: ReaderOptions | null = null): string 
  * Read a URL through the Reader, returning the structured JSON envelope. Jina's
  * arbitrary-key `links`/`images` maps are not representable here; use `read`
  * with `withLinksSummary`/`withImagesSummary` to get them appended to the text.
+ * @param url Absolute URL of the page to read.
+ * @param options Optional Reader settings; `null` uses Jina's defaults.
+ * @returns The page title, description, resolved URL, markdown content and billed token count.
  * @capability jina.ai/read { host: string }
  */
 export function readJson(url: string, options: ReaderOptions | null = null): ReaderResult {
@@ -147,6 +153,9 @@ export function readJson(url: string, options: ReaderOptions | null = null): Rea
 
 /**
  * Search the web, returning the top results concatenated as markdown.
+ * @param query Search query text.
+ * @param options Optional search settings; `null` uses Jina's defaults.
+ * @returns The top results concatenated as markdown text.
  * @capability jina.ai/search {}
  */
 export function search(query: string, options: SearchOptions | null = null): string {
@@ -166,6 +175,9 @@ export function search(query: string, options: SearchOptions | null = null): str
 
 /**
  * Search the web, returning the top results as structured objects.
+ * @param query Search query text.
+ * @param options Optional search settings; `null` uses Jina's defaults.
+ * @returns One entry per search hit, in Jina's ranking order; empty when there are no hits.
  * @capability jina.ai/search {}
  */
 export function searchJson(query: string, options: SearchOptions | null = null): SearchResult[] {
@@ -191,6 +203,10 @@ export function searchJson(query: string, options: SearchOptions | null = null):
  * with the host's batched file-read to consume the result incrementally.
  * The file is written for the caller: its own `fs.write` rule decides whether `path` is allowed.
  * A response over 20 MB is refused.
+ * @param url Absolute URL of the page to read.
+ * @param path VFS path the markdown is written to.
+ * @param options Optional Reader settings; `null` uses Jina's defaults.
+ * @returns The download result for the file written to `path`.
  * @capability jina.ai/read { host: string }
  * @capability fs.write { path: string, max_bytes: number }
  */
@@ -229,6 +245,10 @@ export function downloadRead(
  * Search the web and stream the concatenated markdown results straight to a VFS
  * file, JSON-free (see `downloadRead`). Prefer this over `search` when the result
  * set is large.
+ * @param query Search query text.
+ * @param path VFS path the markdown results are written to.
+ * @param options Optional search settings; `null` uses Jina's defaults.
+ * @returns The download result for the file written to `path`.
  * @capability jina.ai/search {}
  * @capability fs.write { path: string, max_bytes: number }
  */
@@ -261,6 +281,8 @@ export function downloadSearch(
  *
  * Each option is read from `options` exactly once, into a local, and the
  * headers are encoded from those locals by `readerHeadersFrom`.
+ * @param options Reader options to encode; `null` yields no headers.
+ * @returns Map of `x-*` request header names to values; only options that are set appear.
  */
 export function readerHeaders(options: ReaderOptions | null = null): Map<string, string> {
     if (options === null) return new Map<string, string>();
@@ -283,7 +305,11 @@ export function readerHeaders(options: ReaderOptions | null = null): Map<string,
     });
 }
 
-/** Encode search options as request headers. Pure, as with `readerHeaders`. */
+/**
+ * Encode search options as request headers. Pure, as with `readerHeaders`.
+ * @param options Search options to encode; `null` yields no headers.
+ * @returns Map of `x-*` request header names to values; only options that are set appear.
+ */
 export function searchHeaders(options: SearchOptions | null = null): Map<string, string> {
     if (options === null) return new Map<string, string>();
     const site = options.site;

@@ -31,6 +31,8 @@ export class Failure extends Error {}
 
 /**
  * Sends the message.
+ * @param channelId Conversation to post in.
+ * @param failure The failure.
  * @capability test.com/send { channelId: string, reason: string }
  */
 export function send(channelId: string, failure: Failure): void {

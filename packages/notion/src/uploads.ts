@@ -34,7 +34,13 @@ export {
     PageResult,
 } from "./types";
 
-/** Upload a VFS file, automatically selecting Notion single- or multipart mode. */
+/**
+ * Upload a VFS file, automatically selecting Notion single- or multipart mode.
+ *
+ * @param sourcePath Path of a file in the virtual filesystem; files over 20 MiB use a multipart upload.
+ * @param options Filename, content type, and optional multipart chunk size.
+ * @returns The completed file upload, whose ID can be attached to pages, blocks, or comments.
+ */
 export function uploadFile(sourcePath: string, options: FileUploadOptions): FileUpload {
     validateUploadOptions(options);
     const source = stat(sourcePath);
@@ -45,12 +51,23 @@ export function uploadFile(sourcePath: string, options: FileUploadOptions): File
     return uploadMultiPart(sourcePath, source.size, options);
 }
 
-/** Retrieve one of this connection's file uploads by its resolved ID. */
+/**
+ * Retrieve one of this connection's file uploads by its resolved ID.
+ *
+ * @param uploadId Resolved ID of the file upload.
+ * @returns The file upload with its current status.
+ */
 export function getFileUpload(uploadId: string): FileUpload {
     return fileUploadFrom(notionGet("/file_uploads/" + pathId(uploadId)).json());
 }
 
-/** List file uploads owned by this connection. */
+/**
+ * List file uploads owned by this connection.
+ *
+ * @param requestedSize Uploads per page, 1 to 100; `null` uses 100.
+ * @param startCursor Cursor from a previous page's `nextCursor`; `null` starts at the first upload.
+ * @returns One page of file uploads.
+ */
 export function listFileUploads(requestedSize: number | null, startCursor: string | null): PageResult<FileUpload> {
     const query = new Map<string, string>();
     putQuery(query, "start_cursor", startCursor);

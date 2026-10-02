@@ -27,6 +27,9 @@ function post(channelId: string, text: string): void {}
 
 /**
  * Sends the message.
+ * @param channelId Conversation to post in.
+ * @param options Delivery settings.
+ * @param payload Payload to send.
  * @capability test.com/send { channelId: string }
  */
 export function send(channelId: string, options: Options | null, payload: unknown): void {

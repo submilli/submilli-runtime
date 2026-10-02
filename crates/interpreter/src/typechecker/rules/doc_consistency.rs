@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use crate::{
     Diagnostic, DocComment, Ident, Severity, Span, Type, TypedAst, TypedInterfaceMember,
@@ -68,12 +68,14 @@ fn validate_callable(
 ) {
     let mut by_name: BTreeMap<&str, (usize, &Ident)> = BTreeMap::new();
     for (i, p) in params.iter().enumerate() {
-        by_name.insert(p.name.name.as_str(), (i, &p.name));
+        if !is_destructured(p) {
+            by_name.insert(p.name.name.as_str(), (i, &p.name));
+        }
     }
 
     let mut seen: BTreeMap<&str, &crate::DocParam> = BTreeMap::new();
     let mut doc_indices: Vec<(usize, &crate::DocParam)> = Vec::new();
-    for dp in &doc.params {
+    for (tag_index, dp) in doc.params.iter().enumerate() {
         if let Some(prev) = seen.get(dp.name.as_str()) {
             diags.push(Diagnostic {
                 severity: Severity::Warning,
@@ -87,6 +89,11 @@ fn validate_callable(
         seen.insert(dp.name.as_str(), dp);
         match by_name.get(dp.name.as_str()) {
             Some((idx, _)) => doc_indices.push((*idx, dp)),
+            // A destructured parameter has no name to document, so, as in
+            // TypeScript, the n-th `@param` documents the n-th parameter.
+            None if params.get(tag_index).is_some_and(is_destructured) => {
+                doc_indices.push((tag_index, dp));
+            }
             None => diags.push(warning(
                 dp.name_span,
                 format!(
@@ -111,16 +118,29 @@ fn validate_callable(
         }
     }
 
-    for p in params {
-        if !seen.contains_key(p.name.name.as_str()) {
-            diags.push(warning(
-                p.name.span,
-                format!(
-                    "{} `{}` is undocumented (missing `@param {}`)",
-                    param_label, p.name.name, p.name.name
-                ),
-            ));
-        }
+    let documented_positions: BTreeSet<usize> = doc_indices.iter().map(|(idx, _)| *idx).collect();
+    for (idx, p) in params.iter().enumerate() {
+        let message = if is_destructured(p) {
+            if documented_positions.contains(&idx) {
+                continue;
+            }
+            format!(
+                "destructured {} {} is undocumented (add a `@param` in its position)",
+                param_label,
+                idx + 1
+            )
+        } else {
+            // Matched by name, so a repeated parameter name (itself an error)
+            // is not also reported as undocumented.
+            if seen.contains_key(p.name.name.as_str()) {
+                continue;
+            }
+            format!(
+                "{} `{}` is undocumented (missing `@param {}`)",
+                param_label, p.name.name, p.name.name
+            )
+        };
+        diags.push(warning(p.name.span, message));
     }
 
     let is_void = return_type.is_void();
@@ -143,6 +163,10 @@ fn validate_callable(
             format!("unknown JSDoc tag `@{}`", u.name),
         ));
     }
+}
+
+fn is_destructured(param: &TypedParam) -> bool {
+    crate::lower_patterns::is_pattern_param(&param.name.name)
 }
 
 fn validate_property(doc: &DocComment, name_span: Span, diags: &mut Vec<Diagnostic>) {
@@ -261,6 +285,90 @@ mod tests {
                 .iter()
                 .any(|d| d.message.contains("`a` is undocumented"))
         );
+    }
+
+    #[test]
+    fn param_in_position_documents_destructured_param() {
+        let mut diags = Vec::new();
+        let doc = make_doc(&["a", "options"], true);
+        let params = vec![param("a"), param("#pattern_p_0")];
+        validate_callable(
+            &doc,
+            span(),
+            &params,
+            &Type::Number,
+            "parameter",
+            &mut diags,
+        );
+        assert!(diags.is_empty(), "{diags:?}");
+    }
+
+    #[test]
+    fn undocumented_destructured_param_warns_by_position() {
+        let mut diags = Vec::new();
+        let doc = make_doc(&["a"], true);
+        let params = vec![param("a"), param("#pattern_p_0")];
+        validate_callable(
+            &doc,
+            span(),
+            &params,
+            &Type::Number,
+            "parameter",
+            &mut diags,
+        );
+        let messages: Vec<_> = diags.iter().map(|d| d.message.as_str()).collect();
+        assert_eq!(
+            messages,
+            ["destructured parameter 2 is undocumented (add a `@param` in its position)"]
+        );
+    }
+
+    #[test]
+    fn param_in_position_documents_unlowered_destructured_param() {
+        let mut diags = Vec::new();
+        let doc = make_doc(&["options"], true);
+        validate_callable(
+            &doc,
+            span(),
+            &[param("")],
+            &Type::Number,
+            "method parameter",
+            &mut diags,
+        );
+        assert!(diags.is_empty(), "{diags:?}");
+    }
+
+    #[test]
+    fn duplicate_tag_counts_toward_destructured_position() {
+        let mut diags = Vec::new();
+        let doc = make_doc(&["a", "a", "options"], true);
+        let params = vec![param("a"), param("#pattern_p_0")];
+        validate_callable(
+            &doc,
+            span(),
+            &params,
+            &Type::Number,
+            "parameter",
+            &mut diags,
+        );
+        let messages: Vec<_> = diags.iter().map(|d| d.message.as_str()).collect();
+        assert_eq!(
+            messages,
+            [
+                "duplicate `@param a`",
+                "`@param options` does not match any parameter of this function",
+                "destructured parameter 2 is undocumented (add a `@param` in its position)",
+            ]
+        );
+    }
+
+    #[test]
+    fn repeated_param_name_is_documented_once_for_both() {
+        let mut diags = Vec::new();
+        let doc = make_doc(&["a"], false);
+        let params = vec![param("a"), param("a")];
+        validate_callable(&doc, span(), &params, &Type::Void, "parameter", &mut diags);
+        assert!(diags.is_empty(), "{diags:?}");
     }
 
     #[test]

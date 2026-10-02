@@ -29,6 +29,7 @@ function post(channelId: string, text: string): void {}
 
 /**
  * Sends the message.
+ * @param input Message and where to send it.
  * @capability test.com/send { channelId: string }
  */
 export function send(input: Input): void {
@@ -37,6 +38,7 @@ export function send(input: Input): void {
 
 /**
  * Labels the conversation.
+ * @param tags Labels to attach.
  * @capability test.com/label { tags }
  */
 export function label(tags: string[]): void {

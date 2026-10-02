@@ -4,6 +4,7 @@ import { check } from "submilli:security";
 
 /**
  * Runs the operation.
+ * @param id Operation target.
  * @capability test.com/op { id, extra: boolean }
  */
 export function run(id: string): void {

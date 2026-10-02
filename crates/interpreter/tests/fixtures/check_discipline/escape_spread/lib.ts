@@ -33,6 +33,7 @@ function join(tags: string[]): void {}
 
 /**
  * Applies delivery settings.
+ * @param shape The shape.
  * @capability test.com/configure { unfurl: boolean }
  */
 export function configure(shape: { unfurl: boolean }): void {
@@ -43,6 +44,7 @@ export function configure(shape: { unfurl: boolean }): void {
 
 /**
  * Attaches labels.
+ * @param tags Labels to attach.
  * @capability test.com/label { count: number }
  */
 export function label(tags: string[]): void {

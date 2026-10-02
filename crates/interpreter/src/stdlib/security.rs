@@ -244,7 +244,11 @@ mod tests {
             &[(
                 "lib",
                 r#"
-                /** Pass-through JSON encoder. */
+                /**
+                 * Pass-through JSON encoder.
+                 * @param value Value to encode.
+                 * @returns `value` as JSON.
+                 */
                 export function passthrough(value: unknown): string {
                     return JSON.stringify(value);
                 }
@@ -486,6 +490,7 @@ mod tests {
 
                 /**
                  * Gates an operation on behalf of whoever called it.
+                 * @param foo Value the capability filter matches.
                  * @capability test.com/op { foo }
                  */
                 export function guarded(foo: number): void {
@@ -502,7 +507,10 @@ mod tests {
                 r#"
                 import { guarded } from "test:inner";
 
-                /** Calls the inner package, standing between it and the script. */
+                /**
+                 * Calls the inner package, standing between it and the script.
+                 * @param foo Value passed to the inner package.
+                 */
                 export function relay(foo: number): void {
                     guarded(foo);
                 }

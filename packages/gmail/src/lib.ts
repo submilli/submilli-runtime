@@ -362,6 +362,7 @@ interface GoogleErrorDetail {
 
 /**
  * Return the authenticated Gmail profile.
+ * @returns The account's email address, message and thread totals, and current history ID.
  * @capability submilli/gmail.getProfile {}
  */
 export function getProfile(): Profile {
@@ -377,6 +378,9 @@ export function getProfile(): Profile {
 
 /**
  * Search Gmail threads using Gmail's query syntax.
+ * @param query Gmail search query, such as `from:dana@example.com is:unread newer_than:7d`.
+ * @param options Optional page size (1-100, default 20), continuation token, and spam/trash inclusion; `null` uses the defaults.
+ * @returns One page of lightweight thread results (ID, snippet, history ID) matching the query; `items` is empty when nothing matches and `nextPageToken` is empty on the last page.
  * @capability submilli/gmail.searchThreads {}
  */
 export function searchThreads(query: string, options: SearchOptions | null = null): Page<ThreadRef> {
@@ -401,6 +405,8 @@ export function searchThreads(query: string, options: SearchOptions | null = nul
 
 /**
  * Return a bounded page of unread inbox threads.
+ * @param options Optional page size (1-50, default 20) and continuation token; `null` uses the defaults.
+ * @returns One page of unread inbox threads (lightweight references) and a `nextPageToken` that is empty on the last page.
  * @capability submilli/gmail.triage {}
  */
 export function triage(options: PageOptions | null = null): TriageResult {
@@ -415,6 +421,8 @@ export function triage(options: PageOptions | null = null): TriageResult {
 
 /**
  * Fetch and normalize one Gmail thread, returning null when absent.
+ * @param threadId Gmail thread ID, such as the `id` of a `ThreadRef`.
+ * @returns The thread with all its messages normalized, or `null` when the thread does not exist.
  * @capability submilli/gmail.getThread {}
  */
 export function getThread(threadId: string): Thread | null {
@@ -427,6 +435,8 @@ export function getThread(threadId: string): Thread | null {
 
 /**
  * Fetch and normalize one Gmail message, returning null when absent.
+ * @param messageId Gmail message ID, such as the `id` of a message in a `Thread`.
+ * @returns The message with decoded headers, bodies, and attachment metadata, or `null` when the message does not exist.
  * @capability submilli/gmail.getMessage {}
  */
 export function getMessage(messageId: string): Message | null {
@@ -436,6 +446,8 @@ export function getMessage(messageId: string): Message | null {
 
 /**
  * List one page of drafts.
+ * @param page Optional page size (1-100, default 20) and continuation token; `null` uses the defaults.
+ * @returns One page of drafts with their draft, message and thread IDs but no message content (use `getDraft` for that); `items` is empty when there are no drafts and `nextPageToken` is empty on the last page.
  * @capability submilli/gmail.listDrafts {}
  */
 export function listDrafts(page: PageOptions | null = null): Page<Draft> {
@@ -454,6 +466,8 @@ export function listDrafts(page: PageOptions | null = null): Page<Draft> {
 
 /**
  * Fetch one draft, returning null when absent.
+ * @param draftId Draft ID, such as the `id` of a `Draft`.
+ * @returns The draft with its message content, or `null` when the draft does not exist.
  * @capability submilli/gmail.getDraft {}
  */
 export function getDraft(draftId: string): Draft | null {
@@ -465,6 +479,8 @@ export function getDraft(draftId: string): Draft | null {
 
 /**
  * Create a draft from structured headers, bodies, and VFS attachments.
+ * @param input Recipients, subject, bodies, and optional cc, bcc, sender, and VFS attachments for the draft.
+ * @returns The stored draft, including its `id` for `sendDraft` or `deleteDraft`.
  * @capability submilli/gmail.createDraft { recipients: string[], from: string }
  */
 export function createDraft(input: EmailInput): Draft {
@@ -503,6 +519,8 @@ export function createDraft(input: EmailInput): Draft {
 
 /**
  * Create a draft reply after resolving recipients and threading headers.
+ * @param input The message being replied to, the reply body, and optional reply-all flag and VFS attachments.
+ * @returns The stored reply draft in the original message's thread, including its `id`.
  * @capability submilli/gmail.createReplyDraft { recipients: string[] }
  */
 export function createReplyDraft(input: ReplyInput): Draft {
@@ -525,6 +543,7 @@ export function createReplyDraft(input: ReplyInput): Draft {
 
 /**
  * Permanently delete a draft. Missing drafts are treated as already deleted.
+ * @param draftId ID of the draft to delete.
  * @capability submilli/gmail.deleteDraft {}
  */
 export function deleteDraft(draftId: string): void {
@@ -535,6 +554,8 @@ export function deleteDraft(draftId: string): void {
 
 /**
  * Send a new email.
+ * @param input Recipients, subject, bodies, and optional cc, bcc, sender, and VFS attachments for the email.
+ * @returns The sent message as stored by Gmail, including its `id` and `threadId`.
  * @capability submilli/gmail.sendEmail { recipients: string[], from: string }
  */
 export function sendEmail(input: EmailInput): Message {
@@ -571,6 +592,8 @@ export function sendEmail(input: EmailInput): Message {
 
 /**
  * Reply to a message after resolving reply or reply-all recipients.
+ * @param input The message being replied to, the reply body, and optional reply-all flag and VFS attachments.
+ * @returns The sent reply as stored by Gmail, in the original message's thread.
  * @capability submilli/gmail.reply { recipients: string[] }
  */
 export function reply(input: ReplyInput): Message {
@@ -591,6 +614,8 @@ export function reply(input: ReplyInput): Message {
 
 /**
  * Send an existing draft. The draft is read first, so the check covers every address in its To, Cc and Bcc headers.
+ * @param draftId ID of the draft to send.
+ * @returns The sent message as stored by Gmail; throws `GmailError` `not_found` when the draft does not exist.
  * @capability submilli/gmail.sendDraft { recipients: string[] }
  */
 export function sendDraft(draftId: string): Message {
@@ -605,6 +630,7 @@ export function sendDraft(draftId: string): Message {
 
 /**
  * List Gmail system and user labels.
+ * @returns Every label in the mailbox, system labels such as `INBOX` and user labels; use their `id` in `LabelChanges`.
  * @capability submilli/gmail.listLabels {}
  */
 export function listLabels(): Label[] {
@@ -617,6 +643,8 @@ export function listLabels(): Label[] {
 
 /**
  * Create a visible user label.
+ * @param name Display name for the new label.
+ * @returns The created label, including its `id` for use in `LabelChanges`.
  * @capability submilli/gmail.createLabel { name: string }
  */
 export function createLabel(name: string): Label {
@@ -633,6 +661,9 @@ export function createLabel(name: string): Label {
 
 /**
  * Add and remove labels from every message in a thread.
+ * @param threadId ID of the thread whose messages are modified.
+ * @param changes Label IDs to add and remove; `null` fields add or remove nothing.
+ * @returns The thread with its messages after the label change.
  * @capability submilli/gmail.modifyThreadLabels {}
  */
 export function modifyThreadLabels(threadId: string, changes: LabelChanges): Thread {
@@ -658,6 +689,9 @@ export function modifyThreadLabels(threadId: string, changes: LabelChanges): Thr
 
 /**
  * Add and remove labels from one message.
+ * @param messageId ID of the message to modify.
+ * @param changes Label IDs to add and remove; `null` fields add or remove nothing.
+ * @returns The message after the label change.
  * @capability submilli/gmail.modifyMessageLabels {}
  */
 export function modifyMessageLabels(messageId: string, changes: LabelChanges): Message {
@@ -683,6 +717,9 @@ export function modifyMessageLabels(messageId: string, changes: LabelChanges): M
 
 /**
  * Decode one Gmail attachment into the VFS.
+ * @param messageId ID of the message containing the attachment.
+ * @param attachmentId Attachment body ID from `Attachment.attachmentId`.
+ * @param path Destination path in the session VFS, written with the decoded bytes.
  * @capability submilli/gmail.downloadAttachment { path: string }
  */
 export function downloadAttachment(messageId: string, attachmentId: string, path: string): void {
@@ -698,6 +735,9 @@ export function downloadAttachment(messageId: string, attachmentId: string, path
  * this package returns are already decoded and are not suitable input: decoding can turn a display
  * name into address syntax, which would then be read as a recipient. Throws `GmailError`
  * `invalid_recipient` when an address header does not resolve to bare addresses.
+ * @param headers Original message headers with raw (undecoded) values, as Gmail returns them.
+ * @param replyAll When true, also addresses the original To and Cc recipients, not only the sender.
+ * @returns The bare To and Cc addresses of the reply, deduplicated across both lists.
  */
 export function replyRecipients(headers: Header[], replyAll: boolean): ReplyRecipients {
     const replyTo = headerAddresses(headers, "Reply-To");
@@ -718,6 +758,8 @@ export function replyRecipients(headers: Header[], replyAll: boolean): ReplyReci
  * this package returns are already decoded and are not suitable input: decoding can turn a display
  * name into address syntax, which would then be read as a recipient. Throws `GmailError`
  * `invalid_recipient` when one of those headers does not resolve to bare addresses.
+ * @param headers Draft headers with raw (undecoded) values, as Gmail returns them.
+ * @returns The bare To, Cc, and Bcc addresses, deduplicated, in that order; empty when the headers name no recipients.
  */
 export function draftRecipients(headers: Header[]): string[] {
     const seen = new Set<string>();
