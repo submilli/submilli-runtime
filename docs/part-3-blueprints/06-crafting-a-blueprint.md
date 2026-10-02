@@ -431,8 +431,9 @@ submilli blueprint lint blueprint.yaml
 ```
 
 `lint` parses the file and checks it against the packages installed locally: a
-package that needs an operation its own list doesn't allow, or a secret a
-package reads that `secrets` doesn't declare. `lint --fix` adds the rules a
+package that needs an operation its own list doesn't allow, a secret a
+package reads that `secrets` doesn't declare, or a filter on a field the
+operation doesn't report. `lint --fix` adds the rules a
 package needs for its own calls. A misspelled capability name is a rule that
 never matches, and `lint` doesn't catch it; `capability add` refuses a name it
 doesn't know.

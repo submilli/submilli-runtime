@@ -89,13 +89,13 @@ submilli blueprint capability list submilli:fs
 ```text
 submilli:fs
   fs.read — Read files and code workspace content (including search and ignore rules)
-      fields: path: string
+      fields: path: string, length: number, chunkSize: number, recursive: boolean
       example filter: path glob "*.csv"
   fs.write — Create, write, append, or apply code edits to files
-      fields: path: string
+      fields: path: string, length: number, max_bytes: number, diff: string
       example filter: path glob "/out/*"
   fs.stat — Inspect metadata (including code workspace discovery)
-      fields: path: string
+      fields: path: string, recursive: boolean
       example filter: path glob "/data/*"
   fs.list — List directory entries (including code search, glob and tree)
       fields: path: string, recursive: boolean
@@ -132,13 +132,13 @@ submilli blueprint capability add fs.stat
   filter fields: path: string, recursive: boolean
 ✓ added allow fs.write (filter: path glob "/notes/*") to caller 'main' in blueprint.yaml
   Create, write, append, or apply code edits to files
-  filter fields: path: string
+  filter fields: path: string, length: number, max_bytes: number, diff: string
 ✓ added allow fs.read (filter: path glob "/notes/*") to caller 'main' in blueprint.yaml
   Read files and code workspace content (including search and ignore rules)
-  filter fields: path: string
+  filter fields: path: string, length: number, chunkSize: number, recursive: boolean
 ✓ added allow fs.stat to caller 'main' in blueprint.yaml
   Inspect metadata (including code workspace discovery)
-  filter fields: path: string
+  filter fields: path: string, recursive: boolean
 ```
 
 Paths are checked after `.` and `..` are resolved, so a write to

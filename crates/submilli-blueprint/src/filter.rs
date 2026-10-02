@@ -181,6 +181,26 @@ impl FilterExpr {
         out
     }
 
+    /// The context field each comparison tests, in source order (duplicates
+    /// included): the first segment of its path, so `order.total` yields
+    /// `order`. Boolean structure is ignored, as in [`Self::field_matches`].
+    pub fn top_level_fields(&self) -> Vec<&str> {
+        let mut out = Vec::new();
+        self.collect_top_level_fields(&mut out);
+        out
+    }
+
+    fn collect_top_level_fields<'a>(&'a self, out: &mut Vec<&'a str>) {
+        match self {
+            FilterExpr::Compare(c) => out.extend(c.path.first().map(String::as_str)),
+            FilterExpr::Not(inner) => inner.collect_top_level_fields(out),
+            FilterExpr::And(left, right) | FilterExpr::Or(left, right) => {
+                left.collect_top_level_fields(out);
+                right.collect_top_level_fields(out);
+            }
+        }
+    }
+
     fn collect_var_refs<'a>(&'a self, out: &mut Vec<&'a str>) {
         match self {
             FilterExpr::Compare(c) => match &c.operand {
@@ -1395,6 +1415,14 @@ mod tests {
         assert!(parse_filter("amount < 5)").is_err());
         assert!(parse_filter("host matches \"(\"").is_err()); // unbalanced regex group
         assert!(parse_filter("host == \"unterminated").is_err());
+    }
+
+    #[test]
+    fn top_level_fields_name_each_comparison_through_not_and_or() {
+        assert_eq!(
+            filter("a == 1 and not (b.c == \"x\" or a < 2)").top_level_fields(),
+            ["a", "b", "a"]
+        );
     }
 
     #[test]

@@ -178,16 +178,16 @@ submilli blueprint capability add fs.stat
   filter fields: path: string, branch: string
 ✓ added allow fs.read (filter: path == "/repo" or path glob "/repo/*") to caller 'main' in blueprint.yaml
   Read files and code workspace content (including search and ignore rules)
-  filter fields: path: string
+  filter fields: path: string, length: number, chunkSize: number, recursive: boolean
 ✓ added allow fs.list (filter: path == "/repo" or path glob "/repo/*") to caller 'main' in blueprint.yaml
   List directory entries (including code search, glob and tree)
   filter fields: path: string, recursive: boolean
 ✓ added allow fs.write (filter: path glob "/repo/*") to caller 'main' in blueprint.yaml
   Create, write, append, or apply code edits to files
-  filter fields: path: string
+  filter fields: path: string, length: number, max_bytes: number, diff: string
 ✓ added allow fs.stat to caller 'main' in blueprint.yaml
   Inspect metadata (including code workspace discovery)
-  filter fields: path: string
+  filter fields: path: string, recursive: boolean
 ```
 
 Each operation needs only its own rule: `git.clone` creates and fills

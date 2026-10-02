@@ -17,6 +17,7 @@ use submilli_build::PackageStore;
 
 use super::declared_packages;
 use super::file::{blueprint_path, has_capability_rule, load, write};
+use super::filter_fields::{reported_fields, unreported_field_problem, unreported_fields};
 
 #[derive(Subcommand)]
 pub enum CapabilityCmd {
@@ -421,8 +422,9 @@ fn add(args: &AddArgs) -> Result<String> {
         .transpose()?;
 
     refuse_if_never_grantable_to_main(&args.capability, &args.caller)?;
+    let packages = load_packages(&blueprint);
     if !args.force {
-        validate_name(&blueprint, &args.caller, &args.capability)?;
+        validate_name(&blueprint, &packages, &args.caller, &args.capability)?;
     }
 
     let action = Action::from(args.action);
@@ -490,6 +492,15 @@ fn add(args: &AddArgs) -> Result<String> {
             ));
         }
     }
+    let filter_warnings = filter_field_warnings(
+        &blueprint,
+        &packages,
+        &args.capability,
+        rule.filter.as_ref(),
+    );
+    for warning in filter_warnings {
+        message.push_str(&format!("\n  warning: {warning}"));
+    }
     match unreachable {
         Some(warning) => message.push_str(&format!("\n  warning: {warning}")),
         None if shadowed => message.push_str(&format!(
@@ -499,6 +510,33 @@ fn add(args: &AddArgs) -> Result<String> {
         None => {}
     }
     Ok(message)
+}
+
+/// One warning per field `filter` tests that `capability`'s check doesn't
+/// report, which lint reports as an error; or, when a package failed to load,
+/// one warning that the fields were not checked.
+fn filter_field_warnings(
+    blueprint: &Blueprint,
+    packages: &declared_packages::DeclaredPackages,
+    capability: &str,
+    filter: Option<&FilterExpr>,
+) -> Vec<String> {
+    let Some(filter) = filter else {
+        return Vec::new();
+    };
+    // As in lint: a package that failed to load may report more fields.
+    if !packages.errors.is_empty() {
+        return vec![
+            "the filter's fields were not checked, because a package failed to load".to_string(),
+        ];
+    }
+    let Some(reported) = reported_fields(blueprint, &packages.artifacts, capability) else {
+        return Vec::new();
+    };
+    unreported_fields(filter, &reported)
+        .into_iter()
+        .map(|field| format!("the filter {}", unreported_field_problem(field, &reported)))
+        .collect()
 }
 
 /// What inserting `rule` at index `position` leaves unable to match, if
@@ -589,14 +627,18 @@ fn refuse_if_never_grantable_to_main(capability: &str, caller: &str) -> Result<(
 /// package; for a package, also a package a declared one depends on. `--force`
 /// bypasses this — the policy engine itself matches names verbatim and doesn't
 /// care.
-fn validate_name(blueprint: &Blueprint, caller: &str, name: &str) -> Result<()> {
-    let packages = load_packages(blueprint);
-    let known = known_capabilities(blueprint, &packages, caller);
+fn validate_name(
+    blueprint: &Blueprint,
+    packages: &declared_packages::DeclaredPackages,
+    caller: &str,
+    name: &str,
+) -> Result<()> {
+    let known = known_capabilities(blueprint, packages, caller);
     if known.iter().any(|k| k == name) {
         return Ok(());
     }
-    if let Some(dependency) = dependency_providing(&packages, name) {
-        let callers = dependents_of(&packages, dependency)
+    if let Some(dependency) = dependency_providing(packages, name) {
+        let callers = dependents_of(packages, dependency)
             .into_iter()
             .map(|dependent| format!("`--caller {dependent}`"))
             .collect::<Vec<_>>()
@@ -966,6 +1008,42 @@ mod tests {
             "{message}"
         );
         assert_eq!(reload(&path).permissions["main"].len(), 2);
+    }
+
+    /// SUB-1283: the rule is added, as lint would still report it.
+    #[test]
+    fn a_filter_on_an_unreported_field_is_warned_about() {
+        let (_tmp, path) = temp_blueprint("name: t\n");
+        let mut args = add_args("fs.read", &path);
+        args.filter = Some("path glob \"/x/*\" and not (owner == \"ops\")".into());
+
+        let message = add(&args).unwrap();
+
+        assert!(
+            message.contains(
+                "warning: the filter tests `owner`, which the operation doesn't report, so a condition on it is false for every call, and true under `not`; its fields are: chunkSize, length, path, recursive"
+            ),
+            "{message}"
+        );
+        assert!(!message.contains("tests `path`"), "{message}");
+        assert_eq!(reload(&path).permissions["main"].len(), 1);
+    }
+
+    #[test]
+    fn filter_fields_are_not_judged_when_a_package_fails_to_load() {
+        let (_tmp, path) = temp_blueprint("name: t\npackages:\n  - '@sub1283/never-installed'\n");
+        let mut args = add_args("fs.read", &path);
+        args.filter = Some("owner == \"ops\"".into());
+
+        let message = add(&args).unwrap();
+
+        assert!(
+            message.contains(
+                "warning: the filter's fields were not checked, because a package failed to load"
+            ),
+            "{message}"
+        );
+        assert!(!message.contains("doesn't report"), "{message}");
     }
 
     /// The suggested `remove` edits the same caller and file as the `add`.
