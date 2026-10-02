@@ -18,7 +18,7 @@ repository = "https://github.com/submilli/submilli-runtime"
 publish = false
 
 [workspace.dependencies]
-wasmtime = { package = "submilli-wasm", version = "0.1.6", features = ["async"] }
+wasmtime = { package = "submilli-wasm", version = "0.1.7", features = ["async"] }
 wasm-encoder = "0.248"
 wasmparser = "0.248"
 wast = "248"
