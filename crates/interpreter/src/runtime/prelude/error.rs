@@ -50,14 +50,16 @@ const OWN_SLOT_BASE: u32 = 2;
 pub(crate) enum BuiltinErrorClass {
     Error,
     Range,
+    QuotaExceeded,
     Type,
     Syntax,
     PermissionDenied,
 }
 
 impl BuiltinErrorClass {
-    const SUBCLASSES: [Self; 4] = [
+    const SUBCLASSES: [Self; 5] = [
         Self::Range,
+        Self::QuotaExceeded,
         Self::Type,
         Self::Syntax,
         Self::PermissionDenied,
@@ -67,6 +69,7 @@ impl BuiltinErrorClass {
         match self {
             Self::Error => "Error",
             Self::Range => "RangeError",
+            Self::QuotaExceeded => "QuotaExceededError",
             Self::Type => "TypeError",
             Self::Syntax => "SyntaxError",
             Self::PermissionDenied => "PermissionDeniedError",
@@ -79,7 +82,7 @@ impl BuiltinErrorClass {
     /// trailing params follow the same order.
     fn own_fields(self) -> &'static [&'static str] {
         match self {
-            Self::Error | Self::Range | Self::Type | Self::Syntax => &[],
+            Self::Error | Self::Range | Self::QuotaExceeded | Self::Type | Self::Syntax => &[],
             Self::PermissionDenied => &["caller", "capability", "reason"],
         }
     }
@@ -88,6 +91,7 @@ impl BuiltinErrorClass {
         match self {
             Self::Error => handles.error_vtable,
             Self::Range => handles.range_error_vtable,
+            Self::QuotaExceeded => handles.quota_exceeded_vtable,
             Self::Type => handles.type_error_vtable,
             Self::Syntax => handles.syntax_error_vtable,
             Self::PermissionDenied => handles.permission_denied_vtable,
@@ -96,7 +100,9 @@ impl BuiltinErrorClass {
 
     fn field_names(self, handles: &crate::runtime::host::HostAbiHandles) -> Global {
         match self {
-            Self::Error | Self::Range | Self::Type | Self::Syntax => handles.error_field_names,
+            Self::Error | Self::Range | Self::QuotaExceeded | Self::Type | Self::Syntax => {
+                handles.error_field_names
+            }
             Self::PermissionDenied => handles.permission_denied_field_names,
         }
     }
@@ -104,9 +110,11 @@ impl BuiltinErrorClass {
     fn struct_type(self, handles: &crate::runtime::host::HostAbiHandles) -> StructType {
         match self {
             Self::Error => handles.error_type.clone(),
-            Self::Range | Self::Type | Self::Syntax | Self::PermissionDenied => {
-                handles.error_subclass_type.clone()
-            }
+            Self::Range
+            | Self::QuotaExceeded
+            | Self::Type
+            | Self::Syntax
+            | Self::PermissionDenied => handles.error_subclass_type.clone(),
         }
     }
 }
@@ -116,6 +124,7 @@ impl BuiltinErrorClass {
 pub(crate) struct ErrorHost {
     pub vtable: Global,
     pub range_vtable: Global,
+    pub quota_exceeded_vtable: Global,
     pub type_vtable: Global,
     pub syntax_vtable: Global,
     pub permission_denied_vtable: Global,
@@ -297,6 +306,7 @@ pub(crate) fn install_store_bound(
     let (subclass_vtable_ty, _) = build_error_subclass_types(store.engine(), intr)?;
     let [
         range_vtable,
+        quota_exceeded_vtable,
         type_vtable,
         syntax_vtable,
         permission_denied_vtable,
@@ -314,6 +324,7 @@ pub(crate) fn install_store_bound(
     Ok(ErrorHost {
         vtable,
         range_vtable: range_vtable?,
+        quota_exceeded_vtable: quota_exceeded_vtable?,
         type_vtable: type_vtable?,
         syntax_vtable: syntax_vtable?,
         permission_denied_vtable: permission_denied_vtable?,
@@ -505,6 +516,7 @@ pub(crate) fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
     for class in [
         BuiltinErrorClass::Error,
         BuiltinErrorClass::Range,
+        BuiltinErrorClass::QuotaExceeded,
         BuiltinErrorClass::Type,
         BuiltinErrorClass::Syntax,
         BuiltinErrorClass::PermissionDenied,
@@ -816,6 +828,33 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                 implements: Vec::new(),
                 doc: doc(
                     "/** The built-in range-error class (`extends Error`, `name` = `\"RangeError\"`). Thrown by the runtime for out-of-range values: array index out of range, bigint division by zero, `String.repeat` with a negative count, invalid Temporal values, and similar. Catch selectively with `catch (e: RangeError)`. */",
+                ),
+            },
+        },
+    );
+
+    defs.types.insert(
+        "QuotaExceededError".to_string(),
+        TypeSymbol {
+            name: "QuotaExceededError".to_string(),
+            mangled_name: crate::mangle::prelude("QuotaExceededError"),
+            declaration_span: Span::at(crate::FileId::PRELUDE),
+            kind: TypeKind::Class {
+                generics: Vec::new(),
+                // No own fields — `message`/`name` are inherited from `Error`.
+                fields: BTreeMap::new(),
+                narrowing_checks: BTreeMap::new(),
+                methods: BTreeMap::new(),
+                method_visibility: BTreeMap::new(),
+                accessors: Vec::new(),
+                constructor: vec![Param::new("message", Type::String)],
+                statics: BTreeMap::new(),
+                static_visibility: BTreeMap::new(),
+                static_fields: BTreeMap::new(),
+                extends: Some(crate::ClassExtends::plain(crate::mangle::prelude("Error"))),
+                implements: Vec::new(),
+                doc: doc(
+                    "/** A budget refusal (`extends Error`): filesystem space, model tokens, or session state. Free space, reduce the request, or ask the operator for a larger budget. */",
                 ),
             },
         },

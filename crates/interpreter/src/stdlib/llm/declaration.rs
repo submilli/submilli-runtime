@@ -116,8 +116,8 @@ pub fn package_declaration() -> PackageDeclaration {
          failed completion throws a `TypeError` naming the reason and pointing \
          back at the untyped form — there is no `ok` left to branch on, and the \
          partial `text` is reachable only without a type argument.\n *\n * \
-         Throws a `RangeError` when the \
-         execution's token budget or the prompt bounds cannot cover the call, and a \
+         Throws a `QuotaExceededError` when the \
+         execution or server token budget cannot cover the call, a `RangeError` for prompt bounds, and a \
          catchable error naming the model when no provider is configured. No error \
          ever quotes the prompt or the completion.\n * @param model Model name. Call \
          `models()` for the ones this runtime serves; an undeclared name throws.\n * \

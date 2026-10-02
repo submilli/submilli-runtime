@@ -27,7 +27,7 @@ function main(): void {
     } catch (e: Error) {
       rejected = rejected + 1;
       // The failure is the model rejection, not a budget refusal — if the
-      // reservations were leaking, this would turn into a RangeError about
+      // reservations were leaking, this would turn into a QuotaExceededError about
       // the token ceiling instead, and the assertion below would catch it.
       assert(
         e.message.indexOf("token budget") < 0,

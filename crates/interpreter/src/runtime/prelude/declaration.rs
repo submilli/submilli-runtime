@@ -341,6 +341,7 @@ mod tests {
                 "Object",
                 "ObjectConstructor",
                 "PermissionDeniedError",
+                "QuotaExceededError",
                 "RangeError",
                 "RegExp",
                 "RegExpConstructor",
@@ -407,7 +408,12 @@ mod tests {
             // classes (host-implemented).
             if matches!(
                 *name,
-                "Error" | "RangeError" | "TypeError" | "SyntaxError" | "PermissionDeniedError"
+                "Error"
+                    | "QuotaExceededError"
+                    | "RangeError"
+                    | "TypeError"
+                    | "SyntaxError"
+                    | "PermissionDeniedError"
             ) {
                 assert!(matches!(&defs.types[*name].kind, TypeKind::Class { .. }));
                 continue;

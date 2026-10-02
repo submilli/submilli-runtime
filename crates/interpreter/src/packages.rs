@@ -3178,6 +3178,7 @@ mod tests {
     fn builtin_errors_extend_error_in_the_editor_declarations() {
         let lib = render_lib_submilli_d_ts();
         for class in [
+            "QuotaExceededError",
             "RangeError",
             "TypeError",
             "SyntaxError",

@@ -478,7 +478,7 @@ async fn git_refuses_to_write_in_an_unmeasured_vfs() {
     };
     assert!(
         error
-            .downcast_ref::<crate::runtime::host::RangeError>()
+            .downcast_ref::<crate::runtime::host::QuotaExceededError>()
             .is_some(),
         "{error}"
     );
@@ -570,7 +570,7 @@ async fn a_switch_over_a_held_file_needs_room_for_both_copies() {
     };
     assert!(
         error
-            .downcast_ref::<crate::runtime::host::RangeError>()
+            .downcast_ref::<crate::runtime::host::QuotaExceededError>()
             .is_some(),
         "{error}"
     );
@@ -580,7 +580,7 @@ async fn a_switch_over_a_held_file_needs_room_for_both_copies() {
 }
 
 /// A tree nested too deep to measure, anywhere in the VFS, leaves a git change
-/// uncountable: refused as a write past the limit is, with a `RangeError`.
+/// uncountable: refused as a write past the limit is, with a `QuotaExceededError`.
 #[tokio::test]
 async fn git_refuses_a_change_it_cannot_measure() {
     let vfs = Vfs::tempdir().unwrap().with_size_limit(1 << 20);
@@ -606,7 +606,7 @@ async fn git_refuses_a_change_it_cannot_measure() {
     };
     assert!(
         error
-            .downcast_ref::<crate::runtime::host::RangeError>()
+            .downcast_ref::<crate::runtime::host::QuotaExceededError>()
             .is_some(),
         "{error}"
     );
@@ -648,7 +648,7 @@ async fn git_refuses_a_change_that_does_not_grow_an_unmeasured_vfs() {
     };
     assert!(
         error
-            .downcast_ref::<crate::runtime::host::RangeError>()
+            .downcast_ref::<crate::runtime::host::QuotaExceededError>()
             .is_some(),
         "{error}"
     );

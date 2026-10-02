@@ -4,7 +4,7 @@
 // retroactive — a program cannot spend past its budget and discover it
 // afterwards.
 //
-// The refusal is a `RangeError` rather than an opaque trap, because a quota is
+// The refusal is a `QuotaExceededError` rather than an opaque trap, because a quota is
 // something a program can catch and adapt to: shorten the work, batch less, or
 // report that it ran out. The message names this execution's own ceiling and
 // suggests the fix that actually applies here — fewer or shorter calls — which
@@ -27,7 +27,9 @@ function main(): void {
     try {
       llm.call("claude-haiku-4-5", "CONFIDENTIAL-PROMPT-TEXT");
       completed = completed + 1;
-    } catch (e: RangeError) {
+    } catch (e: QuotaExceededError) {
+      assert(e instanceof Error, "quota is an Error");
+      assert(!((e as unknown) instanceof RangeError), "quota is not an argument error");
       caught = e.message;
       break;
     }
@@ -38,7 +40,7 @@ function main(): void {
   assert(caught.length > 0, "the per-execution ceiling eventually refuses a call");
   assert(completed > 0, "but only after admitting the calls that fit");
 
-  // The refusal is catchable as a RangeError, which is what lets a program
+  // The refusal is catchable as a QuotaExceededError, which is what lets a program
   // treat running out of budget as a condition rather than a crash.
   assert(caught.indexOf("execution token budget") >= 0, "the refusal names the execution ceiling");
 

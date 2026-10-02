@@ -19,7 +19,7 @@ minus the ones that don't fit Submilli's model:
 
 - **Types:** `Array`, `Map`, `Set`, `String`, `Number`, `BigInt`, `Boolean`,
   `Object`, `RegExp`, `Uint8Array`, `TextEncoder`, `TextDecoder`, and the
-  error classes `Error`, `TypeError`, `RangeError`, `SyntaxError`, and
+  error classes `Error`, `TypeError`, `RangeError`, `SyntaxError`, `QuotaExceededError`, and
   `PermissionDeniedError`.
 - **Namespaces:** `JSON`, `Math`, and `Temporal`.
 

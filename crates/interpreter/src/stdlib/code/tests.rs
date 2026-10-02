@@ -637,7 +637,7 @@ async fn edits_are_counted_against_the_size_limit() {
         import { writeText, lines } from "submilli:fs";
         import { edit, insertAt } from "submilli:code";
         function refused(write: () => void): boolean {
-            try { write(); return false; } catch (e) { return e instanceof RangeError; }
+            try { write(); return false; } catch (e) { return e instanceof QuotaExceededError && e instanceof Error && !((e as unknown) instanceof RangeError); }
         }
         function main(): void {
             writeText("/a.ts", "x".repeat(50000) + "\nfirst\n");
