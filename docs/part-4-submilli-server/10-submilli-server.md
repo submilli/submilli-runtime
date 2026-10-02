@@ -202,11 +202,11 @@ mcp_allowed_hosts: []
 
 max_execution_memory: 50
 max_execution_time: 0
-max_execution_fuel: 1000000000000
+max_execution_fuel: 1T
 max_execution_stack: 512
 max_session_state_memory: 1024
-max_llm_tokens: 20000000
-max_execution_llm_tokens: 1000000
+max_llm_tokens: 20M
+max_execution_llm_tokens: 1M
 max_llm_concurrency: 4
 shutdown_grace: 5
 telemetry: false
@@ -227,6 +227,15 @@ in the environment. The settings grouped under a heading in the file are the
 exception and use flat flag names: `secret_store.dir` is
 `--secret-store-dir`, `network.allow_private` is `--allow-private`, and the
 `mcp_allowed_hosts` list is a repeatable `--mcp-allowed-host`.
+
+Fuel and token counts accept decimal suffixes in all three sources: `K` for
+1,000, `M` for 1,000,000, `B` for 1,000,000,000, and `T` for
+1,000,000,000,000. For example, use `--max-execution-fuel 1T` or
+`SUBMILLI_MAX_LLM_TOKENS=20M`. Suffixes are case-insensitive, with no space
+before them. Whole numbers may contain underscores between digits, such as
+`10_000_000_000`; fractions and scientific notation are not accepted.
+These forms apply to `max_execution_fuel`, `max_llm_tokens`, and
+`max_execution_llm_tokens`. Memory and stack settings retain their existing units.
 
 Three settings exist only in the file. `api_tokens`, `volumes`, and
 `github_token_file` have no flag and no variable, so who else may call the

@@ -82,6 +82,7 @@ pub struct FileConfig {
     /// Whole seconds; zero or omission disables execution timeout.
     pub max_execution_time: Option<u64>,
     /// Fuel one execution may burn, roughly one unit per Wasm instruction.
+    #[serde(default, deserialize_with = "crate::count::deserialize_optional_count")]
     pub max_execution_fuel: Option<u64>,
     /// Kibibytes of Wasm stack one execution may use.
     pub max_execution_stack: Option<u64>,
@@ -92,8 +93,10 @@ pub struct FileConfig {
     /// Tokens every live execution's `submilli:llm` calls may spend in total.
     /// Bounds the process against the operator's provider credential, where
     /// `max_execution_llm_tokens` bounds a single run.
+    #[serde(default, deserialize_with = "crate::count::deserialize_optional_count")]
     pub max_llm_tokens: Option<u64>,
     /// Tokens a single execution's `submilli:llm` calls may spend.
+    #[serde(default, deserialize_with = "crate::count::deserialize_optional_count")]
     pub max_execution_llm_tokens: Option<u64>,
     /// Prompts one `llm.batch` dispatches at once.
     pub max_llm_concurrency: Option<usize>,
@@ -369,6 +372,14 @@ fn parse_env<T: std::str::FromStr>(
         value
             .parse()
             .map_err(|_| anyhow::anyhow!("${name}: expected {expected}, got `{value}`"))
+    })
+    .transpose()
+}
+
+fn parse_env_count(name: &str, raw: Option<&String>) -> Result<Option<u64>> {
+    raw.map(|value| {
+        crate::count::parse_count(value)
+            .map_err(|error| anyhow::anyhow!("${name}: {error}, got `{value}`"))
     })
     .transpose()
 }
@@ -715,9 +726,8 @@ fn max_execution_memory(cli: &Cli, file: &FileConfig, env: &EnvConfig) -> Result
 /// How much fuel one execution may burn before it stops with `fuel exhausted`.
 /// `0` is rejected: it would stop every program before its first instruction.
 fn max_execution_fuel(cli: &Cli, file: &FileConfig, env: &EnvConfig) -> Result<u64> {
-    let env_fuel = parse_env(
+    let env_fuel = parse_env_count(
         "SUBMILLI_MAX_EXECUTION_FUEL",
-        "a whole number of fuel units",
         env.max_execution_fuel.as_ref(),
     )?;
     let Some(fuel) = explicit(cli.max_execution_fuel, env_fuel, file.max_execution_fuel) else {
@@ -785,11 +795,7 @@ fn max_session_state_memory(cli: &Cli, file: &FileConfig, env: &EnvConfig) -> Re
 /// Tokens, not megabytes: the unit the provider bills in and the refusal message
 /// names, so there is no boundary conversion to get wrong.
 fn max_llm_tokens(cli: &Cli, file: &FileConfig, env: &EnvConfig) -> Result<Option<u64>> {
-    let env_tokens = parse_env(
-        "SUBMILLI_MAX_LLM_TOKENS",
-        "a whole number of tokens",
-        env.max_llm_tokens.as_ref(),
-    )?;
+    let env_tokens = parse_env_count("SUBMILLI_MAX_LLM_TOKENS", env.max_llm_tokens.as_ref())?;
     let Some(tokens) = explicit(cli.max_llm_tokens, env_tokens, file.max_llm_tokens) else {
         return Ok(None);
     };
@@ -804,9 +810,8 @@ fn max_llm_tokens(cli: &Cli, file: &FileConfig, env: &EnvConfig) -> Result<Optio
 /// embedder-only — so an unset value resolves to the runtime's own default here
 /// rather than at the construction site.
 fn max_execution_llm_tokens(cli: &Cli, file: &FileConfig, env: &EnvConfig) -> Result<u64> {
-    let env_tokens = parse_env(
+    let env_tokens = parse_env_count(
         "SUBMILLI_MAX_EXECUTION_LLM_TOKENS",
-        "a whole number of tokens",
         env.max_execution_llm_tokens.as_ref(),
     )?;
     let Some(tokens) = explicit(
@@ -1162,7 +1167,171 @@ fn resolve_network_policy(cli: &Cli, file: &FileConfig, env: &EnvConfig) -> Resu
 #[cfg(test)]
 mod tests {
     use super::*;
+    use clap::Parser;
     use submilli_server::config::{Access, SizeLimit, VolumeSpec};
+
+    #[test]
+    fn count_budgets_accept_the_same_values_from_every_source() {
+        for (raw, expected) in [
+            ("1K", 1_000),
+            ("2k", 2_000),
+            ("20M", 20_000_000),
+            ("3m", 3_000_000),
+            ("10B", 10_000_000_000),
+            ("1b", 1_000_000_000),
+            ("1T", 1_000_000_000_000),
+            ("2t", 2_000_000_000_000),
+            ("10_000_000_000", 10_000_000_000),
+            ("1_000K", 1_000_000),
+            ("123", 123),
+            ("18446744073709551615", u64::MAX),
+        ] {
+            let yaml = format!(
+                "max_execution_fuel: {raw}\nmax_llm_tokens: {raw}\nmax_execution_llm_tokens: {raw}"
+            );
+            let file: FileConfig = serde_yml::from_str(&yaml).unwrap();
+            let cli = Cli::try_parse_from([
+                "submilli-server",
+                "--max-execution-fuel",
+                raw,
+                "--max-llm-tokens",
+                raw,
+                "--max-execution-llm-tokens",
+                raw,
+            ])
+            .unwrap();
+            let env = env_from(&[
+                ("SUBMILLI_MAX_EXECUTION_FUEL", raw),
+                ("SUBMILLI_MAX_LLM_TOKENS", raw),
+                ("SUBMILLI_MAX_EXECUTION_LLM_TOKENS", raw),
+            ]);
+            for (cli, file, env) in [
+                (cli, FileConfig::default(), EnvConfig::default()),
+                (empty_cli(), file, EnvConfig::default()),
+                (empty_cli(), FileConfig::default(), env),
+            ] {
+                assert_eq!(max_execution_fuel(&cli, &file, &env).unwrap(), expected);
+                assert_eq!(max_llm_tokens(&cli, &file, &env).unwrap(), Some(expected));
+                assert_eq!(
+                    max_execution_llm_tokens(&cli, &file, &env).unwrap(),
+                    expected
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn count_budgets_reject_malformed_and_overflowing_values() {
+        for (field, flag, variable) in [
+            (
+                "max_execution_fuel",
+                "--max-execution-fuel",
+                "SUBMILLI_MAX_EXECUTION_FUEL",
+            ),
+            (
+                "max_llm_tokens",
+                "--max-llm-tokens",
+                "SUBMILLI_MAX_LLM_TOKENS",
+            ),
+            (
+                "max_execution_llm_tokens",
+                "--max-execution-llm-tokens",
+                "SUBMILLI_MAX_EXECUTION_LLM_TOKENS",
+            ),
+        ] {
+            for raw in [
+                "1.5M",
+                "1 M",
+                "1e10",
+                "1MB",
+                "-1",
+                "K",
+                "_1",
+                "1_",
+                "1__0",
+                "1_K",
+                "１K",
+                "18446744073709551616",
+                "18446744073709552K",
+                "18446745T",
+            ] {
+                for value in [raw.to_owned(), format!("'{raw}'")] {
+                    let yaml = format!("{field}: {value}");
+                    assert!(serde_yml::from_str::<FileConfig>(&yaml).is_err(), "{yaml}");
+                }
+                assert!(
+                    Cli::try_parse_from(["submilli-server", flag, raw]).is_err(),
+                    "{flag} {raw}"
+                );
+                let env = env_from(&[(variable, raw)]);
+                // Invalid environment values must fail even when a CLI value wins precedence.
+                let cli = Cli::try_parse_from(["submilli-server", flag, "1K"]).unwrap();
+                let error = preflight(&cli, &FileConfig::default(), &env).unwrap_err();
+                assert!(error.to_string().contains(variable), "{error}");
+            }
+        }
+    }
+
+    #[test]
+    fn count_budgets_preserve_precedence_defaults_and_zero_validation() {
+        let file: FileConfig = serde_yml::from_str(
+            "max_execution_fuel: '1K'\nmax_llm_tokens: 2K\nmax_execution_llm_tokens: 3K",
+        )
+        .unwrap();
+        let env = env_from(&[
+            ("SUBMILLI_MAX_EXECUTION_FUEL", "4K"),
+            ("SUBMILLI_MAX_LLM_TOKENS", "5K"),
+            ("SUBMILLI_MAX_EXECUTION_LLM_TOKENS", "6K"),
+        ]);
+        let cli = Cli::try_parse_from([
+            "submilli-server",
+            "--max-execution-fuel",
+            "7K",
+            "--max-llm-tokens",
+            "8K",
+            "--max-execution-llm-tokens",
+            "9K",
+        ])
+        .unwrap();
+        assert_eq!(max_execution_fuel(&cli, &file, &env).unwrap(), 7_000);
+        assert_eq!(max_llm_tokens(&cli, &file, &env).unwrap(), Some(8_000));
+        assert_eq!(max_execution_llm_tokens(&cli, &file, &env).unwrap(), 9_000);
+        assert_eq!(
+            max_execution_fuel(&empty_cli(), &file, &env).unwrap(),
+            4_000
+        );
+        assert_eq!(
+            max_llm_tokens(&empty_cli(), &file, &env).unwrap(),
+            Some(5_000)
+        );
+        assert_eq!(
+            max_execution_llm_tokens(&empty_cli(), &file, &env).unwrap(),
+            6_000
+        );
+
+        let nulls: FileConfig = serde_yml::from_str(
+            "max_execution_fuel: null\nmax_llm_tokens: null\nmax_execution_llm_tokens: null",
+        )
+        .unwrap();
+        assert!(nulls.max_execution_fuel.is_none());
+        assert!(nulls.max_llm_tokens.is_none());
+        assert!(nulls.max_execution_llm_tokens.is_none());
+        for field in [
+            "max_execution_fuel",
+            "max_llm_tokens",
+            "max_execution_llm_tokens",
+        ] {
+            let file = serde_yml::from_str(&format!("{field}: 0K")).unwrap();
+            assert!(preflight(&empty_cli(), &file, &EnvConfig::default()).is_err());
+        }
+        for field in [
+            "max_execution_memory",
+            "max_execution_stack",
+            "max_session_state_memory",
+        ] {
+            assert!(serde_yml::from_str::<FileConfig>(&format!("{field}: 1K")).is_err());
+        }
+    }
 
     fn empty_cli() -> Cli {
         Cli {
