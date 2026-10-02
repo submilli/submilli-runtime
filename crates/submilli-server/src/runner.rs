@@ -108,8 +108,8 @@ pub(crate) struct RunnerRuntime<'a> {
 
 /// Run `code` against a caller-provided VFS. Ownership of `vfs` lives outside:
 /// `ephemeral` callers pass an owning `Vfs::tempdir()` (wiped when it drops here
-/// at return); `per_session` / `persistent` callers pass a non-owning VFS so the
-/// directory survives this call.
+/// at return); `per_session` / `named` callers pass a non-owning VFS so the
+/// directory survives this call. Mounted volumes are never owned.
 pub(crate) async fn run(
     code: &str,
     parsed: ParsedExecute,

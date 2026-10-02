@@ -8,8 +8,15 @@
 //! The root is opened once with ambient authority at construction; from then on
 //! every host function resolves against that handle, so a symlink pointing out of
 //! the root is refused by the kernel rather than checked for.
+//!
+//! A VFS may also carry mounts: other directories (named volumes) grafted at
+//! fixed guest paths below the root. Each has its own handle, access mode and
+//! size limit, and a guest path is routed to exactly one of them by
+//! [`Vfs::locate`] before anything is opened.
 
 use std::collections::HashSet;
+use std::ffi::OsString;
+use std::fmt;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -19,7 +26,7 @@ use cap_std::fs::Dir;
 use tempfile::TempDir;
 
 use crate::runtime::disk_quota::DiskQuota;
-use crate::runtime::fs::FileIdentity;
+use crate::runtime::fs::{FileIdentity, dir_identity};
 
 /// Which blueprint VFS mode this directory backs. Kept independent of the
 /// `submilli-blueprint` enum so the interpreter doesn't depend on that crate;
@@ -29,7 +36,23 @@ pub enum VfsMode {
     None,
     Ephemeral,
     PerSession,
-    Persistent,
+    Named,
+}
+
+/// Whether guest code may change what a volume holds.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Access {
+    ReadOnly,
+    ReadWrite,
+}
+
+impl Access {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::ReadOnly => "read_only",
+            Self::ReadWrite => "read_write",
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -42,7 +65,195 @@ pub struct Vfs {
     /// The blueprint's `size_limit`, shared by every clone so the git worker and
     /// the program charge one counter.
     quota: Option<Arc<DiskQuota>>,
+    access: Access,
+    /// The named volume backing the root, under [`VfsMode::Named`].
+    volume: Option<Arc<str>>,
+    mounts: Arc<[Mount]>,
 }
+
+/// A named volume grafted at a guest path below the root.
+#[derive(Debug, Clone)]
+pub struct Mount {
+    /// The guest path, such as `/memory`.
+    guest: Arc<str>,
+    /// The same path relative to the root, such as `memory`.
+    rel: PathBuf,
+    volume: Arc<str>,
+    dir: Arc<Dir>,
+    access: Access,
+    quota: Option<Arc<DiskQuota>>,
+    /// The identity and exact name of each directory on the way to the mount
+    /// point in the root, the mount point last. A case-insensitive filesystem
+    /// opens these under other spellings too, some not ASCII at all, so the
+    /// mount-point guard recognizes them by identity rather than by name.
+    placeholders: Arc<[Placeholder]>,
+}
+
+impl Mount {
+    pub fn guest_path(&self) -> &str {
+        &self.guest
+    }
+
+    pub fn volume(&self) -> &str {
+        &self.volume
+    }
+
+    pub fn access(&self) -> Access {
+        self.access
+    }
+
+    pub fn quota(&self) -> Option<&Arc<DiskQuota>> {
+        self.quota.as_ref()
+    }
+
+    pub(crate) fn rel(&self) -> &Path {
+        &self.rel
+    }
+
+    pub(crate) fn dir(&self) -> &Arc<Dir> {
+        &self.dir
+    }
+
+    pub(crate) fn placeholders(&self) -> &[Placeholder] {
+        &self.placeholders
+    }
+}
+
+/// A directory in the root on the way to a mount point, or the mount point
+/// itself: what a spelling that reaches it must be named as.
+#[derive(Debug, Clone)]
+pub(crate) struct Placeholder {
+    pub(crate) identity: FileIdentity,
+    /// Its parent, exactly as the mount spells it; `""` for the root.
+    pub(crate) parent: PathBuf,
+    pub(crate) name: OsString,
+}
+
+/// What the server hands [`Vfs::with_mount`]: a volume it has resolved by name.
+pub struct MountSpec {
+    /// Absolute guest path, already validated by the blueprint parser; checked
+    /// again here so a direct embedder cannot build an ambiguous table.
+    pub guest_path: String,
+    pub host: PathBuf,
+    pub volume: String,
+    pub access: Access,
+    /// Shared by every VFS that mounts the same volume, so one limit spans them.
+    pub quota: Option<Arc<DiskQuota>>,
+}
+
+/// The volume a resolved guest path lives in: where writes are charged and
+/// whether they are allowed at all.
+#[derive(Debug, Clone)]
+pub struct Placement {
+    access: Access,
+    quota: Option<Arc<DiskQuota>>,
+    /// The mount's guest path, or `None` for the root volume.
+    mount: Option<Arc<str>>,
+    /// The mounts below this volume; only the root has any. A change to the root
+    /// must not remove, replace or write through one of their mount points.
+    nested: Arc<[Mount]>,
+}
+
+impl Placement {
+    pub fn access(&self) -> Access {
+        self.access
+    }
+
+    pub fn quota(&self) -> Option<&Arc<DiskQuota>> {
+        self.quota.as_ref()
+    }
+
+    /// The guest path of the volume's mount point: `/` for the root.
+    pub fn mount_point(&self) -> &str {
+        self.mount.as_deref().unwrap_or("/")
+    }
+
+    pub(crate) fn nested(&self) -> &[Mount] {
+        &self.nested
+    }
+
+    /// Whether two placements are the same volume, so a rename between them
+    /// stays within one directory handle and one size limit.
+    pub fn same_volume(&self, other: &Self) -> bool {
+        self.mount == other.mount
+    }
+}
+
+/// Why a mount could not be added.
+#[derive(Debug)]
+pub enum MountError {
+    /// The VFS has no root directory to mount below (`vfs: none`).
+    RootDisabled,
+    /// The guest path is not an absolute, normalized path.
+    BadPath(String),
+    /// `/` is the root itself.
+    AtRoot,
+    /// The guest path names Git metadata.
+    ProtectedPath(String),
+    /// One mount would sit inside another.
+    Nested {
+        outer: String,
+        inner: String,
+    },
+    /// The same volume is already mounted, or backs the root.
+    DuplicateVolume {
+        volume: String,
+        at: String,
+    },
+    TooMany,
+    /// The mount point exists in the root but is not a plain directory, or
+    /// does not exist in a read-only root, which it may not create.
+    MountPointUnavailable {
+        path: String,
+        reason: &'static str,
+    },
+    /// Preparing the mount point in the root failed.
+    RootIo(io::Error),
+    /// Opening the volume's directory failed. Carries no host path; the
+    /// caller logs that.
+    Io(io::Error),
+}
+
+impl fmt::Display for MountError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::RootDisabled => {
+                f.write_str("mounts need a filesystem root, and vfs mode `none` has none")
+            }
+            Self::BadPath(path) => write!(
+                f,
+                "mount path `{path}` must be absolute and normalized, made of ASCII letters, \
+                 digits, `.`, `_` and `-`, such as `/memory`"
+            ),
+            Self::AtRoot => f.write_str("a volume cannot be mounted at `/`; that is the root"),
+            Self::ProtectedPath(path) => {
+                write!(f, "mount path `{path}` names Git metadata")
+            }
+            Self::Nested { outer, inner } => {
+                write!(
+                    f,
+                    "mount `{inner}` is inside mount `{outer}`; mounts may not nest"
+                )
+            }
+            Self::DuplicateVolume { volume, at } => {
+                write!(f, "volume `{volume}` is already mounted at `{at}`")
+            }
+            Self::TooMany => write!(f, "more than {MAX_MOUNTS} mounts"),
+            Self::MountPointUnavailable { path, reason } => {
+                write!(f, "mount point `{path}` {reason}")
+            }
+            Self::RootIo(err) => write!(f, "the mount point could not be prepared: {err}"),
+            Self::Io(err) => write!(f, "{err}"),
+        }
+    }
+}
+
+impl std::error::Error for MountError {}
+
+/// The most mounts one VFS carries; routing a path scans them all. The blueprint
+/// parser caps `vfs.mounts` at the same number (`submilli_blueprint::MAX_MOUNTS`)
+/// so a valid blueprint never reaches this; it holds for direct embedders.
+pub const MAX_MOUNTS: usize = 16;
 
 impl Vfs {
     /// A VFS that backs no directory. Every `submilli:fs.*` call traps; only
@@ -54,11 +265,14 @@ impl Vfs {
             dir: None,
             _owned: None,
             quota: None,
+            access: Access::ReadWrite,
+            volume: None,
+            mounts: Arc::from([]),
         }
     }
 
     /// Mount an existing host directory the interpreter does not own. Used for
-    /// `persistent` mode and for `per_session` dirs owned by the server.
+    /// `named` roots and for `per_session` dirs owned by the server.
     pub fn external_with_mode(root: PathBuf, mode: VfsMode) -> io::Result<Self> {
         let meta = std::fs::metadata(&root)
             .map_err(|e| io::Error::new(e.kind(), format!("VFS root {}: {e}", root.display())))?;
@@ -75,11 +289,15 @@ impl Vfs {
             dir: Some(dir),
             _owned: None,
             quota: None,
+            access: Access::ReadWrite,
+            volume: None,
+            mounts: Arc::from([]),
         })
     }
 
+    /// An existing host directory, as `submilli run --vfs` exposes it.
     pub fn external(root: PathBuf) -> io::Result<Self> {
-        Self::external_with_mode(root, VfsMode::Persistent)
+        Self::external_with_mode(root, VfsMode::Named)
     }
 
     pub fn tempdir() -> io::Result<Self> {
@@ -106,6 +324,9 @@ impl Vfs {
             dir: Some(dir),
             _owned: Some(Arc::new(td)),
             quota: None,
+            access: Access::ReadWrite,
+            volume: None,
+            mounts: Arc::from([]),
         })
     }
 
@@ -150,9 +371,152 @@ impl Vfs {
         self
     }
 
-    /// The size limit and its running count, when the blueprint set one.
+    /// Charge the root to `quota`, a limit the server shares between every VFS
+    /// that opens the same named volume.
+    pub fn with_shared_quota(mut self, quota: Arc<DiskQuota>) -> Self {
+        self.quota = Some(quota);
+        self
+    }
+
+    /// The root's size limit and its running count, when one applies.
     pub fn quota(&self) -> Option<&Arc<DiskQuota>> {
         self.quota.as_ref()
+    }
+
+    /// Whether guest code may change the root. Mounts carry their own access.
+    pub fn with_access(mut self, access: Access) -> Self {
+        self.access = access;
+        self
+    }
+
+    pub fn access(&self) -> Access {
+        self.access
+    }
+
+    /// Record the named volume backing the root, for `fs.info()`.
+    pub fn with_volume_name(mut self, volume: &str) -> Self {
+        self.volume = Some(Arc::from(volume));
+        self
+    }
+
+    pub fn volume(&self) -> Option<&str> {
+        self.volume.as_deref()
+    }
+
+    pub fn mounts(&self) -> &[Mount] {
+        &self.mounts
+    }
+
+    /// Graft the volume `spec` describes at its guest path.
+    ///
+    /// In a writable root the mount point is created as an empty directory, so
+    /// listing its parent shows it like any other directory. A read-only root is
+    /// never written, so there the mount point must already exist.
+    pub fn with_mount(mut self, spec: MountSpec) -> Result<Self, MountError> {
+        let root = self.dir.as_ref().ok_or(MountError::RootDisabled)?;
+        if self.mounts.len() >= MAX_MOUNTS {
+            return Err(MountError::TooMany);
+        }
+        let rel = mount_rel(&spec.guest_path)?;
+        if crate::runtime::fs::protected_metadata(&rel) {
+            return Err(MountError::ProtectedPath(spec.guest_path));
+        }
+        if let Some(at) = self.volume_location(&spec.volume) {
+            return Err(MountError::DuplicateVolume {
+                volume: spec.volume,
+                at: at.to_string(),
+            });
+        }
+        // Case is folded as the blueprint parser folds it, so two spellings of one
+        // directory on a case-insensitive filesystem cannot both be mounted.
+        for mount in self.mounts.iter() {
+            let (outer, inner) = if starts_with_folded(&rel, &mount.rel) {
+                (mount.guest.to_string(), spec.guest_path.clone())
+            } else if starts_with_folded(&mount.rel, &rel) {
+                (spec.guest_path.clone(), mount.guest.to_string())
+            } else {
+                continue;
+            };
+            return Err(MountError::Nested { outer, inner });
+        }
+        let placeholders = prepare_mount_point(root, &rel, self.access, &spec.guest_path)?;
+        let dir = open_volume(&spec.host).map_err(MountError::Io)?;
+        let mount = Mount {
+            guest: Arc::from(spec.guest_path.as_str()),
+            rel,
+            volume: Arc::from(spec.volume.as_str()),
+            dir,
+            access: spec.access,
+            quota: spec.quota,
+            placeholders: Arc::from(placeholders),
+        };
+        let mut mounts = self.mounts.to_vec();
+        mounts.push(mount);
+        self.mounts = Arc::from(mounts);
+        Ok(self)
+    }
+
+    /// Charge the volume mounted at `guest_path` to `quota`, the limit the
+    /// server shares between every VFS that mounts it. No mount there is a
+    /// no-op.
+    pub fn with_mount_quota(mut self, guest_path: &str, quota: Arc<DiskQuota>) -> Self {
+        let mounts: Vec<Mount> = self
+            .mounts
+            .iter()
+            .cloned()
+            .map(|mut mount| {
+                if &*mount.guest == guest_path {
+                    mount.quota = Some(Arc::clone(&quota));
+                }
+                mount
+            })
+            .collect();
+        self.mounts = Arc::from(mounts);
+        self
+    }
+
+    fn volume_location(&self, volume: &str) -> Option<&str> {
+        if self.volume.as_deref() == Some(volume) {
+            return Some("/");
+        }
+        self.mounts
+            .iter()
+            .find(|mount| &*mount.volume == volume)
+            .map(|mount| &*mount.guest)
+    }
+
+    /// Route a root-relative path (as the lexical pass produced it) to the
+    /// volume that holds it: the handle to open it through, the path relative
+    /// to that handle, and the volume's placement. `None` under
+    /// [`VfsMode::None`].
+    ///
+    /// Matching is by whole components, so `/memoryx` is not under `/memory`.
+    /// A mount point itself resolves to its volume's root, `.`.
+    pub fn locate(&self, rel: &Path) -> Option<(Arc<Dir>, PathBuf, Placement)> {
+        let root = self.dir.as_ref()?;
+        for mount in self.mounts.iter() {
+            if let Ok(rest) = rel.strip_prefix(&mount.rel) {
+                let rest = if rest.as_os_str().is_empty() {
+                    PathBuf::from(".")
+                } else {
+                    rest.to_path_buf()
+                };
+                let placement = Placement {
+                    access: mount.access,
+                    quota: mount.quota.clone(),
+                    mount: Some(Arc::clone(&mount.guest)),
+                    nested: Arc::from([]),
+                };
+                return Some((Arc::clone(&mount.dir), rest, placement));
+            }
+        }
+        let placement = Placement {
+            access: self.access,
+            quota: self.quota.clone(),
+            mount: None,
+            nested: Arc::clone(&self.mounts),
+        };
+        Some((Arc::clone(root), rel.to_path_buf(), placement))
     }
 
     /// The bytes held by regular files under the root; see [`measure_dir`].
@@ -162,6 +526,12 @@ impl Vfs {
             None => Ok(0),
         }
     }
+}
+
+/// The bytes held by regular files under the host directory `root`, as a size
+/// limit starting from it counts them. The error carries no host path.
+pub fn measure_host_dir(root: &Path) -> io::Result<u64> {
+    measure_dir(&*open_volume(root)?)
 }
 
 /// The bytes held by regular files under `root`; see [`for_each_regular_file`].
@@ -249,6 +619,208 @@ const MAX_MEASURED_ENTRIES: usize = 1_000_000;
 /// before it gives up, which bounds the directories it holds open at once.
 const MAX_MEASURED_DEPTH: usize = 64;
 
+/// The root-relative form of a mount's guest path, refusing anything that is
+/// not absolute, normalized, and made of ASCII letters, digits, `.`, `_` and
+/// `-`. ASCII alone is what the case-folded mount-point guard compares
+/// reliably on hosts whose filesystems fold case. The blueprint parser applies
+/// the same rule; this repeats it for direct embedders.
+fn mount_rel(guest: &str) -> Result<PathBuf, MountError> {
+    let bad = || MountError::BadPath(guest.to_string());
+    let Some(rest) = guest.strip_prefix('/') else {
+        return Err(bad());
+    };
+    if rest.is_empty() {
+        return Err(MountError::AtRoot);
+    }
+    let mut rel = PathBuf::new();
+    for part in rest.split('/') {
+        let plain = part
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'));
+        // A trailing dot is dropped by Windows, which would make `memory.` and
+        // `memory` one directory.
+        if part.is_empty() || part.ends_with('.') || !plain {
+            return Err(bad());
+        }
+        rel.push(part);
+    }
+    Ok(rel)
+}
+
+/// Whether `path` is `prefix` or below it, comparing whole components with
+/// ASCII case folded.
+fn starts_with_folded(path: &Path, prefix: &Path) -> bool {
+    let mut parts = path.components();
+    prefix.components().all(|want| {
+        parts.next().is_some_and(|have| {
+            have.as_os_str()
+                .as_encoded_bytes()
+                .eq_ignore_ascii_case(want.as_os_str().as_encoded_bytes())
+        })
+    })
+}
+
+/// Make sure the mount point is a plain directory in the root, creating it (and
+/// its parents) only when the root may be written.
+///
+/// Returns each directory on the way, the mount point last; see
+/// [`placeholders_on`].
+fn prepare_mount_point(
+    root: &Dir,
+    rel: &Path,
+    access: Access,
+    guest: &str,
+) -> Result<Vec<Placeholder>, MountError> {
+    let unavailable = |reason| MountError::MountPointUnavailable {
+        path: guest.to_string(),
+        reason,
+    };
+    let mut prefix = PathBuf::new();
+    for part in rel.components() {
+        prefix.push(part);
+        match root.symlink_metadata(&prefix) {
+            Ok(meta) if meta.is_dir() => {
+                match spelling_of(root, &prefix).map_err(MountError::RootIo)? {
+                    Spelling::Exact => {}
+                    Spelling::Variant => {
+                        return Err(unavailable(
+                            "exists in the root under a different letter case; rename it to \
+                             match",
+                        ));
+                    }
+                    Spelling::Unknown => {
+                        return Err(unavailable(
+                            "sits beside too many entries to check its spelling; move some \
+                             of them into a subdirectory",
+                        ));
+                    }
+                }
+            }
+            Ok(_) => return Err(unavailable("exists in the root and is not a directory")),
+            Err(err) if err.kind() == io::ErrorKind::NotFound => {
+                if access == Access::ReadOnly {
+                    return Err(unavailable(
+                        "does not exist, and a read-only root cannot create it",
+                    ));
+                }
+                match root.create_dir(&prefix) {
+                    Ok(()) => {}
+                    // Another run created it between the check and here.
+                    Err(err) if err.kind() == io::ErrorKind::AlreadyExists => {}
+                    Err(err) => return Err(MountError::RootIo(err)),
+                }
+            }
+            Err(err) => return Err(MountError::RootIo(err)),
+        }
+    }
+    // Recheck: a racing writer may have swapped a link in after creation.
+    match root.symlink_metadata(rel) {
+        Ok(meta) if meta.is_dir() => {}
+        Ok(_) => return Err(unavailable("exists in the root and is not a directory")),
+        Err(err) => return Err(MountError::RootIo(err)),
+    }
+    placeholders_on(root, rel).map_err(MountError::RootIo)
+}
+
+/// The identity and exact name of each directory on the way to `rel`, `rel`
+/// last, taken after the recheck so a directory swapped in before it isn't the
+/// one recorded. An identity that can't be read fails the mount: without it an
+/// alias of the mount point would go unrecognized.
+fn placeholders_on(root: &Dir, rel: &Path) -> io::Result<Vec<Placeholder>> {
+    let mut placeholders = Vec::new();
+    let mut prefix = PathBuf::new();
+    for part in rel.components() {
+        prefix.push(part);
+        let meta = root.symlink_metadata(&prefix)?;
+        placeholders.push(Placeholder {
+            identity: dir_identity(root, &prefix, &meta)?,
+            parent: prefix.parent().map(Path::to_path_buf).unwrap_or_default(),
+            name: part.as_os_str().to_os_string(),
+        });
+    }
+    Ok(placeholders)
+}
+
+/// How an existing directory on the way to a mount point is spelled on disk.
+enum Spelling {
+    Exact,
+    /// Found only through a case-insensitive lookup.
+    Variant,
+    /// Too many entries beside it to tell.
+    Unknown,
+}
+
+/// Whether the directory entry at `path` is spelled exactly so, not merely found
+/// through a case-insensitive lookup. Recursive listings descend into a mount by
+/// matching the entry's name, so a case variant standing in as the mount point
+/// would hide the volume behind the root's own directory.
+///
+/// Checked on every host, since a Linux filesystem can fold case too (ext4
+/// casefold, or a directory shared in from a Mac). Where the other case finds
+/// nothing, or a different directory, the filesystem distinguishes case here and
+/// the exact lookup that found `path` settles it; only a case-folding directory
+/// is scanned for the exact name.
+fn spelling_of(root: &Dir, path: &Path) -> io::Result<Spelling> {
+    let Some(name) = path.file_name() else {
+        return Ok(Spelling::Exact);
+    };
+    let flipped: String = name
+        .to_string_lossy()
+        .chars()
+        .map(|c| {
+            if c.is_ascii_lowercase() {
+                c.to_ascii_uppercase()
+            } else {
+                c.to_ascii_lowercase()
+            }
+        })
+        .collect();
+    if flipped.as_str() == name {
+        return Ok(Spelling::Exact);
+    }
+    let parent = path.parent().unwrap_or(Path::new(""));
+    let other = match root.symlink_metadata(parent.join(&flipped)) {
+        Ok(meta) => meta,
+        Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(Spelling::Exact),
+        Err(err) => return Err(err),
+    };
+    let this = root.symlink_metadata(path)?;
+    if let (Ok(this), Ok(other)) = (FileIdentity::of(&this), FileIdentity::of(&other))
+        && this != other
+    {
+        return Ok(Spelling::Exact);
+    }
+    let entries = if parent.as_os_str().is_empty() {
+        root.entries()?
+    } else {
+        root.read_dir(parent)?
+    };
+    for (index, entry) in entries.enumerate() {
+        if index >= MAX_SPELLING_SCAN {
+            return Ok(Spelling::Unknown);
+        }
+        if entry?.file_name() == name {
+            return Ok(Spelling::Exact);
+        }
+    }
+    Ok(Spelling::Variant)
+}
+
+/// How many entries [`spelling_of`] reads beside a mount point before giving
+/// up, so a huge directory can't slow every run that mounts below it.
+const MAX_SPELLING_SCAN: usize = 100_000;
+
+fn open_volume(host: &Path) -> io::Result<Arc<Dir>> {
+    let meta = std::fs::metadata(host)?;
+    if !meta.is_dir() {
+        return Err(io::Error::new(
+            io::ErrorKind::NotADirectory,
+            "volume is not a directory",
+        ));
+    }
+    Dir::open_ambient_dir(host, ambient_authority()).map(Arc::new)
+}
+
 fn open_root(root: &Path) -> io::Result<Arc<Dir>> {
     Dir::open_ambient_dir(root, ambient_authority())
         .map(Arc::new)
@@ -293,7 +865,7 @@ mod tests {
         let outer = tempfile::tempdir().expect("outer tempdir");
         std::fs::write(outer.path().join("a.txt"), b"hi").expect("write");
         let vfs = Vfs::external(outer.path().to_path_buf()).expect("external");
-        let dir = vfs.dir().expect("persistent mode backs a directory");
+        let dir = vfs.dir().expect("an external root backs a directory");
         assert_eq!(dir.read("a.txt").expect("read through handle"), b"hi");
     }
 

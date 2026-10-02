@@ -4,8 +4,11 @@ use std::io::Write;
 use std::sync::Arc;
 
 use crate::runtime::fs::{ContainError, ContentPath, LinkPath, resolve_content, resolve_link};
-use crate::runtime::host::{permission_denied, permission_denied_invariant, range_error};
+use crate::runtime::host::{
+    permission_denied, permission_denied_invariant, permission_denied_read_only, range_error,
+};
 use crate::runtime::security::{CheckOutcome, SecurityCheck};
+use crate::runtime::vfs::{Access, Placement};
 use crate::runtime::{DiskQuota, QuotaCharge, QuotaExceeded, StoreData};
 
 pub const DEFAULT_CWD: &str = "/";
@@ -123,10 +126,67 @@ pub fn resolve_link_or_trap(
         .map_err(|err| contain_trap(op, guest_path, &err))
 }
 
+/// Refuse a write into a volume mounted read-only, attributed to the running
+/// package. Call after the capability check and resolution, before any other work,
+/// so the policy sees every attempt and a refused call changes nothing.
+pub(crate) fn require_writable(
+    store: impl wasmtime::AsContext<Data = StoreData>,
+    placement: &Placement,
+    capability: &str,
+    guest_path: &str,
+) -> wasmtime::Result<()> {
+    if placement.access() == Access::ReadWrite {
+        return Ok(());
+    }
+    let caller = running_package(&store).map_err(|unknown| {
+        permission_denied_invariant(unknown.label, capability, unknown.reason)
+    })?;
+    Err(read_only_denial(
+        &caller,
+        capability,
+        guest_path,
+        placement.mount_point(),
+    ))
+}
+
+/// Refuse a write aimed at the VFS root or a mount point: each is a directory,
+/// and replacing one would take a volume with it.
+pub(crate) fn refuse_volume_root(
+    resolved: &ContentPath,
+    op: &str,
+    guest_path: &str,
+) -> wasmtime::Result<()> {
+    if resolved.is_root() {
+        wasmtime::bail!(
+            "{op} {guest_path}: the VFS root or a mount point is a directory, not a file"
+        );
+    }
+    Ok(())
+}
+
+fn read_only_denial(
+    caller: &str,
+    capability: &str,
+    guest_path: &str,
+    mount: &str,
+) -> wasmtime::Error {
+    permission_denied_read_only(
+        caller,
+        capability,
+        format!("{guest_path} is in the volume mounted read-only at {mount}"),
+    )
+}
+
 /// The single translation from a containment failure to a guest-visible trap. Every
 /// escape reaches the guest as the same diagnostic regardless of which operation hit it,
 /// so an LLM reading one recognises the rest.
+///
+/// A read-only refusal that got past [`require_writable`] still surfaces as a
+/// `PermissionDeniedError`, attributed to `<vfs>` since the caller is not at hand.
 pub fn contain_trap(op: &str, guest_path: &str, err: &ContainError) -> wasmtime::Error {
+    if let ContainError::ReadOnly(mount) = err {
+        return read_only_denial("<vfs>", op, guest_path, mount);
+    }
     wasmtime::Error::msg(format!("{op} {guest_path}: {err}"))
 }
 

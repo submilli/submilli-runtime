@@ -7,7 +7,7 @@ use axum::http::{Request, StatusCode};
 use http_body_util::BodyExt;
 use serde_json::{Value, json};
 use submilli_server::blueprint::InMemoryBlueprintStore;
-use submilli_server::config::VolumeTable;
+use submilli_server::config::{VolumeSpec, VolumeTable};
 use submilli_server::{AppState, ServerConfig, app};
 use tower::ServiceExt;
 
@@ -35,7 +35,12 @@ fn seeded_router(yamls: &[&str]) -> Router {
 fn router_with_volumes(names: &[&str]) -> Router {
     let volumes: VolumeTable = names
         .iter()
-        .map(|name| (name.to_string(), PathBuf::from(format!("/srv/{name}"))))
+        .map(|name| {
+            (
+                name.to_string(),
+                VolumeSpec::local_path(PathBuf::from(format!("/srv/{name}"))),
+            )
+        })
         .collect();
     app(AppState::new(ServerConfig {
         volumes,
@@ -49,7 +54,7 @@ fn router_with_volumes(names: &[&str]) -> Router {
 fn router_over_retired_form(dir: &std::path::Path) -> Router {
     std::fs::write(
         dir.join("tenant-alpha.000001.yaml"),
-        "name: tenant-alpha\nvfs:\n  mode: persistent\n  path: /srv/tenants/alpha\n",
+        "name: tenant-alpha\nvfs:\n  mode: persistent\n  volume: tenant-alpha\n",
     )
     .expect("plant revision");
     std::fs::write(
@@ -113,8 +118,8 @@ async fn a_reserved_name_reports_why_it_cannot_run_rather_than_not_found() {
             "{route} must not claim the name is unknown: {rendered}",
         );
         assert!(
-            rendered.contains("`path` key is retired") && rendered.contains("volume:"),
-            "{route} must name the retired key and its replacement: {rendered}",
+            rendered.contains("`persistent` was removed") && rendered.contains("mode: named"),
+            "{route} must name the retired mode and its replacement: {rendered}",
         );
         assert_eq!(
             body.pointer(code_at),
@@ -133,8 +138,8 @@ async fn a_reserved_name_reports_why_it_cannot_run_rather_than_not_found() {
         "auth-status must not claim the name is unregistered: {rendered}",
     );
     assert!(
-        rendered.contains("`path` key is retired") && rendered.contains("volume:"),
-        "auth-status must name the retired key and its replacement: {rendered}",
+        rendered.contains("`persistent` was removed") && rendered.contains("mode: named"),
+        "auth-status must name the retired mode and its replacement: {rendered}",
     );
 
     // The MCP endpoint answers in plain text, not JSON, so it is checked on its own
@@ -159,8 +164,8 @@ async fn a_reserved_name_reports_why_it_cannot_run_rather_than_not_found() {
         "/mcp must not claim the name is unknown: {rendered}",
     );
     assert!(
-        rendered.contains("`path` key is retired") && rendered.contains("volume:"),
-        "/mcp must name the retired key and its replacement: {rendered}",
+        rendered.contains("`persistent` was removed") && rendered.contains("mode: named"),
+        "/mcp must name the retired mode and its replacement: {rendered}",
     );
 }
 
@@ -693,7 +698,7 @@ async fn add_with_undeclared_volume_rejected_and_stores_nothing() {
     let (status, body) = post(
         &router,
         "/v1/blueprints",
-        json!({ "yaml": "name: escaper\nvfs:\n  mode: persistent\n  volume: unknown-vol\n" }),
+        json!({ "yaml": "name: escaper\nvfs:\n  mode: named\n  volume: unknown-vol\n" }),
     )
     .await;
     assert_eq!(status, StatusCode::BAD_REQUEST, "got {body}");
@@ -714,7 +719,7 @@ async fn apply_with_undeclared_volume_rejected_and_stores_nothing() {
     let (status, body) = put(
         &router,
         "/v1/blueprints/escaper",
-        json!({ "yaml": "name: escaper\nvfs:\n  mode: persistent\n  volume: unknown-vol\n" }),
+        json!({ "yaml": "name: escaper\nvfs:\n  mode: named\n  volume: unknown-vol\n" }),
     )
     .await;
     assert_eq!(status, StatusCode::BAD_REQUEST, "got {body}");
@@ -731,7 +736,7 @@ async fn add_with_declared_volume_succeeds() {
     let (status, body) = post(
         &router,
         "/v1/blueprints",
-        json!({ "yaml": "name: worker\nvfs:\n  mode: persistent\n  volume: project-alpha\n" }),
+        json!({ "yaml": "name: worker\nvfs:\n  mode: named\n  volume: project-alpha\n" }),
     )
     .await;
     assert_eq!(status, StatusCode::OK, "got {body}");
@@ -747,7 +752,7 @@ async fn undeclared_volume_with_no_volumes_declared_says_how_to_declare_one() {
     let (status, body) = post(
         &router,
         "/v1/blueprints",
-        json!({ "yaml": "name: escaper\nvfs:\n  mode: persistent\n  volume: anything\n" }),
+        json!({ "yaml": "name: escaper\nvfs:\n  mode: named\n  volume: anything\n" }),
     )
     .await;
     assert_eq!(status, StatusCode::BAD_REQUEST, "got {body}");
@@ -759,7 +764,7 @@ async fn undeclared_volume_with_no_volumes_declared_says_how_to_declare_one() {
 }
 
 #[tokio::test]
-async fn non_persistent_modes_are_unaffected_by_the_volume_check() {
+async fn unnamed_modes_are_unaffected_by_the_volume_check() {
     let router = router_with_volumes(&[]);
     for (name, vfs) in [
         ("no-vfs", "vfs: none\n"),

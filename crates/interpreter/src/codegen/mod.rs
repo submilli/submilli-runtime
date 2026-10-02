@@ -2367,6 +2367,7 @@ function main(): string {
             http_download_result: 47,
             session_entry: 48,
             session_page: 49,
+            fs_mount_info: 50,
 
             temporal_plain_date: 36,
             temporal_plain_time: 37,
@@ -6098,6 +6099,7 @@ function main(): void {
             http_download_result: 47,
             session_entry: 48,
             session_page: 49,
+            fs_mount_info: 50,
 
             temporal_plain_date: 36,
             temporal_plain_time: 37,

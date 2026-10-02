@@ -16,7 +16,7 @@ use serde_json::Value;
 use submilli_blueprint::{AuthError, SecretResolver, SecretSource};
 use submilli_server::blueprint::{BlueprintStore, FileBlueprintStore, StoredBlueprint};
 use submilli_server::blueprint_seed::seed_blueprints;
-use submilli_server::config::VolumeTable;
+use submilli_server::config::{VolumeSpec, VolumeTable};
 use submilli_server::{AppState, ServerConfig, app};
 use tempfile::TempDir;
 use tower::ServiceExt;
@@ -48,7 +48,7 @@ fn write(dir: &Path, file: &str, contents: &str) {
     fs::write(dir.join(file), contents).expect("writing seed file");
 }
 
-/// The table most cases seed against: only the `persistent`-mode cases care
+/// The table most cases seed against: only the `named`-mode cases care
 /// what is declared.
 fn no_volumes() -> VolumeTable {
     VolumeTable::new()
@@ -455,12 +455,12 @@ async fn a_seed_file_naming_an_undeclared_volume_is_not_registered() {
     write(
         seed.path(),
         "escaper.yaml",
-        "name: escaper\nvfs:\n  mode: persistent\n  volume: unknown-vol\n",
+        "name: escaper\nvfs:\n  mode: named\n  volume: unknown-vol\n",
     );
     write(seed.path(), "good.yaml", "name: good\n");
     let volumes = VolumeTable::from([(
         "project-alpha".to_string(),
-        PathBuf::from("/srv/project-alpha"),
+        VolumeSpec::local_path("/srv/project-alpha"),
     )]);
 
     let store = store_at(store_dir.path());
@@ -478,11 +478,11 @@ async fn a_seed_file_naming_a_declared_volume_is_registered() {
     write(
         seed.path(),
         "worker.yaml",
-        "name: worker\nvfs:\n  mode: persistent\n  volume: project-alpha\n",
+        "name: worker\nvfs:\n  mode: named\n  volume: project-alpha\n",
     );
     let volumes = VolumeTable::from([(
         "project-alpha".to_string(),
-        PathBuf::from("/srv/project-alpha"),
+        VolumeSpec::local_path("/srv/project-alpha"),
     )]);
 
     let store = store_at(store_dir.path());
@@ -494,7 +494,7 @@ async fn a_seed_file_naming_a_declared_volume_is_registered() {
 }
 
 #[tokio::test]
-async fn non_persistent_seed_files_are_unaffected_by_the_volume_check() {
+async fn unnamed_seed_files_are_unaffected_by_the_volume_check() {
     let seed = TempDir::new().unwrap();
     let store_dir = TempDir::new().unwrap();
     write(seed.path(), "a.yaml", "name: a\nvfs: none\n");
@@ -523,17 +523,17 @@ async fn the_server_boots_past_seed_files_it_cannot_register() {
     write(
         seed.path(),
         "undeclared.yaml",
-        "name: undeclared\nvfs:\n  mode: persistent\n  volume: unknown-vol\n",
+        "name: undeclared\nvfs:\n  mode: named\n  volume: unknown-vol\n",
     );
     write(
         seed.path(),
         "worker.yaml",
-        "name: worker\nvfs:\n  mode: persistent\n  volume: project-alpha\n",
+        "name: worker\nvfs:\n  mode: named\n  volume: project-alpha\n",
     );
     write(seed.path(), "plain.yaml", "name: plain\n");
     let volumes = VolumeTable::from([(
         "project-alpha".to_string(),
-        PathBuf::from("/srv/project-alpha"),
+        VolumeSpec::local_path("/srv/project-alpha"),
     )]);
 
     let names = seeded_names_over_the_api(Some(seed.path().to_path_buf()), volumes).await;

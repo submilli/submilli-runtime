@@ -5,7 +5,7 @@ use std::io;
 use std::path::{Component, Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
-use submilli_server::config::{ServerDirectories, VolumeTable};
+use submilli_server::config::{ServerDirectories, VolumeKind, VolumeTable};
 
 use super::{BLUEPRINTS, LegacyLayout, SERVER_DIR, SESSIONS, STAGING_DIR, VFS_SESSIONS};
 
@@ -24,11 +24,11 @@ pub(crate) fn validate_dependencies(
             fs::canonicalize(path).with_context(|| format!("resolving `{}`", path.display()))
         })
         .collect::<Result<Vec<_>>>()?;
-    for (name, path) in dependency_paths(directories).into_iter().chain(
-        volumes
-            .iter()
-            .map(|(name, path)| (name.as_str(), path.as_path())),
-    ) {
+    let local_paths = volumes.iter().filter_map(|(name, spec)| match &spec.kind {
+        VolumeKind::LocalPath { path } => Some((name.as_str(), path.as_path())),
+        VolumeKind::ManagedLocal => None,
+    });
+    for (name, path) in dependency_paths(directories).into_iter().chain(local_paths) {
         if let Some(index) = traversed_source(path, &resolved, 0)? {
             let pin_advice = if sources[index].starts_with(layout.root.join(STAGING_DIR)) {
                 ""
@@ -87,6 +87,7 @@ fn dependency_paths(directories: &ServerDirectories) -> Vec<(&'static str, &Path
         session_storage_root,
         session_store_dir,
         ephemeral_storage_root,
+        managed_volume_root,
         config_file,
     } = directories;
     [
@@ -100,6 +101,7 @@ fn dependency_paths(directories: &ServerDirectories) -> Vec<(&'static str, &Path
         ("per-session VFS root", session_storage_root),
         ("durable session store", session_store_dir),
         ("ephemeral storage root", ephemeral_storage_root),
+        ("managed volume root", managed_volume_root),
         ("server config file", config_file),
     ]
     .into_iter()
@@ -230,7 +232,10 @@ mod tests {
     fn volume_roots_are_dependencies() {
         let home = tempfile::tempdir().unwrap();
         fs::create_dir(home.path().join(SESSIONS)).unwrap();
-        let volumes = VolumeTable::from([("data".into(), home.path().join("sessions/data"))]);
+        let volumes = VolumeTable::from([(
+            "data".into(),
+            submilli_server::config::VolumeSpec::local_path(home.path().join("sessions/data")),
+        )]);
         assert!(
             validate_dependencies(
                 &layout(home.path()),
@@ -239,6 +244,31 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn the_managed_volume_root_is_a_dependency_and_managed_volumes_are_not() {
+        let home = tempfile::tempdir().unwrap();
+        fs::create_dir(home.path().join(SESSIONS)).unwrap();
+        let managed = VolumeTable::from([(
+            "memory".into(),
+            submilli_server::config::VolumeSpec::managed(
+                submilli_server::config::SizeLimit::Unlimited,
+            ),
+        )]);
+        let inside = ServerDirectories {
+            managed_volume_root: Some(home.path().join("sessions/volumes")),
+            ..ServerDirectories::default()
+        };
+        let err = validate_dependencies(&layout(home.path()), &inside, &managed)
+            .expect_err("a root inside a moving directory blocks the migration");
+        assert!(err.to_string().contains("managed volume root"), "{err}");
+        validate_dependencies(
+            &layout(home.path()),
+            &ServerDirectories::default(),
+            &managed,
+        )
+        .expect("a managed volume names no path of its own");
     }
 
     #[cfg(unix)]

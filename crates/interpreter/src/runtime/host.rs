@@ -984,6 +984,9 @@ enum DenialSource {
     /// A runtime invariant refused ahead of the policy. No rule can grant it,
     /// so the message must not suggest asking for one.
     Invariant,
+    /// The path is in a volume mounted read-only. Unlike a policy decision,
+    /// writing somewhere else is a legitimate response.
+    ReadOnly,
 }
 
 impl PermissionDenied {
@@ -1025,6 +1028,10 @@ impl std::fmt::Display for PermissionDenied {
                  asking a package to fetch the value and hand it back, not through raw \
                  HTTP. Report it and stop."
             }
+            DenialSource::ReadOnly => {
+                " This volume cannot be written from this blueprint; write under a \
+                 writable path instead (fs.info() lists each mount and its access)."
+            }
         })
     }
 }
@@ -1049,6 +1056,15 @@ pub fn permission_denied_invariant(
     reason: impl Into<String>,
 ) -> wasmtime::Error {
     denied(caller, capability, reason, DenialSource::Invariant)
+}
+
+/// A write into a volume mounted read-only.
+pub fn permission_denied_read_only(
+    caller: impl Into<String>,
+    capability: impl Into<String>,
+    reason: impl Into<String>,
+) -> wasmtime::Error {
+    denied(caller, capability, reason, DenialSource::ReadOnly)
 }
 
 fn denied(

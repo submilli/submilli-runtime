@@ -4,14 +4,13 @@ use axum::{
     http::StatusCode,
 };
 use serde::{Deserialize, Serialize};
-use submilli_blueprint::{
-    self, Blueprint, BlueprintError, SecretSource, VfsConfig, YamlPath, yaml_path,
-};
+use submilli_blueprint::{self, Blueprint, BlueprintError, SecretSource, YamlPath, yaml_path};
 use submilli_shared::EnvFileSecretResolver;
 
 use crate::app::AppState;
 use crate::blueprint::{StoreError, StoredBlueprint};
 use crate::config::VolumeTable;
+use crate::volumes::ReferenceError;
 
 #[derive(Debug, Deserialize)]
 pub struct AddRequest {
@@ -178,49 +177,59 @@ fn reject_local_secret_sources(
     Ok(())
 }
 
-/// Reject a `persistent` blueprint naming a volume the operator has not
-/// declared, so the store never holds one no session could mount.
+/// A blueprint's reference to a named volume that no session could mount, with
+/// where in the blueprint it sits.
+#[derive(Debug)]
+pub(crate) struct VolumeReferenceProblem {
+    pub code: &'static str,
+    pub message: String,
+    pub path: submilli_blueprint::YamlPath,
+}
+
+/// Reject a blueprint naming a volume the operator has not declared, or asking
+/// for more access than the declaration allows, so the store never holds one no
+/// session could mount as written. Checks the `named` root and every mount.
 ///
 /// Unlike [`reject_local_secret_sources`] this is not an HTTP-only rule: the
 /// message is built here but every registration channel calls it, the seed
 /// directory included. A channel that skipped it would accept a form its twin
 /// rejects, which is the gap this exists to close.
-pub(crate) fn check_declared_volume(
+pub(crate) fn check_volume_references(
     blueprint: &Blueprint,
     volumes: &VolumeTable,
-) -> Result<(), String> {
-    let VfsConfig::Persistent { volume } = &blueprint.vfs else {
-        return Ok(());
-    };
-    if volumes.contains_key(volume) {
-        return Ok(());
+) -> Result<(), VolumeReferenceProblem> {
+    for reference in blueprint.vfs.named_references() {
+        let Err(err) = crate::volumes::check_reference(volumes, reference.volume, reference.access)
+        else {
+            continue;
+        };
+        let (code, field) = match err {
+            ReferenceError::Undeclared { .. } => ("undeclared_volume", "volume"),
+            ReferenceError::AccessExceeds { .. } => ("volume_access_exceeded", "access"),
+        };
+        return Err(VolumeReferenceProblem {
+            code,
+            message: err.to_string(),
+            path: reference.yaml_path(field),
+        });
     }
-    Err(if volumes.is_empty() {
-        format!(
-            "volume '{volume}' is not declared on this server, which declares no volumes at \
-             all; the operator declares one by mapping a name to a directory under `volumes:` \
-             in the server config file"
-        )
-    } else {
-        let declared = volumes.keys().cloned().collect::<Vec<_>>().join(", ");
-        format!(
-            "volume '{volume}' is not declared on this server; declared volumes are: \
-             {declared}. Use one of those, or ask the operator to declare '{volume}' under \
-             `volumes:` in the server config file"
-        )
-    })
+    Ok(())
 }
 
-fn reject_undeclared_volume(
+fn reject_unusable_volume_reference(
     blueprint: &Blueprint,
     volumes: &VolumeTable,
 ) -> Result<(), (StatusCode, Json<ErrorResponse>)> {
-    check_declared_volume(blueprint, volumes).map_err(|message| {
+    check_volume_references(blueprint, volumes).map_err(|problem| {
         (
             StatusCode::BAD_REQUEST,
             Json(
-                ErrorResponse::named("undeclared_volume", message.clone(), blueprint.name.clone())
-                    .diagnostic(Some(yaml_path!["vfs", "volume"]), message),
+                ErrorResponse::named(
+                    problem.code,
+                    problem.message.clone(),
+                    blueprint.name.clone(),
+                )
+                .diagnostic(Some(problem.path), problem.message),
             ),
         )
     })
@@ -232,7 +241,7 @@ pub async fn add(
 ) -> Result<(StatusCode, Json<AddResponse>), (StatusCode, Json<ErrorResponse>)> {
     let blueprint = parse_blueprint(&req.yaml)?;
     reject_local_secret_sources(&blueprint)?;
-    reject_undeclared_volume(&blueprint, state.session_manager().volumes())?;
+    reject_unusable_volume_reference(&blueprint, state.session_manager().volumes())?;
     verify_secrets(&state, &blueprint).await?;
     let name = blueprint.name.clone();
     state
@@ -273,7 +282,7 @@ pub async fn apply(
 ) -> Result<(StatusCode, Json<ApplyResponse>), (StatusCode, Json<ErrorResponse>)> {
     let blueprint = parse_blueprint(&req.yaml)?;
     reject_local_secret_sources(&blueprint)?;
-    reject_undeclared_volume(&blueprint, state.session_manager().volumes())?;
+    reject_unusable_volume_reference(&blueprint, state.session_manager().volumes())?;
     verify_secrets(&state, &blueprint).await?;
     let packages_changed = state
         .blueprints()

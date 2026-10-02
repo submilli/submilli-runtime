@@ -1118,6 +1118,7 @@ pub enum InterfaceCarrier {
     FsPeek,
     FsDirEntry,
     FsInfo,
+    FsMountInfo,
     FsFileWriter,
     HttpResponse,
     HttpDownloadResult,

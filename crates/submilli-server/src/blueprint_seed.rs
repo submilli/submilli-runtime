@@ -21,7 +21,7 @@ use submilli_blueprint::SecretResolver;
 
 use crate::blueprint::{BlueprintStore, StoredBlueprint};
 use crate::config::VolumeTable;
-use crate::handlers::blueprint::{check_declared_volume, permissions_last_preserving_comments};
+use crate::handlers::blueprint::{check_volume_references, permissions_last_preserving_comments};
 
 /// What one reconcile pass did, per seed file considered.
 #[derive(Debug, Default, PartialEq, Eq)]
@@ -100,11 +100,12 @@ pub async fn seed_blueprints(
         // The same rule the API applies, with the seed's consequence: a
         // blueprint no session could mount stays out of the store, but a
         // read-only ConfigMap holding one must not keep the server from booting.
-        if let Err(message) = check_declared_volume(&blueprint, volumes) {
+        if let Err(problem) = check_volume_references(&blueprint, volumes) {
             tracing::warn!(
                 file = %file.name,
                 blueprint = %blueprint.name,
-                "{message}",
+                "{}",
+                problem.message,
             );
             outcome.failed += 1;
             continue;

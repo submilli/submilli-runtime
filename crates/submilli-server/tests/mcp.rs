@@ -19,7 +19,7 @@ use submilli_build::{
     ArtifactMetadata, CapabilitySchema, PackageStore, write_package_artifact_with_docs,
 };
 use submilli_server::blueprint::InMemoryBlueprintStore;
-use submilli_server::config::VolumeTable;
+use submilli_server::config::{VolumeSpec, VolumeTable};
 use submilli_server::{AppState, ServerConfig, app};
 use tower::ServiceExt;
 
@@ -136,13 +136,19 @@ impl Harness {
         let blueprints = Arc::new(InMemoryBlueprintStore::seed([
             Blueprint {
                 name: EPH.into(),
-                vfs: VfsConfig::Ephemeral { size_limit: None },
+                vfs: VfsConfig::Ephemeral {
+                    size_limit: None,
+                    mounts: Default::default(),
+                },
                 permissions: allow_fs(),
                 ..Default::default()
             },
             Blueprint {
                 name: SESS.into(),
-                vfs: VfsConfig::PerSession { size_limit: None },
+                vfs: VfsConfig::PerSession {
+                    size_limit: None,
+                    mounts: Default::default(),
+                },
                 permissions: allow_fs(),
                 ..Default::default()
             },
@@ -839,7 +845,10 @@ async fn mcp_session_restores_after_server_restart() {
     let blueprints = || {
         vec![Blueprint {
             name: SESS.into(),
-            vfs: VfsConfig::PerSession { size_limit: None },
+            vfs: VfsConfig::PerSession {
+                size_limit: None,
+                mounts: Default::default(),
+            },
             permissions: allow_fs(),
             ..Default::default()
         }]
@@ -2098,8 +2107,10 @@ const VOL: &str = "vol";
 fn volume_blueprint(volume: &str) -> Blueprint {
     Blueprint {
         name: VOL.into(),
-        vfs: VfsConfig::Persistent {
+        vfs: VfsConfig::Named {
             volume: volume.into(),
+            access: None,
+            mounts: Default::default(),
         },
         permissions: allow_fs(),
         ..Default::default()
@@ -2109,11 +2120,14 @@ fn volume_blueprint(volume: &str) -> Blueprint {
 /// The MCP route builds its own VFS for every non-`per_session` blueprint, so
 /// volume resolution has to hold there too — not only on the session path.
 #[tokio::test]
-async fn mcp_persistent_mounts_the_declared_volume() {
+async fn mcp_named_root_mounts_the_declared_volume() {
     let dir = tempfile::tempdir().expect("volume dir");
     let h = Harness::from_blueprints_with_volumes(
         vec![volume_blueprint("work")],
-        VolumeTable::from([("work".to_string(), dir.path().to_path_buf())]),
+        VolumeTable::from([(
+            "work".to_string(),
+            VolumeSpec::local_path(dir.path().to_path_buf()),
+        )]),
     );
     let session = h.handshake(VOL).await;
     let (_, _, rpc) = h.post(VOL, tools_call(2, WRITE), Some(&session)).await;
@@ -2122,14 +2136,17 @@ async fn mcp_persistent_mounts_the_declared_volume() {
 }
 
 /// The file tools describe themselves as a way to read what an `execute` run wrote,
-/// and name the modes where that survives. `persistent` is one of them — an agent
+/// and name the modes where that survives. A named volume is one of them — an agent
 /// told otherwise would page a large payload back through a single result instead.
 #[tokio::test]
-async fn files_tools_see_what_execute_wrote_to_a_persistent_volume() {
+async fn files_tools_see_what_execute_wrote_to_a_named_volume() {
     let dir = tempfile::tempdir().expect("volume dir");
     let h = Harness::from_blueprints_with_volumes(
         vec![volume_blueprint("work")],
-        VolumeTable::from([("work".to_string(), dir.path().to_path_buf())]),
+        VolumeTable::from([(
+            "work".to_string(),
+            VolumeSpec::local_path(dir.path().to_path_buf()),
+        )]),
     );
     let session = h.handshake(VOL).await;
     let (_, _, w) = h.post(VOL, tools_call(2, WRITE), Some(&session)).await;
@@ -2148,6 +2165,49 @@ async fn files_tools_see_what_execute_wrote_to_a_persistent_volume() {
         .filter_map(|e| e["path"].as_str())
         .collect();
     assert!(paths.contains(&"/a.txt"), "got: {list}");
+}
+
+/// A recursive listing reaches a mounted volume's files through the volume, not
+/// the empty directory the root holds at its mount point.
+#[tokio::test]
+async fn files_list_descends_into_a_mounted_volume() {
+    let dir = tempfile::tempdir().expect("volume dir");
+    std::fs::create_dir(dir.path().join("notes")).unwrap();
+    std::fs::write(dir.path().join("notes/a.md"), "a").unwrap();
+    let mut blueprint = submilli_blueprint::parse(
+        "name: vol\nvfs:\n  mounts:\n    /data/memory: {mode: named, volume: work}\n",
+    )
+    .unwrap();
+    blueprint.permissions = allow_fs();
+    let h = Harness::from_blueprints_with_volumes(
+        vec![blueprint],
+        VolumeTable::from([(
+            "work".to_string(),
+            VolumeSpec::local_path(dir.path().to_path_buf()),
+        )]),
+    );
+    let session = h.handshake(VOL).await;
+    let call = rpc_call(
+        2,
+        "submilli__files__list",
+        json!({ "path": "/data", "recursive": true }),
+    );
+    let (_, _, list) = h.post(VOL, call, Some(&session)).await;
+    let paths: Vec<&str> = output(&list)["entries"]
+        .as_array()
+        .expect("entries array")
+        .iter()
+        .filter_map(|e| e["path"].as_str())
+        .collect();
+    assert_eq!(
+        paths,
+        [
+            "/data/memory",
+            "/data/memory/notes",
+            "/data/memory/notes/a.md"
+        ],
+        "got: {list}"
+    );
 }
 
 #[tokio::test]
@@ -2326,7 +2386,7 @@ async fn llm_discovery_requires_models_and_permission() {
 }
 
 #[tokio::test]
-async fn files_tools_enforce_session_policy_on_persistent_volume() {
+async fn files_tools_enforce_session_policy_on_a_named_volume() {
     let dir = tempfile::tempdir().expect("volume");
     for user in ["ada", "grace"] {
         std::fs::create_dir(dir.path().join(user)).unwrap();
@@ -2335,7 +2395,7 @@ async fn files_tools_enforce_session_policy_on_persistent_volume() {
     let blueprint = submilli_blueprint::parse(
         r#"
 name: vol
-vfs: { mode: persistent, volume: work }
+vfs: { mode: named, volume: work }
 variables:
   user: { required: true }
 permissions:
@@ -2351,7 +2411,10 @@ permissions:
     .unwrap();
     let h = Harness::from_blueprints_with_volumes(
         vec![blueprint],
-        VolumeTable::from([("work".into(), dir.path().to_path_buf())]),
+        VolumeTable::from([(
+            "work".to_string(),
+            VolumeSpec::local_path(dir.path().to_path_buf()),
+        )]),
     );
     for user in ["ada", "grace"] {
         let session = handshake_with_vars(&h, VOL, json!({"user": user})).await;
@@ -2421,8 +2484,14 @@ permissions:
 #[tokio::test]
 async fn files_tools_default_deny_in_every_vfs_mode() {
     for vfs in [
-        VfsConfig::Ephemeral { size_limit: None },
-        VfsConfig::PerSession { size_limit: None },
+        VfsConfig::Ephemeral {
+            size_limit: None,
+            mounts: Default::default(),
+        },
+        VfsConfig::PerSession {
+            size_limit: None,
+            mounts: Default::default(),
+        },
         VfsConfig::None,
     ] {
         let h = Harness::from_blueprints(vec![Blueprint {
@@ -2463,7 +2532,7 @@ async fn filesystem_policy_uses_normalized_paths_for_programs_and_file_tools() {
     let blueprint = submilli_blueprint::parse(
         r#"
 name: vol
-vfs: { mode: persistent, volume: work }
+vfs: { mode: named, volume: work }
 variables:
   user: { required: true }
 permissions:
@@ -2497,7 +2566,10 @@ permissions:
     .unwrap();
     let h = Harness::from_blueprints_with_volumes(
         vec![blueprint],
-        VolumeTable::from([("work".into(), dir.path().to_path_buf())]),
+        VolumeTable::from([(
+            "work".to_string(),
+            VolumeSpec::local_path(dir.path().to_path_buf()),
+        )]),
     );
     let session = handshake_with_vars(&h, VOL, json!({"user": "ada"})).await;
     for expression in [

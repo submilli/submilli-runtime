@@ -32,7 +32,7 @@ call by call with filters. It can't raise an operator's limit.
 | Time | none | `max_execution_time`, seconds | The run ends: `timeout exceeded` |
 | Fuel | 10¹² | `max_execution_fuel` | The run ends: `fuel exhausted` |
 | Stack | 512 KB | `max_execution_stack`, KB, at most 16,384 | The run ends: `call stack exhausted` |
-| Filesystem size | none | the blueprint's `vfs.size_limit` | `RangeError` |
+| Filesystem size | none | the blueprint's `vfs.size_limit`; a named volume's `size_limit` in the server config | `RangeError` |
 | Model tokens, one run | 1,000,000 | `max_execution_llm_tokens` | `RangeError` |
 | Model tokens, all runs | 20,000,000 | `max_llm_tokens` | `RangeError` |
 | Prompts in flight | 4 | `max_llm_concurrency` | Further prompts wait |
@@ -126,9 +126,11 @@ Under `per_session` it covers all the session's files, not each program's.
 
 A write that would pass the limit is refused with a `RangeError` the program
 can catch, and deleting files frees the space again. `fs.info().sizeLimit`
-tells the program its limit, and is `-1` when there is none. A `persistent`
-volume takes no `size_limit`: every session that names it shares one
-directory, and its size is the operator's to manage.
+tells the program its limit, and is `-1` when there is none. A [named
+volume](/docs/server#volumes) takes no `size_limit` in the blueprint: the
+operator sets one where the server declares it, and that one limit covers
+every session and blueprint using the volume. `fs.info().mounts` reports each
+mounted volume's limit.
 
 ## Model spending
 

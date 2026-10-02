@@ -14,7 +14,7 @@ use std::collections::VecDeque;
 use std::ffi::{OsStr, OsString};
 use std::fs::File;
 use std::io::{BufRead, BufReader, BufWriter, Read, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -274,6 +274,9 @@ impl Level {
 /// coming immediately after it, because the descent has to wait for a directory handle.
 pub struct ContainedWalk {
     base: Arc<Dir>,
+    /// Mount points below the base, relative to it, with the volume handle a
+    /// descent opens in place of the empty directory the root holds there.
+    mounts: Vec<(PathBuf, Arc<Dir>)>,
     /// Guest-relative path of the listed directory, `""` for the root, else `"tree/"`.
     base_prefix: String,
     stack: Vec<Level>,
@@ -287,10 +290,17 @@ pub struct ContainedWalk {
 
 impl ContainedWalk {
     /// `base_prefix` is the guest-relative path of the listed directory, `""` for the root.
-    pub fn new(base: Arc<Dir>, base_prefix: String, recursive: bool) -> std::io::Result<Self> {
+    /// `mounts` are the mount points below it; see [`ContentPath::mounts_below`].
+    pub fn new(
+        base: Arc<Dir>,
+        base_prefix: String,
+        recursive: bool,
+        mounts: Vec<(PathBuf, Arc<Dir>)>,
+    ) -> std::io::Result<Self> {
         let iter = base.entries()?;
         Ok(Self {
             base,
+            mounts,
             base_prefix,
             stack: vec![Level::new(PathBuf::new(), iter)],
             open_dirs: 1,
@@ -355,7 +365,7 @@ impl ContainedWalk {
     fn descend(&mut self, name: &OsStr, entry: &DirEntry) {
         if self.open_dirs < MAX_OPEN_DIRS
             && let Some(child) = self.stack.last().map(|level| level.path.join(name))
-            && let Ok(dir) = entry.open_dir()
+            && let Ok(dir) = self.open_child(&child, entry)
             && let Ok(iter) = dir.entries()
         {
             self.stack.push(Level::new(child, iter));
@@ -386,12 +396,35 @@ impl ContainedWalk {
         let path = level.path.join(name);
         // The level draining its deferrals released its own handle first, so `open_dirs`
         // is always below the cap here.
-        if let Ok(dir) = self.base.open_dir(&path)
+        if let Ok(dir) = self.open_path(&path)
             && let Ok(iter) = dir.entries()
         {
             self.stack.push(Level::new(path, iter));
             self.open_dirs += 1;
         }
+    }
+
+    /// The directory `entry` names at `path`, or the mounted volume when `path`
+    /// is a mount point.
+    fn open_child(&self, path: &Path, entry: &DirEntry) -> std::io::Result<Dir> {
+        match self.mounts.iter().find(|(rel, _)| rel == path) {
+            Some((_, volume)) => volume.try_clone(),
+            None => entry.open_dir(),
+        }
+    }
+
+    /// The directory at `path` below the base, through the volume mounted over
+    /// it if any.
+    fn open_path(&self, path: &Path) -> std::io::Result<Dir> {
+        for (rel, volume) in &self.mounts {
+            if let Ok(rest) = path.strip_prefix(rel) {
+                if rest.as_os_str().is_empty() {
+                    return volume.try_clone();
+                }
+                return volume.open_dir(rest);
+            }
+        }
+        self.base.open_dir(path)
     }
 }
 
@@ -780,7 +813,7 @@ mod tests {
         } else {
             format!("{}/", listed.trim_start_matches('/'))
         };
-        ContainedWalk::new(base, base_prefix, recursive).unwrap()
+        ContainedWalk::new(base, base_prefix, recursive, Vec::new()).unwrap()
     }
 
     fn walk_all(root: &std::path::Path, listed: &str) -> Vec<WalkEntry> {

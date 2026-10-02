@@ -1298,6 +1298,9 @@ fn emit_non_shape_interface_test(
             InterfaceCarrier::FsPeek => emit_ref_test(emitter, value_local, intr.fs_peek),
             InterfaceCarrier::FsDirEntry => emit_ref_test(emitter, value_local, intr.fs_dir_entry),
             InterfaceCarrier::FsInfo => emit_ref_test(emitter, value_local, intr.fs_info),
+            InterfaceCarrier::FsMountInfo => {
+                emit_ref_test(emitter, value_local, intr.fs_mount_info);
+            }
             InterfaceCarrier::FsFileWriter => {
                 emit_ref_test(emitter, value_local, intr.fs_file_writer);
             }

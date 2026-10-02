@@ -19,10 +19,10 @@
 //! timestamps, not process uptime.
 //!
 //! Only `per_session` owns a directory the manager wipes. `ephemeral` dirs are
-//! per-execute (owned by the runner); a `persistent` directory is one the
-//! operator declared as a volume in the server config, and is never created,
-//! wiped, or reaped here — [`build_vfs`] only resolves the blueprint's volume
-//! name through the declared table and mounts what it finds.
+//! per-execute (owned by the runner); a named volume — a `named` root or a
+//! `vfs.mounts` entry — is one the operator declared in the server config, and
+//! is never wiped or reaped here: [`build_vfs`] only resolves the blueprint's
+//! volume names through the [`VolumeRegistry`] and mounts what it finds.
 //!
 //! [`wipe_now`]: SessionManager::wipe_now
 //! [`boot`]: SessionManager::boot
@@ -34,8 +34,9 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime};
 
 use interpreter::runtime::{
-    ExecutionTokenBudget, HttpClient, InMemorySessionKv, LlmLimits, SessionKvLimits,
-    SessionKvStore, SharedKvBudget, SharedTokenBudget, Vfs, VfsInfo, VfsMode as RtVfsMode,
+    Access as RtAccess, ExecutionTokenBudget, HttpClient, InMemorySessionKv, LlmLimits, MountError,
+    MountSpec, SessionKvLimits, SessionKvStore, SharedKvBudget, SharedTokenBudget, Vfs, VfsInfo,
+    VfsMode as RtVfsMode,
 };
 use submilli_blueprint::{Blueprint, HarnessSecretBindings, VarBindings, VfsConfig};
 use uuid::Uuid;
@@ -43,6 +44,7 @@ use uuid::Uuid;
 use crate::config::VolumeTable;
 use crate::idempotency_store::IdempotencyStore;
 use crate::session_store::{DurableSessionStore, SessionRecord};
+use crate::volumes::VolumeRegistry;
 
 /// Builds a fresh per-session HTTP client (its own connection pool). Injected so
 /// the manager owns each session's client lifecycle without depending on the
@@ -84,6 +86,12 @@ pub enum SessionError {
     /// directory, or is unreadable. The host path is deliberately absent — it is
     /// logged server-side instead, so a client learns only the volume name.
     VolumeUnavailable(String),
+    /// A volume could not be grafted at its mount path in the root, such as
+    /// when the root holds a file there.
+    MountFailed {
+        volume: String,
+        reason: String,
+    },
 }
 
 impl std::fmt::Display for SessionError {
@@ -100,6 +108,9 @@ impl std::fmt::Display for SessionError {
                 f,
                 "volume '{name}' is declared but unavailable; the server log has the details"
             ),
+            SessionError::MountFailed { volume, reason } => {
+                write!(f, "volume '{volume}' could not be mounted: {reason}")
+            }
         }
     }
 }
@@ -142,10 +153,10 @@ pub struct SessionManager {
     session_root: PathBuf,
     /// Root for `ephemeral` scratch dirs; `None` uses the OS temp dir.
     ephemeral_root: Option<PathBuf>,
-    /// Operator-declared volumes a `persistent` blueprint resolves through.
+    /// Operator-declared named volumes every blueprint resolves through.
     /// Passed in rather than looked up globally, so every mount path takes the
-    /// same table.
-    volumes: Arc<VolumeTable>,
+    /// same table and shares the same size limits.
+    volumes: Arc<VolumeRegistry>,
     http_client_factory: HttpClientFactory,
     store: Arc<dyn DurableSessionStore>,
     /// Idempotency entries are session-scoped, so they end when the session
@@ -251,7 +262,7 @@ impl SessionManager {
     pub fn new(
         session_root: PathBuf,
         ephemeral_root: Option<PathBuf>,
-        volumes: Arc<VolumeTable>,
+        volumes: Arc<VolumeRegistry>,
         http_client_factory: HttpClientFactory,
         store: Arc<dyn DurableSessionStore>,
         idempotency: Arc<dyn IdempotencyStore>,
@@ -398,9 +409,14 @@ impl SessionManager {
         self.ephemeral_root.as_deref()
     }
 
-    /// The declared volume table. Every caller of [`build_vfs`] reads it from
-    /// here, so no mount route can skip volume resolution.
+    /// The declared volume table, for registration checks and listings.
     pub(crate) fn volumes(&self) -> &VolumeTable {
+        self.volumes.table()
+    }
+
+    /// The declared volumes. Every caller of [`build_vfs`] reads them from here,
+    /// so no mount route can skip volume resolution.
+    pub(crate) fn volume_registry(&self) -> &VolumeRegistry {
         &self.volumes
     }
 
@@ -477,7 +493,7 @@ impl SessionManager {
         };
 
         if inserted {
-            crate::metrics::session_init(vfs_kind(&blueprint.vfs));
+            crate::metrics::session_init(blueprint.vfs.mode_str());
             self.persist(SessionRecord {
                 session_id: session_id.to_string(),
                 blueprint_name: blueprint.name.clone(),
@@ -539,7 +555,7 @@ impl SessionManager {
         blueprint: &Blueprint,
     ) -> Result<(Vfs, VfsInfo), SessionError> {
         let (vfs, info) = self.session_vfs(session_id, blueprint)?;
-        Ok((attach_size_limit(vfs, blueprint).await?, info))
+        Ok((attach_limits(vfs, blueprint, &self.volumes).await?, info))
     }
 
     /// Mark execute activity, keeping the session alive and resetting idle.
@@ -801,24 +817,16 @@ fn remove_entry(state: &mut State, session_id: &str) -> bool {
     }
 }
 
-fn vfs_kind(vfs: &VfsConfig) -> &'static str {
-    match vfs {
-        VfsConfig::None => "none",
-        VfsConfig::Ephemeral { .. } => "ephemeral",
-        VfsConfig::PerSession { .. } => "per_session",
-        VfsConfig::Persistent { .. } => "persistent",
-    }
-}
-
-/// Build the `Vfs` for one execute. `persistent` mode resolves its blueprint's
-/// volume name through `volumes` here — at the single point every mount is
-/// constructed — so no route into a session can mount a directory the operator
-/// did not declare.
+/// Build the `Vfs` for one execute. Every named volume — a `named` root or a
+/// mount — resolves through `volumes` here, at the single point every VFS is
+/// constructed, so no route into a session can mount a directory the operator
+/// did not declare. Size limits are attached separately ([`attach_limits`]),
+/// since only a program that may write needs them.
 pub(crate) fn build_vfs(
     blueprint: &Blueprint,
     session_root: Option<&Path>,
     ephemeral_root: Option<&Path>,
-    volumes: &VolumeTable,
+    volumes: &VolumeRegistry,
 ) -> Result<Vfs, SessionError> {
     // `Vfs` formats the host root into its error, and these roots are the server's own
     // storage layout. Redact for the same reason a volume's target is redacted: the
@@ -831,28 +839,59 @@ pub(crate) fn build_vfs(
             ))
         }
     };
-    match &blueprint.vfs {
-        VfsConfig::None => Ok(Vfs::none()),
+    let root = match &blueprint.vfs {
+        VfsConfig::None => return Ok(Vfs::none()),
         VfsConfig::Ephemeral { .. } => match ephemeral_root {
-            Some(root) => Vfs::tempdir_in(root).map_err(io("ephemeral")),
-            None => Vfs::tempdir().map_err(io("ephemeral")),
+            Some(root) => Vfs::tempdir_in(root).map_err(io("ephemeral"))?,
+            None => Vfs::tempdir().map_err(io("ephemeral"))?,
         },
         VfsConfig::PerSession { .. } => {
             let root = session_root
                 .ok_or_else(|| SessionError::Io("per_session vfs root missing".into()))?;
             Vfs::external_with_mode(root.to_path_buf(), RtVfsMode::PerSession)
-                .map_err(io("per_session"))
+                .map_err(io("per_session"))?
         }
-        VfsConfig::Persistent { volume } => mount_volume(volume, volumes),
-    }
+        VfsConfig::Named { volume, access, .. } => mount_root(volume, *access, volumes)?,
+    };
+    blueprint
+        .vfs
+        .mounts()
+        .iter()
+        .try_fold(root, |vfs, (path, mount)| {
+            graft(vfs, path, &mount.volume, mount.access, volumes)
+        })
 }
 
-/// Enforce the blueprint's `size_limit` on `vfs`. Attaching it walks the whole
-/// directory, so the walk runs on the blocking pool rather than an async worker.
-pub(crate) async fn attach_size_limit(
+/// Enforce the size limits on `vfs`: the blueprint's `size_limit` on an
+/// ephemeral or per-session root, and each named volume's own limit, shared with
+/// every other VFS using it. Measuring walks a whole directory, so it runs on
+/// the blocking pool rather than an async worker.
+pub(crate) async fn attach_limits(
     vfs: Vfs,
     blueprint: &Blueprint,
+    volumes: &VolumeRegistry,
 ) -> Result<Vfs, SessionError> {
+    let mut vfs = attach_size_limit(vfs, blueprint).await?;
+    if let Some(volume) = vfs.volume().map(str::to_string)
+        && let Some(quota) = volumes.quota(&volume).await?
+    {
+        vfs = vfs.with_shared_quota(quota);
+    }
+    let mounts: Vec<(String, String)> = vfs
+        .mounts()
+        .iter()
+        .map(|mount| (mount.guest_path().to_string(), mount.volume().to_string()))
+        .collect();
+    for (path, volume) in mounts {
+        if let Some(quota) = volumes.quota(&volume).await? {
+            vfs = vfs.with_mount_quota(&path, quota);
+        }
+    }
+    Ok(vfs)
+}
+
+/// Enforce the blueprint's own `size_limit` on an ephemeral or per-session root.
+async fn attach_size_limit(vfs: Vfs, blueprint: &Blueprint) -> Result<Vfs, SessionError> {
     let Some(limit) = blueprint.vfs.size_limit() else {
         return Ok(vfs);
     };
@@ -872,26 +911,79 @@ pub(crate) async fn attach_size_limit(
     Ok(vfs)
 }
 
-/// Mount a declared volume. Both failures are reported to the client by volume
-/// name only: the host directory is the operator's business, and the mount
-/// error carries it verbatim, so it is logged rather than returned.
-fn mount_volume(volume: &str, volumes: &VolumeTable) -> Result<Vfs, SessionError> {
-    let Some(target) = volumes.get(volume) else {
-        tracing::warn!(
-            volume,
-            "blueprint names a volume this server does not declare"
-        );
-        return Err(SessionError::UnknownVolume(volume.to_string()));
-    };
-    Vfs::external_with_mode(target.clone(), RtVfsMode::Persistent).map_err(|err| {
+/// Open a named volume as the root. Failures are reported to the client by
+/// volume name only: the host directory is the operator's business, and the
+/// open error carries it verbatim, so it is logged rather than returned.
+fn mount_root(
+    volume: &str,
+    access: Option<submilli_blueprint::Access>,
+    volumes: &VolumeRegistry,
+) -> Result<Vfs, SessionError> {
+    let resolved = volumes.resolve(volume, access)?;
+    let vfs = Vfs::external_with_mode(resolved.host.clone(), RtVfsMode::Named).map_err(|err| {
         tracing::error!(
             volume,
-            path = %target.display(),
+            path = %resolved.host.display(),
             %err,
             "mounting declared volume failed"
         );
         SessionError::VolumeUnavailable(volume.to_string())
+    })?;
+    Ok(vfs
+        .with_access(runtime_access(resolved.access))
+        .with_volume_name(volume))
+}
+
+/// Graft a named volume at `path` below the root.
+fn graft(
+    vfs: Vfs,
+    path: &str,
+    volume: &str,
+    access: Option<submilli_blueprint::Access>,
+    volumes: &VolumeRegistry,
+) -> Result<Vfs, SessionError> {
+    let resolved = volumes.resolve(volume, access)?;
+    let host = resolved.host.clone();
+    vfs.with_mount(MountSpec {
+        guest_path: path.to_string(),
+        host: resolved.host,
+        volume: volume.to_string(),
+        access: runtime_access(resolved.access),
+        // Attached by `attach_limits`, and only for a run that may write.
+        quota: None,
     })
+    .map_err(|err| match err {
+        MountError::Io(err) => {
+            tracing::error!(
+                volume,
+                path = %host.display(),
+                %err,
+                "mounting declared volume failed"
+            );
+            SessionError::VolumeUnavailable(volume.to_string())
+        }
+        MountError::RootIo(err) => {
+            // The root's own storage, not the volume's, failed.
+            tracing::error!(volume, mount = path, %err, "preparing the mount point failed");
+            SessionError::MountFailed {
+                volume: volume.to_string(),
+                reason: format!(
+                    "the mount point {path} could not be prepared; the server log has the details"
+                ),
+            }
+        }
+        other => SessionError::MountFailed {
+            volume: volume.to_string(),
+            reason: other.to_string(),
+        },
+    })
+}
+
+fn runtime_access(access: submilli_blueprint::Access) -> RtAccess {
+    match access {
+        submilli_blueprint::Access::ReadOnly => RtAccess::ReadOnly,
+        submilli_blueprint::Access::ReadWrite => RtAccess::ReadWrite,
+    }
 }
 
 pub(crate) fn vfs_info(blueprint: &Blueprint) -> VfsInfo {
@@ -900,7 +992,7 @@ pub(crate) fn vfs_info(blueprint: &Blueprint) -> VfsInfo {
             VfsConfig::None => RtVfsMode::None,
             VfsConfig::Ephemeral { .. } => RtVfsMode::Ephemeral,
             VfsConfig::PerSession { .. } => RtVfsMode::PerSession,
-            VfsConfig::Persistent { .. } => RtVfsMode::Persistent,
+            VfsConfig::Named { .. } => RtVfsMode::Named,
         },
         size_limit: blueprint.vfs.size_limit(),
     }
@@ -930,10 +1022,13 @@ mod tests {
 
         let blueprint = Blueprint {
             name: "bp".into(),
-            vfs: VfsConfig::PerSession { size_limit: None },
+            vfs: VfsConfig::PerSession {
+                size_limit: None,
+                mounts: Default::default(),
+            },
             ..Default::default()
         };
-        let err = build_vfs(&blueprint, Some(&root), None, &VolumeTable::new())
+        let err = build_vfs(&blueprint, Some(&root), None, &VolumeRegistry::default())
             .expect_err("mounting a file as a session root must fail");
 
         let msg = err.to_string();
@@ -1011,7 +1106,10 @@ mod tests {
         Blueprint {
             name: "p".into(),
             idle_timeout: idle,
-            vfs: VfsConfig::PerSession { size_limit: None },
+            vfs: VfsConfig::PerSession {
+                size_limit: None,
+                mounts: Default::default(),
+            },
             ..Default::default()
         }
     }
@@ -1095,7 +1193,10 @@ mod tests {
         );
         let bp = Blueprint {
             name: "e".into(),
-            vfs: VfsConfig::Ephemeral { size_limit: None },
+            vfs: VfsConfig::Ephemeral {
+                size_limit: None,
+                mounts: Default::default(),
+            },
             ..Default::default()
         };
         mgr.ensure("sid", &bp).await.unwrap();
@@ -1550,12 +1651,82 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn persistent_creates_no_dir_and_survives_reap() {
+    async fn named_volumes_survive_reap_and_orphan_reconciliation() {
+        let session_root = tempfile::tempdir().expect("tempdir");
+        let data = tempfile::tempdir().expect("data");
+        let local = data.path().join("local");
+        std::fs::create_dir(&local).unwrap();
+        std::fs::write(local.join("kept.txt"), "kept").unwrap();
+        let registry = VolumeRegistry::new(
+            VolumeTable::from([
+                (
+                    "managed".to_string(),
+                    crate::config::VolumeSpec::managed(crate::config::SizeLimit::Bytes(1 << 20)),
+                ),
+                (
+                    "local".to_string(),
+                    crate::config::VolumeSpec::local_path(&local),
+                ),
+            ]),
+            data.path().join("volumes"),
+        );
+        let mgr = SessionManager::new(
+            session_root.path().to_path_buf(),
+            None,
+            Arc::new(registry),
+            no_http(),
+            mem_store(),
+            mem_ledger(),
+            CapabilitySettings::default(),
+        );
+        let bp = submilli_blueprint::parse(
+            "name: x\nidle_timeout: 1s\nvfs:\n  mode: per_session\n  mounts:\n    /managed: {mode: named, volume: managed}\n    /local: {mode: named, volume: local, access: read_only}\n",
+        )
+        .unwrap();
+        let id = mgr
+            .create(&bp, Arc::new(VarBindings::new()), no_secrets())
+            .await
+            .unwrap();
+        let (vfs, _) = mgr.vfs_for_execute(&id, &bp).await.unwrap();
+        let managed = data.path().join("volumes/managed");
+        assert!(
+            managed.is_dir(),
+            "the managed volume is created on first use"
+        );
+        std::fs::write(managed.join("note.txt"), "note").unwrap();
+        assert_eq!(vfs.mounts().len(), 2);
+        assert!(
+            vfs.mounts()
+                .iter()
+                .any(|mount| mount.volume() == "managed" && mount.quota().is_some()),
+            "the managed volume carries its shared limit"
+        );
+        drop(vfs);
+        mgr.reap(way_later()).await;
+        assert!(
+            !session_root.path().join(&id).exists(),
+            "the session dir is wiped"
+        );
+        mgr.boot().await;
+        assert_eq!(
+            std::fs::read_to_string(managed.join("note.txt")).unwrap(),
+            "note"
+        );
+        assert_eq!(
+            std::fs::read_to_string(local.join("kept.txt")).unwrap(),
+            "kept"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_named_root_creates_no_session_dir() {
         let (mgr, root) = manager();
         let bp = Blueprint {
             name: "x".into(),
-            vfs: VfsConfig::Persistent {
+            vfs: VfsConfig::Named {
                 volume: "workspace".into(),
+                access: None,
+                mounts: Default::default(),
             },
             ..Default::default()
         };
@@ -1563,10 +1734,8 @@ mod tests {
             .create(&bp, Arc::new(VarBindings::new()), no_secrets())
             .await
             .unwrap();
-        // No scratch dir is allocated for persistent mode.
         assert!(!root.path().join(&id).exists());
         mgr.reap(way_later()).await;
-        // The operator's directory is untouched.
         assert!(root.path().is_dir());
     }
 

@@ -92,6 +92,14 @@ jobs:
       - name: MCP file-tool containment
         run: cargo test -p submilli-server --test mcp files_
 
+      # Mounts route guest paths into other volumes and guard their mount points by
+      # name and by file identity, both of which differ by platform: case folding,
+      # Unicode aliases, and identity read through a handle on Windows.
+      - name: VFS mounts
+        run: >-
+          cargo test -p interpreter --lib --
+          stdlib::fs::tests::mount stdlib::git::integration_tests::mount
+
       # The size limit keys files by device and inode, which Windows reports only
       # for metadata read through an open handle, and counts a file whose name goes
       # while a handle holds it until the handle closes. These walk a VFS; write,

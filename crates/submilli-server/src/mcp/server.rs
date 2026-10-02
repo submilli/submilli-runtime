@@ -29,7 +29,7 @@ use crate::handlers::execute::{blueprint_miss_message, outcome_to_parts, split_c
 use crate::packages;
 use crate::runner;
 use crate::session::LastRun;
-use crate::session_manager::{attach_size_limit, build_vfs, vfs_info};
+use crate::session_manager::{attach_limits, build_vfs, vfs_info};
 
 const TOOL_NAME: &str = "submilli__typescript__execute";
 
@@ -206,11 +206,12 @@ impl SubmilliMcp {
     /// Open the VFS a tool operates on. `per_session` resolves the session's
     /// durable directory (and keeps it alive); every other mode gets a standalone
     /// VFS per call. A cross-call workflow — write in `execute`, read with
-    /// `files.read` — therefore needs a mode whose *directory* is the same one
-    /// each time: `per_session`, or `persistent`, which remounts the same declared
-    /// volume. Only `ephemeral` hands out a fresh temp directory per call. Shared
-    /// by `execute`, `files.read` and `files.list`; only a program run enforces
-    /// the size limit, which costs a walk of the whole directory.
+    /// `files.read` — therefore needs a directory that is the same one each
+    /// time: a `per_session` root, a `named` root, or a path under a mount, which
+    /// remount the same declared volume. Only an `ephemeral` root is a fresh
+    /// temp directory per call. Shared by `execute`, `files.read` and
+    /// `files.list`; only a program run enforces the size limits, which costs a
+    /// walk of each limited directory.
     async fn acquire_vfs(
         &self,
         blueprint: &Blueprint,
@@ -234,10 +235,15 @@ impl SubmilliMcp {
             manager.touch(sid).await;
             Ok(pair)
         } else {
-            let vfs = build_vfs(blueprint, None, manager.ephemeral_root(), manager.volumes())
-                .map_err(|e| ErrorData::internal_error(e.to_string(), None))?;
+            let vfs = build_vfs(
+                blueprint,
+                None,
+                manager.ephemeral_root(),
+                manager.volume_registry(),
+            )
+            .map_err(|e| ErrorData::internal_error(e.to_string(), None))?;
             let vfs = if purpose == VfsUse::RunProgram {
-                attach_size_limit(vfs, blueprint)
+                attach_limits(vfs, blueprint, manager.volume_registry())
                     .await
                     .map_err(|e| ErrorData::internal_error(e.to_string(), None))?
             } else {
@@ -532,8 +538,9 @@ impl SubmilliMcp {
             (1-based line, default 1) and `limit` (lines, default 2000). Returns \
             { content, line_start, line_end, has_more, next_offset, bytes }; pass \
             `next_offset` back to page on. Files survive across calls under a \
-            per_session or persistent VFS; an ephemeral one is emptied after \
-            every execute. Requires fs.read as caller main with op readText."
+            per_session or named root and under a mounted volume; an \
+            ephemeral root is emptied after every execute. Requires fs.read \
+            as caller main with op readText."
     )]
     async fn read_file(
         &self,
@@ -576,9 +583,10 @@ impl SubmilliMcp {
             Args: optional `path` (directory, default the workspace root) and \
             `recursive` (default false). Returns { entries: [{ path, kind, bytes }], \
             count, truncated }, capped at 1000 entries. Files survive across calls \
-            under a per_session or persistent VFS; an ephemeral one is emptied \
-            after every execute. Requires fs.list as caller main with op list; \
-            policy checks the starting directory, including recursive listings."
+            under a per_session or named root and under a mounted volume; an \
+            ephemeral root is emptied after every execute. Requires fs.list as \
+            caller main with op list; policy checks the starting directory, \
+            including recursive listings."
     )]
     async fn list_files(
         &self,
@@ -652,7 +660,9 @@ impl SubmilliMcp {
 ///
 /// Entry metadata does not follow symlinks, so a link to a directory is reported
 /// as an entry and never descended into — which is also what keeps the walk from
-/// leaving the root once `base` itself has been opened under containment.
+/// leaving the root once `base` itself has been opened under containment. A mount
+/// point below `base` is descended into through its volume's handle, not the
+/// empty directory the root holds there.
 fn list_entries(
     base: &ContentPath,
     base_guest: &str,
@@ -663,8 +673,14 @@ fn list_entries(
     // its own: siblings share one parent, so the descriptors this holds open are
     // bounded by the tree's depth instead of its width.
     let mut pending = Vec::new();
+    let mounts = if recursive {
+        base.mounts_below()
+    } else {
+        Vec::new()
+    };
     let mut dir = Arc::new(base.open_dir()?);
     let mut prefix = base_guest.to_string();
+    let mut rel = std::path::PathBuf::new();
     loop {
         for item in dir.entries()? {
             if entries.len() >= LIST_MAX_ENTRIES {
@@ -677,7 +693,8 @@ fn list_entries(
             let name = item.file_name();
             let path = format!("{prefix}/{}", name.to_string_lossy());
             if recursive && is_dir {
-                pending.push((Arc::clone(&dir), name, path.clone()));
+                let child = rel.join(&name);
+                pending.push((Arc::clone(&dir), name, path.clone(), child));
             }
             entries.push(FileEntry {
                 path,
@@ -688,11 +705,15 @@ fn list_entries(
                 bytes: if file_type.is_file() { meta.len() } else { 0 },
             });
         }
-        let Some((parent, name, next)) = pending.pop() else {
+        let Some((parent, name, next, child)) = pending.pop() else {
             return Ok((entries, false));
         };
-        dir = Arc::new(parent.open_dir(&name)?);
+        dir = match mounts.iter().find(|(mount, _)| *mount == child) {
+            Some((_, volume)) => Arc::new(volume.try_clone()?),
+            None => Arc::new(parent.open_dir(&name)?),
+        };
         prefix = next;
+        rel = child;
     }
 }
 
