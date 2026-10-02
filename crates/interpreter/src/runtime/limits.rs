@@ -167,7 +167,13 @@ pub fn install_tenant_limits(store: &mut Store<StoreData>) {
 /// Usage survives successful execution, traps, and cleanup of host allocations.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct ExecutionUsage {
+    /// All fuel spent: `wasm_fuel + host_fuel`.
     pub fuel: u64,
+    /// Fuel burnt by the program's own Wasm instructions.
+    pub wasm_fuel: u64,
+    /// Fuel charged by host functions for the work they did on the program's
+    /// behalf (see [`super::fuel::charge_host_fuel`]).
+    pub host_fuel: u64,
     pub memory_peak: u64,
 }
 
@@ -177,8 +183,20 @@ impl ExecutionUsage {
         let fuel = initial_fuel
             .checked_sub(remaining)
             .ok_or_else(|| wasmtime::Error::msg("remaining fuel exceeds initial budget"))?;
+        // Batched host charges the engine has not seen yet; a run that Wasm
+        // exhausted with a batch pending overran the budget by that much, and
+        // the report stays within the budget.
+        let fuel = fuel
+            .saturating_add(store.data().host_fuel_pending)
+            .min(initial_fuel);
+        let host_fuel = store.data().host_fuel;
+        let wasm_fuel = fuel
+            .checked_sub(host_fuel)
+            .ok_or_else(|| wasmtime::Error::msg("host fuel exceeds the fuel spent"))?;
         Ok(Self {
             fuel,
+            wasm_fuel,
+            host_fuel,
             memory_peak: store.data().tenant_limits.peak_bytes(),
         })
     }

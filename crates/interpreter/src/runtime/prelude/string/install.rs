@@ -15,6 +15,7 @@ use super::{
     to_well_formed, trim, trim_end, trim_start,
 };
 use crate::runtime::StoreData;
+use crate::runtime::fuel;
 use crate::runtime::host::{
     intrinsic_string_type, read_code_units, register_host_fn, register_host_fn_async,
     string_array_type, write_submilli_string_struct, write_submilli_string_struct_units,
@@ -870,6 +871,7 @@ impl StringAbi {
         vtable: Val,
         s: &Str,
     ) -> wasmtime::Result<Val> {
+        fuel::charge(&mut *caller, fuel::COPY, s.units().len() as u64)?;
         let pre = ArrayRefPre::new(&mut *caller, self.payload_ty.clone());
         let payload = ArrayRef::new_from_i16_slice(&mut *caller, &pre, s.units())?;
         let pre = StructRefPre::new(&mut *caller, self.string_ty.clone());

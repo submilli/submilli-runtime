@@ -807,9 +807,53 @@ fn report_is_opt_in_and_keeps_the_result_on_stdout() {
     assert_eq!(stdout(&reported), "42\n");
     let line = stderr(&reported);
     assert!(line.starts_with("fuel: "), "{line}");
+    let (total, split) = line
+        .trim_start_matches("fuel: ")
+        .split_once(" (wasm ")
+        .unwrap();
+    let (wasm, rest) = split.split_once(", host ").unwrap();
+    let (host, _) = rest.split_once(')').unwrap();
+    let number = |grouped: &str| -> u64 { grouped.replace(',', "").parse().unwrap() };
+    assert_eq!(number(total), number(wasm) + number(host), "{line}");
+    assert!(number(wasm) > 0, "{line}");
     assert!(line.contains("memory peak:"), "{line}");
     assert!(line.contains(" ms (compile "), "{line}");
     assert!(line.contains(" ms, run "), "{line}");
+}
+
+/// The host fuel a program reports under `--report`.
+fn host_fuel(name: &str, source: &str) -> u64 {
+    let out = run_script(name, source, &["--report"]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    let line = stderr(&out);
+    let (_, rest) = line.split_once(", host ").unwrap();
+    let (host, _) = rest.split_once(')').unwrap();
+    host.replace(',', "").parse().unwrap()
+}
+
+#[test]
+fn each_host_call_is_charged_its_flat_cost() {
+    use interpreter::runtime::fuel::CALL;
+    const N: u64 = 10_000;
+    // The same loop, once in Wasm alone and once calling a host function
+    // that marshals nothing, so the difference is the flat charge per call.
+    let plain = host_fuel(
+        "usage-plain-loop",
+        "function main(): number {
+            let sum = 0;
+            for (let i = 0; i < 10000; i++) { sum += i; }
+            return sum;
+        }",
+    );
+    let calling = host_fuel(
+        "usage-calling-loop",
+        "function main(): number {
+            let sum = 0;
+            for (let i = 0; i < 10000; i++) { sum += Math.abs(i); }
+            return sum;
+        }",
+    );
+    assert_eq!(calling - plain, N * CALL);
 }
 
 #[test]

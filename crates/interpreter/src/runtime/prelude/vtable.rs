@@ -22,6 +22,7 @@ use wasmtime::{
 };
 
 use crate::runtime::StoreData;
+use crate::runtime::fuel::{self, host_func_async};
 use crate::runtime::host::{
     fatal_host_error, host_string_vtable, read_code_units, read_uint8_array_arg,
     write_submilli_string_struct, write_submilli_string_struct_units,
@@ -206,7 +207,7 @@ fn build_string_vtable(
     store: &mut Store<StoreData>,
     intr: &IntrinsicTypes,
 ) -> wasmtime::Result<[Func; 4]> {
-    let to_string = Func::new_async(
+    let to_string = host_func_async(
         &mut *store,
         intr.to_string_fn.clone(),
         |_caller, params, results| {
@@ -221,7 +222,7 @@ fn build_string_vtable(
 
     let raw_string = intr.raw_string.clone();
     let string_ty = intr.string.clone();
-    let to_json = Func::new_async(
+    let to_json = host_func_async(
         &mut *store,
         intr.to_json_fn.clone(),
         move |mut caller, params, results| {
@@ -235,7 +236,7 @@ fn build_string_vtable(
     );
 
     let string_ty = intr.string.clone();
-    let equals = Func::new_async(
+    let equals = host_func_async(
         &mut *store,
         intr.equals_fn.clone(),
         move |mut caller, params, results| {
@@ -248,7 +249,7 @@ fn build_string_vtable(
         },
     );
 
-    let hash = Func::new_async(
+    let hash = host_func_async(
         &mut *store,
         intr.hash_fn.clone(),
         |mut caller, params, results| {
@@ -305,7 +306,7 @@ fn build_array_vtable(
 ) -> wasmtime::Result<[Func; 4]> {
     let raw_string = intr.raw_string.clone();
     let string_ty = intr.string.clone();
-    let to_string = Func::new_async(
+    let to_string = host_func_async(
         &mut *store,
         intr.to_string_fn.clone(),
         move |mut caller, params, results| {
@@ -321,7 +322,7 @@ fn build_array_vtable(
 
     let raw_string = intr.raw_string.clone();
     let string_ty = intr.string.clone();
-    let to_json = Func::new_async(
+    let to_json = host_func_async(
         &mut *store,
         intr.to_json_fn.clone(),
         move |mut caller, params, results| {
@@ -336,7 +337,7 @@ fn build_array_vtable(
     );
 
     let array_ty = intr.array.clone();
-    let equals = Func::new_async(
+    let equals = host_func_async(
         &mut *store,
         intr.equals_fn.clone(),
         move |mut caller, params, results| {
@@ -349,7 +350,7 @@ fn build_array_vtable(
         },
     );
 
-    let hash = Func::new_async(
+    let hash = host_func_async(
         &mut *store,
         intr.hash_fn.clone(),
         |mut caller, params, results| {
@@ -493,7 +494,7 @@ fn build_object_vtable(
     store: &mut Store<StoreData>,
     intr: &IntrinsicTypes,
 ) -> wasmtime::Result<[Func; 4]> {
-    let to_string = Func::new_async(
+    let to_string = host_func_async(
         &mut *store,
         intr.to_string_fn.clone(),
         |mut caller, params, results| {
@@ -511,7 +512,7 @@ fn build_object_vtable(
 
     let raw_string = intr.raw_string.clone();
     let string_ty = intr.string.clone();
-    let to_json = Func::new_async(
+    let to_json = host_func_async(
         &mut *store,
         intr.to_json_fn.clone(),
         move |mut caller, params, results| {
@@ -525,7 +526,7 @@ fn build_object_vtable(
         },
     );
 
-    let equals = Func::new_async(
+    let equals = host_func_async(
         &mut *store,
         intr.equals_fn.clone(),
         |mut caller, params, results| {
@@ -537,7 +538,7 @@ fn build_object_vtable(
         },
     );
 
-    let hash = Func::new_async(
+    let hash = host_func_async(
         &mut *store,
         intr.hash_fn.clone(),
         |mut caller, params, results| {
@@ -815,7 +816,7 @@ fn build_boxed_number_vtable(
     store: &mut Store<StoreData>,
     intr: &IntrinsicTypes,
 ) -> wasmtime::Result<[Func; 4]> {
-    let to_string = Func::new_async(
+    let to_string = host_func_async(
         &mut *store,
         intr.to_string_fn.clone(),
         |mut caller, params, results| {
@@ -828,7 +829,7 @@ fn build_boxed_number_vtable(
         },
     );
 
-    let to_json = Func::new_async(
+    let to_json = host_func_async(
         &mut *store,
         intr.to_json_fn.clone(),
         |mut caller, params, results| {
@@ -848,7 +849,7 @@ fn build_boxed_number_vtable(
     );
 
     let boxed_number = intr.boxed_number.clone();
-    let equals = Func::new_async(
+    let equals = host_func_async(
         &mut *store,
         intr.equals_fn.clone(),
         move |mut caller, params, results| {
@@ -861,7 +862,7 @@ fn build_boxed_number_vtable(
         },
     );
 
-    let hash = Func::new_async(
+    let hash = host_func_async(
         &mut *store,
         intr.hash_fn.clone(),
         |mut caller, params, results| {
@@ -880,14 +881,14 @@ fn build_boxed_boolean_vtable(
     store: &mut Store<StoreData>,
     intr: &IntrinsicTypes,
 ) -> wasmtime::Result<[Func; 4]> {
-    let to_string = Func::new_async(
+    let to_string = host_func_async(
         &mut *store,
         intr.to_string_fn.clone(),
         |caller, params, results| {
             Box::new(async move { boxed_boolean_spell(caller, params, results) })
         },
     );
-    let to_json = Func::new_async(
+    let to_json = host_func_async(
         &mut *store,
         intr.to_json_fn.clone(),
         |caller, params, results| {
@@ -896,7 +897,7 @@ fn build_boxed_boolean_vtable(
     );
 
     let boxed_boolean = intr.boxed_boolean.clone();
-    let equals = Func::new_async(
+    let equals = host_func_async(
         &mut *store,
         intr.equals_fn.clone(),
         move |mut caller, params, results| {
@@ -909,7 +910,7 @@ fn build_boxed_boolean_vtable(
         },
     );
 
-    let hash = Func::new_async(
+    let hash = host_func_async(
         &mut *store,
         intr.hash_fn.clone(),
         |mut caller, params, results| {
@@ -952,7 +953,7 @@ fn build_bigint_vtable(
     store: &mut Store<StoreData>,
     intr: &IntrinsicTypes,
 ) -> wasmtime::Result<[Func; 4]> {
-    let to_string = Func::new_async(
+    let to_string = host_func_async(
         &mut *store,
         intr.to_string_fn.clone(),
         |mut caller, params, results| {
@@ -964,7 +965,7 @@ fn build_bigint_vtable(
     );
 
     // BigInt JSON has no native literal, so toJson renders the decimal text (== toString).
-    let to_json = Func::new_async(
+    let to_json = host_func_async(
         &mut *store,
         intr.to_json_fn.clone(),
         |mut caller, params, results| {
@@ -976,7 +977,7 @@ fn build_bigint_vtable(
     );
 
     let bigint_ty = intr.bigint.clone();
-    let equals = Func::new_async(
+    let equals = host_func_async(
         &mut *store,
         intr.equals_fn.clone(),
         move |mut caller, params, results| {
@@ -989,7 +990,7 @@ fn build_bigint_vtable(
         },
     );
 
-    let hash = Func::new_async(
+    let hash = host_func_async(
         &mut *store,
         intr.hash_fn.clone(),
         |mut caller, params, results| {
@@ -1056,7 +1057,7 @@ fn build_uint8array_vtable(
     store: &mut Store<StoreData>,
     intr: &IntrinsicTypes,
 ) -> wasmtime::Result<[Func; 4]> {
-    let to_string = Func::new_async(
+    let to_string = host_func_async(
         &mut *store,
         intr.to_string_fn.clone(),
         |mut caller, params, results| {
@@ -1070,7 +1071,7 @@ fn build_uint8array_vtable(
         },
     );
 
-    let to_json = Func::new_async(
+    let to_json = host_func_async(
         &mut *store,
         intr.to_json_fn.clone(),
         |mut caller, params, results| {
@@ -1088,7 +1089,7 @@ fn build_uint8array_vtable(
     );
 
     let uint8_ty = intr.uint8_array.clone();
-    let equals = Func::new_async(
+    let equals = host_func_async(
         &mut *store,
         intr.equals_fn.clone(),
         move |mut caller, params, results| {
@@ -1101,7 +1102,7 @@ fn build_uint8array_vtable(
         },
     );
 
-    let hash = Func::new_async(
+    let hash = host_func_async(
         &mut *store,
         intr.hash_fn.clone(),
         |mut caller, params, results| {
@@ -1150,7 +1151,7 @@ fn build_closure_vtable(
     intr: &IntrinsicTypes,
 ) -> wasmtime::Result<[Func; 4]> {
     let to_string = object_object_slot(store, intr.to_string_fn.clone());
-    let to_json = Func::new_async(
+    let to_json = host_func_async(
         &mut *store,
         intr.to_json_fn.clone(),
         |mut caller, _, results| {
@@ -1170,7 +1171,7 @@ fn build_regex_vtable(
     store: &mut Store<StoreData>,
     intr: &IntrinsicTypes,
 ) -> wasmtime::Result<[Func; 4]> {
-    let to_string = Func::new_async(
+    let to_string = host_func_async(
         &mut *store,
         intr.to_string_fn.clone(),
         |mut caller, params, results| {
@@ -1190,7 +1191,7 @@ fn build_regex_match_box_vtable(
     store: &mut Store<StoreData>,
     intr: &IntrinsicTypes,
 ) -> wasmtime::Result<[Func; 4]> {
-    let to_string = Func::new_async(
+    let to_string = host_func_async(
         &mut *store,
         intr.to_string_fn.clone(),
         |mut caller, params, results| {
@@ -1241,7 +1242,7 @@ fn regex_to_string(caller: &mut Caller<'_, StoreData>, recv: &Val) -> wasmtime::
 
 /// Slot returning the literal `[object Object]`.
 fn object_object_slot(store: &mut Store<StoreData>, ty: wasmtime::FuncType) -> Func {
-    Func::new_async(&mut *store, ty, |mut caller, _params, results| {
+    host_func_async(&mut *store, ty, |mut caller, _params, results| {
         Box::new(async move {
             let st = write_submilli_string_struct(&mut caller, "[object Object]")?;
             results[0] = Val::AnyRef(Some(st.to_anyref()));
@@ -1252,7 +1253,7 @@ fn object_object_slot(store: &mut Store<StoreData>, ty: wasmtime::FuncType) -> F
 
 /// `toJson` slot returning the literal `{}`.
 fn empty_object_json_slot(store: &mut Store<StoreData>, intr: &IntrinsicTypes) -> Func {
-    Func::new_async(
+    host_func_async(
         &mut *store,
         intr.to_json_fn.clone(),
         |mut caller, _params, results| {
@@ -1267,7 +1268,7 @@ fn empty_object_json_slot(store: &mut Store<StoreData>, intr: &IntrinsicTypes) -
 
 /// `equals` slot with `ref.eq` semantics (null == null, otherwise identity).
 fn ref_identity_equals_slot(store: &mut Store<StoreData>, intr: &IntrinsicTypes) -> Func {
-    Func::new_async(
+    host_func_async(
         &mut *store,
         intr.equals_fn.clone(),
         |caller, params, results| {
@@ -1286,7 +1287,7 @@ fn ref_identity_equals_slot(store: &mut Store<StoreData>, intr: &IntrinsicTypes)
 
 /// `hash` slot returning 0 — identity-equal values need no distribution.
 fn zero_hash_slot(store: &mut Store<StoreData>, intr: &IntrinsicTypes) -> Func {
-    Func::new_async(
+    host_func_async(
         &mut *store,
         intr.hash_fn.clone(),
         |_caller, _params, results| {
@@ -1579,6 +1580,7 @@ fn build_string(
     vtable: Val,
     units: &[u16],
 ) -> wasmtime::Result<Val> {
+    fuel::charge(&mut *caller, fuel::COPY, units.len() as u64)?;
     let pre = ArrayRefPre::new(&mut *caller, raw_string.clone());
     let raw = ArrayRef::new_from_i16_slice(&mut *caller, &pre, units)?;
     let pre = StructRefPre::new(&mut *caller, string_ty.clone());

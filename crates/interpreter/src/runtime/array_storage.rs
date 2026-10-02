@@ -3,6 +3,7 @@
 use wasmtime::{ArrayRef, ArrayRefPre, Caller, Rooted, StructRef, Val};
 
 use super::StoreData;
+use super::fuel;
 use super::host::fatal_host_error;
 use super::intrinsic_types::intrinsic_types;
 
@@ -46,11 +47,14 @@ impl ArrayStorage {
         })
     }
 
+    /// Every whole-array read by a host function goes through here, so this
+    /// is where its per-element cost is charged.
     pub fn snapshot(&self, caller: &mut Caller<'_, StoreData>) -> wasmtime::Result<Vec<Val>> {
         #[cfg(test)]
         {
             caller.data_mut().array_growth.snapshot_slots += u64::from(self.len);
         }
+        fuel::charge(&mut *caller, fuel::ELEM, u64::from(self.len))?;
         let mut elements = Vec::new();
         elements
             .try_reserve_exact(self.len as usize)
@@ -89,6 +93,7 @@ impl ArrayStorage {
     ) -> wasmtime::Result<()> {
         let len = checked_length(elements.len())?;
         self.reserve(caller, len)?;
+        fuel::charge(&mut *caller, fuel::ELEM, u64::from(len.max(self.len)))?;
         for (index, &element) in elements.iter().enumerate() {
             self.backing
                 .set(&mut *caller, index as u32, element)
@@ -113,6 +118,7 @@ impl ArrayStorage {
             return Ok(());
         }
         let capacity = grown_capacity(capacity, required)?;
+        fuel::charge(&mut *caller, fuel::ELEM, u64::from(self.len))?;
         let raw_ty = intrinsic_types(&mut *caller)?.raw_array.clone();
         let pre = ArrayRefPre::new(&mut *caller, raw_ty);
         let backing = ArrayRef::new(&mut *caller, &pre, &Val::null_any_ref(), capacity)?;

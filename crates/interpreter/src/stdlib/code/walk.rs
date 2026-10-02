@@ -5,6 +5,7 @@ use super::{
     gate, normalize, read_contents, read_file, text,
 };
 use crate::runtime::fs::resolve_link;
+use crate::runtime::fuel;
 use crate::runtime::{
     StoreData,
     host::read_boxed_number,
@@ -111,9 +112,10 @@ fn search_file(
             .saturating_mul(32),
     )?;
     let lines = text::lines(source.strip_prefix('\u{feff}').unwrap_or(&source));
-    Budget::work(
-        caller,
-        source.len().saturating_mul(regex.as_str().len().max(1)),
+    fuel::charge(
+        &mut *caller,
+        fuel::SCAN,
+        (source.len() as u64).saturating_mul(regex.as_str().len().max(1) as u64),
     )?;
     let mut count = 0;
     for (index, line) in lines.iter().enumerate() {
@@ -227,7 +229,7 @@ fn walk(
     }];
     let mut visited = 0;
     while let Some(mut dir) = pending.pop() {
-        Budget::work(caller, 100)?;
+        fuel::charge(&mut *caller, fuel::SYSCALL, 1)?;
         if dir.depth >= depth {
             continue;
         }
@@ -250,7 +252,7 @@ fn walk(
             if visited > MAX_ENTRIES {
                 bail!("code.{op}: traversal exceeds {MAX_ENTRIES} entries; choose a smaller root");
             }
-            Budget::work(caller, 100)?;
+            fuel::charge(&mut *caller, fuel::SYSCALL, 1)?;
             let Some(entry) = inspect_entry(caller, budget, &item, &dir, op)? else {
                 continue;
             };

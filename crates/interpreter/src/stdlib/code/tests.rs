@@ -66,7 +66,15 @@ fn diff_keeps_surrogates() {
     assert!(text::diff(&[0xd800], &[0xd801]).unwrap().contains(&0xd800));
 }
 
+use crate::runtime::limits::ExecutionUsage;
+
 async fn run(source: &str, data: crate::runtime::StoreData) -> wasmtime::Result<()> {
+    run_measured(source, data).await.map(|_| ())
+}
+async fn run_measured(
+    source: &str,
+    data: crate::runtime::StoreData,
+) -> wasmtime::Result<ExecutionUsage> {
     use crate::runtime::{RuntimeConfig, install_tenant_limits};
     let compiled = crate::compile_script(source, "code.ts", crate::FileId(0), &[], &[])
         .unwrap_or_else(|e| panic!("{e:#?}"));
@@ -81,7 +89,26 @@ async fn run(source: &str, data: crate::runtime::StoreData) -> wasmtime::Result<
     let instance = linker.instantiate_async(&mut store, &module).await?;
     let result = crate::dispatch_main_async(&mut store, &instance).await;
     assert_eq!(store.data().tenant_limits.host_attached_bytes(), 0);
-    result.map(|_| ())
+    let usage = ExecutionUsage::capture(&store, cfg.fuel)?;
+    result.map(|_| usage)
+}
+#[tokio::test]
+async fn native_work_is_reported_as_host_fuel() {
+    let source = r#"
+        import { writeText } from "submilli:fs";
+        import { edit } from "submilli:code";
+        function main(): void {
+            writeText("/a.ts", "first\n");
+            assert(edit("/a.ts", "first", "second").changed, "edited");
+        }
+    "#;
+    let vfs = crate::runtime::Vfs::tempdir().unwrap();
+    let usage = run_measured(source, crate::runtime::StoreData::with_vfs(vfs))
+        .await
+        .unwrap();
+    assert!(usage.host_fuel > 0, "{usage:?}");
+    assert!(usage.wasm_fuel > 0, "{usage:?}");
+    assert_eq!(usage.fuel, usage.wasm_fuel + usage.host_fuel);
 }
 #[tokio::test]
 async fn workspace_fixture() {
@@ -599,38 +626,6 @@ fn diff_handles_long_shared_line_prefixes() {
     assert_eq!(result.text, new);
 }
 
-#[test]
-fn native_work_consumes_store_fuel_and_respects_refills() {
-    use super::budget::Budget;
-    use crate::runtime::{RuntimeConfig, StoreData, Vfs};
-    use wasmtime::{Func, FuncType, Trap, Val, ValType};
-
-    let config = RuntimeConfig::default();
-    let engine = config.engine().unwrap();
-    let mut store = config
-        .store(&engine, StoreData::with_vfs(Vfs::none()))
-        .unwrap();
-    let charge = Func::new(
-        &mut store,
-        FuncType::new(&engine, [ValType::I32], []),
-        |mut caller, params, _| Budget::work(&mut caller, params[0].unwrap_i32() as usize),
-    );
-
-    store.set_fuel(300).unwrap();
-    charge.call(&mut store, &[Val::I32(100)], &mut []).unwrap();
-    assert_eq!(store.get_fuel().unwrap(), 200);
-    charge.call(&mut store, &[Val::I32(200)], &mut []).unwrap();
-    assert_eq!(store.get_fuel().unwrap(), 0);
-
-    store.set_fuel(50).unwrap();
-    charge.call(&mut store, &[Val::I32(20)], &mut []).unwrap();
-    assert_eq!(store.get_fuel().unwrap(), 30);
-    let error = charge
-        .call(&mut store, &[Val::I32(31)], &mut [])
-        .unwrap_err();
-    assert_eq!(error.downcast_ref::<Trap>(), Some(&Trap::OutOfFuel));
-    assert_eq!(store.get_fuel().unwrap(), 0);
-}
 #[tokio::test]
 async fn edits_are_counted_against_the_size_limit() {
     let source = r#"

@@ -9,6 +9,7 @@ use wasmtime::{
     StructRefPre, StructType, Val, ValType,
 };
 
+use crate::runtime::fuel::{self, charge_host_fuel};
 use crate::runtime::intrinsic_types::build_intrinsic_types;
 pub(crate) use crate::runtime::intrinsic_types::{
     intrinsic_array_type, intrinsic_bigint_type, intrinsic_string_type, intrinsic_uint8_array_type,
@@ -278,11 +279,14 @@ fn install_internal_module(
     Ok(())
 }
 
+/// Every byte payload the host builds ends here, so this is where its copy is
+/// charged.
 pub(crate) fn write_uint8_array(
-    mut ctx: impl AsContextMut,
+    mut ctx: impl AsContextMut<Data = StoreData>,
     array_ty: ArrayType,
     bytes: &[u8],
 ) -> wasmtime::Result<Rooted<ArrayRef>> {
+    fuel::charge(&mut ctx, fuel::COPY, bytes.len() as u64)?;
     let pre = ArrayRefPre::new(&mut ctx, array_ty);
     ArrayRef::new_from_i8_slice(&mut ctx, &pre, bytes)
 }
@@ -321,7 +325,9 @@ pub(crate) fn read_uint8_array_arg(
     } else {
         any.unwrap_array(&mut *caller)?
     };
-    let len = usize::try_from(arr.len(&mut *caller)?).map_err(fatal_host_error)?;
+    let len = arr.len(&mut *caller)?;
+    fuel::charge(&mut *caller, fuel::COPY, u64::from(len))?;
+    let len = usize::try_from(len).map_err(fatal_host_error)?;
     let mut out = Vec::new();
     out.try_reserve_exact(len).map_err(fatal_host_error)?;
     out.resize(len, 0);
@@ -561,35 +567,50 @@ pub fn read_string_array_arg(
 /// Encodes a Rust string as a Submilli packed-UTF-16 `(array (mut i16))` —
 /// the bare `$rawString` payload, without the `$string` object wrapper.
 pub fn write_submilli_string(
-    ctx: impl AsContextMut,
+    mut ctx: impl AsContextMut<Data = StoreData>,
     s: &str,
 ) -> wasmtime::Result<Rooted<ArrayRef>> {
-    let units: Vec<u16> = s.encode_utf16().collect();
+    let units = encode_utf16(&mut ctx, s)?;
     write_code_units(ctx, &units)
 }
 
-/// Builds a `$rawString` payload from UTF-16 code units in one pass.
+/// UTF-8 to UTF-16, charged as a scan of the input.
+pub(crate) fn encode_utf16(
+    ctx: impl AsContextMut<Data = StoreData>,
+    s: &str,
+) -> wasmtime::Result<Vec<u16>> {
+    fuel::charge(ctx, fuel::SCAN, s.len() as u64)?;
+    Ok(s.encode_utf16().collect())
+}
+
+/// Builds a `$rawString` payload from UTF-16 code units in one pass. Every
+/// string result the host builds from units ends here, so this is where its
+/// copy is charged.
 pub(crate) fn write_code_units(
-    mut ctx: impl AsContextMut,
+    mut ctx: impl AsContextMut<Data = StoreData>,
     units: &[u16],
 ) -> wasmtime::Result<Rooted<ArrayRef>> {
+    fuel::charge(&mut ctx, fuel::COPY, units.len() as u64)?;
     let array_ty = string_array_type(ctx.as_context().engine());
     let pre = ArrayRefPre::new(&mut ctx, array_ty);
     ArrayRef::new_from_i16_slice(&mut ctx, &pre, units)
 }
 
 /// A `$rawString` payload's UTF-16 code units, copied in one pass rather than
-/// one `get` per unit: string host functions call this on every receiver.
+/// one `get` per unit: string host functions call this on every receiver, so
+/// this is where the copy of every string argument is charged.
 ///
 /// A payload that is not an `i16` array is a catchable error labelled `name`:
 /// a program can reach this with a non-string, through a `toJson` inserted
 /// into a `Record`.
 pub(crate) fn read_code_units(
-    mut ctx: impl AsContextMut,
+    mut ctx: impl AsContextMut<Data = StoreData>,
     raw: Rooted<ArrayRef>,
     name: &str,
 ) -> wasmtime::Result<Vec<u16>> {
-    let len = usize::try_from(raw.len(&mut ctx)?).map_err(fatal_host_error)?;
+    let len = raw.len(&mut ctx)?;
+    fuel::charge(&mut ctx, fuel::COPY, u64::from(len))?;
+    let len = usize::try_from(len).map_err(fatal_host_error)?;
     let mut units = Vec::new();
     units.try_reserve_exact(len).map_err(fatal_host_error)?;
     units.resize(len, 0);
@@ -796,7 +817,7 @@ pub fn write_submilli_string_struct(
     caller: &mut Caller<'_, StoreData>,
     s: &str,
 ) -> wasmtime::Result<Rooted<StructRef>> {
-    let units: Vec<u16> = s.encode_utf16().collect();
+    let units = encode_utf16(&mut *caller, s)?;
     write_submilli_string_struct_units(caller, &units)
 }
 
@@ -808,6 +829,7 @@ pub fn write_submilli_string_struct_units(
     caller: &mut Caller<'_, StoreData>,
     units: &[u16],
 ) -> wasmtime::Result<Rooted<StructRef>> {
+    // `write_code_units` charges the copy.
     let raw = write_code_units(&mut *caller, units)?;
     let string_type = {
         let abi = caller
@@ -898,6 +920,7 @@ pub fn write_submilli_array_struct(
     elements: &[Val],
 ) -> wasmtime::Result<Rooted<StructRef>> {
     let len = super::array_storage::checked_length(elements.len())?;
+    fuel::charge(&mut *caller, fuel::ELEM, u64::from(len))?;
     let (array_type, raw_array_type) = {
         let abi = caller
             .data()
@@ -1290,18 +1313,34 @@ pub fn register_host_fn(
     + Sync
     + 'static,
 ) -> wasmtime::Result<()> {
+    let call_fuel = call_fuel_of(module);
     linker.func_new(
         module,
         mangled_name.as_str(),
         ty,
-        move |mut hc, params, results| match body(&mut hc, params, results) {
-            Ok(()) => Ok(()),
-            // Already a thrown exception (pending on the store) — propagate as-is.
-            Err(err) if err.is::<wasmtime::ThrownException>() => Err(err),
-            Err(err) => Err(throw_host_error(&mut hc, err)),
+        move |mut hc, params, results| {
+            let outcome =
+                charge_host_fuel(&mut hc, call_fuel).and_then(|()| body(&mut hc, params, results));
+            match outcome {
+                Ok(()) => Ok(()),
+                // Already a thrown exception (pending on the store) — propagate as-is.
+                Err(err) if err.is::<wasmtime::ThrownException>() => Err(err),
+                Err(err) => Err(throw_host_error(&mut hc, err)),
+            }
         },
     )?;
     Ok(())
+}
+
+/// The flat fuel of one call into `module`. `submilli:test` is free: it only
+/// exists under `submilli build test`, and a test's own labels and assertions
+/// are not the program's work.
+fn call_fuel_of(module: &str) -> u64 {
+    if module == crate::stdlib::test::MODULE_NAME {
+        0
+    } else {
+        super::fuel::CALL
+    }
 }
 
 /// Async sibling of [`register_host_fn`]: registers under `mangled_name`.
@@ -1328,6 +1367,7 @@ where
     // `Arc` so each invocation owns a cheap clone the returned future can hold —
     // a bare `&body` reference to the `Fn`'s captured state can't escape it.
     let body = std::sync::Arc::new(body);
+    let call_fuel = call_fuel_of(module);
     linker.func_new_async(
         module,
         mangled_name.as_str(),
@@ -1335,7 +1375,11 @@ where
         move |mut hc, params, results| {
             let body = std::sync::Arc::clone(&body);
             Box::new(async move {
-                match body(&mut hc, params, results).await {
+                let outcome = match charge_host_fuel(&mut hc, call_fuel) {
+                    Ok(()) => body(&mut hc, params, results).await,
+                    Err(err) => Err(err),
+                };
+                match outcome {
                     Ok(()) => Ok(()),
                     Err(err) if err.is::<wasmtime::ThrownException>() => Err(err),
                     Err(err) => Err(throw_host_error(&mut hc, err)),

@@ -4,6 +4,7 @@
 use wasmtime::{Caller, Func, Val};
 
 use crate::runtime::StoreData;
+use crate::runtime::fuel;
 
 /// A guest closure: its function plus the captured env, which the uniform
 /// closure ABI passes as the leading call argument.
@@ -134,6 +135,8 @@ impl Closure {
         caller: &mut Caller<'_, StoreData>,
         args: &[Val],
     ) -> wasmtime::Result<Val> {
+        // The host's overhead of one callback; the callee pays its own fuel.
+        fuel::charge_call(&mut *caller)?;
         let signature = self.func.ty(&*caller);
         let inputs = if let Some(params) = super::arguments::metadata(caller, &self.env)? {
             super::arguments::bind(caller, &params, args)?

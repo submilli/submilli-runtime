@@ -131,18 +131,29 @@ async fn logs_usage_for_success_and_each_execution_failure() {
         let session = response["session_id"].as_str().unwrap();
         assert!(line.contains(&format!("session=\"{session}\"")), "{line}");
         assert!(line.contains(&format!("outcome=\"{expected}\"")), "{line}");
-        for field in ["fuel", "memory_peak", "wall_ms"] {
-            let value = line
-                .split_whitespace()
-                .find_map(|part| part.strip_prefix(&format!("{field}=")))
-                .unwrap();
-            let number: u64 = value.parse().unwrap();
-            if expected == "ok" && field != "wall_ms" {
-                assert!(number > 0, "{line}");
-            }
-            if expected == "fuel_exhausted" && field == "fuel" {
-                assert_eq!(number, 100_000);
+        let field = |name: &str| -> u64 {
+            line.split_whitespace()
+                .find_map(|part| part.strip_prefix(&format!("{name}=")))
+                .unwrap()
+                .parse()
+                .unwrap()
+        };
+        // `wall_ms` may round to 0, and a program that calls no charging host
+        // function has no host fuel; the other figures are always positive on
+        // success.
+        if expected == "ok" {
+            for name in ["fuel", "wasm_fuel", "memory_peak"] {
+                assert!(field(name) > 0, "{line}");
             }
         }
+        if expected == "fuel_exhausted" {
+            assert_eq!(field("fuel"), 100_000, "{line}");
+        }
+        field("wall_ms"); // present and numeric; may be 0
+        assert_eq!(
+            field("fuel"),
+            field("wasm_fuel") + field("host_fuel"),
+            "{line}"
+        );
     }
 }
