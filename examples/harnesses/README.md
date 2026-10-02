@@ -79,7 +79,8 @@ against the local server with a scripted model that calls the execute tool
 with `note.ts`, and asserts four things: the note is written to the user's
 directory, the same program aimed at another user's directory is denied, a
 connection that names no user is refused, and so is one whose token the
-server does not know.
+server does not know. The deepagents check also asserts that a denied call to
+`submilli__files__list` reaches the model as a result instead of ending the run.
 
 ```sh
 npm run check       # the TypeScript examples

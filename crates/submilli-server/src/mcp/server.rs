@@ -6,7 +6,7 @@
 use std::borrow::Cow;
 use std::sync::Arc;
 
-use interpreter::runtime::fs::{ContainError, ContentPath, resolve_content};
+use interpreter::runtime::fs::{ContainError, ContentPath, guest_normalize, resolve_content};
 use interpreter::runtime::{CheckOutcome, SecurityCheck, Vfs, VfsInfo};
 use interpreter::stdlib::fs::handles::kind_of;
 use rmcp::handler::server::router::tool::ToolRouter;
@@ -149,12 +149,13 @@ fn session_header(parts: &axum::http::request::Parts) -> Option<String> {
         .map(str::to_string)
 }
 
-/// Wrap an `ExecuteOutput` as the tool's structured result (shared by `execute`
-/// and `lastRun`).
-fn execute_result(output: ExecuteOutput) -> Result<CallToolResult, ErrorData> {
-    let value =
-        serde_json::to_value(output).map_err(|e| ErrorData::internal_error(e.to_string(), None))?;
-    Ok(CallToolResult::structured(value))
+/// Wrap a tool's output as its structured result.
+fn structured_result(output: impl Serialize) -> Result<CallToolResult, ErrorData> {
+    Ok(CallToolResult::structured(tool_value(output)?))
+}
+
+fn tool_value(output: impl Serialize) -> Result<serde_json::Value, ErrorData> {
+    serde_json::to_value(output).map_err(|e| ErrorData::internal_error(e.to_string(), None))
 }
 
 #[derive(Clone)]
@@ -399,7 +400,7 @@ impl SubmilliMcp {
                 .await;
         }
 
-        execute_result(ExecuteOutput {
+        structured_result(ExecuteOutput {
             result,
             console,
             error,
@@ -416,7 +417,7 @@ impl SubmilliMcp {
         let session_id = session_header(&parts)
             .ok_or_else(|| ErrorData::invalid_request("no session for lastRun", None))?;
         match self.state.sessions().get(&session_id).await {
-            Some(run) => execute_result(ExecuteOutput {
+            Some(run) => structured_result(ExecuteOutput {
                 result: run.result,
                 console: run.console,
                 error: run.error,
@@ -540,7 +541,8 @@ impl SubmilliMcp {
             `next_offset` back to page on. Files survive across calls under a \
             per_session or named root and under a mounted volume; an \
             ephemeral root is emptied after every execute. Requires fs.read \
-            as caller main with op readText."
+            as caller main with op readText. A denial or a missing file returns \
+            { error: { kind, message } }."
     )]
     async fn read_file(
         &self,
@@ -550,30 +552,30 @@ impl SubmilliMcp {
         let blueprint = Arc::new(self.require_blueprint().await?);
 
         let session_id = session_header(&parts);
-        self.check_file_permission(
+        if let Err(refused) = self.authorize_file_call(
             Arc::clone(&blueprint),
             session_id.as_deref(),
             "fs.read",
-            serde_json::json!({ "path": &args.path }),
-        )?;
+            &args.path,
+            None,
+        ) {
+            return file_tool_failure(refused);
+        }
         let (vfs, _info) = self
             .acquire_vfs(&blueprint, session_id.as_deref(), VfsUse::ReadFiles)
             .await?;
-
-        let resolved = resolve_content(&vfs, "/", &args.path)
-            .map_err(|e| ErrorData::invalid_request(format!("{}: {e}", args.path), None))?;
 
         let offset = args.offset.unwrap_or(1).max(1);
         let limit = args
             .limit
             .unwrap_or(READ_DEFAULT_LIMIT)
             .clamp(1, READ_MAX_LIMIT);
-        let output = read_window(&args.path, &resolved, offset, limit)
-            .map_err(|e| ErrorData::invalid_request(format!("{}: {e}", args.path), None))?;
-
-        let value = serde_json::to_value(output)
-            .map_err(|e| ErrorData::internal_error(e.to_string(), None))?;
-        Ok(CallToolResult::structured(value))
+        let read = resolve_content(&vfs, "/", &args.path)
+            .and_then(|resolved| read_window(&args.path, &resolved, offset, limit));
+        match read {
+            Ok(output) => structured_result(output),
+            Err(error) => file_tool_failure(FileToolError::file(&args.path, error)),
+        }
     }
 
     #[tool(
@@ -586,7 +588,8 @@ impl SubmilliMcp {
             under a per_session or named root and under a mounted volume; an \
             ephemeral root is emptied after every execute. Requires fs.list as \
             caller main with op list; policy checks the starting directory, \
-            including recursive listings."
+            including recursive listings. A denial or a missing directory returns \
+            { error: { kind, message } }."
     )]
     async fn list_files(
         &self,
@@ -598,45 +601,58 @@ impl SubmilliMcp {
         let session_id = session_header(&parts);
         let dir = args.path.as_deref().unwrap_or("/");
         let recursive = args.recursive.unwrap_or(false);
-        self.check_file_permission(
+        if let Err(refused) = self.authorize_file_call(
             Arc::clone(&blueprint),
             session_id.as_deref(),
             "fs.list",
-            serde_json::json!({ "path": dir, "recursive": recursive }),
-        )?;
+            dir,
+            Some(recursive),
+        ) {
+            return file_tool_failure(refused);
+        }
         let (vfs, _info) = self
             .acquire_vfs(&blueprint, session_id.as_deref(), VfsUse::ReadFiles)
             .await?;
 
-        let resolved = resolve_content(&vfs, "/", dir)
-            .map_err(|e| ErrorData::invalid_request(format!("{dir}: {e}"), None))?;
-
-        let (mut entries, truncated) =
-            list_entries(&resolved, &guest_dir_prefix(dir), recursive)
-                .map_err(|e| ErrorData::invalid_request(format!("{dir}: {e}"), None))?;
+        let listed = resolve_content(&vfs, "/", dir)
+            .and_then(|resolved| list_entries(&resolved, &guest_dir_prefix(dir), recursive));
+        let (mut entries, truncated) = match listed {
+            Ok(listed) => listed,
+            Err(error) => return file_tool_failure(FileToolError::file(dir, error)),
+        };
         entries.sort_by(|a, b| a.path.cmp(&b.path));
 
-        let output = ListFilesOutput {
+        structured_result(ListFilesOutput {
             path: dir.to_string(),
             count: entries.len(),
             truncated,
             entries,
-        };
-        let value = serde_json::to_value(output)
-            .map_err(|e| ErrorData::internal_error(e.to_string(), None))?;
-        Ok(CallToolResult::structured(value))
+        })
     }
 }
 
 impl SubmilliMcp {
     /// File tools act as the session's main program, including on isolated VFSs.
-    fn check_file_permission(
+    ///
+    /// The path is checked lexically before the policy sees it. The policy refuses
+    /// a path that cannot name anything in the VFS (`..` past the root, a NUL byte)
+    /// too, but as a denial, which tells the model a rule stopped it rather than
+    /// that the path is wrong.
+    fn authorize_file_call(
         &self,
         blueprint: Arc<Blueprint>,
         session_id: Option<&str>,
         capability: &str,
-        context: serde_json::Value,
-    ) -> Result<(), ErrorData> {
+        path: &str,
+        recursive: Option<bool>,
+    ) -> Result<(), FileToolError> {
+        guest_normalize("/", path).map_err(|error| FileToolError::file(path, error.into()))?;
+        let mut context = serde_json::Map::new();
+        context.insert("path".into(), path.into());
+        if let Some(recursive) = recursive {
+            context.insert("recursive".into(), recursive.into());
+        }
+        let context = serde_json::Value::Object(context);
         let variables = self
             .state
             .session_manager()
@@ -647,11 +663,55 @@ impl SubmilliMcp {
             CheckOutcome::Deny { reason } => reason,
             _ => "unrecognized policy outcome".to_string(),
         };
-        Err(ErrorData::invalid_request(
-            format!("permission denied: caller=main capability={capability}: {reason}"),
-            None,
-        ))
+        Err(FileToolError::denied(capability, &reason))
     }
+}
+
+/// A file tool call that failed for this call alone: a denial, a missing file, a
+/// path outside the VFS. It is answered as an `isError` result the model reads,
+/// carrying a `{ kind, message }` error like the one `execute` reports, because
+/// clients such as `langchain-mcp-adapters` raise on a JSON-RPC error and end the
+/// agent run. JSON-RPC errors stay for protocol problems: no session, unknown tool,
+/// malformed arguments.
+#[derive(Serialize)]
+struct FileToolError {
+    kind: FileToolErrorKind,
+    message: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "snake_case")]
+enum FileToolErrorKind {
+    PermissionDenied,
+    FileError,
+}
+
+impl FileToolError {
+    fn denied(capability: &str, reason: &str) -> Self {
+        Self {
+            kind: FileToolErrorKind::PermissionDenied,
+            message: format!("permission denied: caller=main capability={capability}: {reason}"),
+        }
+    }
+
+    fn file(path: &str, error: ContainError) -> Self {
+        Self {
+            kind: FileToolErrorKind::FileError,
+            message: format!("{path}: {error}"),
+        }
+    }
+}
+
+/// The `{ error }` result a failed file tool call answers with.
+#[derive(Serialize)]
+struct FileToolErrorOutput {
+    error: FileToolError,
+}
+
+fn file_tool_failure(error: FileToolError) -> Result<CallToolResult, ErrorData> {
+    Ok(CallToolResult::structured_error(tool_value(
+        FileToolErrorOutput { error },
+    )?))
 }
 
 /// Walk `base` (optionally recursing) through the contained handle, naming each

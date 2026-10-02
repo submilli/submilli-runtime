@@ -20,15 +20,23 @@ class Scripted(GenericFakeChatModel):
         return self
 
 
-def scripted(code: str) -> Scripted:
-    call = {"name": "submilli__typescript__execute", "args": {"code": code}, "id": "call-1"}
-    return Scripted(messages=iter([AIMessage(content="", tool_calls=[call]), AIMessage(content="done")]))
+def execute_call(code: str) -> dict:
+    return {"name": "submilli__typescript__execute", "args": {"code": code}}
 
 
-async def tool_output(code: str, user_id: str) -> str:
-    """What the model was shown after running `code`."""
+def files_list_call(path: str) -> dict:
+    return {"name": "submilli__files__list", "args": {"path": path}}
+
+
+def scripted(call: dict) -> Scripted:
+    tool_call = {**call, "id": "call-1"}
+    return Scripted(messages=iter([AIMessage(content="", tool_calls=[tool_call]), AIMessage(content="done")]))
+
+
+async def tool_output(call: dict, user_id: str) -> str:
+    """What the model was shown after making `call`."""
     seen = []
-    model = scripted(code)
+    model = scripted(call)
     original = model._generate
 
     def record(messages, *args, **kwargs):
@@ -41,18 +49,22 @@ async def tool_output(code: str, user_id: str) -> str:
 
 
 async def main() -> None:
-    assert "check.md" in await tool_output(PROGRAM, "u_ada")
-    denied = await tool_output(PROGRAM.replace("u_ada", "u_grace"), "u_ada")
+    assert "check.md" in await tool_output(execute_call(PROGRAM), "u_ada")
+    denied = await tool_output(execute_call(PROGRAM.replace("u_ada", "u_grace")), "u_ada")
     assert "permission denied" in denied, denied
+    # A file tool answers a denial as a result the model reads, too, not as an
+    # error that ends the run.
+    listed = await tool_output(files_list_call("/"), "u_ada")
+    assert "permission denied" in listed, listed
     try:
-        await answer("total", "", scripted(PROGRAM))
+        await answer("total", "", scripted(execute_call(PROGRAM)))
     except Exception:
         pass  # The server refuses the connection: the blueprint requires a user.
     else:
         raise AssertionError("a session without the user binding was accepted")
     agent.SUBMILLI_SERVER_TOKEN = "a-token-the-server-does-not-know"
     try:
-        await answer("total", "u_ada", scripted(PROGRAM))
+        await answer("total", "u_ada", scripted(execute_call(PROGRAM)))
     except Exception:
         pass  # The server answers 401 before it looks at anything else.
     else:
