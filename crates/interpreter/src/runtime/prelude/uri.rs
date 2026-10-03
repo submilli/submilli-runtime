@@ -5,6 +5,7 @@
 use wasmtime::{FuncType, HeapType, Linker, RefType, Val, ValType};
 
 use crate::runtime::StoreData;
+use crate::runtime::fuel;
 use crate::runtime::host::{
     intrinsic_string_type, read_string_arg, register_host_fn, write_submilli_string_struct,
 };
@@ -132,6 +133,7 @@ pub(crate) fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
             /* deterministic = */ true,
             move |caller, params, results| -> wasmtime::Result<()> {
                 let s = read_string_arg(&mut *caller, &params[0], name)?;
+                fuel::charge(&mut *caller, fuel::SCAN, s.len() as u64)?;
                 let mapped = op(&s).map_err(wasmtime::Error::msg)?;
                 let st = write_submilli_string_struct(caller, &mapped)?;
                 results[0] = Val::AnyRef(Some(st.to_anyref()));

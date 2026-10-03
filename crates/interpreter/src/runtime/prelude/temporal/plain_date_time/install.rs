@@ -290,10 +290,10 @@ fn reg_plain_date_time_to_zoned(
             let date = plain_date_from_struct(caller, st, "PlainDateTime.toZonedDateTime")?;
             let time = plain_time_from_struct(caller, st, 3, "PlainDateTime.toZonedDateTime")?;
             let (tz, canonical_id) = super::super::zoned_date_time::resolve_time_zone(
+                caller,
                 &tz_id,
                 "PlainDateTime.toZonedDateTime",
-            )
-            .map_err(crate::runtime::host::range_error)?;
+            )?;
             let z = date
                 .to_datetime(time)
                 .to_zoned(tz)

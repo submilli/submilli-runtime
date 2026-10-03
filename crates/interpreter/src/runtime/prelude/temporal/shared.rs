@@ -1219,7 +1219,7 @@ pub(super) fn zoned_date_time_from_struct(
     let secs = st_i64(caller, st, 1, label)?;
     let nanos = st_i32(caller, st, 2, label)?;
     let tz_id = st_string(caller, st, 3, label)?;
-    make_zoned(secs, nanos, &tz_id, label)
+    make_zoned(caller, secs, nanos, &tz_id, label)
 }
 
 pub(super) fn zoned_date_time_from_val(
@@ -1274,7 +1274,7 @@ pub(super) fn zoned_date_time_parts_from_val(
     let secs = st_i64(caller, st, 1, label)?;
     let nanos = st_i32(caller, st, 2, label)?;
     let tz_id = st_string(caller, st, 3, label)?;
-    let zoned = make_zoned(secs, nanos, &tz_id, label)?;
+    let zoned = make_zoned(caller, secs, nanos, &tz_id, label)?;
     Ok((zoned, tz_id))
 }
 
@@ -1923,9 +1923,14 @@ fn read_i64(v: &Val, name: &str) -> wasmtime::Result<i64> {
     }
 }
 
-fn make_zoned(secs: i64, nanos: i32, tz_id: &str, label: &'static str) -> wasmtime::Result<Zoned> {
-    let (tz, _) = super::zoned_date_time::resolve_time_zone(tz_id, label)
-        .map_err(crate::runtime::host::range_error)?;
+fn make_zoned(
+    caller: &mut Caller<'_, StoreData>,
+    secs: i64,
+    nanos: i32,
+    tz_id: &str,
+    label: &'static str,
+) -> wasmtime::Result<Zoned> {
+    let (tz, _) = super::zoned_date_time::resolve_time_zone(caller, tz_id, label)?;
     let ts = Timestamp::new(secs, nanos).map_err(|_| {
         crate::runtime::host::range_error(format!(
             "Temporal.{label}: the instant is outside the representable range"

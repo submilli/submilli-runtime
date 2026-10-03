@@ -9,6 +9,9 @@ use std::str::FromStr;
 
 use jiff::{RoundMode, Span, Timestamp, TimestampDifference, TimestampRound, Zoned};
 use num_bigint::BigInt;
+use wasmtime::Caller;
+
+use crate::runtime::StoreData;
 
 type Result<T> = std::result::Result<T, String>;
 
@@ -147,9 +150,13 @@ pub(super) fn round_mode(mode: &str) -> Result<RoundMode> {
     })
 }
 
-pub(super) fn to_zoned_date_time_iso(ts: Timestamp, time_zone: &str) -> Result<(Zoned, String)> {
+pub(super) fn to_zoned_date_time_iso(
+    caller: &mut Caller<'_, StoreData>,
+    ts: Timestamp,
+    time_zone: &str,
+) -> wasmtime::Result<(Zoned, String)> {
     let (tz, id) =
-        super::zoned_date_time::resolve_time_zone(time_zone, "Instant.toZonedDateTimeISO")?;
+        super::zoned_date_time::resolve_time_zone(caller, time_zone, "Instant.toZonedDateTimeISO")?;
     Ok((ts.to_zoned(tz), id))
 }
 

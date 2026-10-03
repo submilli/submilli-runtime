@@ -8,6 +8,7 @@
 use wasmtime::{FuncType, HeapType, Linker, RefType, Val, ValType};
 
 use crate::runtime::StoreData;
+use crate::runtime::fuel;
 use crate::runtime::host::{
     permission_denied, permission_denied_invariant, read_string_arg, register_host_fn_async,
 };
@@ -87,6 +88,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
                     serde_json::from_str(&context_json).map_err(|e| {
                         wasmtime::Error::msg(format!("security.check: malformed context JSON: {e}"))
                     })?;
+                fuel::charge_host_fuel(&mut *caller, fuel::GATE)?;
                 let who = consumer_of_running_package(&*caller, &capability)?;
                 match caller
                     .data()

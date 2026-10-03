@@ -7,6 +7,7 @@ use wasmtime::{Caller, Val};
 
 use super::string_form_units;
 use crate::runtime::StoreData;
+use crate::runtime::fuel;
 use crate::runtime::host::fatal_host_error;
 use crate::runtime::prelude::closure::Closure;
 use crate::runtime::prelude::vtable::read_string_units;
@@ -33,6 +34,9 @@ pub(crate) async fn merge_sort<T: Copy>(
     to_val: impl Fn(&mut Caller<'_, StoreData>, T) -> wasmtime::Result<Val>,
 ) -> wasmtime::Result<()> {
     let len = items.len();
+    // Bottom-up and non-adaptive, so the whole cost is known here. The
+    // comparisons charge their own callbacks and key reads.
+    fuel::charge_host_fuel(&mut *caller, fuel::sort_cost(len as u64))?;
     let mut merged = items.clone();
     let mut width = 1usize;
     while width < len {

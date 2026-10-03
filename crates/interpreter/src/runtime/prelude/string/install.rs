@@ -684,6 +684,9 @@ fn reg_str_str_num_to_num(
             let recv = abi.read(caller, &params[0], name)?;
             let search = abi.read(caller, &params[1], name)?;
             let from = number(&params[2], name)?;
+            // A naive search; the worst case multiplies in the needle, which
+            // is accepted as under-charged (SUB-1292).
+            fuel::charge(&mut *caller, fuel::SCAN, recv.value.units().len() as u64)?;
             results[0] = Val::F64(op(&recv.value, &search.value, from).to_bits());
             Ok(())
         },
@@ -717,6 +720,7 @@ fn register_string_search_predicate(
                 let recv = abi.read(caller, &params[0], name)?;
                 let search = super::super::value::search_string(caller, &params[1]).await?;
                 let from = super::super::value::to_number(caller, &params[2]).await?;
+                fuel::charge(&mut *caller, fuel::SCAN, recv.value.units().len() as u64)?;
                 results[0] = Val::I32(op(&recv.value, &Str::from_units(search), from) as i32);
                 Ok(())
             })
@@ -888,6 +892,13 @@ fn reg_str_to_str(
         true,
         move |caller, params, results| {
             let recv = abi.read(caller, &params[0], name)?;
+            // Case mapping, trimming and normalization each pass over the
+            // whole string, through UTF-8 and back.
+            fuel::charge(
+                &mut *caller,
+                fuel::SCAN,
+                2 * recv.value.units().len() as u64,
+            )?;
             results[0] = abi.write(caller, recv.vtable, &op(&recv.value))?;
             Ok(())
         },

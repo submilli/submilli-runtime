@@ -14,6 +14,7 @@
 use wasmtime::{ArrayRef, ArrayRefPre, Caller, Rooted, StructRef, StructRefPre, StructType, Val};
 
 use crate::runtime::StoreData;
+use crate::runtime::fuel;
 use crate::runtime::host::{
     host_boxed_boolean_vtable, host_boxed_number_vtable, host_object_vtable, host_opaque_vtable,
     read_code_units, type_error, write_submilli_string_struct_units,
@@ -166,6 +167,8 @@ fn walk(
     if let Some(what) = shapes.refusal(caller, value)? {
         return Err(unsupported(what));
     }
+    // Per node visited: shared substructure is visited once per path.
+    fuel::charge(&mut *caller, fuel::ELEM, 1)?;
     if is_a(caller, value, &shapes.array)? {
         for element in crate::runtime::prelude::collection::read_array_vals(caller, value)? {
             walk(caller, &element, depth + 1, shapes)?;

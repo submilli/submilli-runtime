@@ -238,8 +238,7 @@ fn install_direct(
         |caller, params, results| {
             let ts = instant_from_val(caller, &params[0], "Instant.toZonedDateTimeISO")?;
             let tz_id = read_string_arg(caller, &params[1], "Temporal.Instant.toZonedDateTimeISO")?;
-            let (zoned, canonical_id) = super::to_zoned_date_time_iso(ts, &tz_id)
-                .map_err(crate::runtime::host::range_error)?;
+            let (zoned, canonical_id) = super::to_zoned_date_time_iso(caller, ts, &tz_id)?;
             results[0] = make_zoned_date_time(caller, &zoned, &canonical_id)?;
             Ok(())
         },

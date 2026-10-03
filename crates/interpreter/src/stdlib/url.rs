@@ -11,6 +11,7 @@ use std::collections::BTreeMap;
 use wasmtime::{Caller, FuncType, HeapType, Linker, RefType, StructType, Val, ValType};
 
 use crate::runtime::StoreData;
+use crate::runtime::fuel;
 use crate::runtime::host::{
     read_boxed_number, read_string_arg, register_host_fn, register_host_fn_async, type_error,
     write_boxed_number_struct, write_submilli_string_struct,
@@ -389,6 +390,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         /* deterministic = */ true,
         |caller, params, results| {
             let s = read_string_arg(&mut *caller, &params[0], "url.encodeComponent")?;
+            fuel::charge(&mut *caller, fuel::SCAN, s.len() as u64)?;
             let encoded = encode_component(&s);
             let st = write_submilli_string_struct(caller, &encoded)?;
             results[0] = Val::AnyRef(Some(st.to_anyref()));
@@ -404,6 +406,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         /* deterministic = */ true,
         |caller, params, results| {
             let s = read_string_arg(&mut *caller, &params[0], "url.decodeComponent")?;
+            fuel::charge(&mut *caller, fuel::SCAN, s.len() as u64)?;
             let decoded = percent_encoding::percent_decode_str(&s)
                 .decode_utf8()
                 .map_err(|e| {
@@ -426,6 +429,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         /* deterministic = */ true,
         |caller, params, results| {
             let pairs = map::string_entries(caller, &params[0])?;
+            fuel::charge(&mut *caller, fuel::SCAN, pairs_len(&pairs))?;
             let st = write_submilli_string_struct(caller, &encode_query(&pairs))?;
             results[0] = Val::AnyRef(Some(st.to_anyref()));
             Ok(())
@@ -441,6 +445,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         |caller, params, results| {
             Box::pin(async move {
                 let s = read_string_arg(&mut *caller, &params[0], "url.decodeQuery")?;
+                fuel::charge(&mut *caller, fuel::SCAN, s.len() as u64)?;
                 let pairs =
                     decode_query(&s).map_err(|e| type_error(format!("url.decodeQuery: {e}")))?;
                 results[0] = map::string_map_from_pairs(caller, &pairs).await?;
@@ -458,6 +463,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         |caller, params, results| {
             Box::pin(async move {
                 let s = read_string_arg(&mut *caller, &params[0], "url.parse")?;
+                fuel::charge(&mut *caller, fuel::PARSE, s.len() as u64)?;
                 let parsed =
                     url::Url::parse(&s).map_err(|e| type_error(format!("url.parse: {e}")))?;
                 let query = match parsed.query() {
@@ -509,6 +515,11 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
             // `set_path` would remove the segment, so a caller's `..` would reach the parent.
             refuse_dot_segments_in_path(&path)
                 .map_err(|refusal| refusal.into_error("url.build"))?;
+            fuel::charge(
+                &mut *caller,
+                fuel::PARSE,
+                (protocol.len() + host.len() + path.len()) as u64 + pairs_len(&query),
+            )?;
             let serialised = build_url(&protocol, &host, port, &path, &query, fragment.as_deref())
                 .map_err(|e| type_error(format!("url.build: {e}")))?;
             let st = write_submilli_string_struct(caller, &serialised)?;
@@ -617,6 +628,14 @@ pub(crate) fn is_scheme(scheme: &str) -> bool {
     let mut chars = scheme.chars();
     chars.next().is_some_and(|c| c.is_ascii_alphabetic())
         && chars.all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.'))
+}
+
+/// The bytes of a query's keys and values, the size of encoding it.
+fn pairs_len(pairs: &[(String, String)]) -> u64 {
+    pairs
+        .iter()
+        .map(|(key, value)| (key.len() + value.len()) as u64)
+        .sum()
 }
 
 fn decode_query(s: &str) -> Result<Vec<(String, String)>, String> {

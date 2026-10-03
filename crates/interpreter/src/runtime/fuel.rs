@@ -8,8 +8,7 @@
 //! function charges `CALL` plus the classes that describe what it does with
 //! the sizes it knows. The rates are placeholders until SUB-1270 measures
 //! them; `plans/sub-1269-host-fuel-costs.md` gives the formula of every host
-//! function. Classes without a caller yet (`HASH`, `TZ`, `GATE`, `sort_cost`)
-//! are reserved for the standard-library pricing that follows.
+//! function.
 //!
 //! Charges are batched: a charge is refused before the work when the budget
 //! is short, but the engine's fuel is only lowered once [`HOST_FUEL_BATCH`]
@@ -65,6 +64,13 @@ pub const SCAN: Rate = Rate::per_unit(1);
 pub const PARSE: Rate = Rate::per_unit(6);
 /// Per element, entry or field touched, boxed or allocated as a GC value.
 pub const ELEM: Rate = Rate::per_unit(10);
+/// Regex matching per byte of haystack. The engine is the `regex` crate: no
+/// backtracking, so the worst case is the program size times the haystack,
+/// and the program size is capped at compile time.
+pub const REGEX: Rate = Rate::per_unit(8);
+/// Compiling a regex, on top of `PARSE` of its source: the program it
+/// builds is bounded by a size cap, not by the source length.
+pub const REGEX_COMPILE: u64 = 2_000;
 /// Cryptographic hashing per byte.
 pub const HASH: Rate = Rate::per_unit(4);
 /// Bytes sent, received, read or written; waiting costs nothing.
@@ -81,6 +87,19 @@ pub const GATE: u64 = 400;
 pub fn sort_cost(n: u64) -> u64 {
     let log = u64::from(n.max(2).ilog2());
     ELEM.cost(n.saturating_mul(log))
+}
+
+/// Multiplication, division or radix conversion of big integers of `a` and
+/// `b` limbs: a limb operation per limb pair while the operands are small,
+/// then, once the library switches to Karatsuba and Toom-3, close to linear
+/// in the larger operand. A placeholder shape until SUB-1270 measures it.
+pub fn bigint_product_cost(a: u64, b: u64) -> u64 {
+    let (small, large) = (a.min(b).max(1), a.max(b).max(1));
+    let schoolbook = small.saturating_mul(large.min(64));
+    let beyond = large
+        .saturating_sub(64)
+        .saturating_mul(u64::from(large.ilog2()) + 1);
+    ELEM.cost(schoolbook.saturating_add(beyond))
 }
 
 /// Charges the flat per-call cost.
@@ -137,6 +156,36 @@ where
         }
         body(caller, params, results)
     })
+}
+
+/// Charges `units` for work that followed an effect: a response received, a
+/// file written, a completion returned. The effect has happened and its
+/// result is in hand, so the charge never refuses: a short budget is taken
+/// to zero, the call completes, and the run stops at the next fuel check.
+pub fn settle(
+    ctx: impl AsContextMut<Data = StoreData>,
+    rate: Rate,
+    n: u64,
+) -> wasmtime::Result<()> {
+    settle_host_fuel(ctx, rate.cost(n))
+}
+
+/// [`settle`] for an amount of fuel.
+pub fn settle_host_fuel(
+    mut ctx: impl AsContextMut<Data = StoreData>,
+    units: u64,
+) -> wasmtime::Result<()> {
+    let mut ctx = ctx.as_context_mut();
+    let pending = ctx.data().host_fuel_pending;
+    let available = ctx.get_fuel()?.saturating_sub(pending);
+    if units <= available {
+        return charge_host_fuel(ctx, units);
+    }
+    ctx.set_fuel(0)?;
+    let data = ctx.data_mut();
+    data.host_fuel_pending = 0;
+    data.host_fuel = data.host_fuel.saturating_add(available);
+    Ok(())
 }
 
 /// Host charges accumulate on the store and are applied to the engine once
@@ -206,6 +255,45 @@ mod tests {
     use super::*;
     use crate::runtime::{RuntimeConfig, Vfs};
     use wasmtime::{Func, FuncType, Val, ValType};
+
+    #[test]
+    fn settling_never_refuses_and_leaves_a_short_budget_at_zero() {
+        let config = RuntimeConfig::default();
+        let engine = config.engine().unwrap();
+        let mut store = config
+            .store(&engine, StoreData::with_vfs(Vfs::none()))
+            .unwrap();
+        let settle = Func::new(
+            &mut store,
+            FuncType::new(&engine, [ValType::I64], []),
+            |mut caller, params, _| settle_host_fuel(&mut caller, params[0].unwrap_i64() as u64),
+        );
+        let charge = Func::new(
+            &mut store,
+            FuncType::new(&engine, [ValType::I64], []),
+            |mut caller, params, _| charge_host_fuel(&mut caller, params[0].unwrap_i64() as u64),
+        );
+
+        // Within the budget it is an ordinary charge, batched like any other.
+        store.set_fuel(1_000).unwrap();
+        settle.call(&mut store, &[Val::I64(300)], &mut []).unwrap();
+        assert_eq!(store.get_fuel().unwrap(), 1_000);
+        assert_eq!(store.data().host_fuel_pending, 300);
+        assert_eq!(store.data().host_fuel, 300);
+
+        // Beyond it, pending included, it takes what is there and succeeds;
+        // the next ordinary charge is the one that traps.
+        settle
+            .call(&mut store, &[Val::I64(5_000)], &mut [])
+            .unwrap();
+        assert_eq!(store.get_fuel().unwrap(), 0);
+        assert_eq!(store.data().host_fuel_pending, 0);
+        assert_eq!(store.data().host_fuel, 1_000);
+        let error = charge
+            .call(&mut store, &[Val::I64(1)], &mut [])
+            .unwrap_err();
+        assert_eq!(error.downcast_ref::<Trap>(), Some(&Trap::OutOfFuel));
+    }
 
     #[test]
     fn the_batch_covers_the_default_yield_interval() {

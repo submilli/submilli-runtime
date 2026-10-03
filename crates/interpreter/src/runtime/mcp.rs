@@ -19,6 +19,7 @@ use std::pin::Pin;
 use wasmtime::{FuncType, HeapType, Linker, RefType, Val, ValType};
 
 use crate::runtime::StoreData;
+use crate::runtime::fuel;
 use crate::runtime::host::{
     intrinsic_string_type, read_string_arg, register_host_fn_async, write_submilli_string_struct,
 };
@@ -91,7 +92,7 @@ pub fn install_mcp_async(linker: &mut Linker<StoreData>) -> wasmtime::Result<()>
                 // (`mcp.<server>`, known when the blueprint is written); the tool is
                 // in the filter context so a policy can constrain by tool.
                 check_security(
-                    &*caller,
+                    &mut *caller,
                     &format!("mcp.{server}"),
                     serde_json::json!({ "tool": tool, "transport": "streamable_http" }),
                 )?;
@@ -102,6 +103,7 @@ pub fn install_mcp_async(linker: &mut Linker<StoreData>) -> wasmtime::Result<()>
                     ))
                 })?;
 
+                fuel::charge(&mut *caller, fuel::IO, args_json.len() as u64)?;
                 let value = transport
                     .call(&server, &tool, &args_json)
                     .await
@@ -112,6 +114,10 @@ pub fn install_mcp_async(linker: &mut Linker<StoreData>) -> wasmtime::Result<()>
                         "@mcp/{server}.{tool}: result is not serializable: {e}"
                     ))
                 })?;
+                // The tool has run and its result is here: settled, not
+                // refused. Serialized once here and parsed again by the caller.
+                fuel::settle(&mut *caller, fuel::IO, text.len() as u64)?;
+                fuel::settle(&mut *caller, fuel::PARSE, text.len() as u64)?;
                 let st = write_submilli_string_struct(&mut *caller, &text)?;
                 results[0] = Val::AnyRef(Some(st.to_anyref()));
                 Ok(())

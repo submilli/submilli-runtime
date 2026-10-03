@@ -48,6 +48,13 @@ pub(crate) fn install(
         |caller, params, results| -> wasmtime::Result<()> {
             let s = read_string_arg(&mut *caller, &params[0], "bigint.fromString")?;
             let trimmed = s.trim();
+            // Decimal parsing is quadratic: a pass over the digits per limb
+            // of the result, about one limb per 19 digits.
+            let digits = trimmed.len() as u64;
+            fuel::charge_host_fuel(
+                &mut *caller,
+                fuel::bigint_product_cost(digits, digits.div_ceil(19)),
+            )?;
             let parsed: num_bigint::BigInt = trimmed.parse().map_err(|_| {
                 crate::runtime::host::syntax_error(format!(
                     "bigint.fromString: invalid bigint literal: {trimmed:?}",
@@ -118,6 +125,7 @@ pub(crate) fn install(
         /* deterministic = */ true,
         |caller, params, results| -> wasmtime::Result<()> {
             let value = read_bigint_arg(&mut *caller, &params[0], &params[1], "bigint.toString")?;
+            fuel::charge_host_fuel(&mut *caller, radix_cost(&value))?;
             let formatted = value.to_str_radix(10);
             let arr = write_submilli_string(&mut *caller, &formatted)?;
             results[0] = Val::AnyRef(Some(arr.to_anyref()));
@@ -151,6 +159,7 @@ pub(crate) fn install(
             if radix.is_nan() || !(2.0..=36.0).contains(&truncated) {
                 return Err(range_error("toString radix must be between 2 and 36"));
             }
+            fuel::charge_host_fuel(&mut *caller, radix_cost(&value))?;
             let formatted = value.to_str_radix(truncated as u32);
             let arr = write_submilli_string(&mut *caller, &formatted)?;
             results[0] = Val::AnyRef(Some(arr.to_anyref()));
@@ -168,10 +177,10 @@ pub(crate) fn install(
         ],
         [ValType::I32, raw_bigint_result.clone()],
     );
-    for (name, op) in [
-        ("add", BinOp::Add),
-        ("sub", BinOp::Sub),
-        ("mul", BinOp::Mul),
+    for (name, op, cost) in [
+        ("add", BinOp::Add, Cost::Linear),
+        ("sub", BinOp::Sub, Cost::Linear),
+        ("mul", BinOp::Mul, Cost::Product),
     ] {
         register_host_fn(
             linker,
@@ -180,7 +189,7 @@ pub(crate) fn install(
             binop_ty.clone(),
             /* deterministic = */ true,
             move |caller, params, results| -> wasmtime::Result<()> {
-                run_binop(&mut *caller, params, results, name, |a, b| {
+                run_binop(&mut *caller, params, results, name, cost, |a, b| {
                     Ok(match op {
                         BinOp::Add => a + b,
                         BinOp::Sub => a - b,
@@ -204,7 +213,7 @@ pub(crate) fn install(
                 if divisor.is_zero() {
                     return Err(range_error("Division by zero"));
                 }
-                run_binop(caller, params, results, name, |a, b| {
+                run_binop(caller, params, results, name, Cost::Product, |a, b| {
                     Ok(match kind {
                         DivKind::Div => a / b,
                         DivKind::Rem => a % b,
@@ -222,16 +231,23 @@ pub(crate) fn install(
         binop_ty.clone(),
         /* deterministic = */ true,
         |caller, params, results| -> wasmtime::Result<()> {
-            run_binop(&mut *caller, params, results, "pow", |base, exp| {
-                use num_traits::{Signed, ToPrimitive};
-                if exp.is_negative() {
-                    return Err(range_error("bigint.pow: exponent must be non-negative"));
-                }
-                let exp_u32 = exp
-                    .to_u32()
-                    .ok_or_else(|| range_error("bigint.pow: exponent too large to fit in u32"))?;
-                Ok(base.pow(exp_u32))
-            })
+            run_binop(
+                &mut *caller,
+                params,
+                results,
+                "pow",
+                Cost::Pow,
+                |base, exp| {
+                    use num_traits::{Signed, ToPrimitive};
+                    if exp.is_negative() {
+                        return Err(range_error("bigint.pow: exponent must be non-negative"));
+                    }
+                    let exp_u32 = exp.to_u32().ok_or_else(|| {
+                        range_error("bigint.pow: exponent too large to fit in u32")
+                    })?;
+                    Ok(base.pow(exp_u32))
+                },
+            )
         },
     )?;
 
@@ -323,15 +339,81 @@ enum DivKind {
     Rem,
 }
 
+/// Formatting in a radix is quadratic in the limbs: each output chunk divides
+/// the remaining magnitude.
+fn radix_cost(value: &num_bigint::BigInt) -> u64 {
+    let limbs = limbs_of(value);
+    fuel::bigint_product_cost(limbs, limbs)
+}
+
+/// Limbs of the magnitude: the size variable of every BigInt cost.
+fn limbs_of(value: &num_bigint::BigInt) -> u64 {
+    value.magnitude().to_u64_digits().len() as u64
+}
+
+/// The largest BigInt `pow` may produce, in limbs: 512 KiB of magnitude. The
+/// result size is known before the work, so an oversized one is refused
+/// instead of built in host memory the store limit does not see.
+const MAX_POW_LIMBS: u64 = 1 << 16;
+
+/// How a binary operation's work scales with its operands.
+#[derive(Copy, Clone)]
+enum Cost {
+    /// A pass over the longer operand: add, sub.
+    Linear,
+    /// A limb pair per step: mul, div, mod.
+    Product,
+    /// Repeated squaring up to the result size.
+    Pow,
+}
+
+impl Cost {
+    /// The fuel for `a op b`, sized before the work. `Pow` refuses a result
+    /// over the cap here, before any of it is built.
+    fn of(self, a: &num_bigint::BigInt, b: &num_bigint::BigInt) -> wasmtime::Result<u64> {
+        let (la, lb) = (limbs_of(a), limbs_of(b));
+        Ok(match self {
+            Cost::Linear => fuel::ELEM.cost(la.max(lb)),
+            Cost::Product => fuel::bigint_product_cost(la, lb),
+            Cost::Pow => {
+                use num_traits::ToPrimitive;
+                // An exponent outside u32 is refused by the operation itself,
+                // with its own message; it costs nothing here.
+                match b.to_u32() {
+                    Some(exp) => pow_cost(a, exp)?,
+                    None => 0,
+                }
+            }
+        })
+    }
+}
+
+/// The work of `base ** exp`, dominated by the squarings near the result
+/// size; the result has `bits(base) * exp / 64` limbs. A base of magnitude 0
+/// or 1 has a one-limb result whatever the exponent.
+fn pow_cost(base: &num_bigint::BigInt, exp: u32) -> wasmtime::Result<u64> {
+    let bits = base.bits();
+    if bits <= 1 {
+        return Ok(fuel::ELEM.cost(1));
+    }
+    let result_limbs = bits.saturating_mul(u64::from(exp)).div_ceil(64);
+    if result_limbs > MAX_POW_LIMBS {
+        return Err(range_error("bigint.pow: result too large"));
+    }
+    Ok(fuel::bigint_product_cost(result_limbs, result_limbs))
+}
+
 fn run_binop(
     caller: &mut Caller<'_, StoreData>,
     params: &[Val],
     results: &mut [Val],
     op_name: &str,
+    cost: Cost,
     op: impl FnOnce(num_bigint::BigInt, num_bigint::BigInt) -> wasmtime::Result<num_bigint::BigInt>,
 ) -> wasmtime::Result<()> {
     let a = read_bigint_arg(caller, &params[0], &params[1], &format!("{op_name} lhs"))?;
     let b = read_bigint_arg(caller, &params[2], &params[3], &format!("{op_name} rhs"))?;
+    fuel::charge_host_fuel(&mut *caller, cost.of(&a, &b)?)?;
     let r = op(a, b)?;
     let (sign, magnitude) = r.into_parts();
     let limbs = magnitude.to_u64_digits();

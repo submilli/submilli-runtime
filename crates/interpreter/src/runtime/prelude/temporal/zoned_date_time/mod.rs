@@ -12,6 +12,10 @@ use jiff::{
     fmt::temporal::DateTimeParser,
     tz::{Offset, TimeZone},
 };
+use wasmtime::Caller;
+
+use crate::runtime::StoreData;
+use crate::runtime::fuel;
 
 type Result<T> = std::result::Result<T, String>;
 
@@ -80,39 +84,50 @@ pub(super) fn subtract(zoned: &Zoned, span: Span) -> Result<Zoned> {
     })
 }
 
-pub(super) fn resolve_time_zone(time_zone: &str, operation: &str) -> Result<(TimeZone, String)> {
+/// Looks a zone up by name. Charged as one `TZ`: a cache hit is a lock and a
+/// binary search, a miss reads and parses a zone file.
+pub(super) fn resolve_time_zone(
+    caller: &mut Caller<'_, StoreData>,
+    time_zone: &str,
+    operation: &str,
+) -> wasmtime::Result<(TimeZone, String)> {
+    // A fuel trap passes through as it is; an unknown zone is the program's
+    // `RangeError`.
+    fuel::charge_host_fuel(&mut *caller, fuel::TZ)?;
+    let unknown = || crate::runtime::host::range_error(unknown_zone(operation, time_zone));
     if is_offset_identifier(time_zone) {
-        let offset =
-            parse_fixed_offset(time_zone).map_err(|_| unknown_zone(operation, time_zone))?;
+        let offset = parse_fixed_offset(time_zone).map_err(|_| unknown())?;
         return Ok((TimeZone::fixed(offset), format_offset(offset.seconds())));
     }
-    let tz = TimeZone::get(time_zone).map_err(|_| unknown_zone(operation, time_zone))?;
-    let id = tz
-        .iana_name()
-        .ok_or_else(|| unknown_zone(operation, time_zone))?
-        .to_string();
+    let tz = TimeZone::get(time_zone).map_err(|_| unknown())?;
+    let id = tz.iana_name().ok_or_else(unknown)?.to_string();
     Ok((tz, id))
 }
 
-pub(super) fn time_zone_ids_equal(a: &str, b: &str) -> bool {
+pub(super) fn time_zone_ids_equal(
+    caller: &mut Caller<'_, StoreData>,
+    a: &str,
+    b: &str,
+) -> wasmtime::Result<bool> {
     if a.eq_ignore_ascii_case(b) {
-        return true;
+        return Ok(true);
     }
     let a_is_offset = is_offset_identifier(a);
     let b_is_offset = is_offset_identifier(b);
     if a_is_offset || b_is_offset {
         if a_is_offset != b_is_offset {
-            return false;
+            return Ok(false);
         }
         let (Ok(a), Ok(b)) = (parse_fixed_offset(a), parse_fixed_offset(b)) else {
-            return false;
+            return Ok(false);
         };
-        return a == b;
+        return Ok(a == b);
     }
+    fuel::charge_host_fuel(&mut *caller, 2 * fuel::TZ)?;
     let (Ok(a), Ok(b)) = (TimeZone::get(a), TimeZone::get(b)) else {
-        return false;
+        return Ok(false);
     };
-    time_zones_have_same_rules(&a, &b)
+    time_zones_have_same_rules(caller, &a, &b)
 }
 
 fn parse_fixed_offset(input: &str) -> std::result::Result<Offset, jiff::Error> {
@@ -121,9 +136,15 @@ fn parse_fixed_offset(input: &str) -> std::result::Result<Offset, jiff::Error> {
         .and_then(|time_zone| time_zone.to_fixed_offset())
 }
 
-fn time_zones_have_same_rules(a: &TimeZone, b: &TimeZone) -> bool {
+/// Walks both zones' transitions in lockstep; charged per step, since two
+/// aliases with ongoing DST have tens of thousands of them.
+fn time_zones_have_same_rules(
+    caller: &mut Caller<'_, StoreData>,
+    a: &TimeZone,
+    b: &TimeZone,
+) -> wasmtime::Result<bool> {
     if a == b {
-        return true;
+        return Ok(true);
     }
     let a_initial = a.to_offset_info(Timestamp::MIN);
     let b_initial = b.to_offset_info(Timestamp::MIN);
@@ -131,20 +152,21 @@ fn time_zones_have_same_rules(a: &TimeZone, b: &TimeZone) -> bool {
         || a_initial.abbreviation() != b_initial.abbreviation()
         || a_initial.dst() != b_initial.dst()
     {
-        return false;
+        return Ok(false);
     }
 
     let mut a_transitions = a.following(Timestamp::MIN);
     let mut b_transitions = b.following(Timestamp::MIN);
     loop {
+        fuel::charge(&mut *caller, fuel::ELEM, 1)?;
         match (a_transitions.next(), b_transitions.next()) {
-            (None, None) => return true,
+            (None, None) => return Ok(true),
             (Some(a), Some(b))
                 if a.timestamp() == b.timestamp()
                     && a.offset() == b.offset()
                     && a.abbreviation() == b.abbreviation()
                     && a.dst() == b.dst() => {}
-            _ => return false,
+            _ => return Ok(false),
         }
     }
 }
@@ -153,8 +175,12 @@ fn is_offset_identifier(time_zone: &str) -> bool {
     matches!(time_zone.as_bytes().first(), Some(b'+' | b'-'))
 }
 
-pub(super) fn with_time_zone(zoned: &Zoned, time_zone: &str) -> Result<(Zoned, String)> {
-    let (tz, id) = resolve_time_zone(time_zone, "ZonedDateTime.withTimeZone")?;
+pub(super) fn with_time_zone(
+    caller: &mut Caller<'_, StoreData>,
+    zoned: &Zoned,
+    time_zone: &str,
+) -> wasmtime::Result<(Zoned, String)> {
+    let (tz, id) = resolve_time_zone(caller, time_zone, "ZonedDateTime.withTimeZone")?;
     Ok((zoned.timestamp().to_zoned(tz), id))
 }
 
