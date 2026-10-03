@@ -352,12 +352,28 @@ async fn run_inner(
         _ = &mut cancelled => internal_failure("execution cancelled"),
         outcome = execution => outcome,
     };
-    store.data_mut().blocking_work.finish().await;
+    if let Err(error) = store.data_mut().blocking_work.finish().await {
+        record_worker_cleanup_failure(&mut outcome, &error);
+    }
     match ExecutionUsage::capture(&store, runtime.config.fuel) {
         Ok(usage) => outcome.usage = usage,
         Err(error) => return internal_failure(&format!("usage capture failed: {error}")),
     }
     outcome
+}
+
+fn record_worker_cleanup_failure(
+    outcome: &mut RunOutcome,
+    error: &interpreter::runtime::blocking::BlockingWorkDrainError,
+) {
+    let secondary = format!("worker cleanup failure: {error}");
+    if let Some(primary) = outcome.error.as_mut() {
+        primary.message.push('\n');
+        primary.message.push_str(&secondary);
+        return;
+    }
+    outcome.value = None;
+    outcome.error = internal_failure(&secondary).error;
 }
 
 fn log_execution(blueprint: &str, session: &str, started: Instant, outcome: &RunOutcome) {
@@ -761,6 +777,7 @@ mod tests {
     }
 
     struct PausedGit {
+        panic_after_resume: bool,
         started: tokio::sync::Notify,
         resumed: std::sync::atomic::AtomicBool,
         finish: Mutex<std::sync::mpsc::Receiver<()>>,
@@ -779,6 +796,9 @@ mod tests {
                     .unwrap()
                     .recv_timeout(Duration::from_secs(5))
                     .unwrap();
+                if self.panic_after_resume {
+                    panic!("injected cancelled worker failure");
+                }
             }
             CheckOutcome::Allow
         }
@@ -806,11 +826,21 @@ mod tests {
 
     #[tokio::test]
     async fn cancelled_request_waits_for_git_before_releasing_store_and_vfs() {
+        cancelled_git_owner_retains_resources(false).await;
+    }
+
+    #[tokio::test]
+    async fn cancelled_request_drains_panicking_git_worker() {
+        cancelled_git_owner_retains_resources(true).await;
+    }
+
+    async fn cancelled_git_owner_retains_resources(panic_after_resume: bool) {
         let vfs = Vfs::tempdir().unwrap();
         let root = vfs.root().to_owned();
         let defaults = StoreData::with_vfs(Vfs::none());
         let (finish, cleanup) = std::sync::mpsc::channel();
         let security = Arc::new(PausedGit {
+            panic_after_resume,
             started: tokio::sync::Notify::new(),
             resumed: std::sync::atomic::AtomicBool::new(false),
             finish: Mutex::new(cleanup),
@@ -891,5 +921,69 @@ mod tests {
         // The owner's store and worker both release their policy references.
         assert_eq!(Arc::strong_count(&security), 1);
         assert!(!security.resumed.load(std::sync::atomic::Ordering::Relaxed));
+    }
+}
+
+#[cfg(test)]
+mod worker_cleanup_tests {
+    use super::*;
+
+    async fn injected_drain_failure() -> interpreter::runtime::blocking::BlockingWorkDrainError {
+        let mut workers = interpreter::runtime::blocking::BlockingWork::default();
+        let (started, ready) = tokio::sync::oneshot::channel();
+        let (release, gate) = std::sync::mpsc::channel();
+        let mut waiter = Box::pin(workers.spawn(move || {
+            started.send(()).unwrap();
+            gate.recv_timeout(std::time::Duration::from_secs(5))
+                .unwrap();
+            panic!("injected abandoned worker failure");
+        }));
+        tokio::select! {
+            _ = &mut waiter => panic!("worker ended early"),
+            result = ready => result.unwrap(),
+        }
+        drop(waiter);
+        release.send(()).unwrap();
+        workers.finish().await.unwrap_err()
+    }
+
+    #[tokio::test]
+    async fn cleanup_failure_preserves_primary_error_and_captured_output() {
+        let cleanup = injected_drain_failure().await;
+        for message in ["execution failed", "execution cancelled"] {
+            let mut outcome = internal_failure(message);
+            outcome.error.as_mut().unwrap().kind = ErrorKind::Timeout;
+            outcome.console_raw = "before\n".into();
+            outcome.discovery_warnings = vec!["discovery warning".into()];
+            let primary = outcome.error.as_ref().unwrap().message.clone();
+            record_worker_cleanup_failure(&mut outcome, &cleanup);
+            let error = outcome.error.unwrap();
+            assert!(matches!(error.kind, ErrorKind::Timeout));
+            assert_eq!(
+                error.message,
+                format!("{primary}\nworker cleanup failure: {cleanup}")
+            );
+            assert_eq!(outcome.console_raw, "before\n");
+            assert_eq!(outcome.discovery_warnings, ["discovery warning"]);
+        }
+    }
+
+    #[tokio::test]
+    async fn cleanup_failure_suppresses_success_and_preserves_reporting_context() {
+        let cleanup = injected_drain_failure().await;
+        let mut outcome = RunOutcome {
+            usage: ExecutionUsage::default(),
+            value: Some("42".into()),
+            console_raw: "before\n".into(),
+            error: None,
+            discovery_warnings: vec!["discovery warning".into()],
+        };
+        record_worker_cleanup_failure(&mut outcome, &cleanup);
+        assert!(outcome.value.is_none());
+        let error = outcome.error.unwrap();
+        assert!(matches!(error.kind, ErrorKind::RuntimeError));
+        assert!(error.message.contains("blocking worker panicked"));
+        assert_eq!(outcome.console_raw, "before\n");
+        assert_eq!(outcome.discovery_warnings, ["discovery warning"]);
     }
 }

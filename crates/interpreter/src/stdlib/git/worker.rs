@@ -41,7 +41,10 @@ pub(super) fn run(
             Value::Null
         }
         "add" => {
-            let paths = serde_json::from_value::<Vec<String>>(args[0].clone())?;
+            let paths = args.first().ok_or_else(|| {
+                crate::runtime::host::fatal_host_error("git.add worker is missing decoded paths")
+            })?;
+            let paths = serde_json::from_value::<Vec<String>>(paths.clone())?;
             operations::add(&snapshot, &paths)?;
             changed = true;
             Value::Null

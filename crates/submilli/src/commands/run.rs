@@ -469,7 +469,8 @@ fn execute_on_this_thread(
         let instance = instantiate_program_async(&linker, &mut store, &module).await?;
         dispatch_main_async(&mut store, &instance).await
     });
-    rt.block_on(store.data_mut().blocking_work.finish());
+    let cleanup = rt.block_on(store.data_mut().blocking_work.finish());
+    let (dispatch, secondary_cleanup) = settle_worker_cleanup(dispatch, cleanup);
     let run_elapsed = run_started.elapsed();
     let exit = match dispatch {
         Ok(Some(json)) => {
@@ -486,6 +487,9 @@ fn execute_on_this_thread(
             Ok(ExitCode::from(1))
         }
     };
+    if let Some(error) = secondary_cleanup {
+        eprintln!("worker cleanup failure: {error}");
+    }
     if args.report {
         let usage = ExecutionUsage::capture(&store, cfg.fuel)?;
         eprintln!(
@@ -500,6 +504,25 @@ fn execute_on_this_thread(
         );
     }
     exit
+}
+
+fn settle_worker_cleanup<T>(
+    dispatch: wasmtime::Result<T>,
+    cleanup: Result<(), interpreter::runtime::blocking::BlockingWorkDrainError>,
+) -> (
+    wasmtime::Result<T>,
+    Option<interpreter::runtime::blocking::BlockingWorkDrainError>,
+) {
+    match (dispatch, cleanup) {
+        (Ok(_), Err(error)) => (
+            Err(
+                interpreter::runtime::host::fatal_host_error("worker cleanup failed")
+                    .context(error),
+            ),
+            None,
+        ),
+        (dispatch, cleanup) => (dispatch, cleanup.err()),
+    }
 }
 
 fn grouped_fuel(fuel: u64) -> String {
@@ -845,6 +868,55 @@ function main(): string {
                 .iter()
                 .find(|(key, _)| key == name)
                 .and_then(|(_, value)| value.clone())
+        }
+    }
+}
+
+#[cfg(test)]
+mod worker_cleanup_tests {
+    use super::*;
+
+    async fn injected_drain_failure() -> interpreter::runtime::blocking::BlockingWorkDrainError {
+        let mut workers = interpreter::runtime::blocking::BlockingWork::default();
+        let (started, ready) = tokio::sync::oneshot::channel();
+        let (release, gate) = std::sync::mpsc::channel();
+        let mut waiter = Box::pin(workers.spawn(move || {
+            started.send(()).unwrap();
+            gate.recv_timeout(std::time::Duration::from_secs(5))
+                .unwrap();
+            panic!("injected abandoned worker failure");
+        }));
+        tokio::select! {
+            _ = &mut waiter => panic!("worker ended early"),
+            result = ready => result.unwrap(),
+        }
+        drop(waiter);
+        release.send(()).unwrap();
+        workers.finish().await.unwrap_err()
+    }
+
+    #[tokio::test]
+    async fn cleanup_failure_turns_success_into_fatal_failure() {
+        let cleanup = injected_drain_failure().await;
+        let (result, secondary) = settle_worker_cleanup(Ok(42), Err(cleanup));
+        let error = result.unwrap_err();
+        assert!(error.is::<interpreter::runtime::host::FatalHostError>());
+        assert!(error.is::<interpreter::runtime::blocking::BlockingWorkDrainError>());
+        assert!(error.to_string().contains("blocking worker panicked"));
+        assert!(secondary.is_none());
+    }
+
+    #[tokio::test]
+    async fn cleanup_failure_preserves_original_execution_error() {
+        for message in ["execution failed", "execution cancelled"] {
+            let cleanup = injected_drain_failure().await;
+            let (result, secondary) =
+                settle_worker_cleanup::<()>(Err(wasmtime::Error::msg(message)), Err(cleanup));
+            assert_eq!(result.unwrap_err().to_string(), message);
+            assert_eq!(
+                secondary.unwrap().errors(),
+                &[interpreter::runtime::blocking::BlockingWorkError::WorkerPanicked]
+            );
         }
     }
 }
