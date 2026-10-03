@@ -96,8 +96,7 @@ help: add `amount` to the matching `@capability` binding
 
 The other disagreements are warnings: a tag field the `check` doesn't
 send, a tag with no `check`, a `check` with no tag, or a tag that names
-a parameter the function doesn't have. CI can fail on these with
-`--deny-warnings`; see [Verify a package in CI](/docs/tutorials/verify-a-package-in-ci).
+a parameter the function doesn't have.
 :::
 
 Name a capability `<domain>/<resource>.<verb>`, one per operation, so a
@@ -206,7 +205,7 @@ function lookUpClass(customerId: string): string {
 ```
 
 The new field goes in both places; add it to the `check` alone and the
-build fails because `customerClass` is missing from the tag.
+build warns that `customerClass` is missing from the tag.
 
 ## Call the service
 

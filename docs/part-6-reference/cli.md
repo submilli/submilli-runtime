@@ -488,7 +488,6 @@ Usage: submilli build check [OPTIONS]
 
 Options:
   -p, --package <PACKAGE>  Compile only this package and its sibling dependencies
-      --deny-warnings      Fail on code warnings; also enabled by SUBMILLI_DENY_WARNINGS=1
   -h, --help               Print help
 ```
 
@@ -501,7 +500,6 @@ Usage: submilli build publish-local [OPTIONS]
 
 Options:
   -p, --package <PACKAGE>  Compile only this package and its sibling dependencies
-      --deny-warnings      Fail on code warnings; also enabled by SUBMILLI_DENY_WARNINGS=1
   -h, --help               Print help
 ```
 
@@ -514,7 +512,6 @@ Usage: submilli build test [OPTIONS]
 
 Options:
   -p, --package <PACKAGE>  Compile only this package and its sibling dependencies
-      --deny-warnings      Fail on code warnings; also enabled by SUBMILLI_DENY_WARNINGS=1
       --all-env            Supply all Unicode process environment variables as test credentials
       --env-var <NAME>     Supply a process variable (repeatable or comma-separated); fail if unset or non-Unicode
       --env-file <PATH>    Read credentials from a file; relative paths use the current directory. Fail if unreadable
@@ -536,9 +533,8 @@ Arguments:
   [PACKAGE]  Install only this package (`@org/name`). Omit to install every package the repo declares
 
 Options:
-      --upgrade        Re-install over a package already in the store at a different commit
-      --deny-warnings  Fail on code warnings; also enabled by SUBMILLI_DENY_WARNINGS=1
-  -h, --help           Print help
+      --upgrade  Re-install over a package already in the store at a different commit
+  -h, --help     Print help
 ```
 
 ## `submilli docs`
@@ -786,9 +782,8 @@ Arguments:
   <FILE>  Path to the blueprint YAML file to lint
 
 Options:
-      --fix            Add the rules declared packages and their dependencies require for their own calls
-      --deny-warnings  Fail on blueprint warnings; also enabled by SUBMILLI_DENY_WARNINGS=1
-  -h, --help           Print help
+      --fix   Add the rules declared packages and their dependencies require for their own calls
+  -h, --help  Print help
 ```
 
 ### `submilli blueprint add-mcp`
@@ -1471,7 +1466,6 @@ Arguments:
 Options:
       --sha <SHA>          Pin to this commit SHA (or ref). Resolved from the default branch when omitted
       --upgrade            Re-install over a package already present at a different commit
-      --deny-warnings      Fail on code warnings; also enabled by SUBMILLI_DENY_WARNINGS=1
       --server <URL>       Base URL of the running submilli-server [env: SUBMILLI_SERVER_URL=] [default: http://127.0.0.1:8128]
       --token-file <PATH>  File holding the API token to send. Without it the token is read from `$SUBMILLI_SERVER_TOKEN`; with neither, no token is sent, which only a server started with `--allow-unauthenticated` accepts. There is no flag taking the token itself, so it never lands in the process list. Env: `$SUBMILLI_SERVER_TOKEN_FILE`
   -h, --help               Print help
