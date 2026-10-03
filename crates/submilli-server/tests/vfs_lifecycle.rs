@@ -43,12 +43,15 @@ impl Harness {
 
     fn with_vfs_and_volumes(vfs: VfsConfig, volumes: VolumeTable) -> Self {
         let vfs_root = tempfile::tempdir().expect("vfs root");
-        let blueprints = Arc::new(InMemoryBlueprintStore::seed([Blueprint {
-            name: BLUEPRINT.into(),
-            vfs,
-            permissions: allow_fs(),
-            ..Default::default()
-        }]));
+        let blueprints = Arc::new(
+            InMemoryBlueprintStore::seed([Blueprint {
+                name: BLUEPRINT.into(),
+                vfs,
+                permissions: allow_fs(),
+                ..Default::default()
+            }])
+            .expect("seed blueprints"),
+        );
         let config = ServerConfig {
             blueprints: Some(blueprints),
             session_storage_root: Some(vfs_root.path().to_path_buf()),
@@ -245,12 +248,15 @@ async fn disconnect_wipes_known_204_unknown_404() {
 /// Build a server over explicit durable dirs so two instances can share them
 /// across a simulated restart.
 fn restartable_state(vfs_root: &Path, store_dir: &Path) -> AppState {
-    let blueprints = Arc::new(InMemoryBlueprintStore::seed([Blueprint {
-        name: BLUEPRINT.into(),
-        vfs: per_session(),
-        permissions: allow_fs(),
-        ..Default::default()
-    }]));
+    let blueprints = Arc::new(
+        InMemoryBlueprintStore::seed([Blueprint {
+            name: BLUEPRINT.into(),
+            vfs: per_session(),
+            permissions: allow_fs(),
+            ..Default::default()
+        }])
+        .expect("seed blueprints"),
+    );
     let config = ServerConfig {
         blueprints: Some(blueprints),
         session_storage_root: Some(vfs_root.to_path_buf()),

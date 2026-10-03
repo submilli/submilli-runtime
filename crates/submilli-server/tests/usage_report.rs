@@ -33,10 +33,13 @@ impl tracing_subscriber::fmt::MakeWriter<'_> for LogBuffer {
 }
 
 async fn execute(config: RuntimeConfig, code: &str) -> Value {
-    let blueprints = Arc::new(InMemoryBlueprintStore::seed([Blueprint {
-        name: "usage-test".into(),
-        ..Default::default()
-    }]));
+    let blueprints = Arc::new(
+        InMemoryBlueprintStore::seed([Blueprint {
+            name: "usage-test".into(),
+            ..Default::default()
+        }])
+        .expect("seed blueprints"),
+    );
     let state = AppState::new(ServerConfig {
         blueprints: Some(blueprints),
         runtime: config,

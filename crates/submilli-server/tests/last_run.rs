@@ -17,10 +17,13 @@ use tower::ServiceExt;
 const BLUEPRINT_NAME: &str = "test";
 
 fn router() -> Router {
-    let blueprints = Arc::new(InMemoryBlueprintStore::seed([Blueprint {
-        name: BLUEPRINT_NAME.into(),
-        ..Default::default()
-    }]));
+    let blueprints = Arc::new(
+        InMemoryBlueprintStore::seed([Blueprint {
+            name: BLUEPRINT_NAME.into(),
+            ..Default::default()
+        }])
+        .expect("seed blueprints"),
+    );
     let config = ServerConfig {
         blueprints: Some(blueprints),
         ..ServerConfig::default()

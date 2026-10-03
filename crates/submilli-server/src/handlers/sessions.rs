@@ -66,12 +66,19 @@ pub async fn create(
     State(state): State<AppState>,
     Json(req): Json<CreateRequest>,
 ) -> impl IntoResponse {
-    let Some(blueprint) = state.blueprints().get(&req.blueprint).await else {
+    let found = match state.blueprints().get(&req.blueprint).await {
+        Ok(found) => found,
+        Err(error) => return crate::blueprint::store_failure_response(error).into_response(),
+    };
+    let Some(blueprint) = found else {
         // One code for "this name is not runnable", whether it was never registered
         // or is registered in a form this binary can no longer parse: a client that
         // has to branch on the difference reads `message`, and one that only needs to
         // know the name is unusable keeps its existing predicate.
-        let message = blueprint_miss_message(&state, &req.blueprint).await;
+        let message = match blueprint_miss_message(&state, &req.blueprint).await {
+            Ok(message) => message,
+            Err(error) => return crate::blueprint::store_failure_response(error).into_response(),
+        };
         return (
             StatusCode::NOT_FOUND,
             Json(serde_json::json!({
@@ -161,10 +168,17 @@ pub async fn execute(
         )
             .into_response();
     };
-    let Some(blueprint) = state.blueprints().get(&blueprint_name).await else {
+    let found = match state.blueprints().get(&blueprint_name).await {
+        Ok(found) => found,
+        Err(error) => return crate::blueprint::store_failure_response(error).into_response(),
+    };
+    let Some(blueprint) = found else {
         // A session outlives a restart, so its blueprint may have become unrunnable
         // (rather than removed) while the session slept: `message` says which.
-        let message = blueprint_miss_message(&state, &blueprint_name).await;
+        let message = match blueprint_miss_message(&state, &blueprint_name).await {
+            Ok(message) => message,
+            Err(error) => return crate::blueprint::store_failure_response(error).into_response(),
+        };
         return (
             StatusCode::NOT_FOUND,
             Json(serde_json::json!({
@@ -352,10 +366,17 @@ pub async fn rebind(
         )
             .into_response();
     };
-    let Some(blueprint) = state.blueprints().get(&blueprint_name).await else {
+    let found = match state.blueprints().get(&blueprint_name).await {
+        Ok(found) => found,
+        Err(error) => return crate::blueprint::store_failure_response(error).into_response(),
+    };
+    let Some(blueprint) = found else {
         // A session outlives a restart, so its blueprint may have become unrunnable
         // (rather than removed) while the session slept: `message` says which.
-        let message = blueprint_miss_message(&state, &blueprint_name).await;
+        let message = match blueprint_miss_message(&state, &blueprint_name).await {
+            Ok(message) => message,
+            Err(error) => return crate::blueprint::store_failure_response(error).into_response(),
+        };
         return (
             StatusCode::NOT_FOUND,
             Json(serde_json::json!({

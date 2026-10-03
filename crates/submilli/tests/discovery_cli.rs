@@ -47,7 +47,9 @@ async fn mcp_docs_work_locally_and_through_a_registered_blueprint() {
     let yaml = format!("name: test\nmcp:\n  tracker:\n    url: {upstream}/mcp\n");
     let blueprint = submilli_blueprint::parse(&yaml).unwrap();
     let server = serve(app(AppState::new(ServerConfig {
-        blueprints: Some(Arc::new(InMemoryBlueprintStore::seed([blueprint]))),
+        blueprints: Some(Arc::new(
+            InMemoryBlueprintStore::seed([blueprint]).expect("seed blueprints"),
+        )),
         ..ServerConfig::default()
     })
     .unwrap()))

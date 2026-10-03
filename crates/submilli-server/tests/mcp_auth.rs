@@ -53,7 +53,9 @@ impl Harness {
         };
 
         let config = ServerConfig {
-            blueprints: Some(Arc::new(InMemoryBlueprintStore::seed([blueprint]))),
+            blueprints: Some(Arc::new(
+                InMemoryBlueprintStore::seed([blueprint]).expect("seed blueprints"),
+            )),
             secret_store: Some(store.clone()),
             ..ServerConfig::default()
         };

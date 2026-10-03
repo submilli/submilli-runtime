@@ -56,11 +56,14 @@ pub struct ExecuteResponse {
 /// reserved. Reporting that as "unknown blueprint" would send the operator looking
 /// for a blueprint that is sitting in the store with readable YAML, so every route
 /// that resolves a name renders the reason through here — REST and MCP alike.
-pub(crate) async fn blueprint_miss_message(state: &AppState, name: &str) -> String {
-    match state.blueprints().unusable_reason(name).await {
+pub(crate) async fn blueprint_miss_message(
+    state: &AppState,
+    name: &str,
+) -> Result<String, crate::blueprint::StoreError> {
+    Ok(match state.blueprints().unusable_reason(name).await? {
         Some(reason) => reason,
         None => format!("unknown blueprint: {name}"),
-    }
+    })
 }
 
 pub async fn handle(
@@ -77,8 +80,33 @@ pub async fn handle(
 
     // Blueprint and variables are supplied inline and validated here, before the
     // shared core runs them.
-    let Some(blueprint) = state.blueprints().get(&req.blueprint).await else {
-        let message = blueprint_miss_message(&state, &req.blueprint).await;
+    let found = match state.blueprints().get(&req.blueprint).await {
+        Ok(found) => found,
+        Err(error) => {
+            return with_session_header(
+                &session_id,
+                error_response(
+                    &session_id,
+                    ErrorKind::RuntimeError,
+                    crate::blueprint::store_failure_message(error).into(),
+                ),
+            );
+        }
+    };
+    let Some(blueprint) = found else {
+        let message = match blueprint_miss_message(&state, &req.blueprint).await {
+            Ok(message) => message,
+            Err(error) => {
+                return with_session_header(
+                    &session_id,
+                    error_response(
+                        &session_id,
+                        ErrorKind::RuntimeError,
+                        crate::blueprint::store_failure_message(error).into(),
+                    ),
+                );
+            }
+        };
         return with_session_header(
             &session_id,
             error_response(&session_id, ErrorKind::BlueprintNotFound, message),

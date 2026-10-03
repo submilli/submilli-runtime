@@ -55,7 +55,7 @@ impl Harness {
     fn from_blueprints(bps: Vec<Blueprint>) -> Self {
         let session_root = tempfile::tempdir().expect("session root");
         let session_root_path = session_root.path().to_path_buf();
-        let blueprints = Arc::new(InMemoryBlueprintStore::seed(bps));
+        let blueprints = Arc::new(InMemoryBlueprintStore::seed(bps).expect("seed blueprints"));
         let config = ServerConfig {
             blueprints: Some(blueprints),
             session_storage_root: Some(session_root_path.clone()),
@@ -74,7 +74,7 @@ impl Harness {
     fn from_blueprints_with_volumes(bps: Vec<Blueprint>, volumes: VolumeTable) -> Self {
         let session_root = tempfile::tempdir().expect("session root");
         let session_root_path = session_root.path().to_path_buf();
-        let blueprints = Arc::new(InMemoryBlueprintStore::seed(bps));
+        let blueprints = Arc::new(InMemoryBlueprintStore::seed(bps).expect("seed blueprints"));
         let config = ServerConfig {
             blueprints: Some(blueprints),
             session_storage_root: Some(session_root_path.clone()),
@@ -94,7 +94,7 @@ impl Harness {
         session_root: std::path::PathBuf,
         session_store_dir: std::path::PathBuf,
     ) -> Self {
-        let blueprints = Arc::new(InMemoryBlueprintStore::seed(bps));
+        let blueprints = Arc::new(InMemoryBlueprintStore::seed(bps).expect("seed blueprints"));
         let config = ServerConfig {
             blueprints: Some(blueprints),
             session_storage_root: Some(session_root.clone()),
@@ -115,7 +115,7 @@ impl Harness {
     ) -> Self {
         let session_root = tempfile::tempdir().expect("session root");
         let session_root_path = session_root.path().to_path_buf();
-        let blueprints = Arc::new(InMemoryBlueprintStore::seed(bps));
+        let blueprints = Arc::new(InMemoryBlueprintStore::seed(bps).expect("seed blueprints"));
         let config = ServerConfig {
             blueprints: Some(blueprints),
             session_storage_root: Some(session_root_path.clone()),
@@ -133,47 +133,50 @@ impl Harness {
     fn new() -> Self {
         let session_root = tempfile::tempdir().expect("session root");
         let session_root_path = session_root.path().to_path_buf();
-        let blueprints = Arc::new(InMemoryBlueprintStore::seed([
-            Blueprint {
-                name: EPH.into(),
-                vfs: VfsConfig::Ephemeral {
-                    size_limit: None,
-                    mounts: Default::default(),
-                    cwd: None,
-                },
-                permissions: allow_fs(),
-                ..Default::default()
-            },
-            Blueprint {
-                name: SESS.into(),
-                vfs: VfsConfig::PerSession {
-                    size_limit: None,
-                    mounts: Default::default(),
-                    cwd: None,
-                },
-                permissions: allow_fs(),
-                ..Default::default()
-            },
-            Blueprint {
-                name: NO_VFS.into(),
-                vfs: VfsConfig::None,
-                permissions: allow_fs(),
-                ..Default::default()
-            },
-            Blueprint {
-                name: MCP.into(),
-                mcp: BTreeMap::from([(
-                    "linear".to_string(),
-                    McpServer {
-                        transport: "streamable_http".into(),
-                        url: "https://mcp.linear.app/mcp".into(),
-                        headers: BTreeMap::new(),
-                        auth: None,
+        let blueprints = Arc::new(
+            InMemoryBlueprintStore::seed([
+                Blueprint {
+                    name: EPH.into(),
+                    vfs: VfsConfig::Ephemeral {
+                        size_limit: None,
+                        mounts: Default::default(),
+                        cwd: None,
                     },
-                )]),
-                ..Default::default()
-            },
-        ]));
+                    permissions: allow_fs(),
+                    ..Default::default()
+                },
+                Blueprint {
+                    name: SESS.into(),
+                    vfs: VfsConfig::PerSession {
+                        size_limit: None,
+                        mounts: Default::default(),
+                        cwd: None,
+                    },
+                    permissions: allow_fs(),
+                    ..Default::default()
+                },
+                Blueprint {
+                    name: NO_VFS.into(),
+                    vfs: VfsConfig::None,
+                    permissions: allow_fs(),
+                    ..Default::default()
+                },
+                Blueprint {
+                    name: MCP.into(),
+                    mcp: BTreeMap::from([(
+                        "linear".to_string(),
+                        McpServer {
+                            transport: "streamable_http".into(),
+                            url: "https://mcp.linear.app/mcp".into(),
+                            headers: BTreeMap::new(),
+                            auth: None,
+                        },
+                    )]),
+                    ..Default::default()
+                },
+            ])
+            .expect("seed blueprints"),
+        );
         let config = ServerConfig {
             blueprints: Some(blueprints),
             session_storage_root: Some(session_root_path.clone()),

@@ -23,11 +23,14 @@ async fn spawn_server() -> String {
             action: Action::Allow,
         })
         .collect();
-    let blueprints = Arc::new(InMemoryBlueprintStore::seed([Blueprint {
-        name: BLUEPRINT_NAME.into(),
-        permissions: BTreeMap::from([("main".to_string(), rules)]),
-        ..Default::default()
-    }]));
+    let blueprints = Arc::new(
+        InMemoryBlueprintStore::seed([Blueprint {
+            name: BLUEPRINT_NAME.into(),
+            permissions: BTreeMap::from([("main".to_string(), rules)]),
+            ..Default::default()
+        }])
+        .expect("seed blueprints"),
+    );
     let config = ServerConfig {
         blueprints: Some(blueprints),
         ..ServerConfig::default()

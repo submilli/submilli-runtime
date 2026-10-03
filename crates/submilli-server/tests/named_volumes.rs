@@ -43,7 +43,9 @@ impl Server {
             })
             .collect::<Vec<_>>();
         let config = ServerConfig {
-            blueprints: Some(Arc::new(InMemoryBlueprintStore::seed(blueprints))),
+            blueprints: Some(Arc::new(
+                InMemoryBlueprintStore::seed(blueprints).expect("seed blueprints"),
+            )),
             session_storage_root: Some(data.join("sessions")),
             managed_volume_root: Some(data.join("volumes")),
             volumes,

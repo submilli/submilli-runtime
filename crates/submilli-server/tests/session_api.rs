@@ -45,7 +45,7 @@ permissions:
 
 fn router() -> Router {
     let blueprint = submilli_blueprint::parse(POLICY).expect("valid blueprint");
-    let blueprints = Arc::new(InMemoryBlueprintStore::seed([blueprint]));
+    let blueprints = Arc::new(InMemoryBlueprintStore::seed([blueprint]).expect("seed blueprints"));
     let config = ServerConfig {
         blueprints: Some(blueprints),
         ..ServerConfig::default()
@@ -98,7 +98,7 @@ fn secret_router(store_root: &Path) -> Router {
         "name: secret-api\ndefault: deny\npackages:\n  - \"@acme/secrets\"\nsecrets:\n  TOKEN:\n    harness:\n      required: true\npermissions:\n  \"@acme/secrets\":\n    - capability: secrets.get\n      filter: name == \"TOKEN\"\n      action: allow\n",
     )
     .expect("valid blueprint");
-    let blueprints = Arc::new(InMemoryBlueprintStore::seed([blueprint]));
+    let blueprints = Arc::new(InMemoryBlueprintStore::seed([blueprint]).expect("seed blueprints"));
     app(AppState::new(ServerConfig {
         blueprints: Some(blueprints),
         package_store_root: Some(store_root.to_path_buf()),
