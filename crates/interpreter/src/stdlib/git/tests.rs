@@ -795,6 +795,7 @@ async fn timeout_waits_for_worker_cleanup_and_resource_release() {
         result = ready => result.unwrap(),
     }
 
+    let worker = async { worker.await.map_err(blocking_worker_failure)? };
     let result = finish_worker(worker, &cancelled, tokio::time::Instant::now());
     tokio::pin!(result);
     assert!(
@@ -851,7 +852,7 @@ async fn cancellation_keeps_resources_until_worker_cleanup() {
     assert!(root.exists());
     assert!(data.tenant_limits.host_attached_bytes() > 0);
     finish.send(()).unwrap();
-    cleanup.await;
+    cleanup.await.unwrap();
     assert_eq!(data.tenant_limits.host_attached_bytes(), 0);
     drop(data);
     assert!(!root.exists());
@@ -1000,4 +1001,101 @@ async fn timeout_drains_worker_and_preserves_invariant_trap() {
     )
     .await
     .unwrap();
+}
+
+#[tokio::test]
+async fn worker_panic_bypasses_guest_catch_and_allows_same_store_follow_up() {
+    use crate::runtime::security::{CheckOutcome, SecurityCheck};
+    struct PanicOnce(AtomicBool);
+    impl SecurityCheck for PanicOnce {
+        fn check(&self, _: &str, _: &str, _: &Value) -> CheckOutcome {
+            if self.0.swap(false, Ordering::SeqCst) {
+                panic!("injected worker failure");
+            }
+            CheckOutcome::Allow
+        }
+    }
+    let source = r#"
+        import { Repository } from "submilli:git";
+        import * as fs from "submilli:fs";
+        function main(): number {
+            try { Repository.init("/repo"); }
+            catch (error) { fs.writeText("/caught", "must not run"); }
+            return 42;
+        }
+    "#;
+    let compiled = crate::compile_script(source, "git.ts", crate::FileId(0), &[], &[]).unwrap();
+    let vfs = Vfs::tempdir().unwrap();
+    let mut data = test_data(vfs.clone());
+    data.security_check = Arc::new(PanicOnce(AtomicBool::new(true)));
+    data.install_type_info(compiled.type_info.clone());
+    let config = RuntimeConfig::default();
+    let engine = config.engine().unwrap();
+    let mut store = config.store_async(&engine, data).unwrap();
+    crate::runtime::install_tenant_limits(&mut store);
+    let module = wasmtime::Module::new(&engine, &compiled.wasm).unwrap();
+    let mut linker = Linker::new(&engine);
+    install_runtime_async(&mut linker, &mut store)
+        .await
+        .unwrap();
+    let instance = linker.instantiate_async(&mut store, &module).await.unwrap();
+    let error = dispatch_main_async(&mut store, &instance)
+        .await
+        .unwrap_err();
+    assert!(
+        error.is::<crate::runtime::host::FatalHostError>(),
+        "{error:#}"
+    );
+    assert!(
+        error.is::<crate::runtime::blocking::BlockingWorkError>(),
+        "{error:#}"
+    );
+    assert!(error.to_string().contains("blocking worker panicked"));
+    assert!(!vfs.root().join("caught").exists());
+    store.data_mut().blocking_work.finish().await.unwrap();
+    assert_eq!(store.data().tenant_limits.host_attached_bytes(), 0);
+    assert_eq!(
+        dispatch_main_async(&mut store, &instance).await.unwrap(),
+        Some("42".into())
+    );
+    assert!(!vfs.root().join("caught").exists());
+}
+
+#[tokio::test]
+async fn worker_panic_after_deadline_remains_fatal() {
+    let mut workers = crate::runtime::blocking::BlockingWork::default();
+    let (started, ready) = tokio::sync::oneshot::channel();
+    let (release, gate) = std::sync::mpsc::channel();
+    let mut worker = Box::pin(async {
+        workers
+            .spawn(move || -> Result<()> {
+                started.send(()).unwrap();
+                gate.recv_timeout(std::time::Duration::from_secs(5))
+                    .unwrap();
+                panic!("worker failed during timeout cleanup");
+            })
+            .await
+            .map_err(blocking_worker_failure)?
+    });
+    tokio::select! {
+        _ = &mut worker => panic!("worker ended early"),
+        result = ready => result.unwrap(),
+    }
+    let cancelled = AtomicBool::new(false);
+    let mut result = Box::pin(finish_worker(
+        worker,
+        &cancelled,
+        tokio::time::Instant::now(),
+    ));
+    assert!(
+        tokio::time::timeout(std::time::Duration::from_millis(20), &mut result)
+            .await
+            .is_err()
+    );
+    assert!(cancelled.load(Ordering::Relaxed));
+    release.send(()).unwrap();
+    let error = result.await.unwrap_err();
+    assert!(crate::runtime::host::ends_the_run(&error));
+    assert!(error.is::<crate::runtime::blocking::BlockingWorkError>());
+    assert_eq!(workers.spawn(|| 42).await.unwrap(), 42);
 }

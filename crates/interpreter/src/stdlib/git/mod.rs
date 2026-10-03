@@ -78,9 +78,10 @@ impl Job {
         match self.security.check(&self.caller, capability, &context) {
             CheckOutcome::Allow => Ok(()),
             CheckOutcome::Deny { reason } => {
-                if let Ok(mut denial) = self.denial.lock() {
-                    *denial = Some((capability.to_owned(), reason.clone()));
-                }
+                let mut denial = self.denial.lock().map_err(|_| {
+                    crate::runtime::host::fatal_host_error("git worker denial lock poisoned")
+                })?;
+                *denial = Some((capability.to_owned(), reason.clone()));
                 Err(permission_denied(&self.caller, capability, reason))
             }
         }
@@ -96,7 +97,11 @@ impl Job {
         loop {
             match workers.clone().try_acquire_owned() {
                 Ok(permit) => return Ok(permit),
-                Err(tokio::sync::TryAcquireError::Closed) => bail!("git: workers closed"),
+                Err(tokio::sync::TryAcquireError::Closed) => {
+                    return Err(crate::runtime::host::fatal_host_error(
+                        "git: workers closed",
+                    ));
+                }
                 Err(tokio::sync::TryAcquireError::NoPermits) => {}
             }
             self.check_cancelled()?;
@@ -405,7 +410,9 @@ async fn invoke(
     method: bool,
     params: &[Val],
 ) -> Result<Val> {
-    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(60);
+    let deadline = tokio::time::Instant::now()
+        .checked_add(std::time::Duration::from_secs(60))
+        .ok_or_else(|| crate::runtime::host::fatal_host_error("git deadline is out of range"))?;
     let config = caller.data().git.clone().ok_or_else(|| {
         wasmtime::Error::msg("submilli:git is disabled; configure the blueprint git block")
     })?;
@@ -417,7 +424,7 @@ async fn invoke(
     )
     .await??;
     let principal = running_package(&*caller)
-        .map_err(|_| wasmtime::Error::msg("git: cannot identify caller"))?;
+        .map_err(|_| crate::runtime::host::fatal_host_error("git: cannot identify caller"))?;
     let cancelled = Arc::new(AtomicBool::new(false));
     let cancel_guard = CancelOnDrop(cancelled.clone());
     // The worker stops itself once its work passes what the run has left.
@@ -433,7 +440,9 @@ async fn invoke(
         security: caller.data().security_check.clone(),
         secrets: caller.data().secret_provider.clone(),
         http: caller.data().http_client.clone(),
-        runtime: tokio::runtime::Handle::current(),
+        runtime: tokio::runtime::Handle::try_current().map_err(|_| {
+            crate::runtime::host::fatal_host_error("git worker requires a Tokio runtime")
+        })?,
         deadline,
         cancelled,
         max_bytes,
@@ -447,10 +456,17 @@ async fn invoke(
     let returns_string = op == "commit";
     let denial = job.denial.clone();
     let principal = job.caller.clone();
-    let worker = caller.data_mut().blocking_work.spawn(move || {
-        job.check_cancelled()?;
-        worker::run(&vfs, &job, &op, &args).map(|result| (result, budget))
-    });
+    let worker = async {
+        caller
+            .data_mut()
+            .blocking_work
+            .spawn(move || {
+                job.check_cancelled()?;
+                worker::run(&vfs, &job, &op, &args).map(|result| (result, budget))
+            })
+            .await
+            .map_err(blocking_worker_failure)?
+    };
     let outcome = finish_worker(worker, &cancel_guard.0, deadline).await;
     // The work is done, and may be published, whether or not it succeeded:
     // it is settled, not refused.
@@ -477,7 +493,7 @@ async fn invoke(
     };
     if let Some((capability, reason)) = denial
         .lock()
-        .map_err(|_| wasmtime::Error::msg("git: denial lock poisoned"))?
+        .map_err(|_| crate::runtime::host::fatal_host_error("git: denial lock poisoned"))?
         .take()
     {
         return Err(permission_denied(&principal, &capability, reason));
@@ -531,6 +547,10 @@ async fn finish_worker<T>(
             }
         }
     }
+}
+
+fn blocking_worker_failure(error: crate::runtime::blocking::BlockingWorkError) -> wasmtime::Error {
+    crate::runtime::host::fatal_host_error("git blocking worker failed").context(error)
 }
 
 async fn decode_arguments(

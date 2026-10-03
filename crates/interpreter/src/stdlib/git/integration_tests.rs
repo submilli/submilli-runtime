@@ -1180,3 +1180,43 @@ async fn a_change_stopped_for_fuel_leaves_the_repository_as_it_was() {
     assert!(short.meter.is_exhausted());
     assert_eq!(digest(root.path()), before);
 }
+
+#[tokio::test]
+async fn missing_add_worker_arguments_fail_without_stranding_repository_lock() {
+    let vfs = Vfs::tempdir().unwrap();
+    super::worker::run(&vfs, &job(&vfs, "init"), "init", &[]).unwrap();
+    let error = super::worker::run(&vfs, &job(&vfs, "add"), "add", &[])
+        .err()
+        .unwrap();
+    assert!(error.is::<crate::runtime::host::FatalHostError>());
+    assert!(error.to_string().contains("missing decoded paths"));
+    assert!(super::worker::run(&vfs, &job(&vfs, "status"), "status", &[]).is_ok());
+}
+
+#[tokio::test]
+async fn poisoned_worker_denial_record_is_fatal() {
+    use crate::runtime::security::{CheckOutcome, SecurityCheck};
+    struct Deny;
+    impl SecurityCheck for Deny {
+        fn check(&self, _: &str, _: &str, _: &serde_json::Value) -> CheckOutcome {
+            CheckOutcome::Deny {
+                reason: "test denial".into(),
+            }
+        }
+    }
+    let vfs = Vfs::tempdir().unwrap();
+    let mut job = job(&vfs, "init");
+    job.security = Arc::new(Deny);
+    let denial = job.denial.clone();
+    assert!(
+        std::thread::spawn(move || {
+            let _guard = denial.lock().unwrap();
+            panic!("injected denial poison");
+        })
+        .join()
+        .is_err()
+    );
+    let error = job.check("git.init", json!({"path":"/"})).unwrap_err();
+    assert!(error.is::<crate::runtime::host::FatalHostError>());
+    assert!(error.to_string().contains("denial lock poisoned"));
+}
