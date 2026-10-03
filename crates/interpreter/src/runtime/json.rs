@@ -196,7 +196,8 @@ pub(super) fn install_json_module(
                     }
                 };
                 let intr = intrinsic_types(&mut *caller)?;
-                let json = if contains_dynamic_object(caller, abi_arg(params, 2)?, &intr, 0)? {
+                let mut remaining = crate::runtime::MAX_STRUCTURAL_WALK_NODES;
+                let json = if contains_dynamic_object(caller, abi_arg(params, 2)?, &intr, 0, &mut remaining)? {
                     let serialized = crate::runtime::prelude::vtable::object_to_json(
                         caller,
                         abi_arg(params, 2)?,
@@ -225,7 +226,9 @@ fn contains_dynamic_object(
     value: &Val,
     intr: &crate::runtime::intrinsic_types::IntrinsicTypes,
     depth: u32,
+    remaining: &mut u32,
 ) -> wasmtime::Result<bool> {
+    charge_json_visit(caller, remaining)?;
     // Let the existing bounded vtable walker report cycles or excessive depth.
     if depth >= crate::runtime::MAX_VTABLE_WALK_DEPTH {
         return Ok(true);
@@ -245,7 +248,9 @@ fn contains_dynamic_object(
                 ));
             }
         };
-        for index in 0..names.len(&mut *caller)? {
+        let name_count = names.len(&mut *caller)?;
+        fuel::charge(&mut *caller, fuel::ELEM, u64::from(name_count))?;
+        for index in 0..name_count {
             let name = names.get(&mut *caller, index)?;
             if crate::runtime::prelude::object::field_was_inserted(caller, &name)? {
                 return Ok(true);
@@ -275,11 +280,26 @@ fn contains_dynamic_object(
     };
     for index in 0..len {
         let value = values.get(&mut *caller, index)?;
-        if contains_dynamic_object(caller, &value, intr, depth + 1)? {
+        if contains_dynamic_object(caller, &value, intr, depth + 1, remaining)? {
             return Ok(true);
         }
     }
     Ok(false)
+}
+
+/// Preflight reads values before dispatching any serialization hooks, so its
+/// visits need their own fuel and node budget.
+fn charge_json_visit(
+    caller: &mut Caller<'_, StoreData>,
+    remaining: &mut u32,
+) -> wasmtime::Result<()> {
+    *remaining = remaining.checked_sub(1).ok_or_else(|| {
+        super::host::range_error(format!(
+            "JSON.stringify exceeds {} structural visits; serialize a smaller value or reduce shared nesting",
+            crate::runtime::MAX_STRUCTURAL_WALK_NODES,
+        ))
+    })?;
+    fuel::charge(caller, fuel::ELEM, 1)
 }
 
 fn stringify_typed_object(
@@ -306,7 +326,10 @@ fn stringify_typed_object(
         )));
     };
 
-    let value = stringify_typed_object_value(caller, package, fields.clone(), value)?;
+    let fields = fields.clone();
+    let mut remaining = crate::runtime::MAX_STRUCTURAL_WALK_NODES;
+    charge_json_visit(caller, &mut remaining)?;
+    let value = stringify_typed_object_value(caller, package, fields, value, &mut remaining, 0)?;
     serde_json::to_string(&value).map_err(|e| wasmtime::Error::msg(format!("JSON.stringify: {e}")))
 }
 
@@ -315,6 +338,8 @@ fn stringify_typed_object_value(
     package: &str,
     fields: Vec<crate::FieldInfo>,
     value: Rooted<StructRef>,
+    remaining: &mut u32,
+    depth: u32,
 ) -> wasmtime::Result<serde_json::Value> {
     let field_names = match value.field(&mut *caller, 1)? {
         Val::AnyRef(Some(any)) => any.unwrap_array(&mut *caller)?,
@@ -334,6 +359,7 @@ fn stringify_typed_object_value(
     };
     let mut field_index_by_name = BTreeMap::new();
     let field_name_count = field_names.len(&mut *caller)?;
+    fuel::charge(&mut *caller, fuel::ELEM, u64::from(field_name_count))?;
     for idx in 0..field_name_count {
         let name = field_names.get(&mut *caller, idx)?;
         let name = read_string_arg(&mut *caller, &name, "JSON.stringify object field name")?;
@@ -364,7 +390,7 @@ fn stringify_typed_object_value(
         }
         map.insert(
             field.name,
-            stringify_type_info_val(caller, package, field.type_id, raw)?,
+            stringify_type_info_val(caller, package, field.type_id, raw, remaining, depth + 1)?,
         );
     }
     Ok(serde_json::Value::Object(map))
@@ -375,7 +401,15 @@ fn stringify_type_info_val(
     package: &str,
     type_id: crate::TypeInfoId,
     val: Val,
+    remaining: &mut u32,
+    depth: u32,
 ) -> wasmtime::Result<serde_json::Value> {
+    if depth >= crate::runtime::MAX_VTABLE_WALK_DEPTH {
+        return Err(super::host::range_error(
+            "JSON.stringify type traversal exceeds 128 levels; serialize a less deeply nested value",
+        ));
+    }
+    charge_json_visit(caller, remaining)?;
     let kind = caller
         .data()
         .type_info
@@ -400,11 +434,15 @@ fn stringify_type_info_val(
         crate::TypeInfoKind::String | crate::TypeInfoKind::StringLiteral(_) => {
             boxed_string(caller, val).map(serde_json::Value::String)
         }
-        crate::TypeInfoKind::Array { element } => stringify_array(caller, package, element, val),
-        crate::TypeInfoKind::Tuple { elements } => stringify_tuple(caller, package, &elements, val),
+        crate::TypeInfoKind::Array { element } => {
+            stringify_array(caller, package, element, val, remaining, depth)
+        }
+        crate::TypeInfoKind::Tuple { elements } => {
+            stringify_tuple(caller, package, &elements, val, remaining, depth)
+        }
         crate::TypeInfoKind::Object { fields } => {
             let object = boxed_struct(caller, val, "object")?;
-            stringify_typed_object_value(caller, package, fields, object)
+            stringify_typed_object_value(caller, package, fields, object, remaining, depth)
         }
         crate::TypeInfoKind::Union { members }
             if members.iter().any(|id| {
@@ -436,7 +474,7 @@ fn stringify_type_info_val(
                     )
                 })
                 .ok_or_else(|| wasmtime::Error::msg("JSON.stringify: empty nullable union"))?;
-            stringify_type_info_val(caller, package, *non_null, val)
+            stringify_type_info_val(caller, package, *non_null, val, remaining, depth + 1)
         }
         other => Err(wasmtime::Error::msg(format!(
             "JSON.stringify: host TypeInfo stringify for `{other:?}` is not implemented yet"
@@ -449,6 +487,8 @@ fn stringify_array(
     package: &str,
     element: crate::TypeInfoId,
     val: Val,
+    remaining: &mut u32,
+    depth: u32,
 ) -> wasmtime::Result<serde_json::Value> {
     let storage = super::array_storage::ArrayStorage::read(caller, &val)?;
     let raw = storage.backing;
@@ -459,7 +499,14 @@ fn stringify_array(
         .map_err(super::host::fatal_host_error)?;
     for index in 0..len {
         let elem = raw.get(&mut *caller, index)?;
-        values.push(stringify_type_info_val(caller, package, element, elem)?);
+        values.push(stringify_type_info_val(
+            caller,
+            package,
+            element,
+            elem,
+            remaining,
+            depth + 1,
+        )?);
     }
     Ok(serde_json::Value::Array(values))
 }
@@ -469,6 +516,8 @@ fn stringify_tuple(
     package: &str,
     elements: &[crate::TypeInfoId],
     val: Val,
+    remaining: &mut u32,
+    depth: u32,
 ) -> wasmtime::Result<serde_json::Value> {
     let storage = super::array_storage::ArrayStorage::read(caller, &val)?;
     let raw = storage.backing;
@@ -485,7 +534,14 @@ fn stringify_tuple(
         .map_err(super::host::fatal_host_error)?;
     for (index, element) in elements.iter().enumerate() {
         let elem = raw.get(&mut *caller, index as u32)?;
-        values.push(stringify_type_info_val(caller, package, *element, elem)?);
+        values.push(stringify_type_info_val(
+            caller,
+            package,
+            *element,
+            elem,
+            remaining,
+            depth + 1,
+        )?);
     }
     Ok(serde_json::Value::Array(values))
 }

@@ -935,7 +935,7 @@ fn accessors_do_not_pay_for_the_whole_receiver() {
 
 #[test]
 fn operations_charge_for_the_input_they_process() {
-    use interpreter::runtime::fuel::{CALL, ELEM, PARSE, REGEX, SCAN, sort_cost};
+    use interpreter::runtime::fuel::{CALL, COPY, ELEM, PARSE, REGEX, SCAN, sort_cost};
     // Each case builds a large input (the baseline) and then runs one
     // operation over it; the host fuel the operation adds must cover at
     // least its class charge for that input. The floors include what the
@@ -984,6 +984,51 @@ fn operations_charge_for_the_input_they_process() {
         );
         let added = with_operation - baseline;
         assert!(added >= floor, "{name}: {added} < {floor}");
+    }
+
+    // A structural visit budget does not change the cost of accepted walks:
+    // two array snapshots, one hook per element, and the outer call + hook.
+    for n in [128_u64, 256] {
+        let input = format!(
+            "const a: number[] = []; const b: number[] = [];
+             for (let i = 0; i < {n}; i++) {{ a.push(i); b.push(i); }}"
+        );
+        let baseline = host_fuel(
+            &format!("usage-structural-{n}-baseline"),
+            &format!("function main(): number {{ {input} return 0; }}"),
+        );
+        let actual = host_fuel(
+            &format!("usage-structural-{n}"),
+            &format!("function main(): number {{ {input} Object.is(a, b); return 0; }}"),
+        ) - baseline;
+        assert_eq!(actual, 2 * CALL + ELEM.cost(2 * n) + n * CALL);
+    }
+
+    let mut empty_json_cost = 0;
+    for n in [0_u64, 128, 256] {
+        let input =
+            format!("const a: number[] = []; for (let i = 0; i < {n}; i++) {{ a.push(7); }}");
+        let baseline = host_fuel(
+            &format!("usage-typed-json-{n}-baseline"),
+            &format!("function main(): number {{ {input} return 0; }}"),
+        );
+        let actual = host_fuel(
+            &format!("usage-typed-json-{n}"),
+            &format!(
+                "function main(): number {{ {input} JSON.stringify({{items:a}}); return 0; }}"
+            ),
+        ) - baseline;
+        if n == 0 {
+            empty_json_cost = actual;
+            continue;
+        }
+        // Preflight and serialization both visit each element. Previously only
+        // output marshalling grew: this exact delta catches that undercharge.
+        let output_len = 2 * n + 11;
+        assert_eq!(
+            actual - empty_json_cost,
+            ELEM.cost(2 * n) + SCAN.cost(output_len - 12) + COPY.cost(output_len) - COPY.cost(12),
+        );
     }
 }
 

@@ -775,19 +775,36 @@ async fn every(
     Ok(true)
 }
 
-/// Flatten nested arrays up to `depth` levels into `out`. No callback, so this
-/// is plain (synchronous) recursion.
+/// Flatten without native recursion; each frame retains its unvisited siblings.
+/// Bound nesting independently of the requested flattening depth.
 fn flat_into(
     caller: &mut Caller<'_, StoreData>,
     elements: Vec<Val>,
     depth: i32,
     out: &mut Vec<Val>,
 ) -> wasmtime::Result<()> {
-    for elem in elements {
+    let mut frames = vec![(elements.into_iter(), depth)];
+    while let Some((elements, depth)) = frames.last_mut() {
+        let Some(elem) = elements.next() else {
+            frames.pop();
+            continue;
+        };
+        let depth = *depth;
         if depth > 0 && is_array(caller, &elem)? {
+            if frames.len() >= crate::runtime::MAX_VTABLE_WALK_DEPTH as usize {
+                return Err(crate::runtime::host::range_error(format!(
+                    "Array#flat exceeds {} levels of nesting; flatten fewer levels",
+                    crate::runtime::MAX_VTABLE_WALK_DEPTH,
+                )));
+            }
             let sub = read_array(caller, &elem, "Array#flat")?;
-            flat_into(caller, sub, depth - 1, out)?;
+            frames
+                .try_reserve(1)
+                .map_err(crate::runtime::host::fatal_host_error)?;
+            frames.push((sub.into_iter(), depth - 1));
         } else {
+            out.try_reserve(1)
+                .map_err(crate::runtime::host::fatal_host_error)?;
             out.push(elem);
         }
     }

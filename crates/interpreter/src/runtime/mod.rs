@@ -159,6 +159,9 @@ pub struct StoreData {
     /// Depth of the in-flight universal-vtable walk; see
     /// [`MAX_VTABLE_WALK_DEPTH`].
     pub vtable_walk_depth: u32,
+    /// Hook entries in the current outer structural walk, including repeated
+    /// visits to shared children. Reset only when the outer walk finishes.
+    pub(crate) vtable_walk_nodes: u32,
 }
 
 /// The nesting the universal-vtable walk allows before it reports a runaway.
@@ -170,6 +173,9 @@ pub struct StoreData {
 /// test-harness thread aborts between 160 and 200 levels, so the bound sits
 /// below the point where the native stack runs out.
 pub(crate) const MAX_VTABLE_WALK_DEPTH: u32 = 128;
+
+/// Bounds shared-substructure expansion independently of available fuel.
+pub(crate) const MAX_STRUCTURAL_WALK_NODES: u32 = 100_000;
 
 pub const DEFAULT_FS_MAX_READ_SIZE: u64 = 50 * 1024 * 1024;
 
@@ -222,6 +228,7 @@ impl StoreData {
             call_metadata_type: None,
             type_info: std::collections::BTreeMap::new(),
             vtable_walk_depth: 0,
+            vtable_walk_nodes: 0,
         }
     }
 
