@@ -61,7 +61,7 @@ pub fn emit_bodies(
                 object_ref,
             ));
         }
-        let mut emitter = FunctionEmitter::new(ctx, &wasm_params);
+        let mut emitter = FunctionEmitter::new(ctx, &wasm_params)?;
 
         let target = ctx
             .symbols
@@ -85,7 +85,7 @@ pub fn emit_bodies(
         if !ret.is_void() {
             cast::emit_box(&mut emitter, ctx, &target.ret)?;
         }
-        let built = emitter.build();
+        let built = emitter.build()?;
         code.function(&built);
     }
     Ok(())

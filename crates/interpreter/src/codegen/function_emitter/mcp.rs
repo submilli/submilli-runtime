@@ -107,19 +107,19 @@ mod tests {
     #[test]
     fn mcp_import_failures_are_compiler_failures() {
         with_context(&TypedAst::new(), &mock_symbols_with_intrinsics(), |ctx| {
-            let mut emitter = FunctionEmitter::new(ctx, &[]);
+            let mut emitter = FunctionEmitter::new(ctx, &[]).unwrap();
             assert_internal(emit_mcp_call(&mut emitter, ctx, "server", "tool", &[]).unwrap_err());
             assert_internal(ctx.check_failure().unwrap_err());
             emit_parse_unknown(&mut emitter, ctx);
             assert_internal(ctx.check_failure().unwrap_err());
         });
         with_context(&TypedAst::new(), &SymbolTable::default(), |ctx| {
-            emit_parse_unknown(&mut FunctionEmitter::new(ctx, &[]), ctx);
+            emit_parse_unknown(&mut FunctionEmitter::new(ctx, &[]).unwrap(), ctx);
             assert_internal(ctx.check_failure().unwrap_err());
             let invalid = crate::ExprId(u32::MAX);
             assert_internal(
                 emit_mcp_call(
-                    &mut FunctionEmitter::new(ctx, &[]),
+                    &mut FunctionEmitter::new(ctx, &[]).unwrap(),
                     ctx,
                     "server",
                     "tool",

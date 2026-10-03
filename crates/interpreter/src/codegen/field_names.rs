@@ -209,7 +209,7 @@ pub(crate) fn emit_name_is_accessor(
     emitter: &mut super::function_emitter::FunctionEmitter,
     ctx: &super::CodegenCtx,
 ) -> Result<(), crate::compiler_error::CompilerFailure> {
-    let name = emitter.add_anonymous_local(ctx.symbols.value_type(&Type::String)?);
+    let name = emitter.add_anonymous_local(ctx.symbols.value_type(&Type::String)?)?;
     let marked = ctx.symbols.optional_field_name_type()?;
     emitter.instruction(Instruction::LocalTee(name));
     emitter.instruction(Instruction::RefTestNonNull(HeapType::Concrete(marked)));
@@ -239,7 +239,7 @@ pub(crate) fn emit_name_presence(
     let name = emitter.add_anonymous_local(ValType::Ref(RefType {
         nullable: false,
         heap_type: HeapType::Concrete(intrinsics.string),
-    }));
+    }))?;
     emitter.instruction(Instruction::LocalTee(name));
     emitter.instruction(Instruction::RefTestNonNull(HeapType::Concrete(optional)));
     emitter.emit_if(wasm_encoder::BlockType::Result(ValType::I32));
@@ -269,7 +269,7 @@ pub(crate) fn emit_mark_present(
     let name = emitter.add_anonymous_local(ValType::Ref(RefType {
         nullable: false,
         heap_type: HeapType::Concrete(intrinsics.string),
-    }));
+    }))?;
     emitter.instruction(Instruction::LocalGet(object));
     emitter.instruction(Instruction::StructGet {
         struct_type_index: intrinsics.object_shape,

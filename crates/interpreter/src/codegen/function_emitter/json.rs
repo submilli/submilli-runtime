@@ -37,7 +37,7 @@ pub(super) fn emit_stringify(
     }
 
     emit_expr(emitter, ctx, arg)?;
-    let arg_local = emitter.add_anonymous_local(ctx.symbols.value_type(&arg_ty)?);
+    let arg_local = emitter.add_anonymous_local(ctx.symbols.value_type(&arg_ty)?)?;
     emitter.instruction(Instruction::LocalSet(arg_local));
     emit_stringify_optional_args(emitter, ctx, args, arg_local, &arg_ty)?;
     Ok(())
@@ -82,10 +82,12 @@ fn emit_stringify_nullable(emitter: &mut FunctionEmitter, ctx: &CodegenCtx) {
     ) else {
         return;
     };
-    let obj_tmp = emitter.add_anonymous_local(ValType::Ref(RefType {
+    let Some(obj_tmp) = ctx.latch(emitter.add_anonymous_local(ValType::Ref(RefType {
         nullable: true,
         heap_type: HeapType::Concrete(intrinsics.object),
-    }));
+    }))) else {
+        return;
+    };
     emitter.instruction(Instruction::LocalTee(obj_tmp));
     emitter.instruction(Instruction::RefIsNull);
     emitter.emit_if(BlockType::Result(ValType::Ref(RefType {
@@ -131,10 +133,12 @@ fn emit_stringify_string_host(emitter: &mut FunctionEmitter, ctx: &CodegenCtx) {
     };
     emitter.instruction(Instruction::Call(stringify_idx));
 
-    let raw_local = emitter.add_anonymous_local(ValType::Ref(RefType {
+    let Some(raw_local) = ctx.latch(emitter.add_anonymous_local(ValType::Ref(RefType {
         nullable: false,
         heap_type: HeapType::Concrete(intrinsics.raw_string),
-    }));
+    }))) else {
+        return;
+    };
     emitter.instruction(Instruction::LocalSet(raw_local));
     let Some(string_vtable_idx) = ctx.require(
         ctx.symbols.prelude_global_idx("string_vtable"),
@@ -215,13 +219,13 @@ fn emit_stringify_space_arg(
     Ok(match space_ty.peel() {
         Type::Number | Type::NumberLiteral(_) => {
             emit_expr(emitter, ctx, space)?;
-            let local = emitter.add_anonymous_local(ValType::F64);
+            let local = emitter.add_anonymous_local(ValType::F64)?;
             emitter.instruction(Instruction::LocalSet(local));
             StringifySpace::Number(local)
         }
         Type::String | Type::StringLiteral(_) => {
             emit_expr(emitter, ctx, space)?;
-            let local = emitter.add_anonymous_local(ctx.symbols.value_type(&space_ty)?);
+            let local = emitter.add_anonymous_local(ctx.symbols.value_type(&space_ty)?)?;
             emitter.instruction(Instruction::LocalSet(local));
             StringifySpace::String(local)
         }
@@ -232,7 +236,7 @@ fn emit_stringify_space_arg(
         }
         Type::Unknown => {
             emit_expr(emitter, ctx, space)?;
-            let local = emitter.add_anonymous_local(ctx.symbols.value_type(&Type::Unknown)?);
+            let local = emitter.add_anonymous_local(ctx.symbols.value_type(&Type::Unknown)?)?;
             emitter.instruction(Instruction::LocalSet(local));
             StringifySpace::Dynamic(local)
         }
@@ -250,7 +254,7 @@ fn emit_dynamic_space(
     space: u32,
 ) -> Result<(), crate::compiler_error::CompilerFailure> {
     let string_type = ctx.symbols.value_type(&Type::String)?;
-    let json = emitter.add_anonymous_local(string_type);
+    let json = emitter.add_anonymous_local(string_type)?;
     emitter.instruction(Instruction::LocalSet(json));
     let number = ctx
         .symbols
@@ -332,10 +336,12 @@ fn emit_wrap_raw_string(emitter: &mut FunctionEmitter, ctx: &CodegenCtx) {
     ) else {
         return;
     };
-    let raw_local = emitter.add_anonymous_local(ValType::Ref(RefType {
+    let Some(raw_local) = ctx.latch(emitter.add_anonymous_local(ValType::Ref(RefType {
         nullable: false,
         heap_type: HeapType::Concrete(intrinsics.raw_string),
-    }));
+    }))) else {
+        return;
+    };
     emitter.instruction(Instruction::LocalSet(raw_local));
     let Some(string_vtable_idx) = ctx.require(
         ctx.symbols.prelude_global_idx("string_vtable"),
@@ -367,8 +373,8 @@ pub(crate) fn emit_main_output_shim(
     main_func_idx: u32,
     return_ty: &Type,
     source_return_ty: &Type,
-) -> Function {
-    let mut emitter = FunctionEmitter::new(ctx, &[]);
+) -> Result<Function, crate::compiler_error::CompilerFailure> {
+    let mut emitter = FunctionEmitter::new(ctx, &[])?;
     emitter.instruction(Instruction::Call(main_func_idx));
     let scalar_output = match source_return_ty.peel() {
         Type::String
@@ -438,10 +444,12 @@ fn emit_nullable_primitive_to_string(emitter: &mut FunctionEmitter, ctx: &Codege
     ) else {
         return;
     };
-    let obj_tmp = emitter.add_anonymous_local(ValType::Ref(RefType {
+    let Some(obj_tmp) = ctx.latch(emitter.add_anonymous_local(ValType::Ref(RefType {
         nullable: true,
         heap_type: HeapType::Concrete(intrinsics.object),
-    }));
+    }))) else {
+        return;
+    };
     emitter.instruction(Instruction::LocalTee(obj_tmp));
     emitter.instruction(Instruction::RefIsNull);
     emitter.emit_if(BlockType::Result(ValType::Ref(RefType {
@@ -557,7 +565,9 @@ pub(crate) fn emit_raw_string_matches_literal(
     else {
         return;
     };
-    let result_local = emitter.add_anonymous_local(ValType::I32);
+    let Some(result_local) = emitter.ctx.latch(emitter.add_anonymous_local(ValType::I32)) else {
+        return;
+    };
     emitter.instruction(Instruction::I32Const(0));
     emitter.instruction(Instruction::LocalSet(result_local));
 
@@ -596,7 +606,7 @@ mod tests {
     #[test]
     fn invalid_json_arity_is_an_internal_failure_before_reading_arguments() {
         with_context(&TypedAst::new(), &SymbolTable::default(), |ctx| {
-            let mut emitter = FunctionEmitter::new(ctx, &[]);
+            let mut emitter = FunctionEmitter::new(ctx, &[]).unwrap();
             assert_internal(emit_stringify(&mut emitter, ctx, &[]).unwrap_err());
             assert_internal(emit_parse(&mut emitter, ctx, &[]).unwrap_err());
             let invalid = crate::ExprId(u32::MAX);
@@ -623,13 +633,13 @@ mod tests {
         ];
         for emit in emitters {
             with_context(&TypedAst::new(), &SymbolTable::default(), |ctx| {
-                emit(&mut FunctionEmitter::new(ctx, &[]), ctx);
+                emit(&mut FunctionEmitter::new(ctx, &[]).unwrap(), ctx);
                 assert_internal(ctx.check_failure().unwrap_err());
             });
         }
         for emit in [emit_stringify_string_host as Emit, emit_wrap_raw_string] {
             with_context(&TypedAst::new(), &mock_symbols_with_intrinsics(), |ctx| {
-                emit(&mut FunctionEmitter::new(ctx, &[]), ctx);
+                emit(&mut FunctionEmitter::new(ctx, &[]).unwrap(), ctx);
                 assert_internal(ctx.check_failure().unwrap_err());
             });
         }
@@ -647,7 +657,7 @@ mod tests {
                 })
                 .unwrap();
             with_context(&ta, &mock_symbols_with_intrinsics(), |ctx| {
-                let mut emitter = FunctionEmitter::new(ctx, &[]);
+                let mut emitter = FunctionEmitter::new(ctx, &[]).unwrap();
                 match emit_stringify_space_arg(&mut emitter, ctx, space) {
                     Err(error) => assert_internal(error),
                     Ok(_) => panic!("invalid space metadata was accepted"),
@@ -659,7 +669,7 @@ mod tests {
     #[test]
     fn inline_raw_literals_keep_utf16_units() {
         with_context(&TypedAst::new(), &mock_symbols_with_intrinsics(), |ctx| {
-            let mut emitter = FunctionEmitter::new(ctx, &[]);
+            let mut emitter = FunctionEmitter::new(ctx, &[]).unwrap();
             emit_inline_const_raw_string(&mut emitter, ctx, "a\u{1f642}");
             ctx.check_failure().unwrap();
             let units: Vec<_> = emitter

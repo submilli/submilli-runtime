@@ -281,7 +281,8 @@ pub fn emit_coercion(
         return Ok(false);
     };
     if takes_fewer_arguments(source, target) {
-        let original = emitter.add_anonymous_local(ctx.symbols.value_type(&crate::Type::Unknown)?);
+        let original =
+            emitter.add_anonymous_local(ctx.symbols.value_type(&crate::Type::Unknown)?)?;
         emitter.instruction(Instruction::LocalSet(original));
         emit_wrap(emitter, ctx, target, original)?;
     } else {
@@ -320,7 +321,7 @@ pub fn emit_erased_cast(
         .symbols
         .closure_struct_type_idx(source)
         .ok_or_else(|| crate::codegen::internal_failure("source closure"))?;
-    let original = emitter.add_anonymous_local(ctx.symbols.value_type(&crate::Type::Unknown)?);
+    let original = emitter.add_anonymous_local(ctx.symbols.value_type(&crate::Type::Unknown)?)?;
     emitter.instruction(Instruction::LocalTee(original));
     emitter.instruction(Instruction::RefTestNonNull(HeapType::Concrete(
         source_struct,

@@ -17,10 +17,12 @@ pub const INDEX_OOB_MESSAGE: &str = "index out of range";
 /// [`emit_checked_index`]. Kept separate from the check because a write must
 /// evaluate its RHS between the two — left-to-right evaluation order puts the
 /// RHS's side effects before the check's throw.
-pub fn stash_index_operand(emitter: &mut FunctionEmitter) -> u32 {
-    let idx_f64_local = emitter.add_anonymous_local(ValType::F64);
+pub fn stash_index_operand(
+    emitter: &mut FunctionEmitter,
+) -> Result<u32, crate::compiler_error::CompilerFailure> {
+    let idx_f64_local = emitter.add_anonymous_local(ValType::F64)?;
     emitter.instruction(Instruction::LocalSet(idx_f64_local));
-    idx_f64_local
+    Ok(idx_f64_local)
 }
 
 /// Throws unless `idx >= 0 && idx < len && idx === Math.floor(idx)`, then returns
@@ -38,8 +40,8 @@ pub fn emit_checked_index(
     ctx: &CodegenCtx,
     raw_arr_local: u32,
     idx_f64_local: u32,
-) -> u32 {
-    let len = emitter.add_anonymous_local(ValType::I32);
+) -> Result<u32, crate::compiler_error::CompilerFailure> {
+    let len = emitter.add_anonymous_local(ValType::I32)?;
     emitter.instruction(Instruction::LocalGet(raw_arr_local));
     emitter.instruction(Instruction::ArrayLen);
     emitter.instruction(Instruction::LocalSet(len));
@@ -47,12 +49,15 @@ pub fn emit_checked_index(
 }
 
 /// Capture the logical length while leaving the array receiver on the stack.
-pub fn stash_array_length(emitter: &mut FunctionEmitter, array_type: u32) -> u32 {
+pub fn stash_array_length(
+    emitter: &mut FunctionEmitter,
+    array_type: u32,
+) -> Result<u32, crate::compiler_error::CompilerFailure> {
     let receiver = emitter.add_anonymous_local(ValType::Ref(wasm_encoder::RefType {
         nullable: false,
         heap_type: wasm_encoder::HeapType::Concrete(array_type),
-    }));
-    let len = emitter.add_anonymous_local(ValType::I32);
+    }))?;
+    let len = emitter.add_anonymous_local(ValType::I32)?;
     emitter.instruction(Instruction::LocalTee(receiver));
     emitter.instruction(Instruction::StructGet {
         struct_type_index: array_type,
@@ -60,7 +65,7 @@ pub fn stash_array_length(emitter: &mut FunctionEmitter, array_type: u32) -> u32
     });
     emitter.instruction(Instruction::LocalSet(len));
     emitter.instruction(Instruction::LocalGet(receiver));
-    len
+    Ok(len)
 }
 
 pub fn emit_checked_index_with_length(
@@ -68,7 +73,7 @@ pub fn emit_checked_index_with_length(
     ctx: &CodegenCtx,
     len: u32,
     idx_f64_local: u32,
-) -> u32 {
+) -> Result<u32, crate::compiler_error::CompilerFailure> {
     // idx >= 0
     emitter.instruction(Instruction::LocalGet(idx_f64_local));
     emitter.instruction(Instruction::F64Const(0.0.into()));
@@ -91,11 +96,11 @@ pub fn emit_checked_index_with_length(
     emit_index_oob_throw(emitter, ctx);
     emitter.emit_end();
 
-    let idx_local = emitter.add_anonymous_local(ValType::I32);
+    let idx_local = emitter.add_anonymous_local(ValType::I32)?;
     emitter.instruction(Instruction::LocalGet(idx_f64_local));
     emitter.instruction(Instruction::I32TruncSatF64U);
     emitter.instruction(Instruction::LocalSet(idx_local));
-    idx_local
+    Ok(idx_local)
 }
 
 fn emit_index_oob_throw(emitter: &mut FunctionEmitter, ctx: &CodegenCtx) {

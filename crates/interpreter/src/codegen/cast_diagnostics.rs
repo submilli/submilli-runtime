@@ -53,11 +53,13 @@ pub(super) fn has_nested_paths(ty: &crate::Type) -> bool {
 
 pub(super) fn begin(emitter: &mut FunctionEmitter, ctx: &CodegenCtx) -> Option<Locals> {
     let previous = emitter.cast_diagnostic.take();
-    let current = emitter.add_anonymous_local(string_slot(ctx));
-    let failure = emitter.add_anonymous_local(string_slot(ctx));
+    let current = ctx.latch(emitter.add_anonymous_local(ctx.latch(string_slot(ctx))?))?;
+    let failure = ctx.latch(emitter.add_anonymous_local(ctx.latch(string_slot(ctx))?))?;
     super::cast_check::emit_inline_string(emitter, ctx, "$");
     emitter.instruction(Instruction::LocalSet(current));
-    emitter.instruction(Instruction::RefNull(HeapType::Concrete(string_index(ctx))));
+    emitter.instruction(Instruction::RefNull(HeapType::Concrete(
+        ctx.latch(string_index(ctx))?,
+    )));
     emitter.instruction(Instruction::LocalSet(failure));
     emitter.cast_diagnostic = Some(Locals {
         current,
@@ -76,7 +78,7 @@ pub(super) fn session_key(emitter: &mut FunctionEmitter, key: Option<u32>) {
 
 pub(super) fn checkpoint(emitter: &mut FunctionEmitter, ctx: &CodegenCtx) -> Option<u32> {
     let state = emitter.cast_diagnostic.clone()?;
-    let saved = emitter.add_anonymous_local(string_slot(ctx));
+    let saved = ctx.latch(emitter.add_anonymous_local(ctx.latch(string_slot(ctx))?))?;
     emitter.instruction(Instruction::LocalGet(state.failure));
     emitter.instruction(Instruction::LocalSet(saved));
     Some(saved)
@@ -92,7 +94,7 @@ pub(super) fn finish(
     let (Some(state), Some(saved)) = (emitter.cast_diagnostic.clone(), saved) else {
         return Ok(());
     };
-    let result = emitter.add_anonymous_local(ValType::I32);
+    let result = emitter.add_anonymous_local(ValType::I32)?;
     emitter.instruction(Instruction::LocalTee(result));
     emitter.emit_if(BlockType::Empty);
     emitter.instruction(Instruction::LocalGet(saved));
@@ -114,18 +116,29 @@ pub(super) fn finish(
 /// a nested field failure. Ties retain the first alternative's explanation.
 pub(super) fn union_start(emitter: &mut FunctionEmitter, ctx: &CodegenCtx) -> Option<u32> {
     emitter.cast_diagnostic.as_ref()?;
-    let best = emitter.add_anonymous_local(string_slot(ctx));
-    emitter.instruction(Instruction::RefNull(HeapType::Concrete(string_index(ctx))));
+    let best = ctx.latch(emitter.add_anonymous_local(ctx.latch(string_slot(ctx))?))?;
+    emitter.instruction(Instruction::RefNull(HeapType::Concrete(
+        ctx.latch(string_index(ctx))?,
+    )));
     emitter.instruction(Instruction::LocalSet(best));
     Some(best)
 }
 
 pub(super) fn union_next(emitter: &mut FunctionEmitter, ctx: &CodegenCtx) {
+    ctx.latch(union_next_checked(emitter, ctx));
+}
+
+fn union_next_checked(
+    emitter: &mut FunctionEmitter,
+    ctx: &CodegenCtx,
+) -> Result<(), crate::compiler_error::CompilerFailure> {
     let Some(state) = emitter.cast_diagnostic.clone() else {
-        return;
+        return Ok(());
     };
-    emitter.instruction(Instruction::RefNull(HeapType::Concrete(string_index(ctx))));
+    emitter.instruction(Instruction::RefNull(HeapType::Concrete(string_index(ctx)?)));
     emitter.instruction(Instruction::LocalSet(state.failure));
+
+    Ok(())
 }
 
 pub(super) fn union_keep(emitter: &mut FunctionEmitter, ctx: &CodegenCtx, best: Option<u32>) {
@@ -159,6 +172,14 @@ pub(super) fn union_end(emitter: &mut FunctionEmitter, best: Option<u32>, previo
 }
 
 fn path_length(emitter: &mut FunctionEmitter, ctx: &CodegenCtx, local: u32) {
+    ctx.latch(path_length_checked(emitter, ctx, local));
+}
+
+fn path_length_checked(
+    emitter: &mut FunctionEmitter,
+    ctx: &CodegenCtx,
+    local: u32,
+) -> Result<(), crate::compiler_error::CompilerFailure> {
     emitter.instruction(Instruction::LocalGet(local));
     emitter.instruction(Instruction::RefIsNull);
     emitter.emit_if(BlockType::Result(ValType::I32));
@@ -167,11 +188,13 @@ fn path_length(emitter: &mut FunctionEmitter, ctx: &CodegenCtx, local: u32) {
     emitter.instruction(Instruction::LocalGet(local));
     emitter.instruction(Instruction::RefAsNonNull);
     emitter.instruction(Instruction::StructGet {
-        struct_type_index: string_index(ctx),
+        struct_type_index: string_index(ctx)?,
         field_index: 1,
     });
     emitter.instruction(Instruction::ArrayLen);
     emitter.emit_end();
+
+    Ok(())
 }
 
 pub(super) fn field(emitter: &mut FunctionEmitter, _ctx: &CodegenCtx, name: &str) -> Option<usize> {
@@ -245,16 +268,25 @@ fn emit_path(
 }
 
 pub(super) fn append_failure(emitter: &mut FunctionEmitter, ctx: &CodegenCtx) {
+    ctx.latch(append_failure_checked(emitter, ctx));
+}
+
+fn append_failure_checked(
+    emitter: &mut FunctionEmitter,
+    ctx: &CodegenCtx,
+) -> Result<(), crate::compiler_error::CompilerFailure> {
     let Some(state) = emitter.cast_diagnostic.clone() else {
-        return;
+        return Ok(());
     };
-    let message = emitter.add_anonymous_local(string_slot(ctx));
+    let Some(message) = ctx.latch(emitter.add_anonymous_local(string_slot(ctx)?)) else {
+        return Ok(());
+    };
     emitter.instruction(Instruction::LocalSet(message));
     // A root mismatch keeps the established scalar diagnostic unchanged.
     path_length(emitter, ctx, state.failure);
     emitter.instruction(Instruction::I32Const(1));
     emitter.instruction(Instruction::I32GtU);
-    emitter.emit_if(BlockType::Result(string_slot(ctx)));
+    emitter.emit_if(BlockType::Result(string_slot(ctx)?));
     emitter.instruction(Instruction::LocalGet(message));
     super::cast_check::emit_inline_string(emitter, ctx, " at ");
     concat(emitter, ctx);
@@ -270,6 +302,8 @@ pub(super) fn append_failure(emitter: &mut FunctionEmitter, ctx: &CodegenCtx) {
         emitter.instruction(Instruction::LocalGet(key));
         concat(emitter, ctx);
     }
+
+    Ok(())
 }
 
 pub(super) fn save_recursive(
@@ -299,41 +333,60 @@ pub(super) fn save_recursive(
 }
 
 pub(super) fn load_recursive(emitter: &mut FunctionEmitter, ctx: &CodegenCtx, visited: u32) {
+    ctx.latch(load_recursive_checked(emitter, ctx, visited));
+}
+
+fn load_recursive_checked(
+    emitter: &mut FunctionEmitter,
+    ctx: &CodegenCtx,
+    visited: u32,
+) -> Result<(), crate::compiler_error::CompilerFailure> {
     let Some(state) = emitter.cast_diagnostic.clone() else {
-        return;
+        return Ok(());
     };
     let array = ctx
         .symbols
         .intrinsic_type_indices()
-        .expect("intrinsics")
+        .ok_or_else(|| crate::codegen::internal_failure("intrinsics"))?
         .raw_array;
     emitter.instruction(Instruction::LocalGet(visited));
     emitter.instruction(Instruction::I32Const(FAILURE_SLOT));
     emitter.instruction(Instruction::ArrayGet(array));
     emitter.instruction(Instruction::RefCastNullable(HeapType::Concrete(
-        string_index(ctx),
+        string_index(ctx)?,
     )));
     emitter.instruction(Instruction::LocalSet(state.failure));
+
+    Ok(())
 }
 
 pub(super) fn enter_recursive(emitter: &mut FunctionEmitter, ctx: &CodegenCtx) {
+    ctx.latch(enter_recursive_checked(emitter, ctx));
+}
+
+fn enter_recursive_checked(
+    emitter: &mut FunctionEmitter,
+    ctx: &CodegenCtx,
+) -> Result<(), crate::compiler_error::CompilerFailure> {
     begin(emitter, ctx);
     let state = emitter
         .cast_diagnostic
         .clone()
-        .expect("validator diagnostic");
+        .ok_or_else(|| crate::codegen::internal_failure("validator diagnostic"))?;
     let array = ctx
         .symbols
         .intrinsic_type_indices()
-        .expect("intrinsics")
+        .ok_or_else(|| crate::codegen::internal_failure("intrinsics"))?
         .raw_array;
     emitter.instruction(Instruction::LocalGet(1));
     emitter.instruction(Instruction::I32Const(PATH_SLOT));
     emitter.instruction(Instruction::ArrayGet(array));
     emitter.instruction(Instruction::RefCastNullable(HeapType::Concrete(
-        string_index(ctx),
+        string_index(ctx)?,
     )));
-    let incoming = emitter.add_anonymous_local(string_slot(ctx));
+    let Some(incoming) = ctx.latch(emitter.add_anonymous_local(string_slot(ctx)?)) else {
+        return Ok(());
+    };
     emitter.instruction(Instruction::LocalTee(incoming));
     emitter.instruction(Instruction::RefIsNull);
     emitter.instruction(Instruction::I32Eqz);
@@ -342,10 +395,21 @@ pub(super) fn enter_recursive(emitter: &mut FunctionEmitter, ctx: &CodegenCtx) {
     emitter.instruction(Instruction::LocalSet(state.current));
     emitter.emit_end();
     load_recursive(emitter, ctx, 1);
+
+    Ok(())
 }
 
 pub(super) fn concat(emitter: &mut FunctionEmitter, ctx: &CodegenCtx) {
-    let right = emitter.add_anonymous_local(string_slot(ctx));
+    ctx.latch(concat_checked(emitter, ctx));
+}
+
+fn concat_checked(
+    emitter: &mut FunctionEmitter,
+    ctx: &CodegenCtx,
+) -> Result<(), crate::compiler_error::CompilerFailure> {
+    let Some(right) = ctx.latch(emitter.add_anonymous_local(string_slot(ctx)?)) else {
+        return Ok(());
+    };
     emitter.instruction(Instruction::LocalSet(right));
     emitter.instruction(Instruction::RefAsNonNull);
     emitter.instruction(Instruction::LocalGet(right));
@@ -353,16 +417,20 @@ pub(super) fn concat(emitter: &mut FunctionEmitter, ctx: &CodegenCtx) {
     emitter.instruction(Instruction::Call(
         ctx.symbols
             .prelude_func_idx("string_concat")
-            .expect("string concat"),
+            .ok_or_else(|| crate::codegen::internal_failure("string concat"))?,
     ));
+
+    Ok(())
 }
 
-fn string_index(ctx: &CodegenCtx) -> u32 {
-    ctx.symbols.string_type_idx().expect("string")
+fn string_index(ctx: &CodegenCtx) -> Result<u32, crate::compiler_error::CompilerFailure> {
+    ctx.symbols
+        .string_type_idx()
+        .ok_or_else(|| crate::codegen::internal_failure("string"))
 }
-fn string_slot(ctx: &CodegenCtx) -> ValType {
-    ValType::Ref(RefType {
+fn string_slot(ctx: &CodegenCtx) -> Result<ValType, crate::compiler_error::CompilerFailure> {
+    Ok(ValType::Ref(RefType {
         nullable: true,
-        heap_type: HeapType::Concrete(string_index(ctx)),
-    })
+        heap_type: HeapType::Concrete(string_index(ctx)?),
+    }))
 }

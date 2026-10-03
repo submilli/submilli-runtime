@@ -134,13 +134,32 @@ impl ValidatorBodies {
         if generics.is_empty() {
             return None;
         }
-        let mut key = ty.peel().clone();
-        match &mut key {
-            Type::AliasRef { args, .. } | Type::InterfaceRef { args, .. } => {
-                *args = generics.iter().cloned().map(Type::TypeVar).collect();
-            }
-            _ => unreachable!(),
-        }
+        let arguments = generics.iter().cloned().map(Type::TypeVar).collect();
+        let key = match ty.peel() {
+            Type::AliasRef {
+                package,
+                mangled,
+                name,
+                ..
+            } => Type::AliasRef {
+                package: package.clone(),
+                mangled: mangled.clone(),
+                name: name.clone(),
+                args: arguments,
+            },
+            Type::InterfaceRef {
+                package,
+                mangled,
+                name,
+                ..
+            } => Type::InterfaceRef {
+                package: package.clone(),
+                mangled: mangled.clone(),
+                name: name.clone(),
+                args: arguments,
+            },
+            _ => return None,
+        };
         Some(key)
     }
 

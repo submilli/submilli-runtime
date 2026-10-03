@@ -65,12 +65,17 @@ fn collect_parameters(ty: &Type, names: &mut BTreeSet<String>) {
     }
 }
 
-pub fn bind(emitter: &mut FunctionEmitter, names: &[String], local: u32) {
+pub fn bind(
+    emitter: &mut FunctionEmitter,
+    names: &[String],
+    local: u32,
+) -> Result<(), crate::compiler_error::CompilerFailure> {
     for (slot, name) in names.iter().enumerate() {
         emitter
             .runtime_type_params
-            .insert(name.clone(), (local, slot as u32));
+            .insert(name.clone(), (local, crate::codegen::wasm_u32(slot)?));
     }
+    Ok(())
 }
 
 pub fn allocate(
@@ -115,7 +120,7 @@ pub fn allocate(
         }
         symbols.type_descriptor_functions.insert(ty.clone(), *next);
         descriptors.push((ty, *next));
-        *next += 1;
+        crate::codegen::next_index(next)?;
     }
     Ok(descriptors)
 }
@@ -140,7 +145,7 @@ pub fn allocate_globals(
         .ok_or_else(|| crate::codegen::internal_failure("descriptor closure"))?;
     for ty in &closed {
         symbols.type_descriptor_globals.insert(ty.clone(), *next);
-        *next += 1;
+        crate::codegen::next_index(next)?;
         globals.global(
             GlobalType {
                 val_type: ValType::Ref(RefType {
@@ -153,7 +158,7 @@ pub fn allocate_globals(
             &ConstExpr::ref_null(HeapType::Concrete(closure)),
         );
     }
-    Ok(closed.len() as u32)
+    crate::codegen::wasm_u32(closed.len())
 }
 
 pub fn environment(
@@ -170,7 +175,7 @@ pub fn environment(
             .intrinsic_type_indices()
             .ok_or_else(|| crate::codegen::internal_failure("intrinsics"))?
             .object_fields,
-        array_size: types.len() as u32,
+        array_size: crate::codegen::wasm_u32(types.len())?,
     });
 
     Ok(())
@@ -198,6 +203,11 @@ pub fn validator_environment(
     if let Some((names, _)) = ctx.symbols.generic_runtime_validator(key)
         && let Type::AliasRef { args, .. } | Type::InterfaceRef { args, .. } = key.peel()
     {
+        if names.len() != args.len() {
+            return Err(crate::codegen::internal_failure(
+                "validator type argument count mismatch",
+            ));
+        }
         let mut pairs: Vec<_> = names.iter().zip(args).collect();
         pairs.sort_by_key(|(name, _)| *name);
         environment(
@@ -301,7 +311,7 @@ pub fn test_parameter(
     let local = emitter.add_anonymous_local(ValType::Ref(RefType {
         nullable: false,
         heap_type: HeapType::Concrete(closure_type),
-    }));
+    }))?;
     emit(emitter, ctx, &Type::TypeVar(name.into()))?;
     emitter.instruction(Instruction::RefCastNonNull(HeapType::Concrete(
         closure_type,
@@ -346,11 +356,11 @@ pub fn body(
         ),
         (ident("value"), ctx.symbols.value_type(&Type::Unknown)?),
     ];
-    let mut emitter = FunctionEmitter::new(ctx, &params);
-    bind(&mut emitter, &parameters(ty), 0);
+    let mut emitter = FunctionEmitter::new(ctx, &params)?;
+    bind(&mut emitter, &parameters(ty), 0)?;
     ctx.checking_standalone(ty, || {
         super::cast_check::emit_structural_test(&mut emitter, ctx, 1, ty, ty)
     })?;
     cast::emit_box(&mut emitter, ctx, &Type::Boolean)?;
-    Ok(emitter.build())
+    emitter.build()
 }

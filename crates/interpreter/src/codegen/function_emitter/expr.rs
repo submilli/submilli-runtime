@@ -5,15 +5,8 @@
 //! mutation of the supplied emitter; both `_start`'s initializer code and
 //! function bodies share this single dispatch.
 //!
-//! Each [`TypedExprKind`] variant lands as code generation work proceeds:
-//! - `Number`, arithmetic `Binary`, `Unary::Neg/Pos`.
-//! - `Binary::Add` on strings (dispatched via prelude).
-//! - `Boolean`, comparisons, equality, `And`/`Or`, `Unary::Not`.
-//! - `LocalRef` (function-local bindings).
-//! - Later: user `Call`, `Null`.
-//!
-//! Until those land, unimplemented branches `unimplemented!` at codegen
-//! time — the typed AST never reaches them in current fixtures.
+//! Missing emission metadata returns a compiler failure; the caller discards
+//! the owned emitter and module before publishing Wasm.
 
 use crate::codegen::CodegenCtx;
 use crate::codegen::bounds::{
@@ -145,9 +138,7 @@ fn emit_expr_value(
             // load the `(ref $box_T)` slot, `struct.get` the value
             // field, then recover the declared type from the cell's
             // erased payload. Non-boxed reads are a plain `local.get`.
-            let slot = emitter
-                .local_slot(&ident.name)
-                .expect("function-local binding has a Wasm local slot");
+            let slot = emitter.require_local_slot(&ident.name)?;
             emitter.instruction(Instruction::LocalGet(slot));
             if *boxed {
                 let box_idx = ctx.symbols.box_type_idx(&expr.ty)?.ok_or_else(|| {
@@ -180,14 +171,17 @@ fn emit_expr_value(
                     ValType::Ref(RefType { heap_type, .. }) => {
                         emitter.instruction(Instruction::RefNull(heap_type));
                     }
-                    other => unreachable!("static-interface binding lowered to {other:?}"),
+                    other => {
+                        return Err(crate::codegen::internal_failure(format!(
+                            "static-interface binding lowered to {other:?}"
+                        )));
+                    }
                 }
                 return Ok(());
             }
-            let idx = ctx
-                .symbols
-                .global_idx(mangled)
-                .expect("top-level let/const recorded during codegen");
+            let idx = ctx.symbols.global_idx(mangled).ok_or_else(|| {
+                crate::codegen::internal_failure("top-level let/const recorded during codegen")
+            })?;
             emitter.instruction(Instruction::GlobalGet(idx));
             if let ValType::Ref(RefType {
                 nullable: false, ..
@@ -242,15 +236,15 @@ fn emit_expr_value(
             // pre-packs the trailing args — so `args.len()` always
             // matches `target.params.len()` and no codegen branching
             // is needed.
-            let target = ctx.symbols.top_level_fn(mangled).unwrap_or_else(|| {
-                panic!(
+            let target = ctx.symbols.top_level_fn(mangled).ok_or_else(|| {
+                crate::codegen::internal_failure(format!(
                     "Call references unknown top-level fn `{}`",
                     mangled.as_str()
-                )
-            });
-            if crate::codegen::field_guards::guarded_constructor(ctx, mangled, &expr.ty) {
+                ))
+            })?;
+            if crate::codegen::field_guards::guarded_constructor(ctx, mangled, &expr.ty)? {
                 let Type::ClassRef { mangled: class, .. } = expr.ty.peel() else {
-                    unreachable!("constructor class");
+                    return Err(crate::codegen::internal_failure("constructor class"));
                 };
                 emit_args_into_slots(emitter, ctx, args, ctx.symbols.class_ctor_abi(class))?;
                 crate::codegen::field_guards::constructor_argument(emitter, ctx, &expr.ty)?;
@@ -274,16 +268,16 @@ fn emit_expr_value(
             // Direct call of the parent's constructor *init* fn on the current
             // `this` (self-first ABI), initializing the parent-declared fields.
             // A generic parent's declared ctor params erase to boxed slots.
-            let this = emitter
-                .this_local()
-                .expect("super(...) only inside a constructor body");
+            let this = emitter.this_local().ok_or_else(|| {
+                crate::codegen::internal_failure("super(...) only inside a constructor body")
+            })?;
             emitter.instruction(Instruction::LocalGet(this));
             let ctor_abi = ctx.symbols.class_ctor_abi(parent).map(<[ValType]>::to_vec);
             emit_args_into_slots(emitter, ctx, args, ctor_abi.as_deref())?;
             let init = ctx
                 .symbols
                 .class_ctor_init_func_idx(parent)
-                .expect("parent ctor init fn allocated");
+                .ok_or_else(|| crate::codegen::internal_failure("parent ctor init fn allocated"))?;
             emitter.instruction(Instruction::Call(init));
             // Own field initializers / parameter-property copies run right after
             // the parent is initialized, before the rest of the constructor body.
@@ -296,9 +290,9 @@ fn emit_expr_value(
             // vtable dispatch, which would re-resolve to the override). The
             // owner's physical sig is the slot sig — same erasure handling as
             // the vtable path.
-            let this = emitter
-                .this_local()
-                .expect("super.method() only inside a method body");
+            let this = emitter.this_local().ok_or_else(|| {
+                crate::codegen::internal_failure("super.method() only inside a method body")
+            })?;
             emitter.instruction(Instruction::LocalGet(this));
             let abi = ctx.symbols.class_method_abi(owner, &name.name).cloned();
             emit_args_into_slots(
@@ -310,7 +304,9 @@ fn emit_expr_value(
             let func = ctx
                 .symbols
                 .class_method_func_idx(owner, &name.name)
-                .expect("parent method body fn allocated");
+                .ok_or_else(|| {
+                    crate::codegen::internal_failure("parent method body fn allocated")
+                })?;
             emitter.instruction(Instruction::Call(func));
             emit_slot_return_cast(emitter, ctx, &expr.ty.clone(), abi.as_ref())?;
         }
@@ -400,10 +396,11 @@ fn emit_expr_value(
             // Static-interface properties (`Number.EPSILON`) import as
             // constant globals — no receiver, no getter call.
             if ctx.symbols.iface_dispatch(iface) == Some(crate::Dispatch::Static) {
-                let global_idx = ctx
-                    .symbols
-                    .global_idx(&key)
-                    .expect("static interface property recorded as a global import");
+                let global_idx = ctx.symbols.global_idx(&key).ok_or_else(|| {
+                    crate::codegen::internal_failure(
+                        "static interface property recorded as a global import",
+                    )
+                })?;
                 emitter.instruction(Instruction::GlobalGet(global_idx));
                 return Ok(());
             }
@@ -412,10 +409,11 @@ fn emit_expr_value(
                 emit_inline_length(emitter, ctx, struct_idx);
                 return Ok(());
             }
-            let func_idx = ctx
-                .symbols
-                .func_idx(&key)
-                .expect("interface property getter recorded during the dependency-import pass");
+            let func_idx = ctx.symbols.func_idx(&key).ok_or_else(|| {
+                crate::codegen::internal_failure(
+                    "interface property getter recorded during the dependency-import pass",
+                )
+            })?;
             emit_receiver(emitter, ctx, *receiver)?;
             // InterfaceRef-typed receivers (`Map<K, V>`,
             // `Set<T>` — Direct dispatch) lower to
@@ -520,9 +518,9 @@ fn emit_expr_value(
             }));
         }
         TypedExprKind::This => {
-            let slot = emitter
-                .this_local()
-                .expect("`this` has a local receiver or captured binding");
+            let slot = emitter.this_local().ok_or_else(|| {
+                crate::codegen::internal_failure("`this` has a local receiver or captured binding")
+            })?;
             if emitter.dynamic_this {
                 emitter.instruction(Instruction::LocalGet(slot));
                 emitter.instruction(Instruction::RefIsNull);
@@ -554,11 +552,13 @@ fn emit_expr_value(
             let boxed_idx = ctx
                 .symbols
                 .boxed_number_type_idx()
-                .expect("boxed_number type registered");
+                .ok_or_else(|| crate::codegen::internal_failure("boxed_number type registered"))?;
             let vtable_global = ctx
                 .symbols
                 .prelude_global_idx("boxed_number_vtable")
-                .expect("boxed_number_vtable imported from prelude");
+                .ok_or_else(|| {
+                    crate::codegen::internal_failure("boxed_number_vtable imported from prelude")
+                })?;
             emitter.instruction(Instruction::GlobalGet(vtable_global));
             emitter.instruction(Instruction::F64Const(Ieee64::from(*value)));
             emitter.instruction(Instruction::StructNew(boxed_idx));
@@ -578,10 +578,12 @@ fn emit_expr_value(
         }
         TypedExprKind::InstanceOf { value, class } => match class.peel() {
             Type::ClassRef { mangled, .. } => {
-                let vtable_global = ctx
-                    .symbols
-                    .class_vtable_global_idx(mangled)
-                    .expect("class vtable global recorded");
+                let vtable_global =
+                    ctx.symbols
+                        .class_vtable_global_idx(mangled)
+                        .ok_or_else(|| {
+                            crate::codegen::internal_failure("class vtable global recorded")
+                        })?;
                 emit_expr(emitter, ctx, *value)?;
                 cast::emit_nominal_instance_test(emitter, ctx, vtable_global)?;
             }
@@ -589,14 +591,17 @@ fn emit_expr_value(
             // canonically unique, which makes the structural test the same
             // answer the nominal walk would give.
             Type::Uint8Array => {
-                let idx = ctx
-                    .symbols
-                    .uint8_array_type_idx()
-                    .expect("$Uint8Array intrinsic registered");
+                let idx = ctx.symbols.uint8_array_type_idx().ok_or_else(|| {
+                    crate::codegen::internal_failure("$Uint8Array intrinsic registered")
+                })?;
                 emit_expr(emitter, ctx, *value)?;
                 emitter.instruction(Instruction::RefTestNonNull(HeapType::Concrete(idx)));
             }
-            _ => unreachable!("instanceof codegen with a non-class RHS: {class:?}"),
+            _ => {
+                return Err(crate::codegen::internal_failure(format!(
+                    "instanceof codegen with a non-class RHS: {class:?}"
+                )));
+            }
         },
         TypedExprKind::Narrowed {
             path,
@@ -611,17 +616,17 @@ fn emit_expr_value(
             emitter.push_scope();
             if path.chain.is_empty() {
                 let shadow_val = ctx.symbols.value_type(&cast_info.to_ty)?;
-                let shadow = emitter.define_local(binding, shadow_val);
+                let shadow = emitter.define_local(binding, shadow_val)?;
                 emit_expr(emitter, ctx, *source)?;
                 crate::codegen::function_emitter::cast::emit_narrowing_cast(
                     emitter, ctx, cast_info,
                 )?;
                 emitter.instruction(Instruction::LocalSet(shadow));
             } else {
-                emitter.register_narrow_source(&binding.name, *source);
+                emitter.register_narrow_source(&binding.name, *source)?;
             }
             emit_expr(emitter, ctx, *inner)?;
-            emitter.pop_scope();
+            emitter.pop_scope()?;
         }
         TypedExprKind::Closure {
             params,
@@ -689,7 +694,7 @@ fn emit_expr_value(
             let lhs_val = ctx.symbols.value_type(&lhs_ty)?;
             let lhs_is_ref = matches!(lhs_val, ValType::Ref(_));
             if lhs_is_ref {
-                let tmp = emitter.add_anonymous_local(lhs_val);
+                let tmp = emitter.add_anonymous_local(lhs_val)?;
                 emit_expr(emitter, ctx, *lhs)?;
                 emitter.instruction(Instruction::LocalTee(tmp));
                 emitter.instruction(Instruction::RefIsNull);
@@ -919,7 +924,7 @@ fn emit_generic_call(
             cast::emit_coerce_to_slot(emitter, ctx, &arg_ty, param_ty)?;
         }
     }
-    if crate::codegen::field_guards::guarded_constructor(ctx, mangled, result_ty) {
+    if crate::codegen::field_guards::guarded_constructor(ctx, mangled, result_ty)? {
         crate::codegen::field_guards::constructor_argument(emitter, ctx, result_ty)?;
     }
     if ctx.symbols.runtime_generic_functions.contains(mangled) {
@@ -1069,7 +1074,7 @@ fn emit_object_literal(
     }
     emitter.instruction(Instruction::ArrayNewFixed {
         array_type_index: intrinsics.object_fields,
-        array_size: declared_fields.len() as u32,
+        array_size: crate::codegen::wasm_u32(declared_fields.len())?,
     });
     emitter.instruction(Instruction::StructNew(object_shape_idx));
 
@@ -1160,7 +1165,7 @@ fn emit_field_access(
             crate::codegen::internal_failure("intrinsics declared by codegen entry")
         })?;
         emit_receiver(emitter, ctx, *receiver)?;
-        let object = emitter.add_anonymous_local(ctx.symbols.value_type(&receiver_ty)?);
+        let object = emitter.add_anonymous_local(ctx.symbols.value_type(&receiver_ty)?)?;
         emitter.instruction(Instruction::LocalTee(object));
         emitter.instruction(Instruction::StructGet {
             struct_type_index: struct_idx,
@@ -1205,7 +1210,7 @@ fn emit_field_access(
     // Stashed so we can re-push it (as the call's self argument) and
     // then read its slot 2 to get the getter funcref.
     emit_receiver(emitter, ctx, *receiver)?;
-    let rcv_local = stash_receiver_as_object_shape(emitter, &receiver_ty, intrinsics.object_shape);
+    let rcv_local = stash_receiver_as_object_shape(emitter, &receiver_ty, intrinsics.object_shape)?;
     emit_object_property_read_as(
         emitter,
         ctx,
@@ -1294,7 +1299,7 @@ fn emit_closure_value(
         Some(emitter.add_anonymous_local(ValType::Ref(RefType {
             nullable: false,
             heap_type: HeapType::Concrete(env_type_idx),
-        })))
+        }))?)
     } else {
         None
     };
@@ -1314,13 +1319,20 @@ fn emit_closure_value(
     // Closure struct allocation consumes all three.
     emitter.instruction(Instruction::StructNew(closure_struct_idx));
     if let Some(environment) = self_environment {
-        let closure = emitter.add_anonymous_local(ctx.symbols.value_type(result_ty)?);
+        let closure = emitter.add_anonymous_local(ctx.symbols.value_type(result_ty)?)?;
         emitter.instruction(Instruction::LocalSet(closure));
         emitter.instruction(Instruction::LocalGet(environment));
         emitter.instruction(Instruction::LocalGet(closure));
         emitter.instruction(Instruction::StructSet {
             struct_type_index: env_type_idx,
-            field_index: (captured.len() + usize::from(!runtime_generics.is_empty())) as u32,
+            field_index: crate::codegen::wasm_u32(
+                captured
+                    .len()
+                    .checked_add(usize::from(!runtime_generics.is_empty()))
+                    .ok_or_else(|| {
+                        crate::codegen::internal_failure("closure capture count overflow")
+                    })?,
+            )?,
         });
         emitter.instruction(Instruction::LocalGet(closure));
     }
@@ -1368,15 +1380,13 @@ fn emit_local_narrow_ref(
             return Ok(());
         }
         if let BindingId::Global(mangled) = &path.root {
-            let idx = ctx
-                .symbols
-                .global_idx(mangled)
-                .expect("Inferer guarantees the binding exists");
+            let idx = ctx.symbols.global_idx(mangled).ok_or_else(|| {
+                crate::codegen::internal_failure("Inferer guarantees the binding exists")
+            })?;
             emitter.instruction(Instruction::GlobalGet(idx));
-            let source_ty = ctx
-                .symbols
-                .global_type(mangled)
-                .expect("language globals retain their declared type");
+            let source_ty = ctx.symbols.global_type(mangled).ok_or_else(|| {
+                crate::codegen::internal_failure("language globals retain their declared type")
+            })?;
             crate::codegen::cast_check::emit_checked_cast_on_stack(
                 emitter,
                 ctx,
@@ -1396,11 +1406,11 @@ fn emit_local_narrow_ref(
             cast::emit_narrowing_cast(emitter, ctx, &cast_info)?;
             return Ok(());
         }
-        panic!(
+        return Err(crate::codegen::internal_failure(format!(
             "narrow binding `{}` (path {path:?}) not registered in codegen scope — \
              the region's source names a shadow from a scope that already closed",
             binding.name,
-        )
+        )));
     };
     emitter.instruction(Instruction::LocalGet(slot));
     let stack_ty = unbox_if_boxed(emitter, ctx, slot_ty);
@@ -1498,7 +1508,7 @@ fn emit_array_literal(
         }
         emitter.instruction(Instruction::ArrayNewFixed {
             array_type_index: raw_array_idx,
-            array_size: elements.len() as u32,
+            array_size: crate::codegen::wasm_u32(elements.len())?,
         });
         emitter.instruction(Instruction::I32Const(
             i32::try_from(elements.len())
@@ -1539,7 +1549,7 @@ fn emit_tuple_literal(
     }
     emitter.instruction(Instruction::ArrayNewFixed {
         array_type_index: raw_array_idx,
-        array_size: elements.len() as u32,
+        array_size: crate::codegen::wasm_u32(elements.len())?,
     });
     emitter.instruction(Instruction::I32Const(
         i32::try_from(elements.len())
@@ -1566,9 +1576,9 @@ fn emit_spread_array_literal(
         nullable: false,
         heap_type: HeapType::Concrete(raw),
     });
-    let total = emitter.add_anonymous_local(ValType::I32);
-    let offset = emitter.add_anonymous_local(ValType::I32);
-    let destination = emitter.add_anonymous_local(raw_type);
+    let total = emitter.add_anonymous_local(ValType::I32)?;
+    let offset = emitter.add_anonymous_local(ValType::I32)?;
+    let destination = emitter.add_anonymous_local(raw_type)?;
     emitter.instruction(Instruction::I32Const(0));
     emitter.instruction(Instruction::LocalSet(total));
     // Snapshot every chunk in source order before later expressions can mutate
@@ -1576,7 +1586,7 @@ fn emit_spread_array_literal(
     let mut chunks = Vec::with_capacity(elements.len());
     for element in elements {
         emit_literal_chunk(emitter, ctx, element, array, raw)?;
-        let chunk = emitter.add_anonymous_local(raw_type);
+        let chunk = emitter.add_anonymous_local(raw_type)?;
         emitter.instruction(Instruction::LocalTee(chunk));
         emitter.instruction(Instruction::ArrayLen);
         emitter.instruction(Instruction::LocalGet(total));
@@ -1647,9 +1657,9 @@ fn emit_literal_chunk(
         nullable: false,
         heap_type: HeapType::Concrete(raw),
     });
-    let source = emitter.add_anonymous_local(raw_type);
-    let snapshot = emitter.add_anonymous_local(raw_type);
-    let length = stash_array_length(emitter, array);
+    let source = emitter.add_anonymous_local(raw_type)?;
+    let snapshot = emitter.add_anonymous_local(raw_type)?;
+    let length = stash_array_length(emitter, array)?;
     emitter.instruction(Instruction::StructGet {
         struct_type_index: array,
         field_index: 1,
@@ -1687,10 +1697,8 @@ fn emit_postfix_unary(
             target_ty,
         } => {
             // A read-modify-write, so the write decides the slot.
-            let slot = emitter
-                .write_slot(&ident.name)
-                .expect("Inferer guarantees the binding exists");
-            let old = emitter.add_anonymous_local(ctx.symbols.value_type(result_ty)?);
+            let slot = emitter.write_slot(&ident.name)?;
+            let old = emitter.add_anonymous_local(ctx.symbols.value_type(result_ty)?)?;
             let box_idx = if *boxed {
                 Some(ctx.symbols.box_type_idx(target_ty)?.ok_or_else(|| {
                     crate::codegen::internal_failure("box type registered for postfix operand")
@@ -1728,11 +1736,10 @@ fn emit_postfix_unary(
         crate::PostfixTarget::Global {
             mangled, target_ty, ..
         } => {
-            let idx = ctx
-                .symbols
-                .global_idx(mangled)
-                .expect("Inferer guarantees the binding exists");
-            let old = emitter.add_anonymous_local(ctx.symbols.value_type(result_ty)?);
+            let idx = ctx.symbols.global_idx(mangled).ok_or_else(|| {
+                crate::codegen::internal_failure("Inferer guarantees the binding exists")
+            })?;
+            let old = emitter.add_anonymous_local(ctx.symbols.value_type(result_ty)?)?;
             emitter.instruction(Instruction::GlobalGet(idx));
             // Reference globals start as null before module initialization.
             if let ValType::Ref(RefType {
@@ -1772,20 +1779,19 @@ fn emit_postfix_unary(
                 return Ok(());
             }
             // Mirror AssignField + FieldAccess's vtable-dispatched calls.
-            let intrinsics = ctx
-                .symbols
-                .intrinsic_type_indices()
-                .expect("intrinsics declared by codegen entry");
-            let tmp = emitter.add_anonymous_local(ctx.symbols.value_type(target_ty)?);
+            let intrinsics = ctx.symbols.intrinsic_type_indices().ok_or_else(|| {
+                crate::codegen::internal_failure("intrinsics declared by codegen entry")
+            })?;
+            let tmp = emitter.add_anonymous_local(ctx.symbols.value_type(target_ty)?)?;
             emit_receiver(emitter, ctx, *receiver)?;
             let rcv_local =
-                stash_receiver_as_object_shape(emitter, &receiver_ty, intrinsics.object_shape);
+                stash_receiver_as_object_shape(emitter, &receiver_ty, intrinsics.object_shape)?;
             emit_object_property_read(emitter, ctx, rcv_local, &name.name, target_ty)?;
             emit_postfix_numeric(emitter, ctx, target_ty);
             emitter.instruction(Instruction::LocalSet(tmp));
             emitter.instruction(Instruction::LocalGet(tmp));
             emit_postfix_delta(emitter, ctx, op, target_ty);
-            let updated = emitter.add_anonymous_local(ctx.symbols.value_type(target_ty)?);
+            let updated = emitter.add_anonymous_local(ctx.symbols.value_type(target_ty)?)?;
             emitter.instruction(Instruction::LocalSet(updated));
             emit_object_property_write_value(
                 emitter,
@@ -1835,7 +1841,7 @@ fn emit_index_postfix(
             .map_err(crate::codegen::arena_failure)?
             .ty,
     )?;
-    let receiver_local = emitter.add_anonymous_local(ctx.symbols.value_type(&Type::Unknown)?);
+    let receiver_local = emitter.add_anonymous_local(ctx.symbols.value_type(&Type::Unknown)?)?;
     emitter.instruction(Instruction::LocalSet(receiver_local));
     emit_expr(emitter, ctx, index)?;
     let key = emitter.add_anonymous_local(
@@ -1845,7 +1851,7 @@ fn emit_index_postfix(
                 .map_err(crate::codegen::arena_failure)?
                 .ty,
         )?,
-    );
+    )?;
     emitter.instruction(Instruction::LocalSet(key));
     let (backing, position, raw_type) = emit_index_location(
         emitter,
@@ -1867,10 +1873,10 @@ fn emit_index_postfix(
         emitter.instruction(Instruction::ArrayGet(raw_type));
     }
     emit_postfix_numeric(emitter, ctx, &result_ty);
-    let old = emitter.add_anonymous_local(ctx.symbols.value_type(&result_ty)?);
+    let old = emitter.add_anonymous_local(ctx.symbols.value_type(&result_ty)?)?;
     emitter.instruction(Instruction::LocalTee(old));
     emit_postfix_delta(emitter, ctx, op, &result_ty);
-    let updated = emitter.add_anonymous_local(ctx.symbols.value_type(&result_ty)?);
+    let updated = emitter.add_anonymous_local(ctx.symbols.value_type(&result_ty)?)?;
     emitter.instruction(Instruction::LocalSet(updated));
     // GetValue and PutValue each convert the original property key. Conversion
     // can mutate the array, so reload the backing storage for the write.
@@ -1929,8 +1935,10 @@ fn emit_index_location(
     crate::codegen::cast_check::emit_operation_cast_on_stack(emitter, ctx, &Type::Unknown, &ty)?;
     emitter.instruction(Instruction::LocalGet(key));
     emit_index_number(emitter, ctx, key_ty)?;
-    let operand = stash_index_operand(emitter);
-    let length = (!is_uint8).then(|| stash_array_length(emitter, container));
+    let operand = stash_index_operand(emitter)?;
+    let length = (!is_uint8)
+        .then(|| stash_array_length(emitter, container))
+        .transpose()?;
     emitter.instruction(Instruction::StructGet {
         struct_type_index: container,
         field_index: 1,
@@ -1938,23 +1946,33 @@ fn emit_index_location(
     let backing = emitter.add_anonymous_local(ValType::Ref(RefType {
         nullable: false,
         heap_type: HeapType::Concrete(raw),
-    }));
+    }))?;
     emitter.instruction(Instruction::LocalSet(backing));
     let position = match length {
-        Some(length) => emit_checked_index_with_length(emitter, ctx, length, operand),
-        None => emit_checked_index(emitter, ctx, backing, operand),
+        Some(length) => emit_checked_index_with_length(emitter, ctx, length, operand)?,
+        None => emit_checked_index(emitter, ctx, backing, operand)?,
     };
     Ok((backing, position, raw))
 }
 
 fn emit_postfix_numeric(emitter: &mut FunctionEmitter, ctx: &CodegenCtx, ty: &Type) {
+    ctx.latch(emit_postfix_numeric_checked(emitter, ctx, ty));
+}
+
+fn emit_postfix_numeric_checked(
+    emitter: &mut FunctionEmitter,
+    ctx: &CodegenCtx,
+    ty: &Type,
+) -> Result<(), crate::compiler_error::CompilerFailure> {
     if matches!(ty, Type::Unknown) {
         let function = ctx
             .symbols
             .prelude_func_idx("__value_numeric")
-            .expect("dynamic update helper collected");
+            .ok_or_else(|| crate::codegen::internal_failure("dynamic update helper collected"))?;
         emitter.instruction(Instruction::Call(function));
     }
+
+    Ok(())
 }
 
 fn emit_postfix_delta(
@@ -1963,6 +1981,15 @@ fn emit_postfix_delta(
     op: crate::PostfixOp,
     ty: &Type,
 ) {
+    ctx.latch(emit_postfix_delta_checked(emitter, ctx, op, ty));
+}
+
+fn emit_postfix_delta_checked(
+    emitter: &mut FunctionEmitter<'_>,
+    ctx: &CodegenCtx<'_>,
+    op: crate::PostfixOp,
+    ty: &Type,
+) -> Result<(), crate::compiler_error::CompilerFailure> {
     if matches!(ty, Type::Unknown) {
         let name = if matches!(op, crate::PostfixOp::Inc) {
             "inc"
@@ -1972,20 +1999,26 @@ fn emit_postfix_delta(
         let function = ctx
             .symbols
             .prelude_func_idx(&format!("__value_{name}"))
-            .expect("dynamic update helper collected");
+            .ok_or_else(|| crate::codegen::internal_failure("dynamic update helper collected"))?;
         emitter.instruction(Instruction::Call(function));
-        return;
+        return Ok(());
     }
     if matches!(ty.peel(), Type::BigInt) {
         emit_bigint_pm_one(emitter, ctx, op);
-        return;
+        return Ok(());
     }
     emitter.instruction(Instruction::F64Const(Ieee64::from(1.0)));
     emitter.instruction(match op {
         crate::PostfixOp::Inc => Instruction::F64Add,
         crate::PostfixOp::Dec => Instruction::F64Sub,
-        crate::PostfixOp::NonNullAssert => unreachable!("non-null assertion is not PostfixUnary"),
+        crate::PostfixOp::NonNullAssert => {
+            return Err(crate::codegen::internal_failure(
+                "non-null assertion is not PostfixUnary",
+            ));
+        }
     });
+
+    Ok(())
 }
 
 /// `receiver.field++` on a class instance, leaving the *old* value on the stack.
@@ -2005,29 +2038,32 @@ fn emit_class_field_postfix(
     let intrinsics = ctx
         .symbols
         .intrinsic_type_indices()
-        .expect("intrinsics declared by codegen entry");
-    let struct_idx = ctx
-        .symbols
-        .class_struct_type_idx(mangled)
-        .expect("class struct type recorded in classes::emit");
+        .ok_or_else(|| crate::codegen::internal_failure("intrinsics declared by codegen entry"))?;
+    let struct_idx = ctx.symbols.class_struct_type_idx(mangled).ok_or_else(|| {
+        crate::codegen::internal_failure("class struct type recorded in classes::emit")
+    })?;
     // A property with no slot is an accessor, which has no payload to
     // read-modify-write; `class_postfix_target` rejects those before codegen.
     let slot = ctx
         .symbols
         .class_field_slot(mangled, field)
-        .expect("data-field slot recorded in classes::emit — accessors are rejected in infer");
+        .ok_or_else(|| {
+            crate::codegen::internal_failure(
+                "data-field slot recorded in classes::emit — accessors are rejected in infer",
+            )
+        })?;
     let fields_local = emitter.add_anonymous_local(ValType::Ref(RefType {
         nullable: false,
         heap_type: HeapType::Concrete(intrinsics.object_fields),
-    }));
-    let old = emitter.add_anonymous_local(ctx.symbols.value_type(target_ty)?);
+    }))?;
+    let old = emitter.add_anonymous_local(ctx.symbols.value_type(target_ty)?)?;
     let object = emitter.add_anonymous_local(
         ctx.symbols.value_type(
             ctx.ta
                 .source_type(receiver)
                 .map_err(crate::codegen::arena_failure)?,
         )?,
-    );
+    )?;
     emit_receiver(emitter, ctx, receiver)?;
     emitter.instruction(Instruction::LocalTee(object));
     emitter.instruction(Instruction::StructGet {
@@ -2074,6 +2110,11 @@ fn emit_chain_parts(
     result_ty: &Type,
     source_types: Option<&[Type]>,
 ) -> Result<(), crate::compiler_error::CompilerFailure> {
+    if source_types.is_some_and(|types| parts.len().checked_add(1) != Some(types.len())) {
+        return Err(crate::codegen::internal_failure(
+            "optional-chain source type count mismatch",
+        ));
+    }
     if idx == parts.len() {
         // A void-tailed chain left nothing on the stack — no value to
         // coerce, and `value_type(void)` has no lowering.
@@ -2092,14 +2133,21 @@ fn emit_chain_parts(
         )?;
         return Ok(());
     }
-    let part = &parts[idx];
+    let part = parts.get(idx).ok_or_else(|| {
+        crate::codegen::internal_failure("optional-chain part index is out of bounds")
+    })?;
+    let next = idx
+        .checked_add(1)
+        .ok_or_else(|| crate::codegen::internal_failure("optional-chain index overflow"))?;
+    let source_ty = source_types.and_then(|types| types.get(idx));
+    let check_ty = source_types.and_then(|types| types.get(next));
     let saved_receiver = if matches!(
         part,
         crate::TypedChainPart::Field { .. }
             | crate::TypedChainPart::Index { .. }
             | crate::TypedChainPart::InterfaceProperty { .. }
     ) {
-        let slot = emitter.add_anonymous_local(ctx.symbols.value_type(receiver_ty)?);
+        let slot = emitter.add_anonymous_local(ctx.symbols.value_type(receiver_ty)?)?;
         emitter.instruction(Instruction::LocalTee(slot));
         Some(slot)
     } else if matches!(part, crate::TypedChainPart::NonNull { .. }) {
@@ -2128,7 +2176,7 @@ fn emit_chain_parts(
         } else {
             BlockType::Result(ctx.symbols.value_type(result_ty)?)
         };
-        let tmp = emitter.add_anonymous_local(recv_val);
+        let tmp = emitter.add_anonymous_local(recv_val)?;
         emitter.instruction(Instruction::LocalTee(tmp));
         emitter.instruction(Instruction::RefIsNull);
         emitter.emit_if(block_ty);
@@ -2142,40 +2190,26 @@ fn emit_chain_parts(
         emitter.emit_else();
         emitter.instruction(Instruction::LocalGet(tmp));
         emitter.instruction(Instruction::RefAsNonNull);
-        emit_chain_operation(
-            emitter,
-            ctx,
-            part,
-            receiver_ty,
-            source_types.map(|types| &types[idx]),
-            source_types.map(|types| &types[idx + 1]),
-        )?;
+        emit_chain_operation(emitter, ctx, part, receiver_ty, source_ty, check_ty)?;
         emitter.call_receiver = saved_receiver;
         emit_chain_parts(
             emitter,
             ctx,
             parts,
-            idx + 1,
+            next,
             &part_result_ty,
             result_ty,
             source_types,
         )?;
         emitter.emit_end();
     } else {
-        emit_chain_operation(
-            emitter,
-            ctx,
-            part,
-            receiver_ty,
-            source_types.map(|types| &types[idx]),
-            source_types.map(|types| &types[idx + 1]),
-        )?;
+        emit_chain_operation(emitter, ctx, part, receiver_ty, source_ty, check_ty)?;
         emitter.call_receiver = saved_receiver;
         emit_chain_parts(
             emitter,
             ctx,
             parts,
-            idx + 1,
+            next,
             &part_result_ty,
             result_ty,
             source_types,
@@ -2286,7 +2320,7 @@ fn emit_live_member_on_stack(
     emitter.instruction(Instruction::Call(
         ctx.symbols
             .prelude_func_idx(helper)
-            .expect("live member helper collected"),
+            .ok_or_else(|| crate::codegen::internal_failure("live member helper collected"))?,
     ));
     let Some(args) = args else {
         return Ok(());
@@ -2313,7 +2347,7 @@ fn emit_live_member_on_stack(
     }
     emitter.instruction(Instruction::ArrayNewFixed {
         array_type_index: intr.raw_array,
-        array_size: args.len() as u32,
+        array_size: crate::codegen::wasm_u32(args.len())?,
     });
     emitter.instruction(Instruction::I32Const(i32::try_from(args.len()).map_err(
         |_| crate::codegen::internal_failure("argument array too large"),
@@ -2396,10 +2430,12 @@ fn emit_null_for_chain_result(
         // path lowers to a ref-typed slot. Hitting a primitive here
         // means the chain wasn't actually nullable in the first
         // place — infer's redundant-`?.` warning would have fired.
-        _ => unreachable!(
-            "optional chain result_ty `{result_ty}` lowers to a primitive — \
+        _ => {
+            return Err(crate::codegen::internal_failure(format!(
+                "optional chain result_ty `{result_ty}` lowers to a primitive — \
              chain must be ref-typed"
-        ),
+            )));
+        }
     };
     Ok(())
 }
@@ -2446,11 +2482,11 @@ fn emit_object_spread(
     let intrinsics = ctx
         .symbols
         .intrinsic_type_indices()
-        .expect("intrinsics declared");
+        .ok_or_else(|| crate::codegen::internal_failure("intrinsics declared"))?;
     let merge = ctx
         .symbols
         .prelude_func_idx("ObjectConstructor##spread")
-        .expect("spread helper collected");
+        .ok_or_else(|| crate::codegen::internal_failure("spread helper collected"))?;
     emitter.instruction(Instruction::RefNull(HeapType::Concrete(intrinsics.object)));
     for (index, source) in sources.iter().enumerate() {
         // A source `runtime_values` widened may no longer hold what its
@@ -2462,7 +2498,7 @@ fn emit_object_spread(
             .source_type(source.expr_id())
             .map_err(crate::codegen::arena_failure)?;
         let source_local =
-            stash_receiver_as_object_shape(emitter, narrowed_ty, intrinsics.object_shape);
+            stash_receiver_as_object_shape(emitter, narrowed_ty, intrinsics.object_shape)?;
         emitter.instruction(Instruction::LocalGet(source_local));
         if index + 1 == sources.len() {
             emit_spread_shape(emitter, ctx, shape);
@@ -2494,30 +2530,30 @@ fn emit_spread_mask(
     let intrinsics = ctx
         .symbols
         .intrinsic_type_indices()
-        .expect("intrinsics declared");
+        .ok_or_else(|| crate::codegen::internal_failure("intrinsics declared"))?;
     let vtable = ctx
         .symbols
         .vtable_global_idx(shape)
-        .expect("spread shape vtable collected");
+        .ok_or_else(|| crate::codegen::internal_failure("spread shape vtable collected"))?;
     emitter.instruction(Instruction::GlobalGet(vtable));
     for name in fields.keys() {
         let global = ctx
             .symbols
             .field_name_string_global_idx(name)
-            .expect("spread name collected");
+            .ok_or_else(|| crate::codegen::internal_failure("spread name collected"))?;
         emitter.instruction(Instruction::GlobalGet(global));
     }
     emitter.instruction(Instruction::ArrayNewFixed {
         array_type_index: intrinsics.field_names,
-        array_size: fields.len() as u32,
+        array_size: crate::codegen::wasm_u32(fields.len())?,
     });
     for (name, ty) in &fields {
         let global = ctx
             .symbols
             .field_name_string_global_idx(name)
-            .expect("spread name collected");
-        let index = emitter.add_anonymous_local(ValType::I32);
-        let value = emitter.add_anonymous_local(object_ref(intrinsics.object));
+            .ok_or_else(|| crate::codegen::internal_failure("spread name collected"))?;
+        let index = emitter.add_anonymous_local(ValType::I32)?;
+        let value = emitter.add_anonymous_local(object_ref(intrinsics.object))?;
         emit_object_field_index_by_name(emitter, ctx, source, global);
         emitter.instruction(Instruction::LocalTee(index));
         emitter.instruction(Instruction::I32Const(0));
@@ -2537,7 +2573,7 @@ fn emit_spread_mask(
     }
     emitter.instruction(Instruction::ArrayNewFixed {
         array_type_index: intrinsics.object_fields,
-        array_size: fields.len() as u32,
+        array_size: crate::codegen::wasm_u32(fields.len())?,
     });
     emitter.instruction(Instruction::StructNew(intrinsics.object_shape));
     Ok(())
@@ -2573,13 +2609,21 @@ fn collect_spread_field_types(
 /// The final merge restores optional markers and writable absent slots from
 /// the inferred result shape, while retaining unnamed runtime fields.
 fn emit_spread_shape(emitter: &mut FunctionEmitter, ctx: &CodegenCtx, shape: &Type) {
+    ctx.latch(emit_spread_shape_checked(emitter, ctx, shape));
+}
+
+fn emit_spread_shape_checked(
+    emitter: &mut FunctionEmitter,
+    ctx: &CodegenCtx,
+    shape: &Type,
+) -> Result<(), crate::compiler_error::CompilerFailure> {
     let Type::Object { fields, .. } = shape else {
-        unreachable!("structural spread shape")
+        return Err(crate::codegen::internal_failure("structural spread shape"));
     };
     let intrinsics = ctx
         .symbols
         .intrinsic_type_indices()
-        .expect("intrinsics declared");
+        .ok_or_else(|| crate::codegen::internal_failure("intrinsics declared"))?;
     let names: Vec<_> = fields
         .iter()
         .map(|(name, field)| crate::codegen::field_names::FieldName {
@@ -2592,16 +2636,20 @@ fn emit_spread_shape(emitter: &mut FunctionEmitter, ctx: &CodegenCtx, shape: &Ty
     let names_global = ctx
         .symbols
         .field_names_global_idx(&names)
-        .expect("spread shape names collected");
+        .ok_or_else(|| crate::codegen::internal_failure("spread shape names collected"))?;
     let vtable = ctx
         .symbols
         .vtable_global_idx(shape)
-        .expect("spread shape vtable collected");
+        .ok_or_else(|| crate::codegen::internal_failure("spread shape vtable collected"))?;
     emitter.instruction(Instruction::GlobalGet(vtable));
     emitter.instruction(Instruction::GlobalGet(names_global));
-    emitter.instruction(Instruction::I32Const(fields.len() as i32));
+    emitter.instruction(Instruction::I32Const(
+        crate::codegen::wasm_u32(fields.len())? as i32,
+    ));
     emitter.instruction(Instruction::ArrayNewDefault(intrinsics.object_fields));
     emitter.instruction(Instruction::StructNew(intrinsics.object_shape));
+
+    Ok(())
 }
 
 /// Coerces a field-read receiver already on the stack to `(ref $ObjectShape)`,
@@ -2623,14 +2671,14 @@ pub(super) fn stash_receiver_as_object_shape(
     emitter: &mut FunctionEmitter<'_>,
     receiver_ty: &Type,
     object_shape: u32,
-) -> u32 {
+) -> Result<u32, crate::compiler_error::CompilerFailure> {
     coerce_field_receiver_to_object_shape(emitter, receiver_ty, object_shape);
     let rcv_local = emitter.add_anonymous_local(ValType::Ref(RefType {
         nullable: false,
         heap_type: HeapType::Concrete(object_shape),
-    }));
+    }))?;
     emitter.instruction(Instruction::LocalSet(rcv_local));
-    rcv_local
+    Ok(rcv_local)
 }
 
 fn coerce_field_receiver_to_object_shape(
@@ -2693,10 +2741,9 @@ fn emit_chain_access(
                 cast::emit_coerce_to_slot(emitter, ctx, check_ty, result_ty)?;
                 return Ok(());
             }
-            let intrinsics = ctx
-                .symbols
-                .intrinsic_type_indices()
-                .expect("intrinsics declared by codegen entry");
+            let intrinsics = ctx.symbols.intrinsic_type_indices().ok_or_else(|| {
+                crate::codegen::internal_failure("intrinsics declared by codegen entry")
+            })?;
             // Class receiver: resolve the slot statically, mirroring the
             // non-optional `FieldAccess` path. The name scan below would read a
             // null for an accessor property, which backs no payload slot.
@@ -2706,14 +2753,13 @@ fn emit_chain_access(
                     emit_class_vtable_dispatch(emitter, ctx, mangled, &getter, &[], result_ty)?;
                     return Ok(());
                 };
-                let struct_idx = ctx
-                    .symbols
-                    .class_struct_type_idx(mangled)
-                    .expect("class struct type recorded in classes::emit");
+                let struct_idx = ctx.symbols.class_struct_type_idx(mangled).ok_or_else(|| {
+                    crate::codegen::internal_failure("class struct type recorded in classes::emit")
+                })?;
                 let object = emitter.add_anonymous_local(ValType::Ref(RefType {
                     nullable: false,
                     heap_type: HeapType::Concrete(struct_idx),
-                }));
+                }))?;
                 emitter.instruction(Instruction::LocalTee(object));
                 emitter.instruction(Instruction::StructGet {
                     struct_type_index: struct_idx,
@@ -2734,7 +2780,7 @@ fn emit_chain_access(
                 return Ok(());
             }
             let rcv_local =
-                stash_receiver_as_object_shape(emitter, receiver_ty, intrinsics.object_shape);
+                stash_receiver_as_object_shape(emitter, receiver_ty, intrinsics.object_shape)?;
             emit_object_property_read_as(emitter, ctx, rcv_local, &name.name, result_ty, check_ty)?;
         }
         crate::TypedChainPart::Index { idx, result_ty, .. } => {
@@ -2805,10 +2851,11 @@ fn emit_chain_access(
                 return Ok(());
             }
             let key = crate::mangle::extend(iface, &name.name);
-            let func_idx = ctx
-                .symbols
-                .func_idx(&key)
-                .expect("interface property getter recorded during the dependency-import pass");
+            let func_idx = ctx.symbols.func_idx(&key).ok_or_else(|| {
+                crate::codegen::internal_failure(
+                    "interface property getter recorded during the dependency-import pass",
+                )
+            })?;
             if matches!(receiver_ty.peel(), Type::InterfaceRef { .. }) {
                 emitter.instruction(Instruction::RefAsNonNull);
             }
@@ -2916,12 +2963,18 @@ fn emit_binary(
                 let idx = ctx
                     .symbols
                     .prelude_func_idx("string_concat")
-                    .expect("string_concat imported from prelude");
+                    .ok_or_else(|| {
+                        crate::codegen::internal_failure("string_concat imported from prelude")
+                    })?;
                 emitter.instruction(Instruction::Call(idx));
             }
             // `bigint + bigint` → inline host call.
             Type::BigInt => emit_bigint_binop_inline(emitter, ctx, lhs, rhs, "add")?,
-            other => unreachable!("typechecker rejects `+` for {other:?}"),
+            other => {
+                return Err(crate::codegen::internal_failure(format!(
+                    "typechecker rejects `+` for {other:?}"
+                )));
+            }
         },
         BinOp::Sub | BinOp::Mul | BinOp::Div => {
             // bigint operands route to inline host calls.
@@ -2930,19 +2983,31 @@ fn emit_binary(
                     BinOp::Sub => "sub",
                     BinOp::Mul => "mul",
                     BinOp::Div => "div",
-                    _ => unreachable!(),
+                    _ => {
+                        return Err(crate::codegen::internal_failure(
+                            "invalid compiler emission dispatch",
+                        ));
+                    }
                 };
                 emit_bigint_binop_inline(emitter, ctx, lhs, rhs, name)?;
                 return Ok(());
             }
-            debug_assert!(matches!(result_ty, Type::Number));
+            if !matches!(result_ty, Type::Number) {
+                return Err(crate::codegen::internal_failure(
+                    "numeric operator has a non-number result type",
+                ));
+            }
             emit_primitive_operand(emitter, ctx, lhs)?;
             emit_primitive_operand(emitter, ctx, rhs)?;
             let inst = match op {
                 BinOp::Sub => Instruction::F64Sub,
                 BinOp::Mul => Instruction::F64Mul,
                 BinOp::Div => Instruction::F64Div,
-                _ => unreachable!(),
+                _ => {
+                    return Err(crate::codegen::internal_failure(
+                        "invalid compiler emission dispatch",
+                    ));
+                }
             };
             emitter.instruction(inst);
         }
@@ -2955,13 +3020,17 @@ fn emit_binary(
                 emit_bigint_binop_inline(emitter, ctx, lhs, rhs, "pow")?;
                 return Ok(());
             }
-            debug_assert!(matches!(result_ty, Type::Number));
+            if !matches!(result_ty, Type::Number) {
+                return Err(crate::codegen::internal_failure(
+                    "numeric operator has a non-number result type",
+                ));
+            }
             emit_primitive_operand(emitter, ctx, lhs)?;
             emit_primitive_operand(emitter, ctx, rhs)?;
             let idx = ctx
                 .symbols
                 .func_idx(&crate::runtime::prelude::math::math_key("pow"))
-                .expect("Math#pow host import recorded");
+                .ok_or_else(|| crate::codegen::internal_failure("Math#pow host import recorded"))?;
             emitter.instruction(Instruction::Call(idx));
         }
         BinOp::Rem => {
@@ -2973,8 +3042,8 @@ fn emit_binary(
             // Wasm has no `f64.rem`; lower to JS-truncation modulo using
             // `a - trunc(a / b) * b`. Two scratch f64 locals so each operand
             // is evaluated exactly once (preserves side-effect order).
-            let a = emitter.add_anonymous_local(ValType::F64);
-            let b = emitter.add_anonymous_local(ValType::F64);
+            let a = emitter.add_anonymous_local(ValType::F64)?;
+            let b = emitter.add_anonymous_local(ValType::F64)?;
             emit_primitive_operand(emitter, ctx, lhs)?;
             emitter.instruction(Instruction::LocalSet(a));
             emit_primitive_operand(emitter, ctx, rhs)?;
@@ -3006,10 +3075,9 @@ fn emit_binary(
             emit_primitive_operand(emitter, ctx, lhs)?;
             emit_primitive_operand(emitter, ctx, rhs)?;
             if matches!(operand_ty, Type::String | Type::StringLiteral(_)) {
-                let idx = ctx
-                    .symbols
-                    .prelude_func_idx("string_cmp")
-                    .expect("string_cmp imported from prelude");
+                let idx = ctx.symbols.prelude_func_idx("string_cmp").ok_or_else(|| {
+                    crate::codegen::internal_failure("string_cmp imported from prelude")
+                })?;
                 emitter.instruction(Instruction::Call(idx));
                 emitter.instruction(Instruction::I32Const(0));
                 emitter.instruction(match op {
@@ -3017,7 +3085,11 @@ fn emit_binary(
                     BinOp::Gt => Instruction::I32GtS,
                     BinOp::Le => Instruction::I32LeS,
                     BinOp::Ge => Instruction::I32GeS,
-                    _ => unreachable!(),
+                    _ => {
+                        return Err(crate::codegen::internal_failure(
+                            "invalid compiler emission dispatch",
+                        ));
+                    }
                 });
             } else {
                 emitter.instruction(match op {
@@ -3025,7 +3097,11 @@ fn emit_binary(
                     BinOp::Gt => Instruction::F64Gt,
                     BinOp::Le => Instruction::F64Le,
                     BinOp::Ge => Instruction::F64Ge,
-                    _ => unreachable!(),
+                    _ => {
+                        return Err(crate::codegen::internal_failure(
+                            "invalid compiler emission dispatch",
+                        ));
+                    }
                 });
             }
         }
@@ -3129,10 +3205,9 @@ fn emit_binary(
                 return Ok(());
             }
             let operand_val = ctx.symbols.value_type(operand_ty.primitive_behavior())?;
-            let string_idx = ctx
-                .symbols
-                .string_type_idx()
-                .expect("string type registered with intrinsics");
+            let string_idx = ctx.symbols.string_type_idx().ok_or_else(|| {
+                crate::codegen::internal_failure("string type registered with intrinsics")
+            })?;
             match operand_val {
                 ValType::F64 => {
                     emit_primitive_operand(emitter, ctx, lhs)?;
@@ -3158,10 +3233,9 @@ fn emit_binary(
                 }) if idx == string_idx => {
                     emit_expr(emitter, ctx, lhs)?;
                     emit_expr(emitter, ctx, rhs)?;
-                    let func = ctx
-                        .symbols
-                        .prelude_func_idx("string_eq")
-                        .expect("string_eq imported from prelude");
+                    let func = ctx.symbols.prelude_func_idx("string_eq").ok_or_else(|| {
+                        crate::codegen::internal_failure("string_eq imported from prelude")
+                    })?;
                     emitter.instruction(Instruction::Call(func));
                     if matches!(op, BinOp::NotEq) {
                         emitter.instruction(Instruction::I32Eqz);
@@ -3198,7 +3272,9 @@ fn emit_binary(
                     emit_vtable_equality(emitter, ctx, op);
                 }
                 other => {
-                    unreachable!("typechecker rejects equality on Wasm value-type `{other:?}`")
+                    return Err(crate::codegen::internal_failure(format!(
+                        "typechecker rejects equality on Wasm value-type `{other:?}`"
+                    )));
                 }
             }
         }
@@ -3217,7 +3293,7 @@ fn emit_binary(
                 .clone();
             let lhs_val = ctx.symbols.value_type(&lhs_ty)?;
             let lhs_is_ref = matches!(lhs_val, ValType::Ref(_));
-            let tmp = emitter.add_anonymous_local(lhs_val);
+            let tmp = emitter.add_anonymous_local(lhs_val)?;
             emit_expr(emitter, ctx, lhs)?;
             emitter.instruction(Instruction::LocalTee(tmp));
             crate::codegen::function_emitter::cast::emit_condition_to_i32(emitter, ctx, &lhs_ty)?;
@@ -3277,9 +3353,9 @@ fn emit_binary(
         // into the dedicated `TypedExprKind::NullishCoalesce` node, so
         // this arm is unreachable in well-typed input.
         BinOp::NullishCoalesce => {
-            unreachable!(
-                "BinOp::NullishCoalesce should be lifted into TypedExprKind::NullishCoalesce by infer"
-            );
+            return Err(crate::codegen::internal_failure(
+                "BinOp::NullishCoalesce should be lifted into TypedExprKind::NullishCoalesce by infer",
+            ));
         }
     };
     Ok(())
@@ -3327,7 +3403,7 @@ fn emit_in_operator(
             .ty,
         &Type::String,
     )?;
-    let key = emitter.add_anonymous_local(ctx.symbols.value_type(&Type::String)?);
+    let key = emitter.add_anonymous_local(ctx.symbols.value_type(&Type::String)?)?;
     emitter.instruction(Instruction::LocalSet(key));
     emit_expr(emitter, ctx, rhs)?;
     cast::emit_box(
@@ -3363,17 +3439,16 @@ pub(crate) fn emit_class_field_setup(
         Some(s) if !s.is_empty() => s.to_vec(),
         _ => return Ok(()),
     };
-    let struct_idx = ctx
-        .symbols
-        .class_struct_type_idx(mangled)
-        .expect("class struct type recorded in classes::emit");
+    let struct_idx = ctx.symbols.class_struct_type_idx(mangled).ok_or_else(|| {
+        crate::codegen::internal_failure("class struct type recorded in classes::emit")
+    })?;
     let intrinsics = ctx
         .symbols
         .intrinsic_type_indices()
-        .expect("intrinsics declared by codegen entry");
-    let this = emitter
-        .this_local()
-        .expect("field setup runs inside a constructor init fn");
+        .ok_or_else(|| crate::codegen::internal_failure("intrinsics declared by codegen entry"))?;
+    let this = emitter.this_local().ok_or_else(|| {
+        crate::codegen::internal_failure("field setup runs inside a constructor init fn")
+    })?;
     for step in &setup {
         let field = match step {
             FieldSetup::Init { field, .. }
@@ -3383,7 +3458,9 @@ pub(crate) fn emit_class_field_setup(
         let slot = ctx
             .symbols
             .class_field_slot(mangled, field)
-            .expect("class field slot recorded in classes::emit");
+            .ok_or_else(|| {
+                crate::codegen::internal_failure("class field slot recorded in classes::emit")
+            })?;
         match step {
             FieldSetup::Init { value, .. } => {
                 let value_ty = ctx
@@ -3405,7 +3482,7 @@ pub(crate) fn emit_class_field_setup(
                 emitter.instruction(Instruction::RefNull(HeapType::Concrete(intrinsics.object)));
             }
         }
-        let stored = emitter.add_anonymous_local(ctx.symbols.value_type(&Type::Unknown)?);
+        let stored = emitter.add_anonymous_local(ctx.symbols.value_type(&Type::Unknown)?)?;
         emitter.instruction(Instruction::LocalSet(stored));
         emitter.instruction(Instruction::LocalGet(this));
         emitter.instruction(Instruction::StructGet {
@@ -3415,7 +3492,7 @@ pub(crate) fn emit_class_field_setup(
         emitter.instruction(Instruction::I32Const(slot as i32));
         emitter.instruction(Instruction::LocalGet(stored));
         emitter.instruction(Instruction::ArraySet(intrinsics.object_fields));
-        let index = emitter.add_anonymous_local(ValType::I32);
+        let index = emitter.add_anonymous_local(ValType::I32)?;
         emitter.instruction(Instruction::I32Const(slot as i32));
         emitter.instruction(Instruction::LocalSet(index));
         crate::codegen::field_names::emit_mark_present(emitter, ctx, this, index)?;
@@ -3447,11 +3524,27 @@ pub(crate) fn emit_object_field_read_by_name(
     object_local: u32,
     name_global: u32,
 ) {
+    ctx.latch(emit_object_field_read_by_name_checked(
+        emitter,
+        ctx,
+        object_local,
+        name_global,
+    ));
+}
+
+fn emit_object_field_read_by_name_checked(
+    emitter: &mut FunctionEmitter,
+    ctx: &CodegenCtx,
+    object_local: u32,
+    name_global: u32,
+) -> Result<(), crate::compiler_error::CompilerFailure> {
     let intrinsics = ctx
         .symbols
         .intrinsic_type_indices()
-        .expect("intrinsics declared by codegen entry");
-    let index_local = emitter.add_anonymous_local(ValType::I32);
+        .ok_or_else(|| crate::codegen::internal_failure("intrinsics declared by codegen entry"))?;
+    let Some(index_local) = ctx.latch(emitter.add_anonymous_local(ValType::I32)) else {
+        return Ok(());
+    };
     emit_object_field_index_by_name(emitter, ctx, object_local, name_global);
     emitter.instruction(Instruction::LocalSet(index_local));
     emitter.emit_block(BlockType::Result(ValType::Ref(RefType {
@@ -3473,6 +3566,8 @@ pub(crate) fn emit_object_field_read_by_name(
     emitter.instruction(Instruction::LocalGet(index_local));
     emitter.instruction(Instruction::ArrayGet(intrinsics.object_fields));
     emitter.emit_end();
+
+    Ok(())
 }
 
 pub(crate) fn emit_object_field_write_by_name(
@@ -3488,8 +3583,8 @@ pub(crate) fn emit_object_field_write_by_name(
     let value_local = emitter.add_anonymous_local(ValType::Ref(RefType {
         nullable: true,
         heap_type: HeapType::Concrete(intrinsics.object),
-    }));
-    let index_local = emitter.add_anonymous_local(ValType::I32);
+    }))?;
+    let index_local = emitter.add_anonymous_local(ValType::I32)?;
     emitter.instruction(Instruction::LocalSet(value_local));
     emit_object_field_index_by_name(emitter, ctx, object_local, name_global);
     emitter.instruction(Instruction::LocalTee(index_local));
@@ -3558,11 +3653,13 @@ pub(crate) fn emit_is_accessor_backed(
     let intrinsics = ctx
         .symbols
         .intrinsic_type_indices()
-        .expect("intrinsics declared by codegen entry");
+        .ok_or_else(|| crate::codegen::internal_failure("intrinsics declared by codegen entry"))?;
     let accessor_global = ctx
         .symbols
         .field_name_string_global_idx(accessor_name)
-        .expect("caller checked the accessor name has a string global");
+        .ok_or_else(|| {
+            crate::codegen::internal_failure("caller checked the accessor name has a string global")
+        })?;
     let closure_struct_idx = ctx
         .symbols
         .closure_struct_type_idx(crate::codegen::classes::accessor_closure_sig(kind))
@@ -3571,7 +3668,7 @@ pub(crate) fn emit_is_accessor_backed(
                 "accessor closure struct collected by analysis::note_shaped_property_access",
             )
         })?;
-    let index_local = emitter.add_anonymous_local(ValType::I32);
+    let index_local = emitter.add_anonymous_local(ValType::I32)?;
     emit_field_index_by_name(emitter, ctx, object_local, accessor_global, true);
     emitter.instruction(Instruction::LocalTee(index_local));
     emitter.instruction(Instruction::I32Const(0));
@@ -3637,7 +3734,11 @@ fn emit_object_property_read_as(
     let name_global = ctx
         .symbols
         .field_name_string_global_idx(prop_name)
-        .expect("per-name string global recorded during field-name-strings emission");
+        .ok_or_else(|| {
+            crate::codegen::internal_failure(
+                "per-name string global recorded during field-name-strings emission",
+            )
+        })?;
     if !accessor_branch_emittable(ctx, &getter) {
         emit_object_field_read_by_name(emitter, ctx, object_local, name_global);
         emit_dynamic_narrowed_property_read(
@@ -3653,9 +3754,9 @@ fn emit_object_property_read_as(
     let intrinsics = ctx
         .symbols
         .intrinsic_type_indices()
-        .expect("intrinsics declared by codegen entry");
+        .ok_or_else(|| crate::codegen::internal_failure("intrinsics declared by codegen entry"))?;
     let result_vt = ctx.symbols.value_type(field_ty)?;
-    let index_local = emitter.add_anonymous_local(ValType::I32);
+    let index_local = emitter.add_anonymous_local(ValType::I32)?;
     emit_object_field_index_by_name(emitter, ctx, object_local, name_global);
     emitter.instruction(Instruction::LocalSet(index_local));
     emitter.instruction(Instruction::LocalGet(index_local));
@@ -3722,11 +3823,11 @@ fn emit_dynamic_narrowed_property_read(
     let intrinsics = ctx
         .symbols
         .intrinsic_type_indices()
-        .expect("intrinsics declared by codegen entry");
+        .ok_or_else(|| crate::codegen::internal_failure("intrinsics declared by codegen entry"))?;
     let raw = emitter.add_anonymous_local(ValType::Ref(RefType {
         nullable: true,
         heap_type: HeapType::Concrete(intrinsics.object),
-    }));
+    }))?;
     emitter.instruction(Instruction::LocalSet(raw));
     emit_dynamic_narrowing_check(
         emitter,
@@ -3816,7 +3917,11 @@ fn emit_object_property_write_value(
     let name_global = ctx
         .symbols
         .field_name_string_global_idx(prop_name)
-        .expect("per-name string global recorded during field-name-strings emission");
+        .ok_or_else(|| {
+            crate::codegen::internal_failure(
+                "per-name string global recorded during field-name-strings emission",
+            )
+        })?;
     // Fail-soft twin of [`accessor_branch_emittable`], asked of both halves:
     // reaching here means analysis classified the access, which interns both
     // accessor names — so neither name can actually be missing.
@@ -3827,7 +3932,7 @@ fn emit_object_property_write_value(
         emit_object_field_write_by_name(emitter, ctx, object_local, name_global)?;
         return Ok(());
     }
-    let index_local = emitter.add_anonymous_local(ValType::I32);
+    let index_local = emitter.add_anonymous_local(ValType::I32)?;
     emit_object_field_index_by_name(emitter, ctx, object_local, name_global);
     emitter.instruction(Instruction::LocalSet(index_local));
     emitter.instruction(Instruction::LocalGet(index_local));
@@ -3924,8 +4029,8 @@ fn emit_bounds_checked_index_with_receiver_on_stack(
     let raw_arr_local = emitter.add_anonymous_local(ValType::Ref(RefType {
         nullable: false,
         heap_type: HeapType::Concrete(raw_array_idx),
-    }));
-    let receiver = emitter.add_anonymous_local(ctx.symbols.value_type(&Type::Unknown)?);
+    }))?;
+    let receiver = emitter.add_anonymous_local(ctx.symbols.value_type(&Type::Unknown)?)?;
     emitter.instruction(Instruction::LocalSet(receiver));
     emit_expr(emitter, ctx, idx)?;
     let key = emitter.add_anonymous_local(
@@ -3935,7 +4040,7 @@ fn emit_bounds_checked_index_with_receiver_on_stack(
                 .map_err(crate::codegen::arena_failure)?
                 .ty,
         )?,
-    );
+    )?;
     emitter.instruction(Instruction::LocalSet(key));
     emitter.instruction(Instruction::LocalGet(receiver));
     crate::codegen::cast_check::emit_operation_cast_on_stack(
@@ -3953,14 +4058,14 @@ fn emit_bounds_checked_index_with_receiver_on_stack(
             .map_err(crate::codegen::arena_failure)?
             .ty,
     )?;
-    let idx_f64_local = stash_index_operand(emitter);
-    let length = stash_array_length(emitter, array_idx);
+    let idx_f64_local = stash_index_operand(emitter)?;
+    let length = stash_array_length(emitter, array_idx)?;
     emitter.instruction(Instruction::StructGet {
         struct_type_index: array_idx,
         field_index: 1,
     });
     emitter.instruction(Instruction::LocalSet(raw_arr_local));
-    let idx_local = emit_checked_index_with_length(emitter, ctx, length, idx_f64_local);
+    let idx_local = emit_checked_index_with_length(emitter, ctx, length, idx_f64_local)?;
     emitter.instruction(Instruction::LocalGet(raw_arr_local));
     emitter.instruction(Instruction::LocalGet(idx_local));
     emitter.instruction(Instruction::ArrayGet(raw_array_idx));
@@ -3973,19 +4078,17 @@ fn emit_uint8_index_with_receiver_on_stack(
     ctx: &CodegenCtx,
     index: ExprId,
 ) -> Result<(), crate::compiler_error::CompilerFailure> {
-    let uint8_idx = ctx
-        .symbols
-        .uint8_array_type_idx()
-        .expect("Type::Uint8Array requires intrinsic types declared");
-    let raw_uint8_idx = ctx
-        .symbols
-        .raw_uint8_array_type_idx()
-        .expect("Type::Uint8Array requires intrinsic types declared");
+    let uint8_idx = ctx.symbols.uint8_array_type_idx().ok_or_else(|| {
+        crate::codegen::internal_failure("Type::Uint8Array requires intrinsic types declared")
+    })?;
+    let raw_uint8_idx = ctx.symbols.raw_uint8_array_type_idx().ok_or_else(|| {
+        crate::codegen::internal_failure("Type::Uint8Array requires intrinsic types declared")
+    })?;
     let raw_local = emitter.add_anonymous_local(ValType::Ref(RefType {
         nullable: false,
         heap_type: HeapType::Concrete(raw_uint8_idx),
-    }));
-    let receiver = emitter.add_anonymous_local(ctx.symbols.value_type(&Type::Unknown)?);
+    }))?;
+    let receiver = emitter.add_anonymous_local(ctx.symbols.value_type(&Type::Unknown)?)?;
     emitter.instruction(Instruction::LocalSet(receiver));
     emit_expr(emitter, ctx, index)?;
     let key = emitter.add_anonymous_local(
@@ -3995,7 +4098,7 @@ fn emit_uint8_index_with_receiver_on_stack(
                 .map_err(crate::codegen::arena_failure)?
                 .ty,
         )?,
-    );
+    )?;
     emitter.instruction(Instruction::LocalSet(key));
     emitter.instruction(Instruction::LocalGet(receiver));
     crate::codegen::cast_check::emit_operation_cast_on_stack(
@@ -4013,13 +4116,13 @@ fn emit_uint8_index_with_receiver_on_stack(
             .map_err(crate::codegen::arena_failure)?
             .ty,
     )?;
-    let idx_f64_local = stash_index_operand(emitter);
+    let idx_f64_local = stash_index_operand(emitter)?;
     emitter.instruction(Instruction::StructGet {
         struct_type_index: uint8_idx,
         field_index: 1,
     });
     emitter.instruction(Instruction::LocalSet(raw_local));
-    let idx_local = emit_checked_index(emitter, ctx, raw_local, idx_f64_local);
+    let idx_local = emit_checked_index(emitter, ctx, raw_local, idx_f64_local)?;
     emitter.instruction(Instruction::LocalGet(raw_local));
     emitter.instruction(Instruction::LocalGet(idx_local));
     emitter.instruction(Instruction::ArrayGetU(raw_uint8_idx));
@@ -4061,14 +4164,32 @@ fn emit_field_index_by_name(
     name_global: u32,
     accessor: bool,
 ) {
+    ctx.latch(emit_field_index_by_name_checked(
+        emitter,
+        ctx,
+        object_local,
+        name_global,
+        accessor,
+    ));
+}
+
+fn emit_field_index_by_name_checked(
+    emitter: &mut FunctionEmitter,
+    ctx: &CodegenCtx,
+    object_local: u32,
+    name_global: u32,
+    accessor: bool,
+) -> Result<(), crate::compiler_error::CompilerFailure> {
     emitter.instruction(Instruction::LocalGet(object_local));
     emitter.instruction(Instruction::GlobalGet(name_global));
     emitter.instruction(Instruction::I32Const(i32::from(accessor)));
     emitter.instruction(Instruction::Call(
         ctx.symbols
             .field_lookup_function
-            .expect("field lookup allocated"),
+            .ok_or_else(|| crate::codegen::internal_failure("field lookup allocated"))?,
     ));
+
+    Ok(())
 }
 
 /// Emit a direct call to an imported function. Host imports get the
@@ -4085,14 +4206,17 @@ fn emit_direct_call(
     ret: &Type,
     args: &[ExprId],
 ) -> Result<(), crate::compiler_error::CompilerFailure> {
-    let string_type_idx = ctx
-        .symbols
-        .string_type_idx()
-        .expect("$string type registered before call codegen");
-    let raw_string_type_idx = ctx
-        .symbols
-        .raw_string_type_idx()
-        .expect("$rawString type registered before call codegen");
+    if params.len() != args.len() {
+        return Err(crate::codegen::internal_failure(
+            "direct-call argument count mismatch",
+        ));
+    }
+    let string_type_idx = ctx.symbols.string_type_idx().ok_or_else(|| {
+        crate::codegen::internal_failure("$string type registered before call codegen")
+    })?;
+    let raw_string_type_idx = ctx.symbols.raw_string_type_idx().ok_or_else(|| {
+        crate::codegen::internal_failure("$rawString type registered before call codegen")
+    })?;
     let mut evaluated = Vec::with_capacity(args.len());
     for &arg in args {
         emit_expr(emitter, ctx, arg)?;
@@ -4103,12 +4227,12 @@ fn emit_direct_call(
                     .map_err(crate::codegen::arena_failure)?
                     .ty,
             )?,
-        );
+        )?;
         emitter.instruction(Instruction::LocalSet(slot));
         evaluated.push(slot);
     }
-    for (i, &arg_id) in args.iter().enumerate() {
-        emitter.instruction(Instruction::LocalGet(evaluated[i]));
+    for (i, (&arg_id, local)) in args.iter().zip(evaluated).enumerate() {
+        emitter.instruction(Instruction::LocalGet(local));
         // Plan 75.8: coerce a primitive arg into a wider ref-typed
         // param slot (e.g., calling `f(x: number | null)` with `5`
         // requires boxing the f64 before the call). No-op when the
@@ -4143,12 +4267,14 @@ fn emit_direct_call(
         let scratch = emitter.add_anonymous_local(ValType::Ref(RefType {
             nullable: false,
             heap_type: HeapType::Concrete(raw_string_type_idx),
-        }));
+        }))?;
         emitter.instruction(Instruction::LocalSet(scratch));
         let vtable_global = ctx
             .symbols
             .prelude_global_idx("string_vtable")
-            .expect("string_vtable imported from prelude");
+            .ok_or_else(|| {
+                crate::codegen::internal_failure("string_vtable imported from prelude")
+            })?;
         emitter.instruction(Instruction::GlobalGet(vtable_global));
         emitter.instruction(Instruction::LocalGet(scratch));
         emitter.instruction(Instruction::StructNew(string_type_idx));
@@ -4211,14 +4337,14 @@ fn emit_callee(
                         .map_err(crate::codegen::arena_failure)?
                         .ty,
                 )?,
-            );
+            )?;
             emitter.instruction(Instruction::LocalSet(slot));
-            emitter.record_single_evaluation(receiver, slot);
+            emitter.record_single_evaluation(receiver, slot)?;
             Ok::<_, crate::compiler_error::CompilerFailure>(slot)
         })
         .transpose()?;
     emit_expr(emitter, ctx, callee)?;
-    emitter.end_single_evaluations(mark);
+    emitter.end_single_evaluations(mark)?;
     Ok(
         if matches!(
             ctx.ta
@@ -4265,7 +4391,7 @@ fn emit_indirect_closure_call_with_receiver_on_stack(
     result_ty: &Type,
 ) -> Result<(), crate::compiler_error::CompilerFailure> {
     let receiver = emitter.call_receiver.take();
-    let callee = emitter.add_anonymous_local(ctx.symbols.value_type(&Type::Unknown)?);
+    let callee = emitter.add_anonymous_local(ctx.symbols.value_type(&Type::Unknown)?)?;
     emitter.instruction(Instruction::LocalSet(callee));
     let mut arguments = Vec::with_capacity(args.len());
     for &arg in args {
@@ -4278,7 +4404,7 @@ fn emit_indirect_closure_call_with_receiver_on_stack(
                 .map_err(crate::codegen::arena_failure)?
                 .ty,
         )?;
-        let slot = emitter.add_anonymous_local(ctx.symbols.value_type(&Type::Unknown)?);
+        let slot = emitter.add_anonymous_local(ctx.symbols.value_type(&Type::Unknown)?)?;
         emitter.instruction(Instruction::LocalSet(slot));
         arguments.push(slot);
     }
@@ -4314,7 +4440,7 @@ fn emit_indirect_closure_call_with_receiver_on_stack(
     let closure_local = emitter.add_anonymous_local(ValType::Ref(RefType {
         nullable: false,
         heap_type: HeapType::Concrete(closure_struct_idx),
-    }));
+    }))?;
     emitter.instruction(Instruction::LocalTee(closure_local));
     emitter.instruction(Instruction::StructGet {
         struct_type_index: closure_struct_idx,
@@ -4384,10 +4510,9 @@ fn emit_typeof_tag(
             // returns 1 iff the value is a `$BoxedNumber`. Handles
             // nullable LHS (returns 0 for null) without an explicit
             // null check.
-            let boxed = ctx
-                .symbols
-                .boxed_number_type_idx()
-                .expect("$BoxedNumber intrinsic type registered");
+            let boxed = ctx.symbols.boxed_number_type_idx().ok_or_else(|| {
+                crate::codegen::internal_failure("$BoxedNumber intrinsic type registered")
+            })?;
             emit_expr(emitter, ctx, value)?;
             cast::emit_box(
                 emitter,
@@ -4400,10 +4525,9 @@ fn emit_typeof_tag(
             emitter.instruction(Instruction::RefTestNonNull(HeapType::Concrete(boxed)));
         }
         crate::TypeofTagKind::String => {
-            let string = ctx
-                .symbols
-                .string_type_idx()
-                .expect("$string intrinsic type registered");
+            let string = ctx.symbols.string_type_idx().ok_or_else(|| {
+                crate::codegen::internal_failure("$string intrinsic type registered")
+            })?;
             emit_expr(emitter, ctx, value)?;
             cast::emit_box(
                 emitter,
@@ -4416,10 +4540,9 @@ fn emit_typeof_tag(
             emitter.instruction(Instruction::RefTestNonNull(HeapType::Concrete(string)));
         }
         crate::TypeofTagKind::Boolean => {
-            let boxed = ctx
-                .symbols
-                .boxed_boolean_type_idx()
-                .expect("$BoxedBoolean intrinsic type registered");
+            let boxed = ctx.symbols.boxed_boolean_type_idx().ok_or_else(|| {
+                crate::codegen::internal_failure("$BoxedBoolean intrinsic type registered")
+            })?;
             emit_expr(emitter, ctx, value)?;
             cast::emit_box(
                 emitter,
@@ -4432,10 +4555,9 @@ fn emit_typeof_tag(
             emitter.instruction(Instruction::RefTestNonNull(HeapType::Concrete(boxed)));
         }
         crate::TypeofTagKind::Function => {
-            let closure_idx = ctx
-                .symbols
-                .closure_type_idx()
-                .expect("$Closure intrinsic type registered");
+            let closure_idx = ctx.symbols.closure_type_idx().ok_or_else(|| {
+                crate::codegen::internal_failure("$Closure intrinsic type registered")
+            })?;
             emit_expr(emitter, ctx, value)?;
             cast::emit_box(
                 emitter,
@@ -4450,7 +4572,7 @@ fn emit_typeof_tag(
         crate::TypeofTagKind::Object => {
             let scratch_ty = ctx.symbols.value_type(&Type::Unknown)?;
             let nullable = matches!(scratch_ty, ValType::Ref(rt) if rt.nullable);
-            let scratch = emitter.add_anonymous_local(scratch_ty);
+            let scratch = emitter.add_anonymous_local(scratch_ty)?;
             emit_expr(emitter, ctx, value)?;
             cast::emit_box(
                 emitter,
@@ -4468,10 +4590,9 @@ fn emit_typeof_tag(
             // any struct nobody remembered to add. The exclusions below are
             // exhaustive by construction — they are the `$Object` subtypes that
             // carry a primitive tag of their own.
-            let intrinsics = ctx
-                .symbols
-                .intrinsic_type_indices()
-                .expect("intrinsics declared by codegen entry");
+            let intrinsics = ctx.symbols.intrinsic_type_indices().ok_or_else(|| {
+                crate::codegen::internal_failure("intrinsics declared by codegen entry")
+            })?;
             emitter.instruction(Instruction::LocalGet(scratch));
             emitter.instruction(Instruction::RefTestNonNull(HeapType::Concrete(
                 intrinsics.object,
@@ -4527,7 +4648,11 @@ fn emit_unary(
                         crate::runtime::BIGINT_MODULE_NAME,
                         "neg",
                     ))
-                    .expect("submilli:bigint.neg import recorded by codegen bootstrap");
+                    .ok_or_else(|| {
+                        crate::codegen::internal_failure(
+                            "submilli:bigint.neg import recorded by codegen bootstrap",
+                        )
+                    })?;
                 emit_bigint_wrap_host_result(emitter, ctx, host_idx);
                 return Ok(());
             }
@@ -4552,7 +4677,11 @@ fn emit_unary(
                         crate::runtime::NUMBER_MODULE_NAME,
                         "toNumber",
                     ))
-                    .expect("submilli:number.toNumber import recorded by codegen analysis");
+                    .ok_or_else(|| {
+                        crate::codegen::internal_failure(
+                            "submilli:number.toNumber import recorded by codegen analysis",
+                        )
+                    })?;
                 emitter.instruction(Instruction::Call(host_idx));
             }
         }
@@ -4833,7 +4962,7 @@ fn emit_shape_method_with_arguments(
     let intrinsics = ctx
         .symbols
         .intrinsic_type_indices()
-        .expect("intrinsics declared by codegen entry");
+        .ok_or_else(|| crate::codegen::internal_failure("intrinsics declared by codegen entry"))?;
 
     // Build the closure signature from the arg types and the
     // call's return type. `classify` reduces to (arity, is_void).
@@ -4868,11 +4997,11 @@ fn emit_shape_method_with_arguments(
     let rcv_local = emitter.add_anonymous_local(ValType::Ref(RefType {
         nullable: false,
         heap_type: HeapType::Concrete(intrinsics.object_shape),
-    }));
+    }))?;
     let closure_local = emitter.add_anonymous_local(ValType::Ref(RefType {
         nullable: false,
         heap_type: HeapType::Concrete(closure_struct_idx),
-    }));
+    }))?;
 
     // 1. Receiver is on stack as `(ref [null] $Object)` (or a
     //    narrower subtype). The field scan expects `(ref
@@ -4888,20 +5017,26 @@ fn emit_shape_method_with_arguments(
     if let Some(index_local) = slot_index_local {
         emit_field_slot_get(emitter, intrinsics, rcv_local, index_local);
     } else {
-        let name_global = ctx.symbols.field_name_string_global_idx(method).expect(
-            "per-name string global recorded during field-name-strings emission \
-             for interface method names",
-        );
+        let name_global = ctx
+            .symbols
+            .field_name_string_global_idx(method)
+            .ok_or_else(|| {
+                crate::codegen::internal_failure(
+                    ("per-name string global recorded during field-name-strings emission \
+             for interface method names")
+                        .to_string(),
+                )
+            })?;
         emit_object_field_read_by_name(emitter, ctx, rcv_local, name_global);
     }
 
-    let method_value = emitter.add_anonymous_local(ctx.symbols.value_type(&Type::Unknown)?);
+    let method_value = emitter.add_anonymous_local(ctx.symbols.value_type(&Type::Unknown)?)?;
     emitter.instruction(Instruction::LocalSet(method_value));
     let mut evaluated_args = Vec::with_capacity(args.len());
     for arg in args {
         arg.emit(emitter, ctx)?;
         cast::emit_box(emitter, ctx, &arg.ty(ctx)?)?;
-        let slot = emitter.add_anonymous_local(ctx.symbols.value_type(&Type::Unknown)?);
+        let slot = emitter.add_anonymous_local(ctx.symbols.value_type(&Type::Unknown)?)?;
         emitter.instruction(Instruction::LocalSet(slot));
         evaluated_args.push(slot);
     }
@@ -5012,14 +5147,18 @@ pub(super) fn emit_vtable_dispatch_on_object_stack(
             return;
         }
     };
-    let obj_local = emitter.add_anonymous_local(ValType::Ref(RefType {
+    let Some(obj_local) = ctx.latch(emitter.add_anonymous_local(ValType::Ref(RefType {
         nullable: false,
         heap_type: HeapType::Concrete(intrinsics.object),
-    }));
-    let fn_local = emitter.add_anonymous_local(ValType::Ref(RefType {
+    }))) else {
+        return;
+    };
+    let Some(fn_local) = ctx.latch(emitter.add_anonymous_local(ValType::Ref(RefType {
         nullable: false,
         heap_type: HeapType::Concrete(fn_type_idx),
-    }));
+    }))) else {
+        return;
+    };
     // the receiver may arrive as `(ref null $Object)` when
     // it's typed `unknown`. Coerce to non-null before stashing in
     // `obj_local`. Traps on null at runtime — calling `.toString()`
@@ -5050,6 +5189,11 @@ fn emit_args_into_slots(
     args: &[ExprId],
     slots: Option<&[ValType]>,
 ) -> Result<(), crate::compiler_error::CompilerFailure> {
+    if slots.is_some_and(|slots| slots.len() != args.len()) {
+        return Err(crate::codegen::internal_failure(
+            "call ABI argument count mismatch",
+        ));
+    }
     let locals: Vec<_> = args
         .iter()
         .map(|&arg| {
@@ -5061,7 +5205,7 @@ fn emit_args_into_slots(
                         .map_err(crate::codegen::arena_failure)?
                         .ty,
                 )?,
-            );
+            )?;
             emitter.instruction(Instruction::LocalSet(local));
             Ok::<_, crate::compiler_error::CompilerFailure>(local)
         })
@@ -5195,24 +5339,24 @@ fn emit_class_vtable_dispatch(
     let struct_idx = ctx
         .symbols
         .class_struct_type_idx(class)
-        .expect("class struct type recorded");
+        .ok_or_else(|| crate::codegen::internal_failure("class struct type recorded"))?;
     let vtable_idx = ctx
         .symbols
         .class_vtable_type_idx(class)
-        .expect("class vtable type recorded");
+        .ok_or_else(|| crate::codegen::internal_failure("class vtable type recorded"))?;
     let slot = ctx
         .symbols
         .class_method_slot(class, method)
-        .expect("class method slot recorded");
+        .ok_or_else(|| crate::codegen::internal_failure("class method slot recorded"))?;
     let sig_idx = ctx
         .symbols
         .class_method_sig(class, method)
-        .expect("class method sig recorded");
+        .ok_or_else(|| crate::codegen::internal_failure("class method sig recorded"))?;
 
     let rcv_local = emitter.add_anonymous_local(ValType::Ref(RefType {
         nullable: false,
         heap_type: HeapType::Concrete(struct_idx),
-    }));
+    }))?;
     // Defensive cast: the receiver is `(ref $Foo)` on the direct path, but the
     // optional-chain path may hand us a wider `(ref null $Object)`.
     emitter.instruction(Instruction::RefCastNonNull(HeapType::Concrete(struct_idx)));
@@ -5231,7 +5375,7 @@ fn emit_class_vtable_dispatch(
     let fn_local = emitter.add_anonymous_local(ValType::Ref(RefType {
         nullable: false,
         heap_type: HeapType::Concrete(sig_idx),
-    }));
+    }))?;
     emitter.instruction(Instruction::LocalSet(fn_local));
 
     // self (`(ref $Foo)` <: the sig's `(ref $Object)`), then args, then funcref.
@@ -5260,7 +5404,11 @@ fn emit_intrinsic_call(
             // `assert(cond, msg)` — throw `new Error(msg)` on false.
             // JS-style left-to-right argument evaluation: cond first,
             // then msg (stashed in a local for the throw path).
-            debug_assert_eq!(args.len(), 2, "assert arity is enforced by the typechecker");
+            if args.len() != 2 {
+                return Err(crate::codegen::internal_failure(
+                    "assert requires two arguments",
+                ));
+            }
             emit_expr(emitter, ctx, args[0])?;
             cast::emit_condition_to_i32(
                 emitter,
@@ -5276,7 +5424,7 @@ fn emit_intrinsic_call(
                 .try_expr(args[1])
                 .map_err(crate::codegen::arena_failure)?
                 .ty;
-            let msg_local = emitter.add_anonymous_local(ctx.symbols.value_type(message_type)?);
+            let msg_local = emitter.add_anonymous_local(ctx.symbols.value_type(message_type)?)?;
             emitter.instruction(Instruction::LocalSet(msg_local));
             emitter.instruction(Instruction::I32Eqz);
             emitter.emit_if(BlockType::Empty);
@@ -5285,7 +5433,9 @@ fn emit_intrinsic_call(
             let ctor_idx = ctx
                 .symbols
                 .func_idx(&crate::mangle::prelude("Error#constructor"))
-                .expect("Error#constructor exported from prelude");
+                .ok_or_else(|| {
+                    crate::codegen::internal_failure("Error#constructor exported from prelude")
+                })?;
             emitter.instruction(Instruction::Call(ctor_idx));
             crate::codegen::throw::emit_error_throw(emitter, ctx);
             emitter.emit_end();
@@ -5303,15 +5453,18 @@ fn emit_intrinsic_call(
         // `NumberConstructor`. Wraps the host result `(i32 sign, ref
         // $rawBigInt limbs)` into a `$bigint` struct.
         Intrinsic::BigIntFromString => {
-            debug_assert_eq!(
-                args.len(),
-                1,
-                "BigInt.fromString arity enforced by typechecker",
-            );
+            if args.len() != 1 {
+                return Err(crate::codegen::internal_failure(
+                    "BigInt.fromString requires one argument",
+                ));
+            }
             emit_expr(emitter, ctx, args[0])?;
             // The arg is `(ref $string)`; the host fn takes
             // `(ref $rawString)`. Pull the raw array out via slot 1.
-            let string_type_idx = ctx.symbols.string_type_idx().expect("$string registered");
+            let string_type_idx = ctx
+                .symbols
+                .string_type_idx()
+                .ok_or_else(|| crate::codegen::internal_failure("$string registered"))?;
             emitter.instruction(Instruction::StructGet {
                 struct_type_index: string_type_idx,
                 field_index: 1,
@@ -5322,7 +5475,11 @@ fn emit_intrinsic_call(
                     crate::runtime::BIGINT_MODULE_NAME,
                     "fromString",
                 ))
-                .expect("submilli:bigint.fromString import recorded by codegen bootstrap");
+                .ok_or_else(|| {
+                    crate::codegen::internal_failure(
+                        "submilli:bigint.fromString import recorded by codegen bootstrap",
+                    )
+                })?;
             emit_bigint_wrap_host_result(emitter, ctx, host_idx);
         }
     };
@@ -5334,10 +5491,18 @@ fn emit_intrinsic_call(
 /// Stack at exit: `[i32]` (1 if equal, 0 otherwise — flipped via
 /// `I32Eqz` for `BinOp::NotEq`).
 fn emit_vtable_equality(emitter: &mut FunctionEmitter, ctx: &CodegenCtx, op: BinOp) {
+    ctx.latch(emit_vtable_equality_checked(emitter, ctx, op));
+}
+
+fn emit_vtable_equality_checked(
+    emitter: &mut FunctionEmitter,
+    ctx: &CodegenCtx,
+    op: BinOp,
+) -> Result<(), crate::compiler_error::CompilerFailure> {
     let intrinsics = ctx
         .symbols
         .intrinsic_type_indices()
-        .expect("intrinsics declared by codegen entry");
+        .ok_or_else(|| crate::codegen::internal_failure("intrinsics declared by codegen entry"))?;
     // The operands' own types may differ (two function types of different
     // arities), so both are stashed at the common `$Object` shape.
     let operand_ref = ValType::Ref(RefType {
@@ -5354,11 +5519,21 @@ fn emit_vtable_equality(emitter: &mut FunctionEmitter, ctx: &CodegenCtx, op: Bin
     });
 
     // Stack: [lhs, rhs]. Stash both, load equals fn, restack args.
-    let lhs_local = emitter.add_anonymous_local(operand_ref);
-    let rhs_local = emitter.add_anonymous_local(operand_ref);
-    let lhs_object = emitter.add_anonymous_local(object_ref);
-    let rhs_object = emitter.add_anonymous_local(object_ref);
-    let eq_fn_local = emitter.add_anonymous_local(equals_fn_ref);
+    let Some(lhs_local) = ctx.latch(emitter.add_anonymous_local(operand_ref)) else {
+        return Ok(());
+    };
+    let Some(rhs_local) = ctx.latch(emitter.add_anonymous_local(operand_ref)) else {
+        return Ok(());
+    };
+    let Some(lhs_object) = ctx.latch(emitter.add_anonymous_local(object_ref)) else {
+        return Ok(());
+    };
+    let Some(rhs_object) = ctx.latch(emitter.add_anonymous_local(object_ref)) else {
+        return Ok(());
+    };
+    let Some(eq_fn_local) = ctx.latch(emitter.add_anonymous_local(equals_fn_ref)) else {
+        return Ok(());
+    };
 
     emitter.instruction(Instruction::LocalSet(rhs_local));
     emitter.instruction(Instruction::LocalSet(lhs_local));
@@ -5389,6 +5564,8 @@ fn emit_vtable_equality(emitter: &mut FunctionEmitter, ctx: &CodegenCtx, op: Bin
     if matches!(op, BinOp::NotEq) {
         emitter.instruction(Instruction::I32Eqz);
     }
+
+    Ok(())
 }
 
 /// null-aware `===` / `!==` dispatch. Used when either
@@ -5412,7 +5589,7 @@ fn emit_nullable_eq(
     let intrinsics = ctx
         .symbols
         .intrinsic_type_indices()
-        .expect("intrinsics declared by codegen entry");
+        .ok_or_else(|| crate::codegen::internal_failure("intrinsics declared by codegen entry"))?;
     let object_null_ref = ValType::Ref(RefType {
         nullable: true,
         heap_type: HeapType::Concrete(intrinsics.object),
@@ -5443,10 +5620,10 @@ fn emit_nullable_eq(
     // primitive Wasm values into their `$Boxed*` shape and is a
     // no-op for ref types / unions, so both sides land on the
     // stack at the universal nullable shape.
-    let lhs_local = emitter.add_anonymous_local(object_null_ref);
-    let rhs_local = emitter.add_anonymous_local(object_null_ref);
-    let lhs_nonnull_local = emitter.add_anonymous_local(object_ref);
-    let eq_fn_local = emitter.add_anonymous_local(equals_fn_ref);
+    let lhs_local = emitter.add_anonymous_local(object_null_ref)?;
+    let rhs_local = emitter.add_anonymous_local(object_null_ref)?;
+    let lhs_nonnull_local = emitter.add_anonymous_local(object_ref)?;
+    let eq_fn_local = emitter.add_anonymous_local(equals_fn_ref)?;
 
     emit_expr(emitter, ctx, lhs)?;
     cast::emit_box(emitter, ctx, &lhs_ty)?;
@@ -5590,13 +5767,27 @@ fn emit_regex_literal(
 /// fn (`bigint.add` / `bigint.cmp` / `bigint.neg` /
 /// `number.fromBigInt`).
 fn emit_bigint_extract_to_stack(emitter: &mut FunctionEmitter, ctx: &CodegenCtx) {
-    let bigint_idx = ctx.symbols.bigint_type_idx().expect("$bigint registered");
+    ctx.latch(emit_bigint_extract_to_stack_checked(emitter, ctx));
+}
+
+fn emit_bigint_extract_to_stack_checked(
+    emitter: &mut FunctionEmitter,
+    ctx: &CodegenCtx,
+) -> Result<(), crate::compiler_error::CompilerFailure> {
+    let bigint_idx = ctx
+        .symbols
+        .bigint_type_idx()
+        .ok_or_else(|| crate::codegen::internal_failure("$bigint registered"))?;
     // Stash the receiver in a scratch local since we need two
     // struct.get reads.
-    let scratch = emitter.add_anonymous_local(wasm_encoder::ValType::Ref(wasm_encoder::RefType {
-        nullable: false,
-        heap_type: wasm_encoder::HeapType::Concrete(bigint_idx),
-    }));
+    let Some(scratch) = ctx.latch(emitter.add_anonymous_local(wasm_encoder::ValType::Ref(
+        wasm_encoder::RefType {
+            nullable: false,
+            heap_type: wasm_encoder::HeapType::Concrete(bigint_idx),
+        },
+    ))) else {
+        return Ok(());
+    };
     emitter.instruction(Instruction::LocalSet(scratch));
     emitter.instruction(Instruction::LocalGet(scratch));
     emitter.instruction(Instruction::StructGet {
@@ -5608,6 +5799,8 @@ fn emit_bigint_extract_to_stack(emitter: &mut FunctionEmitter, ctx: &CodegenCtx)
         struct_type_index: bigint_idx,
         field_index: 2, // limbs
     });
+
+    Ok(())
 }
 
 /// helper — call `host_func_idx` (whose result shape is
@@ -5619,30 +5812,55 @@ fn emit_bigint_wrap_host_result(
     ctx: &CodegenCtx,
     host_func_idx: u32,
 ) {
+    ctx.latch(emit_bigint_wrap_host_result_checked(
+        emitter,
+        ctx,
+        host_func_idx,
+    ));
+}
+
+fn emit_bigint_wrap_host_result_checked(
+    emitter: &mut FunctionEmitter,
+    ctx: &CodegenCtx,
+    host_func_idx: u32,
+) -> Result<(), crate::compiler_error::CompilerFailure> {
     emitter.instruction(Instruction::Call(host_func_idx));
-    let bigint_idx = ctx.symbols.bigint_type_idx().expect("$bigint registered");
+    let bigint_idx = ctx
+        .symbols
+        .bigint_type_idx()
+        .ok_or_else(|| crate::codegen::internal_failure("$bigint registered"))?;
     let raw_bigint_idx = ctx
         .symbols
         .raw_bigint_type_idx()
-        .expect("$rawBigInt registered");
+        .ok_or_else(|| crate::codegen::internal_failure("$rawBigInt registered"))?;
     let vtable_global = ctx
         .symbols
         .prelude_global_idx("bigint_vtable")
-        .expect("bigint_vtable imported from prelude bootstrap");
+        .ok_or_else(|| {
+            crate::codegen::internal_failure("bigint_vtable imported from prelude bootstrap")
+        })?;
     // Stack: [sign, limbs]. Need [vtable, sign, limbs] for
     // struct.new $bigint. Use two scratch locals to reorder.
-    let scratch_limbs =
-        emitter.add_anonymous_local(wasm_encoder::ValType::Ref(wasm_encoder::RefType {
+    let Some(scratch_limbs) = ctx.latch(emitter.add_anonymous_local(wasm_encoder::ValType::Ref(
+        wasm_encoder::RefType {
             nullable: false,
             heap_type: wasm_encoder::HeapType::Concrete(raw_bigint_idx),
-        }));
-    let scratch_sign = emitter.add_anonymous_local(wasm_encoder::ValType::I32);
+        },
+    ))) else {
+        return Ok(());
+    };
+    let Some(scratch_sign) = ctx.latch(emitter.add_anonymous_local(wasm_encoder::ValType::I32))
+    else {
+        return Ok(());
+    };
     emitter.instruction(Instruction::LocalSet(scratch_limbs));
     emitter.instruction(Instruction::LocalSet(scratch_sign));
     emitter.instruction(Instruction::GlobalGet(vtable_global));
     emitter.instruction(Instruction::LocalGet(scratch_sign));
     emitter.instruction(Instruction::LocalGet(scratch_limbs));
     emitter.instruction(Instruction::StructNew(bigint_idx));
+
+    Ok(())
 }
 
 /// inline binary bigint op. `op_name` is one of
@@ -5660,13 +5878,13 @@ fn emit_bigint_binop_inline(
     let raw_bigint_idx = ctx
         .symbols
         .raw_bigint_type_idx()
-        .expect("$rawBigInt registered");
+        .ok_or_else(|| crate::codegen::internal_failure("$rawBigInt registered"))?;
     let lhs_limbs =
         emitter.add_anonymous_local(wasm_encoder::ValType::Ref(wasm_encoder::RefType {
             nullable: false,
             heap_type: wasm_encoder::HeapType::Concrete(raw_bigint_idx),
-        }));
-    let lhs_sign = emitter.add_anonymous_local(wasm_encoder::ValType::I32);
+        }))?;
+    let lhs_sign = emitter.add_anonymous_local(wasm_encoder::ValType::I32)?;
     emitter.instruction(Instruction::LocalSet(lhs_limbs));
     emitter.instruction(Instruction::LocalSet(lhs_sign));
     emitter.instruction(Instruction::LocalGet(lhs_sign));
@@ -5679,9 +5897,11 @@ fn emit_bigint_binop_inline(
             crate::runtime::BIGINT_MODULE_NAME,
             op_name,
         ))
-        .unwrap_or_else(|| {
-            panic!("submilli:bigint.{op_name} import recorded by codegen bootstrap")
-        });
+        .ok_or_else(|| {
+            crate::codegen::internal_failure(format!(
+                "submilli:bigint.{op_name} import recorded by codegen bootstrap"
+            ))
+        })?;
     emit_bigint_wrap_host_result(emitter, ctx, host_idx);
     Ok(())
 }
@@ -5693,29 +5913,46 @@ fn emit_bigint_binop_inline(
 /// literal via [`emit_bigint_literal`] (small-literal path:
 /// `f64.const 1` + `submilli:bigint.fromNumber`).
 fn emit_bigint_pm_one(emitter: &mut FunctionEmitter, ctx: &CodegenCtx, op: crate::PostfixOp) {
+    ctx.latch(emit_bigint_pm_one_checked(emitter, ctx, op));
+}
+
+fn emit_bigint_pm_one_checked(
+    emitter: &mut FunctionEmitter,
+    ctx: &CodegenCtx,
+    op: crate::PostfixOp,
+) -> Result<(), crate::compiler_error::CompilerFailure> {
     emit_bigint_extract_to_stack(emitter, ctx);
     let raw_bigint_idx = ctx
         .symbols
         .raw_bigint_type_idx()
-        .expect("$rawBigInt registered");
-    let lhs_limbs =
-        emitter.add_anonymous_local(wasm_encoder::ValType::Ref(wasm_encoder::RefType {
+        .ok_or_else(|| crate::codegen::internal_failure("$rawBigInt registered"))?;
+    let Some(lhs_limbs) = ctx.latch(emitter.add_anonymous_local(wasm_encoder::ValType::Ref(
+        wasm_encoder::RefType {
             nullable: false,
             heap_type: wasm_encoder::HeapType::Concrete(raw_bigint_idx),
-        }));
-    let lhs_sign = emitter.add_anonymous_local(wasm_encoder::ValType::I32);
+        },
+    ))) else {
+        return Ok(());
+    };
+    let Some(lhs_sign) = ctx.latch(emitter.add_anonymous_local(wasm_encoder::ValType::I32)) else {
+        return Ok(());
+    };
     emitter.instruction(Instruction::LocalSet(lhs_limbs));
     emitter.instruction(Instruction::LocalSet(lhs_sign));
     emitter.instruction(Instruction::LocalGet(lhs_sign));
     emitter.instruction(Instruction::LocalGet(lhs_limbs));
     if ctx.latch(emit_bigint_literal(emitter, ctx, "1")).is_none() {
-        return;
+        return Ok(());
     }
     emit_bigint_extract_to_stack(emitter, ctx);
     let op_name = match op {
         crate::PostfixOp::Inc => "add",
         crate::PostfixOp::Dec => "sub",
-        crate::PostfixOp::NonNullAssert => unreachable!("non-null assertion is not PostfixUnary"),
+        crate::PostfixOp::NonNullAssert => {
+            return Err(crate::codegen::internal_failure(
+                "non-null assertion is not PostfixUnary",
+            ));
+        }
     };
     let host_idx = ctx
         .symbols
@@ -5723,10 +5960,14 @@ fn emit_bigint_pm_one(emitter: &mut FunctionEmitter, ctx: &CodegenCtx, op: crate
             crate::runtime::BIGINT_MODULE_NAME,
             op_name,
         ))
-        .unwrap_or_else(|| {
-            panic!("submilli:bigint.{op_name} import recorded by codegen bootstrap")
-        });
+        .ok_or_else(|| {
+            crate::codegen::internal_failure(format!(
+                "submilli:bigint.{op_name} import recorded by codegen bootstrap"
+            ))
+        })?;
     emit_bigint_wrap_host_result(emitter, ctx, host_idx);
+
+    Ok(())
 }
 
 /// inline `cmp` + signed compare against 0 for
@@ -5745,7 +5986,11 @@ fn emit_bigint_cmp_inline(
         BinOp::Gt => Instruction::I32GtS,
         BinOp::Le => Instruction::I32LeS,
         BinOp::Ge => Instruction::I32GeS,
-        _ => unreachable!("emit_bigint_cmp_inline called with non-cmp op"),
+        _ => {
+            return Err(crate::codegen::internal_failure(
+                "emit_bigint_cmp_inline called with non-cmp op",
+            ));
+        }
     };
     emitter.instruction(inst);
     Ok(())
@@ -5780,13 +6025,13 @@ fn emit_bigint_cmp_call(
     let raw_bigint_idx = ctx
         .symbols
         .raw_bigint_type_idx()
-        .expect("$rawBigInt registered");
+        .ok_or_else(|| crate::codegen::internal_failure("$rawBigInt registered"))?;
     let lhs_limbs =
         emitter.add_anonymous_local(wasm_encoder::ValType::Ref(wasm_encoder::RefType {
             nullable: false,
             heap_type: wasm_encoder::HeapType::Concrete(raw_bigint_idx),
-        }));
-    let lhs_sign = emitter.add_anonymous_local(wasm_encoder::ValType::I32);
+        }))?;
+    let lhs_sign = emitter.add_anonymous_local(wasm_encoder::ValType::I32)?;
     emitter.instruction(Instruction::LocalSet(lhs_limbs));
     emitter.instruction(Instruction::LocalSet(lhs_sign));
     emitter.instruction(Instruction::LocalGet(lhs_sign));
@@ -5799,7 +6044,11 @@ fn emit_bigint_cmp_call(
             crate::runtime::BIGINT_MODULE_NAME,
             "cmp",
         ))
-        .expect("submilli:bigint.cmp import recorded by codegen bootstrap");
+        .ok_or_else(|| {
+            crate::codegen::internal_failure(
+                "submilli:bigint.cmp import recorded by codegen bootstrap",
+            )
+        })?;
     emitter.instruction(Instruction::Call(cmp_idx));
     Ok(())
 }
@@ -5813,7 +6062,7 @@ fn evaluate_object_members(
     let intrinsics = ctx
         .symbols
         .intrinsic_type_indices()
-        .expect("intrinsics declared");
+        .ok_or_else(|| crate::codegen::internal_failure("intrinsics declared"))?;
     let mut values = HashMap::new();
     for member in members {
         let TypedObjectMember::Value(value_id) = *member else {
@@ -5828,7 +6077,7 @@ fn evaluate_object_members(
             .ty;
         emit_expr(emitter, ctx, value_id)?;
         cast::emit_box(emitter, ctx, value_ty)?;
-        let local = emitter.add_anonymous_local(object_ref(intrinsics.object));
+        let local = emitter.add_anonymous_local(object_ref(intrinsics.object))?;
         emitter.instruction(Instruction::LocalSet(local));
         values.insert(value_id, local);
     }
@@ -5848,7 +6097,7 @@ fn emit_field_holds_value_of(
     let intrinsics = ctx
         .symbols
         .intrinsic_type_indices()
-        .expect("intrinsics declared by codegen entry");
+        .ok_or_else(|| crate::codegen::internal_failure("intrinsics declared by codegen entry"))?;
     emitter.instruction(Instruction::LocalGet(object));
     emitter.instruction(Instruction::StructGet {
         struct_type_index: intrinsics.object_shape,
@@ -5885,7 +6134,7 @@ pub(super) fn emit_index_number(
         let function = ctx
             .symbols
             .prelude_func_idx("__value_to_index")
-            .expect("dynamic index helper collected");
+            .ok_or_else(|| crate::codegen::internal_failure("dynamic index helper collected"))?;
         emitter.instruction(Instruction::Call(function));
     } else {
         cast::emit_coerce_to_slot(emitter, ctx, ty, &Type::Number)?;
@@ -5911,7 +6160,7 @@ fn emit_computed_object(
     let object = emitter.add_anonymous_local(ValType::Ref(RefType {
         nullable: false,
         heap_type: HeapType::Concrete(intr.object_shape),
-    }));
+    }))?;
     for _ in 0..4 {
         emitter.instruction(Instruction::RefNull(HeapType::Concrete(intr.object)));
     }
@@ -5983,7 +6232,7 @@ fn emit_object_index_postfix(
             .map_err(crate::codegen::arena_failure)?
             .ty,
     )?;
-    let object = emitter.add_anonymous_local(ctx.symbols.value_type(&Type::Unknown)?);
+    let object = emitter.add_anonymous_local(ctx.symbols.value_type(&Type::Unknown)?)?;
     emitter.instruction(Instruction::LocalSet(object));
     emit_expr(emitter, ctx, index)?;
     crate::codegen::cast_check::emit_operation_cast_on_stack(
@@ -5995,7 +6244,7 @@ fn emit_object_index_postfix(
             .ty,
         &Type::String,
     )?;
-    let key = emitter.add_anonymous_local(ctx.symbols.value_type(&Type::String)?);
+    let key = emitter.add_anonymous_local(ctx.symbols.value_type(&Type::String)?)?;
     emitter.instruction(Instruction::LocalSet(key));
     emitter.instruction(Instruction::LocalGet(object));
     emitter.instruction(Instruction::LocalGet(key));
@@ -6014,10 +6263,10 @@ fn emit_object_index_postfix(
     )?;
     cast::emit_box(emitter, ctx, read_ty)?;
     emit_postfix_numeric(emitter, ctx, &Type::Unknown);
-    let old = emitter.add_anonymous_local(ctx.symbols.value_type(&Type::Unknown)?);
+    let old = emitter.add_anonymous_local(ctx.symbols.value_type(&Type::Unknown)?)?;
     emitter.instruction(Instruction::LocalTee(old));
     emit_postfix_delta(emitter, ctx, op, &Type::Unknown);
-    let updated = emitter.add_anonymous_local(ctx.symbols.value_type(&Type::Unknown)?);
+    let updated = emitter.add_anonymous_local(ctx.symbols.value_type(&Type::Unknown)?)?;
     emitter.instruction(Instruction::LocalSet(updated));
     emitter.instruction(Instruction::LocalGet(object));
     emitter.instruction(Instruction::LocalGet(key));
@@ -6031,4 +6280,97 @@ fn emit_object_index_postfix(
     emitter.instruction(Instruction::Call(symbol));
     emitter.instruction(Instruction::LocalGet(old));
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::codegen::invariant_tests::{assert_internal, with_context};
+    use crate::{FileId, Span, TypedAst, TypedExpr};
+
+    #[test]
+    fn call_and_chain_metadata_are_checked_before_operands() {
+        with_context(
+            &TypedAst::new(),
+            &crate::codegen::SymbolTable::default(),
+            |ctx| {
+                let mut emitter = FunctionEmitter::new(ctx, &[]).unwrap();
+                assert_internal(
+                    emit_intrinsic_call(&mut emitter, ctx, Intrinsic::Assert, &[]).unwrap_err(),
+                );
+                assert_internal(
+                    emit_intrinsic_call(&mut emitter, ctx, Intrinsic::BigIntFromString, &[])
+                        .unwrap_err(),
+                );
+                assert_internal(
+                    emit_direct_call(
+                        &mut emitter,
+                        ctx,
+                        false,
+                        0,
+                        &[Type::Number],
+                        &Type::Void,
+                        &[],
+                    )
+                    .unwrap_err(),
+                );
+                assert_internal(
+                    emit_args_into_slots(&mut emitter, ctx, &[], Some(&[ValType::F64]))
+                        .unwrap_err(),
+                );
+                assert_internal(
+                    emit_chain_parts(
+                        &mut emitter,
+                        ctx,
+                        &[],
+                        1,
+                        &Type::Number,
+                        &Type::Number,
+                        None,
+                    )
+                    .unwrap_err(),
+                );
+                assert_internal(
+                    emit_chain_parts(
+                        &mut emitter,
+                        ctx,
+                        &[],
+                        0,
+                        &Type::Number,
+                        &Type::Number,
+                        Some(&[]),
+                    )
+                    .unwrap_err(),
+                );
+            },
+        );
+    }
+
+    #[test]
+    fn uninterned_literal_fails_and_a_fresh_emitter_still_works() {
+        let mut ta = TypedAst::new();
+        let string = ta
+            .try_push_expr(TypedExpr {
+                kind: TypedExprKind::String("missing".into()),
+                ty: Type::String,
+                span: Span::at(FileId(0)),
+            })
+            .unwrap();
+        let number = ta
+            .try_push_expr(TypedExpr {
+                kind: TypedExprKind::Number(3.0),
+                ty: Type::Number,
+                span: Span::at(FileId(0)),
+            })
+            .unwrap();
+        with_context(&ta, &crate::codegen::SymbolTable::default(), |ctx| {
+            let mut failed = FunctionEmitter::new(ctx, &[]).unwrap();
+            assert_internal(emit_expr(&mut failed, ctx, string).unwrap_err());
+            drop(failed);
+            let mut healthy = FunctionEmitter::new(ctx, &[]).unwrap();
+            emit_expr(&mut healthy, ctx, number).unwrap();
+            healthy.instruction(Instruction::Drop);
+            healthy.build().unwrap();
+        });
+    }
 }
