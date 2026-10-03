@@ -329,13 +329,61 @@ is refused when the blueprint is registered, and leaving `access` out takes
 the operator's setting. A write under a read-only mount throws a catchable
 `PermissionDeniedError`. A volume's size limit is the operator's too, and one
 limit covers every session and blueprint that uses the volume. Mount points
-cannot be removed or moved, and mounts may not nest. A mount path is made of
+cannot be removed or moved. Entries under `mounts` may not nest inside one another;
+a named root can host mounts just like an ephemeral or per-session root. A mount path is made of
 ASCII letters, digits, `.`, `_` and `-`, and no part of it ends in `.`. A named volume can also
 be the root itself: `vfs: {mode: named, volume: project-memory}`.
 
 `fs.info()` tells the program what it has: the root's `mode`, `access` and
 `sizeLimit`, and a `mounts` list with each mount's `path`, `volume`, `access`
 and `sizeLimit`.
+
+### Select a volume directory and working directory
+
+Use `subPath` to expose a directory within a named volume:
+
+```yaml title="blueprint.yaml (fragment)"
+variables:
+  userId:
+    required: true
+vfs:
+  mode: ephemeral
+  cwd: /notes
+  mounts:
+    /notes:
+      mode: named
+      volume: notes
+      subPath: users/${vars.userId}
+```
+
+The application binds `userId` when opening the session. For `userId: ada`,
+`/notes/a.md` accesses `users/ada/a.md` inside the volume. Programs see the selected
+directory as the mount root; its siblings are outside that mount. The volume's
+shared quota still applies. A writable mount creates missing directories, while
+a read-only mount requires them to exist. Subpath selection does not follow symlinks.
+
+`subPath` is relative to the volume root. Omit it to mount the whole volume.
+A fixed value such as `teams/research` works too. Named roots accept the same
+field alongside `volume`. Paths must be normalized: no empty, `.` or `..`
+components. Each `${vars.NAME}` reference must occupy a complete component,
+refer to a declared variable, and resolve to one nonempty directory name.
+
+The same volume may appear at several guest paths, including overlapping source
+directories. Each mount has its own access and permission rules; a broader mount
+explicitly exposes more of the volume. Read-only access on one alias does not
+restrict a separate writable alias. All aliases share the volume's quota.
+
+`cwd` is an absolute guest path, defaults to `/`, and supports the same variable
+references. It is available in every mode except `none`. In the example,
+`fs.writeText("a.md", "hello")` writes `/notes/a.md`, and `fs.cwd()` returns
+`/notes`. Packages, code tools, and HTTP download destinations use the same cwd.
+Missing cwd directories are created only in writable storage, including writable
+mounts under a read-only root. Ephemeral directories are prepared again each run.
+
+Working directories do not establish confinement: absolute paths and `..` still
+navigate the guest filesystem. Permissions continue to match normalized absolute
+guest paths. Use `subPath` for isolation and bind user identifiers in the trusted
+application. `fs.cwd()` requires no capability, and scripts cannot change cwd.
 
 ## Let the program commit
 

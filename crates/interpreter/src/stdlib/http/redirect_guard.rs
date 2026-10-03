@@ -68,6 +68,7 @@ pub(super) struct CapabilityGuard {
     caller: String,
     security_check: Arc<dyn SecurityCheck>,
     request: GuardedRequest,
+    cwd: String,
 }
 
 impl std::fmt::Debug for CapabilityGuard {
@@ -83,11 +84,13 @@ impl CapabilityGuard {
         caller: String,
         security_check: Arc<dyn SecurityCheck>,
         request: GuardedRequest,
+        cwd: String,
     ) -> Self {
         Self {
             caller,
             security_check,
             request,
+            cwd,
         }
     }
 
@@ -121,6 +124,7 @@ impl RedirectGuard for CapabilityGuard {
             self.security_check.as_ref(),
             &capability,
             &context,
+            &self.cwd,
         )
         .map_err(RedirectDenied::from_error)
     }

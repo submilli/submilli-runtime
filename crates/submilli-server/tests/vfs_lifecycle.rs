@@ -123,6 +123,7 @@ fn per_session() -> VfsConfig {
     VfsConfig::PerSession {
         size_limit: None,
         mounts: Default::default(),
+        cwd: None,
     }
 }
 
@@ -152,6 +153,7 @@ async fn per_session_size_limit_spans_the_session() {
     let h = Harness::with_vfs(VfsConfig::PerSession {
         size_limit: Some(100),
         mounts: Default::default(),
+        cwd: None,
     });
     let (_, created) = h
         .post("/v1/sessions", json!({ "blueprint": BLUEPRINT }), None)
@@ -179,6 +181,7 @@ async fn ephemeral_does_not_persist_across_executes() {
     let h = Harness::with_vfs(VfsConfig::Ephemeral {
         size_limit: None,
         mounts: Default::default(),
+        cwd: None,
     });
     let (_, created) = h
         .post("/v1/sessions", json!({ "blueprint": BLUEPRINT }), None)
@@ -352,6 +355,8 @@ fn with_volume(target: &Path) -> Harness {
             volume: "work".into(),
             access: None,
             mounts: Default::default(),
+            cwd: None,
+            sub_path: None,
         },
         VolumeTable::from([(
             "work".to_string(),
@@ -399,6 +404,8 @@ async fn mount_failure(target: PathBuf, volumes: VolumeTable) -> String {
             volume: "work".into(),
             access: None,
             mounts: Default::default(),
+            cwd: None,
+            sub_path: None,
         },
         volumes,
     );
@@ -495,6 +502,8 @@ async fn a_failed_mount_logs_the_host_path_it_withheld() {
             volume: "work".into(),
             access: None,
             mounts: Default::default(),
+            cwd: None,
+            sub_path: None,
         },
         volumes,
     );

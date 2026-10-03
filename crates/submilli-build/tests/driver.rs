@@ -446,7 +446,7 @@ path = "types"
             (
                 "git.clone",
                 Some(
-                    "path == \"/clone\" and remote == \"https://github.com/\" \
+                    "remote == \"https://github.com/\" \
                      and remoteName == \"origin\""
                 )
             ),

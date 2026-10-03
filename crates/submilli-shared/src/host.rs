@@ -66,7 +66,17 @@ impl PolicyCheck {
 
 impl SecurityCheck for PolicyCheck {
     fn check(&self, caller: &str, capability: &str, context: &serde_json::Value) -> CheckOutcome {
-        let context = match filesystem_policy_context(capability, context) {
+        self.check_with_cwd(caller, capability, context, "/")
+    }
+
+    fn check_with_cwd(
+        &self,
+        caller: &str,
+        capability: &str,
+        context: &serde_json::Value,
+        cwd: &str,
+    ) -> CheckOutcome {
+        let context = match filesystem_policy_context(capability, context, cwd) {
             Ok(context) => context,
             Err(reason) => return CheckOutcome::Deny { reason },
         };
@@ -113,6 +123,7 @@ fn filesystem_path_fields(capability: &str) -> &'static [&'static str] {
     match capability {
         "fs.read" | "fs.write" | "fs.stat" | "fs.list" | "fs.mkdir" | "fs.remove" => &["path"],
         "fs.copy" | "fs.move" => &["from", "to"],
+        "git.init" | "git.clone" | "git.fetch" | "git.commit" => &["path"],
         "http.download" => &["vfs_path"],
         _ => &[],
     }
@@ -124,6 +135,7 @@ fn filesystem_path_fields(capability: &str) -> &'static [&'static str] {
 fn filesystem_policy_context<'a>(
     capability: &str,
     context: &'a serde_json::Value,
+    cwd: &str,
 ) -> Result<Cow<'a, serde_json::Value>, String> {
     let fields = filesystem_path_fields(capability);
     let mut normalized_context = Cow::Borrowed(context);
@@ -134,7 +146,7 @@ fn filesystem_policy_context<'a>(
             .ok_or_else(|| {
                 format!("invalid {capability} context: {field} must be a VFS path string")
             })?;
-        let normalized = interpreter::runtime::fs::guest_normalize("/", path)
+        let normalized = interpreter::runtime::fs::guest_normalize(cwd, path)
             .map_err(|error| format!("invalid {capability} {field}: {error}"))?;
         if normalized != path {
             normalized_context.to_mut()[field] = serde_json::Value::String(normalized);
@@ -401,6 +413,35 @@ mod tests {
 
     /// Call-site derivation normalizes the same fields from the catalog, so a
     /// derived `requires` filter names the path this check sees.
+    #[test]
+    fn working_directory_is_used_for_all_filesystem_policy_fields() {
+        let blueprint = parse("name: cwd\ndefault: deny\npermissions:\n  main:\n    - {capability: fs.read, action: allow, filter: 'path glob \"/notes/*\"'}\n    - {capability: fs.move, action: allow, filter: 'from glob \"/notes/*\" and to glob \"/notes/*\"'}\n    - {capability: http.download, action: allow, filter: 'vfs_path glob \"/notes/*\"'}\n").unwrap();
+        let policy = PolicyCheck::new(Arc::new(blueprint));
+        for (capability, context) in [
+            ("fs.read", serde_json::json!({"path":"a"})),
+            ("fs.move", serde_json::json!({"from":"a", "to":"b"})),
+            ("http.download", serde_json::json!({"vfs_path":"a"})),
+        ] {
+            assert!(matches!(
+                policy.check_with_cwd("main", capability, &context, "/notes"),
+                CheckOutcome::Allow
+            ));
+            assert!(matches!(
+                policy.check_with_cwd("main", capability, &context, "/elsewhere"),
+                CheckOutcome::Deny { .. }
+            ));
+        }
+        assert!(matches!(
+            policy.check_with_cwd(
+                "main",
+                "fs.read",
+                &serde_json::json!({"path":"../private/a"}),
+                "/notes"
+            ),
+            CheckOutcome::Deny { .. }
+        ));
+    }
+
     #[test]
     fn normalized_policy_paths_are_vfs_path_fields_in_the_catalog() {
         use interpreter::stdlib::capabilities::{FieldNormalization, catalog};

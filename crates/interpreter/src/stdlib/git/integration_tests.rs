@@ -693,6 +693,53 @@ async fn mount_point_inside_a_repository_is_refused() {
 }
 
 #[tokio::test]
+async fn root_volume_alias_preserves_guest_mount_placeholders() {
+    use crate::runtime::vfs::{Access, MountSpec};
+    let root = tempfile::tempdir().unwrap();
+    let child = tempfile::tempdir().unwrap();
+    let vfs = Vfs::external(root.path().to_path_buf())
+        .unwrap()
+        .with_volume_name("root")
+        .with_mount(MountSpec {
+            guest_path: "/alias".into(),
+            host: root.path().to_path_buf(),
+            volume: "root".into(),
+            access: Access::ReadWrite,
+            quota: None,
+        })
+        .unwrap()
+        .with_mount(MountSpec {
+            guest_path: "/child".into(),
+            host: child.path().to_path_buf(),
+            volume: "child".into(),
+            access: Access::ReadWrite,
+            quota: None,
+        })
+        .unwrap();
+    for path in ["/", "/alias", "/alias/child", "/alias/alias"] {
+        let error = worker::run(
+            &vfs,
+            &job_at(&vfs, "init", path),
+            "init",
+            &[json!({ "branch": "main" })],
+        )
+        .err()
+        .unwrap()
+        .to_string();
+        assert!(error.contains("mount point"), "{path}: {error}");
+    }
+    assert!(!root.path().join(".git").exists());
+    assert!(root.path().join("child").is_dir());
+    worker::run(
+        &vfs,
+        &job_at(&vfs, "init", "/child"),
+        "init",
+        &[json!({ "branch": "main" })],
+    )
+    .unwrap();
+}
+
+#[tokio::test]
 async fn mount_read_only_refuses_repository_changes_but_not_reads() {
     let volume = tempfile::tempdir().unwrap();
     let writable = mounted(

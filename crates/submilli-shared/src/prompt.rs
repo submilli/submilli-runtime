@@ -93,7 +93,16 @@ pub fn execute_tool_description(blueprint: &Blueprint, surface: PromptSurface) -
     let visibility = LibraryVisibility::for_blueprint(blueprint);
     let http_visible = visibility.allows(HTTP_MODULE);
     let sandbox = if visibility.allows("submilli:fs") || visibility.allows("submilli:code") {
-        format!("Sandbox: File system {}.", vfs_mode_phrase(&blueprint.vfs))
+        format!(
+            "Sandbox: File system {}. Working directory: {}{}.",
+            vfs_mode_phrase(&blueprint.vfs),
+            blueprint.vfs.cwd(),
+            if blueprint.vfs.cwd().contains("${") {
+                " (resolved per session)"
+            } else {
+                ""
+            }
+        )
     } else {
         String::new()
     };
@@ -653,6 +662,7 @@ mod tests {
             vfs: VfsConfig::PerSession {
                 size_limit: Some(1024),
                 mounts: Default::default(),
+                cwd: None,
             },
             ..Blueprint::default()
         };

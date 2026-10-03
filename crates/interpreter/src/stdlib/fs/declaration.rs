@@ -26,6 +26,13 @@ pub fn package_declaration() -> PackageDeclaration {
 
     insert_fn(
         &mut defs,
+        "cwd",
+        Vec::new(),
+        Type::String,
+        "/** The absolute guest working directory used by relative paths. Shared by the program and packages; no capability required. Defaults to `/`. */",
+    );
+    insert_fn(
+        &mut defs,
         "maxReadSize",
         Vec::new(),
         Type::Number,

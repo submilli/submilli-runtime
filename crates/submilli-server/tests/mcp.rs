@@ -139,6 +139,7 @@ impl Harness {
                 vfs: VfsConfig::Ephemeral {
                     size_limit: None,
                     mounts: Default::default(),
+                    cwd: None,
                 },
                 permissions: allow_fs(),
                 ..Default::default()
@@ -148,6 +149,7 @@ impl Harness {
                 vfs: VfsConfig::PerSession {
                     size_limit: None,
                     mounts: Default::default(),
+                    cwd: None,
                 },
                 permissions: allow_fs(),
                 ..Default::default()
@@ -848,6 +850,7 @@ async fn mcp_session_restores_after_server_restart() {
             vfs: VfsConfig::PerSession {
                 size_limit: None,
                 mounts: Default::default(),
+                cwd: None,
             },
             permissions: allow_fs(),
             ..Default::default()
@@ -2296,6 +2299,8 @@ fn volume_blueprint(volume: &str) -> Blueprint {
             volume: volume.into(),
             access: None,
             mounts: Default::default(),
+            cwd: None,
+            sub_path: None,
         },
         permissions: allow_fs(),
         ..Default::default()
@@ -2400,9 +2405,9 @@ async fn mcp_undeclared_volume_fails_by_name_without_a_host_path() {
     let dir = tempfile::tempdir().expect("volume dir");
     let h =
         Harness::from_blueprints_with_volumes(vec![volume_blueprint("gone")], VolumeTable::new());
-    let session = h.handshake(VOL).await;
-    let (_, _, rpc) = h.post(VOL, tools_call(2, SUM), Some(&session)).await;
-    let body = rpc.to_string();
+    let (status, headers, body) = init_with_header(&h, VOL, "").await;
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+    assert!(headers.get("mcp-session-id").is_none());
     assert!(
         body.contains("gone"),
         "the volume name must reach the client: {body}"
@@ -2672,10 +2677,12 @@ async fn files_tools_default_deny_in_every_vfs_mode() {
         VfsConfig::Ephemeral {
             size_limit: None,
             mounts: Default::default(),
+            cwd: None,
         },
         VfsConfig::PerSession {
             size_limit: None,
             mounts: Default::default(),
+            cwd: None,
         },
         VfsConfig::None,
     ] {
@@ -2925,4 +2932,59 @@ fn mcp_closure_arity_returns_diagnostics() {
         assert!(output(&rpc)["error"].is_null(), "{rpc}");
         assert_eq!(output(&rpc)["result"], "2", "{rpc}");
     });
+}
+
+#[tokio::test]
+async fn subpath_cwd_is_shared_by_execute_file_tools_and_prompt() {
+    let volume = tempfile::tempdir().unwrap();
+    let blueprint = submilli_blueprint::parse(
+        r#"name: cwd
+variables:
+  user: {required: true}
+vfs:
+  mode: named
+  volume: notes
+  subPath: users/${vars.user}
+  cwd: /drafts/${vars.user}
+permissions:
+  main:
+    - {capability: fs.read, action: allow, filter: 'path glob "/drafts/${vars.user}/*"'}
+    - {capability: fs.write, action: allow, filter: 'path glob "/drafts/${vars.user}/*"'}
+    - {capability: fs.list, action: allow, filter: 'path == "/drafts/${vars.user}"'}
+"#,
+    )
+    .unwrap();
+    let h = Harness::from_blueprints_with_volumes(
+        vec![blueprint],
+        VolumeTable::from([("notes".into(), VolumeSpec::local_path(volume.path()))]),
+    );
+    let session = handshake_with_vars(&h, "cwd", json!({"user":"ada"})).await;
+    let (_, _, tools) = h.post("cwd", tools_list(2), Some(&session)).await;
+    assert!(
+        tool_desc(&tools, EXECUTE).contains("Working directory: /drafts/ada."),
+        "{tools}"
+    );
+    let (_, _, written) = h.post("cwd", tools_call(3, r#"import { writeText, cwd } from "submilli:fs"; function main(): string { writeText("a.txt", "hello"); return cwd(); }"#), Some(&session)).await;
+    assert!(output(&written)["error"].is_null(), "{written}");
+    assert_eq!(output(&written)["result"], "/drafts/ada");
+    let (_, _, read) = h
+        .post(
+            "cwd",
+            rpc_call(4, "submilli__files__read", json!({"path":"a.txt"})),
+            Some(&session),
+        )
+        .await;
+    assert_eq!(output(&read)["content"], "hello", "{read}");
+    let (_, _, listed) = h
+        .post(
+            "cwd",
+            rpc_call(5, "submilli__files__list", json!({})),
+            Some(&session),
+        )
+        .await;
+    assert_eq!(output(&listed)["count"], 1, "{listed}");
+    assert_eq!(
+        std::fs::read_to_string(volume.path().join("users/ada/drafts/ada/a.txt")).unwrap(),
+        "hello"
+    );
 }

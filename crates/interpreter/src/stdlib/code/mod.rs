@@ -110,14 +110,29 @@ fn invoke(
         "tree" => walk::tree(
             caller,
             budget,
-            &normalize(&first)?,
+            &normalize(caller.data().vfs.cwd(), &first)?,
             integer(abi_arg(params, 1)?, "depth", 0)?,
         )?,
-        "read" => read_window(caller, budget, &normalize(&first)?, params)?,
+        "read" => read_window(
+            caller,
+            budget,
+            &normalize(caller.data().vfs.cwd(), &first)?,
+            params,
+        )?,
         "diffFiles" => {
             let second = argument(caller, budget, abi_arg(params, 1)?)?;
-            let a = read_file(caller, budget, &normalize(&first)?, op)?;
-            let b = read_file(caller, budget, &normalize(&second)?, op)?;
+            let a = read_file(
+                caller,
+                budget,
+                &normalize(caller.data().vfs.cwd(), &first)?,
+                op,
+            )?;
+            let b = read_file(
+                caller,
+                budget,
+                &normalize(caller.data().vfs.cwd(), &second)?,
+                op,
+            )?;
             budget.charge(caller, (a.len() + b.len()).saturating_mul(2))?;
             let result = diff(
                 caller,
@@ -130,11 +145,17 @@ fn invoke(
             )));
         }
         "edit" | "insertAt" | "applyPatch" => {
-            return mutate(caller, budget, &normalize(&first)?, op, params);
+            return mutate(
+                caller,
+                budget,
+                &normalize(caller.data().vfs.cwd(), &first)?,
+                op,
+                params,
+            );
         }
         _ => {
             return Err(crate::runtime::host::invariant_trap(
-                "code: invalid registered operation",
+                "unknown code operation",
             ));
         }
     };
@@ -209,7 +230,7 @@ fn mutate(
         }
         _ => {
             return Err(crate::runtime::host::invariant_trap(
-                "code: invalid registered operation",
+                "unknown code mutation",
             ));
         }
     };
@@ -272,11 +293,15 @@ fn prepare_edit(
         bail!("code.edit: oldString must not be empty; use insertAt");
     }
     let matches = original.match_indices(&old).count();
-    let selected = if (*abi_arg(params, 3)?)
-        .i32()
-        .ok_or_else(|| crate::runtime::host::invariant_trap("code ABI: expected i32"))?
-        != 0
-    {
+    let replace_all = match abi_arg(params, 3)? {
+        Val::I32(value) => *value != 0,
+        _ => {
+            return Err(crate::runtime::host::invariant_trap(
+                "code.edit: invalid boolean argument",
+            ));
+        }
+    };
+    let selected = if replace_all {
         matches
     } else {
         usize::from(matches > 0)
@@ -307,17 +332,14 @@ fn prepare_edit(
         original,
         &old,
         &new,
-        (*abi_arg(params, 3)?)
-            .i32()
-            .ok_or_else(|| crate::runtime::host::invariant_trap("code ABI: expected i32"))?
-            != 0,
+        replace_all,
         integer(abi_arg(params, 4)?, "nearLine", 0)?,
         maximum,
     )
 }
 
-fn normalize(path: &str) -> Result<String> {
-    crate::runtime::fs::guest_normalize("/", path)
+fn normalize(cwd: &str, path: &str) -> Result<String> {
+    crate::runtime::fs::guest_normalize(cwd, path)
         .map_err(|e| wasmtime::Error::msg(format!("code: {e}")))
 }
 fn gate(caller: &mut Caller<'_, StoreData>, capability: &str, path: &str) -> Result<()> {
@@ -394,9 +416,14 @@ fn diff(
     Ok(result)
 }
 fn integer(val: &Val, name: &str, min: usize) -> Result<usize> {
-    let n = val
-        .f64()
-        .ok_or_else(|| crate::runtime::host::invariant_trap("code ABI: expected f64"))?;
+    let n = match val {
+        Val::F64(bits) => f64::from_bits(*bits),
+        _ => {
+            return Err(crate::runtime::host::invariant_trap(
+                "code: invalid numeric argument",
+            ));
+        }
+    };
     if !n.is_finite() || n.fract() != 0.0 || n < min as f64 || n > u32::MAX as f64 {
         bail!(
             "code: {name} must be an integer between {min} and {}",

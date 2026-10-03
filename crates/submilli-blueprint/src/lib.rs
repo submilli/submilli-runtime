@@ -9,6 +9,7 @@ mod mcp;
 mod permissions;
 mod secrets;
 mod variables;
+mod vfs_paths;
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
@@ -200,12 +201,14 @@ pub enum VfsConfig {
     Ephemeral {
         size_limit: Option<u64>,
         mounts: Mounts,
+        cwd: Option<String>,
     },
     /// A disk-backed directory that persists across executes within one session
     /// and is wiped when the session ends.
     PerSession {
         size_limit: Option<u64>,
         mounts: Mounts,
+        cwd: Option<String>,
     },
     /// A named volume the operator declared in the server config as the root;
     /// files persist across calls, sessions, and restarts, and other blueprints
@@ -214,8 +217,10 @@ pub enum VfsConfig {
     /// blueprint names the volume — only the operator knows where it is stored.
     Named {
         volume: String,
+        sub_path: Option<String>,
         access: Option<Access>,
         mounts: Mounts,
+        cwd: Option<String>,
     },
 }
 
@@ -241,6 +246,7 @@ impl Access {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MountConfig {
     pub volume: String,
+    pub sub_path: Option<String>,
     /// `None` takes the access the server declares for the volume.
     pub access: Option<Access>,
 }
@@ -285,6 +291,7 @@ impl Default for VfsConfig {
         VfsConfig::Ephemeral {
             size_limit: None,
             mounts: Mounts::new(),
+            cwd: None,
         }
     }
 }
@@ -375,8 +382,8 @@ impl ModeTag {
     /// carry both, so they keep parsing rather than failing on an unknown key.
     fn allows(self, field: &str) -> bool {
         match field {
-            "volume" | "access" => matches!(self, ModeTag::Named),
-            "mounts" => !matches!(self, ModeTag::None),
+            "volume" | "access" | "subPath" => matches!(self, ModeTag::Named),
+            "mounts" | "cwd" => !matches!(self, ModeTag::None),
             "grace_period" => matches!(self, ModeTag::PerSession),
             "size_limit" | "path_limit" => {
                 matches!(self, ModeTag::Ephemeral | ModeTag::PerSession)
@@ -443,12 +450,14 @@ struct Full {
     volume: Option<String>,
     access: Option<Access>,
     mounts: Option<Mounts>,
+    sub_path: Option<String>,
+    cwd: Option<String>,
     grace_period: Option<String>,
     size_limit: Option<SizeRepr>,
     has_legacy_path_limit: bool,
 }
 
-const VFS_KEYS: &str = "`mode`, `volume`, `access`, `size_limit`, `mounts` (`grace_period` under \
+const VFS_KEYS: &str = "`mode`, `volume`, `access`, `size_limit`, `mounts`, `subPath`, `cwd` (`grace_period` under \
                         `mode: per_session` and `path_limit` are also accepted, but ignored)";
 
 /// What a `volume:` written without a `mode:` beside it is told. The block
@@ -531,6 +540,20 @@ impl<'de> de::Visitor<'de> for VfsVisitor {
                 "access" => {
                     let seed = Guarded::new("access", mode, PhantomData::<Access>);
                     full.access = Some(map.next_value_seed(seed)?);
+                }
+                "subPath" => {
+                    full.sub_path = Some(map.next_value_seed(Guarded::new(
+                        "subPath",
+                        mode,
+                        PhantomData::<String>,
+                    ))?);
+                }
+                "cwd" => {
+                    full.cwd = Some(map.next_value_seed(Guarded::new(
+                        "cwd",
+                        mode,
+                        PhantomData::<String>,
+                    ))?);
                 }
                 "mounts" => {
                     full.mounts =
@@ -880,7 +903,7 @@ impl<'de> de::DeserializeSeed<'de> for MountSeed {
     }
 }
 
-const MOUNT_KEYS: &str = "`mode`, `volume`, `access`";
+const MOUNT_KEYS: &str = "`mode`, `volume`, `access`, `subPath`";
 
 impl<'de> de::Visitor<'de> for MountSeed {
     type Value = MountConfig;
@@ -894,6 +917,7 @@ impl<'de> de::Visitor<'de> for MountSeed {
         let mut named = false;
         let mut volume = None;
         let mut access = None;
+        let mut sub_path = None;
         while let Some(key) = map.next_key::<String>()? {
             if !seen.insert(key.clone()) {
                 map.next_value_seed(Reject::<()>::new(duplicate_key(&key, "the mount")))?;
@@ -913,6 +937,7 @@ impl<'de> de::Visitor<'de> for MountSeed {
                 }
                 "volume" => volume = Some(map.next_value_seed(VolumeName)?),
                 "access" => access = Some(map.next_value::<Access>()?),
+                "subPath" => sub_path = Some(map.next_value::<String>()?),
                 other => map.next_value_seed(Reject::<()>::new(format!(
                     "unknown field `{other}` in a mount, expected one of {MOUNT_KEYS}"
                 )))?,
@@ -930,7 +955,11 @@ impl<'de> de::Visitor<'de> for MountSeed {
                  server config",
             )
         })?;
-        Ok(MountConfig { volume, access })
+        Ok(MountConfig {
+            volume,
+            access,
+            sub_path,
+        })
     }
 }
 
@@ -949,13 +978,25 @@ impl Serialize for VfsConfig {
                 map.serialize_entry("mode", "none")?;
                 map.end()
             }
-            VfsConfig::Ephemeral { size_limit, mounts }
-            | VfsConfig::PerSession { size_limit, mounts } => {
-                let len = 1 + opt(size_limit.is_some()) + opt(!mounts.is_empty());
+            VfsConfig::Ephemeral {
+                size_limit,
+                mounts,
+                cwd,
+            }
+            | VfsConfig::PerSession {
+                size_limit,
+                mounts,
+                cwd,
+            } => {
+                let len =
+                    1 + opt(size_limit.is_some()) + opt(!mounts.is_empty()) + opt(cwd.is_some());
                 let mut map = serializer.serialize_map(Some(len))?;
                 map.serialize_entry("mode", self.mode_str())?;
                 if let Some(n) = size_limit {
                     map.serialize_entry("size_limit", n)?;
+                }
+                if let Some(cwd) = cwd {
+                    map.serialize_entry("cwd", cwd)?;
                 }
                 serialize_mounts(&mut map, mounts)?;
                 map.end()
@@ -964,13 +1005,25 @@ impl Serialize for VfsConfig {
                 volume,
                 access,
                 mounts,
+                sub_path,
+                cwd,
             } => {
-                let len = 2 + opt(access.is_some()) + opt(!mounts.is_empty());
+                let len = 2
+                    + opt(access.is_some())
+                    + opt(!mounts.is_empty())
+                    + opt(sub_path.is_some())
+                    + opt(cwd.is_some());
                 let mut map = serializer.serialize_map(Some(len))?;
                 map.serialize_entry("mode", "named")?;
                 map.serialize_entry("volume", volume)?;
+                if let Some(sub_path) = sub_path {
+                    map.serialize_entry("subPath", sub_path)?;
+                }
                 if let Some(access) = access {
                     map.serialize_entry("access", access)?;
+                }
+                if let Some(cwd) = cwd {
+                    map.serialize_entry("cwd", cwd)?;
                 }
                 serialize_mounts(&mut map, mounts)?;
                 map.end()
@@ -1002,10 +1055,19 @@ struct SerializedMount<'a>(&'a MountConfig);
 
 impl Serialize for SerializedMount<'_> {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        let MountConfig { volume, access } = self.0;
-        let mut map = serializer.serialize_map(Some(2 + usize::from(access.is_some())))?;
+        let MountConfig {
+            volume,
+            access,
+            sub_path,
+        } = self.0;
+        let mut map = serializer.serialize_map(Some(
+            2 + usize::from(access.is_some()) + usize::from(sub_path.is_some()),
+        ))?;
         map.serialize_entry("mode", "named")?;
         map.serialize_entry("volume", volume)?;
+        if let Some(sub_path) = sub_path {
+            map.serialize_entry("subPath", sub_path)?;
+        }
         if let Some(access) = access {
             map.serialize_entry("access", access)?;
         }
@@ -1040,6 +1102,8 @@ fn build_vfs(full: Full) -> Result<VfsConfig, BlueprintError> {
     }
     for (field, present) in [
         ("access", full.access.is_some()),
+        ("subPath", full.sub_path.is_some()),
+        ("cwd", full.cwd.is_some()),
         ("mounts", full.mounts.is_some()),
         ("grace_period", grace.is_some()),
         ("size_limit", size_limit.is_some()),
@@ -1049,12 +1113,21 @@ fn build_vfs(full: Full) -> Result<VfsConfig, BlueprintError> {
             return Err(mode_conflict(field, mode));
         }
     }
-    let mounts = check_mount_volumes(full.mounts.unwrap_or_default())?;
+    let mounts = full.mounts.unwrap_or_default();
+    let cwd = full.cwd;
 
     match mode {
         ModeTag::None => Ok(VfsConfig::None),
-        ModeTag::Ephemeral => Ok(VfsConfig::Ephemeral { size_limit, mounts }),
-        ModeTag::PerSession => Ok(VfsConfig::PerSession { size_limit, mounts }),
+        ModeTag::Ephemeral => Ok(VfsConfig::Ephemeral {
+            size_limit,
+            mounts,
+            cwd,
+        }),
+        ModeTag::PerSession => Ok(VfsConfig::PerSession {
+            size_limit,
+            mounts,
+            cwd,
+        }),
         ModeTag::Named => {
             let volume = full.volume.ok_or_else(|| {
                 BlueprintError::InvalidVfs(
@@ -1063,40 +1136,15 @@ fn build_vfs(full: Full) -> Result<VfsConfig, BlueprintError> {
                         .into(),
                 )
             })?;
-            if let Some((path, _)) = mounts.iter().find(|(_, mount)| mount.volume == volume) {
-                return Err(BlueprintError::InvalidVfs(
-                    format!(
-                        "volume '{volume}' is both the root and mounted at '{path}'; use each \
-                         volume once"
-                    )
-                    .into(),
-                ));
-            }
             Ok(VfsConfig::Named {
                 volume,
                 access: full.access,
+                sub_path: full.sub_path,
+                cwd,
                 mounts,
             })
         }
     }
-}
-
-/// Refuse a volume mounted twice: two paths to one directory would make every
-/// cross-mount operation between them charge one limit twice.
-fn check_mount_volumes(mounts: Mounts) -> Result<Mounts, BlueprintError> {
-    let mut seen: BTreeMap<&str, &str> = BTreeMap::new();
-    for (path, mount) in &mounts {
-        if let Some(first) = seen.insert(&mount.volume, path) {
-            return Err(BlueprintError::InvalidVfs(
-                format!(
-                    "volume '{}' is mounted at both '{first}' and '{path}'; mount each volume once",
-                    mount.volume
-                )
-                .into(),
-            ));
-        }
-    }
-    Ok(mounts)
 }
 
 fn mode_conflict(field: &str, mode: ModeTag) -> BlueprintError {
@@ -1133,6 +1181,7 @@ pub fn parse(yaml: &str) -> Result<Blueprint, BlueprintError> {
     permissions::validate(&blueprint.permissions)?;
     variables::validate_variables(&blueprint)?;
     git::validate(&blueprint)?;
+    vfs_paths::validate(&blueprint)?;
     mcp::validate_mcp(&blueprint)?;
     llm::validate_llm(&blueprint)?;
     Ok(blueprint)
@@ -1842,6 +1891,8 @@ permissions:
                 volume: "workspace".into(),
                 access: None,
                 mounts: Mounts::new(),
+                cwd: None,
+                sub_path: None,
             }
         );
     }
@@ -1901,6 +1952,8 @@ permissions:
                 volume: "7".into(),
                 access: None,
                 mounts: Mounts::new(),
+                cwd: None,
+                sub_path: None,
             }
         );
     }
@@ -2437,6 +2490,8 @@ permissions:
                 volume: "notes".into(),
                 access: Some(Access::ReadOnly),
                 mounts: Mounts::new(),
+                cwd: None,
+                sub_path: None,
             }
         );
         assert_eq!(b.vfs.mode_str(), "named");
@@ -2463,7 +2518,10 @@ permissions:
     fn mounts_parse_under_every_mode_with_a_root() {
         let yaml = "name: x\nvfs:\n  mode: per_session\n  size_limit: 1MB\n  mounts:\n    /memory:\n      mode: named\n      volume: project-memory\n      access: read_write\n    /handbook:\n      mode: named\n      volume: company-handbook\n";
         let b = parse(yaml).unwrap();
-        let VfsConfig::PerSession { size_limit, mounts } = &b.vfs else {
+        let VfsConfig::PerSession {
+            size_limit, mounts, ..
+        } = &b.vfs
+        else {
             panic!("per_session: {:?}", b.vfs);
         };
         assert_eq!(*size_limit, Some(1024 * 1024));
@@ -2472,6 +2530,7 @@ permissions:
             Some(&MountConfig {
                 volume: "project-memory".into(),
                 access: Some(Access::ReadWrite),
+                sub_path: None,
             })
         );
         assert_eq!(
@@ -2479,6 +2538,7 @@ permissions:
             Some(&MountConfig {
                 volume: "company-handbook".into(),
                 access: None,
+                sub_path: None,
             })
         );
         let references = b.vfs.named_references();
@@ -2605,24 +2665,14 @@ permissions:
     }
 
     #[test]
-    fn a_volume_is_used_once_per_blueprint() {
-        let err = parse(
+    fn a_volume_can_be_used_more_than_once() {
+        for yaml in [
             "name: x\nvfs:\n  mounts:\n    /a: {mode: named, volume: v}\n    /b: {mode: named, volume: v}\n",
-        )
-        .unwrap_err();
-        assert!(
-            err.to_string().contains("mounted at both '/a' and '/b'"),
-            "got {err}"
-        );
-        let err = parse(
             "name: x\nvfs:\n  mode: named\n  volume: v\n  mounts:\n    /b: {mode: named, volume: v}\n",
-        )
-        .unwrap_err();
-        assert!(
-            err.to_string()
-                .contains("both the root and mounted at '/b'"),
-            "got {err}"
-        );
+        ] {
+            let blueprint = parse(yaml).unwrap();
+            assert_eq!(parse(&to_yaml(&blueprint)).unwrap().vfs, blueprint.vfs);
+        }
     }
 
     #[test]

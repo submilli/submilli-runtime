@@ -12,6 +12,15 @@ pub enum CheckOutcome {
 }
 
 pub trait SecurityCheck: Send + Sync {
+    fn check_with_cwd(
+        &self,
+        caller: &str,
+        capability: &str,
+        context: &serde_json::Value,
+        _cwd: &str,
+    ) -> CheckOutcome {
+        self.check(caller, capability, context)
+    }
     fn check(&self, caller: &str, capability: &str, context: &serde_json::Value) -> CheckOutcome;
 }
 

@@ -515,6 +515,62 @@ impl LinkPath {
         Ok(mount_below(&real, placement))
     }
 
+    /// Compare physical entries, including aliases through other mounts.
+    pub fn same_entry(&self, other: &Self) -> Result<bool, ContainError> {
+        let source = self.symlink_metadata()?;
+        let target = match other.symlink_metadata() {
+            Ok(meta) => meta,
+            Err(ContainError::Io(error)) if error.kind() == io::ErrorKind::NotFound => {
+                return Ok(false);
+            }
+            Err(error) => return Err(error),
+        };
+        Ok(FileIdentity::of(&source)? == FileIdentity::of(&target)?)
+    }
+
+    /// Refuse a copy onto itself or into its own tree before creating targets.
+    pub fn check_copy_destination(&self, to: &ContentPath) -> Result<(), ContainError> {
+        let source = self.symlink_metadata()?;
+        let identity = FileIdentity::of(&source)?;
+        let invalid = || {
+            ContainError::Io(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "cannot copy an entry onto itself or a directory into its own tree",
+            ))
+        };
+        if source.is_dir() && to.placement.ancestors().contains(&identity) {
+            return Err(invalid());
+        }
+        let mut prefix = PathBuf::from(".");
+        let parts = std::iter::once(None).chain(to.rel.components().map(Some));
+        for part in parts {
+            if let Some(part) = part {
+                prefix.push(part.as_os_str());
+            }
+            match to.dir.metadata(&prefix) {
+                Ok(meta) => {
+                    if FileIdentity::of(&meta)? == identity
+                        && (source.is_dir()
+                            || prefix == to.rel
+                            || prefix.strip_prefix(".").is_ok_and(|p| p == to.rel))
+                    {
+                        return Err(invalid());
+                    }
+                }
+                Err(error)
+                    if matches!(
+                        error.kind(),
+                        io::ErrorKind::NotFound | io::ErrorKind::NotADirectory
+                    ) =>
+                {
+                    break;
+                }
+                Err(error) => return Err(error.into()),
+            }
+        }
+        Ok(())
+    }
+
     /// A collision-safe sibling to stage a move between volumes in, resolved
     /// through the same parent handle so the final rename cannot be redirected.
     pub fn temp_sibling(&self) -> Self {
@@ -622,6 +678,13 @@ impl LinkPath {
     }
 
     pub fn create_dir_all(&self) -> Result<(), ContainError> {
+        if self
+            .parent
+            .metadata(&self.name)
+            .is_ok_and(|meta| meta.is_dir())
+        {
+            return Ok(());
+        }
         self.guard.check_link_mutation(false)?;
         match self.parent.create_dir(&self.name) {
             Ok(()) => Ok(()),
@@ -812,7 +875,18 @@ pub(crate) fn check_repository_clear_of_mounts(
     path: &Path,
     placement: &Placement,
 ) -> Result<(), ContainError> {
-    check_mount_points(root, path, placement, true, true)
+    check_nested_mount_points(root, path, placement, true, true)?;
+    match root.metadata(path) {
+        Ok(meta) if meta.is_dir() => {
+            if placement.protects_descendants(dir_identity(root, path, &meta)?) {
+                return Err(ContainError::MountPoint(Arc::from(placement.mount_point())));
+            }
+        }
+        Ok(_) => {}
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error.into()),
+    }
+    Ok(())
 }
 
 /// Refuse a change to the root volume that would reach a mount point.
@@ -824,6 +898,36 @@ pub(crate) fn check_repository_clear_of_mounts(
 /// lands once the root's links are followed, so a link to an ancestor cannot
 /// spell its way past the guard.
 fn check_mount_points(
+    root: &Dir,
+    path: &Path,
+    placement: &Placement,
+    recursive: bool,
+    follow_final: bool,
+) -> Result<(), ContainError> {
+    check_nested_mount_points(root, path, placement, recursive, follow_final)?;
+    let metadata = if follow_final {
+        root.metadata(path)
+    } else {
+        root.symlink_metadata(path)
+    };
+    match metadata {
+        Ok(meta) if meta.is_dir() => {
+            if placement.protects(dir_identity(root, path, &meta)?, recursive) {
+                return Err(ContainError::MountPoint(Arc::from(placement.mount_point())));
+            }
+        }
+        Ok(_) => {}
+        Err(error)
+            if matches!(
+                error.kind(),
+                io::ErrorKind::NotFound | io::ErrorKind::NotADirectory
+            ) => {}
+        Err(error) => return Err(error.into()),
+    }
+    Ok(())
+}
+
+fn check_nested_mount_points(
     root: &Dir,
     path: &Path,
     placement: &Placement,

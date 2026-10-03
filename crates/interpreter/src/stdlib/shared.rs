@@ -13,8 +13,6 @@ use crate::runtime::security::{CheckOutcome, SecurityCheck};
 use crate::runtime::vfs::{Access, Placement};
 use crate::runtime::{DiskQuota, QuotaCharge, QuotaExceeded, StoreData};
 
-pub const DEFAULT_CWD: &str = "/";
-
 /// The package whose code is executing, read off the innermost wasm frame's owning module.
 ///
 /// This answers "whose code is running", which is the question a capability check needs —
@@ -81,6 +79,7 @@ pub fn check_security(
         store.as_context().data().security_check.as_ref(),
         capability,
         &context,
+        store.as_context().data().vfs.cwd(),
     )
 }
 
@@ -91,6 +90,7 @@ pub(crate) fn authorize_capability(
     security_check: &dyn SecurityCheck,
     capability: &str,
     context: &serde_json::Value,
+    cwd: &str,
 ) -> wasmtime::Result<()> {
     // The ordering is the invariant. This must precede both the delegation
     // below and any work the host fn does after we return — a reorder that
@@ -102,7 +102,7 @@ pub(crate) fn authorize_capability(
     {
         return Err(permission_denied_invariant(caller, capability, reason));
     }
-    match security_check.check(caller, capability, context) {
+    match security_check.check_with_cwd(caller, capability, context, cwd) {
         CheckOutcome::Allow => Ok(()),
         CheckOutcome::Deny { reason } => Err(permission_denied(caller, capability, reason)),
     }
@@ -115,7 +115,7 @@ pub fn resolve_content_or_trap(
     guest_path: &str,
     op: &str,
 ) -> wasmtime::Result<ContentPath> {
-    resolve_content(&data.vfs, DEFAULT_CWD, guest_path)
+    resolve_content(&data.vfs, data.vfs.cwd(), guest_path)
         .map_err(|err| contain_trap(op, guest_path, &err))
 }
 
@@ -126,7 +126,7 @@ pub fn resolve_link_or_trap(
     guest_path: &str,
     op: &str,
 ) -> wasmtime::Result<LinkPath> {
-    resolve_link(&data.vfs, DEFAULT_CWD, guest_path)
+    resolve_link(&data.vfs, data.vfs.cwd(), guest_path)
         .map_err(|err| contain_trap(op, guest_path, &err))
 }
 
