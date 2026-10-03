@@ -17,6 +17,8 @@
 //! a host-built value hashes and serializes identically to a guest-built one.
 
 use crate::runtime::host::{abi_arg, abi_result};
+mod serialization;
+
 use wasmtime::{
     ArrayRef, ArrayRefPre, ArrayType, Caller, Func, Global, GlobalType, HeapType, Linker,
     Mutability, RefType, Rooted, Store, StructRef, StructRefPre, StructType, Val, ValType,
@@ -30,7 +32,7 @@ use crate::runtime::host::{
 };
 use crate::runtime::intrinsic_types::{IntrinsicTypes, build_intrinsic_types, intrinsic_types};
 use crate::runtime::number::format_number_js;
-use crate::runtime::prelude::keep::{KeptValue, keep_all};
+use crate::runtime::prelude::keep::keep_all;
 
 const FNV_OFFSET: u32 = 0x811c_9dc5;
 const FNV_PRIME: u32 = 0x0100_0193;
@@ -324,8 +326,24 @@ fn string_to_json(
     let st = as_struct(caller, recv, "String#toJson")?;
     let vtable = st.field(&mut *caller, 0)?;
     let units = read_struct_units(caller, &st, "String#toJson")?;
-    let escaped = json_escape_units(&units);
-    build_string(caller, raw_string, string_ty, vtable, &escaped)
+    let escaped = serialization::quoted(caller, &units)?;
+    build_string(caller, raw_string, string_ty, vtable, escaped.units())
+}
+
+pub(super) fn quote_string(
+    caller: &mut Caller<'_, StoreData>,
+    units: &[u16],
+) -> wasmtime::Result<Val> {
+    let intr = intrinsic_types(&mut *caller)?;
+    let escaped = serialization::quoted(caller, units)?;
+    let vtable = host_string_vtable(caller)?;
+    build_string(
+        caller,
+        &intr.raw_string,
+        &intr.string,
+        vtable,
+        escaped.units(),
+    )
 }
 
 pub(super) fn string_hash(
@@ -472,26 +490,9 @@ async fn array_to_string(
     raw_string: &ArrayType,
     string_ty: &StructType,
 ) -> wasmtime::Result<Val> {
-    let elements = read_array_backing(caller, recv, "Array#toString")?;
-    // An element's `toString` may be the program's, which can drop the rest
-    // from the array.
-    keep_all(caller, &elements)?;
-    let mut out: Vec<u16> = Vec::new();
-    for (i, elem) in elements.iter().enumerate() {
-        if i > 0 {
-            out.push(u16::from(b','));
-        }
-        match elem {
-            Val::AnyRef(Some(_)) => {
-                let s = dispatch_vtable_slot(caller, elem, 0, &[]).await?;
-                out.extend(read_string_units(caller, &s, "Array#toString element")?);
-            }
-            Val::AnyRef(None) => {}
-            other => wasmtime::bail!("Array#toString: invalid element {other:?}"),
-        }
-    }
+    let output = serialization::array(caller, recv, false).await?;
     let vtable = host_string_vtable(caller)?;
-    build_string(caller, raw_string, string_ty, vtable, &out)
+    build_string(caller, raw_string, string_ty, vtable, output.units())
 }
 
 /// `Array#toJson`: `[` + each element's `toJson` (null → `null`), joined by `,` + `]`.
@@ -501,31 +502,9 @@ async fn array_to_json(
     raw_string: &ArrayType,
     string_ty: &StructType,
 ) -> wasmtime::Result<Val> {
-    let elements = read_array_backing(caller, recv, "Array#toJson")?;
-    // An element's `toJson` may be the program's, which can drop the rest
-    // from the array.
-    keep_all(caller, &elements)?;
-    let mut out: Vec<u16> = vec![u16::from(b'[')];
-    for (i, elem) in elements.iter().enumerate() {
-        if i > 0 {
-            out.push(u16::from(b','));
-        }
-        if is_function(caller, elem)? {
-            out.extend("null".encode_utf16());
-            continue;
-        }
-        match elem {
-            Val::AnyRef(Some(_)) => {
-                let s = dispatch_vtable_slot(caller, elem, 1, &[]).await?;
-                out.extend(read_string_units(caller, &s, "Array#toJson element")?);
-            }
-            Val::AnyRef(None) => out.extend("null".encode_utf16()),
-            other => wasmtime::bail!("Array#toJson: invalid element {other:?}"),
-        }
-    }
-    out.push(u16::from(b']'));
+    let output = serialization::array(caller, recv, true).await?;
     let vtable = host_string_vtable(caller)?;
-    build_string(caller, raw_string, string_ty, vtable, &out)
+    build_string(caller, raw_string, string_ty, vtable, output.units())
 }
 
 /// Structural `Array#equals`: same length, element-wise via each element's
@@ -713,50 +692,9 @@ async fn object_to_json_fields(
     if let Some(value) = object_override(caller, recv, "toJson").await? {
         return Ok(value);
     }
-    let entries = json_property_slots(caller, recv)?;
-
-    // A value's own `toJson` may be a host body, whose receiver the engine
-    // does not keep; a getter's result is held by nothing else.
-    let kept_value = KeptValue::new(caller)?;
-    let mut out: Vec<u16> = vec![u16::from(b'{')];
-    for (name_units, slot, getter) in &entries {
-        let object = as_struct(caller, recv, "Object#toJson")?;
-        let values = super::object::field_array(caller, &object, 2)?;
-        let mut value = values.get(&mut *caller, *slot)?;
-        if *getter {
-            value = super::closure::read(caller, &value, "JSON getter")?
-                .call_with_receiver(caller, *recv, &[])
-                .await?;
-        }
-        kept_value.set(caller, value)?;
-        let value = &value;
-        if is_function(caller, value)? {
-            continue;
-        }
-        if out.len() > 1 {
-            out.push(u16::from(b','));
-        }
-
-        out.extend(json_escape_units(name_units));
-        out.push(u16::from(b':'));
-
-        match value {
-            Val::AnyRef(Some(_)) => {
-                let json = dispatch_vtable_slot(caller, value, 1, &[]).await?;
-                out.extend(read_string_units(
-                    caller,
-                    &json,
-                    "Object#toJson field value",
-                )?);
-            }
-            Val::AnyRef(None) => out.extend("null".encode_utf16()),
-            other => wasmtime::bail!("Object#toJson: invalid field value {other:?}"),
-        }
-    }
-    out.push(u16::from(b'}'));
-
+    let output = serialization::object(caller, recv).await?;
     let vtable = host_string_vtable(caller)?;
-    build_string(caller, raw_string, string_ty, vtable, &out)
+    build_string(caller, raw_string, string_ty, vtable, output.units())
 }
 
 /// Snapshot keys, then read each value in canonical key order. Getter side
@@ -769,7 +707,12 @@ fn json_property_slots(
     let names = super::object::field_array(caller, &object, 1)?;
     let values = super::object::field_array(caller, &object, 2)?;
     let mut entries = Vec::new();
-    for slot in 0..super::object::field_count(caller, recv)? {
+    let count = super::object::field_count(caller, recv)?;
+    fuel::charge(&mut *caller, fuel::ELEM, u64::from(count))?;
+    entries
+        .try_reserve_exact(count as usize)
+        .map_err(fatal_host_error)?;
+    for slot in 0..count {
         let name = names.get(&mut *caller, slot)?;
         if super::object::field_is_private(caller, &name)? {
             continue;
@@ -795,7 +738,46 @@ fn json_property_slots(
         }
         entries.push((units, slot, getter));
     }
-    entries.sort_by(|left, right| left.0.cmp(&right.0));
+    let _sort_memory = super::array::sort::reserve_key_sort_memory(caller, entries.len())?;
+    let mut indices = Vec::new();
+    indices
+        .try_reserve_exact(entries.len())
+        .map_err(fatal_host_error)?;
+    indices.extend(0..entries.len());
+    super::array::sort::sort_key_indices(
+        caller,
+        |index| entries.get(index).map(|entry| entry.0.as_slice()),
+        &mut indices,
+    )?;
+    let mut ranks = Vec::new();
+    ranks
+        .try_reserve_exact(entries.len())
+        .map_err(fatal_host_error)?;
+    ranks.resize(entries.len(), 0);
+    for (rank, original) in indices.into_iter().enumerate() {
+        let position = ranks
+            .get_mut(original)
+            .ok_or_else(|| fatal_host_error("invalid JSON key index"))?;
+        *position = rank;
+    }
+    fuel::charge(&mut *caller, fuel::ELEM, entries.len() as u64)?;
+    // Slots are visited in ascending order above; ranks map that order to the
+    // UTF-16 ordering. Apply the permutation without copying key strings.
+    for position in 0..entries.len() {
+        loop {
+            let target = *ranks
+                .get(position)
+                .ok_or_else(|| fatal_host_error("invalid JSON key rank"))?;
+            if target == position {
+                break;
+            }
+            if target >= entries.len() {
+                return Err(fatal_host_error("invalid JSON key rank"));
+            }
+            entries.swap(position, target);
+            ranks.swap(position, target);
+        }
+    }
     Ok(entries)
 }
 
@@ -1654,38 +1636,58 @@ fn fnv_combine(acc: u32, element_hash: u32) -> u32 {
 /// JSON-escape UTF-16 code units into a quoted `"…"` unit sequence — the exact
 /// escapes for controls, quotes, backslashes, and unpaired surrogates.
 /// Valid surrogate pairs stay intact; lone halves use well-formed JSON escapes.
+#[cfg(test)]
 pub(super) fn json_escape_units(units: &[u16]) -> Vec<u16> {
-    let mut out: Vec<u16> = Vec::with_capacity(units.len() + 2);
+    let mut out = Vec::new();
     out.push(u16::from(b'"'));
-    for (index, &c) in units.iter().enumerate() {
-        match c {
-            0x08 => out.extend([u16::from(b'\\'), u16::from(b'b')]),
-            0x09 => out.extend([u16::from(b'\\'), u16::from(b't')]),
-            0x0A => out.extend([u16::from(b'\\'), u16::from(b'n')]),
-            0x0C => out.extend([u16::from(b'\\'), u16::from(b'f')]),
-            0x0D => out.extend([u16::from(b'\\'), u16::from(b'r')]),
-            c if c < 0x20 || is_unpaired_surrogate(units, index) => {
-                out.extend([u16::from(b'\\'), u16::from(b'u')]);
-                out.push(hex_nibble((c >> 12) & 0xf));
-                out.push(hex_nibble((c >> 8) & 0xf));
-                out.push(hex_nibble((c >> 4) & 0xf));
-                out.push(hex_nibble(c & 0xf));
-            }
-            0x22 => out.extend([u16::from(b'\\'), u16::from(b'"')]),
-            0x5C => out.extend([u16::from(b'\\'), u16::from(b'\\')]),
-            c => out.push(c),
-        }
+    for (index, &unit) in units.iter().enumerate() {
+        let (escaped, len) = escaped_json_unit(units, index, unit);
+        out.extend(escaped.into_iter().take(len));
     }
     out.push(u16::from(b'"'));
     out
 }
 
-fn is_unpaired_surrogate(units: &[u16], index: usize) -> bool {
-    match units[index] {
-        0xd800..=0xdbff => !units
-            .get(index + 1)
+pub(super) fn escaped_json_unit(units: &[u16], index: usize, unit: u16) -> ([u16; 6], usize) {
+    let escaped_letter = match unit {
+        0x08 => Some(b'b'),
+        0x09 => Some(b't'),
+        0x0a => Some(b'n'),
+        0x0c => Some(b'f'),
+        0x0d => Some(b'r'),
+        0x22 => Some(b'"'),
+        0x5c => Some(b'\\'),
+        _ => None,
+    };
+    if let Some(letter) = escaped_letter {
+        return ([92, u16::from(letter), 0, 0, 0, 0], 2);
+    }
+    if unit < 0x20 || is_unpaired_surrogate(units, index, unit) {
+        return (
+            [
+                92,
+                117,
+                hex_nibble((unit >> 12) & 15),
+                hex_nibble((unit >> 8) & 15),
+                hex_nibble((unit >> 4) & 15),
+                hex_nibble(unit & 15),
+            ],
+            6,
+        );
+    }
+    ([unit, 0, 0, 0, 0, 0], 1)
+}
+
+fn is_unpaired_surrogate(units: &[u16], index: usize, unit: u16) -> bool {
+    match unit {
+        0xd800..=0xdbff => !index
+            .checked_add(1)
+            .and_then(|next| units.get(next))
             .is_some_and(|next| (0xdc00..=0xdfff).contains(next)),
-        0xdc00..=0xdfff => index == 0 || !(0xd800..=0xdbff).contains(&units[index - 1]),
+        0xdc00..=0xdfff => !index
+            .checked_sub(1)
+            .and_then(|previous| units.get(previous))
+            .is_some_and(|previous| (0xd800..=0xdbff).contains(previous)),
         _ => false,
     }
 }

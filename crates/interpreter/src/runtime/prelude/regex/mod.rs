@@ -561,7 +561,11 @@ pub(super) fn string_replace(
         let input = read_string_units(caller, abi_arg(params, 0)?, "String#replace(input)")?;
         let search = read_string_units(caller, abi_arg(params, 1)?, "String#replace(search)")?;
         let repl = read_string_units(caller, abi_arg(params, 2)?, "String#replace(replacement)")?;
-        fuel::charge(&mut *caller, fuel::SCAN, input.len() as u64)?;
+        fuel::charge(
+            &mut *caller,
+            fuel::SCAN,
+            (input.len() + search.len()) as u64,
+        )?;
         let out = replace_literal(&input, &search, &repl, false);
         let st = write_submilli_string_struct_units(caller, &out)?;
         return Ok(Val::AnyRef(Some(st.to_anyref())));
@@ -595,12 +599,12 @@ pub(super) fn string_replace_all(
     if arg_is_string(caller, abi_arg(params, 1)?)? {
         let input = read_string_units(caller, abi_arg(params, 0)?, "String#replaceAll(input)")?;
         let search = read_string_units(caller, abi_arg(params, 1)?, "String#replaceAll(search)")?;
-        let repl = read_string_units(
-            caller,
-            abi_arg(params, 2)?,
-            "String#replaceAll(replacement)",
+        let repl = read_string_units(caller, abi_arg(params, 2)?, "String#replaceAll(replacement)")?;
+        fuel::charge(
+            &mut *caller,
+            fuel::SCAN,
+            (input.len() + search.len()) as u64,
         )?;
-        fuel::charge(&mut *caller, fuel::SCAN, input.len() as u64)?;
         let out = replace_literal(&input, &search, &repl, true);
         let st = write_submilli_string_struct_units(caller, &out)?;
         return Ok(Val::AnyRef(Some(st.to_anyref())));
@@ -641,7 +645,7 @@ pub(super) fn string_split(
     let parts: Vec<Vec<u16>> = if arg_is_string(caller, abi_arg(params, 1)?)? {
         let input = read_string_units(caller, abi_arg(params, 0)?, "String#split(input)")?;
         let sep = read_string_units(caller, abi_arg(params, 1)?, "String#split(separator)")?;
-        fuel::charge(&mut *caller, fuel::SCAN, input.len() as u64)?;
+        fuel::charge(&mut *caller, fuel::SCAN, (input.len() + sep.len()) as u64)?;
         split_literal(&input, &sep, limit)
     } else {
         let st = as_struct(caller, abi_arg(params, 1)?, "String#split(regex)")?;
@@ -667,14 +671,9 @@ pub(super) fn string_split(
 
 /// First index at/after `from` where `needle` occurs in `hay`. An empty needle
 /// matches at `from` (JS treats `""` as present everywhere).
+#[cfg(test)]
 fn find(hay: &[u16], needle: &[u16], from: usize) -> Option<usize> {
-    if needle.is_empty() {
-        return (from <= hay.len()).then_some(from);
-    }
-    if needle.len() > hay.len() {
-        return None;
-    }
-    (from..=hay.len() - needle.len()).find(|&i| &hay[i..i + needle.len()] == needle)
+    super::string::search::Search::new(needle, false).find(hay, from)
 }
 
 /// Expand JS replacement-pattern tokens against a single match: `$$`→`$`,
@@ -709,8 +708,9 @@ fn apply_replacement(repl: &[u16], src: &[u16], start: usize, end: usize) -> Vec
 /// Replace the first (or every, when `all`) literal occurrence of `search`,
 /// applying JS replacement patterns.
 fn replace_literal(input: &[u16], search: &[u16], repl: &[u16], all: bool) -> Vec<u16> {
+    let matcher = super::string::search::Search::new(search, false);
     if !all {
-        return match find(input, search, 0) {
+        return match matcher.find(input, 0) {
             Some(idx) => {
                 let end = idx + search.len();
                 let mut out = input[..idx].to_vec();
@@ -724,7 +724,7 @@ fn replace_literal(input: &[u16], search: &[u16], repl: &[u16], all: bool) -> Ve
 
     let mut out = Vec::new();
     let mut pos = 0;
-    while let Some(idx) = find(input, search, pos) {
+    while let Some(idx) = matcher.find(input, pos) {
         out.extend_from_slice(&input[pos..idx]);
         out.extend(apply_replacement(repl, input, idx, idx + search.len()));
         if search.is_empty() {
@@ -766,18 +766,13 @@ fn split_literal(input: &[u16], sep: &[u16], limit: i32) -> Vec<Vec<u16>> {
 
     let mut out = Vec::new();
     let mut start = 0;
-    let mut pos = 0;
-    while pos + sep.len() <= input.len() {
-        if &input[pos..pos + sep.len()] == sep {
-            if out.len() == cap {
-                return out;
-            }
-            out.push(input[start..pos].to_vec());
-            pos += sep.len();
-            start = pos;
-        } else {
-            pos += 1;
+    let matcher = super::string::search::Search::new(sep, false);
+    while let Some(pos) = matcher.find(input, start) {
+        if out.len() == cap {
+            return out;
         }
+        out.push(input[start..pos].to_vec());
+        start = pos + sep.len();
     }
     if out.len() == cap {
         return out;

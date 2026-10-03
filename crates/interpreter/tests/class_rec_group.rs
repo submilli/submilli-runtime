@@ -79,26 +79,48 @@ fn animal_dog_rec_group_shapes() {
     let bytes = compile(ANIMAL_DOG);
     let shapes = struct_shapes(&bytes);
 
-    // $Animal struct: vtable, field-names, object-fields, identity ID.
-    assert!(
-        shapes.contains(&(4, true)),
-        "expected the $Animal struct (4 fields, sub $ObjectShape); got {shapes:?}",
-    );
-    // $Dog struct: same object-shape prefix, subtype of $Animal.
-    assert!(
-        shapes.iter().filter(|&&(n, _)| n == 4).count() >= 2,
-        "expected both $Animal and $Dog structs (4 fields each); got {shapes:?}",
-    );
-    // $Animal_vtable: 4 universal slots + speak.
-    assert!(
-        shapes.contains(&(5, true)),
-        "expected $Animal_vtable (5 fields, sub $VTable); got {shapes:?}",
-    );
-    // $Dog_vtable: 4 universal + speak (override) + learn.
-    assert!(
-        shapes.contains(&(6, true)),
-        "expected $Dog_vtable (6 fields, sub $Animal_vtable); got {shapes:?}",
-    );
+    let mut type_index = 0;
+    let mut pairs = Vec::new();
+    for payload in Parser::new(0).parse_all(&bytes) {
+        if let Payload::TypeSection(reader) = payload.expect("payload") {
+            for rec in reader {
+                let rec = rec.expect("rec group");
+                let members = rec.types().collect::<Vec<_>>();
+                if let [vtable, instance] = members.as_slice()
+                    && let CompositeInnerType::Struct(vtable_shape) = &vtable.composite_type.inner
+                    && let CompositeInnerType::Struct(instance_shape) =
+                        &instance.composite_type.inner
+                {
+                    pairs.push((
+                        type_index,
+                        vtable_shape.fields.len(),
+                        instance_shape.fields.len(),
+                        vtable.supertype_idx,
+                        instance.supertype_idx,
+                    ));
+                }
+                type_index += members.len() as u32;
+            }
+        }
+    }
+    // Class declarations emit (vtable, instance) pairs. Identify Animal and
+    // Dog through both subtype links, so unrelated intrinsic shapes cannot
+    // satisfy the assertions. Six vtable header fields precede methods.
+    let animal = pairs
+        .iter()
+        .find(|pair| pair.1 == 7 && pair.2 == 5)
+        .expect("Animal vtable + instance pair");
+    let dog = pairs
+        .iter()
+        .find(|pair| {
+            pair.3
+                .is_some_and(|parent| parent.as_module_index() == Some(animal.0))
+                && pair
+                    .4
+                    .is_some_and(|parent| parent.as_module_index() == Some(animal.0 + 1))
+        })
+        .expect("Dog pair subtypes both Animal types");
+    assert_eq!((dog.1, dog.2), (8, 5), "unexpected Dog layout: {shapes:?}");
 }
 
 #[test]
@@ -117,7 +139,7 @@ fn single_class_with_fields_validates() {
     Validator::new()
         .validate_all(&bytes)
         .expect("single class validates");
-    assert!(struct_shapes(&bytes).contains(&(3, true)));
+    assert!(struct_shapes(&bytes).contains(&(5, true)));
 }
 
 #[test]

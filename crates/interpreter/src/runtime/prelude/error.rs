@@ -184,6 +184,10 @@ pub(crate) fn build_error_subclass_types(
             intr.class_vtable.clone().into(),
         ))),
     ));
+    def.field(wasmtime::FieldType::new(
+        imm,
+        wasmtime::StorageType::ValType(ValType::I32),
+    ));
     def.finish();
 
     let mut def = b.define_struct(struct_label);
@@ -294,6 +298,7 @@ pub(crate) fn install_store_bound(
             Val::FuncRef(Some(slots[3])),
             // Nominal-identity parent link: Error is the chain root.
             Val::AnyRef(None),
+            Val::I32(0),
         ],
     )?;
     let vtable = Global::new(
@@ -371,6 +376,7 @@ fn install_subclass_vtable(
             Val::FuncRef(Some(slots[3])),
             // Parent link: the subclass extends Error.
             Val::AnyRef(Some(parent.to_anyref())),
+            Val::I32(0),
         ],
     )?;
     let vtable = Global::new(

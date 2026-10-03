@@ -13,24 +13,22 @@
 //! that call guest code snapshot and root their inputs before callbacks run.
 
 mod install;
-mod sort;
+pub(super) mod sort;
 
 pub(crate) use install::declare_types;
 pub use install::{declare, install};
-pub(crate) use sort::{Order, merge_sort};
+pub(crate) use sort::merge_sort;
 
-use wasmtime::{Caller, Rooted, StructRef, StructRefPre, Val};
+use wasmtime::{Caller, StructRef, StructRefPre, Val};
 
 use crate::runtime::StoreData;
 use crate::runtime::array_storage::ArrayStorage;
-use crate::runtime::host::{
-    host_boxed_number_vtable, write_submilli_array_struct, write_submilli_string_struct,
-};
+use crate::runtime::host::{host_boxed_number_vtable, write_submilli_array_struct};
 use crate::runtime::intrinsic_types::intrinsic_types;
 use crate::runtime::prelude::closure::Closure;
 use crate::runtime::prelude::iterator::{IterKind, make_index_iterator};
 use crate::runtime::prelude::keep::{KeptValue, KeptValues, keep_all};
-use crate::runtime::prelude::vtable::{dispatch_vtable_slot, read_string_units, string_length};
+use crate::runtime::prelude::vtable::{dispatch_vtable_slot, read_string_units};
 
 // ---------------------------------------------------------------------------
 // Marshalling helpers
@@ -488,106 +486,9 @@ async fn sort_elems(
     cmp: Option<&Closure>,
 ) -> wasmtime::Result<()> {
     match cmp {
-        Some(cmp) => {
-            merge_sort(caller, elements, &Order::Comparator(cmp), |_, elem| {
-                Ok(elem)
-            })
-            .await
-        }
-        None => sort_by_string(caller, elements).await,
+        Some(cmp) => merge_sort(caller, elements, cmp, |_, elem| Ok(elem)).await,
+        None => sort::sort_by_string(caller, elements).await,
     }
-}
-
-/// The default order: elements compare by their string form, and none is
-/// computed for fewer than two elements, which never compare. Each element's
-/// `toString()` normally runs once and its string is kept for every comparison;
-/// past [`SORT_KEY_BUDGET_UNITS`] the strings are released and each comparison
-/// computes its two instead, as JavaScript does.
-async fn sort_by_string(
-    caller: &mut Caller<'_, StoreData>,
-    elements: &mut Vec<Val>,
-) -> wasmtime::Result<()> {
-    if elements.len() < 2 {
-        return Ok(());
-    }
-    let Some(keys) = kept_string_forms(caller, elements).await? else {
-        return merge_sort(caller, elements, &Order::StringPerComparison, |_, elem| {
-            Ok(elem)
-        })
-        .await;
-    };
-    let mut keyed: Vec<(Val, Val)> = keys
-        .values()
-        .iter()
-        .copied()
-        .zip(elements.iter().copied())
-        .collect();
-    merge_sort(caller, &mut keyed, &Order::KeptStrings, |_, (key, _)| {
-        Ok(key)
-    })
-    .await?;
-    *elements = keyed.into_iter().map(|(_, elem)| elem).collect();
-    Ok(())
-}
-
-/// Every element's string form (see [`string_form_units`]), kept alive
-/// together, or `None` once they pass [`SORT_KEY_BUDGET_UNITS`].
-async fn kept_string_forms(
-    caller: &mut Caller<'_, StoreData>,
-    elements: &[Val],
-) -> wasmtime::Result<Option<KeptValues>> {
-    let mut keys = KeptValues::with_capacity(caller, elements.len())?;
-    // One shared string for every `null`: whatever the host allocates stays
-    // alive until the sort returns.
-    let null_key = write_submilli_string_struct(caller, "null")?;
-    let null_key = Val::AnyRef(Some(null_key.to_anyref()));
-    let mut kept_units = 0usize;
-    for &elem in elements {
-        let key = if is_null(&elem) {
-            null_key
-        } else {
-            dispatch_vtable_slot(caller, &elem, 0, &[]).await?
-        };
-        keys.push(caller, key)?;
-        // A string element is its own string form, and every `null` shares one
-        // key, so keeping those costs nothing extra.
-        if is_null(&elem) || same_object(caller, &key, &elem)? {
-            continue;
-        }
-        kept_units = kept_units.saturating_add(string_length(caller, &key, "sort key")?);
-        if kept_units > SORT_KEY_BUDGET_UNITS {
-            keys.clear(caller)?;
-            return Ok(None);
-        }
-    }
-    Ok(Some(keys))
-}
-
-/// Whether `a` and `b` are the same GC object.
-fn same_object(caller: &mut Caller<'_, StoreData>, a: &Val, b: &Val) -> wasmtime::Result<bool> {
-    match (a, b) {
-        (Val::AnyRef(Some(a)), Val::AnyRef(Some(b))) => Rooted::ref_eq(&*caller, a, b),
-        _ => Ok(false),
-    }
-}
-
-/// How many code units of `toString()` results the default sort keeps alive at
-/// once (8 MiB) before it computes them per comparison instead.
-const SORT_KEY_BUDGET_UNITS: usize = 4 * 1024 * 1024;
-
-/// An element's string form in the default order: its `toString()`, or `"null"`
-/// for `null`, as in JavaScript (`[null, "a"].sort()` is `["a", null]`). Read
-/// as soon as `toString()` returns; `null` allocates nothing, since whatever the
-/// host allocates stays alive until the sort returns. [`kept_string_forms`]
-/// builds the same strings as values.
-pub(super) async fn string_form_units(
-    caller: &mut Caller<'_, StoreData>,
-    elem: Val,
-) -> wasmtime::Result<Vec<u16>> {
-    if is_null(&elem) {
-        return Ok("null".encode_utf16().collect());
-    }
-    element_to_string(caller, elem).await
 }
 
 /// `null` when `index` is out of range — [`install`] raises the catchable

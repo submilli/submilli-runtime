@@ -38,9 +38,10 @@ use crate::{MangledName, TypedAst, TypedClassDecl, TypedTypeDecl};
 pub(crate) const UNIVERSAL_STUB_COUNT: usize = 4;
 /// `$ClassVTable` field index of the nominal-identity parent link.
 pub(crate) const VTABLE_PARENT_SLOT: u32 = UNIVERSAL_STUB_COUNT as u32;
-/// Class-vtable fields preceding method slots: the universal funcrefs plus the
-/// parent link.
-pub(crate) const VTABLE_METHOD_SLOT_BASE: u32 = VTABLE_PARENT_SLOT + 1;
+/// Whether JSON uses the runtime's default property serializer.
+pub(crate) const VTABLE_DEFAULT_JSON_SLOT: u32 = VTABLE_PARENT_SLOT + 1;
+/// Universal funcrefs, parent link and default-serializer marker precede methods.
+pub(crate) const VTABLE_METHOD_SLOT_BASE: u32 = VTABLE_DEFAULT_JSON_SLOT + 1;
 
 /// One method slot in a class vtable. `name` is the method name; `owner` is the
 /// most-derived class that supplies the body (the class itself for an override,
@@ -661,6 +662,10 @@ impl ClassPlan {
             fieldtype_ref(intrinsics.equals_fn),
             fieldtype_ref(intrinsics.hash_fn),
             fieldtype_ref_null(intrinsics.class_vtable),
+            FieldType {
+                element_type: StorageType::Val(ValType::I32),
+                mutable: false,
+            },
         ];
         for slot in &class.methods {
             fields.push(fieldtype_ref(slot.sig_idx));
@@ -885,6 +890,9 @@ impl ClassPlan {
                 Instruction::RefFunc(class.equals_func_idx),
                 Instruction::RefFunc(class.hash_func_idx),
                 parent_link,
+                Instruction::I32Const(i32::from(
+                    !class.methods.iter().any(|slot| slot.name == "toJson"),
+                )),
             ];
             for slot in &class.methods {
                 let func = symbols

@@ -356,7 +356,7 @@ pub(crate) fn build_intrinsic_types(engine: &Engine) -> wasmtime::Result<Intrins
     )?;
 
     // `(rec $ClassVTable)` — the class-only vtable base: the 4 universal slots
-    // plus the self-referential nominal-identity parent link, its own singleton
+    // plus the nominal-identity parent link and default-JSON marker, its own singleton
     // rec group (mirrors `declare_intrinsic_types`).
     let mut b = RecGroupBuilder::new(engine);
     let class_vtable_label = b.declare_struct();
@@ -373,6 +373,7 @@ pub(crate) fn build_intrinsic_types(engine: &Engine) -> wasmtime::Result<Intrins
         .mutability(imm)
         .nullable(true)
         .finish();
+    def.field(FieldType::new(imm, StorageType::ValType(ValType::I32)));
     def.finish();
     let g = b.build().map_err(crate::runtime::host::fatal_host_error)?;
     let class_vtable = g
@@ -381,7 +382,7 @@ pub(crate) fn build_intrinsic_types(engine: &Engine) -> wasmtime::Result<Intrins
 
     // `(rec $Error_vtable $Error)` — the class-shaped pair, one 2-member rec
     // group mirroring the user-class emitter's output (`classes.rs`): the vtable
-    // is the `$ClassVTable` prefix (universal slots + parent link, no methods);
+    // is the `$ClassVTable` prefix (universal slots + parent link + default-JSON marker, no methods);
     // the struct has the 4 `$ObjectShape` header slots and an identity ID;
     // named fields remain in the object-fields payload.
     let mut b = RecGroupBuilder::new(engine);
@@ -404,6 +405,7 @@ pub(crate) fn build_intrinsic_types(engine: &Engine) -> wasmtime::Result<Intrins
             class_vtable.clone().into(),
         ))),
     ));
+    def.field(FieldType::new(imm, StorageType::ValType(ValType::I32)));
     def.finish();
 
     let mut def = b.define_struct(error_label);

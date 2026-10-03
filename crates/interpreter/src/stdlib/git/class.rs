@@ -93,6 +93,10 @@ fn class_types(
         def.field(ref_field(ty.clone().into(), false));
     }
     def.field(ref_field(intr.class_vtable.clone().into(), true));
+    def.field(FieldType::new(
+        Mutability::Const,
+        StorageType::ValType(ValType::I32),
+    ));
     for ty in methods {
         def.field(ref_field(ty.into(), false));
     }
@@ -174,6 +178,7 @@ fn make_vtable(store: &mut Store<StoreData>, ty: StructType, methods: Vec<Func>)
         opaque.field(&mut *store, 2)?,
         opaque.field(&mut *store, 3)?,
         Val::AnyRef(None),
+        Val::I32(1),
     ];
     slots.extend(methods.into_iter().map(|method| Val::FuncRef(Some(method))));
     let pre = StructRefPre::new(&mut *store, ty.clone());

@@ -9,6 +9,7 @@
 //! [`install`]; this file is just the strings.
 
 mod install;
+pub(crate) mod search;
 
 pub(crate) use install::declare_types;
 pub use install::{declare, install};
@@ -126,13 +127,7 @@ fn normalize_slice_index(x: i32, len: usize) -> usize {
 /// First index `>= from` at which `needle` occurs in `haystack`. An empty
 /// `needle` matches at `min(from, len)` — JS `indexOf`/`includes` search order.
 fn raw_index_of(haystack: &[u16], needle: &[u16], from: usize) -> Option<usize> {
-    if needle.is_empty() {
-        return Some(from.min(haystack.len()));
-    }
-    if needle.len() > haystack.len() {
-        return None;
-    }
-    (from..=haystack.len() - needle.len()).find(|&i| &haystack[i..i + needle.len()] == needle)
+    search::Search::new(needle, false).find(haystack, from.min(haystack.len()))
 }
 
 /// `charAt`: the single code unit at `index`, or `""` out of range.
@@ -203,10 +198,10 @@ pub fn last_index_of(s: &Str, search: &Str, from: f64) -> f64 {
     if needle.is_empty() {
         return from as f64;
     }
-    (0..=from)
-        .rev()
-        .find(|&i| &haystack[i..i + needle.len()] == needle)
-        .map_or(-1.0, |i| i as f64)
+    let end = from + needle.len();
+    search::Search::new(needle, true)
+        .find(&haystack[..end], 0)
+        .map_or(-1.0, |i| (end - i - needle.len()) as f64)
 }
 
 /// `includes`: whether `search` occurs at or after `fromIndex`.

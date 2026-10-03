@@ -136,9 +136,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         true,
         move |caller, params, results| {
             let recv = json_abi.read(caller, abi_arg(params, 0)?, "String#toJson")?;
-            let escaped = crate::runtime::prelude::vtable::json_escape_units(recv.value.units());
-            let st = write_submilli_string_struct_units(caller, &escaped)?;
-            *abi_result(results, 0)? = Val::AnyRef(Some(st.to_anyref()));
+            *abi_result(results, 0)? = crate::runtime::prelude::vtable::quote_string(caller, recv.value.units())?;
             Ok(())
         },
     )?;
@@ -688,9 +686,11 @@ fn reg_str_str_num_to_num(
             let recv = abi.read(caller, abi_arg(params, 0)?, name)?;
             let search = abi.read(caller, abi_arg(params, 1)?, name)?;
             let from = number(abi_arg(params, 2)?, name)?;
-            // A naive search; the worst case multiplies in the needle, which
-            // is accepted as under-charged (SUB-1292).
-            fuel::charge(&mut *caller, fuel::SCAN, recv.value.units().len() as u64)?;
+            fuel::charge(
+                &mut *caller,
+                fuel::SCAN,
+                (recv.value.len() + search.value.len()) as u64,
+            )?;
             *abi_result(results, 0)? = Val::F64(op(&recv.value, &search.value, from).to_bits());
             Ok(())
         },
@@ -722,12 +722,14 @@ fn register_string_search_predicate(
             let abi = abi.clone();
             Box::pin(async move {
                 let recv = abi.read(caller, abi_arg(params, 0)?, name)?;
-                let search =
-                    super::super::value::search_string(caller, abi_arg(params, 1)?).await?;
+                let search = super::super::value::search_string(caller, abi_arg(params, 1)?).await?;
                 let from = super::super::value::to_number(caller, abi_arg(params, 2)?).await?;
-                fuel::charge(&mut *caller, fuel::SCAN, recv.value.units().len() as u64)?;
-                *abi_result(results, 0)? =
-                    Val::I32(op(&recv.value, &Str::from_units(search), from) as i32);
+                fuel::charge(
+                    &mut *caller,
+                    fuel::SCAN,
+                    (recv.value.len() + search.len()) as u64,
+                )?;
+                *abi_result(results, 0)? = Val::I32(op(&recv.value, &Str::from_units(search), from) as i32);
                 Ok(())
             })
         },

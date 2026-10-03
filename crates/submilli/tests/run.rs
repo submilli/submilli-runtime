@@ -988,6 +988,60 @@ fn operations_charge_for_the_input_they_process() {
         assert!(added >= floor, "{name}: {added} < {floor}");
     }
 
+    // Double both text and nesting: the old intermediate-string charge grew
+    // nearly fourfold. Shared default serialization copies output linearly.
+    for (method, old) in [
+        ("JSON.stringify(value)", [17_925_u64, 68_729]),
+        ("(value as unknown[]).toString()", [16_832, 66_400]),
+    ] {
+        let mut added = Vec::new();
+        for (index, units) in [4096, 8192].into_iter().enumerate() {
+            let input = format!(
+                "let value: unknown = \"x\".repeat({units}); for (let i=0; i<{}; i++) {{ value=[value]; }}",
+                units / 256
+            );
+            let baseline = host_fuel(
+                "usage-shared-serializer-base",
+                &format!("function main(): number {{ {input} return 0; }}"),
+            );
+            let actual = host_fuel(
+                "usage-shared-serializer",
+                &format!("function main(): number {{ {input} {method}; return 0; }}"),
+            ) - baseline;
+            assert!(
+                actual < old[index] / 2,
+                "{method}: {actual} versus old {}",
+                old[index]
+            );
+            added.push(actual);
+        }
+        assert!(added[1] <= added[0] * 22 / 10, "{method}: {added:?}");
+    }
+
+    // Identical keys share a prefix group. Doubling key length adds precisely
+    // one key copy per item and one pair scan per other item, rather than
+    // copies for every merge comparison in the old implementation.
+    let mut key_costs = Vec::new();
+    for units in [1024_u64, 2048] {
+        let input = format!(
+            "const key = \"x\".repeat({units}); const values: string[] = []; for (let i=0; i<128; i++) {{ values.push(key); }}"
+        );
+        let baseline = host_fuel(
+            "usage-sort-keys-base",
+            &format!("function main(): number {{ {input} return 0; }}"),
+        );
+        key_costs.push(
+            host_fuel(
+                "usage-sort-keys",
+                &format!("function main(): number {{ {input} values.sort(); return 0; }}"),
+            ) - baseline,
+        );
+    }
+    assert_eq!(
+        key_costs[1] - key_costs[0],
+        128 * COPY.cost(1024) + 127 * SCAN.cost(2048)
+    );
+
     for n in [128_u64, 256] {
         for (method, per_call) in [
             ("exec", CALL + REGEX.cost(1) + SCAN.cost(1) + COPY.cost(1)),

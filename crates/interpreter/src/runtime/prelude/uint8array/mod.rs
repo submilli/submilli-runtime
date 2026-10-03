@@ -28,7 +28,7 @@ use crate::runtime::host::{
 };
 use crate::runtime::intrinsic_types::intrinsic_types;
 use crate::runtime::number::format_number_js;
-use crate::runtime::prelude::array::{ElementCallback, Order, merge_sort};
+use crate::runtime::prelude::array::{ElementCallback, merge_sort};
 use crate::runtime::prelude::closure::Closure;
 use crate::runtime::prelude::iterator::as_struct;
 use crate::runtime::prelude::keep::KeptValue;
@@ -364,7 +364,7 @@ async fn sort_bytes(
     for byte in 0..=u8::MAX {
         boxes.push(box_byte(caller, byte)?);
     }
-    merge_sort(caller, bytes, &Order::Comparator(cmp), |_, byte| {
+    merge_sort(caller, bytes, cmp, |_, byte| {
         boxes
             .get(usize::from(byte))
             .copied()

@@ -89,7 +89,7 @@ pub fn declare_intrinsic_types(types: &mut TypeSection) -> IntrinsicTypeIndices 
     let closure = 19u32;
     // `$ClassVTable` — nominal-identity base for class vtables (SUB-631). A
     // self-referential singleton rec group `(sub $VTable (4 funcrefs, parent
-    // (ref null $ClassVTable)))`. Only class vtables (and `$Error_vtable`)
+    // (ref null $ClassVTable), default-JSON i32))`. Only class vtables (and `$Error_vtable`)
     // subtype it; every other vtable stays a plain `$VTable` subtype, so a
     // `ref.cast (ref $ClassVTable)` classifies "is a class instance" and the
     // parent field carries the `extends` chain for `instanceof`'s ref.eq walk.
@@ -381,6 +381,10 @@ pub fn declare_intrinsic_types(types: &mut TypeSection) -> IntrinsicTypeIndices 
                 element_type: StorageType::Val(ref_null(class_vtable)),
                 mutable: false,
             },
+            FieldType {
+                element_type: StorageType::Val(ValType::I32),
+                mutable: false,
+            },
         ],
         Some(vtable),
     )]);
@@ -395,6 +399,10 @@ pub fn declare_intrinsic_types(types: &mut TypeSection) -> IntrinsicTypeIndices 
                 fieldtype_ref(hash_fn),
                 FieldType {
                     element_type: StorageType::Val(ref_null(class_vtable)),
+                    mutable: false,
+                },
+                FieldType {
+                    element_type: StorageType::Val(ValType::I32),
                     mutable: false,
                 },
             ],
