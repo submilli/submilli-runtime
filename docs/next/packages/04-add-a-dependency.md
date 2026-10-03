@@ -32,6 +32,8 @@ import { applyCredit } from "@acme/billing";
 
 /**
  * Apologize to a customer with a goodwill credit, and say so in dollars.
+ * @param customerId The customer's id in the billing system.
+ * @returns A sentence saying how much was credited.
  */
 export function apologize(customerId: string): string {
     const credit = applyCredit(customerId, 1500);

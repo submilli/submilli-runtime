@@ -47,6 +47,31 @@ Add `--upgrade` to replace a package already installed at another commit.
 Every [curated package](/docs/next/reference/curated-packages) comes from
 that repository.
 
+### From a private repository
+
+A private repository needs a GitHub token that can read it; without
+one, `install` reports that it found no public repository by that name.
+Store yours once, and `install` and `build` send it from then on:
+
+```sh
+submilli github authenticate
+```
+
+```text
+✓ stored a GitHub token for octocat (never expires) in ~/.submilli/github_token
+```
+
+`authenticate` prompts for the token, or reads it from piped standard
+input, and checks it with GitHub. In CI, put the token in `GH_TOKEN`
+instead; `submilli github auth-status` says which token applies. Refer
+to [Install private packages on a
+server](/docs/next/server/install-private-packages#create-the-token) for
+the token's settings, and to the [CLI
+reference](/docs/next/reference/cli) for the errors an install can
+give.
+
+### On a server
+
 A server has a package store of its own, so a blueprint that will run there
 needs the package installed there too. The `submilli server` commands talk
 to a running server; [Connect the CLI](/docs/next/server/connect-the-cli)
@@ -127,7 +152,7 @@ submilli blueprint add-package @acme/billing --no-capabilities
 ```text
 warning: blueprint.yaml: package `@acme/billing` requires secret `BILLING_API_KEY`, but `secrets:` does not declare it
 ✓ added @acme/billing to blueprint.yaml
-  1 provided capabilities not selected — denied by `default: deny`
+  1 provided capabilities not selected; `default: deny` denies calls to them
   added 2 rules to caller `@acme/billing` (default allow):
     allow http.post (filter: host == "billing.internal.example.com")
     allow secrets.get (filter: name == "BILLING_API_KEY")

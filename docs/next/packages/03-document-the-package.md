@@ -22,9 +22,23 @@ Acme's billing package; substitute your operations and your service.
 ## Doc comments are the API
 
 Every export and every field of a type the package returns gets a doc
-comment; the build warns about an export without one. The comments are
-what `submilli docs` prints, and what the model's documentation tool
-returns:
+comment, and a function's comment names each parameter with `@param`
+and what it returns with `@returns`. The build warns about an export
+without a comment, and about a comment that leaves a parameter or the
+result out:
+
+```text
+warning: parameter `customerId` is undocumented (missing `@param customerId`)
+  --> packages/billing/src/lib.ts:22:29
+   |
+21 |  */
+22 | export function applyCredit(customerId: string, amount: number): Credit {
+   |                             ^^^^^^^^^^
+23 |     if (amount <= 0) {
+```
+
+The comments are what `submilli docs` prints, and what the model's
+documentation tool returns:
 
 ```sh
 submilli docs @acme/billing
@@ -35,7 +49,10 @@ submilli docs @acme/billing
 
 /**
  * Add a goodwill credit to a customer's account.
+ * @param customerId The customer's id in the billing system, such as `cus_northwind`.
+ * @param amount The credit, in cents; must be positive.
  * @capability acme.com/credits.apply { customerId: string, customerClass: string, amount: number }
+ * @returns The credit as recorded, with the customer's balance after it.
  */
 function applyCredit(customerId: string, amount: number): Credit;
 

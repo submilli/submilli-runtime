@@ -124,7 +124,10 @@ submilli docs @acme/billing
 
 /**
  * Add a goodwill credit to a customer's account.
+ * @param customerId The customer's id in the billing system, such as `cus_northwind`.
+ * @param amount The credit, in cents; must be positive.
  * @capability acme.com/credits.apply { customerId: string, customerClass: string, amount: number }
+ * @returns The credit as recorded.
  */
 function applyCredit(customerId: string, amount: number): Credit;
 …

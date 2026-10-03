@@ -137,6 +137,9 @@ up the missing fact before it asks:
 ```typescript title="package/src/lib.ts (fragment)"
 /**
  * Add a goodwill credit to a customer's account.
+ * @param customerId The customer's id in the billing system, such as `cus_northwind`.
+ * @param amount The credit, in cents; must be positive.
+ * @returns The credit as recorded.
  * @capability acme.com/credits.apply { customerId: string, customerClass: string, amount: number }
  */
 export function applyCredit(customerId: string, amount: number): Credit {

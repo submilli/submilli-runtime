@@ -102,6 +102,9 @@ export interface Credit {
 
 /**
  * Add a goodwill credit to a customer's account.
+ * @param customerId The customer's id in the billing system, such as `cus_northwind`.
+ * @param amount The credit, in cents; must be positive.
+ * @returns The credit as recorded.
  * @capability acme.com/credits.apply { customerId: string, customerClass: string, amount: number }
  */
 export function applyCredit(customerId: string, amount: number): Credit {
@@ -277,6 +280,8 @@ const BASE = "https://billing.acme.com/v1";
 
 /**
  * Fetch a customer's latest invoice from the billing service.
+ * @param customerId The customer's id in the billing system.
+ * @returns The latest invoice, or `null` when the customer has none.
  * @capability acme.com/invoices.latest { customerId: string }
  */
 export function latestInvoice(customerId: string): Invoice | null {
@@ -458,6 +463,9 @@ export interface Note {
 /**
  * List notes attached directly to this company, as the Attio API orders them.
  * Notes attached to the company's people are not included.
+ * @param companyId The company's record id.
+ * @param page Page size and offset; `null` for the first page.
+ * @returns One page of notes.
  * @capability attio.com/notes.list { companyId: string }
  */
 export function listNotes(companyId: string, page: PageOptions | null = null): Page<Note> {

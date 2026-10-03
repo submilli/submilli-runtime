@@ -12,6 +12,37 @@ packages:
 secrets:
   JINA_API_KEY:
     store: jina_api_key
+  ANTHROPIC_API_KEY:
+    store: anthropic_api_key
+  # GOOGLE_API_KEY:
+  #   store: google_api_key
+  # OPENAI_API_KEY:
+  #   store: openai_api_key
+
+# A model the programs may call themselves, to summarize a page or sort
+# results without bringing the text back into the conversation. One
+# provider is enough; uncomment yours.
+llm:
+  providers:
+    anthropic:
+      type: anthropic
+      api_key: ${secrets.ANTHROPIC_API_KEY}
+    # google:
+    #   type: google
+    #   api_key: ${secrets.GOOGLE_API_KEY}
+    # openai:
+    #   type: openai
+    #   api_key: ${secrets.OPENAI_API_KEY}
+  models:
+    claude-haiku-4-5:
+      provider: anthropic
+      description: Fast and cheap; use for summarizing pages and ranking results.
+    # gemini-3.8-flash:
+    #   provider: google
+    #   description: Fast and cheap; use for summarizing pages and ranking results.
+    # gpt-4o-mini:
+    #   provider: openai
+    #   description: Fast and cheap; use for summarizing pages and ranking results.
 
 # Notes outlive the conversation: every session shares the `notes` volume, and
 # the rules below give each user one directory of it.
@@ -27,6 +58,8 @@ permissions:
   - capability: jina.ai/search
     action: allow
   - capability: jina.ai/read
+    action: allow
+  - capability: llm.call
     action: allow
   - capability: fs.read
     filter: path == "/${vars.userId}" or path glob "/${vars.userId}/*"

@@ -127,6 +127,8 @@ const LEDGER: Charge[] = [
 
 /**
  * List the charges on one customer's account.
+ * @param customerId Billing customer ID, such as `cus_northwind`.
+ * @returns The customer's charges; empty when they have none.
  * @capability acme.com/charges.list { customerId: string }
  */
 export function listCharges(customerId: string): Charge[] {

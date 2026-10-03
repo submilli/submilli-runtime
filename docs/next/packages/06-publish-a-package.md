@@ -65,7 +65,7 @@ submilli blueprint add-package @acme/billing --no-capabilities
 ✓ created blueprint.yaml (name: support)
 warning: blueprint.yaml: package `@acme/billing` requires secret `BILLING_API_KEY`, but `secrets:` does not declare it
 ✓ added @acme/billing to blueprint.yaml
-  1 provided capabilities not selected — denied by `default: deny`
+  1 provided capabilities not selected; `default: deny` denies calls to them
   added 3 rules to caller `@acme/billing` (default allow):
     allow http.get (filter: host == "api.stripe.com")
     allow http.post (filter: host == "api.stripe.com")
@@ -150,7 +150,8 @@ submilli install acme/billing-package @acme/billing
 The first argument is the repository, `owner/repo`, with `@<ref>` to pin
 a branch, tag, or commit; the second is the package, since one repository
 can hold several. A private repository installs the same way once the CLI
-has a GitHub token that can read it:
+has a GitHub token that can read it, as [Start a
+blueprint](/docs/next/blueprints/start-a-blueprint) shows:
 
 ```sh
 submilli github authenticate

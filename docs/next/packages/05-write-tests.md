@@ -110,10 +110,26 @@ ok   packages/billing/tests/lib.test.ts :: refuses a zero amount
 [security] caller=@acme/billing capability=secrets.get context={"name":"BILLING_API_KEY"}
 FAIL packages/billing/tests/network.test.ts
 error: Error: BILLING_API_KEY is not configured for this blueprint
-  at requestHeaders (@acme/billing/lib:62:25)  [thrown here]
-  at lookUpClass (@acme/billing/lib:49:74)  [caller]
-  at applyCredit (@acme/billing/lib:27:39)  [caller]
+  at requestHeaders (@acme/billing/lib:73:25)  [thrown here]
+72 |     if (key === null) {
+73 |         throw new Error("BILLING_API_KEY is not configured for this blueprint");
+   |                         ^
+74 |     }
+  at lookUpClass (@acme/billing/lib:60:74)  [caller]
+59 | function lookUpClass(customerId: string): string {
+60 |     const response = get(BASE + customerPath(customerId), requestHeaders(false));
+   |                                                                          ^
+61 |     if (response.status === 404) {
+  at applyCredit (@acme/billing/lib:30:39)  [caller]
+29 |     const id = customerId.trim();
+30 |     const customerClass = lookUpClass(id);
+   |                                       ^
+31 |     check("acme.com/credits.apply", { customerId: id, customerClass, amount });
   at main (packages/billing/tests/network.test.ts:4:54)  [entry]
+3 | function main(): void {
+4 |     const credit = applyCredit("cus_VMQR3azuTWVAWs", 100);
+  |                                                      ^
+5 |     assert(credit.amount === 100, "credit carries the amount");
 ok   packages/billing/docs/readme.md :: example 1 (compile)
 
 2 passed, 1 failed across 3 files

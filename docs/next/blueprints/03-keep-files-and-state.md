@@ -49,11 +49,16 @@ Pick the mode by how long the files should last:
 | `none` | Nothing; every `submilli:fs` call fails |
 | `ephemeral` (the default) | A scratch directory created for the run and deleted after it |
 | `per_session` | A directory that lasts as long as the session |
-| `persistent` | A volume the server's operator declared, kept across sessions and restarts |
+| `named` | A volume the server's operator declared, kept across sessions and restarts, and shared with every blueprint that names it |
 
 Under `per_session`, files and session state alike last exactly that long.
 `idle_timeout` closes a session nobody has used for that long; the default
 is 24 hours, and the CLI writes `1h` back as `'3600s'`.
+
+A named volume can also sit beside the session's files, mounted at a path
+of its own under `vfs.mounts`, read-only or read-write. [Mount a shared
+volume](/docs/next/server/mount-a-shared-volume) declares one on the
+server and mounts it.
 
 ## What programs can do with it
 
@@ -218,8 +223,9 @@ bytes gets:
 error: QuotaExceededError: fs.writeText /notes/big.md: the filesystem's size limit of 1024 bytes would be exceeded: 0 bytes are in use and this needs 2000 more
 ```
 
-Deleting files frees the space. A `persistent` volume takes no
-`size_limit`; its size is the operator's to manage.
+Deleting files frees the space. A named volume takes no `size_limit`
+here: the operator sets one where the server declares the volume, and
+that one limit covers every session and blueprint using it.
 
 ## Session state
 

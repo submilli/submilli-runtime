@@ -69,7 +69,54 @@ Connected, the model gets Submilli as a set of tools. The ones that matter:
 The harness supplies no system prompt for Submilli. The instructions that
 teach a model the language arrive as the description of the execute tool,
 with this blueprint's packages and permissions already filled in. What you
-supply is the agent's own brief: what it is for.
+supply is the agent's own brief: what it is for, and how to work. This is
+the brief the book's research agent runs with, from [Connect a
+harness](/docs/next/tutorials/connect-a-harness); `{userId}` is filled in
+by the harness:
+
+```text title="prompt.txt"
+You are a research assistant working for {userId}. You answer questions
+by searching the web and reading pages, and you keep a notebook so the
+next conversation can start from what this one learned.
+
+## Work in programs
+
+Do the work by writing and running TypeScript on Submilli. Read `docs`
+before using an unfamiliar package or API: the runtime is not Node.js,
+has no shell, and has no npm packages. Prefer one coherent program for
+related reads, filtering, and summaries, and return the evidence the
+answer needs, not whole pages. Keep predictable follow-up steps inside
+the same program: a URL or an id one call returns is used by the next
+call in code, not in another turn. When a program fails, read the
+diagnostic and repair it. A permission denial is final; do not look for
+another route to the same effect.
+
+## Resources
+
+- `@submilli/jina`: web search, and reading a page as clean text.
+- `submilli:llm`: a model you may call from a program, to summarize a
+  long page or rank results without bringing the text back here.
+- `submilli:fs`: your notebook, the directory /{userId}/notes, read and
+  written from a program. It is the only path you may touch: never list
+  or read `/` or another directory, and use no other file tool for it.
+  Read it before you search; when you are done, write what you learned,
+  with its sources.
+
+## Answer
+
+Prefer the newest source and check its date against today's before you
+call something the latest. Lead with the answer and cite the pages you
+used. Distinguish what the
+evidence establishes from what you infer and what remains unknown. Never
+claim you read or saved something unless a program's result shows it.
+```
+
+Four things, and nothing about the language: what the agent is for; how
+to work in programs rather than one call at a time, including that a
+denial is final; what it may reach, in the words the model will see in
+`docs`; and how to answer. The second part is the one that changes how
+an agent behaves on Submilli: a model told to fetch, filter, and join in
+one program does the work in a few runs instead of a few dozen.
 
 The execute tool answers with three fields:
 
@@ -111,5 +158,5 @@ To go deeper into the three components:
   operate MCP servers, set limits, deploy.
 
 Or jump straight to embedding Submilli:
-[connect your harness](/docs/next/tutorials/connect-mastra), then
+[connect your harness](/docs/next/tutorials/connect-a-harness), then
 [deploy on Kubernetes](/docs/next/server/deploy-on-kubernetes).

@@ -54,6 +54,9 @@ export interface Credit {
 
 /**
  * Add a goodwill credit to a customer's account.
+ * @param customerId The customer's id in the billing system, such as `cus_northwind`.
+ * @param amount The credit, in cents; must be positive.
+ * @returns The credit as recorded.
  * @capability acme.com/credits.apply { customerId: string, amount: number }
  */
 export function applyCredit(customerId: string, amount: number): Credit {
@@ -84,10 +87,12 @@ out of the tag:
 
 ```text
 warning: payload key `amount` missing from `@capability` binding
-  --> packages/billing/src/lib.ts:19:37
+  --> packages/billing/src/lib.ts:22:37
    |
-19 |     check("acme.com/credits.apply", { customerId, amount });
+21 |     }
+22 |     check("acme.com/credits.apply", { customerId, amount });
    |                                     ^^^^^^^^^^^^^^^^^^^^^^
+23 | 
 ```
 :::
 
@@ -112,11 +117,22 @@ in a nested function, which may run later, more than once, or never:
 
 ```text
 warning: `check()` is called inside a nested function in `applyCredit`
-  --> packages/billing/src/lib.ts:19:33
+  --> packages/billing/src/lib.ts:22:33
    |
-19 |     const guard = () => { check("acme.com/credits.apply", { customerId, amount }); };
+21 |     }
+22 |     const guard = () => { check("acme.com/credits.apply", { customerId, amount }); };
    |                                 ^^^^^^^^^^^^^^^^^^^^^^^^
+23 |     guard();
+   |
 help: Call `check()` directly in the body of `applyCredit`; a nested function may run later, repeatedly, or never
+   |
+note: the nested function starts here
+  --> packages/billing/src/lib.ts:22:19
+   |
+21 |     }
+22 |     const guard = () => { check("acme.com/credits.apply", { customerId, amount }); };
+   |                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+23 |     guard();
 ```
 
 ## Design the payload
@@ -158,6 +174,9 @@ now:
 ```typescript title="packages/billing/src/lib.ts (fragment)"
 /**
  * Add a goodwill credit to a customer's account.
+ * @param customerId The customer's id in the billing system, such as `cus_northwind`.
+ * @param amount The credit, in cents; must be positive.
+ * @returns The credit as recorded.
  * @capability acme.com/credits.apply { customerId: string, customerClass: string, amount: number }
  */
 export function applyCredit(customerId: string, amount: number): Credit {
@@ -172,7 +191,11 @@ export function applyCredit(customerId: string, amount: number): Credit {
     return { customerId: id, amount };
 }
 
-/** Whether the customer is premium or standard. Read from the account later on this page. */
+/**
+ * Whether the customer is premium or standard. Read from the account later on this page.
+ * @param customerId The customer's id, already trimmed.
+ * @returns `"premium"` or `"standard"`.
+ */
 function lookUpClass(customerId: string): string {
     return "standard";
 }
@@ -209,12 +232,20 @@ export function applyCredit(customerId: string, amount: number): Credit {
     return { customerId: id, amount, balance: transaction.ending_balance };
 }
 
-/** The path of one customer under the billing API, with the id escaped. */
+/**
+ * The path of one customer under the billing API.
+ * @param customerId The customer's id, escaped into the path.
+ * @returns The path, without the base URL.
+ */
 function customerPath(customerId: string): string {
     return "/customers/" + encodeComponent(customerId);
 }
 
-/** Whether the customer is premium or standard, read from the account. */
+/**
+ * Whether the customer is premium or standard, read from the account.
+ * @param customerId The customer's id, already trimmed.
+ * @returns `"premium"` or `"standard"`.
+ */
 function lookUpClass(customerId: string): string {
     const response = get(BASE + customerPath(customerId), requestHeaders(false));
     if (response.status === 404) {
@@ -358,6 +389,9 @@ export interface Credit {
 
 /**
  * Add a goodwill credit to a customer's account.
+ * @param customerId The customer's id in the billing system, such as `cus_northwind`.
+ * @param amount The credit, in cents; must be positive.
+ * @returns The credit as recorded, with the customer's balance after it.
  * @capability acme.com/credits.apply { customerId: string, customerClass: string, amount: number }
  */
 export function applyCredit(customerId: string, amount: number): Credit {
@@ -380,12 +414,20 @@ export function applyCredit(customerId: string, amount: number): Credit {
     return { customerId: id, amount, balance: transaction.ending_balance };
 }
 
-/** The path of one customer under the billing API, with the id escaped. */
+/**
+ * The path of one customer under the billing API.
+ * @param customerId The customer's id, escaped into the path.
+ * @returns The path, without the base URL.
+ */
 function customerPath(customerId: string): string {
     return "/customers/" + encodeComponent(customerId);
 }
 
-/** Whether the customer is premium or standard, read from the account. */
+/**
+ * Whether the customer is premium or standard, read from the account.
+ * @param customerId The customer's id, already trimmed.
+ * @returns `"premium"` or `"standard"`.
+ */
 function lookUpClass(customerId: string): string {
     const response = get(BASE + customerPath(customerId), requestHeaders(false));
     if (response.status === 404) {
