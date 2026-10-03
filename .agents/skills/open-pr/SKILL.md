@@ -44,6 +44,23 @@ search for relevant in-progress work. Confirm that each issue is addressed by
 this PR; incidental mentions are not links. Ask when ambiguous. With no candidates,
 continue without Linear updates and say no issue was identified.
 
+### Partial no-panic backlog work
+
+For work implementing selected items from SUB-633, treat the parent as tracking
+context rather than an issue completed by the PR. Omit its ID and URL from the
+PR title and description, new commit messages, and new feature-branch names so
+the Linear integration does not link the PR as completing the entire backlog.
+Use the concrete change and selected item numbers instead, for example
+`Return worker failures and preserve cleanup ownership (item 26)`. Do not rewrite
+published history or rename an existing published branch solely for this rule.
+
+Keep the parent issue's workflow state unchanged. Record progress only for the
+selected checklist items and inventory sites; a merged subset does not complete
+the parent. The commit-ID, PR issue-link, and review-state requirements below
+apply to other linked issues, but exclude this parent for partial work. Include
+the parent as a linked issue only if the user explicitly requests that and all
+of its completion criteria are satisfied.
+
 Read each linked issue's title, URL, team, and current state, and discover the
 team's actual review workflow state (often `In Review`). Do not invent a state
 name or ID or substitute `Done`. Resolve a missing or ambiguous review state
@@ -112,7 +129,8 @@ code preparation or PR creation merely because Linear is unavailable.
   from Linear titles. For multiple issues, use a covering subject and a short
   paragraph per issue in the body, including each ID and what changed for it.
 - Every commit created by this workflow must name the linked issues it addresses
-  in its subject or body. Ensure every linked issue appears in at least one PR
+  in its subject or body, subject to the partial-backlog exception above.
+  Ensure every linked issue appears in at least one PR
   commit message. For existing commits missing IDs, amend/reword only unpublished
   feature commits owned by this task; do not rewrite base commits or others' work.
   If that cannot be done safely, report the metadata blocker before publishing.
@@ -179,7 +197,8 @@ attempts if the base advances. Use the selected PR base, not a hard-coded remote
 ## Open the PR and move issues to review
 
 1. Follow any repository PR template. Describe the concrete problem and resulting
-   behavior, link every associated Linear issue by ID and URL when available,
+   behavior, link every associated Linear issue by ID and URL when available
+   except the parent excluded by the partial-backlog rule above,
    and include scope, review rounds (new or reused), the completion reason,
    finding dispositions, the full-run result and any focused follow-up results,
    and unrelated outstanding findings or disclosed independent-review fallback. Do not claim unavailable checks passed.
@@ -190,7 +209,8 @@ attempts if the base advances. Use the selected PR base, not a hard-coded remote
 3. Read back the PR and confirm it is open, targets the intended base, and has
    the verified head SHA. If any of those changed, reconcile and review/verify
    new content before proceeding. PR creation failure must not move Linear issues.
-4. For each linked Linear issue, re-read its current state. If already in the
+4. For each linked Linear issue, excluding the partial-backlog parent above,
+   re-read its current state. If already in the
    discovered review state, leave it there. Otherwise update it to that state
    after confirming the PR, including for a draft unless the user requested a
    different state policy. Do not reopen completed/canceled issues automatically;
