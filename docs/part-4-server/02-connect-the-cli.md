@@ -74,9 +74,6 @@ submilli server status --server https://runtime.example.com:8128 --token-file ad
 
 Publicly trusted certificates need no extra setup.
 
-For Kubernetes port forwarding, temporarily map the certificate's hostname to
-`127.0.0.1` in `/etc/hosts` and keep that hostname in the HTTPS URL.
-
 ### Trust a self-signed server
 
 For a self-signed certificate or an unknown issuer, the CLI shows the public-key
