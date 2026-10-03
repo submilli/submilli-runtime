@@ -246,6 +246,12 @@ The build compares each tag with the `check` calls (from
 | Warning | ``unknown field `idd` in `@capability` binding `$ticket` `` | A path naming no property of the parameter's type |
 | Warning | ``dynamic capability string in `check()`; use a string literal`` | A `check` whose capability name isn't a string literal |
 
+A warning doesn't stop the build. With `--deny-warnings`, or
+`SUBMILLI_DENY_WARNINGS=1`, any code warning, these and the
+documentation warnings alike, fails `submilli build check`, `build test`,
+`build publish-local`, `submilli install`, and `submilli server packages
+install`, which then installs nothing.
+
 Where a `check` may be called, and how each value reaching it must be read,
 is in [Export a function](/docs/packages/export-a-function).
 

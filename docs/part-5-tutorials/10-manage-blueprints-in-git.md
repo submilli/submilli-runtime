@@ -144,6 +144,8 @@ on:
 jobs:
   check:
     runs-on: ubuntu-latest
+    env:
+      SUBMILLI_DENY_WARNINGS: "1"
     steps:
       - uses: actions/checkout@v4
 
@@ -161,6 +163,11 @@ jobs:
             (cd "$dir" && submilli blueprint lint blueprint.yaml && ./test.sh)
           done
 ```
+
+`SUBMILLI_DENY_WARNINGS` makes every warning fail the job: a package
+whose `check` and `@capability` tag disagree fails `submilli install`,
+and a blueprint that lint warns about, such as one with `default: allow`,
+fails `submilli blueprint lint`.
 
 Now break the rule the way a careless edit would: drop the filter, so
 that any customer's charges are allowed. Lint still passes, since the

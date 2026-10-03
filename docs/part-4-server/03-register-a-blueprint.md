@@ -37,6 +37,19 @@ For a private repository, refer to [Install private
 packages](/docs/server/install-private-packages); refer to the [CLI
 reference](/docs/reference/cli) for pinning and upgrading.
 
+The build's warnings are printed and the package is installed anyway.
+For a package you didn't write, a warning such as a `check` that
+disagrees with its `@capability` tag is a gap in what your blueprint can
+enforce, so refuse it instead:
+
+```sh
+submilli server packages install --deny-warnings acme/billing-package @acme/billing
+```
+
+With a warning, the command fails and the server installs nothing. To
+hold every install on the server to that, whatever the caller asks,
+start the server with `SUBMILLI_DENY_WARNINGS=1`.
+
 Every `store:` secret the blueprint declares must be in the server's
 store before registration. The blueprint names the secret as the package
 reads it, and the store key it comes from:

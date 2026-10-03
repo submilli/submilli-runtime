@@ -226,6 +226,8 @@ earlier unfiltered rule always decides first; a capability name nothing
 provides, with a suggestion; an `http.<method>` name that only
 `http.request` reaches; a package rule that differs from what the package
 requires; and a package list for a package the blueprint doesn't use.
+With `--deny-warnings`, or `SUBMILLI_DENY_WARNINGS=1`, any of these fails
+the lint.
 
 ## Denials at run time
 

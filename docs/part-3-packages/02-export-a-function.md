@@ -138,6 +138,22 @@ note: the nested function starts here
 23 |     guard();
 ```
 
+A warning doesn't stop the build: after it, `submilli build check` still
+prints `checked @acme/billing v0.1.0`. Each of these warnings is a gap in
+what a blueprint can enforce, so make them fail where it counts, in CI or
+before you publish, with `--deny-warnings`, or `SUBMILLI_DENY_WARNINGS=1`
+for a whole job:
+
+```sh
+submilli build check --deny-warnings
+```
+
+```text
+warning: `check()` is called inside a nested function in `applyCredit`
+…
+error: 1 warning(s) treated as errors (--deny-warnings)
+```
+
 ## Design the payload
 
 A rule never sees the request the package sends to the service. It sees
