@@ -95,12 +95,12 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
                     })?;
                 fuel::charge_host_fuel(&mut *caller, fuel::GATE)?;
                 let who = consumer_of_running_package(&*caller, &capability)?;
-                match caller
-                    .data()
-                    .security_check
-                    .clone()
-                    .check(&who, &capability, &context)
-                {
+                match caller.data().security_check.clone().check_with_cwd(
+                    &who,
+                    &capability,
+                    &context,
+                    caller.data().vfs.cwd(),
+                ) {
                     CheckOutcome::Allow => Ok(()),
                     CheckOutcome::Deny { reason } => {
                         Err(permission_denied(who, capability, reason))

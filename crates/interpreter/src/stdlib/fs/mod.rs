@@ -43,7 +43,7 @@ use crate::stdlib::abi::{
     self, backing_struct, externref_field, f64_field, install_field_getters, string_field,
 };
 use crate::stdlib::shared::{
-    DEFAULT_CWD, atomic_write, check_security, contain_trap, quota_refusal, refuse_volume_root,
+    atomic_write, check_security, contain_trap, quota_refusal, refuse_volume_root,
     require_writable, resolve_content_or_trap, resolve_link_or_trap, write_target_trap,
 };
 use handles::{
@@ -214,6 +214,23 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         /* deterministic = */ true,
         |caller, _params, results| {
             *abi_result(results, 0)? = Val::F64((caller.data().fs_max_read_size as f64).to_bits());
+            Ok(())
+        },
+    )?;
+
+    register_host_fn(
+        linker,
+        MODULE_NAME,
+        fs_fn("cwd"),
+        FuncType::new(&engine, [], [string.clone()]),
+        true,
+        |caller, _params, results| {
+            let cwd = caller.data().vfs.cwd().to_owned();
+            let value = write_submilli_string_struct(&mut *caller, &cwd)?;
+            let result = results.first_mut().ok_or_else(|| {
+                crate::runtime::host::fatal_host_error("fs.cwd: missing result slot")
+            })?;
+            *result = Val::AnyRef(Some(value.to_anyref()));
             Ok(())
         },
     )?;
@@ -538,6 +555,12 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
                     "fs.move {pair}: the VFS root and mount points cannot be moved or replaced"
                 );
             }
+            if from_resolved
+                .same_entry(&to_resolved)
+                .map_err(|e| contain_trap("fs.move", &pair, &e))?
+            {
+                return Ok(());
+            }
             if !from_resolved
                 .placement()
                 .same_volume(to_resolved.placement())
@@ -595,6 +618,9 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
             // even when the destination's parent does not exist yet.
             let to_volume = resolve_content_or_trap(caller.data(), &to, "fs.copy")?;
             require_writable(&*caller, to_volume.placement(), "fs.copy", &to)?;
+            from_resolved
+                .check_copy_destination(&to_volume)
+                .map_err(|e| contain_trap("fs.copy", &pair, &e))?;
             // A recursive copy used to reach `create_dir_all(to)`, which built the whole
             // destination chain. Resolving the destination now opens its parent, so that
             // chain has to exist first or a working call starts failing.
@@ -614,6 +640,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
                 &to_resolved,
                 &CopyRun {
                     recursive,
+                    depth: 0,
                     links: LinkCopies::BestEffort,
                     op: "fs.copy",
                     pair: &pair,
@@ -755,8 +782,13 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
             } else {
                 Vec::new()
             };
-            let walk = ContainedWalk::new(base, list_prefix(&path)?, recursive, mounts)
-                .map_err(|e| contain_trap("fs.list", &path, &ContainError::from(e)))?;
+            let walk = ContainedWalk::new(
+                base,
+                list_prefix(caller.data().vfs.cwd(), &path)?,
+                recursive,
+                mounts,
+            )
+            .map_err(|e| contain_trap("fs.list", &path, &ContainError::from(e)))?;
             let dir = ChargedDirIter::new(walk, &caller.data().tenant_limits)
                 .map_err(|e| wasmtime::Error::new(e).context(format!("fs.list {path}")))?;
             *abi_result(results, 0)? =
@@ -853,7 +885,7 @@ fn stat_entry(caller: &mut Caller<'_, StoreData>, path: &str) -> wasmtime::Resul
     // opens the parent, so a missing *ancestor* fails here rather than at the metadata call
     // below — and answering that with a trap would break the contract every caller branches
     // on. Escapes still trap: unreachable-because-outside is not the same as absent.
-    let resolved = match resolve_link(&caller.data().vfs, DEFAULT_CWD, path) {
+    let resolved = match resolve_link(&caller.data().vfs, caller.data().vfs.cwd(), path) {
         Ok(resolved) => resolved,
         Err(ContainError::Io(e)) if is_absent(&e) => return Ok(Val::AnyRef(None)),
         Err(e) => return Err(contain_trap("fs.stat", path, &e)),
@@ -1420,8 +1452,8 @@ fn gate(
 }
 
 /// The guest-relative prefix a listing's entries carry: `""` at the root, else `"tree/"`.
-fn list_prefix(path: &str) -> wasmtime::Result<String> {
-    let normalized = guest_normalize(crate::stdlib::shared::DEFAULT_CWD, path)
+fn list_prefix(cwd: &str, path: &str) -> wasmtime::Result<String> {
+    let normalized = guest_normalize(cwd, path)
         .map_err(|e| contain_trap("fs.list", path, &ContainError::from(e)))?;
     Ok(if normalized == "/" {
         String::new()
@@ -1569,6 +1601,7 @@ fn move_across(from: &LinkPath, to: &LinkPath, pair: &str) -> wasmtime::Result<(
     let to_quota = to.placement().quota().cloned();
     let staged = to.temp_sibling();
     let run = CopyRun {
+        depth: 0,
         recursive: true,
         links: LinkCopies::Required,
         op: "fs.move",
@@ -1681,6 +1714,7 @@ fn remove_releasing(
 /// How one copy walk treats its tree.
 #[derive(Clone, Copy)]
 struct CopyRun<'a> {
+    depth: usize,
     recursive: bool,
     links: LinkCopies,
     /// `fs.copy` or `fs.move`, for diagnostics.
@@ -1711,7 +1745,11 @@ fn copy_recursive(from: &LinkPath, to: &LinkPath, run: &CopyRun<'_>) -> wasmtime
         op,
         pair,
         quota,
+        depth,
     } = *run;
+    if depth >= 64 {
+        wasmtime::bail!("{op} {pair}: copy directory depth exceeds 64");
+    }
     let meta = from
         .symlink_metadata()
         .map_err(|e| contain_trap(op, pair, &e))?;
@@ -1730,6 +1768,7 @@ fn copy_recursive(from: &LinkPath, to: &LinkPath, run: &CopyRun<'_>) -> wasmtime
             .entries()
             .map_err(|e| contain_trap(op, pair, &ContainError::from(e)))?;
         let nested = CopyRun {
+            depth: depth + 1,
             recursive: true,
             ..*run
         };
@@ -1778,6 +1817,81 @@ mod tests {
     use crate::runtime::{
         RuntimeConfig, StoreData, Vfs, VfsInfo, VfsMode, dispatch_main_async, install_runtime_async,
     };
+
+    #[tokio::test]
+    async fn subpath_aliases_move_copy_and_cwd() {
+        use crate::runtime::{Access, DiskQuota, MountSpec};
+        let volume = tempfile::tempdir().unwrap();
+        let quota = Arc::new(DiskQuota::new(8, 0));
+        let mut vfs = Vfs::tempdir().unwrap();
+        for (guest, sub_path) in [
+            ("/all", None),
+            ("/personal", Some("users/ada")),
+            ("/alias", Some("users/ada")),
+        ] {
+            vfs = vfs
+                .with_mount_subpath(
+                    MountSpec {
+                        guest_path: guest.into(),
+                        host: volume.path().into(),
+                        volume: "notes".into(),
+                        access: Access::ReadWrite,
+                        quota: Some(Arc::clone(&quota)),
+                    },
+                    sub_path,
+                )
+                .unwrap();
+        }
+        let vfs = vfs.with_cwd("/personal").unwrap();
+        let source = r#"
+            import { cwd, writeText, readText, move, copy, remove, mkdir, list } from "submilli:fs";
+            function fails(f: () => void): boolean { try { f(); return false; } catch { return true; } }
+            function main(): void {
+                assert(cwd() === "/personal", "cwd");
+                writeText("a", "12345678");
+                move("a", "/alias/a");
+                assert(readText("a") === "12345678", "same-file move keeps content");
+                assert(fails(() => copy("a", "/alias/a", false)), "self-copy refused");
+                move("a", "/all/b");
+                assert(readText("/all/b") === "12345678", "same-volume move at quota");
+                assert(fails(() => remove("/all/users", true)), "aliased mount ancestor protected");
+                mkdir("tree", true);
+                assert(fails(() => copy("tree", "/alias/tree/child", true)), "descendant copy refused");
+                let found = false;
+                for (const entry of list(".", false)) { if (entry.name === "tree") found = entry.path === "/personal/tree"; }
+                assert(found, "listing uses cwd");
+            }
+        "#;
+        run_with(source, StoreData::with_vfs(vfs)).await.unwrap();
+        assert_eq!(quota.used(), 8);
+    }
+
+    #[tokio::test]
+    async fn copy_merges_into_existing_mount_root() {
+        let volume = tempfile::tempdir().unwrap();
+        let vfs = mount_volume(
+            Vfs::tempdir().unwrap(),
+            "/notes",
+            volume.path(),
+            "notes",
+            crate::runtime::Access::ReadWrite,
+            None,
+        );
+        run_with(
+            r#"
+            import { mkdir, writeText, readText, copy } from "submilli:fs";
+            function main(): void {
+                mkdir("/tree", true);
+                writeText("/tree/a", "hello");
+                copy("/tree", "/notes", true);
+                assert(readText("/notes/a") === "hello", "copy merges into mount root");
+            }
+        "#,
+            StoreData::with_vfs(vfs),
+        )
+        .await
+        .unwrap();
+    }
 
     struct DenyAllFs;
     impl SecurityCheck for DenyAllFs {
@@ -3330,10 +3444,7 @@ function main(): void {
             one.clone().with_mount(spec("/a/b", "b")),
             Err(MountError::Nested { .. })
         ));
-        assert!(matches!(
-            one.clone().with_mount(spec("/c", "a")),
-            Err(MountError::DuplicateVolume { .. })
-        ));
+        assert!(one.clone().with_mount(spec("/c", "a")).is_ok());
         let root = one.root().to_path_buf();
         std::fs::write(root.join("file"), "f").expect("file");
         assert!(matches!(

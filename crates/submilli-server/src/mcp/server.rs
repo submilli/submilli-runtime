@@ -218,6 +218,7 @@ impl SubmilliMcp {
         blueprint: &Blueprint,
         session_id: Option<&str>,
         purpose: VfsUse,
+        variables: &submilli_blueprint::VarBindings,
     ) -> Result<(Vfs, VfsInfo), ErrorData> {
         let manager = self.state.session_manager();
         if matches!(blueprint.vfs, VfsConfig::PerSession { .. }) {
@@ -228,9 +229,11 @@ impl SubmilliMcp {
                 .await
                 .map_err(|e| ErrorData::internal_error(e.to_string(), None))?;
             let pair = if purpose == VfsUse::RunProgram {
-                manager.vfs_for_execute(sid, blueprint).await
+                manager
+                    .vfs_for_execute_with_variables(sid, blueprint, variables)
+                    .await
             } else {
-                manager.session_vfs(sid, blueprint)
+                manager.session_vfs_with_variables(sid, blueprint, variables)
             }
             .map_err(|e| ErrorData::internal_error(e.to_string(), None))?;
             manager.touch(sid).await;
@@ -238,6 +241,7 @@ impl SubmilliMcp {
         } else {
             let vfs = build_vfs(
                 blueprint,
+                variables,
                 None,
                 manager.ephemeral_root(),
                 manager.volume_registry(),
@@ -314,7 +318,12 @@ impl SubmilliMcp {
             .imports()
             .map_err(|message| ErrorData::internal_error(message, None))?;
         let (vfs, vfs_info) = self
-            .acquire_vfs(&blueprint, session_id.as_deref(), VfsUse::RunProgram)
+            .acquire_vfs(
+                &blueprint,
+                session_id.as_deref(),
+                VfsUse::RunProgram,
+                &variables,
+            )
             .await?;
 
         let manager = self.state.session_manager();
@@ -554,9 +563,13 @@ impl SubmilliMcp {
         let blueprint = Arc::new(self.require_blueprint().await?);
 
         let session_id = session_header(&parts);
+        let variables = self
+            .state
+            .session_manager()
+            .variables(session_id.as_deref().unwrap_or(""));
         if let Err(refused) = self.authorize_file_call(
             Arc::clone(&blueprint),
-            session_id.as_deref(),
+            Arc::clone(&variables),
             "fs.read",
             &args.path,
             None,
@@ -564,7 +577,12 @@ impl SubmilliMcp {
             return file_tool_failure(refused);
         }
         let (vfs, _info) = self
-            .acquire_vfs(&blueprint, session_id.as_deref(), VfsUse::ReadFiles)
+            .acquire_vfs(
+                &blueprint,
+                session_id.as_deref(),
+                VfsUse::ReadFiles,
+                &variables,
+            )
             .await?;
 
         let offset = args.offset.unwrap_or(1).max(1);
@@ -572,7 +590,7 @@ impl SubmilliMcp {
             .limit
             .unwrap_or(READ_DEFAULT_LIMIT)
             .clamp(1, READ_MAX_LIMIT);
-        let read = resolve_content(&vfs, "/", &args.path)
+        let read = resolve_content(&vfs, vfs.cwd(), &args.path)
             .and_then(|resolved| read_window(&args.path, &resolved, offset, limit));
         match read {
             Ok(output) => structured_result(output),
@@ -584,7 +602,7 @@ impl SubmilliMcp {
         name = "submilli__files__list",
         description = "List files in the session workspace (VFS). Use it to discover \
             what an `execute` run wrote to disk before reading with `submilli__files__read`. \
-            Args: optional `path` (directory, default the workspace root) and \
+            Args: optional `path` (directory, default the working directory) and \
             `recursive` (default false). Returns { entries: [{ path, kind, bytes }], \
             count, truncated }, capped at 1000 entries. Files survive across calls \
             under a per_session or named root and under a mounted volume; an \
@@ -601,11 +619,15 @@ impl SubmilliMcp {
         let blueprint = Arc::new(self.require_blueprint().await?);
 
         let session_id = session_header(&parts);
-        let dir = args.path.as_deref().unwrap_or("/");
+        let variables = self
+            .state
+            .session_manager()
+            .variables(session_id.as_deref().unwrap_or(""));
+        let dir = args.path.as_deref().unwrap_or(".");
         let recursive = args.recursive.unwrap_or(false);
         if let Err(refused) = self.authorize_file_call(
             Arc::clone(&blueprint),
-            session_id.as_deref(),
+            Arc::clone(&variables),
             "fs.list",
             dir,
             Some(recursive),
@@ -613,11 +635,21 @@ impl SubmilliMcp {
             return file_tool_failure(refused);
         }
         let (vfs, _info) = self
-            .acquire_vfs(&blueprint, session_id.as_deref(), VfsUse::ReadFiles)
+            .acquire_vfs(
+                &blueprint,
+                session_id.as_deref(),
+                VfsUse::ReadFiles,
+                &variables,
+            )
             .await?;
 
-        let listed = resolve_content(&vfs, "/", dir)
-            .and_then(|resolved| list_entries(&resolved, &guest_dir_prefix(dir), recursive));
+        let listed = resolve_content(&vfs, vfs.cwd(), dir).and_then(|resolved| {
+            list_entries(
+                &resolved,
+                &guest_dir_prefix(&guest_normalize(vfs.cwd(), dir)?),
+                recursive,
+            )
+        });
         let (mut entries, truncated) = match listed {
             Ok(listed) => listed,
             Err(error) => return file_tool_failure(FileToolError::file(dir, error)),
@@ -643,24 +675,25 @@ impl SubmilliMcp {
     fn authorize_file_call(
         &self,
         blueprint: Arc<Blueprint>,
-        session_id: Option<&str>,
+        variables: Arc<submilli_blueprint::VarBindings>,
         capability: &str,
         path: &str,
         recursive: Option<bool>,
     ) -> Result<(), FileToolError> {
-        guest_normalize("/", path).map_err(|error| FileToolError::file(path, error.into()))?;
         let mut context = serde_json::Map::new();
         context.insert("path".into(), path.into());
         if let Some(recursive) = recursive {
             context.insert("recursive".into(), recursive.into());
         }
         let context = serde_json::Value::Object(context);
-        let variables = self
-            .state
-            .session_manager()
-            .variables(session_id.unwrap_or(""));
+        let config = blueprint
+            .vfs
+            .resolve(&variables)
+            .map_err(|error| FileToolError::denied(capability, &error.to_string()))?;
+        guest_normalize(config.cwd(), path)
+            .map_err(|error| FileToolError::file(path, error.into()))?;
         let policy = PolicyCheck::with_variables(blueprint, variables);
-        let reason = match policy.check("main", capability, &context) {
+        let reason = match policy.check_with_cwd("main", capability, &context, config.cwd()) {
             CheckOutcome::Allow => return Ok(()),
             CheckOutcome::Deny { reason } => reason,
             _ => "unrecognized policy outcome".to_string(),
@@ -901,12 +934,25 @@ impl ServerHandler for SubmilliMcp {
     async fn list_tools(
         &self,
         _request: Option<PaginatedRequestParams>,
-        _context: RequestContext<RoleServer>,
+        context: RequestContext<RoleServer>,
     ) -> Result<ListToolsResult, ErrorData> {
         use submilli_shared::prompt::tools as shared;
         let mut tools = self.tool_router.list_all();
+        let mut blueprint = self.current_blueprint().await;
+        let session_id = context
+            .extensions
+            .get::<axum::http::request::Parts>()
+            .and_then(session_header);
+        let variables = self
+            .state
+            .session_manager()
+            .variables(session_id.as_deref().unwrap_or(""));
+        blueprint.vfs = blueprint
+            .vfs
+            .resolve(&variables)
+            .map_err(|error| ErrorData::invalid_request(error.to_string(), None))?;
         let execute = submilli_shared::prompt::execute_tool_description(
-            &self.current_blueprint().await,
+            &blueprint,
             submilli_shared::prompt::PromptSurface::Mcp,
         );
         for tool in &mut tools {

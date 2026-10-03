@@ -301,7 +301,10 @@ vfs:
         // removes its files.
         let server = Server::new(data.path(), &[blueprint], VolumeTable::new());
         server.state.boot().await;
-        let refused = server.run("keeper", "function main(): void {}").await;
+        let (status, refused) = server
+            .post("/v1/sessions", json!({"blueprint":"keeper"}))
+            .await;
+        assert!(!status.is_success(), "{refused}");
         assert!(refused.to_string().contains("not declared"), "{refused}");
         assert!(data.path().join("volumes/notes/n.txt").exists());
     }
@@ -362,4 +365,134 @@ async fn registration_checks_mounts_against_the_declared_volumes() {
         )
         .await;
     assert_eq!(status, StatusCode::OK, "{body}");
+}
+
+#[tokio::test]
+async fn subpaths_isolate_sessions_and_cwd_uses_guest_paths() {
+    let data = tempfile::tempdir().unwrap();
+    let server = Server::new(
+        data.path(),
+        &[r#"name: personal
+variables:
+  user: {required: true}
+vfs:
+  cwd: /notes
+  mounts:
+    /notes: {mode: named, volume: notes, subPath: 'users/${vars.user}'}
+"#],
+        VolumeTable::from([("notes".into(), managed(SizeLimit::Bytes(100)))]),
+    );
+    let mut sessions = Vec::new();
+    for user in ["ada", "bob"] {
+        let (status, body) = server
+            .post(
+                "/v1/sessions",
+                json!({"blueprint":"personal", "variables":{"user":user}}),
+            )
+            .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        let id = body["session_id"].as_str().unwrap().to_owned();
+        let code = format!(
+            r#"import {{ writeText, cwd }} from "submilli:fs"; function main(): string {{ writeText("a.md", "{user}"); return cwd(); }}"#
+        );
+        let result = server.run_in(&id, &code).await;
+        assert!(result["error"].is_null(), "{result}");
+        assert_eq!(result["result"], "/notes");
+        sessions.push(id);
+    }
+    for (session, user) in sessions.iter().zip(["ada", "bob"]) {
+        let result = server.run_in(session, r#"import { readText } from "submilli:fs"; function main(): string { return readText("a.md")!; }"#).await;
+        assert_eq!(result["result"], user, "{result}");
+        assert_eq!(
+            std::fs::read_to_string(data.path().join(format!("volumes/notes/users/{user}/a.md")))
+                .unwrap(),
+            user
+        );
+    }
+    for bad in ["..", ".", "a/b", "", "a\0b"] {
+        let (status, body) = server
+            .post(
+                "/v1/sessions",
+                json!({"blueprint":"personal", "variables":{"user":bad}}),
+            )
+            .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    }
+}
+
+#[tokio::test]
+async fn overlapping_subpaths_share_quota_and_respect_mount_access() {
+    let data = tempfile::tempdir().unwrap();
+    let server = Server::new(
+        data.path(),
+        &[r#"name: aliases
+vfs:
+  cwd: /personal
+  mounts:
+    /personal: {mode: named, volume: notes, subPath: users/ada}
+    /all: {mode: named, volume: notes}
+    /readonly: {mode: named, volume: notes, subPath: users/ada, access: read_only}
+"#],
+        VolumeTable::from([("notes".into(), managed(SizeLimit::Bytes(10)))]),
+    );
+    // A read-only alias requires the selected directory to exist before setup.
+    std::fs::create_dir_all(data.path().join("volumes/notes/users/ada")).unwrap();
+    let session = server.session("aliases").await;
+    let written = server.run_in(&session, r#"import { writeText, readText } from "submilli:fs"; function main(): string { writeText("a", "12345678"); return readText("/readonly/a")!; }"#).await;
+    assert_eq!(written["result"], "12345678", "{written}");
+    let denied = server.run_in(&session, r#"import { writeText } from "submilli:fs"; function main(): void { writeText("/readonly/a", "x"); }"#).await;
+    assert!(!denied["error"].is_null(), "{denied}");
+    let full = server.run_in(&session, r#"import { writeText } from "submilli:fs"; function main(): void { writeText("/all/other", "123"); }"#).await;
+    assert!(!full["error"].is_null(), "{full}");
+    let rewrite = server.run_in(&session, r#"import { writeText, readText } from "submilli:fs"; function main(): string { writeText("/all/users/ada/a", "abcdefgh"); return readText("a")!; }"#).await;
+    assert_eq!(rewrite["result"], "abcdefgh", "{rewrite}");
+}
+
+#[tokio::test]
+async fn readonly_subpath_setup_fails_without_disclosing_host_path() {
+    let data = tempfile::tempdir().unwrap();
+    let server = Server::new(
+        data.path(),
+        &[r#"name: readonly
+vfs:
+  mode: named
+  volume: notes
+  subPath: missing
+  access: read_only
+"#],
+        VolumeTable::from([("notes".into(), managed(SizeLimit::Unlimited))]),
+    );
+    let (status, body) = server
+        .post("/v1/sessions", json!({"blueprint":"readonly"}))
+        .await;
+    assert!(!status.is_success(), "{body}");
+    assert!(body.to_string().contains("notes"), "{body}");
+    assert!(!body.to_string().contains(data.path().to_str().unwrap()));
+    assert!(!data.path().join("volumes/notes/missing").exists());
+}
+
+#[tokio::test]
+async fn one_shot_resolves_subpaths_before_execution() {
+    let data = tempfile::tempdir().unwrap();
+    let server = Server::new(
+        data.path(),
+        &[r#"name: once
+variables:
+  user: {required: true}
+vfs:
+  mode: named
+  volume: notes
+  subPath: users/${vars.user}
+  cwd: /drafts
+"#],
+        VolumeTable::from([("notes".into(), managed(SizeLimit::Unlimited))]),
+    );
+    let (status, output) = server.post("/v1/execute", json!({"blueprint":"once", "variables":{"user":"ada"}, "code":r#"import { writeText, cwd } from "submilli:fs"; function main(): string { writeText("a", "once"); return cwd(); }"#})).await;
+    assert_eq!(status, StatusCode::OK, "{output}");
+    assert!(output["error"].is_null(), "{output}");
+    assert_eq!(output["result"], "/drafts", "{output}");
+    assert_eq!(
+        std::fs::read_to_string(data.path().join("volumes/notes/users/ada/drafts/a")).unwrap(),
+        "once"
+    );
 }

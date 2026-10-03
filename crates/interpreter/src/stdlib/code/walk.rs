@@ -12,9 +12,7 @@ use crate::runtime::{
     host::read_boxed_number,
     prelude::collection::{object_field, read_array_vals, unbox_bool},
 };
-use crate::stdlib::shared::{
-    DEFAULT_CWD, contain_trap, resolve_content_or_trap, resolve_link_or_trap,
-};
+use crate::stdlib::shared::{contain_trap, resolve_content_or_trap, resolve_link_or_trap};
 use globset::{GlobBuilder, GlobSet, GlobSetBuilder};
 use ignore::gitignore::{Gitignore, GitignoreBuilder};
 use regex::{Regex, RegexBuilder};
@@ -54,12 +52,22 @@ pub(super) fn glob(
     budget: &mut Budget,
     pattern: &str,
 ) -> Result<Value> {
+    let absolute = pattern.starts_with('/');
     let pattern = GlobBuilder::new(pattern.trim_start_matches('/'))
         .literal_separator(true)
         .build()?
         .compile_matcher();
-    let mut entries = walk(caller, budget, "/", usize::MAX, "glob")?;
-    entries.retain(|e| e.kind == "file" && pattern.is_match(e.path.trim_start_matches('/')));
+    let cwd = if absolute {
+        "/"
+    } else {
+        caller.data().vfs.cwd()
+    }
+    .to_owned();
+    let mut entries = walk(caller, budget, &cwd, usize::MAX, "glob")?;
+    let prefix = format!("{}/", cwd.trim_end_matches('/'));
+    entries.retain(|e| {
+        e.kind == "file" && pattern.is_match(e.path.strip_prefix(&prefix).unwrap_or(&e.path))
+    });
     entries.sort_by(|a, b| {
         b.modified
             .total_cmp(&a.modified)
@@ -298,7 +306,7 @@ fn validate_root(caller: &mut Caller<'_, StoreData>, root: &str, op: &str) -> Re
     for component in root.split('/').filter(|component| !component.is_empty()) {
         path.push('/');
         path.push_str(component);
-        let metadata = resolve_link(&caller.data().vfs, DEFAULT_CWD, &path)
+        let metadata = resolve_link(&caller.data().vfs, caller.data().vfs.cwd(), &path)
             .and_then(|resolved| resolved.symlink_metadata())
             .map_err(|e| contain_trap(op, root, &e))?;
         if metadata.file_type().is_symlink() {
@@ -492,8 +500,11 @@ impl Options {
     }
     fn read(caller: &mut Caller<'_, StoreData>, budget: &mut Budget, val: &Val) -> Result<Self> {
         let path = match present(caller, val, "path")? {
-            Some(v) => normalize(&argument(caller, budget, &v)?)?,
-            None => "/".into(),
+            Some(v) => {
+                let path = argument(caller, budget, &v)?;
+                normalize(caller.data().vfs.cwd(), &path)?
+            }
+            None => caller.data().vfs.cwd().to_owned(),
         };
         let mode = match present(caller, val, "mode")? {
             Some(v) => argument(caller, budget, &v)?,

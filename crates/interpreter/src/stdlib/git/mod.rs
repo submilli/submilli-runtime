@@ -561,7 +561,7 @@ async fn decode_arguments(
     } else {
         operations::text_arg(&args, usize::from(op == "clone"))?.to_owned()
     };
-    let path = crate::runtime::fs::guest_normalize("/", &path)?;
+    let path = crate::runtime::fs::guest_normalize(caller.data().vfs.cwd(), &path)?;
     if path
         .split('/')
         .any(|part| part.eq_ignore_ascii_case(".git") || stage::is_reserved_stage_name(part))

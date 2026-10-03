@@ -54,7 +54,7 @@ fn derive_filters(
             DocCapabilityBindingKind::Literal { value, .. } => {
                 // The tag's span is in the callee's source, not the caller's, so a
                 // literal the runtime refuses keeps its spelling without a warning.
-                filters.push(binding_filter(
+                filters.extend(binding_filter(
                     tag,
                     &binding.field,
                     StaticValue::from(value),
@@ -83,7 +83,7 @@ fn derive_filters(
                     .map_err(crate::typechecker::arena_failure)?
                     .span;
                 match literal_from_expr_path(caller_ast, *actual, path)? {
-                    Some(value) => filters.push(binding_filter(
+                    Some(value) => filters.extend(binding_filter(
                         tag,
                         &binding.field,
                         value,
@@ -136,9 +136,17 @@ fn binding_filter(
     value: StaticValue,
     warn_at: Option<Span>,
     warnings: &mut Vec<Diagnostic>,
-) -> String {
+) -> Option<String> {
     let operand = match value {
         StaticValue::String(value) => {
+            if field_normalization(&tag.capability, field) == FieldNormalization::VfsPath
+                && !value.starts_with('/')
+            {
+                if let Some(span) = warn_at {
+                    warnings.push(warning(span, format!("relative `{field}` depends on the session cwd; no static path filter for `{}`", tag.capability)));
+                }
+                return None;
+            }
             let normalized = normalized_string(tag, field, value, warn_at, warnings);
             format!("\"{}\"", escape(&normalized))
         }
@@ -146,7 +154,7 @@ fn binding_filter(
         StaticValue::Boolean(value) => value.to_string(),
         StaticValue::Null => "null".to_string(),
     };
-    format!("{field} == {operand}")
+    Some(format!("{field} == {operand}"))
 }
 
 /// The string the runtime checks for `value`. A value the runtime refuses keeps
@@ -676,11 +684,9 @@ mod tests {
         let derived = derive_call_site_capability(&tag, &params, &ta, &args).unwrap();
         assert_eq!(
             derived.filter.as_deref(),
-            Some(
-                "path == \"/repo\" and remote == \"https://github.com/\" and remoteName == \"origin\""
-            )
+            Some("remote == \"https://github.com/\" and remoteName == \"origin\"")
         );
-        assert!(derived.warnings.is_empty(), "{:?}", derived.warnings);
+        assert_eq!(derived.warnings.len(), 1, "{:?}", derived.warnings);
     }
 
     #[test]
@@ -691,11 +697,8 @@ mod tests {
              function main(): void { callee(\"/data/../in.csv\", \"out/\"); }\n",
         );
         let derived = derive_call_site_capability(&tag, &params, &ta, &args).unwrap();
-        assert_eq!(
-            derived.filter.as_deref(),
-            Some("from == \"/in.csv\" and to == \"/out\"")
-        );
-        assert!(derived.warnings.is_empty(), "{:?}", derived.warnings);
+        assert_eq!(derived.filter.as_deref(), Some("from == \"/in.csv\""));
+        assert_eq!(derived.warnings.len(), 1, "{:?}", derived.warnings);
     }
 
     #[test]
@@ -706,7 +709,7 @@ mod tests {
              function main(): void { callee(); }\n",
         );
         let derived = derive_call_site_capability(&tag, &params, &ta, &args).unwrap();
-        assert_eq!(derived.filter.as_deref(), Some("path == \"/data\""));
+        assert_eq!(derived.filter, None);
         assert!(derived.warnings.is_empty(), "{:?}", derived.warnings);
     }
 
@@ -731,11 +734,8 @@ mod tests {
              function main(): void { callee(\"https://Example.com/f\", DIR + \"../dl.csv\"); }\n",
         );
         let derived = derive_call_site_capability(&tag, &params, &ta, &args).unwrap();
-        assert_eq!(
-            derived.filter.as_deref(),
-            Some("host == \"example.com\" and vfs_path == \"/dl.csv\"")
-        );
-        assert!(derived.warnings.is_empty(), "{:?}", derived.warnings);
+        assert_eq!(derived.filter.as_deref(), Some("host == \"example.com\""));
+        assert_eq!(derived.warnings.len(), 1, "{:?}", derived.warnings);
     }
 
     #[test]

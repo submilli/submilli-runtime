@@ -481,6 +481,7 @@ fn request_principal(
         who.clone(),
         std::sync::Arc::clone(&caller.data().security_check),
         request,
+        caller.data().vfs.cwd().to_owned(),
     );
     (who, std::sync::Arc::new(guard))
 }
@@ -2314,11 +2315,24 @@ function main(): void {
         security: Option<Arc<dyn SecurityCheck>>,
         vfs_root: &std::path::Path,
     ) -> Result<(), String> {
+        run_download_at(source, client, security, vfs_root, "/").await
+    }
+
+    async fn run_download_at(
+        source: &str,
+        client: Arc<dyn HttpClient>,
+        security: Option<Arc<dyn SecurityCheck>>,
+        vfs_root: &std::path::Path,
+        cwd: &str,
+    ) -> Result<(), String> {
         let compiled =
             compile_script(source, "test.subm", crate::FileId(0), &[], &[]).expect("compile clean");
         let cfg = RuntimeConfig::default();
         let engine = cfg.engine().expect("engine");
-        let vfs = Vfs::external(vfs_root.to_path_buf()).expect("external vfs");
+        let vfs = Vfs::external(vfs_root.to_path_buf())
+            .expect("external vfs")
+            .with_cwd(cwd)
+            .expect("cwd");
         let mut data = StoreData::with_vfs(vfs);
         data.http_client = client;
         if let Some(sec) = security {
@@ -2338,6 +2352,53 @@ function main(): void {
             .await
             .map(|_| ())
             .map_err(|e| format!("{e:?}"))
+    }
+
+    struct CwdPolicy;
+    impl SecurityCheck for CwdPolicy {
+        fn check(&self, _: &str, _: &str, _: &serde_json::Value) -> CheckOutcome {
+            CheckOutcome::Deny {
+                reason: "missing cwd".into(),
+            }
+        }
+        fn check_with_cwd(
+            &self,
+            _: &str,
+            capability: &str,
+            context: &serde_json::Value,
+            cwd: &str,
+        ) -> CheckOutcome {
+            let field = if capability == "http.download" {
+                "vfs_path"
+            } else {
+                "path"
+            };
+            let path = context
+                .get(field)
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("");
+            if crate::runtime::fs::guest_normalize(cwd, path)
+                .is_ok_and(|path| path == "/notes/out.bin")
+            {
+                CheckOutcome::Allow
+            } else {
+                CheckOutcome::Deny {
+                    reason: "outside notes".into(),
+                }
+            }
+        }
+    }
+    #[tokio::test]
+    async fn download_uses_cwd_for_policy_and_io() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mock = Arc::new(MockHttpClient::new(vec![ok_response(200, "hello")]));
+        run_download_at(r#"import { download } from "submilli:http"; function main(): void { download("https://example.test/file", "out.bin"); }"#,
+            mock, Some(Arc::new(CwdPolicy)), tmp.path(), "/notes").await.unwrap();
+        assert_eq!(
+            std::fs::read(tmp.path().join("notes/out.bin")).unwrap(),
+            b"hello"
+        );
+        assert!(!tmp.path().join("out.bin").exists());
     }
 
     #[tokio::test]

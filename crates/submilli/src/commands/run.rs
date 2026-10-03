@@ -381,6 +381,14 @@ fn execute_on_this_thread(
         Some(path) => Vfs::external(path).context("opening --vfs directory")?,
         None => Vfs::tempdir().context("allocating temporary VFS directory")?,
     };
+    if let Some(blueprint) = &blueprint {
+        let config = blueprint.vfs.resolve(&variables)?;
+        if !matches!(config, submilli_blueprint::VfsConfig::None) {
+            vfs = vfs
+                .with_cwd(config.cwd())
+                .context("preparing blueprint cwd")?;
+        }
+    }
     let size_limit = blueprint.as_ref().and_then(|bp| bp.vfs.size_limit());
     if let Some(limit) = size_limit {
         let measured = vfs.measure_usage();

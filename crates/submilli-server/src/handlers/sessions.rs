@@ -97,7 +97,12 @@ pub async fn create(
         }
     };
 
-    if let Err(error) = submilli_shared::resolve_git(&blueprint, &variables) {
+    if let Err(error) = blueprint
+        .vfs
+        .resolve(&variables)
+        .map(|_| ())
+        .and_then(|()| submilli_shared::resolve_git(&blueprint, &variables).map(|_| ()))
+    {
         return (
             StatusCode::BAD_REQUEST,
             Json(serde_json::json!({"error": error.to_string()})),

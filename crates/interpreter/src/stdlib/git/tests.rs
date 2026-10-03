@@ -3,6 +3,76 @@ use crate::runtime::{RuntimeConfig, Vfs, dispatch_main_async, install_runtime_as
 use serde_json::json;
 
 #[tokio::test]
+async fn repositories_use_selected_volume_subdirectories() {
+    use crate::runtime::vfs::{Access, MountSpec};
+    for named_root in [true, false] {
+        let volume = tempfile::tempdir().unwrap();
+        let vfs = if named_root {
+            Vfs::external(volume.path().to_path_buf())
+                .unwrap()
+                .with_volume_name("shared")
+                .with_subpath(Some("users/ada"))
+                .unwrap()
+        } else {
+            Vfs::tempdir()
+                .unwrap()
+                .with_mount_subpath(
+                    MountSpec {
+                        guest_path: "/workspace".into(),
+                        host: volume.path().to_path_buf(),
+                        volume: "shared".into(),
+                        access: Access::ReadWrite,
+                        quota: None,
+                    },
+                    Some("users/ada"),
+                )
+                .unwrap()
+                .with_cwd("/workspace")
+                .unwrap()
+        };
+        run_source(
+            r#"
+            import { Repository } from "submilli:git";
+            import * as fs from "submilli:fs";
+            function main(): void {
+                const repo = Repository.init("repo");
+                fs.writeText("repo/note.txt", "hello");
+                repo.add(["note.txt"]);
+                repo.commit("initial");
+                assert(Repository.open("repo").status().clean);
+            }
+            "#,
+            test_data(vfs),
+        )
+        .await;
+        assert!(volume.path().join("users/ada/repo/.git").is_dir());
+        assert!(!volume.path().join("repo").exists());
+    }
+}
+
+#[tokio::test]
+async fn relative_repository_paths_use_vfs_cwd() {
+    let vfs = Vfs::tempdir().unwrap().with_cwd("/work").unwrap();
+    run_source(
+        r#"
+        import { Repository } from "submilli:git";
+        import * as fs from "submilli:fs";
+        function main(): void {
+            const repo = Repository.init("repo");
+            fs.writeText("repo/note.txt", "hello");
+            repo.add(["note.txt"]);
+            repo.commit("initial");
+            assert(Repository.open("/work/repo").status().clean);
+            assert(Repository.open("repo").log().commits[0].message === "initial");
+            assert(!fs.exists("/repo"));
+        }
+        "#,
+        test_data(vfs),
+    )
+    .await;
+}
+
+#[tokio::test]
 async fn local_repository_round_trip() {
     let source = r#"
         import { Repository } from "submilli:git";

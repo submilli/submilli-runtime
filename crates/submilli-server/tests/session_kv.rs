@@ -349,6 +349,7 @@ async fn state_survives_every_vfs_mode() {
             VfsConfig::Ephemeral {
                 size_limit: None,
                 mounts: Default::default(),
+                cwd: None,
             },
         ),
         (
@@ -356,6 +357,7 @@ async fn state_survives_every_vfs_mode() {
             VfsConfig::PerSession {
                 size_limit: None,
                 mounts: Default::default(),
+                cwd: None,
             },
         ),
     ] {
@@ -444,6 +446,7 @@ async fn a_restored_session_starts_with_an_empty_store() {
                 VfsConfig::PerSession {
                     size_limit: None,
                     mounts: Default::default(),
+                    cwd: None,
                 },
             )]))),
             session_storage_root: Some(vfs_root.path().to_path_buf()),

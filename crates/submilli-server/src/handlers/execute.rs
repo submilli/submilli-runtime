@@ -100,7 +100,12 @@ pub async fn handle(
             );
         }
     };
-    if let Err(error) = submilli_shared::resolve_git(&blueprint, &variables) {
+    if let Err(error) = blueprint
+        .vfs
+        .resolve(&variables)
+        .map(|_| ())
+        .and_then(|()| submilli_shared::resolve_git(&blueprint, &variables).map(|_| ()))
+    {
         return with_session_header(
             &session_id,
             error_response(&session_id, ErrorKind::InvalidRequest, error.to_string()),
@@ -120,6 +125,22 @@ pub async fn handle(
             );
         }
     };
+
+    if let Err(error) = state
+        .session_manager()
+        .bind(
+            &session_id,
+            &blueprint,
+            Arc::clone(&variables),
+            Arc::clone(&harness_secrets),
+        )
+        .await
+    {
+        return with_session_header(
+            &session_id,
+            error_response(&session_id, ErrorKind::InvalidRequest, error.to_string()),
+        );
+    }
 
     // The one-shot path mints a fresh session per call, so a key would have
     // nothing durable to bind to: `dispatched` is irrelevant here and any
@@ -242,7 +263,10 @@ pub(crate) async fn execute_core(state: &AppState, inputs: ExecuteInputs<'_>) ->
     // `idle_timeout` on its own is still collected mid-flight. The write is
     // debounced (`PERSIST_INTERVAL`), so this costs nothing per call.
     manager.touch(session_id).await;
-    let (vfs, vfs_info) = match manager.vfs_for_execute(session_id, &blueprint).await {
+    let (vfs, vfs_info) = match manager
+        .vfs_for_execute_with_variables(session_id, &blueprint, &variables)
+        .await
+    {
         Ok(pair) => pair,
         Err(err) => {
             return ExecuteOutcome::undispatched(error_response(

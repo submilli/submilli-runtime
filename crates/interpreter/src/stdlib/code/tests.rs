@@ -683,3 +683,29 @@ async fn edits_in_a_read_only_mount_are_refused_and_searches_still_work() {
         "hello\n"
     );
 }
+
+#[tokio::test]
+async fn code_tools_resolve_relative_paths_and_patterns_from_cwd() {
+    let vfs = crate::runtime::Vfs::tempdir()
+        .unwrap()
+        .with_cwd("/notes")
+        .unwrap();
+    run(
+        r#"
+        import { writeText } from "submilli:fs";
+        import { read, glob, search, tree, edit } from "submilli:code";
+        function main(): void {
+            writeText("a.ts", "hello");
+            assert(read("a.ts").path === "/notes/a.ts", "read path");
+            assert(glob("*.ts").entries.length === 1, "cwd glob");
+            assert(glob("/notes/*.ts").entries.length === 1, "absolute glob");
+            assert(search("hello").matches.length === 1, "default search root");
+            assert(tree(".").entries.length === 1, "relative tree");
+            assert(edit("a.ts", "hello", "updated").changed, "relative edit");
+        }
+    "#,
+        crate::runtime::StoreData::with_vfs(vfs),
+    )
+    .await
+    .unwrap();
+}

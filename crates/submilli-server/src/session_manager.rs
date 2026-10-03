@@ -79,6 +79,7 @@ pub use submilli_shared::llm::provider::DEFAULT_MAX_CONCURRENCY;
 pub enum SessionError {
     UnknownSession,
     Io(String),
+    InvalidVfs(String),
     /// The blueprint names a volume this server does not declare — the operator
     /// removed or renamed it since the blueprint was registered.
     UnknownVolume(String),
@@ -98,6 +99,7 @@ impl std::fmt::Display for SessionError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             SessionError::UnknownSession => f.write_str("unknown or expired session"),
+            SessionError::InvalidVfs(msg) => write!(f, "invalid session filesystem: {msg}"),
             SessionError::Io(msg) => write!(f, "session vfs io: {msg}"),
             SessionError::UnknownVolume(name) => write!(
                 f,
@@ -149,6 +151,7 @@ struct State {
 
 pub struct SessionManager {
     inner: Mutex<State>,
+    bind_lock: tokio::sync::Mutex<()>,
     /// Durable root for `per_session` directories (keyed by session id).
     session_root: PathBuf,
     /// Root for `ephemeral` scratch dirs; `None` uses the OS temp dir.
@@ -270,6 +273,7 @@ impl SessionManager {
     ) -> Self {
         let CapabilitySettings { session_kv, llm } = capabilities;
         Self {
+            bind_lock: tokio::sync::Mutex::new(()),
             inner: Mutex::new(State {
                 sessions: HashMap::new(),
             }),
@@ -359,6 +363,35 @@ impl SessionManager {
         variables: Arc<VarBindings>,
         harness_secrets: Arc<HarnessSecretBindings>,
     ) -> Result<(), SessionError> {
+        let _binding = self.bind_lock.lock().await;
+        if self
+            .blueprint_name(session_id)
+            .is_some_and(|name| name != blueprint.name)
+        {
+            return Err(SessionError::UnknownSession);
+        }
+        blueprint
+            .vfs
+            .resolve(&variables)
+            .map_err(|e| SessionError::InvalidVfs(e.to_string()))?;
+        let session_root = matches!(blueprint.vfs, VfsConfig::PerSession { .. })
+            .then(|| self.session_root.join(session_id));
+        let created = self.prepare_session_root(session_root.as_deref())?;
+        if let Err(error) = build_vfs(
+            blueprint,
+            &variables,
+            session_root.as_deref(),
+            self.ephemeral_root.as_deref(),
+            &self.volumes,
+        ) {
+            if created
+                && let Some(root) = &session_root
+                && let Err(cleanup) = std::fs::remove_dir_all(root)
+            {
+                tracing::error!(%cleanup, "removing failed session workspace failed");
+            }
+            return Err(error);
+        }
         self.ensure(session_id, blueprint).await?;
         let record = {
             let mut state = self.lock();
@@ -371,6 +404,20 @@ impl SessionManager {
         };
         self.persist(record).await;
         Ok(())
+    }
+
+    /// The caller owns cleanup only when this binding created the directory.
+    fn prepare_session_root(&self, root: Option<&Path>) -> Result<bool, SessionError> {
+        let Some(root) = root else {
+            return Ok(false);
+        };
+        let error = |_| SessionError::Io("could not prepare session directory".into());
+        std::fs::create_dir_all(&self.session_root).map_err(error)?;
+        match std::fs::create_dir(root) {
+            Ok(()) => Ok(true),
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => Ok(false),
+            Err(e) => Err(error(e)),
+        }
     }
 
     /// The session's bound variables, or an empty set if none were bound (an
@@ -526,6 +573,16 @@ impl SessionManager {
         session_id: &str,
         blueprint: &Blueprint,
     ) -> Result<(Vfs, VfsInfo), SessionError> {
+        let variables = self.variables(session_id);
+        self.session_vfs_with_variables(session_id, blueprint, &variables)
+    }
+
+    pub(crate) fn session_vfs_with_variables(
+        &self,
+        session_id: &str,
+        blueprint: &Blueprint,
+        variables: &VarBindings,
+    ) -> Result<(Vfs, VfsInfo), SessionError> {
         let session_root = {
             let state = self.lock();
             let entry = state
@@ -540,6 +597,7 @@ impl SessionManager {
 
         let vfs = build_vfs(
             blueprint,
+            variables,
             session_root.as_deref(),
             self.ephemeral_root.as_deref(),
             &self.volumes,
@@ -554,7 +612,18 @@ impl SessionManager {
         session_id: &str,
         blueprint: &Blueprint,
     ) -> Result<(Vfs, VfsInfo), SessionError> {
-        let (vfs, info) = self.session_vfs(session_id, blueprint)?;
+        let variables = self.variables(session_id);
+        self.vfs_for_execute_with_variables(session_id, blueprint, &variables)
+            .await
+    }
+
+    pub(crate) async fn vfs_for_execute_with_variables(
+        &self,
+        session_id: &str,
+        blueprint: &Blueprint,
+        variables: &VarBindings,
+    ) -> Result<(Vfs, VfsInfo), SessionError> {
+        let (vfs, info) = self.session_vfs_with_variables(session_id, blueprint, variables)?;
         Ok((attach_limits(vfs, blueprint, &self.volumes).await?, info))
     }
 
@@ -824,6 +893,7 @@ fn remove_entry(state: &mut State, session_id: &str) -> bool {
 /// since only a program that may write needs them.
 pub(crate) fn build_vfs(
     blueprint: &Blueprint,
+    variables: &VarBindings,
     session_root: Option<&Path>,
     ephemeral_root: Option<&Path>,
     volumes: &VolumeRegistry,
@@ -839,7 +909,11 @@ pub(crate) fn build_vfs(
             ))
         }
     };
-    let root = match &blueprint.vfs {
+    let config = blueprint
+        .vfs
+        .resolve(variables)
+        .map_err(|e| SessionError::InvalidVfs(e.to_string()))?;
+    let root = match &config {
         VfsConfig::None => return Ok(Vfs::none()),
         VfsConfig::Ephemeral { .. } => match ephemeral_root {
             Some(root) => Vfs::tempdir_in(root).map_err(io("ephemeral"))?,
@@ -851,15 +925,33 @@ pub(crate) fn build_vfs(
             Vfs::external_with_mode(root.to_path_buf(), RtVfsMode::PerSession)
                 .map_err(io("per_session"))?
         }
-        VfsConfig::Named { volume, access, .. } => mount_root(volume, *access, volumes)?,
+        VfsConfig::Named {
+            volume,
+            access,
+            sub_path,
+            ..
+        } => mount_root(volume, *access, sub_path.as_deref(), volumes)?,
     };
-    blueprint
-        .vfs
+    let vfs = config
         .mounts()
         .iter()
         .try_fold(root, |vfs, (path, mount)| {
-            graft(vfs, path, &mount.volume, mount.access, volumes)
-        })
+            graft(
+                vfs,
+                path,
+                &mount.volume,
+                mount.access,
+                mount.sub_path.as_deref(),
+                volumes,
+            )
+        })?;
+    vfs.with_cwd(config.cwd()).map_err(|error| {
+        tracing::error!(%error, "preparing working directory failed");
+        SessionError::InvalidVfs(format!(
+            "cwd {} must name an existing directory or a directory in writable storage",
+            config.cwd()
+        ))
+    })
 }
 
 /// Enforce the size limits on `vfs`: the blueprint's `size_limit` on an
@@ -917,6 +1009,7 @@ async fn attach_size_limit(vfs: Vfs, blueprint: &Blueprint) -> Result<Vfs, Sessi
 fn mount_root(
     volume: &str,
     access: Option<submilli_blueprint::Access>,
+    sub_path: Option<&str>,
     volumes: &VolumeRegistry,
 ) -> Result<Vfs, SessionError> {
     let resolved = volumes.resolve(volume, access)?;
@@ -929,9 +1022,18 @@ fn mount_root(
         );
         SessionError::VolumeUnavailable(volume.to_string())
     })?;
-    Ok(vfs
-        .with_access(runtime_access(resolved.access))
-        .with_volume_name(volume))
+    vfs.with_access(runtime_access(resolved.access))
+        .with_volume_name(volume)
+        .with_subpath(sub_path)
+        .map_err(|error| {
+            tracing::error!(volume, %error, "opening volume subPath failed");
+            SessionError::MountFailed {
+                volume: volume.into(),
+                reason:
+                    "subPath must name a directory; missing directories require read_write access"
+                        .into(),
+            }
+        })
 }
 
 /// Graft a named volume at `path` below the root.
@@ -940,18 +1042,22 @@ fn graft(
     path: &str,
     volume: &str,
     access: Option<submilli_blueprint::Access>,
+    sub_path: Option<&str>,
     volumes: &VolumeRegistry,
 ) -> Result<Vfs, SessionError> {
     let resolved = volumes.resolve(volume, access)?;
     let host = resolved.host.clone();
-    vfs.with_mount(MountSpec {
-        guest_path: path.to_string(),
-        host: resolved.host,
-        volume: volume.to_string(),
-        access: runtime_access(resolved.access),
-        // Attached by `attach_limits`, and only for a run that may write.
-        quota: None,
-    })
+    vfs.with_mount_subpath(
+        MountSpec {
+            guest_path: path.to_string(),
+            host: resolved.host,
+            volume: volume.to_string(),
+            access: runtime_access(resolved.access),
+            // Attached by `attach_limits`, and only for a run that may write.
+            quota: None,
+        },
+        sub_path,
+    )
     .map_err(|err| match err {
         MountError::Io(err) => {
             tracing::error!(
@@ -1025,11 +1131,18 @@ mod tests {
             vfs: VfsConfig::PerSession {
                 size_limit: None,
                 mounts: Default::default(),
+                cwd: None,
             },
             ..Default::default()
         };
-        let err = build_vfs(&blueprint, Some(&root), None, &VolumeRegistry::default())
-            .expect_err("mounting a file as a session root must fail");
+        let err = build_vfs(
+            &blueprint,
+            &VarBindings::new(),
+            Some(&root),
+            None,
+            &VolumeRegistry::default(),
+        )
+        .expect_err("mounting a file as a session root must fail");
 
         let msg = err.to_string();
         assert!(
@@ -1109,6 +1222,7 @@ mod tests {
             vfs: VfsConfig::PerSession {
                 size_limit: None,
                 mounts: Default::default(),
+                cwd: None,
             },
             ..Default::default()
         }
@@ -1129,6 +1243,36 @@ mod tests {
 
     fn no_secrets() -> Arc<HarnessSecretBindings> {
         Arc::new(HarnessSecretBindings::new())
+    }
+
+    #[tokio::test]
+    async fn failed_binding_cleans_new_workspace_and_preserves_existing_session() {
+        let (mgr, root) = manager();
+        let bad = submilli_blueprint::parse("name: x\nvfs:\n  mode: per_session\n  mounts:\n    /missing: {mode: named, volume: absent}\n").unwrap();
+        assert!(
+            mgr.bind("new", &bad, Arc::new(VarBindings::new()), no_secrets())
+                .await
+                .is_err()
+        );
+        assert!(!root.path().join("new").exists());
+        assert!(!mgr.contains("new"));
+        let good = submilli_blueprint::parse("name: x\nvfs: per_session\nvariables:\n  user: {}\n")
+            .unwrap();
+        let original = Arc::new(VarBindings::from([("user".into(), "ada".into())]));
+        mgr.bind("existing", &good, original.clone(), no_secrets())
+            .await
+            .unwrap();
+        std::fs::write(root.path().join("existing/kept"), "keep").unwrap();
+        assert!(
+            mgr.bind("existing", &bad, Arc::new(VarBindings::new()), no_secrets())
+                .await
+                .is_err()
+        );
+        assert_eq!(mgr.variables("existing"), original);
+        assert_eq!(
+            std::fs::read_to_string(root.path().join("existing/kept")).unwrap(),
+            "keep"
+        );
     }
 
     #[tokio::test]
@@ -1196,6 +1340,7 @@ mod tests {
             vfs: VfsConfig::Ephemeral {
                 size_limit: None,
                 mounts: Default::default(),
+                cwd: None,
             },
             ..Default::default()
         };
@@ -1720,13 +1865,23 @@ mod tests {
 
     #[tokio::test]
     async fn a_named_root_creates_no_session_dir() {
-        let (mgr, root) = manager();
+        let (mut mgr, root) = manager();
+        let volume = tempfile::tempdir().unwrap();
+        mgr.volumes = Arc::new(VolumeRegistry::new(
+            VolumeTable::from([(
+                "workspace".into(),
+                crate::config::VolumeSpec::local_path(volume.path()),
+            )]),
+            volume.path().join("managed"),
+        ));
         let bp = Blueprint {
             name: "x".into(),
             vfs: VfsConfig::Named {
                 volume: "workspace".into(),
                 access: None,
                 mounts: Default::default(),
+                cwd: None,
+                sub_path: None,
             },
             ..Default::default()
         };

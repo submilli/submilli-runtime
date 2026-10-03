@@ -20,6 +20,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use cap_fs_ext::DirExt;
 use cap_std::ambient_authority;
 use cap_std::fs::Dir;
 use tempfile::TempDir;
@@ -57,6 +58,8 @@ impl Access {
 #[derive(Debug, Clone)]
 pub struct Vfs {
     root: PathBuf,
+    cwd: Arc<str>,
+    ancestors: Arc<[FileIdentity]>,
     mode: VfsMode,
     /// `None` only for [`VfsMode::None`], which backs no directory.
     dir: Option<Arc<Dir>>,
@@ -88,6 +91,7 @@ pub struct Mount {
     /// opens these under other spellings too, some not ASCII at all, so the
     /// mount-point guard recognizes them by identity rather than by name.
     placeholders: Arc<[Placeholder]>,
+    ancestors: Arc<[FileIdentity]>,
 }
 
 impl Mount {
@@ -155,6 +159,10 @@ pub struct Placement {
     nested: Arc<[Mount]>,
     /// The host directory the volume's handle was opened on.
     host: Arc<Path>,
+    volume: Option<Arc<str>>,
+    ancestors: Arc<[FileIdentity]>,
+    protected_roots: Arc<[FileIdentity]>,
+    protected_ancestors: Arc<[FileIdentity]>,
 }
 
 impl Placement {
@@ -171,6 +179,19 @@ impl Placement {
         self.mount.as_deref().unwrap_or("/")
     }
 
+    pub(crate) fn ancestors(&self) -> &[FileIdentity] {
+        &self.ancestors
+    }
+
+    pub(crate) fn protects(&self, identity: FileIdentity, recursive: bool) -> bool {
+        self.protected_roots.contains(&identity)
+            || (recursive && self.protected_ancestors.contains(&identity))
+    }
+
+    pub(crate) fn protects_descendants(&self, identity: FileIdentity) -> bool {
+        self.protected_ancestors.contains(&identity)
+    }
+
     pub(crate) fn nested(&self) -> &[Mount] {
         &self.nested
     }
@@ -185,7 +206,11 @@ impl Placement {
     /// Whether two placements are the same volume, so a rename between them
     /// stays within one directory handle and one size limit.
     pub fn same_volume(&self, other: &Self) -> bool {
-        self.mount == other.mount
+        match (&self.volume, &other.volume) {
+            (Some(left), Some(right)) => left == right,
+            (None, None) => self.mount == other.mount,
+            _ => false,
+        }
     }
 }
 
@@ -278,6 +303,8 @@ impl Vfs {
             access: Access::ReadWrite,
             volume: None,
             mounts: Arc::from([]),
+            cwd: Arc::from("/"),
+            ancestors: Arc::from([]),
         }
     }
 
@@ -293,6 +320,7 @@ impl Vfs {
             ));
         }
         let dir = open_root(&root)?;
+        let identity = dir_identity(&dir, Path::new("."), &dir.dir_metadata()?)?;
         Ok(Self {
             root,
             mode,
@@ -302,6 +330,8 @@ impl Vfs {
             access: Access::ReadWrite,
             volume: None,
             mounts: Arc::from([]),
+            cwd: Arc::from("/"),
+            ancestors: Arc::from([identity]),
         })
     }
 
@@ -328,6 +358,7 @@ impl Vfs {
     fn from_owned(td: TempDir) -> io::Result<Self> {
         let root = td.path().to_path_buf();
         let dir = open_root(&root)?;
+        let identity = dir_identity(&dir, Path::new("."), &dir.dir_metadata()?)?;
         Ok(Self {
             root,
             mode: VfsMode::Ephemeral,
@@ -337,6 +368,8 @@ impl Vfs {
             access: Access::ReadWrite,
             volume: None,
             mounts: Arc::from([]),
+            cwd: Arc::from("/"),
+            ancestors: Arc::from([identity]),
         })
     }
 
@@ -422,7 +455,15 @@ impl Vfs {
     /// In a writable root the mount point is created as an empty directory, so
     /// listing its parent shows it like any other directory. A read-only root is
     /// never written, so there the mount point must already exist.
-    pub fn with_mount(mut self, spec: MountSpec) -> Result<Self, MountError> {
+    pub fn with_mount(self, spec: MountSpec) -> Result<Self, MountError> {
+        self.with_mount_subpath(spec, None)
+    }
+
+    pub fn with_mount_subpath(
+        mut self,
+        spec: MountSpec,
+        sub_path: Option<&str>,
+    ) -> Result<Self, MountError> {
         let root = self.dir.as_ref().ok_or(MountError::RootDisabled)?;
         if self.mounts.len() >= MAX_MOUNTS {
             return Err(MountError::TooMany);
@@ -430,12 +471,6 @@ impl Vfs {
         let rel = mount_rel(&spec.guest_path)?;
         if crate::runtime::fs::protected_metadata(&rel) {
             return Err(MountError::ProtectedPath(spec.guest_path));
-        }
-        if let Some(at) = self.volume_location(&spec.volume) {
-            return Err(MountError::DuplicateVolume {
-                volume: spec.volume,
-                at: at.to_string(),
-            });
         }
         // Case is folded as the blueprint parser folds it, so two spellings of one
         // directory on a case-insensitive filesystem cannot both be mounted.
@@ -450,16 +485,24 @@ impl Vfs {
             return Err(MountError::Nested { outer, inner });
         }
         let placeholders = prepare_mount_point(root, &rel, self.access, &spec.guest_path)?;
-        let dir = open_volume(&spec.host).map_err(MountError::Io)?;
+        let (dir, ancestors) = select_directory(
+            open_volume(&spec.host).map_err(MountError::Io)?,
+            sub_path,
+            spec.access,
+        )
+        .map_err(MountError::Io)?;
         let mount = Mount {
             guest: Arc::from(spec.guest_path.as_str()),
             rel,
             volume: Arc::from(spec.volume.as_str()),
             dir,
-            host: Arc::from(spec.host.as_path()),
+            host: Arc::from(
+                sub_path.map_or_else(|| spec.host.clone(), |path| spec.host.join(path)),
+            ),
             access: spec.access,
             quota: spec.quota,
             placeholders: Arc::from(placeholders),
+            ancestors: Arc::from(ancestors),
         };
         let mut mounts = self.mounts.to_vec();
         mounts.push(mount);
@@ -486,16 +529,6 @@ impl Vfs {
         self
     }
 
-    fn volume_location(&self, volume: &str) -> Option<&str> {
-        if self.volume.as_deref() == Some(volume) {
-            return Some("/");
-        }
-        self.mounts
-            .iter()
-            .find(|mount| &*mount.volume == volume)
-            .map(|mount| &*mount.guest)
-    }
-
     /// Route a root-relative path (as the lexical pass produced it) to the
     /// volume that holds it: the handle to open it through, the path relative
     /// to that handle, and the volume's placement. `None` under
@@ -505,6 +538,7 @@ impl Vfs {
     /// A mount point itself resolves to its volume's root, `.`.
     pub fn locate(&self, rel: &Path) -> Option<(Arc<Dir>, PathBuf, Placement)> {
         let root = self.dir.as_ref()?;
+        let (protected_roots, protected_ancestors) = self.protected_directories();
         for mount in self.mounts.iter() {
             if let Ok(rest) = rel.strip_prefix(&mount.rel) {
                 let rest = if rest.as_os_str().is_empty() {
@@ -518,6 +552,10 @@ impl Vfs {
                     mount: Some(Arc::clone(&mount.guest)),
                     nested: Arc::from([]),
                     host: Arc::clone(&mount.host),
+                    volume: Some(Arc::clone(&mount.volume)),
+                    ancestors: Arc::clone(&mount.ancestors),
+                    protected_roots,
+                    protected_ancestors,
                 };
                 return Some((Arc::clone(&mount.dir), rest, placement));
             }
@@ -528,8 +566,84 @@ impl Vfs {
             mount: None,
             nested: Arc::clone(&self.mounts),
             host: Arc::from(self.root.as_path()),
+            volume: self.volume.clone(),
+            ancestors: Arc::clone(&self.ancestors),
+            protected_roots,
+            protected_ancestors,
         };
         Some((Arc::clone(root), rel.to_path_buf(), placement))
+    }
+
+    fn protected_directories(&self) -> (Arc<[FileIdentity]>, Arc<[FileIdentity]>) {
+        let mut roots = Vec::new();
+        let mut ancestors = self
+            .ancestors
+            .split_last()
+            .map_or(&[][..], |(_, parents)| parents)
+            .to_vec();
+        if let Some(identity) = self.ancestors.last() {
+            roots.push(*identity);
+            if !self.mounts.is_empty() {
+                ancestors.push(*identity);
+            }
+        }
+        for mount in self.mounts.iter() {
+            if let Some(identity) = mount.ancestors.last() {
+                roots.push(*identity);
+            }
+            if let Some((_, parents)) = mount.ancestors.split_last() {
+                ancestors.extend_from_slice(parents);
+            }
+            // Git must also avoid publishing inside hidden placeholders.
+            for placeholder in mount.placeholders.iter() {
+                ancestors.push(placeholder.identity);
+            }
+            if let Some(placeholder) = mount.placeholders.last() {
+                roots.push(placeholder.identity);
+            }
+        }
+        (Arc::from(roots), Arc::from(ancestors))
+    }
+
+    /// Guest working directory shared by I/O, policy, and introspection.
+    pub fn cwd(&self) -> &str {
+        &self.cwd
+    }
+
+    pub fn with_cwd(mut self, cwd: &str) -> Result<Self, crate::runtime::fs::ContainError> {
+        use crate::runtime::fs::{ContainError, guest_normalize, resolve_content};
+        if !cwd.starts_with('/') || cwd.len() > 4096 || guest_normalize("/", cwd)? != cwd {
+            return Err(ContainError::Io(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "cwd must be an absolute normalized guest path",
+            )));
+        }
+        let target = resolve_content(&self, "/", cwd)?;
+        match target.open_dir() {
+            Ok(_) => {}
+            Err(ContainError::Io(error)) if error.kind() == io::ErrorKind::NotFound => {
+                target.create_dir_all()?;
+                target.open_dir()?;
+            }
+            Err(error) => return Err(error),
+        }
+        self.cwd = Arc::from(cwd);
+        Ok(self)
+    }
+
+    /// Select a directory through the volume handle, without ambient reopening.
+    pub fn with_subpath(mut self, sub_path: Option<&str>) -> io::Result<Self> {
+        let root = self
+            .dir
+            .clone()
+            .ok_or_else(|| io::Error::other("filesystem disabled"))?;
+        let (dir, ancestors) = select_directory(root, sub_path, self.access)?;
+        self.dir = Some(dir);
+        if let Some(path) = sub_path {
+            self.root.push(path);
+        }
+        self.ancestors = Arc::from(ancestors);
+        Ok(self)
     }
 
     /// The bytes held by regular files under the root; see [`measure_dir`].
@@ -813,6 +927,51 @@ fn open_volume(host: &Path) -> io::Result<Arc<Dir>> {
     Dir::open_ambient_dir(host, ambient_authority()).map(Arc::new)
 }
 
+fn select_directory(
+    mut dir: Arc<Dir>,
+    sub_path: Option<&str>,
+    access: Access,
+) -> io::Result<(Arc<Dir>, Vec<FileIdentity>)> {
+    let mut ancestors = vec![dir_identity(&dir, Path::new("."), &dir.dir_metadata()?)?];
+    let Some(path) = sub_path else {
+        return Ok((dir, ancestors));
+    };
+    if path.is_empty()
+        || path.len() > 4096
+        || path.split('/').any(|part| {
+            part.is_empty() || part == "." || part == ".." || part.contains(['\\', '\0'])
+        })
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "subPath must be a normalized relative path",
+        ));
+    }
+    for component in path.split('/') {
+        let child = match dir.open_dir_nofollow(component) {
+            Ok(child) => child,
+            Err(error)
+                if error.kind() == io::ErrorKind::NotFound && access == Access::ReadWrite =>
+            {
+                match dir.create_dir(component) {
+                    Ok(()) => {}
+                    Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
+                    Err(error) => return Err(error),
+                }
+                dir.open_dir_nofollow(component)?
+            }
+            Err(error) => return Err(error),
+        };
+        ancestors.push(dir_identity(
+            &child,
+            Path::new("."),
+            &child.dir_metadata()?,
+        )?);
+        dir = Arc::new(child);
+    }
+    Ok((dir, ancestors))
+}
+
 fn open_root(root: &Path) -> io::Result<Arc<Dir>> {
     Dir::open_ambient_dir(root, ambient_authority())
         .map(Arc::new)
@@ -822,6 +981,39 @@ fn open_root(root: &Path) -> io::Result<Arc<Dir>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn subpath_creation_and_readonly_cwd() {
+        let volume = tempfile::tempdir().unwrap();
+        let vfs = Vfs::external(volume.path().into())
+            .unwrap()
+            .with_subpath(Some("users/ada"))
+            .unwrap();
+        assert!(volume.path().join("users/ada").is_dir());
+        let vfs = vfs.with_cwd("/notes/drafts").unwrap();
+        assert_eq!(vfs.cwd(), "/notes/drafts");
+        assert!(volume.path().join("users/ada/notes/drafts").is_dir());
+        let readonly = vfs.with_access(Access::ReadOnly);
+        assert!(readonly.clone().with_cwd("/notes").is_ok());
+        assert!(readonly.with_cwd("/missing").is_err());
+        assert!(
+            Vfs::external(volume.path().into())
+                .unwrap()
+                .with_access(Access::ReadOnly)
+                .with_subpath(Some("absent"))
+                .is_err()
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn subpath_selection_rejects_symlinks() {
+        let volume = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(volume.path().join("users/ada")).unwrap();
+        std::os::unix::fs::symlink("ada", volume.path().join("users/alias")).unwrap();
+        let vfs = Vfs::external(volume.path().into()).unwrap();
+        assert!(vfs.with_subpath(Some("users/alias")).is_err());
+    }
 
     #[test]
     fn tempdir_is_deleted_on_drop() {
