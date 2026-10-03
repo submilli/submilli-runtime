@@ -73,8 +73,8 @@ Connect a harness ([the sub-tree's index](/docs/next/tutorials/connect-a-harness
 Other:
 
 8. [Diagnose a denial](/docs/next/tutorials/diagnose-a-denial)
-9. [Verify in CI](/docs/next/tutorials/verify-in-ci)
-10. [Manage blueprints in Git](/docs/next/tutorials/manage-blueprints-in-git)
+9. [Verify a package in CI](/docs/next/tutorials/verify-a-package-in-ci) (workflow untested on GitHub until [SUB-1309](https://linear.app/submilli/issue/SUB-1309))
+10. [Manage blueprints in Git](/docs/next/tutorials/manage-blueprints-in-git) (same, SUB-1309)
 11. [Add the GitHub MCP server](/docs/next/tutorials/add-the-github-mcp-server)
 
 ## Part 6 · Reference

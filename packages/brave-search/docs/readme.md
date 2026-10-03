@@ -51,3 +51,6 @@ Failures throw `BraveSearchError` with `code`, `status`, and nullable `retryAfte
 have status 0. Codes include `invalid_argument`, `missing_credentials`,
 `unauthorized`, `forbidden`, `rate_limited`, `http_error`, and `invalid_response`.
 Runtime permission and transport errors propagate unchanged. No automatic retries.
+HTTP error messages include Brave's response `type` and `error.detail` when
+available, including validation failures with status 422. Empty or malformed
+error bodies fall back to the HTTP error message.

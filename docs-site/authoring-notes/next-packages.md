@@ -196,3 +196,24 @@ revisited.
   during this session; the store was moved aside and recreated, so the
   Part 2 blueprints registered on that server no longer have their
   secrets. Nothing on the committed pages depends on that server state.
+
+## SUB-1261: `@param` and `@returns` (2026-10-02)
+
+SUB-1138 (main d199f40) made `build check` warn on a package doc comment
+that leaves out a parameter or the result. Every doc-commented function
+in Part 3, the Start here Packages page, the two quickstarts, the live
+chapters the issue lists, and the skill's packages reference now carries
+`@param` and `@returns`. The scratch sources (`scratchpad/pkgdemo`) were
+tagged first and every output re-captured with the CLI built from that
+main: Export a function's two stage-one warnings moved from line 19 to
+22 (and the nested-check warning now prints its `note:` block), Document
+the package gained the real `parameter is undocumented` warning and its
+`submilli docs` output shows the tags (printed as `@param`, `@capability`,
+`@returns`, in that order), and Write tests' failing network run now
+prints a source excerpt under every frame, with the frames at lines 73,
+60, and 30. `examples/quickstart/verify.sh --blocks-only` passes for the
+live quickstart; the draft quickstart fails only on `agent.py` lines it
+never printed, which predates this change. The opening fragment on
+Export a function keeps the one-line `@capability` comment as a
+fragment, since its point is the two lines.
+

@@ -36,6 +36,8 @@ import { check } from "submilli:security";
 
 /**
  * Return a customer's fixture balance in cents.
+ * @param customerId The customer's id.
+ * @returns The balance, in cents.
  * @capability acme.com/balance.read { customerId: string }
  */
 export function readBalance(customerId: string): number {
@@ -132,6 +134,7 @@ export interface MessageInput {
 
 /**
  * Post one message. Flat input: destructure once, pass the consts on.
+ * @param input The channel and the text to post.
  * @capability acme.com/messages.post { channelId: $input.channelId }
  */
 export function postMessage(input: MessageInput): void {
@@ -143,6 +146,8 @@ export function postMessage(input: MessageInput): void {
 /**
  * Post one message to several channels. Array of strings: one `for...of` into
  * the package's own array.
+ * @param channelIds The channels to post to.
+ * @param text The message body.
  * @capability acme.com/messages.broadcast { channelIds }
  */
 export function broadcast(channelIds: string[], text: string): void {
@@ -159,6 +164,8 @@ export function broadcast(channelIds: string[], text: string): void {
 /**
  * Post a message with custom fields. `fields` never reaches the check, so it
  * needs no copy.
+ * @param channelId The destination channel.
+ * @param fields Name and value pairs, posted one per line.
  * @capability acme.com/messages.post { channelId }
  */
 export function postFields(channelId: string, fields: Map<string, string>): void {

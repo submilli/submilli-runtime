@@ -305,5 +305,7 @@ You have read one denial all the way down: from the message to the rule
 that decided to the binding that made it decide that way, and you have
 seen the denial a dead rule makes, a filter on a field the operation
 doesn't report, which lint refuses before it reaches a server. Next:
-[Verify in CI](/docs/next/tutorials/verify-in-ci), where the two runs you
-made by hand become a check on every pull request.
+[Verify a package in
+CI](/docs/next/tutorials/verify-a-package-in-ci), then [Manage blueprints
+in Git](/docs/next/tutorials/manage-blueprints-in-git), where the two runs
+you made by hand become a check on every pull request.
