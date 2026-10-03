@@ -46,6 +46,10 @@ pub struct Args {
     #[arg(long)]
     fix: bool,
 
+    /// Fail on blueprint warnings; also enabled by SUBMILLI_DENY_WARNINGS=1.
+    #[arg(long)]
+    deny_warnings: bool,
+
     /// Path to the blueprint YAML file to lint.
     file: PathBuf,
 }
@@ -64,22 +68,63 @@ pub fn execute(args: Args) -> anyhow::Result<ExitCode> {
 }
 
 fn lint_blueprint(args: Args, blueprint: &mut Blueprint) -> anyhow::Result<ExitCode> {
+    let mut findings = inspect_blueprint(blueprint);
+    for warning in &findings.warnings {
+        eprintln!("warning: {}: {warning}", args.file.display());
+    }
+    if args.fix && !findings.fixes.is_empty() {
+        apply_fixes(blueprint, findings.fixes)?;
+        let updated = serde_yml::to_string(blueprint).context("serializing fixed blueprint")?;
+        fs::write(&args.file, updated)
+            .with_context(|| format!("writing {}", args.file.display()))?;
+        eprintln!("fixed {}", args.file.display());
+        let reported_warnings = findings.warnings;
+        findings = inspect_blueprint(blueprint);
+        for warning in &findings.warnings {
+            if !reported_warnings.contains(warning) {
+                eprintln!("warning: {}: {warning}", args.file.display());
+            }
+        }
+    }
+    let denied = (args.deny_warnings || submilli_build::deny_warnings_from_env())
+        && !findings.warnings.is_empty();
+    for error in &findings.errors {
+        eprintln!("error: {}: {error}", args.file.display());
+    }
+    if denied {
+        eprintln!(
+            "error: {}",
+            submilli_build::warning_denial_message(findings.warnings.len())
+        );
+    }
+    if !findings.errors.is_empty() || denied {
+        return Ok(ExitCode::from(1));
+    }
+    println!("✓ {} is valid", args.file.display());
+    Ok(ExitCode::SUCCESS)
+}
+
+struct LintFindings {
+    errors: Vec<String>,
+    warnings: Vec<String>,
+    fixes: Vec<MissingRequiresRule>,
+}
+
+fn inspect_blueprint(blueprint: &Blueprint) -> LintFindings {
     let mut errors = Vec::new();
-    let mut unfixable_errors = Vec::new();
     let mut fixes = Vec::new();
 
     let packages = declared_packages::load(blueprint, &PackageStore::default());
-    unfixable_errors.extend(packages.errors.iter().cloned());
+    errors.extend(packages.errors.iter().cloned());
     // A package that failed to load may report fields of its own, even for a
     // standard-library name, so no field list is known to be complete.
     if packages.errors.is_empty() {
-        unfixable_errors.extend(
+        errors.extend(
             unreported_field_errors(blueprint, &packages.artifacts)
                 .into_iter()
                 .map(|problem| problem.message),
         );
     }
-    errors.extend(unfixable_errors.iter().cloned());
 
     let mut warnings = Vec::from_iter(default_allow_warning(blueprint));
     warnings.extend(unreachable_main_rule_warnings(blueprint));
@@ -111,25 +156,10 @@ fn lint_blueprint(args: Args, blueprint: &mut Blueprint) -> anyhow::Result<ExitC
         );
     }
 
-    for warning in &warnings {
-        eprintln!("warning: {}: {warning}", args.file.display());
-    }
-    if args.fix && !fixes.is_empty() {
-        apply_fixes(blueprint, fixes);
-        let updated = submilli_blueprint::to_yaml(blueprint);
-        fs::write(&args.file, updated)
-            .with_context(|| format!("writing {}", args.file.display()))?;
-        eprintln!("fixed {}", args.file.display());
-        errors = unfixable_errors;
-    }
-    if errors.is_empty() {
-        println!("✓ {} is valid", args.file.display());
-        Ok(ExitCode::SUCCESS)
-    } else {
-        for error in errors {
-            eprintln!("error: {}: {error}", args.file.display());
-        }
-        Ok(ExitCode::from(1))
+    LintFindings {
+        errors,
+        warnings,
+        fixes,
     }
 }
 
@@ -185,7 +215,7 @@ fn collect_requires_findings(
     }
 }
 
-fn apply_fixes(blueprint: &mut Blueprint, fixes: Vec<MissingRequiresRule>) {
+fn apply_fixes(blueprint: &mut Blueprint, fixes: Vec<MissingRequiresRule>) -> anyhow::Result<()> {
     for fix in fixes {
         if has_matching_rule(
             blueprint,
@@ -195,25 +225,32 @@ fn apply_fixes(blueprint: &mut Blueprint, fixes: Vec<MissingRequiresRule>) {
         ) {
             continue;
         }
+        let filter = fix
+            .filter
+            .as_deref()
+            .map(parse_filter)
+            .transpose()
+            .with_context(|| {
+                format!(
+                    "invalid capability filter for `{}` required by `{}`",
+                    fix.capability, fix.caller
+                )
+            })?;
         blueprint
             .permissions
             .entry(fix.caller)
             .or_default()
             .push(PermissionRule {
                 capability: fix.capability,
-                filter: fix
-                    .filter
-                    .as_deref()
-                    .map(parse_filter)
-                    .transpose()
-                    .expect("compiler-emitted capability filters must parse as blueprint filters"),
+                filter,
                 action: Action::Allow,
             });
     }
+    Ok(())
 }
 
 fn parse_filter(filter: &str) -> Result<FilterExpr, serde_yml::Error> {
-    serde_yml::from_str(&serde_yml::to_string(filter).expect("filter string serializes"))
+    serde_yml::from_str(&serde_yml::to_string(filter)?)
 }
 
 /// Warning rather than error: the form stays valid, but it inverts the posture
@@ -382,4 +419,30 @@ fn missing_caller_block_warnings(blueprint: &Blueprint) -> Vec<String> {
 
 fn is_registry_package(caller: &str) -> bool {
     caller.starts_with('@') && !caller.starts_with("@mcp/")
+}
+
+#[cfg(test)]
+mod fix_failure_tests {
+    use super::*;
+
+    #[test]
+    fn malformed_required_filter_returns_context_instead_of_panicking() {
+        let mut blueprint = submilli_blueprint::parse("name: strict\n").unwrap();
+        let original = blueprint.permissions.clone();
+        let error = apply_fixes(
+            &mut blueprint,
+            vec![MissingRequiresRule {
+                caller: "@acme/package".into(),
+                capability: "fs.read".into(),
+                filter: Some("path ==".into()),
+            }],
+        )
+        .unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("invalid capability filter for `fs.read` required by `@acme/package`")
+        );
+        assert_eq!(blueprint.permissions, original);
+    }
 }

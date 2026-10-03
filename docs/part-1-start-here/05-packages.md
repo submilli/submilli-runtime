@@ -89,17 +89,11 @@ values, and throws `PermissionDeniedError` if not.
 :::tip[Did you know?]
 The compiler keeps the `@capability` tag and the `check` call in step. When
 you build a package, it compares the fields the tag declares with the
-fields the call passes, and warns when they disagree: a field in one and
-not the other, a tag with no check, a check with no tag.
+fields the call passes. An undeclared payload field is an error; other
+disagreements warn. `submilli build check --deny-warnings` also fails on
+those warnings.
 
-```text
-warning: payload key `customerClass` missing from `@capability` binding
-  --> package/src/lib.ts:24:37
-   |
-23 |     const customerClass = lookUpClass(customerId);
-24 |     check("acme.com/credits.apply", { customerId, customerClass, amount });
-   |                                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-```
+
 :::
 
 This is semantic security from the package's side. The package decides

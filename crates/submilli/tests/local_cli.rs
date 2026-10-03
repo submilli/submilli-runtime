@@ -2526,3 +2526,80 @@ fn lint_suggests_closest_capability_names_without_changing_blueprint() {
     }
     assert_eq!(fs::read_to_string(&file).expect("read blueprint"), original);
 }
+
+#[test]
+fn deny_warnings_lint_flag_and_environment_reject_unsafe_default() {
+    let tmp = tempfile::tempdir().unwrap();
+    let file = tmp.path().join("blueprint.yaml");
+    fs::write(&file, "name: strict\ndefault: allow\n").unwrap();
+    for environment in [false, true] {
+        let mut command = Command::new(submilli_bin());
+        command
+            .args(["blueprint", "lint"])
+            .arg(&file)
+            .env("SUBMILLI_HOME", tmp.path());
+        if environment {
+            command.env("SUBMILLI_DENY_WARNINGS", "1");
+        } else {
+            command.arg("--deny-warnings");
+        }
+        let out = command.output().unwrap();
+        assert_eq!(out.status.code(), Some(1));
+        assert!(
+            stderr(&out).contains("1 warning(s) treated as errors"),
+            "{}",
+            stderr(&out)
+        );
+        assert!(!stdout(&out).contains("is valid"));
+    }
+    fs::write(&file, "name: strict\ndefault: deny\n").unwrap();
+    let out = run(&[
+        os("blueprint"),
+        os("lint"),
+        os("--deny-warnings"),
+        file.as_os_str(),
+    ]);
+    assert!(out.status.success(), "{}", stderr(&out));
+}
+
+#[test]
+fn deny_warnings_lint_fix_uses_remaining_findings() {
+    let home = tempfile::tempdir().unwrap();
+    let _project = publish_capability_packages(home.path());
+    let file = home.path().join("blueprint.yaml");
+    write_file(
+        &file,
+        "name: x\npackages:\n  - \"@acme/app\"\n  - \"@acme/sdk\"\npermissions: { \"@acme/sdk\": [] }\n",
+    );
+    let out = run_with_home(
+        &[
+            os("blueprint"),
+            os("lint"),
+            os("--fix"),
+            os("--deny-warnings"),
+            file.as_os_str(),
+        ],
+        home.path(),
+    );
+    assert!(out.status.success(), "{}", stderr(&out));
+    write_file(
+        &file,
+        "name: x\ndefault: allow\npackages:\n  - \"@acme/app\"\n  - \"@acme/sdk\"\npermissions: { \"@acme/sdk\": [] }\n",
+    );
+    let out = run_with_home(
+        &[
+            os("blueprint"),
+            os("lint"),
+            os("--fix"),
+            os("--deny-warnings"),
+            file.as_os_str(),
+        ],
+        home.path(),
+    );
+    assert_eq!(out.status.code(), Some(1));
+    assert!(
+        stderr(&out).contains("1 warning(s) treated as errors"),
+        "{}",
+        stderr(&out)
+    );
+}

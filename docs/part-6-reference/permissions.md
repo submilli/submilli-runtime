@@ -220,12 +220,18 @@ missing field is false.
 | A package requires an operation its own list has no rule for (lint and registration) | ``package `@acme/billing` requires `http.get` with filter `…`, but `permissions.@acme/billing` has no matching rule``; `submilli blueprint lint --fix` adds it |
 | A filter tests a field the capability doesn't report (lint and registration) | ``rule 1 for `fs.read` tests `owner`, which the operation doesn't report, …`` |
 
-`submilli blueprint lint` also warns, without stopping, about:
+`submilli blueprint lint` also warns about:
 `default: allow`; a rule for `secrets.get` under `main`; a rule that an
 earlier unfiltered rule always decides first; a capability name nothing
 provides, with a suggestion; an `http.<method>` name that only
 `http.request` reaches; a package rule that differs from what the package
 requires; and a package list for a package the blueprint doesn't use.
+
+`blueprint lint --deny-warnings` (or `SUBMILLI_DENY_WARNINGS=1`) prints
+these warnings, then exits 1 with
+`error: N warning(s) treated as errors (--deny-warnings)`. With `--fix`,
+only warnings remaining after fixes affect the exit status. Without strict
+mode, warnings do not stop linting.
 
 ## Denials at run time
 

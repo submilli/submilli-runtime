@@ -107,13 +107,14 @@ submilli run --blueprint blueprint.yaml --var customerId=cus_northwind total.ts
 submilli run --blueprint blueprint.yaml --var customerId=cus_initech total.ts 2>&1 | grep PermissionDeniedError
 ```
 
+`--deny-warnings` makes compiler and blueprint warnings fail the check.
 Install the pinned package, lint, and run the test, the three steps the
 pull-request job will run:
 
 ```sh
-submilli install submilli/acme@88656b81c537 @submilli/acme-billing
+submilli install --deny-warnings submilli/acme@88656b81c537 @submilli/acme-billing
 cd blueprints/support
-submilli blueprint lint blueprint.yaml
+submilli blueprint lint --deny-warnings blueprint.yaml
 chmod +x test.sh
 ./test.sh
 ```
@@ -153,12 +154,12 @@ jobs:
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
 
       - name: Install the packages the blueprints list
-        run: while read repo package sha; do submilli install "$repo@$sha" "$package"; done < packages.txt
+        run: while read repo package sha; do submilli install --deny-warnings "$repo@$sha" "$package"; done < packages.txt
 
       - name: Lint and test each blueprint
         run: |
           for dir in blueprints/*/; do
-            (cd "$dir" && submilli blueprint lint blueprint.yaml && ./test.sh)
+            (cd "$dir" && submilli blueprint lint --deny-warnings blueprint.yaml && ./test.sh)
           done
 ```
 
@@ -208,7 +209,7 @@ commands look for them:
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
 
       - name: Install the packages on the server
-        run: while read repo package sha; do submilli server packages install "$repo" "$package" --sha "$sha"; done < packages.txt
+        run: while read repo package sha; do submilli server packages install --deny-warnings "$repo" "$package" --sha "$sha"; done < packages.txt
 
       - name: Register the blueprints
         run: for dir in blueprints/*/; do submilli server blueprint apply "${dir}blueprint.yaml"; done

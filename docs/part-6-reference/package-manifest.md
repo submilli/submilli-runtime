@@ -249,6 +249,25 @@ The build compares each tag with the `check` calls (from
 Where a `check` may be called, and how each value reaching it must be read,
 is in [Export a function](/docs/packages/export-a-function).
 
+## Denying warnings
+
+`build check`, `build test`, `build publish-local`, `install`, and
+`server packages install` accept `--deny-warnings`. `SUBMILLI_DENY_WARNINGS=1`
+enables it without a flag; unset or `0` leaves it disabled. Warnings retain
+their source context, then the command exits 1 with
+`error: N warning(s) treated as errors (--deny-warnings)`.
+
+All compiler warnings count: capability declarations and derivation, check
+placement and data flow, documentation, types, and test or documentation-example
+sources compiled by `build test`. MCP discovery warnings about unavailable or
+unauthenticated servers and tools returning `unknown` do not count. Skipped
+network test files are not compiled.
+
+Install checks cover newly compiled dependencies too. A warning rejection
+writes no artifacts to the destination store, including upgrades. Previously
+stored dependencies that are not recompiled are not audited. Setting the same
+variable on the server enforces strict installs for every API caller.
+
 ## capabilities.yaml
 
 `capabilities.yaml` is derived from the package's source and rewritten in

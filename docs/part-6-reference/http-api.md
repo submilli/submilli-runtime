@@ -23,7 +23,8 @@ relative to that address.
 ### Authentication
 
 Every endpoint on this page requires `Authorization: Bearer <token>`, with a
-token of either role, `user` or `admin`. `SUBMILLI_SERVER_TOKEN` is an
+token of either role, `user` or `admin`, except package installation, which
+requires `admin`. `SUBMILLI_SERVER_TOKEN` is an
 `admin` token; tokens declared under `api_tokens` in the config file carry
 the role given there. A server started with `--allow-unauthenticated`
 checks no token.
@@ -73,6 +74,7 @@ its own. A program that fails is not an HTTP error: `POST /v1/execute` and
 | `GET` | [`/v1/blueprints/{name}/builtins`](#get-v1blueprintsnamebuiltins) |
 | `GET` | [`/v1/blueprints/{name}/builtins/docs`](#get-v1blueprintsnamebuiltinsdocs) |
 | `POST` | [`/v1/execute`](#post-v1execute) |
+| `POST` | [`/v1/packages/install`](#post-v1packagesinstall) |
 
 ## Sessions
 
@@ -339,6 +341,28 @@ message}` and, when there is a suggestion, `did_you_mean`. `error` is
 ```json
 {"results":[{"did_you_mean":"submilli:code","error":"unknown_builtin","message":"unknown built-in: Nope. Did you mean `submilli:code`?","name":"Nope"}]}
 ```
+
+## Package installation
+
+### POST /v1/packages/install
+
+Role: `admin`. Fetches and compiles a GitHub repository into the server's store.
+
+| Field | Type | Default | Value |
+| --- | --- | --- | --- |
+| `url` | string | required | GitHub repository URL or `org/repo` |
+| `sha` | string | default branch | Commit or ref to install |
+| `package` | string | all packages | Select one package and its sibling dependencies |
+| `upgrade` | boolean | `false` | Replace packages installed at a different commit |
+| `deny_warnings` | boolean | `false` | Refuse compiler warnings before storing artifacts |
+
+Answers `200` with `sha`, `installed`, `up_to_date`, and `warnings` (rendered
+compiler diagnostics, as strings). A warning rejection answers `400` with
+`error: "warnings_denied"`, `message: "N warning(s) treated as errors (--deny-warnings)"`,
+and `warnings`; the destination store is unchanged, including dependencies.
+`SUBMILLI_DENY_WARNINGS=1` on the server enforces this even when the request
+omits the field or sends `false`. See [Denying warnings](/docs/reference/package-manifest#denying-warnings)
+for which warnings count.
 
 ## One-off runs
 

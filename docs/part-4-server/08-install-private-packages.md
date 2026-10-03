@@ -70,7 +70,7 @@ rotates the token without a restart. Then install as for a public
 repository:
 
 ```sh
-submilli server packages install acme/billing-package @acme/billing
+submilli server packages install --deny-warnings acme/billing-package @acme/billing
 ```
 
 ```text

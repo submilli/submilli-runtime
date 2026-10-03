@@ -23,8 +23,9 @@ use axum::response::IntoResponse;
 use serde::{Deserialize, Serialize};
 
 use submilli_build::{
-    DriverError, FetchErrorKind, GithubSource, InstallError, Lockfile, PackageName, PackageSource,
-    ResolveError, install_from_dir, install_plan, load_manifest, resolve_github_closure,
+    DriverError, FetchErrorKind, GithubSource, InstallError, InstallPreparation, Lockfile,
+    PackageName, PackageSource, ResolveError, deny_warnings_from_env, load_manifest,
+    resolve_github_closure, warning_denial_message,
 };
 use submilli_shared::github;
 use submilli_shared::github::{
@@ -288,12 +289,20 @@ pub async fn blueprint_builtin_docs(
 pub struct InstallErrorBody {
     pub error: &'static str,
     pub message: String,
+    pub warnings: Vec<String>,
 }
 
 type InstallFailure = (StatusCode, Json<InstallErrorBody>);
 
 fn install_err(status: StatusCode, error: &'static str, message: String) -> InstallFailure {
-    (status, Json(InstallErrorBody { error, message }))
+    (
+        status,
+        Json(InstallErrorBody {
+            error,
+            message,
+            warnings: Vec::new(),
+        }),
+    )
 }
 
 #[derive(Debug, Deserialize)]
@@ -310,6 +319,8 @@ pub struct InstallRequest {
     /// Re-install over a package already present at a different commit.
     #[serde(default)]
     pub upgrade: bool,
+    #[serde(default)]
+    pub deny_warnings: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -317,6 +328,7 @@ pub struct InstallResponse {
     pub sha: String,
     pub installed: Vec<String>,
     pub up_to_date: Vec<String>,
+    pub warnings: Vec<String>,
 }
 
 /// `POST /v1/packages/install` — fetch a GitHub repo, compile it, and install
@@ -438,14 +450,32 @@ fn install_blocking(
         existing_lock.as_ref(),
     )
     .map_err(map_resolve_error)?;
-    install_plan(store, &closure.plan, req.upgrade).map_err(map_install_error)?;
-
-    let only = req.package.map(PackageName::new);
-    let report = install_from_dir(store, dir.path(), only.as_ref(), &source, req.upgrade)
+    let mut preparation = InstallPreparation::new(store).map_err(map_install_error)?;
+    preparation
+        .prepare_plan(&closure.plan, req.upgrade)
         .map_err(map_install_error)?;
 
+    let only = req.package.map(PackageName::new);
+    let report = preparation
+        .prepare_repo(dir.path(), only.as_ref(), &source, req.upgrade)
+        .map_err(map_install_error)?;
+
+    publish_install(preparation, report, resolved.sha, req.deny_warnings)
+}
+
+fn publish_install(
+    preparation: InstallPreparation,
+    report: submilli_build::InstallReport,
+    sha: String,
+    deny_warnings: bool,
+) -> Result<InstallResponse, InstallFailure> {
+    let warnings = preparation.warnings.clone();
+    preparation
+        .publish(deny_warnings || deny_warnings_from_env())
+        .map_err(map_install_error)?;
     Ok(InstallResponse {
-        sha: resolved.sha,
+        warnings,
+        sha,
         installed: report
             .installed
             .iter()
@@ -503,6 +533,15 @@ fn map_resolve_error(err: ResolveError) -> InstallFailure {
 
 fn map_install_error(err: InstallError) -> InstallFailure {
     match err {
+        InstallError::WarningsDenied { warnings } => (
+            StatusCode::BAD_REQUEST,
+            Json(InstallErrorBody {
+                error: "warnings_denied",
+                message: warning_denial_message(warnings.len()),
+                warnings,
+            }),
+        ),
+        InstallError::Preparation(error) => internal_install_error(error),
         InstallError::NoManifest { repo_dir } => install_err(
             StatusCode::BAD_REQUEST,
             "no_manifest",
@@ -616,5 +655,93 @@ mod tests {
         let rotated = github_auth(Some(path.clone())).unwrap();
         assert_eq!(rotated.token().unwrap().secret(), "ghp_rotated");
         assert_eq!(rotated.source(), &TokenSource::ServerFile(path));
+    }
+}
+
+#[cfg(test)]
+mod warning_policy_tests {
+    use super::*;
+
+    #[test]
+    fn deny_warnings_request_defaults_to_false_and_response_preserves_diagnostics() {
+        let request: InstallRequest = serde_json::from_str(r#"{"url":"acme/billing"}"#).unwrap();
+        assert!(!request.deny_warnings);
+        let request: InstallRequest =
+            serde_json::from_str(r#"{"url":"acme/billing","deny_warnings":true}"#).unwrap();
+        assert!(request.deny_warnings);
+        let warnings = vec!["warning: capability mismatch\n  --> src/lib.ts:1:1\n".to_string()];
+        let (status, Json(body)) = map_install_error(InstallError::WarningsDenied {
+            warnings: warnings.clone(),
+        });
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(body.error, "warnings_denied");
+        assert_eq!(
+            body.message,
+            "1 warning(s) treated as errors (--deny-warnings)"
+        );
+        assert_eq!(body.warnings, warnings);
+        let response = InstallResponse {
+            sha: "commit".into(),
+            installed: Vec::new(),
+            up_to_date: Vec::new(),
+            warnings: warnings.clone(),
+        };
+        assert_eq!(
+            serde_json::to_value(response).unwrap()["warnings"],
+            serde_json::json!(warnings)
+        );
+    }
+}
+
+#[cfg(test)]
+mod strict_install_tests {
+    use super::*;
+
+    #[test]
+    fn deny_warnings_server_environment_overrides_false_request() {
+        const CHILD: &str = "SUBMILLI_TEST_STRICT_INSTALL_CHILD";
+        if std::env::var_os(CHILD).is_none() {
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
+                .args(["--exact", "handlers::packages::strict_install_tests::deny_warnings_server_environment_overrides_false_request", "--nocapture"])
+                .env(CHILD, "1").env("SUBMILLI_DENY_WARNINGS", "1").output().unwrap();
+            assert!(
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            assert!(String::from_utf8_lossy(&output.stdout).contains("1 passed"));
+            return;
+        }
+        let directory = tempfile::tempdir().unwrap();
+        let repo = directory.path().join("repo");
+        std::fs::create_dir_all(repo.join("src")).unwrap();
+        std::fs::create_dir_all(repo.join("docs")).unwrap();
+        std::fs::write(repo.join("submilli.toml"), "[[package]]\nname = \"@acme/warned\"\nversion = \"0.1.0\"\ndescription = \"Warnings fixture.\"\n").unwrap();
+        std::fs::write(
+            repo.join("src/lib.ts"),
+            "export function hello(): number { return 1; }\n",
+        )
+        .unwrap();
+        std::fs::write(repo.join("docs/readme.md"), "# Fixture\n").unwrap();
+        let store = submilli_build::PackageStore::new(directory.path().join("store"));
+        let mut preparation = InstallPreparation::new(&store).unwrap();
+        let source = PackageSource::Github(GithubSource {
+            org: "acme".into(),
+            repo: "warned".into(),
+            sha: "0".repeat(40),
+            source_hash: None,
+        });
+        let report = preparation
+            .prepare_repo(&repo, None, &source, false)
+            .unwrap();
+        let request: InstallRequest =
+            serde_json::from_str(r#"{"url":"acme/warned","deny_warnings":false}"#).unwrap();
+        let (status, Json(body)) =
+            publish_install(preparation, report, "0".repeat(40), request.deny_warnings)
+                .unwrap_err();
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(body.error, "warnings_denied");
+        assert!(!body.warnings.is_empty());
+        assert!(!store.root().exists());
     }
 }

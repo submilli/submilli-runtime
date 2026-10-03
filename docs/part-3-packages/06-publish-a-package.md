@@ -18,8 +18,10 @@ package.
 
 ## Install it locally
 
+Check with `submilli build check --deny-warnings` before publishing.
+
 ```sh
-submilli build publish-local -p @acme/billing
+submilli build publish-local --deny-warnings -p @acme/billing
 ```
 
 ```text

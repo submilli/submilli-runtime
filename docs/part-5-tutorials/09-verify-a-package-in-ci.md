@@ -88,8 +88,10 @@ function main(): void {
 
 ## Run the tests by hand first
 
+`--deny-warnings` makes compiler warnings fail the check.
+
 ```sh
-submilli build test
+submilli build test --deny-warnings
 ```
 
 ```text
@@ -128,14 +130,14 @@ jobs:
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
 
       - name: Test the package
-        run: submilli build test
+        run: submilli build test --deny-warnings
 ```
 
 The job runs on pull requests, to stop a bad change before it merges,
 and on pushes to main, to catch what reached it another way. The
 installer is pinned to a release, so a new CLI can't change what the
-job does until you change the line. `submilli build test` exits 1 when a
-test fails, which is what fails the job. Commit the workflow, open a pull
+job does until you change the line. `submilli build test --deny-warnings` exits 1 when a
+test fails or the compiler reports a code warning, which is what fails the job. Commit the workflow, open a pull
 request, and the check runs and passes.
 
 ## See it fail
@@ -152,7 +154,7 @@ that keeps a lookup to one customer, so every charge comes back.
 ```
 
 ```sh
-submilli build test
+submilli build test --deny-warnings
 ```
 
 ```text
@@ -172,6 +174,32 @@ Notice that the `check` still passed: the package asked about
 `cus_northwind` and was told yes. A blueprint can't catch this; only the
 package's own tests can, which is why they gate the merge. Restore the
 line.
+
+## See a capability warning fail
+
+Keep the restored implementation and add `customerClass: string` to its tag:
+
+```typescript title="packages/billing/src/lib.ts (fragment)"
+ * @capability acme.com/charges.list { customerId: string, customerClass: string }
+```
+
+```sh
+submilli build test --deny-warnings
+```
+
+```text
+warning: `@capability` binding key `customerClass` is missing from `check()` payload
+  --> packages/billing/src/lib.ts:25:60
+   |
+24 |  * @returns The customer's charges; empty when they have none.
+25 |  * @capability acme.com/charges.list { customerId: string, customerClass: string }
+   |                                                            ^^^^^^^^^^^^^
+26 |  */
+error: 1 warning(s) treated as errors (--deny-warnings)
+```
+
+Notice that the tag promises a field the `check` never sends. The job fails
+before tests run. Remove `customerClass: string` to make the check pass again.
 
 ## Tests that call the service
 
@@ -223,7 +251,7 @@ jobs:
       - name: Test the package
         env:
           BILLING_API_KEY: ${{ secrets.BILLING_API_KEY }}
-        run: submilli build test --env-var BILLING_API_KEY
+        run: submilli build test --deny-warnings --env-var BILLING_API_KEY
 ```
 
 ```text
@@ -266,11 +294,11 @@ jobs:
         if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
         env:
           BILLING_API_KEY: ${{ secrets.BILLING_API_KEY }}
-        run: submilli build test --env-var BILLING_API_KEY
+        run: submilli build test --deny-warnings --env-var BILLING_API_KEY
 
       - name: Test the package without the service
         if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository
-        run: submilli build test --skip-network
+        run: submilli build test --deny-warnings --skip-network
 ```
 
 The second step says what it left out:

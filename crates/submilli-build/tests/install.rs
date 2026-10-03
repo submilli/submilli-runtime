@@ -23,7 +23,7 @@ fn write_repo(name: &str) -> TempDir {
     write(
         repo.path(),
         "src/lib.ts",
-        "export function hello(): number { return 1; }",
+        "/** Say hello.\n * @returns One.\n */\nexport function hello(): number { return 1; }",
     );
     write(repo.path(), "docs/readme.md", "# Test\n");
     repo
@@ -251,5 +251,119 @@ fn a_fallback_copy_neither_conflicts_nor_satisfies() {
     match untouched.metadata.source {
         Some(PackageSource::Github(gh)) => assert_eq!(gh.sha, SHA_A, "fallback copy is untouched"),
         other => panic!("expected GitHub provenance, got {other:?}"),
+    }
+}
+
+#[test]
+fn deny_warnings_preparation_preserves_store_and_reports_same_commit_warnings() {
+    use submilli_build::InstallPreparation;
+    let clean = write_repo("@acme/dependency");
+    let warned = write_repo("@acme/warned");
+    write(
+        warned.path(),
+        "src/lib.ts",
+        "export function hello(): number { return 1; }\n",
+    );
+    write(
+        warned.path(),
+        "submilli.toml",
+        "[dependencies]\n\"@acme/dependency\" = \"0.1.0\"\n\n[[package]]\nname = \"@acme/warned\"\nversion = \"0.1.0\"\ndescription = \"Warned package.\"\ndependencies = [\"@acme/dependency\"]\n",
+    );
+    write(
+        warned.path(),
+        "src/lib.ts",
+        "import { hello } from \"@acme/dependency\";\nexport function answer(): number { return hello(); }\n",
+    );
+    let root = TempDir::new().unwrap();
+    let store = PackageStore::new(root.path());
+    let mut preparation = InstallPreparation::new(&store).unwrap();
+    preparation
+        .prepare_repo(
+            clean.path(),
+            None,
+            &github("acme", "dependency", SHA_A),
+            false,
+        )
+        .unwrap();
+    let report = preparation
+        .prepare_repo(warned.path(), None, &github("acme", "warned", SHA_A), false)
+        .unwrap();
+    assert!(!report.warnings.is_empty());
+    let error = preparation.publish(true).unwrap_err();
+    assert!(matches!(error, InstallError::WarningsDenied { .. }));
+    assert_eq!(fs::read_dir(root.path()).unwrap().count(), 0);
+
+    install_from_dir(
+        &store,
+        clean.path(),
+        None,
+        &github("acme", "dependency", SHA_A),
+        false,
+    )
+    .unwrap();
+    let permissive = install_from_dir(
+        &store,
+        warned.path(),
+        None,
+        &github("acme", "warned", SHA_A),
+        false,
+    )
+    .unwrap();
+    assert!(!permissive.warnings.is_empty());
+    let artifact = store.load_owned("@acme/warned").unwrap();
+    for sha in [SHA_A, SHA_B] {
+        let mut preparation = InstallPreparation::new(&store).unwrap();
+        let report = preparation
+            .prepare_repo(warned.path(), None, &github("acme", "warned", sha), true)
+            .unwrap();
+        if sha == SHA_A {
+            assert_eq!(report.up_to_date.len(), 1);
+        }
+        assert!(matches!(
+            preparation.publish(true),
+            Err(InstallError::WarningsDenied { .. })
+        ));
+        assert_eq!(
+            store.load_owned("@acme/warned").unwrap().wasm,
+            artifact.wasm
+        );
+        assert_eq!(
+            store.load_owned("@acme/warned").unwrap().metadata.source,
+            artifact.metadata.source
+        );
+    }
+}
+
+#[test]
+fn deny_warnings_preparation_checks_overlapping_sibling_commits() {
+    use submilli_build::InstallPreparation;
+    let repo = write_repo("@acme/shared");
+    for (sha, upgrade, conflict) in [
+        (SHA_A, false, false),
+        (SHA_B, false, true),
+        (SHA_B, true, false),
+    ] {
+        let root = TempDir::new().unwrap();
+        let store = PackageStore::new(root.path());
+        let mut preparation = InstallPreparation::new(&store).unwrap();
+        preparation
+            .prepare_repo(repo.path(), None, &github("acme", "first", SHA_A), false)
+            .unwrap();
+        let second =
+            preparation.prepare_repo(repo.path(), None, &github("acme", "second", sha), upgrade);
+        if conflict {
+            assert!(matches!(second, Err(InstallError::Conflict { .. })));
+            assert_eq!(fs::read_dir(root.path()).unwrap().count(), 0);
+        } else {
+            let report = second.unwrap();
+            assert_eq!(report.up_to_date.len(), usize::from(sha == SHA_A));
+            preparation.publish(true).unwrap();
+            let Some(PackageSource::Github(source)) =
+                store.load_owned("@acme/shared").unwrap().metadata.source
+            else {
+                panic!("GitHub provenance")
+            };
+            assert_eq!(source.sha, sha);
+        }
     }
 }

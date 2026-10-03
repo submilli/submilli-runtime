@@ -1961,3 +1961,222 @@ export interface Svc {
     assert!(text.contains("run(opts:"), "{text}");
     assert!(!text.contains("#pattern_p_"), "{text}");
 }
+
+#[test]
+fn deny_warnings_build_commands_reject_code_warnings_without_installing() {
+    let cases = [
+        (
+            "binding key `customer`",
+            r#"import { check } from "submilli:security";
+/** Check a request.
+ * @param customer Customer ID.
+ * @capability acme.com/op { customer }
+ */
+export function op(customer: string): void { check("acme.com/op", {}); }
+"#,
+        ),
+        (
+            "inside a nested function",
+            r#"import { check } from "submilli:security";
+/** Check a request.
+ * @param customer Customer ID.
+ * @capability acme.com/op { customer }
+ */
+export function op(customer: string): void {
+ const approve = (): void => { check("acme.com/op", { customer }); };
+ approve();
+}
+"#,
+        ),
+        (
+            "non-literal argument",
+            r#"import { readText } from "submilli:fs";
+/** Read a file.
+ * @param path File path.
+ */
+export function op(path: string): string | null { return readText(path); }
+"#,
+        ),
+        (
+            "cannot statically resolve the host",
+            r#"import { get } from "submilli:http";
+/** Fetch a URL.
+ * @param path URL path.
+ */
+export function op(path: string): string { return get("https://api.example.com" + path).body; }
+"#,
+        ),
+    ];
+    for (warning, source) in cases {
+        let tmp = tempfile::tempdir().unwrap();
+        let project = tmp.path().join("project");
+        write_file(
+            &project.join("submilli.toml"),
+            "[[package]]\nname = \"@acme/strict\"\nversion = \"0.1.0\"\ndescription = \"Strict fixture.\"\n",
+        );
+        write_file(&project.join("src/lib.ts"), source);
+        for command in ["check", "test", "publish-local"] {
+            let home = tmp.path().join(command);
+            let out = build_subcommand(command, &project, &home, &["--deny-warnings"]);
+            assert_eq!(out.status.code(), Some(1), "{command}: {}", stderr(&out));
+            assert!(stderr(&out).contains(warning), "{}", stderr(&out));
+            assert!(
+                stderr(&out).contains("warning(s) treated as errors (--deny-warnings)"),
+                "{}",
+                stderr(&out)
+            );
+            let count = stderr(&out)
+                .lines()
+                .filter(|line| line.starts_with("warning:"))
+                .count();
+            assert!(stderr(&out).contains(&format!(
+                "error: {count} warning(s) treated as errors (--deny-warnings)"
+            )));
+            assert!(!home.join("packages/@acme/strict").exists());
+            let permissive = build_subcommand(command, &project, &home, &[]);
+            assert!(
+                permissive.status.success(),
+                "{command}: {}",
+                stderr(&permissive)
+            );
+            assert!(stderr(&permissive).contains(warning));
+        }
+    }
+}
+
+#[test]
+fn deny_warnings_environment_matches_flag_and_clean_package_passes() {
+    let tmp = tempfile::tempdir().unwrap();
+    let project = tmp.path().join("project");
+    write_file(
+        &project.join("submilli.toml"),
+        "[[package]]\nname = \"@acme/strict\"\nversion = \"0.1.0\"\ndescription = \"Strict fixture.\"\n",
+    );
+    write_file(
+        &project.join("src/lib.ts"),
+        "/** Describe the answer.\n * @returns The answer.\n */\nexport function answer(): number { return 42; }\n",
+    );
+    assert!(
+        build_subcommand("check", &project, tmp.path(), &["--deny-warnings"])
+            .status
+            .success()
+    );
+    write_file(
+        &project.join("src/lib.ts"),
+        "export function answer(): number { return 42; }\n",
+    );
+    let out = Command::new(submilli_bin())
+        .args(["build", "check"])
+        .current_dir(&project)
+        .env("SUBMILLI_HOME", tmp.path())
+        .env("SUBMILLI_DENY_WARNINGS", "1")
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(1));
+    assert!(
+        stderr(&out).contains("treated as errors"),
+        "{}",
+        stderr(&out)
+    );
+}
+
+#[test]
+fn deny_warnings_checks_test_sources_and_documentation_examples() {
+    let tmp = tempfile::tempdir().unwrap();
+    let project = tmp.path().join("project");
+    write_file(
+        &project.join("submilli.toml"),
+        "[[package]]\nname = \"@acme/strict\"\nversion = \"0.1.0\"\ndescription = \"Strict fixture.\"\n",
+    );
+    write_file(
+        &project.join("src/lib.ts"),
+        "/** Describe the answer.\n * @returns The answer.\n */\nexport function answer(): number { return 42; }\n",
+    );
+    let example = "import { check } from \"submilli:security\";\n/** Run the example.\n * @capability acme.com/extra\n */\nfunction main(): void { }\n";
+    write_file(&project.join("tests/lib.test.ts"), example);
+    let out = build_test(&project, tmp.path(), &["--deny-warnings"]);
+    assert_eq!(out.status.code(), Some(1));
+    assert!(
+        stderr(&out).contains("treated as errors"),
+        "{}",
+        stderr(&out)
+    );
+    fs::remove_file(project.join("tests/lib.test.ts")).unwrap();
+    write_file(
+        &project.join("docs/readme.md"),
+        &format!("# Example\n```ts\n{example}```\n"),
+    );
+    let out = build_test(&project, tmp.path(), &["--deny-warnings"]);
+    assert_eq!(out.status.code(), Some(1));
+    assert!(stderr(&out).contains("docs/readme.md"), "{}", stderr(&out));
+    assert!(stderr(&out).contains("treated as errors"));
+}
+
+#[test]
+fn deny_warnings_preserves_existing_capability_payload_error() {
+    let tmp = tempfile::tempdir().unwrap();
+    let project = tmp.path().join("project");
+    write_file(
+        &project.join("submilli.toml"),
+        "[[package]]\nname = \"@acme/strict\"\nversion = \"0.1.0\"\ndescription = \"Strict fixture.\"\n",
+    );
+    write_file(
+        &project.join("src/lib.ts"),
+        "import { check } from \"submilli:security\";\n/** Check an operation.\n * @param customer Customer ID.\n * @capability acme.com/op {}\n */\nexport function op(customer: string): void { check(\"acme.com/op\", { customer }); }\n",
+    );
+    for flags in [&[][..], &["--deny-warnings"][..]] {
+        let out = build_subcommand("check", &project, tmp.path(), flags);
+        assert_eq!(out.status.code(), Some(1));
+        assert!(
+            stderr(&out).contains("payload key `customer` missing"),
+            "{}",
+            stderr(&out)
+        );
+    }
+}
+
+#[test]
+fn deny_warnings_respects_package_selection_and_skipped_network_files() {
+    let tmp = tempfile::tempdir().unwrap();
+    let project = tmp.path().join("project");
+    write_file(
+        &project.join("submilli.toml"),
+        "[[package]]\nname = \"@acme/clean\"\nversion = \"0.1.0\"\ndescription = \"Clean package.\"\npath = \"clean\"\n\n[[package]]\nname = \"@acme/warned\"\nversion = \"0.1.0\"\ndescription = \"Warned package.\"\npath = \"warned\"\n",
+    );
+    write_file(
+        &project.join("clean/src/lib.ts"),
+        "/** Answer.\n * @returns The answer.\n */\nexport function answer(): number { return 42; }\n",
+    );
+    write_file(
+        &project.join("warned/src/lib.ts"),
+        "export function answer(): number { return 42; }\n",
+    );
+    write_file(
+        &project.join("clean/tests/nested/network_warning.test.ts"),
+        "/** Run.\n * @capability acme.com/extra\n */\nfunction main(): void { assert(false, \"must not execute\"); }\n",
+    );
+    let out = build_test(
+        &project,
+        tmp.path(),
+        &["-p", "@acme/clean", "--skip-network", "--deny-warnings"],
+    );
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert!(stdout(&out).contains("HTTP test files skipped"));
+    let out = build_test(
+        &project,
+        tmp.path(),
+        &["-p", "@acme/clean", "--deny-warnings"],
+    );
+    assert_eq!(out.status.code(), Some(1));
+    assert!(
+        stderr(&out).contains("1 warning(s) treated as errors"),
+        "{}",
+        stderr(&out)
+    );
+    assert!(
+        !stderr(&out).contains("must not execute"),
+        "{}",
+        stderr(&out)
+    );
+    assert!(!stdout(&out).contains("warned/src"));
+}
