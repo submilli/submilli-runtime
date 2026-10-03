@@ -174,6 +174,7 @@ impl Closure {
 pub(crate) fn original(caller: &mut Caller<'_, StoreData>, val: Val) -> wasmtime::Result<Val> {
     let mut current = val;
     while let Some(inner) = adapter_target(caller, &current)? {
+        fuel::charge(&mut *caller, fuel::ELEM, 1)?;
         current = inner;
     }
     Ok(current)

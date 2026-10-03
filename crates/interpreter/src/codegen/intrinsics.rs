@@ -177,6 +177,10 @@ pub fn declare_intrinsic_types(types: &mut TypeSection) -> IntrinsicTypeIndices 
                             element_type: StorageType::Val(ref_to(raw_string)),
                             mutable: false,
                         },
+                        FieldType {
+                            element_type: StorageType::Val(ValType::I64),
+                            mutable: true,
+                        },
                     ]
                     .into_boxed_slice(),
                 }),
@@ -403,6 +407,10 @@ pub fn declare_intrinsic_types(types: &mut TypeSection) -> IntrinsicTypeIndices 
                     mutable: true,
                     ..fieldtype_ref(object_fields)
                 },
+                FieldType {
+                    element_type: StorageType::Val(ValType::I64),
+                    mutable: true,
+                },
             ],
             Some(object_shape),
         ),
@@ -515,6 +523,10 @@ pub fn declare_intrinsic_types(types: &mut TypeSection) -> IntrinsicTypeIndices 
                         element_type: StorageType::Val(ValType::I32),
                         mutable: false,
                     },
+                    FieldType {
+                        element_type: StorageType::Val(ValType::I64),
+                        mutable: true,
+                    },
                 ]
                 .into_boxed_slice(),
             }),
@@ -551,6 +563,10 @@ pub fn declare_intrinsic_types(types: &mut TypeSection) -> IntrinsicTypeIndices 
                     FieldType {
                         element_type: StorageType::Val(ref_to(regex_capture_array)),
                         mutable: false,
+                    },
+                    FieldType {
+                        element_type: StorageType::Val(ValType::I64),
+                        mutable: true,
                     },
                 ]
                 .into_boxed_slice(),
@@ -700,6 +716,12 @@ pub fn declare_intrinsic_types(types: &mut TypeSection) -> IntrinsicTypeIndices 
                     mutable_i32,
                     order_field,
                     mutable_i32,
+                    order_field,
+                    order_field,
+                    FieldType {
+                        element_type: StorageType::Val(ValType::I64),
+                        mutable: true,
+                    },
                 ]
                 .into_boxed_slice(),
             }),
@@ -719,6 +741,12 @@ pub fn declare_intrinsic_types(types: &mut TypeSection) -> IntrinsicTypeIndices 
                     mutable_i32,
                     order_field,
                     mutable_i32,
+                    order_field,
+                    order_field,
+                    FieldType {
+                        element_type: StorageType::Val(ValType::I64),
+                        mutable: true,
+                    },
                 ]
                 .into_boxed_slice(),
             }),
@@ -1066,6 +1094,7 @@ pub(crate) fn push_string_literal(
         array_type_index: intrinsics.raw_string,
         array_size: super::wasm_u32(len)?,
     });
+    f.instruction(&Instruction::I64Const(0));
     f.instruction(&Instruction::StructNew(intrinsics.string));
     Ok(())
 }

@@ -67,6 +67,7 @@ pub(crate) fn next_closure_type(
                 imm,
                 StorageType::ValType(ValType::Ref(RefType::new(false, HeapType::Any))),
             ),
+            FieldType::new(Mutability::Var, StorageType::ValType(ValType::I64)),
         ],
     )?;
     Ok((func, st))
@@ -107,6 +108,7 @@ pub(crate) fn void_closure_type(
                 imm,
                 StorageType::ValType(ValType::Ref(RefType::new(false, HeapType::Any))),
             ),
+            FieldType::new(Mutability::Var, StorageType::ValType(ValType::I64)),
         ],
     )?;
     Ok((func, st))
@@ -241,7 +243,12 @@ pub(crate) fn build_iterator(
     let closure = StructRef::new(
         &mut *caller,
         &closure_pre,
-        &[closure_vtable, Val::FuncRef(Some(next_fn)), env],
+        &[
+            closure_vtable,
+            Val::FuncRef(Some(next_fn)),
+            env,
+            Val::I64(0),
+        ],
     )?;
 
     let next_name = write_submilli_string_struct(caller, "next")?;
@@ -297,7 +304,12 @@ pub(crate) fn build_closable_iterator(
     let next_closure = StructRef::new(
         &mut *caller,
         &next_pre,
-        &[closure_vtable, Val::FuncRef(Some(next_fn)), env],
+        &[
+            closure_vtable,
+            Val::FuncRef(Some(next_fn)),
+            env,
+            Val::I64(0),
+        ],
     )?;
 
     let (_, close_struct_ty) = void_closure_type(caller.engine(), &intr)?;
@@ -305,7 +317,12 @@ pub(crate) fn build_closable_iterator(
     let close_closure = StructRef::new(
         &mut *caller,
         &close_pre,
-        &[closure_vtable, Val::FuncRef(Some(close_fn)), env],
+        &[
+            closure_vtable,
+            Val::FuncRef(Some(close_fn)),
+            env,
+            Val::I64(0),
+        ],
     )?;
 
     let close_name = write_submilli_string_struct(caller, "close")?;

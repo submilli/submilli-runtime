@@ -11,7 +11,7 @@
 //! payload `FuncType` is built from the canonical intrinsic `$Error` struct type.
 //!
 //! `$Error` is class-shaped (see `codegen/intrinsics.rs`): the three
-//! `$ObjectShape` header slots, with `message` at object-fields payload slot 0
+//! `$ObjectShape` header slots plus a mutable identity ID, with `message` at payload slot 0
 //! and `name` at slot 1. Construction is host-only — guests call the imported
 //! constructor; a user subclass's `super(...)` calls the self-first ctor-init.
 //!
@@ -207,6 +207,10 @@ pub(crate) fn build_error_subclass_types(
             intr.object_fields.clone().into(),
         ))),
     ));
+    def.field(wasmtime::FieldType::new(
+        wasmtime::Mutability::Var,
+        wasmtime::StorageType::ValType(ValType::I64),
+    ));
     def.finish();
 
     let g = b.build().map_err(fatal_host_error)?;
@@ -247,7 +251,11 @@ pub(crate) fn install_store_bound(
                 let st = StructRef::new(
                     &mut *store,
                     &pre,
-                    &[string_vtable_val, Val::AnyRef(Some(raw.to_anyref()))],
+                    &[
+                        string_vtable_val,
+                        Val::AnyRef(Some(raw.to_anyref())),
+                        Val::I64(0),
+                    ],
                 )?;
                 name_vals.push(Val::AnyRef(Some(st.to_anyref())));
             }
@@ -270,7 +278,7 @@ pub(crate) fn install_store_bound(
     pd_names.extend(BuiltinErrorClass::PermissionDenied.own_fields());
     let permission_denied_field_names = field_names_global(store, &pd_names)?;
 
-    let slots = build_error_vtable(store, intr, BuiltinErrorClass::Error)?;
+    let slots = build_error_vtable(store, intr)?;
     let pre = StructRefPre::new(&mut *store, intr.error_vtable.clone());
     let vtable_struct = StructRef::new(
         &mut *store,
@@ -347,7 +355,7 @@ fn install_subclass_vtable(
     parent: Rooted<StructRef>,
     class: BuiltinErrorClass,
 ) -> wasmtime::Result<Global> {
-    let slots = build_error_vtable(store, intr, class)?;
+    let slots = build_error_vtable(store, intr)?;
     let pre = StructRefPre::new(&mut *store, vtable_ty.clone());
     let vtable_struct = StructRef::new(
         &mut *store,
@@ -386,14 +394,11 @@ fn install_subclass_vtable(
 
 /// The four universal slots for `$Error`/subclass instances. `toString`
 /// follows JS `Error.prototype.toString` ("name: message", eliding the
-/// separator when either side is empty); `toJson` is `"{}"`; `equals` matches
-/// the per-class codegen bodies — exact-class nominal guard + structural
-/// message/name compare; `hash` is 0 — structurally-equal errors trivially
-/// share it.
+/// separator when either side is empty); `toJson` is `"{}"`. Equality and
+/// hashing use reference identity, as do generated Error subclass hooks.
 fn build_error_vtable(
     store: &mut Store<StoreData>,
     intr: &IntrinsicTypes,
-    class: BuiltinErrorClass,
 ) -> wasmtime::Result<[Func; 4]> {
     let to_string = host_func_async(
         &mut *store,
@@ -447,8 +452,7 @@ fn build_error_vtable(
         intr.equals_fn.clone(),
         move |mut caller, params, results| {
             Box::new(async move {
-                *abi_result(results, 0)? =
-                    Val::I32(error_equals(&mut caller, params, class)? as i32);
+                *abi_result(results, 0)? = Val::I32(error_equals(&mut caller, params)? as i32);
                 Ok(())
             })
         },
@@ -457,9 +461,12 @@ fn build_error_vtable(
     let hash = host_func_async(
         &mut *store,
         intr.hash_fn.clone(),
-        |_caller, _params, results| {
+        |mut caller, params, results| {
             Box::new(async move {
-                *abi_result(results, 0)? = Val::I32(0);
+                *abi_result(results, 0)? = Val::I32(super::vtable::identity_hash(
+                    &mut caller,
+                    abi_arg(params, 0)?,
+                )? as i32);
                 Ok(())
             })
         },
@@ -573,49 +580,14 @@ pub(crate) fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
     Ok(())
 }
 
-/// Host-side twin of codegen's per-class equals bodies
-/// (`classes::emit_class_equals_body`): exact-class vtable-identity guard —
-/// no parent walk; subclass instances dispatch their own guest-emitted bodies
-/// — then structural message/name comparison in UTF-16 code-unit space.
-/// `self` is guaranteed exactly-`class`: only that class's host vtable
-/// references this fn.
-fn error_equals(
-    caller: &mut Caller<'_, StoreData>,
-    params: &[Val],
-    class: BuiltinErrorClass,
-) -> wasmtime::Result<bool> {
+/// Errors compare by identity regardless of mutable payload fields.
+/// Generated Error subclass hooks use the same reference comparison.
+fn error_equals(caller: &mut Caller<'_, StoreData>, params: &[Val]) -> wasmtime::Result<bool> {
     let (Val::AnyRef(Some(a)), Val::AnyRef(Some(b))) = (abi_arg(params, 0)?, abi_arg(params, 1)?)
     else {
         return Ok(false);
     };
-    if Rooted::ref_eq(&*caller, a, b)? {
-        return Ok(true);
-    }
-    let Some(b_st) = b.as_struct(&mut *caller)? else {
-        return Ok(false);
-    };
-    let target = match class.vtable(&abi(caller)?).get(&mut *caller) {
-        Val::AnyRef(Some(target)) => target,
-        other => {
-            return Err(wasmtime::Error::msg(format!(
-                "Error#equals: malformed error vtable global {other:?}"
-            )));
-        }
-    };
-    let Val::AnyRef(Some(b_vt)) = b_st.field(&mut *caller, 0)? else {
-        return Ok(false);
-    };
-    if !Rooted::ref_eq(&*caller, &b_vt, &target)? {
-        return Ok(false);
-    }
-    for slot in 0..(OWN_SLOT_BASE + class.own_fields().len() as u32) {
-        if payload_units(caller, abi_arg(params, 0)?, slot, "Error#equals")?
-            != payload_units(caller, abi_arg(params, 1)?, slot, "Error#equals")?
-        {
-            return Ok(false);
-        }
-    }
-    Ok(true)
+    Rooted::ref_eq(&*caller, a, b)
 }
 
 /// Host-side twin of codegen's nominal `instanceof` walk
@@ -727,7 +699,12 @@ fn construct(
     let st = StructRef::new(
         &mut *caller,
         &pre,
-        &[vtable, field_names, Val::AnyRef(Some(payload.to_anyref()))],
+        &[
+            vtable,
+            field_names,
+            Val::AnyRef(Some(payload.to_anyref())),
+            Val::I64(0),
+        ],
     )?;
     Ok(Val::AnyRef(Some(st.to_anyref())))
 }

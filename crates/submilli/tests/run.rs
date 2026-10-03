@@ -1037,6 +1037,100 @@ fn operations_charge_for_the_input_they_process() {
         }
     }
 
+    for n in [128_u64, 256] {
+        let input = format!(
+            "const key = \"x\".repeat({n}); const m = new Map<string, number>(); m.set(key, 1);"
+        );
+        let baseline = host_fuel(
+            &format!("usage-cached-key-{n}-base"),
+            &format!("function main(): number {{ {input} return 0; }}"),
+        );
+        let actual = host_fuel(
+            &format!("usage-cached-key-{n}"),
+            &format!(
+                "function main(): number {{ {input} for (let i=0; i<{n}; i++) {{ m.get(key); }} return 0; }}"
+            ),
+        ) - baseline;
+        // Old cost was 14,848/41,984: key hashing and equality copied units
+        // on every lookup. Now just get/hash/equals calls and one probe.
+        assert_eq!(actual, n * (3 * CALL + ELEM.cost(1)));
+
+        let input = format!("const a = \"x\".repeat({n}); const b = \"x\".repeat({n}+1);");
+        let baseline = host_fuel(
+            &format!("usage-length-equals-{n}-base"),
+            &format!("function main(): number {{ {input} return 0; }}"),
+        );
+        let actual = host_fuel(
+            &format!("usage-length-equals-{n}"),
+            &format!(
+                "function main(): number {{ {input} for (let i=0; i<{n}; i++) {{ Object.is(a,b); }} return 0; }}"
+            ),
+        ) - baseline;
+        assert_eq!(actual, n * 2 * CALL);
+    }
+
+    // These measured pre-fix costs include constant-hash collision chains.
+    // Subtract key construction so this checks insertion, including resizes.
+    for (name, key_type, make_key, old_cost) in [
+        ("number", "number", "i", [238_286_u64, 903_144]),
+        (
+            "instant",
+            "Temporal.Instant",
+            "Temporal.Instant.fromEpochMilliseconds(i)",
+            [238_286, 903_144],
+        ),
+        (
+            "map",
+            "Map<number, number>",
+            "new Map<number, number>()",
+            [238_286, 903_144],
+        ),
+        (
+            "set",
+            "Set<number>",
+            "new Set<number>()",
+            [238_286, 903_144],
+        ),
+        (
+            "error",
+            "Error",
+            "new Error(i.toString())",
+            [254_914, 969_180],
+        ),
+        (
+            "regex",
+            "RegExp",
+            "new RegExp(\"x\", \"\")",
+            [238_286, 903_144],
+        ),
+        ("closure", "() => number", "() => i", [100_158, 364_616]),
+    ] {
+        let mut measured = [0_u64; 2];
+        for (index, n) in [128, 256].into_iter().enumerate() {
+            let input = format!(
+                "const keys: ({key_type})[] = []; for (let i=0; i<{n}; i++) {{ keys.push({make_key}); }} const m = new Map<{key_type}, number>();"
+            );
+            let baseline = host_fuel(
+                &format!("usage-hash-{name}-{n}-base"),
+                &format!("function main(): number {{ {input} return 0; }}"),
+            );
+            measured[index] = host_fuel(
+                &format!("usage-hash-{name}-{n}"),
+                &format!(
+                    "function main(): number {{ {input} for (let i=0; i<keys.length; i++) {{ m.set(keys[i], i); }} return 0; }}"
+                ),
+            ) - baseline;
+            assert!(
+                measured[index] * 2 < old_cost[index],
+                "{name}/{n}: {}",
+                measured[index]
+            );
+        }
+        // Capacity doubles; a small allowance covers hash-dependent probes.
+        // The measured old ratios were 3.6–3.8, so they fail this bound.
+        assert!(measured[1] * 10 <= measured[0] * 22, "{name}: {measured:?}");
+    }
+
     // A structural visit budget does not change the cost of accepted walks:
     // two array snapshots, one hook per element, and the outer call + hook.
     for n in [128_u64, 256] {

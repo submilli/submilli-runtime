@@ -153,6 +153,11 @@ pub(crate) fn build_intrinsic_types(engine: &Engine) -> wasmtime::Result<Intrins
         imm,
         StorageType::ValType(ValType::Ref(RefType::new(false, raw_string.clone().into()))),
     ));
+    // Zero means not hashed; nonzero stores the unsigned 32-bit hash plus one.
+    def.field(FieldType::new(
+        Mutability::Var,
+        StorageType::ValType(ValType::I64),
+    ));
     def.finish();
 
     let mut def = b.define_struct(boxed_number);
@@ -373,8 +378,8 @@ pub(crate) fn build_intrinsic_types(engine: &Engine) -> wasmtime::Result<Intrins
     // `(rec $Error_vtable $Error)` — the class-shaped pair, one 2-member rec
     // group mirroring the user-class emitter's output (`classes.rs`): the vtable
     // is the `$ClassVTable` prefix (universal slots + parent link, no methods);
-    // the struct is the 3 `$ObjectShape` header slots with fields in the
-    // object-fields payload.
+    // the struct has the 3 `$ObjectShape` header slots and an identity ID;
+    // named fields remain in the object-fields payload.
     let mut b = RecGroupBuilder::new(engine);
     let error_vtable_label = b.declare_struct();
     let error_label = b.declare_struct();
@@ -418,6 +423,7 @@ pub(crate) fn build_intrinsic_types(engine: &Engine) -> wasmtime::Result<Intrins
             object_fields.clone().into(),
         ))),
     ));
+    def.field(FieldType::new(mutv, StorageType::ValType(ValType::I64)));
     def.finish();
 
     let g = b.build().map_err(crate::runtime::host::fatal_host_error)?;
@@ -509,6 +515,7 @@ pub(crate) fn build_intrinsic_types(engine: &Engine) -> wasmtime::Result<Intrins
                 StorageType::ValType(ValType::Ref(RefType::new(false, string.clone().into()))),
             ),
             FieldType::new(imm, StorageType::ValType(ValType::I32)),
+            FieldType::new(mutv, StorageType::ValType(ValType::I64)),
         ],
     )?;
     let regex_match_box = singleton_struct(
@@ -543,6 +550,7 @@ pub(crate) fn build_intrinsic_types(engine: &Engine) -> wasmtime::Result<Intrins
                     regex_capture_array.clone().into(),
                 ))),
             ),
+            FieldType::new(mutv, StorageType::ValType(ValType::I64)),
         ],
     )?;
 

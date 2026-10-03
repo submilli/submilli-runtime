@@ -70,6 +70,7 @@ fn emit_inline_const_string(
         .ok_or_else(|| crate::codegen::internal_failure("MCP string vtable is missing"))?;
     emitter.instruction(Instruction::GlobalGet(string_vtable_idx));
     emit_inline_const_raw_string(emitter, ctx, text)?;
+    emitter.instruction(Instruction::I64Const(0));
     emitter.instruction(Instruction::StructNew(intrinsics.string));
     Ok(())
 }

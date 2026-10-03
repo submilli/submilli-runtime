@@ -218,3 +218,63 @@ mod table_capacity_tests {
         assert!(rehash_capacity(1 << 30, 1 << 30, 1 << 30).is_err());
     }
 }
+
+#[cfg(test)]
+mod work_tests {
+    use crate::runtime::{RuntimeConfig, StoreData, Vfs, install_runtime_async};
+    use wasmtime::{Linker, Module};
+
+    #[tokio::test]
+    async fn draining_collections_reads_linear_index_slots() {
+        for (kind, insert) in [
+            ("Map<string, number>", "m.set(key, i)"),
+            ("Set<string>", "m.add(key)"),
+        ] {
+            let mut reads = Vec::new();
+            for n in [128_u64, 256] {
+                let input = format!(
+                    "const keys: string[] = []; const m = new {kind}(); for(let i=0; i<{n}; i++) {{ const key=i.toString(); keys.push(key); {insert}; }}"
+                );
+                let base =
+                    index_reads(&format!("function main(): number {{ {input} return 0; }}")).await;
+                let deleted = index_reads(&format!("function main(): number {{ {input} for(const key of keys) {{ assert(m.delete(key)); }} return 0; }}")).await;
+                // One hash-array read for every occupied probe plus one reverse
+                // position read per deletion. The old ledger walk inspected
+                // n*(n+1)/2 positions while charging none of those reads.
+                let work = deleted - base;
+                assert!(
+                    work >= 2 * n && work < n * (n + 1) / 2,
+                    "{kind}/{n}: {work}"
+                );
+                reads.push(work);
+            }
+            assert!(reads[1] * 10 <= reads[0] * 22, "{kind}: {reads:?}");
+        }
+    }
+
+    async fn index_reads(source: &str) -> u64 {
+        let compiled = crate::compile::compile_script(
+            source,
+            "collection-work.ts",
+            crate::FileId(0),
+            &[],
+            &[],
+        )
+        .unwrap();
+        let config = RuntimeConfig::default();
+        let engine = config.engine().unwrap();
+        let mut data = StoreData::with_vfs(Vfs::none());
+        data.install_type_info(compiled.type_info.clone());
+        let mut store = config.store_async(&engine, data).unwrap();
+        let mut linker = Linker::new(&engine);
+        install_runtime_async(&mut linker, &mut store)
+            .await
+            .unwrap();
+        let module = Module::new(&engine, &compiled.wasm).unwrap();
+        let instance = linker.instantiate_async(&mut store, &module).await.unwrap();
+        crate::dispatch_main_async(&mut store, &instance)
+            .await
+            .unwrap();
+        store.data().collection_index_reads
+    }
+}

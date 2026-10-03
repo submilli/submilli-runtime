@@ -129,10 +129,10 @@ async fn set(
         let values = field_array(caller, &object, 2)?;
         values.set(&mut *caller, property.slot, *value)?;
         let marker = super::super::iterator::as_struct(caller, &property.name, "field name")?;
-        if marker.ty(&*caller)?.fields().count() > 2
-            && matches!(marker.field(&mut *caller, 2)?, Val::I32(0))
+        if marker.ty(&*caller)?.fields().count() > 3
+            && matches!(marker.field(&mut *caller, 3)?, Val::I32(0))
         {
-            marker.set_field(&mut *caller, 2, Val::I32(1))?;
+            marker.set_field(&mut *caller, 3, Val::I32(1))?;
         }
         return Ok(());
     }

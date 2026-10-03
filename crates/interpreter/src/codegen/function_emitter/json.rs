@@ -148,6 +148,7 @@ fn emit_stringify_string_host(emitter: &mut FunctionEmitter, ctx: &CodegenCtx) {
     };
     emitter.instruction(Instruction::GlobalGet(string_vtable_idx));
     emitter.instruction(Instruction::LocalGet(raw_local));
+    emitter.instruction(Instruction::I64Const(0));
     emitter.instruction(Instruction::StructNew(intrinsics.string));
 }
 
@@ -351,6 +352,7 @@ fn emit_wrap_raw_string(emitter: &mut FunctionEmitter, ctx: &CodegenCtx) {
     };
     emitter.instruction(Instruction::GlobalGet(string_vtable_idx));
     emitter.instruction(Instruction::LocalGet(raw_local));
+    emitter.instruction(Instruction::I64Const(0));
     emitter.instruction(Instruction::StructNew(intrinsics.string));
 }
 

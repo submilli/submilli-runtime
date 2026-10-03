@@ -305,8 +305,8 @@ fn build_string_vtable(
         intr.hash_fn.clone(),
         |caller, params, results| {
             Box::new(async move {
-                let units = read_string_units(&mut *caller, abi_arg(params, 0)?, "String#hash")?;
-                *abi_result(results, 0)? = Val::I32(fnv_hash_units(&units) as i32);
+                *abi_result(results, 0)? =
+                    Val::I32(string_hash(caller, abi_arg(params, 0)?)? as i32);
                 Ok(())
             })
         },
@@ -328,7 +328,27 @@ fn string_to_json(
     build_string(caller, raw_string, string_ty, vtable, &escaped)
 }
 
-fn string_equals(
+fn string_hash(caller: &mut Caller<'_, StoreData>, value: &Val) -> wasmtime::Result<u32> {
+    let string = as_struct(caller, value, "String#hash")?;
+    let Val::I64(cached) = string.field(&mut *caller, 2)? else {
+        return Err(crate::runtime::host::fatal_host_error(
+            "String: invalid hash cache",
+        ));
+    };
+    if cached != 0 {
+        let hash = cached
+            .checked_sub(1)
+            .ok_or_else(|| crate::runtime::host::fatal_host_error("String: invalid hash cache"))?;
+        return u32::try_from(hash).map_err(crate::runtime::host::fatal_host_error);
+    }
+    let units = read_struct_units(caller, &string, "String#hash")?;
+    fuel::charge(&mut *caller, fuel::SCAN, units.len() as u64)?;
+    let hash = fnv_hash_units(&units);
+    string.set_field(&mut *caller, 2, Val::I64(i64::from(hash) + 1))?;
+    Ok(hash)
+}
+
+pub(super) fn string_equals(
     caller: &mut Caller<'_, StoreData>,
     recv: &Val,
     other: &Val,
@@ -339,11 +359,28 @@ fn string_equals(
     let Some(other_st) = as_opt_struct(caller, other)? else {
         return Ok(false);
     };
-    if !StructType::eq(&other_st.ty(&caller)?, string_ty) {
+    if !other_st.matches_ty(&*caller, string_ty)? {
         return Ok(false);
     }
-    let recv_units = read_string_units(caller, recv, "String#equals receiver")?;
+    let recv_st = as_struct(caller, recv, "String#equals receiver")?;
+    if Rooted::ref_eq(&*caller, &recv_st, &other_st)? {
+        return Ok(true);
+    }
+    let length = |caller: &mut Caller<'_, StoreData>, string: &Rooted<StructRef>| match string
+        .field(&mut *caller, 1)?
+    {
+        Val::AnyRef(Some(raw)) => raw.unwrap_array(&mut *caller)?.len(&mut *caller),
+        _ => Err(crate::runtime::host::fatal_host_error(
+            "String: invalid payload",
+        )),
+    };
+    let len = length(caller, &recv_st)?;
+    if len != length(caller, &other_st)? {
+        return Ok(false);
+    }
+    let recv_units = read_struct_units(caller, &recv_st, "String#equals receiver")?;
     let other_units = read_struct_units(caller, &other_st, "String#equals other")?;
+    fuel::charge(&mut *caller, fuel::SCAN, u64::from(len))?;
     Ok(recv_units == other_units)
 }
 
@@ -800,11 +837,8 @@ async fn object_equals(
 }
 
 async fn object_hash(caller: &mut Caller<'_, StoreData>, recv: &Val) -> wasmtime::Result<u32> {
-    // Reference-equal collections must hash equal, and nothing else about a
-    // `Map`/`Set` participates in equality — one shared bucket is the
-    // hash that pairs with the reference `equals` above.
     if is_collection_backing(caller, recv)? {
-        return Ok(FNV_OFFSET);
+        return identity_hash(caller, recv);
     }
     let entries = read_object_entries(caller, recv, "Object#hash")?;
     let mut hash = FNV_OFFSET;
@@ -1270,7 +1304,24 @@ fn build_closure_vtable(
         },
     );
     let equals = ref_identity_equals_slot(store, intr);
-    let hash = zero_hash_slot(store, intr);
+    let hash = host_vtable_func(
+        &mut *store,
+        intr.hash_fn.clone(),
+        |caller, params, results| {
+            Box::new(async move {
+                let object = as_struct(caller, &params[0], "Closure#hash")?;
+                if matches!(object.field(&mut *caller, 3)?, Val::I64(0)) {
+                    let original = super::closure::original(caller, params[0])?;
+                    identity_hash(caller, &original)?;
+                    let original = as_struct(caller, &original, "Closure#hash original")?;
+                    let id = original.field(&mut *caller, 3)?;
+                    object.set_field(&mut *caller, 3, id)?;
+                }
+                results[0] = Val::I32(identity_hash(caller, &params[0])? as i32);
+                Ok(())
+            })
+        },
+    );
     Ok([to_string, to_json, equals, hash])
 }
 
@@ -1290,7 +1341,7 @@ fn build_regex_vtable(
     );
     let to_json = empty_object_json_slot(store, intr);
     let equals = ref_identity_equals_slot(store, intr);
-    let hash = zero_hash_slot(store, intr);
+    let hash = identity_hash_slot(store, intr);
     Ok([to_string, to_json, equals, hash])
 }
 
@@ -1312,7 +1363,7 @@ fn build_regex_match_box_vtable(
     );
     let to_json = empty_object_json_slot(store, intr);
     let equals = ref_identity_equals_slot(store, intr);
-    let hash = zero_hash_slot(store, intr);
+    let hash = identity_hash_slot(store, intr);
     Ok([to_string, to_json, equals, hash])
 }
 
@@ -1392,7 +1443,7 @@ fn ref_identity_equals_slot(store: &mut Store<StoreData>, intr: &IntrinsicTypes)
     )
 }
 
-/// `hash` slot returning 0 — identity-equal values need no distribution.
+/// Fallback hash for opaque host values without identity metadata.
 fn zero_hash_slot(store: &mut Store<StoreData>, intr: &IntrinsicTypes) -> Func {
     host_vtable_func(
         &mut *store,
@@ -1404,6 +1455,51 @@ fn zero_hash_slot(store: &mut Store<StoreData>, intr: &IntrinsicTypes) -> Func {
             })
         },
     )
+}
+
+fn identity_hash_slot(store: &mut Store<StoreData>, intr: &IntrinsicTypes) -> Func {
+    host_vtable_func(
+        &mut *store,
+        intr.hash_fn.clone(),
+        |caller, params, results| {
+            Box::new(async move {
+                results[0] = Val::I32(identity_hash(caller, &params[0])? as i32);
+                Ok(())
+            })
+        },
+    )
+}
+
+/// Identity-equal builtins reserve their last field for a store-local hash ID.
+pub(super) fn identity_hash(
+    caller: &mut Caller<'_, StoreData>,
+    value: &Val,
+) -> wasmtime::Result<u32> {
+    let object = as_struct(caller, value, "identity hash")?;
+    let field = object
+        .ty(&*caller)?
+        .fields()
+        .count()
+        .checked_sub(1)
+        .ok_or_else(|| {
+            crate::runtime::host::fatal_host_error("Identity object has no hash field")
+        })?;
+    let Val::I64(mut id) = object.field(&mut *caller, field)? else {
+        return Err(crate::runtime::host::fatal_host_error(
+            "Invalid identity hash field",
+        ));
+    };
+    if id == 0 {
+        let next = caller
+            .data()
+            .next_identity_hash
+            .checked_add(1)
+            .ok_or_else(|| crate::runtime::host::fatal_host_error("Identity hash IDs exhausted"))?;
+        object.set_field(&mut *caller, field, Val::I64(next as i64))?;
+        caller.data_mut().next_identity_hash = next;
+        id = next as i64;
+    }
+    Ok(mix_hash_bits(id as u64))
 }
 
 fn read_boxed_f64(
@@ -1468,12 +1564,19 @@ fn boxed_boolean_equals(
 // pure slot algorithms (unit-tested without a store)
 // ---------------------------------------------------------------------------
 
-/// XOR-fold a number's `f64` bit pattern into an `i32` hash: low 32 bits XOR
-/// high 32 bits. Mirrors `prelude::boxed::number_hash_body` (`+0` and `-0` have
-/// distinct bit patterns and so hash differently).
+/// Mix exponent and mantissa into the low bits used by power-of-two tables.
 fn boxed_number_hash(n: f64) -> u32 {
-    let bits = n.to_bits();
-    (bits as u32) ^ ((bits >> 32) as u32)
+    // Equality treats signed zeros alike, so their hashes must agree.
+    let bits = if n == 0.0 { 0 } else { n.to_bits() };
+    mix_hash_bits(bits)
+}
+
+pub(super) fn mix_hash_bits(bits: u64) -> u32 {
+    let mut mixed = bits.wrapping_add(0x9e37_79b9_7f4a_7c15);
+    mixed = (mixed ^ (mixed >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+    mixed = (mixed ^ (mixed >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+    mixed ^= mixed >> 31;
+    mixed as u32 ^ (mixed >> 32) as u32
 }
 
 /// XOR-fold a bigint's sign with each limb's low/high 32-bit halves. Mirrors
@@ -1500,7 +1603,7 @@ fn uint8array_hash(bytes: &[u8]) -> u32 {
 
 /// FNV-1a-32 over UTF-16 code units, low byte then high byte per unit — the exact
 /// order of `prelude::string::vtable_hash_body`.
-fn fnv_hash_units(units: &[u16]) -> u32 {
+pub(super) fn fnv_hash_units(units: &[u16]) -> u32 {
     let mut hash = FNV_OFFSET;
     for &unit in units {
         hash = (hash ^ u32::from(unit & 0xff)).wrapping_mul(FNV_PRIME);
@@ -1694,7 +1797,7 @@ fn build_string(
     let st = StructRef::new(
         &mut *caller,
         &pre,
-        &[vtable, Val::AnyRef(Some(raw.to_anyref()))],
+        &[vtable, Val::AnyRef(Some(raw.to_anyref())), Val::I64(0)],
     )?;
     Ok(Val::AnyRef(Some(st.to_anyref())))
 }
@@ -1766,14 +1869,13 @@ mod tests {
     }
 
     #[test]
-    fn boxed_number_hash_folds_bits_and_distinguishes_signed_zero() {
-        // Low 32 XOR high 32 of the IEEE-754 bit pattern.
-        for n in [0.0_f64, 1.0, -1.0, 42.5, f64::INFINITY] {
-            let bits = n.to_bits();
-            assert_eq!(boxed_number_hash(n), (bits as u32) ^ ((bits >> 32) as u32));
-        }
-        // `+0` and `-0` are equal under `==` but hash differently (distinct bits).
-        assert_ne!(boxed_number_hash(0.0), boxed_number_hash(-0.0));
+    fn boxed_number_hash_distributes_small_integers_and_agrees_for_zero() {
+        assert_eq!(boxed_number_hash(0.0), boxed_number_hash(-0.0));
+        let buckets: std::collections::BTreeSet<_> = (0..256)
+            .map(|n| boxed_number_hash(f64::from(n)) & 511)
+            .collect();
+        // The former bit fold put every one of these values in bucket zero.
+        assert!(buckets.len() > 180, "{} distinct buckets", buckets.len());
     }
 
     #[test]

@@ -400,6 +400,7 @@ fn emit_subtype_to_json_body(
         intrinsics.object_shape,
     )));
     f.instruction(&Instruction::Call(stringify_func_idx));
+    f.instruction(&Instruction::I64Const(0));
     f.instruction(&Instruction::StructNew(intrinsics.string));
     f.instruction(&Instruction::End);
     Ok(f)
@@ -974,7 +975,12 @@ fn emit_subtype_hash_body(
 
     // Peel before Union check — aliased unions must trigger null-aware dispatch prelude.
     let any_dispatch = fields.values().any(|f| {
-        is_ref_dispatch_field(&f.ty) || matches!(f.ty.peel(), Type::Union(_)) || f.optional
+        is_ref_dispatch_field(&f.ty)
+            || matches!(
+                f.ty.peel(),
+                Type::Number | Type::NumberLiteral(_) | Type::Union(_)
+            )
+            || f.optional
     });
     let any_union = fields
         .values()
@@ -991,7 +997,6 @@ fn emit_subtype_hash_body(
     //   3: field_obj (ref $Object) — any dispatch
     //   4: hash_fn   (ref $hashFn) — any dispatch
     //   5: f_null    (ref null $Object) — any union/optional field
-    //   6: f_bits    (i64) — number-field unboxing
     let mut locals: Vec<(u32, ValType)> = vec![(1, object_shape_ref), (1, ValType::I32)];
     if any_dispatch {
         locals.push((1, object_ref));
@@ -1000,15 +1005,6 @@ fn emit_subtype_hash_body(
     if any_union {
         locals.push((1, object_null_ref));
     }
-    let any_number_field = fields.values().any(|f| {
-        // peel so `type N = number; { x: N }` still
-        // triggers the f_bits scratch allocation.
-        matches!(f.ty.peel(), Type::Number | Type::NumberLiteral(_))
-    });
-    if any_number_field {
-        locals.push((1, ValType::I64));
-    }
-
     let mut f = Function::new(locals);
     let self_param = 0u32;
     let self_t = 1u32;
@@ -1016,13 +1012,6 @@ fn emit_subtype_hash_body(
     let field_obj = 3u32;
     let hash_fn = 4u32;
     let f_null = if any_dispatch { 5u32 } else { 3u32 };
-    let f_bits = match (any_dispatch, any_union) {
-        (true, true) => 6u32,
-        (true, false) => 5u32,
-        (false, true) => 4u32,
-        (false, false) => 3u32,
-    };
-
     f.instruction(&Instruction::LocalGet(self_param));
     f.instruction(&Instruction::RefCastNonNull(HeapType::Concrete(
         intrinsics.object_shape,
@@ -1042,7 +1031,7 @@ fn emit_subtype_hash_body(
             &field.ty,
             field.optional,
             intrinsics,
-            (self_t, field_obj, hash_fn, f_null, f_bits),
+            (self_t, field_obj, hash_fn, f_null),
         )?;
         // hash = (hash XOR field_hash) * 0x01000193
         f.instruction(&Instruction::LocalGet(hash));
@@ -1064,9 +1053,9 @@ fn emit_field_hash(
     field_ty: &Type,
     field_optional: bool,
     intrinsics: IntrinsicTypeIndices,
-    locals: (u32, u32, u32, u32, u32),
+    locals: (u32, u32, u32, u32),
 ) -> Result<(), CompilerFailure> {
-    let (self_t, field_obj, hash_fn, f_null, f_bits) = locals;
+    let (self_t, field_obj, hash_fn, f_null) = locals;
 
     let field_ty = field_ty.peel();
 
@@ -1093,26 +1082,6 @@ fn emit_field_hash(
     };
 
     match field_ty {
-        Type::Number | Type::NumberLiteral(_) => {
-            // Unbox f64, reinterpret bits, fold high/low halves.
-            load_slot_as_object(f);
-            f.instruction(&Instruction::RefCastNonNull(HeapType::Concrete(
-                intrinsics.boxed_number,
-            )));
-            f.instruction(&Instruction::StructGet {
-                struct_type_index: intrinsics.boxed_number,
-                field_index: 1,
-            });
-            f.instruction(&Instruction::I64ReinterpretF64);
-            f.instruction(&Instruction::LocalSet(f_bits));
-            f.instruction(&Instruction::LocalGet(f_bits));
-            f.instruction(&Instruction::I32WrapI64);
-            f.instruction(&Instruction::LocalGet(f_bits));
-            f.instruction(&Instruction::I64Const(32));
-            f.instruction(&Instruction::I64ShrU);
-            f.instruction(&Instruction::I32WrapI64);
-            f.instruction(&Instruction::I32Xor);
-        }
         Type::Boolean | Type::BooleanLiteral(_) => {
             load_slot_as_object(f);
             f.instruction(&Instruction::RefCastNonNull(HeapType::Concrete(
@@ -1123,7 +1092,9 @@ fn emit_field_hash(
                 field_index: 1,
             });
         }
-        Type::String
+        Type::Number
+        | Type::NumberLiteral(_)
+        | Type::String
         | Type::StringLiteral(_)
         | Type::BigInt
         | Type::Object { .. }
@@ -1377,6 +1348,7 @@ fn push_inline_string(
         array_type_index: raw_string_idx,
         array_size: wasm_u32(s.len())?,
     });
+    f.instruction(&Instruction::I64Const(0));
     f.instruction(&Instruction::StructNew(string_idx));
     Ok(())
 }

@@ -285,6 +285,7 @@ fn emit_new_descriptor(
     ));
     emitter.instruction(Instruction::RefFunc(*function));
     capture(emitter, ctx, ty)?;
+    emitter.instruction(Instruction::I64Const(0));
     emitter.instruction(Instruction::StructNew(
         ctx.symbols
             .closure_struct_type_idx(field_guards::signature())

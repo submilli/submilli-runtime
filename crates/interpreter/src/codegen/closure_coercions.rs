@@ -368,6 +368,7 @@ fn emit_wrap(
     emitter.instruction(Instruction::LocalGet(original));
     emitter.instruction(Instruction::RefAsNonNull);
     super::this_binding::wrap(emitter, ctx)?;
+    emitter.instruction(Instruction::I64Const(0));
     emitter.instruction(Instruction::StructNew(
         ctx.symbols
             .closure_struct_type_idx(target)

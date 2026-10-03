@@ -96,7 +96,7 @@ pub(crate) fn field_is_present(
     if StructType::eq(&name.ty(&*caller)?, &string) {
         return Ok(true);
     }
-    Ok(matches!(name.field(&mut *caller, 2)?, Val::I32(value) if value != 0))
+    Ok(matches!(name.field(&mut *caller, 3)?, Val::I32(value) if value != 0))
 }
 
 fn enumerate(
@@ -148,7 +148,7 @@ pub(crate) fn is_accessor_slot(
     if StructType::eq(&name.ty(&*caller)?, &string) {
         return Ok(false);
     }
-    Ok(matches!(name.field(&mut *caller, 2)?, Val::I32(-1)))
+    Ok(matches!(name.field(&mut *caller, 3)?, Val::I32(-1)))
 }
 
 /// Visibility is carried only by compiler-created marked names. Host-created
@@ -158,10 +158,10 @@ pub(crate) fn field_is_private(
     name: &Val,
 ) -> wasmtime::Result<bool> {
     let name = as_struct(caller, name, "field name")?;
-    if name.ty(&*caller)?.fields().count() < 4 {
+    if name.ty(&*caller)?.fields().count() < 5 {
         return Ok(false);
     }
-    Ok(matches!(name.field(&mut *caller, 3)?, Val::I32(1)))
+    Ok(matches!(name.field(&mut *caller, 4)?, Val::I32(1)))
 }
 
 /// Copy present own fields while preserving UTF-16 names and boxed values.
@@ -239,11 +239,12 @@ fn copy_field_name(
     let mut fields = vec![
         object.field(&mut *caller, 0)?,
         object.field(&mut *caller, 1)?,
+        object.field(&mut *caller, 2)?,
     ];
     if !present {
         fields.push(Val::I32(0));
-        if ty.fields().count() > 3 {
-            fields.push(object.field(&mut *caller, 3)?);
+        if ty.fields().count() > 4 {
+            fields.push(object.field(&mut *caller, 4)?);
         }
     }
     let pre = StructRefPre::new(&mut *caller, ty);
@@ -334,6 +335,7 @@ fn inserted_field_name(caller: &mut Caller<'_, StoreData>, name: &Val) -> wasmti
     let values = [
         name.field(&mut *caller, 0)?,
         name.field(&mut *caller, 1)?,
+        name.field(&mut *caller, 2)?,
         Val::I32(2),
     ];
     let pre = StructRefPre::new(&mut *caller, ty);
@@ -351,7 +353,7 @@ pub(crate) fn field_was_inserted(
     if StructType::eq(&name.ty(&*caller)?, &string) {
         return Ok(false);
     }
-    Ok(matches!(name.field(&mut *caller, 2)?, Val::I32(2)))
+    Ok(matches!(name.field(&mut *caller, 3)?, Val::I32(2)))
 }
 
 /// The compiler marks rejected known fields with non-null mask slots.

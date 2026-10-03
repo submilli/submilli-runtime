@@ -118,6 +118,10 @@ fn class_types(
             intr.object_fields.clone().into(),
         ))),
     ));
+    def.field(FieldType::new(
+        Mutability::Var,
+        StorageType::ValType(ValType::I64),
+    ));
     def.finish();
     let group = builder.build().map_err(fatal_host_error)?;
     Ok((
@@ -197,6 +201,7 @@ fn make_field_names(store: &mut Store<StoreData>, intr: &IntrinsicTypes) -> Resu
         &[
             vtable,
             Val::AnyRef(Some(raw.to_anyref())),
+            Val::I64(0),
             Val::I32(1),
             Val::I32(1),
         ],
@@ -404,7 +409,12 @@ fn new_instance(
     let instance = StructRef::new(
         &mut *caller,
         &pre,
-        &[vtable, names, Val::AnyRef(Some(fields.to_anyref()))],
+        &[
+            vtable,
+            names,
+            Val::AnyRef(Some(fields.to_anyref())),
+            Val::I64(0),
+        ],
     )?;
     Ok(Val::AnyRef(Some(instance.to_anyref())))
 }

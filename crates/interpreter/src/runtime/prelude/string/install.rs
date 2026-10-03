@@ -10,7 +10,7 @@ use wasmtime::{
 };
 
 use super::{
-    RangeError, Str, at_index, cmp, code_point, concat, ends_with_window, eq, from_char_code,
+    RangeError, Str, at_index, cmp, code_point, concat, ends_with_window, from_char_code,
     from_code_point, includes, index_of, is_well_formed, last_index_of, normalize, pad_end,
     pad_start, repeat, slice_range, starts_with_window, substring_range, to_lower_case,
     to_upper_case, to_well_formed, trim, trim_end, trim_start, unit_index,
@@ -154,9 +154,12 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         ),
         true,
         move |caller, params, results| {
-            let a = equals_abi.read(caller, abi_arg(params, 0)?, "String#equals")?;
-            let b = equals_abi.read(caller, abi_arg(params, 1)?, "String#equals")?;
-            *abi_result(results, 0)? = Val::I32(eq(&a.value, &b.value) as i32);
+            *abi_result(results, 0)? = Val::I32(super::super::vtable::string_equals(
+                caller,
+                abi_arg(params, 0)?,
+                abi_arg(params, 1)?,
+                &equals_abi.string_ty,
+            )? as i32);
             Ok(())
         },
     )?;
@@ -247,14 +250,12 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         FuncType::new(&engine, [s.clone(), s.clone()], [ValType::I32]),
         true,
         move |caller, params, results| {
-            // Different lengths differ without reading either string.
-            let a = eq_abi.payload(caller, abi_arg(params, 0)?, "string_eq")?;
-            let b = eq_abi.payload(caller, abi_arg(params, 1)?, "string_eq")?;
-            let equal = a.len == b.len && {
-                let a = a.read_all(caller, "string_eq")?;
-                let b = b.read_all(caller, "string_eq")?;
-                eq(&a, &b)
-            };
+            let equal = super::super::vtable::string_equals(
+                caller,
+                abi_arg(params, 0)?,
+                abi_arg(params, 1)?,
+                &eq_abi.string_ty,
+            )?;
             *abi_result(results, 0)? = Val::I32(equal as i32);
             Ok(())
         },
@@ -1015,7 +1016,7 @@ impl StringAbi {
         let st = StructRef::new(
             &mut *caller,
             &pre,
-            &[vtable, Val::AnyRef(Some(payload.to_anyref()))],
+            &[vtable, Val::AnyRef(Some(payload.to_anyref())), Val::I64(0)],
         )?;
         Ok(Val::AnyRef(Some(st.to_anyref())))
     }

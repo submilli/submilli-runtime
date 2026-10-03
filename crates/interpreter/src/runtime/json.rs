@@ -781,7 +781,11 @@ impl JsonUnknownAllocator {
                 let object = StructRef::new(
                     &mut *ctx,
                     &self.string_pre,
-                    &[self.string_vtable, Val::AnyRef(Some(raw.to_anyref()))],
+                    &[
+                        self.string_vtable,
+                        Val::AnyRef(Some(raw.to_anyref())),
+                        Val::I64(0),
+                    ],
                 )?;
                 Ok(Val::AnyRef(Some(object.to_anyref())))
             }
@@ -819,7 +823,11 @@ impl JsonUnknownAllocator {
                     let name_object = StructRef::new(
                         &mut *ctx,
                         &self.string_pre,
-                        &[self.string_vtable, Val::AnyRef(Some(raw_name.to_anyref()))],
+                        &[
+                            self.string_vtable,
+                            Val::AnyRef(Some(raw_name.to_anyref())),
+                            Val::I64(0),
+                        ],
                     )?;
                     names.push(Val::AnyRef(Some(name_object.to_anyref())));
                     values.push(self.allocate(&mut *ctx, item)?);

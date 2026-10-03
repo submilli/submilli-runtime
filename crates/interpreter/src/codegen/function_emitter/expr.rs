@@ -633,6 +633,7 @@ fn emit_function_ref(
     if let Some(metadata) = ctx.symbols.function_argument_metadata.get(mangled) {
         crate::codegen::call_arguments::wrap(emitter, ctx, metadata)?;
     }
+    emitter.instruction(Instruction::I64Const(0));
     emitter.instruction(Instruction::StructNew(closure_struct_idx));
 
     Ok(())
@@ -1383,7 +1384,8 @@ fn emit_closure_value(
     }
     // Stack: vtable, funcref, env — `(ref $env_N)` subtypes
     // `(ref any)` so the env flows into field 2 implicitly.
-    // Closure struct allocation consumes all three.
+    // Closure struct allocation consumes all four fields.
+    emitter.instruction(Instruction::I64Const(0));
     emitter.instruction(Instruction::StructNew(closure_struct_idx));
     if let Some(environment) = self_environment {
         let closure = emitter.add_anonymous_local(ctx.symbols.value_type(result_ty)?)?;
@@ -4366,6 +4368,7 @@ fn emit_direct_call(
             })?;
         emitter.instruction(Instruction::GlobalGet(vtable_global));
         emitter.instruction(Instruction::LocalGet(scratch));
+        emitter.instruction(Instruction::I64Const(0));
         emitter.instruction(Instruction::StructNew(string_type_idx));
     };
     Ok(())

@@ -79,15 +79,15 @@ fn animal_dog_rec_group_shapes() {
     let bytes = compile(ANIMAL_DOG);
     let shapes = struct_shapes(&bytes);
 
-    // $Animal struct: vtable, field-names, object-fields.
+    // $Animal struct: vtable, field-names, object-fields, identity ID.
     assert!(
-        shapes.contains(&(3, true)),
-        "expected the $Animal struct (3 fields, sub $ObjectShape); got {shapes:?}",
+        shapes.contains(&(4, true)),
+        "expected the $Animal struct (4 fields, sub $ObjectShape); got {shapes:?}",
     );
     // $Dog struct: same object-shape prefix, subtype of $Animal.
     assert!(
-        shapes.iter().filter(|&&(n, _)| n == 3).count() >= 2,
-        "expected both $Animal and $Dog structs (3 fields each); got {shapes:?}",
+        shapes.iter().filter(|&&(n, _)| n == 4).count() >= 2,
+        "expected both $Animal and $Dog structs (4 fields each); got {shapes:?}",
     );
     // $Animal_vtable: 4 universal slots + speak.
     assert!(

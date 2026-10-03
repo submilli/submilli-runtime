@@ -205,6 +205,7 @@ pub(super) fn construct(
             *source,
             *flags,
             Val::I32(bits),
+            Val::I64(0),
         ],
     )?;
     Ok(Val::AnyRef(Some(st.to_anyref())))
@@ -263,6 +264,7 @@ fn build_match_box(
             *input_value,
             Val::AnyRef(Some(numbered_arr.to_anyref())),
             Val::AnyRef(Some(named_arr.to_anyref())),
+            Val::I64(0),
         ],
     )?;
     Ok(Val::AnyRef(Some(st.to_anyref())))
@@ -306,7 +308,11 @@ fn wrap_raw_string(
     let string_ty = intrinsic_types(&mut *caller)?.string.clone();
     let vtable = host_string_vtable(caller)?;
     let pre = StructRefPre::new(&mut *caller, string_ty);
-    let st = StructRef::new(&mut *caller, &pre, &[vtable, Val::AnyRef(Some(raw))])?;
+    let st = StructRef::new(
+        &mut *caller,
+        &pre,
+        &[vtable, Val::AnyRef(Some(raw)), Val::I64(0)],
+    )?;
     Ok(Val::AnyRef(Some(st.to_anyref())))
 }
 

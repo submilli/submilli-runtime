@@ -628,6 +628,10 @@ fn reconstruct_one(
                 mutable: true,
                 ..fieldtype_ref(intrinsics.object_fields)
             },
+            FieldType {
+                element_type: StorageType::Val(ValType::I64),
+                mutable: true,
+            },
         ],
         Some(struct_super),
     );

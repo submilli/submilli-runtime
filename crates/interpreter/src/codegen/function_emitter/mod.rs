@@ -752,6 +752,7 @@ impl<'a> FunctionEmitter<'a> {
             array_type_index: raw_string_type_idx,
             array_data_index: consts_data_idx,
         });
+        self.instruction(Instruction::I64Const(0));
         self.instruction(Instruction::StructNew(string_type_idx));
     }
 
@@ -1039,6 +1040,7 @@ pub(crate) fn emit_inline_string_literal(
         array_type_index: raw_string_type_idx,
         array_size: crate::codegen::wasm_u32(len)?,
     });
+    emitter.instruction(Instruction::I64Const(0));
     emitter.instruction(Instruction::StructNew(string_type_idx));
     Ok(())
 }
@@ -1612,6 +1614,7 @@ mod tests {
             array_type_index: 0,
             array_data_index: 3,
         });
+        expected.instruction(&Instruction::I64Const(0));
         expected.instruction(&Instruction::StructNew(3));
         expected.instruction(&Instruction::End);
         let mut expected_bytes = Vec::new();

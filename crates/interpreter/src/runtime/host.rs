@@ -945,7 +945,7 @@ pub fn write_submilli_string_struct_units(
     StructRef::new(
         &mut *caller,
         &pre,
-        &[vtable, Val::AnyRef(Some(raw.to_anyref()))],
+        &[vtable, Val::AnyRef(Some(raw.to_anyref())), Val::I64(0)],
     )
 }
 

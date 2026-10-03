@@ -132,6 +132,9 @@ pub struct StoreData {
     /// Fuel charged by host functions for their own work; the rest of the fuel
     /// spent went to Wasm instructions. See [`fuel::charge_host_fuel`].
     pub host_fuel: u64,
+    pub(crate) next_identity_hash: u64,
+    #[cfg(test)]
+    pub(crate) collection_index_reads: u64,
     /// Host charges not yet applied to the engine's fuel (see
     /// [`fuel::HOST_FUEL_BATCH`]).
     pub host_fuel_pending: u64,
@@ -226,6 +229,9 @@ impl StoreData {
             metrics: Arc::new(metrics::NoopMetricsSink),
             tenant_limits: TenantLimits::new(max_store_bytes),
             host_fuel: 0,
+            #[cfg(test)]
+            collection_index_reads: 0,
+            next_identity_hash: 0,
             host_fuel_pending: 0,
             host_fuel_applied_at: None,
             test_labels: RefCell::new(Vec::new()),

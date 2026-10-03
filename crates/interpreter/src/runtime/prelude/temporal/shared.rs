@@ -372,15 +372,51 @@ fn plain_vtable_slots(
                     *abi_result(results, 0)? = Val::I32(0);
                     return Ok(());
                 };
-                *abi_result(results, 0)? = Val::I32(equals_op(&mut caller, a, b)? as i32);
+                // WasmGC types are structural. The vtable distinguishes nominal
+                // Temporal kinds even when their backing layouts coincide.
+                let (Val::AnyRef(Some(a_vtable)), Val::AnyRef(Some(b_vtable))) =
+                    (a.field(&mut caller, 0)?, b.field(&mut caller, 0)?)
+                else {
+                    return Err(crate::runtime::host::fatal_host_error(
+                        "Temporal.equals: invalid vtable",
+                    ));
+                };
+                *abi_result(results, 0)? = Val::I32(
+                    (Rooted::ref_eq(&caller, &a_vtable, &b_vtable)?
+                        && equals_op(&mut caller, a, b)?) as i32,
+                );
                 Ok(())
             })
         },
     );
 
-    let hash = host_func_async(&mut *store, hash_ty, move |_caller, _params, results| {
+    let hash = host_func_async(&mut *store, hash_ty, move |mut caller, params, results| {
+        let ty = ty.clone();
         Box::new(async move {
-            *abi_result(results, 0)? = Val::I32(0);
+            let value = cast_struct(&mut caller, abi_arg(params, 0)?, &ty, "Temporal.hash")?;
+            let fields = ty.fields().count();
+            crate::runtime::fuel::charge(
+                &mut caller,
+                crate::runtime::fuel::ELEM,
+                fields.saturating_sub(1) as u64,
+            )?;
+            let mut hash = 0_u32;
+            for field in 1..fields {
+                let bits = match value.field(&mut caller, field)? {
+                    Val::I32(n) => n as u64,
+                    Val::I64(n) => n as u64,
+                    // Zone aliases may compare equal. The instant alone is a
+                    // valid hash for zoned values, independent of zone spelling.
+                    Val::AnyRef(_) => continue,
+                    _ => {
+                        return Err(crate::runtime::host::fatal_host_error(
+                            "Temporal: invalid hash field",
+                        ));
+                    }
+                };
+                hash = hash.rotate_left(5) ^ super::super::vtable::mix_hash_bits(bits);
+            }
+            *abi_result(results, 0)? = Val::I32(hash as i32);
             Ok(())
         })
     });
@@ -415,12 +451,15 @@ fn cast_struct(
 fn try_cast_struct(
     caller: &mut Caller<'_, StoreData>,
     val: &Val,
-    _ty: &StructType,
+    ty: &StructType,
 ) -> wasmtime::Result<Option<Rooted<StructRef>>> {
-    match val {
-        Val::AnyRef(Some(any)) => any.as_struct(&mut *caller),
-        _ => Ok(None),
-    }
+    let Val::AnyRef(Some(any)) = val else {
+        return Ok(None);
+    };
+    let Some(value) = any.as_struct(&mut *caller)? else {
+        return Ok(None);
+    };
+    Ok(value.matches_ty(&*caller, ty)?.then_some(value))
 }
 
 pub(super) fn st_i32(
