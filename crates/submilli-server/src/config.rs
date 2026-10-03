@@ -17,6 +17,8 @@ use crate::session_store::DurableSessionStore;
 #[derive(Clone, Default)]
 pub struct ServerConfig {
     pub runtime: RuntimeConfig,
+    /// TLS configuration for the listener. None keeps plain HTTP.
+    pub tls: Option<Arc<rustls::ServerConfig>>,
     /// Who may call the HTTP API. Defaults to [`AuthConfig::Disabled`]; the
     /// `submilli-server` binary requires tokens unless the operator opts out.
     pub auth: AuthConfig,
@@ -451,6 +453,9 @@ pub struct ServerDirectories {
     pub api_token_files: Vec<PathBuf>,
     /// The file the GitHub token for package installs is read from.
     pub github_token_file: Option<PathBuf>,
+    /// The TLS private key must never be reachable through a named volume.
+    pub tls_key_file: Option<PathBuf>,
+    pub tls_cert_file: Option<PathBuf>,
     pub session_storage_root: Option<PathBuf>,
     /// The durable session store — lifecycle records plus the idempotency
     /// ledger in a subdirectory of it. A different directory from
@@ -494,6 +499,8 @@ impl ServerDirectories {
             secret_store_key_file: None,
             api_token_files: Vec::new(),
             github_token_file: config.github_token_file.clone(),
+            tls_key_file: None,
+            tls_cert_file: None,
             // Neither the secret store's paths, the token files', nor the config
             // file's survive into `ServerConfig`; an embedder that wants them
             // guarded fills them in.
@@ -964,7 +971,7 @@ fn guarded_dirs(dirs: &ServerDirectories) -> Vec<GuardedDir> {
         .ephemeral_storage_root
         .clone()
         .unwrap_or_else(std::env::temp_dir);
-    let rows: [(&'static str, Option<PathBuf>, Direction, &'static str); 16] = [
+    let rows: [(&'static str, Option<PathBuf>, Direction, &'static str); 18] = [
         (
             "secret store",
             dirs.secret_store_dir.clone(),
@@ -976,6 +983,18 @@ fn guarded_dirs(dirs: &ServerDirectories) -> Vec<GuardedDir> {
             dirs.secret_store_key_file.clone(),
             Direction::VolumeContains,
             "a guest read would reach the store's decryption key",
+        ),
+        (
+            "TLS certificate file",
+            dirs.tls_cert_file.clone(),
+            Direction::VolumeContains,
+            "a program could replace the server's TLS certificate",
+        ),
+        (
+            "TLS private key",
+            dirs.tls_key_file.clone(),
+            Direction::VolumeContains,
+            "a program could read or replace the server's TLS identity",
         ),
         (
             "GitHub token file",

@@ -381,3 +381,35 @@ The floor stays at 1.25 even though the default access mode needs 1.29, because
 raising `kubeVersion` would block those clusters from installing at all rather
 than letting them opt down. See [Storage](#the-access-mode-defaults-to-readwriteoncepod-and-that-needs-kubernetes-129)
 for what that trade costs.
+
+## Native HTTPS
+
+The server uses plain HTTP by default. Supply an existing TLS Secret to enable
+HTTPS on the same port:
+
+```yaml
+tls:
+  enabled: true
+  existingSecret: submilli-tls
+  certKey: tls.crt
+  privateKeyKey: tls.key
+```
+
+Create it with `kubectl create secret tls submilli-tls --cert=server.crt --key=server.key`.
+The certificate must include the Service names clients use and the pod-0
+headless name used by `helm test`, `<fullname>-0.<headless-service>`.
+The test pods mount only the public certificate and verify it with curl's
+`--cacert`; for a private issuer, include its verification chain in the PEM.
+HTTPS health probes do not verify certificates; the API test does.
+
+Certificate files are loaded at startup. Restart the StatefulSet after rotating
+the Secret. `config.tls` is reserved; use the TLS values so mounts, configuration,
+probes, and tests remain consistent. TLS Secret key names must differ.
+
+`ingress.tls` controls the Ingress frontend separately. With native TLS enabled,
+configure your controller's HTTPS backend protocol and certificate trust; for
+ingress-nginx, the backend protocol annotation is
+`nginx.ingress.kubernetes.io/backend-protocol: HTTPS`.
+See the [Kubernetes guide](https://submilli.ai/docs/server/deploy-on-kubernetes)
+and [CLI trust guide](https://submilli.ai/docs/server/connect-the-cli#trust-a-self-signed-server)
+for certificate creation and self-signed trust approval.

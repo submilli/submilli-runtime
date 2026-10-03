@@ -1329,6 +1329,7 @@ Interact with a running submilli-server
 Usage: submilli server <COMMAND>
 
 Commands:
+  trust      Manage approved HTTPS server public keys
   docs       Read package declarations, including a blueprint's MCP tools
   run-code   Execute a Submilli script on a running submilli-server
   packages   Manage the server's package store and list the packages it can resolve
@@ -1342,6 +1343,59 @@ Commands:
 
 Options:
   -h, --help  Print help
+```
+
+### `submilli server trust`
+
+```text
+Manage approved HTTPS server public keys
+
+Usage: submilli server trust <COMMAND>
+
+Commands:
+  add     Inspect and approve a server public key. No token is sent
+  list    List approved server public keys in this Submilli home
+  remove  Remove a saved public key before approving a verified replacement
+  help    Print this message or the help of the given subcommand(s)
+
+Options:
+  -h, --help  Print help
+```
+
+#### `submilli server trust add`
+
+```text
+Inspect and approve a server public key. No token is sent
+
+Usage: submilli server trust add [OPTIONS] --server <URL>
+
+Options:
+      --server <URL>          HTTPS server URL whose public key should be approved [env: SUBMILLI_SERVER_URL=]
+      --fingerprint <SHA256>  Independently obtained SHA-256 SPKI fingerprint (sha256:<64 hex digits>). Matching it approves trust without an interactive prompt
+  -h, --help                  Print help
+```
+
+#### `submilli server trust list`
+
+```text
+List approved server public keys in this Submilli home
+
+Usage: submilli server trust list
+
+Options:
+  -h, --help  Print help
+```
+
+#### `submilli server trust remove`
+
+```text
+Remove a saved public key before approving a verified replacement
+
+Usage: submilli server trust remove --server <URL>
+
+Options:
+      --server <URL>  HTTPS server URL whose saved key should be removed [env: SUBMILLI_SERVER_URL=]
+  -h, --help          Print help
 ```
 
 ### `submilli server docs`

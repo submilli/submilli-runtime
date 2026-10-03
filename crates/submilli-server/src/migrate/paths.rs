@@ -88,6 +88,8 @@ fn dependency_paths(directories: &ServerDirectories) -> Vec<(&'static str, &Path
         ephemeral_storage_root,
         managed_volume_root,
         config_file,
+        tls_key_file,
+        tls_cert_file,
     } = directories;
     [
         ("blueprint store", blueprint_dir),
@@ -101,6 +103,8 @@ fn dependency_paths(directories: &ServerDirectories) -> Vec<(&'static str, &Path
         ("ephemeral storage root", ephemeral_storage_root),
         ("managed volume root", managed_volume_root),
         ("server config file", config_file),
+        ("TLS private key", tls_key_file),
+        ("TLS certificate file", tls_cert_file),
     ]
     .into_iter()
     .filter_map(|(name, path)| path.as_deref().map(|path| (name, path)))

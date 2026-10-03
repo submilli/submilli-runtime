@@ -6,7 +6,7 @@ sidebar:
   order: 2
 ---
 
-The `submilli server` commands talk to a running server over HTTP. Out
+The `submilli server` commands talk to a running server over HTTP or HTTPS. Out
 of the box they call `http://127.0.0.1:8128` and send the token from
 `SUBMILLI_SERVER_TOKEN`, which is why they need no setup in the shell
 that started the server. From another machine, or from a deploy job, the
@@ -55,13 +55,97 @@ active sessions: 0
 blueprints:      support
 ```
 
-The server speaks plain HTTP, so reach it the way your application does,
+With HTTPS disabled, reach the server the way your application does,
 over the private network it sits on, and not across the open internet.
 Under Compose the port is published on the host's loopback, so the
 commands work from the host without `--server`, and `docker compose exec
 submilli submilli server status` works from inside the container. On
 Kubernetes, `kubectl port-forward svc/submilli 8128:8128` brings the
 server to your loopback for the length of a command.
+
+## Trust a self-signed server
+
+For a server configured with HTTPS, use an `https://` URL whose hostname or IP
+address matches the certificate's subject alternative names (SANs), the names
+and IP addresses the certificate covers:
+
+```sh
+submilli server status --server https://runtime.example.com:8128 --token-file admin.token
+```
+
+A publicly trusted certificate works without an approval prompt. If the
+certificate is self-signed or its issuer is unknown, an interactive CLI shows
+the server address, certificate names, validity period, and SHA-256 public-key
+fingerprint. Approval defaults to No. Check the fingerprint with the operator
+before accepting: obtaining it from the same untrusted connection does not
+confirm the server's identity.
+
+On the server machine, or from a certificate file supplied through a trusted
+channel, obtain the fingerprint independently:
+
+```sh
+openssl x509 -in server.crt -pubkey -noout \
+  | openssl pkey -pubin -outform DER \
+  | openssl dgst -sha256 \
+  | awk '{print "sha256:" $NF}'
+```
+
+Approval records the public key for this hostname and port in
+`~/.submilli/server-trust.json`, or `$SUBMILLI_HOME/server-trust.json` when that
+variable is set. No API token or application request is sent during certificate
+discovery; a configured HTTP proxy may receive a CONNECT request to establish
+the tunnel. The requested operation proceeds only after approval, and its TLS
+connection verifies the key again.
+
+Without an interactive terminal the CLI refuses unknown trust. Register an
+independently verified fingerprint first; replace the placeholder with the
+`sha256:` value from the command:
+
+```sh
+submilli server trust add --server https://runtime.example.com:8128 --fingerprint 'sha256:<64 hexadecimal digits>'
+submilli server status --server https://runtime.example.com:8128 --token-file admin.token
+```
+
+You can also run `trust add --server URL` interactively to approve a certificate
+before running any server commands. Inspect and remove saved trust with:
+
+```sh
+submilli server trust list
+submilli server trust remove --server https://runtime.example.com:8128
+```
+
+Trust is specific to a hostname and port. Renewal with the same public key
+keeps working. A changed key fails: verify the replacement independently,
+remove the old entry, and approve the new fingerprint. An expired certificate
+or a hostname mismatch still fails with an approved key; renew the certificate
+or use its correct hostname. The CLI does not provide a switch that disables
+certificate verification.
+
+This store is used by CLI server commands and remote blueprint apply. Your
+application's HTTP client and agent framework's MCP client configure trust
+separately; approving the CLI does not approve those clients.
+
+### Connect through a Kubernetes port forward
+
+A certificate for a Service DNS name does not match `localhost`. Keep its
+hostname in the URL while connecting through the loopback tunnel. For a
+certificate containing `submilli.default.svc`, add a temporary hosts entry on
+your machine:
+
+```sh
+printf '127.0.0.1 submilli.default.svc\n' | sudo tee -a /etc/hosts
+kubectl port-forward svc/submilli 8128:8128
+```
+
+Leave the tunnel running and use another shell:
+
+```sh
+submilli server status --server https://submilli.default.svc:8128 --token-file admin.token
+```
+
+The hostname still matches the certificate, and the CLI can approve its key.
+Remove the temporary hosts entry when finished. Trust remains scoped to that
+hostname and the port you connected to.
 
 ## Keep them in your shell
 

@@ -64,6 +64,16 @@ pub struct Cli {
     #[arg(long)]
     port: Option<u16>,
 
+    /// Certificate chain PEM file. HTTPS is enabled only when both TLS files are set.
+    /// Env: `$SUBMILLI_TLS_CERT_FILE`.
+    #[arg(long, value_name = "PATH")]
+    tls_cert_file: Option<PathBuf>,
+
+    /// Private key PEM file matching the certificate. Read at startup; restart to rotate.
+    /// Env: `$SUBMILLI_TLS_KEY_FILE`.
+    #[arg(long, value_name = "PATH")]
+    tls_key_file: Option<PathBuf>,
+
     /// Directory the registered blueprints are persisted to and loaded from on
     /// startup. Created if absent. [default: ~/.submilli/server/blueprints
     /// (override the base with $SUBMILLI_HOME)]
@@ -447,11 +457,22 @@ fn log_migration(migration: &migrate::MigrationReport) {
 /// non-zero. The endpoint needs no token, so the probe never reads one.
 fn health_check(cli: &Cli) -> Result<()> {
     let addr = file_config::resolve_bind_addr(cli)?;
-    let url = format!("http://{}/healthz", probe_target(addr));
-    let agent: ureq::Agent = ureq::Agent::config_builder()
+    let tls_files = file_config::resolve_tls_files(cli)?;
+    let protocol = if tls_files.is_some() { "https" } else { "http" };
+    let url = format!("{protocol}://{}/healthz", probe_target(addr));
+    let config = ureq::Agent::config_builder()
+        .max_redirects(0)
         .timeout_global(Some(HEALTH_CHECK_TIMEOUT))
-        .build()
-        .into();
+        .build();
+    let agent = if let Some((cert_file, _)) = tls_files {
+        let certs = submilli_server::tls::certificates(&cert_file)?;
+        let leaf = certs.first().context("TLS certificate chain is empty")?;
+        let pin = submilli_shared::tls::fingerprint(leaf)?;
+        let verifier = submilli_shared::tls::Verifier::local_probe(pin)?;
+        submilli_shared::tls::agent(config, submilli_shared::tls::client_config(verifier)?, &url)?
+    } else {
+        config.into()
+    };
     agent
         .get(&url)
         .call()

@@ -100,6 +100,70 @@ The policy has three limits worth knowing:
   debugging, and it's worth deciding who on your team should have that
   permission.
 
+## Enable HTTPS
+
+Native HTTPS is off by default. To enable it, create a Kubernetes TLS Secret
+in the server's namespace from your PEM certificate chain and private key:
+
+```sh
+kubectl create secret tls submilli-tls --cert=server.crt --key=server.key
+```
+
+Then add these values and install or upgrade the release:
+
+```yaml title="values.yaml"
+tls:
+  enabled: true
+  existingSecret: submilli-tls
+```
+
+The chart mounts the files read-only and configures HTTPS on the existing
+server port, 8128. Health probes and `helm test` use HTTPS too. The API test
+pods mount only the public certificate; they verify the server rather than
+skipping certificate checks. Kubelet HTTPS probes check availability without
+verifying the certificate, so `helm test` supplies the certificate verification
+check.
+
+Choose certificate SANs for the addresses your clients use. The Helm tests
+address pod 0 as `submilli-0.submilli-headless`, so include that name too. For
+the release `submilli` in namespace `default`, a self-signed example is:
+
+```sh
+openssl req -x509 -newkey rsa:2048 -nodes -days 365 \
+  -keyout server.key -out server.crt -subj '/CN=submilli.default.svc' \
+  -addext 'subjectAltName=DNS:submilli,DNS:submilli.default.svc,DNS:submilli.default.svc.cluster.local,DNS:submilli-0.submilli-headless,DNS:submilli-0.submilli-headless.default.svc,DNS:submilli-0.submilli-headless.default.svc.cluster.local' \
+  -addext 'basicConstraints=critical,CA:FALSE'
+chmod 0600 server.key
+```
+
+Generate the files before creating the Secret. Adjust the release, namespace,
+cluster DNS suffix, and pod names for your deployment. With a private issuer,
+include the issuer chain needed by the chart's test clients in `server.crt`.
+Applications now call `https://submilli.<namespace>.svc:8128` and need their own
+trust configuration for a private or self-signed certificate.
+
+[Connect the CLI](/docs/server/connect-the-cli#trust-a-self-signed-server)
+explains its approval prompt and fingerprint registration for deploy jobs. That
+page also covers preserving the certificate hostname with `kubectl port-forward`.
+TLS does not replace API tokens, NetworkPolicy, or the MCP hostname allowlist.
+
+The server reads certificates at startup. After updating the Secret, restart it:
+
+```sh
+kubectl rollout restart statefulset/submilli
+```
+
+`tls.certKey` and `tls.privateKeyKey` select keys other than the standard
+`tls.crt` and `tls.key`. Use these chart values instead of `config.tls`, which
+is reserved so the config, mounts, probes, and tests agree.
+
+Native TLS and `ingress.tls` are separate: the latter configures the certificate
+clients see at the Ingress. If you enable both, configure your controller to
+connect to the backend over HTTPS. For ingress-nginx, set
+`ingress.annotations.nginx.ingress.kubernetes.io/backend-protocol: HTTPS`;
+other controllers use their own settings. Backend certificate verification is
+also a controller setting, not something this chart configures automatically.
+
 ## Store secrets and register blueprints
 
 The server's secret store is on from the first install. The chart

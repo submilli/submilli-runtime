@@ -26,11 +26,22 @@ struct StatusResponse {
 pub fn execute(args: Args) -> anyhow::Result<ExitCode> {
     let base = args.target.base();
     let url = format!("{base}/v1/status");
-    let agent = args.target.agent()?;
+    let agent = match args.target.agent() {
+        Ok(agent) => agent,
+        Err(error) if crate::commands::http::connection_refused(&error) => {
+            println!("stopped (no server at {base})");
+            return Ok(ExitCode::from(1));
+        }
+        Err(error) => return Err(error),
+    };
 
-    let Ok(resp) = agent.get(&url).call() else {
-        println!("stopped (no server at {base})");
-        return Ok(ExitCode::from(1));
+    let resp = match agent.get(&url).call() {
+        Ok(response) => response,
+        Err(ureq::Error::Io(error)) if error.kind() == std::io::ErrorKind::ConnectionRefused => {
+            println!("stopped (no server at {base})");
+            return Ok(ExitCode::from(1));
+        }
+        Err(error) => return Err(error.into()),
     };
     // A server that refuses the token is running; saying "stopped" would hide
     // the real problem.

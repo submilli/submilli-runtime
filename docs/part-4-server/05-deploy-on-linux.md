@@ -134,6 +134,59 @@ packages as [Register a blueprint](/docs/server/register-a-blueprint)
 shows; a deploy job does the same with the admin token, which [Manage
 blueprints in Git](/docs/tutorials/manage-blueprints-in-git) builds.
 
+## Enable HTTPS
+
+To encrypt connections to the machine, supply a PEM certificate chain and its
+private key. HTTPS is off until both are configured, and uses the same port,
+8128. Obtain a certificate from your certificate issuer, place the files at
+`/etc/submilli/server.crt` and `/etc/submilli/server.key`, and give the server
+read access:
+
+```sh
+sudo chown submilli:submilli /etc/submilli/server.crt /etc/submilli/server.key
+sudo chmod 0400 /etc/submilli/server.crt /etc/submilli/server.key
+```
+
+The certificate must include the DNS name or IP address clients use in its
+**subject alternative names** (SANs). To use a self-signed certificate instead,
+generate one for this machine's DNS name before setting those permissions:
+
+```sh
+sudo openssl req -x509 -newkey rsa:2048 -nodes -days 365 \
+  -keyout /etc/submilli/server.key -out /etc/submilli/server.crt \
+  -subj "/CN=$(hostname -f)" \
+  -addext "subjectAltName=DNS:$(hostname -f)" \
+  -addext 'basicConstraints=critical,CA:FALSE'
+```
+
+Add the TLS block to `/etc/submilli/server.yaml`:
+
+```yaml title="/etc/submilli/server.yaml (fragment)"
+tls:
+  cert_file: /etc/submilli/server.crt
+  key_file: /etc/submilli/server.key
+```
+
+Then restart and connect using the certificate's hostname:
+
+```sh
+sudo systemctl restart submilli
+sudo submilli server status --server "https://$(hostname -f):8128" --token-file /etc/submilli/admin.token
+```
+
+A publicly trusted certificate needs no extra CLI setup. For a self-signed
+certificate, the CLI asks you to verify and approve its public-key fingerprint;
+[Connect the CLI](/docs/server/connect-the-cli#trust-a-self-signed-server)
+shows how to obtain that fingerprint independently and approve it in a deploy
+job. Other applications and MCP clients need their own certificate trust setup.
+
+The server now accepts HTTPS on this port; update applications' URLs to
+`https://<the machine's name>:8128`. Authentication still requires the token.
+Missing, invalid, or mismatched certificate/key files stop startup rather than
+falling back to HTTP. Certificates are read at startup: renew the files and
+restart the service. Renewal with the same key keeps the CLI's saved trust;
+changing the key requires a new approval.
+
 ## Reach an internal service
 
 The server blocks programs from calling private addresses, whatever a

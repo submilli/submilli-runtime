@@ -1,0 +1,99 @@
+suite: native HTTPS configuration
+templates:
+  - configmap-config.yaml
+  - statefulset.yaml
+  - tests/test-api.yaml
+  - tests/test-networkpolicy.yaml
+tests:
+  - it: keeps TLS disabled by default
+    template: configmap-config.yaml
+    asserts:
+      - notMatchRegex:
+          path: data["server.yaml"]
+          pattern: 'tls:'
+  - it: mounts only the selected identity files and switches health probes
+    template: statefulset.yaml
+    set:
+      tls.enabled: true
+      tls.existingSecret: identity
+      tls.certKey: certificate
+      tls.privateKeyKey: private
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].startupProbe.httpGet.scheme
+          value: HTTPS
+      - equal:
+          path: spec.template.spec.containers[0].readinessProbe.httpGet.scheme
+          value: HTTPS
+      - contains:
+          path: spec.template.spec.volumes
+          content:
+            name: tls
+            secret:
+              secretName: identity
+              items:
+                - key: certificate
+                  path: server.crt
+                - key: private
+                  path: server.key
+  - it: configures certificate paths
+    template: configmap-config.yaml
+    set:
+      tls.enabled: true
+      tls.existingSecret: identity
+    asserts:
+      - matchRegex:
+          path: data["server.yaml"]
+          pattern: 'cert_file: /etc/submilli/tls/server.crt'
+      - matchRegex:
+          path: data["server.yaml"]
+          pattern: 'key_file: /etc/submilli/tls/server.key'
+  - it: API tests use HTTPS and mount no private key
+    template: tests/test-api.yaml
+    set:
+      tls.enabled: true
+      tls.existingSecret: identity
+    asserts:
+      - matchRegex:
+          path: spec.containers[0].args[0]
+          pattern: 'BASE="https://'
+      - matchRegex:
+          path: spec.containers[0].args[0]
+          pattern: '--cacert /etc/submilli/tls/server.crt'
+      - contains:
+          path: spec.volumes
+          content:
+            name: tls-cert
+            secret:
+              secretName: identity
+              items:
+                - key: tls.crt
+                  path: server.crt
+  - it: NetworkPolicy tests use HTTPS with certificate verification
+    template: tests/test-networkpolicy.yaml
+    set:
+      tls.enabled: true
+      tls.existingSecret: identity
+    asserts:
+      - matchRegex:
+          path: spec.containers[0].args[0]
+          pattern: 'BASE="https://'
+      - matchRegex:
+          path: spec.containers[0].args[0]
+          pattern: '--cacert /etc/submilli/tls/server.crt'
+  - it: refuses conflicting TLS configuration
+    template: statefulset.yaml
+    set:
+      config.tls.cert_file: other.crt
+    asserts:
+      - failedTemplate:
+          errorMessage: 'config.tls is owned by the chart: set tls.enabled and tls.existingSecret instead, which also mount the certificate and key'
+  - it: refuses identical certificate and key names
+    template: statefulset.yaml
+    set:
+      tls.enabled: true
+      tls.existingSecret: identity
+      tls.privateKeyKey: tls.crt
+    asserts:
+      - failedTemplate:
+          errorMessage: tls.certKey and tls.privateKeyKey must differ

@@ -40,3 +40,5 @@ pub fn resolve_git(
         })
         .transpose()
 }
+
+pub mod tls;

@@ -1,3 +1,11 @@
+# Native HTTPS on the server's existing port. Provide a certificate and key;
+# restart the StatefulSet after rotating this Secret.
+tls:
+  enabled: false
+  existingSecret: ""
+  certKey: tls.crt
+  privateKeyKey: tls.key
+
 # Default values for the submilli chart.
 #
 # Every key here is validated by values.schema.json — a typo like

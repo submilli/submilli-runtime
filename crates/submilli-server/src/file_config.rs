@@ -68,6 +68,8 @@ pub struct FileConfig {
     pub port: Option<u16>,
     #[serde(default)]
     pub logging: LoggingFileConfig,
+    #[serde(default)]
+    pub tls: TlsFileConfig,
     pub blueprint_dir: Option<PathBuf>,
     pub session_store_dir: Option<PathBuf>,
     pub vfs_session_dir: Option<PathBuf>,
@@ -150,6 +152,13 @@ pub struct FileConfig {
     /// thing the report could carry, so it is a separate opt-in. Same rules as
     /// `telemetry`; `SUBMILLI_TELEMETRY_INCLUDE_SOURCE` can also opt in.
     pub telemetry_include_source: Option<bool>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TlsFileConfig {
+    pub cert_file: Option<PathBuf>,
+    pub key_file: Option<PathBuf>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -250,6 +259,8 @@ pub(crate) struct EnvConfig {
     package_store_dir: Option<PathBuf>,
     secret_store_key_env: Option<String>,
     secret_store_key_file: Option<PathBuf>,
+    tls_cert_file: Option<PathBuf>,
+    tls_key_file: Option<PathBuf>,
     allow_localhost: bool,
     allow_private: bool,
     allow_ip: Vec<String>,
@@ -313,6 +324,8 @@ impl EnvConfig {
         Self {
             config: path("SUBMILLI_CONFIG"),
             log_file: path("SUBMILLI_LOG_FILE"),
+            tls_cert_file: path("SUBMILLI_TLS_CERT_FILE"),
+            tls_key_file: path("SUBMILLI_TLS_KEY_FILE"),
             bind: var("SUBMILLI_BIND"),
             port: var("SUBMILLI_PORT"),
             shutdown_grace: var("SUBMILLI_SHUTDOWN_GRACE"),
@@ -463,6 +476,9 @@ pub(crate) fn resolve(cli: Cli) -> Result<Resolved> {
 /// The settings this boot can refuse without touching any state directory.
 fn preflight(cli: &Cli, file: &FileConfig, env: &EnvConfig) -> Result<()> {
     bind_addr(cli, file, env)?;
+    if let Some((cert, key)) = tls_files(cli, file, env)? {
+        submilli_server::tls::load(&cert, &key)?;
+    }
     shutdown_grace(cli, file, env)?;
     resolve_network_policy(cli, file, env)?;
     max_execution_memory(cli, file, env)?;
@@ -521,6 +537,16 @@ fn guarded_directories(cli: &Cli, file: &FileConfig, env: &EnvConfig) -> ServerD
             .map(|token| token.token_file.clone())
             .collect(),
         github_token_file: file.github_token_file.clone(),
+        tls_cert_file: explicit(
+            cli.tls_cert_file.clone(),
+            env.tls_cert_file.clone(),
+            file.tls.cert_file.clone(),
+        ),
+        tls_key_file: explicit(
+            cli.tls_key_file.clone(),
+            env.tls_key_file.clone(),
+            file.tls.key_file.clone(),
+        ),
         session_storage_root: Some(
             explicit(
                 cli.vfs_session_dir.clone(),
@@ -680,6 +706,32 @@ pub(crate) fn resolve_bind_addr(cli: &Cli) -> Result<SocketAddr> {
     let env = EnvConfig::from_env();
     let file = load_config_file(cli, &env)?;
     bind_addr(cli, &file, &env)
+}
+
+pub(crate) fn resolve_tls_files(cli: &Cli) -> Result<Option<(PathBuf, PathBuf)>> {
+    let env = EnvConfig::from_env();
+    let file = load_config_file(cli, &env)?;
+    tls_files(cli, &file, &env)
+}
+
+fn tls_files(cli: &Cli, file: &FileConfig, env: &EnvConfig) -> Result<Option<(PathBuf, PathBuf)>> {
+    let cert = explicit(
+        cli.tls_cert_file.clone(),
+        env.tls_cert_file.clone(),
+        file.tls.cert_file.clone(),
+    );
+    let key = explicit(
+        cli.tls_key_file.clone(),
+        env.tls_key_file.clone(),
+        file.tls.key_file.clone(),
+    );
+    match (cert, key) {
+        (None, None) => Ok(None),
+        (Some(cert), Some(key)) => Ok(Some((cert, key))),
+        _ => anyhow::bail!(
+            "HTTPS requires both tls.cert_file and tls.key_file (or --tls-cert-file and --tls-key-file)"
+        ),
+    }
 }
 
 /// The listen address, resolved down the full five-tier ladder.
@@ -894,6 +946,9 @@ fn merge(cli: Cli, file: FileConfig, env: EnvConfig) -> Result<(SocketAddr, Serv
     validate_volumes(&file.volumes, &guarded_directories(&cli, &file, &env))?;
     let network_policy = resolve_network_policy(&cli, &file, &env)?;
     let auth = resolve_auth(&cli, &file, &env)?;
+    let tls = tls_files(&cli, &file, &env)?
+        .map(|(cert, key)| submilli_server::tls::load(&cert, &key))
+        .transpose()?;
     let secret_store = resolve_secret_store(&cli, &file, &env)?;
     let mcp_allowed_hosts = resolve_mcp_allowed_hosts(&cli, &file, &env);
     let runtime = RuntimeConfig {
@@ -955,6 +1010,7 @@ fn merge(cli: Cli, file: FileConfig, env: EnvConfig) -> Result<(SocketAddr, Serv
 
     let config = ServerConfig {
         runtime,
+        tls,
         // Named rather than left to `..ServerConfig::default()`, whose `auth`
         // is "no authentication": a field that went missing here would fail
         // open.
@@ -1386,6 +1442,8 @@ mod tests {
             // without declaring tokens; the auth tests turn it back off.
             allow_unauthenticated: true,
             health_check: false,
+            tls_cert_file: None,
+            tls_key_file: None,
         }
     }
 
@@ -1406,6 +1464,31 @@ mod tests {
         );
         let parsed = Cli::try_parse_from(["submilli-server", "--log-file", "parsed.log"]).unwrap();
         assert_eq!(parsed.log_file, Some("parsed.log".into()));
+    }
+
+    #[test]
+    fn tls_requires_both_files_and_walks_the_ladder() {
+        let mut cli = empty_cli();
+        let mut file = FileConfig::default();
+        let mut env = EnvConfig::default();
+        assert!(tls_files(&cli, &file, &env).unwrap().is_none());
+        file.tls.cert_file = Some("file.crt".into());
+        assert!(tls_files(&cli, &file, &env).is_err());
+        file.tls.key_file = Some("file.key".into());
+        assert_eq!(
+            tls_files(&cli, &file, &env).unwrap(),
+            Some(("file.crt".into(), "file.key".into()))
+        );
+        env.tls_cert_file = Some("env.crt".into());
+        env.tls_key_file = Some("env.key".into());
+        cli.tls_cert_file = Some("cli.crt".into());
+        assert_eq!(
+            tls_files(&cli, &file, &env).unwrap(),
+            Some(("cli.crt".into(), "env.key".into()))
+        );
+        let parsed: FileConfig =
+            serde_yml::from_str("tls:\n  cert_file: server.crt\n  key_file: server.key\n").unwrap();
+        assert_eq!(parsed.tls.cert_file, Some("server.crt".into()));
     }
 
     #[test]
@@ -1501,6 +1584,8 @@ network:
             secret_store_key_file: Some(root.join("keys/secret.b64")),
             api_token_files: vec![root.join("tokens/admin"), root.join("tokens/user")],
             github_token_file: Some(root.join("github/token")),
+            tls_key_file: Some(root.join("tls/key.pem")),
+            tls_cert_file: Some(root.join("tls/cert.pem")),
             session_storage_root: Some(root.join("vfs/sessions")),
             session_store_dir: Some(root.join("sessions")),
             ephemeral_storage_root: Some(root.join("scratch")),
@@ -1536,6 +1621,8 @@ network:
             ephemeral_storage_root,
             managed_volume_root,
             config_file,
+            tls_key_file,
+            tls_cert_file,
         } = dirs.clone();
         [
             (blueprint_dir, "blueprint store"),
@@ -1544,6 +1631,8 @@ network:
             (secret_store_dir, "secret store"),
             (secret_store_key_file, "secret-store key file"),
             (github_token_file, "GitHub token file"),
+            (tls_key_file, "TLS private key"),
+            (tls_cert_file, "TLS certificate file"),
             (session_storage_root, "per-session VFS root"),
             (session_store_dir, "durable session store"),
             (ephemeral_storage_root, "ephemeral storage root"),

@@ -12,9 +12,13 @@ pub mod secret;
 pub mod session;
 pub mod status;
 pub mod stop;
+pub mod trust;
 
 #[derive(Subcommand)]
 pub enum ServerCmd {
+    /// Manage approved HTTPS server public keys.
+    #[command(subcommand)]
+    Trust(trust::TrustCmd),
     /// Read package declarations, including a blueprint's MCP tools.
     Docs(docs::Args),
     /// Execute a Submilli script on a running submilli-server.
@@ -43,6 +47,7 @@ pub enum ServerCmd {
 
 pub fn execute(cmd: ServerCmd) -> Result<ExitCode> {
     match cmd {
+        ServerCmd::Trust(cmd) => trust::execute(cmd),
         ServerCmd::Docs(args) => docs::execute(args),
         ServerCmd::RunCode(args) => run_code::execute(args),
         ServerCmd::Packages(cmd) => packages::execute(cmd),

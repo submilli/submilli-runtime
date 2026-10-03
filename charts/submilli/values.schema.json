@@ -238,7 +238,10 @@
       "properties": {
         "mcp_allowed_hosts": {
           "type": "array",
-          "items": { "type": "string", "minLength": 1 },
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
           "description": "Additional MCP hosts, merged with the chart's Service, pod, and enabled Ingress names."
         }
       },
@@ -353,6 +356,48 @@
     },
     "affinity": {
       "type": "object"
+    },
+    "tls": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "enabled",
+        "existingSecret",
+        "certKey",
+        "privateKeyKey"
+      ],
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "existingSecret": {
+          "type": "string"
+        },
+        "certKey": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9._-]+$"
+        },
+        "privateKeyKey": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9._-]+$"
+        }
+      },
+      "if": {
+        "properties": {
+          "enabled": {
+            "const": true
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "existingSecret": {
+            "minLength": 1
+          }
+        }
+      }
     }
   }
 }
