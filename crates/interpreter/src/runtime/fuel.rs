@@ -176,6 +176,20 @@ pub fn settle(
     settle_host_fuel(ctx, rate.cost(n))
 }
 
+/// Marshal an already-observed effect's result using helpers that normally
+/// charge before work. Within this host-only scope, short fuel settles to zero
+/// without discarding the result. Do not run guest callbacks in this scope.
+pub(crate) fn settle_result<T>(
+    caller: &mut Caller<'_, StoreData>,
+    body: impl FnOnce(&mut Caller<'_, StoreData>) -> wasmtime::Result<T>,
+) -> wasmtime::Result<T> {
+    let previous = caller.data().settling_host_result;
+    caller.data_mut().settling_host_result = true;
+    let result = body(caller);
+    caller.data_mut().settling_host_result = previous;
+    result
+}
+
 /// [`settle`] for an amount of fuel.
 pub fn settle_host_fuel(
     mut ctx: impl AsContextMut<Data = StoreData>,
@@ -232,6 +246,9 @@ pub fn charge_host_fuel(
         let data = ctx.data_mut();
         data.host_fuel_pending = 0;
         data.host_fuel = data.host_fuel.saturating_add(available);
+        if data.settling_host_result {
+            return Ok(());
+        }
         return Err(Trap::OutOfFuel.into());
     }
     // Neither overflows: `units <= engine_fuel - pending`.
@@ -261,6 +278,51 @@ mod tests {
     use super::*;
     use crate::runtime::{RuntimeConfig, Vfs};
     use wasmtime::{Func, FuncType, Val, ValType};
+
+    #[test]
+    fn result_settlement_preserves_values_and_restores_refusing_charges() {
+        let config = RuntimeConfig::default();
+        let engine = config.engine().unwrap();
+        let mut store = config
+            .store(&engine, StoreData::with_vfs(Vfs::none()))
+            .unwrap();
+        let complete = Func::new(
+            &mut store,
+            FuncType::new(&engine, [], [ValType::I32]),
+            |mut caller, _, results| {
+                results[0] = settle_result(&mut caller, |caller| {
+                    charge(caller, PARSE, 100)?;
+                    Ok(Val::I32(42))
+                })?;
+                assert!(!caller.data().settling_host_result);
+                Ok(())
+            },
+        );
+        store.set_fuel(1).unwrap();
+        let mut results = [Val::I32(0)];
+        complete.call(&mut store, &[], &mut results).unwrap();
+        assert_eq!(results[0].i32(), Some(42));
+        assert_eq!(store.get_fuel().unwrap(), 0);
+        assert_eq!(store.data().host_fuel, 1);
+        assert!(charge_call(&mut store).unwrap_err().is::<Trap>());
+
+        let fail = Func::new(
+            &mut store,
+            FuncType::new(&engine, [], []),
+            |mut caller, _, _| {
+                let result = settle_result(&mut caller, |caller| {
+                    charge(caller, COPY, 100)?;
+                    Err::<(), _>(crate::runtime::host::range_error("copy entry limit"))
+                });
+                assert!(!caller.data().settling_host_result);
+                result
+            },
+        );
+        let error = fail.call(&mut store, &[], &mut []).unwrap_err();
+        assert!(error.to_string().contains("copy entry limit"), "{error}");
+        assert!(!store.data().settling_host_result);
+        assert!(charge_call(&mut store).unwrap_err().is::<Trap>());
+    }
 
     #[test]
     fn settling_never_refuses_and_leaves_a_short_budget_at_zero() {

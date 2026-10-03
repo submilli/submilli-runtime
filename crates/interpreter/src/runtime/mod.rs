@@ -162,6 +162,8 @@ pub struct StoreData {
     /// Hook entries in the current outer structural walk, including repeated
     /// visits to shared children. Reset only when the outer walk finishes.
     pub(crate) vtable_walk_nodes: u32,
+    /// Host-only result marshalling after an effect must not refuse for fuel.
+    pub(crate) settling_host_result: bool,
 }
 
 /// The nesting the universal-vtable walk allows before it reports a runaway.
@@ -229,6 +231,7 @@ impl StoreData {
             type_info: std::collections::BTreeMap::new(),
             vtable_walk_depth: 0,
             vtable_walk_nodes: 0,
+            settling_host_result: false,
         }
     }
 

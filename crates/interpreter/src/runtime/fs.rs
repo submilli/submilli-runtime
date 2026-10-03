@@ -719,9 +719,12 @@ impl LinkPath {
     /// only after establishing it is not a symlink — dereferencing one here is what
     /// would turn a copy into an exfiltration.
     pub fn copy_to(&self, dest: &Self) -> Result<(), ContainError> {
+        self.copy_to_counted(dest).map(|_| ())
+    }
+
+    pub(crate) fn copy_to_counted(&self, dest: &Self) -> Result<u64, ContainError> {
         dest.guard.check_mutation(true)?;
-        self.parent.copy(&self.name, &dest.parent, &dest.name)?;
-        Ok(())
+        Ok(self.parent.copy(&self.name, &dest.parent, &dest.name)?)
     }
 
     /// Rename onto `dest`. Neither final component is followed, so this relocates a

@@ -935,7 +935,9 @@ fn accessors_do_not_pay_for_the_whole_receiver() {
 
 #[test]
 fn operations_charge_for_the_input_they_process() {
-    use interpreter::runtime::fuel::{CALL, COPY, ELEM, PARSE, REGEX, SCAN, sort_cost};
+    use interpreter::runtime::fuel::{
+        CALL, COPY, ELEM, IO, PARSE, REGEX, SCAN, SYSCALL, sort_cost,
+    };
     // Each case builds a large input (the baseline) and then runs one
     // operation over it; the host fuel the operation adds must cover at
     // least its class charge for that input. The floors include what the
@@ -1030,6 +1032,53 @@ fn operations_charge_for_the_input_they_process() {
             ELEM.cost(2 * n) + SCAN.cost(output_len - 12) + COPY.cost(output_len) - COPY.cost(12),
         );
     }
+
+    for (name, operation, expected_delta) in [
+        (
+            "file-copy",
+            "copy(\"/input\", \"/output\", false);",
+            IO.cost(128),
+        ),
+        (
+            "line-read",
+            "for (const line of lines(\"/input\")) { const n = line.length; }",
+            IO.cost(128) + SCAN.cost(2 * 128) + COPY.cost(128),
+        ),
+    ] {
+        let mut costs = Vec::new();
+        for n in [128, 256] {
+            let input = format!("writeText(\"/input\", \"x\".repeat({n}));");
+            let source = |operation: &str| {
+                format!(
+                    "import {{writeText, copy, lines}} from \"submilli:fs\";
+                 function main(): number {{ {input} {operation} return 0; }}"
+                )
+            };
+            let baseline = host_fuel(&format!("usage-{name}-{n}-baseline"), &source(""));
+            costs.push(host_fuel(&format!("usage-{name}-{n}"), &source(operation)) - baseline);
+        }
+        assert_eq!(costs[1] - costs[0], expected_delta, "{name}");
+    }
+
+    let mut copy_costs = Vec::new();
+    for n in [2, 4] {
+        let source = |operation: &str| {
+            format!(
+                "import {{mkdir, writeText, copy}} from \"submilli:fs\";
+             function main(): number {{ mkdir(\"/input\", false);
+             for (let i = 0; i < {n}; i++) {{ writeText(\"/input/\" + i.toString(), \"\"); }}
+             {operation} return 0; }}"
+            )
+        };
+        let baseline = host_fuel(&format!("usage-copy-entries-{n}-baseline"), &source(""));
+        copy_costs.push(
+            host_fuel(
+                &format!("usage-copy-entries-{n}"),
+                &source("copy(\"/input\", \"/output\", true);"),
+            ) - baseline,
+        );
+    }
+    assert_eq!(copy_costs[1] - copy_costs[0], SYSCALL.cost(2));
 }
 
 #[test]
