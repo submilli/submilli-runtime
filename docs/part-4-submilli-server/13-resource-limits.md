@@ -242,10 +242,14 @@ size counts against the volume's `size_limit`, not against memory:
 
 An operation that passes a limit fails with an error that names it, and the
 repository is left as it was. A change is staged in a `.git-submilli-…`
-directory beside `.git` and moved into place at the end. If the server stops
-while it is moving files, that directory stays behind with what it replaced,
-and Git refuses the repository until it is recovered: restore the repository,
-from a backup or by cloning it again, then remove the directory.
+directory beside `.git` and moved into place at the end; the next change
+removes one a stopped server left behind. If the server stops while it is
+moving files, Git refuses the repository until it is recovered: restore the
+repository, from a backup or by cloning it again, then remove the directory.
+
+Operations on one repository take turns within a server, so only one server
+should work on a repository: two servers sharing its volume could undo each
+other's changes.
 
 ## With a coding agent
 

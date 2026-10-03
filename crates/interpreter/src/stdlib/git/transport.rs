@@ -49,7 +49,9 @@ fn preserve_http_setup_failure(error: wasmtime::Error) -> wasmtime::Error {
     if let Some(message) = http_setup_failure(&error) {
         return crate::runtime::host::fatal_host_error(message);
     }
-    error
+    // A limit reached before any pack arrives, while the remote's references
+    // are read, says what to raise as it would later.
+    own_limit(&error).unwrap_or(error)
 }
 
 #[allow(clippy::result_large_err)]
@@ -77,7 +79,7 @@ fn fetch_inner(
         job: job.clone(),
         url: url.clone(),
         spool_dir: Arc::new(snapshot.spool()?),
-        spool_quota: snapshot.spool_quota()?,
+        spool_quota: snapshot.staged_quota()?,
         limits: snapshot.transfer(),
         objects: Arc::new(snapshot.thread_safe_objects()?),
     };
@@ -159,20 +161,26 @@ fn redact_fetch_failure(error: wasmtime::Error) -> wasmtime::Error {
     }
     // A limit of Git's own says what to raise; nothing in it came from the remote.
     if let Some(limit) = own_limit(&error) {
-        return wasmtime::Error::msg(limit);
+        return limit;
     }
     wasmtime::Error::msg("git: fetch failed while receiving repository data")
 }
 
-/// The message of a limit of Git's own that `error` comes from, if it does.
-fn own_limit(error: &wasmtime::Error) -> Option<String> {
+/// The limit of Git's own that `error` comes from, if it does, as the program
+/// should see it: a size limit as a `QuotaExceededError`, the others plainly.
+fn own_limit(error: &wasmtime::Error) -> Option<wasmtime::Error> {
     let root = error.root_cause();
     let cause = root
         .downcast_ref::<io::Error>()
         .and_then(io::Error::get_ref)
         .map_or(root, |error| error as &(dyn std::error::Error + 'static));
+    if cause.is::<crate::runtime::host::QuotaExceededError>() {
+        return Some(crate::runtime::host::quota_exceeded_error(
+            cause.to_string(),
+        ));
+    }
     (cause.is::<super::storage::MemoryLimit>() || cause.is::<TransferLimit>())
-        .then(|| cause.to_string())
+        .then(|| wasmtime::Error::msg(cause.to_string()))
 }
 
 fn http_setup_failure(error: &wasmtime::Error) -> Option<&str> {
@@ -273,7 +281,7 @@ struct Client {
     /// Where responses are written as they arrive: a directory in the stage.
     spool_dir: Arc<cap_std::fs::Dir>,
     /// The size limit the spooled responses count against.
-    spool_quota: super::stage::SpoolQuota,
+    spool_quota: super::stage::StagedQuota,
     /// What every response may hold, and what it may make gix hold in memory.
     limits: Transfer,
     /// The objects the repository has, which a fetched delta may name as its base.
@@ -307,15 +315,18 @@ impl TransferLimit {
     }
 }
 
-/// `error` from the transport, unless it is the transfer limit: the transport
-/// enforces `max_response_size` itself, so it can refuse a response before the
-/// spool sees it.
+/// `error` from the transport, unless the spool refused: the transport
+/// reports that in its own words. It also enforces `max_response_size` itself,
+/// and may refuse a response before the spool sees it.
 fn transport_error(
     error: HttpError,
     spool: &SpoolWriter,
     otherwise: impl FnOnce(HttpError) -> io::Error,
 ) -> io::Error {
-    if spool.refused || matches!(error, HttpError::TooLarge { .. }) {
+    if let Some(refusal) = &spool.refusal {
+        return refusal.io();
+    }
+    if matches!(error, HttpError::TooLarge { .. }) {
         return TransferLimit::io();
     }
     otherwise(error)
@@ -413,7 +424,7 @@ impl Client {
             job: self.job.clone(),
             max_transfer_bytes: self.limits.max_transfer_bytes,
             quota: self.spool_quota.clone(),
-            refused: false,
+            refusal: None,
         })
     }
 
@@ -514,10 +525,29 @@ struct SpoolWriter {
     job: Job,
     max_transfer_bytes: u64,
     /// The size limit, which spooled bytes count against until publication.
-    quota: super::stage::SpoolQuota,
-    /// Whether the transfer limit refused a write. The transport reports a
-    /// failed write in its own words, so the limit is reported from here.
-    refused: bool,
+    quota: super::stage::StagedQuota,
+    /// Why a write was refused, if one was. The transport reports a failed
+    /// write in its own words, so the refusal is reported from here.
+    refusal: Option<Refusal>,
+}
+
+/// Why the spool refused a write.
+enum Refusal {
+    Transfer,
+    /// The size limit, with what it said.
+    Quota(String),
+}
+
+impl Refusal {
+    fn io(&self) -> io::Error {
+        match self {
+            Self::Transfer => TransferLimit::io(),
+            Self::Quota(exceeded) => io::Error::new(
+                io::ErrorKind::InvalidData,
+                crate::runtime::host::QuotaExceededError(format!("git: {exceeded}")),
+            ),
+        }
+    }
 }
 
 impl Write for SpoolWriter {
@@ -527,11 +557,18 @@ impl Write for SpoolWriter {
             .job
             .transferred
             .fetch_add(bytes.len() as u64, std::sync::atomic::Ordering::Relaxed);
-        if total.saturating_add(bytes.len() as u64) > self.max_transfer_bytes
-            || self.quota.reserve(bytes.len() as u64).is_err()
-        {
-            self.refused = true;
-            return Err(TransferLimit::io());
+        let refusal = if total.saturating_add(bytes.len() as u64) > self.max_transfer_bytes {
+            Some(Refusal::Transfer)
+        } else {
+            self.quota
+                .reserve(bytes.len() as u64)
+                .err()
+                .map(|exceeded| Refusal::Quota(exceeded.to_string()))
+        };
+        if let Some(refusal) = refusal {
+            let error = refusal.io();
+            self.refusal = Some(refusal);
+            return Err(error);
         }
         self.file.write_all(bytes)?;
         Ok(bytes.len())
@@ -942,7 +979,7 @@ mod tests {
     }
 
     #[test]
-    fn limits_of_git_s_own_survive_redaction() {
+    fn redaction_keeps_git_limit_errors() {
         let limit = |error: io::Error| redact_fetch_failure(error.into()).to_string();
         assert!(limit(TransferLimit::io()).contains("transfer limit exceeded"));
         assert!(
@@ -954,6 +991,14 @@ mod tests {
         assert_eq!(
             limit(io_error("a remote said something")),
             "git: fetch failed while receiving repository data"
+        );
+        let full = Refusal::Quota("the size limit would be exceeded".into()).io();
+        let error = redact_fetch_failure(full.into());
+        assert!(
+            error
+                .downcast_ref::<crate::runtime::host::QuotaExceededError>()
+                .is_some(),
+            "{error}"
         );
     }
 

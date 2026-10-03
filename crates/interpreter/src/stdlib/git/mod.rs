@@ -532,7 +532,7 @@ async fn decode_arguments(
     let path = crate::runtime::fs::guest_normalize("/", &path)?;
     if path
         .split('/')
-        .any(|part| part.eq_ignore_ascii_case(".git") || stage::is_stage_name(part))
+        .any(|part| part.eq_ignore_ascii_case(".git") || stage::is_reserved_stage_name(part))
     {
         bail!("git: repository path targets protected metadata");
     }

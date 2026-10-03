@@ -10,13 +10,13 @@
 //! so a failed operation leaves the repository as it was.
 //!
 //! A stage marks itself before its first move and is removed, marker and all,
-//! once the last is done. A stage left behind unmarked, by a crash before
-//! publication or a cleanup that failed after it, holds nothing the repository
-//! needs. Once nothing has touched it for [`ABANDONED_AFTER`], longer than any
-//! operation runs, the next change to the repository removes it; until then it
-//! may be another server's live operation, and a change waits for it to go.
-//! Reads leave stages alone. A marked stage means publication stopped part
-//! way: the repository refuses Git operations until the host restores it.
+//! once the last is done. One repository is only ever worked on by one server
+//! process, whose operations take turns on it (`lock.rs`), so a stage another
+//! operation finds was left behind. Unmarked, by a crash before publication or
+//! a cleanup that failed after it, it holds nothing the repository needs, and
+//! the next change removes it; reads leave it, since a read may not write.
+//! Marked, publication stopped part way: the repository refuses Git
+//! operations until the host restores it.
 use super::meter::Meter;
 use super::storage::{MAX_NESTING, validate_path};
 use crate::runtime::DiskQuota;
@@ -49,14 +49,12 @@ const OLD: &str = "old";
 const PUBLISHING: &str = "publishing";
 /// The longest loose reference Git writes: a symbolic ref to a long name.
 const MAX_LOOSE_REF: u64 = 4096;
-/// How long an unmarked stage is left untouched before it is taken for
-/// abandoned: far longer than an operation's 60 seconds.
-pub(super) const ABANDONED_AFTER: std::time::Duration = std::time::Duration::from_secs(600);
 /// Files copied with the references, beside `refs/`.
 const REFERENCE_FILES: [&str; 3] = ["HEAD", "packed-refs", "shallow"];
 
-/// Whether `name`, an entry of a repository's directory, is a stage.
-pub(super) fn is_stage_name(name: &str) -> bool {
+/// Whether `name` is one a stage could take, in any case: no checkout may
+/// use it, nor may a program write it (`protected_metadata` in `runtime/fs.rs`).
+pub(super) fn is_reserved_stage_name(name: &str) -> bool {
     name.to_ascii_lowercase().starts_with(STAGE_PREFIX)
 }
 
@@ -66,10 +64,9 @@ fn is_stage_directory_name(name: &str) -> bool {
         .is_some_and(|id| uuid::Uuid::parse_str(id).is_ok())
 }
 
-/// Checks the stages in the repository directory `repo`: refuses the
-/// repository if a publication stopped part way. For an operation that
-/// `writes`, also removes the stages abandoned before publication, and
-/// refuses while another operation's stage is live.
+/// Checks the stages in the repository directory `repo`, which this
+/// operation holds: refuses the repository if a publication stopped part way,
+/// and for an operation that `writes`, removes the stages left before one began.
 pub(super) fn check_stages(repo: &Dir, writes: bool) -> Result<()> {
     for entry in repo.entries()? {
         let entry = entry?;
@@ -80,21 +77,15 @@ pub(super) fn check_stages(repo: &Dir, writes: bool) -> Result<()> {
         if !entry.file_type()?.is_dir() {
             continue;
         }
-        let stage = repo.open_dir(name)?;
-        if stage.try_exists(PUBLISHING)? {
+        if repo.open_dir(name)?.try_exists(PUBLISHING)? {
             bail!(
                 "git: an unfinished publication in {name} requires host recovery before \
                  further Git operations"
             );
         }
-        if !writes {
-            continue;
+        if writes {
+            repo.remove_dir_all(name)?;
         }
-        let touched = stage.dir_metadata()?.modified()?.into_std();
-        if touched.elapsed().unwrap_or_default() < ABANDONED_AFTER {
-            bail!("git: another Git operation is changing this repository; try again");
-        }
-        repo.remove_dir_all(name)?;
     }
     Ok(())
 }
@@ -106,11 +97,8 @@ pub(super) struct Stage {
     pub host: PathBuf,
     repo: Arc<Dir>,
     meter: Arc<Meter>,
-    /// The volume's size limit, which staged checkouts count against as they
-    /// are written.
-    quota: Option<Arc<DiskQuota>>,
-    /// Bytes reserved for staged checkouts and fetched responses.
-    staged: Arc<AtomicU64>,
+    /// The volume's size limit, and what the stage holds against it.
+    quota: StagedQuota,
     state: State,
 }
 
@@ -162,8 +150,10 @@ impl Stage {
             dir,
             repo: Arc::clone(repo),
             meter,
-            quota,
-            staged: Arc::default(),
+            quota: StagedQuota {
+                quota,
+                staged: Arc::default(),
+            },
             state: State::Pending,
         };
         stage.meter.syscalls(8);
@@ -284,11 +274,11 @@ impl Stage {
         Ok(())
     }
 
-    /// What staging a file at `path` frees: the regular file there, unless a
-    /// program holds it, which keeps it on disk, or it is reached through a
+    /// What publishing a file at `path` frees: the regular file there, unless
+    /// a program holds it, which keeps it on disk, or it is reached through a
     /// link, which publication won't replace.
     fn replaced_len(&self, path: &str) -> Result<u64> {
-        let Some(quota) = &self.quota else {
+        let Some(quota) = &self.quota.quota else {
             return Ok(0);
         };
         for ancestor in Path::new(path).ancestors().skip(1) {
@@ -310,22 +300,15 @@ impl Stage {
 
     /// Counts `bytes` the stage holds against the size limit until publication.
     fn reserve(&self, bytes: u64) -> Result<()> {
-        if let Some(quota) = &self.quota {
-            quota
-                .reserve(bytes)
-                .map_err(|exceeded| quota_exceeded_error(format!("git: {exceeded}")))?;
-            self.staged.fetch_add(bytes, Ordering::Relaxed);
-        }
-        Ok(())
+        self.quota
+            .reserve(bytes)
+            .map_err(|exceeded| quota_exceeded_error(format!("git: {exceeded}")))
     }
 
     /// Lets a fetch's spooled responses count against the size limit as they
     /// are written, with the rest of what the stage holds.
-    pub(super) fn spool_quota(&self) -> SpoolQuota {
-        SpoolQuota {
-            quota: self.quota.clone(),
-            staged: Arc::clone(&self.staged),
-        }
+    pub(super) fn staged_quota(&self) -> StagedQuota {
+        self.quota.clone()
     }
 
     /// Moves every staged change into place, counting what it adds against
@@ -337,16 +320,16 @@ impl Stage {
         cancelled: &AtomicBool,
     ) -> Result<()> {
         let plan = self.plan(worktree, cancelled)?;
-        let quota = self.quota.clone();
+        let quota = self.quota.quota.clone();
         // What publication needs replaces what staging held: the staged and
         // spooled files go with the stage.
         let reservation = match &quota {
             Some(quota) => {
-                let staged = self.staged.swap(0, Ordering::Relaxed);
+                let staged = self.quota.take();
                 match plan.reserve(quota, staged) {
                     Ok(reservation) => Some(reservation),
                     Err(error) => {
-                        self.staged.fetch_add(staged, Ordering::Relaxed);
+                        self.quota.restore(staged);
                         return Err(error);
                     }
                 }
@@ -390,11 +373,11 @@ impl Stage {
                 if let Err(undo) = self.undo(&steps) {
                     // Whatever stayed placed stays counted.
                     self.state = State::NeedsRecovery;
-                    return Err(error.context(format!(
+                    return Err(error.context(NeedsHostRecovery(format!(
                         "git: publication failed and could not be undone ({undo}); the \
                          repository needs host recovery from {}",
                         self.name
-                    )));
+                    ))));
                 }
                 release(&reservation);
                 let _ = self.dir.remove_file(PUBLISHING);
@@ -535,7 +518,12 @@ impl Stage {
             .filter(|directory| !directory.as_os_str().is_empty())
             .filter(|directory| !refilled.contains(directory))
             .collect();
-        emptied.sort_by_key(|directory| std::cmp::Reverse(directory.components().count()));
+        emptied.sort_by_key(|directory| {
+            (
+                std::cmp::Reverse(directory.components().count()),
+                *directory,
+            )
+        });
         emptied.dedup();
         for directory in emptied {
             let permissions = self.repo.symlink_metadata(directory)?.permissions();
@@ -616,24 +604,23 @@ impl Stage {
 impl Drop for Stage {
     fn drop(&mut self) {
         if self.state == State::Pending {
-            if let Some(quota) = &self.quota {
-                quota.release(self.staged.swap(0, Ordering::Relaxed));
-            }
+            self.quota.release();
             let _ = self.repo.remove_dir_all(&self.name);
         }
     }
 }
 
-/// The size limit, and what a stage holds against it, for a writer that
-/// works away from the stage: a fetch's spool. The default has no limit.
+/// The size limit, and what a stage holds against it until publication:
+/// staged checkouts, and a fetch's spooled responses, written away from the
+/// stage. The default has no limit.
 #[derive(Clone, Default)]
-pub(super) struct SpoolQuota {
+pub(super) struct StagedQuota {
     quota: Option<Arc<DiskQuota>>,
     staged: Arc<AtomicU64>,
 }
 
-impl SpoolQuota {
-    /// Counts `bytes` written to the spool, or refuses them past the limit.
+impl StagedQuota {
+    /// Counts `bytes` the stage holds, or refuses them past the limit.
     pub(super) fn reserve(&self, bytes: u64) -> Result<(), crate::runtime::QuotaExceeded> {
         if let Some(quota) = &self.quota {
             quota.reserve(bytes)?;
@@ -641,7 +628,38 @@ impl SpoolQuota {
         }
         Ok(())
     }
+
+    /// Takes over everything counted so far, as publication's own reservation.
+    fn take(&self) -> u64 {
+        self.staged.swap(0, Ordering::Relaxed)
+    }
+
+    /// Gives back what [`take`](Self::take) took, publication having failed
+    /// before reserving.
+    fn restore(&self, bytes: u64) {
+        self.staged.fetch_add(bytes, Ordering::Relaxed);
+    }
+
+    /// Releases everything counted: the stage is gone unpublished.
+    fn release(&self) {
+        if let Some(quota) = &self.quota {
+            quota.release(self.take());
+        }
+    }
 }
+
+/// A publication that failed and could not be undone: what it replaced is
+/// in its stage, for the host to restore.
+#[derive(Debug)]
+pub(super) struct NeedsHostRecovery(String);
+
+impl std::fmt::Display for NeedsHostRecovery {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for NeedsHostRecovery {}
 
 /// Notes a step publication took, so it can be undone.
 fn record(steps: &mut Vec<Step>, step: Step) -> Result<()> {

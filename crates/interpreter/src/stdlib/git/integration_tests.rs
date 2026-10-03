@@ -967,10 +967,9 @@ fn shallow_is_staged_and_published() {
     assert!(!root.path().join(".git/shallow").exists());
 }
 
-/// A stage left before publication began is cleared by the next change once
-/// it is stale; until then it may be another server's live operation, so a
-/// change waits and a read leaves it. One left part way through publication
-/// blocks the repository.
+/// A stage left before publication began is cleared by the next change, and
+/// left alone by a read; one left part way through publication blocks the
+/// repository. A file that only looks like a stage is neither.
 #[test]
 fn a_leftover_stage_is_cleared_unless_publication_began() {
     let root = repository();
@@ -980,6 +979,10 @@ fn a_leftover_stage_is_cleared_unless_publication_began() {
         uuid::Uuid::new_v4()
     ));
     std::fs::create_dir_all(left.join("objects")).unwrap();
+    let lookalike = root
+        .path()
+        .join(format!("{}notes", super::stage::STAGE_PREFIX));
+    std::fs::write(&lookalike, "not a stage").unwrap();
     let open = |writes: bool| {
         storage::Snapshot::open_unmetered(
             &super::location::Location::at(root.path()),
@@ -990,17 +993,9 @@ fn a_leftover_stage_is_cleared_unless_publication_began() {
     };
     drop(open(false).unwrap());
     assert!(left.exists(), "a read leaves a stage alone");
-    let error = open(true).err().unwrap();
-    assert!(
-        error.to_string().contains("another Git operation"),
-        "{error}"
-    );
-    let stale = filetime::FileTime::from_system_time(
-        std::time::SystemTime::now() - super::stage::ABANDONED_AFTER * 2,
-    );
-    filetime::set_file_mtime(&left, stale).unwrap();
     drop(open(true).unwrap());
-    assert!(!left.exists(), "a stale stage is cleared");
+    assert!(!left.exists(), "a change clears it");
+    assert!(lookalike.exists());
 
     std::fs::create_dir(&left).unwrap();
     std::fs::write(left.join("publishing"), "").unwrap();

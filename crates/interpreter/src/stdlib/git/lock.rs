@@ -1,6 +1,8 @@
-//! One Git operation at a time per repository in this process. Repositories are
-//! read and changed in place, and runs sharing a named volume can reach one
-//! repository at once.
+//! One Git operation at a time per repository. Repositories are read and
+//! changed in place, and runs sharing a named volume can reach one repository
+//! at once. Only one server process works on a repository, so a lock within
+//! the process is enough; two processes changing one repository could undo
+//! each other's changes.
 use crate::runtime::fs::FileIdentity;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};

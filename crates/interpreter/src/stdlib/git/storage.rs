@@ -379,8 +379,8 @@ impl Snapshot {
     }
 
     /// The size limit, and what the stage holds against it, for a fetch's spool.
-    pub fn spool_quota(&self) -> Result<super::stage::SpoolQuota> {
-        Ok(self.stage()?.spool_quota())
+    pub fn staged_quota(&self) -> Result<super::stage::StagedQuota> {
+        Ok(self.stage()?.staged_quota())
     }
 
     /// The pack directory of the stage's object store, where fetch writes.
@@ -471,7 +471,10 @@ impl Snapshot {
             _ => 0,
         };
         if let Err(error) = stage.publish(worktree.as_ref(), &self.cancelled) {
-            if let Some(quota) = &self.quota {
+            if error.is::<super::stage::NeedsHostRecovery>() {
+                // What the stage kept belongs to this `.git`: keep it, counted.
+                self.published = true;
+            } else if let Some(quota) = &self.quota {
                 quota.release(created);
             }
             return Err(error);
@@ -949,7 +952,7 @@ pub fn validate_path(path: &str) -> Result<()> {
             .any(|c| !matches!(c, Component::Normal(_)))
         || path
             .split('/')
-            .any(|c| c.eq_ignore_ascii_case(".git") || super::stage::is_stage_name(c))
+            .any(|c| c.eq_ignore_ascii_case(".git") || super::stage::is_reserved_stage_name(c))
     {
         bail!("git: invalid repository-relative path");
     }
@@ -1021,7 +1024,9 @@ fn walk(
             .file_name()
             .into_string()
             .map_err(|_| wasmtime::Error::msg("git: non-UTF-8 paths are unsupported"))?;
-        if worktree && (name.eq_ignore_ascii_case(".git") || super::stage::is_stage_name(&name)) {
+        if worktree
+            && (name.eq_ignore_ascii_case(".git") || super::stage::is_reserved_stage_name(&name))
+        {
             if !prefix.is_empty() {
                 bail!("git: nested repositories are unsupported");
             }
