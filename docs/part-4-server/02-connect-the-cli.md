@@ -1,36 +1,21 @@
 ---
 title: "Connect the CLI"
-description: "How to point the submilli server commands at a server: its token from a file, its address, the first check, keeping both in your shell, switching between servers by name, and which commands need the admin token."
+description: "Set the server address and token, trust a self-signed certificate, and switch between servers."
 slug: server/connect-the-cli
 sidebar:
   order: 2
 ---
 
-The `submilli server` commands talk to a running server over HTTP or HTTPS. Out
-of the box they call `http://127.0.0.1:8128` and send the token from
-`SUBMILLI_SERVER_TOKEN`, which is why they need no setup in the shell
-that started the server. From another machine, or from a deploy job, the
-address is different and the token shouldn't be typed.
-
-This guide shows you how to point the `submilli server` commands at a
-server: give them its token from a file, name its address, make the
-first check, keep both in your shell, switch between servers by name,
-and know which commands need the admin token.
+Use `submilli server` commands to manage a running server. The default address
+is `http://127.0.0.1:8128`.
 
 ## Give it the token
 
-Without a token the server answers `401`, and the commands say so:
+Set `SUBMILLI_SERVER_TOKEN`, or supply a token file with `--token-file` or
+`SUBMILLI_SERVER_TOKEN_FILE`. Tokens passed through a file stay out of shell
+history and the process list.
 
-```text
-error: the server did not accept this command's API token. Set `SUBMILLI_SERVER_TOKEN` to the token the server was started with, or `SUBMILLI_SERVER_TOKEN_FILE` to a file holding one
-```
-
-Set `SUBMILLI_SERVER_TOKEN` in the shell, or point `--token-file`, or
-`SUBMILLI_SERVER_TOKEN_FILE`, at a file holding it. No flag takes the
-token itself, so it never lands in the process list or in shell history.
-
-On Kubernetes the chart keeps the tokens in a Secret; read the admin one
-into a file first:
+For Kubernetes, read the chart's admin token into a file:
 
 ```sh
 kubectl get secret submilli-auth -o jsonpath='{.data.admin-token}' | base64 -d > admin.token
@@ -38,50 +23,32 @@ kubectl get secret submilli-auth -o jsonpath='{.data.admin-token}' | base64 -d >
 
 ## Name the address
 
-`--server` names the server, on every `submilli server` command, and
-`SUBMILLI_SERVER_URL` sets it for a whole shell. `status` is the first
-check; it needs the admin token:
+Use `--server` for one command or `SUBMILLI_SERVER_URL` for the shell:
 
 ```sh
 export SUBMILLI_SERVER_URL=http://10.0.12.7:8128
 submilli server status --token-file admin.token
 ```
 
-```text
-status:          running
-bind:            0.0.0.0:8128
-pid:             39225
-active sessions: 0
-blueprints:      support
-```
+Use plain HTTP only on a private network. Compose publishes the port on the
+host's loopback. To reach Kubernetes locally:
 
-With HTTPS disabled, reach the server the way your application does,
-over the private network it sits on, and not across the open internet.
-Under Compose the port is published on the host's loopback, so the
-commands work from the host without `--server`, and `docker compose exec
-submilli submilli server status` works from inside the container. On
-Kubernetes, `kubectl port-forward svc/submilli 8128:8128` brings the
-server to your loopback for the length of a command.
+```sh
+kubectl port-forward svc/submilli 8128:8128
+```
 
 ## Trust a self-signed server
 
-For a server configured with HTTPS, use an `https://` URL whose hostname or IP
-address matches the certificate's subject alternative names (SANs), the names
-and IP addresses the certificate covers:
+Use an HTTPS URL whose hostname or IP address is covered by the certificate:
 
 ```sh
 submilli server status --server https://runtime.example.com:8128 --token-file admin.token
 ```
 
-A publicly trusted certificate works without an approval prompt. If the
-certificate is self-signed or its issuer is unknown, an interactive CLI shows
-the server address, certificate names, validity period, and SHA-256 public-key
-fingerprint. Approval defaults to No. Check the fingerprint with the operator
-before accepting: obtaining it from the same untrusted connection does not
-confirm the server's identity.
-
-On the server machine, or from a certificate file supplied through a trusted
-channel, obtain the fingerprint independently:
+Publicly trusted certificates work automatically. For an unknown issuer, the
+CLI asks you to approve the public-key fingerprint; approval defaults to No.
+Verify it with the operator before accepting. On the server machine, obtain it
+from the certificate file:
 
 ```sh
 openssl x509 -in server.crt -pubkey -noout \
@@ -90,81 +57,56 @@ openssl x509 -in server.crt -pubkey -noout \
   | awk '{print "sha256:" $NF}'
 ```
 
-Approval records the public key for this hostname and port in
-`~/.submilli/server-trust.json`, or `$SUBMILLI_HOME/server-trust.json` when that
-variable is set. No API token or application request is sent during certificate
-discovery; a configured HTTP proxy may receive a CONNECT request to establish
-the tunnel. The requested operation proceeds only after approval, and its TLS
-connection verifies the key again.
-
-Without an interactive terminal the CLI refuses unknown trust. Register an
-independently verified fingerprint first; replace the placeholder with the
-`sha256:` value from the command:
+For automation, register that independently verified fingerprint first:
 
 ```sh
 submilli server trust add --server https://runtime.example.com:8128 --fingerprint 'sha256:<64 hexadecimal digits>'
 submilli server status --server https://runtime.example.com:8128 --token-file admin.token
 ```
 
-You can also run `trust add --server URL` interactively to approve a certificate
-before running any server commands. Inspect and remove saved trust with:
+Inspect or remove saved trust:
 
 ```sh
 submilli server trust list
 submilli server trust remove --server https://runtime.example.com:8128
 ```
 
-Trust is specific to a hostname and port. Renewal with the same public key
-keeps working. A changed key fails: verify the replacement independently,
-remove the old entry, and approve the new fingerprint. An expired certificate
-or a hostname mismatch still fails with an approved key; renew the certificate
-or use its correct hostname. The CLI does not provide a switch that disables
-certificate verification.
-
-This store is used by CLI server commands and remote blueprint apply. Your
-application's HTTP client and agent framework's MCP client configure trust
-separately; approving the CLI does not approve those clients.
+Trust is stored by hostname and port in `$SUBMILLI_HOME/server-trust.json`
+(default `~/.submilli/server-trust.json`). Same-key renewal keeps working.
+For a changed key, verify the replacement, remove the old entry, and approve it
+again. Expiry and hostname checks still apply. Application and MCP clients
+configure their own trust separately.
 
 ### Connect through a Kubernetes port forward
 
-A certificate for a Service DNS name does not match `localhost`. Keep its
-hostname in the URL while connecting through the loopback tunnel. For a
-certificate containing `submilli.default.svc`, add a temporary hosts entry on
-your machine:
+Keep the certificate's hostname in the URL. For a certificate covering
+`submilli.default.svc`, add a temporary hosts entry and start the tunnel:
 
 ```sh
 printf '127.0.0.1 submilli.default.svc\n' | sudo tee -a /etc/hosts
 kubectl port-forward svc/submilli 8128:8128
 ```
 
-Leave the tunnel running and use another shell:
+In another shell:
 
 ```sh
 submilli server status --server https://submilli.default.svc:8128 --token-file admin.token
 ```
 
-The hostname still matches the certificate, and the CLI can approve its key.
-Remove the temporary hosts entry when finished. Trust remains scoped to that
-hostname and the port you connected to.
+Remove the temporary hosts entry when finished.
 
 ## Keep them in your shell
 
-To stop passing the two on every command, put them in your shell's
-startup file, `~/.zshrc` or `~/.bashrc`, with the token in a file only
-you can read:
+Put these in `~/.zshrc` or `~/.bashrc`, with the token file readable only by you:
 
 ```sh title="~/.zshrc"
 export SUBMILLI_SERVER_URL=http://10.0.12.7:8128
 export SUBMILLI_SERVER_TOKEN_FILE=$HOME/.submilli/servers/prod/token
 ```
 
-From then on every new shell is connected, and `submilli server status`
-needs no flags.
-
 ## Switch between servers
 
-With more than one server, staging and production say, keep each one's
-address and token in a directory of its own:
+Keep each server's address and token in its own directory:
 
 ```text
 ~/.submilli/servers/staging/url      http://10.0.12.7:8128
@@ -173,8 +115,7 @@ address and token in a directory of its own:
 ~/.submilli/servers/prod/token
 ```
 
-Then a small function in `~/.zshrc` or `~/.bashrc` switches the two
-variables by name, and refuses a name with no directory:
+Add this function to your shell's startup file:
 
 ```sh title="~/.zshrc"
 submilli-use() {
@@ -190,34 +131,14 @@ submilli-use staging
 submilli server status
 ```
 
-```text
-status:          running
-bind:            0.0.0.0:8128
-pid:             39225
-active sessions: 0
-blueprints:      support
-```
-
-The switch lasts for the shell it runs in. To start every shell on one
-server, call the function as the last line of `~/.zshrc` or
-`~/.bashrc`: `submilli-use staging`.
+The selection applies to the current shell.
 
 ## Which commands need the admin token
-
-A `user` token, the kind an application holds, runs programs and reads;
-everything that changes the server needs `admin`:
 
 | Token | Commands |
 | --- | --- |
 | `user` or `admin` | `run-code`, `session open` and `close`, `docs` |
 | `admin` only | `status`, `blueprint …`, `packages …`, `secret …`, `mcp …`, `stop` |
 
-A `user` token on an admin command is refused by role, not by value:
-
-```text
-error: this endpoint needs a token with the `admin` role; the token sent has the `user` role
-```
-
-[Run the server](/docs/server/run-the-server) shows how to declare a
-`user` token. Refer to the [CLI reference](/docs/reference/cli) for
-every `submilli server` command and its options.
+[Run the server](/docs/server/run-the-server) covers token configuration.
+See the [CLI reference](/docs/reference/cli) for all commands and options.
