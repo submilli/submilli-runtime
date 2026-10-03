@@ -66,6 +66,8 @@ const MCP_LOOPBACK_HOSTS: [&str; 3] = ["localhost", "127.0.0.1", "::1"];
 pub struct FileConfig {
     pub bind: Option<IpAddr>,
     pub port: Option<u16>,
+    #[serde(default)]
+    pub logging: LoggingFileConfig,
     pub blueprint_dir: Option<PathBuf>,
     pub session_store_dir: Option<PathBuf>,
     pub vfs_session_dir: Option<PathBuf>,
@@ -157,6 +159,13 @@ pub struct McpOAuthFileConfig {
     pub providers: Vec<OAuthProviderFileConfig>,
 }
 
+/// Audit settings will live beside `file` when audit collection is implemented.
+#[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LoggingFileConfig {
+    pub file: Option<PathBuf>,
+}
+
 /// One `mcp_oauth.providers` entry. `match` is the authorization-server host.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -220,6 +229,7 @@ pub struct NetworkFileConfig {
 #[derive(Debug, Default)]
 pub(crate) struct EnvConfig {
     config: Option<PathBuf>,
+    log_file: Option<PathBuf>,
     bind: Option<String>,
     port: Option<String>,
     shutdown_grace: Option<String>,
@@ -302,6 +312,7 @@ impl EnvConfig {
 
         Self {
             config: path("SUBMILLI_CONFIG"),
+            log_file: path("SUBMILLI_LOG_FILE"),
             bind: var("SUBMILLI_BIND"),
             port: var("SUBMILLI_PORT"),
             shutdown_grace: var("SUBMILLI_SHUTDOWN_GRACE"),
@@ -408,6 +419,7 @@ fn load(path: &Path) -> Result<FileConfig> {
 pub(crate) fn resolve(cli: Cli) -> Result<Resolved> {
     let env = EnvConfig::from_env();
     let file = load_config_file(&cli, &env)?;
+    let log_file = logging_file(&cli, &file, &env);
     // The migration is one-way, so every setting that can be refused without
     // touching the disk is checked first: a boot that is going to fail on a
     // bad port, limit, key, or volume must not reshape the volume on its way
@@ -444,6 +456,7 @@ pub(crate) fn resolve(cli: Cli) -> Result<Resolved> {
         telemetry_include_source,
         shutdown_grace,
         migration,
+        log_file,
     })
 }
 
@@ -622,6 +635,7 @@ fn legacy_layout(cli: &Cli, file: &FileConfig, env: &EnvConfig) -> crate::migrat
 
 /// Everything the binary needs from the three configuration sources.
 pub(crate) struct Resolved {
+    pub log_file: Option<PathBuf>,
     pub addr: SocketAddr,
     pub config: ServerConfig,
     pub telemetry: bool,
@@ -631,6 +645,13 @@ pub(crate) struct Resolved {
     pub shutdown_grace: Duration,
     /// What the boot migration did, if it ran. Logged once a subscriber exists.
     pub migration: Option<crate::migrate::MigrationReport>,
+}
+
+fn logging_file(cli: &Cli, file: &FileConfig, env: &EnvConfig) -> Option<PathBuf> {
+    cli.log_file
+        .clone()
+        .or_else(|| env.log_file.clone())
+        .or_else(|| file.logging.file.clone())
 }
 
 /// The `SUBMILLI_ALLOW_*` variables that widened the outbound egress guard.
@@ -1336,6 +1357,7 @@ mod tests {
     fn empty_cli() -> Cli {
         Cli {
             config: None,
+            log_file: None,
             bind: None,
             port: None,
             blueprint_dir: None,
@@ -1365,6 +1387,25 @@ mod tests {
             allow_unauthenticated: true,
             health_check: false,
         }
+    }
+
+    #[test]
+    fn logging_file_walks_the_precedence_ladder() {
+        let file: FileConfig = serde_yml::from_str("logging:\n  file: config.log\n").unwrap();
+        let mut env = env_from(&[("SUBMILLI_LOG_FILE", "env.log")]);
+        let mut cli = empty_cli();
+        cli.log_file = Some("flag.log".into());
+        assert_eq!(logging_file(&cli, &file, &env), Some("flag.log".into()));
+        cli.log_file = None;
+        assert_eq!(logging_file(&cli, &file, &env), Some("env.log".into()));
+        env.log_file = None;
+        assert_eq!(logging_file(&cli, &file, &env), Some("config.log".into()));
+        assert_eq!(logging_file(&cli, &FileConfig::default(), &env), None);
+        assert!(
+            serde_yml::from_str::<FileConfig>("logging:\n  audit:\n    enabled: true\n").is_err()
+        );
+        let parsed = Cli::try_parse_from(["submilli-server", "--log-file", "parsed.log"]).unwrap();
+        assert_eq!(parsed.log_file, Some("parsed.log".into()));
     }
 
     #[test]

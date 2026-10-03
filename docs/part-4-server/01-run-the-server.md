@@ -45,9 +45,13 @@ submilli-server
 ```
 
 ```text
-INFO submilli_server::auth: inbound authentication enabled tokens="SUBMILLI_SERVER_TOKEN (admin)"
-INFO submilli_server::serve: submilli-server listening addr=127.0.0.1:8128
+ts=2026-10-03T15:29:43.129Z level=info stream=log target=submilli_server::auth msg="inbound authentication enabled" tokens="SUBMILLI_SERVER_TOKEN (admin)"
+ts=2026-10-03T15:29:43.145Z level=info stream=log target=submilli_server::serve msg="submilli-server listening" addr=127.0.0.1:8128
 ```
+
+To append logs to a file when running as a plain process, set
+`logging.file`, `--log-file`, or `SUBMILLI_LOG_FILE`; see
+[Logs](/docs/reference/server-settings#logs).
 
 Apart from the API token, everything the server needs it creates on
 first use. The `submilli server` commands read the API token from the
@@ -89,8 +93,8 @@ submilli-server --config server.yaml
 ```
 
 ```text
-INFO submilli_server::auth: inbound authentication enabled tokens="admin (admin)"
-INFO submilli_server::serve: submilli-server listening addr=127.0.0.1:8128
+ts=2026-10-03T15:29:43.183Z level=info stream=log target=submilli_server::auth msg="inbound authentication enabled" tokens="admin (admin)"
+ts=2026-10-03T15:29:43.199Z level=info stream=log target=submilli_server::serve msg="submilli-server listening" addr=127.0.0.1:8128
 ```
 
 The `submilli server` commands then read the token from the file too,
@@ -132,8 +136,8 @@ submilli-server --config server.yaml
 ```
 
 ```text
-INFO submilli_server::auth: inbound authentication enabled tokens="admin (admin), app (user)"
-INFO submilli_server::serve: submilli-server listening addr=127.0.0.1:8128
+ts=2026-10-03T15:29:43.233Z level=info stream=log target=submilli_server::auth msg="inbound authentication enabled" tokens="admin (admin), app (user)"
+ts=2026-10-03T15:29:43.249Z level=info stream=log target=submilli_server::serve msg="submilli-server listening" addr=127.0.0.1:8128
 ```
 
 To rotate a token, add another entry with the same role, move the
@@ -215,7 +219,7 @@ submilli-server --config server.yaml
 ```
 
 ```text
-INFO submilli_server::serve: submilli-server listening addr=127.0.0.1:8128
+ts=2026-10-03T15:29:43.280Z level=info stream=log target=submilli_server::serve msg="submilli-server listening" addr=127.0.0.1:8128
 ```
 
 Back up the sessions, the managed volumes, and the secrets, and keep the

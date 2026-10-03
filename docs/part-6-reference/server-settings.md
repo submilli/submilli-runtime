@@ -57,6 +57,7 @@ flat names listed. A dash means the form doesn't exist.
 | `max_llm_concurrency` | `--max-llm-concurrency` | `SUBMILLI_MAX_LLM_CONCURRENCY` | prompts, at least 1 | `4` | Prompts of one `llm.batch` in flight at once. |
 | `telemetry` | — | `SUBMILLI_TELEMETRY` | boolean | `false` | Report to the Submilli maintainers. See [`telemetry`](#telemetry). |
 | `telemetry_include_source` | — | `SUBMILLI_TELEMETRY_INCLUDE_SOURCE` | boolean | `false` | Attach failed programs' source to reports. |
+| `logging.file` | `--log-file` | `SUBMILLI_LOG_FILE` | path | standard output | Append server logs to a file. See [Logs](#logs). |
 | `shutdown_grace` | `--shutdown-grace` | `SUBMILLI_SHUTDOWN_GRACE` | seconds | `5` | How long running requests may finish after a stop. See [Shutdown](#shutdown). |
 | — | `--health-check` | — | — | — | Probe a running server and exit. See [Health and status](#health-and-status). |
 
@@ -288,11 +289,50 @@ the bind address, process ID, open sessions, and registered blueprints.
 ## Logs
 
 The server logs to standard output at `info` and above; `RUST_LOG` sets the
-filter, such as `RUST_LOG=submilli_server=debug`. Every program it runs adds
-one line:
+filter, such as `RUST_LOG=submilli_server=debug`. To append to a file instead:
+
+```yaml title="server.yaml (fragment)"
+logging:
+  file: /var/log/submilli/server.log
+```
+
+`--log-file` overrides `SUBMILLI_LOG_FILE`, which overrides `logging.file`.
+Relative paths resolve against the process's working directory. The parent
+directory must exist and the destination must be a regular file; an inaccessible
+path fails startup with the path in the
+error. Existing contents are retained across restarts.
+
+On Unix, send `SIGHUP` after an external tool such as logrotate moves the
+file: the server creates or opens the configured path again and subsequent
+records use that file. If reopening fails, the server keeps the old file and
+reports the failure to standard error. With standard output, `SIGHUP` has no
+effect. The server does no rotation or retention itself. Later write failures
+are reported to standard error; they do not stop the server. Sentry reporting
+is independent of this output.
+
+Records use logfmt, one event per line, with no ANSI colours even on a terminal.
+The leading keys always appear in this order:
+
+| Key | Value |
+| --- | --- |
+| `ts` | RFC 3339 UTC timestamp with millisecond precision. |
+| `level` | Lowercase severity: `error`, `warn`, `info`, `debug`, or `trace`. |
+| `stream` | `log` for diagnostic records. |
+| `target` | The tracing target that emitted the event. |
+| `msg` | The event message, empty when none was supplied. |
+
+Event fields follow those keys, then any enclosing span fields. A field that
+shares a leading key is prefixed with `fields.`, for example `fields.stream`.
+Values are bare unless empty or containing whitespace, `=`, a quote, or a
+control character. Quoted values escape quotes and backslashes, use `\n`,
+`\r`, and `\t` for line breaks and tabs, and `\uXXXX` for other controls.
+Printable Unicode remains unchanged. Records exceeding 1 MiB are rejected
+with an error on standard error.
+
+Every program the server runs adds an execution record:
 
 ```text
-INFO submilli_server::execute: execution finished blueprint="probe" session="2543962c-2188-4c3a-bf1f-ec1b465db1ba" fuel=1000000000 wasm_fuel=999999943 host_fuel=57 memory_peak=65536 wall_ms=2318 outcome="fuel_exhausted"
+ts=2026-10-03T15:29:46.963Z level=info stream=log target=submilli_server::execute msg="execution finished" blueprint=probe session=e4940e90-2fb3-48df-baea-af505766958f fuel=100000 wasm_fuel=99943 host_fuel=57 memory_peak=65536 wall_ms=19 outcome=fuel_exhausted
 ```
 
 | Field | Value |
@@ -325,6 +365,8 @@ Usage: submilli-server [OPTIONS]
 Options:
       --config <CONFIG>
           YAML config file supplying values for the options below. Any flag passed on the command line overrides the corresponding file value. Env: `$SUBMILLI_CONFIG`
+      --log-file <PATH>
+          Append server logs to this file instead of standard output. The parent directory must exist. On Unix, SIGHUP reopens it for external rotation. Env: `$SUBMILLI_LOG_FILE`, which outranks the config file
       --bind <BIND>
           Address to bind. Falls back to the `$HOST` env var, or `0.0.0.0` when `$PORT` is set (so it's reachable on Render and similar hosts). [default: 127.0.0.1] Env: `$SUBMILLI_BIND`, which outranks the config file and `$HOST`
       --port <PORT>

@@ -10,6 +10,7 @@ mod execution_timeout;
 pub mod handlers;
 pub mod idempotency;
 pub mod idempotency_store;
+pub mod logging;
 mod mcp;
 pub mod metrics;
 pub mod packages;
