@@ -22,6 +22,11 @@ pub(super) fn emit_mcp_call(
     tool: &str,
     args: &[ExprId],
 ) -> Result<(), crate::compiler_error::CompilerFailure> {
+    if args.len() > 1 {
+        return Err(crate::codegen::internal_failure(
+            "MCP calls require a single arguments object",
+        ));
+    }
     // Push the three `(ref $string)` args: server, tool, argsJson. A zero-arg
     // tool sends `{}`; otherwise the args object is serialized via its vtable
     // `toJson` slot.
@@ -40,7 +45,9 @@ pub(super) fn emit_mcp_call(
             crate::runtime::MCP_MODULE_NAME,
             "call",
         ))
-        .expect("submilli:mcp.call imported during codegen");
+        .ok_or_else(|| {
+            crate::codegen::internal_failure("submilli:mcp.call imported during codegen")
+        })?;
     emitter.instruction(Instruction::Call(call_idx));
 
     emit_parse_unknown(emitter, ctx);
@@ -48,36 +55,78 @@ pub(super) fn emit_mcp_call(
 }
 
 fn emit_parse_unknown(emitter: &mut FunctionEmitter, ctx: &CodegenCtx) {
-    let intrinsics = ctx
-        .symbols
-        .intrinsic_type_indices()
-        .expect("intrinsic type indices registered");
+    let Some(intrinsics) = ctx.require(
+        ctx.symbols.intrinsic_type_indices(),
+        "intrinsic type indices registered",
+    ) else {
+        return;
+    };
     emitter.instruction(Instruction::StructGet {
         struct_type_index: intrinsics.string,
         field_index: 1,
     });
-    let parse_idx = ctx
-        .symbols
-        .func_idx(&crate::mangle::host(
+    let Some(parse_idx) = ctx.require(
+        ctx.symbols.func_idx(&crate::mangle::host(
             crate::runtime::JSON_MODULE_NAME,
             "parse",
-        ))
-        .expect("submilli:json.parse imported during codegen");
+        )),
+        "submilli:json.parse imported during codegen",
+    ) else {
+        return;
+    };
     emitter.instruction(Instruction::Call(parse_idx));
 }
 
 /// Push a real `(ref $string)` for an inline constant: the `string_vtable` over a
 /// freshly built `$rawString`.
 fn emit_inline_const_string(emitter: &mut FunctionEmitter, ctx: &CodegenCtx, text: &str) {
-    let intrinsics = ctx
-        .symbols
-        .intrinsic_type_indices()
-        .expect("intrinsic type indices registered");
-    let string_vtable_idx = ctx
-        .symbols
-        .prelude_global_idx("string_vtable")
-        .expect("string_vtable imported");
+    let Some(intrinsics) = ctx.require(
+        ctx.symbols.intrinsic_type_indices(),
+        "intrinsic type indices registered",
+    ) else {
+        return;
+    };
+    let Some(string_vtable_idx) = ctx.require(
+        ctx.symbols.prelude_global_idx("string_vtable"),
+        "string_vtable imported",
+    ) else {
+        return;
+    };
     emitter.instruction(Instruction::GlobalGet(string_vtable_idx));
     emit_inline_const_raw_string(emitter, ctx, text);
     emitter.instruction(Instruction::StructNew(intrinsics.string));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::TypedAst;
+    use crate::codegen::invariant_tests::{assert_internal, with_context};
+    use crate::codegen::{SymbolTable, tests::mock_symbols_with_intrinsics};
+
+    #[test]
+    fn mcp_import_failures_are_compiler_failures() {
+        with_context(&TypedAst::new(), &mock_symbols_with_intrinsics(), |ctx| {
+            let mut emitter = FunctionEmitter::new(ctx, &[]);
+            assert_internal(emit_mcp_call(&mut emitter, ctx, "server", "tool", &[]).unwrap_err());
+            assert_internal(ctx.check_failure().unwrap_err());
+            emit_parse_unknown(&mut emitter, ctx);
+            assert_internal(ctx.check_failure().unwrap_err());
+        });
+        with_context(&TypedAst::new(), &SymbolTable::default(), |ctx| {
+            emit_parse_unknown(&mut FunctionEmitter::new(ctx, &[]), ctx);
+            assert_internal(ctx.check_failure().unwrap_err());
+            let invalid = crate::ExprId(u32::MAX);
+            assert_internal(
+                emit_mcp_call(
+                    &mut FunctionEmitter::new(ctx, &[]),
+                    ctx,
+                    "server",
+                    "tool",
+                    &[invalid; 2],
+                )
+                .unwrap_err(),
+            );
+        });
+    }
 }
