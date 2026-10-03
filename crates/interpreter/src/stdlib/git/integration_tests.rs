@@ -35,10 +35,10 @@ fn repository() -> tempfile::TempDir {
 
 /// The repository at `root`, opened to write.
 fn snapshot(root: &Path) -> storage::Snapshot {
-    storage::Snapshot::open(
+    storage::Snapshot::open_unmetered(
         &super::location::Location::at(root),
         Arc::new(AtomicBool::new(false)),
-        storage::MAX_BYTES,
+        storage::MAX_WORKING_BYTES,
         true,
     )
     .unwrap()
@@ -55,7 +55,7 @@ fn metadata_publication_preserves_native_hook_execution() {
     let mut state = snapshot(root.path());
     super::operations::set_remote(&mut state, "origin", "https://example.com/repo.git", true)
         .unwrap();
-    state.publish(None).unwrap();
+    state.publish().unwrap();
     assert_ne!(
         std::fs::metadata(&hook).unwrap().permissions().mode() & 0o111,
         0
@@ -77,7 +77,7 @@ fn failed_metadata_staging_does_not_leave_a_recovery_blocker() {
     // refuses it before moving anything.
     std::fs::write(state.repo.refs.git_dir().join("refs/heads/blocked"), "x").unwrap();
     std::fs::create_dir(root.path().join(".git/refs/heads/blocked")).unwrap();
-    assert!(state.publish(None).is_err());
+    assert!(state.publish().is_err());
     assert_eq!(native(root.path(), &["rev-parse", "HEAD"]), head);
     assert!(std::fs::read_dir(root.path()).unwrap().all(|entry| {
         !entry
@@ -86,7 +86,7 @@ fn failed_metadata_staging_does_not_leave_a_recovery_blocker() {
             .to_string_lossy()
             .starts_with(".git-submilli-")
     }));
-    snapshot(root.path()).publish(None).unwrap();
+    snapshot(root.path()).publish().unwrap();
 }
 
 fn job(vfs: &Vfs, op: &str) -> Job {
@@ -104,8 +104,9 @@ fn job(vfs: &Vfs, op: &str) -> Job {
         secrets: data.secret_provider.clone(),
         http: data.http_client.clone(),
         runtime: tokio::runtime::Handle::current(),
+        deadline: tokio::time::Instant::now() + std::time::Duration::from_secs(60),
         cancelled: Arc::new(AtomicBool::new(false)),
-        max_bytes: storage::MAX_BYTES,
+        max_bytes: storage::MAX_WORKING_BYTES,
         transferred: Arc::new(AtomicU64::new(0)),
         meter: Default::default(),
         denial: Arc::new(Mutex::new(None)),
@@ -125,7 +126,7 @@ async fn native_merge_in_progress_refuses_mutations_without_changing_history() {
         &Dir::open_ambient_dir(root.path(), cap_std::ambient_authority()).unwrap(),
         false,
         &AtomicBool::new(false),
-        storage::MAX_BYTES,
+        storage::MAX_WORKING_BYTES,
     )
     .unwrap();
     let vfs = Vfs::external(root.path().to_owned()).unwrap();
@@ -146,7 +147,7 @@ async fn native_merge_in_progress_refuses_mutations_without_changing_history() {
         &Dir::open_ambient_dir(root.path(), cap_std::ambient_authority()).unwrap(),
         false,
         &AtomicBool::new(false),
-        storage::MAX_BYTES,
+        storage::MAX_WORKING_BYTES,
     )
     .unwrap();
     assert_eq!(before, after);
@@ -329,7 +330,7 @@ async fn filesystem_ref_aliases_cannot_bypass_branch_grants() {
             &metadata,
             false,
             &AtomicBool::new(false),
-            storage::MAX_BYTES,
+            storage::MAX_WORKING_BYTES,
         )
         .unwrap();
         let mut request = job(&vfs, operation);
@@ -347,7 +348,7 @@ async fn filesystem_ref_aliases_cannot_bypass_branch_grants() {
             &metadata,
             false,
             &AtomicBool::new(false),
-            storage::MAX_BYTES,
+            storage::MAX_WORKING_BYTES,
         )
         .unwrap();
         assert_eq!(before, after);
@@ -719,7 +720,7 @@ async fn mount_read_only_refuses_repository_changes_but_not_reads() {
         &Dir::open_ambient_dir(volume.path(), cap_std::ambient_authority()).unwrap(),
         true,
         &AtomicBool::new(false),
-        storage::MAX_BYTES,
+        storage::MAX_WORKING_BYTES,
     )
     .unwrap();
     let vfs = mounted(
@@ -758,7 +759,7 @@ async fn mount_read_only_refuses_repository_changes_but_not_reads() {
         &Dir::open_ambient_dir(volume.path(), cap_std::ambient_authority()).unwrap(),
         true,
         &AtomicBool::new(false),
-        storage::MAX_BYTES,
+        storage::MAX_WORKING_BYTES,
     )
     .unwrap();
     assert_eq!(before, after, "nothing in the volume changed");
@@ -877,7 +878,7 @@ fn a_publication_failing_at_any_step_leaves_the_repository_as_it_was() {
         let state = snapshot(root.path());
         super::operations::checkout(&state, "topic").unwrap();
         super::stage::FAIL_AFTER.with(|after| after.set(Some(steps)));
-        let result = state.publish(None);
+        let result = state.publish();
         super::stage::FAIL_AFTER.with(|after| after.set(None));
         if result.is_ok() {
             published = true;
@@ -896,4 +897,93 @@ fn a_publication_failing_at_any_step_leaves_the_repository_as_it_was() {
         b"now a directory"
     );
     native(root.path(), &["fsck", "--full"]);
+
+    // And back: the directory gives way to the file again.
+    let state = snapshot(root.path());
+    super::operations::checkout(&state, "main").unwrap();
+    state.publish().unwrap();
+    assert_eq!(digest(root.path()).get("swap"), before.get("swap"));
+    assert!(native(root.path(), &["status", "--porcelain"]).is_empty());
+}
+
+/// Branches whose files differ only in case switch either way, on a
+/// filesystem that folds case as on one that doesn't.
+#[test]
+fn a_switch_renames_a_file_that_differs_only_in_case() {
+    let root = repository();
+    std::fs::create_dir(root.path().join("Docs")).unwrap();
+    std::fs::write(root.path().join("Docs/README"), "upper").unwrap();
+    native(root.path(), &["add", "."]);
+    native(root.path(), &["commit", "-m", "upper"]);
+    native(root.path(), &["switch", "-c", "lower"]);
+    native(root.path(), &["mv", "Docs/README", "Docs/readme.tmp"]);
+    native(root.path(), &["mv", "Docs/readme.tmp", "Docs/readme"]);
+    native(root.path(), &["mv", "Docs", "docs.tmp"]);
+    native(root.path(), &["mv", "docs.tmp", "docs"]);
+    native(root.path(), &["commit", "-m", "lower"]);
+    native(root.path(), &["switch", "main"]);
+    for (branch, path) in [("lower", "docs/readme"), ("main", "Docs/README")] {
+        let state = snapshot(root.path());
+        super::operations::checkout(&state, branch).unwrap();
+        state.publish().unwrap();
+        assert!(native(root.path(), &["status", "--porcelain"]).is_empty());
+        let directory = path.split('/').next().unwrap();
+        let names: Vec<_> = std::fs::read_dir(root.path())
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().into_string().unwrap())
+            .collect();
+        assert!(
+            names.iter().any(|name| name == directory),
+            "{branch}: {names:?}"
+        );
+    }
+}
+
+/// gix rewrites `shallow` during a fetch; with a stage it writes the stage's
+/// copy, which publication puts in place, or nothing reaches `.git`.
+#[test]
+fn shallow_is_staged_and_published() {
+    let root = repository();
+    let state = snapshot(root.path());
+    let shallow = state.repo.shallow_file();
+    assert!(
+        !shallow.starts_with(root.path().join(".git")),
+        "{shallow:?} is in .git"
+    );
+    let head = native(root.path(), &["rev-parse", "HEAD"]);
+    std::fs::write(&shallow, &head).unwrap();
+    drop(state);
+    assert!(!root.path().join(".git/shallow").exists());
+    let state = snapshot(root.path());
+    std::fs::write(state.repo.shallow_file(), &head).unwrap();
+    state.publish().unwrap();
+    assert_eq!(
+        std::fs::read(root.path().join(".git/shallow")).unwrap(),
+        head
+    );
+    let state = snapshot(root.path());
+    std::fs::remove_file(state.repo.shallow_file()).unwrap();
+    state.publish().unwrap();
+    assert!(!root.path().join(".git/shallow").exists());
+}
+
+/// A stage left before publication began is cleared when the repository is
+/// next opened; one left part way through publication blocks it.
+#[test]
+fn a_leftover_stage_is_cleared_unless_publication_began() {
+    let root = repository();
+    std::fs::create_dir_all(root.path().join(".git-submilli-left/objects")).unwrap();
+    drop(snapshot(root.path()));
+    assert!(!root.path().join(".git-submilli-left").exists());
+    std::fs::create_dir(root.path().join(".git-submilli-begun")).unwrap();
+    std::fs::write(root.path().join(".git-submilli-begun/publishing"), "").unwrap();
+    let error = storage::Snapshot::open_unmetered(
+        &super::location::Location::at(root.path()),
+        Arc::new(AtomicBool::new(false)),
+        storage::MAX_WORKING_BYTES,
+        false,
+    )
+    .err()
+    .unwrap();
+    assert!(error.to_string().contains("host recovery"), "{error}");
 }

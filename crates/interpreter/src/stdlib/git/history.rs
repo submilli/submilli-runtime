@@ -221,7 +221,7 @@ mod tests {
     /// A new repository; the VFS holding it lives as long as it's kept.
     fn snapshot(max_bytes: u64) -> (crate::runtime::Vfs, Snapshot) {
         let vfs = crate::runtime::Vfs::tempdir().unwrap();
-        let snapshot = Snapshot::init(
+        let snapshot = Snapshot::init_unmetered(
             &crate::stdlib::git::location::Location::of_vfs(&vfs),
             "main",
             Default::default(),

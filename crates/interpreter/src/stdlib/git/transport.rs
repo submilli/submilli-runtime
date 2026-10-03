@@ -73,12 +73,12 @@ fn fetch_inner(
         .repo
         .remote_at_without_url_rewrite(url.as_str())?
         .with_fetch_tags(gix::remote::fetch::Tags::None);
-    let spool = snapshot.spool()?;
     let http = Client {
         job: job.clone(),
         url: url.clone(),
-        spool: Arc::new(spool),
-        limits: snapshot.transfer,
+        spool_dir: Arc::new(snapshot.spool()?),
+        limits: snapshot.transfer(),
+        objects: Arc::new(snapshot.thread_safe_objects()?),
     };
     let transport = http::Transport::new_http(
         http,
@@ -157,14 +157,21 @@ fn redact_fetch_failure(error: wasmtime::Error) -> wasmtime::Error {
         return crate::runtime::host::fatal_host_error(message);
     }
     // A limit of Git's own says what to raise; nothing in it came from the remote.
-    let cause = error.root_cause().to_string();
-    if cause.starts_with("git: ")
-        && (cause.contains("raise max_execution_memory")
-            || cause.contains("transfer limit exceeded"))
-    {
-        return wasmtime::Error::msg(cause);
+    if let Some(limit) = own_limit(&error) {
+        return wasmtime::Error::msg(limit);
     }
     wasmtime::Error::msg("git: fetch failed while receiving repository data")
+}
+
+/// The message of a limit of Git's own that `error` comes from, if it does.
+fn own_limit(error: &wasmtime::Error) -> Option<String> {
+    let root = error.root_cause();
+    let cause = root
+        .downcast_ref::<io::Error>()
+        .and_then(io::Error::get_ref)
+        .map_or(root, |error| error as &(dyn std::error::Error + 'static));
+    (cause.is::<super::storage::MemoryLimit>() || cause.is::<TransferLimit>())
+        .then(|| cause.to_string())
 }
 
 fn http_setup_failure(error: &wasmtime::Error) -> Option<&str> {
@@ -263,18 +270,33 @@ struct Client {
     job: Job,
     url: String,
     /// Where responses are written as they arrive: a directory in the stage.
-    spool: Arc<cap_std::fs::Dir>,
+    spool_dir: Arc<cap_std::fs::Dir>,
     /// What every response may hold, and what it may make gix hold in memory.
     limits: Transfer,
+    /// The objects the repository has, which a fetched delta may name as its base.
+    objects: Arc<gix::odb::Store>,
 }
 
 /// The limits on a fetch's responses.
 #[derive(Clone, Copy, Debug)]
 pub(super) struct Transfer {
     /// Bytes all responses together may bring, on disk.
-    pub max_bytes: u64,
+    pub max_transfer_bytes: u64,
     pub pack: super::pack_limits::Limits,
 }
+
+/// A fetch that brought more than the size limit leaves room for. Like a
+/// [`MemoryLimit`](super::storage::MemoryLimit), it reaches the program as it is.
+#[derive(Debug)]
+struct TransferLimit;
+
+impl std::fmt::Display for TransferLimit {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("git: transfer limit exceeded; the fetch needs more room under the size limit")
+    }
+}
+
+impl std::error::Error for TransferLimit {}
 
 /// A response whose body was spooled to a file.
 #[derive(Debug)]
@@ -287,13 +309,13 @@ impl Client {
     fn response(&self, request: &HttpRequest) -> io::Result<Response> {
         self.job.check_cancelled().map_err(io_error)?;
         let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(60);
-        let mut spool = self.spool_file()?;
+        let mut spool = self.spool_writer()?;
         let mut response = self
             .wait(
                 deadline,
                 self.job.http.send_without_redirects_to(request, &mut spool),
             )?
-            .map_err(http_error)?;
+            .map_err(|error| spool.refusal().unwrap_or_else(|| http_error(error)))?;
         if !same_url(&response.final_url, &request.url) {
             return Err(io_error("git: redirects are unsupported"));
         }
@@ -313,7 +335,7 @@ impl Client {
                 .headers
                 .push(("Authorization".into(), format!("Basic {encoded}")));
             self.job.check_cancelled().map_err(io_error)?;
-            spool = self.spool_file()?;
+            spool = self.spool_writer()?;
             response = self
                 .wait(
                     deadline,
@@ -321,9 +343,11 @@ impl Client {
                         .http
                         .send_without_redirects_to(&authenticated, &mut spool),
                 )?
-                .map_err(|error| match error {
-                    HttpError::Internal(_) => http_error(error),
-                    _ => io_error("git: authenticated request failed"),
+                .map_err(|error| {
+                    spool.refusal().unwrap_or_else(|| match error {
+                        HttpError::Internal(_) => http_error(error),
+                        _ => io_error("git: authenticated request failed"),
+                    })
                 })?;
         }
         if !same_url(&response.final_url, &request.url) || !(200..300).contains(&response.status) {
@@ -335,10 +359,12 @@ impl Client {
         let mut body = spool.file;
         // Checked from disk as a stream, then handed to gix from the start.
         body.seek(io::SeekFrom::Start(0))?;
+        let objects = self.objects.to_handle_arc();
         super::pack_limits::validate(
             &mut io::BufReader::new(&mut body),
             request.method == "GET",
             self.limits.pack,
+            &|id| gix::odb::pack::Find::contains(&objects, id),
             &self.job.cancelled,
         )?;
         body.seek(io::SeekFrom::Start(0))?;
@@ -350,19 +376,20 @@ impl Client {
     }
 
     /// A new file in the spool, for one response's body.
-    fn spool_file(&self) -> io::Result<Spool> {
+    fn spool_writer(&self) -> io::Result<SpoolWriter> {
         let name = format!("response-{}", uuid::Uuid::new_v4());
-        let file = self.spool.open_with(
+        let file = self.spool_dir.open_with(
             &name,
             cap_std::fs::OpenOptions::new()
                 .read(true)
                 .write(true)
                 .create_new(true),
         )?;
-        Ok(Spool {
+        Ok(SpoolWriter {
             file,
             job: self.job.clone(),
-            max_bytes: self.limits.max_bytes,
+            max_transfer_bytes: self.limits.max_transfer_bytes,
+            refused: false,
         })
     }
 
@@ -410,7 +437,7 @@ impl Client {
                 headers,
                 body: vec![],
                 timeout_ms: 60_000,
-                max_response_size: self.limits.max_bytes,
+                max_response_size: self.limits.max_transfer_bytes,
                 decompress: false,
                 transport_policy: None,
                 redirect_guard: None,
@@ -458,23 +485,32 @@ fn check_wait(
 
 /// A response body being written to the spool, counted against the transfer
 /// limit as it arrives.
-struct Spool {
+struct SpoolWriter {
     file: cap_std::fs::File,
     job: Job,
-    max_bytes: u64,
+    max_transfer_bytes: u64,
+    /// Whether the transfer limit refused a write. The transport reports a
+    /// failed write in its own words, so the limit is reported from here.
+    refused: bool,
 }
 
-impl Write for Spool {
+impl SpoolWriter {
+    fn refusal(&self) -> Option<io::Error> {
+        self.refused
+            .then(|| io::Error::new(io::ErrorKind::InvalidData, TransferLimit))
+    }
+}
+
+impl Write for SpoolWriter {
     fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
         self.job.check_cancelled().map_err(io_error)?;
         let total = self
             .job
             .transferred
             .fetch_add(bytes.len() as u64, std::sync::atomic::Ordering::Relaxed);
-        if total.saturating_add(bytes.len() as u64) > self.max_bytes {
-            return Err(io_error(
-                "git: transfer limit exceeded; the fetch needs more room under the size limit",
-            ));
+        if total.saturating_add(bytes.len() as u64) > self.max_transfer_bytes {
+            self.refused = true;
+            return Err(io::Error::new(io::ErrorKind::InvalidData, TransferLimit));
         }
         self.file.write_all(bytes)?;
         Ok(bytes.len())
@@ -699,9 +735,10 @@ mod tests {
             unreachable!()
         }
 
-        async fn send_without_redirects(
+        async fn send_without_redirects_to(
             &self,
             req: &HttpRequest,
+            _body: &mut (dyn std::io::Write + Send),
         ) -> Result<HttpResponse, HttpError> {
             let request = self.requests.fetch_add(1, Ordering::Relaxed);
             if self.stall == Stall::InitialRequest
@@ -748,15 +785,22 @@ mod tests {
 
     fn client(providers: Arc<Providers>) -> Client {
         let data = StoreData::with_vfs(crate::runtime::Vfs::none());
-        let spool = tempfile::tempdir().unwrap();
+        let spool = tempfile::tempdir().unwrap().keep();
         let spool_dir =
-            cap_std::fs::Dir::open_ambient_dir(spool.path(), cap_std::ambient_authority()).unwrap();
-        // Leaked: the client outlives this helper, and the test process is short.
-        std::mem::forget(spool);
+            cap_std::fs::Dir::open_ambient_dir(&spool, cap_std::ambient_authority()).unwrap();
+        std::fs::create_dir(spool.join("objects")).unwrap();
+        let objects = gix::odb::Store::at_opts(
+            spool.join("objects"),
+            gix::hash::Kind::Sha1,
+            &mut std::iter::empty(),
+            Default::default(),
+        )
+        .unwrap();
         Client {
-            spool: Arc::new(spool_dir),
+            spool_dir: Arc::new(spool_dir),
+            objects: Arc::new(objects),
             limits: Transfer {
-                max_bytes: 4096,
+                max_transfer_bytes: 4096,
                 pack: crate::stdlib::git::pack_limits::Limits {
                     max_records: 16,
                     max_object_bytes: 4096,
@@ -777,6 +821,7 @@ mod tests {
                 secrets: providers.clone(),
                 http: providers.clone(),
                 runtime: tokio::runtime::Handle::current(),
+                deadline: tokio::time::Instant::now() + std::time::Duration::from_secs(60),
                 cancelled: providers.cancelled.clone(),
                 max_bytes: 4096,
                 transferred: Arc::new(AtomicU64::new(0)),

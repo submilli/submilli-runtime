@@ -23,22 +23,51 @@ use std::sync::{
 };
 use wasmtime::{Result, bail};
 
-pub const MAX_BYTES: u64 = 50 * 1024 * 1024;
+/// The most any one count of Git's working memory may reach, whatever the
+/// run has free: a blob, a diff, the paths of a tree.
+pub const MAX_WORKING_BYTES: u64 = 50 * 1024 * 1024;
 /// The most a fetch may bring when the volume has no size limit to bound it.
-pub const MAX_TRANSFER: u64 = 4 * 1024 * 1024 * 1024;
+pub const MAX_TRANSFER_BYTES: u64 = 4 * 1024 * 1024 * 1024;
 /// Paths in a file set, a sanity bound: what binds first is the memory each
 /// path takes, counted against [`Snapshot::max_bytes`].
 pub const MAX_PATHS: usize = 1_000_000;
 /// Paths one call to `add` may name.
 pub const MAX_REQUESTED_PATHS: usize = 10_000;
+/// Directory levels Git follows in a tree, the worktree, `.git` or references.
+pub const MAX_NESTING: usize = 64;
+
+/// Git refusing work that needs more memory than it has free. Fetch failures
+/// are redacted, since a remote's response may hold anything; this one names
+/// only Git's own limit, so it reaches the program as it is.
+#[derive(Debug)]
+pub struct MemoryLimit(String);
+
+impl std::fmt::Display for MemoryLimit {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "git: {} limit exceeded; it needs more memory than Git has free, so raise \
+             max_execution_memory",
+            self.0
+        )
+    }
+}
+
+impl std::error::Error for MemoryLimit {}
 
 /// Refuses work that needs more memory than Git has, saying what to raise.
 pub fn memory_limit(what: &str) -> wasmtime::Error {
-    wasmtime::Error::msg(format!(
-        "git: {what} limit exceeded; it needs more memory than Git has free, so raise \
-         max_execution_memory"
-    ))
+    wasmtime::Error::new(MemoryLimit(what.to_owned()))
 }
+
+/// [`memory_limit`] as an I/O error, for readers gix drives.
+pub fn memory_limit_io(what: &str) -> std::io::Error {
+    std::io::Error::new(
+        std::io::ErrorKind::InvalidData,
+        MemoryLimit(what.to_owned()),
+    )
+}
+
 /// Files and their contents, as tests compare a directory before and after.
 #[cfg(test)]
 pub type Files = BTreeMap<String, (u32, Vec<u8>)>;
@@ -49,79 +78,92 @@ pub type Entries = BTreeMap<String, (u32, gix::ObjectId)>;
 /// The `.git` a new repository starts with.
 const SKELETON_CONFIG: &[u8] = b"[core]\n\trepositoryformatversion = 0\n\tbare = false\n";
 
+/// What a repository is opened with.
+pub struct Opening {
+    pub cancelled: Arc<AtomicBool>,
+    /// What the operation may count while it works; see `WorkingBudget`.
+    pub max_bytes: u64,
+    /// The volume's size limit, which staged and published files count against.
+    pub quota: Option<Arc<DiskQuota>>,
+    /// The work the operation does, counted for fuel.
+    pub meter: Arc<Meter>,
+}
+
+#[cfg(test)]
+impl Opening {
+    /// No size limit, and work counted nowhere.
+    pub fn unmetered(cancelled: Arc<AtomicBool>, max_bytes: u64) -> Self {
+        Self {
+            cancelled,
+            max_bytes,
+            quota: None,
+            meter: Default::default(),
+        }
+    }
+}
+
 pub struct Snapshot {
     pub max_bytes: u64,
     pub repo: gix::Repository,
     pub dir: Arc<Dir>,
     /// The repository's own configuration, which Git parses itself; replaced
     /// in full when a remote changes.
-    pub original_config: Vec<u8>,
+    pub config: Vec<u8>,
     config_changed: bool,
     pub cancelled: Arc<AtomicBool>,
     pub pending_worktree: std::cell::RefCell<Option<WorktreeChange>>,
     /// Where an operation that changes the repository writes; `None` for one
     /// that only reads.
     stage: Option<Stage>,
+    quota: Option<Arc<DiskQuota>>,
     /// Whether this operation created `.git`, and the bytes it wrote there.
     created: Option<u64>,
     published: bool,
     /// The work this operation does, counted for fuel.
     pub meter: Arc<Meter>,
-    /// What a fetch may bring, and make gix hold.
-    pub transfer: super::transport::Transfer,
     // Dropped last: the repository stays held until everything above is gone.
     _lock: RepositoryLock,
 }
 
 impl Snapshot {
-    /// Opens the repository at `location`; `writes` gives it a stage. Its
-    /// work is counted nowhere: for tests.
-    #[cfg(test)]
+    /// Opens the repository at `location`, which `lock` holds; `writes` gives
+    /// it a stage.
     pub fn open(
         location: &Location,
-        cancelled: Arc<AtomicBool>,
-        max_bytes: u64,
+        lock: RepositoryLock,
+        opening: Opening,
         writes: bool,
     ) -> Result<Self> {
-        Self::open_metered(location, cancelled, max_bytes, writes, Default::default())
+        Self::open_locked(location, lock, opening, writes, None)
     }
 
-    /// Opens the repository at `location`, counting the work into `meter`;
-    /// `writes` gives it a stage.
-    pub fn open_metered(
+    /// [`open`](Self::open), taking the lock: for tests.
+    #[cfg(test)]
+    pub fn open_unmetered(
         location: &Location,
         cancelled: Arc<AtomicBool>,
         max_bytes: u64,
         writes: bool,
-        meter: Arc<Meter>,
     ) -> Result<Self> {
         let lock = RepositoryLock::acquire(location.identity, &cancelled)?;
-        Self::open_locked(location, lock, cancelled, max_bytes, writes, None, meter)
+        Self::open(
+            location,
+            lock,
+            Opening::unmetered(cancelled, max_bytes),
+            writes,
+        )
     }
 
-    /// [`init_metered`](Self::init_metered), counting the work nowhere: for tests.
-    #[cfg(test)]
+    /// Creates a repository at `location`, which `lock` holds, on `branch`,
+    /// and opens it to write. Its `.git` is removed again unless the
+    /// operation publishes.
     pub fn init(
         location: &Location,
+        lock: RepositoryLock,
         branch: &str,
-        cancelled: Arc<AtomicBool>,
-        max_bytes: u64,
-    ) -> Result<Self> {
-        Self::init_metered(location, branch, cancelled, max_bytes, Default::default())
-    }
-
-    /// Creates a repository at `location`, on `branch`, and opens it to write,
-    /// counting the work into `meter`. Its `.git` is removed again unless the
-    /// operation publishes.
-    pub fn init_metered(
-        location: &Location,
-        branch: &str,
-        cancelled: Arc<AtomicBool>,
-        max_bytes: u64,
-        meter: Arc<Meter>,
+        opening: Opening,
     ) -> Result<Self> {
         validate_new_ref_name(branch)?;
-        let lock = RepositoryLock::acquire(location.identity, &cancelled)?;
         let dir = &location.dir;
         if dir.try_exists(".git")? {
             bail!("git.init: repository already exists");
@@ -135,17 +177,9 @@ impl Snapshot {
             dir.write(".git/HEAD", &head)?;
             dir.write(".git/config", SKELETON_CONFIG)?;
             let written = (head.len() + SKELETON_CONFIG.len()) as u64;
-            meter.syscalls(6);
-            meter.io(written);
-            Self::open_locked(
-                location,
-                lock,
-                cancelled,
-                max_bytes,
-                true,
-                Some(written),
-                meter,
-            )
+            opening.meter.syscalls(6);
+            opening.meter.io(written);
+            Self::open_locked(location, lock, opening, true, Some(written))
         })();
         if result.is_err() {
             let _ = dir.remove_dir_all(".git");
@@ -153,65 +187,50 @@ impl Snapshot {
         result
     }
 
+    /// [`init`](Self::init), taking the lock: for tests.
+    #[cfg(test)]
+    pub fn init_unmetered(
+        location: &Location,
+        branch: &str,
+        cancelled: Arc<AtomicBool>,
+        max_bytes: u64,
+    ) -> Result<Self> {
+        let lock = RepositoryLock::acquire(location.identity, &cancelled)?;
+        Self::init(
+            location,
+            lock,
+            branch,
+            Opening::unmetered(cancelled, max_bytes),
+        )
+    }
+
     fn open_locked(
         location: &Location,
         lock: RepositoryLock,
-        cancelled: Arc<AtomicBool>,
-        max_bytes: u64,
+        opening: Opening,
         writes: bool,
         created: Option<u64>,
-        meter: Arc<Meter>,
     ) -> Result<Self> {
+        let Opening {
+            cancelled,
+            max_bytes,
+            quota,
+            meter,
+        } = opening;
         let dir = Arc::clone(&location.dir);
-        let metadata = dir.symlink_metadata(".git")?;
-        if !metadata.is_dir() || metadata.file_type().is_symlink() {
-            bail!("git: expected an ordinary .git directory");
-        }
-        for entry in dir.entries()? {
-            if entry?
-                .file_name()
-                .to_string_lossy()
-                .to_ascii_lowercase()
-                .starts_with(".git-submilli-")
-            {
-                bail!(
-                    "git: unfinished publication requires host recovery before further Git operations"
-                );
-            }
-        }
         let git = dir.open_dir(".git")?;
-        let summary = super::metadata_scan::scan(&git, &cancelled, &meter)?;
-        validate_config_budget(&summary.config, max_bytes, &cancelled)?;
-        if !summary.packs.is_empty() {
-            super::pack_index_check::check(
-                &git.open_dir("objects/pack")?,
-                &summary.packs,
-                super::pack_index_check::Limits {
-                    max_objects: max_bytes / super::pack_index_check::check_bytes(1),
-                    max_object_bytes: max_bytes,
-                },
-                &cancelled,
-                &meter,
-            )?;
-        }
+        let config = check_metadata(&dir, &git, max_bytes, &cancelled, &meter)?;
         let mut repo = open_in_place(&location.git_dir()?, max_bytes)?;
         let stage = if writes {
-            let stage = Stage::create(&dir, &location.host, Arc::clone(&meter))?;
-            stage.copy_references(&git, &cancelled)?;
-            let objects = gix::odb::at_opts(
-                stage.host.join(super::stage::OBJECTS),
-                gix::hash::Kind::Sha1,
-                [],
-                gix::odb::store::init::Options {
-                    use_multi_pack_index: false,
-                    alloc_limit_bytes: Some(max_bytes as usize),
-                    ..Default::default()
-                },
-            )?;
-            // Written objects go to the stage's store, not to memory.
-            repo.objects = gix::odb::memory::Proxy::from(objects).with_write_passthrough();
-            repo.refs = reference_store(stage.host.join(super::stage::REFS));
-            Some(stage)
+            Some(attach_stage(
+                &mut repo,
+                location,
+                &git,
+                max_bytes,
+                &cancelled,
+                &meter,
+                quota.clone(),
+            )?)
         } else {
             None
         };
@@ -219,22 +238,15 @@ impl Snapshot {
             max_bytes,
             repo,
             dir,
-            original_config: summary.config,
+            config,
             config_changed: false,
             cancelled,
             pending_worktree: Default::default(),
             stage,
+            quota,
             created,
             published: false,
             meter,
-            transfer: super::transport::Transfer {
-                max_bytes: MAX_TRANSFER,
-                pack: super::pack_limits::Limits {
-                    max_records: (max_bytes / 256).max(1) as usize,
-                    max_object_bytes: max_bytes,
-                    max_chain_bytes: max_bytes,
-                },
-            },
             _lock: lock,
         };
         snapshot.remotes()?;
@@ -254,18 +266,38 @@ impl Snapshot {
         })
     }
 
+    /// What a fetch may bring, on disk and in gix's memory: each of the
+    /// spooled responses and the pack written from them may take half of
+    /// what the size limit leaves.
+    pub fn transfer(&self) -> super::transport::Transfer {
+        let room = self.quota.as_ref().map_or(MAX_TRANSFER_BYTES, |quota| {
+            quota.limit().saturating_sub(quota.used()) / 2
+        });
+        super::transport::Transfer {
+            max_transfer_bytes: room.min(MAX_TRANSFER_BYTES),
+            pack: super::pack_limits::Limits {
+                max_records: (self.max_bytes / 256).max(1) as usize,
+                max_object_bytes: self.max_bytes,
+                max_chain_bytes: self.max_bytes,
+            },
+        }
+    }
+
     /// The index: the one this operation staged, or the repository's.
     pub fn index(&self) -> Result<gix::index::State> {
-        let bytes = match &self.stage {
-            Some(stage) if stage.has_metadata("index")? => {
-                read_bounded(&stage.dir, Path::new("metadata/index"), self.max_bytes)?
-            }
-            _ => match self.dir.open(".git/index") {
-                Ok(_) => read_bounded(&self.dir, Path::new(".git/index"), self.max_bytes)?,
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                    return Ok(gix::index::State::new(gix::hash::Kind::Sha1));
-                }
-                Err(error) => return Err(error.into()),
+        let staged = match &self.stage {
+            Some(stage) if stage.has_metadata("index")? => read_bounded(
+                &stage.dir,
+                &Stage::metadata_relative("index"),
+                self.max_bytes,
+            )?,
+            _ => None,
+        };
+        let bytes = match staged {
+            Some(bytes) => bytes,
+            None => match read_bounded(&self.dir, Path::new(".git/index"), self.max_bytes)? {
+                Some(bytes) => bytes,
+                None => return Ok(gix::index::State::new(gix::hash::Kind::Sha1)),
             },
         };
         self.meter.syscalls(2);
@@ -310,7 +342,7 @@ impl Snapshot {
     /// Replaces the repository's configuration, at publication.
     pub fn set_config(&mut self, config: Vec<u8>) -> Result<()> {
         self.stage()?;
-        self.original_config = config;
+        self.config = config;
         self.config_changed = true;
         Ok(())
     }
@@ -331,6 +363,21 @@ impl Snapshot {
         Ok(stage.dir.open_dir("spool")?)
     }
 
+    /// The stage's object store, and the repository's through it, opened to
+    /// be shared with the fetch transport, which gix moves between threads.
+    pub fn thread_safe_objects(&self) -> Result<gix::odb::Store> {
+        Ok(gix::odb::Store::at_opts(
+            self.stage()?.host.join(super::stage::OBJECTS),
+            gix::hash::Kind::Sha1,
+            &mut std::iter::empty(),
+            gix::odb::store::init::Options {
+                use_multi_pack_index: false,
+                alloc_limit_bytes: Some(self.max_bytes as usize),
+                ..Default::default()
+            },
+        )?)
+    }
+
     /// The pack directory of the stage's object store, where fetch writes.
     pub fn staged_packs(&self) -> Result<Dir> {
         Ok(self.stage()?.dir.open_dir("objects/pack")?)
@@ -345,28 +392,27 @@ impl Snapshot {
             bail!("git: invalid reference path");
         }
         // The references gix reads: the stage's copy when there is one.
-        let mut directory = self.repo.refs.git_dir().to_path_buf();
+        let references =
+            Dir::open_ambient_dir(self.repo.refs.git_dir(), cap_std::ambient_authority())?;
+        let mut directory = PathBuf::new();
         for component in Path::new(name).components() {
             self.check_cancelled()?;
             let Component::Normal(component) = component else {
                 bail!("git: invalid reference path");
             };
             let path = directory.join(component);
-            if !path.try_exists()? {
+            if !references.try_exists(&path)? {
                 return Ok(());
             }
             // Gix retains the requested spelling even when the filesystem
             // resolves a case or Unicode alias. Capability checks need the
             // actual ref spelling, including each directory component.
-            let mut exact = false;
-            for entry in std::fs::read_dir(&directory)? {
-                self.check_cancelled()?;
-                if entry?.file_name() == component {
-                    exact = true;
-                    break;
-                }
-            }
-            if !exact {
+            let above = if directory.as_os_str().is_empty() {
+                references.try_clone()?
+            } else {
+                references.open_dir(&directory)?
+            };
+            if !super::stage::has_exact_entry(&above, component)? {
                 bail!("git: reference spelling aliases an existing reference path");
             }
             directory = path;
@@ -388,33 +434,7 @@ impl Snapshot {
                 }
                 let path = Path::new(name);
                 if let Some(parent) = path.parent() {
-                    let mut prefix = PathBuf::new();
-                    for component in parent.components() {
-                        prefix.push(component);
-                        // A different spelling must not reuse a directory
-                        // already created on a case-folding filesystem.
-                        match probe.create_dir(&prefix) {
-                            Ok(()) => {}
-                            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
-                                let mut exact = false;
-                                let above = prefix.parent().unwrap_or(Path::new(""));
-                                let above = if above.as_os_str().is_empty() {
-                                    probe.try_clone()?
-                                } else {
-                                    probe.open_dir(above)?
-                                };
-                                for entry in above.entries()? {
-                                    if entry?.file_name() == component.as_os_str() {
-                                        exact = true;
-                                    }
-                                }
-                                if !exact {
-                                    return Err(error.into());
-                                }
-                            }
-                            Err(error) => return Err(error.into()),
-                        }
-                    }
+                    create_probe_directories(&probe, parent)?;
                 }
                 // Check the complete batch on the volume's filesystem before
                 // gix creates any refs; two new destinations can alias each other.
@@ -429,26 +449,31 @@ impl Snapshot {
         result
     }
 
-    /// Publishes everything staged, counting it against `quota`.
-    pub fn publish(mut self, quota: Option<&DiskQuota>) -> Result<()> {
+    /// Publishes everything staged, counting it against the size limit.
+    pub fn publish(mut self) -> Result<()> {
         let stage = self
             .stage
             .take()
             .ok_or_else(|| wasmtime::Error::msg("git: nothing to publish"))?;
         if self.config_changed {
-            stage.write_metadata("config", &self.original_config)?;
+            stage.write_metadata("config", &self.config)?;
         }
         let worktree = self.pending_worktree.borrow_mut().take();
-        if let (Some(quota), Some(written)) = (quota, self.created) {
-            quota.reserve(written).map_err(|exceeded| {
-                crate::runtime::host::quota_exceeded_error(format!("git: {exceeded}"))
-            })?;
-            if let Err(error) = stage.publish(worktree.as_ref(), Some(quota), &self.cancelled) {
-                quota.release(written);
-                return Err(error);
+        // A repository this operation created also counts the `.git` it began with.
+        let created = match (&self.quota, self.created) {
+            (Some(quota), Some(written)) => {
+                quota.reserve(written).map_err(|exceeded| {
+                    crate::runtime::host::quota_exceeded_error(format!("git: {exceeded}"))
+                })?;
+                written
             }
-        } else {
-            stage.publish(worktree.as_ref(), quota, &self.cancelled)?;
+            _ => 0,
+        };
+        if let Err(error) = stage.publish(worktree.as_ref(), &self.cancelled) {
+            if let Some(quota) = &self.quota {
+                quota.release(created);
+            }
+            return Err(error);
         }
         self.published = true;
         Ok(())
@@ -550,7 +575,7 @@ impl Snapshot {
 
     pub fn remotes(&self) -> Result<BTreeMap<String, String>> {
         let config = gix::config::File::from_bytes_no_includes(
-            &self.original_config,
+            &self.config,
             gix::config::file::Metadata::default(),
             Default::default(),
         )?;
@@ -590,24 +615,140 @@ impl Drop for Snapshot {
     }
 }
 
+/// Everything that must hold before gix opens `.git`, the repository directory
+/// `dir`'s: no stage left by an unfinished publication, nothing in `.git`
+/// that could lead gix outside it or into a loop, and a configuration small
+/// enough to parse. Returns the configuration.
+fn check_metadata(
+    dir: &Dir,
+    git: &Dir,
+    max_bytes: u64,
+    cancelled: &AtomicBool,
+    meter: &Meter,
+) -> Result<Vec<u8>> {
+    let metadata = dir.symlink_metadata(".git")?;
+    if !metadata.is_dir() || metadata.file_type().is_symlink() {
+        bail!("git: expected an ordinary .git directory");
+    }
+    super::stage::clear_abandoned(dir)?;
+    let summary = super::metadata_scan::scan(git, cancelled, meter)?;
+    validate_config_budget(&summary.config, max_bytes, cancelled)?;
+    if !summary.packs.is_empty() {
+        super::pack_index_check::check(
+            &git.open_dir("objects/pack")?,
+            &summary.packs,
+            super::pack_index_check::Limits {
+                max_objects: max_bytes / super::pack_index_check::check_bytes(1),
+                max_object_bytes: max_bytes,
+            },
+            cancelled,
+            meter,
+        )?;
+    }
+    Ok(summary.config)
+}
+
+/// Gives `repo` a stage to write to: new objects go to the stage's object
+/// store, references and `shallow` to the stage's copy of them.
+fn attach_stage(
+    repo: &mut gix::Repository,
+    location: &Location,
+    git: &Dir,
+    max_bytes: u64,
+    cancelled: &AtomicBool,
+    meter: &Arc<Meter>,
+    quota: Option<Arc<DiskQuota>>,
+) -> Result<Stage> {
+    let stage = Stage::create(&location.dir, &location.host, Arc::clone(meter), quota)?;
+    stage.copy_references(git, max_bytes, cancelled)?;
+    let objects = gix::odb::at_opts(
+        stage.host.join(super::stage::OBJECTS),
+        gix::hash::Kind::Sha1,
+        [],
+        gix::odb::store::init::Options {
+            use_multi_pack_index: false,
+            alloc_limit_bytes: Some(max_bytes as usize),
+            ..Default::default()
+        },
+    )?;
+    // Written objects go to the stage's store, not to memory.
+    repo.objects = gix::odb::memory::Proxy::from(objects).with_write_passthrough();
+    let references = stage.host.join(super::stage::REFS);
+    // Fetch rewrites `shallow` where gix finds it; let that be the copy.
+    let shallow = references.join("shallow");
+    let shallow = shallow
+        .to_str()
+        .ok_or_else(|| wasmtime::Error::msg("git: non-UTF-8 repository path"))?;
+    let mut config = repo.config_snapshot_mut();
+    config.set_raw_value_by("gitoxide", Some("core".into()), "shallowFile", shallow)?;
+    config.commit()?;
+    repo.refs = reference_store(references);
+    Ok(stage)
+}
+
+/// Creates the directories `parent` in `probe`, refusing one that a different
+/// spelling already created on a case-folding or normalizing filesystem.
+fn create_probe_directories(probe: &Dir, parent: &Path) -> Result<()> {
+    let mut prefix = PathBuf::new();
+    for component in parent.components() {
+        let above = prefix.clone();
+        prefix.push(component);
+        match probe.create_dir(&prefix) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                let above = if above.as_os_str().is_empty() {
+                    probe.try_clone()?
+                } else {
+                    probe.open_dir(&above)?
+                };
+                if !super::stage::has_exact_entry(&above, component.as_os_str())? {
+                    return Err(error.into());
+                }
+            }
+            Err(error) => return Err(error.into()),
+        }
+    }
+    Ok(())
+}
+
+/// The configuration gix runs with, in place of the repository's own, as
+/// (section, subsection, key, value).
+fn fixed_configuration(
+    max_bytes: u64,
+) -> [(&'static str, Option<&'static str>, &'static str, String); 9] {
+    [
+        (
+            "gitoxide",
+            Some("objects"),
+            "allocLimit",
+            max_bytes.to_string(),
+        ),
+        ("core", None, "logAllRefUpdates", "false".into()),
+        ("index", None, "threads", "1".into()),
+        ("core", None, "commitGraph", "false".into()),
+        ("core", None, "multiPackIndex", "false".into()),
+        ("core", None, "useReplaceRefs", "false".into()),
+        ("core", None, "deltaBaseCacheLimit", "0".into()),
+        ("gitoxide", Some("objects"), "cacheLimit", "0".into()),
+        // Ignore server ACK IDs instead of letting them introduce
+        // unvalidated local histories into the negotiation graph.
+        ("fetch", None, "negotiationAlgorithm", "noop".into()),
+    ]
+}
+
 /// Opens the `.git` at `git_dir` with a fixed configuration: the repository's
 /// own is read for nothing but locating the repository. Paths, helpers,
 /// includes, filters, hooks and external configuration are absent; remotes
 /// are parsed separately, without includes.
 fn open_in_place(git_dir: &Path, max_bytes: u64) -> Result<gix::Repository> {
-    let overrides = [
-        format!("gitoxide.objects.allocLimit={max_bytes}"),
-        "core.logAllRefUpdates=false".into(),
-        "index.threads=1".into(),
-        "core.commitGraph=false".into(),
-        "core.multiPackIndex=false".into(),
-        "core.useReplaceRefs=false".into(),
-        "core.deltaBaseCacheLimit=0".into(),
-        "gitoxide.objects.cacheLimit=0".into(),
-        // Ignore server ACK IDs instead of letting them introduce
-        // unvalidated local histories into the negotiation graph.
-        "fetch.negotiationAlgorithm=noop".into(),
-    ];
+    let fixed = fixed_configuration(max_bytes);
+    let overrides: Vec<String> = fixed
+        .iter()
+        .map(|(section, subsection, key, value)| match subsection {
+            Some(subsection) => format!("{section}.{subsection}.{key}={value}"),
+            None => format!("{section}.{key}={value}"),
+        })
+        .collect();
     let mut repo = gix::open_opts(
         git_dir,
         gix::open::Options::isolated()
@@ -622,21 +763,21 @@ fn open_in_place(git_dir: &Path, max_bytes: u64) -> Result<gix::Repository> {
             .config_overrides(overrides.iter().map(String::as_str)),
     )?;
     // Some values are read from the resolved configuration without the filter;
-    // replace it with the overrides alone.
-    let mut text =
-        String::from("[core]\nrepositoryformatversion = 0\nbare = false\nfilemode = true\n");
-    for value in &overrides {
-        let (key, value) = value.split_once('=').expect("override has a value");
-        let (section, name) = key.rsplit_once('.').expect("override has a section");
-        text.push_str(&format!("[{section}]\n{name} = {value}\n"));
+    // replace it with the fixed configuration alone.
+    let mut config = gix::config::File::new(gix::config::file::Metadata::api());
+    for (section, subsection, key, value) in [
+        ("core", None, "repositoryformatversion", "0".to_owned()),
+        ("core", None, "bare", "false".into()),
+        ("core", None, "filemode", "true".into()),
+    ]
+    .into_iter()
+    .chain(fixed)
+    {
+        config.set_raw_value_by(section, subsection.map(Into::into), key, value.as_str())?;
     }
-    let mut config = repo.config_snapshot_mut();
-    *config = gix::config::File::from_bytes_owned(
-        &mut text.into_bytes(),
-        gix::config::file::Metadata::api(),
-        Default::default(),
-    )?;
-    config.commit()?;
+    let mut snapshot = repo.config_snapshot_mut();
+    *snapshot = config;
+    snapshot.commit()?;
     repo.refs.write_reflog = gix::refs::store::WriteReflog::Disable;
     Ok(repo)
 }
@@ -653,23 +794,31 @@ fn reference_store(git_dir: PathBuf) -> gix::RefStore {
     )
 }
 
-fn read_bounded(dir: &Dir, path: &Path, limit: u64) -> Result<Vec<u8>> {
+/// The file at `path` in `dir`, refused past `limit` bytes; `None` if there
+/// is none.
+pub(super) fn read_bounded(dir: &Dir, path: &Path, limit: u64) -> Result<Option<Vec<u8>>> {
+    let file = match dir.open(path) {
+        Ok(file) => file,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error.into()),
+    };
     let mut bytes = Vec::new();
-    dir.open(path)?
-        .take(limit.saturating_add(1))
-        .read_to_end(&mut bytes)?;
+    file.take(limit.saturating_add(1)).read_to_end(&mut bytes)?;
     if bytes.len() as u64 > limit {
         return Err(memory_limit(&format!("metadata size ({})", path.display())));
     }
-    Ok(bytes)
+    Ok(Some(bytes))
 }
 
 pub(super) fn validate_metadata_path(path: &str) -> Result<()> {
     validate_path(path)?;
     let mut components = path.split('/');
-    let root = components.next().expect("validated nonempty path");
-    // Scratch storage may fold case or ignore Unicode characters even when the
-    // mounted repository does not. Classify structural names before copying.
+    let Some(root) = components.next() else {
+        bail!("git: invalid repository-relative path");
+    };
+    // A filesystem may fold case or ignore Unicode characters: refuse a
+    // structural name spelled any way but its own, which gix might take for
+    // the name, before gix reads `.git`.
     let uppercase_roots = [
         "HEAD",
         "ORIG_HEAD",
@@ -772,7 +921,7 @@ pub fn validate_branch(name: &str) -> Result<()> {
 }
 
 pub fn reject_in_progress(dir: &Dir) -> Result<()> {
-    // Check the original metadata: snapshots omit empty state directories.
+    // Each marker is a file or a directory native Git leaves while it works.
     for marker in [
         "rebase-apply",
         "rebase-merge",
@@ -799,9 +948,9 @@ pub fn validate_path(path: &str) -> Result<()> {
         || Path::new(path)
             .components()
             .any(|c| !matches!(c, Component::Normal(_)))
-        || path.split('/').any(|c| {
-            c.eq_ignore_ascii_case(".git") || c.to_ascii_lowercase().starts_with(".git-submilli-")
-        })
+        || path
+            .split('/')
+            .any(|c| c.eq_ignore_ascii_case(".git") || super::stage::is_stage_name(c))
     {
         bail!("git: invalid repository-relative path");
     }
@@ -861,7 +1010,7 @@ fn walk(
     depth: usize,
     visit: &mut VisitFile<'_>,
 ) -> Result<()> {
-    if depth > 64 {
+    if depth > MAX_NESTING {
         bail!("git: directory nesting limit exceeded");
     }
     for entry in dir.entries()? {
@@ -873,7 +1022,7 @@ fn walk(
             .file_name()
             .into_string()
             .map_err(|_| wasmtime::Error::msg("git: non-UTF-8 paths are unsupported"))?;
-        if worktree && (name.eq_ignore_ascii_case(".git") || name.starts_with(".git-submilli-")) {
+        if worktree && (name.eq_ignore_ascii_case(".git") || super::stage::is_stage_name(&name)) {
             if !prefix.is_empty() {
                 bail!("git: nested repositories are unsupported");
             }
@@ -1009,47 +1158,6 @@ fn read_file_entry(
     Ok((mode, content))
 }
 
-/// Creates the missing directories above the checked-out file `path`, each
-/// under the exact spelling given, refusing to go through a link, a file, or a
-/// directory spelled another way. Adds each directory it creates to `created`,
-/// outermost first, as it creates it, so a failure part way can be undone.
-pub(super) fn prepare_parent(dir: &Dir, path: &Path, created: &mut Vec<PathBuf>) -> Result<()> {
-    let Some(parent) = path.parent() else {
-        return Ok(());
-    };
-    let mut prefix = std::path::PathBuf::new();
-    for component in parent.components() {
-        prefix.push(component);
-        match dir.symlink_metadata(&prefix) {
-            Ok(metadata) if metadata.is_dir() && !metadata.file_type().is_symlink() => {
-                let parent = prefix.parent().unwrap_or(Path::new(""));
-                let parent = dir.open_dir(if parent.as_os_str().is_empty() {
-                    Path::new(".")
-                } else {
-                    parent
-                })?;
-                let mut exact = false;
-                for entry in parent.entries()? {
-                    if entry?.file_name() == component.as_os_str() {
-                        exact = true;
-                        break;
-                    }
-                }
-                if !exact {
-                    bail!("git: checkout directory spelling aliases an existing path");
-                }
-            }
-            Ok(_) => bail!("git: checkout path overlaps a file or symlink"),
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                dir.create_dir(&prefix)?;
-                created.push(prefix.clone());
-            }
-            Err(error) => return Err(error.into()),
-        }
-    }
-    Ok(())
-}
-
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;
@@ -1104,11 +1212,11 @@ mod tests {
     use super::super::stage::WorktreeChange;
 
     fn init(vfs: &crate::runtime::Vfs) -> Snapshot {
-        Snapshot::init(&Location::of_vfs(vfs), "main", Default::default(), 4096).unwrap()
+        Snapshot::init_unmetered(&Location::of_vfs(vfs), "main", Default::default(), 4096).unwrap()
     }
 
     fn open(vfs: &crate::runtime::Vfs, writes: bool) -> Result<Snapshot> {
-        Snapshot::open(&Location::of_vfs(vfs), Default::default(), 4096, writes)
+        Snapshot::open_unmetered(&Location::of_vfs(vfs), Default::default(), 4096, writes)
     }
 
     /// Stages `files` as new checked-out files.
@@ -1148,9 +1256,10 @@ mod tests {
             metadata.write(path, "untrusted metadata").unwrap();
             let cancelled = Arc::new(AtomicBool::new(false));
             let before = read_files(&metadata, false, &cancelled, 4096).unwrap();
-            let error = Snapshot::open(&Location::of_vfs(&vfs), cancelled.clone(), 4096, true)
-                .err()
-                .expect("metadata alias must be rejected before opening gix");
+            let error =
+                Snapshot::open_unmetered(&Location::of_vfs(&vfs), cancelled.clone(), 4096, true)
+                    .err()
+                    .expect("metadata alias must be rejected before opening gix");
             assert!(
                 error.to_string().contains("metadata path"),
                 "{path}: {error}"
@@ -1162,13 +1271,34 @@ mod tests {
         }
     }
 
+    /// The repository in `vfs`, opened to write under `quota`, created if `init`.
+    fn with_quota(
+        vfs: &crate::runtime::Vfs,
+        quota: &Arc<crate::runtime::DiskQuota>,
+        init: bool,
+    ) -> Result<Snapshot> {
+        let location = Location::of_vfs(vfs);
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let lock = RepositoryLock::acquire(location.identity, &cancelled)?;
+        let opening = Opening {
+            quota: Some(Arc::clone(quota)),
+            ..Opening::unmetered(cancelled, 4096)
+        };
+        if init {
+            Snapshot::init(&location, lock, "main", opening)
+        } else {
+            Snapshot::open(&location, lock, opening, true)
+        }
+    }
+
     #[test]
-    fn publication_is_refused_past_the_vfs_size_limit() {
+    fn a_checkout_is_refused_past_the_vfs_size_limit_as_it_is_staged() {
         let vfs = crate::runtime::Vfs::tempdir().unwrap();
-        let snapshot = init(&vfs);
-        stage_files(&snapshot, &[("notes.txt", 1000)]);
-        let quota = crate::runtime::DiskQuota::new(500, 0);
-        let error = snapshot.publish(Some(&quota)).unwrap_err();
+        let quota = Arc::new(crate::runtime::DiskQuota::new(500, 0));
+        let snapshot = with_quota(&vfs, &quota, true).unwrap();
+        let error = snapshot
+            .stage_worktree_file("notes.txt", 0o100644, &[b'x'; 1000])
+            .unwrap_err();
         assert!(error.to_string().contains("size limit"), "{error}");
         assert!(
             error
@@ -1176,17 +1306,18 @@ mod tests {
                 .is_some(),
             "a refusal is a QuotaExceededError the program can catch"
         );
-        assert_eq!(quota.used(), 0, "a refused publication claims nothing");
+        drop(snapshot);
+        assert_eq!(quota.used(), 0, "a refused checkout claims nothing");
         assert!(
             !vfs.dir().unwrap().try_exists(".git").unwrap(),
             "a repository that wasn't published is gone"
         );
 
         // With room, what publication adds is counted, and nothing else.
-        let snapshot = init(&vfs);
+        let roomy = Arc::new(crate::runtime::DiskQuota::new(1 << 20, 0));
+        let snapshot = with_quota(&vfs, &roomy, true).unwrap();
         stage_files(&snapshot, &[("notes.txt", 1000)]);
-        let roomy = crate::runtime::DiskQuota::new(1 << 20, 0);
-        snapshot.publish(Some(&roomy)).unwrap();
+        snapshot.publish().unwrap();
         assert_eq!(
             roomy.used(),
             crate::runtime::measure_dir(vfs.dir().unwrap()).unwrap()
@@ -1194,13 +1325,14 @@ mod tests {
     }
 
     #[test]
-    fn a_publication_that_replaces_more_than_it_writes_needs_no_room() {
+    fn a_publication_that_replaces_more_than_it_writes_frees_the_difference() {
         let vfs = crate::runtime::Vfs::tempdir().unwrap();
-        init(&vfs).publish(None).unwrap();
+        init(&vfs).publish().unwrap();
         let root = vfs.dir().unwrap();
         root.write("old.txt", vec![b'o'; 5000]).unwrap();
         let used = crate::runtime::measure_dir(root).unwrap();
-        let snapshot = open(&vfs, true).unwrap();
+        let tight = Arc::new(crate::runtime::DiskQuota::new(used + 1000, used));
+        let snapshot = with_quota(&vfs, &tight, false).unwrap();
         stage_files(&snapshot, &[("new.txt", 1000)]);
         snapshot
             .pending_worktree
@@ -1209,23 +1341,25 @@ mod tests {
             .unwrap()
             .remove
             .push("old.txt".into());
-        let tight = crate::runtime::DiskQuota::new(used + 10, used);
-        snapshot.publish(Some(&tight)).unwrap();
+        snapshot.publish().unwrap();
         assert_eq!(tight.used(), crate::runtime::measure_dir(root).unwrap());
     }
 
     #[test]
     fn a_new_repository_must_fit_the_size_limit() {
         let vfs = crate::runtime::Vfs::tempdir().unwrap();
-        let full = crate::runtime::DiskQuota::new(0, 0);
-        let error = init(&vfs).publish(Some(&full)).unwrap_err();
+        let full = Arc::new(crate::runtime::DiskQuota::new(0, 0));
+        let error = with_quota(&vfs, &full, true)
+            .unwrap()
+            .publish()
+            .unwrap_err();
         assert!(error.to_string().contains("size limit"), "{error}");
     }
 
     #[test]
     fn snapshot_bounds_configuration_event_expansion() {
         let vfs = crate::runtime::Vfs::tempdir().unwrap();
-        init(&vfs).publish(None).unwrap();
+        init(&vfs).publish().unwrap();
         let root = vfs.dir().unwrap();
         root.write(".git/config", format!("[core]\n{}", "a\n".repeat(64)))
             .unwrap();
@@ -1247,7 +1381,7 @@ mod tests {
     #[test]
     fn a_read_leaves_the_repository_as_it_was() {
         let vfs = crate::runtime::Vfs::tempdir().unwrap();
-        init(&vfs).publish(None).unwrap();
+        init(&vfs).publish().unwrap();
         let root = vfs.dir().unwrap();
         let cancelled = AtomicBool::new(false);
         let before = read_files(root, false, &cancelled, 1 << 20).unwrap();
@@ -1266,7 +1400,7 @@ mod tests {
         for (link, directory) in [("A", "a"), ("é", "e\u{301}")] {
             for mode in [0o100644, 0o120000] {
                 let vfs = crate::runtime::Vfs::tempdir().unwrap();
-                init(&vfs).publish(None).unwrap();
+                init(&vfs).publish().unwrap();
                 let root = vfs.dir().unwrap();
                 let head = root.read(".git/HEAD").unwrap();
                 let snapshot = open(&vfs, true).unwrap();
@@ -1282,7 +1416,7 @@ mod tests {
                         remove: Vec::new(),
                         place: vec![link.to_owned(), target],
                     });
-                    let _ = snapshot.publish(None);
+                    let _ = snapshot.publish();
                 }
                 assert_eq!(root.read(".git/HEAD").unwrap(), head);
             }
@@ -1293,13 +1427,13 @@ mod tests {
     #[test]
     fn checkout_refuses_symlink_parents() {
         let vfs = crate::runtime::Vfs::tempdir().unwrap();
-        init(&vfs).publish(None).unwrap();
+        init(&vfs).publish().unwrap();
         let root = vfs.dir().unwrap();
         let head = root.read(".git/HEAD").unwrap();
         root.symlink_contents(".git", "alias").unwrap();
         let snapshot = open(&vfs, true).unwrap();
         stage_files(&snapshot, &[("alias/HEAD", 9)]);
-        assert!(snapshot.publish(None).is_err());
+        assert!(snapshot.publish().is_err());
         assert_eq!(root.read(".git/HEAD").unwrap(), head);
     }
 }
@@ -1313,7 +1447,8 @@ mod alias_tests {
     fn reference_updates_reject_existing_and_prospective_filesystem_aliases() {
         let vfs = crate::runtime::Vfs::tempdir().unwrap();
         let snapshot =
-            Snapshot::init(&Location::of_vfs(&vfs), "main", Default::default(), 4096).unwrap();
+            Snapshot::init_unmetered(&Location::of_vfs(&vfs), "main", Default::default(), 4096)
+                .unwrap();
         for (first, second) in [("Main", "main"), ("é", "e\u{301}")] {
             let probe = tempfile::tempdir_in(vfs.root()).unwrap();
             std::fs::write(probe.path().join(first), "probe").unwrap();
@@ -1369,9 +1504,9 @@ mod alias_tests {
     fn checkout_preserves_distinct_root_metadata_aliases() {
         let vfs = crate::runtime::Vfs::tempdir().unwrap();
         let location = Location::of_vfs(&vfs);
-        Snapshot::init(&location, "main", Default::default(), 4096)
+        Snapshot::init_unmetered(&location, "main", Default::default(), 4096)
             .unwrap()
-            .publish(None)
+            .publish()
             .unwrap();
         let root = vfs.dir().unwrap();
         // A case-folding mount cannot hold this independent untracked directory.
@@ -1381,7 +1516,7 @@ mod alias_tests {
         root.create_dir(".GIT").unwrap();
         root.write(".GIT/keep", "untracked data").unwrap();
         let before = root.read(".git/HEAD").unwrap();
-        let snapshot = Snapshot::open(&location, Default::default(), 4096, true).unwrap();
+        let snapshot = Snapshot::open_unmetered(&location, Default::default(), 4096, true).unwrap();
         let error =
             super::super::operations::replace_worktree(&snapshot, &Entries::new()).unwrap_err();
         assert!(error.to_string().contains("noncanonical worktree metadata"));

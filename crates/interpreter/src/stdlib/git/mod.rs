@@ -54,6 +54,8 @@ struct Job {
     secrets: Arc<dyn SecretProvider>,
     http: Arc<dyn HttpClient>,
     runtime: tokio::runtime::Handle,
+    /// When the operation times out, waits included.
+    deadline: tokio::time::Instant,
     cancelled: Arc<AtomicBool>,
     max_bytes: u64,
     transferred: Arc<AtomicU64>,
@@ -82,6 +84,27 @@ impl Job {
             }
         }
     }
+    /// One of the workers Git shares across the process, waited for until
+    /// the operation's deadline or its cancellation.
+    fn worker_permit(&self) -> Result<tokio::sync::OwnedSemaphorePermit> {
+        let workers = WORKERS
+            .get_or_init(|| Arc::new(tokio::sync::Semaphore::new(4)))
+            .clone();
+        // Polled from the worker's own thread, which is not the runtime's.
+        loop {
+            match workers.clone().try_acquire_owned() {
+                Ok(permit) => return Ok(permit),
+                Err(tokio::sync::TryAcquireError::Closed) => bail!("git: workers closed"),
+                Err(tokio::sync::TryAcquireError::NoPermits) => {}
+            }
+            self.check_cancelled()?;
+            if tokio::time::Instant::now() >= self.deadline {
+                bail!("git: operation timed out");
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+    }
+
     fn check_cancelled(&self) -> Result<()> {
         if self.cancelled.load(Ordering::Relaxed) {
             bail!("git: operation cancelled");
@@ -404,16 +427,13 @@ async fn invoke(
         secrets: caller.data().secret_provider.clone(),
         http: caller.data().http_client.clone(),
         runtime: tokio::runtime::Handle::current(),
+        deadline,
         cancelled,
         max_bytes,
         transferred: Arc::new(AtomicU64::new(0)),
         meter: Default::default(),
         denial: Arc::new(Mutex::new(None)),
     };
-    let workers = WORKERS
-        .get_or_init(|| Arc::new(tokio::sync::Semaphore::new(4)))
-        .clone();
-    let permit = before_deadline(deadline, workers.acquire_owned()).await??;
     let vfs = caller.data().vfs.clone();
     let op = op.to_owned();
     let is_constructor = !method;
@@ -423,7 +443,6 @@ async fn invoke(
     let transferred = job.transferred.clone();
     let meter = job.meter.clone();
     let worker = caller.data_mut().blocking_work.spawn(move || {
-        let _permit = permit;
         job.check_cancelled()?;
         worker::run(&vfs, &job, &op, &args).map(|result| (result, budget))
     });
@@ -512,7 +531,7 @@ async fn decode_arguments(
     let path = crate::runtime::fs::guest_normalize("/", &path)?;
     if path
         .split('/')
-        .any(|part| part.eq_ignore_ascii_case(".git") || part.starts_with(".git-submilli-"))
+        .any(|part| part.eq_ignore_ascii_case(".git") || stage::is_stage_name(part))
     {
         bail!("git: repository path targets protected metadata");
     }
@@ -601,7 +620,7 @@ impl WorkingBudget {
     /// holds at most about three times what it counts.
     fn max_bytes(&self, op: &str) -> u64 {
         let ratio = if op == "diff" { 8 } else { 4 };
-        (self.bytes.saturating_sub(MIN_WORKING_BYTES / 4) / ratio).min(storage::MAX_BYTES)
+        (self.bytes.saturating_sub(MIN_WORKING_BYTES / 4) / ratio).min(storage::MAX_WORKING_BYTES)
     }
 }
 impl Drop for WorkingBudget {

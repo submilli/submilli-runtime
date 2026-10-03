@@ -155,46 +155,6 @@ impl HttpClient for UploadPack {
         panic!("Git must not use a redirect-following transport")
     }
 
-    async fn send_without_redirects(
-        &self,
-        request: &HttpRequest,
-    ) -> Result<HttpResponse, HttpError> {
-        use std::io::Write;
-        let (body, content_type) = if request.method == "GET" {
-            let mut body = b"001e# service=git-upload-pack\n0000".to_vec();
-            body.extend(native(
-                &self.repo,
-                &["upload-pack", "--stateless-rpc", "--advertise-refs", "."],
-            ));
-            (body, "application/x-git-upload-pack-advertisement")
-        } else {
-            let mut child = std::process::Command::new("git")
-                .arg("-C")
-                .arg(&self.repo)
-                .args(["upload-pack", "--stateless-rpc", "."])
-                .stdin(std::process::Stdio::piped())
-                .stdout(std::process::Stdio::piped())
-                .spawn()
-                .expect("spawn upload-pack");
-            child
-                .stdin
-                .take()
-                .expect("stdin")
-                .write_all(&request.body)
-                .expect("request body");
-            let output = child.wait_with_output().expect("upload-pack");
-            assert!(output.status.success());
-            (output.stdout, "application/x-git-upload-pack-result")
-        };
-        Ok(HttpResponse {
-            status: 200,
-            status_text: "OK".into(),
-            headers: vec![("content-type".into(), content_type.into())],
-            body,
-            final_url: request.url.clone(),
-        })
-    }
-
     /// Streams `upload-pack`'s output, so the server holds none of it: the
     /// measurement is of Git alone.
     async fn send_without_redirects_to(
@@ -204,10 +164,23 @@ impl HttpClient for UploadPack {
     ) -> Result<HttpResponse, HttpError> {
         use std::io::Write;
         if request.method == "GET" {
-            let mut response = self.send_without_redirects(request).await?;
-            body.write_all(&response.body).expect("write body");
-            response.body = Vec::new();
-            return Ok(response);
+            body.write_all(b"001e# service=git-upload-pack\n0000")
+                .expect("write body");
+            body.write_all(&native(
+                &self.repo,
+                &["upload-pack", "--stateless-rpc", "--advertise-refs", "."],
+            ))
+            .expect("write body");
+            return Ok(HttpResponse {
+                status: 200,
+                status_text: "OK".into(),
+                headers: vec![(
+                    "content-type".into(),
+                    "application/x-git-upload-pack-advertisement".into(),
+                )],
+                body: Vec::new(),
+                final_url: request.url.clone(),
+            });
         }
         let mut child = std::process::Command::new("git")
             .arg("-C")
@@ -593,9 +566,9 @@ fn clone_and_work(files: &[(String, usize)]) -> Result<Measured, String> {
     )
 }
 
-/// Under the default memory limit, a repository many times the old 2 MB
-/// ceiling is cloned, checked, committed to and switched, and the run's real
-/// peak memory stays within what it was charged.
+/// Under the default memory limit, a 10 MB repository of 1,000 files is
+/// cloned, checked, committed to and switched, and the run's real peak memory
+/// stays within what it was charged.
 #[test]
 fn a_large_repository_works_end_to_end_under_the_default_limit() {
     let _guard = TEST_LOCK

@@ -2,9 +2,10 @@
 //! would let gix read or write outside it or loop: links, special files,
 //! external object stores, linked worktrees, unknown pack files, and names a
 //! case-folding filesystem would merge. Only names and file types are read,
-//! never contents, except the small `config` and `HEAD`.
+//! never contents, except the small `config`. Nothing is changed: the scan
+//! runs for reads too, on volumes that may be read-only.
 use super::meter::Meter;
-use super::storage::validate_metadata_path;
+use super::storage::{MAX_NESTING, validate_metadata_path};
 use cap_std::fs::Dir;
 use std::io::Read;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -13,7 +14,6 @@ use wasmtime::{Result, bail};
 /// Directory entries a scan visits at most. Loose objects count, so this is
 /// far above `MAX_PATHS`, which bounds what Git holds in memory.
 const MAX_ENTRIES: usize = 1_000_000;
-const MAX_DEPTH: usize = 64;
 /// Larger configuration is refused; gix parses all of it.
 const MAX_CONFIG_BYTES: u64 = 1024 * 1024;
 
@@ -22,8 +22,6 @@ const MAX_CONFIG_BYTES: u64 = 1024 * 1024;
 pub(super) struct Summary {
     /// The repository's own configuration, read for Git to parse itself.
     pub config: Vec<u8>,
-    /// The size of `index`, 0 if there is none.
-    pub index_bytes: u64,
     /// The stems of the packs in `objects/pack`.
     pub packs: Vec<String>,
 }
@@ -70,11 +68,6 @@ pub(super) fn scan(git: &Dir, cancelled: &AtomicBool, meter: &Meter) -> Result<S
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
         Err(error) => return Err(error.into()),
     }
-    match git.symlink_metadata("index") {
-        Ok(meta) => summary.index_bytes = meta.len(),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-        Err(error) => return Err(error.into()),
-    }
     Ok(summary)
 }
 
@@ -87,7 +80,7 @@ struct Scan<'a> {
 
 impl Scan<'_> {
     fn walk(&mut self, dir: &Dir, prefix: &str, depth: usize) -> Result<()> {
-        if depth > MAX_DEPTH {
+        if depth > MAX_NESTING {
             bail!("git: directory nesting limit exceeded");
         }
         let loose = is_loose_object_directory(prefix);
@@ -111,10 +104,10 @@ impl Scan<'_> {
                 bail!("git: symlinks in repository metadata are unsupported: {path}");
             }
             if is_temporary(prefix, &name) {
-                // Left by a write that never finished. Nothing reads it, and
-                // this operation holds the repository.
+                // A write in progress, by native Git perhaps, or one that
+                // never finished. gix reads none of them; the object store
+                // never names them.
                 if kind.is_file() {
-                    dir.remove_file(&name)?;
                     continue;
                 }
                 bail!("git: unexpected temporary directory in repository metadata: {path}");
@@ -242,11 +235,14 @@ mod tests {
     }
 
     #[test]
-    fn removes_unfinished_object_writes() {
+    fn leaves_unfinished_object_writes_alone() {
         let (temp, git) = repository();
         std::fs::write(temp.path().join(".git/objects/.tmpAbC123"), "partial").unwrap();
+        std::fs::create_dir(temp.path().join(".git/objects/ab")).unwrap();
+        std::fs::write(temp.path().join(".git/objects/ab/tmp_obj_XYZ"), "partial").unwrap();
         scan(&git, &AtomicBool::new(false), &Meter::default()).unwrap();
-        assert!(!temp.path().join(".git/objects/.tmpAbC123").exists());
+        assert!(temp.path().join(".git/objects/.tmpAbC123").exists());
+        assert!(temp.path().join(".git/objects/ab/tmp_obj_XYZ").exists());
     }
 
     #[test]

@@ -156,30 +156,23 @@ impl std::error::Error for HttpError {}
 pub trait HttpClient: Send + Sync {
     async fn send(&self, req: &HttpRequest) -> Result<HttpResponse, HttpError>;
 
-    /// Git requires an exact destination: never follow redirects, even on the same host.
-    /// Embedders must opt in to this contract before Git can use their transport.
-    async fn send_without_redirects(&self, _req: &HttpRequest) -> Result<HttpResponse, HttpError> {
+    /// Sends `req` to exactly its URL, never following a redirect, even on
+    /// the same host, and writes the body to `body` as it arrives; the
+    /// returned response's `body` is empty. Git fetches through it, streaming
+    /// packs to disk, so an implementation holds one chunk in memory however
+    /// large `max_response_size` is.
+    ///
+    /// Embedders must opt in to this contract before Git can use their
+    /// transport: there is no buffering fallback, for the reason `download`
+    /// has none.
+    async fn send_without_redirects_to(
+        &self,
+        _req: &HttpRequest,
+        _body: &mut (dyn std::io::Write + Send),
+    ) -> Result<HttpResponse, HttpError> {
         Err(HttpError::Other(
             "transport does not support requests without redirects".into(),
         ))
-    }
-
-    /// [`send_without_redirects`](Self::send_without_redirects), writing the
-    /// body to `body` as it arrives instead of returning it; the returned
-    /// response's `body` is empty. Git streams fetched packs to disk through it.
-    ///
-    /// The default buffers the whole body first: an embedder whose responses
-    /// can be large should stream, so a fetch holds one chunk in memory.
-    async fn send_without_redirects_to(
-        &self,
-        req: &HttpRequest,
-        body: &mut (dyn std::io::Write + Send),
-    ) -> Result<HttpResponse, HttpError> {
-        let mut response = self.send_without_redirects(req).await?;
-        body.write_all(&response.body)
-            .map_err(|error| HttpError::Other(error.to_string()))?;
-        response.body = Vec::new();
-        Ok(response)
     }
 
     /// No default impl: the obvious "buffer via `send` then `write_all`" fallback
@@ -491,12 +484,6 @@ impl Deadline {
 impl HttpClient for ReqwestHttpClient {
     async fn send(&self, req: &HttpRequest) -> Result<HttpResponse, HttpError> {
         let resp = self.follow_redirects(req).await?;
-        read_response(resp, req.max_response_size).await
-    }
-
-    async fn send_without_redirects(&self, req: &HttpRequest) -> Result<HttpResponse, HttpError> {
-        let hop = self.initial_hop(req)?;
-        let resp = self.send_hop(&hop, &Deadline::new(req.timeout_ms)).await?;
         read_response(resp, req.max_response_size).await
     }
 

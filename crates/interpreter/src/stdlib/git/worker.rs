@@ -1,5 +1,5 @@
 //! Repository jobs run on the blocking pool and retain their VFS through cleanup.
-use super::{Job, location::Location, operations, storage, transport};
+use super::{Job, location::Location, lock::RepositoryLock, operations, storage, transport};
 
 use crate::runtime::fs::{ContainError, check_repository_clear_of_mounts};
 use crate::runtime::host::permission_denied_read_only;
@@ -29,14 +29,8 @@ pub(super) fn run(
     if writes(op) {
         refuse_read_only_repository(job, op, &placement)?;
     }
-    let quota = placement.quota();
-    let mut snapshot = open_snapshot(&root, &relative, &placement, job, op, creates, branch)?;
-    if let Some(quota) = quota {
-        // A fetch's responses are spooled and its pack written: each may take
-        // half of what the size limit leaves.
-        let room = quota.limit().saturating_sub(quota.used()) / 2;
-        snapshot.transfer.max_bytes = room.min(storage::MAX_TRANSFER);
-    }
+    let (mut snapshot, _permit) =
+        open_snapshot(&root, &relative, &placement, job, op, creates, branch)?;
     let mut changed = op == "init";
     let result = match op {
         "open" | "init" => Value::Null,
@@ -114,7 +108,7 @@ pub(super) fn run(
         _ => operations::read(&snapshot, op, args)?,
     };
     if changed {
-        snapshot.publish(quota.map(Arc::as_ref))?;
+        snapshot.publish()?;
     }
     Ok(Output::Json(result))
 }
@@ -199,7 +193,9 @@ fn authorize_operation(job: &Job, op: &str, args: &[Value], branch: &str) -> Res
 }
 
 /// `relative` is the repository's path within the volume `root` holds, `.` for
-/// the volume's own root.
+/// the volume's own root. The repository is held first, then one of the
+/// workers Git shares, so calls waiting on a busy repository don't keep
+/// others from working.
 fn open_snapshot(
     root: &cap_std::fs::Dir,
     relative: &std::path::Path,
@@ -208,7 +204,7 @@ fn open_snapshot(
     op: &str,
     create: bool,
     branch: &str,
-) -> Result<storage::Snapshot> {
+) -> Result<(storage::Snapshot, tokio::sync::OwnedSemaphorePermit)> {
     let mut prefix = std::path::PathBuf::new();
     for component in relative.components() {
         prefix.push(component);
@@ -238,24 +234,25 @@ fn open_snapshot(
     if writes(op) && !create {
         storage::reject_in_progress(&dir)?;
     }
+    let lock = RepositoryLock::acquire(location.identity, &job.cancelled)?;
+    let permit = job.worker_permit()?;
+    let opening = storage::Opening {
+        cancelled: job.cancelled.clone(),
+        max_bytes: job.max_bytes,
+        quota: placement.quota().cloned(),
+        meter: Arc::clone(&job.meter),
+    };
     let snapshot = if create {
-        storage::Snapshot::init_metered(
+        storage::Snapshot::init(
             &location,
+            lock,
             if branch.is_empty() { "main" } else { branch },
-            job.cancelled.clone(),
-            job.max_bytes,
-            Arc::clone(&job.meter),
+            opening,
         )?
     } else {
-        storage::Snapshot::open_metered(
-            &location,
-            job.cancelled.clone(),
-            job.max_bytes,
-            writes(op),
-            Arc::clone(&job.meter),
-        )?
+        storage::Snapshot::open(&location, lock, opening, writes(op))?
     };
-    Ok(snapshot)
+    Ok((snapshot, permit))
 }
 
 /// Whether `op` changes the repository, and so needs a stage.

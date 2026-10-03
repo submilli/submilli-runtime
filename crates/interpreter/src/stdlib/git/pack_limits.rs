@@ -3,7 +3,7 @@
 //! disk, so a pack larger than memory can be checked holding one entry's
 //! header and a small inflation buffer.
 use gix::odb::pack::data::entry::Header;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::io::{self, BufRead, Read};
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -25,10 +25,13 @@ pub(super) struct Limits {
 /// are dropped as they are read.
 const MAX_CONTROL_RECORDS: usize = 1_000_000;
 
+/// Checks one response read from `body`. `local` says whether the repository
+/// already has an object: a delta in the pack may name one as its base.
 pub(super) fn validate(
     body: &mut dyn BufRead,
     advertisement: bool,
     limits: Limits,
+    local: &dyn Fn(&gix::oid) -> bool,
     cancelled: &AtomicBool,
 ) -> io::Result<()> {
     check_cancelled(cancelled)?;
@@ -42,7 +45,7 @@ pub(super) fn validate(
     }
     if read == 4 && &start == b"PACK" {
         let mut pack = Counting::new(io::Cursor::new(start).chain(body));
-        validate_pack(&mut pack, limits, cancelled)?;
+        validate_pack(&mut pack, limits, local, cancelled)?;
         if pack.fill_buf()?.is_empty() {
             return Ok(());
         }
@@ -63,7 +66,7 @@ pub(super) fn validate(
     if pack.fill_buf()?.is_empty() {
         return Ok(());
     }
-    validate_pack(&mut pack, limits, cancelled)?;
+    validate_pack(&mut pack, limits, local, cancelled)?;
     if !pack.fill_buf()?.is_empty() {
         return Err(invalid("incomplete pack checksum or trailing pack data"));
     }
@@ -223,42 +226,63 @@ impl<R: BufRead> BufRead for Counting<R> {
 /// Checks a pack read from `pack`: its header and object count, each entry's
 /// declared size against what it inflates to, and the memory each delta chain
 /// needs once gix resolves it.
+///
+/// A chain's memory is followed through offset deltas, which name an earlier
+/// entry. A reference delta names its base by id, which is only known here
+/// for whole objects, hashed as they are inflated: its base must be one of
+/// those, or an object the repository has. Git sends offset deltas within a
+/// pack to a client that asks, as gix does, so a reference delta's base is
+/// otherwise the client's own.
 fn validate_pack<R: BufRead>(
     pack: &mut Counting<R>,
     limits: Limits,
+    local: &dyn Fn(&gix::oid) -> bool,
     cancelled: &AtomicBool,
 ) -> io::Result<()> {
-    let mut header = [0u8; 12];
-    pack.read_exact(&mut header)
-        .map_err(|_| invalid("incomplete pack header"))?;
-    if &header[..4] != b"PACK" {
+    let mut signature = [0u8; 4];
+    let mut version = [0u8; 4];
+    let mut count = [0u8; 4];
+    for field in [&mut signature, &mut version, &mut count] {
+        pack.read_exact(field)
+            .map_err(|_| invalid("incomplete pack header"))?;
+    }
+    if &signature != b"PACK" {
         return Err(invalid("invalid pack signature"));
     }
-    let version = u32::from_be_bytes(header[4..8].try_into().expect("four bytes"));
-    let count = u32::from_be_bytes(header[8..12].try_into().expect("four bytes"));
+    let version = u32::from_be_bytes(version);
+    let count = u32::from_be_bytes(count);
     if version != 2 {
         return Err(invalid("unsupported pack version"));
     }
     if count as u64 > limits.max_records as u64 {
-        return Err(invalid(
-            "pack object count exceeds what Git may index in the memory available",
-        ));
+        return Err(super::storage::memory_limit_io("pack object count"));
     }
     // What each entry needs in memory once resolved, by its offset: itself,
     // plus every base on its chain.
     let mut chains: HashMap<u64, u64> = HashMap::with_capacity(count as usize);
+    // The ids of the pack's whole objects, and the bases reference deltas name.
+    let mut whole = HashSet::new();
+    let mut named_bases = Vec::new();
     for _ in 0..count {
         check_cancelled(cancelled)?;
         let offset = pack.consumed;
         let entry = gix::odb::pack::data::Entry::from_read(pack, offset, 20)
             .map_err(|_| invalid("invalid pack object header"))?;
         if entry.decompressed_size > limits.max_object_bytes {
-            return Err(invalid(
-                "pack object size limit exceeded; it needs more memory than Git has free, so \
-                 raise max_execution_memory",
-            ));
+            return Err(super::storage::memory_limit_io("pack object size"));
         }
-        let prefix = inflate_entry(pack, entry.decompressed_size, cancelled)?;
+        let kind = match entry.header {
+            Header::Commit => Some(gix::objs::Kind::Commit),
+            Header::Tree => Some(gix::objs::Kind::Tree),
+            Header::Blob => Some(gix::objs::Kind::Blob),
+            Header::Tag => Some(gix::objs::Kind::Tag),
+            Header::OfsDelta { .. } | Header::RefDelta { .. } => None,
+        };
+        let inflated = inflate_entry(pack, entry.decompressed_size, kind, cancelled)?;
+        if let Some(id) = inflated.id {
+            whole.insert(id);
+        }
+        let prefix = inflated.prefix;
         let chain = match entry.header {
             Header::OfsDelta { base_distance } => {
                 let base = offset
@@ -273,8 +297,9 @@ fn validate_pack<R: BufRead>(
                 base.saturating_add(entry.decompressed_size)
                     .saturating_add(result)
             }
-            Header::RefDelta { .. } => {
-                // The base may come from the repository; only its size is known.
+            Header::RefDelta { base_id } => {
+                named_bases.push(base_id);
+                // A whole object, here or in the repository: its size is known.
                 let mut prefix = prefix.as_slice();
                 let base = delta_size(&mut prefix)?;
                 let result = delta_size(&mut prefix)?;
@@ -284,29 +309,48 @@ fn validate_pack<R: BufRead>(
             _ => entry.decompressed_size,
         };
         if chain > limits.max_chain_bytes {
-            return Err(invalid(
-                "a pack delta chain needs more memory than Git may use; raise \
-                 max_execution_memory",
-            ));
+            return Err(super::storage::memory_limit_io("pack delta chain"));
         }
         chains.insert(offset, chain);
     }
     let mut checksum = [0u8; 20];
     pack.read_exact(&mut checksum)
         .map_err(|_| invalid("incomplete pack checksum or trailing pack data"))?;
+    for base in named_bases {
+        check_cancelled(cancelled)?;
+        if !whole.contains(&base) && !local(&base) {
+            return Err(invalid(
+                "a pack delta's base is neither a whole object in the pack nor in the repository",
+            ));
+        }
+    }
     Ok(())
 }
 
-/// Inflates one entry from `input`, consuming exactly its compressed bytes,
-/// and returns the first bytes it inflates to: a delta's size header.
+/// What inflating an entry learned.
+struct Inflated {
+    /// The first bytes it inflates to: a delta's size header.
+    prefix: Vec<u8>,
+    /// A whole object's id.
+    id: Option<gix::ObjectId>,
+}
+
+/// Inflates one entry from `input`, consuming exactly its compressed bytes;
+/// a whole object of `kind` is hashed as it inflates.
 fn inflate_entry(
     input: &mut dyn BufRead,
     expected: u64,
+    kind: Option<gix::objs::Kind>,
     cancelled: &AtomicBool,
-) -> io::Result<Vec<u8>> {
+) -> io::Result<Inflated> {
     let mut decoder = flate2::Decompress::new(true);
     let mut output = [0u8; 8192];
     let mut prefix = Vec::with_capacity(20);
+    let mut hasher = kind.map(|kind| {
+        let mut hasher = gix::hash::hasher(gix::hash::Kind::Sha1);
+        hasher.update(&gix::objs::encode::loose_header(kind, expected));
+        hasher
+    });
     loop {
         check_cancelled(cancelled)?;
         let available = input.fill_buf()?;
@@ -324,12 +368,20 @@ fn inflate_entry(
             return Err(invalid("pack object exceeds declared inflated size"));
         }
         let written = (decoder.total_out() - previous_out) as usize;
-        prefix.extend_from_slice(&output[..written.min(20 - prefix.len())]);
+        let inflated = output.get(..written).unwrap_or_default();
+        prefix.extend_from_slice(inflated.get(..20 - prefix.len()).unwrap_or(inflated));
+        if let Some(hasher) = &mut hasher {
+            hasher.update(inflated);
+        }
         if status == flate2::Status::StreamEnd {
             if decoder.total_out() != expected {
                 return Err(invalid("pack object inflated size mismatch"));
             }
-            return Ok(prefix);
+            let id = hasher
+                .map(gix::hash::Hasher::try_finalize)
+                .transpose()
+                .map_err(|_| invalid("pack object hash failed"))?;
+            return Ok(Inflated { prefix, id });
         }
         if consumed == 0 && written == 0 {
             return Err(invalid("incomplete compressed pack object"));
@@ -380,6 +432,7 @@ mod tests {
                 max_object_bytes: budget,
                 max_chain_bytes: budget,
             },
+            &|_| true,
             &AtomicBool::new(false),
         )
     }
@@ -450,6 +503,40 @@ mod tests {
     }
 
     #[test]
+    fn a_reference_delta_names_a_whole_object_of_the_pack_or_of_the_repository() {
+        use gix::odb::pack::data::entry::Header;
+        let base = b"base contents".as_slice();
+        let base_id =
+            gix::objs::compute_hash(gix::hash::Kind::Sha1, gix::objs::Kind::Blob, base).unwrap();
+        // Copies the whole 13-byte base.
+        let delta = [13, 13, 0x90, 13];
+        let pack = |entries: &[Vec<u8>]| complete_pack(entries);
+        let limits = Limits {
+            max_records: 16,
+            max_object_bytes: BUDGET,
+            max_chain_bytes: BUDGET,
+        };
+        let check = |body: &[u8], local: bool| {
+            super::validate(
+                &mut io::Cursor::new(body),
+                false,
+                limits,
+                &|_| local,
+                &AtomicBool::new(false),
+            )
+        };
+        let in_pack = pack(&[
+            compressed_entry(Header::Blob, base),
+            compressed_entry(Header::RefDelta { base_id }, &delta),
+        ]);
+        check(&in_pack, false).unwrap();
+        let thin = pack(&[compressed_entry(Header::RefDelta { base_id }, &delta)]);
+        check(&thin, true).unwrap();
+        let error = check(&thin, false).unwrap_err();
+        assert!(error.to_string().contains("neither"), "{error}");
+    }
+
+    #[test]
     fn a_pack_larger_than_the_budget_passes_when_each_chain_fits() {
         use gix::odb::pack::data::entry::Header;
         let entry = compressed_entry(Header::Blob, &vec![0; 700_000]);
@@ -480,6 +567,7 @@ mod tests {
                     max_object_bytes: BUDGET,
                     max_chain_bytes: BUDGET,
                 },
+                &|_| true,
                 &AtomicBool::new(true),
             )
             .is_err()

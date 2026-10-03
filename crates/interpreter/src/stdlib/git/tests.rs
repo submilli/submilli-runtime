@@ -238,10 +238,10 @@ fn patches_apply_file_lifecycle_and_mode_changes_with_native_git() {
     symlink("target", repo.join("type-change")).unwrap();
     native(repo, &["add", "."]);
     let expected_tree = native(repo, &["write-tree"]);
-    let snapshot = storage::Snapshot::open(
+    let snapshot = storage::Snapshot::open_unmetered(
         &location::Location::at(repo),
         Arc::new(AtomicBool::new(false)),
-        storage::MAX_BYTES,
+        storage::MAX_WORKING_BYTES,
         false,
     )
     .unwrap();
@@ -284,9 +284,10 @@ impl HttpClient for GitServer {
     > {
         panic!("Git must not use a redirect-following transport")
     }
-    async fn send_without_redirects(
+    async fn send_without_redirects_to(
         &self,
         request: &crate::stdlib::http::transport::HttpRequest,
+        body_out: &mut (dyn std::io::Write + Send),
     ) -> std::result::Result<
         crate::stdlib::http::transport::HttpResponse,
         crate::stdlib::http::transport::HttpError,
@@ -335,11 +336,12 @@ impl HttpClient for GitServer {
             assert!(output.status.success());
             (output.stdout, "application/x-git-upload-pack-result")
         };
+        body_out.write_all(&body).unwrap();
         Ok(crate::stdlib::http::transport::HttpResponse {
             status: 200,
             status_text: "OK".into(),
             headers: vec![("content-type".into(), content_type.into())],
-            body,
+            body: Vec::new(),
             final_url: request.url.clone(),
         })
     }

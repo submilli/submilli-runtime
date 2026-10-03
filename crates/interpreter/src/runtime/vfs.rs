@@ -14,7 +14,6 @@
 //! size limit, and a guest path is routed to exactly one of them by
 //! [`Vfs::locate`] before anything is opened.
 
-use std::collections::HashSet;
 use std::ffi::OsString;
 use std::fmt;
 use std::io;
@@ -563,27 +562,6 @@ pub fn regular_files(root: &Dir, max_entries: usize) -> io::Result<Vec<(FileIden
     let mut files = Vec::new();
     for_each_regular_file(root, max_entries, |file, bytes| files.push((file, bytes)))?;
     Ok(files)
-}
-
-/// The bytes the regular files under `root` hold, and those of them in `held` with
-/// their sizes, from one walk: what a change replacing them frees is the total less
-/// the held ones, which stay on disk until released.
-pub fn measure_with_held(
-    root: &Dir,
-    held: &HashSet<FileIdentity>,
-) -> io::Result<(u64, Vec<(FileIdentity, u64)>)> {
-    if held.is_empty() {
-        return Ok((measure_dir(root)?, Vec::new()));
-    }
-    let mut total: u64 = 0;
-    let mut held_files = Vec::new();
-    for_each_regular_file(root, MAX_MEASURED_ENTRIES, |file, bytes| {
-        total = total.saturating_add(bytes);
-        if held.contains(&file) {
-            held_files.push((file, bytes));
-        }
-    })?;
-    Ok((total, held_files))
 }
 
 /// Visit each regular file under `root`. Links are never followed, so a link cannot

@@ -5,7 +5,7 @@
 //! tracked too: an open file's data stays on disk after its name is removed, so
 //! its bytes are freed when the last handle closes rather than when the name goes.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::fmt;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
@@ -141,11 +141,6 @@ impl DiskQuota {
         self.open_files().get(&file).is_some_and(|held| held.writer)
     }
 
-    /// Every file a reader or writer holds open.
-    pub fn held_files(&self) -> HashSet<FileIdentity> {
-        self.open_files().keys().copied().collect()
-    }
-
     /// A regular file's name was removed or replaced: free its `bytes` now, or
     /// when the last reader holding it closes. A writer's own file is left for
     /// the writer to settle.
@@ -158,20 +153,6 @@ impl DiskQuota {
                 drop(open);
                 self.release(bytes);
             }
-        }
-    }
-
-    /// A held file's name vanished in a change counted by measuring the
-    /// directory, which already stopped counting its `bytes`: count them again
-    /// until the handles holding it close. A writer's own file is the writer's
-    /// to settle; a reader's is freed when the last reader closes.
-    pub fn count_while_held(&self, file: FileIdentity, bytes: u64) {
-        self.record(bytes);
-        let mut open = self.open_files();
-        if let Some(held) = open.get_mut(&file)
-            && !held.writer
-        {
-            held.pending = held.pending.saturating_add(bytes);
         }
     }
 
@@ -590,17 +571,6 @@ mod tests {
             40,
             "releasing it is the writer's charge's job"
         );
-    }
-
-    #[test]
-    fn a_held_file_that_vanished_is_counted_until_its_reader_closes() {
-        let quota = Arc::new(DiskQuota::new(100, 0));
-        let file = identity();
-        let reader = quota.hold(file, Holder::Reader);
-        quota.count_while_held(file, 30);
-        assert_eq!(quota.used(), 30);
-        drop(reader);
-        assert_eq!(quota.used(), 0);
     }
 
     /// The identity of a fresh file, for tests that need one.

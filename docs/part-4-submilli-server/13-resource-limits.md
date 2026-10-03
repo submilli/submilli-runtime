@@ -222,23 +222,30 @@ size counts against the volume's `size_limit`, not against memory:
 - **Memory.** Git's work counts against `max_execution_memory`, but it holds
   what one operation touches, not the repository: the paths it lists, and one
   file at a time. Under the default 50 MB, Git takes a file of up to about
-  8 MB and a diff of up to about 4 MB, and tens of thousands of paths. A larger
-  one fails with an error that says to raise `max_execution_memory`.
-- **Size.** A fetch may bring at most half of what the `size_limit` leaves,
-  or 4 GB without one.
-  Directories nest at most 64 levels. A new branch or remote name is at most
-  250 bytes. A history page returns at most 1,000 commits, 50 by default.
+  8 MB, a diff of up to about 4 MB, and tens of thousands of paths. A file,
+  diff or listing larger than that fails with an error that says to raise
+  `max_execution_memory`. So does a repository whose packs hold more than
+  about 50,000 objects under the default.
+- **Size.** Directories nest at most 64 levels. A new branch or remote name
+  is at most 250 bytes. A history page returns at most 1,000 commits, 50 by
+  default.
 - **Packs.** Git uses a repository's packs with the indexes native Git wrote
   for them. A pack without a valid index is refused; run `git index-pack` on
   it.
-- **Time.** Each operation has 60 seconds, including the wait for one of the
-  four Git workers a server shares among all its programs.
-- **Fetch.** A fetch downloads the history it needs without first telling the
-  remote what is already present, so it may transfer objects the repository
-  has.
+- **Time.** Each operation has 60 seconds, including the waits for another
+  operation on the same repository and for one of the four Git workers a
+  server shares among all its programs.
+- **Fetch.** A fetch may bring at most half of what the `size_limit` leaves,
+  or 4 GB without one. It downloads the history it needs without first
+  telling the remote what is already present, so it may transfer objects the
+  repository has.
 
 An operation that passes a limit fails with an error that names it, and the
-repository is left as it was.
+repository is left as it was. A change is staged in a `.git-submilli-…`
+directory beside `.git` and moved into place at the end. If the server stops
+while it is moving files, that directory stays behind with what it replaced,
+and Git refuses the repository until it is recovered: restore the repository,
+from a backup or by cloning it again, then remove the directory.
 
 ## With a coding agent
 

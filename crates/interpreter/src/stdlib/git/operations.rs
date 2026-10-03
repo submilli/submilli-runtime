@@ -5,7 +5,6 @@ use super::storage::{
 use gix::bstr::ByteSlice;
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
-use std::io::Read;
 use wasmtime::{Result, bail};
 
 pub fn read(snapshot: &Snapshot, op: &str, args: &[Value]) -> Result<Value> {
@@ -59,7 +58,7 @@ fn walk_tree(
     depth: usize,
 ) -> Result<()> {
     snapshot.check_cancelled()?;
-    if depth > 64 {
+    if depth > super::storage::MAX_NESTING {
         bail!("git: tree nesting limit exceeded");
     }
     let tree = snapshot.repo.find_tree(id)?;
@@ -108,6 +107,7 @@ fn walk_tree(
     Ok(())
 }
 
+// Test instrumentation, compiled into tests only.
 #[cfg(test)]
 thread_local! {
     /// How many times this thread checked a file set, so a test can show that
@@ -346,14 +346,17 @@ fn diff(snapshot: &Snapshot, options: &Value) -> Result<Value> {
         .get("mode")
         .and_then(Value::as_str)
         .unwrap_or("working");
-    let after_source = if mode == "working" {
-        Source::Worktree
-    } else {
-        Source::Objects
-    };
-    let (before, after) = match mode {
-        "working" => (index_entries(snapshot)?, snapshot.worktree()?),
-        "staged" => (head_entries(snapshot)?, index_entries(snapshot)?),
+    let (before, after, after_source) = match mode {
+        "working" => (
+            index_entries(snapshot)?,
+            snapshot.worktree()?,
+            Source::Worktree,
+        ),
+        "staged" => (
+            head_entries(snapshot)?,
+            index_entries(snapshot)?,
+            Source::Objects,
+        ),
         "refs" => (
             resolve_tree(
                 snapshot,
@@ -367,6 +370,7 @@ fn diff(snapshot: &Snapshot, options: &Value) -> Result<Value> {
                     .as_str()
                     .ok_or_else(|| wasmtime::Error::msg("git.diff: to is required"))?,
             )?,
+            Source::Objects,
         ),
         _ => bail!("git.diff: mode must be working, staged, or refs"),
     };
@@ -639,8 +643,10 @@ pub fn replace_worktree(snapshot: &Snapshot, next: &Entries) -> Result<()> {
     }
     validate_file_set(next)?;
     let mut change = super::stage::WorktreeChange::default();
-    for path in previous.keys() {
-        if !next.contains_key(path) {
+    // Every file that goes or changes is removed before any is placed, so a
+    // file can take a directory's place, or a name differing only in case.
+    for (path, entry) in &previous {
+        if next.get(path) != Some(entry) {
             change.remove.push(path.clone());
         }
     }
@@ -672,7 +678,7 @@ pub fn set_remote(snapshot: &mut Snapshot, name: &str, url: &str, add: bool) -> 
         );
     }
     let mut config = gix::config::File::from_bytes_no_includes(
-        &snapshot.original_config,
+        &snapshot.config,
         gix::config::file::Metadata::default(),
         Default::default(),
     )?;
@@ -699,15 +705,12 @@ fn remove_ignored(snapshot: &Snapshot, work: &mut Entries, index: &Entries) -> R
     snapshot.check_cancelled()?;
     let mut search = gix::ignore::Search::default();
     let mut budget = IgnoreBudget::default();
-    match snapshot.dir.open(".git/info/exclude") {
-        Ok(file) => {
-            let mut bytes = Vec::new();
-            file.take(snapshot.max_bytes.saturating_add(1))
-                .read_to_end(&mut bytes)?;
-            budget.add(snapshot, &mut search, &bytes, ".gitignore")?;
-        }
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-        Err(error) => return Err(error.into()),
+    if let Some(bytes) = super::storage::read_bounded(
+        &snapshot.dir,
+        std::path::Path::new(".git/info/exclude"),
+        snapshot.max_bytes,
+    )? {
+        budget.add(snapshot, &mut search, &bytes, ".gitignore")?;
     }
     for (path, (mode, _)) in work.iter() {
         snapshot.check_cancelled()?;
@@ -798,7 +801,7 @@ mod tests {
     #[test]
     fn log_accepts_large_offsets_and_returns_followable_pages() {
         let vfs = crate::runtime::Vfs::tempdir().unwrap();
-        let snapshot = Snapshot::init(
+        let snapshot = Snapshot::init_unmetered(
             &crate::stdlib::git::location::Location::of_vfs(&vfs),
             "main",
             Default::default(),
@@ -838,7 +841,7 @@ mod tests {
     #[test]
     fn ignore_patterns_bound_decoded_memory_matching_work_and_cancellation() {
         let vfs = crate::runtime::Vfs::tempdir().unwrap();
-        let snapshot = Snapshot::init(
+        let snapshot = Snapshot::init_unmetered(
             &crate::stdlib::git::location::Location::of_vfs(&vfs),
             "main",
             Default::default(),
@@ -887,7 +890,7 @@ mod tests {
     #[test]
     fn staging_bounds_requests_and_unions_duplicate_selections() {
         let vfs = crate::runtime::Vfs::tempdir().unwrap();
-        let snapshot = Snapshot::init(
+        let snapshot = Snapshot::init_unmetered(
             &crate::stdlib::git::location::Location::of_vfs(&vfs),
             "main",
             Default::default(),
@@ -920,7 +923,7 @@ mod tests {
     #[test]
     fn nested_trees_charge_unvisited_entries_before_descending() {
         let vfs = crate::runtime::Vfs::tempdir().unwrap();
-        let snapshot = Snapshot::init(
+        let snapshot = Snapshot::init_unmetered(
             &crate::stdlib::git::location::Location::of_vfs(&vfs),
             "main",
             Default::default(),
@@ -960,7 +963,7 @@ mod tests {
     #[test]
     fn loading_a_tree_checks_its_file_set_once() {
         let vfs = crate::runtime::Vfs::tempdir().unwrap();
-        let snapshot = Snapshot::init(
+        let snapshot = Snapshot::init_unmetered(
             &crate::stdlib::git::location::Location::of_vfs(&vfs),
             "main",
             Default::default(),
@@ -994,7 +997,7 @@ mod tests {
     fn status_and_add_hash_files_without_reading_them_whole() {
         let vfs = crate::runtime::Vfs::tempdir().unwrap();
         // Far less memory than the file holds.
-        let snapshot = Snapshot::init(
+        let snapshot = Snapshot::init_unmetered(
             &crate::stdlib::git::location::Location::of_vfs(&vfs),
             "main",
             Default::default(),

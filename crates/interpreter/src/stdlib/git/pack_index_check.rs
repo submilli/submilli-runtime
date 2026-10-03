@@ -25,6 +25,8 @@ use wasmtime::{Result, bail};
 /// Deeper chains than native Git ever writes (its `--depth` caps at 4095).
 const MAX_DELTA_DEPTH: u32 = 4095;
 const IDX_MAGIC: [u8; 4] = [0xff, b't', b'O', b'c'];
+/// An object's name, CRC and offset in a version 2 index.
+const INDEX_ENTRY: u64 = HASH as u64 + 8;
 const FANOUT: usize = 8;
 const NAMES: usize = FANOUT + 256 * 4;
 const HASH: usize = 20;
@@ -45,9 +47,12 @@ pub(super) struct Limits {
 
 /// The memory a check of `objects` objects holds, at most.
 pub(super) fn check_bytes(objects: u64) -> u64 {
-    // Each index's names and offsets (28 bytes an object), plus the graph:
+    // The index as read (about 28 bytes an object, while it is checked),
+    // its names and offsets kept (28), the entries by offset (16), a list of
+    // bases each (24, and 64 for one with a base), a depth (4), and the set of
+    // offsets seen (about 16): a little over 180 bytes an object.
     // an offset, a base and a depth an object.
-    objects.saturating_mul(28 + 8 + 16 + 8)
+    objects.saturating_mul(INDEX_ENTRY + 8 + 16 + 24 + 64 + 4 + 16)
 }
 
 /// One pack and its index, as they are on disk: what a cached verdict is about.
@@ -263,9 +268,12 @@ fn read_index(packs: &Dir, stem: &str, max_objects: u64, cancelled: &AtomicBool)
         return Err(corrupt("pack too short"));
     }
     let index_len = packs.symlink_metadata(format!("{stem}.idx"))?.len();
-    let most = NAMES as u64 + max_objects.saturating_mul(28 + 8) + 2 * HASH as u64;
+    // Each object's name, CRC and offset, and at most a large offset too.
+    let most = NAMES as u64 + max_objects.saturating_mul(INDEX_ENTRY + 8) + 2 * HASH as u64;
     if index_len > most {
-        bail!("git: pack {stem} holds more objects than Git may check in the memory available");
+        return Err(super::storage::memory_limit(&format!(
+            "pack index size ({stem})"
+        )));
     }
     let mut bytes = Vec::with_capacity(index_len as usize);
     packs
@@ -275,7 +283,7 @@ fn read_index(packs: &Dir, stem: &str, max_objects: u64, cancelled: &AtomicBool)
     if bytes.len() < NAMES + 2 * HASH || bytes[..4] != IDX_MAGIC {
         return Err(corrupt("not a version 2 index"));
     }
-    if u32::from_be_bytes(bytes[4..8].try_into().expect("four bytes")) != 2 {
+    if be_u32(&bytes, 4) != Some(2) {
         return Err(corrupt("not a version 2 index"));
     }
     let checksum_at = bytes.len() - HASH;
@@ -289,15 +297,13 @@ fn read_index(packs: &Dir, stem: &str, max_objects: u64, cancelled: &AtomicBool)
     if trailer != bytes[checksum_at - HASH..checksum_at] {
         return Err(corrupt("it describes another pack"));
     }
-    let fanout = |byte: usize| -> u64 {
-        let at = FANOUT + byte * 4;
-        u64::from(u32::from_be_bytes(
-            bytes[at..at + 4].try_into().expect("four bytes"),
-        ))
-    };
+    // In bounds: the index is longer than its fanout table.
+    let fanout = |byte: usize| -> u64 { be_u32(&bytes, FANOUT + byte * 4).map_or(0, u64::from) };
     let count = fanout(255);
     if count > max_objects {
-        bail!("git: pack {stem} holds more objects than Git may check in the memory available");
+        return Err(super::storage::memory_limit(&format!(
+            "pack object count ({stem})"
+        )));
     }
     let count = count as usize;
     let small = NAMES + count * (HASH + 4);
@@ -334,7 +340,7 @@ fn read_index(packs: &Dir, stem: &str, max_objects: u64, cancelled: &AtomicBool)
             return Err(corrupt("fanout"));
         }
         let at = small + position * 4;
-        let raw = u32::from_be_bytes(bytes[at..at + 4].try_into().expect("four bytes"));
+        let raw = be_u32(&bytes, at).ok_or_else(|| corrupt("offset"))?;
         let offset = if raw & 0x8000_0000 == 0 {
             u64::from(raw)
         } else {
@@ -343,7 +349,7 @@ fn read_index(packs: &Dir, stem: &str, max_objects: u64, cancelled: &AtomicBool)
                 return Err(corrupt("offset"));
             }
             let at = large + slot * 8;
-            u64::from_be_bytes(bytes[at..at + 8].try_into().expect("eight bytes"))
+            be_u64(&bytes, at).ok_or_else(|| corrupt("offset"))?
         };
         if offset < 12 || offset >= pack_len - HASH as u64 || !seen.insert(offset) {
             return Err(corrupt("offset"));
@@ -509,6 +515,15 @@ fn check_graph(
     Ok(())
 }
 
+/// The big-endian number at `at` in `bytes`, if they reach that far.
+fn be_u32(bytes: &[u8], at: usize) -> Option<u32> {
+    Some(u32::from_be_bytes(*bytes.get(at..)?.first_chunk()?))
+}
+
+fn be_u64(bytes: &[u8], at: usize) -> Option<u64> {
+    Some(u64::from_be_bytes(*bytes.get(at..)?.first_chunk()?))
+}
+
 fn read_at(file: &std::fs::File, offset: u64, buf: &mut [u8]) -> std::io::Result<()> {
     #[cfg(unix)]
     {
@@ -624,7 +639,7 @@ mod tests {
 
     fn open(temp: &tempfile::TempDir) -> wasmtime::Result<Snapshot> {
         super::forget();
-        Snapshot::open(
+        Snapshot::open_unmetered(
             &Location::at(temp.path()),
             Default::default(),
             BUDGET,
