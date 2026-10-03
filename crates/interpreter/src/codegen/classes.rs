@@ -689,6 +689,10 @@ impl ClassPlan {
                 ..fieldtype_ref(intrinsics.object_fields)
             },
             FieldType {
+                element_type: StorageType::Val(ValType::Ref(RefType::ANYREF)),
+                mutable: true,
+            },
+            FieldType {
                 element_type: StorageType::Val(ValType::I64),
                 mutable: true,
             },
@@ -1324,6 +1328,7 @@ impl ClassPlan {
             array_type_index: intrinsics.object_fields,
             array_size: payload_len,
         });
+        emitter.instruction(Instruction::RefNull(HeapType::ANY));
         emitter.instruction(Instruction::I64Const(0));
         emitter.instruction(Instruction::StructNew(class.struct_type_idx));
         emitter.instruction(Instruction::LocalSet(this_slot));

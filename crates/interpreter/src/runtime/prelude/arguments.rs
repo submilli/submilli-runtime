@@ -144,6 +144,7 @@ fn empty_object(caller: &mut Caller<'_, StoreData>) -> wasmtime::Result<Val> {
                 vtable,
                 Val::AnyRef(Some(names.to_anyref())),
                 Val::AnyRef(Some(fields.to_anyref())),
+                Val::AnyRef(None),
             ],
         )?
         .to_anyref(),

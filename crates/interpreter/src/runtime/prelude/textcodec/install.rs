@@ -56,7 +56,11 @@ fn new_instance(caller: &mut Caller<'_, StoreData>) -> wasmtime::Result<Val> {
         Val::AnyRef(Some(arr.to_anyref()))
     };
     let pre = StructRefPre::new(&mut *caller, intr.object_shape.clone());
-    let st = StructRef::new(&mut *caller, &pre, &[vtable, names, fields])?;
+    let st = StructRef::new(
+        &mut *caller,
+        &pre,
+        &[vtable, names, fields, Val::AnyRef(None)],
+    )?;
     Ok(Val::AnyRef(Some(st.to_anyref())))
 }
 

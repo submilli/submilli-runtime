@@ -118,6 +118,10 @@ fn class_types(
             intr.object_fields.clone().into(),
         ))),
     ));
+    def.field(wasmtime::FieldType::new(
+        wasmtime::Mutability::Var,
+        wasmtime::StorageType::ValType(ValType::Ref(RefType::ANYREF)),
+    ));
     def.field(FieldType::new(
         Mutability::Var,
         StorageType::ValType(ValType::I64),
@@ -413,6 +417,7 @@ fn new_instance(
             vtable,
             names,
             Val::AnyRef(Some(fields.to_anyref())),
+            Val::AnyRef(None),
             Val::I64(0),
         ],
     )?;

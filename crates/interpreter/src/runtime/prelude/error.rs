@@ -10,7 +10,7 @@
 //! The engine matches tag imports by exact canonical type identity, so the
 //! payload `FuncType` is built from the canonical intrinsic `$Error` struct type.
 //!
-//! `$Error` is class-shaped (see `codegen/intrinsics.rs`): the three
+//! `$Error` is class-shaped (see `codegen/intrinsics.rs`): the four
 //! `$ObjectShape` header slots plus a mutable identity ID, with `message` at payload slot 0
 //! and `name` at slot 1. Construction is host-only — guests call the imported
 //! constructor; a user subclass's `super(...)` calls the self-first ctor-init.
@@ -206,6 +206,10 @@ pub(crate) fn build_error_subclass_types(
             false,
             intr.object_fields.clone().into(),
         ))),
+    ));
+    def.field(wasmtime::FieldType::new(
+        wasmtime::Mutability::Var,
+        wasmtime::StorageType::ValType(ValType::Ref(RefType::ANYREF)),
     ));
     def.field(wasmtime::FieldType::new(
         wasmtime::Mutability::Var,
@@ -703,6 +707,7 @@ fn construct(
             vtable,
             field_names,
             Val::AnyRef(Some(payload.to_anyref())),
+            Val::AnyRef(None),
             Val::I64(0),
         ],
     )?;

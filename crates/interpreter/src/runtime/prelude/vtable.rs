@@ -328,7 +328,10 @@ fn string_to_json(
     build_string(caller, raw_string, string_ty, vtable, &escaped)
 }
 
-fn string_hash(caller: &mut Caller<'_, StoreData>, value: &Val) -> wasmtime::Result<u32> {
+pub(super) fn string_hash(
+    caller: &mut Caller<'_, StoreData>,
+    value: &Val,
+) -> wasmtime::Result<u32> {
     let string = as_struct(caller, value, "String#hash")?;
     let Val::I64(cached) = string.field(&mut *caller, 2)? else {
         return Err(crate::runtime::host::fatal_host_error(
@@ -766,7 +769,7 @@ fn json_property_slots(
     let names = super::object::field_array(caller, &object, 1)?;
     let values = super::object::field_array(caller, &object, 2)?;
     let mut entries = Vec::new();
-    for slot in 0..names.len(&mut *caller)? {
+    for slot in 0..super::object::field_count(caller, recv)? {
         let name = names.get(&mut *caller, slot)?;
         if super::object::field_is_private(caller, &name)? {
             continue;
@@ -817,19 +820,40 @@ async fn object_equals(
         return Ok(false);
     }
 
-    let lhs = read_object_entries(caller, recv, "Object#equals receiver")?;
-    let Ok(rhs) = read_object_entries(caller, other, "Object#equals other") else {
-        return Ok(false);
-    };
-    if lhs.len() != rhs.len() {
+    let intr = intrinsic_types(&mut *caller)?;
+    if !super::collection::is_a(caller, other, &intr.object_shape)? {
         return Ok(false);
     }
-
+    let lhs_object = as_struct(caller, recv, "Object#equals receiver")?;
+    let rhs_object = as_struct(caller, other, "Object#equals other")?;
+    for object in [lhs_object, rhs_object] {
+        let vtable = object.field(&mut *caller, 0)?;
+        if super::collection::is_a(caller, &vtable, &intr.class_vtable)? {
+            return Ok(false);
+        }
+    }
+    let left_count = super::object::field_count(caller, recv)?;
+    let right_count = super::object::field_count(caller, other)?;
+    fuel::charge(
+        &mut *caller,
+        fuel::ELEM,
+        u64::from(left_count) + u64::from(right_count),
+    )?;
+    let lhs = read_object_entries(caller, recv, "Object#equals receiver")?;
+    if lhs.len() != super::object::data_field_count(caller, other)? {
+        return Ok(false);
+    }
+    let names = super::object::field_array(caller, &rhs_object, 1)?;
+    let values = super::object::field_array(caller, &rhs_object, 2)?;
     for (name, lhs_value) in &lhs {
-        let Some((_, rhs_value)) = rhs.iter().find(|(rhs_name, _)| rhs_name == name) else {
+        let Some(slot) = super::object::find_data_slot(caller, other, name)? else {
             return Ok(false);
         };
-        if !object_field_equals(caller, lhs_value, rhs_value).await? {
+        let rhs_name = names.get(&mut *caller, slot)?;
+        let rhs_value = values.get(&mut *caller, slot)?;
+        if !super::object::field_is_present(caller, &rhs_name, &rhs_value)?
+            || !object_field_equals(caller, lhs_value, &rhs_value).await?
+        {
             return Ok(false);
         }
     }
@@ -840,11 +864,14 @@ async fn object_hash(caller: &mut Caller<'_, StoreData>, recv: &Val) -> wasmtime
     if is_collection_backing(caller, recv)? {
         return identity_hash(caller, recv);
     }
+    let count = super::object::field_count(caller, recv)?;
+    fuel::charge(&mut *caller, fuel::ELEM, u64::from(count))?;
     let entries = read_object_entries(caller, recv, "Object#hash")?;
     let mut hash = FNV_OFFSET;
-    for (_, value) in &entries {
+    for (name, value) in &entries {
         let field_hash = object_field_hash(caller, value).await?;
-        hash = fnv_combine(hash, field_hash);
+        fuel::charge(&mut *caller, fuel::SCAN, name.len() as u64)?;
+        hash = hash.wrapping_add(field_hash.rotate_left(13) ^ fnv_hash_units(name));
     }
     Ok(hash)
 }
@@ -896,14 +923,17 @@ pub(crate) fn read_object_entries(
         other => wasmtime::bail!("{name}: malformed field-value array {other:?}"),
     };
 
-    let name_count = names.len(&mut *caller)?;
+    let name_count = super::object::field_count(caller, recv)?;
     let value_count = values.len(&mut *caller)?;
     // Class validator rows follow the named payload and are not properties.
     if name_count > value_count {
         wasmtime::bail!("{name}: field-name count {name_count} != field-value count {value_count}");
     }
 
-    let mut entries = Vec::with_capacity(name_count as usize);
+    let mut entries = Vec::new();
+    entries
+        .try_reserve_exact(name_count as usize)
+        .map_err(crate::runtime::host::fatal_host_error)?;
     for i in 0..name_count {
         let field_name = names.get(&mut *caller, i)?;
         let value = values.get(&mut *caller, i)?;
@@ -1604,8 +1634,12 @@ fn uint8array_hash(bytes: &[u8]) -> u32 {
 /// FNV-1a-32 over UTF-16 code units, low byte then high byte per unit — the exact
 /// order of `prelude::string::vtable_hash_body`.
 pub(super) fn fnv_hash_units(units: &[u16]) -> u32 {
+    hash_utf16_units(units.iter().copied())
+}
+
+pub(crate) fn hash_utf16_units(units: impl IntoIterator<Item = u16>) -> u32 {
     let mut hash = FNV_OFFSET;
-    for &unit in units {
+    for unit in units {
         hash = (hash ^ u32::from(unit & 0xff)).wrapping_mul(FNV_PRIME);
         hash = (hash ^ u32::from(unit >> 8)).wrapping_mul(FNV_PRIME);
     }

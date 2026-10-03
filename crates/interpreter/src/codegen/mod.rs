@@ -972,6 +972,7 @@ fn codegen_inner(
         (crate::runtime::prelude::MODULE_NAME, "boxed_boolean_vtable"),
         (crate::runtime::prelude::MODULE_NAME, "array_vtable"),
         (crate::runtime::prelude::MODULE_NAME, "closure_vtable"),
+        (crate::runtime::prelude::MODULE_NAME, "object_vtable"),
     ] {
         let mangled = crate::mangle::prelude(name);
         import_section.import(

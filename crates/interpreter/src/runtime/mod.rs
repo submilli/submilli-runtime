@@ -135,6 +135,8 @@ pub struct StoreData {
     pub(crate) next_identity_hash: u64,
     #[cfg(test)]
     pub(crate) collection_index_reads: u64,
+    #[cfg(test)]
+    pub(crate) object_index_probes: u64,
     /// Host charges not yet applied to the engine's fuel (see
     /// [`fuel::HOST_FUEL_BATCH`]).
     pub host_fuel_pending: u64,
@@ -231,6 +233,8 @@ impl StoreData {
             host_fuel: 0,
             #[cfg(test)]
             collection_index_reads: 0,
+            #[cfg(test)]
+            object_index_probes: 0,
             next_identity_hash: 0,
             host_fuel_pending: 0,
             host_fuel_applied_at: None,

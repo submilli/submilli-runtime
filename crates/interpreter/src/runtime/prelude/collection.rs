@@ -115,7 +115,7 @@ fn object_field_kind(
         _ => return Ok(None),
     };
     let target: Vec<u16> = name.encode_utf16().collect();
-    let count = names.len(&mut *caller)?;
+    let count = super::object::field_count(caller, obj)?;
     fuel::charge(&mut *caller, fuel::ELEM, u64::from(count))?;
     for i in 0..count {
         let nm = names.get(&mut *caller, i)?;

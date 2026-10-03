@@ -234,7 +234,7 @@ pub fn declare_intrinsic_types(types: &mut TypeSection) -> IntrinsicTypeIndices 
             composite_type: CompositeType {
                 inner: CompositeInnerType::Array(wasm_encoder::ArrayType(FieldType {
                     element_type: StorageType::Val(ref_to(string)),
-                    mutable: false,
+                    mutable: true,
                 })),
                 shared: false,
                 descriptor: None,
@@ -267,6 +267,10 @@ pub fn declare_intrinsic_types(types: &mut TypeSection) -> IntrinsicTypeIndices 
                         },
                         FieldType {
                             element_type: StorageType::Val(ref_to(object_fields)),
+                            mutable: true,
+                        },
+                        FieldType {
+                            element_type: StorageType::Val(ValType::Ref(RefType::ANYREF)),
                             mutable: true,
                         },
                     ]
@@ -406,6 +410,10 @@ pub fn declare_intrinsic_types(types: &mut TypeSection) -> IntrinsicTypeIndices 
                 FieldType {
                     mutable: true,
                     ..fieldtype_ref(object_fields)
+                },
+                FieldType {
+                    element_type: StorageType::Val(ValType::Ref(RefType::ANYREF)),
+                    mutable: true,
                 },
                 FieldType {
                     element_type: StorageType::Val(ValType::I64),

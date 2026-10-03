@@ -254,7 +254,10 @@ fn contains_dynamic_object(
                 ));
             }
         };
-        let name_count = names.len(&mut *caller)?;
+        let name_count = crate::runtime::prelude::object::field_count(
+            caller,
+            &Val::AnyRef(Some(object.to_anyref())),
+        )?;
         fuel::charge(&mut *caller, fuel::ELEM, u64::from(name_count))?;
         for index in 0..name_count {
             let name = names.get(&mut *caller, index)?;
@@ -364,7 +367,10 @@ fn stringify_typed_object_value(
         }
     };
     let mut field_index_by_name = BTreeMap::new();
-    let field_name_count = field_names.len(&mut *caller)?;
+    let field_name_count = crate::runtime::prelude::object::field_count(
+        caller,
+        &Val::AnyRef(Some(value.to_anyref())),
+    )?;
     fuel::charge(&mut *caller, fuel::ELEM, u64::from(field_name_count))?;
     for idx in 0..field_name_count {
         let name = field_names.get(&mut *caller, idx)?;
@@ -842,6 +848,7 @@ impl JsonUnknownAllocator {
                         self.object_vtable,
                         Val::AnyRef(Some(field_names.to_anyref())),
                         Val::AnyRef(Some(object_fields.to_anyref())),
+                        Val::AnyRef(None),
                     ],
                 )?;
                 Ok(Val::AnyRef(Some(object.to_anyref())))

@@ -152,6 +152,10 @@ pub(crate) fn iterator_result_struct(
                     intr.object_fields.clone().into(),
                 ))),
             ),
+            FieldType::new(
+                Mutability::Var,
+                StorageType::ValType(ValType::Ref(RefType::ANYREF)),
+            ),
         ],
     )
 }
@@ -219,7 +223,11 @@ fn build_result(
 ) -> wasmtime::Result<Val> {
     let ty = iterator_result_struct(caller.engine(), intr)?;
     let pre = StructRefPre::new(&mut *caller, ty);
-    let st = StructRef::new(&mut *caller, &pre, &[vtable, names, fields])?;
+    let st = StructRef::new(
+        &mut *caller,
+        &pre,
+        &[vtable, names, fields, Val::AnyRef(None)],
+    )?;
     Ok(Val::AnyRef(Some(st.to_anyref())))
 }
 
@@ -278,6 +286,7 @@ pub(crate) fn build_iterator(
             object_vtable,
             Val::AnyRef(Some(names.to_anyref())),
             Val::AnyRef(Some(fields.to_anyref())),
+            Val::AnyRef(None),
         ],
     )?;
     Ok(Val::AnyRef(Some(obj.to_anyref())))
@@ -356,6 +365,7 @@ pub(crate) fn build_closable_iterator(
             object_vtable,
             Val::AnyRef(Some(names.to_anyref())),
             Val::AnyRef(Some(fields.to_anyref())),
+            Val::AnyRef(None),
         ],
     )?;
     Ok(Val::AnyRef(Some(obj.to_anyref())))
@@ -750,6 +760,10 @@ mod tests {
                         EncFieldType {
                             mutable: true,
                             ..mk(object_fields_type_idx)
+                        },
+                        EncFieldType {
+                            mutable: true,
+                            element_type: EncStorageType::Val(EncValType::Ref(EncRefType::ANYREF)),
                         },
                     ]
                     .into_boxed_slice(),

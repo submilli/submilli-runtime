@@ -1131,6 +1131,54 @@ fn operations_charge_for_the_input_they_process() {
         assert!(measured[1] * 10 <= measured[0] * 22, "{name}: {measured:?}");
     }
 
+    // Dynamic field insertion and lookup formerly scanned the entire receiver.
+    // These baselines include key construction; subtract it and, for reads,
+    // subtract insertion as well to isolate each operation's work.
+    for (operation, old_cost) in [
+        ("insert", [254_144_u64, 1_016_192]),
+        ("read", [174_272_u64, 692_608]),
+        ("hasOwn", [12_736_u64, 41_856]),
+    ] {
+        let mut measured = [0_u64; 2];
+        for (index, n) in [128, 256].into_iter().enumerate() {
+            let input = format!(
+                "const keys: string[] = []; for (let i=0; i<{n}; i++) {{ keys.push(i.toString()); }} const r: Record<string, number> = {{}};"
+            );
+            let insert = "for (let i=0; i<keys.length; i++) { r[keys[i]]=i; }";
+            let (setup, work) = if operation == "insert" {
+                (input, insert.to_string())
+            } else {
+                (
+                    format!("{input} {insert}"),
+                    if operation == "hasOwn" {
+                        "for (let i=0; i<keys.length; i++) { Object.hasOwn(r, keys[i]); }"
+                    } else {
+                        "for (let i=0; i<keys.length; i++) { r[keys[i]]; }"
+                    }
+                    .to_string(),
+                )
+            };
+            let baseline = host_fuel(
+                &format!("usage-object-{operation}-{n}-base"),
+                &format!("function main(): number {{ {setup} return 0; }}"),
+            );
+            measured[index] = host_fuel(
+                &format!("usage-object-{operation}-{n}"),
+                &format!("function main(): number {{ {setup} {work} return 0; }}"),
+            ) - baseline;
+            let improvement_factor = if operation == "hasOwn" { 1 } else { 2 };
+            assert!(
+                measured[index] * improvement_factor < old_cost[index],
+                "{operation}/{n}: {}",
+                measured[index]
+            );
+        }
+        assert!(
+            measured[1] * 10 <= measured[0] * 22,
+            "{operation}: {measured:?}"
+        );
+    }
+
     // A structural visit budget does not change the cost of accepted walks:
     // two array snapshots, one hook per element, and the outer call + hook.
     for n in [128_u64, 256] {

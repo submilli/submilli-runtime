@@ -1144,6 +1144,7 @@ fn emit_object_literal(
         array_type_index: intrinsics.object_fields,
         array_size: crate::codegen::wasm_u32(declared_fields.len())?,
     });
+    emitter.instruction(Instruction::RefNull(HeapType::ANY));
     emitter.instruction(Instruction::StructNew(object_shape_idx));
 
     Ok(())
@@ -2644,6 +2645,7 @@ fn emit_spread_mask(
         array_type_index: intrinsics.object_fields,
         array_size: crate::codegen::wasm_u32(fields.len())?,
     });
+    emitter.instruction(Instruction::RefNull(HeapType::ANY));
     emitter.instruction(Instruction::StructNew(intrinsics.object_shape));
     Ok(())
 }
@@ -2716,6 +2718,7 @@ fn emit_spread_shape_checked(
         crate::codegen::wasm_u32(fields.len())? as i32,
     ));
     emitter.instruction(Instruction::ArrayNewDefault(intrinsics.object_fields));
+    emitter.instruction(Instruction::RefNull(HeapType::ANY));
     emitter.instruction(Instruction::StructNew(intrinsics.object_shape));
 
     Ok(())

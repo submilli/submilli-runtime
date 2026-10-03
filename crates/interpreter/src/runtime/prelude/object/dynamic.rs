@@ -5,7 +5,6 @@ use super::{
     ctor_key, field_array, field_is_present, field_is_private, is_accessor_slot, shape_arrays,
 };
 use crate::runtime::StoreData;
-use crate::runtime::fuel;
 use crate::runtime::host::{register_host_fn, register_host_fn_async, write_submilli_array_struct};
 use crate::runtime::prelude::collection::FIELD_NAME;
 use crate::runtime::prelude::keep::KeptValues;
@@ -31,22 +30,15 @@ fn find(
             crate::runtime::host::type_error("property receiver must be an object"),
         ));
     };
-    let count = names.len(&mut *caller)?;
-    fuel::charge(&mut *caller, fuel::ELEM, u64::from(count))?;
-    for slot in 0..count {
-        let name = names.get(&mut *caller, slot)?;
-        if is_accessor_slot(caller, &name)? == accessor
-            && !field_is_private(caller, &name)?
-            && read_string_units(caller, &name, FIELD_NAME)? == key
-        {
-            return Ok(Some(Property {
-                slot,
-                name,
-                value: values.get(&mut *caller, slot)?,
-            }));
-        }
-    }
-    Ok(None)
+    let object = super::super::iterator::as_struct(caller, object, "property receiver")?;
+    let Some(slot) = super::index::lookup(caller, &object, key, accessor, true)? else {
+        return Ok(None);
+    };
+    Ok(Some(Property {
+        slot,
+        name: names.get(&mut *caller, slot)?,
+        value: values.get(&mut *caller, slot)?,
+    }))
 }
 
 fn accessor_key(prefix: &str, key: &[u16]) -> wasmtime::Result<Vec<u16>> {
@@ -166,7 +158,7 @@ async fn values(caller: &mut Caller<'_, StoreData>, object: &Val) -> wasmtime::R
     let Some((names, fields)) = shape_arrays(caller, object)? else {
         return Ok(Val::AnyRef(None));
     };
-    let count = names.len(&mut *caller)?;
+    let count = super::field_count(caller, object)?;
     // A getter's result is held by nothing while the next getter runs.
     let mut result = KeptValues::with_capacity(caller, count as usize)?;
     for slot in 0..count {

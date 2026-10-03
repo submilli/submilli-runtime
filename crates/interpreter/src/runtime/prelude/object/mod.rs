@@ -8,6 +8,7 @@
 
 use crate::runtime::host::{abi_arg, abi_result};
 mod dynamic;
+mod index;
 
 use wasmtime::{
     ArrayRef, ArrayRefPre, Caller, FuncType, HeapType, Linker, RefType, Rooted, StructRef,
@@ -46,6 +47,42 @@ impl Enumerate {
             Enumerate::Entries => "entries",
         }
     }
+}
+
+pub(super) fn find_data_slot(
+    caller: &mut Caller<'_, StoreData>,
+    object: &Val,
+    key: &[u16],
+) -> wasmtime::Result<Option<u32>> {
+    let object = as_struct(caller, object, "object equality receiver")?;
+    index::lookup(caller, &object, key, false, false)
+}
+
+pub(super) fn data_field_count(
+    caller: &mut Caller<'_, StoreData>,
+    object: &Val,
+) -> wasmtime::Result<usize> {
+    let Some((names, values)) = shape_arrays(caller, object)? else {
+        return Ok(0);
+    };
+    let count = field_count(caller, object)?;
+    let mut present = 0;
+    for slot in 0..count {
+        let name = names.get(&mut *caller, slot)?;
+        let value = values.get(&mut *caller, slot)?;
+        if field_is_present(caller, &name, &value)? && !is_accessor_slot(caller, &name)? {
+            present += 1;
+        }
+    }
+    Ok(present)
+}
+
+pub(crate) fn field_count(
+    caller: &mut Caller<'_, StoreData>,
+    object: &Val,
+) -> wasmtime::Result<u32> {
+    let object = as_struct(caller, object, "object field count")?;
+    index::len(caller, &object)
 }
 
 /// The `$ObjectShape` field arrays `(field_names, object_fields)` of `obj`, or
@@ -112,7 +149,7 @@ fn enumerate(
     }
     let mut elems = Vec::new();
     if let Some((names, values)) = shape_arrays(caller, obj)? {
-        let len = names.len(&mut *caller)?;
+        let len = field_count(caller, obj)?;
         elems.reserve(len as usize);
         for i in 0..len {
             let name = names.get(&mut *caller, i)?;
@@ -180,7 +217,7 @@ fn spread(
         let Some((names, values)) = shape_arrays(caller, object)? else {
             continue;
         };
-        for index in 0..names.len(&mut *caller)? {
+        for index in 0..field_count(caller, object)? {
             let name = names.get(&mut *caller, index)?;
             let value = values.get(&mut *caller, index)?;
             if !field_is_present(caller, &name, &value)? || is_accessor_slot(caller, &name)? {
@@ -194,7 +231,7 @@ fn spread(
         }
     }
     if let Some((names, _)) = shape_arrays(caller, shape)? {
-        for index in 0..names.len(&mut *caller)? {
+        for index in 0..field_count(caller, shape)? {
             let name = names.get(&mut *caller, index)?;
             let units = read_string_units(caller, &name, FIELD_NAME)?;
             if let std::collections::btree_map::Entry::Vacant(entry) = entries.entry(units) {
@@ -216,6 +253,7 @@ fn spread(
             vtable,
             Val::AnyRef(Some(names.to_anyref())),
             Val::AnyRef(Some(values.to_anyref())),
+            Val::AnyRef(None),
         ],
     )?;
     Ok(Val::AnyRef(Some(object.to_anyref())))
@@ -262,57 +300,103 @@ fn insert_field(
     value: &Val,
 ) -> wasmtime::Result<()> {
     let object = as_struct(caller, obj, "field insertion receiver")?;
-    let names = field_array(caller, &object, 1)?;
-    let values = field_array(caller, &object, 2)?;
-    let named_len = names.len(&mut *caller)?;
+    let old_names = field_array(caller, &object, 1)?;
+    let old_values = field_array(caller, &object, 2)?;
+    let count = index::len(caller, &object)?;
+    let capacity = old_names.len(&mut *caller)?;
+    let new_count = count
+        .checked_add(1)
+        .filter(|n| *n <= i32::MAX as u32)
+        .ok_or_else(|| crate::runtime::host::range_error("object field count limit exceeded"))?;
+    let name = inserted_field_name(caller, name)?;
+    let (names, values, table) = if count == capacity {
+        let (names, values) = grow_fields(caller, &old_names, &old_values, &name)?;
+        let new_capacity = names.len(&mut *caller)?;
+        let table = index::build(caller, &names, count, new_capacity)?;
+        (names, values, table)
+    } else {
+        let table = match index::cached(caller, &object)? {
+            Some(table) => table,
+            None => index::build(caller, &old_names, count, capacity)?,
+        };
+        (old_names, old_values, table)
+    };
+    let bucket = index::empty_bucket(caller, &table, &name)?;
+    // All fuel and allocation checks precede publication. Guard rows use the
+    // backing capacity as their stride, so spare named slots need no reshuffle.
+    names.set(&mut *caller, count, name)?;
+    values.set(&mut *caller, count, *value)?;
+    table.set(&mut *caller, bucket, Val::I32(new_count as i32))?;
+    table.set(&mut *caller, 0, Val::I32(new_count as i32))?;
+    table.set(&mut *caller, 1, Val::I32(1))?;
+    object.set_field(&mut *caller, 1, Val::AnyRef(Some(names.to_anyref())))?;
+    object.set_field(&mut *caller, 2, Val::AnyRef(Some(values.to_anyref())))?;
+    object.set_field(
+        &mut *caller,
+        index::INDEX_FIELD,
+        Val::AnyRef(Some(table.to_anyref())),
+    )?;
+    Ok(())
+}
+
+fn grow_fields(
+    caller: &mut Caller<'_, StoreData>,
+    names: &Rooted<ArrayRef>,
+    values: &Rooted<ArrayRef>,
+    filler: &Val,
+) -> wasmtime::Result<(Rooted<ArrayRef>, Rooted<ArrayRef>)> {
+    let capacity = names.len(&mut *caller)?;
     let value_len = values.len(&mut *caller)?;
-    let row_width = named_len
+    let width = capacity
         .checked_add(1)
-        .ok_or_else(|| crate::runtime::host::fatal_host_error("object field row width overflow"))?;
-    let hidden = value_len.checked_sub(named_len).ok_or_else(|| {
-        crate::runtime::host::fatal_host_error("object payload is shorter than its names")
-    })?;
-    if hidden % row_width != 0 {
-        return Err(crate::runtime::host::fatal_host_error(
-            "malformed object field guard rows",
-        ));
-    }
-    let new_value_len = value_len
-        .checked_add(1)
-        .and_then(|len| len.checked_add(hidden / row_width))
-        .ok_or_else(|| crate::runtime::host::fatal_host_error("object field count overflow"))?;
-    let mut new_names = Vec::new();
-    let mut new_values = Vec::new();
-    new_names
-        .try_reserve_exact(row_width as usize)
-        .map_err(crate::runtime::host::fatal_host_error)?;
-    new_values
-        .try_reserve_exact(new_value_len as usize)
-        .map_err(crate::runtime::host::fatal_host_error)?;
-    for index in 0..named_len {
-        new_names.push(names.get(&mut *caller, index)?);
-        new_values.push(values.get(&mut *caller, index)?);
-    }
-    new_names.push(inserted_field_name(caller, name)?);
-    new_values.push(*value);
-    // Each hidden guard row has one slot per named field followed by its
-    // generic context. Grow every row along with the named payload so the
-    // compiler's depth/field indexing continues to address the same guards.
-    for row_start in (named_len..value_len).step_by(row_width as usize) {
-        for index in row_start..row_start + named_len {
-            new_values.push(values.get(&mut *caller, index)?);
-        }
-        new_values.push(Val::AnyRef(None));
-        new_values.push(values.get(&mut *caller, row_start + named_len)?);
-    }
+        .ok_or_else(|| crate::runtime::host::fatal_host_error("object guard row width overflow"))?;
+    let hidden = value_len
+        .checked_sub(capacity)
+        .filter(|n| n % width == 0)
+        .ok_or_else(|| crate::runtime::host::fatal_host_error("malformed object guard rows"))?;
+    let rows = hidden / width;
+    let new_capacity = capacity
+        .checked_mul(2)
+        .map(|n| n.max(8))
+        .filter(|n| *n < i32::MAX as u32)
+        .ok_or_else(|| crate::runtime::host::range_error("object field capacity limit exceeded"))?;
+    let new_width = new_capacity + 1;
+    let new_value_len = rows
+        .checked_mul(new_width)
+        .and_then(|n| n.checked_add(new_capacity))
+        .ok_or_else(|| {
+            crate::runtime::host::range_error("object payload capacity limit exceeded")
+        })?;
+    crate::runtime::fuel::charge(
+        &mut *caller,
+        crate::runtime::fuel::ELEM,
+        u64::from(new_capacity)
+            + u64::from(new_value_len)
+            + u64::from(capacity)
+            + u64::from(value_len),
+    )?;
     let intr = intrinsic_types(&mut *caller)?;
     let names_pre = ArrayRefPre::new(&mut *caller, intr.field_names.clone());
     let values_pre = ArrayRefPre::new(&mut *caller, intr.object_fields.clone());
-    let names = ArrayRef::new_fixed(&mut *caller, &names_pre, &new_names)?;
-    let values = ArrayRef::new_fixed(&mut *caller, &values_pre, &new_values)?;
-    object.set_field(&mut *caller, 1, Val::AnyRef(Some(names.to_anyref())))?;
-    object.set_field(&mut *caller, 2, Val::AnyRef(Some(values.to_anyref())))?;
-    Ok(())
+    let new_names = ArrayRef::new(&mut *caller, &names_pre, filler, new_capacity)?;
+    let new_values = ArrayRef::new(&mut *caller, &values_pre, &Val::AnyRef(None), new_value_len)?;
+    for slot in 0..capacity {
+        let name = names.get(&mut *caller, slot)?;
+        let value = values.get(&mut *caller, slot)?;
+        new_names.set(&mut *caller, slot, name)?;
+        new_values.set(&mut *caller, slot, value)?;
+    }
+    for row in 0..rows {
+        let old_start = capacity + row * width;
+        let new_start = new_capacity + row * new_width;
+        for slot in 0..capacity {
+            let guard = values.get(&mut *caller, old_start + slot)?;
+            new_values.set(&mut *caller, new_start + slot, guard)?;
+        }
+        let context = values.get(&mut *caller, old_start + capacity)?;
+        new_values.set(&mut *caller, new_start + new_capacity, context)?;
+    }
+    Ok((new_names, new_values))
 }
 
 /// A present inserted name also tells typed serializers that the original
@@ -363,7 +447,7 @@ fn spread_omitted_fields(
 ) -> wasmtime::Result<std::collections::BTreeSet<Vec<u16>>> {
     let mut omitted = std::collections::BTreeSet::new();
     if let Some((names, values)) = shape_arrays(caller, mask)? {
-        for index in 0..names.len(&mut *caller)? {
+        for index in 0..field_count(caller, mask)? {
             if !matches!(values.get(&mut *caller, index)?, Val::AnyRef(None)) {
                 let name = names.get(&mut *caller, index)?;
                 omitted.insert(read_string_units(caller, &name, FIELD_NAME)?);
@@ -381,16 +465,12 @@ fn has_own(caller: &mut Caller<'_, StoreData>, obj: &Val, key: &Val) -> wasmtime
         return Ok(false);
     };
     let target = read_string_units(caller, key, FIELD_NAME)?;
-    for i in 0..names.len(&mut *caller)? {
-        let name = names.get(&mut *caller, i)?;
-        if read_string_units(caller, &name, FIELD_NAME)? == target {
-            let value = values.get(&mut *caller, i)?;
-            return Ok(
-                field_is_present(caller, &name, &value)? && !is_accessor_slot(caller, &name)?
-            );
-        }
-    }
-    Ok(false)
+    let Some(slot) = find_data_slot(caller, obj, &target)? else {
+        return Ok(false);
+    };
+    let name = names.get(&mut *caller, slot)?;
+    let value = values.get(&mut *caller, slot)?;
+    field_is_present(caller, &name, &value)
 }
 
 /// SameValue on two `f64` bit patterns: any NaN equals any NaN (Wasm arithmetic

@@ -183,7 +183,7 @@ pub(crate) fn build_intrinsic_types(engine: &Engine) -> wasmtime::Result<Intrins
     let mut def = b.define_array(field_names);
     def.finality(NonFinal);
     def.forward_ref_element(string)
-        .mutability(imm)
+        .mutability(mutv)
         .nullable(false)
         .finish();
     def.finish();
@@ -211,6 +211,10 @@ pub(crate) fn build_intrinsic_types(engine: &Engine) -> wasmtime::Result<Intrins
         .mutability(mutv)
         .nullable(false)
         .finish();
+    def.field(FieldType::new(
+        mutv,
+        StorageType::ValType(ValType::Ref(RefType::ANYREF)),
+    ));
     def.finish();
 
     let mut def = b.define_func(to_string_fn);
@@ -378,7 +382,7 @@ pub(crate) fn build_intrinsic_types(engine: &Engine) -> wasmtime::Result<Intrins
     // `(rec $Error_vtable $Error)` — the class-shaped pair, one 2-member rec
     // group mirroring the user-class emitter's output (`classes.rs`): the vtable
     // is the `$ClassVTable` prefix (universal slots + parent link, no methods);
-    // the struct has the 3 `$ObjectShape` header slots and an identity ID;
+    // the struct has the 4 `$ObjectShape` header slots and an identity ID;
     // named fields remain in the object-fields payload.
     let mut b = RecGroupBuilder::new(engine);
     let error_vtable_label = b.declare_struct();
@@ -422,6 +426,10 @@ pub(crate) fn build_intrinsic_types(engine: &Engine) -> wasmtime::Result<Intrins
             false,
             object_fields.clone().into(),
         ))),
+    ));
+    def.field(FieldType::new(
+        mutv,
+        StorageType::ValType(ValType::Ref(RefType::ANYREF)),
     ));
     def.field(FieldType::new(mutv, StorageType::ValType(ValType::I64)));
     def.finish();

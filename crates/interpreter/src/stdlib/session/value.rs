@@ -489,6 +489,7 @@ fn build_object(
             vtable,
             Val::AnyRef(Some(names.to_anyref())),
             Val::AnyRef(Some(values.to_anyref())),
+            Val::AnyRef(None),
         ],
     )?;
     Ok(Val::AnyRef(Some(st.to_anyref())))
