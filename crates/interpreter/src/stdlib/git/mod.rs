@@ -84,6 +84,7 @@ impl Job {
             }
         }
     }
+
     /// One of the workers Git shares across the process, waited for until
     /// the operation's deadline or its cancellation.
     fn worker_permit(&self) -> Result<tokio::sync::OwnedSemaphorePermit> {

@@ -77,6 +77,7 @@ fn fetch_inner(
         job: job.clone(),
         url: url.clone(),
         spool_dir: Arc::new(snapshot.spool()?),
+        spool_quota: snapshot.spool_quota()?,
         limits: snapshot.transfer(),
         objects: Arc::new(snapshot.thread_safe_objects()?),
     };
@@ -271,6 +272,8 @@ struct Client {
     url: String,
     /// Where responses are written as they arrive: a directory in the stage.
     spool_dir: Arc<cap_std::fs::Dir>,
+    /// The size limit the spooled responses count against.
+    spool_quota: super::stage::SpoolQuota,
     /// What every response may hold, and what it may make gix hold in memory.
     limits: Transfer,
     /// The objects the repository has, which a fetched delta may name as its base.
@@ -298,6 +301,26 @@ impl std::fmt::Display for TransferLimit {
 
 impl std::error::Error for TransferLimit {}
 
+impl TransferLimit {
+    fn io() -> io::Error {
+        io::Error::new(io::ErrorKind::InvalidData, Self)
+    }
+}
+
+/// `error` from the transport, unless it is the transfer limit: the transport
+/// enforces `max_response_size` itself, so it can refuse a response before the
+/// spool sees it.
+fn transport_error(
+    error: HttpError,
+    spool: &SpoolWriter,
+    otherwise: impl FnOnce(HttpError) -> io::Error,
+) -> io::Error {
+    if spool.refused || matches!(error, HttpError::TooLarge { .. }) {
+        return TransferLimit::io();
+    }
+    otherwise(error)
+}
+
 /// A response whose body was spooled to a file.
 #[derive(Debug)]
 struct Response {
@@ -315,7 +338,7 @@ impl Client {
                 deadline,
                 self.job.http.send_without_redirects_to(request, &mut spool),
             )?
-            .map_err(|error| spool.refusal().unwrap_or_else(|| http_error(error)))?;
+            .map_err(|error| transport_error(error, &spool, http_error))?;
         if !same_url(&response.final_url, &request.url) {
             return Err(io_error("git: redirects are unsupported"));
         }
@@ -344,7 +367,7 @@ impl Client {
                         .send_without_redirects_to(&authenticated, &mut spool),
                 )?
                 .map_err(|error| {
-                    spool.refusal().unwrap_or_else(|| match error {
+                    transport_error(error, &spool, |error| match error {
                         HttpError::Internal(_) => http_error(error),
                         _ => io_error("git: authenticated request failed"),
                     })
@@ -389,6 +412,7 @@ impl Client {
             file,
             job: self.job.clone(),
             max_transfer_bytes: self.limits.max_transfer_bytes,
+            quota: self.spool_quota.clone(),
             refused: false,
         })
     }
@@ -489,16 +513,11 @@ struct SpoolWriter {
     file: cap_std::fs::File,
     job: Job,
     max_transfer_bytes: u64,
+    /// The size limit, which spooled bytes count against until publication.
+    quota: super::stage::SpoolQuota,
     /// Whether the transfer limit refused a write. The transport reports a
     /// failed write in its own words, so the limit is reported from here.
     refused: bool,
-}
-
-impl SpoolWriter {
-    fn refusal(&self) -> Option<io::Error> {
-        self.refused
-            .then(|| io::Error::new(io::ErrorKind::InvalidData, TransferLimit))
-    }
 }
 
 impl Write for SpoolWriter {
@@ -508,9 +527,11 @@ impl Write for SpoolWriter {
             .job
             .transferred
             .fetch_add(bytes.len() as u64, std::sync::atomic::Ordering::Relaxed);
-        if total.saturating_add(bytes.len() as u64) > self.max_transfer_bytes {
+        if total.saturating_add(bytes.len() as u64) > self.max_transfer_bytes
+            || self.quota.reserve(bytes.len() as u64).is_err()
+        {
             self.refused = true;
-            return Err(io::Error::new(io::ErrorKind::InvalidData, TransferLimit));
+            return Err(TransferLimit::io());
         }
         self.file.write_all(bytes)?;
         Ok(bytes.len())
@@ -798,6 +819,7 @@ mod tests {
         .unwrap();
         Client {
             spool_dir: Arc::new(spool_dir),
+            spool_quota: Default::default(),
             objects: Arc::new(objects),
             limits: Transfer {
                 max_transfer_bytes: 4096,
@@ -917,6 +939,22 @@ mod tests {
             .unwrap_err();
         assert!(error.to_string().contains("timed out"));
         assert!(dropped.load(Ordering::Relaxed));
+    }
+
+    #[test]
+    fn limits_of_git_s_own_survive_redaction() {
+        let limit = |error: io::Error| redact_fetch_failure(error.into()).to_string();
+        assert!(limit(TransferLimit::io()).contains("transfer limit exceeded"));
+        assert!(
+            limit(crate::stdlib::git::storage::memory_limit_io(
+                "pack delta chain"
+            ))
+            .contains("raise max_execution_memory")
+        );
+        assert_eq!(
+            limit(io_error("a remote said something")),
+            "git: fetch failed while receiving repository data"
+        );
     }
 
     #[test]

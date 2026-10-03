@@ -47,12 +47,11 @@ pub(super) struct Limits {
 
 /// The memory a check of `objects` objects holds, at most.
 pub(super) fn check_bytes(objects: u64) -> u64 {
-    // The index as read (about 28 bytes an object, while it is checked),
-    // its names and offsets kept (28), the entries by offset (16), a list of
-    // bases each (24, and 64 for one with a base), a depth (4), and the set of
-    // offsets seen (about 16): a little over 180 bytes an object.
-    // an offset, a base and a depth an object.
-    objects.saturating_mul(INDEX_ENTRY + 8 + 16 + 24 + 64 + 4 + 16)
+    // While an index is checked: its name, CRC and offset as read, then each
+    // object's name and offset kept, its place among the entries by offset, a
+    // list of bases with room for one, a depth, and its offset in the set of
+    // those seen.
+    objects.saturating_mul(INDEX_ENTRY + HASH as u64 + 8 + 16 + 24 + 64 + 4 + 16)
 }
 
 /// One pack and its index, as they are on disk: what a cached verdict is about.

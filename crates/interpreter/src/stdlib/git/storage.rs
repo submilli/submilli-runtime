@@ -219,7 +219,7 @@ impl Snapshot {
         } = opening;
         let dir = Arc::clone(&location.dir);
         let git = dir.open_dir(".git")?;
-        let config = check_metadata(&dir, &git, max_bytes, &cancelled, &meter)?;
+        let config = check_metadata(&dir, &git, writes, max_bytes, &cancelled, &meter)?;
         let mut repo = open_in_place(&location.git_dir()?, max_bytes)?;
         let stage = if writes {
             Some(attach_stage(
@@ -378,6 +378,11 @@ impl Snapshot {
         )?)
     }
 
+    /// The size limit, and what the stage holds against it, for a fetch's spool.
+    pub fn spool_quota(&self) -> Result<super::stage::SpoolQuota> {
+        Ok(self.stage()?.spool_quota())
+    }
+
     /// The pack directory of the stage's object store, where fetch writes.
     pub fn staged_packs(&self) -> Result<Dir> {
         Ok(self.stage()?.dir.open_dir("objects/pack")?)
@@ -407,11 +412,7 @@ impl Snapshot {
             // Gix retains the requested spelling even when the filesystem
             // resolves a case or Unicode alias. Capability checks need the
             // actual ref spelling, including each directory component.
-            let above = if directory.as_os_str().is_empty() {
-                references.try_clone()?
-            } else {
-                references.open_dir(&directory)?
-            };
+            let above = super::stage::open_relative(&references, &directory)?;
             if !super::stage::has_exact_entry(&above, component)? {
                 bail!("git: reference spelling aliases an existing reference path");
             }
@@ -616,12 +617,14 @@ impl Drop for Snapshot {
 }
 
 /// Everything that must hold before gix opens `.git`, the repository directory
-/// `dir`'s: no stage left by an unfinished publication, nothing in `.git`
+/// `dir`'s, for an operation that `writes` or doesn't: no stage left by an
+/// unfinished publication, nor, for a change, another live one; nothing in `.git`
 /// that could lead gix outside it or into a loop, and a configuration small
 /// enough to parse. Returns the configuration.
 fn check_metadata(
     dir: &Dir,
     git: &Dir,
+    writes: bool,
     max_bytes: u64,
     cancelled: &AtomicBool,
     meter: &Meter,
@@ -630,7 +633,7 @@ fn check_metadata(
     if !metadata.is_dir() || metadata.file_type().is_symlink() {
         bail!("git: expected an ordinary .git directory");
     }
-    super::stage::clear_abandoned(dir)?;
+    super::stage::check_stages(dir, writes)?;
     let summary = super::metadata_scan::scan(git, cancelled, meter)?;
     validate_config_budget(&summary.config, max_bytes, cancelled)?;
     if !summary.packs.is_empty() {
@@ -660,7 +663,7 @@ fn attach_stage(
     quota: Option<Arc<DiskQuota>>,
 ) -> Result<Stage> {
     let stage = Stage::create(&location.dir, &location.host, Arc::clone(meter), quota)?;
-    stage.copy_references(git, max_bytes, cancelled)?;
+    stage.copy_references(git, cancelled)?;
     let objects = gix::odb::at_opts(
         stage.host.join(super::stage::OBJECTS),
         gix::hash::Kind::Sha1,
@@ -696,11 +699,7 @@ fn create_probe_directories(probe: &Dir, parent: &Path) -> Result<()> {
         match probe.create_dir(&prefix) {
             Ok(()) => {}
             Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
-                let above = if above.as_os_str().is_empty() {
-                    probe.try_clone()?
-                } else {
-                    probe.open_dir(&above)?
-                };
+                let above = super::stage::open_relative(probe, &above)?;
                 if !super::stage::has_exact_entry(&above, component.as_os_str())? {
                     return Err(error.into());
                 }

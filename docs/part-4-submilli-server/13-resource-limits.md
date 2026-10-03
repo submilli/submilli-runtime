@@ -226,7 +226,7 @@ size counts against the volume's `size_limit`, not against memory:
   diff or listing larger than that fails with an error that says to raise
   `max_execution_memory`. So does a repository whose packs hold more than
   about 50,000 objects under the default.
-- **Size.** Directories nest at most 64 levels. A new branch or remote name
+- **Other limits.** Directories nest at most 64 levels. A new branch or remote name
   is at most 250 bytes. A history page returns at most 1,000 commits, 50 by
   default.
 - **Packs.** Git uses a repository's packs with the indexes native Git wrote

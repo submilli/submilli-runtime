@@ -9,12 +9,14 @@
 //! into place, keeping what it replaces, and undoes every move if one fails,
 //! so a failed operation leaves the repository as it was.
 //!
-//! A stage marks itself before its first move and unmarks itself once the last
-//! is done. A stage left behind unmarked, by a crash before publication or a
-//! cleanup that failed after it, holds nothing the repository needs and is
-//! removed when the repository is next opened. A marked one means publication
-//! stopped part way, so the repository refuses Git operations until the host
-//! recovers it from what the stage kept.
+//! A stage marks itself before its first move and is removed, marker and all,
+//! once the last is done. A stage left behind unmarked, by a crash before
+//! publication or a cleanup that failed after it, holds nothing the repository
+//! needs. Once nothing has touched it for [`ABANDONED_AFTER`], longer than any
+//! operation runs, the next change to the repository removes it; until then it
+//! may be another server's live operation, and a change waits for it to go.
+//! Reads leave stages alone. A marked stage means publication stopped part
+//! way: the repository refuses Git operations until the host restores it.
 use super::meter::Meter;
 use super::storage::{MAX_NESTING, validate_path};
 use crate::runtime::DiskQuota;
@@ -47,6 +49,9 @@ const OLD: &str = "old";
 const PUBLISHING: &str = "publishing";
 /// The longest loose reference Git writes: a symbolic ref to a long name.
 const MAX_LOOSE_REF: u64 = 4096;
+/// How long an unmarked stage is left untouched before it is taken for
+/// abandoned: far longer than an operation's 60 seconds.
+pub(super) const ABANDONED_AFTER: std::time::Duration = std::time::Duration::from_secs(600);
 /// Files copied with the references, beside `refs/`.
 const REFERENCE_FILES: [&str; 3] = ["HEAD", "packed-refs", "shallow"];
 
@@ -55,19 +60,39 @@ pub(super) fn is_stage_name(name: &str) -> bool {
     name.to_ascii_lowercase().starts_with(STAGE_PREFIX)
 }
 
-/// Removes the stages left in the repository directory `repo` that hold
-/// nothing it needs, and refuses one that does.
-pub(super) fn clear_abandoned(repo: &Dir) -> Result<()> {
+/// Whether `name` is exactly what [`Stage::create`] names a stage.
+fn is_stage_directory_name(name: &str) -> bool {
+    name.strip_prefix(STAGE_PREFIX)
+        .is_some_and(|id| uuid::Uuid::parse_str(id).is_ok())
+}
+
+/// Checks the stages in the repository directory `repo`: refuses the
+/// repository if a publication stopped part way. For an operation that
+/// `writes`, also removes the stages abandoned before publication, and
+/// refuses while another operation's stage is live.
+pub(super) fn check_stages(repo: &Dir, writes: bool) -> Result<()> {
     for entry in repo.entries()? {
-        let name = entry?.file_name();
-        let Some(name) = name.to_str().filter(|name| is_stage_name(name)) else {
+        let entry = entry?;
+        let name = entry.file_name();
+        let Some(name) = name.to_str().filter(|name| is_stage_directory_name(name)) else {
             continue;
         };
-        if repo.try_exists(Path::new(name).join(PUBLISHING))? {
+        if !entry.file_type()?.is_dir() {
+            continue;
+        }
+        let stage = repo.open_dir(name)?;
+        if stage.try_exists(PUBLISHING)? {
             bail!(
                 "git: an unfinished publication in {name} requires host recovery before \
                  further Git operations"
             );
+        }
+        if !writes {
+            continue;
+        }
+        let touched = stage.dir_metadata()?.modified()?.into_std();
+        if touched.elapsed().unwrap_or_default() < ABANDONED_AFTER {
+            bail!("git: another Git operation is changing this repository; try again");
         }
         repo.remove_dir_all(name)?;
     }
@@ -84,8 +109,8 @@ pub(super) struct Stage {
     /// The volume's size limit, which staged checkouts count against as they
     /// are written.
     quota: Option<Arc<DiskQuota>>,
-    /// Bytes reserved for staged checkouts.
-    staged: AtomicU64,
+    /// Bytes reserved for staged checkouts and fetched responses.
+    staged: Arc<AtomicU64>,
     state: State,
 }
 
@@ -138,7 +163,7 @@ impl Stage {
             repo: Arc::clone(repo),
             meter,
             quota,
-            staged: AtomicU64::new(0),
+            staged: Arc::default(),
             state: State::Pending,
         };
         stage.meter.syscalls(8);
@@ -160,23 +185,12 @@ impl Stage {
     }
 
     /// Copies the references, `HEAD`, `packed-refs` and `shallow` of the
-    /// `.git` directory `git` into the stage's reference copy. They are what
-    /// the operation reads, so `limit` bounds each.
-    pub(super) fn copy_references(
-        &self,
-        git: &Dir,
-        limit: u64,
-        cancelled: &AtomicBool,
-    ) -> Result<()> {
+    /// `.git` directory `git` into the stage's reference copy, streaming each.
+    pub(super) fn copy_references(&self, git: &Dir, cancelled: &AtomicBool) -> Result<()> {
         let copy = self.dir.open_dir(REFS)?;
         for file in REFERENCE_FILES {
             match git.open(file) {
-                Ok(source) => {
-                    if source.metadata()?.len() > limit {
-                        return Err(super::storage::memory_limit(&format!("{file} size")));
-                    }
-                    copy_file(source, &copy, Path::new(file), &self.meter)?;
-                }
+                Ok(source) => copy_file(source, &copy, Path::new(file), &self.meter)?,
                 Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
                 Err(error) => return Err(error.into()),
             }
@@ -234,21 +248,9 @@ impl Stage {
         self.meter
             .syscalls(3 + Path::new(path).components().count() as u64);
         self.meter.io(contents.len() as u64);
-        if mode != 0o120000
-            && let Some(quota) = &self.quota
-        {
-            // A replaced file a program holds stays on disk: it frees nothing.
-            let replaced = match self.repo.symlink_metadata(path) {
-                Ok(meta) if meta.is_file() && !quota.is_held(FileIdentity::of(&meta)?) => {
-                    meta.len()
-                }
-                _ => 0,
-            };
-            let growth = (contents.len() as u64).saturating_sub(replaced);
-            quota
-                .reserve(growth)
-                .map_err(|exceeded| quota_exceeded_error(format!("git: {exceeded}")))?;
-            self.staged.fetch_add(growth, Ordering::Relaxed);
+        if mode != 0o120000 {
+            let replaced = self.replaced_len(path)?;
+            self.reserve((contents.len() as u64).saturating_sub(replaced))?;
         }
         let worktree = self.dir.open_dir(WORKTREE)?;
         if let Some(parent) = Path::new(path).parent() {
@@ -282,10 +284,47 @@ impl Stage {
         Ok(())
     }
 
-    /// Releases what staged checkouts reserved: publication reserves its own.
-    fn release_staged(&self) {
+    /// What staging a file at `path` frees: the regular file there, unless a
+    /// program holds it, which keeps it on disk, or it is reached through a
+    /// link, which publication won't replace.
+    fn replaced_len(&self, path: &str) -> Result<u64> {
+        let Some(quota) = &self.quota else {
+            return Ok(0);
+        };
+        for ancestor in Path::new(path).ancestors().skip(1) {
+            if ancestor.as_os_str().is_empty() {
+                break;
+            }
+            match self.repo.symlink_metadata(ancestor) {
+                Ok(meta) if meta.is_dir() && !meta.file_type().is_symlink() => {}
+                _ => return Ok(0),
+            }
+        }
+        match self.repo.symlink_metadata(path) {
+            Ok(meta) if meta.is_file() && !quota.is_held(FileIdentity::of(&meta)?) => {
+                Ok(meta.len())
+            }
+            _ => Ok(0),
+        }
+    }
+
+    /// Counts `bytes` the stage holds against the size limit until publication.
+    fn reserve(&self, bytes: u64) -> Result<()> {
         if let Some(quota) = &self.quota {
-            quota.release(self.staged.swap(0, Ordering::Relaxed));
+            quota
+                .reserve(bytes)
+                .map_err(|exceeded| quota_exceeded_error(format!("git: {exceeded}")))?;
+            self.staged.fetch_add(bytes, Ordering::Relaxed);
+        }
+        Ok(())
+    }
+
+    /// Lets a fetch's spooled responses count against the size limit as they
+    /// are written, with the rest of what the stage holds.
+    pub(super) fn spool_quota(&self) -> SpoolQuota {
+        SpoolQuota {
+            quota: self.quota.clone(),
+            staged: Arc::clone(&self.staged),
         }
     }
 
@@ -298,10 +337,20 @@ impl Stage {
         cancelled: &AtomicBool,
     ) -> Result<()> {
         let plan = self.plan(worktree, cancelled)?;
-        self.release_staged();
         let quota = self.quota.clone();
+        // What publication needs replaces what staging held: the staged and
+        // spooled files go with the stage.
         let reservation = match &quota {
-            Some(quota) => Some(plan.reserve(quota)?),
+            Some(quota) => {
+                let staged = self.staged.swap(0, Ordering::Relaxed);
+                match plan.reserve(quota, staged) {
+                    Ok(reservation) => Some(reservation),
+                    Err(error) => {
+                        self.staged.fetch_add(staged, Ordering::Relaxed);
+                        return Err(error);
+                    }
+                }
+            }
             None => None,
         };
         let release = |reservation: &Option<Reservation>| {
@@ -315,7 +364,10 @@ impl Stage {
         }
         // Once the first move happens, finish or undo, even if cancelled: no
         // program may see half a change.
-        self.dir.write(PUBLISHING, "")?;
+        if let Err(error) = self.dir.write(PUBLISHING, "") {
+            release(&reservation);
+            return Err(error.into());
+        }
         let mut steps = Vec::new();
         let result = self.apply(&plan, &mut steps);
         // A move, removal or directory per step, and the stage's cleanup.
@@ -327,10 +379,11 @@ impl Stage {
                     reservation.settle(quota);
                 }
                 self.state = State::Published;
-                // Unmarked, the stage holds nothing the repository needs, and
-                // is removed now or when the repository is next opened.
-                let _ = self.dir.remove_file(PUBLISHING);
-                let _ = self.repo.remove_dir_all(&self.name);
+                // Unmarked, a stage left behind holds nothing the repository
+                // needs, and is removed by a later change.
+                if self.repo.remove_dir_all(&self.name).is_err() {
+                    let _ = self.dir.remove_file(PUBLISHING);
+                }
                 Ok(())
             }
             Err(error) => {
@@ -453,7 +506,7 @@ impl Stage {
         let mut checked = HashSet::new();
         for (number, removed) in plan.removed.iter().enumerate() {
             if removed.kind == Kind::Worktree {
-                check_parents(&self.repo, &removed.target, &mut checked)?;
+                check_parents(&self.repo, &removed.target, &mut checked, None)?;
             }
             let backup = number.to_string();
             self.repo.rename(&removed.target, &old, &backup)?;
@@ -466,13 +519,21 @@ impl Stage {
             )?;
         }
         // Directories the removals emptied, deepest first, so a file can take
-        // a directory's place.
+        // a directory's place. One a placed file goes back into stays, as it
+        // was.
+        let refilled: HashSet<&Path> = plan
+            .added
+            .iter()
+            .filter(|added| added.kind == Kind::Worktree)
+            .flat_map(|added| added.target.ancestors().skip(1))
+            .collect();
         let mut emptied: Vec<&Path> = plan
             .removed
             .iter()
             .filter(|removed| removed.kind == Kind::Worktree)
             .flat_map(|removed| removed.target.ancestors().skip(1))
             .filter(|directory| !directory.as_os_str().is_empty())
+            .filter(|directory| !refilled.contains(directory))
             .collect();
         emptied.sort_by_key(|directory| std::cmp::Reverse(directory.components().count()));
         emptied.dedup();
@@ -490,7 +551,7 @@ impl Stage {
             let mut created = Vec::new();
             let prepared = match added.kind {
                 Kind::Worktree => {
-                    prepare_parents(&self.repo, &added.target, &mut checked, &mut created)
+                    check_parents(&self.repo, &added.target, &mut checked, Some(&mut created))
                 }
                 Kind::Metadata => create_parents(&self.repo, &added.target, &mut created),
             };
@@ -529,29 +590,56 @@ impl Stage {
         Ok(())
     }
 
+    /// Undoes `steps`, latest first, going on past one that fails so as
+    /// little as possible is left for the host; returns the first failure.
     fn undo(&self, steps: &[Step]) -> Result<()> {
         let old = self.dir.open_dir(OLD)?;
+        let mut first_failure = None;
         for step in steps.iter().rev() {
-            match step {
-                Step::Placed { target, from } => self.repo.rename(target, &self.dir, from)?,
-                Step::Removed { target, backup } => old.rename(backup, &self.repo, target)?,
-                Step::CreatedDirectory(directory) => self.repo.remove_dir(directory)?,
-                Step::RemovedDirectory(directory, permissions) => {
-                    self.repo.create_dir(directory)?;
-                    self.repo.set_permissions(directory, permissions.clone())?;
-                }
+            let undone = match step {
+                Step::Placed { target, from } => self.repo.rename(target, &self.dir, from),
+                Step::Removed { target, backup } => old.rename(backup, &self.repo, target),
+                Step::CreatedDirectory(directory) => self.repo.remove_dir(directory),
+                Step::RemovedDirectory(directory, permissions) => self
+                    .repo
+                    .create_dir(directory)
+                    .and_then(|()| self.repo.set_permissions(directory, permissions.clone())),
+            };
+            if let Err(error) = undone {
+                first_failure.get_or_insert(error);
             }
         }
-        Ok(())
+        first_failure.map_or(Ok(()), |error| Err(error.into()))
     }
 }
 
 impl Drop for Stage {
     fn drop(&mut self) {
         if self.state == State::Pending {
-            self.release_staged();
+            if let Some(quota) = &self.quota {
+                quota.release(self.staged.swap(0, Ordering::Relaxed));
+            }
             let _ = self.repo.remove_dir_all(&self.name);
         }
+    }
+}
+
+/// The size limit, and what a stage holds against it, for a writer that
+/// works away from the stage: a fetch's spool. The default has no limit.
+#[derive(Clone, Default)]
+pub(super) struct SpoolQuota {
+    quota: Option<Arc<DiskQuota>>,
+    staged: Arc<AtomicU64>,
+}
+
+impl SpoolQuota {
+    /// Counts `bytes` written to the spool, or refuses them past the limit.
+    pub(super) fn reserve(&self, bytes: u64) -> Result<(), crate::runtime::QuotaExceeded> {
+        if let Some(quota) = &self.quota {
+            quota.reserve(bytes)?;
+            self.staged.fetch_add(bytes, Ordering::Relaxed);
+        }
+        Ok(())
     }
 }
 
@@ -683,10 +771,11 @@ impl Plan {
         )
     }
 
-    /// Reserves what publication adds less what it frees right away, refusing
-    /// what doesn't fit. A replaced file a program holds open stays on disk
-    /// until closed, so it frees nothing yet.
-    fn reserve(&self, quota: &DiskQuota) -> Result<Reservation> {
+    /// Reserves what publication adds less what it frees right away, given
+    /// that `staged` is reserved already, refusing what doesn't fit. A
+    /// replaced file a program holds open stays on disk until closed, so it
+    /// frees nothing yet.
+    fn reserve(&self, quota: &DiskQuota, staged: u64) -> Result<Reservation> {
         if quota.is_unmeasured() {
             let refused = crate::runtime::QuotaExceeded::Unmeasured {
                 limit: quota.limit(),
@@ -707,9 +796,13 @@ impl Plan {
             }
         }
         let reserved = added.saturating_sub(freed);
-        quota
-            .reserve(reserved)
-            .map_err(|exceeded| quota_exceeded_error(format!("git: {exceeded}")))?;
+        if reserved > staged {
+            quota
+                .reserve(reserved - staged)
+                .map_err(|exceeded| quota_exceeded_error(format!("git: {exceeded}")))?;
+        } else {
+            quota.release(staged - reserved);
+        }
         Ok(Reservation {
             reserved,
             excess: freed.saturating_sub(added),
@@ -768,7 +861,7 @@ pub(super) fn has_exact_entry(dir: &Dir, name: &std::ffi::OsStr) -> Result<bool>
 }
 
 /// The directory `relative` in `dir`, `dir` itself when empty.
-fn open_relative(dir: &Dir, relative: &Path) -> Result<Dir> {
+pub(super) fn open_relative(dir: &Dir, relative: &Path) -> Result<Dir> {
     Ok(if relative.as_os_str().is_empty() {
         dir.try_clone()?
     } else {
@@ -776,42 +869,16 @@ fn open_relative(dir: &Dir, relative: &Path) -> Result<Dir> {
     })
 }
 
-/// Refuses a checked-out file whose parent directories are not real
-/// directories under their exact spelling: a link, or an alias, could lead
-/// elsewhere.
-fn check_parents(dir: &Dir, path: &Path, checked: &mut HashSet<PathBuf>) -> Result<()> {
-    let Some(parent) = path.parent() else {
-        return Ok(());
-    };
-    let mut prefix = PathBuf::new();
-    for component in parent.components() {
-        let above = prefix.clone();
-        prefix.push(component);
-        if checked.contains(&prefix) {
-            continue;
-        }
-        let meta = dir.symlink_metadata(&prefix)?;
-        if !meta.is_dir() || meta.file_type().is_symlink() {
-            bail!("git: checkout path overlaps a file or symlink");
-        }
-        if !has_exact_entry(&open_relative(dir, &above)?, component.as_os_str())? {
-            bail!("git: checkout directory spelling aliases an existing path");
-        }
-        checked.insert(prefix.clone());
-    }
-    Ok(())
-}
-
-/// Creates the missing directories above the checked-out file `path`, each
-/// under the exact spelling given, refusing to go through a link, a file, or
-/// a directory spelled another way. Adds each directory it creates to
-/// `created`, outermost first, as it creates it, so a failure part way can be
-/// undone.
-fn prepare_parents(
+/// Checks that the parent directories of the checked-out file `path` are
+/// real directories under their exact spelling: a link, or an alias, could
+/// lead elsewhere. With `created`, creates the missing ones, adding each to it
+/// as it does, outermost first, so a failure part way can be undone; without,
+/// a missing one is an error.
+fn check_parents(
     dir: &Dir,
     path: &Path,
     checked: &mut HashSet<PathBuf>,
-    created: &mut Vec<PathBuf>,
+    mut created: Option<&mut Vec<PathBuf>>,
 ) -> Result<()> {
     let Some(parent) = path.parent() else {
         return Ok(());
@@ -831,6 +898,9 @@ fn prepare_parents(
             }
             Ok(_) => bail!("git: checkout path overlaps a file or symlink"),
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                let Some(created) = created.as_deref_mut() else {
+                    return Err(error.into());
+                };
                 dir.create_dir(&prefix)?;
                 created.push(prefix.clone());
             }
@@ -864,8 +934,8 @@ fn create_parents(repo: &Dir, path: &Path, created: &mut Vec<PathBuf>) -> Result
     Ok(())
 }
 
-/// Whether `left_path` in `left` and `right_path` in `right` hold the same
-/// bytes, a missing file holding none; compared as they're read.
+/// Whether `left_path` in `left` and `right_path` in `right` are both there
+/// and hold the same bytes, compared as they're read.
 fn same_contents(left: &Dir, left_path: &Path, right: &Dir, right_path: &Path) -> Result<bool> {
     let open = |dir: &Dir, path: &Path| -> Result<Option<cap_std::fs::File>> {
         match dir.open(path) {

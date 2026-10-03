@@ -967,23 +967,45 @@ fn shallow_is_staged_and_published() {
     assert!(!root.path().join(".git/shallow").exists());
 }
 
-/// A stage left before publication began is cleared when the repository is
-/// next opened; one left part way through publication blocks it.
+/// A stage left before publication began is cleared by the next change once
+/// it is stale; until then it may be another server's live operation, so a
+/// change waits and a read leaves it. One left part way through publication
+/// blocks the repository.
 #[test]
 fn a_leftover_stage_is_cleared_unless_publication_began() {
     let root = repository();
-    std::fs::create_dir_all(root.path().join(".git-submilli-left/objects")).unwrap();
-    drop(snapshot(root.path()));
-    assert!(!root.path().join(".git-submilli-left").exists());
-    std::fs::create_dir(root.path().join(".git-submilli-begun")).unwrap();
-    std::fs::write(root.path().join(".git-submilli-begun/publishing"), "").unwrap();
-    let error = storage::Snapshot::open_unmetered(
-        &super::location::Location::at(root.path()),
-        Arc::new(AtomicBool::new(false)),
-        storage::MAX_WORKING_BYTES,
-        false,
-    )
-    .err()
-    .unwrap();
-    assert!(error.to_string().contains("host recovery"), "{error}");
+    let left = root.path().join(format!(
+        "{}{}",
+        super::stage::STAGE_PREFIX,
+        uuid::Uuid::new_v4()
+    ));
+    std::fs::create_dir_all(left.join("objects")).unwrap();
+    let open = |writes: bool| {
+        storage::Snapshot::open_unmetered(
+            &super::location::Location::at(root.path()),
+            Arc::new(AtomicBool::new(false)),
+            storage::MAX_WORKING_BYTES,
+            writes,
+        )
+    };
+    drop(open(false).unwrap());
+    assert!(left.exists(), "a read leaves a stage alone");
+    let error = open(true).err().unwrap();
+    assert!(
+        error.to_string().contains("another Git operation"),
+        "{error}"
+    );
+    let stale = filetime::FileTime::from_system_time(
+        std::time::SystemTime::now() - super::stage::ABANDONED_AFTER * 2,
+    );
+    filetime::set_file_mtime(&left, stale).unwrap();
+    drop(open(true).unwrap());
+    assert!(!left.exists(), "a stale stage is cleared");
+
+    std::fs::create_dir(&left).unwrap();
+    std::fs::write(left.join("publishing"), "").unwrap();
+    for writes in [false, true] {
+        let error = open(writes).err().unwrap();
+        assert!(error.to_string().contains("host recovery"), "{error}");
+    }
 }

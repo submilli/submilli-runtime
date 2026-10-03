@@ -107,7 +107,6 @@ fn walk_tree(
     Ok(())
 }
 
-// Test instrumentation, compiled into tests only.
 #[cfg(test)]
 thread_local! {
     /// How many times this thread checked a file set, so a test can show that

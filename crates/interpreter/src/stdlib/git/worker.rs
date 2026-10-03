@@ -29,7 +29,8 @@ pub(super) fn run(
     if writes(op) {
         refuse_read_only_repository(job, op, &placement)?;
     }
-    let (mut snapshot, _permit) =
+    // Declared first, the permit is released last, after the snapshot's cleanup.
+    let (_permit, mut snapshot) =
         open_snapshot(&root, &relative, &placement, job, op, creates, branch)?;
     let mut changed = op == "init";
     let result = match op {
@@ -204,7 +205,7 @@ fn open_snapshot(
     op: &str,
     create: bool,
     branch: &str,
-) -> Result<(storage::Snapshot, tokio::sync::OwnedSemaphorePermit)> {
+) -> Result<(tokio::sync::OwnedSemaphorePermit, storage::Snapshot)> {
     let mut prefix = std::path::PathBuf::new();
     for component in relative.components() {
         prefix.push(component);
@@ -252,7 +253,7 @@ fn open_snapshot(
     } else {
         storage::Snapshot::open(&location, lock, opening, writes(op))?
     };
-    Ok((snapshot, permit))
+    Ok((permit, snapshot))
 }
 
 /// Whether `op` changes the repository, and so needs a stage.

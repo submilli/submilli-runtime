@@ -3,7 +3,7 @@
 //! disk, so a pack larger than memory can be checked holding one entry's
 //! header and a small inflation buffer.
 use gix::odb::pack::data::entry::Header;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::io::{self, BufRead, Read};
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -260,8 +260,9 @@ fn validate_pack<R: BufRead>(
     // What each entry needs in memory once resolved, by its offset: itself,
     // plus every base on its chain.
     let mut chains: HashMap<u64, u64> = HashMap::with_capacity(count as usize);
-    // The ids of the pack's whole objects, and the bases reference deltas name.
-    let mut whole = HashSet::new();
+    // The pack's whole objects by id, with their sizes, and the bases
+    // reference deltas name, with what each delta adds to its base.
+    let mut whole = HashMap::new();
     let mut named_bases = Vec::new();
     for _ in 0..count {
         check_cancelled(cancelled)?;
@@ -280,7 +281,7 @@ fn validate_pack<R: BufRead>(
         };
         let inflated = inflate_entry(pack, entry.decompressed_size, kind, cancelled)?;
         if let Some(id) = inflated.id {
-            whole.insert(id);
+            whole.insert(id, entry.decompressed_size);
         }
         let prefix = inflated.prefix;
         let chain = match entry.header {
@@ -298,13 +299,15 @@ fn validate_pack<R: BufRead>(
                     .saturating_add(result)
             }
             Header::RefDelta { base_id } => {
-                named_bases.push(base_id);
-                // A whole object, here or in the repository: its size is known.
+                // A whole object, here or in the repository. Its size as the
+                // delta declares it for now; a base in the pack is checked
+                // again below at its own size.
                 let mut prefix = prefix.as_slice();
                 let base = delta_size(&mut prefix)?;
                 let result = delta_size(&mut prefix)?;
-                base.saturating_add(entry.decompressed_size)
-                    .saturating_add(result)
+                let added = entry.decompressed_size.saturating_add(result);
+                named_bases.push((base_id, added));
+                base.saturating_add(added)
             }
             _ => entry.decompressed_size,
         };
@@ -316,12 +319,20 @@ fn validate_pack<R: BufRead>(
     let mut checksum = [0u8; 20];
     pack.read_exact(&mut checksum)
         .map_err(|_| invalid("incomplete pack checksum or trailing pack data"))?;
-    for base in named_bases {
+    for (base, added) in named_bases {
         check_cancelled(cancelled)?;
-        if !whole.contains(&base) && !local(&base) {
-            return Err(invalid(
-                "a pack delta's base is neither a whole object in the pack nor in the repository",
-            ));
+        match whole.get(&base) {
+            Some(size) if size.saturating_add(added) > limits.max_chain_bytes => {
+                return Err(super::storage::memory_limit_io("pack delta chain"));
+            }
+            Some(_) => {}
+            None if local(&base) => {}
+            None => {
+                return Err(invalid(
+                    "a pack delta's base is neither a whole object in the pack nor in the \
+                     repository",
+                ));
+            }
         }
     }
     Ok(())
@@ -510,7 +521,6 @@ mod tests {
             gix::objs::compute_hash(gix::hash::Kind::Sha1, gix::objs::Kind::Blob, base).unwrap();
         // Copies the whole 13-byte base.
         let delta = [13, 13, 0x90, 13];
-        let pack = |entries: &[Vec<u8>]| complete_pack(entries);
         let limits = Limits {
             max_records: 16,
             max_object_bytes: BUDGET,
@@ -525,12 +535,12 @@ mod tests {
                 &AtomicBool::new(false),
             )
         };
-        let in_pack = pack(&[
+        let in_pack = complete_pack(&[
             compressed_entry(Header::Blob, base),
             compressed_entry(Header::RefDelta { base_id }, &delta),
         ]);
         check(&in_pack, false).unwrap();
-        let thin = pack(&[compressed_entry(Header::RefDelta { base_id }, &delta)]);
+        let thin = complete_pack(&[compressed_entry(Header::RefDelta { base_id }, &delta)]);
         check(&thin, true).unwrap();
         let error = check(&thin, false).unwrap_err();
         assert!(error.to_string().contains("neither"), "{error}");
