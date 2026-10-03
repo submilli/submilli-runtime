@@ -100,6 +100,52 @@ The policy has three limits worth knowing:
   debugging, and it's worth deciding who on your team should have that
   permission.
 
+## Enable HTTPS
+
+HTTPS is off by default. Supply a PEM certificate chain and private key in a
+TLS Secret. The certificate must cover the names clients use and
+`submilli-0.submilli-headless`, which Helm tests use. For release `submilli` in
+namespace `default`, generate a self-signed certificate and create the Secret:
+
+```sh
+openssl req -x509 -newkey rsa:2048 -nodes -days 365 \
+  -keyout server.key -out server.crt -subj '/CN=submilli.default.svc' \
+  -addext 'subjectAltName=DNS:submilli,DNS:submilli.default.svc,DNS:submilli.default.svc.cluster.local,DNS:submilli-0.submilli-headless,DNS:submilli-0.submilli-headless.default.svc,DNS:submilli-0.submilli-headless.default.svc.cluster.local' \
+  -addext 'basicConstraints=critical,CA:FALSE'
+chmod 0600 server.key
+kubectl create secret tls submilli-tls --cert=server.crt --key=server.key
+```
+
+Adjust names for your release, namespace, and cluster DNS suffix. Create the
+Secret in the server's namespace; for a private issuer, include its chain in
+`server.crt`. Add to `values.yaml`:
+
+```yaml title="values.yaml"
+tls:
+  enabled: true
+  existingSecret: submilli-tls
+```
+
+Apply the values:
+
+```sh
+helm upgrade submilli oci://ghcr.io/submilli/charts/submilli -f values.yaml
+```
+
+Clients now use `https://submilli.<namespace>.svc:8128`. Probes and Helm tests
+use HTTPS; Helm tests verify the certificate. For self-signed certificates, see
+[Connect the CLI](/docs/server/connect-the-cli#trust-a-self-signed-server).
+Application clients configure their own trust.
+
+After replacing the Secret, restart the server:
+
+```sh
+kubectl rollout restart statefulset/submilli
+```
+
+Use `tls` chart values, not `config.tls`. If `ingress.tls` is also enabled,
+configure your Ingress controller to connect to the backend over HTTPS.
+
 ## Store secrets and register blueprints
 
 The server's secret store is on from the first install. The chart

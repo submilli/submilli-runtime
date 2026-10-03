@@ -2,7 +2,7 @@
 {{/* Pod 0 by name through the headless Service, not the load-balanced one.
      Replicas share nothing, so a round-robin Service would register the probe
      blueprint on one server and then assert against another. */}}
-{{- $base := printf "http://%s-0.%s:%v" $fullname (include "submilli.headlessName" .) .Values.server.port -}}
+{{- $base := printf "%s://%s-0.%s:%v" (ternary "https" "http" .Values.tls.enabled) $fullname (include "submilli.headlessName" .) .Values.server.port -}}
 {{- $execProbe := printf "%s-helmtest-exec" $fullname | trunc 63 | trimSuffix "-" -}}
 
 {{/*
@@ -62,6 +62,11 @@ spec:
         capabilities:
           drop: [ALL]
       volumeMounts:
+        {{- if .Values.tls.enabled }}
+        - name: tls-cert
+          mountPath: /etc/submilli/tls
+          readOnly: true
+        {{- end }}
         - name: tmp
           mountPath: /tmp
         {{- if .Values.auth.enabled }}
@@ -76,6 +81,9 @@ spec:
 
           BASE="{{ $base }}"
           CURL="curl -sS --connect-timeout 5 --max-time 30"
+          {{- if .Values.tls.enabled }}
+          CURL="$CURL --cacert /etc/submilli/tls/server.crt"
+          {{- end }}
 
           # The admin token, because registering and deleting the probe
           # blueprint are admin routes. It reaches curl through a config file
@@ -186,6 +194,14 @@ spec:
           echo
           echo "PASS"
   volumes:
+    {{- if .Values.tls.enabled }}
+    - name: tls-cert
+      secret:
+        secretName: {{ .Values.tls.existingSecret | quote }}
+        items:
+          - key: {{ .Values.tls.certKey | quote }}
+            path: server.crt
+    {{- end }}
     - name: tmp
       emptyDir: {}
     {{- if .Values.auth.enabled }}

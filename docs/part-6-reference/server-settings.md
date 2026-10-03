@@ -28,6 +28,8 @@ flat names listed. A dash means the form doesn't exist.
 | — | `--config` | `SUBMILLI_CONFIG` | path | none | The config file. |
 | `bind` | `--bind` | `SUBMILLI_BIND` | IP address | `127.0.0.1` | Address to listen on. See [`bind` and `port`](#bind-and-port). |
 | `port` | `--port` | `SUBMILLI_PORT` | port number | `8128` | TCP port to listen on. |
+| `tls.cert_file` | `--tls-cert-file` | `SUBMILLI_TLS_CERT_FILE` | path | none | PEM certificate chain. See [TLS](#tls). |
+| `tls.key_file` | `--tls-key-file` | `SUBMILLI_TLS_KEY_FILE` | path | none | Matching PEM private key. |
 | — | — | `SUBMILLI_SERVER_TOKEN` | string | none | An API token with the `admin` role. See [`api_tokens`](#api_tokens). |
 | `api_tokens` | — | — | list | `[]` | API tokens, each read from a file. |
 | `allow_unauthenticated` | `--allow-unauthenticated` | `SUBMILLI_ALLOW_UNAUTHENTICATED` | boolean | `false` | Serve without API tokens. |
@@ -103,6 +105,25 @@ The defaults, `127.0.0.1` and `8128`, accept connections from the same
 machine only. The plain `HOST` and `PORT` variables that hosting platforms
 set rank below the config file; `PORT` alone also binds `0.0.0.0`, unless a
 flag, a `SUBMILLI_*` variable, the file, or `HOST` names the address.
+
+## TLS
+
+HTTPS is disabled when neither TLS file is set. Setting both `tls.cert_file`
+and `tls.key_file` enables HTTPS on the configured port for all endpoints.
+Setting only one, invalid PEM, unreadable files, or a key that does not match
+the certificate stops startup. Each PEM file is limited to 1 MiB.
+
+```yaml title="server.yaml (fragment)"
+tls:
+  cert_file: /etc/submilli/server.crt
+  key_file: /etc/submilli/server.key
+```
+
+Certificates are loaded at startup; restart to rotate them. The listener limits
+pending TLS handshakes to 128 and gives each ten seconds. Authentication and
+MCP hostname checks still apply. `--health-check` uses the configured public
+key to verify the local HTTPS server, without the CLI trust store or a hostname
+check against the loopback probe address; certificate validity still applies.
 
 ## `api_tokens`
 
@@ -350,6 +371,10 @@ Options:
           Address to bind. Falls back to the `$HOST` env var, or `0.0.0.0` when `$PORT` is set (so it's reachable on Render and similar hosts). [default: 127.0.0.1] Env: `$SUBMILLI_BIND`, which outranks the config file and `$HOST`
       --port <PORT>
           TCP port to listen on. Falls back to the `$PORT` env var (set by Render and similar hosts), then 8128. [default: 8128] Env: `$SUBMILLI_PORT`, which outranks the config file and `$PORT`
+      --tls-cert-file <PATH>
+          Certificate chain PEM file. HTTPS is enabled only when both TLS files are set. Env: `$SUBMILLI_TLS_CERT_FILE`
+      --tls-key-file <PATH>
+          Private key PEM file matching the certificate. Read at startup; restart to rotate. Env: `$SUBMILLI_TLS_KEY_FILE`
       --blueprint-dir <BLUEPRINT_DIR>
           Directory the registered blueprints are persisted to and loaded from on startup. Created if absent. [default: ~/.submilli/server/blueprints (override the base with $SUBMILLI_HOME)] Env: `$SUBMILLI_BLUEPRINT_DIR`
       --session-store-dir <SESSION_STORE_DIR>

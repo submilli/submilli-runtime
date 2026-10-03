@@ -184,5 +184,6 @@ fn server_label(cmd: &commands::server::ServerCmd) -> &'static str {
         ServerCmd::Session(_) => "server.session",
         ServerCmd::Mcp(_) => "server.mcp",
         ServerCmd::Docs(_) => "server.docs",
+        ServerCmd::Trust(_) => "server.trust",
     }
 }

@@ -34,18 +34,39 @@ pub async fn serve(addr: SocketAddr, config: ServerConfig, shutdown_grace: Durat
     let signals = ShutdownSignals::install()?;
 
     crate::auth::log_auth_posture(addr.ip(), &config.auth);
+    let tls = config.tls.clone();
     let state = AppState::new(config)?;
     // Rehydrate persisted sessions and sweep orphan directories before serving,
     // so an immediate reconnect resolves instead of 404-ing.
     state.boot().await;
     let listener = tokio::net::TcpListener::bind(addr).await?;
-    let bound = listener.local_addr().unwrap_or(addr);
+    let bound = listener.local_addr()?;
     state.set_bind_addr(bound);
     let shutdown = state.shutdown_signal();
     let router = app(state);
     crate::metrics::server_start();
-    tracing::info!(addr = %bound, "submilli-server listening");
+    tracing::info!(addr = %bound, protocol = if tls.is_some() { "https" } else { "http" }, "submilli-server listening");
 
+    if let Some(tls) = tls {
+        return serve_listener(
+            crate::tls::Listener::new(listener, tls),
+            router,
+            signals,
+            shutdown,
+            shutdown_grace,
+        )
+        .await;
+    }
+    serve_listener(listener, router, signals, shutdown, shutdown_grace).await
+}
+
+async fn serve_listener<L: axum::serve::Listener<Addr = SocketAddr>>(
+    listener: L,
+    router: axum::Router,
+    signals: ShutdownSignals,
+    shutdown: Arc<Notify>,
+    shutdown_grace: Duration,
+) -> Result<()> {
     // The handoff doubles as the "drain has begun" signal and as the transfer of
     // the signal streams, which the deadline needs to notice a second signal.
     let (draining, drain_started) = oneshot::channel();

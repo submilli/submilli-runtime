@@ -6,7 +6,7 @@ sidebar:
   order: 2
 ---
 
-The `submilli server` commands talk to a running server over HTTP. Out
+The `submilli server` commands talk to a running server over HTTP or HTTPS. Out
 of the box they call `http://127.0.0.1:8128` and send the token from
 `SUBMILLI_SERVER_TOKEN`, which is why they need no setup in the shell
 that started the server. From another machine, or from a deploy job, the
@@ -55,13 +55,57 @@ active sessions: 0
 blueprints:      support
 ```
 
-The server speaks plain HTTP, so reach it the way your application does,
+With HTTPS disabled, reach the server the way your application does,
 over the private network it sits on, and not across the open internet.
 Under Compose the port is published on the host's loopback, so the
 commands work from the host without `--server`, and `docker compose exec
 submilli submilli server status` works from inside the container. On
 Kubernetes, `kubectl port-forward svc/submilli 8128:8128` brings the
 server to your loopback for the length of a command.
+
+## Connect over HTTPS
+
+For a server with HTTPS enabled, use its certificate's hostname in `--server`
+or `SUBMILLI_SERVER_URL`:
+
+```sh
+submilli server status --server https://runtime.example.com:8128 --token-file admin.token
+```
+
+Publicly trusted certificates need no extra setup.
+
+### Trust a self-signed server
+
+For a self-signed certificate or an unknown issuer, the CLI shows the public-key
+fingerprint and asks whether to trust it. Approval defaults to No. Verify the
+fingerprint with the operator before accepting. On the server machine, obtain
+it from the certificate file:
+
+```sh
+openssl x509 -in server.crt -pubkey -noout \
+  | openssl pkey -pubin -outform DER \
+  | openssl dgst -sha256 \
+  | awk '{print "sha256:" $NF}'
+```
+
+Without an interactive terminal, register that verified fingerprint first.
+Replace the placeholder with the command's `sha256:` value:
+
+```sh
+submilli server trust add --server https://runtime.example.com:8128 --fingerprint 'sha256:<64 hexadecimal digits>'
+```
+
+Trust is saved by hostname and port in `~/.submilli/server-trust.json`
+(or `$SUBMILLI_HOME/server-trust.json`). Inspect or remove it with:
+
+```sh
+submilli server trust list
+submilli server trust remove --server https://runtime.example.com:8128
+```
+
+Renewing with the same key keeps trust. For a changed key, verify the replacement,
+remove the old entry, and approve it again. Expired certificates and hostname
+mismatches still fail. Application and MCP clients configure trust separately.
 
 ## Keep them in your shell
 

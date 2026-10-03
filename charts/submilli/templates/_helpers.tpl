@@ -167,6 +167,7 @@ source for it would let the two drift apart, or is outranked by the environment
 and would do nothing.
 */ -}}
 {{- $owned := dict
+      "tls" "set tls.enabled and tls.existingSecret instead, which also mount the certificate and key"
       "bind" "set server.bind instead"
       "port" "set server.port instead; it also drives the container port, the Services, and the NetworkPolicy"
       "vfs_ephemeral_dir" "the chart fixes it at /tmp, the only writable path outside the state volume"
@@ -192,6 +193,15 @@ and would do nothing.
 {{-   fail "auth.adminTokenKey and auth.userTokenKey must differ: one key would give both roles the same token, which the server refuses" -}}
 {{- end -}}
 {{- $config := dict "bind" .Values.server.bind "max_execution_memory" .Values.execution.maxMemoryMB "shutdown_grace" .Values.server.shutdownGrace -}}
+{{- if .Values.tls.enabled -}}
+{{-   if not .Values.tls.existingSecret -}}
+{{-     fail "tls.existingSecret is required when tls.enabled=true" -}}
+{{-   end -}}
+{{-   if eq .Values.tls.certKey .Values.tls.privateKeyKey -}}
+{{-     fail "tls.certKey and tls.privateKeyKey must differ" -}}
+{{-   end -}}
+{{-   $_ := set $config "tls" (dict "cert_file" "/etc/submilli/tls/server.crt" "key_file" "/etc/submilli/tls/server.key") -}}
+{{- end -}}
 {{- /*
 SUBMILLI_HOME relocates five of the server's six state directories (kept under
 its server/ subdirectory; an older volume is moved into that shape on the first

@@ -19,6 +19,7 @@ pub mod serve;
 pub mod session;
 pub mod session_manager;
 pub mod session_store;
+pub mod tls;
 pub mod volumes;
 
 pub use app::{AppState, app, route_table};

@@ -134,6 +134,47 @@ packages as [Register a blueprint](/docs/server/register-a-blueprint)
 shows; a deploy job does the same with the admin token, which [Manage
 blueprints in Git](/docs/tutorials/manage-blueprints-in-git) builds.
 
+## Enable HTTPS
+
+HTTPS is off by default. Supply a PEM certificate chain and matching private
+key at `/etc/submilli/server.crt` and `/etc/submilli/server.key`. The certificate
+must cover the hostname clients use. To generate a self-signed certificate:
+
+```sh
+sudo openssl req -x509 -newkey rsa:2048 -nodes -days 365 \
+  -keyout /etc/submilli/server.key -out /etc/submilli/server.crt \
+  -subj "/CN=$(hostname -f)" \
+  -addext "subjectAltName=DNS:$(hostname -f)" \
+  -addext 'basicConstraints=critical,CA:FALSE'
+```
+
+Give the server read access:
+
+```sh
+sudo chown submilli:submilli /etc/submilli/server.crt /etc/submilli/server.key
+sudo chmod 0400 /etc/submilli/server.crt /etc/submilli/server.key
+```
+
+Add the TLS block to `/etc/submilli/server.yaml`:
+
+```yaml title="/etc/submilli/server.yaml (fragment)"
+tls:
+  cert_file: /etc/submilli/server.crt
+  key_file: /etc/submilli/server.key
+```
+
+Restart and connect using HTTPS on the same port:
+
+```sh
+sudo systemctl restart submilli
+sudo submilli server status --server "https://$(hostname -f):8128" --token-file /etc/submilli/admin.token
+```
+
+Update application URLs to `https://<hostname>:8128`. For self-signed certificates,
+[Connect the CLI](/docs/server/connect-the-cli#trust-a-self-signed-server)
+shows how to verify and approve the fingerprint. Other clients configure trust
+separately. Restart the service after replacing certificates.
+
 ## Reach an internal service
 
 The server blocks programs from calling private addresses, whatever a

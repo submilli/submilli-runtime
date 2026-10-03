@@ -35,6 +35,11 @@ flate2 = { workspace = true }
 tar = { workspace = true }
 tempfile = { workspace = true }
 
+rustls.workspace = true
+webpki-roots.workspace = true
+x509-parser.workspace = true
+
 [dev-dependencies]
+rcgen.workspace = true
 httpmock = { workspace = true }
 tokio = { workspace = true, features = ["test-util", "macros", "rt", "rt-multi-thread"] }
