@@ -244,7 +244,8 @@ An operation that passes a limit fails with an error that names it, and the
 repository is left as it was. A change is staged in a `.git-submilli-…`
 directory beside `.git` and moved into place at the end; the next change
 removes one a stopped server left behind. If the server stops while it is
-moving files, Git refuses the repository until it is recovered: restore the
+moving files, or a move fails and can't be undone, Git refuses the repository
+until it is recovered: restore the
 repository, from a backup or by cloning it again, then remove the directory.
 
 Operations on one repository take turns within a server, so only one server

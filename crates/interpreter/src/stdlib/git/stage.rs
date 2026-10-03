@@ -84,7 +84,11 @@ pub(super) fn check_stages(repo: &Dir, writes: bool) -> Result<()> {
             );
         }
         if writes {
-            repo.remove_dir_all(name)?;
+            repo.remove_dir_all(name).map_err(|error| {
+                wasmtime::Error::msg(format!(
+                    "git: could not remove {name}, left by an earlier operation: {error}"
+                ))
+            })?;
         }
     }
     Ok(())
@@ -151,7 +155,7 @@ impl Stage {
             repo: Arc::clone(repo),
             meter,
             quota: StagedQuota {
-                quota,
+                limit: quota,
                 staged: Arc::default(),
             },
             state: State::Pending,
@@ -278,7 +282,7 @@ impl Stage {
     /// a program holds it, which keeps it on disk, or it is reached through a
     /// link, which publication won't replace.
     fn replaced_len(&self, path: &str) -> Result<u64> {
-        let Some(quota) = &self.quota.quota else {
+        let Some(quota) = &self.quota.limit else {
             return Ok(0);
         };
         for ancestor in Path::new(path).ancestors().skip(1) {
@@ -320,7 +324,7 @@ impl Stage {
         cancelled: &AtomicBool,
     ) -> Result<()> {
         let plan = self.plan(worktree, cancelled)?;
-        let quota = self.quota.quota.clone();
+        let quota = self.quota.limit.clone();
         // What publication needs replaces what staging held: the staged and
         // spooled files go with the stage.
         let reservation = match &quota {
@@ -347,9 +351,9 @@ impl Stage {
         }
         // Once the first move happens, finish or undo, even if cancelled: no
         // program may see half a change.
-        if let Err(error) = self.dir.write(PUBLISHING, "") {
+        if let Err(error) = self.mark() {
             release(&reservation);
-            return Err(error.into());
+            return Err(error);
         }
         let mut steps = Vec::new();
         let result = self.apply(&plan, &mut steps);
@@ -362,11 +366,10 @@ impl Stage {
                     reservation.settle(quota);
                 }
                 self.state = State::Published;
-                // Unmarked, a stage left behind holds nothing the repository
-                // needs, and is removed by a later change.
-                if self.repo.remove_dir_all(&self.name).is_err() {
-                    let _ = self.dir.remove_file(PUBLISHING);
-                }
+                // Unmarked first: a stage left behind unmarked holds nothing
+                // the repository needs, and a later change removes it.
+                let _ = self.dir.remove_file(PUBLISHING);
+                let _ = self.repo.remove_dir_all(&self.name);
                 Ok(())
             }
             Err(error) => {
@@ -384,6 +387,21 @@ impl Stage {
                 Err(error)
             }
         }
+    }
+
+    /// Marks the stage as holding what the repository needs, durably, before
+    /// the first move.
+    fn mark(&self) -> Result<()> {
+        let marker = self.dir.open_with(
+            PUBLISHING,
+            cap_std::fs::OpenOptions::new().write(true).create_new(true),
+        )?;
+        marker.sync_all()?;
+        // So the marker's name is durable too, where a directory can be synced.
+        if let Ok(stage) = self.dir.open(".") {
+            let _ = stage.sync_all();
+        }
+        Ok(())
     }
 
     /// What publication will move, in order: new objects first, since nothing
@@ -581,6 +599,10 @@ impl Stage {
     /// Undoes `steps`, latest first, going on past one that fails so as
     /// little as possible is left for the host; returns the first failure.
     fn undo(&self, steps: &[Step]) -> Result<()> {
+        #[cfg(test)]
+        if FAIL_UNDO.with(std::cell::Cell::get) {
+            bail!("git: undo failed (injected)");
+        }
         let old = self.dir.open_dir(OLD)?;
         let mut first_failure = None;
         for step in steps.iter().rev() {
@@ -615,21 +637,21 @@ impl Drop for Stage {
 /// stage. The default has no limit.
 #[derive(Clone, Default)]
 pub(super) struct StagedQuota {
-    quota: Option<Arc<DiskQuota>>,
+    limit: Option<Arc<DiskQuota>>,
     staged: Arc<AtomicU64>,
 }
 
 impl StagedQuota {
     /// Counts `bytes` the stage holds, or refuses them past the limit.
     pub(super) fn reserve(&self, bytes: u64) -> Result<(), crate::runtime::QuotaExceeded> {
-        if let Some(quota) = &self.quota {
-            quota.reserve(bytes)?;
+        if let Some(limit) = &self.limit {
+            limit.reserve(bytes)?;
             self.staged.fetch_add(bytes, Ordering::Relaxed);
         }
         Ok(())
     }
 
-    /// Takes over everything counted so far, as publication's own reservation.
+    /// Zeroes what is counted and returns it.
     fn take(&self) -> u64 {
         self.staged.swap(0, Ordering::Relaxed)
     }
@@ -642,8 +664,8 @@ impl StagedQuota {
 
     /// Releases everything counted: the stage is gone unpublished.
     fn release(&self) {
-        if let Some(quota) = &self.quota {
-            quota.release(self.take());
+        if let Some(limit) = &self.limit {
+            limit.release(self.take());
         }
     }
 }
@@ -686,6 +708,8 @@ thread_local! {
     /// Fails publication once it has taken this many steps.
     pub(super) static FAIL_AFTER: std::cell::Cell<Option<usize>> =
         const { std::cell::Cell::new(None) };
+    /// Fails undoing a failed publication.
+    pub(super) static FAIL_UNDO: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]

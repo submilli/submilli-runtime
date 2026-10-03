@@ -1004,3 +1004,46 @@ fn a_leftover_stage_is_cleared_unless_publication_began() {
         assert!(error.to_string().contains("host recovery"), "{error}");
     }
 }
+
+/// A publication that fails and can't be undone keeps what it replaced in its
+/// stage, keeps a `.git` it created, and leaves the repository refused until
+/// the host recovers it.
+#[test]
+fn a_publication_that_cannot_be_undone_needs_host_recovery() {
+    let root = tempfile::tempdir().unwrap();
+    let location = super::location::Location::at(root.path());
+    let open = |writes| {
+        storage::Snapshot::open_unmetered(
+            &location,
+            Arc::new(AtomicBool::new(false)),
+            storage::MAX_WORKING_BYTES,
+            writes,
+        )
+    };
+    let created = storage::Snapshot::init_unmetered(
+        &location,
+        "main",
+        Arc::new(AtomicBool::new(false)),
+        storage::MAX_WORKING_BYTES,
+    )
+    .unwrap();
+    created
+        .stage_worktree_file("notes.txt", 0o100644, b"notes")
+        .unwrap();
+    *created.pending_worktree.borrow_mut() = Some(super::stage::WorktreeChange {
+        remove: Vec::new(),
+        place: vec!["notes.txt".into()],
+    });
+    super::stage::FAIL_AFTER.with(|after| after.set(Some(1)));
+    super::stage::FAIL_UNDO.with(|undo| undo.set(true));
+    let result = created.publish();
+    super::stage::FAIL_AFTER.with(|after| after.set(None));
+    super::stage::FAIL_UNDO.with(|undo| undo.set(false));
+    let error = result.unwrap_err();
+    assert!(format!("{error:#}").contains("host recovery"), "{error:#}");
+    assert!(root.path().join(".git").exists(), "the created .git stays");
+    for writes in [false, true] {
+        let error = open(writes).err().unwrap();
+        assert!(error.to_string().contains("host recovery"), "{error}");
+    }
+}

@@ -118,7 +118,9 @@ pub struct Snapshot {
     quota: Option<Arc<DiskQuota>>,
     /// Whether this operation created `.git`, and the bytes it wrote there.
     created: Option<u64>,
-    published: bool,
+    /// Whether a `.git` this operation created stays when this is dropped:
+    /// published, or holding what a publication that needs host recovery kept.
+    keep_git: bool,
     /// The work this operation does, counted for fuel.
     pub meter: Arc<Meter>,
     // Dropped last: the repository stays held until everything above is gone.
@@ -245,7 +247,7 @@ impl Snapshot {
             stage,
             quota,
             created,
-            published: false,
+            keep_git: false,
             meter,
             _lock: lock,
         };
@@ -473,13 +475,13 @@ impl Snapshot {
         if let Err(error) = stage.publish(worktree.as_ref(), &self.cancelled) {
             if error.is::<super::stage::NeedsHostRecovery>() {
                 // What the stage kept belongs to this `.git`: keep it, counted.
-                self.published = true;
+                self.keep_git = true;
             } else if let Some(quota) = &self.quota {
                 quota.release(created);
             }
             return Err(error);
         }
-        self.published = true;
+        self.keep_git = true;
         Ok(())
     }
 
@@ -613,7 +615,7 @@ impl Drop for Snapshot {
         // The stage goes first, then a repository this operation created and
         // didn't publish; the lock is released last.
         drop(self.stage.take());
-        if self.created.is_some() && !self.published {
+        if self.created.is_some() && !self.keep_git {
             let _ = self.dir.remove_dir_all(".git");
         }
     }
@@ -621,7 +623,8 @@ impl Drop for Snapshot {
 
 /// Everything that must hold before gix opens `.git`, the repository directory
 /// `dir`'s, for an operation that `writes` or doesn't: no stage left by an
-/// unfinished publication, nor, for a change, another live one; nothing in `.git`
+/// unfinished publication (a change clears any other stage left behind);
+/// nothing in `.git`
 /// that could lead gix outside it or into a loop, and a configuration small
 /// enough to parse. Returns the configuration.
 fn check_metadata(

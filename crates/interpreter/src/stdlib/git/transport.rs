@@ -42,10 +42,12 @@ pub fn fetch(
     remote_name: &str,
     branch: &str,
 ) -> Result<FetchResult> {
-    fetch_inner(snapshot, job, remote_name, branch).map_err(preserve_http_setup_failure)
+    fetch_inner(snapshot, job, remote_name, branch).map_err(classify_fetch_failure)
 }
 
-fn preserve_http_setup_failure(error: wasmtime::Error) -> wasmtime::Error {
+/// A fetch failure as the program sees it: a broken HTTP setup is fatal to the
+/// host, a limit of Git's own keeps its type, anything else is as it is.
+fn classify_fetch_failure(error: wasmtime::Error) -> wasmtime::Error {
     if let Some(message) = http_setup_failure(&error) {
         return crate::runtime::host::fatal_host_error(message);
     }
@@ -749,7 +751,7 @@ mod tests {
     #[test]
     fn http_setup_errors_keep_the_fatal_host_marker() {
         let error = http_error(HttpError::Internal("injected setup failure".into()));
-        let error = preserve_http_setup_failure(error.into());
+        let error = classify_fetch_failure(error.into());
         assert!(
             format!("{error:?}").contains("internal host error"),
             "{error:?}"
