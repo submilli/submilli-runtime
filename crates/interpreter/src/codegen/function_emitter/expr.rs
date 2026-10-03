@@ -155,114 +155,13 @@ fn emit_expr_value(
             emit_local_narrow_ref(emitter, ctx, binding, path, &expr.ty)?;
         }
         TypedExprKind::GlobalRef { mangled, .. } => {
-            // Read a top-level `let` / `const` binding. The typed AST
-            // split means we no longer dispatch on
-            // ValueKind here — `FunctionRef` handles the
-            // function-as-value path separately.
-            //
-            // Static-interface receiver bindings (`console`, `Map`,
-            // `Temporal.Instant`) are inert — every call site drops the
-            // receiver — so they lower to a typed null with no global behind
-            // them (see `static_interface_of` in codegen::mod).
-            if let Type::InterfaceRef { mangled: iface, .. } = expr.ty.peel()
-                && ctx.symbols.iface_dispatch(iface) == Some(crate::Dispatch::Static)
-            {
-                match ctx.symbols.value_type(&expr.ty)? {
-                    ValType::Ref(RefType { heap_type, .. }) => {
-                        emitter.instruction(Instruction::RefNull(heap_type));
-                    }
-                    other => {
-                        return Err(crate::codegen::internal_failure(format!(
-                            "static-interface binding lowered to {other:?}"
-                        )));
-                    }
-                }
-                return Ok(());
-            }
-            let idx = ctx.symbols.global_idx(mangled).ok_or_else(|| {
-                crate::codegen::internal_failure("top-level let/const recorded during codegen")
-            })?;
-            emitter.instruction(Instruction::GlobalGet(idx));
-            if let ValType::Ref(RefType {
-                nullable: false, ..
-            }) = ctx.symbols.value_type(&expr.ty)?
-            {
-                emitter.instruction(Instruction::RefAsNonNull);
-            }
+            emit_global_ref(emitter, ctx, mangled, &expr.ty)?;
         }
         TypedExprKind::FunctionRef { mangled, .. } => {
-            // top-level function used as a value. Wrap it in
-            // a closure struct whose funcref points at a per-function
-            // adapter (slot 0 = env, slot 1 = adapter funcref, slot 2
-            // = env sentinel). The shared closure vtable reuses for
-            // the env slot — adapter bodies ignore it, and the slot
-            // just needs a non-null `(ref any)`.
-            let closure_struct_idx = ctx
-                .symbols
-                .closure_struct_type_idx(crate::codegen::closures::classify(&expr.ty)?)
-                .ok_or_else(|| {
-                    crate::codegen::internal_failure(
-                        "closure struct type registered for every function-as-value",
-                    )
-                })?;
-            let adapter_idx = ctx.symbols.adapter_func_idx(mangled).ok_or_else(|| {
-                crate::codegen::internal_failure(
-                    "adapter func recorded for every function-as-value",
-                )
-            })?;
-            let vtable_idx = ctx.symbols.closure_vtable_global_idx().ok_or_else(|| {
-                crate::codegen::internal_failure(
-                    "closure vtable global emitted whenever closures or adapters exist",
-                )
-            })?;
-            emitter.instruction(Instruction::GlobalGet(vtable_idx));
-            emitter.instruction(Instruction::RefFunc(adapter_idx));
-            emitter.instruction(Instruction::GlobalGet(vtable_idx));
-            if let Some(metadata) = ctx.symbols.function_argument_metadata.get(mangled) {
-                crate::codegen::call_arguments::wrap(emitter, ctx, metadata)?;
-            }
-            emitter.instruction(Instruction::StructNew(closure_struct_idx));
+            emit_function_ref(emitter, ctx, mangled, &expr.ty)?;
         }
         TypedExprKind::Call { mangled, args, .. } => {
-            // Static dispatch — the typechecker already resolved this to
-            // a known top-level symbol (`mangled`), so it must be in the
-            // top-level fn registry. Imported (prelude / host) and local
-            // user functions take slightly different emission paths.
-            // No call-boundary box/cast logic here — generic calls route
-            // through [`GenericCall`](TypedExprKind::GenericCall) instead.
-            //
-            // note: variadic callees see one synthesized
-            // `ArrayLiteral` in the rest slot — the typechecker
-            // pre-packs the trailing args — so `args.len()` always
-            // matches `target.params.len()` and no codegen branching
-            // is needed.
-            let target = ctx.symbols.top_level_fn(mangled).ok_or_else(|| {
-                crate::codegen::internal_failure(format!(
-                    "Call references unknown top-level fn `{}`",
-                    mangled.as_str()
-                ))
-            })?;
-            if crate::codegen::field_guards::guarded_constructor(ctx, mangled, &expr.ty)? {
-                let Type::ClassRef { mangled: class, .. } = expr.ty.peel() else {
-                    return Err(crate::codegen::internal_failure("constructor class"));
-                };
-                emit_args_into_slots(emitter, ctx, args, ctx.symbols.class_ctor_abi(class))?;
-                crate::codegen::field_guards::constructor_argument(emitter, ctx, &expr.ty)?;
-                emitter.instruction(Instruction::Call(target.wasm_idx));
-            } else {
-                emit_direct_call(
-                    emitter,
-                    ctx,
-                    target.is_host,
-                    target.wasm_idx,
-                    &target.params,
-                    &target.ret,
-                    args,
-                )?;
-            }
-            if expr.ty.is_void() && !target.ret.is_void() {
-                emitter.instruction(Instruction::Drop);
-            }
+            emit_symbol_call(emitter, ctx, mangled, args, &expr.ty)?;
         }
         TypedExprKind::SuperCtorCall { parent, args } => {
             // Direct call of the parent's constructor *init* fn on the current
@@ -386,58 +285,7 @@ fn emit_expr_value(
             receiver,
             iface,
             name,
-        } => {
-            // property dispatch. The typechecker resolved this
-            // to an interface property at infer time and stamped the
-            // interface's mangled name on the node, so codegen looks
-            // up the getter under `<iface>#<name>` directly — no
-            // receiver-type inspection needed.
-            let key = crate::mangle::extend(iface, &name.name);
-            // Static-interface properties (`Number.EPSILON`) import as
-            // constant globals — no receiver, no getter call.
-            if ctx.symbols.iface_dispatch(iface) == Some(crate::Dispatch::Static) {
-                let global_idx = ctx.symbols.global_idx(&key).ok_or_else(|| {
-                    crate::codegen::internal_failure(
-                        "static interface property recorded as a global import",
-                    )
-                })?;
-                emitter.instruction(Instruction::GlobalGet(global_idx));
-                return Ok(());
-            }
-            if let Some(struct_idx) = inline_length_struct_idx(ctx, iface, &name.name)? {
-                emit_receiver(emitter, ctx, *receiver)?;
-                emit_inline_length(emitter, ctx, struct_idx);
-                return Ok(());
-            }
-            let func_idx = ctx.symbols.func_idx(&key).ok_or_else(|| {
-                crate::codegen::internal_failure(
-                    "interface property getter recorded during the dependency-import pass",
-                )
-            })?;
-            emit_receiver(emitter, ctx, *receiver)?;
-            // InterfaceRef-typed receivers (`Map<K, V>`,
-            // `Set<T>` — Direct dispatch) lower to
-            // `(ref null $Object)`, but the property getter wrapper
-            // takes `(ref $Object)` non-null. Coerce the same way
-            // `emit_method_call` does for the method path. Primitive
-            // Direct receivers (Array, Uint8Array, etc.) already have
-            // non-null Wasm types so no coercion needed.
-            //
-            // `peel` so an aliased InterfaceRef
-            // (`type Query = Map<string, string>` etc.) still hits
-            // this branch — `matches!` on the raw type would miss
-            // the wrapper.
-            if matches!(
-                ctx.ta
-                    .source_type(*receiver)
-                    .map_err(crate::codegen::arena_failure)?
-                    .peel(),
-                Type::InterfaceRef { .. }
-            ) {
-                emitter.instruction(Instruction::RefAsNonNull);
-            }
-            emitter.instruction(Instruction::Call(func_idx));
-        }
+        } => emit_interface_property(emitter, ctx, receiver, iface, name)?,
         TypedExprKind::ArrayLiteral { elements, .. } => {
             emit_array_literal(emitter, ctx, elements)?;
         }
@@ -445,60 +293,7 @@ fn emit_expr_value(
             emit_tuple_literal(emitter, ctx, elements)?;
         }
         TypedExprKind::IndexAccess { receiver, index } => {
-            // Uint8Array uses a different storage shape than
-            // Array (packed i8 vs boxed anyref slots), so the index
-            // recipe forks on the static receiver type. Tuples lower
-            // to `$Array` and fall through to the default arm.
-            let recv_ty = ctx
-                .ta
-                .source_type(*receiver)
-                .map_err(crate::codegen::arena_failure)?
-                .clone();
-            if recv_ty.is_structural_object() {
-                emit_expr(emitter, ctx, *receiver)?;
-                cast::emit_box(
-                    emitter,
-                    ctx,
-                    &ctx.ta
-                        .try_expr(*receiver)
-                        .map_err(crate::codegen::arena_failure)?
-                        .ty,
-                )?;
-                emit_expr(emitter, ctx, *index)?;
-                crate::codegen::cast_check::emit_operation_cast_on_stack(
-                    emitter,
-                    ctx,
-                    &ctx.ta
-                        .try_expr(*index)
-                        .map_err(crate::codegen::arena_failure)?
-                        .ty,
-                    &Type::String,
-                )?;
-                let Some(symbol) = ctx.require(
-                    ctx.symbols.prelude_func_idx("ObjectConstructor##getField"),
-                    "dynamic read imported",
-                ) else {
-                    return Ok(());
-                };
-                emitter.instruction(Instruction::Call(symbol));
-                let checked_ty = ctx
-                    .ta
-                    .source_type(id)
-                    .map_err(crate::codegen::arena_failure)?;
-                crate::codegen::cast_check::emit_checked_cast_on_stack(
-                    emitter,
-                    ctx,
-                    &Type::Unknown,
-                    checked_ty,
-                )?;
-                cast::emit_coerce_to_slot(emitter, ctx, checked_ty, &expr.ty)?;
-            } else if recv_ty.peel() == &Type::Uint8Array {
-                emit_expr(emitter, ctx, *receiver)?;
-                emit_uint8_index_with_receiver_on_stack(emitter, ctx, *index)?;
-            } else {
-                emit_expr(emitter, ctx, *receiver)?;
-                emit_bounds_checked_index_with_receiver_on_stack(emitter, ctx, *index, &expr.ty)?;
-            }
+            emit_index_access(emitter, ctx, id, receiver, index, &expr.ty)?;
         }
         TypedExprKind::Null => {
             // Plan 75.8: `null` lowers to `ref.null none`.
@@ -680,46 +475,7 @@ fn emit_expr_value(
         // A `void` right side has no result slot: see
         // `emit_void_nullish_coalesce`.
         TypedExprKind::NullishCoalesce { lhs, rhs } => {
-            let result_ty = expr.ty.clone();
-            if result_ty.is_void() {
-                return emit_void_nullish_coalesce(emitter, ctx, *lhs, *rhs);
-            }
-            let result_val = ctx.symbols.value_type(&result_ty)?;
-            let lhs_ty = ctx
-                .ta
-                .try_expr(*lhs)
-                .map_err(crate::codegen::arena_failure)?
-                .ty
-                .clone();
-            let lhs_val = ctx.symbols.value_type(&lhs_ty)?;
-            let lhs_is_ref = matches!(lhs_val, ValType::Ref(_));
-            if lhs_is_ref {
-                let tmp = emitter.add_anonymous_local(lhs_val)?;
-                emit_expr(emitter, ctx, *lhs)?;
-                emitter.instruction(Instruction::LocalTee(tmp));
-                emitter.instruction(Instruction::RefIsNull);
-                emitter.emit_if(BlockType::Result(result_val));
-                emit_conditional_operand(emitter, ctx, *rhs, &result_ty)?;
-                emitter.emit_else();
-                emitter.instruction(Instruction::LocalGet(tmp));
-                // The else branch knows the value isn't null; cast
-                // from `lhs_ty`'s Wasm form to the result slot. For a
-                // mixed-typed union (`string | null` → `(ref null
-                // $Object)`) this is a ref-cast down to the result's
-                // concrete heap type, which traps if the value's
-                // runtime tag disagrees (it shouldn't — infer
-                // enforced assignability). `emit_cast_to` handles
-                // both the `ref.as_non_null` lift and the per-type
-                // narrowing cast.
-                crate::codegen::function_emitter::cast::emit_cast_to(emitter, ctx, &result_ty)?;
-                emitter.emit_end();
-            } else {
-                // Non-nullable, primitive-typed lhs — just emit it.
-                emit_expr(emitter, ctx, *lhs)?;
-                crate::codegen::function_emitter::cast::emit_coerce_to_slot(
-                    emitter, ctx, &lhs_ty, &result_ty,
-                )?;
-            }
+            emit_nullish_coalesce(emitter, ctx, lhs, rhs, &expr.ty)?;
         }
         // optional chain. Each `?.` step opens a fresh
         // `if`-with-result that short-circuits to `null` on a null
@@ -796,6 +552,317 @@ fn emit_expr_value(
             )?;
         }
     };
+    Ok(())
+}
+
+fn emit_global_ref(
+    emitter: &mut FunctionEmitter,
+    ctx: &CodegenCtx,
+    mangled: &crate::MangledName,
+    result_ty: &Type,
+) -> Result<(), crate::compiler_error::CompilerFailure> {
+    // Read a top-level `let` / `const` binding. The typed AST
+    // split means we no longer dispatch on
+    // ValueKind here — `FunctionRef` handles the
+    // function-as-value path separately.
+    //
+    // Static-interface receiver bindings (`console`, `Map`,
+    // `Temporal.Instant`) are inert — every call site drops the
+    // receiver — so they lower to a typed null with no global behind
+    // them (see `static_interface_of` in codegen::mod).
+    if let Type::InterfaceRef { mangled: iface, .. } = result_ty.peel()
+        && ctx.symbols.iface_dispatch(iface) == Some(crate::Dispatch::Static)
+    {
+        match ctx.symbols.value_type(result_ty)? {
+            ValType::Ref(RefType { heap_type, .. }) => {
+                emitter.instruction(Instruction::RefNull(heap_type));
+            }
+            other => {
+                return Err(crate::codegen::internal_failure(format!(
+                    "static-interface binding lowered to {other:?}"
+                )));
+            }
+        }
+        return Ok(());
+    }
+    let idx = ctx.symbols.global_idx(mangled).ok_or_else(|| {
+        crate::codegen::internal_failure("top-level let/const recorded during codegen")
+    })?;
+    emitter.instruction(Instruction::GlobalGet(idx));
+    if let ValType::Ref(RefType {
+        nullable: false, ..
+    }) = ctx.symbols.value_type(result_ty)?
+    {
+        emitter.instruction(Instruction::RefAsNonNull);
+    }
+
+    Ok(())
+}
+
+fn emit_function_ref(
+    emitter: &mut FunctionEmitter,
+    ctx: &CodegenCtx,
+    mangled: &crate::MangledName,
+    result_ty: &Type,
+) -> Result<(), crate::compiler_error::CompilerFailure> {
+    // top-level function used as a value. Wrap it in
+    // a closure struct whose funcref points at a per-function
+    // adapter (slot 0 = env, slot 1 = adapter funcref, slot 2
+    // = env sentinel). The shared closure vtable reuses for
+    // the env slot — adapter bodies ignore it, and the slot
+    // just needs a non-null `(ref any)`.
+    let closure_struct_idx = ctx
+        .symbols
+        .closure_struct_type_idx(crate::codegen::closures::classify(result_ty)?)
+        .ok_or_else(|| {
+            crate::codegen::internal_failure(
+                "closure struct type registered for every function-as-value",
+            )
+        })?;
+    let adapter_idx = ctx.symbols.adapter_func_idx(mangled).ok_or_else(|| {
+        crate::codegen::internal_failure("adapter func recorded for every function-as-value")
+    })?;
+    let vtable_idx = ctx.symbols.closure_vtable_global_idx().ok_or_else(|| {
+        crate::codegen::internal_failure(
+            "closure vtable global emitted whenever closures or adapters exist",
+        )
+    })?;
+    emitter.instruction(Instruction::GlobalGet(vtable_idx));
+    emitter.instruction(Instruction::RefFunc(adapter_idx));
+    emitter.instruction(Instruction::GlobalGet(vtable_idx));
+    if let Some(metadata) = ctx.symbols.function_argument_metadata.get(mangled) {
+        crate::codegen::call_arguments::wrap(emitter, ctx, metadata)?;
+    }
+    emitter.instruction(Instruction::StructNew(closure_struct_idx));
+
+    Ok(())
+}
+
+fn emit_symbol_call(
+    emitter: &mut FunctionEmitter,
+    ctx: &CodegenCtx,
+    mangled: &crate::MangledName,
+    args: &[ExprId],
+    result_ty: &Type,
+) -> Result<(), crate::compiler_error::CompilerFailure> {
+    // Static dispatch — the typechecker already resolved this to
+    // a known top-level symbol (`mangled`), so it must be in the
+    // top-level fn registry. Imported (prelude / host) and local
+    // user functions take slightly different emission paths.
+    // No call-boundary box/cast logic here — generic calls route
+    // through [`GenericCall`](TypedExprKind::GenericCall) instead.
+    //
+    // note: variadic callees see one synthesized
+    // `ArrayLiteral` in the rest slot — the typechecker
+    // pre-packs the trailing args — so `args.len()` always
+    // matches `target.params.len()` and no codegen branching
+    // is needed.
+    let target = ctx.symbols.top_level_fn(mangled).ok_or_else(|| {
+        crate::codegen::internal_failure(format!(
+            "Call references unknown top-level fn `{}`",
+            mangled.as_str()
+        ))
+    })?;
+    if crate::codegen::field_guards::guarded_constructor(ctx, mangled, result_ty)? {
+        let Type::ClassRef { mangled: class, .. } = result_ty.peel() else {
+            return Err(crate::codegen::internal_failure("constructor class"));
+        };
+        emit_args_into_slots(emitter, ctx, args, ctx.symbols.class_ctor_abi(class))?;
+        crate::codegen::field_guards::constructor_argument(emitter, ctx, result_ty)?;
+        emitter.instruction(Instruction::Call(target.wasm_idx));
+    } else {
+        emit_direct_call(
+            emitter,
+            ctx,
+            target.is_host,
+            target.wasm_idx,
+            &target.params,
+            &target.ret,
+            args,
+        )?;
+    }
+    if result_ty.is_void() && !target.ret.is_void() {
+        emitter.instruction(Instruction::Drop);
+    }
+
+    Ok(())
+}
+
+fn emit_interface_property(
+    emitter: &mut FunctionEmitter,
+    ctx: &CodegenCtx,
+    receiver: &ExprId,
+    iface: &crate::MangledName,
+    name: &Ident,
+) -> Result<(), crate::compiler_error::CompilerFailure> {
+    // property dispatch. The typechecker resolved this
+    // to an interface property at infer time and stamped the
+    // interface's mangled name on the node, so codegen looks
+    // up the getter under `<iface>#<name>` directly — no
+    // receiver-type inspection needed.
+    let key = crate::mangle::extend(iface, &name.name);
+    // Static-interface properties (`Number.EPSILON`) import as
+    // constant globals — no receiver, no getter call.
+    if ctx.symbols.iface_dispatch(iface) == Some(crate::Dispatch::Static) {
+        let global_idx = ctx.symbols.global_idx(&key).ok_or_else(|| {
+            crate::codegen::internal_failure(
+                "static interface property recorded as a global import",
+            )
+        })?;
+        emitter.instruction(Instruction::GlobalGet(global_idx));
+        return Ok(());
+    }
+    if let Some(struct_idx) = inline_length_struct_idx(ctx, iface, &name.name)? {
+        emit_receiver(emitter, ctx, *receiver)?;
+        emit_inline_length(emitter, ctx, struct_idx);
+        return Ok(());
+    }
+    let func_idx = ctx.symbols.func_idx(&key).ok_or_else(|| {
+        crate::codegen::internal_failure(
+            "interface property getter recorded during the dependency-import pass",
+        )
+    })?;
+    emit_receiver(emitter, ctx, *receiver)?;
+    // InterfaceRef-typed receivers (`Map<K, V>`,
+    // `Set<T>` — Direct dispatch) lower to
+    // `(ref null $Object)`, but the property getter wrapper
+    // takes `(ref $Object)` non-null. Coerce the same way
+    // `emit_method_call` does for the method path. Primitive
+    // Direct receivers (Array, Uint8Array, etc.) already have
+    // non-null Wasm types so no coercion needed.
+    //
+    // `peel` so an aliased InterfaceRef
+    // (`type Query = Map<string, string>` etc.) still hits
+    // this branch — `matches!` on the raw type would miss
+    // the wrapper.
+    if matches!(
+        ctx.ta
+            .source_type(*receiver)
+            .map_err(crate::codegen::arena_failure)?
+            .peel(),
+        Type::InterfaceRef { .. }
+    ) {
+        emitter.instruction(Instruction::RefAsNonNull);
+    }
+    emitter.instruction(Instruction::Call(func_idx));
+
+    Ok(())
+}
+
+fn emit_index_access(
+    emitter: &mut FunctionEmitter,
+    ctx: &CodegenCtx,
+    id: ExprId,
+    receiver: &ExprId,
+    index: &ExprId,
+    result_ty: &Type,
+) -> Result<(), crate::compiler_error::CompilerFailure> {
+    // Uint8Array uses a different storage shape than
+    // Array (packed i8 vs boxed anyref slots), so the index
+    // recipe forks on the static receiver type. Tuples lower
+    // to `$Array` and fall through to the default arm.
+    let recv_ty = ctx
+        .ta
+        .source_type(*receiver)
+        .map_err(crate::codegen::arena_failure)?
+        .clone();
+    if recv_ty.is_structural_object() {
+        emit_expr(emitter, ctx, *receiver)?;
+        cast::emit_box(
+            emitter,
+            ctx,
+            &ctx.ta
+                .try_expr(*receiver)
+                .map_err(crate::codegen::arena_failure)?
+                .ty,
+        )?;
+        emit_expr(emitter, ctx, *index)?;
+        crate::codegen::cast_check::emit_operation_cast_on_stack(
+            emitter,
+            ctx,
+            &ctx.ta
+                .try_expr(*index)
+                .map_err(crate::codegen::arena_failure)?
+                .ty,
+            &Type::String,
+        )?;
+        let Some(symbol) = ctx.require(
+            ctx.symbols.prelude_func_idx("ObjectConstructor##getField"),
+            "dynamic read imported",
+        ) else {
+            return Ok(());
+        };
+        emitter.instruction(Instruction::Call(symbol));
+        let checked_ty = ctx
+            .ta
+            .source_type(id)
+            .map_err(crate::codegen::arena_failure)?;
+        crate::codegen::cast_check::emit_checked_cast_on_stack(
+            emitter,
+            ctx,
+            &Type::Unknown,
+            checked_ty,
+        )?;
+        cast::emit_coerce_to_slot(emitter, ctx, checked_ty, result_ty)?;
+    } else if recv_ty.peel() == &Type::Uint8Array {
+        emit_expr(emitter, ctx, *receiver)?;
+        emit_uint8_index_with_receiver_on_stack(emitter, ctx, *index)?;
+    } else {
+        emit_expr(emitter, ctx, *receiver)?;
+        emit_bounds_checked_index_with_receiver_on_stack(emitter, ctx, *index, result_ty)?;
+    }
+
+    Ok(())
+}
+
+fn emit_nullish_coalesce(
+    emitter: &mut FunctionEmitter,
+    ctx: &CodegenCtx,
+    lhs: &ExprId,
+    rhs: &ExprId,
+    result_ty: &Type,
+) -> Result<(), crate::compiler_error::CompilerFailure> {
+    let result_ty = result_ty.clone();
+    if result_ty.is_void() {
+        return emit_void_nullish_coalesce(emitter, ctx, *lhs, *rhs);
+    }
+    let result_val = ctx.symbols.value_type(&result_ty)?;
+    let lhs_ty = ctx
+        .ta
+        .try_expr(*lhs)
+        .map_err(crate::codegen::arena_failure)?
+        .ty
+        .clone();
+    let lhs_val = ctx.symbols.value_type(&lhs_ty)?;
+    let lhs_is_ref = matches!(lhs_val, ValType::Ref(_));
+    if lhs_is_ref {
+        let tmp = emitter.add_anonymous_local(lhs_val)?;
+        emit_expr(emitter, ctx, *lhs)?;
+        emitter.instruction(Instruction::LocalTee(tmp));
+        emitter.instruction(Instruction::RefIsNull);
+        emitter.emit_if(BlockType::Result(result_val));
+        emit_conditional_operand(emitter, ctx, *rhs, &result_ty)?;
+        emitter.emit_else();
+        emitter.instruction(Instruction::LocalGet(tmp));
+        // The else branch knows the value isn't null; cast
+        // from `lhs_ty`'s Wasm form to the result slot. For a
+        // mixed-typed union (`string | null` → `(ref null
+        // $Object)`) this is a ref-cast down to the result's
+        // concrete heap type, which traps if the value's
+        // runtime tag disagrees (it shouldn't — infer
+        // enforced assignability). `emit_cast_to` handles
+        // both the `ref.as_non_null` lift and the per-type
+        // narrowing cast.
+        crate::codegen::function_emitter::cast::emit_cast_to(emitter, ctx, &result_ty)?;
+        emitter.emit_end();
+    } else {
+        // Non-nullable, primitive-typed lhs — just emit it.
+        emit_expr(emitter, ctx, *lhs)?;
+        crate::codegen::function_emitter::cast::emit_coerce_to_slot(
+            emitter, ctx, &lhs_ty, &result_ty,
+        )?;
+    }
+
     Ok(())
 }
 
@@ -3105,249 +3172,8 @@ fn emit_binary(
                 });
             }
         }
-        BinOp::Eq | BinOp::NotEq => {
-            // The inferer's Eq rule infers the RHS using the LHS's
-            // type as the hint, so both operands share a Wasm
-            // `value_type`. Dispatch off that value-type — the
-            // language `Type` might be a literal-refined primitive
-            // or a literal-only union; at the Wasm level those
-            // collapse to the same compare path as their base
-            // primitive (equality is value-level — the literal
-            // refinement is a typecheck-time restriction, not a
-            // runtime distinction).
-            // Plan 75.8: when either operand is the `null` literal,
-            // emit the non-null side followed by `ref.is_null`
-            // (negated for `NotEq`). This covers `x === null` /
-            // `x !== null` against any nullable value, the primary
-            // null-narrowing predicate. Both-null collapses to a
-            // constant.
-            let lhs_is_null_lit = matches!(
-                ctx.ta
-                    .try_expr(lhs)
-                    .map_err(crate::codegen::arena_failure)?
-                    .kind,
-                TypedExprKind::Null
-            );
-            let rhs_is_null_lit = matches!(
-                ctx.ta
-                    .try_expr(rhs)
-                    .map_err(crate::codegen::arena_failure)?
-                    .kind,
-                TypedExprKind::Null
-            );
-            if lhs_is_null_lit && rhs_is_null_lit {
-                let v: i32 = if matches!(op, BinOp::Eq) { 1 } else { 0 };
-                emitter.instruction(Instruction::I32Const(v));
-                return Ok(());
-            }
-            if lhs_is_null_lit || rhs_is_null_lit {
-                let non_null_side = if lhs_is_null_lit { rhs } else { lhs };
-                let non_null_ty = ctx
-                    .ta
-                    .try_expr(non_null_side)
-                    .map_err(crate::codegen::arena_failure)?
-                    .ty
-                    .clone();
-                let non_null_val = ctx.symbols.value_type(&non_null_ty)?;
-                // Plan 75.10 PR 2: when the non-null side has a
-                // primitive Wasm type (f64 / i32 — e.g., a
-                // narrowed-to-`Number` after assignment), `ref.is_null`
-                // would be a validation error. The answer is
-                // statically known — a primitive can never be null —
-                // so emit the operand for side effects, drop, then
-                // push the constant result.
-                if matches!(non_null_val, ValType::F64 | ValType::I32) {
-                    emit_expr(emitter, ctx, non_null_side)?;
-                    emitter.instruction(Instruction::Drop);
-                    let v: i32 = if matches!(op, BinOp::NotEq) { 1 } else { 0 };
-                    emitter.instruction(Instruction::I32Const(v));
-                    return Ok(());
-                }
-                emit_expr(emitter, ctx, non_null_side)?;
-                emitter.instruction(Instruction::RefIsNull);
-                if matches!(op, BinOp::NotEq) {
-                    emitter.instruction(Instruction::I32Eqz);
-                }
-                return Ok(());
-            }
-            // When either operand admits null the two may differ in Wasm shape
-            // (one `(ref null $Object)`, the other f64 / `(ref $string)` / …),
-            // and the `operand_val` dispatch below assumes a shared value-type.
-            // Route through a null-aware dispatch that boxes both sides to
-            // `(ref [null] $Object)` and calls `vtable.equals`.
-            let lhs_admits_null = may_hold_null(
-                &ctx.ta
-                    .try_expr(lhs)
-                    .map_err(crate::codegen::arena_failure)?
-                    .ty,
-            );
-            let rhs_admits_null = may_hold_null(
-                &ctx.ta
-                    .try_expr(rhs)
-                    .map_err(crate::codegen::arena_failure)?
-                    .ty,
-            );
-            if lhs_admits_null || rhs_admits_null {
-                emit_nullable_eq(emitter, ctx, lhs, rhs, op)?;
-                return Ok(());
-            }
-            let operand_ty = ctx
-                .ta
-                .try_expr(lhs)
-                .map_err(crate::codegen::arena_failure)?
-                .ty
-                .clone();
-            // bigint equality short-circuits to a direct
-            // `submilli:bigint.cmp == 0` call — a faster path than the
-            // generic `ValType::Ref(_)` arm's vtable `equals` dispatch.
-            if matches!(operand_ty.peel(), Type::BigInt) {
-                emit_bigint_cmp_eq_inline(emitter, ctx, lhs, rhs, op)?;
-                return Ok(());
-            }
-            let operand_val = ctx.symbols.value_type(operand_ty.primitive_behavior())?;
-            let string_idx = ctx.symbols.string_type_idx().ok_or_else(|| {
-                crate::codegen::internal_failure("string type registered with intrinsics")
-            })?;
-            match operand_val {
-                ValType::F64 => {
-                    emit_primitive_operand(emitter, ctx, lhs)?;
-                    emit_primitive_operand(emitter, ctx, rhs)?;
-                    emitter.instruction(if matches!(op, BinOp::Eq) {
-                        Instruction::F64Eq
-                    } else {
-                        Instruction::F64Ne
-                    });
-                }
-                ValType::I32 => {
-                    emit_expr(emitter, ctx, lhs)?;
-                    emit_expr(emitter, ctx, rhs)?;
-                    emitter.instruction(if matches!(op, BinOp::Eq) {
-                        Instruction::I32Eq
-                    } else {
-                        Instruction::I32Ne
-                    });
-                }
-                ValType::Ref(RefType {
-                    heap_type: HeapType::Concrete(idx),
-                    ..
-                }) if idx == string_idx => {
-                    emit_expr(emitter, ctx, lhs)?;
-                    emit_expr(emitter, ctx, rhs)?;
-                    let func = ctx.symbols.prelude_func_idx("string_eq").ok_or_else(|| {
-                        crate::codegen::internal_failure("string_eq imported from prelude")
-                    })?;
-                    emitter.instruction(Instruction::Call(func));
-                    if matches!(op, BinOp::NotEq) {
-                        emitter.instruction(Instruction::I32Eqz);
-                    }
-                }
-                ValType::Ref(_) => {
-                    // Object / array / closure / generic-erased (all
-                    // subtypes of `$Object`): load lhs.vtable.equals
-                    // and call it. Each subtype's body runs the
-                    // structural compare for its own shape; nested
-                    // objects / arrays recurse through their own
-                    // vtable.equals slots.
-                    //
-                    // Enum values fall here too — they share the
-                    // `$BoxedNumber` / `$string` shapes whose
-                    // vtable `equals` slot is wired by the prelude.
-                    //
-                    // The Eq rule infers the RHS with the LHS type as
-                    // hint, but a union LHS (`$Object` repr) can pair
-                    // with an RHS that lands on a concrete primitive
-                    // member (`first === 1`, RHS `f64`). Box both sides
-                    // to `$Object` so they match the `equals` slot's
-                    // signature.
-                    emit_expr(emitter, ctx, lhs)?;
-                    cast::emit_box(emitter, ctx, &operand_ty)?;
-                    emit_expr(emitter, ctx, rhs)?;
-                    let rhs_ty = ctx
-                        .ta
-                        .try_expr(rhs)
-                        .map_err(crate::codegen::arena_failure)?
-                        .ty
-                        .clone();
-                    cast::emit_box(emitter, ctx, &rhs_ty)?;
-                    emit_vtable_equality(emitter, ctx, op);
-                }
-                other => {
-                    return Err(crate::codegen::internal_failure(format!(
-                        "typechecker rejects equality on Wasm value-type `{other:?}`"
-                    )));
-                }
-            }
-        }
-        BinOp::And | BinOp::Or => {
-            // JS value-returning short-circuit, mirroring the `??` lowering:
-            // stash the LHS in an anonymous local, truthiness-test the teed
-            // copy, then either evaluate the RHS or replay the kept LHS —
-            // each branch coerced into the result union's slot. `&&` keeps
-            // the LHS when falsy, `||` when truthy.
-            let result_val = ctx.symbols.value_type(result_ty)?;
-            let lhs_ty = ctx
-                .ta
-                .try_expr(lhs)
-                .map_err(crate::codegen::arena_failure)?
-                .ty
-                .clone();
-            let lhs_val = ctx.symbols.value_type(&lhs_ty)?;
-            let lhs_is_ref = matches!(lhs_val, ValType::Ref(_));
-            let tmp = emitter.add_anonymous_local(lhs_val)?;
-            emit_expr(emitter, ctx, lhs)?;
-            emitter.instruction(Instruction::LocalTee(tmp));
-            crate::codegen::function_emitter::cast::emit_condition_to_i32(emitter, ctx, &lhs_ty)?;
-            let emit_rhs_branch = |emitter: &mut FunctionEmitter| -> Result<(), crate::compiler_error::CompilerFailure> {
-                let rhs_ty = ctx
-                    .ta
-                    .try_expr(rhs)
-                    .map_err(crate::codegen::arena_failure)?
-                    .ty
-                    .clone();
-                emit_expr(emitter, ctx, rhs)?;
-                crate::codegen::function_emitter::cast::emit_coerce_to_slot(
-                    emitter, ctx, &rhs_ty, result_ty,
-                )?;
-                Ok(())
-            };
-            // An LHS narrowed to always-truthy (`&&`) or always-falsy (`||`)
-            // is never the result, and the result slot has no room for it:
-            // `c && n()` under `c === true` is a bare f64.
-            let kept_lhs_ty = match op {
-                BinOp::And => falsy_part(&lhs_ty),
-                _ => truthy_part(&lhs_ty),
-            };
-            let lhs_is_never_kept = matches!(kept_lhs_ty.peel(), Type::Never);
-            let emit_kept_lhs_branch = |emitter: &mut FunctionEmitter| {
-                if lhs_is_never_kept {
-                    emitter.instruction(Instruction::Unreachable);
-                    return Ok(());
-                }
-                emitter.instruction(Instruction::LocalGet(tmp));
-                if lhs_is_ref {
-                    // Ref-repr LHS: cast into the result slot's form —
-                    // `ref.as_non_null` lift, downcast, or unbox as needed
-                    // (same contract as the `??` kept branch).
-                    crate::codegen::function_emitter::cast::emit_cast_to(emitter, ctx, result_ty)?;
-                } else {
-                    crate::codegen::function_emitter::cast::emit_coerce_to_slot(
-                        emitter, ctx, &lhs_ty, result_ty,
-                    )?;
-                }
-                Ok::<(), crate::compiler_error::CompilerFailure>(())
-            };
-            emitter.emit_if(BlockType::Result(result_val));
-            match op {
-                BinOp::And => emit_rhs_branch(emitter)?,
-                _ => emit_kept_lhs_branch(emitter)?,
-            }
-            emitter.emit_else();
-            match op {
-                BinOp::And => emit_kept_lhs_branch(emitter)?,
-                _ => emit_rhs_branch(emitter)?,
-            }
-            emitter.emit_end();
-        }
+        BinOp::Eq | BinOp::NotEq => emit_equality(emitter, ctx, op, lhs, rhs)?,
+        BinOp::And | BinOp::Or => emit_logical(emitter, ctx, op, lhs, rhs, result_ty)?,
         BinOp::In => emit_in_operator(emitter, ctx, lhs, rhs)?,
         // infer lifts `Binary { op: NullishCoalesce,.. }`
         // into the dedicated `TypedExprKind::NullishCoalesce` node, so
@@ -3358,6 +3184,269 @@ fn emit_binary(
             ));
         }
     };
+    Ok(())
+}
+
+// Substantial recursive arms live outside the dispatcher so their temporaries
+// do not enlarge every arithmetic expression's stack frame.
+fn emit_equality(
+    emitter: &mut FunctionEmitter,
+    ctx: &CodegenCtx,
+    op: BinOp,
+    lhs: ExprId,
+    rhs: ExprId,
+) -> Result<(), crate::compiler_error::CompilerFailure> {
+    // The inferer's Eq rule infers the RHS using the LHS's
+    // type as the hint, so both operands share a Wasm
+    // `value_type`. Dispatch off that value-type — the
+    // language `Type` might be a literal-refined primitive
+    // or a literal-only union; at the Wasm level those
+    // collapse to the same compare path as their base
+    // primitive (equality is value-level — the literal
+    // refinement is a typecheck-time restriction, not a
+    // runtime distinction).
+    // Plan 75.8: when either operand is the `null` literal,
+    // emit the non-null side followed by `ref.is_null`
+    // (negated for `NotEq`). This covers `x === null` /
+    // `x !== null` against any nullable value, the primary
+    // null-narrowing predicate. Both-null collapses to a
+    // constant.
+    let lhs_is_null_lit = matches!(
+        ctx.ta
+            .try_expr(lhs)
+            .map_err(crate::codegen::arena_failure)?
+            .kind,
+        TypedExprKind::Null
+    );
+    let rhs_is_null_lit = matches!(
+        ctx.ta
+            .try_expr(rhs)
+            .map_err(crate::codegen::arena_failure)?
+            .kind,
+        TypedExprKind::Null
+    );
+    if lhs_is_null_lit && rhs_is_null_lit {
+        let v: i32 = if matches!(op, BinOp::Eq) { 1 } else { 0 };
+        emitter.instruction(Instruction::I32Const(v));
+        return Ok(());
+    }
+    if lhs_is_null_lit || rhs_is_null_lit {
+        let non_null_side = if lhs_is_null_lit { rhs } else { lhs };
+        let non_null_ty = ctx
+            .ta
+            .try_expr(non_null_side)
+            .map_err(crate::codegen::arena_failure)?
+            .ty
+            .clone();
+        let non_null_val = ctx.symbols.value_type(&non_null_ty)?;
+        // Plan 75.10 PR 2: when the non-null side has a
+        // primitive Wasm type (f64 / i32 — e.g., a
+        // narrowed-to-`Number` after assignment), `ref.is_null`
+        // would be a validation error. The answer is
+        // statically known — a primitive can never be null —
+        // so emit the operand for side effects, drop, then
+        // push the constant result.
+        if matches!(non_null_val, ValType::F64 | ValType::I32) {
+            emit_expr(emitter, ctx, non_null_side)?;
+            emitter.instruction(Instruction::Drop);
+            let v: i32 = if matches!(op, BinOp::NotEq) { 1 } else { 0 };
+            emitter.instruction(Instruction::I32Const(v));
+            return Ok(());
+        }
+        emit_expr(emitter, ctx, non_null_side)?;
+        emitter.instruction(Instruction::RefIsNull);
+        if matches!(op, BinOp::NotEq) {
+            emitter.instruction(Instruction::I32Eqz);
+        }
+        return Ok(());
+    }
+    // When either operand admits null the two may differ in Wasm shape
+    // (one `(ref null $Object)`, the other f64 / `(ref $string)` / …),
+    // and the `operand_val` dispatch below assumes a shared value-type.
+    // Route through a null-aware dispatch that boxes both sides to
+    // `(ref [null] $Object)` and calls `vtable.equals`.
+    let lhs_admits_null = may_hold_null(
+        &ctx.ta
+            .try_expr(lhs)
+            .map_err(crate::codegen::arena_failure)?
+            .ty,
+    );
+    let rhs_admits_null = may_hold_null(
+        &ctx.ta
+            .try_expr(rhs)
+            .map_err(crate::codegen::arena_failure)?
+            .ty,
+    );
+    if lhs_admits_null || rhs_admits_null {
+        emit_nullable_eq(emitter, ctx, lhs, rhs, op)?;
+        return Ok(());
+    }
+    let operand_ty = ctx
+        .ta
+        .try_expr(lhs)
+        .map_err(crate::codegen::arena_failure)?
+        .ty
+        .clone();
+    // bigint equality short-circuits to a direct
+    // `submilli:bigint.cmp == 0` call — a faster path than the
+    // generic `ValType::Ref(_)` arm's vtable `equals` dispatch.
+    if matches!(operand_ty.peel(), Type::BigInt) {
+        emit_bigint_cmp_eq_inline(emitter, ctx, lhs, rhs, op)?;
+        return Ok(());
+    }
+    let operand_val = ctx.symbols.value_type(operand_ty.primitive_behavior())?;
+    let string_idx = ctx.symbols.string_type_idx().ok_or_else(|| {
+        crate::codegen::internal_failure("string type registered with intrinsics")
+    })?;
+    match operand_val {
+        ValType::F64 => {
+            emit_primitive_operand(emitter, ctx, lhs)?;
+            emit_primitive_operand(emitter, ctx, rhs)?;
+            emitter.instruction(if matches!(op, BinOp::Eq) {
+                Instruction::F64Eq
+            } else {
+                Instruction::F64Ne
+            });
+        }
+        ValType::I32 => {
+            emit_expr(emitter, ctx, lhs)?;
+            emit_expr(emitter, ctx, rhs)?;
+            emitter.instruction(if matches!(op, BinOp::Eq) {
+                Instruction::I32Eq
+            } else {
+                Instruction::I32Ne
+            });
+        }
+        ValType::Ref(RefType {
+            heap_type: HeapType::Concrete(idx),
+            ..
+        }) if idx == string_idx => {
+            emit_expr(emitter, ctx, lhs)?;
+            emit_expr(emitter, ctx, rhs)?;
+            let func = ctx.symbols.prelude_func_idx("string_eq").ok_or_else(|| {
+                crate::codegen::internal_failure("string_eq imported from prelude")
+            })?;
+            emitter.instruction(Instruction::Call(func));
+            if matches!(op, BinOp::NotEq) {
+                emitter.instruction(Instruction::I32Eqz);
+            }
+        }
+        ValType::Ref(_) => {
+            // Object / array / closure / generic-erased (all
+            // subtypes of `$Object`): load lhs.vtable.equals
+            // and call it. Each subtype's body runs the
+            // structural compare for its own shape; nested
+            // objects / arrays recurse through their own
+            // vtable.equals slots.
+            //
+            // Enum values fall here too — they share the
+            // `$BoxedNumber` / `$string` shapes whose
+            // vtable `equals` slot is wired by the prelude.
+            //
+            // The Eq rule infers the RHS with the LHS type as
+            // hint, but a union LHS (`$Object` repr) can pair
+            // with an RHS that lands on a concrete primitive
+            // member (`first === 1`, RHS `f64`). Box both sides
+            // to `$Object` so they match the `equals` slot's
+            // signature.
+            emit_expr(emitter, ctx, lhs)?;
+            cast::emit_box(emitter, ctx, &operand_ty)?;
+            emit_expr(emitter, ctx, rhs)?;
+            let rhs_ty = ctx
+                .ta
+                .try_expr(rhs)
+                .map_err(crate::codegen::arena_failure)?
+                .ty
+                .clone();
+            cast::emit_box(emitter, ctx, &rhs_ty)?;
+            emit_vtable_equality(emitter, ctx, op);
+        }
+        other => {
+            return Err(crate::codegen::internal_failure(format!(
+                "typechecker rejects equality on Wasm value-type `{other:?}`"
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn emit_logical(
+    emitter: &mut FunctionEmitter,
+    ctx: &CodegenCtx,
+    op: BinOp,
+    lhs: ExprId,
+    rhs: ExprId,
+    result_ty: &Type,
+) -> Result<(), crate::compiler_error::CompilerFailure> {
+    // JS value-returning short-circuit, mirroring the `??` lowering:
+    // stash the LHS in an anonymous local, truthiness-test the teed
+    // copy, then either evaluate the RHS or replay the kept LHS —
+    // each branch coerced into the result union's slot. `&&` keeps
+    // the LHS when falsy, `||` when truthy.
+    let result_val = ctx.symbols.value_type(result_ty)?;
+    let lhs_ty = ctx
+        .ta
+        .try_expr(lhs)
+        .map_err(crate::codegen::arena_failure)?
+        .ty
+        .clone();
+    let lhs_val = ctx.symbols.value_type(&lhs_ty)?;
+    let lhs_is_ref = matches!(lhs_val, ValType::Ref(_));
+    let tmp = emitter.add_anonymous_local(lhs_val)?;
+    emit_expr(emitter, ctx, lhs)?;
+    emitter.instruction(Instruction::LocalTee(tmp));
+    crate::codegen::function_emitter::cast::emit_condition_to_i32(emitter, ctx, &lhs_ty)?;
+    let emit_rhs_branch =
+        |emitter: &mut FunctionEmitter| -> Result<(), crate::compiler_error::CompilerFailure> {
+            let rhs_ty = ctx
+                .ta
+                .try_expr(rhs)
+                .map_err(crate::codegen::arena_failure)?
+                .ty
+                .clone();
+            emit_expr(emitter, ctx, rhs)?;
+            crate::codegen::function_emitter::cast::emit_coerce_to_slot(
+                emitter, ctx, &rhs_ty, result_ty,
+            )?;
+            Ok(())
+        };
+    // An LHS narrowed to always-truthy (`&&`) or always-falsy (`||`)
+    // is never the result, and the result slot has no room for it:
+    // `c && n()` under `c === true` is a bare f64.
+    let kept_lhs_ty = match op {
+        BinOp::And => falsy_part(&lhs_ty),
+        _ => truthy_part(&lhs_ty),
+    };
+    let lhs_is_never_kept = matches!(kept_lhs_ty.peel(), Type::Never);
+    let emit_kept_lhs_branch = |emitter: &mut FunctionEmitter| {
+        if lhs_is_never_kept {
+            emitter.instruction(Instruction::Unreachable);
+            return Ok(());
+        }
+        emitter.instruction(Instruction::LocalGet(tmp));
+        if lhs_is_ref {
+            // Ref-repr LHS: cast into the result slot's form —
+            // `ref.as_non_null` lift, downcast, or unbox as needed
+            // (same contract as the `??` kept branch).
+            crate::codegen::function_emitter::cast::emit_cast_to(emitter, ctx, result_ty)?;
+        } else {
+            crate::codegen::function_emitter::cast::emit_coerce_to_slot(
+                emitter, ctx, &lhs_ty, result_ty,
+            )?;
+        }
+        Ok::<(), crate::compiler_error::CompilerFailure>(())
+    };
+    emitter.emit_if(BlockType::Result(result_val));
+    match op {
+        BinOp::And => emit_rhs_branch(emitter)?,
+        _ => emit_kept_lhs_branch(emitter)?,
+    }
+    emitter.emit_else();
+    match op {
+        BinOp::And => emit_kept_lhs_branch(emitter)?,
+        _ => emit_rhs_branch(emitter)?,
+    }
+    emitter.emit_end();
     Ok(())
 }
 
