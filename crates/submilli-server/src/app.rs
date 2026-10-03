@@ -965,7 +965,9 @@ mod tests {
         let blueprint = submilli_blueprint::parse("name: test\nmcp:\n  local:\n    url: http://127.0.0.1:1/mcp\n    auth:\n      type: oauth2\n").unwrap();
         let state = AppState::new(ServerConfig {
             secret_store: Some(store),
-            blueprints: Some(Arc::new(InMemoryBlueprintStore::seed([blueprint.clone()]))),
+            blueprints: Some(Arc::new(
+                InMemoryBlueprintStore::seed([blueprint.clone()]).expect("seed blueprints"),
+            )),
             ..ServerConfig::default()
         })
         .unwrap();

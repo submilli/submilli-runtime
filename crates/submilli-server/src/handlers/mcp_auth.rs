@@ -50,8 +50,21 @@ fn store(state: &AppState) -> Result<&Arc<dyn SecretStore>, Failure> {
     })
 }
 
+fn blueprint_store_error(error: crate::blueprint::StoreError) -> Failure {
+    err(
+        StatusCode::INTERNAL_SERVER_ERROR,
+        "internal_error",
+        crate::blueprint::store_failure_message(error).into(),
+    )
+}
+
 async fn get_blueprint(state: &AppState, name: &str) -> Result<Blueprint, Failure> {
-    match state.blueprints().get(name).await {
+    match state
+        .blueprints()
+        .get(name)
+        .await
+        .map_err(blueprint_store_error)?
+    {
         Some(blueprint) => Ok(blueprint),
         // A name held out of the parsed set is still registered — reporting it as
         // unregistered here would send an operator looking for a blueprint sitting
@@ -59,7 +72,9 @@ async fn get_blueprint(state: &AppState, name: &str) -> Result<Blueprint, Failur
         None => Err(err(
             StatusCode::NOT_FOUND,
             "unknown_blueprint",
-            blueprint_miss_message(state, name).await,
+            blueprint_miss_message(state, name)
+                .await
+                .map_err(blueprint_store_error)?,
         )),
     }
 }

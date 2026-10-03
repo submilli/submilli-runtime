@@ -71,7 +71,9 @@ impl Harness {
     ) -> Self {
         let vfs_root = tempfile::tempdir().expect("vfs root");
         let config = ServerConfig {
-            blueprints: Some(Arc::new(InMemoryBlueprintStore::seed(blueprints))),
+            blueprints: Some(Arc::new(
+                InMemoryBlueprintStore::seed(blueprints).expect("seed blueprints"),
+            )),
             session_storage_root: Some(vfs_root.path().to_path_buf()),
             ..ServerConfig::default()
         };
@@ -441,14 +443,17 @@ async fn a_restored_session_starts_with_an_empty_store() {
     let vfs_root = tempfile::tempdir().expect("vfs root");
     let build = || {
         let config = ServerConfig {
-            blueprints: Some(Arc::new(InMemoryBlueprintStore::seed(vec![blueprint(
-                BLUEPRINT,
-                VfsConfig::PerSession {
-                    size_limit: None,
-                    mounts: Default::default(),
-                    cwd: None,
-                },
-            )]))),
+            blueprints: Some(Arc::new(
+                InMemoryBlueprintStore::seed(vec![blueprint(
+                    BLUEPRINT,
+                    VfsConfig::PerSession {
+                        size_limit: None,
+                        mounts: Default::default(),
+                        cwd: None,
+                    },
+                )])
+                .expect("seed blueprints"),
+            )),
             session_storage_root: Some(vfs_root.path().to_path_buf()),
             session_store_dir: Some(store_dir.path().to_path_buf()),
             ..ServerConfig::default()

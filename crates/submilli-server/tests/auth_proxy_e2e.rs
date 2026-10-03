@@ -24,7 +24,7 @@ use tower::ServiceExt;
 /// Build a router with a preloaded blueprint store.
 fn router_with_blueprint(config_base: ServerConfig, yaml: &str) -> Router {
     let blueprint = submilli_blueprint::parse(yaml).expect("valid blueprint");
-    let store = Arc::new(InMemoryBlueprintStore::seed([blueprint]));
+    let store = Arc::new(InMemoryBlueprintStore::seed([blueprint]).expect("seed blueprints"));
     app(AppState::new(ServerConfig {
         blueprints: Some(store),
         ..config_base

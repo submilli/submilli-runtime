@@ -26,7 +26,7 @@ function main(): number { check("test.com/op", { amount: 100 }); return 1; }
 
 fn router(policy_yaml: &str, package_store_root: Option<&Path>) -> Router {
     let blueprint = submilli_blueprint::parse(policy_yaml).expect("valid policy blueprint");
-    let blueprints = Arc::new(InMemoryBlueprintStore::seed([blueprint]));
+    let blueprints = Arc::new(InMemoryBlueprintStore::seed([blueprint]).expect("seed blueprints"));
     let config = ServerConfig {
         blueprints: Some(blueprints),
         package_store_root: package_store_root.map(Path::to_path_buf),

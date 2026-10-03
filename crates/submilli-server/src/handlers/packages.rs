@@ -191,7 +191,12 @@ async fn registered_blueprint(
     ),
     BlueprintMiss,
 > {
-    match state.blueprints().get(name).await {
+    match state
+        .blueprints()
+        .get(name)
+        .await
+        .map_err(crate::blueprint::store_failure_response)?
+    {
         Some(blueprint) => {
             let catalog = state.mcp_catalog(name, &blueprint).await;
             Ok((blueprint, catalog))

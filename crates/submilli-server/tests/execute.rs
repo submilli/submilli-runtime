@@ -21,10 +21,13 @@ use uuid::Uuid;
 const BLUEPRINT_NAME: &str = "test";
 
 fn router() -> Router {
-    let blueprints = Arc::new(InMemoryBlueprintStore::seed([Blueprint {
-        name: BLUEPRINT_NAME.into(),
-        ..Default::default()
-    }]));
+    let blueprints = Arc::new(
+        InMemoryBlueprintStore::seed([Blueprint {
+            name: BLUEPRINT_NAME.into(),
+            ..Default::default()
+        }])
+        .expect("seed blueprints"),
+    );
     let config = ServerConfig {
         blueprints: Some(blueprints),
         ..ServerConfig::default()
@@ -45,11 +48,14 @@ fn router_with_packages_and_runtime(
     packages: &[&str],
     runtime: RuntimeConfig,
 ) -> Router {
-    let blueprints = Arc::new(InMemoryBlueprintStore::seed([Blueprint {
-        name: BLUEPRINT_NAME.into(),
-        packages: packages.iter().map(ToString::to_string).collect(),
-        ..Default::default()
-    }]));
+    let blueprints = Arc::new(
+        InMemoryBlueprintStore::seed([Blueprint {
+            name: BLUEPRINT_NAME.into(),
+            packages: packages.iter().map(ToString::to_string).collect(),
+            ..Default::default()
+        }])
+        .expect("seed blueprints"),
+    );
     let config = ServerConfig {
         blueprints: Some(blueprints),
         package_store_root: Some(package_store_root),
@@ -60,24 +66,27 @@ fn router_with_packages_and_runtime(
 }
 
 fn router_with_oauth_mcp() -> Router {
-    let blueprints = Arc::new(InMemoryBlueprintStore::seed([Blueprint {
-        name: BLUEPRINT_NAME.into(),
-        mcp: BTreeMap::from([(
-            "github".to_string(),
-            McpServer {
-                transport: "streamable_http".into(),
-                url: "https://api.githubcopilot.com/mcp/".into(),
-                headers: BTreeMap::new(),
-                auth: Some(McpAuth::Oauth2 {
-                    client_id: None,
-                    authorization_endpoint: None,
-                    token_endpoint: None,
-                    scopes: Vec::new(),
-                }),
-            },
-        )]),
-        ..Default::default()
-    }]));
+    let blueprints = Arc::new(
+        InMemoryBlueprintStore::seed([Blueprint {
+            name: BLUEPRINT_NAME.into(),
+            mcp: BTreeMap::from([(
+                "github".to_string(),
+                McpServer {
+                    transport: "streamable_http".into(),
+                    url: "https://api.githubcopilot.com/mcp/".into(),
+                    headers: BTreeMap::new(),
+                    auth: Some(McpAuth::Oauth2 {
+                        client_id: None,
+                        authorization_endpoint: None,
+                        token_endpoint: None,
+                        scopes: Vec::new(),
+                    }),
+                },
+            )]),
+            ..Default::default()
+        }])
+        .expect("seed blueprints"),
+    );
     let config = ServerConfig {
         blueprints: Some(blueprints),
         ..ServerConfig::default()
@@ -310,11 +319,14 @@ async fn blueprint_package_resolves_from_the_fallback_store() {
     let owned = tmp.path().join("server-packages");
     let fallback = tmp.path().join("cli-packages");
     write_acme_util_package(&fallback);
-    let blueprints = Arc::new(InMemoryBlueprintStore::seed([Blueprint {
-        name: BLUEPRINT_NAME.into(),
-        packages: ["@acme/util".to_string()].into_iter().collect(),
-        ..Default::default()
-    }]));
+    let blueprints = Arc::new(
+        InMemoryBlueprintStore::seed([Blueprint {
+            name: BLUEPRINT_NAME.into(),
+            packages: ["@acme/util".to_string()].into_iter().collect(),
+            ..Default::default()
+        }])
+        .expect("seed blueprints"),
+    );
     let router = app(AppState::new(ServerConfig {
         blueprints: Some(blueprints),
         package_store_root: Some(owned.clone()),
@@ -963,10 +975,13 @@ async fn git_transitive_imports_require_configuration_and_keep_package_attributi
 #[tokio::test]
 async fn configured_execution_timeout_interrupts_loop_without_expiring_early() {
     use std::time::{Duration, Instant};
-    let blueprints = Arc::new(InMemoryBlueprintStore::seed([Blueprint {
-        name: BLUEPRINT_NAME.into(),
-        ..Default::default()
-    }]));
+    let blueprints = Arc::new(
+        InMemoryBlueprintStore::seed([Blueprint {
+            name: BLUEPRINT_NAME.into(),
+            ..Default::default()
+        }])
+        .expect("seed blueprints"),
+    );
     let router = app(AppState::new(ServerConfig {
         blueprints: Some(blueprints),
         runtime: RuntimeConfig {

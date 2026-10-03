@@ -299,8 +299,18 @@ impl SessionManager for VfsSessionManager {
         // `apply` is honoured; the handler's pre-check already validated against
         // this same store, so a well-formed request won't reach the 500-mapped
         // error path here.
-        let Some(blueprint) = self.state.blueprints().get(&self.blueprint_name).await else {
-            let reason = blueprint_miss_message(&self.state, &self.blueprint_name).await;
+        let Some(blueprint) = self
+            .state
+            .blueprints()
+            .get(&self.blueprint_name)
+            .await
+            .map_err(|error| init_error(crate::blueprint::store_failure_message(error).into()))?
+        else {
+            let reason = blueprint_miss_message(&self.state, &self.blueprint_name)
+                .await
+                .map_err(|error| {
+                    init_error(crate::blueprint::store_failure_message(error).into())
+                })?;
             return Err(init_error(reason));
         };
         let supplied = supplied_variables(&message).map_err(init_error)?;

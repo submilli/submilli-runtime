@@ -257,7 +257,7 @@ pub async fn add(
                     name.clone(),
                 )),
             ),
-            StoreError::Io(message) => internal_error(message),
+            error => store_error(error),
         })?;
     Ok((StatusCode::OK, Json(AddResponse { name })))
 }
@@ -285,6 +285,7 @@ pub async fn apply(
         .blueprints()
         .get(&name)
         .await
+        .map_err(store_error)?
         .is_some_and(|existing| existing.packages != blueprint.packages);
     if blueprint.name != name {
         let message = format!(
@@ -306,10 +307,7 @@ pub async fn apply(
             permissions_last_preserving_comments(&req.yaml),
         ))
         .await
-        .map_err(|err| match err {
-            StoreError::Io(message) => internal_error(message),
-            StoreError::AlreadyExists => internal_error("unexpected conflict on upsert".into()),
-        })?;
+        .map_err(store_error)?;
     // Keep the live MCP service (and its sessions) — the execute path re-fetches
     // the blueprint per call, so open sessions run under the new config. Only the
     // discovered `@mcp/<server>` catalog and changed packages need rebuilding.
@@ -332,7 +330,12 @@ pub async fn show(
     State(state): State<AppState>,
     Path(name): Path<String>,
 ) -> Result<(StatusCode, Json<ShowResponse>), (StatusCode, Json<ErrorResponse>)> {
-    match state.blueprints().get_yaml(&name).await {
+    match state
+        .blueprints()
+        .get_yaml(&name)
+        .await
+        .map_err(store_error)?
+    {
         Some(yaml) => Ok((StatusCode::OK, Json(ShowResponse { yaml, name }))),
         None => Err(not_found(name)),
     }
@@ -368,7 +371,7 @@ pub async fn prompt(
     State(state): State<AppState>,
     Path(name): Path<String>,
 ) -> Result<(StatusCode, Json<PromptResponse>), (StatusCode, Json<ErrorResponse>)> {
-    match state.blueprints().get(&name).await {
+    match state.blueprints().get(&name).await.map_err(store_error)? {
         Some(blueprint) => Ok((
             StatusCode::OK,
             Json(PromptResponse {
@@ -400,10 +403,7 @@ pub async fn remove(
         .blueprints()
         .remove(&name)
         .await
-        .map_err(|err| match err {
-            StoreError::Io(message) => internal_error(message),
-            StoreError::AlreadyExists => internal_error("unexpected conflict on remove".into()),
-        })?;
+        .map_err(store_error)?;
     if removed {
         state.wipe_blueprint_sessions(&name).await;
         state.evict_mcp_service(&name);
@@ -413,6 +413,10 @@ pub async fn remove(
     } else {
         Err(not_found(name))
     }
+}
+
+fn store_error(error: StoreError) -> (StatusCode, Json<ErrorResponse>) {
+    internal_error(crate::blueprint::store_failure_message(error).into())
 }
 
 fn internal_error(message: String) -> (StatusCode, Json<ErrorResponse>) {
@@ -506,15 +510,18 @@ pub struct ListResponse {
     pub blueprints: Vec<BlueprintSummary>,
 }
 
-pub async fn list(State(state): State<AppState>) -> Json<ListResponse> {
+pub async fn list(
+    State(state): State<AppState>,
+) -> Result<Json<ListResponse>, (StatusCode, Json<ErrorResponse>)> {
     let blueprints = state
         .blueprints()
         .list_blueprints()
         .await
+        .map_err(store_error)?
         .iter()
         .map(BlueprintSummary::from)
         .collect();
-    Json(ListResponse { blueprints })
+    Ok(Json(ListResponse { blueprints }))
 }
 
 pub(crate) fn permissions_last_preserving_comments(yaml: &str) -> String {

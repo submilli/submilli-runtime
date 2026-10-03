@@ -13,7 +13,8 @@ async fn get(route: &str) -> (StatusCode, Value) {
     let blueprint = submilli_blueprint::parse("name: open\ndefault: allow\n").expect("blueprint");
     let state = AppState::new(ServerConfig {
         blueprints: Some(std::sync::Arc::new(
-            submilli_server::blueprint::InMemoryBlueprintStore::seed([blueprint]),
+            submilli_server::blueprint::InMemoryBlueprintStore::seed([blueprint])
+                .expect("seed blueprints"),
         )),
         ..ServerConfig::default()
     })
@@ -325,11 +326,14 @@ mod blueprint_scoped {
     /// `@acme/tools` has an artifact on disk.
     fn router_declaring(store_root: &Path, packages: impl IntoIterator<Item = String>) -> Router {
         write_package(store_root);
-        let blueprints = Arc::new(InMemoryBlueprintStore::seed([Blueprint {
-            name: BLUEPRINT.into(),
-            packages: packages.into_iter().collect::<BTreeSet<String>>(),
-            ..Default::default()
-        }]));
+        let blueprints = Arc::new(
+            InMemoryBlueprintStore::seed([Blueprint {
+                name: BLUEPRINT.into(),
+                packages: packages.into_iter().collect::<BTreeSet<String>>(),
+                ..Default::default()
+            }])
+            .expect("seed blueprints"),
+        );
         let config = ServerConfig {
             blueprints: Some(blueprints),
             package_store_root: Some(store_root.to_path_buf()),
@@ -464,7 +468,9 @@ mod blueprint_scoped {
             ))
             .unwrap();
             let router = app(AppState::new(ServerConfig {
-                blueprints: Some(Arc::new(InMemoryBlueprintStore::seed([blueprint]))),
+                blueprints: Some(Arc::new(
+                    InMemoryBlueprintStore::seed([blueprint]).expect("seed blueprints"),
+                )),
                 ..ServerConfig::default()
             })
             .unwrap());

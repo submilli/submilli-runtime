@@ -21,7 +21,9 @@ use tower::ServiceExt;
 fn router(yaml: &str, package_store_root: Option<&Path>) -> Router {
     let blueprint = submilli_blueprint::parse(yaml).expect("valid blueprint");
     let config = ServerConfig {
-        blueprints: Some(Arc::new(InMemoryBlueprintStore::seed([blueprint]))),
+        blueprints: Some(Arc::new(
+            InMemoryBlueprintStore::seed([blueprint]).expect("seed blueprints"),
+        )),
         package_store_root: package_store_root.map(Path::to_path_buf),
         ..ServerConfig::default()
     };

@@ -21,7 +21,7 @@ fn seeded_router(yamls: &[&str]) -> Router {
     let blueprints = yamls
         .iter()
         .map(|yaml| submilli_blueprint::parse(yaml).expect("valid blueprint"));
-    let store = Arc::new(InMemoryBlueprintStore::seed(blueprints));
+    let store = Arc::new(InMemoryBlueprintStore::seed(blueprints).expect("seed blueprints"));
     app(AppState::new(ServerConfig {
         blueprints: Some(store),
         ..ServerConfig::default()

@@ -185,10 +185,18 @@ impl SubmilliMcp {
     /// runnable blueprint, so the refusal names that reason instead of telling the
     /// agent the endpoint it is connected to addresses nothing.
     async fn require_blueprint(&self) -> Result<Blueprint, ErrorData> {
-        match self.state.blueprints().get(&self.blueprint_name).await {
+        match self
+            .state
+            .blueprints()
+            .get(&self.blueprint_name)
+            .await
+            .map_err(blueprint_store_error)?
+        {
             Some(blueprint) => Ok(blueprint),
             None => Err(ErrorData::invalid_request(
-                blueprint_miss_message(&self.state, &self.blueprint_name).await,
+                blueprint_miss_message(&self.state, &self.blueprint_name)
+                    .await
+                    .map_err(blueprint_store_error)?,
                 None,
             )),
         }
@@ -196,12 +204,14 @@ impl SubmilliMcp {
 
     /// The current blueprint, re-fetched from the store so a mid-session update is
     /// reflected; falls back to the build-time snapshot if it was removed.
-    async fn current_blueprint(&self) -> Blueprint {
-        self.state
+    async fn current_blueprint(&self) -> Result<Blueprint, ErrorData> {
+        Ok(self
+            .state
             .blueprints()
             .get(&self.blueprint_name)
             .await
-            .unwrap_or_else(|| self.blueprint.clone())
+            .map_err(blueprint_store_error)?
+            .unwrap_or_else(|| self.blueprint.clone()))
     }
 
     /// Open the VFS a tool operates on. `per_session` resolves the session's
@@ -448,7 +458,13 @@ impl SubmilliMcp {
         &self,
         Parameters(args): Parameters<PackageDocsArgs>,
     ) -> Result<CallToolResult, ErrorData> {
-        let lookup = match self.state.blueprints().get(&self.blueprint_name).await {
+        let lookup = match self
+            .state
+            .blueprints()
+            .get(&self.blueprint_name)
+            .await
+            .map_err(blueprint_store_error)?
+        {
             Some(blueprint) => {
                 let catalog = self
                     .state
@@ -482,7 +498,13 @@ impl SubmilliMcp {
         // Fold this blueprint's `@mcp/<server>` packages in alongside the stdlib
         // hits, so search can discover MCP tooling — not just `packages.docs` once
         // the server name is already known.
-        let value = match self.state.blueprints().get(&self.blueprint_name).await {
+        let value = match self
+            .state
+            .blueprints()
+            .get(&self.blueprint_name)
+            .await
+            .map_err(blueprint_store_error)?
+        {
             Some(blueprint) => {
                 let catalog = self
                     .state
@@ -511,20 +533,25 @@ impl SubmilliMcp {
     ) -> Result<CallToolResult, ErrorData> {
         // The bound blueprint's `@mcp/*` names, so a package name asked of this
         // tool gets the correcting call rather than a bare unknown.
-        let (mcp_packages, visibility) =
-            match self.state.blueprints().get(&self.blueprint_name).await {
-                Some(blueprint) => {
-                    let catalog = self
-                        .state
-                        .mcp_catalog(&self.blueprint_name, &blueprint)
-                        .await;
-                    (
-                        packages::mcp_package_names(&catalog),
-                        LibraryVisibility::for_blueprint(&blueprint),
-                    )
-                }
-                None => (Vec::new(), LibraryVisibility::unscoped()),
-            };
+        let (mcp_packages, visibility) = match self
+            .state
+            .blueprints()
+            .get(&self.blueprint_name)
+            .await
+            .map_err(blueprint_store_error)?
+        {
+            Some(blueprint) => {
+                let catalog = self
+                    .state
+                    .mcp_catalog(&self.blueprint_name, &blueprint)
+                    .await;
+                (
+                    packages::mcp_package_names(&catalog),
+                    LibraryVisibility::for_blueprint(&blueprint),
+                )
+            }
+            None => (Vec::new(), LibraryVisibility::unscoped()),
+        };
         Ok(CallToolResult::structured(packages::builtins_docs_json(
             &args.names,
             &mcp_packages,
@@ -938,7 +965,7 @@ impl ServerHandler for SubmilliMcp {
     ) -> Result<ListToolsResult, ErrorData> {
         use submilli_shared::prompt::tools as shared;
         let mut tools = self.tool_router.list_all();
-        let mut blueprint = self.current_blueprint().await;
+        let mut blueprint = self.current_blueprint().await?;
         let session_id = context
             .extensions
             .get::<axum::http::request::Parts>()
@@ -981,6 +1008,10 @@ impl ServerHandler for SubmilliMcp {
     fn get_tool(&self, name: &str) -> Option<Tool> {
         self.tool_router.get(name).cloned()
     }
+}
+
+fn blueprint_store_error(error: crate::blueprint::StoreError) -> ErrorData {
+    ErrorData::internal_error(crate::blueprint::store_failure_message(error), None)
 }
 
 fn tool_call_failure(error: ErrorData) -> Result<CallToolResult, ErrorData> {

@@ -132,7 +132,9 @@ fn router_with_ledger() -> (Router, Arc<dyn IdempotencyStore>) {
     let ledger: Arc<dyn IdempotencyStore> = Arc::new(InMemoryIdempotencyStore::default());
     let blueprint = submilli_blueprint::parse(POLICY).expect("valid blueprint");
     let state = AppState::new(ServerConfig {
-        blueprints: Some(Arc::new(InMemoryBlueprintStore::seed([blueprint]))),
+        blueprints: Some(Arc::new(
+            InMemoryBlueprintStore::seed([blueprint]).expect("seed blueprints"),
+        )),
         idempotency_store: Some(Arc::clone(&ledger)),
         ..ServerConfig::default()
     })
@@ -372,9 +374,12 @@ async fn an_unbound_harness_secret_is_reported_before_the_key_is_considered() {
     let sessions: Arc<dyn DurableSessionStore> = Arc::new(InMemoryDurableSessionStore::default());
     let build = || {
         AppState::new(ServerConfig {
-            blueprints: Some(Arc::new(InMemoryBlueprintStore::seed([
-                submilli_blueprint::parse(NEEDS_SECRET).expect("valid blueprint"),
-            ]))),
+            blueprints: Some(Arc::new(
+                InMemoryBlueprintStore::seed([
+                    submilli_blueprint::parse(NEEDS_SECRET).expect("valid blueprint")
+                ])
+                .expect("seed blueprints"),
+            )),
             idempotency_store: Some(Arc::clone(&ledger)),
             session_store: Some(Arc::clone(&sessions)),
             ..ServerConfig::default()
@@ -465,7 +470,9 @@ async fn a_pre_dispatch_failure_leaves_no_entry_and_a_retry_runs_again() {
     )
     .expect("valid blueprint");
     let state = AppState::new(ServerConfig {
-        blueprints: Some(Arc::new(InMemoryBlueprintStore::seed([blueprint]))),
+        blueprints: Some(Arc::new(
+            InMemoryBlueprintStore::seed([blueprint]).expect("seed blueprints"),
+        )),
         idempotency_store: Some(Arc::clone(&ledger)),
         package_store_root: Some(tempfile::tempdir().unwrap().keep()),
         ..ServerConfig::default()
@@ -553,7 +560,9 @@ async fn the_file_backed_ledger_records_and_replays_through_the_endpoint() {
         Arc::new(FileIdempotencyStore::new(root.clone()).expect("file ledger"));
     let blueprint = submilli_blueprint::parse(POLICY).expect("valid blueprint");
     let router = app(AppState::new(ServerConfig {
-        blueprints: Some(Arc::new(InMemoryBlueprintStore::seed([blueprint]))),
+        blueprints: Some(Arc::new(
+            InMemoryBlueprintStore::seed([blueprint]).expect("seed blueprints"),
+        )),
         idempotency_store: Some(Arc::clone(&ledger)),
         ..ServerConfig::default()
     })

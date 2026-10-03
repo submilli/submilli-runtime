@@ -238,9 +238,9 @@ impl Harness {
     ) -> Self {
         let vfs_root = tempfile::tempdir().expect("vfs root");
         let config = ServerConfig {
-            blueprints: Some(Arc::new(InMemoryBlueprintStore::seed(vec![blueprint(
-                BLUEPRINT,
-            )]))),
+            blueprints: Some(Arc::new(
+                InMemoryBlueprintStore::seed(vec![blueprint(BLUEPRINT)]).expect("seed blueprints"),
+            )),
             session_storage_root: Some(vfs_root.path().to_path_buf()),
             llm_dispatch: dispatch,
             ..ServerConfig::default()
