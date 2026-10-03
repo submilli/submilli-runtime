@@ -419,6 +419,11 @@ async fn invoke(
         .map_err(|_| wasmtime::Error::msg("git: cannot identify caller"))?;
     let cancelled = Arc::new(AtomicBool::new(false));
     let cancel_guard = CancelOnDrop(cancelled.clone());
+    // The worker stops itself once its work passes what the run has left.
+    let meter = Arc::new(meter::Meter::new(
+        meter::remaining_fuel(&mut *caller)?,
+        Some(cancelled.clone()),
+    ));
     let job = Job {
         op: op.to_owned(),
         path: path.clone(),
@@ -432,7 +437,7 @@ async fn invoke(
         cancelled,
         max_bytes,
         transferred: Arc::new(AtomicU64::new(0)),
-        meter: Default::default(),
+        meter: Arc::clone(&meter),
         denial: Arc::new(Mutex::new(None)),
     };
     let vfs = caller.data().vfs.clone();
@@ -441,18 +446,19 @@ async fn invoke(
     let returns_string = op == "commit";
     let denial = job.denial.clone();
     let principal = job.caller.clone();
-    let transferred = job.transferred.clone();
-    let meter = job.meter.clone();
     let worker = caller.data_mut().blocking_work.spawn(move || {
         job.check_cancelled()?;
         worker::run(&vfs, &job, &op, &args).map(|result| (result, budget))
     });
     let outcome = finish_worker(worker, &cancel_guard.0, deadline).await;
     // The work is done, and may be published, whether or not it succeeded:
-    // network bytes the worker moved and its own file and object work are
-    // settled, not refused.
-    fuel::settle(&mut *caller, fuel::IO, transferred.load(Ordering::Relaxed))?;
+    // it is settled, not refused.
     meter.settle(&mut *caller)?;
+    if outcome.is_err() && meter.is_exhausted() {
+        // Stopped for fuel before publishing: the run ends as a Wasm loop
+        // out of fuel would, and the program cannot catch it.
+        return Err(wasmtime::Trap::OutOfFuel.into());
+    }
     if let Some((capability, reason)) = denial
         .lock()
         .map_err(|_| wasmtime::Error::msg("git: denial lock poisoned"))?

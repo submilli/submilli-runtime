@@ -142,13 +142,12 @@ fn fetch_inner(
         // gix hashed every object it indexed: the pack needs no check.
         let packs = snapshot.staged_packs()?;
         super::pack_index_check::trust(&packs, stem)?;
-        // Every object inflated, resolved and hashed, the pack and index written.
+        // The pack and its index written; inflating and hashing its objects
+        // was counted when the response was checked.
         let pack_bytes = packs.metadata(format!("{stem}.pack"))?.len();
         let objects = u64::from(write_pack_bundle.index.num_objects);
         snapshot.meter.syscalls(8);
         snapshot.meter.io(pack_bytes);
-        snapshot.meter.parse(pack_bytes);
-        snapshot.meter.hash(pack_bytes);
         snapshot.meter.elements(objects);
     }
     Ok(FetchResult {
@@ -396,13 +395,23 @@ impl Client {
         // Checked from disk as a stream, then handed to gix from the start.
         body.seek(io::SeekFrom::Start(0))?;
         let objects = self.objects.to_handle_arc();
-        super::pack_limits::validate(
+        let mut inflated = 0;
+        let checked = super::pack_limits::validate(
             &mut io::BufReader::new(&mut body),
             request.method == "GET",
             self.limits.pack,
             &|id| gix::odb::pack::Find::contains(&objects, id),
+            &mut inflated,
             &self.job.cancelled,
-        )?;
+        );
+        // The response is read back twice, by the check and by gix, and each
+        // inflates every object; gix also resolves and hashes each. Counted
+        // here, so a fetch that fails later still pays for what it did.
+        let spooled = body.metadata()?.len();
+        self.job.meter.io(spooled.saturating_mul(2));
+        self.job.meter.parse(inflated.saturating_mul(2));
+        self.job.meter.hash(inflated);
+        checked?;
         body.seek(io::SeekFrom::Start(0))?;
         self.job.check_cancelled().map_err(io_error)?;
         Ok(Response {
@@ -573,6 +582,8 @@ impl Write for SpoolWriter {
             return Err(error);
         }
         self.file.write_all(bytes)?;
+        // Received, and written to the spool.
+        self.job.meter.io(bytes.len() as u64);
         Ok(bytes.len())
     }
     fn flush(&mut self) -> io::Result<()> {

@@ -386,6 +386,8 @@ fn diff(snapshot: &Snapshot, options: &Value) -> Result<Value> {
         // One pair of contents in memory at a time.
         let a = contents(snapshot, Source::Objects, path, before.get(path))?;
         let b = contents(snapshot, after_source, path, after.get(path))?;
+        // Checked as text, searched for NUL and turned into a patch.
+        snapshot.meter.scan((a.len() + b.len()) as u64);
         let (Ok(a), Ok(b)) = (std::str::from_utf8(&a), std::str::from_utf8(&b)) else {
             binary.push(path);
             continue;
@@ -488,8 +490,11 @@ fn branches(snapshot: &Snapshot) -> Result<Value> {
     let current = current_branch(snapshot)?;
     let mut branches = Vec::new();
     let mut bytes = 0;
+    super::history::meter_packed_references(snapshot)?;
     for reference in snapshot.repo.references()?.local_branches()? {
         snapshot.check_cancelled()?;
+        snapshot.meter.syscalls(1);
+        snapshot.meter.elements(1);
         let reference = reference.map_err(|error| wasmtime::Error::msg(error.to_string()))?;
         let name = reference.name().shorten().to_str()?.to_owned();
         bytes += name.len() as u64 + 256;
@@ -734,6 +739,7 @@ fn remove_ignored(snapshot: &Snapshot, work: &mut Entries, index: &Entries) -> R
             remaining_work = remaining_work
                 .checked_sub(cost)
                 .ok_or_else(|| memory_limit("ignore matching resource"))?;
+            snapshot.meter.scan(cost);
             if search
                 .pattern_matching_relative_path(
                     path.as_bytes()[..offset].as_bstr(),

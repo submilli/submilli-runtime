@@ -1047,3 +1047,89 @@ fn a_publication_that_cannot_be_undone_needs_host_recovery() {
         assert!(error.to_string().contains("host recovery"), "{error}");
     }
 }
+
+/// A repository of `files` small files under `d*/`, committed.
+fn wide_repository(files: usize) -> tempfile::TempDir {
+    let root = repository();
+    for number in 0..files {
+        let path = root
+            .path()
+            .join(format!("d{:02}/f{number:05}", number % 50));
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, format!("file {number}\n")).unwrap();
+    }
+    native(root.path(), &["add", "."]);
+    native(root.path(), &["commit", "-m", "wide"]);
+    root
+}
+
+/// `job` for `op` at the VFS root, its meter stopping the work past `ceiling` fuel.
+fn job_with_ceiling(vfs: &Vfs, op: &str, ceiling: u64) -> Job {
+    let mut job = job(vfs, op);
+    job.meter = Arc::new(super::meter::Meter::new(
+        ceiling,
+        Some(Arc::clone(&job.cancelled)),
+    ));
+    job
+}
+
+/// With less fuel than an operation needs, the worker stops itself near the
+/// ceiling instead of finishing and being charged after.
+#[tokio::test]
+async fn the_worker_stops_at_its_fuel_ceiling() {
+    let root = wide_repository(2_000);
+    let vfs = Vfs::external(root.path().to_path_buf()).unwrap();
+    let full = job(&vfs, "status");
+    worker::run(&vfs, &full, "status", &[]).unwrap();
+    let needed = full.meter.fuel();
+    let short = job_with_ceiling(&vfs, "status", needed / 10);
+    assert!(worker::run(&vfs, &short, "status", &[]).is_err());
+    assert!(short.meter.is_exhausted());
+    assert!(
+        short.meter.fuel() < needed / 2,
+        "stopped at {} of {needed}",
+        short.meter.fuel()
+    );
+}
+
+/// A change stopped for fuel is stopped before it publishes: the repository
+/// is as it was.
+#[tokio::test]
+async fn a_change_stopped_for_fuel_leaves_the_repository_as_it_was() {
+    let root = wide_repository(500);
+    for number in 0..500 {
+        let path = root
+            .path()
+            .join(format!("d{:02}/f{number:05}", number % 50));
+        std::fs::write(path, format!("changed {number}\n")).unwrap();
+    }
+    let before = digest(root.path());
+    // What `add` needs, measured on a copy so the repository stays untouched.
+    let probe = tempfile::tempdir().unwrap();
+    native(
+        probe.path(),
+        &[
+            "clone",
+            "-q",
+            "--no-hardlinks",
+            root.path().to_str().unwrap(),
+            ".",
+        ],
+    );
+    // A local path is no HTTPS remote Git accepts.
+    native(probe.path(), &["remote", "remove", "origin"]);
+    for number in 0..500 {
+        let path = probe
+            .path()
+            .join(format!("d{:02}/f{number:05}", number % 50));
+        std::fs::write(path, format!("changed {number}\n")).unwrap();
+    }
+    let probe_vfs = Vfs::external(probe.path().to_path_buf()).unwrap();
+    let measured = job(&probe_vfs, "add");
+    worker::run(&probe_vfs, &measured, "add", &[json!(["."])]).unwrap();
+    let vfs = Vfs::external(root.path().to_path_buf()).unwrap();
+    let short = job_with_ceiling(&vfs, "add", measured.meter.fuel() / 4);
+    assert!(worker::run(&vfs, &short, "add", &[json!(["."])]).is_err());
+    assert!(short.meter.is_exhausted());
+    assert_eq!(digest(root.path()), before);
+}

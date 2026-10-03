@@ -87,6 +87,49 @@ fn test_data(vfs: Vfs) -> StoreData {
     data
 }
 
+/// Runs `source` with only `fuel` to spend, returning the error it ended with
+/// and the host fuel it was charged.
+async fn run_with_fuel(source: &str, mut data: StoreData, fuel: u64) -> (wasmtime::Error, u64) {
+    let compiled = crate::compile_script(source, "git.ts", crate::FileId(0), &[], &[])
+        .unwrap_or_else(|error| panic!("{error:#?}"));
+    let cfg = RuntimeConfig {
+        fuel,
+        ..RuntimeConfig::default()
+    };
+    let engine = cfg.engine().unwrap();
+    data.install_type_info(compiled.type_info.clone());
+    let mut store = cfg.store(&engine, data).unwrap();
+    let module = wasmtime::Module::new(&engine, &compiled.wasm).unwrap();
+    let mut linker = Linker::new(&engine);
+    install_runtime_async(&mut linker, &mut store)
+        .await
+        .unwrap();
+    let instance = linker.instantiate_async(&mut store, &module).await.unwrap();
+    let error = dispatch_main_async(&mut store, &instance)
+        .await
+        .expect_err("the run runs out of fuel");
+    assert_eq!(store.data().tenant_limits.host_attached_bytes(), 0);
+    (error, store.data().host_fuel)
+}
+
+/// Runs `source` to completion, returning the host fuel it was charged.
+async fn host_fuel_of(source: &str, mut data: StoreData) -> u64 {
+    let compiled = crate::compile_script(source, "git.ts", crate::FileId(0), &[], &[])
+        .unwrap_or_else(|error| panic!("{error:#?}"));
+    let cfg = RuntimeConfig::default();
+    let engine = cfg.engine().unwrap();
+    data.install_type_info(compiled.type_info.clone());
+    let mut store = cfg.store(&engine, data).unwrap();
+    let module = wasmtime::Module::new(&engine, &compiled.wasm).unwrap();
+    let mut linker = Linker::new(&engine);
+    install_runtime_async(&mut linker, &mut store)
+        .await
+        .unwrap();
+    let instance = linker.instantiate_async(&mut store, &module).await.unwrap();
+    dispatch_main_async(&mut store, &instance).await.unwrap();
+    store.data().host_fuel
+}
+
 async fn run_source(source: &str, mut data: StoreData) {
     let compiled = crate::compile_script(source, "git.ts", crate::FileId(0), &[], &[])
         .unwrap_or_else(|error| panic!("{error:#?}"));
@@ -788,4 +831,93 @@ fn repository_docs_expose_class_factories_and_capabilities() {
         );
     }
     assert!(!docs.declarations.contains("function init("));
+}
+
+/// A Git operation that needs more fuel than the run has ends the run with
+/// the runtime's own out-of-fuel trap, charged no more than the run had.
+#[tokio::test]
+async fn git_runs_out_of_fuel_like_any_other_work() {
+    let vfs = Vfs::tempdir().unwrap();
+    let repo = vfs.root().join("repo");
+    std::fs::create_dir(&repo).unwrap();
+    native(&repo, &["init", "-q", "-b", "main"]);
+    for number in 0..2_000 {
+        let path = repo.join(format!("d{:02}/f{number:05}", number % 50));
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, format!("file {number}\n")).unwrap();
+    }
+    let budget = 2_000_000;
+    let (error, host_fuel) = run_with_fuel(
+        r#"
+        import { Repository } from "submilli:git";
+        function main(): void {
+            Repository.open("/repo").status();
+        }
+    "#,
+        test_data(vfs.clone()),
+        budget,
+    )
+    .await;
+    assert_eq!(
+        error.downcast_ref::<wasmtime::Trap>(),
+        Some(&wasmtime::Trap::OutOfFuel),
+        "{error:?}"
+    );
+    assert!(host_fuel <= budget, "{host_fuel}");
+}
+
+/// A fetch pays for what it inflates, not for what it transfers: two packs
+/// of about the same size on the wire cost what their contents do.
+#[tokio::test]
+async fn fetch_fuel_follows_what_the_pack_inflates_to() {
+    let mut fuel = Vec::new();
+    // Repetitive, and random bytes of about the same compressed size.
+    let repetitive = vec![b'a'; 5_000_000];
+    let mut state = 0x9E37_79B9_7F4A_7C15u64;
+    let random: Vec<u8> = (0..8_000)
+        .map(|_| {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            state as u8
+        })
+        .collect();
+    for contents in [repetitive, random] {
+        let upstream = tempfile::tempdir().unwrap();
+        native(upstream.path(), &["init", "-q", "-b", "main"]);
+        native(upstream.path(), &["config", "user.name", "Upstream"]);
+        native(
+            upstream.path(),
+            &["config", "user.email", "upstream@example.com"],
+        );
+        std::fs::write(upstream.path().join("data"), &contents).unwrap();
+        native(upstream.path(), &["add", "."]);
+        native(upstream.path(), &["commit", "-q", "-m", "data"]);
+        let vfs = Vfs::tempdir().unwrap();
+        let mut data = test_data(vfs.clone());
+        data.http_client = Arc::new(GitServer {
+            repo: upstream.path().to_owned(),
+            authentication: false,
+        });
+        fuel.push(
+            host_fuel_of(
+                r#"
+                import { Repository } from "submilli:git";
+                function main(): void {
+                    const repo = Repository.init("/repo");
+                    repo.addRemote("origin", "https://example.com/repo.git");
+                    repo.fetch("origin", "main");
+                }
+            "#,
+                data,
+            )
+            .await,
+        );
+    }
+    assert!(
+        fuel[0] > 10 * fuel[1],
+        "5 MB inflated cost {}, 8 KB cost {}",
+        fuel[0],
+        fuel[1]
+    );
 }

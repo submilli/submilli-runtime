@@ -27,11 +27,14 @@ const MAX_CONTROL_RECORDS: usize = 1_000_000;
 
 /// Checks one response read from `body`. `local` says whether the repository
 /// already has an object: a delta in the pack may name one as its base.
+/// Adds the bytes the pack's entries inflate to to `inflated` as it goes, so
+/// the work is known however far the check got.
 pub(super) fn validate(
     body: &mut dyn BufRead,
     advertisement: bool,
     limits: Limits,
     local: &dyn Fn(&gix::oid) -> bool,
+    inflated: &mut u64,
     cancelled: &AtomicBool,
 ) -> io::Result<()> {
     check_cancelled(cancelled)?;
@@ -45,7 +48,7 @@ pub(super) fn validate(
     }
     if read == 4 && &start == b"PACK" {
         let mut pack = Counting::new(io::Cursor::new(start).chain(body));
-        validate_pack(&mut pack, limits, local, cancelled)?;
+        validate_pack(&mut pack, limits, local, inflated, cancelled)?;
         if pack.fill_buf()?.is_empty() {
             return Ok(());
         }
@@ -66,7 +69,7 @@ pub(super) fn validate(
     if pack.fill_buf()?.is_empty() {
         return Ok(());
     }
-    validate_pack(&mut pack, limits, local, cancelled)?;
+    validate_pack(&mut pack, limits, local, inflated, cancelled)?;
     if !pack.fill_buf()?.is_empty() {
         return Err(invalid("incomplete pack checksum or trailing pack data"));
     }
@@ -237,6 +240,7 @@ fn validate_pack<R: BufRead>(
     pack: &mut Counting<R>,
     limits: Limits,
     local: &dyn Fn(&gix::oid) -> bool,
+    inflated_total: &mut u64,
     cancelled: &AtomicBool,
 ) -> io::Result<()> {
     let mut signature = [0u8; 4];
@@ -280,6 +284,7 @@ fn validate_pack<R: BufRead>(
             Header::OfsDelta { .. } | Header::RefDelta { .. } => None,
         };
         let inflated = inflate_entry(pack, entry.decompressed_size, kind, cancelled)?;
+        *inflated_total = inflated_total.saturating_add(entry.decompressed_size);
         if let Some(id) = inflated.id {
             whole.insert(id, entry.decompressed_size);
         }
@@ -444,6 +449,7 @@ mod tests {
                 max_chain_bytes: budget,
             },
             &|_| true,
+            &mut 0,
             &AtomicBool::new(false),
         )
     }
@@ -532,6 +538,7 @@ mod tests {
                 false,
                 limits,
                 &|_| local,
+                &mut 0,
                 &AtomicBool::new(false),
             )
         };
@@ -544,6 +551,32 @@ mod tests {
         check(&thin, true).unwrap();
         let error = check(&thin, false).unwrap_err();
         assert!(error.to_string().contains("neither"), "{error}");
+    }
+
+    #[test]
+    fn counts_what_the_pack_inflates_to_not_what_it_takes() {
+        use gix::odb::pack::data::entry::Header;
+        let inflated = |contents: &[u8]| {
+            let pack = complete_pack(&[compressed_entry(Header::Blob, contents)]);
+            let mut total = 0;
+            super::validate(
+                &mut io::Cursor::new(&pack),
+                false,
+                Limits {
+                    max_records: 16,
+                    max_object_bytes: BUDGET,
+                    max_chain_bytes: BUDGET,
+                },
+                &|_| true,
+                &mut total,
+                &AtomicBool::new(false),
+            )
+            .unwrap();
+            (pack.len(), total)
+        };
+        let (small_pack, repetitive) = inflated(&[b'a'; 500_000]);
+        assert!(small_pack < 2_000, "{small_pack}");
+        assert_eq!(repetitive, 500_000);
     }
 
     #[test]
@@ -578,6 +611,7 @@ mod tests {
                     max_chain_bytes: BUDGET,
                 },
                 &|_| true,
+                &mut 0,
                 &AtomicBool::new(true),
             )
             .is_err()

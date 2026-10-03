@@ -59,12 +59,30 @@ pub(super) fn follow_reference(
     bail!("git: symbolic reference nesting limit exceeded")
 }
 
+/// Counts reading and parsing `packed-refs`, which listing references does
+/// besides reading each loose one.
+pub(super) fn meter_packed_references(snapshot: &Snapshot) -> Result<()> {
+    match std::fs::symlink_metadata(snapshot.repo.refs.git_dir().join("packed-refs")) {
+        Ok(meta) => {
+            snapshot.meter.syscalls(2);
+            snapshot.meter.io(meta.len());
+            snapshot.meter.parse(meta.len());
+            Ok(())
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error.into()),
+    }
+}
+
 pub(super) struct FetchGraph<'a>(Ancestors<'a>);
 
 pub(super) fn validate_fetch_graph(snapshot: &Snapshot) -> Result<FetchGraph<'_>> {
     let mut graph = FetchGraph(Ancestors::empty(snapshot)?);
+    meter_packed_references(snapshot)?;
     for reference in snapshot.repo.references()?.all()? {
         snapshot.check_cancelled()?;
+        snapshot.meter.syscalls(1);
+        snapshot.meter.elements(1);
         let reference = reference.map_err(|error| wasmtime::Error::msg(error.to_string()))?;
         graph
             .0
