@@ -14,6 +14,7 @@ use wasmtime::{
 use serde::Serialize;
 
 use crate::runtime::StoreData;
+use crate::runtime::fuel;
 use crate::runtime::host::{
     host_array_vtable, host_boxed_boolean_vtable, host_boxed_number_vtable, host_object_vtable,
     host_string_vtable, read_string_arg, register_host_fn, register_host_fn_async,
@@ -47,6 +48,7 @@ pub(super) fn install_json_module(
         /* deterministic = */ true,
         move |caller, params, results| -> wasmtime::Result<()> {
             let s = read_string_arg(&mut *caller, &params[0], "json.parse")?;
+            fuel::charge(&mut *caller, fuel::PARSE, s.len() as u64)?;
             // Invalid JSON raises a catchable SyntaxError carrying serde's
             // position/expectation detail, rather than trapping uncatchably.
             // Returning an `Err` is enough: the `register_host_fn` wrapper turns
@@ -86,6 +88,7 @@ pub(super) fn install_json_module(
         /* deterministic = */ true,
         |caller, params, results| -> wasmtime::Result<()> {
             let s = read_string_arg(&mut *caller, &params[0], "json.stringify")?;
+            fuel::charge(&mut *caller, fuel::SCAN, s.len() as u64)?;
             let encoded = serde_json::to_string(&s)
                 .map_err(|e| wasmtime::Error::msg(format!("JSON.stringify: {e}")))?;
             let raw = write_submilli_string(&mut *caller, &encoded)?;
@@ -113,6 +116,7 @@ pub(super) fn install_json_module(
                     wasmtime::bail!("json.stringifyPrettyNumber expects f64, got {other:?}")
                 }
             };
+            fuel::charge(&mut *caller, fuel::PARSE, json.len() as u64)?;
             let encoded = pretty_print_json(&json, spaces.as_bytes())?;
             let raw = write_submilli_string(&mut *caller, &encoded)?;
             results[0] = Val::AnyRef(Some(raw.to_anyref()));
@@ -135,6 +139,7 @@ pub(super) fn install_json_module(
             let json = read_string_arg(&mut *caller, &params[0], "json.stringifyPrettyString")?;
             let indent = read_string_arg(&mut *caller, &params[1], "json.stringifyPrettyString")?;
             let indent = first_chars(&indent, 10);
+            fuel::charge(&mut *caller, fuel::PARSE, json.len() as u64)?;
             let encoded = pretty_print_json(&json, indent.as_bytes())?;
             let raw = write_submilli_string(&mut *caller, &encoded)?;
             results[0] = Val::AnyRef(Some(raw.to_anyref()));
@@ -502,6 +507,7 @@ pub(crate) fn parse_json_as_unknown(
     text: &str,
     context: &str,
 ) -> wasmtime::Result<Val> {
+    fuel::charge(&mut *caller, fuel::PARSE, text.len() as u64)?;
     let value: serde_json::Value = serde_json::from_str(text).map_err(|e| {
         let msg = format!("{context}: {e}");
         if e.to_string().starts_with("number out of range") {
@@ -668,6 +674,8 @@ impl JsonUnknownAllocator {
         ctx: &mut impl AsContextMut<Data = StoreData>,
         value: &serde_json::Value,
     ) -> wasmtime::Result<Val> {
+        // One GC value per node; strings and arrays charge their own copies.
+        fuel::charge(&mut *ctx, fuel::ELEM, 1)?;
         match value {
             serde_json::Value::Null => Ok(Val::AnyRef(None)),
             serde_json::Value::Bool(b) => {

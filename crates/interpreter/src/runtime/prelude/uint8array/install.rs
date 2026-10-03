@@ -6,6 +6,7 @@
 use wasmtime::{FuncType, HeapType, Linker, RefType, StructType, Val, ValType};
 
 use crate::runtime::StoreData;
+use crate::runtime::fuel;
 use crate::runtime::host::{
     intrinsic_array_type, intrinsic_string_type, intrinsic_uint8_array_type, register_host_fn,
     register_host_fn_async, write_submilli_string_struct, write_submilli_string_struct_units,
@@ -250,6 +251,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         |caller, params, results| {
             let bytes = super::read_bytes(caller, &params[0], "Uint8Array#toBase64")?;
             let (url_safe, omit) = super::read_base64_options(caller, &params[1])?;
+            fuel::charge(&mut *caller, fuel::SCAN, bytes.len() as u64)?;
             results[0] = string_val(caller, &super::encode_base64(&bytes, url_safe, omit))?;
             Ok(())
         },
@@ -619,6 +621,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
             let units = read_string_units(caller, &params[0], "Uint8Array.fromBase64")?;
             let s = String::from_utf16_lossy(&units);
             let (url_safe, _) = super::read_base64_options(caller, &params[1])?;
+            fuel::charge(&mut *caller, fuel::SCAN, s.len() as u64)?;
             let bytes = super::decode_base64(&s, url_safe)?;
             results[0] = super::build(caller, &bytes)?;
             Ok(())

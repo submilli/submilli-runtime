@@ -7,6 +7,7 @@ use sha2::{Digest, Sha256, Sha512};
 use wasmtime::{Caller, FuncType, HeapType, Linker, RefType, Val, ValType};
 
 use crate::runtime::StoreData;
+use crate::runtime::fuel;
 use crate::runtime::host::{
     read_string_arg, read_uint8_array_arg, register_host_fn, write_submilli_uint8array_struct,
 };
@@ -123,6 +124,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
             /* deterministic = */ true,
             move |caller, params, results| {
                 let input = read_string_or_bytes(caller, &params[0], &context)?;
+                fuel::charge(&mut *caller, fuel::HASH, input.len() as u64)?;
                 let arr = write_submilli_uint8array_struct(caller, &digest(&input))?;
                 results[0] = Val::AnyRef(Some(arr.to_anyref()));
                 Ok(())
@@ -139,6 +141,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         |caller, params, results| {
             let key = read_uint8_array_arg(&mut *caller, &params[0], "crypto.hmacSha256 (key)")?;
             let msg = read_string_or_bytes(caller, &params[1], "crypto.hmacSha256 (message)")?;
+            fuel::charge(&mut *caller, fuel::HASH, (key.len() + msg.len()) as u64)?;
             let mut mac = <Hmac<Sha256> as Mac>::new_from_slice(&key)
                 .map_err(|e| crate::runtime::host::type_error(format!("crypto.hmacSha256: {e}")))?;
             mac.update(&msg);
@@ -171,6 +174,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
                     "crypto.randomBytes: length {len} exceeds maximum {MAX_RANDOM_BYTES}"
                 )));
             }
+            fuel::charge(&mut *caller, fuel::SCAN, len as u64)?;
             let mut buf = vec![0u8; len as usize];
             getrandom::getrandom(&mut buf)
                 .map_err(|e| wasmtime::Error::msg(format!("crypto.randomBytes: {e}")))?;
@@ -190,6 +194,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         |caller, params, results| {
             let a = read_uint8_array_arg(&mut *caller, &params[0], "crypto.timingSafeEqual (a)")?;
             let b = read_uint8_array_arg(&mut *caller, &params[1], "crypto.timingSafeEqual (b)")?;
+            fuel::charge(&mut *caller, fuel::SCAN, a.len().max(b.len()) as u64)?;
             let equal = a.len() == b.len() && {
                 let mut diff: u8 = 0;
                 for (x, y) in a.iter().zip(b.iter()) {

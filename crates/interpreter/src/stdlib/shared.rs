@@ -4,6 +4,7 @@ use std::io::Write;
 use std::sync::Arc;
 
 use crate::runtime::fs::{ContainError, ContentPath, LinkPath, resolve_content, resolve_link};
+use crate::runtime::fuel;
 use crate::runtime::host::{
     permission_denied, permission_denied_invariant, permission_denied_read_only,
     quota_exceeded_error,
@@ -66,10 +67,12 @@ pub(crate) struct UnknownPrincipal {
 /// function, so the invariant does not extend to it; that path attributes to
 /// the caller and would deny anyway.
 pub fn check_security(
-    store: impl wasmtime::AsContext<Data = StoreData>,
+    mut store: impl wasmtime::AsContextMut<Data = StoreData>,
     capability: &str,
     context: serde_json::Value,
 ) -> wasmtime::Result<()> {
+    // The backtrace capture and the policy walk, neither sized by the call.
+    fuel::charge_host_fuel(&mut store, fuel::GATE)?;
     let caller = running_package(&store).map_err(|unknown| {
         permission_denied_invariant(unknown.label, capability, unknown.reason)
     })?;

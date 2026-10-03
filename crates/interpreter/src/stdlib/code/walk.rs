@@ -433,7 +433,7 @@ fn load_ignores(
 /// leaks. Only the policy's own answer filters; an invariant denial means the
 /// check could not be made and still fails the call.
 fn may_probe_ignore(
-    caller: &Caller<'_, StoreData>,
+    caller: &mut Caller<'_, StoreData>,
     path: &str,
     scope: IgnoreScope,
 ) -> Result<bool> {

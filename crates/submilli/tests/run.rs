@@ -934,6 +934,60 @@ fn accessors_do_not_pay_for_the_whole_receiver() {
 }
 
 #[test]
+fn operations_charge_for_the_input_they_process() {
+    use interpreter::runtime::fuel::{CALL, ELEM, PARSE, REGEX, SCAN, sort_cost};
+    // Each case builds a large input (the baseline) and then runs one
+    // operation over it; the host fuel the operation adds must cover at
+    // least its class charge for that input. The floors include what the
+    // operation's own callbacks and allocations cost, so that dropping the
+    // class charge itself would fall short.
+    let text_input = "const s = \"x\".repeat(100000);";
+    let json_input = "const s = \"[\" + \"1,\".repeat(50000) + \"1]\";";
+    let sort_input = "const a: number[] = []; for (let i = 0; i < 8192; i++) { a.push(8192 - i); }";
+    // Bottom-up merge sort of a descending power-of-two array: n/2 * log2(n)
+    // comparisons, each one callback.
+    let sort_comparisons: u64 = 8192 / 2 * 13;
+    let cases = [
+        (
+            "regex",
+            text_input,
+            "return /y/.test(s) ? 1 : s.length % 10;",
+            REGEX.cost(100_000),
+        ),
+        (
+            "json-parse",
+            json_input,
+            "return JSON.parse(s) === null ? 0 : s.length % 10;",
+            PARSE.cost(2 * 50_000 + 2) + ELEM.cost(50_001),
+        ),
+        (
+            "sort",
+            sort_input,
+            "a.sort((x: number, y: number) => x - y); return a[0] % 10;",
+            sort_cost(8192) + sort_comparisons * CALL,
+        ),
+        (
+            "upper",
+            text_input,
+            "return s.toUpperCase().length % 10;",
+            SCAN.cost(2 * 100_000),
+        ),
+    ];
+    for (name, input, operation, floor) in cases {
+        let baseline = host_fuel(
+            &format!("usage-{name}-baseline"),
+            &format!("function main(): number {{ {input} return 0; }}"),
+        );
+        let with_operation = host_fuel(
+            &format!("usage-{name}"),
+            &format!("function main(): number {{ {input} {operation} }}"),
+        );
+        let added = with_operation - baseline;
+        assert!(added >= floor, "{name}: {added} < {floor}");
+    }
+}
+
+#[test]
 fn report_captures_fuel_exhaustion_in_top_level_code() {
     let out = run_script(
         "usage-top-level",

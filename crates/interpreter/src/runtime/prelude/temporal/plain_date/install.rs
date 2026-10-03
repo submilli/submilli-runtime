@@ -229,10 +229,10 @@ fn reg_plain_date_to_zoned(linker: &mut Linker<StoreData>, ty: FuncType) -> wasm
             let date = plain_date_from_struct(caller, st, "PlainDate.toZonedDateTime")?;
             let (tz_id, time) = plain_date_to_zoned_arg(caller, &params[1])?;
             let (tz, canonical_id) = super::super::zoned_date_time::resolve_time_zone(
+                caller,
                 &tz_id,
                 "PlainDate.toZonedDateTime",
-            )
-            .map_err(crate::runtime::host::range_error)?;
+            )?;
             let z = date
                 .to_datetime(time)
                 .to_zoned(tz)

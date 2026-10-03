@@ -175,6 +175,7 @@ fn install_internal_module(
             };
             let config: GeneralPurposeConfig = if omit_padding { NO_PAD } else { PAD };
             let engine = GeneralPurpose::new(alphabet, config);
+            fuel::charge(&mut *caller, fuel::SCAN, bytes.len() as u64)?;
             let encoded = engine.encode(&bytes);
             let arr = write_submilli_string(&mut *caller, &encoded)?;
             results[0] = Val::AnyRef(Some(arr.to_anyref()));
@@ -196,6 +197,7 @@ fn install_internal_module(
         /* deterministic = */ true,
         move |caller, params, results| -> wasmtime::Result<()> {
             let s = read_string_arg(&mut *caller, &params[0], "uint8array_from_base64")?;
+            fuel::charge(&mut *caller, fuel::SCAN, s.len() as u64)?;
             let alphabet_flag = params[1].i32().unwrap_or(0);
             let alphabet = if alphabet_flag == 1 {
                 &alphabet::URL_SAFE

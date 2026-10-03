@@ -164,10 +164,25 @@ In order. Each is reviewable alone.
    `byteLength`/`at` read in place, `slice`/`subarray` copy their range. Done on the branch
    after PR 3. The rows in Parts 1, 2 and 4 that cite the whole-receiver copy for these
    functions are now `CALL` (plus `COPY(range)` for the ranged ones).
-5. **Operation terms and I/O**: regex (`exec_at`), sort (`merge_sort`), JSON, BigInt
-   arithmetic and radix conversion, `TZ` in `resolve_time_zone`, `GATE` in
-   `check_security`, URL, crypto, base64; then `fs`, `http`, `llm`, `mcp`, `session` and
-   the git worker counters, under the never-lose-an-effect rule.
+5. **Operation terms and I/O**: done on the branch after PR 4. Regex matching (`REGEX`
+   per haystack byte in `exec_at` and the replace/split arms) and compilation (`PARSE` of
+   the source plus a flat `REGEX_COMPILE`); sort (`sort_cost` up front in `merge_sort`);
+   JSON parse, stringify and pretty-print (`PARSE`/`SCAN` of the text, `ELEM` per node
+   allocated); BigInt add/sub (`ELEM` of the larger operand), mul/div/mod (a limb pair per
+   step), pow (the result's square, and a 4 MiB cap on the result), radix conversion
+   (quadratic in limbs); string case/trim/normalize (`SCAN` of two passes), searches
+   (`SCAN` of the receiver), URI and base64 codecs, text decoding (`SCAN`); `TZ` in
+   `resolve_time_zone` and per transition step in the zone-rules walk; `GATE` in
+   `check_security` and `security.check`; crypto (`HASH`); URL parse/build (`PARSE`),
+   component and query codecs (`SCAN`). I/O: `http` verbs charge the request bytes before
+   sending and the response bytes after; `download` the request before and twice the bytes
+   written after; `fs` one `SYSCALL` per gated call plus `IO` of bytes read or written and
+   per iterator step; `session` `IO` of the payload and `PARSE` on read, `ELEM` per node
+   serialized and per listed entry; `llm` `IO` of the prompts before and of the
+   completions after; `mcp` `IO` of the arguments before, `IO` and `PARSE` of the result
+   after; `git` `PARSE` of the arguments before, `IO` of the network bytes and `PARSE` of
+   the result after. The git worker's own file and object work is not counted yet; it
+   belongs with SUB-1129, which reshapes it.
 
 PR 2 found one thing PR 3 must solve: `Store::set_fuel` restarts the engine's async yield
 countdown, so once every host call charges, a program that calls host functions more often
