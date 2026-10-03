@@ -213,12 +213,14 @@ pub(crate) fn install(
                 if divisor.is_zero() {
                     return Err(range_error("Division by zero"));
                 }
-                run_binop(caller, params, results, name, Cost::Product, |a, b| {
-                    Ok(match kind {
-                        DivKind::Div => a / b,
-                        DivKind::Rem => a % b,
-                    })
-                })
+                let dividend =
+                    read_bigint_arg(caller, &params[0], &params[1], &format!("{name} lhs"))?;
+                fuel::charge_host_fuel(&mut *caller, Cost::Product.of(&dividend, &divisor)?)?;
+                let result = match kind {
+                    DivKind::Div => dividend / divisor,
+                    DivKind::Rem => dividend % divisor,
+                };
+                write_binop_result(caller, results, result)
             },
         )?;
     }
@@ -481,7 +483,15 @@ fn run_binop(
     )?;
     fuel::charge_host_fuel(&mut *caller, cost.of(&a, &b)?)?;
     let r = op(a, b)?;
-    let (sign, magnitude) = r.into_parts();
+    write_binop_result(caller, results, r)
+}
+
+fn write_binop_result(
+    caller: &mut Caller<'_, StoreData>,
+    results: &mut [Val],
+    value: num_bigint::BigInt,
+) -> wasmtime::Result<()> {
+    let (sign, magnitude) = value.into_parts();
     let limbs = magnitude.to_u64_digits();
     let arr = write_limbs(caller, &limbs)?;
     *abi_result(results, 0)? = Val::I32(sign_to_i32(sign));
@@ -497,14 +507,20 @@ pub(crate) fn read_bigint_arg(
 ) -> wasmtime::Result<num_bigint::BigInt> {
     let sign = read_sign(sign_val)?;
     let limbs = read_limbs_arg(caller, limbs_val, name)?;
-    Ok(limbs_to_bigint(sign, &limbs))
+    limbs_to_bigint(sign, &limbs)
 }
 
 /// Reconstruct a `num_bigint::BigInt` from the canonical `$bigint` payload —
 /// `sign` ∈ {−1, 0, 1} and little-endian u64 `limbs`. Shared by the host
 /// arithmetic ABI and the host-owned `$bigint` vtable.
-pub(crate) fn limbs_to_bigint(sign: i32, limbs: &[u64]) -> num_bigint::BigInt {
-    let mut u32s = Vec::with_capacity(limbs.len() * 2);
+pub(crate) fn limbs_to_bigint(sign: i32, limbs: &[u64]) -> wasmtime::Result<num_bigint::BigInt> {
+    let count = limbs
+        .len()
+        .checked_mul(2)
+        .ok_or_else(|| crate::runtime::host::fatal_host_error("BigInt limb count overflow"))?;
+    let mut u32s = Vec::new();
+    u32s.try_reserve_exact(count)
+        .map_err(crate::runtime::host::fatal_host_error)?;
     for w in limbs {
         u32s.push((*w & 0xFFFF_FFFF) as u32);
         u32s.push((*w >> 32) as u32);
@@ -515,7 +531,7 @@ pub(crate) fn limbs_to_bigint(sign: i32, limbs: &[u64]) -> num_bigint::BigInt {
         v if v < 0 => num_bigint::Sign::Minus,
         _ => num_bigint::Sign::NoSign,
     };
-    num_bigint::BigInt::from_biguint(signum, magnitude)
+    Ok(num_bigint::BigInt::from_biguint(signum, magnitude))
 }
 
 /// Read a `$bigint` struct ref's `sign` (field 1) and little-endian u64 `limbs`
@@ -560,20 +576,12 @@ fn read_limbs_arg(
         }
     };
     let len = arr.len(&mut *caller)?;
-    fuel::charge(&mut *caller, fuel::ELEM, u64::from(len))?;
-    let mut out = Vec::with_capacity(len as usize);
-    for i in 0..len {
-        let elem = arr.get(&mut *caller, i)?;
-        let limb = match elem {
-            Val::I64(v) => v as u64,
-            other => {
-                return Err(type_error(format!(
-                    "{name} limb {i}: expected i64, got {other:?}"
-                )));
-            }
-        };
-        out.push(limb);
-    }
+    fuel::charge(&mut *caller, fuel::COPY, u64::from(len).saturating_mul(8))?;
+    let mut out = Vec::new();
+    out.try_reserve_exact(len as usize)
+        .map_err(crate::runtime::host::fatal_host_error)?;
+    out.resize(len as usize, 0);
+    arr.copy_to_i64_slice(&*caller, &mut out)?;
     Ok(out)
 }
 
@@ -581,11 +589,10 @@ pub(crate) fn write_limbs(
     mut ctx: impl AsContextMut<Data = StoreData>,
     limbs: &[u64],
 ) -> wasmtime::Result<Rooted<ArrayRef>> {
-    fuel::charge(&mut ctx, fuel::ELEM, limbs.len() as u64)?;
+    fuel::charge(&mut ctx, fuel::COPY, (limbs.len() as u64).saturating_mul(8))?;
     let array_ty = limbs_array_type(ctx.as_context().engine());
     let pre = ArrayRefPre::new(&mut ctx, array_ty);
-    let units: Vec<Val> = limbs.iter().map(|w| Val::I64(*w as i64)).collect();
-    ArrayRef::new_fixed(&mut ctx, &pre, &units)
+    ArrayRef::new_from_i64_slice(&mut ctx, &pre, limbs)
 }
 
 pub(crate) fn make_bigint_struct(

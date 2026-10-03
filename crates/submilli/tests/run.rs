@@ -988,6 +988,59 @@ fn operations_charge_for_the_input_they_process() {
         assert!(added >= floor, "{name}: {added} < {floor}");
     }
 
+    for (method, statement, per_call, old_cost) in [
+        (
+            "fill",
+            "bytes.fill(7,i,i+1);",
+            CALL + COPY.cost(1),
+            [6144_u64, 20480],
+        ),
+        (
+            "copy",
+            "bytes.copyWithin(i,0,1);",
+            CALL + 2 * COPY.cost(1),
+            [6144, 20480],
+        ),
+        (
+            "set",
+            "bytes.set(source,i);",
+            CALL + 2 * COPY.cost(1),
+            [6272, 20736],
+        ),
+    ] {
+        for (index, count) in [128_u64, 256].into_iter().enumerate() {
+            let input =
+                format!("const bytes=Uint8Array.alloc({count}); const source=Uint8Array.new([1]);");
+            let baseline = host_fuel(
+                "usage-byte-range-base",
+                &format!("function main():number{{{input} return 0;}}"),
+            );
+            let actual = host_fuel(
+                "usage-byte-range",
+                &format!(
+                    "function main():number{{{input} for(let i=0;i<{count};i++){{{statement}}} return 0;}}"
+                ),
+            ) - baseline;
+            assert_eq!(actual, count * per_call, "{method}");
+            assert!(actual < old_cost[index] / 2, "{method}: {actual}");
+        }
+    }
+    for count in [128_u64, 256] {
+        let input = format!("const s=\"x\".repeat({count});");
+        let baseline = host_fuel(
+            "usage-number-predicate-base",
+            &format!("function main():number{{{input} return 0;}}"),
+        );
+        let actual = host_fuel(
+            "usage-number-predicate",
+            &format!(
+                "function main():number{{{input} for(let i=0;i<{count};i++){{Number.isNaN(s);Number.isFinite(s);Number.isInteger(s);Number.isSafeInteger(s);}} return 0;}}"
+            ),
+        ) - baseline;
+        assert_eq!(actual, 4 * count * CALL);
+        assert!(actual < 4 * count * (CALL + COPY.cost(count)));
+    }
+
     // Double both text and nesting: the old intermediate-string charge grew
     // nearly fourfold. Shared default serialization copies output linearly.
     for (method, old) in [
@@ -1357,7 +1410,7 @@ fn operations_charge_for_the_input_they_process() {
             actual,
             CALL + COPY.cost(digits)
                 + SCAN.cost(digits)
-                + ELEM.cost(limbs)
+                + COPY.cost(8 * limbs)
                 + ELEM.cost(digits * digits.div_ceil(19))
         );
     }
@@ -1375,7 +1428,10 @@ fn operations_charge_for_the_input_they_process() {
         // Formatting these power-of-two radices extracts bits linearly.
         assert_eq!(
             actual,
-            CALL + 2 * ELEM.cost(limbs) + SCAN.cost(16 * limbs) + COPY.cost(16 * limbs)
+            CALL + COPY.cost(8 * limbs)
+                + ELEM.cost(limbs)
+                + SCAN.cost(16 * limbs)
+                + COPY.cost(16 * limbs)
         );
     }
 

@@ -212,18 +212,13 @@ fn install_internal_module(
             } else {
                 &alphabet::STANDARD
             };
-            // Forgiving on padding: try `PAD` first, fall back to
-            // `NO_PAD`. Avoids requiring callers to know which form
-            // they have.
-            let decoded = {
-                let padded = GeneralPurpose::new(alphabet, PAD);
-                if let Ok(b) = padded.decode(s.as_bytes()) {
-                    Ok(b)
-                } else {
-                    let unpadded = GeneralPurpose::new(alphabet, NO_PAD);
-                    unpadded.decode(s.as_bytes())
-                }
+            // A terminal '=' selects canonical padding; otherwise require none.
+            let config = if s.as_bytes().last() == Some(&b'=') {
+                PAD
+            } else {
+                NO_PAD
             };
+            let decoded = GeneralPurpose::new(alphabet, config).decode(s.as_bytes());
             let bytes =
                 decoded.map_err(|e| wasmtime::Error::msg(format!("Uint8Array.fromBase64: {e}")))?;
             let arr = write_uint8_array(

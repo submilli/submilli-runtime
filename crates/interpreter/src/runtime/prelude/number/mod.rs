@@ -85,7 +85,7 @@ fn number_ctor_call(caller: &mut Caller<'_, StoreData>, value: &Val) -> wasmtime
             "Number(bigint)",
         )?;
         return Ok(
-            crate::runtime::prelude::bigint::ops::limbs_to_bigint(sign, &limbs)
+            crate::runtime::prelude::bigint::ops::limbs_to_bigint(sign, &limbs)?
                 .to_f64()
                 .unwrap_or(f64::INFINITY),
         );
@@ -629,11 +629,11 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                         "isNaN".to_string(),
                         MethodSig {
                             generics: Vec::new(),
-                            params: vec![Param::new("value", Type::Number)],
+                            params: vec![Param::new("value", Type::Unknown)],
                             ret: Type::Boolean,
                             predicate: None,
                             doc: doc(
-                                "/** Returns `true` when `value` is `NaN`. Same as the global `isNaN` (parameters are already `number`-typed; there is no coercion to differ on). */",
+                                "/** Returns `true` when `value` is `NaN`. Non-number values return `false` without coercion. */",
                             ),
                         },
                     ),
@@ -641,7 +641,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                         "isFinite".to_string(),
                         MethodSig {
                             generics: Vec::new(),
-                            params: vec![Param::new("value", Type::Number)],
+                            params: vec![Param::new("value", Type::Unknown)],
                             ret: Type::Boolean,
                             predicate: None,
                             doc: doc(
@@ -653,7 +653,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                         "isInteger".to_string(),
                         MethodSig {
                             generics: Vec::new(),
-                            params: vec![Param::new("value", Type::Number)],
+                            params: vec![Param::new("value", Type::Unknown)],
                             ret: Type::Boolean,
                             predicate: None,
                             doc: doc(
@@ -665,7 +665,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                         "isSafeInteger".to_string(),
                         MethodSig {
                             generics: Vec::new(),
-                            params: vec![Param::new("value", Type::Number)],
+                            params: vec![Param::new("value", Type::Unknown)],
                             ret: Type::Boolean,
                             predicate: None,
                             doc: doc(

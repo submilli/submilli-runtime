@@ -465,7 +465,7 @@ fn read_primitive(
     }
     if object.matches_ty(&*caller, &intr.bigint)? {
         let (sign, limbs) = read_bigint_struct(caller, value, "arithmetic")?;
-        return Ok(Some(Primitive::BigInt(limbs_to_bigint(sign, &limbs))));
+        return Ok(Some(Primitive::BigInt(limbs_to_bigint(sign, &limbs)?)));
     }
     Ok(None)
 }
@@ -603,10 +603,22 @@ pub(super) fn number_value(
     caller: &mut Caller<'_, StoreData>,
     value: &Val,
 ) -> wasmtime::Result<Option<f64>> {
-    Ok(match read_primitive(caller, value)? {
-        Some(Primitive::Number(value)) => Some(value),
-        _ => None,
-    })
+    let Val::AnyRef(Some(reference)) = value else {
+        return Ok(None);
+    };
+    let Some(object) = reference.as_struct(&mut *caller)? else {
+        return Ok(None);
+    };
+    let intr = intrinsic_types(&mut *caller)?;
+    if !object.matches_ty(&*caller, &intr.boxed_number)? {
+        return Ok(None);
+    }
+    match object.field(&mut *caller, 1)? {
+        Val::F64(bits) => Ok(Some(f64::from_bits(bits))),
+        _ => Err(crate::runtime::host::fatal_host_error(
+            "invalid boxed number payload",
+        )),
+    }
 }
 
 pub(super) async fn search_string(

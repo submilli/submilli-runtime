@@ -58,7 +58,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
                 wasmtime::bail!("toString radix must be between 2 and 36");
             }
             let text =
-                ops::format_bigint(caller, &limbs_to_bigint(sign, &limbs), truncated as u32)?;
+                ops::format_bigint(caller, &limbs_to_bigint(sign, &limbs)?, truncated as u32)?;
             *abi_result(results, 0)? = string_val(caller, &text)?;
             Ok(())
         },
@@ -74,7 +74,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         true,
         |caller, params, results| {
             let (sign, limbs) = read_bigint_struct(caller, abi_arg(params, 0)?, "BigInt#toJson")?;
-            let text = ops::format_bigint(caller, &limbs_to_bigint(sign, &limbs), 10)?;
+            let text = ops::format_bigint(caller, &limbs_to_bigint(sign, &limbs)?, 10)?;
             *abi_result(results, 0)? = string_val(caller, &text)?;
             Ok(())
         },

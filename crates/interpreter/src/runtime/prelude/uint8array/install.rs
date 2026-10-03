@@ -306,11 +306,9 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         ),
         true,
         |caller, params, results| {
-            let bytes = super::read_bytes(caller, abi_arg(params, 0)?, "Uint8Array#fill")?;
             *abi_result(results, 0)? = super::fill(
                 caller,
                 abi_arg(params, 0)?,
-                bytes,
                 f64v(abi_arg(params, 1)?),
                 f64v(abi_arg(params, 2)?),
                 f64v(abi_arg(params, 3)?),
@@ -328,11 +326,9 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         ),
         true,
         |caller, params, results| {
-            let bytes = super::read_bytes(caller, abi_arg(params, 0)?, "Uint8Array#copyWithin")?;
             *abi_result(results, 0)? = super::copy_within(
                 caller,
                 abi_arg(params, 0)?,
-                bytes,
                 f64v(abi_arg(params, 1)?),
                 f64v(abi_arg(params, 2)?),
                 f64v(abi_arg(params, 3)?),
@@ -346,20 +342,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         method_key("set"),
         ft(vec![uint8.clone(), uint8.clone(), num.clone()], vec![]),
         true,
-        |caller, params, _results| {
-            let bytes = super::read_bytes(caller, abi_arg(params, 0)?, "Uint8Array#set")?;
-            let source = super::read_bytes(caller, abi_arg(params, 1)?, "Uint8Array#set source")?;
-            match super::set(
-                caller,
-                abi_arg(params, 0)?,
-                bytes,
-                &source,
-                f64v(abi_arg(params, 2)?),
-            )? {
-                Some(_) => Ok(()),
-                None => Err(crate::runtime::host::range_error("offset is out of bounds")),
-            }
-        },
+        |caller, params, _results| super::set(caller, abi_arg(params, 0)?, abi_arg(params, 1)?, f64v(abi_arg(params, 2)?)),
     )?;
     register_host_fn_async(
         linker,
@@ -636,20 +619,18 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         true,
         |caller, params, results| {
             let intr = intrinsic_types(&mut *caller)?;
-            let bytes = if crate::runtime::prelude::collection::is_a(
-                caller,
-                abi_arg(params, 0)?,
-                &intr.array,
-            )? {
-                super::read_number_array(caller, abi_arg(params, 0)?, "Uint8Array.new")?
-            } else {
-                let n = crate::runtime::host::read_boxed_number(
-                    caller,
-                    abi_arg(params, 0)?,
-                    "Uint8Array.new",
-                )?;
-                vec![0u8; super::alloc_len(n)?]
-            };
+            let bytes =
+                if crate::runtime::prelude::collection::is_a(caller, abi_arg(params, 0)?, &intr.array)? {
+                    super::read_number_array(caller, abi_arg(params, 0)?, "Uint8Array.new")?
+                } else {
+                    let n = crate::runtime::host::read_boxed_number(
+                        caller,
+                        abi_arg(params, 0)?,
+                        "Uint8Array.new",
+                    )?;
+                    *abi_result(results, 0)? = super::allocate(caller, super::alloc_len(n)?)?;
+                    return Ok(());
+                };
             *abi_result(results, 0)? = super::build(caller, &bytes)?;
             Ok(())
         },
@@ -662,7 +643,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         true,
         |caller, params, results| {
             let n = super::alloc_len(f64v(abi_arg(params, 0)?))?;
-            *abi_result(results, 0)? = super::build(caller, &vec![0u8; n])?;
+            *abi_result(results, 0)? = super::allocate(caller, n)?;
             Ok(())
         },
     )?;

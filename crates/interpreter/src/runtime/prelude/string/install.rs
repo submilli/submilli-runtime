@@ -1045,7 +1045,7 @@ async fn string_ctor_call(
             value,
             "String(bigint)",
         )?;
-        let value = crate::runtime::prelude::bigint::ops::limbs_to_bigint(sign, &limbs);
+        let value = crate::runtime::prelude::bigint::ops::limbs_to_bigint(sign, &limbs)?;
         let text = crate::runtime::prelude::bigint::ops::format_bigint(caller, &value, 10)?;
         let st = write_submilli_string_struct(caller, &text)?;
         return Ok(Val::AnyRef(Some(st.to_anyref())));
