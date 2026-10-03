@@ -10,7 +10,7 @@ use std::io::Write;
 use wasmtime::{Caller, FuncType, HeapType, Linker, RefType, Val, ValType};
 
 use crate::runtime::StoreData;
-use crate::runtime::host::{intrinsic_array_type, register_host_fn_async};
+use crate::runtime::host::{fatal_host_error, intrinsic_array_type, register_host_fn_async};
 use crate::runtime::intrinsic_types::build_intrinsic_types;
 use crate::runtime::prelude::vtable::{dispatch_vtable_slot, read_string_units};
 use crate::runtime::prelude::{MODULE_NAME, declare_method};
@@ -39,13 +39,16 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         false,
         |caller, params, _results| {
             Box::pin(async move {
-                let mut units = to_string_units(caller, &params[0]).await?;
-                for elem in super::array::read_array(caller, &params[1], "console.log")? {
+                let [first, rest] = params else {
+                    return Err(fatal_host_error("console.log: expected two ABI arguments"));
+                };
+                let mut units = to_string_units(caller, first).await?;
+                for elem in super::array::read_array(caller, rest, "console.log")? {
                     units.push(u16::from(b' '));
                     units.extend(to_string_units(caller, &elem).await?);
                 }
                 let line = String::from_utf16_lossy(&units);
-                writeln!(caller.data_mut().console, "{line}")?;
+                writeln!(caller.data_mut().console, "{line}").map_err(fatal_host_error)?;
                 Ok(())
             })
         },

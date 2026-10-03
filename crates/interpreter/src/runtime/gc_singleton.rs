@@ -3,6 +3,8 @@
 //! returned handle share the engine type-index a module emitting the same bytes
 //! uses, so a host-built type flows into a guest slot of that type without trapping.
 
+use crate::runtime::host::fatal_host_error;
+
 use wasmtime::{
     ArrayType, Engine, FieldType, Finality, FuncType, RecGroupBuilder, StructType, ValType,
 };
@@ -24,10 +26,11 @@ pub(crate) fn singleton_struct(
         def.field(field);
     }
     def.finish();
-    Ok(builder
-        .build()?
+    builder
+        .build()
+        .map_err(fatal_host_error)?
         .get_struct(id)
-        .expect("singleton struct id should resolve to a struct"))
+        .ok_or_else(|| fatal_host_error("singleton struct id should resolve to a struct"))
 }
 
 pub(crate) fn singleton_array(
@@ -41,10 +44,11 @@ pub(crate) fn singleton_array(
     def.finality(finality);
     def.element(field);
     def.finish();
-    Ok(builder
-        .build()?
+    builder
+        .build()
+        .map_err(fatal_host_error)?
         .get_array(id)
-        .expect("singleton array id should resolve to an array"))
+        .ok_or_else(|| fatal_host_error("singleton array id should resolve to an array"))
 }
 
 /// Declare a non-final function type with no supertype — the shape codegen emits
@@ -65,8 +69,32 @@ pub(crate) fn singleton_func(
         def.result(result);
     }
     def.finish();
-    Ok(builder
-        .build()?
+    builder
+        .build()
+        .map_err(fatal_host_error)?
         .get_func(id)
-        .expect("singleton func id should resolve to a func"))
+        .ok_or_else(|| fatal_host_error("singleton func id should resolve to a func"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::runtime::host::FatalHostError;
+
+    #[test]
+    fn invalid_singleton_layout_is_fatal_and_does_not_break_next_build() {
+        let engine = crate::RuntimeConfig::default().engine().unwrap();
+        let parent = singleton_struct(&engine, Finality::Final, None, vec![]).unwrap();
+        let error =
+            singleton_struct(&engine, Finality::NonFinal, Some(parent), vec![]).unwrap_err();
+        assert!(error.is::<FatalHostError>(), "{error:#}");
+        singleton_struct(&engine, Finality::NonFinal, None, vec![]).unwrap();
+        singleton_array(
+            &engine,
+            Finality::Final,
+            FieldType::new(wasmtime::Mutability::Var, wasmtime::StorageType::I16),
+        )
+        .unwrap();
+        singleton_func(&engine, vec![ValType::I32], vec![]).unwrap();
+    }
 }

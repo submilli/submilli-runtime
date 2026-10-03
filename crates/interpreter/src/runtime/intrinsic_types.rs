@@ -247,7 +247,7 @@ pub(crate) fn build_intrinsic_types(engine: &Engine) -> wasmtime::Result<Intrins
     def.forward_ref_param(object).nullable(true).finish();
     def.finish();
 
-    let g = b.build()?;
+    let g = b.build().map_err(crate::runtime::host::fatal_host_error)?;
     let vtable = g
         .get_struct(vtable)
         .ok_or_else(|| crate::runtime::host::fatal_host_error("vtable should be a struct"))?;
@@ -365,7 +365,7 @@ pub(crate) fn build_intrinsic_types(engine: &Engine) -> wasmtime::Result<Intrins
         .nullable(true)
         .finish();
     def.finish();
-    let g = b.build()?;
+    let g = b.build().map_err(crate::runtime::host::fatal_host_error)?;
     let class_vtable = g
         .get_struct(class_vtable_label)
         .ok_or_else(|| crate::runtime::host::fatal_host_error("class_vtable should be a struct"))?;
@@ -420,7 +420,7 @@ pub(crate) fn build_intrinsic_types(engine: &Engine) -> wasmtime::Result<Intrins
     ));
     def.finish();
 
-    let g = b.build()?;
+    let g = b.build().map_err(crate::runtime::host::fatal_host_error)?;
     let error_vtable = g
         .get_struct(error_vtable_label)
         .ok_or_else(|| crate::runtime::host::fatal_host_error("error_vtable should be a struct"))?;

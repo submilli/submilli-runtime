@@ -35,7 +35,7 @@ use super::vtable::{as_struct, read_string_units};
 use crate::runtime::StoreData;
 use crate::runtime::fuel::host_func_async;
 use crate::runtime::host::{
-    register_host_fn, write_submilli_string, write_submilli_string_struct_units,
+    fatal_host_error, register_host_fn, write_submilli_string, write_submilli_string_struct_units,
 };
 use crate::runtime::intrinsic_types::IntrinsicTypes;
 
@@ -208,13 +208,13 @@ pub(crate) fn build_error_subclass_types(
     ));
     def.finish();
 
-    let g = b.build()?;
+    let g = b.build().map_err(fatal_host_error)?;
     let vtable = g
         .get_struct(vtable_label)
-        .expect("error subclass vtable should be a struct");
+        .ok_or_else(|| fatal_host_error("error subclass vtable should be a struct"))?;
     let struct_ty = g
         .get_struct(struct_label)
-        .expect("error subclass should be a struct");
+        .ok_or_else(|| fatal_host_error("error subclass should be a struct"))?;
     Ok((vtable, struct_ty))
 }
 
@@ -661,14 +661,32 @@ pub(crate) fn construct_from_message(
     message: &str,
     own_fields: &[&str],
 ) -> wasmtime::Result<Val> {
-    debug_assert_eq!(own_fields.len(), class.own_fields().len());
-    let mut vals = Vec::with_capacity(1 + own_fields.len());
-    for text in std::iter::once(&message).chain(own_fields) {
+    validate_own_field_count(class, own_fields.len())?;
+    let message_units: Vec<u16> = message.encode_utf16().collect();
+    let message = write_submilli_string_struct_units(&mut *caller, &message_units)?;
+    let mut vals = Vec::with_capacity(own_fields.len());
+    for text in own_fields {
         let units: Vec<u16> = text.encode_utf16().collect();
         let st = write_submilli_string_struct_units(&mut *caller, &units)?;
         vals.push(Val::AnyRef(Some(st.to_anyref())));
     }
-    construct(caller, class, &vals[0].clone(), &vals[1..])
+    construct(
+        caller,
+        class,
+        &Val::AnyRef(Some(message.to_anyref())),
+        &vals,
+    )
+}
+
+fn validate_own_field_count(class: BuiltinErrorClass, actual: usize) -> wasmtime::Result<()> {
+    let expected = class.own_fields().len();
+    if actual != expected {
+        return Err(fatal_host_error(format!(
+            "{} construction expected {expected} own fields, got {actual}",
+            class.name_text()
+        )));
+    }
+    Ok(())
 }
 
 /// Allocate an instance of `class` with `message`, the class's `name`, and its
@@ -983,4 +1001,23 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
             },
         },
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn invalid_error_field_count_returns_fatal_error() {
+        for (class, invalid) in [
+            (BuiltinErrorClass::Error, 1),
+            (BuiltinErrorClass::PermissionDenied, 0),
+            (BuiltinErrorClass::PermissionDenied, 4),
+        ] {
+            let error = validate_own_field_count(class, invalid).unwrap_err();
+            assert!(error.is::<crate::runtime::host::FatalHostError>());
+            assert!(error.to_string().contains(class.name_text()));
+            validate_own_field_count(class, class.own_fields().len()).unwrap();
+        }
+    }
 }
