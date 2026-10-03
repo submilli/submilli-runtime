@@ -1,10 +1,10 @@
 //! Blocking gix transport over the embedder's policy-controlled HTTP client.
 use super::{Job, operations, storage::Snapshot};
-use crate::stdlib::http::transport::{HttpError, HttpRequest, HttpResponse};
+use crate::stdlib::http::transport::{HttpError, HttpRequest};
 use base64::Engine;
 use gix::protocol::transport::client::blocking_io::http;
 use serde_json::json;
-use std::io::{self, BufRead, Cursor, Read, Write};
+use std::io::{self, BufRead, Cursor, Read, Seek, Write};
 use std::sync::{Arc, Mutex};
 use wasmtime::{Result, bail};
 
@@ -73,9 +73,12 @@ fn fetch_inner(
         .repo
         .remote_at_without_url_rewrite(url.as_str())?
         .with_fetch_tags(gix::remote::fetch::Tags::None);
+    let spool = snapshot.spool()?;
     let http = Client {
         job: job.clone(),
         url: url.clone(),
+        spool: Arc::new(spool),
+        limits: snapshot.transfer,
     };
     let transport = http::Transport::new_http(
         http,
@@ -251,14 +254,37 @@ pub fn pull(
 struct Client {
     job: Job,
     url: String,
+    /// Where responses are written as they arrive: a directory in the stage.
+    spool: Arc<cap_std::fs::Dir>,
+    /// What every response may hold, and what it may make gix hold in memory.
+    limits: Transfer,
+}
+
+/// The limits on a fetch's responses.
+#[derive(Clone, Copy, Debug)]
+pub(super) struct Transfer {
+    /// Bytes all responses together may bring, on disk.
+    pub max_bytes: u64,
+    pub pack: super::pack_limits::Limits,
+}
+
+/// A response whose body was spooled to a file.
+#[derive(Debug)]
+struct Response {
+    headers: Vec<(String, String)>,
+    body: cap_std::fs::File,
 }
 
 impl Client {
-    fn response(&self, request: &HttpRequest) -> io::Result<HttpResponse> {
+    fn response(&self, request: &HttpRequest) -> io::Result<Response> {
         self.job.check_cancelled().map_err(io_error)?;
         let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(60);
+        let mut spool = self.spool_file()?;
         let mut response = self
-            .wait(deadline, self.job.http.send_without_redirects(request))?
+            .wait(
+                deadline,
+                self.job.http.send_without_redirects_to(request, &mut spool),
+            )?
             .map_err(http_error)?;
         if !same_url(&response.final_url, &request.url) {
             return Err(io_error("git: redirects are unsupported"));
@@ -279,10 +305,13 @@ impl Client {
                 .headers
                 .push(("Authorization".into(), format!("Basic {encoded}")));
             self.job.check_cancelled().map_err(io_error)?;
+            spool = self.spool_file()?;
             response = self
                 .wait(
                     deadline,
-                    self.job.http.send_without_redirects(&authenticated),
+                    self.job
+                        .http
+                        .send_without_redirects_to(&authenticated, &mut spool),
                 )?
                 .map_err(|error| match error {
                     HttpError::Internal(_) => http_error(error),
@@ -295,21 +324,38 @@ impl Client {
                 response.status
             )));
         }
-        let total = self.job.transferred.fetch_add(
-            response.body.len() as u64,
-            std::sync::atomic::Ordering::Relaxed,
-        );
-        if total.saturating_add(response.body.len() as u64) > self.job.max_bytes {
-            return Err(io_error("git: transfer limit exceeded"));
-        }
+        let mut body = spool.file;
+        // Checked from disk as a stream, then handed to gix from the start.
+        body.seek(io::SeekFrom::Start(0))?;
         super::pack_limits::validate(
-            &response.body,
+            &mut io::BufReader::new(&mut body),
             request.method == "GET",
-            self.job.max_bytes,
+            self.limits.pack,
             &self.job.cancelled,
         )?;
+        body.seek(io::SeekFrom::Start(0))?;
         self.job.check_cancelled().map_err(io_error)?;
-        Ok(response)
+        Ok(Response {
+            headers: response.headers,
+            body,
+        })
+    }
+
+    /// A new file in the spool, for one response's body.
+    fn spool_file(&self) -> io::Result<Spool> {
+        let name = format!("response-{}", uuid::Uuid::new_v4());
+        let file = self.spool.open_with(
+            &name,
+            cap_std::fs::OpenOptions::new()
+                .read(true)
+                .write(true)
+                .create_new(true),
+        )?;
+        Ok(Spool {
+            file,
+            job: self.job.clone(),
+            max_bytes: self.limits.max_bytes,
+        })
     }
 
     fn wait<T>(
@@ -356,7 +402,7 @@ impl Client {
                 headers,
                 body: vec![],
                 timeout_ms: 60_000,
-                max_response_size: self.job.max_bytes,
+                max_response_size: self.limits.max_bytes,
                 decompress: false,
                 transport_policy: None,
                 redirect_guard: None,
@@ -402,21 +448,49 @@ fn check_wait(
     Ok(())
 }
 
+/// A response body being written to the spool, counted against the transfer
+/// limit as it arrives.
+struct Spool {
+    file: cap_std::fs::File,
+    job: Job,
+    max_bytes: u64,
+}
+
+impl Write for Spool {
+    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        self.job.check_cancelled().map_err(io_error)?;
+        let total = self
+            .job
+            .transferred
+            .fetch_add(bytes.len() as u64, std::sync::atomic::Ordering::Relaxed);
+        if total.saturating_add(bytes.len() as u64) > self.max_bytes {
+            return Err(io_error(
+                "git: transfer limit exceeded; the fetch needs more room under the size limit",
+            ));
+        }
+        self.file.write_all(bytes)?;
+        Ok(bytes.len())
+    }
+    fn flush(&mut self) -> io::Result<()> {
+        self.file.flush()
+    }
+}
+
 struct Pending {
     client: Client,
     request: HttpRequest,
-    response: Option<HttpResponse>,
+    response: Option<Response>,
     body_closed: bool,
 }
 
 pub struct ResponseReader {
     pending: Arc<Mutex<Pending>>,
-    cursor: Option<Cursor<Vec<u8>>>,
+    reader: Option<Box<dyn BufRead + Send>>,
     headers: bool,
 }
 impl ResponseReader {
-    fn cursor(&mut self) -> io::Result<&mut Cursor<Vec<u8>>> {
-        if self.cursor.is_none() {
+    fn reader(&mut self) -> io::Result<&mut Box<dyn BufRead + Send>> {
+        if self.reader.is_none() {
             let mut pending = self
                 .pending
                 .lock()
@@ -431,35 +505,37 @@ impl ResponseReader {
                 .response
                 .as_mut()
                 .ok_or_else(|| io_error("git: missing response"))?;
-            let bytes = if self.headers {
-                response
-                    .headers
-                    .iter()
-                    .map(|(k, v)| format!("{k}: {v}\r\n"))
-                    .collect::<String>()
-                    .into_bytes()
+            let reader: Box<dyn BufRead + Send> = if self.headers {
+                Box::new(Cursor::new(
+                    response
+                        .headers
+                        .iter()
+                        .map(|(k, v)| format!("{k}: {v}\r\n"))
+                        .collect::<String>()
+                        .into_bytes(),
+                ))
             } else {
-                std::mem::take(&mut response.body)
+                Box::new(io::BufReader::new(response.body.try_clone()?))
             };
-            self.cursor = Some(Cursor::new(bytes));
+            self.reader = Some(reader);
         }
-        self.cursor
+        self.reader
             .as_mut()
             .ok_or_else(|| io_error("git: response unavailable"))
     }
 }
 impl Read for ResponseReader {
     fn read(&mut self, out: &mut [u8]) -> io::Result<usize> {
-        self.cursor()?.read(out)
+        self.reader()?.read(out)
     }
 }
 impl BufRead for ResponseReader {
     fn fill_buf(&mut self) -> io::Result<&[u8]> {
-        self.cursor()?.fill_buf()
+        self.reader()?.fill_buf()
     }
     fn consume(&mut self, amount: usize) {
-        if let Some(cursor) = &mut self.cursor {
-            cursor.consume(amount);
+        if let Some(reader) = &mut self.reader {
+            reader.consume(amount);
         }
     }
 }
@@ -506,12 +582,12 @@ impl http::Http for Client {
         Ok(http::GetResponse {
             headers: ResponseReader {
                 pending: pending.clone(),
-                cursor: None,
+                reader: None,
                 headers: true,
             },
             body: ResponseReader {
                 pending,
-                cursor: None,
+                reader: None,
                 headers: false,
             },
         })
@@ -531,12 +607,12 @@ impl http::Http for Client {
             post_body: RequestWriter(pending.clone()),
             headers: ResponseReader {
                 pending: pending.clone(),
-                cursor: None,
+                reader: None,
                 headers: true,
             },
             body: ResponseReader {
                 pending,
-                cursor: None,
+                reader: None,
                 headers: false,
             },
         })
@@ -564,6 +640,7 @@ mod tests {
     use super::*;
 
     use crate::runtime::{HttpClient, SecretProvider, StoreData};
+    use crate::stdlib::http::transport::HttpResponse;
     use crate::stdlib::http::transport::{DownloadMeta, HttpError};
     use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
@@ -663,7 +740,21 @@ mod tests {
 
     fn client(providers: Arc<Providers>) -> Client {
         let data = StoreData::with_vfs(crate::runtime::Vfs::none());
+        let spool = tempfile::tempdir().unwrap();
+        let spool_dir =
+            cap_std::fs::Dir::open_ambient_dir(spool.path(), cap_std::ambient_authority()).unwrap();
+        // Leaked: the client outlives this helper, and the test process is short.
+        std::mem::forget(spool);
         Client {
+            spool: Arc::new(spool_dir),
+            limits: Transfer {
+                max_bytes: 4096,
+                pack: crate::stdlib::git::pack_limits::Limits {
+                    max_records: 16,
+                    max_object_bytes: 4096,
+                    max_chain_bytes: 4096,
+                },
+            },
             url: "https://example.com/repo".into(),
             job: Job {
                 op: "fetch".into(),
@@ -687,9 +778,7 @@ mod tests {
         }
     }
 
-    fn response_worker(
-        providers: Arc<Providers>,
-    ) -> tokio::task::JoinHandle<io::Result<HttpResponse>> {
+    fn response_worker(providers: Arc<Providers>) -> tokio::task::JoinHandle<io::Result<Response>> {
         let client = client(providers);
         tokio::task::spawn_blocking(move || {
             let pending = client

@@ -31,6 +31,12 @@ pub(super) fn run(
     }
     let quota = placement.quota();
     let mut snapshot = open_snapshot(&root, &relative, &placement, job, op, creates, branch)?;
+    if let Some(quota) = quota {
+        // A fetch's responses are spooled and its pack written: each may take
+        // half of what the size limit leaves.
+        let room = quota.limit().saturating_sub(quota.used()) / 2;
+        snapshot.transfer.max_bytes = room.min(storage::MAX_TRANSFER);
+    }
     let mut changed = op == "init";
     let result = match op {
         "open" | "init" => Value::Null,

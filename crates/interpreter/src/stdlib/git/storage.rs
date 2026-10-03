@@ -24,6 +24,8 @@ use std::sync::{
 use wasmtime::{Result, bail};
 
 pub const MAX_BYTES: u64 = 50 * 1024 * 1024;
+/// The most a fetch may bring when the volume has no size limit to bound it.
+pub const MAX_TRANSFER: u64 = 4 * 1024 * 1024 * 1024;
 pub const MAX_PATHS: usize = 10_000;
 /// Files and their contents, as tests compare a directory before and after.
 #[cfg(test)]
@@ -53,6 +55,8 @@ pub struct Snapshot {
     published: bool,
     /// The work this operation does, counted for fuel.
     pub meter: Arc<Meter>,
+    /// What a fetch may bring, and make gix hold.
+    pub transfer: super::transport::Transfer,
     // Dropped last: the repository stays held until everything above is gone.
     _lock: RepositoryLock,
 }
@@ -211,6 +215,14 @@ impl Snapshot {
             created,
             published: false,
             meter,
+            transfer: super::transport::Transfer {
+                max_bytes: MAX_TRANSFER,
+                pack: super::pack_limits::Limits {
+                    max_records: (max_bytes / 256).max(1) as usize,
+                    max_object_bytes: max_bytes / 4,
+                    max_chain_bytes: max_bytes / 2,
+                },
+            },
             _lock: lock,
         };
         snapshot.remotes()?;
@@ -294,6 +306,17 @@ impl Snapshot {
     /// Stages a checked-out file; see [`Stage::write_worktree_file`].
     pub fn stage_worktree_file(&self, path: &str, mode: u32, contents: &[u8]) -> Result<()> {
         self.stage()?.write_worktree_file(path, mode, contents)
+    }
+
+    /// A directory in the stage for fetched responses, which are never published.
+    pub fn spool(&self) -> Result<Dir> {
+        let stage = self.stage()?;
+        match stage.dir.create_dir("spool") {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
+            Err(error) => return Err(error.into()),
+        }
+        Ok(stage.dir.open_dir("spool")?)
     }
 
     /// The pack directory of the stage's object store, where fetch writes.

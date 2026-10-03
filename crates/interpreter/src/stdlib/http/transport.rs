@@ -164,6 +164,24 @@ pub trait HttpClient: Send + Sync {
         ))
     }
 
+    /// [`send_without_redirects`](Self::send_without_redirects), writing the
+    /// body to `body` as it arrives instead of returning it; the returned
+    /// response's `body` is empty. Git streams fetched packs to disk through it.
+    ///
+    /// The default buffers the whole body first: an embedder whose responses
+    /// can be large should stream, so a fetch holds one chunk in memory.
+    async fn send_without_redirects_to(
+        &self,
+        req: &HttpRequest,
+        body: &mut (dyn std::io::Write + Send),
+    ) -> Result<HttpResponse, HttpError> {
+        let mut response = self.send_without_redirects(req).await?;
+        body.write_all(&response.body)
+            .map_err(|error| HttpError::Other(error.to_string()))?;
+        response.body = Vec::new();
+        Ok(response)
+    }
+
     /// No default impl: the obvious "buffer via `send` then `write_all`" fallback
     /// would silently break the bounded-memory guarantee `http.download` advertises.
     async fn download(
@@ -480,6 +498,38 @@ impl HttpClient for ReqwestHttpClient {
         let hop = self.initial_hop(req)?;
         let resp = self.send_hop(&hop, &Deadline::new(req.timeout_ms)).await?;
         read_response(resp, req.max_response_size).await
+    }
+
+    async fn send_without_redirects_to(
+        &self,
+        req: &HttpRequest,
+        body: &mut (dyn std::io::Write + Send),
+    ) -> Result<HttpResponse, HttpError> {
+        let hop = self.initial_hop(req)?;
+        let resp = self.send_hop(&hop, &Deadline::new(req.timeout_ms)).await?;
+        let status = resp.status().as_u16();
+        let status_text = resp.status().canonical_reason().unwrap_or("").to_string();
+        let final_url = resp.url().to_string();
+        let headers = collect_headers(resp.headers());
+        let limit = req.max_response_size;
+        let mut received: u64 = 0;
+        let mut stream = resp.bytes_stream();
+        while let Some(chunk) = stream.next().await {
+            let chunk = chunk.map_err(map_reqwest_error)?;
+            received = received.saturating_add(chunk.len() as u64);
+            if received > limit {
+                return Err(HttpError::TooLarge { limit });
+            }
+            body.write_all(&chunk)
+                .map_err(|error| HttpError::Other(error.to_string()))?;
+        }
+        Ok(HttpResponse {
+            status,
+            status_text,
+            headers,
+            body: Vec::new(),
+            final_url,
+        })
     }
 
     async fn download(
