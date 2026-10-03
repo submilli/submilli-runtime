@@ -1561,7 +1561,7 @@ Other counted work:
 - references listed: `SYSCALL(1) + ELEM(1)` each, plus `SYSCALL(2) + IO(pr) + PARSE(pr)` for `packed-refs` of `pr` bytes;
 - a diff pair: `SCAN(len(a) + len(b))`.
 
-**Fetch** (`transport.rs`, `pack_limits.rs`): each response is written to the stage's spool, `IO(N)` as received; it is read back by the check and by gix, and hashed whole by gix, `IO(2N) + HASH(N)`. The check counts each entry before inflating it, so the ceiling stops it part way and a fetch that fails later still pays: an entry of `raw` inflated bytes is inflated by the check and by gix, `PARSE(2 raw)`; a whole object is hashed by both, `HASH(2 raw)`; for a delta, gix builds and hashes the object it describes, `PARSE(result) + HASH(result)`. The pack written: `SYSCALL(8) + IO(pack) + ELEM(objects)`. `N` = spooled bytes.
+**Fetch** (`transport.rs`, `pack_limits.rs`): each response is written to the stage's spool, `IO(N)` as received; it is read back by the check and by gix, and hashed whole by gix when it is a pack, `IO(2N) + HASH(N)`. The check counts each entry before inflating it, so the ceiling stops it part way and a fetch that fails later still pays: an entry of `raw` inflated bytes is inflated by the check and by gix, `PARSE(2 raw)`; a whole object is hashed by both, `HASH(2 raw)`; for a delta, gix builds and hashes the object it describes, `PARSE(result) + HASH(result)`. The pack written: `SYSCALL(8) + IO(pack) + ELEM(objects)`. `N` = spooled bytes.
 
 | Function | Formula (meter, beyond `CALL + PARSE(len(args))` before and the result's `PARSE` after) | Notes |
 |---|---|---|
@@ -1584,7 +1584,9 @@ Other counted work:
 
 **Known gaps, accepted:**
 
-- Work counted only once it is done is lost if it is interrupted: an entry the check fails part way through inflating, gix's `receive`, a worktree file read. Each is bounded by `max_bytes` or the response.
+- Work counted only once it is done is lost if it is interrupted: gix's `receive` past the check, a worktree file read. Each is bounded by `max_bytes` or the response. A pack entry is charged its check's share before it is inflated, and gix's share once it inflates as declared; a delta's result once its chain is within limits.
+- A timed-out or cancelled worker runs on to its next check; that work is charged, since the store thread waits for the worker before settling.
+- Request bodies sent while fetching are not metered: they are small, bounded by the references the repository has.
 - A call the program abandons (its future dropped) is not settled: the worker is cancelled and its work counted, but nothing charges it.
 - Pack-set verification is cached process-wide: the first run to see a pack set pays for checking it, later runs pay `SYSCALL(2p)`.
 - gix resolves deltas with its caches off (`core.deltaBaseCacheLimit=0`, `gitoxide.objects.cacheLimit=0`), so reading an object decodes its whole chain again; it is charged for the decoded size only, not for each base along the chain. Depth is capped at 4095.

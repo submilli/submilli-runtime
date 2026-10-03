@@ -394,10 +394,12 @@ impl Client {
         let mut body = spool.file;
         // Checked from disk as a stream, then handed to gix from the start.
         body.seek(io::SeekFrom::Start(0))?;
-        // Read back twice, by the check and by gix, which also hashes it whole.
-        let spooled = body.metadata().map_or(0, |meta| meta.len());
+        // Read back twice, by the check and by gix, which hashes a pack whole.
+        let spooled = body.metadata()?.len();
         self.job.meter.io(spooled.saturating_mul(2));
-        self.job.meter.hash(spooled);
+        if request.method != "GET" {
+            self.job.meter.hash(spooled);
+        }
         let objects = self.objects.to_handle_arc();
         super::pack_limits::validate(
             &mut io::BufReader::new(&mut body),

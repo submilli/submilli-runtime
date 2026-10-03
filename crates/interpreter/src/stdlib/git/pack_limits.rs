@@ -285,18 +285,23 @@ fn validate_pack<R: BufRead>(
             Header::Tag => Some(gix::objs::Kind::Tag),
             Header::OfsDelta { .. } | Header::RefDelta { .. } => None,
         };
-        // Inflated here and again by gix; a whole object is hashed by both.
+        // Inflated, and a whole object hashed, here and again by gix: this
+        // check's share before the work, so the ceiling can stop it; gix's
+        // once the entry is shown to inflate as declared.
         let raw = entry.decompressed_size;
-        meter.parse(raw.saturating_mul(2));
-        if kind.is_some() {
-            meter.hash(raw.saturating_mul(2));
-        }
+        let hashed = if kind.is_some() { raw } else { 0 };
+        meter.parse(raw);
+        meter.hash(hashed);
         let inflated = inflate_entry(pack, raw, kind, cancelled)?;
+        meter.parse(raw);
+        meter.hash(hashed);
         if let Some(id) = inflated.id {
             whole.insert(id, entry.decompressed_size);
         }
         let prefix = inflated.prefix;
-        let chain = match entry.header {
+        // What the entry needs once resolved, with its bases, and the size of
+        // the object a delta describes, which gix builds and hashes.
+        let (chain, result) = match entry.header {
             Header::OfsDelta { base_distance } => {
                 let base = offset
                     .checked_sub(base_distance)
@@ -307,11 +312,7 @@ fn validate_pack<R: BufRead>(
                 let mut prefix = prefix.as_slice();
                 delta_size(&mut prefix)?;
                 let result = delta_size(&mut prefix)?;
-                // gix builds the object the delta describes, and hashes it.
-                meter.parse(result);
-                meter.hash(result);
-                base.saturating_add(entry.decompressed_size)
-                    .saturating_add(result)
+                (base.saturating_add(raw).saturating_add(result), result)
             }
             Header::RefDelta { base_id } => {
                 // A whole object, here or in the repository. Its size as the
@@ -320,17 +321,18 @@ fn validate_pack<R: BufRead>(
                 let mut prefix = prefix.as_slice();
                 let base = delta_size(&mut prefix)?;
                 let result = delta_size(&mut prefix)?;
-                meter.parse(result);
-                meter.hash(result);
-                let added = entry.decompressed_size.saturating_add(result);
+                let added = raw.saturating_add(result);
                 named_bases.push((base_id, added));
-                base.saturating_add(added)
+                (base.saturating_add(added), result)
             }
-            _ => entry.decompressed_size,
+            _ => (raw, 0),
         };
         if chain > limits.max_chain_bytes {
             return Err(super::storage::memory_limit_io("pack delta chain"));
         }
+        // Charged once the chain's check has bounded what the delta declares.
+        meter.parse(result);
+        meter.hash(result);
         chains.insert(offset, chain);
     }
     let mut checksum = [0u8; 20];
@@ -594,6 +596,53 @@ mod tests {
     }
 
     #[test]
+    fn a_delta_pays_for_the_object_it_describes() {
+        use gix::odb::pack::data::entry::Header;
+        // One 100 KB base, and fifty deltas that each copy all of it: a few
+        // bytes each on the wire, 100 KB each for gix to build and hash.
+        let base = 100_000u64;
+        // Base size, result size (both 100,000 as varints), then one copy of
+        // 100,000 bytes (three size bytes) from offset 0.
+        let copy = [0xa0, 0x8d, 0x06, 0xa0, 0x8d, 0x06, 0xf0, 0xa0, 0x86, 0x01];
+        let mut entries = vec![compressed_entry(Header::Blob, &[b'a'; 100_000])];
+        let mut offsets = vec![12u64];
+        for _ in 0..50 {
+            let offset = offsets.last().unwrap() + entries.last().unwrap().len() as u64;
+            entries.push(compressed_entry(
+                Header::OfsDelta {
+                    base_distance: offset - 12,
+                },
+                &copy,
+            ));
+            offsets.push(offset);
+        }
+        let pack = complete_pack(&entries);
+        let meter = Meter::default();
+        super::validate(
+            &mut io::Cursor::new(&pack),
+            false,
+            Limits {
+                max_records: 64,
+                max_object_bytes: BUDGET,
+                max_chain_bytes: BUDGET,
+            },
+            &|_| true,
+            &meter,
+            &AtomicBool::new(false),
+        )
+        .unwrap();
+        let resolved = 50 * base;
+        assert!(pack.len() < 2_000, "{}", pack.len());
+        assert!(
+            meter.fuel()
+                >= crate::runtime::fuel::PARSE.cost(resolved)
+                    + crate::runtime::fuel::HASH.cost(resolved),
+            "{}",
+            meter.fuel()
+        );
+    }
+
+    #[test]
     fn the_fuel_ceiling_stops_the_check_part_way() {
         use gix::odb::pack::data::entry::Header;
         let entry = compressed_entry(Header::Blob, &[b'a'; 100_000]);
@@ -619,6 +668,14 @@ mod tests {
         .unwrap_err();
         assert!(error.to_string().contains("cancelled"), "{error}");
         assert!(meter.is_exhausted());
+        // Stopped after about three entries' work, not all ten.
+        assert!(
+            meter.fuel()
+                <= crate::runtime::fuel::PARSE.cost(600_000)
+                    + crate::runtime::fuel::HASH.cost(600_000),
+            "{}",
+            meter.fuel()
+        );
     }
 
     #[test]
