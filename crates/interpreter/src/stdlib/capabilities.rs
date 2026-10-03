@@ -395,13 +395,14 @@ const LLM: &[Capability] = &[Capability {
     summary: "Call a model (call, batch) and enumerate the models it may call (models). \
               Narrowing `model` also narrows what `models()` reveals: every candidate is \
               filtered through this same rule, so a listing never offers a model the \
-              caller would be denied at call time",
+              caller would be denied at call time. A policy allowing no candidates \
+              returns an empty listing",
     filter_fields: &[
         field(
             "model",
             "string",
-            "Model name the call targets; \"\" on the `models` op itself, then each \
-             candidate's own name as the listing is filtered",
+            "Model name the call targets or the candidate being listed. The empty-name \
+             runtime preflight for models does not decide visibility",
         ),
         field(
             "prompt_count",

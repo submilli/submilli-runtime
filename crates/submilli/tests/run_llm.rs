@@ -126,7 +126,7 @@ fn fixture(name: &str, source: &str) -> Fixture {
 
 fn fixture_with(name: &str, source: &str, blueprint_yaml: &str) -> Fixture {
     let dir = tempfile::tempdir().expect("tempdir");
-    let script = dir.path().join(format!("{name}.subm"));
+    let script = dir.path().join(format!("{name}.ts"));
     fs::write(&script, source).expect("write script");
     let blueprint = dir.path().join("blueprint.yaml");
     fs::write(&blueprint, blueprint_yaml).expect("write blueprint");
@@ -183,6 +183,62 @@ fn a_call_to_an_undeclared_model_is_refused_naming_the_model() {
         !printed.starts_with("OK:"),
         "an undeclared model must not resolve: {printed}"
     );
+}
+
+#[test]
+fn models_lists_only_candidates_allowed_by_blueprint_rules() {
+    let source = r#"import llm from "submilli:llm";
+function main(): string {
+    const names: string[] = [];
+    for (const model of llm.models()) { names.push(model.name); }
+    return JSON.stringify(names);
+}"#;
+    for (rule, expected) in [
+        (
+            "filter: model glob \"claude-*\"\n      action: allow",
+            "[\"claude-haiku-4-5\",\"claude-sonnet-5\"]",
+        ),
+        (
+            "filter: model == \"claude-sonnet-5\"\n      action: allow",
+            "[\"claude-sonnet-5\"]",
+        ),
+        ("filter: model glob \"absent-*\"\n      action: allow", "[]"),
+        (
+            "action: allow",
+            "[\"claude-haiku-4-5\",\"claude-sonnet-5\",\"internal-secret-model\"]",
+        ),
+        ("action: deny", "[]"),
+        (
+            "filter: model == \"claude-haiku-4-5\"\n      action: deny\n    - capability: llm.call\n      action: allow",
+            "[\"claude-sonnet-5\",\"internal-secret-model\"]",
+        ),
+    ] {
+        let yaml = format!(
+            r#"name: llm-listing
+default: deny
+permissions:
+  main:
+    - capability: llm.call
+      {rule}
+llm:
+  providers:
+    fake:
+      type: anthropic
+  models:
+    claude-haiku-4-5:
+      provider: fake
+    claude-sonnet-5:
+      provider: fake
+    internal-secret-model:
+      provider: fake
+"#
+        );
+        let home = tempfile::tempdir().expect("home");
+        let fixture = fixture_with("llm_models", source, &yaml);
+        let out = run(&fixture, home.path(), &[], &[]);
+        assert!(out.status.success(), "rule {rule}: {}", stderr(&out));
+        assert_eq!(stdout(&out).trim(), expected, "rule {rule}");
+    }
 }
 
 /// The wiring this unit exists to add, proven from the CLI end: a declared model
