@@ -1075,6 +1075,109 @@ async fn files_list_enumerates_the_workspace() {
     assert_eq!(out["count"], json!(1));
 }
 
+#[tokio::test]
+async fn tool_arguments_accept_string_scalars_and_report_invalid_arguments() {
+    let h = Harness::new();
+    let session = h.handshake(SESS).await;
+    let (_, _, written) = h
+        .post(SESS, tools_call(2, WRITE_TREE), Some(&session))
+        .await;
+    assert!(output(&written)["error"].is_null(), "{written}");
+
+    for (value, count) in [
+        (json!("true"), 3),
+        (json!("false"), 2),
+        (json!(true), 3),
+        (json!(null), 2),
+    ] {
+        let (_, _, rpc) = h
+            .post(
+                SESS,
+                rpc_call(3, "submilli__files__list", json!({"recursive": value})),
+                Some(&session),
+            )
+            .await;
+        assert_eq!(output(&rpc)["count"], count, "{rpc}");
+    }
+
+    let (_, _, written) = h
+        .post(SESS, tools_call(4, WRITE_LINES), Some(&session))
+        .await;
+    assert!(output(&written)["error"].is_null(), "{written}");
+    let (_, _, rpc) = h
+        .post(
+            SESS,
+            rpc_call(
+                5,
+                "submilli__files__read",
+                json!({"path": "/lines.txt", "offset": "2", "limit": "2"}),
+            ),
+            Some(&session),
+        )
+        .await;
+    assert_eq!(output(&rpc)["content"], "l2\nl3", "{rpc}");
+
+    for (tool, args, message) in [
+        (
+            "submilli__files__list",
+            json!({"recursive": "yes"}),
+            "boolean",
+        ),
+        ("submilli__files__list", json!({"recursive": 1}), "boolean"),
+        ("submilli__files__read", json!({}), "missing field"),
+        ("submilli__files__read", json!({"path": 1}), "string"),
+        (
+            "submilli__files__read",
+            json!({"path": "/", "limit": "-1"}),
+            "u32",
+        ),
+        (
+            "submilli__files__read",
+            json!({"path": "/", "limit": "4294967296"}),
+            "u32",
+        ),
+        (
+            "submilli__files__read",
+            json!({"path": "/", "limit": "1.5"}),
+            "u32",
+        ),
+        ("submilli__typescript__execute", json!({}), "missing field"),
+        (
+            "submilli__typescript__execute",
+            json!({"code": "", "extra": true}),
+            "unknown field",
+        ),
+        (
+            "submilli__typescript__packages__docs",
+            json!({}),
+            "missing field",
+        ),
+        (
+            "submilli__typescript__builtins__docs",
+            json!({"names": "Array"}),
+            "sequence",
+        ),
+    ] {
+        let (_, _, rpc) = h.post(SESS, rpc_call(6, tool, args), Some(&session)).await;
+        assert!(refuses_with(&rpc, message), "{tool}: {rpc}");
+        assert_eq!(output(&rpc)["error"]["kind"], "invalid_arguments", "{rpc}");
+        assert!(text_output(&rpc).contains(message), "{rpc}");
+    }
+
+    let (_, _, rpc) = h
+        .post(SESS, rpc_call(7, "missing_tool", json!({})), Some(&session))
+        .await;
+    assert_eq!(rpc["error"]["code"], -32602, "{rpc}");
+    let (_, _, rpc) = h
+        .post(
+            SESS,
+            rpc_call(8, "submilli__files__list", json!({})),
+            Some(&session),
+        )
+        .await;
+    assert_eq!(output(&rpc)["count"], 3, "session remains usable: {rpc}");
+}
+
 /// A file tool's per-call failure: an `isError` result whose `error.message` the
 /// model reads, never a JSON-RPC error. Clients such as `langchain-mcp-adapters`
 /// raise on a JSON-RPC error, which crashes the agent instead of telling the model.
@@ -1167,10 +1270,10 @@ async fn files_tools_answer_failures_as_tool_results() {
         assert!(text.contains(message), "unstructured clients see: {text}");
     }
 
-    // Malformed arguments are a protocol problem, answered as one.
+    // Invalid tool arguments reach the model as a correctable tool failure.
     let call = rpc_call(9, "submilli__files__read", json!({ "path": 1 }));
     let (_, _, rpc) = h.post(EPH, call, Some(&session)).await;
-    assert!(!rpc["error"].is_null(), "{rpc}");
+    assert!(refuses_with(&rpc, "expected a string"), "{rpc}");
 }
 
 const ESCAPE_DIAGNOSTIC: &str = "path escapes the VFS root";
