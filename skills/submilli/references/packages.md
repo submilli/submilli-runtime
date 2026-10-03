@@ -467,7 +467,7 @@ function main(): void {
   not detection of network calls. Other tests and readme examples still run.
   `SUBMILLI_SKIP_HTTP_TESTS` has no effect on package-test selection.
 - In a CI job with an injected secret, run
-  `submilli build test -p @acme/billing --env-var BILLING_API_KEY`.
+  `submilli build test --deny-warnings -p @acme/billing --env-var BILLING_API_KEY`.
 - Test that a write operation sends only the fields set, that a missing
   resource yields `null`, and that a service error surfaces its detail.
 

@@ -10,9 +10,9 @@ use std::process::ExitCode;
 
 use interpreter::{Severity, Sources, Span, diagnostics};
 use submilli_build::{
-    BuildDiagnostic, BuildSeverity, DriverError, GithubSource, InstallError, Lockfile, PackageName,
-    PackageSource, PackageStore, ResolveError, install_from_dir, install_plan, load_manifest,
-    resolve_github_closure,
+    BuildDiagnostic, BuildSeverity, DriverError, GithubSource, InstallError, InstallPreparation,
+    Lockfile, PackageName, PackageSource, PackageStore, ResolveError, deny_warnings_from_env,
+    load_manifest, resolve_github_closure, warning_denial_message,
 };
 use submilli_shared::github;
 
@@ -33,6 +33,10 @@ pub struct Args {
     /// Re-install over a package already in the store at a different commit.
     #[arg(long)]
     upgrade: bool,
+
+    /// Fail on code warnings; also enabled by SUBMILLI_DENY_WARNINGS=1.
+    #[arg(long)]
+    deny_warnings: bool,
 }
 
 impl Args {
@@ -94,19 +98,20 @@ fn install(args: &Args, auth: &LazyAuth) -> anyhow::Result<ExitCode> {
                 return Ok(ExitCode::from(1));
             }
         };
-    if let Err(err) = install_plan(&store, &closure.plan, args.upgrade) {
-        render_install_error(&err);
-        return Ok(ExitCode::from(1));
-    }
-
-    match install_from_dir(
-        &store,
-        fetched.dir.path(),
-        only.as_ref(),
-        &source,
-        args.upgrade,
-    ) {
-        Ok(report) => {
+    let result = (|| {
+        let mut preparation = InstallPreparation::new(&store)?;
+        preparation.prepare_plan(&closure.plan, args.upgrade)?;
+        let report =
+            preparation.prepare_repo(fetched.dir.path(), only.as_ref(), &source, args.upgrade)?;
+        let warnings = preparation.warnings.clone();
+        preparation.publish(args.deny_warnings || deny_warnings_from_env())?;
+        Ok::<_, InstallError>((report, warnings))
+    })();
+    match result {
+        Ok((report, warnings)) => {
+            for warning in warnings {
+                eprint!("{warning}");
+            }
             for name in &report.up_to_date {
                 eprintln!("up to date {}", name.as_str());
             }
@@ -129,6 +134,13 @@ fn install(args: &Args, auth: &LazyAuth) -> anyhow::Result<ExitCode> {
 
 pub(crate) fn render_install_error(err: &InstallError) {
     match err {
+        InstallError::WarningsDenied { warnings } => {
+            for warning in warnings {
+                eprint!("{warning}");
+            }
+            eprintln!("error: {}", warning_denial_message(warnings.len()));
+        }
+        InstallError::Preparation(error) => eprintln!("error: preparing install: {error}"),
         InstallError::NoManifest { repo_dir } => {
             eprintln!(
                 "error: {} has no submilli.toml at its root; only Submilli package repos can be installed",
