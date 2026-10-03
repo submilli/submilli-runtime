@@ -931,6 +931,23 @@ fn accessors_do_not_pay_for_the_whole_receiver() {
             "{body}: {extra}"
         );
     }
+    for n in [128_u64, 256] {
+        let setup = "const z = Temporal.ZonedDateTime.from(\"2024-03-09T12:00:00-05:00[America/New_York]\");";
+        let baseline = host_fuel(
+            &format!("usage-zone-getter-{n}-base"),
+            &format!("function main(): number {{ {setup} return 0; }}"),
+        );
+        let actual = host_fuel(
+            &format!("usage-zone-getter-{n}"),
+            &format!(
+                "function main(): number {{ {setup} for (let i=0; i<{n}; i++) {{ const day = z.daysInWeek; }} return 0; }}"
+            ),
+        ) - baseline;
+        eprintln!("zone getter {n}: {actual}");
+        assert_eq!(actual, n * CALL);
+        let old = if n == 128 { 29_952 } else { 59_904 };
+        assert!(actual < old / 2);
+    }
 }
 
 #[test]
@@ -972,7 +989,7 @@ fn operations_charge_for_the_input_they_process() {
             "upper",
             text_input,
             "return s.toUpperCase().length % 10;",
-            SCAN.cost(2 * 100_000),
+            SCAN.cost(100_000),
         ),
     ];
     for (name, input, operation, floor) in cases {
@@ -986,6 +1003,167 @@ fn operations_charge_for_the_input_they_process() {
         );
         let added = with_operation - baseline;
         assert!(added >= floor, "{name}: {added} < {floor}");
+    }
+
+    for (name, operation) in [
+        (
+            "replace-literal",
+            "return s.replaceAll(\"a\", \"bb\").length % 10;",
+        ),
+        (
+            "replace-regex",
+            "return s.replaceAll(/a/g, \"bb\").length % 10;",
+        ),
+        ("split-literal", "return s.split(\",\").length % 10;"),
+        ("split-regex", "return s.split(/,/).length % 10;"),
+    ] {
+        let mut costs = Vec::new();
+        for count in [128, 256] {
+            let setup = format!("const s=\"a,\".repeat({count});");
+            let baseline = host_fuel(
+                "incremental-output-baseline",
+                &format!("function main():number{{ {setup} return 0; }}"),
+            );
+            let actual = host_fuel(
+                name,
+                &format!("function main():number{{ {setup} {operation} }}"),
+            ) - baseline;
+            let old_literal = CALL
+                + COPY.cost((2 * count) as u64)
+                + COPY.cost(1)
+                + COPY.cost(2)
+                + SCAN.cost((2 * count + 1) as u64)
+                + COPY.cost((3 * count) as u64);
+            if name == "replace-literal" {
+                assert!(actual >= old_literal + SCAN.cost((2 * count) as u64));
+            }
+            if name == "split-literal" {
+                let old = CALL
+                    + COPY.cost((2 * count) as u64)
+                    + COPY.cost(1)
+                    + SCAN.cost((2 * count + 1) as u64)
+                    + count as u64 * COPY.cost(1)
+                    + ELEM.cost((count + 1) as u64);
+                assert_eq!(
+                    actual, old,
+                    "split preserves its charge while moving admission into the loop"
+                );
+            }
+            eprintln!("{name} {count}: {actual}");
+            costs.push(actual);
+        }
+        assert!(costs[1] > costs[0]);
+        assert!(costs[1] < costs[0] * 5 / 2);
+    }
+    let stopped = run_script(
+        "bounded-prefix-replacement",
+        "function main():number{ const s=\"a\".repeat(8192); try { s.replaceAll(\"a\", \"$`$'\"); } catch(e) { return 7; } return 0; }",
+        &["--fuel", "200000", "--timeout", "2000"],
+    );
+    assert!(!stopped.status.success());
+    assert!(
+        stderr(&stopped).contains("fuel exhausted"),
+        "{}",
+        stderr(&stopped)
+    );
+
+    let mut iterator_costs = Vec::new();
+    for count in [128, 256] {
+        let setup =
+            format!("const values:number[]=[]; for(let i=0;i<{count};i++){{ values.push(i); }}");
+        let baseline = host_fuel(
+            "iterator-baseline",
+            &format!("function main():number{{ {setup} return 0; }}"),
+        );
+        let actual = host_fuel(
+            "iterator-results",
+            &format!(
+                "function main():number{{ {setup} let sum=0; for(const value of values.values()){{ sum+=value; }} return sum % 10; }}"
+            ),
+        ) - baseline;
+        eprintln!("iterator {count}: {actual}");
+        let old = if count == 128 { 16_262 } else { 32_390 };
+        assert!(
+            actual < old - (count as u64) * 8,
+            "iterator allocation fuel: {actual}, old {old}"
+        );
+        iterator_costs.push(actual);
+    }
+    assert!(iterator_costs[1] < iterator_costs[0] * 5 / 2);
+
+    let mut metadata_costs = Vec::new();
+    for count in [128, 256] {
+        let padding = "x".repeat(count * 32);
+        let declaration =
+            format!("function work(n:number, padding:unknown=\"{padding}\"):void {{ }}");
+        let setup =
+            format!("const values:number[]=[]; for(let i=0;i<{count};i++){{ values.push(i); }}");
+        let baseline = host_fuel(
+            "metadata-baseline",
+            &format!("{declaration} function main(): number {{ {setup} return 0; }}"),
+        );
+        let actual = host_fuel(
+            "metadata",
+            &format!(
+                "{declaration} function main(): number {{ {setup} values.forEach(work); return 0; }}"
+            ),
+        ) - baseline;
+        eprintln!("metadata {count}: {actual}");
+        assert!(
+            actual > PARSE.cost((count * 32) as u64),
+            "metadata fixture must exercise the cache miss"
+        );
+        metadata_costs.push(actual);
+        let old = if count == 128 { 593_152 } else { 2_365_952 };
+        assert!(actual < old / 2);
+    }
+    assert!(metadata_costs[1] < metadata_costs[0] * 5 / 2);
+
+    let mut options_costs = Vec::new();
+    for count in [128, 256] {
+        let fields = (0..count)
+            .map(|i| format!("p{i}: {i},"))
+            .collect::<String>();
+        let setup = format!("const bag = {{ days: 1, {fields} }};");
+        let baseline = host_fuel(
+            "options-baseline",
+            &format!("function main(): number {{ {setup} return 0; }}"),
+        );
+        let actual = host_fuel(
+            "options",
+            &format!(
+                "function main(): number {{ {setup} for (let i=0;i<{count};i++) {{ Temporal.Duration.from(bag); }} return 0; }}"
+            ),
+        ) - baseline;
+        eprintln!("options {count}: {actual}");
+        options_costs.push(actual);
+        let old = if count == 128 { 1_801_984 } else { 7_175_680 };
+        assert!(actual < old / 2, "options: {actual} >= half of old {old}");
+    }
+
+    assert!(options_costs[1] < options_costs[0] * 5 / 2);
+
+    for method in ["trim", "trimStart", "trimEnd", "toUpperCase", "toLowerCase"] {
+        let mut costs = Vec::new();
+        for count in [65536, 131072] {
+            let setup = format!("const s = \"x\".repeat({count});");
+            let baseline = host_fuel(
+                "string-transform-baseline",
+                &format!("function main(): number {{ {setup} return 0; }}"),
+            );
+            let actual = host_fuel(
+                "string-transform",
+                &format!("function main(): number {{ {setup} return s.{method}().length % 10; }}"),
+            ) - baseline;
+            eprintln!("{method} {count}: {actual}");
+            let old = if count == 65536 { 147_472 } else { 294_928 };
+            assert!(
+                actual < old - SCAN.cost(count as u64) / 2,
+                "{method}: {actual}, old {old}"
+            );
+            costs.push(actual);
+        }
+        assert!(costs[1] < costs[0] * 5 / 2, "{method}: {costs:?}");
     }
 
     for (method, statement, per_call, old_cost) in [

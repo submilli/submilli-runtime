@@ -89,13 +89,14 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
                     dispatch_vtable_slot(caller, abi_arg(params, 1)?, TO_JSON_SLOT, &[]).await?;
                 let context_json =
                     read_string_arg(&mut *caller, &json_val, "security.check (context)")?;
+                fuel::charge(&mut *caller, fuel::PARSE, context_json.len() as u64)?;
                 let context: serde_json::Value =
                     serde_json::from_str(&context_json).map_err(|e| {
                         wasmtime::Error::msg(format!("security.check: malformed context JSON: {e}"))
                     })?;
                 fuel::charge_host_fuel(&mut *caller, fuel::GATE)?;
-                let who =
-                    consumer_of_running_package(&*caller, &capability).inspect_err(|_error| {
+                let who = consumer_of_running_package(&mut *caller, &capability).inspect_err(
+                    |_error| {
                         crate::stdlib::shared::audit_denial(
                             caller.data().security_check.as_ref(),
                             "<unknown caller>",
@@ -104,7 +105,8 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
                             "invariant",
                             "caller cannot be attributed",
                         );
-                    })?;
+                    },
+                )?;
                 let policy = caller.data().security_check.clone();
                 let outcome =
                     policy.check_with_cwd(&who, &capability, &context, caller.data().vfs.cwd());
@@ -173,48 +175,72 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
 /// and would make an operator's `main:` rule for that capability dead on arrival — while
 /// closing no hole, since the confused-deputy case is caught by the guard above regardless.
 fn consumer_of_running_package(
-    store: &impl wasmtime::AsContext<Data = StoreData>,
+    store: &mut impl wasmtime::AsContextMut<Data = StoreData>,
     capability: &str,
 ) -> wasmtime::Result<String> {
-    let backtrace = wasmtime::WasmBacktrace::force_capture(store);
-    let mut frames = backtrace.frames().iter();
-    let Some(running) = frames.next().map(wasmtime::FrameInfo::module) else {
-        return Err(permission_denied_invariant(
+    let available = store
+        .as_context()
+        .get_fuel()?
+        .saturating_sub(store.as_context().data().host_fuel_pending);
+    let mut work = 0_u64;
+    let mut exhausted = false;
+    let mut running: Option<String> = None;
+    let mut below = None;
+    let mut unknown = None;
+    let walk = wasmtime::WasmBacktrace::visit_modules(&*store, |module| {
+        let step = fuel::ELEM.cost(1);
+        if step > available.saturating_sub(work) {
+            exhausted = true;
+            return std::ops::ControlFlow::Break(());
+        }
+        work += step;
+        let Some(owner) = module.name() else {
+            unknown = Some(permission_denied_invariant(
+                "<unnamed module>",
+                capability,
+                "a frame between the running code and its caller declares no package name, so the caller cannot be identified",
+            ));
+            return std::ops::ControlFlow::Break(());
+        };
+        if let Some(running) = &running {
+            if owner != running {
+                match crate::stdlib::shared::owned_principal(owner) {
+                    Ok(owner) => below = Some(owner),
+                    Err(error) => unknown = Some(error),
+                }
+                return std::ops::ControlFlow::Break(());
+            }
+        } else {
+            match crate::stdlib::shared::owned_principal(owner) {
+                Ok(owner) => running = Some(owner),
+                Err(error) => {
+                    unknown = Some(error);
+                    return std::ops::ControlFlow::Break(());
+                }
+            }
+        }
+        std::ops::ControlFlow::Continue(())
+    });
+    fuel::charge_host_fuel(&mut *store, work)?;
+    if exhausted {
+        fuel::charge_host_fuel(&mut *store, fuel::ELEM.cost(1))?;
+    }
+    walk.map_err(crate::runtime::host::fatal_host_error)?;
+    if let Some(error) = unknown {
+        return Err(error);
+    }
+    let running = running.ok_or_else(|| {
+        permission_denied_invariant(
             "<no wasm frame>",
             capability,
             "no wasm frame is executing, so there is no caller to gate",
-        ));
-    };
-    let Some(running) = running.name() else {
-        return Err(permission_denied_invariant(
-            "<unnamed module>",
-            capability,
-            "the running module declares no package name, so its caller cannot be identified",
-        ));
-    };
-    // Fail closed on an unnamed frame anywhere in the walk, not just at the top. Skipping one
-    // would let the walk step *past* an unidentifiable principal and name whatever sits
-    // beyond it — attributing to a package that is not the immediate invoker.
-    let mut below = None;
-    for frame in frames {
-        let Some(owner) = frame.module().name() else {
-            return Err(permission_denied_invariant(
-                "<unnamed module>",
-                capability,
-                "a frame between the running code and its caller declares no package name, so \
-                 the caller cannot be identified",
-            ));
-        };
-        if owner != running {
-            below = Some(owner);
-            break;
-        }
-    }
+        )
+    })?;
     if running == crate::mangle::USER_PACKAGE && below.is_some() {
         // Invariant, not policy: no rule can grant this, so the message must not send the
         // reader off to ask the operator for one.
         return Err(permission_denied_invariant(
-            running,
+            &running,
             capability,
             "security.check gates the caller of the package that runs it. This is main's own \
              code running inside a package, which has no caller to gate — naming the package \
@@ -224,12 +250,92 @@ fn consumer_of_running_package(
     // No differing frame means one principal owns the whole stack: a script asking about
     // itself, a package's test file calling into its library, or an initializer with nothing
     // above it. The consumer sits outside the guest, which is the script's position.
-    Ok(below.unwrap_or(crate::mangle::USER_PACKAGE).to_string())
+    match below {
+        Some(owner) => Ok(owner),
+        None => crate::stdlib::shared::owned_principal(crate::mangle::USER_PACKAGE),
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn necessary_caller_walk_is_metered_and_stops_before_short_fuel_work() {
+        use std::sync::{
+            Arc, Mutex,
+            atomic::{AtomicBool, Ordering},
+        };
+        let config = crate::runtime::RuntimeConfig::default();
+        let engine = config.engine().unwrap();
+        let mut store = config
+            .store_async(&engine, StoreData::with_vfs(crate::runtime::Vfs::none()))
+            .unwrap();
+        let costs = Arc::new(Mutex::new(Vec::new()));
+        let measured = Arc::clone(&costs);
+        let short = Arc::new(AtomicBool::new(false));
+        let limited = Arc::clone(&short);
+        let mut linker = Linker::new(&engine);
+        linker
+            .func_new(
+                "host",
+                "check",
+                FuncType::new(&engine, [], []),
+                move |mut caller, _, _| {
+                    if limited.load(Ordering::Relaxed) {
+                        caller.set_fuel(5)?;
+                    }
+                    assert_eq!(
+                        crate::stdlib::shared::running_package(&caller)
+                            .map_err(|error| error.into_denial("test.op"))?,
+                        "main"
+                    );
+                    let before = caller.data().host_fuel;
+                    assert_eq!(consumer_of_running_package(&mut caller, "test.op")?, "main");
+                    measured
+                        .lock()
+                        .unwrap()
+                        .push(caller.data().host_fuel - before);
+                    Ok(())
+                },
+            )
+            .unwrap();
+        let source = r#"(module $main
+            (import "host" "check" (func $check))
+            (func $walk (export "walk") (param $depth i32)
+                local.get $depth i32.eqz
+                if call $check else local.get $depth i32.const 1 i32.sub call $walk end))"#;
+        let buffer = wast::parser::ParseBuffer::new(source).unwrap();
+        let mut wat = wast::parser::parse::<wast::Wat>(&buffer).unwrap();
+        let wasm = wat.encode().unwrap();
+        let module = wasmtime::Module::new(&engine, wasm).unwrap();
+        let instance = linker.instantiate_async(&mut store, &module).await.unwrap();
+        let walk = instance.get_func(&mut store, "walk").unwrap();
+        for depth in [32, 64] {
+            walk.call_async(&mut store, &[Val::I32(depth)], &mut [])
+                .await
+                .unwrap();
+        }
+        assert_eq!(
+            *costs.lock().unwrap(),
+            vec![fuel::ELEM.cost(33), fuel::ELEM.cost(65)]
+        );
+        short.store(true, Ordering::Relaxed);
+        let error = walk
+            .call_async(&mut store, &[Val::I32(64)], &mut [])
+            .await
+            .unwrap_err();
+        assert_eq!(
+            error.downcast_ref::<wasmtime::Trap>(),
+            Some(&wasmtime::Trap::OutOfFuel)
+        );
+        assert_eq!(store.get_fuel().unwrap(), 0);
+        short.store(false, Ordering::Relaxed);
+        store.set_fuel(1_000_000).unwrap();
+        walk.call_async(&mut store, &[Val::I32(32)], &mut [])
+            .await
+            .unwrap();
+    }
 
     /// One package owns every frame — a package's own test file calling into its library, or
     /// an initializer with nothing above it. There is no "one below" to name, and the walk

@@ -38,6 +38,7 @@ pub(crate) fn wrap(
 ) -> Result<(), CompilerFailure> {
     let ty = metadata_type(ctx)?;
     emit_inline_string_literal(emitter, ctx, metadata)?;
+    emitter.instruction(Instruction::I64Const(0));
     emitter.instruction(Instruction::StructNew(ty));
     Ok(())
 }

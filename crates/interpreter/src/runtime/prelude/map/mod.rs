@@ -32,7 +32,7 @@ use wasmtime::{
 };
 
 use crate::runtime::StoreData;
-use crate::runtime::fuel::{self, host_func};
+use crate::runtime::fuel;
 use crate::runtime::gc_singleton::{singleton_array, singleton_struct};
 use crate::runtime::host::{host_map_tombstone, host_object_vtable, write_submilli_array_struct};
 use crate::runtime::intrinsic_types::{IntrinsicTypes, intrinsic_types};
@@ -42,7 +42,8 @@ use crate::runtime::prelude::collection::{
 };
 use crate::runtime::prelude::collection::{is_a, object_field, read_array_vals, unbox_bool};
 use crate::runtime::prelude::iterator::{
-    IterKind, as_struct, build_iterator, iter_done, iter_yield, next_closure_type,
+    IterKind, IteratorSource, as_struct, build_iterator, iter_done, iter_yield, next_closure_type,
+    shared_next,
 };
 use crate::runtime::prelude::keep::{KeptValue, keep_all};
 use crate::runtime::prelude::vtable::dispatch_vtable_slot;
@@ -622,9 +623,13 @@ fn make_map_iterator(
 
     let intr = intrinsic_types(&mut *caller)?;
     let (next_ty, next_struct) = next_closure_type(caller.engine(), &intr)?;
-    let next = host_func(&mut *caller, next_ty, move |caller, params, results| {
-        map_next_step(caller, params, results, kind)
-    });
+    let next = shared_next(
+        caller,
+        IteratorSource::Map,
+        kind,
+        next_ty,
+        move |caller, params, results| map_next_step(caller, params, results, kind),
+    )?;
     build_iterator(caller, next_struct, next, cursor)
 }
 
@@ -821,19 +826,93 @@ pub(crate) async fn string_map_from_pairs(
     caller: &mut Caller<'_, StoreData>,
     pairs: &[(String, String)],
 ) -> wasmtime::Result<Val> {
+    host_string_map_from_pairs(caller, pairs)
+}
+
+/// Construct host-supplied strings without dispatching guest vtable callbacks.
+/// Post-effect result marshalling can therefore finish even at zero fuel.
+pub(crate) fn host_string_map_from_pairs(
+    caller: &mut Caller<'_, StoreData>,
+    pairs: &[(String, String)],
+) -> wasmtime::Result<Val> {
+    let capacity = pairs
+        .len()
+        .checked_mul(2)
+        .and_then(usize::checked_next_power_of_two)
+        .and_then(|capacity| i32::try_from(capacity.max(INITIAL_CAPACITY as usize)).ok())
+        .ok_or_else(|| {
+            crate::runtime::host::range_error("host string map capacity limit exceeded")
+        })?;
     let map = build_empty(caller)?;
-    for (k, v) in pairs {
-        let key = crate::runtime::host::write_submilli_string_struct(caller, k)?;
-        let value = crate::runtime::host::write_submilli_string_struct(caller, v)?;
-        set(
+    let backing = backing(caller, &map)?;
+    if capacity > INITIAL_CAPACITY {
+        rehash(caller, &backing, capacity)?;
+    }
+    for (key, value) in pairs {
+        let _native = crate::runtime::limits::HostBytes::new(
+            &caller.data().tenant_limits,
+            (key.len() as u64).saturating_mul(8),
+        )?;
+        let mut units = Vec::new();
+        units
+            .try_reserve_exact(key.len())
+            .map_err(crate::runtime::host::fatal_host_error)?;
+        units.extend(key.encode_utf16());
+        let key = crate::runtime::host::write_submilli_string_struct(caller, key)?;
+        let value = crate::runtime::host::write_submilli_string_struct(caller, value)?;
+        insert_host_string(
             caller,
-            &map,
-            &Val::AnyRef(Some(key.to_anyref())),
-            &Val::AnyRef(Some(value.to_anyref())),
-        )
-        .await?;
+            &backing,
+            &units,
+            Val::AnyRef(Some(key.to_anyref())),
+            Val::AnyRef(Some(value.to_anyref())),
+        )?;
     }
     Ok(map)
+}
+
+fn insert_host_string(
+    caller: &mut Caller<'_, StoreData>,
+    backing: &Rooted<StructRef>,
+    units: &[u16],
+    key: Val,
+    value: Val,
+) -> wasmtime::Result<()> {
+    let keys = field_array(caller, backing, F_KEYS)?;
+    let values = field_array(caller, backing, F_VALUES)?;
+    let hashes = field_array(caller, backing, F_HASHES)?;
+    let capacity = probe_capacity(keys.len(&mut *caller)?)?;
+    let hash = super::vtable::string_hash(caller, &key)? as i32;
+    let mut bucket = hash & (capacity - 1);
+    for _ in 0..capacity {
+        fuel::charge(&mut *caller, fuel::ELEM, 1)?;
+        let slot = keys.get(&mut *caller, bucket as u32)?;
+        if is_null(&slot) {
+            let size = field_i32(caller, backing, F_SIZE)?;
+            let order = field_array(caller, backing, F_ORDER)?;
+            let positions = field_array(caller, backing, F_ORDER_POSITIONS)?;
+            keys.set(&mut *caller, bucket as u32, key)?;
+            values.set(&mut *caller, bucket as u32, value)?;
+            hashes.set(&mut *caller, bucket as u32, Val::I32(hash))?;
+            order.set(&mut *caller, size as u32, Val::I32(bucket))?;
+            positions.set(&mut *caller, bucket as u32, Val::I32(size))?;
+            backing.set_field(&mut *caller, F_SIZE, Val::I32(size + 1))?;
+            backing.set_field(&mut *caller, F_ORDER_LEN, Val::I32(size + 1))?;
+            return Ok(());
+        }
+        if index_value(caller, &hashes, bucket as u32)? == hash {
+            let existing = super::vtable::read_string_units(caller, &slot, "host map key")?;
+            fuel::charge(&mut *caller, fuel::SCAN, units.len() as u64)?;
+            if existing == units {
+                values.set(&mut *caller, bucket as u32, value)?;
+                return Ok(());
+            }
+        }
+        bucket = (bucket + 1) & (capacity - 1);
+    }
+    Err(crate::runtime::host::fatal_host_error(
+        "host string map has no empty bucket",
+    ))
 }
 
 /// Read a `Map<string, string>`'s live entries in insertion order — the

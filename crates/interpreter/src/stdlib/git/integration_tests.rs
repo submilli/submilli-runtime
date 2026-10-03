@@ -111,6 +111,8 @@ fn job(vfs: &Vfs, op: &str) -> Job {
         meter: Default::default(),
         algorithm_fuel: Arc::new(super::work::AlgorithmWork::new(u64::MAX)),
         denial: Arc::new(Mutex::new(None)),
+        history_cache: (op == "log")
+            .then(|| Arc::new(super::log_cache::Cache::new(&data.tenant_limits).unwrap())),
     }
 }
 

@@ -29,6 +29,42 @@ pub(super) fn blob(
     Ok(blob)
 }
 
+pub(super) fn commit(
+    snapshot: &Snapshot,
+    id: gix::ObjectId,
+    remaining: u64,
+) -> Result<gix::Commit<'_>> {
+    let size = admit(snapshot, id, gix::objs::Kind::Commit, remaining)?;
+    let commit = snapshot.repo.find_commit(id)?;
+    if commit.data.len() as u64 != size {
+        bail!("git: commit size disagrees with its header");
+    }
+    Ok(commit)
+}
+
+pub(super) fn read(
+    snapshot: &Snapshot,
+    id: gix::ObjectId,
+    remaining: u64,
+) -> Result<gix::Object<'_>> {
+    snapshot.check_cancelled()?;
+    snapshot.record_algorithm_fuel(fuel::SYSCALL.cost(1))?;
+    let header = snapshot.repo.find_header(id)?;
+    let size = header.size();
+    let kind = header.kind();
+    if size > remaining {
+        bail!("git: decoded object memory limit exceeded");
+    }
+    snapshot.record_algorithm_fuel(fuel::PARSE.cost(size))?;
+    let object = snapshot.repo.find_object(id)?;
+    if object.data.len() as u64 != size || object.kind != kind {
+        return Err(crate::runtime::host::fatal_host_error(
+            "git: object disagrees with its header",
+        ));
+    }
+    Ok(object)
+}
+
 fn admit(
     snapshot: &Snapshot,
     id: gix::ObjectId,

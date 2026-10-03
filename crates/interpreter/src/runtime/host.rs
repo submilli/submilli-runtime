@@ -1017,6 +1017,15 @@ pub fn write_submilli_array_struct(
 ) -> wasmtime::Result<Rooted<StructRef>> {
     let len = super::array_storage::checked_length(elements.len())?;
     fuel::charge(&mut *caller, fuel::ELEM, u64::from(len))?;
+    write_submilli_array_struct_precharged(caller, elements)
+}
+
+/// The caller has admitted ELEM once for each element while producing it.
+pub(crate) fn write_submilli_array_struct_precharged(
+    caller: &mut Caller<'_, StoreData>,
+    elements: &[Val],
+) -> wasmtime::Result<Rooted<StructRef>> {
+    let len = super::array_storage::checked_length(elements.len())?;
     let (array_type, raw_array_type) = {
         let abi = caller
             .data()

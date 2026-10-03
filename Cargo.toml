@@ -75,6 +75,7 @@ flate2 = "1"
 tar = "0.4"
 zstd = "0.13"
 regex = "1"
+regex-syntax = "0.8"
 jiff = "0.2"
 # default-features off to drop the `transport` feature's native-tls (→ openssl,
 # which breaks static-musl cross-builds); same default set re-enabled with rustls.

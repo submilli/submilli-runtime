@@ -289,23 +289,30 @@ fn log(snapshot: &Snapshot, opts: &Value) -> Result<Value> {
         return Ok(json!({"commits":[],"nextOffset":null}));
     }
     let head = super::history::resolve_commit(snapshot, "HEAD")?.id;
-    let mut history = super::history::Ancestors::new(snapshot, head)?;
-    let mut skipped = 0;
-    while let Some(commit) = history.next()? {
-        if skipped < offset {
-            skipped += 1;
-            continue;
-        }
-        if commits.len() == limit as usize {
-            let next_offset = offset
-                .checked_add(limit)
-                .ok_or_else(|| wasmtime::Error::msg("git.log: pagination offset overflow"))?;
-            return Ok(json!({"commits":commits,"nextOffset":next_offset}));
-        }
+    let cache = snapshot.history_cache.as_ref().ok_or_else(|| {
+        crate::runtime::host::fatal_host_error("git: history cache was not installed")
+    })?;
+    let ids = cache.page(snapshot, head, offset, limit)?;
+    let more = ids.len() > limit as usize;
+    commits
+        .try_reserve_exact(ids.len().min(limit as usize))
+        .map_err(crate::runtime::host::fatal_host_error)?;
+    for id in ids.iter().take(limit as usize) {
+        snapshot.check_cancelled()?;
+        let commit = super::object::commit(snapshot, *id, snapshot.max_bytes)?;
         let decoded = commit.decode()?;
         commits.push(json!({"id":commit.id.to_string(),"message":decoded.message.to_str_lossy(),"authorName":decoded.author()?.name.to_str_lossy(),"authorEmail":decoded.author()?.email.to_str_lossy()}));
     }
-    Ok(json!({"commits":commits,"nextOffset":null}))
+    let next = if more {
+        Some(
+            offset
+                .checked_add(limit)
+                .ok_or_else(|| wasmtime::Error::msg("git.log: pagination offset overflow"))?,
+        )
+    } else {
+        None
+    };
+    Ok(json!({"commits":commits,"nextOffset":next}))
 }
 
 fn page_number(options: &Value, name: &str, default: u64) -> Result<u64> {
@@ -922,13 +929,19 @@ mod tests {
     #[test]
     fn log_accepts_large_offsets_and_returns_followable_pages() {
         let vfs = crate::runtime::Vfs::tempdir().unwrap();
-        let snapshot = Snapshot::init_unmetered(
+        let mut snapshot = Snapshot::init_unmetered(
             &crate::stdlib::git::location::Location::of_vfs(&vfs),
             "main",
             Default::default(),
             16_384,
         )
         .unwrap();
+        snapshot.history_cache = Some(std::sync::Arc::new(
+            super::super::log_cache::Cache::new(&crate::runtime::limits::TenantLimits::new(
+                8 * 1024 * 1024,
+            ))
+            .unwrap(),
+        ));
         let exhausted = json!({"commits":[],"nextOffset":null});
         assert_eq!(
             log(&snapshot, &json!({"offset":10_001})).unwrap(),

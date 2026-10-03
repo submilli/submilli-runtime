@@ -675,7 +675,7 @@ pub fn declare_intrinsic_types(types: &mut TypeSection) -> IntrinsicTypeIndices 
         },
     });
 
-    // $temporal_zdt: same (secs, nanos) as $temporal_instant plus IANA tz id in field 3.
+    // $temporal_zdt: epoch fields, zone ID, and host-owned resolved Zoned value.
     types.ty().subtype(&SubType {
         is_final: false,
         supertype_idx: Some(object),
@@ -693,6 +693,13 @@ pub fn declare_intrinsic_types(types: &mut TypeSection) -> IntrinsicTypeIndices 
                     },
                     FieldType {
                         element_type: StorageType::Val(ref_to(string)),
+                        mutable: false,
+                    },
+                    FieldType {
+                        element_type: StorageType::Val(ValType::Ref(RefType {
+                            nullable: false,
+                            heap_type: HeapType::EXTERN,
+                        })),
                         mutable: false,
                     },
                 ]

@@ -395,7 +395,7 @@ async fn perform_request(
         GuardedRequest::Verb {
             timeout_ms: DEFAULT_TIMEOUT_MS,
         },
-    );
+    )?;
     let req = HttpRequest {
         method: method.to_ascii_uppercase(),
         url: url.to_string(),
@@ -432,25 +432,36 @@ async fn perform_request(
             .as_ref()
             .map(|resp| (resp.status, resp.body.len() as u64)),
     );
-    let resp = send_result.map_err(|e| {
-        let msg = format!("http {method}: {e}");
-        // An over-limit response body is a spec `RangeError` (out-of-range
-        // size) and a bad verb a `TypeError`; other transport failures stay
-        // base `Error`s.
-        match e {
-            HttpError::TooLarge { .. } => crate::runtime::host::range_error(msg),
-            HttpError::UnsupportedMethod(_) => crate::runtime::host::type_error(msg),
-            HttpError::Internal(_) => crate::runtime::host::fatal_host_error(msg),
-            HttpError::PermissionDenied(denied) => denied.into_error(),
-            _ => wasmtime::Error::msg(msg),
-        }
-    })?;
+    settle_response(caller, send_result, method)
+}
 
-    // The response is here: settled, not refused.
-    fuel::settle(&mut *caller, fuel::IO, response_bytes(&resp))?;
-    // UTF-8 validation of the body; the string build charges its own copy.
-    fuel::settle(&mut *caller, fuel::SCAN, resp.body.len() as u64)?;
-    write_response(caller, resp).await
+fn settle_response(
+    caller: &mut Caller<'_, StoreData>,
+    send_result: std::result::Result<HttpResponse, HttpError>,
+    method: &str,
+) -> wasmtime::Result<Val> {
+    fuel::settle_result(caller, |caller| {
+        let result = (|| {
+            let resp = send_result.map_err(|e| {
+                let msg = format!("http {method}: {e}");
+                // An over-limit response body is a spec `RangeError` (out-of-range
+                // size) and a bad verb a `TypeError`; other transport failures stay
+                // base `Error`s.
+                match e {
+                    HttpError::TooLarge { .. } => crate::runtime::host::range_error(msg),
+                    HttpError::UnsupportedMethod(_) => crate::runtime::host::type_error(msg),
+                    HttpError::Internal(_) => crate::runtime::host::fatal_host_error(msg),
+                    HttpError::PermissionDenied(denied) => denied.into_error(),
+                    _ => wasmtime::Error::msg(msg),
+                }
+            })?;
+
+            fuel::settle(&mut *caller, fuel::IO, response_bytes(&resp))?;
+            fuel::settle(&mut *caller, fuel::SCAN, resp.body.len() as u64)?;
+            write_response(caller, resp)
+        })();
+        result.map_err(|error| crate::runtime::host::throw_host_error(caller, error))
+    })
 }
 
 /// The bytes a request sends: method, URL, headers and body.
@@ -474,28 +485,24 @@ fn response_bytes(resp: &HttpResponse) -> u64 {
 fn request_principal(
     caller: &Caller<'_, StoreData>,
     request: GuardedRequest,
-) -> (String, std::sync::Arc<CapabilityGuard>) {
+) -> wasmtime::Result<(String, std::sync::Arc<CapabilityGuard>)> {
     let who = crate::stdlib::shared::running_package(caller)
-        .unwrap_or_else(|unknown| unknown.label.to_string());
+        .or_else(crate::stdlib::shared::PrincipalError::label_or_error)?;
     let guard = CapabilityGuard::new(
         who.clone(),
         std::sync::Arc::clone(&caller.data().security_check),
         request,
         caller.data().vfs.cwd().to_owned(),
     );
-    (who, std::sync::Arc::new(guard))
+    Ok((who, std::sync::Arc::new(guard)))
 }
 
 /// Build the `$ResponseBacking` from a transport [`HttpResponse`].
-async fn write_response(
-    caller: &mut Caller<'_, StoreData>,
-    resp: HttpResponse,
-) -> wasmtime::Result<Val> {
+fn write_response(caller: &mut Caller<'_, StoreData>, resp: HttpResponse) -> wasmtime::Result<Val> {
     let body_text = std::str::from_utf8(&resp.body)
-        .map_err(|e| wasmtime::Error::msg(format!("http: response body is not UTF-8: {e}")))?
-        .to_string();
-    let body = write_submilli_string_struct(caller, &body_text)?.to_anyref();
-    let headers = map::string_map_from_pairs(caller, &resp.headers).await?;
+        .map_err(|e| wasmtime::Error::msg(format!("http: response body is not UTF-8: {e}")))?;
+    let body = write_submilli_string_struct(caller, body_text)?.to_anyref();
+    let headers = map::host_string_map_from_pairs(caller, &resp.headers)?;
     let ok = (200..300).contains(&resp.status);
     let status_text = write_submilli_string_struct(caller, &resp.status_text)?.to_anyref();
     let url = write_submilli_string_struct(caller, &resp.final_url)?.to_anyref();
@@ -641,7 +648,7 @@ async fn perform_download(
         .check_rename_end()
         .map_err(|err| contain_trap("http.download", &guest_path, &err))?;
 
-    let (who, guard) = request_principal(caller, GuardedRequest::Download(target));
+    let (who, guard) = request_principal(caller, GuardedRequest::Download(target))?;
     let req = HttpRequest {
         method: "GET".to_string(),
         url: url.clone(),
@@ -1175,6 +1182,70 @@ mod tests {
             .await
             .expect("main ran without trap");
         mock
+    }
+
+    #[tokio::test]
+    async fn response_marshalling_settles_after_short_fuel_and_preserves_errors() {
+        let config = RuntimeConfig::default();
+        let engine = config.engine().unwrap();
+        let mut store = config
+            .store_async(&engine, StoreData::with_vfs(Vfs::none()))
+            .unwrap();
+        let mut linker = wasmtime::Linker::new(&engine);
+        install_runtime_async(&mut linker, &mut store)
+            .await
+            .unwrap();
+        let probe = wasmtime::Func::new(
+            &mut store,
+            wasmtime::FuncType::new(&engine, [wasmtime::ValType::I32], []),
+            |mut caller, params, _| {
+                let invalid = params[0].i32().unwrap() != 0;
+                caller.set_fuel(1)?;
+                super::fuel::settle(&mut caller, super::fuel::IO, 128)?;
+                let mut response = ok_response(200, "café");
+                response.headers = vec![
+                    ("a".into(), "first".into()),
+                    ("a".into(), "last".into()),
+                    ("b".into(), "second".into()),
+                ];
+                if invalid {
+                    response.body = vec![0xFF];
+                }
+                let response = super::settle_response(&mut caller, Ok(response), "GET")?;
+                super::fuel::settle_result(&mut caller, |caller| {
+                    let response = crate::runtime::prelude::iterator::as_struct(
+                        caller, &response, "response",
+                    )?;
+                    let body = response.field(&mut *caller, 1)?;
+                    assert_eq!(
+                        super::read_string_arg(caller, &body, "response body")?,
+                        "café"
+                    );
+                    let headers = response.field(&mut *caller, 2)?;
+                    assert_eq!(
+                        super::map::string_entries(caller, &headers)?,
+                        vec![("a".into(), "last".into()), ("b".into(), "second".into())]
+                    );
+                    Ok(())
+                })
+            },
+        );
+        for invalid in [0, 1, 0] {
+            store.set_fuel(1_000_000).unwrap();
+            let result = probe
+                .call_async(&mut store, &[wasmtime::Val::I32(invalid)], &mut [])
+                .await;
+            if invalid != 0 {
+                let error = result.unwrap_err();
+                assert!(error.is::<wasmtime::ThrownException>());
+                let original = crate::runtime::exec::uncaught_error(&mut store, error);
+                assert!(original.to_string().contains("response body is not UTF-8"));
+            } else {
+                result.unwrap();
+            }
+            assert_eq!(store.get_fuel().unwrap(), 0);
+            assert!(!store.data().settling_host_result);
+        }
     }
 
     fn ok_response(status: u16, body: &str) -> HttpResponse {

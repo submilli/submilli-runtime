@@ -176,6 +176,13 @@ async fn run_program(source: &str, mut data: StoreData, fuel: u64) -> (wasmtime:
         .unwrap();
     let instance = linker.instantiate_async(&mut store, &module).await.unwrap();
     let outcome = dispatch_main_async(&mut store, &instance).await.map(drop);
+    if store.data().git_history.is_some() {
+        assert_eq!(
+            store.data().tenant_limits.host_attached_bytes(),
+            4 * 1024 * 1024
+        );
+        store.data_mut().git_history = None;
+    }
     assert_eq!(store.data().tenant_limits.host_attached_bytes(), 0);
     (outcome, store.data().host_fuel)
 }

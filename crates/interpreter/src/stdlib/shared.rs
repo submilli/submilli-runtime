@@ -28,28 +28,62 @@ use crate::runtime::{DiskQuota, QuotaCharge, QuotaExceeded, StoreData};
 /// - **Frames, but the innermost module has no name.** A module this compiler produced always
 ///   carries one. One that does not is not a principal we can name.
 ///
-/// [`WasmBacktrace::force_capture`] rather than `capture`, because `capture` returns an empty
-/// trace when `Config::wasm_backtrace` is off — which would turn a performance knob into a
-/// security control.
+/// Attribution visits the innermost module directly, independently of the
+/// diagnostic backtrace setting, without capturing or symbolizing outer frames.
 pub(crate) fn running_package(
     store: &impl wasmtime::AsContext<Data = StoreData>,
-) -> Result<String, UnknownPrincipal> {
-    let backtrace = wasmtime::WasmBacktrace::force_capture(store);
-    let Some(frame) = backtrace.frames().first() else {
-        return Err(UnknownPrincipal {
+) -> Result<String, PrincipalError> {
+    let mut principal = None;
+    wasmtime::WasmBacktrace::visit_modules(store, |module| {
+        principal = Some(match module.name() {
+            Some(name) => owned_principal(name).map_err(PrincipalError::Internal),
+            None => Err(PrincipalError::Unknown(UnknownPrincipal {
+                label: "<unnamed module>",
+                reason: "the running module declares no package name, so its caller cannot be identified",
+            })),
+        });
+        std::ops::ControlFlow::Break(())
+    }).map_err(|error| PrincipalError::Internal(crate::runtime::host::fatal_host_error(error)))?;
+    principal.unwrap_or_else(|| {
+        Err(PrincipalError::Unknown(UnknownPrincipal {
             label: "<no wasm frame>",
             reason: "no wasm frame is executing, so the call has no caller to attribute it to",
-        });
-    };
-    frame.module().name().map(str::to_string).ok_or(UnknownPrincipal {
-        label: "<unnamed module>",
-        reason: "the running module declares no package name, so its caller cannot be identified",
+        }))
     })
 }
 
-/// Why the running code could not be named. Carries a `label` rather than reusing a package
-/// name, so it can never collide with a real principal — in particular never with `main`,
-/// whose identity grants auth-proxy credential injection.
+pub(crate) fn owned_principal(name: &str) -> wasmtime::Result<String> {
+    let mut result = String::new();
+    result
+        .try_reserve_exact(name.len())
+        .map_err(crate::runtime::host::fatal_host_error)?;
+    result.push_str(name);
+    Ok(result)
+}
+
+pub(crate) enum PrincipalError {
+    Unknown(UnknownPrincipal),
+    Internal(wasmtime::Error),
+}
+impl PrincipalError {
+    pub fn into_denial(self, capability: &str) -> wasmtime::Error {
+        match self {
+            Self::Unknown(unknown) => {
+                permission_denied_invariant(unknown.label, capability, unknown.reason)
+            }
+            Self::Internal(error) => error,
+        }
+    }
+
+    pub fn label_or_error(self) -> wasmtime::Result<String> {
+        match self {
+            Self::Unknown(unknown) => owned_principal(unknown.label),
+            Self::Internal(error) => Err(error),
+        }
+    }
+}
+
+/// An unknown principal label cannot collide with an actual package name.
 pub(crate) struct UnknownPrincipal {
     pub label: &'static str,
     pub reason: &'static str,
@@ -69,18 +103,20 @@ pub fn check_security(
     capability: &str,
     context: serde_json::Value,
 ) -> wasmtime::Result<()> {
-    // The backtrace capture and the policy walk, neither sized by the call.
+    // Direct caller attribution and the policy check have one flat gate charge.
     fuel::charge_host_fuel(&mut store, fuel::GATE)?;
-    let caller = running_package(&store).map_err(|unknown| {
-        audit_denial(
-            store.as_context().data().security_check.as_ref(),
-            unknown.label,
-            capability,
-            &context,
-            "invariant",
-            unknown.reason,
-        );
-        permission_denied_invariant(unknown.label, capability, unknown.reason)
+    let caller = running_package(&store).map_err(|error| {
+        if let PrincipalError::Unknown(ref unknown) = error {
+            audit_denial(
+                store.as_context().data().security_check.as_ref(),
+                unknown.label,
+                capability,
+                &context,
+                "invariant",
+                unknown.reason,
+            );
+        }
+        error.into_denial(capability)
     })?;
     authorize_capability(
         &caller,
@@ -202,16 +238,18 @@ pub(crate) fn require_writable(
     if placement.access() == Access::ReadWrite {
         return Ok(());
     }
-    let caller = running_package(&store).map_err(|unknown| {
-        audit_denial(
-            store.as_context().data().security_check.as_ref(),
-            unknown.label,
-            capability,
-            &serde_json::json!({ "path": guest_path }),
-            "invariant",
-            unknown.reason,
-        );
-        permission_denied_invariant(unknown.label, capability, unknown.reason)
+    let caller = running_package(&store).map_err(|error| {
+        if let PrincipalError::Unknown(ref unknown) = error {
+            audit_denial(
+                store.as_context().data().security_check.as_ref(),
+                unknown.label,
+                capability,
+                &serde_json::json!({ "path": guest_path }),
+                "invariant",
+                unknown.reason,
+            );
+        }
+        error.into_denial(capability)
     })?;
     audit_denial(
         store.as_context().data().security_check.as_ref(),

@@ -18,8 +18,9 @@
 
 use crate::runtime::host::{abi_arg, abi_result};
 use wasmtime::{
-    ArrayRef, ArrayRefPre, Caller, FieldType, Finality, Func, FuncType, HeapType, Mutability,
-    RefType, Rooted, StorageType, StructRef, StructRefPre, StructType, Val, ValType,
+    ArrayRef, ArrayRefPre, Caller, FieldType, Finality, Func, FuncType, Global, GlobalType,
+    HeapType, Mutability, RefType, Rooted, StorageType, StructRef, StructRefPre, StructType, Val,
+    ValType,
 };
 
 use crate::runtime::StoreData;
@@ -182,11 +183,21 @@ pub(crate) fn iter_done(caller: &mut Caller<'_, StoreData>) -> wasmtime::Result<
 
 /// Box a `bool` into a `$boxed_boolean` object (the `done` field's value).
 fn box_boolean(caller: &mut Caller<'_, StoreData>, b: bool) -> wasmtime::Result<Val> {
+    let index = if b { 5 } else { 4 };
+    if let Some(root) = caller
+        .data()
+        .iterator_constants
+        .get(index)
+        .copied()
+        .flatten()
+    {
+        return Ok(root.get(&mut *caller));
+    }
     let boxed = intrinsic_types(&mut *caller)?.boxed_boolean.clone();
     let vtable = host_boxed_boolean_vtable(caller)?;
     let pre = StructRefPre::new(&mut *caller, boxed);
     let st = StructRef::new(&mut *caller, &pre, &[vtable, Val::I32(b as i32)])?;
-    Ok(Val::AnyRef(Some(st.to_anyref())))
+    retain_constant(caller, index, Val::AnyRef(Some(st.to_anyref())))
 }
 
 fn field_names_array(
@@ -194,13 +205,15 @@ fn field_names_array(
     intr: &IntrinsicTypes,
     names: &[&str],
 ) -> wasmtime::Result<Val> {
-    let mut vals = Vec::with_capacity(names.len());
-    for name in names {
-        let s = write_submilli_string_struct(caller, name)?;
-        vals.push(Val::AnyRef(Some(s.to_anyref())));
+    let mut values = [Val::null_any_ref(); 2];
+    let vals = values
+        .get_mut(..names.len())
+        .ok_or_else(|| crate::runtime::host::fatal_host_error("too many iterator field names"))?;
+    for (slot, name) in vals.iter_mut().zip(names) {
+        *slot = iterator_name(caller, name)?;
     }
     let pre = ArrayRefPre::new(&mut *caller, intr.field_names.clone());
-    let arr = ArrayRef::new_fixed(&mut *caller, &pre, &vals)?;
+    let arr = ArrayRef::new_fixed(&mut *caller, &pre, vals)?;
     Ok(Val::AnyRef(Some(arr.to_anyref())))
 }
 
@@ -259,13 +272,9 @@ pub(crate) fn build_iterator(
         ],
     )?;
 
-    let next_name = write_submilli_string_struct(caller, "next")?;
+    let next_name = iterator_name(caller, "next")?;
     let names_pre = ArrayRefPre::new(&mut *caller, intr.field_names.clone());
-    let names = ArrayRef::new_fixed(
-        &mut *caller,
-        &names_pre,
-        &[Val::AnyRef(Some(next_name.to_anyref()))],
-    )?;
+    let names = ArrayRef::new_fixed(&mut *caller, &names_pre, &[next_name])?;
 
     let fields_pre = ArrayRefPre::new(&mut *caller, intr.object_fields.clone());
     let fields = ArrayRef::new_fixed(
@@ -334,17 +343,10 @@ pub(crate) fn build_closable_iterator(
         ],
     )?;
 
-    let close_name = write_submilli_string_struct(caller, "close")?;
-    let next_name = write_submilli_string_struct(caller, "next")?;
+    let close_name = iterator_name(caller, "close")?;
+    let next_name = iterator_name(caller, "next")?;
     let names_pre = ArrayRefPre::new(&mut *caller, intr.field_names.clone());
-    let names = ArrayRef::new_fixed(
-        &mut *caller,
-        &names_pre,
-        &[
-            Val::AnyRef(Some(close_name.to_anyref())),
-            Val::AnyRef(Some(next_name.to_anyref())),
-        ],
-    )?;
+    let names = ArrayRef::new_fixed(&mut *caller, &names_pre, &[close_name, next_name])?;
 
     let fields_pre = ArrayRefPre::new(&mut *caller, intr.object_fields.clone());
     let fields = ArrayRef::new_fixed(
@@ -369,6 +371,98 @@ pub(crate) fn build_closable_iterator(
         ],
     )?;
     Ok(Val::AnyRef(Some(obj.to_anyref())))
+}
+
+fn iterator_name(caller: &mut Caller<'_, StoreData>, name: &str) -> wasmtime::Result<Val> {
+    let index = match name {
+        "done" => 0,
+        "value" => 1,
+        "next" => 2,
+        "close" => 3,
+        _ => {
+            return Err(crate::runtime::host::fatal_host_error(
+                "unknown iterator field name",
+            ));
+        }
+    };
+    if let Some(root) = caller
+        .data()
+        .iterator_constants
+        .get(index)
+        .copied()
+        .flatten()
+    {
+        return Ok(root.get(&mut *caller));
+    }
+    let name = write_submilli_string_struct(caller, name)?;
+    retain_constant(caller, index, Val::AnyRef(Some(name.to_anyref())))
+}
+
+fn retain_constant(
+    caller: &mut Caller<'_, StoreData>,
+    index: usize,
+    value: Val,
+) -> wasmtime::Result<Val> {
+    let ty = GlobalType::new(
+        ValType::Ref(RefType::new(true, HeapType::Any)),
+        Mutability::Const,
+    );
+    let root = Global::new(&mut *caller, ty, value)?;
+    let slot = caller
+        .data_mut()
+        .iterator_constants
+        .get_mut(index)
+        .ok_or_else(|| crate::runtime::host::fatal_host_error("invalid iterator constant index"))?;
+    *slot = Some(root);
+    Ok(value)
+}
+
+pub(crate) enum IteratorSource {
+    Array,
+    Map,
+    Set,
+    String,
+}
+
+pub(crate) fn shared_next(
+    caller: &mut Caller<'_, StoreData>,
+    source: IteratorSource,
+    kind: IterKind,
+    ty: FuncType,
+    implementation: impl Fn(&mut Caller<'_, StoreData>, &[Val], &mut [Val]) -> wasmtime::Result<()>
+    + Send
+    + Sync
+    + 'static,
+) -> wasmtime::Result<Func> {
+    let offset = match source {
+        IteratorSource::Array => 0,
+        IteratorSource::Map => 3,
+        IteratorSource::Set => 6,
+        IteratorSource::String => 9,
+    };
+    let kind = match kind {
+        IterKind::Keys => 0,
+        IterKind::Values => 1,
+        IterKind::Entries => 2,
+    };
+    let index = if offset == 9 { 9 } else { offset + kind };
+    if let Some(function) = caller
+        .data()
+        .iterator_functions
+        .get(index)
+        .copied()
+        .flatten()
+    {
+        return Ok(function);
+    }
+    let function = host_func(&mut *caller, ty, implementation);
+    let slot = caller
+        .data_mut()
+        .iterator_functions
+        .get_mut(index)
+        .ok_or_else(|| crate::runtime::host::fatal_host_error("invalid iterator function index"))?;
+    *slot = Some(function);
+    Ok(function)
 }
 
 // ---------------------------------------------------------------------------
@@ -403,9 +497,13 @@ pub(crate) fn make_index_iterator(
     let intr = intrinsic_types(&mut *caller)?;
     let cursor = make_cursor(caller, payload)?;
     let (next_ty, next_struct) = next_closure_type(caller.engine(), &intr)?;
-    let next = host_func(&mut *caller, next_ty, move |caller, params, results| {
-        index_step(caller, params, results, kind, step)
-    });
+    let next = shared_next(
+        caller,
+        IteratorSource::Array,
+        kind,
+        next_ty,
+        move |caller, params, results| index_step(caller, params, results, kind, step),
+    )?;
     build_iterator(caller, next_struct, next, cursor)
 }
 
@@ -419,7 +517,13 @@ pub(crate) fn make_string_iterator(
     let intr = intrinsic_types(&mut *caller)?;
     let cursor = make_cursor(caller, string)?;
     let (next_ty, next_struct) = next_closure_type(caller.engine(), &intr)?;
-    let next = host_func(&mut *caller, next_ty, string_step);
+    let next = shared_next(
+        caller,
+        IteratorSource::String,
+        IterKind::Values,
+        next_ty,
+        string_step,
+    )?;
     build_iterator(caller, next_struct, next, cursor)
 }
 

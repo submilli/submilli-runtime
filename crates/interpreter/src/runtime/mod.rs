@@ -92,6 +92,7 @@ pub struct StoreData {
     /// reusing or releasing the store. Blocking work may still be cleaning up.
     pub blocking_work: blocking::BlockingWork,
     pub git: Option<crate::stdlib::git::GitConfig>,
+    pub(crate) git_history: Option<Arc<crate::stdlib::git::log_cache::Cache>>,
     pub console: Box<dyn Write + Send>,
     pub vfs: Vfs,
     pub vfs_info: VfsInfo,
@@ -162,6 +163,9 @@ pub struct StoreData {
     /// The call-metadata closure environment type, built on first use for the
     /// same reason as [`Self::intrinsic_types`].
     pub(crate) call_metadata_type: Option<wasmtime::StructType>,
+    pub(crate) iterator_functions: [Option<wasmtime::Func>; 10],
+    pub(crate) iterator_constants: [Option<wasmtime::Global>; 6],
+    pub(crate) parameter_cache: prelude::arguments::ParameterCache,
     pub(crate) regex_input: Option<prelude::regex::input::InputCache>,
     /// Runtime type metadata keyed by package name.
     pub type_info: std::collections::BTreeMap<String, TypeInfoTable>,
@@ -217,6 +221,7 @@ impl StoreData {
             vfs_info,
             security_check: security::default_check(),
             git: None,
+            git_history: None,
             blocking_work: blocking::BlockingWork::default(),
             fs_max_read_size: DEFAULT_FS_MAX_READ_SIZE,
             http_client: crate::stdlib::http::default_http_client(),
@@ -243,6 +248,9 @@ impl StoreData {
             intrinsic_types: None,
             closure_receiver_type: None,
             call_metadata_type: None,
+            iterator_functions: [None; 10],
+            iterator_constants: [None; 6],
+            parameter_cache: Default::default(),
             regex_input: None,
             type_info: std::collections::BTreeMap::new(),
             vtable_walk_depth: 0,

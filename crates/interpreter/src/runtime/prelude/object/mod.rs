@@ -58,6 +58,15 @@ pub(super) fn find_data_slot(
     index::lookup(caller, &object, key, false, false)
 }
 
+pub(super) fn find_field_slot(
+    caller: &mut Caller<'_, StoreData>,
+    object: &Rooted<StructRef>,
+    key: &[u16],
+    accessor: bool,
+) -> wasmtime::Result<Option<u32>> {
+    index::lookup(caller, object, key, accessor, false)
+}
+
 pub(super) fn data_field_count(
     caller: &mut Caller<'_, StoreData>,
     object: &Val,

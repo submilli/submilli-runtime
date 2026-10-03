@@ -7,6 +7,7 @@ mod history;
 mod index_limits;
 mod location;
 mod lock;
+pub(crate) mod log_cache;
 mod metadata_scan;
 mod meter;
 mod object;
@@ -67,6 +68,7 @@ struct Job {
     meter: Arc<meter::Meter>,
     algorithm_fuel: Arc<work::AlgorithmWork>,
     denial: Arc<Mutex<Option<(String, String)>>>,
+    history_cache: Option<Arc<log_cache::Cache>>,
 }
 impl Job {
     fn remote_capability(&self) -> &'static str {
@@ -442,6 +444,17 @@ async fn invoke(
     let config = caller.data().git.clone().ok_or_else(|| {
         wasmtime::Error::msg("submilli:git is disabled; configure the blueprint git block")
     })?;
+    if op == "log" && caller.data().git_history.is_none() {
+        let cache = log_cache::Cache::new(&caller.data().tenant_limits)?;
+        caller.data_mut().git_history = Some(Arc::new(cache));
+    }
+    if matches!(
+        op,
+        "init" | "clone" | "add" | "commit" | "createBranch" | "switchBranch" | "fetch" | "pull"
+    ) && let Some(cache) = &caller.data().git_history
+    {
+        cache.invalidate()?;
+    }
     let budget = WorkingBudget::reserve(&caller.data().tenant_limits, op)?;
     let max_bytes = budget.max_bytes(op);
     let (args, path) = before_deadline(
@@ -480,6 +493,7 @@ async fn invoke(
                 .saturating_sub(caller.data().host_fuel_pending),
         )),
         denial: Arc::new(Mutex::new(None)),
+        history_cache: caller.data().git_history.clone(),
     };
     let vfs = caller.data().vfs.clone();
     let op = op.to_owned();

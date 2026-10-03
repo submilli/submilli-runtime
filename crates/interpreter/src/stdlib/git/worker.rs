@@ -258,6 +258,7 @@ fn open_snapshot(
         storage::Snapshot::open(&location, lock, opening, writes(op))?
     };
     snapshot.algorithm_fuel = Arc::clone(&job.algorithm_fuel);
+    snapshot.history_cache = job.history_cache.clone();
     Ok((permit, snapshot))
 }
 

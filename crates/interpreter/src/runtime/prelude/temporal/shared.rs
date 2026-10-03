@@ -408,6 +408,8 @@ fn plain_vtable_slots(
                     // Zone aliases may compare equal. The instant alone is a
                     // valid hash for zoned values, independent of zone spelling.
                     Val::AnyRef(_) => continue,
+                    // The resolved ZonedDateTime attachment is not semantic data.
+                    Val::ExternRef(_) if fields == 5 && field == 4 => continue,
                     _ => {
                         return Err(crate::runtime::host::fatal_host_error(
                             "Temporal: invalid hash field",
@@ -1107,6 +1109,14 @@ pub(super) fn make_zoned_date_time(
         let abi = temporal_abi(caller)?;
         (abi.zoned_date_time.clone(), abi.zoned_date_time_vtable)
     };
+    let bytes = (std::mem::size_of::<CachedZoned>() + 128) as u64;
+    caller.data().tenant_limits.charge_host_bytes(bytes)?;
+    let payload = CachedZoned {
+        value: zoned.clone(),
+        bytes,
+        counter: caller.data().tenant_limits.host_attached_counter(),
+    };
+    let cached = wasmtime::ExternRef::new(&mut *caller, payload)?;
     let ts = zoned.timestamp();
     let tz = write_submilli_string_struct(caller, tz_id)?;
     make_temporal_struct(
@@ -1117,6 +1127,7 @@ pub(super) fn make_zoned_date_time(
             Val::I64(ts.as_second()),
             Val::I32(ts.subsec_nanosecond()),
             Val::AnyRef(Some(tz.to_anyref())),
+            Val::ExternRef(Some(cached)),
         ],
     )
 }
@@ -1269,15 +1280,35 @@ pub(super) fn span_from_duration_struct(
     super::duration::from_fields(fields, label).map_err(crate::runtime::host::range_error)
 }
 
+struct CachedZoned {
+    value: Zoned,
+    counter: std::sync::Arc<std::sync::atomic::AtomicU64>,
+    bytes: u64,
+}
+impl Drop for CachedZoned {
+    fn drop(&mut self) {
+        self.counter
+            .fetch_sub(self.bytes, std::sync::atomic::Ordering::Relaxed);
+    }
+}
+
 pub(super) fn zoned_date_time_from_struct(
     caller: &mut Caller<'_, StoreData>,
     st: Rooted<StructRef>,
-    label: &'static str,
+    _label: &'static str,
 ) -> wasmtime::Result<Zoned> {
-    let secs = st_i64(caller, st, 1, label)?;
-    let nanos = st_i32(caller, st, 2, label)?;
-    let tz_id = st_string(caller, st, 3, label)?;
-    make_zoned(caller, secs, nanos, &tz_id, label)
+    let Val::ExternRef(Some(cached)) = st.field(&mut *caller, 4)? else {
+        return Err(crate::runtime::host::fatal_host_error(
+            "Temporal.ZonedDateTime: missing resolved value",
+        ));
+    };
+    let payload = cached
+        .data(&*caller)?
+        .and_then(|data| data.downcast_ref::<CachedZoned>())
+        .ok_or_else(|| {
+            crate::runtime::host::fatal_host_error("Temporal.ZonedDateTime: invalid resolved value")
+        })?;
+    Ok(payload.value.clone())
 }
 
 pub(super) fn zoned_date_time_from_val(

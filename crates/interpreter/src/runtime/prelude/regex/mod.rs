@@ -22,6 +22,7 @@ use crate::runtime::host::abi_arg;
 pub(crate) mod engine;
 pub(crate) mod input;
 mod install;
+mod output;
 
 pub(crate) use install::declare_types;
 pub use install::{declare, install};
@@ -121,6 +122,27 @@ fn exec_at(
     } else {
         raw
     })
+}
+
+fn find_at(
+    caller: &mut Caller<'_, StoreData>,
+    regex: &Rooted<StructRef>,
+    input: &str,
+    start: usize,
+) -> wasmtime::Result<Option<(usize, usize)>> {
+    let (found, sticky) = with_regex(caller, regex, |compiled| {
+        (
+            engine::find(&compiled.regex, input, start),
+            compiled.flags.has(FlagSet::Y),
+        )
+    })?;
+    let scanned = found.map_or(input.len(), |(_, end)| end);
+    fuel::charge(
+        &mut *caller,
+        fuel::REGEX,
+        scanned.saturating_sub(start) as u64,
+    )?;
+    Ok(found.filter(|(index, _)| !sticky || *index == start))
 }
 
 /// Write `lastIndex` back after a match attempt: `g`/`y` set → post-match offset
@@ -350,13 +372,8 @@ pub(super) fn test(caller: &mut Caller<'_, StoreData>, params: &[Val]) -> wasmti
     } else {
         0
     };
-    let snapshot = exec_at(caller, &st, &input, start)?;
-    write_last_index(
-        caller,
-        &st,
-        bits,
-        snapshot.as_ref().map(|s| s.next_last_index),
-    )?;
+    let snapshot = find_at(caller, &st, &input, start)?;
+    write_last_index(caller, &st, bits, snapshot.map(|(_, end)| end))?;
     Ok(snapshot.is_some())
 }
 
@@ -515,10 +532,10 @@ pub(super) fn string_search(
     caller: &mut Caller<'_, StoreData>,
     params: &[Val],
 ) -> wasmtime::Result<f64> {
-    let input = read_string_arg(&mut *caller, abi_arg(params, 0)?, "String#search(input)")?;
+    let input = input::read(caller, abi_arg(params, 0)?)?;
     let st = as_struct(caller, abi_arg(params, 1)?, "String#search(regex)")?;
-    Ok(match exec_at(caller, &st, &input, 0)? {
-        Some(s) => s.match_start as f64,
+    Ok(match find_at(caller, &st, &input, 0)? {
+        Some((start, _)) => start as f64,
         None => -1.0,
     })
 }
@@ -558,6 +575,7 @@ pub(super) fn string_replace(
     params: &[Val],
 ) -> wasmtime::Result<Val> {
     if arg_is_string(caller, abi_arg(params, 1)?)? {
+        let _inputs = reserve_string_inputs(caller, params)?;
         let input = read_string_units(caller, abi_arg(params, 0)?, "String#replace(input)")?;
         let search = read_string_units(caller, abi_arg(params, 1)?, "String#replace(search)")?;
         let repl = read_string_units(caller, abi_arg(params, 2)?, "String#replace(replacement)")?;
@@ -566,12 +584,13 @@ pub(super) fn string_replace(
             fuel::SCAN,
             (input.len() + search.len()) as u64,
         )?;
-        let out = replace_literal(&input, &search, &repl, false);
-        let st = write_submilli_string_struct_units(caller, &out)?;
+        let out = replace_literal_bounded(caller, &input, &search, &repl, false)?;
+        let st = write_submilli_string_struct_units(caller, out.values())?;
         return Ok(Val::AnyRef(Some(st.to_anyref())));
     }
     let st = as_struct(caller, abi_arg(params, 1)?, "String#replace(regex)")?;
     let all = flag_bits(caller, &st)? & FlagSet::G.bits() as i32 != 0;
+    let _inputs = reserve_string_inputs(caller, &[*abi_arg(params, 0)?, *abi_arg(params, 2)?])?;
     let input = read_string_arg(&mut *caller, abi_arg(params, 0)?, "String#replace(input)")?;
     let repl = read_string_arg(
         &mut *caller,
@@ -579,14 +598,9 @@ pub(super) fn string_replace(
         "String#replace(replacement)",
     )?;
     fuel::charge(&mut *caller, fuel::REGEX, input.len() as u64)?;
-    let out = with_regex(caller, &st, |c| {
-        if all {
-            c.regex.replace_all(&input, repl.as_str()).into_owned()
-        } else {
-            c.regex.replace(&input, repl.as_str()).into_owned()
-        }
-    })?;
-    let result = write_submilli_string_struct(caller, &out)?;
+    let regex = with_regex(caller, &st, |compiled| compiled.regex.clone())?;
+    let out = replace_regex_bounded(caller, &regex, &input, &repl, all)?;
+    let result = write_submilli_string_struct_units(caller, out.values())?;
     Ok(Val::AnyRef(Some(result.to_anyref())))
 }
 
@@ -597,6 +611,7 @@ pub(super) fn string_replace_all(
     params: &[Val],
 ) -> wasmtime::Result<Val> {
     if arg_is_string(caller, abi_arg(params, 1)?)? {
+        let _inputs = reserve_string_inputs(caller, params)?;
         let input = read_string_units(caller, abi_arg(params, 0)?, "String#replaceAll(input)")?;
         let search = read_string_units(caller, abi_arg(params, 1)?, "String#replaceAll(search)")?;
         let repl = read_string_units(
@@ -609,11 +624,12 @@ pub(super) fn string_replace_all(
             fuel::SCAN,
             (input.len() + search.len()) as u64,
         )?;
-        let out = replace_literal(&input, &search, &repl, true);
-        let st = write_submilli_string_struct_units(caller, &out)?;
+        let out = replace_literal_bounded(caller, &input, &search, &repl, true)?;
+        let st = write_submilli_string_struct_units(caller, out.values())?;
         return Ok(Val::AnyRef(Some(st.to_anyref())));
     }
     let st = as_struct(caller, abi_arg(params, 1)?, "String#replaceAll(regex)")?;
+    let _inputs = reserve_string_inputs(caller, &[*abi_arg(params, 0)?, *abi_arg(params, 2)?])?;
     let input = read_string_arg(
         &mut *caller,
         abi_arg(params, 0)?,
@@ -625,10 +641,9 @@ pub(super) fn string_replace_all(
         "String#replaceAll(replacement)",
     )?;
     fuel::charge(&mut *caller, fuel::REGEX, input.len() as u64)?;
-    let out = with_regex(caller, &st, |c| {
-        c.regex.replace_all(&input, repl.as_str()).into_owned()
-    })?;
-    let result = write_submilli_string_struct(caller, &out)?;
+    let regex = with_regex(caller, &st, |compiled| compiled.regex.clone())?;
+    let out = replace_regex_bounded(caller, &regex, &input, &repl, true)?;
+    let result = write_submilli_string_struct_units(caller, out.values())?;
     Ok(Val::AnyRef(Some(result.to_anyref())))
 }
 
@@ -646,27 +661,302 @@ pub(super) fn string_split(
             )));
         }
     };
-    let parts: Vec<Vec<u16>> = if arg_is_string(caller, abi_arg(params, 1)?)? {
-        let input = read_string_units(caller, abi_arg(params, 0)?, "String#split(input)")?;
-        let sep = read_string_units(caller, abi_arg(params, 1)?, "String#split(separator)")?;
-        fuel::charge(&mut *caller, fuel::SCAN, (input.len() + sep.len()) as u64)?;
-        split_literal(&input, &sep, limit)
+    let mut elements = output::Buffer::<Val>::new();
+    let cap = if limit < 0 {
+        usize::MAX
     } else {
-        let st = as_struct(caller, abi_arg(params, 1)?, "String#split(regex)")?;
-        let input = read_string_arg(&mut *caller, abi_arg(params, 0)?, "String#split(input)")?;
-        fuel::charge(&mut *caller, fuel::REGEX, input.len() as u64)?;
-        with_regex(caller, &st, |c| regex_split(&c.regex, &input, limit))?
-            .into_iter()
-            .map(|s| s.encode_utf16().collect())
-            .collect()
+        limit as usize
     };
-    let mut elements = Vec::with_capacity(parts.len());
-    for part in &parts {
-        let st = write_submilli_string_struct_units(caller, part)?;
-        elements.push(Val::AnyRef(Some(st.to_anyref())));
+    if cap == 0 {
+        let empty = write_submilli_array_struct(caller, &[])?;
+        return Ok(Val::AnyRef(Some(empty.to_anyref())));
     }
-    let arr = write_submilli_array_struct(caller, &elements)?;
+    if arg_is_string(caller, abi_arg(params, 1)?)? {
+        let _inputs = reserve_string_inputs(
+            caller,
+            params.get(..2).ok_or_else(|| {
+                crate::runtime::host::fatal_host_error("String#split: invalid argument count")
+            })?,
+        )?;
+        let input = read_string_units(caller, abi_arg(params, 0)?, "String#split(input)")?;
+        let separator = read_string_units(caller, abi_arg(params, 1)?, "String#split(separator)")?;
+        fuel::charge(
+            &mut *caller,
+            fuel::SCAN,
+            (input.len() + separator.len()) as u64,
+        )?;
+        split_literal_bounded(caller, &mut elements, &input, &separator, cap)?;
+    } else {
+        let regex = as_struct(caller, abi_arg(params, 1)?, "String#split(regex)")?;
+        let input = input::read(caller, abi_arg(params, 0)?)?;
+        fuel::charge(&mut *caller, fuel::REGEX, input.len() as u64)?;
+        let regex = with_regex(caller, &regex, |compiled| compiled.regex.clone())?;
+        for part in regex.split(&input).take(cap) {
+            let part = write_submilli_string_struct(caller, part)?;
+            elements.push(caller, Val::AnyRef(Some(part.to_anyref())))?;
+        }
+    }
+    let arr =
+        crate::runtime::host::write_submilli_array_struct_precharged(caller, elements.values())?;
     Ok(Val::AnyRef(Some(arr.to_anyref())))
+}
+
+fn reserve_string_inputs(
+    caller: &mut Caller<'_, StoreData>,
+    values: &[Val],
+) -> wasmtime::Result<crate::runtime::limits::HostBytes> {
+    let mut units = 0u64;
+    for value in values {
+        let string = as_struct(caller, value, "String operation input")?;
+        let payload = match string.field(&mut *caller, 1)? {
+            Val::AnyRef(Some(payload)) => payload.unwrap_array(&mut *caller)?,
+            _ => {
+                return Err(crate::runtime::host::fatal_host_error(
+                    "String operation has malformed payload",
+                ));
+            }
+        };
+        units = units.saturating_add(u64::from(payload.len(&mut *caller)?));
+    }
+    // Both the copied UTF-16 and decoded UTF-8 can coexist on regex paths.
+    Ok(crate::runtime::limits::HostBytes::new(
+        &caller.data().tenant_limits,
+        units.saturating_mul(8),
+    )?)
+}
+
+fn replace_regex_bounded(
+    caller: &mut Caller<'_, StoreData>,
+    regex: &regex::Regex,
+    input: &str,
+    replacement: &str,
+    all: bool,
+) -> wasmtime::Result<output::Buffer<u16>> {
+    let mut output = output::Buffer::new();
+    let mut previous = 0;
+    let capture_slots = regex.captures_len() as u64;
+    let _captures = crate::runtime::limits::HostBytes::new(
+        &caller.data().tenant_limits,
+        capture_slots.saturating_mul(128),
+    )?;
+    fuel::charge(&mut *caller, fuel::ELEM, capture_slots)?;
+    for captures in regex.captures_iter(input) {
+        let found = captures.get(0).ok_or_else(|| {
+            crate::runtime::host::fatal_host_error("regex replacement omitted whole match")
+        })?;
+        let prefix = input.get(previous..found.start()).ok_or_else(|| {
+            crate::runtime::host::fatal_host_error("invalid regex replacement prefix")
+        })?;
+        output.append_text(caller, prefix)?;
+        fuel::charge(&mut *caller, fuel::SCAN, replacement.len() as u64)?;
+        expand_regex(caller, &mut output, replacement, &captures)?;
+        previous = found.end();
+        if !all {
+            break;
+        }
+        fuel::charge(&mut *caller, fuel::ELEM, capture_slots)?;
+    }
+    let suffix = input.get(previous..).ok_or_else(|| {
+        crate::runtime::host::fatal_host_error("invalid regex replacement suffix")
+    })?;
+    output.append_text(caller, suffix)?;
+    Ok(output)
+}
+
+fn expand_regex(
+    caller: &mut Caller<'_, StoreData>,
+    output: &mut output::Buffer<u16>,
+    mut replacement: &str,
+    captures: &regex::Captures<'_>,
+) -> wasmtime::Result<()> {
+    let mut unclosed_brace = false;
+    while let Some(dollar) = replacement.find('$') {
+        let prefix = replacement
+            .get(..dollar)
+            .ok_or_else(|| crate::runtime::host::fatal_host_error("invalid replacement token"))?;
+        output.append_text(caller, prefix)?;
+        replacement = replacement
+            .get(dollar..)
+            .ok_or_else(|| crate::runtime::host::fatal_host_error("invalid replacement token"))?;
+        if let Some(rest) = replacement.strip_prefix("$$") {
+            output.append_text(caller, "$")?;
+            replacement = rest;
+            continue;
+        }
+        let reference = if unclosed_brace && replacement.starts_with("${") {
+            None
+        } else {
+            capture_reference(replacement)
+        };
+        let Some((reference, end)) = reference else {
+            if replacement.starts_with("${") {
+                unclosed_brace = true;
+            }
+            output.append_text(caller, "$")?;
+            replacement = replacement.get(1..).ok_or_else(|| {
+                crate::runtime::host::fatal_host_error("invalid replacement token")
+            })?;
+            continue;
+        };
+        let capture = match reference.parse::<usize>() {
+            Ok(index) => captures.get(index),
+            Err(_) => captures.name(reference),
+        };
+        if let Some(capture) = capture {
+            output.append_text(caller, capture.as_str())?;
+        }
+        replacement = replacement
+            .get(end..)
+            .ok_or_else(|| crate::runtime::host::fatal_host_error("invalid capture reference"))?;
+    }
+    output.append_text(caller, replacement)
+}
+
+/// Keep the regex crate's existing replacement syntax, including missing
+/// captures becoming empty and greedily parsed unbraced names.
+fn capture_reference(replacement: &str) -> Option<(&str, usize)> {
+    let after_dollar = replacement.strip_prefix('$')?;
+    if let Some(braced) = after_dollar.strip_prefix('{') {
+        let end = braced.find('}')?;
+        return Some((braced.get(..end)?, end + 3));
+    }
+    let length = after_dollar
+        .bytes()
+        .take_while(|byte| byte.is_ascii_alphanumeric() || *byte == b'_')
+        .count();
+    if length == 0 {
+        return None;
+    }
+    Some((after_dollar.get(..length)?, length + 1))
+}
+
+fn split_literal_bounded(
+    caller: &mut Caller<'_, StoreData>,
+    elements: &mut output::Buffer<Val>,
+    input: &[u16],
+    separator: &[u16],
+    cap: usize,
+) -> wasmtime::Result<()> {
+    if separator.is_empty() {
+        for unit in input.iter().take(cap) {
+            push_split_part(caller, elements, &[*unit])?;
+        }
+        return Ok(());
+    }
+    let matcher = super::string::search::Search::new(separator, false);
+    let mut position = 0;
+    while let Some(found) = matcher.find(input, position) {
+        if elements.values().len() == cap {
+            return Ok(());
+        }
+        push_split_part(caller, elements, checked_units(input, position, found)?)?;
+        position = found
+            .checked_add(separator.len())
+            .ok_or_else(|| crate::runtime::host::fatal_host_error("split position overflow"))?;
+    }
+    if elements.values().len() < cap {
+        push_split_part(
+            caller,
+            elements,
+            checked_units(input, position, input.len())?,
+        )?;
+    }
+    Ok(())
+}
+
+fn push_split_part(
+    caller: &mut Caller<'_, StoreData>,
+    elements: &mut output::Buffer<Val>,
+    units: &[u16],
+) -> wasmtime::Result<()> {
+    let string = write_submilli_string_struct_units(caller, units)?;
+    elements.push(caller, Val::AnyRef(Some(string.to_anyref())))
+}
+
+fn replace_literal_bounded(
+    caller: &mut Caller<'_, StoreData>,
+    input: &[u16],
+    search: &[u16],
+    replacement: &[u16],
+    all: bool,
+) -> wasmtime::Result<output::Buffer<u16>> {
+    let matcher = super::string::search::Search::new(search, false);
+    let mut output = output::Buffer::new();
+    let mut position = 0;
+    while let Some(found) = matcher.find(input, position) {
+        output.append(caller, checked_units(input, position, found)?)?;
+        let end = found.checked_add(search.len()).ok_or_else(|| {
+            crate::runtime::host::fatal_host_error("replacement match offset overflow")
+        })?;
+        fuel::charge(&mut *caller, fuel::SCAN, replacement.len() as u64)?;
+        expand_literal(caller, &mut output, input, replacement, found, end)?;
+        position = end;
+        if !all {
+            break;
+        }
+        if search.is_empty() {
+            if let Some(unit) = input.get(found) {
+                output.append(caller, &[*unit])?;
+            }
+            position = found.checked_add(1).ok_or_else(|| {
+                crate::runtime::host::fatal_host_error("replacement match offset overflow")
+            })?;
+            if position > input.len() {
+                break;
+            }
+        }
+    }
+    if position <= input.len() {
+        output.append(caller, checked_units(input, position, input.len())?)?;
+    }
+    Ok(output)
+}
+
+fn expand_literal(
+    caller: &mut Caller<'_, StoreData>,
+    output: &mut output::Buffer<u16>,
+    input: &[u16],
+    replacement: &[u16],
+    start: usize,
+    end: usize,
+) -> wasmtime::Result<()> {
+    let mut position = 0;
+    while let Some(unit) = replacement.get(position) {
+        let token = if *unit == b'$' as u16 {
+            replacement.get(position + 1).copied()
+        } else {
+            None
+        };
+        let expanded = match token {
+            Some(0x24) => Some(&[0x24_u16][..]),
+            Some(0x26) => Some(checked_units(input, start, end)?),
+            Some(0x60) => Some(checked_units(input, 0, start)?),
+            Some(0x27) => Some(checked_units(input, end, input.len())?),
+            _ => None,
+        };
+        if let Some(expanded) = expanded {
+            output.append(caller, expanded)?;
+            position += 2;
+        } else {
+            // Copy a whole literal run, retaining per-fragment COPY rounding.
+            let literal_start = position;
+            position += 1;
+            while replacement
+                .get(position)
+                .is_some_and(|unit| *unit != b'$' as u16)
+            {
+                position += 1;
+            }
+            output.append(caller, checked_units(replacement, literal_start, position)?)?;
+        }
+    }
+    Ok(())
+}
+
+fn checked_units(input: &[u16], start: usize, end: usize) -> wasmtime::Result<&[u16]> {
+    input
+        .get(start..end)
+        .ok_or_else(|| crate::runtime::host::fatal_host_error("invalid string operation span"))
 }
 
 // ---------------------------------------------------------------------------
@@ -683,6 +973,7 @@ fn find(hay: &[u16], needle: &[u16], from: usize) -> Option<usize> {
 /// Expand JS replacement-pattern tokens against a single match: `$$`→`$`,
 /// `$&`→match, `` $` ``→prefix, `$'`→suffix. `$n`/`$<name>` and a trailing `$`
 /// pass through literally (string-arm replace has no captures).
+#[cfg(test)]
 fn apply_replacement(repl: &[u16], src: &[u16], start: usize, end: usize) -> Vec<u16> {
     let mut out = Vec::with_capacity(repl.len());
     let mut i = 0;
@@ -711,6 +1002,7 @@ fn apply_replacement(repl: &[u16], src: &[u16], start: usize, end: usize) -> Vec
 
 /// Replace the first (or every, when `all`) literal occurrence of `search`,
 /// applying JS replacement patterns.
+#[cfg(test)]
 fn replace_literal(input: &[u16], search: &[u16], repl: &[u16], all: bool) -> Vec<u16> {
     let matcher = super::string::search::Search::new(search, false);
     if !all {
@@ -751,6 +1043,7 @@ fn replace_literal(input: &[u16], search: &[u16], repl: &[u16], all: bool) -> Ve
 
 /// JS `String#split` on a literal separator. `limit == 0` → empty; `limit < 0` →
 /// uncapped; an empty separator yields individual code units.
+#[cfg(test)]
 fn split_literal(input: &[u16], sep: &[u16], limit: i32) -> Vec<Vec<u16>> {
     if limit == 0 {
         return Vec::new();
@@ -783,22 +1076,6 @@ fn split_literal(input: &[u16], sep: &[u16], limit: i32) -> Vec<Vec<u16>> {
     }
     out.push(input[start..].to_vec());
     out
-}
-
-/// Regex-arm split, mirroring `submilli:regex.split`: JS-faithful strict
-/// truncation (drop the tail past `limit`, not pack it into the last element).
-fn regex_split(regex: &regex::Regex, input: &str, limit: i32) -> Vec<String> {
-    if limit < 0 {
-        regex.split(input).map(str::to_string).collect()
-    } else if limit == 0 {
-        Vec::new()
-    } else {
-        regex
-            .split(input)
-            .take(limit as usize)
-            .map(str::to_string)
-            .collect()
-    }
 }
 
 #[cfg(test)]

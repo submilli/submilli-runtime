@@ -556,6 +556,10 @@ pub fn emit_env_types(
             })),
             mutable: false,
         },
+        FieldType {
+            element_type: StorageType::Val(ValType::I64),
+            mutable: true,
+        },
     ]);
     symbols.call_metadata_type = Some(*next_type_idx);
     *next_type_idx += 1;

@@ -8,7 +8,6 @@
 use wasmtime::{Caller, StructType, Val};
 
 use crate::runtime::StoreData;
-use crate::runtime::fuel;
 use crate::runtime::host::write_submilli_string_struct_units;
 use crate::runtime::prelude::iterator::as_struct;
 use crate::runtime::prelude::vtable::read_string_units;
@@ -66,8 +65,8 @@ pub(crate) fn read_array_vals(
     crate::runtime::array_storage::ArrayStorage::read(caller, val)?.snapshot(caller)
 }
 
-/// Read a named field from an `$ObjectShape` (the structural getter): scan
-/// `field_names` for `name`, return the parallel `object_fields` entry, or `None`
+/// Read a named field from an `$ObjectShape` using its cached name index,
+/// returning the parallel `object_fields` entry, or `None`
 /// if `obj` isn't object-shaped or lacks the field.
 pub(crate) fn object_field(
     caller: &mut Caller<'_, StoreData>,
@@ -106,26 +105,19 @@ fn object_field_kind(
     if !st.matches_ty(&*caller, &shape)? {
         return Ok(None);
     }
-    let names = match st.field(&mut *caller, 1)? {
-        Val::AnyRef(Some(a)) => a.unwrap_array(&mut *caller)?,
-        _ => return Ok(None),
-    };
     let fields = match st.field(&mut *caller, 2)? {
         Val::AnyRef(Some(a)) => a.unwrap_array(&mut *caller)?,
         _ => return Ok(None),
     };
-    let target: Vec<u16> = name.encode_utf16().collect();
-    let count = super::object::field_count(caller, obj)?;
-    fuel::charge(&mut *caller, fuel::ELEM, u64::from(count))?;
-    for i in 0..count {
-        let nm = names.get(&mut *caller, i)?;
-        if read_string_units(caller, &nm, FIELD_NAME)? == target
-            && super::object::is_accessor_slot(caller, &nm)? == accessor
-        {
-            return Ok(Some(fields.get(&mut *caller, i)?));
-        }
+    let mut target = Vec::new();
+    target
+        .try_reserve_exact(name.len())
+        .map_err(crate::runtime::host::fatal_host_error)?;
+    target.extend(name.encode_utf16());
+    match super::object::find_field_slot(caller, &st, &target, accessor)? {
+        Some(slot) => fields.get(&mut *caller, slot).map(Some),
+        None => Ok(None),
     }
-    Ok(None)
 }
 
 /// Labels an object field name that is not a well-formed `$string`.

@@ -67,14 +67,12 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
     reg_str_to_bool(linker, &engine, &abi, "isWellFormed", is_well_formed)?;
     reg_str_to_str(linker, &engine, &abi, "toWellFormed", to_well_formed)?;
 
-    // Case / whitespace / normalization — formerly the `submilli:string`
-    // module; they decode to UTF-8 for the Unicode crates (the sanctioned
-    // round-trip) and now live alongside the rest of the String surface.
-    reg_str_to_str(linker, &engine, &abi, "toUpperCase", to_upper_case)?;
-    reg_str_to_str(linker, &engine, &abi, "toLowerCase", to_lower_case)?;
-    reg_str_to_str(linker, &engine, &abi, "trim", trim)?;
-    reg_str_to_str(linker, &engine, &abi, "trimStart", trim_start)?;
-    reg_str_to_str(linker, &engine, &abi, "trimEnd", trim_end)?;
+    super::transforms::prepare_case_properties()?;
+    reg_str_transform(linker, &engine, &abi, "toUpperCase", to_upper_case)?;
+    reg_str_transform(linker, &engine, &abi, "toLowerCase", to_lower_case)?;
+    reg_str_transform(linker, &engine, &abi, "trim", trim)?;
+    reg_str_transform(linker, &engine, &abi, "trimStart", trim_start)?;
+    reg_str_transform(linker, &engine, &abi, "trimEnd", trim_end)?;
     reg_str_str_to_str_fallible(linker, &engine, &abi, "normalize", normalize)?;
 
     reg_str_num_to_str_fallible(linker, &engine, &abi, "repeat", repeat)?;
@@ -905,14 +903,45 @@ fn reg_str_to_str(
         true,
         move |caller, params, results| {
             let recv = abi.read(caller, abi_arg(params, 0)?, name)?;
-            // Case mapping, trimming and normalization each pass over the
-            // whole string, through UTF-8 and back.
+            // toWellFormed scans the input and its mutable copy.
             fuel::charge(
                 &mut *caller,
                 fuel::SCAN,
                 2 * recv.value.units().len() as u64,
             )?;
             *abi_result(results, 0)? = abi.write(caller, recv.vtable, &op(&recv.value))?;
+            Ok(())
+        },
+    )
+}
+
+fn reg_str_transform(
+    linker: &mut Linker<StoreData>,
+    engine: &wasmtime::Engine,
+    abi: &StringAbi,
+    name: &'static str,
+    op: fn(&Str) -> wasmtime::Result<Str>,
+) -> wasmtime::Result<()> {
+    let s = abi.value_type();
+    let abi = abi.clone();
+    register_host_fn(
+        linker,
+        MODULE_NAME,
+        method_key(name),
+        FuncType::new(engine, [s.clone()], [s]),
+        true,
+        move |caller, params, results| {
+            let payload = abi.payload(caller, &params[0], name)?;
+            let _native = crate::runtime::limits::HostBytes::new(
+                &caller.data().tenant_limits,
+                (payload.len as u64).saturating_mul(8),
+            )?;
+            let recv = Receiver {
+                vtable: payload.vtable,
+                value: payload.read_all(caller, name)?,
+            };
+            fuel::charge(&mut *caller, fuel::SCAN, recv.value.len() as u64)?;
+            results[0] = abi.write(caller, recv.vtable, &op(&recv.value)?)?;
             Ok(())
         },
     )

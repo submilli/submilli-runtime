@@ -27,7 +27,7 @@ use wasmtime::{
 };
 
 use crate::runtime::StoreData;
-use crate::runtime::fuel::{self, host_func};
+use crate::runtime::fuel;
 use crate::runtime::gc_singleton::singleton_struct;
 use crate::runtime::host::{host_map_tombstone, host_object_vtable, write_submilli_array_struct};
 use crate::runtime::intrinsic_types::{IntrinsicTypes, intrinsic_types};
@@ -37,7 +37,8 @@ use crate::runtime::prelude::collection::{
 };
 use crate::runtime::prelude::collection::{is_a, object_field, read_array_vals, unbox_bool};
 use crate::runtime::prelude::iterator::{
-    IterKind, as_struct, build_iterator, iter_done, iter_yield, next_closure_type,
+    IterKind, IteratorSource, as_struct, build_iterator, iter_done, iter_yield, next_closure_type,
+    shared_next,
 };
 use crate::runtime::prelude::keep::{KeptValue, keep_all};
 use crate::runtime::prelude::map::raw_index_array_type;
@@ -543,9 +544,13 @@ fn make_set_iterator(
 
     let intr = intrinsic_types(&mut *caller)?;
     let (next_ty, next_struct) = next_closure_type(caller.engine(), &intr)?;
-    let next = host_func(&mut *caller, next_ty, move |caller, params, results| {
-        set_next_step(caller, params, results, kind)
-    });
+    let next = shared_next(
+        caller,
+        IteratorSource::Set,
+        kind,
+        next_ty,
+        move |caller, params, results| set_next_step(caller, params, results, kind),
+    )?;
     build_iterator(caller, next_struct, next, cursor)
 }
 

@@ -271,11 +271,21 @@ impl std::fmt::Display for RegexCompileError {
 
 impl std::error::Error for RegexCompileError {}
 
+/// Match boundaries only: boolean tests/search do not materialize captures.
+pub(crate) fn find(regex: &Regex, input: &str, start: usize) -> Option<(usize, usize)> {
+    if start > input.len() || !input.is_char_boundary(start) {
+        return None;
+    }
+    regex
+        .find_at(input, start)
+        .map(|found| (found.start(), found.end()))
+}
+
 /// Run a single match at `last_index`, returning an owned snapshot so the borrow
 /// on `regex` ends before any GC-mutating allocation. Shared by the Wasm-era
 /// `submilli:regex.exec` host fn and the Rust `prelude::regex` methods.
 pub(crate) fn exec_snapshot(regex: &Regex, input: &str, last_index: usize) -> Option<ExecSnapshot> {
-    if last_index > input.len() {
+    if last_index > input.len() || !input.is_char_boundary(last_index) {
         return None;
     }
     let m = regex.captures_at(input, last_index)?;
@@ -315,6 +325,29 @@ pub(crate) struct ExecSnapshot {
 mod tests {
     use super::*;
     use crate::runtime::limits::TenantLimits;
+
+    #[test]
+    fn boolean_matches_skip_capture_materialization() {
+        let mut work = Vec::new();
+        for count in [128, 256] {
+            let groups = (0..count)
+                .map(|index| format!("(?<p{index}>a)"))
+                .collect::<Vec<_>>()
+                .join("|");
+            let regex = Regex::new(&format!("|{groups}")).unwrap();
+            let before = std::time::Instant::now();
+            for _ in 0..count {
+                assert_eq!(find(&regex, "", 0), Some((0, 0)));
+            }
+            eprintln!(
+                "boolean matches {count}: {count} boundary results, {:?}; old {} capture slots",
+                before.elapsed(),
+                2 * count * count
+            );
+            work.push(count);
+        }
+        assert_eq!(work[1], 2 * work[0]);
+    }
 
     #[test]
     fn translate_passes_through_basic_pattern() {

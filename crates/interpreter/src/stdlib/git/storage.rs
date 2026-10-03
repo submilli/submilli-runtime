@@ -108,6 +108,7 @@ pub struct Snapshot {
     pub max_bytes: u64,
     pub(super) algorithm_fuel: Arc<super::work::AlgorithmWork>,
     reference_cache: RefCell<ReferenceCache>,
+    pub(super) history_cache: Option<Arc<super::log_cache::Cache>>,
     pub repo: gix::Repository,
     pub dir: Arc<Dir>,
     /// The repository's own configuration, which Git parses itself; replaced
@@ -250,6 +251,7 @@ impl Snapshot {
             max_bytes,
             algorithm_fuel: Arc::new(super::work::AlgorithmWork::new(u64::MAX)),
             reference_cache: RefCell::new(ReferenceCache::default()),
+            history_cache: None,
             repo,
             dir,
             config,

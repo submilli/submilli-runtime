@@ -12,8 +12,7 @@ pub(super) fn resolve_commit<'a>(
     let mut bytes = 0u64;
     for _ in 0..64 {
         snapshot.check_cancelled()?;
-        let object = snapshot.repo.find_object(id)?;
-        snapshot.meter.parse(object.data.len() as u64);
+        let object = super::object::read(snapshot, id, snapshot.max_bytes.saturating_sub(bytes))?;
         bytes = bytes.saturating_add(object.data.len() as u64);
         if bytes > snapshot.max_bytes {
             return Err(super::storage::memory_limit("revision resource"));
@@ -234,6 +233,13 @@ mod tests {
         (vfs, snapshot)
     }
 
+    fn cache() -> super::super::log_cache::Cache {
+        super::super::log_cache::Cache::new(&crate::runtime::limits::TenantLimits::new(
+            8 * 1024 * 1024,
+        ))
+        .unwrap()
+    }
+
     fn commit(snapshot: &Snapshot, parents: &[gix::ObjectId], message: &str) -> gix::ObjectId {
         let mut bytes = format!(
             "tree {}\n",
@@ -255,6 +261,76 @@ mod tests {
     }
 
     #[test]
+    fn paging_reuses_history_when_input_and_calls_double() {
+        let mut costs = Vec::new();
+        for count in [128, 256] {
+            let (_vfs, snapshot) = snapshot(1024 * 1024);
+            let mut head = commit(&snapshot, &[], "root");
+            for index in 1..count {
+                head = commit(&snapshot, &[head], &format!("child {index}"));
+            }
+            let cache = super::super::log_cache::Cache::new(
+                &crate::runtime::limits::TenantLimits::new(8 * 1024 * 1024),
+            )
+            .unwrap();
+            let before = std::time::Instant::now();
+            for offset in 0..count {
+                let page = cache.page(&snapshot, head, offset, 1).unwrap();
+                assert_eq!(page.len(), if offset + 1 == count { 1 } else { 2 });
+            }
+            let fuel = snapshot.algorithm_fuel.spent();
+            eprintln!(
+                "history pages {count}: {fuel} fuel, {:?}; previous {} commit reads",
+                before.elapsed(),
+                count * (count + 3) / 2 - 1
+            );
+            costs.push(fuel);
+            assert!(cache.page(&snapshot, head, u64::MAX, 1).unwrap().is_empty());
+        }
+        assert!(costs[1] < costs[0] * 5 / 2);
+    }
+
+    #[test]
+    fn cached_history_releases_memory_and_recovers_after_refused_work() {
+        use crate::runtime::limits::{MemoryCapExceeded, TenantLimits};
+        let too_small = TenantLimits::new(1024);
+        let Err(error) = super::super::log_cache::Cache::new(&too_small) else {
+            panic!("accepted oversized cache");
+        };
+        assert!(error.is::<MemoryCapExceeded>());
+        assert_eq!(too_small.host_attached_bytes(), 0);
+        let limits = TenantLimits::new(8 * 1024 * 1024);
+        let cache = super::super::log_cache::Cache::new(&limits).unwrap();
+        assert_eq!(limits.host_attached_bytes(), 4 * 1024 * 1024);
+        let (_vfs, mut snapshot) = snapshot(4096);
+        let root = commit(&snapshot, &[], "root");
+        let head = commit(&snapshot, &[root], "head");
+        snapshot.algorithm_fuel = std::sync::Arc::new(super::super::work::AlgorithmWork::new(1));
+        assert!(
+            cache
+                .page(&snapshot, head, 0, 1)
+                .unwrap_err()
+                .is::<wasmtime::Trap>()
+        );
+        snapshot.algorithm_fuel =
+            std::sync::Arc::new(super::super::work::AlgorithmWork::new(u64::MAX));
+        assert_eq!(cache.page(&snapshot, head, 0, 1).unwrap(), [head, root]);
+        assert!(cache.page(&snapshot, head, 0, 0).is_err());
+        snapshot.cancelled.store(true, Ordering::Relaxed);
+        assert!(
+            cache
+                .page(&snapshot, head, 0, 1)
+                .unwrap_err()
+                .to_string()
+                .contains("cancelled")
+        );
+        snapshot.cancelled.store(false, Ordering::Relaxed);
+        assert_eq!(cache.page(&snapshot, head, 0, 1).unwrap(), [head, root]);
+        drop(cache);
+        assert_eq!(limits.host_attached_bytes(), 0);
+    }
+
+    #[test]
     fn breadth_first_merges_deduplicate_parents_and_find_reachability() {
         let (_vfs, snapshot) = snapshot(16_384);
         let root = commit(&snapshot, &[], "root");
@@ -267,6 +343,15 @@ mod tests {
             ids.push(commit.id);
         }
         assert_eq!(ids, [head, left, right, root]);
+        let cache = cache();
+        assert_eq!(cache.page(&snapshot, head, 0, 1000).unwrap(), ids);
+        assert_eq!(
+            cache.page(&snapshot, right, 0, 1000).unwrap(),
+            [right, root]
+        );
+        assert_eq!(cache.page(&snapshot, head, 1, 1).unwrap(), [left, right]);
+        cache.invalidate().unwrap();
+        assert_eq!(cache.page(&snapshot, head, 0, 1000).unwrap(), ids);
         assert!(is_ancestor(&snapshot, root, head).unwrap());
         assert!(!is_ancestor(&snapshot, left, right).unwrap());
     }
@@ -323,6 +408,8 @@ mod tests {
         let mut walk = Ancestors::new(&snapshot, head).unwrap();
         assert_eq!(walk.next().unwrap().unwrap().id, head);
         assert!(walk.next().unwrap().is_none());
+        let cache = cache();
+        assert_eq!(cache.page(&snapshot, head, 0, 1000).unwrap(), [head]);
     }
 
     fn tag(snapshot: &Snapshot, target: gix::ObjectId, kind: &str, message: &str) -> gix::ObjectId {
@@ -394,7 +481,7 @@ mod tests {
             head = tag(&snapshot, head, "tag", &"x".repeat(512));
         }
         let error = resolve_commit(&snapshot, &head.to_string()).unwrap_err();
-        assert!(error.to_string().contains("revision resource limit"));
+        assert!(error.to_string().contains("decoded object memory limit"));
     }
 
     #[test]
