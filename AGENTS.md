@@ -234,7 +234,7 @@ key generation, retention, and reuse through mocked Kubernetes lookups.
 The public user book lives in `docs/`, in six parts that follow
 [Diátaxis](https://diataxis.fr/): Start here (explanation, with a quickstart
 tutorial), Blueprints, Packages, and Server (how-to guides), Tutorials, and
-Reference. `docs/old/` is the previous book, kept hidden; don't edit it.
+Reference.
 
 Before writing or reviewing any page in `docs/`, read
 [docs-site/WRITING.md](docs-site/WRITING.md). It says which type each part is,

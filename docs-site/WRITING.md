@@ -28,8 +28,7 @@ package, the customer `cus_northwind`, and the injected ticket.
 | 5 · Tutorials | `docs/part-5-tutorials/` | Tutorial | In order, by group |
 | 6 · Reference | `docs/part-6-reference/` | [Reference](https://diataxis.fr/reference/) | Looked up |
 
-`docs/old/` holds the previous book, hidden from navigation, search, and the
-agent exports. Move content out of it; don't edit it. A page's URL comes from
+A page's URL comes from
 its `slug` frontmatter, not its path; its position comes from `sidebar.order`.
 A folder inside a part is a sidebar group, named in `astro.config.mjs`.
 
