@@ -57,6 +57,7 @@ flat names listed. A dash means the form doesn't exist.
 | `max_llm_concurrency` | `--max-llm-concurrency` | `SUBMILLI_MAX_LLM_CONCURRENCY` | prompts, at least 1 | `4` | Prompts of one `llm.batch` in flight at once. |
 | `telemetry` | — | `SUBMILLI_TELEMETRY` | boolean | `false` | Report to the Submilli maintainers. See [`telemetry`](#telemetry). |
 | `telemetry_include_source` | — | `SUBMILLI_TELEMETRY_INCLUDE_SOURCE` | boolean | `false` | Attach failed programs' source to reports. |
+| `logging.file` | `--log-file` | `SUBMILLI_LOG_FILE` | path | standard output | Append server logs to a file. See [Logs](#logs). |
 | `shutdown_grace` | `--shutdown-grace` | `SUBMILLI_SHUTDOWN_GRACE` | seconds | `5` | How long running requests may finish after a stop. See [Shutdown](#shutdown). |
 | — | `--health-check` | — | — | — | Probe a running server and exit. See [Health and status](#health-and-status). |
 
@@ -288,11 +289,29 @@ the bind address, process ID, open sessions, and registered blueprints.
 ## Logs
 
 The server logs to standard output at `info` and above; `RUST_LOG` sets the
-filter, such as `RUST_LOG=submilli_server=debug`. Every program it runs adds
-one line:
+filter, such as `RUST_LOG=submilli_server=debug`. To append to a file instead:
+
+```yaml title="server.yaml (fragment)"
+logging:
+  file: /var/log/submilli/server.log
+```
+
+`--log-file` overrides `SUBMILLI_LOG_FILE`, which overrides `logging.file`.
+The parent directory must exist; an invalid or inaccessible file fails startup.
+Existing contents are retained across restarts.
+
+On Unix, `SIGHUP` reopens the configured path after external rotation. If it
+fails, the server keeps the old file and reports the error to standard error.
+The server does no rotation or retention itself.
+
+Records use logfmt, one event per line, with no ANSI colours. The leading keys
+are `ts` (UTC, milliseconds), `level`, `stream=log`, `target`, and `msg`, followed
+by event fields. Values are quoted and escaped when needed.
+
+Every program the server runs adds an execution record:
 
 ```text
-INFO submilli_server::execute: execution finished blueprint="probe" session="2543962c-2188-4c3a-bf1f-ec1b465db1ba" fuel=1000000000 wasm_fuel=999999943 host_fuel=57 memory_peak=65536 wall_ms=2318 outcome="fuel_exhausted"
+ts=2026-10-03T15:29:46.963Z level=info stream=log target=submilli_server::execute msg="execution finished" blueprint=probe session=e4940e90-2fb3-48df-baea-af505766958f fuel=100000 wasm_fuel=99943 host_fuel=57 memory_peak=65536 wall_ms=19 outcome=fuel_exhausted
 ```
 
 | Field | Value |
@@ -325,6 +344,8 @@ Usage: submilli-server [OPTIONS]
 Options:
       --config <CONFIG>
           YAML config file supplying values for the options below. Any flag passed on the command line overrides the corresponding file value. Env: `$SUBMILLI_CONFIG`
+      --log-file <PATH>
+          Append server logs to this file instead of standard output. The parent directory must exist. On Unix, SIGHUP reopens it for external rotation. Env: `$SUBMILLI_LOG_FILE`, which outranks the config file
       --bind <BIND>
           Address to bind. Falls back to the `$HOST` env var, or `0.0.0.0` when `$PORT` is set (so it's reachable on Render and similar hosts). [default: 127.0.0.1] Env: `$SUBMILLI_BIND`, which outranks the config file and `$HOST`
       --port <PORT>

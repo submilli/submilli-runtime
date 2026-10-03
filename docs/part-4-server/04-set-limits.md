@@ -6,8 +6,9 @@ slug: server/set-limits
 # functions charge fuel) as fixed: the loop's fuel is measured, and the
 # host-side figures under "What a budget buys" are estimates against the
 # charging scheme SUB-1269 proposes, to be replaced by SUB-1270's
-# measurements. The `1B`-style counts (SUB-1272) and the `--report` output
-# and server log line (SUB-1271) are real, on main 10da5c4.
+# measurements. The `1B`-style counts (SUB-1272) and the `--report`
+# output (SUB-1271) are real, on main 10da5c4. The logfmt server
+# log line was recaptured for SUB-1316 with the debug server on this checkout.
 sidebar:
   order: 4
 ---
@@ -153,7 +154,7 @@ how the run ended, so a limit that fires shows up in the log without
 the client's help:
 
 ```text
-INFO submilli_server::execute: execution finished blueprint="support" session="5ee90e95-8ad2-4f0a-9af7-c2a1dc1f75de" fuel=38000105 wasm_fuel=38000026 host_fuel=79 memory_peak=65536 wall_ms=118 outcome="ok"
+ts=2026-10-03T15:29:46.783Z level=info stream=log target=submilli_server::execute msg="execution finished" blueprint=support session=9b86535d-f25b-4ce3-a9da-558918a8e9f9 fuel=38000105 wasm_fuel=38000026 host_fuel=79 memory_peak=65536 wall_ms=3398 outcome=ok
 ```
 
 ## Keep a time limit as the backstop

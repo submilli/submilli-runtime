@@ -45,6 +45,12 @@ pub struct Cli {
     #[arg(long)]
     config: Option<PathBuf>,
 
+    /// Append server logs to this file instead of standard output. The parent
+    /// directory must exist. On Unix, SIGHUP reopens it for external rotation.
+    /// Env: `$SUBMILLI_LOG_FILE`, which outranks the config file.
+    #[arg(long, value_name = "PATH")]
+    log_file: Option<PathBuf>,
+
     /// Address to bind. Falls back to the `$HOST` env var, or `0.0.0.0` when
     /// `$PORT` is set (so it's reachable on Render and similar hosts).
     /// [default: 127.0.0.1]
@@ -279,12 +285,19 @@ fn main() -> Result<()> {
         ))
     });
 
+    let log_output = submilli_server::logging::LogOutput::open(resolved.log_file)?;
     tracing_subscriber::fmt()
+        .with_ansi(false)
+        .log_internal_errors(false)
+        .event_format(submilli_server::logging::Logfmt::default())
+        .fmt_fields(submilli_server::logging::LogfmtFields)
+        .with_writer(log_output.clone())
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
                 .unwrap_or_else(|_| "submilli_server=info,info".into()),
         )
-        .init();
+        .try_init()
+        .map_err(|error| anyhow::anyhow!("cannot initialize server logging: {error}"))?;
 
     // Only now is there a subscriber to warn to.
     if let Some(migration) = &resolved.migration {
@@ -299,15 +312,17 @@ fn main() -> Result<()> {
     }
 
     let runtime = submilli_server::runtime(&resolved.config)?;
+    let reopen = submilli_server::logging::ReopenTask::start(log_output)?;
     let result = runtime.block_on(serve(
         resolved.addr,
         resolved.config,
         resolved.shutdown_grace,
     ));
+    let reopen_result = reopen.stop();
     // Consumes the runtime, so this replaces the implicit drop rather than
     // preceding it — the drop is what would otherwise wait indefinitely.
     runtime.shutdown_timeout(RUNTIME_TEARDOWN_BUDGET);
-    result
+    result.and_then(|()| reopen_result.map_err(Into::into))
 }
 
 /// Report what the boot migration did. It ran before the subscriber existed,
