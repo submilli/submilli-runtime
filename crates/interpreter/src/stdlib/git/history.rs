@@ -16,7 +16,7 @@ pub(super) fn resolve_commit<'a>(
         snapshot.meter.parse(object.data.len() as u64);
         bytes = bytes.saturating_add(object.data.len() as u64);
         if bytes > snapshot.max_bytes {
-            bail!("git: revision resource limit exceeded");
+            return Err(super::storage::memory_limit("revision resource"));
         }
         match object.kind {
             gix::objs::Kind::Commit => return Ok(object.into_commit()),
@@ -193,7 +193,7 @@ impl<'a> Ancestors<'a> {
         self.snapshot.meter.parse(bytes);
         self.bytes = self.bytes.saturating_add(bytes);
         if self.bytes > self.snapshot.max_bytes {
-            bail!("git: history resource limit exceeded");
+            return Err(super::storage::memory_limit("history resource"));
         }
         Ok(())
     }

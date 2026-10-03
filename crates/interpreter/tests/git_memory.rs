@@ -195,6 +195,56 @@ impl HttpClient for UploadPack {
         })
     }
 
+    /// Streams `upload-pack`'s output, so the server holds none of it: the
+    /// measurement is of Git alone.
+    async fn send_without_redirects_to(
+        &self,
+        request: &HttpRequest,
+        body: &mut (dyn std::io::Write + Send),
+    ) -> Result<HttpResponse, HttpError> {
+        use std::io::Write;
+        if request.method == "GET" {
+            let mut response = self.send_without_redirects(request).await?;
+            body.write_all(&response.body).expect("write body");
+            response.body = Vec::new();
+            return Ok(response);
+        }
+        let mut child = std::process::Command::new("git")
+            .arg("-C")
+            .arg(&self.repo)
+            .args(["upload-pack", "--stateless-rpc", "."])
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .spawn()
+            .expect("spawn upload-pack");
+        child
+            .stdin
+            .take()
+            .expect("stdin")
+            .write_all(&request.body)
+            .expect("request body");
+        let mut stdout = child.stdout.take().expect("stdout");
+        let mut chunk = [0u8; 16 * 1024];
+        loop {
+            let read = std::io::Read::read(&mut stdout, &mut chunk).expect("read upload-pack");
+            if read == 0 {
+                break;
+            }
+            body.write_all(&chunk[..read]).expect("write body");
+        }
+        assert!(child.wait().expect("upload-pack").success());
+        Ok(HttpResponse {
+            status: 200,
+            status_text: "OK".into(),
+            headers: vec![(
+                "content-type".into(),
+                "application/x-git-upload-pack-result".into(),
+            )],
+            body: Vec::new(),
+            final_url: request.url.clone(),
+        })
+    }
+
     async fn download(
         &self,
         _: &HttpRequest,
@@ -473,7 +523,12 @@ fn report_peak_memory_per_operation() {
             "\nshape {shape:?}: {} bytes of content",
             shape.total_bytes()
         );
-        for operation in OPERATIONS {
+        // `GIT_MEMORY_OPERATIONS=fetch,clone` measures only those.
+        let only = std::env::var("GIT_MEMORY_OPERATIONS").ok();
+        for operation in OPERATIONS.iter().filter(|operation| {
+            only.as_deref()
+                .is_none_or(|only| only.split(',').any(|name| name == operation.name))
+        }) {
             match measure_operation(operation, shape, MEASURING_CAP) {
                 Ok(measured) => eprintln!(
                     "  {:<14} peak {:>12} bytes ({:>6.2}× content), charged peak {:>12}",
@@ -486,4 +541,87 @@ fn report_peak_memory_per_operation() {
             }
         }
     }
+}
+
+/// The memory limit a run gets unless the blueprint sets one.
+const DEFAULT_CAP: u64 = interpreter::runtime::limits::DEFAULT_MAX_STORE_BYTES;
+
+/// A repository at `dir` holding `files`, each `(path, bytes)`, committed on
+/// `main`.
+fn seed_files(dir: &Path, files: &[(String, usize)]) {
+    std::fs::create_dir_all(dir).expect("repository directory");
+    native(dir, &["init", "-q", "-b", "main"]);
+    for (number, (path, len)) in files.iter().enumerate() {
+        let path = dir.join(path);
+        std::fs::create_dir_all(path.parent().expect("parent")).expect("directory");
+        std::fs::write(path, contents(number, *len)).expect("file");
+    }
+    native(dir, &["add", "-A"]);
+    native(dir, &["commit", "-q", "-m", "initial"]);
+    native(dir, &["gc", "-q"]);
+}
+
+/// Clones the upstream repository seeded with `files` under the default memory
+/// limit, then checks it and commits a change on a new branch.
+fn clone_and_work(files: &[(String, usize)]) -> Result<Measured, String> {
+    let upstream = tempfile::tempdir().expect("upstream");
+    seed_files(upstream.path(), files);
+    let upstream_path = upstream.path().to_path_buf();
+    measure(
+        r#"
+        import { Repository } from "submilli:git";
+        import { writeText } from "submilli:fs";
+        function main(): void {
+            const repo = Repository.clone("https://example.com/upstream.git", "/repo");
+            assert(repo.status().clean, "clean after clone");
+            repo.createBranch("work");
+            repo.switchBranch("work");
+            writeText("/repo/notes.txt", "notes\n");
+            repo.add(["notes.txt"]);
+            repo.commit("notes");
+            assert(repo.status().clean, "clean after commit");
+            repo.switchBranch("main");
+            assert(repo.status().clean, "clean after switching back");
+        }"#,
+        DEFAULT_CAP,
+        |_| {},
+        |data| {
+            data.http_client = Arc::new(UploadPack {
+                repo: upstream_path,
+            });
+        },
+    )
+}
+
+/// Under the default memory limit, a repository many times the old 2 MB
+/// ceiling is cloned, checked, committed to and switched, and the run's real
+/// peak memory stays within what it was charged.
+#[test]
+fn a_large_repository_works_end_to_end_under_the_default_limit() {
+    let _guard = TEST_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let files: Vec<_> = (0..1_000)
+        .map(|number| (format!("d{:02}/f{number:04}", number / 50), 10_000))
+        .collect();
+    let measured = clone_and_work(&files).expect("a 10 MB repository fits");
+    assert!(
+        (measured.peak as u64) < measured.charged,
+        "{measured:?}: Git used more than it was charged"
+    );
+}
+
+/// A file that fits in the memory Git has is checked out; one that doesn't is
+/// refused with a message naming what to raise.
+#[test]
+fn a_file_larger_than_git_may_hold_is_refused_clearly() {
+    let _guard = TEST_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let measured =
+        clone_and_work(&[("large".into(), 6_000_000)]).expect("a 6 MB file fits under 50 MB");
+    assert!((measured.peak as u64) < measured.charged, "{measured:?}");
+    let error = clone_and_work(&[("large".into(), 12_000_000)])
+        .expect_err("a 12 MB file needs more than Git has under 50 MB");
+    assert!(error.contains("raise max_execution_memory"), "{error}");
 }

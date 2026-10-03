@@ -253,7 +253,8 @@ fn validate_pack<R: BufRead>(
             .map_err(|_| invalid("invalid pack object header"))?;
         if entry.decompressed_size > limits.max_object_bytes {
             return Err(invalid(
-                "a pack object is larger than Git may inflate in the memory available",
+                "pack object size limit exceeded; it needs more memory than Git has free, so \
+                 raise max_execution_memory",
             ));
         }
         let prefix = inflate_entry(pack, entry.decompressed_size, cancelled)?;

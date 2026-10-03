@@ -685,7 +685,7 @@ async fn expired_deadline_does_not_start_ready_work() {
 async fn timeout_waits_for_worker_cleanup_and_resource_release() {
     let vfs = Vfs::tempdir().unwrap();
     let data = test_data(vfs.clone());
-    let budget = WorkingBudget::reserve(&data.tenant_limits).unwrap();
+    let budget = WorkingBudget::reserve(&data.tenant_limits, "status").unwrap();
     let cancelled = AtomicBool::new(false);
     let (started, ready) = tokio::sync::oneshot::channel();
     let (finish, cleanup) = std::sync::mpsc::channel();
@@ -726,7 +726,7 @@ async fn cancellation_keeps_resources_until_worker_cleanup() {
     let vfs = Vfs::tempdir().unwrap();
     let root = vfs.root().to_owned();
     let data = test_data(vfs.clone());
-    let budget = WorkingBudget::reserve(&data.tenant_limits).unwrap();
+    let budget = WorkingBudget::reserve(&data.tenant_limits, "status").unwrap();
     let cancelled = Arc::new(AtomicBool::new(false));
     let guard = CancelOnDrop(cancelled.clone());
     let (started, ready) = tokio::sync::oneshot::channel();

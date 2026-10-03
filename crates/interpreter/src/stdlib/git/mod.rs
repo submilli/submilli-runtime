@@ -384,8 +384,8 @@ async fn invoke(
     let config = caller.data().git.clone().ok_or_else(|| {
         wasmtime::Error::msg("submilli:git is disabled; configure the blueprint git block")
     })?;
-    let budget = WorkingBudget::reserve(&caller.data().tenant_limits)?;
-    let max_bytes = (budget.bytes / 16).min(storage::MAX_BYTES);
+    let budget = WorkingBudget::reserve(&caller.data().tenant_limits, op)?;
+    let max_bytes = budget.max_bytes(op);
     let (args, path) = before_deadline(
         deadline,
         decode_arguments(caller, op, method, params, max_bytes),
@@ -440,8 +440,10 @@ async fn invoke(
     {
         return Err(permission_denied(&principal, &capability, reason));
     }
-    let (result, _budget) = outcome?;
+    let (result, budget) = outcome?;
     drop(cancel_guard);
+    // The worker is done with it; the result is charged as guest memory.
+    drop(budget);
     encode_result(
         caller,
         result,
@@ -552,28 +554,54 @@ fn encode_result(
     value::deserialize(caller, &text.encode_utf16().collect::<Vec<_>>())
 }
 
-// Reserve working memory against the same tenant cap as Wasm. Snapshot and
-// transport limits use a fraction of this reservation to cover simultaneous
-// trees, index data, diff/JSON expansion, and gix decoding buffers.
+/// The least Git works with: what opening a repository and a fetch's index
+/// buffers take, measured at under 1 MB, with room to spare.
+const MIN_WORKING_BYTES: u64 = 4 * 1024 * 1024;
+
+/// Working memory reserved for one Git operation against the same cap as
+/// Wasm, while the program waits for it.
+///
+/// gix runs natively, outside the metered heap, so the operation reserves
+/// three quarters of what the run has free, and bounds what it holds by
+/// counting: trees, the index, worktree paths, a blob, a diff, a fetched
+/// pack's delta chains. Each count is held to the reservation divided by
+/// what the operation was measured to need per byte counted, beyond its
+/// fixed working set (`tests/git_memory.rs`).
 struct WorkingBudget {
     bytes: u64,
     counter: Arc<std::sync::atomic::AtomicU64>,
 }
 impl WorkingBudget {
-    fn reserve(limits: &crate::runtime::limits::TenantLimits) -> Result<Self> {
+    fn reserve(limits: &crate::runtime::limits::TenantLimits, op: &str) -> Result<Self> {
         let available = limits
             .max_total_bytes
             .saturating_sub(limits.observed_bytes())
             .saturating_sub(limits.host_attached_bytes());
         let bytes = available / 4 * 3;
-        if bytes < 2 * 1024 * 1024 {
-            bail!("git: insufficient tenant memory for repository work");
+        if bytes < MIN_WORKING_BYTES {
+            const MB: u64 = 1024 * 1024;
+            bail!(
+                "git.{op} needs at least {} MB of working memory; {} MB is free under \
+                 max_execution_memory ({} MB). Raise max_execution_memory",
+                MIN_WORKING_BYTES * 4 / 3 / MB,
+                available / MB,
+                limits.max_total_bytes / MB
+            );
         }
         limits.charge_host_bytes(bytes)?;
         Ok(Self {
             bytes,
             counter: limits.host_attached_counter(),
         })
+    }
+
+    /// What `op` may count while it works: the reservation divided by what
+    /// it was measured to hold per byte counted. A diff holds its patch two
+    /// or three times over as it is built and encoded; everything else
+    /// holds at most about three times what it counts.
+    fn max_bytes(&self, op: &str) -> u64 {
+        let ratio = if op == "diff" { 8 } else { 4 };
+        (self.bytes.saturating_sub(MIN_WORKING_BYTES / 4) / ratio).min(storage::MAX_BYTES)
     }
 }
 impl Drop for WorkingBudget {

@@ -1,5 +1,6 @@
 use super::storage::{
-    Entries, MAX_PATHS, Snapshot, validate_branch, validate_new_ref_name, validate_path,
+    Entries, MAX_PATHS, MAX_REQUESTED_PATHS, Snapshot, memory_limit, validate_branch,
+    validate_new_ref_name, validate_path,
 };
 use gix::bstr::ByteSlice;
 use serde_json::{Value, json};
@@ -67,7 +68,7 @@ fn walk_tree(
     // decoded tree before descending, including entries not yet visited.
     *bytes += tree.data.len();
     if *bytes > snapshot.max_bytes as usize {
-        bail!("git: tree memory limit exceeded");
+        return Err(memory_limit("tree memory"));
     }
     for entry in tree.iter() {
         snapshot.check_cancelled()?;
@@ -76,7 +77,7 @@ fn walk_tree(
         validate_path(&path)?;
         *bytes += path.len() + 128;
         if *bytes > snapshot.max_bytes as usize {
-            bail!("git: tree path memory limit exceeded");
+            return Err(memory_limit("tree path memory"));
         }
         if entry.mode().is_tree() {
             walk_tree(
@@ -93,7 +94,7 @@ fn walk_tree(
                 bail!("git: submodules and special tree modes are unsupported");
             }
             if files.len() >= MAX_PATHS {
-                bail!("git: tree resource limit exceeded");
+                return Err(memory_limit("tree resource"));
             }
             snapshot.meter.elements(1);
             if files
@@ -167,7 +168,7 @@ fn read_index(snapshot: &Snapshot, allow_conflicts: bool) -> Result<Entries> {
         }
         bytes += path.len() + 128;
         if bytes > snapshot.max_bytes as usize || files.len() >= MAX_PATHS {
-            bail!("git: index resource limit exceeded");
+            return Err(memory_limit("index resource"));
         }
         files.insert(path, (mode, entry.id));
     }
@@ -314,7 +315,7 @@ pub fn show(snapshot: &Snapshot, revision: &str, path: &str) -> Result<Vec<u8>> 
 fn blob_contents(snapshot: &Snapshot, id: gix::ObjectId) -> Result<Vec<u8>> {
     let size = snapshot.repo.find_header(id)?.size();
     if size > snapshot.max_bytes {
-        bail!("git: blob {id} exceeds the memory available to Git");
+        return Err(memory_limit(&format!("blob size ({id})")));
     }
     snapshot.meter.parse(size);
     Ok(snapshot.repo.find_blob(id)?.detach().data)
@@ -399,7 +400,7 @@ fn diff(snapshot: &Snapshot, options: &Value) -> Result<Value> {
             b,
         );
         if patch.len() > snapshot.max_bytes as usize {
-            bail!("git.diff: output limit exceeded");
+            return Err(memory_limit("diff output"));
         }
     }
     Ok(json!({"patch":patch,"binaryPaths":binary}))
@@ -490,7 +491,7 @@ fn branches(snapshot: &Snapshot) -> Result<Value> {
         let name = reference.name().shorten().to_str()?.to_owned();
         bytes += name.len() as u64 + 256;
         if bytes > snapshot.max_bytes || branches.len() >= MAX_PATHS {
-            bail!("git: branch listing resource limit exceeded");
+            return Err(memory_limit("branch listing resource"));
         }
         let id = super::history::follow_reference(snapshot, reference)?;
         branches.push(json!({"name":name,"id":id.to_string(),"current":current.as_deref() == Some(name.as_str())}));
@@ -502,7 +503,7 @@ pub fn add(snapshot: &Snapshot, paths: &[String]) -> Result<()> {
     if paths.is_empty() {
         bail!("git.add: supply at least one path");
     }
-    if paths.len() > MAX_PATHS {
+    if paths.len() > MAX_REQUESTED_PATHS {
         bail!("git.add: too many paths; stage a containing directory instead");
     }
     let mut work = snapshot.worktree()?;
@@ -728,9 +729,9 @@ fn remove_ignored(snapshot: &Snapshot, work: &mut Entries, index: &Entries) -> R
         {
             snapshot.check_cancelled()?;
             let cost = budget.pattern_bytes + budget.patterns * (offset as u64 + 1);
-            remaining_work = remaining_work.checked_sub(cost).ok_or_else(|| {
-                wasmtime::Error::msg("git: ignore matching resource limit exceeded")
-            })?;
+            remaining_work = remaining_work
+                .checked_sub(cost)
+                .ok_or_else(|| memory_limit("ignore matching resource"))?;
             if search
                 .pattern_matching_relative_path(
                     path.as_bytes()[..offset].as_bstr(),
@@ -777,7 +778,7 @@ impl IgnoreBudget {
                 || self.patterns > 10_000
                 || self.pattern_bytes + self.patterns * 128 > snapshot.max_bytes
             {
-                bail!("git: ignore pattern resource limit exceeded");
+                return Err(memory_limit("ignore pattern resource"));
             }
         }
         search.add_patterns_buffer(
@@ -895,14 +896,14 @@ mod tests {
         .unwrap();
         snapshot.dir.write("file", "contents").unwrap();
         assert!(
-            add(&snapshot, &vec![".".to_owned(); MAX_PATHS + 1])
+            add(&snapshot, &vec![".".to_owned(); MAX_REQUESTED_PATHS + 1])
                 .unwrap_err()
                 .to_string()
                 .contains("too many paths")
         );
         assert!(add(&snapshot, &[".".into(), "missing".into()]).is_err());
         assert!(index_entries(&snapshot).unwrap().is_empty());
-        add(&snapshot, &vec![".".to_owned(); MAX_PATHS]).unwrap();
+        add(&snapshot, &vec![".".to_owned(); MAX_REQUESTED_PATHS]).unwrap();
         let id = index_entries(&snapshot).unwrap()["file"].1;
         assert_eq!(snapshot.repo.find_blob(id).unwrap().data, b"contents");
         snapshot

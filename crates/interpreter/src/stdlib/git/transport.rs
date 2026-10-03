@@ -156,6 +156,14 @@ fn redact_fetch_failure(error: wasmtime::Error) -> wasmtime::Error {
     if let Some(message) = http_setup_failure(&error) {
         return crate::runtime::host::fatal_host_error(message);
     }
+    // A limit of Git's own says what to raise; nothing in it came from the remote.
+    let cause = error.root_cause().to_string();
+    if cause.starts_with("git: ")
+        && (cause.contains("raise max_execution_memory")
+            || cause.contains("transfer limit exceeded"))
+    {
+        return wasmtime::Error::msg(cause);
+    }
     wasmtime::Error::msg("git: fetch failed while receiving repository data")
 }
 

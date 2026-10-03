@@ -26,7 +26,19 @@ use wasmtime::{Result, bail};
 pub const MAX_BYTES: u64 = 50 * 1024 * 1024;
 /// The most a fetch may bring when the volume has no size limit to bound it.
 pub const MAX_TRANSFER: u64 = 4 * 1024 * 1024 * 1024;
-pub const MAX_PATHS: usize = 10_000;
+/// Paths in a file set, a sanity bound: what binds first is the memory each
+/// path takes, counted against [`Snapshot::max_bytes`].
+pub const MAX_PATHS: usize = 1_000_000;
+/// Paths one call to `add` may name.
+pub const MAX_REQUESTED_PATHS: usize = 10_000;
+
+/// Refuses work that needs more memory than Git has, saying what to raise.
+pub fn memory_limit(what: &str) -> wasmtime::Error {
+    wasmtime::Error::msg(format!(
+        "git: {what} limit exceeded; it needs more memory than Git has free, so raise \
+         max_execution_memory"
+    ))
+}
 /// Files and their contents, as tests compare a directory before and after.
 #[cfg(test)]
 pub type Files = BTreeMap<String, (u32, Vec<u8>)>;
@@ -219,8 +231,8 @@ impl Snapshot {
                 max_bytes: MAX_TRANSFER,
                 pack: super::pack_limits::Limits {
                     max_records: (max_bytes / 256).max(1) as usize,
-                    max_object_bytes: max_bytes / 4,
-                    max_chain_bytes: max_bytes / 2,
+                    max_object_bytes: max_bytes,
+                    max_chain_bytes: max_bytes,
                 },
             },
             _lock: lock,
@@ -486,7 +498,7 @@ impl Snapshot {
             .take(limit.saturating_add(1))
             .read_to_end(&mut contents)?;
         if contents.len() as u64 > limit {
-            bail!("git: file {path} exceeds the memory available to Git");
+            return Err(memory_limit(&format!("file size ({path})")));
         }
         self.meter.syscalls(2);
         self.meter.io(contents.len() as u64);
@@ -647,10 +659,7 @@ fn read_bounded(dir: &Dir, path: &Path, limit: u64) -> Result<Vec<u8>> {
         .take(limit.saturating_add(1))
         .read_to_end(&mut bytes)?;
     if bytes.len() as u64 > limit {
-        bail!(
-            "git: {} is larger than the memory available to Git",
-            path.display()
-        );
+        return Err(memory_limit(&format!("metadata size ({})", path.display())));
     }
     Ok(bytes)
 }
@@ -735,7 +744,7 @@ fn validate_config_budget(bytes: &[u8], max_bytes: u64, cancelled: &AtomicBool) 
         }
         remaining = remaining
             .checked_sub(256)
-            .ok_or_else(|| wasmtime::Error::msg("git: configuration memory limit exceeded"))?;
+            .ok_or_else(|| memory_limit("configuration memory"))?;
     }
     Ok(())
 }
@@ -876,11 +885,11 @@ fn walk(
         let path = format!("{prefix}{name}");
         state.bytes += path.len() as u64 + 128;
         if state.bytes > state.max_bytes {
-            bail!("git: path memory limit exceeded");
+            return Err(memory_limit("path memory"));
         }
         state.paths += 1;
         if state.paths > MAX_PATHS {
-            bail!("git: repository path limit exceeded");
+            return Err(memory_limit("repository path"));
         }
         let meta = dir.symlink_metadata(&name)?;
         if meta.is_dir() {
@@ -898,7 +907,7 @@ fn walk(
         let remaining = state.max_bytes.saturating_sub(state.bytes);
         state.bytes += visit(dir, &name, path, &meta, remaining)?;
         if state.bytes > state.max_bytes {
-            bail!("git: repository snapshot exceeds tenant Git memory limit");
+            return Err(memory_limit("worktree memory"));
         }
     }
     Ok(())
