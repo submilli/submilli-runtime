@@ -20,6 +20,7 @@ use wasmtime::{
 };
 
 use crate::runtime::fs::{ContainError, ContentPath};
+use crate::runtime::fuel;
 use crate::runtime::host::{
     read_boxed_number, read_string_arg, read_uint8_array_arg, register_host_fn,
     register_host_fn_async, write_submilli_string_struct,
@@ -364,7 +365,7 @@ async fn perform_request(
     let capability = format!("http.{}", method.to_ascii_lowercase());
     let (host_str, path_str) = url_host_and_path(url);
     check_security(
-        &*caller,
+        &mut *caller,
         &capability,
         verb_context(&host_str, &path_str, body.len() as u64, DEFAULT_TIMEOUT_MS),
     )?;
@@ -395,6 +396,9 @@ async fn perform_request(
     // Attached after the proxy, so no proxy can drop it and leave hops unchecked.
     req.redirect_guard = Some(guard);
 
+    // The request's bytes are the work before any effect; the response's are
+    // charged once it is here, since a stop in between would lose it.
+    fuel::charge(&mut *caller, fuel::IO, request_bytes(&req))?;
     let metrics = std::sync::Arc::clone(&caller.data().metrics);
     let start = std::time::Instant::now();
     let send_result = http_client.send(&req).await;
@@ -422,7 +426,23 @@ async fn perform_request(
         }
     })?;
 
+    // The response is here: settled, not refused.
+    fuel::settle(&mut *caller, fuel::IO, response_bytes(&resp))?;
+    // UTF-8 validation of the body; the string build charges its own copy.
+    fuel::settle(&mut *caller, fuel::SCAN, resp.body.len() as u64)?;
     write_response(caller, resp).await
+}
+
+/// The bytes a request sends: method, URL, headers and body.
+fn request_bytes(req: &HttpRequest) -> u64 {
+    let headers: usize = req.headers.iter().map(|(k, v)| k.len() + v.len()).sum();
+    (req.method.len() + req.url.len() + headers + req.body.len()) as u64
+}
+
+/// The bytes a response carried: status text, final URL, headers and body.
+fn response_bytes(resp: &HttpResponse) -> u64 {
+    let headers: usize = resp.headers.iter().map(|(k, v)| k.len() + v.len()).sum();
+    (resp.status_text.len() + resp.final_url.len() + headers + resp.body.len()) as u64
 }
 
 /// The principal a request is attributed to, and the guard that checks its
@@ -560,12 +580,12 @@ async fn perform_download(
     };
     // http-side check first; remote-only policies can deny without path-context cost.
     check_security(
-        &*caller,
+        &mut *caller,
         "http.download",
         target.context(&host_str, &url_path_str),
     )?;
     check_security(
-        &*caller,
+        &mut *caller,
         "fs.write",
         serde_json::json!({
             "path": guest_path,
@@ -626,7 +646,16 @@ async fn perform_download(
         resolved.placement().quota().cloned(),
         resolved.regular_file(),
     );
+    fuel::charge(&mut *caller, fuel::IO, request_bytes(&req))?;
     let streamed = stream_to_temp(caller, &req, &tmp, &guest_path, disk_charge).await;
+    if let Ok(streamed) = &streamed {
+        // Received and written to disk: settled, so the file still publishes.
+        fuel::settle(
+            &mut *caller,
+            fuel::IO,
+            streamed.meta.bytes_written.saturating_mul(2),
+        )?;
+    }
     // A filesystem failure has no transport outcome to record.
     match &streamed {
         Ok(streamed) => record_http_metric(

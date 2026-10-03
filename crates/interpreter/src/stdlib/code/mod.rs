@@ -218,7 +218,7 @@ fn mutate(
         String::new()
     };
     check_security(
-        &*caller,
+        &mut *caller,
         "fs.write",
         json!({"path":path, "length": change.text.len(), "diff": patch}),
     )?;
@@ -304,7 +304,7 @@ fn normalize(path: &str) -> Result<String> {
     crate::runtime::fs::guest_normalize("/", path)
         .map_err(|e| wasmtime::Error::msg(format!("code: {e}")))
 }
-fn gate(caller: &Caller<'_, StoreData>, capability: &str, path: &str) -> Result<()> {
+fn gate(caller: &mut Caller<'_, StoreData>, capability: &str, path: &str) -> Result<()> {
     check_security(caller, capability, json!({"path":path,"recursive":true}))
 }
 fn read_file(

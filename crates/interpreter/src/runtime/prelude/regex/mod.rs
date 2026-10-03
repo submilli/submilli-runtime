@@ -27,6 +27,7 @@ pub use install::{declare, install};
 use wasmtime::{ArrayRef, ArrayRefPre, Caller, ExternRef, Rooted, StructRef, StructRefPre, Val};
 
 use crate::runtime::StoreData;
+use crate::runtime::fuel;
 use crate::runtime::host::{
     host_regex_match_box_vtable, host_regex_vtable, host_string_vtable, read_string_arg,
     write_submilli_array_struct, write_submilli_string, write_submilli_string_struct,
@@ -103,7 +104,17 @@ fn exec_at(
         .downcast_ref::<ChargedRegex>()
         .ok_or_else(|| wasmtime::Error::msg("RegExp: externref had unexpected payload type"))?;
     let raw = exec_snapshot(&charged.regex, input, start);
-    Ok(if charged.flags.has(FlagSet::Y) {
+    let sticky = charged.flags.has(FlagSet::Y);
+    // The bytes the engine scanned: up to the match on a hit, to the end on a
+    // miss. Known only afterwards, so a global loop over k matches pays for
+    // the input once, not k times.
+    let scanned = raw.as_ref().map_or(input.len(), |hit| hit.match_end);
+    fuel::charge(
+        &mut *caller,
+        fuel::REGEX,
+        scanned.saturating_sub(start) as u64,
+    )?;
+    Ok(if sticky {
         raw.filter(|s| s.match_start == start)
     } else {
         raw
@@ -157,6 +168,14 @@ pub(super) fn construct(
 ) -> wasmtime::Result<Val> {
     let source_str = read_string_arg(&mut *caller, source, "new RegExp(source)")?;
     let flags_str = read_string_arg(&mut *caller, flags, "new RegExp(flags)")?;
+    // Compiling is not linear in the source (counted repetition expands it),
+    // so a flat surcharge covers what the program size cap allows.
+    fuel::charge_host_fuel(
+        &mut *caller,
+        fuel::PARSE
+            .cost(source_str.len() as u64)
+            .saturating_add(fuel::REGEX_COMPILE),
+    )?;
     let charged = {
         let limits = &caller.data().tenant_limits;
         // An invalid pattern or flag is a spec `SyntaxError`; a tenant
@@ -520,6 +539,7 @@ pub(super) fn string_replace(
         let input = read_string_units(caller, &params[0], "String#replace(input)")?;
         let search = read_string_units(caller, &params[1], "String#replace(search)")?;
         let repl = read_string_units(caller, &params[2], "String#replace(replacement)")?;
+        fuel::charge(&mut *caller, fuel::SCAN, input.len() as u64)?;
         let out = replace_literal(&input, &search, &repl, false);
         let st = write_submilli_string_struct_units(caller, &out)?;
         return Ok(Val::AnyRef(Some(st.to_anyref())));
@@ -528,6 +548,7 @@ pub(super) fn string_replace(
     let all = flag_bits(caller, &st)? & FlagSet::G.bits() as i32 != 0;
     let input = read_string_arg(&mut *caller, &params[0], "String#replace(input)")?;
     let repl = read_string_arg(&mut *caller, &params[2], "String#replace(replacement)")?;
+    fuel::charge(&mut *caller, fuel::REGEX, input.len() as u64)?;
     let out = with_regex(caller, &st, |c| {
         if all {
             c.regex.replace_all(&input, repl.as_str()).into_owned()
@@ -549,6 +570,7 @@ pub(super) fn string_replace_all(
         let input = read_string_units(caller, &params[0], "String#replaceAll(input)")?;
         let search = read_string_units(caller, &params[1], "String#replaceAll(search)")?;
         let repl = read_string_units(caller, &params[2], "String#replaceAll(replacement)")?;
+        fuel::charge(&mut *caller, fuel::SCAN, input.len() as u64)?;
         let out = replace_literal(&input, &search, &repl, true);
         let st = write_submilli_string_struct_units(caller, &out)?;
         return Ok(Val::AnyRef(Some(st.to_anyref())));
@@ -556,6 +578,7 @@ pub(super) fn string_replace_all(
     let st = as_struct(caller, &params[1], "String#replaceAll(regex)")?;
     let input = read_string_arg(&mut *caller, &params[0], "String#replaceAll(input)")?;
     let repl = read_string_arg(&mut *caller, &params[2], "String#replaceAll(replacement)")?;
+    fuel::charge(&mut *caller, fuel::REGEX, input.len() as u64)?;
     let out = with_regex(caller, &st, |c| {
         c.regex.replace_all(&input, repl.as_str()).into_owned()
     })?;
@@ -580,10 +603,12 @@ pub(super) fn string_split(
     let parts: Vec<Vec<u16>> = if arg_is_string(caller, &params[1])? {
         let input = read_string_units(caller, &params[0], "String#split(input)")?;
         let sep = read_string_units(caller, &params[1], "String#split(separator)")?;
+        fuel::charge(&mut *caller, fuel::SCAN, input.len() as u64)?;
         split_literal(&input, &sep, limit)
     } else {
         let st = as_struct(caller, &params[1], "String#split(regex)")?;
         let input = read_string_arg(&mut *caller, &params[0], "String#split(input)")?;
+        fuel::charge(&mut *caller, fuel::REGEX, input.len() as u64)?;
         with_regex(caller, &st, |c| regex_split(&c.regex, &input, limit))?
             .into_iter()
             .map(|s| s.encode_utf16().collect())

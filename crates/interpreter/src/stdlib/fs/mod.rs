@@ -27,7 +27,7 @@ use crate::runtime::fs::{
     ContainError, ContentPath, FileIdentity, LinkPath, MAX_REMOVE_ENTRIES, guest_normalize,
     resolve_link,
 };
-use crate::runtime::fuel::host_func;
+use crate::runtime::fuel::{self, host_func};
 use crate::runtime::gc_singleton::singleton_struct;
 use crate::runtime::host::{
     quota_exceeded_error, read_string_arg, read_uint8_array_arg, register_host_fn,
@@ -237,7 +237,11 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         /* deterministic = */ false,
         |caller, params, results| {
             let path = read_string_arg(&mut *caller, &params[0], "fs.exists")?;
-            check_security(&*caller, "fs.stat", serde_json::json!({ "path": &path }))?;
+            gate(
+                &mut *caller,
+                "fs.stat",
+                serde_json::json!({ "path": &path }),
+            )?;
             let resolved = resolve_content_or_trap(caller.data(), &path, "fs.exists")?;
             // A path the sandbox cannot reach is reported absent, not trapped: that
             // preserves the documented broken-link behaviour and denies the guest an
@@ -265,7 +269,11 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         /* deterministic = */ false,
         |caller, params, results| {
             let path = read_string_arg(&mut *caller, &params[0], "fs.size")?;
-            check_security(&*caller, "fs.stat", serde_json::json!({ "path": &path }))?;
+            gate(
+                &mut *caller,
+                "fs.stat",
+                serde_json::json!({ "path": &path }),
+            )?;
             let resolved = resolve_content_or_trap(caller.data(), &path, "fs.size")?;
             let meta = resolved
                 .metadata()
@@ -286,7 +294,11 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         /* deterministic = */ false,
         |caller, params, results| {
             let path = read_string_arg(&mut *caller, &params[0], "fs.stat")?;
-            check_security(&*caller, "fs.stat", serde_json::json!({ "path": &path }))?;
+            gate(
+                &mut *caller,
+                "fs.stat",
+                serde_json::json!({ "path": &path }),
+            )?;
             results[0] = stat_entry(caller, &path)?;
             Ok(())
         },
@@ -300,7 +312,11 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         /* deterministic = */ false,
         |caller, params, results| {
             let path = read_string_arg(&mut *caller, &params[0], "fs.peek")?;
-            check_security(&*caller, "fs.stat", serde_json::json!({ "path": &path }))?;
+            gate(
+                &mut *caller,
+                "fs.stat",
+                serde_json::json!({ "path": &path }),
+            )?;
             results[0] = peek_file(caller, &path)?;
             Ok(())
         },
@@ -363,8 +379,8 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
             let path = read_string_arg(&mut *caller, &params[0], "fs.readBytes")?;
             let offset = f64_arg(&params[1], "fs.readBytes (offset)")? as i64;
             let length = f64_arg(&params[2], "fs.readBytes (length)")? as i64;
-            check_security(
-                &*caller,
+            gate(
+                &mut *caller,
                 "fs.read",
                 serde_json::json!({
                     "path": &path,
@@ -405,8 +421,8 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
                 } else {
                     read_uint8_array_arg(&mut *caller, &params[1], &ctx)?
                 };
-                check_security(
-                    &*caller,
+                gate(
+                    &mut *caller,
                     "fs.write",
                     serde_json::json!({
                         "path": &path,
@@ -417,6 +433,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
                 require_writable(&*caller, resolved.placement(), "fs.write", &path)?;
                 refuse_volume_root(&resolved, &ctx, &path)?;
                 let quota = resolved.placement().quota().cloned();
+                fuel::charge(&mut *caller, fuel::IO, bytes.len() as u64)?;
                 if atomic {
                     atomic_write(&resolved, &bytes, None, &path, &ctx, quota)
                 } else {
@@ -435,8 +452,8 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         |caller, params, _results| {
             let path = read_string_arg(&mut *caller, &params[0], "fs.mkdir")?;
             let recursive = i32_flag(&params[1], "fs.mkdir (recursive)")?;
-            check_security(
-                &*caller,
+            gate(
+                &mut *caller,
                 "fs.mkdir",
                 serde_json::json!({ "path": &path, "recursive": recursive }),
             )?;
@@ -463,8 +480,8 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         |caller, params, _results| {
             let path = read_string_arg(&mut *caller, &params[0], "fs.remove")?;
             let recursive = i32_flag(&params[1], "fs.remove (recursive)")?;
-            check_security(
-                &*caller,
+            gate(
+                &mut *caller,
                 "fs.remove",
                 serde_json::json!({ "path": &path, "recursive": recursive }),
             )?;
@@ -505,8 +522,8 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         |caller, params, _results| {
             let from = read_string_arg(&mut *caller, &params[0], "fs.move (from)")?;
             let to = read_string_arg(&mut *caller, &params[1], "fs.move (to)")?;
-            check_security(
-                &*caller,
+            gate(
+                &mut *caller,
                 "fs.move",
                 serde_json::json!({ "from": &from, "to": &to }),
             )?;
@@ -553,8 +570,8 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
             let from = read_string_arg(&mut *caller, &params[0], "fs.copy (from)")?;
             let to = read_string_arg(&mut *caller, &params[1], "fs.copy (to)")?;
             let recursive = i32_flag(&params[2], "fs.copy (recursive)")?;
-            check_security(
-                &*caller,
+            gate(
+                &mut *caller,
                 "fs.copy",
                 serde_json::json!({
                     "from": &from,
@@ -613,7 +630,11 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         /* deterministic = */ false,
         |caller, params, results| {
             let path = read_string_arg(&mut *caller, &params[0], "fs.writer (path)")?;
-            check_security(&*caller, "fs.write", serde_json::json!({ "path": &path }))?;
+            gate(
+                &mut *caller,
+                "fs.write",
+                serde_json::json!({ "path": &path }),
+            )?;
             results[0] = open_writer(caller, &path)?;
             Ok(())
         },
@@ -627,7 +648,11 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         /* deterministic = */ false,
         |caller, params, results| {
             let path = read_string_arg(&mut *caller, &params[0], "fs.lines (path)")?;
-            check_security(&*caller, "fs.read", serde_json::json!({ "path": &path }))?;
+            gate(
+                &mut *caller,
+                "fs.read",
+                serde_json::json!({ "path": &path }),
+            )?;
             let resolved = resolve_content_or_trap(caller.data(), &path, "fs.lines")?;
             let file = resolved
                 .open()
@@ -667,8 +692,8 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
                     "fs.bytes: chunkSize must be > 0, got {chunk_size}"
                 )));
             }
-            check_security(
-                &*caller,
+            gate(
+                &mut *caller,
                 "fs.read",
                 serde_json::json!({ "path": &path, "chunkSize": chunk_size }),
             )?;
@@ -707,8 +732,8 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         |caller, params, results| {
             let path = read_string_arg(&mut *caller, &params[0], "fs.list (path)")?;
             let recursive = i32_flag(&params[1], "fs.list (recursive)")?;
-            check_security(
-                &*caller,
+            gate(
+                &mut *caller,
                 "fs.list",
                 serde_json::json!({ "path": &path, "recursive": recursive }),
             )?;
@@ -925,7 +950,7 @@ fn read_whole_capped(
     op: &str,
 ) -> wasmtime::Result<Option<Vec<u8>>> {
     let ctx = format!("fs.{op}");
-    check_security(&*caller, "fs.read", serde_json::json!({ "path": path }))?;
+    gate(&mut *caller, "fs.read", serde_json::json!({ "path": path }))?;
     let resolved = resolve_content_or_trap(caller.data(), path, &ctx)?;
     let meta = resolved
         .metadata()
@@ -936,6 +961,8 @@ fn read_whole_capped(
     if meta.len() > caller.data().fs_max_read_size {
         return Ok(None);
     }
+    // The size is known before the read, so the charge comes first.
+    fuel::charge(&mut *caller, fuel::IO, meta.len())?;
     let bytes = resolved.read().map_err(|e| contain_trap(&ctx, path, &e))?;
     Ok(Some(bytes))
 }
@@ -969,6 +996,8 @@ fn read_byte_range(
         .map_err(|e| contain_trap("fs.readBytes", path, &e))?;
     f.seek(SeekFrom::Start(offset as u64))
         .map_err(|e| wasmtime::Error::msg(format!("fs.readBytes {path}: seek: {e}")))?;
+    // The length is known before the read, so the charge comes first.
+    fuel::charge(&mut *caller, fuel::IO, length as u64)?;
     let mut buf = vec![0u8; length as usize];
     let mut filled = 0;
     while filled < buf.len() {
@@ -1085,6 +1114,7 @@ fn lines_next(
         .map_err(|e| wasmtime::Error::msg(format!("fs.lines.next: {e}")))?;
     results[0] = match line {
         Some(text) => {
+            fuel::charge(&mut *caller, fuel::IO, text.len() as u64)?;
             let st = write_submilli_string_struct(caller, &text)?;
             iter_yield(caller, Val::AnyRef(Some(st.to_anyref())))?
         }
@@ -1107,6 +1137,7 @@ fn bytes_next(
         .map_err(|e| wasmtime::Error::msg(format!("fs.bytes.next: {e}")))?;
     results[0] = match chunk {
         Some(bytes) => {
+            fuel::charge(&mut *caller, fuel::IO, bytes.len() as u64)?;
             let arr = write_submilli_uint8array_struct(caller, &bytes)?;
             iter_yield(caller, Val::AnyRef(Some(arr.to_anyref())))?
         }
@@ -1124,6 +1155,7 @@ fn list_next(
         results[0] = iter_done(caller)?;
         return Ok(());
     };
+    fuel::charge(&mut *caller, fuel::SYSCALL, 1)?;
     let entry = handle_payload::<ChargedDirIter>(caller, &handle, "fs.list.next")?.next_entry();
     let Some(entry) = entry else {
         results[0] = iter_done(caller)?;
@@ -1293,6 +1325,7 @@ fn install_file_writer_methods(
         /* deterministic = */ false,
         |caller, params, _results| {
             let line = read_string_arg(&mut *caller, &params[1], "fs.writer.writeLine")?;
+            fuel::charge(&mut *caller, fuel::IO, line.len() as u64 + 1)?;
             writer_payload(caller, &params[0], "fs.writer.writeLine")?
                 .write_line(&line)
                 .map_err(|e| write_error("fs.writer.writeLine", e))
@@ -1307,6 +1340,7 @@ fn install_file_writer_methods(
         /* deterministic = */ false,
         |caller, params, _results| {
             let bytes = read_uint8_array_arg(&mut *caller, &params[1], "fs.writer.writeBytes")?;
+            fuel::charge(&mut *caller, fuel::IO, bytes.len() as u64)?;
             writer_payload(caller, &params[0], "fs.writer.writeBytes")?
                 .write_bytes(&bytes)
                 .map_err(|e| write_error("fs.writer.writeBytes", e))
@@ -1369,6 +1403,18 @@ fn is_absent(err: &std::io::Error) -> bool {
         err.kind(),
         std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory
     )
+}
+
+/// The capability check every fs call starts with, and the one metadata
+/// syscall it costs at least (open, stat, readdir, unlink, rename); reads and
+/// writes add their bytes on top.
+fn gate(
+    caller: &mut Caller<'_, StoreData>,
+    capability: &str,
+    context: serde_json::Value,
+) -> wasmtime::Result<()> {
+    check_security(&mut *caller, capability, context)?;
+    fuel::charge(&mut *caller, fuel::SYSCALL, 1)
 }
 
 /// The guest-relative prefix a listing's entries carry: `""` at the root, else `"tree/"`.

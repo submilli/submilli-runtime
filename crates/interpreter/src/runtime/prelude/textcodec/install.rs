@@ -10,6 +10,7 @@ use wasmtime::{
 };
 
 use crate::runtime::StoreData;
+use crate::runtime::fuel;
 use crate::runtime::host::{
     host_object_vtable, intrinsic_string_type, intrinsic_uint8_array_type, read_string_arg,
     read_uint8_array_arg, register_host_fn, write_submilli_string_struct,
@@ -91,6 +92,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         true,
         |caller, params, results| {
             let bytes = read_uint8_array_arg(caller, &params[1], "TextDecoder#decode")?;
+            fuel::charge(&mut *caller, fuel::SCAN, bytes.len() as u64)?;
             let s = std::str::from_utf8(&bytes).map_err(|e| {
                 crate::runtime::host::type_error(format!(
                     "TextDecoder.decode: invalid UTF-8 at byte {}: {e}",

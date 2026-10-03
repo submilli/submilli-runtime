@@ -324,8 +324,7 @@ fn install_updates(linker: &mut Linker<StoreData>, types: &DirectTypes) -> wasmt
             let zoned =
                 shared::zoned_date_time_from_val(caller, &params[0], "ZonedDateTime.withTimeZone")?;
             let tz_id = read_string_arg(caller, &params[1], "Temporal.ZonedDateTime.withTimeZone")?;
-            let (out, canonical_id) =
-                super::with_time_zone(&zoned, &tz_id).map_err(crate::runtime::host::range_error)?;
+            let (out, canonical_id) = super::with_time_zone(caller, &zoned, &tz_id)?;
             results[0] = shared::make_zoned_date_time(caller, &out, &canonical_id)?;
             Ok(())
         },
@@ -566,7 +565,8 @@ fn install_strings(linker: &mut Linker<StoreData>, types: &DirectTypes) -> wasmt
                 &params[1],
                 "ZonedDateTime.equals",
             )?;
-            results[0] = Val::I32((a == b && super::time_zone_ids_equal(&a_tz, &b_tz)) as i32);
+            let equal = a == b && super::time_zone_ids_equal(caller, &a_tz, &b_tz)?;
+            results[0] = Val::I32(equal as i32);
             Ok(())
         },
     )

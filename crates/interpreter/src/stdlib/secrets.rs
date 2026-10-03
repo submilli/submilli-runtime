@@ -53,7 +53,11 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         |caller, params, results| {
             Box::pin(async move {
                 let name = read_string_arg(&mut *caller, &params[0], "secrets.get (secret)")?;
-                check_security(&*caller, "secrets.get", serde_json::json!({ "name": name }))?;
+                check_security(
+                    &mut *caller,
+                    "secrets.get",
+                    serde_json::json!({ "name": name }),
+                )?;
 
                 let provider = caller.data().secret_provider.clone();
                 let Some(value) = provider

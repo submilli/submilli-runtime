@@ -10,6 +10,7 @@ mod storage;
 mod transport;
 mod worker;
 
+use crate::runtime::fuel;
 use crate::runtime::host::{
     permission_denied, read_string_arg, register_host_fn_async, write_submilli_string_struct,
     write_submilli_uint8array_struct,
@@ -411,6 +412,7 @@ async fn invoke(
     let returns_string = op == "commit";
     let denial = job.denial.clone();
     let principal = job.caller.clone();
+    let transferred = job.transferred.clone();
     let worker = caller.data_mut().blocking_work.spawn(move || {
         let _permit = permit;
         job.check_cancelled()?;
@@ -426,6 +428,10 @@ async fn invoke(
     }
     let (result, _budget) = outcome?;
     drop(cancel_guard);
+    // Network bytes the worker moved; the operation is published, so this is
+    // settled, not refused. The worker's own file and object work is not
+    // counted yet (SUB-1129 reshapes it).
+    fuel::settle(&mut *caller, fuel::IO, transferred.load(Ordering::Relaxed))?;
     encode_result(
         caller,
         result,
@@ -480,6 +486,7 @@ async fn decode_arguments(
         if units.len() as u64 * 2 > max_bytes {
             bail!("git: argument size limit exceeded");
         }
+        fuel::charge(&mut *caller, fuel::PARSE, units.len() as u64)?;
         let text = String::from_utf16(&units)
             .map_err(|_| wasmtime::Error::msg("git: arguments must be valid Unicode"))?;
         args.push(serde_json::from_str::<Value>(&text)?);
@@ -530,6 +537,8 @@ fn encode_result(
     if text.len() > max_bytes as usize {
         bail!("git: result limit exceeded");
     }
+    // Serialized and parsed back; the operation is already published.
+    fuel::settle(&mut *caller, fuel::PARSE, 2 * text.len() as u64)?;
     value::deserialize(caller, &text.encode_utf16().collect::<Vec<_>>())
 }
 

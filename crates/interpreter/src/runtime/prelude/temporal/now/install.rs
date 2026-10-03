@@ -54,8 +54,7 @@ pub(crate) fn install(linker: &mut Linker<StoreData>, types: &DirectTypes) -> wa
                     "Temporal.Now.zonedDateTimeISO",
                 )?),
             };
-            let (zoned, id) = super::zoned_date_time_iso(time_zone.as_deref())
-                .map_err(crate::runtime::host::range_error)?;
+            let (zoned, id) = super::zoned_date_time_iso(caller, time_zone.as_deref())?;
             results[0] = shared::make_zoned_date_time(caller, &zoned, &id)?;
             Ok(())
         },
@@ -82,8 +81,7 @@ pub(crate) fn install(linker: &mut Linker<StoreData>, types: &DirectTypes) -> wa
                     "Temporal.Now.zonedDateTime",
                 )?),
             };
-            let (zoned, id) = super::zoned_date_time_iso(time_zone.as_deref())
-                .map_err(crate::runtime::host::range_error)?;
+            let (zoned, id) = super::zoned_date_time_iso(caller, time_zone.as_deref())?;
             results[0] = shared::make_zoned_date_time(caller, &zoned, &id)?;
             Ok(())
         },
@@ -175,8 +173,7 @@ fn now_zoned(
         Val::AnyRef(None) => None,
         _ => Some(read_string_arg(caller, tz, label)?),
     };
-    let (zoned, _id) =
-        super::zoned_date_time_iso(tz.as_deref()).map_err(crate::runtime::host::range_error)?;
+    let (zoned, _id) = super::zoned_date_time_iso(caller, tz.as_deref())?;
     Ok(zoned)
 }
 

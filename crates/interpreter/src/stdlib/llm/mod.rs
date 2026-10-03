@@ -29,6 +29,7 @@ use std::sync::Arc;
 use wasmtime::{FuncType, HeapType, Linker, RefType, StructType, Val, ValType};
 
 use crate::runtime::StoreData;
+use crate::runtime::fuel;
 use crate::runtime::host::{
     quota_exceeded_error, range_error, read_string_arg, register_host_fn_async, type_error,
     write_boxed_number_struct, write_submilli_string_struct,
@@ -264,6 +265,9 @@ async fn dispatch(
     // Clone the provider out of the store before any `await`: the borrow on
     // `caller.data()` cannot be held across one.
     let provider = provider(caller, op, model)?;
+    let sent: usize =
+        prompts.iter().map(String::len).sum::<usize>() + schema.as_ref().map_or(0, String::len);
+    fuel::charge(&mut *caller, fuel::IO, sent as u64)?;
 
     // The model's own cap, not the default: KTD3b makes the reservation an upper
     // bound by reserving the same cap the request is sent with.
@@ -280,6 +284,12 @@ async fn dispatch(
                 let (reported, indeterminate) = usage(&outcomes, reservation, prompts.len());
                 budget.reconcile(reservation, reported, indeterminate);
             }
+            // The completions are here and billed: settled, not refused.
+            let received: usize = outcomes
+                .iter()
+                .map(|outcome| outcome.text.as_ref().map_or(0, String::len))
+                .sum();
+            fuel::settle(&mut *caller, fuel::IO, received as u64)?;
             Ok(outcomes)
         }
         Err(error) => {
@@ -300,7 +310,7 @@ async fn dispatch(
 /// request; it cannot see what is being asked, because prompt text is what this
 /// boundary exists to keep in.
 fn gate(
-    caller: &wasmtime::Caller<'_, StoreData>,
+    caller: &mut wasmtime::Caller<'_, StoreData>,
     model: &str,
     prompt_count: usize,
 ) -> wasmtime::Result<()> {
@@ -343,7 +353,7 @@ async fn models(caller: &mut wasmtime::Caller<'_, StoreData>) -> wasmtime::Resul
 /// The per-candidate half of the double gate. A denial omits the model rather
 /// than failing the call: a listing that threw on the first forbidden model
 /// would itself disclose that the operator configured it.
-fn may_call(caller: &wasmtime::Caller<'_, StoreData>, model: &str) -> wasmtime::Result<bool> {
+fn may_call(caller: &mut wasmtime::Caller<'_, StoreData>, model: &str) -> wasmtime::Result<bool> {
     filters_candidate(gate(caller, model, 0))
 }
 
