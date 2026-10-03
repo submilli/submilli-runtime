@@ -599,7 +599,11 @@ pub(super) fn string_replace_all(
     if arg_is_string(caller, abi_arg(params, 1)?)? {
         let input = read_string_units(caller, abi_arg(params, 0)?, "String#replaceAll(input)")?;
         let search = read_string_units(caller, abi_arg(params, 1)?, "String#replaceAll(search)")?;
-        let repl = read_string_units(caller, abi_arg(params, 2)?, "String#replaceAll(replacement)")?;
+        let repl = read_string_units(
+            caller,
+            abi_arg(params, 2)?,
+            "String#replaceAll(replacement)",
+        )?;
         fuel::charge(
             &mut *caller,
             fuel::SCAN,

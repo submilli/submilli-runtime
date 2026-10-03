@@ -2,18 +2,21 @@
 use crate::runtime::host::{abi_arg, abi_result};
 pub(crate) mod class;
 pub mod declaration;
+mod diff;
 mod history;
 mod index_limits;
 mod location;
 mod lock;
 mod metadata_scan;
 mod meter;
+mod object;
 mod operations;
 mod pack_index_check;
 mod pack_limits;
 mod stage;
 mod storage;
 mod transport;
+mod work;
 mod worker;
 
 use crate::runtime::fuel;
@@ -62,6 +65,7 @@ struct Job {
     transferred: Arc<AtomicU64>,
     /// The worker's own file and object work, charged when it returns.
     meter: Arc<meter::Meter>,
+    algorithm_fuel: Arc<work::AlgorithmWork>,
     denial: Arc<Mutex<Option<(String, String)>>>,
 }
 impl Job {
@@ -470,6 +474,11 @@ async fn invoke(
         max_bytes,
         transferred: Arc::new(AtomicU64::new(0)),
         meter: Arc::clone(&meter),
+        algorithm_fuel: Arc::new(work::AlgorithmWork::new(
+            caller
+                .get_fuel()?
+                .saturating_sub(caller.data().host_fuel_pending),
+        )),
         denial: Arc::new(Mutex::new(None)),
     };
     let vfs = caller.data().vfs.clone();
@@ -478,6 +487,7 @@ async fn invoke(
     let returns_string = op == "commit";
     let denial = job.denial.clone();
     let principal = job.caller.clone();
+    let algorithm_fuel = Arc::clone(&job.algorithm_fuel);
     let worker = async {
         caller
             .data_mut()
@@ -493,6 +503,7 @@ async fn invoke(
     // The work is done, and may be published, whether or not it succeeded:
     // it is settled, not refused.
     meter.settle(&mut *caller)?;
+    fuel::settle_host_fuel(&mut *caller, algorithm_fuel.spent())?;
     if let Err(error) = &outcome
         && meter.is_exhausted()
         && !crate::runtime::host::ends_the_run(error)
@@ -520,18 +531,20 @@ async fn invoke(
     {
         return Err(permission_denied(&principal, &capability, reason));
     }
-    let (result, budget) = outcome?;
     drop(cancel_guard);
-    // The worker is done with it; the result is charged as guest memory.
-    drop(budget);
-    encode_result(
-        caller,
-        result,
-        &path,
-        is_constructor,
-        returns_string,
-        max_bytes,
-    )
+    fuel::settle_result(caller, |caller| {
+        let (result, _budget) =
+            outcome.map_err(|error| crate::runtime::host::throw_host_error(caller, error))?;
+        encode_result(
+            caller,
+            result,
+            &path,
+            is_constructor,
+            returns_string,
+            max_bytes,
+        )
+        .map_err(|error| crate::runtime::host::throw_host_error(caller, error))
+    })
 }
 
 async fn before_deadline<T>(

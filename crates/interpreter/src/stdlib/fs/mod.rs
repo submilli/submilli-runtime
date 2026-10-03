@@ -15,7 +15,6 @@ use crate::runtime::host::{abi_arg, abi_result};
 pub mod declaration;
 pub mod handles;
 
-use std::collections::HashSet;
 use std::io::{BufReader, Read, Seek, SeekFrom, Write};
 use std::sync::Arc;
 
@@ -38,7 +37,7 @@ use crate::runtime::intrinsic_types::{IntrinsicTypes, build_intrinsic_types, int
 use crate::runtime::prelude::iterator::{
     as_struct, build_closable_iterator, iter_done, iter_yield, next_closure_type, void_closure_type,
 };
-use crate::runtime::{DiskQuota, Holder, OpenFileGuard, QuotaCharge, StoreData, regular_files};
+use crate::runtime::{DiskQuota, Holder, OpenFileGuard, QuotaCharge, StoreData};
 use crate::stdlib::abi::{
     self, backing_struct, externref_field, f64_field, install_field_getters, string_field,
 };
@@ -516,18 +515,15 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
                     path
                 );
             }
-            let meta = resolved
-                .symlink_metadata()
-                .map_err(|e| contain_trap("fs.remove", &path, &e))?;
-            // `is_dir` on link metadata is false for a symlink to a directory, so an
-            // escaping link is unlinked rather than followed and recursively deleted.
-            remove_releasing(
-                &resolved,
-                meta.is_dir(),
-                recursive,
-                resolved.placement().quota(),
-            )
-            .map_err(|e| contain_trap("fs.remove", &path, &e))
+            let context = MutationContext {
+                op: "fs.remove",
+                path: &path,
+                quota: resolved.placement().quota().cloned(),
+                changed: false,
+            };
+            meter_mutation(caller, context, |step| {
+                crate::runtime::fs::removal::remove(&resolved, recursive, step)
+            })
         },
     )?;
 
@@ -566,7 +562,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
                 .same_volume(to_resolved.placement())
             {
                 let mut work = CopyWork::default();
-                let result = move_across(&from_resolved, &to_resolved, &pair, &mut work);
+                let result = move_across(caller, &from_resolved, &to_resolved, &pair, &mut work);
                 work.settle(caller)?;
                 return fuel::settle_result(caller, |caller| {
                     result.map_err(|error| crate::runtime::host::throw_host_error(caller, error))
@@ -578,9 +574,15 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
             let replaced = to_resolved
                 .regular_file()
                 .filter(|(file, _)| Some(*file) != moved);
-            from_resolved
-                .rename_to(&to_resolved)
-                .map_err(|e| contain_trap("fs.move", &pair, &e))?;
+            let context = MutationContext {
+                op: "fs.move",
+                path: &pair,
+                quota: None,
+                changed: false,
+            };
+            meter_mutation(caller, context, |step| {
+                crate::runtime::fs::removal::rename(&from_resolved, &to_resolved, step)
+            })?;
             if let (Some(quota), Some((file, bytes))) = (to_resolved.placement().quota(), replaced)
             {
                 quota.release_file(file, bytes);
@@ -1547,60 +1549,6 @@ fn append_bytes(
     result
 }
 
-/// The regular files a removal frees: the file itself, or every file under a
-/// directory removed recursively. A tree that can't be walked frees nothing on the
-/// count, which errs toward refusing a later write rather than allowing one past
-/// the limit. The walk stops where the removal's own scan would refuse, so a tree
-/// too large to remove isn't walked in full first.
-fn files_freed_by_remove(
-    target: &LinkPath,
-    is_dir: bool,
-    recursive: bool,
-) -> Vec<(FileIdentity, u64)> {
-    if !is_dir {
-        return target.regular_file().into_iter().collect();
-    }
-    if !recursive {
-        return Vec::new();
-    }
-    target
-        .open_dir()
-        .ok()
-        .and_then(|dir| regular_files(&dir, MAX_REMOVE_ENTRIES).ok())
-        .unwrap_or_default()
-}
-
-/// The regular files still under `target` after a removal stopped partway, or
-/// `None` when that can't be told.
-fn files_left_after(
-    target: &LinkPath,
-    is_dir: bool,
-    recursive: bool,
-) -> Option<HashSet<FileIdentity>> {
-    if !is_dir {
-        return Some(
-            target
-                .regular_file()
-                .map(|(file, _)| file)
-                .into_iter()
-                .collect(),
-        );
-    }
-    if !recursive {
-        // A directory removed on its own frees no regular file.
-        return Some(HashSet::new());
-    }
-    let dir = match target.open_dir() {
-        Ok(dir) => dir,
-        Err(ContainError::Io(error)) if error.kind() == std::io::ErrorKind::NotFound => {
-            return Some(HashSet::new());
-        }
-        Err(_) => return None,
-    };
-    let files = regular_files(&dir, MAX_REMOVE_ENTRIES).ok()?;
-    Some(files.into_iter().map(|(file, _)| file).collect())
-}
-
 /// Register a file a reader opens, so a removal of its name keeps its bytes
 /// counted until the reader closes.
 fn hold_for_reading(
@@ -1621,6 +1569,7 @@ fn hold_for_reading(
 /// cannot be removed, the call fails saying both copies may exist. A link the copy
 /// cannot reproduce fails the move, since the source is removed after.
 fn move_across(
+    caller: &mut Caller<'_, StoreData>,
     from: &LinkPath,
     to: &LinkPath,
     pair: &str,
@@ -1634,10 +1583,19 @@ fn move_across(
     // one holding a mount point, is refused now, before a copy of it lands in the
     // destination. The destination gets the checks its rename will run, so a
     // move that must fail does no copying first.
-    from.check_removable()
-        .map_err(|e| contain_trap("fs.move", pair, &e))?;
-    to.check_removable()
-        .map_err(|e| contain_trap("fs.move", pair, &e))?;
+    meter_mutation(
+        caller,
+        MutationContext {
+            op: "fs.move",
+            path: pair,
+            quota: None,
+            changed: false,
+        },
+        |step| {
+            crate::runtime::fs::removal::validate(from, &mut *step)?;
+            crate::runtime::fs::removal::validate(to, step)
+        },
+    )?;
     refuse_unfitting_destination(to, is_dir, pair)?;
     let to_quota = to.placement().quota().cloned();
     let staged = to.temp_sibling();
@@ -1650,9 +1608,16 @@ fn move_across(
     };
     let copied = copy_bounded(from, &staged, &run, work).and_then(|()| {
         let replaced = to.regular_file();
-        staged
-            .rename_to(to)
-            .map_err(|e| contain_trap("fs.move", pair, &e))?;
+        meter_mutation(
+            caller,
+            MutationContext {
+                op: "fs.move",
+                path: pair,
+                quota: None,
+                changed: true,
+            },
+            |step| crate::runtime::fs::removal::rename(&staged, to, step),
+        )?;
         if let (Some(quota), Some((file, bytes))) = (to_quota.as_ref(), replaced) {
             quota.release_file(file, bytes);
         }
@@ -1661,17 +1626,35 @@ fn move_across(
     if let Err(err) = copied {
         // Best effort: what cannot be removed stays charged, so the count errs
         // toward refusing a later write.
-        if let Ok(meta) = staged.symlink_metadata() {
-            let _ = remove_releasing(&staged, meta.is_dir(), true, to_quota.as_ref());
-        }
+        let _ = meter_mutation(
+            caller,
+            MutationContext {
+                op: "fs.move",
+                path: pair,
+                quota: to_quota,
+                changed: true,
+            },
+            |step| crate::runtime::fs::removal::remove(&staged, true, step),
+        );
         return Err(err);
     }
-    remove_releasing(from, is_dir, true, from.placement().quota()).map_err(|e| {
-        wasmtime::Error::msg(format!(
-            "fs.move {pair}: moved to the destination but could not remove the source, \
-             so both may now exist: {e}"
-        ))
-    })
+    meter_mutation(
+        caller,
+        MutationContext {
+            op: "fs.move",
+            path: pair,
+            quota: from.placement().quota().cloned(),
+            changed: true,
+        },
+        |step| {
+            crate::runtime::fs::removal::remove(from, true, step).map_err(|error| {
+            if crate::runtime::host::ends_the_run(&error) { return error; }
+            wasmtime::Error::msg(format!(
+                "fs.move {pair}: moved to the destination but could not remove the source, so both may now exist: {error}"
+            ))
+        })
+        },
+    )
 }
 
 /// Refuse a destination a rename of the source could not replace — a directory
@@ -1712,43 +1695,52 @@ fn refuse_unfitting_destination(
     Ok(())
 }
 
-/// Remove `target` and release from `quota` every file that is gone afterwards:
-/// all of them on success, and only those actually removed when the removal stops
-/// partway, so the count neither keeps a file that is gone nor frees one that
-/// is still there.
-fn remove_releasing(
-    target: &LinkPath,
-    is_dir: bool,
-    recursive: bool,
-    quota: Option<&Arc<DiskQuota>>,
-) -> Result<(), ContainError> {
-    let freed = match quota {
-        Some(_) => files_freed_by_remove(target, is_dir, recursive),
-        None => Vec::new(),
-    };
-    let removed = match (is_dir, recursive) {
-        (true, true) => target.remove_dir_all(),
-        (true, false) => target.remove_dir(),
-        (false, _) => target.remove_file(),
-    };
-    let Some(quota) = quota else {
-        return removed;
-    };
-    let left: HashSet<FileIdentity> = match removed {
-        Ok(()) => HashSet::new(),
-        Err(_) => match files_left_after(target, is_dir, recursive) {
-            Some(left) => left,
-            // What is left can't be told, so nothing is released: a count kept
-            // too high refuses a later write rather than allowing one past it.
-            None => return removed,
-        },
-    };
-    for (file, bytes) in freed {
-        if !left.contains(&file) {
-            quota.release_file(file, bytes);
+struct MutationContext<'a> {
+    op: &'static str,
+    path: &'a str,
+    quota: Option<Arc<DiskQuota>>,
+    changed: bool,
+}
+
+fn meter_mutation(
+    caller: &mut Caller<'_, StoreData>,
+    context: MutationContext<'_>,
+    run: impl FnOnce(
+        &mut dyn FnMut(crate::runtime::fs::removal::Step) -> wasmtime::Result<()>,
+    ) -> wasmtime::Result<()>,
+) -> wasmtime::Result<()> {
+    use crate::runtime::fs::removal::Step;
+    let mut memory = handles::ByteCharge::new(&caller.data().tenant_limits, 0)?;
+    let mut changed = context.changed;
+    let result = run(&mut |step| {
+        match step {
+            Step::Inspect(units) | Step::Mutate(units) if changed => {
+                fuel::settle(&mut *caller, fuel::SYSCALL, units)?;
+            }
+            Step::Inspect(units) | Step::Mutate(units) => {
+                fuel::charge(&mut *caller, fuel::SYSCALL, units)?;
+            }
+            Step::Reserve(bytes) => memory.grow(&caller.data().tenant_limits, bytes)?,
+            Step::Unlinked(file) => {
+                changed = true;
+                if let (Some(quota), Some((file, bytes))) = (&context.quota, file) {
+                    quota.release_file(file, bytes);
+                }
+            }
         }
+        Ok(())
+    });
+    drop(memory);
+    let result = result.map_err(|error| match error.downcast::<ContainError>() {
+        Ok(error) => contain_trap(context.op, context.path, &error),
+        Err(error) => error,
+    });
+    if changed {
+        return fuel::settle_result(caller, |caller| {
+            result.map_err(|error| crate::runtime::host::throw_host_error(caller, error))
+        });
     }
-    removed
+    result
 }
 
 /// How one copy walk treats its tree.
@@ -2446,6 +2438,14 @@ function main(): void {
     /// Run `source` with the supplied `StoreData`, returning the dispatch result
     /// so callers can assert success (asserts held) or a trap.
     async fn run_with(source: &str, data: StoreData) -> wasmtime::Result<Option<String>> {
+        run_with_fuel(source, data, None).await
+    }
+
+    async fn run_with_fuel(
+        source: &str,
+        data: StoreData,
+        fuel: Option<u64>,
+    ) -> wasmtime::Result<Option<String>> {
         let compiled =
             compile_script(source, "test.subm", crate::FileId(0), &[], &[]).expect("compile clean");
         let cfg = RuntimeConfig::default();
@@ -2460,7 +2460,38 @@ function main(): void {
             .instantiate_async(&mut store, &module)
             .await
             .expect("instantiate");
+        if let Some(fuel) = fuel {
+            store.set_fuel(fuel).unwrap();
+        }
         dispatch_main_async(&mut store, &inst).await
+    }
+
+    #[tokio::test]
+    async fn recursive_remove_finishes_after_fuel_runs_out_following_an_unlink() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::create_dir(root.path().join("tree")).unwrap();
+        for index in 0..4 {
+            std::fs::write(root.path().join(format!("tree/file{index}")), "x").unwrap();
+        }
+        let vfs = Vfs::external(root.path().to_path_buf()).unwrap();
+        let result = run_with_fuel(
+            r#"import { remove, exists } from "submilli:fs";
+            function main(): void { remove("/tree", true); assert(!exists("/tree")); }"#,
+            StoreData::with_vfs(vfs.clone()),
+            Some(9000),
+        )
+        .await;
+        assert!(matches!(
+            result.unwrap_err().downcast_ref::<wasmtime::Trap>(),
+            Some(wasmtime::Trap::OutOfFuel)
+        ));
+        assert!(
+            !root.path().join("tree").exists(),
+            "effects must finish before the next instruction stops"
+        );
+        run_with(r#"import { writeText, readText } from "submilli:fs";
+            function main(): void { writeText("/healthy", "ok"); assert(readText("/healthy") === "ok"); }"#,
+            StoreData::with_vfs(vfs)).await.unwrap();
     }
 
     #[tokio::test]

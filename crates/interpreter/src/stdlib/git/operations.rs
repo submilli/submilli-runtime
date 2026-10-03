@@ -12,7 +12,7 @@ pub fn read(snapshot: &Snapshot, op: &str, args: &[Value]) -> Result<Value> {
     match op {
         "status" => status(snapshot),
         "log" => log(snapshot, args.first().unwrap_or(&Value::Null)),
-        "diff" => diff(snapshot, args.first().unwrap_or(&Value::Null)),
+        "diff" => super::diff::read(snapshot, args.first().unwrap_or(&Value::Null)),
         "branches" => branches(snapshot),
         "remotes" => Ok(json!(
             snapshot
@@ -46,7 +46,7 @@ pub fn head_entries(snapshot: &Snapshot) -> Result<Entries> {
 pub fn tree_entries(snapshot: &Snapshot, id: gix::ObjectId) -> Result<Entries> {
     let mut files = Entries::new();
     walk_tree(snapshot, id, "", &mut files, &mut 0, 0)?;
-    validate_file_set(&files)?;
+    validate_snapshot_files(snapshot, &files)?;
     Ok(files)
 }
 
@@ -66,7 +66,7 @@ fn walk_tree(
     snapshot.meter.parse(tree.data.len() as u64);
     // Ancestor tree buffers remain alive during recursion. Charge each whole
     // decoded tree before descending, including entries not yet visited.
-    *bytes += tree.data.len();
+    *bytes = bytes.saturating_add(tree.data.len());
     if *bytes > snapshot.max_bytes as usize {
         return Err(memory_limit("tree memory"));
     }
@@ -75,7 +75,7 @@ fn walk_tree(
         let entry = entry?;
         let path = format!("{prefix}{}", entry.filename().to_str()?);
         validate_path(&path)?;
-        *bytes += path.len() + 128;
+        *bytes = bytes.saturating_add(path.len().saturating_add(128));
         if *bytes > snapshot.max_bytes as usize {
             return Err(memory_limit("tree path memory"));
         }
@@ -113,6 +113,27 @@ thread_local! {
     /// How many times this thread checked a file set, so a test can show that
     /// loading a tree checks it once rather than once per directory.
     pub(super) static FILE_SET_CHECKS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+pub(super) fn validate_snapshot_files<T>(
+    snapshot: &Snapshot,
+    files: &std::collections::BTreeMap<String, T>,
+) -> Result<()> {
+    let mut entries = files.len() as u64;
+    let mut scanned = 0_u64;
+    for path in files.keys() {
+        scanned = scanned.saturating_add(path.len() as u64);
+        for (offset, _) in path.match_indices('/') {
+            entries = entries.saturating_add(1);
+            scanned = scanned.saturating_add(offset as u64);
+        }
+    }
+    let log = u64::from(entries.max(2).ilog2()) + 1;
+    snapshot.record_algorithm_fuel(
+        crate::runtime::fuel::sort_cost(entries)
+            .saturating_add(crate::runtime::fuel::SCAN.cost(scanned.saturating_mul(log))),
+    )?;
+    validate_file_set(files)
 }
 
 /// Refuses a set of paths that would collide on a case-folding filesystem, or
@@ -172,7 +193,7 @@ fn read_index(snapshot: &Snapshot, allow_conflicts: bool) -> Result<Entries> {
         }
         files.insert(path, (mode, entry.id));
     }
-    validate_file_set(&files)?;
+    validate_snapshot_files(snapshot, &files)?;
     Ok(files)
 }
 
@@ -303,12 +324,47 @@ pub fn resolve_tree(snapshot: &Snapshot, revision: &str) -> Result<Entries> {
 
 pub fn show(snapshot: &Snapshot, revision: &str, path: &str) -> Result<Vec<u8>> {
     validate_path(path)?;
-    let mut tree = super::history::resolve_commit(snapshot, revision)?.tree()?;
-    let entry = tree
-        .peel_to_entry_by_path(path)?
-        .filter(|entry| entry.mode().is_blob_or_symlink())
-        .ok_or_else(|| wasmtime::Error::msg("git.show: path not found"))?;
-    blob_contents(snapshot, entry.object_id())
+    let mut id = super::history::resolve_commit(snapshot, revision)?
+        .tree_id()?
+        .detach();
+    let mut components = path.split('/').peekable();
+    let mut bytes = 0_u64;
+    let mut depth = 0;
+    while let Some(component) = components.next() {
+        snapshot.check_cancelled()?;
+        if depth > 64 {
+            bail!("git: tree nesting limit exceeded");
+        }
+        let tree = super::object::tree(snapshot, id, snapshot.max_bytes.saturating_sub(bytes) / 4)?;
+        bytes = bytes.saturating_add((tree.data.len() as u64).saturating_mul(4));
+        if bytes > snapshot.max_bytes {
+            bail!("git.show: tree memory limit exceeded");
+        }
+        let (mode, child) = find_tree_child(snapshot, &tree, component)?
+            .ok_or_else(|| wasmtime::Error::msg("git.show: path not found"))?;
+        if components.peek().is_some() {
+            if !mode.is_tree() {
+                bail!("git.show: path not found");
+            }
+            id = child;
+            depth += 1;
+            continue;
+        }
+        if ![0o100644, 0o100755, 0o120000].contains(&(mode.value() as u32)) {
+            bail!("git.show: path is not a supported file");
+        }
+        let blob = super::object::blob(snapshot, child, snapshot.max_bytes.saturating_sub(bytes))?;
+        if bytes.saturating_add(blob.data.len() as u64) > snapshot.max_bytes {
+            bail!("git.show: blob memory limit exceeded");
+        }
+        snapshot.record_algorithm_fuel(crate::runtime::fuel::COPY.cost(blob.data.len() as u64))?;
+        let mut data = Vec::new();
+        data.try_reserve_exact(blob.data.len())
+            .map_err(crate::runtime::host::fatal_host_error)?;
+        data.extend_from_slice(&blob.data);
+        return Ok(data);
+    }
+    bail!("git.show: path not found")
 }
 
 /// A blob's contents, refused if larger than the memory available to Git.
@@ -321,170 +377,161 @@ fn blob_contents(snapshot: &Snapshot, id: gix::ObjectId) -> Result<Vec<u8>> {
     Ok(snapshot.repo.find_blob(id)?.detach().data)
 }
 
-/// Where the contents of a side of a diff come from.
-#[derive(Clone, Copy, PartialEq)]
-enum Source {
-    Objects,
-    Worktree,
-}
-
-fn contents(
+fn find_tree_child(
     snapshot: &Snapshot,
-    source: Source,
-    path: &str,
-    entry: Option<&(u32, gix::ObjectId)>,
-) -> Result<Vec<u8>> {
-    match (entry, source) {
-        (None, _) => Ok(Vec::new()),
-        (Some((_, id)), Source::Objects) => blob_contents(snapshot, *id),
-        (Some(_), Source::Worktree) => snapshot.worktree_contents(path, snapshot.max_bytes),
-    }
-}
-
-fn diff(snapshot: &Snapshot, options: &Value) -> Result<Value> {
-    let mode = options
-        .get("mode")
-        .and_then(Value::as_str)
-        .unwrap_or("working");
-    let (before, after, after_source) = match mode {
-        "working" => (
-            index_entries(snapshot)?,
-            snapshot.worktree()?,
-            Source::Worktree,
-        ),
-        "staged" => (
-            head_entries(snapshot)?,
-            index_entries(snapshot)?,
-            Source::Objects,
-        ),
-        "refs" => (
-            resolve_tree(
-                snapshot,
-                options["from"]
-                    .as_str()
-                    .ok_or_else(|| wasmtime::Error::msg("git.diff: from is required"))?,
-            )?,
-            resolve_tree(
-                snapshot,
-                options["to"]
-                    .as_str()
-                    .ok_or_else(|| wasmtime::Error::msg("git.diff: to is required"))?,
-            )?,
-            Source::Objects,
-        ),
-        _ => bail!("git.diff: mode must be working, staged, or refs"),
-    };
-    let paths: BTreeSet<_> = before.keys().chain(after.keys()).collect();
-    let mut patch = String::new();
-    let mut binary = Vec::new();
-    for path in paths {
-        if before.get(path) == after.get(path) {
-            continue;
+    tree: &gix::Tree<'_>,
+    component: &str,
+) -> Result<Option<(gix::objs::tree::EntryMode, gix::ObjectId)>> {
+    let mut folded = std::collections::HashSet::new();
+    let mut child = None;
+    for entry in tree.iter() {
+        snapshot.check_cancelled()?;
+        let entry = entry?;
+        let name = entry.filename().to_str()?;
+        validate_path(name)?;
+        snapshot.record_algorithm_fuel(
+            crate::runtime::fuel::SCAN
+                .cost(name.len() as u64 * 2)
+                .saturating_add(crate::runtime::fuel::ELEM.cost(1)),
+        )?;
+        let mut lowercase = String::new();
+        lowercase
+            .try_reserve(
+                name.len()
+                    .checked_mul(3)
+                    .ok_or_else(|| wasmtime::Error::msg("git.show: filename size overflow"))?,
+            )
+            .map_err(crate::runtime::host::fatal_host_error)?;
+        lowercase.extend(name.chars().flat_map(char::to_lowercase));
+        folded
+            .try_reserve(1)
+            .map_err(crate::runtime::host::fatal_host_error)?;
+        if !folded.insert(lowercase) {
+            bail!("git: case-colliding tree paths are unsupported");
         }
-        if mode == "working" && !before.contains_key(path) {
-            continue;
-        }
-        // One pair of contents in memory at a time.
-        let a = contents(snapshot, Source::Objects, path, before.get(path))?;
-        let b = contents(snapshot, after_source, path, after.get(path))?;
-        // Checked as text, searched for NUL and turned into a patch.
-        snapshot.meter.scan((a.len() + b.len()) as u64);
-        let (Ok(a), Ok(b)) = (std::str::from_utf8(&a), std::str::from_utf8(&b)) else {
-            binary.push(path);
-            continue;
-        };
-        if a.contains('\0') || b.contains('\0') {
-            binary.push(path);
-            continue;
-        }
-        append_patch(
-            &mut patch,
-            path,
-            before.get(path).map(|v| v.0),
-            after.get(path).map(|v| v.0),
-            a,
-            b,
-        );
-        if patch.len() > snapshot.max_bytes as usize {
-            return Err(memory_limit("diff output"));
+        if name == component {
+            child = Some((entry.mode(), entry.object_id()));
         }
     }
-    Ok(json!({"patch":patch,"binaryPaths":binary}))
+    Ok(child)
 }
 
-fn append_patch(
-    patch: &mut String,
+pub(super) fn append_patch(
+    patch: &mut impl std::fmt::Write,
     path: &str,
     before: Option<u32>,
     after: Option<u32>,
     a: &str,
     b: &str,
-) {
+) -> Result<()> {
     if before
         .zip(after)
         .is_some_and(|(old, new)| old & 0o170000 != new & 0o170000)
     {
-        append_patch(patch, path, before, None, a, "");
-        append_patch(patch, path, None, after, "", b);
-        return;
+        append_patch(patch, path, before, None, a, "")?;
+        return append_patch(patch, path, None, after, "", b);
     }
-    let old_path = format!("a/{path}");
-    let new_path = format!("b/{path}");
-    let old_path = gix::quote::ansi_c::quote(old_path.as_bytes().as_bstr());
-    let new_path = gix::quote::ansi_c::quote(new_path.as_bytes().as_bstr());
-    patch.push_str(&format!("diff --git {old_path} {new_path}\n"));
+    let old_path = quoted_patch_path('a', path)?;
+    let new_path = quoted_patch_path('b', path)?;
+    writeln!(patch, "diff --git {old_path} {new_path}")
+        .map_err(crate::runtime::host::fatal_host_error)?;
     match (before, after) {
-        (None, Some(mode)) => patch.push_str(&format!("new file mode {mode:06o}\n")),
-        (Some(mode), None) => patch.push_str(&format!("deleted file mode {mode:06o}\n")),
+        (None, Some(mode)) => writeln!(patch, "new file mode {mode:06o}"),
+        (Some(mode), None) => writeln!(patch, "deleted file mode {mode:06o}"),
         (Some(old), Some(new)) if old != new => {
-            patch.push_str(&format!("old mode {old:06o}\nnew mode {new:06o}\n"));
+            writeln!(patch, "old mode {old:06o}\nnew mode {new:06o}")
         }
-        _ => {}
+        _ => Ok(()),
     }
-    // Empty additions/deletions and mode-only changes are completely described by headers.
+    .map_err(crate::runtime::host::fatal_host_error)?;
+    // Empty additions/deletions and mode-only changes need only headers.
     if a == b {
-        return;
+        return Ok(());
     }
     append_patch_hunk(
         patch,
         if before.is_some() {
-            old_path.as_ref()
+            &old_path
         } else {
-            b"/dev/null".as_bstr()
+            "/dev/null"
         },
         if after.is_some() {
-            new_path.as_ref()
+            &new_path
         } else {
-            b"/dev/null".as_bstr()
+            "/dev/null"
         },
         a,
         b,
-    );
+    )
+}
+
+fn quoted_patch_path(side: char, path: &str) -> Result<String> {
+    use std::fmt::Write;
+    let quote = path
+        .bytes()
+        .any(|byte| !matches!(byte, b' '..=b'~') || matches!(byte, b'"' | b'\\'));
+    let mut output = String::new();
+    output
+        .try_reserve_exact(path.len().saturating_mul(4).saturating_add(4))
+        .map_err(crate::runtime::host::fatal_host_error)?;
+    if quote {
+        output.push('"');
+    }
+    output.push(side);
+    output.push('/');
+    if quote {
+        for byte in path.bytes() {
+            match byte {
+                7 => output.push_str("\\a"),
+                8 => output.push_str("\\b"),
+                b'\t' => output.push_str("\\t"),
+                b'\n' => output.push_str("\\n"),
+                11 => output.push_str("\\v"),
+                12 => output.push_str("\\f"),
+                b'\r' => output.push_str("\\r"),
+                b'"' => output.push_str("\\\""),
+                b'\\' => output.push_str("\\\\"),
+                b' '..=b'~' => output.push(char::from(byte)),
+                byte => write!(output, "\\{byte:03o}")
+                    .map_err(crate::runtime::host::fatal_host_error)?,
+            }
+        }
+    } else {
+        output.push_str(path);
+    }
+    if quote {
+        output.push('"');
+    }
+    Ok(output)
 }
 
 fn append_patch_hunk(
-    patch: &mut String,
-    old_path: &gix::bstr::BStr,
-    new_path: &gix::bstr::BStr,
+    patch: &mut impl std::fmt::Write,
+    old_path: &str,
+    new_path: &str,
     a: &str,
     b: &str,
-) {
-    patch.push_str(&format!(
-        "--- {old_path}\n+++ {new_path}\n@@ -{},{} +{},{} @@\n",
+) -> Result<()> {
+    writeln!(
+        patch,
+        "--- {old_path}\n+++ {new_path}\n@@ -{},{} +{},{} @@",
         usize::from(!a.is_empty()),
         a.split_inclusive('\n').count(),
         usize::from(!b.is_empty()),
         b.split_inclusive('\n').count()
-    ));
+    )
+    .map_err(crate::runtime::host::fatal_host_error)?;
     for (sign, text) in [('-', a), ('+', b)] {
         for line in text.split_inclusive('\n') {
-            patch.push(sign);
-            patch.push_str(line);
+            write!(patch, "{sign}{line}").map_err(crate::runtime::host::fatal_host_error)?;
             if !line.ends_with('\n') {
-                patch.push_str("\n\\ No newline at end of file\n");
+                patch
+                    .write_str("\n\\ No newline at end of file\n")
+                    .map_err(crate::runtime::host::fatal_host_error)?;
             }
         }
     }
+    Ok(())
 }
 
 fn branches(snapshot: &Snapshot) -> Result<Value> {
@@ -518,40 +565,7 @@ pub fn add(snapshot: &Snapshot, paths: &[String]) -> Result<()> {
     let mut work = snapshot.worktree()?;
     let mut index = index_entries(snapshot)?;
     remove_ignored(snapshot, &mut work, &index)?;
-    let mut selected = BTreeSet::new();
-    for path in paths.iter().collect::<BTreeSet<_>>() {
-        snapshot.check_cancelled()?;
-        let mut matched = false;
-        if path == "." {
-            matched = !(index.is_empty() && work.is_empty());
-            selected.extend(index.keys().chain(work.keys()).cloned());
-        } else {
-            validate_path(path)?;
-            let prefix = format!("{path}/");
-            for set in [&index, &work] {
-                if set.contains_key(path.as_str()) {
-                    matched = true;
-                    selected.insert(path.clone());
-                }
-                // The paths below `path/` sort together, from `path/` on.
-                for candidate in set
-                    .range::<str, _>((
-                        std::ops::Bound::Included(prefix.as_str()),
-                        std::ops::Bound::Unbounded,
-                    ))
-                    .map(|(candidate, _)| candidate)
-                    .take_while(|candidate| candidate.starts_with(&prefix))
-                {
-                    snapshot.check_cancelled()?;
-                    matched = true;
-                    selected.insert(candidate.clone());
-                }
-            }
-        }
-        if !matched {
-            bail!("git.add: path does not match a file");
-        }
-    }
+    let selected = select_add_paths(snapshot, &index, &work, paths)?;
     for selected in selected {
         snapshot.check_cancelled()?;
         match work.get(&selected) {
@@ -564,8 +578,102 @@ pub fn add(snapshot: &Snapshot, paths: &[String]) -> Result<()> {
             }
         }
     }
-    validate_file_set(&index)?;
+    validate_snapshot_files(snapshot, &index)?;
     write_index(snapshot, &index)
+}
+
+fn select_add_paths(
+    snapshot: &Snapshot,
+    index: &Entries,
+    work: &Entries,
+    paths: &[String],
+) -> Result<BTreeSet<String>> {
+    let file_log = u64::from((index.len().saturating_add(work.len()).max(2)).ilog2()) + 1;
+    let request_log = u64::from(paths.len().max(2).ilog2()) + 1;
+    let search_units = paths.iter().fold(0_u64, |sum, path| {
+        let ancestors = path
+            .match_indices('/')
+            .fold(0_u64, |sum, (offset, _)| sum.saturating_add(offset as u64));
+        sum.saturating_add((path.len() as u64).saturating_mul(2 * file_log + 2 * request_log))
+            .saturating_add(ancestors.saturating_mul(request_log))
+    });
+    snapshot.record_algorithm_fuel(
+        crate::runtime::fuel::sort_cost(paths.len() as u64)
+            .saturating_add(crate::runtime::fuel::SCAN.cost(search_units)),
+    )?;
+    let requested: BTreeSet<&str> = paths.iter().map(String::as_str).collect();
+    for &path in &requested {
+        snapshot.check_cancelled()?;
+        if path != "." {
+            validate_path(path)?;
+        }
+        let matched = if path == "." {
+            !index.is_empty() || !work.is_empty()
+        } else {
+            let prefix = format!("{path}/");
+            matching_paths(index, path, &prefix).next().is_some()
+                || matching_paths(work, path, &prefix).next().is_some()
+        };
+        if !matched {
+            bail!("git.add: path does not match a file");
+        }
+    }
+    let mut selected = BTreeSet::new();
+    if requested.contains(".") {
+        for candidate in index.keys().chain(work.keys()) {
+            select_add_path(snapshot, &mut selected, candidate)?;
+        }
+        return Ok(selected);
+    }
+    for &path in &requested {
+        // Validate every request above, including absent children of a selected parent.
+        if path
+            .match_indices('/')
+            .any(|(offset, _)| requested.contains(&path[..offset]))
+        {
+            continue;
+        }
+        let prefix = format!("{path}/");
+        for candidate in
+            matching_paths(index, path, &prefix).chain(matching_paths(work, path, &prefix))
+        {
+            select_add_path(snapshot, &mut selected, candidate)?;
+        }
+    }
+    Ok(selected)
+}
+
+fn matching_paths<'a>(
+    files: &'a Entries,
+    path: &str,
+    prefix: &'a str,
+) -> impl Iterator<Item = &'a String> {
+    use std::ops::Bound;
+    files
+        .get_key_value(path)
+        .map(|(path, _)| path)
+        .into_iter()
+        .chain(
+            files
+                .range::<str, _>((Bound::Included(prefix), Bound::Unbounded))
+                .map(|(path, _)| path)
+                .take_while(move |path| path.starts_with(prefix)),
+        )
+}
+
+fn select_add_path(snapshot: &Snapshot, selected: &mut BTreeSet<String>, path: &str) -> Result<()> {
+    snapshot.check_cancelled()?;
+    let log = u64::from((selected.len().max(2)).ilog2()) + 1;
+    snapshot.record_algorithm_fuel(crate::runtime::fuel::ELEM.cost(log).saturating_add(
+        crate::runtime::fuel::SCAN.cost((path.len() as u64).saturating_mul(log)),
+    ))?;
+    let mut owned = String::new();
+    owned
+        .try_reserve_exact(path.len())
+        .map_err(crate::runtime::host::fatal_host_error)?;
+    owned.push_str(path);
+    selected.insert(owned);
+    Ok(())
 }
 
 pub fn commit(snapshot: &Snapshot, message: &str, identity: &super::GitConfig) -> Result<String> {
@@ -601,6 +709,7 @@ pub fn commit(snapshot: &Snapshot, message: &str, identity: &super::GitConfig) -
     };
     let mut time = Default::default();
     let signature = signature.to_ref(&mut time);
+    snapshot.invalidate_reference_cache()?;
     Ok(snapshot
         .repo
         .commit_as(signature, signature, "HEAD", message, tree, parents)?
@@ -611,6 +720,7 @@ pub fn create_branch(snapshot: &Snapshot, name: &str, start: &str) -> Result<()>
     validate_new_ref_name(name)?;
     snapshot.validate_reference_spelling(&format!("refs/heads/{name}"))?;
     let id = super::history::resolve_commit(snapshot, start)?.id;
+    snapshot.invalidate_reference_cache()?;
     snapshot.repo.reference(
         format!("refs/heads/{name}"),
         id,
@@ -635,6 +745,7 @@ pub fn checkout(snapshot: &Snapshot, branch: &str) -> Result<()> {
     }
     let next = resolve_tree(snapshot, &format!("refs/heads/{branch}"))?;
     replace_worktree(snapshot, &next)?;
+    snapshot.invalidate_reference_cache()?;
     snapshot.write_head(branch)
 }
 
@@ -646,7 +757,7 @@ pub fn replace_worktree(snapshot: &Snapshot, next: &Entries) -> Result<()> {
     if previous != head_entries(snapshot)? || previous != work {
         bail!("git: switching and pulling require a clean working tree, including untracked files");
     }
-    validate_file_set(next)?;
+    validate_snapshot_files(snapshot, next)?;
     let mut pending = snapshot
         .pending_worktree
         .try_borrow_mut()

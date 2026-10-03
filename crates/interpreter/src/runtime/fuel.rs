@@ -179,14 +179,14 @@ pub fn settle(
 /// Marshal an already-observed effect's result using helpers that normally
 /// charge before work. Within this host-only scope, short fuel settles to zero
 /// without discarding the result. Do not run guest callbacks in this scope.
-pub(crate) fn settle_result<T>(
-    caller: &mut Caller<'_, StoreData>,
-    body: impl FnOnce(&mut Caller<'_, StoreData>) -> wasmtime::Result<T>,
+pub(crate) fn settle_result<T, C: AsContextMut<Data = StoreData>>(
+    caller: &mut C,
+    body: impl FnOnce(&mut C) -> wasmtime::Result<T>,
 ) -> wasmtime::Result<T> {
-    let previous = caller.data().settling_host_result;
-    caller.data_mut().settling_host_result = true;
+    let previous = caller.as_context().data().settling_host_result;
+    caller.as_context_mut().data_mut().settling_host_result = true;
     let result = body(caller);
-    caller.data_mut().settling_host_result = previous;
+    caller.as_context_mut().data_mut().settling_host_result = previous;
     result
 }
 

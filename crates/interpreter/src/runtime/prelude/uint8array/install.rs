@@ -342,7 +342,14 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         method_key("set"),
         ft(vec![uint8.clone(), uint8.clone(), num.clone()], vec![]),
         true,
-        |caller, params, _results| super::set(caller, abi_arg(params, 0)?, abi_arg(params, 1)?, f64v(abi_arg(params, 2)?)),
+        |caller, params, _results| {
+            super::set(
+                caller,
+                abi_arg(params, 0)?,
+                abi_arg(params, 1)?,
+                f64v(abi_arg(params, 2)?),
+            )
+        },
     )?;
     register_host_fn_async(
         linker,
@@ -619,18 +626,21 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         true,
         |caller, params, results| {
             let intr = intrinsic_types(&mut *caller)?;
-            let bytes =
-                if crate::runtime::prelude::collection::is_a(caller, abi_arg(params, 0)?, &intr.array)? {
-                    super::read_number_array(caller, abi_arg(params, 0)?, "Uint8Array.new")?
-                } else {
-                    let n = crate::runtime::host::read_boxed_number(
-                        caller,
-                        abi_arg(params, 0)?,
-                        "Uint8Array.new",
-                    )?;
-                    *abi_result(results, 0)? = super::allocate(caller, super::alloc_len(n)?)?;
-                    return Ok(());
-                };
+            let bytes = if crate::runtime::prelude::collection::is_a(
+                caller,
+                abi_arg(params, 0)?,
+                &intr.array,
+            )? {
+                super::read_number_array(caller, abi_arg(params, 0)?, "Uint8Array.new")?
+            } else {
+                let n = crate::runtime::host::read_boxed_number(
+                    caller,
+                    abi_arg(params, 0)?,
+                    "Uint8Array.new",
+                )?;
+                *abi_result(results, 0)? = super::allocate(caller, super::alloc_len(n)?)?;
+                return Ok(());
+            };
             *abi_result(results, 0)? = super::build(caller, &bytes)?;
             Ok(())
         },

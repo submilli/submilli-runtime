@@ -17,7 +17,7 @@ use globset::{GlobBuilder, GlobSet, GlobSetBuilder};
 use ignore::gitignore::{Gitignore, GitignoreBuilder};
 use regex::{Regex, RegexBuilder};
 use serde_json::{Value, json};
-use std::{path::Path, time::UNIX_EPOCH};
+use std::{collections::BinaryHeap, path::Path, time::UNIX_EPOCH};
 use wasmtime::{Caller, Result, Val, bail};
 const MAX_RESULTS: usize = 1000;
 const MAX_ENTRIES: usize = 20_000;
@@ -36,7 +36,153 @@ impl Entry {
 struct Directory {
     path: String,
     depth: usize,
-    ignores: IgnoreRules,
+    ignores: IgnoreHeads,
+}
+
+struct OrderedDirectory(Directory);
+impl PartialEq for OrderedDirectory {
+    fn eq(&self, other: &Self) -> bool {
+        self.0.path == other.0.path
+    }
+}
+impl Eq for OrderedDirectory {}
+impl PartialOrd for OrderedDirectory {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+impl Ord for OrderedDirectory {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        // Descendants start at `path + '/'`; a sibling `a-` precedes `a/`.
+        other
+            .0
+            .path
+            .bytes()
+            .chain(std::iter::once(b'/'))
+            .cmp(self.0.path.bytes().chain(std::iter::once(b'/')))
+    }
+}
+
+struct OrderedEntry(Entry);
+impl PartialEq for OrderedEntry {
+    fn eq(&self, other: &Self) -> bool {
+        self.0.path == other.0.path
+    }
+}
+impl Eq for OrderedEntry {}
+impl PartialOrd for OrderedEntry {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+impl Ord for OrderedEntry {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.0.path.cmp(&other.0.path)
+    }
+}
+
+#[derive(Default)]
+struct PendingDirectories {
+    stack: Vec<Directory>,
+    ordered: BinaryHeap<OrderedDirectory>,
+}
+impl PendingDirectories {
+    fn push(
+        &mut self,
+        caller: &mut Caller<'_, StoreData>,
+        dir: Directory,
+        tree: bool,
+    ) -> Result<()> {
+        if tree {
+            let log = u64::from((self.ordered.len() as u64 + 1).max(2).ilog2()) + 1;
+            fuel::charge_host_fuel(
+                &mut *caller,
+                fuel::ELEM
+                    .cost(log)
+                    .saturating_add(fuel::SCAN.cost((dir.path.len() as u64).saturating_mul(log))),
+            )?;
+            self.ordered
+                .try_reserve(1)
+                .map_err(crate::runtime::host::fatal_host_error)?;
+            self.ordered.push(OrderedDirectory(dir));
+        } else {
+            self.stack
+                .try_reserve(1)
+                .map_err(crate::runtime::host::fatal_host_error)?;
+            self.stack.push(dir);
+        }
+        Ok(())
+    }
+    fn pop(&mut self, cutoff: Option<&str>) -> Option<Directory> {
+        if let Some(next) = self.ordered.peek() {
+            if cutoff.is_some_and(|cutoff| {
+                next.0
+                    .path
+                    .bytes()
+                    .chain(std::iter::once(b'/'))
+                    .cmp(cutoff.bytes())
+                    .is_ge()
+            }) {
+                return None;
+            }
+            return self.ordered.pop().map(|dir| dir.0);
+        }
+        self.stack.pop()
+    }
+}
+
+#[derive(Default)]
+struct WalkEntries {
+    all: Vec<Entry>,
+    lowest: BinaryHeap<OrderedEntry>,
+}
+impl WalkEntries {
+    fn cutoff(&self) -> Option<&str> {
+        (self.lowest.len() > MAX_RESULTS)
+            .then(|| self.lowest.peek().map(|entry| entry.0.path.as_str()))
+            .flatten()
+    }
+    fn push(&mut self, caller: &mut Caller<'_, StoreData>, entry: Entry, tree: bool) -> Result<()> {
+        if !tree {
+            self.all
+                .try_reserve(1)
+                .map_err(crate::runtime::host::fatal_host_error)?;
+            self.all.push(entry);
+            return Ok(());
+        }
+        let log = u64::from((self.lowest.len() as u64 + 1).max(2).ilog2()) + 1;
+        fuel::charge_host_fuel(
+            &mut *caller,
+            fuel::ELEM
+                .cost(log)
+                .saturating_add(fuel::SCAN.cost((entry.path.len() as u64).saturating_mul(log))),
+        )?;
+        if self.lowest.len() > MAX_RESULTS {
+            let mut largest = self.lowest.peek_mut().ok_or_else(|| {
+                crate::runtime::host::fatal_host_error("code.tree: missing cutoff entry")
+            })?;
+            if entry.path < largest.0.path {
+                *largest = OrderedEntry(entry);
+            }
+        } else {
+            self.lowest
+                .try_reserve(1)
+                .map_err(crate::runtime::host::fatal_host_error)?;
+            self.lowest.push(OrderedEntry(entry));
+        }
+        Ok(())
+    }
+    fn into_vec(self, tree: bool) -> Result<Vec<Entry>> {
+        if !tree {
+            return Ok(self.all);
+        }
+        let mut entries = Vec::new();
+        entries
+            .try_reserve_exact(self.lowest.len())
+            .map_err(crate::runtime::host::fatal_host_error)?;
+        entries.extend(self.lowest.into_vec().into_iter().map(|entry| entry.0));
+        Ok(entries)
+    }
 }
 pub(super) fn tree(
     caller: &mut Caller<'_, StoreData>,
@@ -53,28 +199,55 @@ pub(super) fn glob(
     pattern: &str,
 ) -> Result<Value> {
     let absolute = pattern.starts_with('/');
-    let pattern = GlobBuilder::new(pattern.trim_start_matches('/'))
-        .literal_separator(true)
-        .build()?
-        .compile_matcher();
     let cwd = if absolute {
         "/"
     } else {
         caller.data().vfs.cwd()
     }
     .to_owned();
-    let mut entries = walk(caller, budget, &cwd, usize::MAX, "glob")?;
+    let prefix_root = glob_root(pattern);
+    let root = format!("{}{}", cwd.trim_end_matches('/'), prefix_root);
+    let pattern = GlobBuilder::new(pattern.trim_start_matches('/'))
+        .literal_separator(true)
+        .build()?
+        .compile_matcher();
+    let mut entries = walk(caller, budget, &root, usize::MAX, "glob")?;
+    let path_bytes = entries
+        .iter()
+        .filter(|entry| entry.kind == "file")
+        .fold(0_u64, |sum, entry| {
+            sum.saturating_add(entry.path.len() as u64)
+        });
+    fuel::charge(&mut *caller, fuel::SCAN, path_bytes)?;
     let prefix = format!("{}/", cwd.trim_end_matches('/'));
     entries.retain(|e| {
         e.kind == "file" && pattern.is_match(e.path.strip_prefix(&prefix).unwrap_or(&e.path))
     });
-    entries.sort_by(|a, b| {
+    fuel::charge_host_fuel(&mut *caller, fuel::sort_cost(entries.len() as u64))?;
+    entries.sort_unstable_by(|a, b| {
         b.modified
             .total_cmp(&a.modified)
             .then_with(|| a.path.cmp(&b.path))
     });
     listing(caller, budget, &entries)
 }
+fn glob_root(pattern: &str) -> String {
+    let mut root = String::new();
+    let mut components = pattern.trim_start_matches('/').split('/').peekable();
+    while let Some(component) = components.next() {
+        if components.peek().is_none()
+            || component.is_empty()
+            || matches!(component, "." | "..")
+            || component.contains(['*', '?', '[', '{', '\\'])
+        {
+            break;
+        }
+        root.push('/');
+        root.push_str(component);
+    }
+    if root.is_empty() { "/".into() } else { root }
+}
+
 pub(super) fn search(
     caller: &mut Caller<'_, StoreData>,
     budget: &mut Budget,
@@ -239,16 +412,31 @@ fn walk(
     depth: usize,
     op: &str,
 ) -> Result<Vec<Entry>> {
-    validate_root(caller, root, op)?;
-    let mut entries = Vec::new();
-    let inherited = ancestor_ignores(caller, budget, root, op)?;
-    let mut pending = vec![Directory {
-        path: root.into(),
-        depth: 0,
-        ignores: inherited,
-    }];
+    if !validate_root(caller, root, op)? {
+        return Ok(Vec::new());
+    }
+    let tree = op == "tree";
+    let mut entries = WalkEntries::default();
+    let mut rules = IgnoreRules::default();
+    let Some(inherited) = ancestor_ignores(caller, budget, root, op, &mut rules)? else {
+        return Ok(Vec::new());
+    };
+    let mut pending = PendingDirectories::default();
+    pending.push(
+        caller,
+        Directory {
+            path: root.into(),
+            depth: if op == "glob" {
+                root.split('/').filter(|part| !part.is_empty()).count()
+            } else {
+                0
+            },
+            ignores: inherited,
+        },
+        tree,
+    )?;
     let mut visited = 0;
-    while let Some(mut dir) = pending.pop() {
+    while let Some(mut dir) = pending.pop(entries.cutoff()) {
         fuel::charge(&mut *caller, fuel::SYSCALL, 1)?;
         if dir.depth >= depth {
             continue;
@@ -261,6 +449,7 @@ fn walk(
             IgnoreScope::Traversed,
             op,
             &mut dir.ignores,
+            &mut rules,
         )?;
         let resolved = resolve_content_or_trap(caller.data(), &dir.path, op)?;
         for item in resolved
@@ -273,28 +462,30 @@ fn walk(
                 bail!("code.{op}: traversal exceeds {MAX_ENTRIES} entries; choose a smaller root");
             }
             fuel::charge(&mut *caller, fuel::SYSCALL, 1)?;
-            let Some(entry) = inspect_entry(caller, budget, &item, &dir, op)? else {
+            let Some(entry) = inspect_entry(caller, budget, &item, &dir, &rules, op)? else {
                 continue;
             };
             if entry.kind == "directory" {
-                budget.charge(
+                budget.charge(caller, entry.path.len())?;
+                pending.push(
                     caller,
-                    (dir.ignores.gitignore.len() + dir.ignores.custom.len())
-                        .saturating_mul(std::mem::size_of::<Gitignore>()),
+                    Directory {
+                        path: entry.path.clone(),
+                        depth: entry.depth,
+                        ignores: dir.ignores,
+                    },
+                    tree,
                 )?;
-                pending.push(Directory {
-                    path: entry.path.clone(),
-                    depth: entry.depth,
-                    ignores: dir.ignores.clone(),
-                });
             }
-            entries.push(entry);
+            entries.push(caller, entry, tree)?;
         }
     }
-    entries.sort_by(|a, b| a.path.cmp(&b.path));
+    let mut entries = entries.into_vec(tree)?;
+    fuel::charge_host_fuel(&mut *caller, fuel::sort_cost(entries.len() as u64))?;
+    entries.sort_unstable_by(|a, b| a.path.cmp(&b.path));
     Ok(entries)
 }
-fn validate_root(caller: &mut Caller<'_, StoreData>, root: &str, op: &str) -> Result<()> {
+fn validate_root(caller: &mut Caller<'_, StoreData>, root: &str, op: &str) -> Result<bool> {
     // `/` has no components to stat; the walk's fs.list gate covers it.
     if root != "/" {
         gate(caller, "fs.stat", root)?;
@@ -306,29 +497,47 @@ fn validate_root(caller: &mut Caller<'_, StoreData>, root: &str, op: &str) -> Re
     for component in root.split('/').filter(|component| !component.is_empty()) {
         path.push('/');
         path.push_str(component);
-        let metadata = resolve_link(&caller.data().vfs, caller.data().vfs.cwd(), &path)
+        if op == "glob" && component.starts_with('.') {
+            return Ok(false);
+        }
+        let metadata = match resolve_link(&caller.data().vfs, caller.data().vfs.cwd(), &path)
             .and_then(|resolved| resolved.symlink_metadata())
-            .map_err(|e| contain_trap(op, root, &e))?;
+        {
+            Ok(metadata) => metadata,
+            Err(crate::runtime::fs::ContainError::Io(error))
+                if op == "glob" && error.kind() == std::io::ErrorKind::NotFound =>
+            {
+                return Ok(false);
+            }
+            Err(error) => return Err(contain_trap(op, root, &error)),
+        };
+        if op == "glob" && !metadata.is_dir() {
+            return Ok(false);
+        }
         if metadata.file_type().is_symlink() {
             bail!("code.{op}: navigation root {root} must not traverse a symlink");
         }
     }
-    Ok(())
+    Ok(true)
 }
 fn ancestor_ignores(
     caller: &mut Caller<'_, StoreData>,
     budget: &mut Budget,
     root: &str,
     op: &str,
-) -> Result<IgnoreRules> {
+    rules: &mut IgnoreRules,
+) -> Result<Option<IgnoreHeads>> {
     let mut parents = Vec::new();
     let mut parent = Path::new(root).parent();
     while let Some(path) = parent {
         parents.push(path.to_string_lossy().into_owned());
         parent = path.parent();
     }
-    let mut inherited = IgnoreRules::default();
+    let mut inherited = IgnoreHeads::default();
     for parent in parents.into_iter().rev() {
+        if op == "glob" && parent != "/" && rules.ignored(caller, inherited, &parent, true)? {
+            return Ok(None);
+        }
         load_ignores(
             caller,
             budget,
@@ -336,15 +545,20 @@ fn ancestor_ignores(
             IgnoreScope::Ancestor,
             op,
             &mut inherited,
+            rules,
         )?;
     }
-    Ok(inherited)
+    if op == "glob" && root != "/" && rules.ignored(caller, inherited, root, true)? {
+        return Ok(None);
+    }
+    Ok(Some(inherited))
 }
 fn inspect_entry(
     caller: &mut Caller<'_, StoreData>,
     budget: &mut Budget,
     item: &cap_std::fs::DirEntry,
     dir: &Directory,
+    rules: &IgnoreRules,
     op: &str,
 ) -> Result<Option<Entry>> {
     let raw = item.file_name();
@@ -362,7 +576,7 @@ fn inspect_entry(
         .symlink_metadata()
         .map_err(|e| contain_trap(op, &path, &e))?;
     let kind = crate::stdlib::fs::handles::kind_of(&metadata.file_type());
-    if ignored(&dir.ignores, &path, kind == "directory") {
+    if rules.ignored(caller, dir.ignores, &path, kind == "directory")? {
         return Ok(None);
     }
     let modified = metadata
@@ -377,25 +591,68 @@ fn inspect_entry(
         modified,
     }))
 }
-#[derive(Clone, Default)]
-struct IgnoreRules {
-    gitignore: Vec<Gitignore>,
-    custom: Vec<Gitignore>,
+#[derive(Clone, Copy, Default)]
+struct IgnoreHeads {
+    gitignore: Option<usize>,
+    custom: Option<usize>,
 }
-fn ignored(ignores: &IgnoreRules, path: &str, directory: bool) -> bool {
-    // Every .ignore takes precedence over every .gitignore, regardless of depth.
-    for matcher in ignores
-        .custom
-        .iter()
-        .rev()
-        .chain(ignores.gitignore.iter().rev())
-    {
-        let result = matcher.matched(path, directory);
-        if !result.is_none() {
-            return result.is_ignore();
-        }
+
+struct IgnoreLayer {
+    matcher: Gitignore,
+    parent: Option<usize>,
+}
+
+// Indices share inherited chains without recursive ownership or drop.
+#[derive(Default)]
+struct IgnoreRules {
+    layers: Vec<IgnoreLayer>,
+}
+impl IgnoreRules {
+    fn push(&mut self, head: &mut Option<usize>, matcher: Gitignore) -> Result<()> {
+        self.layers
+            .try_reserve(1)
+            .map_err(crate::runtime::host::fatal_host_error)?;
+        let index = self.layers.len();
+        self.layers.push(IgnoreLayer {
+            matcher,
+            parent: *head,
+        });
+        *head = Some(index);
+        Ok(())
     }
-    false
+
+    fn ignored(
+        &self,
+        caller: &mut Caller<'_, StoreData>,
+        heads: IgnoreHeads,
+        path: &str,
+        directory: bool,
+    ) -> Result<bool> {
+        // Every .ignore takes precedence over every .gitignore, regardless of depth.
+        for mut head in [heads.custom, heads.gitignore] {
+            while let Some(index) = head {
+                let layer = self.layers.get(index).ok_or_else(|| {
+                    crate::runtime::host::fatal_host_error("code: invalid ignore rule index")
+                })?;
+                let patterns = layer
+                    .matcher
+                    .num_ignores()
+                    .saturating_add(layer.matcher.num_whitelists())
+                    .max(1);
+                fuel::charge(
+                    &mut *caller,
+                    fuel::SCAN,
+                    patterns.saturating_mul(path.len() as u64),
+                )?;
+                let result = layer.matcher.matched(path, directory);
+                if !result.is_none() {
+                    return Ok(result.is_ignore());
+                }
+                head = layer.parent;
+            }
+        }
+        Ok(false)
+    }
 }
 /// Where an ignore file sits relative to the traversal root.
 #[derive(Clone, Copy)]
@@ -411,7 +668,8 @@ fn load_ignores(
     dir: &str,
     scope: IgnoreScope,
     op: &str,
-    ignores: &mut IgnoreRules,
+    ignores: &mut IgnoreHeads,
+    rules: &mut IgnoreRules,
 ) -> Result<()> {
     for name in [".gitignore", ".ignore"] {
         let path = format!("{}/{}", dir.trim_end_matches('/'), name);
@@ -437,12 +695,13 @@ fn load_ignores(
         for line in source.strip_prefix('\u{feff}').unwrap_or(&source).lines() {
             builder.add_line(Some(path.clone().into()), line)?;
         }
-        let rules = if name == ".ignore" {
+        let head = if name == ".ignore" {
             &mut ignores.custom
         } else {
             &mut ignores.gitignore
         };
-        rules.push(builder.build()?);
+        budget.charge(caller, 2 * std::mem::size_of::<IgnoreLayer>())?;
+        rules.push(head, builder.build()?)?;
     }
     Ok(())
 }
@@ -586,4 +845,53 @@ fn listing(
         values.push(entry.value());
     }
     Ok(json!({"truncated":values.len() < entries.len(),"entries":values}))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn inherited_ignore_storage_grows_linearly() {
+        for count in [128, 256] {
+            let mut rules = IgnoreRules::default();
+            let mut head = None;
+            let mut directories = Vec::new();
+            for _ in 0..count {
+                let mut builder = GitignoreBuilder::new("/");
+                builder.add_line(None, "*.tmp").unwrap();
+                rules.push(&mut head, builder.build().unwrap()).unwrap();
+                directories.push(IgnoreHeads {
+                    gitignore: head,
+                    custom: None,
+                });
+            }
+            assert_eq!(rules.layers.len(), count);
+            assert_eq!(directories.len(), count);
+            let old_copies = count * (count + 1) / 2;
+            assert!(rules.layers.len() < old_copies / 2);
+            let mut visited = 0;
+            while let Some(index) = head {
+                let layer = &rules.layers[index];
+                head = layer.parent;
+                visited += 1;
+            }
+            assert_eq!(visited, count);
+        }
+    }
+
+    #[test]
+    fn glob_prefix_stops_before_patterns_and_escaped_components() {
+        for (pattern, root) in [
+            ("src/nested/*.ts", "/src/nested"),
+            ("/src/**/*.ts", "/src"),
+            ("src/file.ts", "/src"),
+            ("src/{a,b}/file.ts", "/src"),
+            ("src/a\\*/file.ts", "/src"),
+            ("*.ts", "/"),
+            ("../*.ts", "/"),
+        ] {
+            assert_eq!(glob_root(pattern), root);
+        }
+    }
 }

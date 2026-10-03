@@ -29,13 +29,13 @@ use crate::runtime::{DiskQuota, Holder, OpenFileGuard, QuotaCharge, QuotaExceede
 const HANDLE_BUF_BYTES: u64 = 8 * 1024;
 
 /// Bytes charged against the store's host-attached counter, refunded on `release`/`drop`.
-struct ByteCharge {
+pub(super) struct ByteCharge {
     bytes: u64,
     counter: Arc<AtomicU64>,
 }
 
 impl ByteCharge {
-    fn new(limits: &TenantLimits, bytes: u64) -> Result<Self, MemoryCapExceeded> {
+    pub(super) fn new(limits: &TenantLimits, bytes: u64) -> Result<Self, MemoryCapExceeded> {
         limits.charge_host_bytes(bytes)?;
         Ok(Self {
             bytes,
@@ -43,7 +43,11 @@ impl ByteCharge {
         })
     }
 
-    fn grow(&mut self, limits: &TenantLimits, bytes: u64) -> Result<(), MemoryCapExceeded> {
+    pub(super) fn grow(
+        &mut self,
+        limits: &TenantLimits,
+        bytes: u64,
+    ) -> Result<(), MemoryCapExceeded> {
         limits.charge_host_bytes(bytes)?;
         self.bytes = self.bytes.saturating_add(bytes);
         Ok(())

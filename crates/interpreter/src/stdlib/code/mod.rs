@@ -2,6 +2,7 @@
 use crate::runtime::host::{abi_arg, abi_result};
 mod budget;
 pub mod declaration;
+mod myers;
 mod patch;
 #[cfg(test)]
 mod tests;
@@ -402,16 +403,10 @@ fn diff(
     budget.charge(caller, (a.len() + b.len()).saturating_mul(16))?;
     let na = text::line_count(a);
     let nb = text::line_count(b);
-    budget.charge(caller, (na + nb).saturating_mul(96))?;
+    budget.charge(caller, (na + nb).saturating_mul(1024))?;
     text::check_diff_size(na, nb)?;
-    // Line-based LCS: a cell per line pair, plus a scan of both texts.
-    fuel::charge(
-        &mut *caller,
-        fuel::PARSE,
-        (na as u64).saturating_mul(nb as u64),
-    )?;
     fuel::charge(&mut *caller, fuel::SCAN, (a.len() + b.len()) as u64)?;
-    let result = text::diff(a, b)?;
+    let result = text::diff_charged(a, b, |steps| fuel::charge(&mut *caller, fuel::PARSE, steps))?;
     budget.check_size(result.len().saturating_mul(2))?;
     Ok(result)
 }

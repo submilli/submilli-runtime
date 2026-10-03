@@ -127,6 +127,7 @@ fn fetch_inner(
             }
         }
     }
+    snapshot.invalidate_reference_cache()?;
     let outcome = prepared
         .receive(gix::progress::Discard, &job.cancelled)
         .map_err(|error| redact_fetch_failure(error.into()))?;
@@ -266,6 +267,7 @@ pub fn pull(
     let tree = snapshot.repo.find_commit(next)?.tree_id()?.detach();
     let files = operations::tree_entries(snapshot, tree)?;
     operations::replace_worktree(snapshot, &files)?;
+    snapshot.invalidate_reference_cache()?;
     snapshot.repo.reference(
         format!("refs/heads/{current}"),
         next,
@@ -345,6 +347,7 @@ impl Client {
         self.job.check_cancelled().map_err(io_error)?;
         let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(60);
         let mut spool = self.spool_writer()?;
+        self.job.algorithm_fuel.before_effect();
         let mut response = self
             .wait(
                 deadline,
@@ -895,6 +898,7 @@ mod tests {
                 max_bytes: 4096,
                 transferred: Arc::new(AtomicU64::new(0)),
                 meter: Default::default(),
+                algorithm_fuel: Arc::new(crate::stdlib::git::work::AlgorithmWork::new(u64::MAX)),
                 denial: Arc::new(Mutex::new(None)),
             },
         }

@@ -28,6 +28,7 @@ pub(super) fn run(
     // before anything is written.
     if writes(op) {
         refuse_read_only_repository(job, op, &placement)?;
+        job.algorithm_fuel.before_effect();
     }
     // Declared first, the permit is released last, after the snapshot's cleanup.
     let (_permit, mut snapshot) =
@@ -246,7 +247,7 @@ fn open_snapshot(
         quota: placement.quota().cloned(),
         meter: Arc::clone(&job.meter),
     };
-    let snapshot = if create {
+    let mut snapshot = if create {
         storage::Snapshot::init(
             &location,
             lock,
@@ -256,6 +257,7 @@ fn open_snapshot(
     } else {
         storage::Snapshot::open(&location, lock, opening, writes(op))?
     };
+    snapshot.algorithm_fuel = Arc::clone(&job.algorithm_fuel);
     Ok((permit, snapshot))
 }
 

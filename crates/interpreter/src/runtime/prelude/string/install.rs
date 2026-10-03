@@ -136,7 +136,8 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         true,
         move |caller, params, results| {
             let recv = json_abi.read(caller, abi_arg(params, 0)?, "String#toJson")?;
-            *abi_result(results, 0)? = crate::runtime::prelude::vtable::quote_string(caller, recv.value.units())?;
+            *abi_result(results, 0)? =
+                crate::runtime::prelude::vtable::quote_string(caller, recv.value.units())?;
             Ok(())
         },
     )?;
@@ -722,14 +723,16 @@ fn register_string_search_predicate(
             let abi = abi.clone();
             Box::pin(async move {
                 let recv = abi.read(caller, abi_arg(params, 0)?, name)?;
-                let search = super::super::value::search_string(caller, abi_arg(params, 1)?).await?;
+                let search =
+                    super::super::value::search_string(caller, abi_arg(params, 1)?).await?;
                 let from = super::super::value::to_number(caller, abi_arg(params, 2)?).await?;
                 fuel::charge(
                     &mut *caller,
                     fuel::SCAN,
                     (recv.value.len() + search.len()) as u64,
                 )?;
-                *abi_result(results, 0)? = Val::I32(op(&recv.value, &Str::from_units(search), from) as i32);
+                *abi_result(results, 0)? =
+                    Val::I32(op(&recv.value, &Str::from_units(search), from) as i32);
                 Ok(())
             })
         },

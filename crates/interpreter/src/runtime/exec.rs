@@ -66,7 +66,12 @@ pub(crate) fn uncaught_error(
     let Some(exn) = store.take_pending_exception() else {
         return err;
     };
-    let Some(text) = read_thrown_error_text(store, exn) else {
+    // An already-thrown error may follow a completed effect. Diagnostic
+    // decoding must preserve its message even after settlement takes fuel to zero.
+    let text = super::fuel::settle_result(store, |store| Ok(read_thrown_error_text(store, exn)))
+        .ok()
+        .flatten();
+    let Some(text) = text else {
         return err;
     };
     // The engine captures the throw-site backtrace into the exception and

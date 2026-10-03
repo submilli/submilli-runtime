@@ -414,6 +414,7 @@ mod tests {
                     "test",
                 )
                 .unwrap();
+            snapshot.invalidate_reference_cache().unwrap();
             let result = validate_fetch_graph(&snapshot);
             if branch == "one" {
                 assert!(result.is_ok());

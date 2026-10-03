@@ -1041,6 +1041,46 @@ fn operations_charge_for_the_input_they_process() {
         assert!(actual < 4 * count * (CALL + COPY.cost(count)));
     }
 
+    // Adding unrelated files must not increase work below a literal glob prefix.
+    let mut glob_fuel = Vec::new();
+    for (index, count) in [128, 256].into_iter().enumerate() {
+        let setup = format!(
+            "mkdir('/wanted/nested',true); mkdir('/unrelated',true); writeText('/wanted/nested/file.ts','x'); for(let i=0;i<{count};i++){{writeText('/unrelated/'+i.toString()+'.ts','x');}}"
+        );
+        let prefix =
+            "import { mkdir, writeText } from 'submilli:fs'; import { glob } from 'submilli:code';";
+        let baseline = host_fuel(
+            "usage-glob-base",
+            &format!("{prefix} function main():number{{{setup} return 0;}}"),
+        );
+        let actual = host_fuel(
+            "usage-glob-prefix",
+            &format!(
+                "{prefix} function main():number{{{setup} assert(glob('wanted/nested/*.ts').entries.length===1); return 0;}}"
+            ),
+        ) - baseline;
+        assert!(actual < [112_162, 214_562][index] / 2, "glob: {actual}");
+        glob_fuel.push(actual);
+    }
+    assert_eq!(glob_fuel[0], glob_fuel[1]);
+
+    let mut diff_fuel = Vec::new();
+    for (index, lines) in [128, 256].into_iter().enumerate() {
+        let setup = format!("const a=\"x\\n\".repeat({lines});const b=\"y\\n\"+a.slice(2);");
+        let prefix = "import { diffText } from 'submilli:code';";
+        let baseline = host_fuel(
+            "usage-diff-base",
+            &format!("{prefix} function main():number{{{setup} return 0;}}"),
+        );
+        let actual = host_fuel(
+            "usage-diff-linear",
+            &format!("{prefix} function main():number{{{setup} diffText(a,b); return 0;}}"),
+        ) - baseline;
+        assert!(actual < [98_902, 394_390][index] / 2, "diff: {actual}");
+        diff_fuel.push(actual);
+    }
+    assert!(diff_fuel[1] <= diff_fuel[0] * 21 / 10, "{diff_fuel:?}");
+
     // Double both text and nesting: the old intermediate-string charge grew
     // nearly fourfold. Shared default serialization copies output linearly.
     for (method, old) in [
@@ -1284,6 +1324,38 @@ fn operations_charge_for_the_input_they_process() {
             measured[1] * 10 <= measured[0] * 22,
             "{operation}: {measured:?}"
         );
+    }
+
+    for (name, operation, calls_per_entry) in [
+        ("remove", "remove(\"/tree\", true);", 4),
+        ("move", "move(\"/tree\", \"/renamed\");", 2),
+    ] {
+        let mut empty_cost = 0;
+        for n in [0_u64, 128, 256] {
+            let input = format!(
+                "mkdir(\"/tree\", true); for (let i = 0; i < {n}; i++) {{ writeText(\"/tree/file\" + String(i), \"x\"); }}"
+            );
+            let import = "import { mkdir, writeText, remove, move } from \"submilli:fs\";";
+            let baseline = host_fuel(
+                &format!("usage-fs-{name}-{n}-baseline"),
+                &format!("{import} function main(): number {{ {input} return 0; }}"),
+            );
+            let actual = host_fuel(
+                &format!("usage-fs-{name}-{n}"),
+                &format!("{import} function main(): number {{ {input} {operation} return 0; }}"),
+            ) - baseline;
+            if n == 0 {
+                empty_cost = actual;
+                continue;
+            }
+            // Both old host bodies charged only their flat gated syscall, so
+            // their entry-dependent delta was zero despite the native walks.
+            assert_eq!(
+                actual - empty_cost,
+                SYSCALL.cost(calls_per_entry * n),
+                "{name}"
+            );
+        }
     }
 
     // A structural visit budget does not change the cost of accepted walks:
