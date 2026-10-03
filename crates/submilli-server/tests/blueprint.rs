@@ -908,3 +908,37 @@ async fn registration_checks_dependency_requirements_and_preserves_existing_blue
     assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
     assert_eq!(body["error"], "invalid_packages");
 }
+
+#[tokio::test]
+async fn registration_validates_filter_fields_on_create_and_update() {
+    let router = router();
+    let valid = "name: filter-check\npermissions:\n  main:\n    - capability: http.get\n      filter: host == \"example.com\"\n      action: allow\n";
+    let invalid = valid.replace("host ==", "missing ==");
+    for endpoint in ["/v1/blueprints", "/v1/blueprints/filter-check"] {
+        let (status, body) = if endpoint == "/v1/blueprints" {
+            post(&router, endpoint, json!({"yaml": invalid})).await
+        } else {
+            assert_eq!(
+                post(&router, "/v1/blueprints", json!({"yaml": valid}))
+                    .await
+                    .0,
+                StatusCode::OK
+            );
+            put(&router, endpoint, json!({"yaml": invalid})).await
+        };
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+        assert_eq!(body["error"], "invalid_filter");
+        assert_eq!(
+            body["diagnostics"][0]["path"],
+            json!(["permissions", "main", 0, "filter"])
+        );
+        assert!(
+            body["message"]
+                .as_str()
+                .unwrap()
+                .contains("tests `missing`")
+        );
+    }
+    let (_, stored) = get(&router, "/v1/blueprints/filter-check").await;
+    assert!(!stored["yaml"].as_str().unwrap().contains("missing"));
+}

@@ -23,7 +23,7 @@ pub(super) fn run(
         check_calls::collect(ta, SearchRoot::Stmt(callable.body), &mut calls)?;
         let checks = calls
             .iter()
-            .map(|call| security_check(ta, call))
+            .map(|call| security_check(ta, declarations, call))
             .collect::<Result<Vec<_>, _>>()?;
         validate_check_tags(callable.doc, &checks, diags);
     }
@@ -239,10 +239,14 @@ fn validate_payload_keys(
         .collect::<BTreeSet<_>>();
     for (key, span) in payload_keys {
         if !binding_keys.contains(key.as_str()) {
-            diags.push(warning(
-                *span,
-                format!("payload key `{key}` missing from `@capability` binding"),
-            ));
+            diags.push(Diagnostic {
+                severity: Severity::Error,
+                help: vec![format!("add `{key}` to the matching `@capability` binding")],
+                ..warning(
+                    *span,
+                    format!("payload key `{key}` missing from `@capability` binding"),
+                )
+            });
         }
     }
     for binding in bindings {
@@ -258,7 +262,11 @@ fn validate_payload_keys(
     }
 }
 
-fn security_check(ta: &TypedAst, call: &CheckCall) -> Result<SecurityCheck, CompilerFailure> {
+fn security_check(
+    ta: &TypedAst,
+    declarations: &TypeDeclarations<'_>,
+    call: &CheckCall,
+) -> Result<SecurityCheck, CompilerFailure> {
     Ok(SecurityCheck {
         span: call.span,
         capability: call
@@ -270,7 +278,7 @@ fn security_check(ta: &TypedAst, call: &CheckCall) -> Result<SecurityCheck, Comp
         payload_keys: call
             .args
             .get(1)
-            .map(|id| literal_payload_keys(ta, *id))
+            .map(|id| payload_keys(ta, declarations, *id))
             .transpose()?
             .flatten(),
     })
@@ -287,8 +295,9 @@ fn literal_capability(
     })
 }
 
-fn literal_payload_keys(
+fn payload_keys(
     ta: &TypedAst,
+    declarations: &TypeDeclarations<'_>,
     id: ExprId,
 ) -> Result<Option<BTreeMap<String, Span>>, CompilerFailure> {
     let expr = ta.try_expr(id).map_err(crate::typechecker::arena_failure)?;
@@ -299,7 +308,9 @@ fn literal_payload_keys(
                 .map(|field| (field.name.name.clone(), field.name.span))
                 .collect(),
         ),
-        _ => None,
+        _ => declarations
+            .property_names(&expr.ty)
+            .map(|names| names.into_iter().map(|name| (name, expr.span)).collect()),
     })
 }
 
@@ -347,6 +358,120 @@ mod tests {
     }
 
     #[test]
+    fn package_payload_properties_resolve_imported_inherited_optional_fields() {
+        let (_, dependency, _) = run_package(
+            "@test/context",
+            &[(
+                "lib",
+                r#"
+            export interface Base { inherited?: number }
+            export interface Context extends Base { own: string }
+        "#,
+            )],
+            &[],
+        );
+        let source = r#"
+            import { check } from "submilli:security";
+            import { Context } from "@test/context";
+            /** @capability x/op { own: string } */
+            export function f(context: Context): void { check("x/op", context); }
+        "#;
+        let (_, _, diags) = run_package("@test/package", &[("lib", source)], &[dependency]);
+        assert!(
+            diags
+                .iter()
+                .any(|diag| diag.severity == crate::Severity::Error
+                    && diag.message.contains("payload key `inherited` missing")),
+            "{diags:?}"
+        );
+    }
+
+    #[test]
+    fn a_tag_without_bindings_rejects_payload_properties() {
+        let diags = diagnostics(
+            r#"
+            import { check } from "submilli:security";
+            /** @capability x/op */
+            function f(): void { check("x/op", { amount: 1 }); }
+            function main(): void {}
+        "#,
+        );
+        assert!(
+            diags
+                .iter()
+                .any(|diag| diag.severity == crate::Severity::Error
+                    && diag.message.contains("payload key `amount` missing")),
+            "{diags:?}"
+        );
+    }
+
+    #[test]
+    fn inherited_interface_and_class_payload_properties_require_bindings() {
+        for declarations in [
+            "interface Base { inherited?: number } interface Context extends Base { own: string }",
+            "class Base { inherited: number = 1; } class Context extends Base { own: string = \"a\"; private hidden: number = 0; }",
+            "type Context = { own: string; inherited: number } | { own: string; inherited?: number };",
+        ] {
+            let source = format!(
+                r#"
+                import {{ check }} from "submilli:security";
+                {declarations}
+                /** @capability x/op {{ own: string }} */
+                function f(context: Context): void {{ check("x/op", context); }}
+                function main(): void {{}}
+            "#
+            );
+            let diags = diagnostics(&source);
+            assert!(
+                diags
+                    .iter()
+                    .any(|diag| diag.severity == crate::Severity::Error
+                        && diag.message.contains("payload key `inherited` missing")),
+                "{diags:?}"
+            );
+            assert!(
+                !diags
+                    .iter()
+                    .any(|diag| diag.message.contains("payload key `hidden`")),
+                "{diags:?}"
+            );
+            let fixed = source.replace("{ own: string }", "{ own: string, inherited: number }");
+            let diags = diagnostics(&fixed);
+            assert!(
+                !diags.iter().any(|diag| diag.message.contains("payload key")
+                    || diag.message.contains("binding key")),
+                "{diags:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn payload_properties_require_bindings_for_literals_variables_and_optional_fields() {
+        for payload in ["{ a, b }", "context"] {
+            let source = format!(
+                r#"
+                import {{ check }} from "submilli:security";
+                interface Context {{ a: number; b?: number }}
+                /** @capability x/op {{ a }} */
+                function f(a: number, b: number): void {{
+                    const context: Context = {{ a, b }};
+                    check("x/op", {payload});
+                }}
+                function main(): void {{}}
+            "#
+            );
+            let diags = diagnostics(&source);
+            assert!(
+                diags
+                    .iter()
+                    .any(|diag| diag.severity == crate::Severity::Error
+                        && diag.message.contains("payload key `b` missing")),
+                "{diags:?}"
+            );
+        }
+    }
+
+    #[test]
     fn missing_capability_tag_warns() {
         let messages = messages(
             "import { check } from \"submilli:security\";\n\
@@ -378,7 +503,7 @@ mod tests {
     }
 
     #[test]
-    fn payload_key_missing_from_binding_warns() {
+    fn payload_key_missing_from_binding_errors() {
         let messages = messages(
             "import { check } from \"submilli:security\";\n\
              /** @capability x/op { a } */\n\

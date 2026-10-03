@@ -208,6 +208,12 @@ fn verify_packages(
     };
 
     blueprint_validation::validate_packages(blueprint, state.package_store()).map_err(|error| {
+        if let PackageValidationError::InvalidFilter(problem) = &error {
+            return (StatusCode::BAD_REQUEST, Json(
+                ErrorResponse::named("invalid_filter", problem.message.clone(), blueprint.name.clone())
+                    .diagnostic(problem.path.clone(), problem.message.clone()),
+            ));
+        }
         let (code, detail) = match &error {
             PackageValidationError::Store(
                 PackageStoreError::MissingPackage { name, .. }

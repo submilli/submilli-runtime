@@ -20,7 +20,9 @@ use super::capability_names::{
 };
 use super::declared_packages;
 use super::file::{blueprint_path, has_capability_rule, load, write};
-use super::filter_fields::{reported_fields, unreported_field_problem, unreported_fields};
+use submilli_build::blueprint_validation::{
+    reported_fields, unreported_field_problem, unreported_fields,
+};
 
 #[derive(Subcommand)]
 pub enum CapabilityCmd {

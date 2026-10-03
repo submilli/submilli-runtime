@@ -28,7 +28,7 @@ use std::process::ExitCode;
 
 use anyhow::Context;
 use submilli_blueprint::{Action, Blueprint, DefaultAction, FilterExpr, PermissionRule};
-use submilli_build::{Artifact, CapabilitySchema, PackageStore};
+use submilli_build::{CapabilitySchema, PackageStore};
 
 use super::capability::action_label;
 use super::capability_names::{
@@ -36,8 +36,8 @@ use super::capability_names::{
 };
 use super::declared_packages::{self, DeclaredPackages};
 use super::file::{has_capability_rule, has_matching_rule};
-use super::filter_fields::{reported_fields, unreported_field_problem, unreported_fields};
 use super::package_secrets::missing_package_secret_warnings;
+use submilli_build::blueprint_validation::unreported_field_errors;
 
 #[derive(clap::Args)]
 pub struct Args {
@@ -73,7 +73,11 @@ fn lint_blueprint(args: Args, blueprint: &mut Blueprint) -> anyhow::Result<ExitC
     // A package that failed to load may report fields of its own, even for a
     // standard-library name, so no field list is known to be complete.
     if packages.errors.is_empty() {
-        unfixable_errors.extend(unreported_field_errors(blueprint, &packages.artifacts));
+        unfixable_errors.extend(
+            unreported_field_errors(blueprint, &packages.artifacts)
+                .into_iter()
+                .map(|problem| problem.message),
+        );
     }
     errors.extend(unfixable_errors.iter().cloned());
 
@@ -127,34 +131,6 @@ fn lint_blueprint(args: Args, blueprint: &mut Blueprint) -> anyhow::Result<ExitC
         }
         Ok(ExitCode::from(1))
     }
-}
-
-/// One error per field a rule's filter tests that its capability's check
-/// doesn't report. A rule for a capability nothing loaded provides has no
-/// field list to check against, so it is skipped.
-fn unreported_field_errors(
-    blueprint: &Blueprint,
-    artifacts: &BTreeMap<String, Artifact>,
-) -> Vec<String> {
-    let mut errors = Vec::new();
-    for (caller, rules) in &blueprint.permissions {
-        for (position, rule) in (1..).zip(rules) {
-            let Some(filter) = &rule.filter else {
-                continue;
-            };
-            let Some(reported) = reported_fields(blueprint, artifacts, &rule.capability) else {
-                continue;
-            };
-            for field in unreported_fields(filter, &reported) {
-                errors.push(format!(
-                    "`permissions.{caller}` rule {position} for `{}` {}",
-                    rule.capability,
-                    unreported_field_problem(field, &reported)
-                ));
-            }
-        }
-    }
-    errors
 }
 
 /// A rule a package's `requires:` needs for its own calls; `--fix` grants it.

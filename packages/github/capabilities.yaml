@@ -3,72 +3,164 @@ provides:
 - name: github.com/branches.create
   description: Create a branch at an exact commit SHA.
   fields:
+    base:
+      type: string
     branch:
+      type: string
+    head:
       type: string
     owner:
       type: string
+    path:
+      type: string
+    ref:
+      type: string
     repo:
+      type: string
+    treeSha:
       type: string
 - name: github.com/branches.delete
   description: Delete a repository branch.
   fields:
+    base:
+      type: string
     branch:
+      type: string
+    head:
       type: string
     owner:
       type: string
+    path:
+      type: string
+    ref:
+      type: string
     repo:
+      type: string
+    treeSha:
       type: string
 - name: github.com/branches.get
   description: Retrieve a branch, or null when it does not exist.
   fields:
+    base:
+      type: string
     branch:
+      type: string
+    head:
       type: string
     owner:
       type: string
+    path:
+      type: string
+    ref:
+      type: string
     repo:
+      type: string
+    treeSha:
       type: string
 - name: github.com/branches.list
   description: List repository branches.
   fields:
+    base:
+      type: string
+    branch:
+      type: string
+    head:
+      type: string
     owner:
       type: string
+    path:
+      type: string
+    ref:
+      type: string
     repo:
+      type: string
+    treeSha:
       type: string
 - name: github.com/code.search
   description: Search code within one repository.
   fields:
+    base:
+      type: string
+    branch:
+      type: string
+    head:
+      type: string
     owner:
       type: string
+    path:
+      type: string
+    ref:
+      type: string
     repo:
+      type: string
+    treeSha:
       type: string
 - name: github.com/commits.create
   description: Commit multiple file writes and deletions with optimistic branch concurrency.
   fields:
+    base:
+      type: string
     branch:
+      type: string
+    head:
       type: string
     owner:
       type: string
+    path:
+      type: string
+    ref:
+      type: string
     repo:
+      type: string
+    treeSha:
       type: string
 - name: github.com/commits.get
   description: Retrieve one commit with configurable detail.
   fields:
+    base:
+      type: string
+    branch:
+      type: string
+    head:
+      type: string
     owner:
+      type: string
+    path:
       type: string
     ref:
       type: string
     repo:
+      type: string
+    treeSha:
       type: string
 - name: github.com/commits.list
   description: List repository commits.
   fields:
+    base:
+      type: string
+    branch:
+      type: string
+    head:
+      type: string
     owner:
       type: string
+    path:
+      type: string
+    ref:
+      type: string
     repo:
+      type: string
+    treeSha:
       type: string
 - name: github.com/contents.listDirectory
   description: List direct entries in a repository directory.
   fields:
+    base:
+      type: string
+    branch:
+      type: string
+    head:
+      type: string
     owner:
       type: string
     path:
@@ -76,10 +168,18 @@ provides:
     ref:
       type: string
     repo:
+      type: string
+    treeSha:
       type: string
 - name: github.com/contents.readFile
   description: Read a repository file as bytes. `ref` in the check is the branch, tag, or commit the caller names, or null for the repository's default branch.
   fields:
+    base:
+      type: string
+    branch:
+      type: string
+    head:
+      type: string
     owner:
       type: string
     path:
@@ -87,10 +187,18 @@ provides:
     ref:
       type: string
     repo:
+      type: string
+    treeSha:
       type: string
 - name: github.com/contents.readTextFile
   description: Read a repository file as strict UTF-8 text.
   fields:
+    base:
+      type: string
+    branch:
+      type: string
+    head:
+      type: string
     owner:
       type: string
     path:
@@ -99,9 +207,13 @@ provides:
       type: string
     repo:
       type: string
+    treeSha:
+      type: string
 - name: github.com/issueComments.create
   description: Add an issue comment.
   fields:
+    base:
+      type: string
     number:
       type: number
     owner:
@@ -111,6 +223,8 @@ provides:
 - name: github.com/issueComments.list
   description: List issue comments.
   fields:
+    base:
+      type: string
     number:
       type: number
     owner:
@@ -120,13 +234,27 @@ provides:
 - name: github.com/issues.create
   description: Create an issue.
   fields:
+    base:
+      type: string
+    branch:
+      type: string
+    head:
+      type: string
     owner:
       type: string
+    path:
+      type: string
+    ref:
+      type: string
     repo:
+      type: string
+    treeSha:
       type: string
 - name: github.com/issues.get
   description: Retrieve an issue, or null when absent.
   fields:
+    base:
+      type: string
     number:
       type: number
     owner:
@@ -136,20 +264,46 @@ provides:
 - name: github.com/issues.list
   description: List true issues using cursor pagination.
   fields:
+    base:
+      type: string
+    branch:
+      type: string
+    head:
+      type: string
     owner:
       type: string
+    path:
+      type: string
+    ref:
+      type: string
     repo:
+      type: string
+    treeSha:
       type: string
 - name: github.com/issues.search
   description: Search issues within one repository.
   fields:
+    base:
+      type: string
+    branch:
+      type: string
+    head:
+      type: string
     owner:
       type: string
+    path:
+      type: string
+    ref:
+      type: string
     repo:
+      type: string
+    treeSha:
       type: string
 - name: github.com/issues.update
   description: Update an issue.
   fields:
+    base:
+      type: string
     number:
       type: number
     owner:
@@ -159,13 +313,27 @@ provides:
 - name: github.com/labels.list
   description: List labels in a repository.
   fields:
+    base:
+      type: string
+    branch:
+      type: string
+    head:
+      type: string
     owner:
       type: string
+    path:
+      type: string
+    ref:
+      type: string
     repo:
+      type: string
+    treeSha:
       type: string
 - name: github.com/pullComments.create
   description: Add a general pull request comment.
   fields:
+    base:
+      type: string
     number:
       type: number
     owner:
@@ -175,6 +343,8 @@ provides:
 - name: github.com/pullComments.list
   description: List general pull request comments.
   fields:
+    base:
+      type: string
     number:
       type: number
     owner:
@@ -184,6 +354,8 @@ provides:
 - name: github.com/pullFiles.list
   description: List files changed by a pull request.
   fields:
+    base:
+      type: string
     number:
       type: number
     owner:
@@ -193,6 +365,8 @@ provides:
 - name: github.com/pullReviews.create
   description: Create a pull request review.
   fields:
+    base:
+      type: string
     number:
       type: number
     owner:
@@ -202,6 +376,8 @@ provides:
 - name: github.com/pullReviews.list
   description: List pull request reviews.
   fields:
+    base:
+      type: string
     number:
       type: number
     owner:
@@ -213,15 +389,25 @@ provides:
   fields:
     base:
       type: string
+    branch:
+      type: string
     head:
       type: string
     owner:
       type: string
+    path:
+      type: string
+    ref:
+      type: string
     repo:
+      type: string
+    treeSha:
       type: string
 - name: github.com/pulls.diff
   description: Retrieve a pull request unified diff.
   fields:
+    base:
+      type: string
     number:
       type: number
     owner:
@@ -231,6 +417,8 @@ provides:
 - name: github.com/pulls.get
   description: Retrieve a pull request, or null when absent.
   fields:
+    base:
+      type: string
     number:
       type: number
     owner:
@@ -240,13 +428,27 @@ provides:
 - name: github.com/pulls.list
   description: List pull requests.
   fields:
+    base:
+      type: string
+    branch:
+      type: string
+    head:
+      type: string
     owner:
       type: string
+    path:
+      type: string
+    ref:
+      type: string
     repo:
+      type: string
+    treeSha:
       type: string
 - name: github.com/pulls.merge
   description: Merge a pull request without force.
   fields:
+    base:
+      type: string
     number:
       type: number
     owner:
@@ -256,9 +458,21 @@ provides:
 - name: github.com/pulls.search
   description: Search pull requests within one repository.
   fields:
+    base:
+      type: string
+    branch:
+      type: string
+    head:
+      type: string
     owner:
       type: string
+    path:
+      type: string
+    ref:
+      type: string
     repo:
+      type: string
+    treeSha:
       type: string
 - name: github.com/pulls.update
   description: Update a pull request. `base` in the check is the branch the update retargets the pull request to, or null when it leaves the base as it is.
@@ -277,23 +491,59 @@ provides:
 - name: github.com/releases.getLatest
   description: Retrieve the latest release, or null when the repository has none.
   fields:
+    base:
+      type: string
+    branch:
+      type: string
+    head:
+      type: string
     owner:
       type: string
+    path:
+      type: string
+    ref:
+      type: string
     repo:
+      type: string
+    treeSha:
       type: string
 - name: github.com/releases.list
   description: List repository releases.
   fields:
+    base:
+      type: string
+    branch:
+      type: string
+    head:
+      type: string
     owner:
       type: string
+    path:
+      type: string
+    ref:
+      type: string
     repo:
+      type: string
+    treeSha:
       type: string
 - name: github.com/repositories.get
   description: Retrieve repository metadata, or null when it does not exist.
   fields:
+    base:
+      type: string
+    branch:
+      type: string
+    head:
+      type: string
     owner:
       type: string
+    path:
+      type: string
+    ref:
+      type: string
     repo:
+      type: string
+    treeSha:
       type: string
 - name: github.com/repositories.search
   description: Search repositories visible to the token.
@@ -311,7 +561,17 @@ provides:
 - name: github.com/trees.get
   description: Retrieve a Git tree.
   fields:
+    base:
+      type: string
+    branch:
+      type: string
+    head:
+      type: string
     owner:
+      type: string
+    path:
+      type: string
+    ref:
       type: string
     repo:
       type: string

@@ -737,3 +737,75 @@ description = "App package."
     );
     assert!(rendered.contains('^'), "missing caret: {rendered}");
 }
+
+#[test]
+fn capability_payload_fields_are_checked_before_building_artifacts() {
+    let project = TempDir::new().unwrap();
+    write_docs(project.path(), "sdk", "# SDK\n");
+    let manifest = r#"
+[[package]]
+name = "@acme/sdk"
+version = "0.1.0"
+description = "SDK package."
+path = "sdk"
+"#;
+    let store = PackageStore::new(project.path().join("store"));
+    for payload in ["{ customer, total }", "context"] {
+        let source = format!(
+            r#"
+import {{ check }} from "submilli:security";
+interface Context {{ customer: string; total?: number }}
+/**
+ * Checks a purchase.
+ * @param customer Customer identifier.
+ * @param total Purchase total.
+ * @capability acme.com/v {{ customer }}
+ */
+export function v(customer: string, total: number): void {{
+    const context: Context = {{ customer, total }};
+    check("acme.com/v", {payload});
+}}
+"#
+        );
+        write_module(project.path(), "sdk/src/lib.ts", &source);
+        let error = build(project.path(), &store, manifest, None).unwrap_err();
+        assert!(
+            error.to_string().contains("payload key `total` missing"),
+            "{error}"
+        );
+        let fixed = source.replace("{ customer }", "{ customer, total }");
+        write_module(project.path(), "sdk/src/lib.ts", &fixed);
+        let built = build(project.path(), &store, manifest, None).unwrap();
+        let capability = &built[0].capabilities.provides[0];
+        assert_eq!(
+            capability
+                .fields
+                .keys()
+                .map(String::as_str)
+                .collect::<Vec<_>>(),
+            ["customer", "total"]
+        );
+        install_packages(&store, &built).unwrap();
+        let yaml = "name: fields\npackages: ['@acme/sdk']\npermissions:\n  main:\n    - capability: acme.com/v\n      filter: total < 100\n      action: allow\n";
+        let blueprint = submilli_blueprint::parse(yaml).unwrap();
+        submilli_build::blueprint_validation::validate_packages(&blueprint, &store).unwrap();
+        let invalid = submilli_blueprint::parse(&yaml.replace("total <", "typo <")).unwrap();
+        let error =
+            submilli_build::blueprint_validation::validate_packages(&invalid, &store).unwrap_err();
+        let submilli_build::blueprint_validation::PackageValidationError::InvalidFilter(problem) =
+            error
+        else {
+            panic!("expected invalid filter, got {error}");
+        };
+        assert_eq!(
+            problem.path,
+            Some(submilli_blueprint::yaml_path![
+                "permissions",
+                "main",
+                0usize,
+                "filter"
+            ])
+        );
+        assert!(problem.message.contains("tests `typo`"));
+    }
+}

@@ -75,6 +75,135 @@ impl<'a> TypeDeclarations<'a> {
         self.member_within(ty, member, MAX_ALIAS_EXPANSIONS)
     }
 
+    /// All statically declared payload properties, including optional properties.
+    /// A union can report a property from any alternative at runtime.
+    pub(super) fn property_names(&self, ty: &Type) -> Option<Vec<String>> {
+        self.property_names_within(ty, MAX_ALIAS_EXPANSIONS)
+    }
+
+    fn property_names_within(&self, ty: &Type, remaining: u32) -> Option<Vec<String>> {
+        let remaining = remaining.checked_sub(1)?;
+        match ty.peel() {
+            Type::Object { fields, .. } => Some(fields.keys().cloned().collect()),
+            Type::Union(alternatives) => {
+                let mut names = std::collections::BTreeSet::new();
+                for alternative in alternatives {
+                    if matches!(alternative.peel(), Type::Null) {
+                        continue;
+                    }
+                    names.extend(self.property_names_within(alternative, remaining)?);
+                }
+                Some(names.into_iter().collect())
+            }
+            Type::InterfaceRef { mangled, name, .. } => match self.find(mangled, name)? {
+                Declared::Typed(TypedTypeDecl::Interface(declaration)) => {
+                    Some(declaration.property_names.iter().cloned().collect())
+                }
+                Declared::Symbol(TypeSymbol {
+                    kind: TypeKind::Interface { properties, .. },
+                    ..
+                }) => Some(properties.keys().cloned().collect()),
+                _ => None,
+            },
+            Type::ClassRef { mangled, .. } => self.class_property_names(mangled, remaining),
+            Type::AliasRef {
+                mangled,
+                name,
+                args,
+                ..
+            } => {
+                let (generics, body) = self.find(mangled, name)?.alias()?;
+                let body = TypeParamSubstitution::from_pairs(generics, args)
+                    .apply(body, &TypeLimits::default())
+                    .ok()?;
+                self.property_names_within(&body, remaining)
+            }
+            _ => None,
+        }
+    }
+
+    fn class_property_names(&self, mangled: &MangledName, remaining: u32) -> Option<Vec<String>> {
+        let remaining = remaining.checked_sub(1)?;
+        let declared = self
+            .script
+            .and_then(|ta| {
+                ta.types.iter().find(|declared| {
+            matches!(declared, TypedTypeDecl::Class(class) if &class.mangled_name == mangled)
+        })
+            })
+            .map(Declared::Typed)
+            .or_else(|| {
+                self.packages
+                    .iter()
+                    .find_map(|package| package.type_symbol(mangled))
+                    .map(Declared::Symbol)
+            })?;
+        let (parent, fields): (_, Vec<_>) = match declared {
+            Declared::Typed(TypedTypeDecl::Class(class)) => {
+                // An authored serializer can report unrelated keys; its result has no
+                // statically declared object shape to compare with the bindings.
+                if class
+                    .methods
+                    .iter()
+                    .any(|method| method.name.name == "toJson")
+                {
+                    return None;
+                }
+                (
+                    class.extends.as_ref(),
+                    class
+                        .fields
+                        .iter()
+                        .map(|field| (&field.name.name, field.visibility))
+                        .chain(
+                            class
+                                .accessors
+                                .iter()
+                                .map(|accessor| (&accessor.name().name, accessor.visibility())),
+                        )
+                        .collect(),
+                )
+            }
+            Declared::Symbol(TypeSymbol {
+                kind:
+                    TypeKind::Class {
+                        fields,
+                        methods,
+                        extends,
+                        ..
+                    },
+                ..
+            }) => {
+                if methods.contains_key("toJson") {
+                    return None;
+                }
+                (
+                    extends.as_ref().map(|base| &base.parent),
+                    fields
+                        .iter()
+                        .map(|(name, field)| (name, field.visibility))
+                        .collect(),
+                )
+            }
+            _ => return None,
+        };
+        let mut names: std::collections::BTreeSet<_> = match parent {
+            Some(parent) => self
+                .class_property_names(parent, remaining)?
+                .into_iter()
+                .collect(),
+            None => std::collections::BTreeSet::new(),
+        };
+        for (name, visibility) in fields {
+            if visibility == crate::Visibility::Private {
+                names.remove(name);
+            } else {
+                names.insert(name.clone());
+            }
+        }
+        Some(names.into_iter().collect())
+    }
+
     fn member_within(&self, ty: &Type, member: &str, expansions_left: u32) -> Member {
         match ty.peel() {
             Type::Object { fields, index } => object_member(fields, index.as_ref(), member),
