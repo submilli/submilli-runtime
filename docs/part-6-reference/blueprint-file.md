@@ -24,7 +24,7 @@ errors that refuse a file when it is linted or registered.
 | [`packages`](#packages) | list | no | empty |
 | [`auth_proxy`](#auth_proxy) | list | no | empty |
 | [`git`](#git) | map | no | absent: `submilli:git` disabled |
-| [`default`](#default) | `deny`, `allow`, `ask-human` | no | `deny` |
+| [`default`](#default) | `deny`, `allow` | no | `deny` |
 | [`permissions`](#permissions) | map | no | empty |
 | [`mcp`](#mcp) | map | no | empty |
 | [`llm`](#llm) | map | no | empty |
@@ -522,14 +522,14 @@ error: case.yaml: invalid git config: must be nonempty and contain no control ch
 | | |
 | --- | --- |
 | Type | string |
-| Allowed values | `deny`, `allow`, `ask-human` |
+| Allowed values | `deny`, `allow` |
 | Default | `deny` |
 
 The action for a capability check that no [`permissions`](#permissions)
 rule matches.
 
 ```text
-error: case.yaml: blueprint parse error: default: unknown variant `block`, expected one of `deny`, `allow`, `ask-human` at line 2 column 10
+error: case.yaml: blueprint parse error: default: unknown variant `block`, expected one of … at line 2 column 10
 ```
 
 ## permissions
@@ -541,7 +541,7 @@ program, or a package name for that package's own calls.
 | --- | --- | --- |
 | `capability` | string, non-empty | yes |
 | `filter` | filter expression | no |
-| `action` | `allow`, `deny`, `ask-human` | yes |
+| `action` | `allow`, `deny` | yes |
 
 ```yaml title="blueprint.yaml (fragment)"
 permissions:

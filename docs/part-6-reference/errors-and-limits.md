@@ -244,7 +244,6 @@ error: PermissionDeniedError: permission denied: caller=main capability=http.get
 | `reason` | Cause |
 | --- | --- |
 | `policy denied <capability> for <caller>` | A `deny` rule, or the blueprint's `default` |
-| `policy requires human approval for <capability> (caller <caller>); ask-human is deferred and treated as deny` | An `ask-human` rule |
 | `secret values are never available to main-module code, and no policy can grant this. …` | `secrets.get` called from the program rather than a package |
 
 For a capability on files, `<capability>` is followed by the path, after

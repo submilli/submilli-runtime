@@ -149,13 +149,11 @@ the package's `check`, the line that asked the blueprint, and `[entry]` is
 the line in the program that made the call, line 12, the "compliance
 step".
 
-The reason tells a refusal by policy from the two refusals no rule can
-change:
+The reason tells a refusal by policy from one no rule can change:
 
 | Reason | Cause |
 | --- | --- |
 | `policy denied <capability> for <caller>` | A `deny` rule, or the default |
-| `policy requires human approval for <capability> …` | An `ask-human` rule, which is treated as deny |
 | `secret values are never available to main-module code …` | `secrets.get` from `main`, which no rule can grant |
 
 Notice that the message doesn't name the rule or the filter that refused.

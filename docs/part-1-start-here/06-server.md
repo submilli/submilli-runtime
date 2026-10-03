@@ -113,6 +113,17 @@ it and the agent gets Submilli as a set of tools: run a program, look up
 packages, read the session's files. An application that would rather build
 those tools itself, as the quickstart's did, uses the HTTP API instead.
 
+## Availability
+
+A session lives on one server: its record and files are on that server's
+disk, which is what lets the server run with no database beside it. Run
+several servers for capacity, and route each session to the server that
+opened it. A restart keeps every session; while a server is down, its
+sessions wait for it, and the others keep serving.
+
+Submilli Enterprise is fault tolerant. To learn more, email us at
+[hello@submilli.ai](mailto:hello@submilli.ai).
+
 ## In production
 
 The server is the part of Submilli you run in production, and the part

@@ -45,7 +45,7 @@ capability.
 | --- | --- | --- | --- |
 | `capability` | string | Yes | The operation's name, such as `fs.write`, `acme.com/credits.apply`, or `mcp.linear` |
 | `filter` | string | No | A condition on the operation's fields, in the [filter language](/docs/reference/filter-language) |
-| `action` | `allow`, `deny`, or `ask-human` | Yes | What happens when the rule matches |
+| `action` | `allow` or `deny` | Yes | What happens when the rule matches |
 
 ## Actions and the default
 
@@ -53,7 +53,6 @@ capability.
 | --- | --- |
 | `allow` | The operation proceeds |
 | `deny` | The operation throws `PermissionDeniedError` |
-| `ask-human` | Treated as `deny`, with its own [reason](#denials-at-run-time) |
 
 `default` takes the same values and is `deny` when the blueprint doesn't set
 it. Under `default: allow`, every operation no rule matches is permitted,
@@ -214,7 +213,7 @@ missing field is false.
 | Mistake | Error |
 | --- | --- |
 | A filter that doesn't parse, or names an undeclared variable | See [Filter language](/docs/reference/filter-language#errors) |
-| An action or `default` that isn't one of the three | ``unknown variant `maybe`, expected one of `allow`, `deny`, `ask-human` `` |
+| An action or `default` other than `allow` or `deny` | ``unknown variant `maybe`, expected one of …`` |
 | A key in a rule other than `capability`, `filter`, `action` | ``unknown field `extra`, expected one of `capability`, `filter`, `action` `` |
 | An MCP capability with the tool in its name | `permission rule 'mcp.linear/save_issue': use capability 'mcp.linear' with a filter such as 'tool == "name"' instead of '/tool'` |
 | A rule for an undeclared MCP server or `llm` model | `permission rule 'mcp.x' references undeclared mcp server 'x'` |
@@ -246,7 +245,6 @@ that refused.
 | Reason | Cause |
 | --- | --- |
 | `policy denied <capability><target> for <caller>` | A `deny` rule, or the default |
-| `policy requires human approval for <capability><target> …` | An `ask-human` rule |
 | `secret values are never available to main-module code, …` | `secrets.get` from `main` |
 | `<path> is in the volume mounted read-only at <mount>` | A write to a read-only volume |
 
