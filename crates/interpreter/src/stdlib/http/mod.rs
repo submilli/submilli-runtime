@@ -44,7 +44,7 @@ use crate::stdlib::shared::{
 use redirect_guard::{
     CapabilityGuard, DownloadTarget, GuardedRequest, host_and_path, verb_context,
 };
-use transport::{DownloadMeta, http_failure_outcome};
+use transport::{DownloadMeta, DownloadProgress, http_failure_outcome};
 
 pub const MODULE_NAME: &str = "submilli:http";
 
@@ -537,7 +537,7 @@ fn read_download_options(
         overwrite: false,
         max_bytes: caller.data().http_max_response_size,
         headers: Vec::new(),
-        timeout_ms: DOWNLOAD_TIMEOUT_MS,
+        timeout_ms: DOWNLOAD_TIMEOUT_MS.min(caller.data().http_max_download_timeout_ms),
         decompress: false,
     };
     if matches!(val, Val::AnyRef(None)) {
@@ -548,25 +548,29 @@ fn read_download_options(
     }
     if let Some(v) = present_field(caller, val, "maxBytes")? {
         let n = read_boxed_number(caller, &v, "http.download (maxBytes)")?;
-        if n < 0.0 {
-            wasmtime::bail!("http.download: maxBytes must be non-negative, got {n}");
-        }
-        options.max_bytes = n as u64;
+        options.max_bytes = download_limit(n, caller.data().http_max_response_size, "maxBytes")?;
     }
     if let Some(v) = present_field(caller, val, "headers")? {
         options.headers = read_headers(caller, &v)?;
     }
     if let Some(v) = present_field(caller, val, "timeout")? {
         let n = read_boxed_number(caller, &v, "http.download (timeout)")?;
-        if n < 0.0 {
-            wasmtime::bail!("http.download: timeout must be non-negative, got {n}");
-        }
-        options.timeout_ms = n as u64;
+        options.timeout_ms =
+            download_limit(n, caller.data().http_max_download_timeout_ms, "timeout")?;
     }
     if let Some(v) = present_field(caller, val, "decompress")? {
         options.decompress = unbox_bool(caller, &v)?;
     }
     Ok(options)
+}
+
+fn download_limit(value: f64, ceiling: u64, name: &str) -> wasmtime::Result<u64> {
+    if !value.is_finite() || value < 0.0 || value.fract() != 0.0 || value > ceiling as f64 {
+        return Err(crate::runtime::host::range_error(format!(
+            "http.download: {name} must be a finite integer between 0 and {ceiling}; use a smaller value"
+        )));
+    }
+    Ok((value as u64).min(ceiling))
 }
 
 /// An options-bag field, `None` when absent — an omitted optional field may
@@ -668,15 +672,11 @@ async fn perform_download(
         resolved.regular_file(),
     );
     fuel::charge(&mut *caller, fuel::IO, request_bytes(&req))?;
-    let streamed = stream_to_temp(caller, &req, &tmp, &guest_path, disk_charge).await;
-    if let Ok(streamed) = &streamed {
-        // Received and written to disk: settled, so the file still publishes.
-        fuel::settle(
-            &mut *caller,
-            fuel::IO,
-            streamed.meta.bytes_written.saturating_mul(2),
-        )?;
-    }
+    let progress = DownloadProgress::default();
+    let streamed = stream_to_temp(caller, &req, &tmp, &guest_path, disk_charge, &progress).await;
+    // Network receipt and disk writes already happened, even on failure.
+    fuel::settle(&mut *caller, fuel::IO, progress.bytes_received())?;
+    fuel::settle(&mut *caller, fuel::IO, progress.bytes_written())?;
     // A filesystem failure has no transport outcome to record.
     match &streamed {
         Ok(streamed) => record_http_metric(
@@ -695,15 +695,19 @@ async fn perform_download(
         ),
         Err(DownloadFailure::Fs(_) | DownloadFailure::Full(..)) => {}
     }
-    let Streamed {
-        meta,
-        file,
-        disk_charge,
-    } = streamed.map_err(DownloadFailure::into_error)?;
-    commit_temp(file, disk_charge, &tmp, &resolved, &guest_path)?;
-
-    let duration_ms = start.elapsed().as_millis() as f64;
-    write_download_result(caller, &meta, &guest_path, duration_ms)
+    fuel::settle_result(caller, |caller| {
+        let result = (|| {
+            let Streamed {
+                meta,
+                file,
+                disk_charge,
+            } = streamed.map_err(DownloadFailure::into_error)?;
+            commit_temp(file, disk_charge, &tmp, &resolved, &guest_path)?;
+            let duration_ms = start.elapsed().as_millis() as f64;
+            write_download_result(caller, &meta, &guest_path, duration_ms)
+        })();
+        result.map_err(|error| crate::runtime::host::throw_host_error(caller, error))
+    })
 }
 
 /// Why a download attempt failed before commit. Transport failures carry the
@@ -749,6 +753,7 @@ async fn stream_to_temp(
     tmp: &ContentPath,
     guest_path: &str,
     disk_charge: QuotaCharge,
+    progress: &DownloadProgress,
 ) -> Result<Streamed, DownloadFailure> {
     let file = tmp
         .create()
@@ -757,9 +762,12 @@ async fn stream_to_temp(
         file,
         disk_charge,
         refused: None,
+        progress,
     });
     let http_client = std::sync::Arc::clone(&caller.data().http_client);
-    let result = http_client.download(req, &mut writer).await;
+    let result = http_client
+        .download_with_progress(req, &mut writer, progress)
+        .await;
     // Flush explicitly; BufWriter swallows errors on drop. Every failure below removes
     // the temp file, and dropping the writer's disk charge gives back what it held.
     let inner = match writer.into_inner() {
@@ -803,13 +811,14 @@ struct Streamed {
 /// The temp file a download streams into, reserving each chunk against the VFS's
 /// size limit before writing it, so a download stops at the limit rather than
 /// after it.
-struct QuotaWriter {
+struct QuotaWriter<'a> {
+    progress: &'a DownloadProgress,
     file: cap_std::fs::File,
     disk_charge: QuotaCharge,
     refused: Option<QuotaExceeded>,
 }
 
-impl std::io::Write for QuotaWriter {
+impl std::io::Write for QuotaWriter<'_> {
     fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
         let asked = buf.len() as u64;
         if let Err(exceeded) = self.disk_charge.reserve(asked) {
@@ -820,6 +829,7 @@ impl std::io::Write for QuotaWriter {
         // A short or failed write keeps less than it reserved; settle on what landed.
         let kept = written.as_ref().map_or(0, |n| *n as u64);
         self.disk_charge.unreserve(asked.saturating_sub(kept));
+        self.progress.written(kept);
         written
     }
 
@@ -2316,16 +2326,28 @@ function main(): void {
         security: Option<Arc<dyn SecurityCheck>>,
         vfs_root: &std::path::Path,
     ) -> Result<(), String> {
-        run_download_at(source, client, security, vfs_root, "/").await
+        run_download_measured(source, client, security, vfs_root).await.0
+    }
+
+    async fn run_download_measured(
+        source: &str, client: Arc<dyn HttpClient>, security: Option<Arc<dyn SecurityCheck>>, vfs_root: &std::path::Path,
+    ) -> (Result<(), String>, u64) {
+        run_download_measured_at(source, client, security, vfs_root, "/").await
     }
 
     async fn run_download_at(
+        source: &str, client: Arc<dyn HttpClient>, security: Option<Arc<dyn SecurityCheck>>, vfs_root: &std::path::Path, cwd: &str,
+    ) -> Result<(), String> {
+        run_download_measured_at(source, client, security, vfs_root, cwd).await.0
+    }
+
+    async fn run_download_measured_at(
         source: &str,
         client: Arc<dyn HttpClient>,
         security: Option<Arc<dyn SecurityCheck>>,
         vfs_root: &std::path::Path,
         cwd: &str,
-    ) -> Result<(), String> {
+    ) -> (Result<(), String>, u64) {
         let compiled =
             compile_script(source, "test.subm", crate::FileId(0), &[], &[]).expect("compile clean");
         let cfg = RuntimeConfig::default();
@@ -2349,10 +2371,40 @@ function main(): void {
             .instantiate_async(&mut store, &module)
             .await
             .expect("instantiate");
-        dispatch_main_async(&mut store, &inst)
+        let result = dispatch_main_async(&mut store, &inst)
             .await
             .map(|_| ())
-            .map_err(|e| format!("{e:?}"))
+            .map_err(|e| format!("{e:?}"));
+        (result, store.data().host_fuel)
+    }
+
+    #[test]
+    fn download_options_cannot_exceed_operator_limits() {
+        for value in [-1.0, 0.5, f64::NAN, f64::INFINITY, 129.0] {
+            assert!(super::download_limit(value, 128, "maxBytes").is_err());
+        }
+        assert_eq!(super::download_limit(0.0, 128, "maxBytes").unwrap(), 0);
+        assert_eq!(super::download_limit(128.0, 128, "maxBytes").unwrap(), 128);
+    }
+
+    #[tokio::test]
+    async fn download_over_limit_options_throw_before_request() {
+        let source = r#"
+            import { download } from "submilli:http";
+            function main(): void {
+                let caught = 0;
+                try { download("https://example.test/f", "/out", {maxBytes: 52428801}); }
+                catch (e: RangeError) { caught += 1; }
+                try { download("https://example.test/f", "/out", {timeout: 60001}); }
+                catch (e: RangeError) { caught += 1; }
+                assert(caught === 2);
+            }
+        "#;
+        let root = tempfile::tempdir().unwrap();
+        let (mock, result) = run_download_with_mock(source, vec![], None, root.path()).await;
+        result.unwrap();
+        assert!(mock.seen.lock().unwrap().is_empty());
+        assert!(dir_is_empty(root.path()));
     }
 
     struct CwdPolicy;
@@ -2893,6 +2945,44 @@ function main(): void {
             dir_is_empty(&outside),
             "the swapped-in link must not receive the download",
         );
+    }
+
+    #[tokio::test]
+    async fn failed_download_settles_received_bytes() {
+        struct PartialTransfer(usize);
+        #[async_trait::async_trait]
+        impl HttpClient for PartialTransfer {
+            async fn send(&self, _: &HttpRequest) -> Result<HttpResponse, HttpError> {
+                Err(HttpError::Other("unused".into()))
+            }
+            async fn download(
+                &self,
+                _: &HttpRequest,
+                writer: &mut (dyn std::io::Write + Send),
+            ) -> Result<DownloadMeta, HttpError> {
+                writer.write_all(&vec![b'x'; self.0]).unwrap();
+                Err(HttpError::Network("interrupted".into()))
+            }
+        }
+        let source = r#"
+            import { download } from "submilli:http";
+            function main(): void {
+                try { download("https://example.test/f", "/out.bin"); }
+                catch (e: Error) { assert(e.message.includes("interrupted")); }
+            }
+        "#;
+        let root = tempfile::tempdir().unwrap();
+        let mut costs = Vec::new();
+        for n in [0, 128, 256] {
+            let (result, fuel) =
+                run_download_measured(source, Arc::new(PartialTransfer(n)), None, root.path())
+                    .await;
+            result.unwrap();
+            assert!(dir_is_empty(root.path()));
+            costs.push(fuel);
+        }
+        assert_eq!(costs[1] - costs[0], 2 * super::fuel::IO.cost(128));
+        assert_eq!(costs[2] - costs[0], 2 * super::fuel::IO.cost(256));
     }
 
     #[tokio::test]

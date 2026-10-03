@@ -98,6 +98,8 @@ pub struct StoreData {
     pub fs_max_read_size: u64,
     pub http_client: Arc<dyn HttpClient>,
     pub http_max_response_size: u64,
+    /// Operator ceiling for a download, including streaming its body.
+    pub http_max_download_timeout_ms: u64,
     pub auth_proxy: Arc<dyn AuthProxy>,
     pub secret_provider: Arc<dyn SecretProvider>,
     /// The outbound `@mcp/<server>` transport the `submilli:mcp.call` host fn
@@ -212,6 +214,7 @@ impl StoreData {
             fs_max_read_size: DEFAULT_FS_MAX_READ_SIZE,
             http_client: crate::stdlib::http::default_http_client(),
             http_max_response_size: DEFAULT_HTTP_MAX_RESPONSE_SIZE,
+            http_max_download_timeout_ms: 60_000,
             auth_proxy: crate::stdlib::http::default_auth_proxy(),
             secret_provider: Arc::new(secrets::NoopSecretProvider),
             mcp_transport: None,
