@@ -157,6 +157,7 @@ pub struct StoreData {
     /// The call-metadata closure environment type, built on first use for the
     /// same reason as [`Self::intrinsic_types`].
     pub(crate) call_metadata_type: Option<wasmtime::StructType>,
+    pub(crate) regex_input: Option<prelude::regex::input::InputCache>,
     /// Runtime type metadata keyed by package name.
     pub type_info: std::collections::BTreeMap<String, TypeInfoTable>,
     /// Depth of the in-flight universal-vtable walk; see
@@ -232,6 +233,7 @@ impl StoreData {
             intrinsic_types: None,
             closure_receiver_type: None,
             call_metadata_type: None,
+            regex_input: None,
             type_info: std::collections::BTreeMap::new(),
             vtable_walk_depth: 0,
             vtable_walk_nodes: 0,

@@ -988,6 +988,55 @@ fn operations_charge_for_the_input_they_process() {
         assert!(added >= floor, "{name}: {added} < {floor}");
     }
 
+    for n in [128_u64, 256] {
+        for (method, per_call) in [
+            ("exec", CALL + REGEX.cost(1) + SCAN.cost(1) + COPY.cost(1)),
+            ("test", CALL + REGEX.cost(1)),
+        ] {
+            let input = format!("const s = \"x\".repeat({n}); const r = /x/g;");
+            let baseline = host_fuel(
+                &format!("usage-regex-{method}-{n}-base"),
+                &format!("function main(): number {{ {input} return 0; }}"),
+            );
+            let actual = host_fuel(
+                &format!("usage-regex-{method}-{n}"),
+                &format!(
+                    "function main(): number {{ {input} for (let i = 0; i < {n}; i++) {{ r.{method}(s); }} return 0; }}"
+                ),
+            ) - baseline;
+            let decoding = COPY.cost(n) + SCAN.cost(n);
+            assert_eq!(actual, decoding + n * per_call);
+            // Old exec cost 21,760/80,384: every call paid full decoding.
+            assert!(actual < n * (decoding + per_call));
+        }
+        for (pattern, slots) in [("/x/g", 0_u64), ("/x|()()()()()()()()/g", 8)] {
+            let input = format!("const s = \"x\".repeat({n}); const r = {pattern};");
+            let baseline = host_fuel(
+                &format!("usage-matchall-{slots}-{n}-base"),
+                &format!("function main(): number {{ {input} return 0; }}"),
+            );
+            let actual = host_fuel(
+                &format!("usage-matchall-{slots}-{n}"),
+                &format!("function main(): number {{ {input} s.matchAll(r); return 0; }}"),
+            ) - baseline;
+            // The empty alternative also matches once at the end of the input.
+            let end_match = if slots == 0 {
+                0
+            } else {
+                ELEM.cost(slots) + ELEM.cost(1)
+            };
+            // Input was already shared; only capture-array slots were missing.
+            assert_eq!(
+                actual,
+                CALL + COPY.cost(n)
+                    + SCAN.cost(n)
+                    + n * (REGEX.cost(1) + SCAN.cost(1) + COPY.cost(1) + ELEM.cost(slots))
+                    + ELEM.cost(n)
+                    + end_match
+            );
+        }
+    }
+
     // A structural visit budget does not change the cost of accepted walks:
     // two array snapshots, one hook per element, and the outer call + hook.
     for n in [128_u64, 256] {

@@ -20,6 +20,7 @@
 
 use crate::runtime::host::abi_arg;
 pub(crate) mod engine;
+pub(crate) mod input;
 mod install;
 
 pub(crate) use install::declare_types;
@@ -223,13 +224,23 @@ fn build_match_box(
         .ok_or_else(|| wasmtime::Error::msg("RegExp: invalid match span"))?;
     let match_str = write_submilli_string_struct(caller, matched)?;
 
-    let mut numbered: Vec<Val> = Vec::with_capacity(snapshot.numbered.len());
+    let mut numbered: Vec<Val> = Vec::new();
+    numbered
+        .try_reserve_exact(snapshot.numbered.len())
+        .map_err(crate::runtime::host::fatal_host_error)?;
     for slot in &snapshot.numbered {
         numbered.push(capture_slot(caller, input, *slot)?);
     }
     let numbered_arr = capture_array(caller, &intr, &numbered)?;
 
     let mut named: Vec<Val> = Vec::new();
+    let named_slots =
+        snapshot.named.len().checked_mul(2).ok_or_else(|| {
+            crate::runtime::host::fatal_host_error("RegExp: capture count overflow")
+        })?;
+    named
+        .try_reserve_exact(named_slots)
+        .map_err(crate::runtime::host::fatal_host_error)?;
     for (name, slot) in &snapshot.named {
         let raw = write_submilli_string(&mut *caller, name)?;
         named.push(Val::AnyRef(Some(raw.to_anyref())));
@@ -281,6 +292,7 @@ fn capture_array(
     intr: &IntrinsicTypes,
     elements: &[Val],
 ) -> wasmtime::Result<Rooted<ArrayRef>> {
+    fuel::charge(&mut *caller, fuel::ELEM, elements.len() as u64)?;
     let pre = ArrayRefPre::new(&mut *caller, intr.regex_capture_array.clone());
     ArrayRef::new_fixed(&mut *caller, &pre, elements)
 }
@@ -321,9 +333,12 @@ fn read_capture_array(
 // ---------------------------------------------------------------------------
 
 pub(super) fn test(caller: &mut Caller<'_, StoreData>, params: &[Val]) -> wasmtime::Result<bool> {
-    let st = as_struct(caller, abi_arg(params, 0)?, "RegExp#test")?;
+    let params: &[Val; 2] = params.try_into().map_err(|_| {
+        crate::runtime::host::fatal_host_error("RegExp#test: invalid argument count")
+    })?;
+    let st = as_struct(caller, &params[0], "RegExp#test")?;
     let bits = flag_bits(caller, &st)?;
-    let input = read_string_arg(&mut *caller, abi_arg(params, 1)?, "RegExp#test(input)")?;
+    let input = input::read(caller, &params[1])?;
     let start = if uses_last_index(bits) {
         last_index(caller, &st)?
     } else {
@@ -345,7 +360,7 @@ pub(super) fn exec(caller: &mut Caller<'_, StoreData>, params: &[Val]) -> wasmti
         .map_err(|_| wasmtime::Error::msg("exec: invalid argument count"))?;
     let st = as_struct(caller, abi_arg(params, 0)?, "RegExp#exec")?;
     let bits = flag_bits(caller, &st)?;
-    let input = read_string_arg(&mut *caller, abi_arg(params, 1)?, "RegExp#exec(input)")?;
+    let input = input::read(caller, &params[1])?;
     let start = if uses_last_index(bits) {
         last_index(caller, &st)?
     } else {
