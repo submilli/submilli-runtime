@@ -297,37 +297,16 @@ logging:
 ```
 
 `--log-file` overrides `SUBMILLI_LOG_FILE`, which overrides `logging.file`.
-Relative paths resolve against the process's working directory. The parent
-directory must exist and the destination must be a regular file; an inaccessible
-path fails startup with the path in the
-error. Existing contents are retained across restarts.
+The parent directory must exist; an invalid or inaccessible file fails startup.
+Existing contents are retained across restarts.
 
-On Unix, send `SIGHUP` after an external tool such as logrotate moves the
-file: the server creates or opens the configured path again and subsequent
-records use that file. If reopening fails, the server keeps the old file and
-reports the failure to standard error. With standard output, `SIGHUP` has no
-effect. The server does no rotation or retention itself. Later write failures
-are reported to standard error; they do not stop the server. Sentry reporting
-is independent of this output.
+On Unix, `SIGHUP` reopens the configured path after external rotation. If it
+fails, the server keeps the old file and reports the error to standard error.
+The server does no rotation or retention itself.
 
-Records use logfmt, one event per line, with no ANSI colours even on a terminal.
-The leading keys always appear in this order:
-
-| Key | Value |
-| --- | --- |
-| `ts` | RFC 3339 UTC timestamp with millisecond precision. |
-| `level` | Lowercase severity: `error`, `warn`, `info`, `debug`, or `trace`. |
-| `stream` | `log` for diagnostic records. |
-| `target` | The tracing target that emitted the event. |
-| `msg` | The event message, empty when none was supplied. |
-
-Event fields follow those keys, then any enclosing span fields. A field that
-shares a leading key is prefixed with `fields.`, for example `fields.stream`.
-Values are bare unless empty or containing whitespace, `=`, a quote, or a
-control character. Quoted values escape quotes and backslashes, use `\n`,
-`\r`, and `\t` for line breaks and tabs, and `\uXXXX` for other controls.
-Printable Unicode remains unchanged. Records exceeding 1 MiB are rejected
-with an error on standard error.
+Records use logfmt, one event per line, with no ANSI colours. The leading keys
+are `ts` (UTC, milliseconds), `level`, `stream=log`, `target`, and `msg`, followed
+by event fields. Values are quoted and escaped when needed.
 
 Every program the server runs adds an execution record:
 

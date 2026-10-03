@@ -49,10 +49,6 @@ ts=2026-10-03T15:29:43.129Z level=info stream=log target=submilli_server::auth m
 ts=2026-10-03T15:29:43.145Z level=info stream=log target=submilli_server::serve msg="submilli-server listening" addr=127.0.0.1:8128
 ```
 
-To append logs to a file when running as a plain process, set
-`logging.file`, `--log-file`, or `SUBMILLI_LOG_FILE`; see
-[Logs](/docs/reference/server-settings#logs).
-
 Apart from the API token, everything the server needs it creates on
 first use. The `submilli server` commands read the API token from the
 same variable, so in this shell they need no further setup:
