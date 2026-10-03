@@ -2622,7 +2622,7 @@ function main(): string {
                 .lock()
                 .expect("mutex")
                 .push((caller.to_string(), capability.to_string()));
-            crate::runtime::CheckOutcome::Allow
+            crate::runtime::CheckOutcome::Allow { rule: None }
         }
     }
 
@@ -3589,10 +3589,11 @@ function main(): string {
                 .push((caller.to_string(), capability.to_string()));
             if capability == "test.denied" {
                 crate::runtime::CheckOutcome::Deny {
+                    rule: None,
                     reason: "blocked by test".to_string(),
                 }
             } else {
-                crate::runtime::CheckOutcome::Allow
+                crate::runtime::CheckOutcome::Allow { rule: None }
             }
         }
     }
@@ -3817,10 +3818,11 @@ function main(): string {
                 .push((caller.to_string(), capability.to_string()));
             if self.deny_caller == Some(caller) {
                 crate::runtime::CheckOutcome::Deny {
+                    rule: None,
                     reason: "blocked by test".to_string(),
                 }
             } else {
-                crate::runtime::CheckOutcome::Allow
+                crate::runtime::CheckOutcome::Allow { rule: None }
             }
         }
     }

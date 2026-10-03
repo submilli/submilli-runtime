@@ -2991,3 +2991,19 @@ permissions:
         "hello"
     );
 }
+
+#[tokio::test]
+async fn execute_ids_cover_argument_validation_and_compile_errors() {
+    let h = Harness::new();
+    let session = h.handshake(EPH).await;
+    for arguments in [json!({}), json!({"code": "function main(): missing {}"})] {
+        let (_, _, rpc) = h
+            .post(EPH, rpc_call(1, EXECUTE, arguments), Some(&session))
+            .await;
+        let id = rpc["result"]["structuredContent"]["execution_id"]
+            .as_str()
+            .or_else(|| rpc["error"]["data"]["execution_id"].as_str())
+            .expect("execution ID on refusal");
+        uuid::Uuid::parse_str(id).unwrap();
+    }
+}

@@ -165,10 +165,11 @@ impl crate::runtime::SecurityCheck for Deny {
         assert!(capability.starts_with("fs."));
         if capability == self.capability && ctx["path"] == self.path {
             crate::runtime::security::CheckOutcome::Deny {
+                rule: None,
                 reason: "test denial".into(),
             }
         } else {
-            crate::runtime::security::CheckOutcome::Allow
+            crate::runtime::security::CheckOutcome::Allow { rule: None }
         }
     }
 }
@@ -237,9 +238,10 @@ impl crate::runtime::SecurityCheck for Within {
             .strip_prefix(self.root)
             .is_some_and(|rest| rest.is_empty() || rest.starts_with('/'));
         if inside || self.also.contains(&path) {
-            crate::runtime::security::CheckOutcome::Allow
+            crate::runtime::security::CheckOutcome::Allow { rule: None }
         } else {
             crate::runtime::security::CheckOutcome::Deny {
+                rule: None,
                 reason: format!("outside {}: {path}", self.root),
             }
         }

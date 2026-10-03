@@ -147,10 +147,11 @@ mod tests {
             ));
             if self.deny {
                 CheckOutcome::Deny {
+                    rule: None,
                     reason: "denied in test".to_string(),
                 }
             } else {
-                CheckOutcome::Allow
+                CheckOutcome::Allow { rule: None }
             }
         }
     }

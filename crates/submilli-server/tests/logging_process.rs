@@ -161,7 +161,7 @@ fn stdout_is_logfmt_and_sighup_is_a_noop() {
     for line in content.lines() {
         assert!(line.starts_with("ts="));
         assert!(line.contains(" level="));
-        assert!(line.contains(" stream=log target="));
+        assert!(line.contains(" stream=log target=") || line.contains(" stream=audit target="));
         assert!(!line.contains('\u{1b}'));
     }
     signal(&server.0, libc::SIGHUP);
@@ -221,7 +221,7 @@ fn an_unopenable_log_file_fails_startup() {
 
 #[cfg_attr(skip_http_tests, ignore = "HTTP tests disabled")]
 #[test]
-fn rust_log_filters_process_output() {
+fn rust_log_filters_logs_while_audit_remains_visible() {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("server.log");
     let port = free_port();
@@ -233,7 +233,10 @@ fn rust_log_filters_process_output() {
     });
     common::wait_ready(port);
     stop(&mut server);
-    assert!(std::fs::read_to_string(path).unwrap().is_empty());
+    let records = std::fs::read_to_string(path).unwrap();
+    assert!(records.contains("event=started"));
+    assert!(records.contains("event=stopped"));
+    assert!(records.lines().all(|line| line.contains(" stream=audit ")));
 }
 
 #[cfg_attr(skip_http_tests, ignore = "HTTP tests disabled")]
@@ -292,4 +295,65 @@ fn terminal_stdout_has_no_ansi_sequences() {
     );
     assert!(!output.contains('\u{1b}'));
     assert!(output.lines().all(|line| line.starts_with("ts=")));
+}
+
+#[cfg_attr(skip_http_tests, ignore = "HTTP tests disabled")]
+#[test]
+fn separate_audit_file_reopens_on_sighup() {
+    let directory = tempfile::tempdir().unwrap();
+    let audit_path = directory.path().join("audit.log");
+    let rotated = directory.path().join("audit.log.1");
+    let log_path = directory.path().join("server.log");
+    let config_path = directory.path().join("server.yaml");
+    std::fs::write(
+        &config_path,
+        format!("logging:\n  audit:\n    file: {}\n", audit_path.display()),
+    )
+    .unwrap();
+    let port = free_port();
+    let mut server = start(directory.path(), port, |command| {
+        command
+            .arg("--config")
+            .arg(config_path)
+            .arg("--log-file")
+            .arg(&log_path);
+    });
+    wait_for(&audit_path, "event=started", &mut server);
+    std::fs::rename(&audit_path, &rotated).unwrap();
+    signal(&server.0, libc::SIGHUP);
+    let agent = ureq::Agent::config_builder()
+        .http_status_as_error(false)
+        .build()
+        .new_agent();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        agent
+            .post(format!("http://127.0.0.1:{port}/v1/execute"))
+            .send_json(serde_json::json!({}))
+            .unwrap();
+        let content = std::fs::read_to_string(&audit_path).unwrap_or_default();
+        if content.contains("type=execution") {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "audit destination was not reopened"
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    stop(&mut server);
+    assert!(
+        std::fs::read_to_string(rotated)
+            .unwrap()
+            .contains("event=started")
+    );
+    let audit = std::fs::read_to_string(audit_path).unwrap();
+    assert!(audit.contains("event=stopped"));
+    assert!(audit.lines().all(|line| line.contains(" stream=audit ")));
+    assert!(
+        std::fs::read_to_string(log_path)
+            .unwrap()
+            .lines()
+            .all(|line| line.contains(" stream=log "))
+    );
 }

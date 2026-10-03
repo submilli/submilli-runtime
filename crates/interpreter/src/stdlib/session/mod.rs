@@ -77,7 +77,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
                 let key = read_key(caller, abi_arg(params, 0)?, "get")?;
                 gate(caller, "session.read", &key)?;
                 let store = provider(caller, "get")?;
-                let Some(payload) = store.get(&key).map_err(|e| trap(&e))? else {
+                let Some(payload) = store.get(&key).map_err(|e| trap(caller, &e))? else {
                     *abi_result(results, 0)? = Val::AnyRef(None);
                     return Ok(());
                 };
@@ -103,7 +103,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
                 gate(caller, "session.read", &key)?;
                 let store = provider(caller, "has")?;
                 *abi_result(results, 0)? =
-                    Val::I32(i32::from(store.has(&key).map_err(|e| trap(&e))?));
+                    Val::I32(i32::from(store.has(&key).map_err(|e| trap(caller, &e))?));
                 Ok(())
             })
         },
@@ -125,7 +125,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
                 // Written to the store: code units, two bytes each.
                 fuel::charge(&mut *caller, fuel::IO, 2 * payload.len() as u64)?;
                 let store = provider(caller, "set")?;
-                store.set(&key, &payload).map_err(|e| trap(&e))
+                store.set(&key, &payload).map_err(|e| trap(caller, &e))
             })
         },
     )?;
@@ -142,7 +142,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
                 gate(caller, "session.remove", &key)?;
                 let store = provider(caller, "remove")?;
                 *abi_result(results, 0)? =
-                    Val::I32(i32::from(store.remove(&key).map_err(|e| trap(&e))?));
+                    Val::I32(i32::from(store.remove(&key).map_err(|e| trap(caller, &e))?));
                 Ok(())
             })
         },
@@ -266,7 +266,7 @@ fn list(
 
     let mut scanned = store
         .scan(resume_after.as_deref(), &prefix, MAX_SCAN_PER_PAGE)
-        .map_err(|e| trap(&e))?;
+        .map_err(|e| trap(caller, &e))?;
 
     // The `limit` applies to candidates, not to survivors of the filter: taking
     // `limit` candidates and only then filtering keeps the cursor independent of
@@ -452,7 +452,7 @@ fn cursor_trap(error: cursor::CursorError) -> wasmtime::Error {
 /// Every store failure reaches the guest as a catchable error. The `Display`
 /// impl already excludes the stored value, so the message can be passed
 /// through whole.
-fn trap(error: &SessionKvError) -> wasmtime::Error {
+fn trap(caller: &wasmtime::Caller<'_, StoreData>, error: &SessionKvError) -> wasmtime::Error {
     match error {
         SessionKvError::InvalidKey { .. } => crate::runtime::host::type_error(error.to_string()),
         SessionKvError::LimitExceeded {
@@ -462,6 +462,16 @@ fn trap(error: &SessionKvError) -> wasmtime::Error {
             ..
         } => crate::runtime::host::range_error(error.to_string()),
         SessionKvError::LimitExceeded { .. } => {
+            let who = crate::stdlib::shared::running_package(caller)
+                .unwrap_or_else(|p| p.label.to_string());
+            crate::stdlib::shared::audit_denial(
+                caller.data().security_check.as_ref(),
+                &who,
+                "session.write",
+                &serde_json::json!({}),
+                "quota",
+                "session-state budget exceeded",
+            );
             crate::runtime::host::quota_exceeded_error(error.to_string())
         }
         SessionKvError::Backend { .. } => wasmtime::Error::msg(error.to_string()),
@@ -712,13 +722,14 @@ function main(): void {
             context: &serde_json::Value,
         ) -> CheckOutcome {
             if capability != "session.read" {
-                return CheckOutcome::Allow;
+                return CheckOutcome::Allow { rule: None };
             }
             let key = context.get("key").and_then(|k| k.as_str()).unwrap_or("");
             if key.starts_with(self.0) {
-                CheckOutcome::Allow
+                CheckOutcome::Allow { rule: None }
             } else {
                 CheckOutcome::Deny {
+                    rule: None,
                     reason: format!("only {} is readable", self.0),
                 }
             }

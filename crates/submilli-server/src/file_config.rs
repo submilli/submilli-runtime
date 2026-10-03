@@ -168,11 +168,13 @@ pub struct McpOAuthFileConfig {
     pub providers: Vec<OAuthProviderFileConfig>,
 }
 
-/// Audit settings will live beside `file` when audit collection is implemented.
+/// Server log and audit output settings.
 #[derive(Debug, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct LoggingFileConfig {
     pub file: Option<PathBuf>,
+    #[serde(default)]
+    pub audit: submilli_server::audit::AuditConfig,
 }
 
 /// One `mcp_oauth.providers` entry. `match` is the authorization-server host.
@@ -1009,6 +1011,7 @@ fn merge(cli: Cli, file: FileConfig, env: EnvConfig) -> Result<(SocketAddr, Serv
         .collect();
 
     let config = ServerConfig {
+        audit: file.logging.audit,
         runtime,
         tls,
         // Named rather than left to `..ServerConfig::default()`, whose `auth`
@@ -1460,7 +1463,7 @@ mod tests {
         assert_eq!(logging_file(&cli, &file, &env), Some("config.log".into()));
         assert_eq!(logging_file(&cli, &FileConfig::default(), &env), None);
         assert!(
-            serde_yml::from_str::<FileConfig>("logging:\n  audit:\n    enabled: true\n").is_err()
+            serde_yml::from_str::<FileConfig>("logging:\n  audit:\n    enabled: true\n").is_ok()
         );
         let parsed = Cli::try_parse_from(["submilli-server", "--log-file", "parsed.log"]).unwrap();
         assert_eq!(parsed.log_file, Some("parsed.log".into()));

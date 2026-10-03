@@ -277,11 +277,37 @@ async fn dispatch(
     // The model's own cap, not the default: KTD3b makes the reservation an upper
     // bound by reserving the same cap the request is sent with.
     let output_reserve = provider.output_reserve(model);
-    let reservation = reserve(budget.as_deref(), op, model, &prompts, output_reserve)?;
+    let reservation =
+        reserve(budget.as_deref(), op, model, &prompts, output_reserve).inspect_err(|_error| {
+            let who = crate::stdlib::shared::running_package(caller)
+                .unwrap_or_else(|p| p.label.to_string());
+            crate::stdlib::shared::audit_denial(
+                caller.data().security_check.as_ref(),
+                &who,
+                "llm.call",
+                &serde_json::json!({ "model": model }),
+                "quota",
+                "model-token budget exceeded",
+            );
+        })?;
     let dispatched = provider
         .call(model, &prompts, schema.as_deref())
         .await
-        .map_err(|e| throw(op, e));
+        .map_err(|e| {
+            if e.is_budget_exceeded() {
+                let who = crate::stdlib::shared::running_package(caller)
+                    .unwrap_or_else(|p| p.label.to_string());
+                crate::stdlib::shared::audit_denial(
+                    caller.data().security_check.as_ref(),
+                    &who,
+                    "llm.call",
+                    &serde_json::json!({"model": model}),
+                    "quota",
+                    "model-token budget exceeded",
+                );
+            }
+            throw(op, e)
+        });
 
     match dispatched {
         Ok(outcomes) => {
@@ -996,7 +1022,7 @@ mod tests {
     async fn the_filter_context_carries_the_numbers_and_never_the_prompt() {
         const SECRET: &str = "the patient's diagnosis is confidential";
         let (provider, _) = MockProvider::new(Vec::new(), Vec::new());
-        let (policy, contexts) = RecordingPolicy::new(|_| CheckOutcome::Allow);
+        let (policy, contexts) = RecordingPolicy::new(|_| CheckOutcome::Allow { rule: None });
 
         Harness::new()
             .provider(provider)
@@ -1037,7 +1063,7 @@ mod tests {
     #[tokio::test]
     async fn prompt_count_is_one_for_call_n_for_batch_and_zero_for_models() {
         let (provider, _) = MockProvider::new(Vec::new(), two_models());
-        let (policy, contexts) = RecordingPolicy::new(|_| CheckOutcome::Allow);
+        let (policy, contexts) = RecordingPolicy::new(|_| CheckOutcome::Allow { rule: None });
 
         Harness::new()
             .provider(provider)
@@ -1260,6 +1286,7 @@ mod tests {
             // guessing names.
             let (provider, recorder) = MockProvider::new(Vec::new(), two_models());
             let (policy, _) = RecordingPolicy::new(|_| CheckOutcome::Deny {
+                rule: None,
                 reason: "the policy forbids model calls".to_string(),
             });
 
@@ -1300,9 +1327,10 @@ mod tests {
             // The op-level check presents no model; each candidate presents its
             // own name, and only the cheap one is granted.
             if model.is_empty() || model.starts_with("claude-") {
-                CheckOutcome::Allow
+                CheckOutcome::Allow { rule: None }
             } else {
                 CheckOutcome::Deny {
+                    rule: None,
                     reason: "not in the operator's allowed models".to_string(),
                 }
             }
@@ -1341,9 +1369,10 @@ mod tests {
         let (policy, _) = RecordingPolicy::new(|ctx| {
             let model = ctx["model"].as_str().unwrap_or_default();
             if model.is_empty() || model.starts_with("claude-") {
-                CheckOutcome::Allow
+                CheckOutcome::Allow { rule: None }
             } else {
                 CheckOutcome::Deny {
+                    rule: None,
                     reason: "hidden".to_string(),
                 }
             }

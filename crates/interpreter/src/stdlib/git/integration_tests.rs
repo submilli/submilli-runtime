@@ -193,10 +193,11 @@ impl crate::runtime::SecurityCheck for RemotePrefix {
                 .is_some_and(|url| url.starts_with("https://example.com/allowed/"))
         {
             return CheckOutcome::Deny {
+                rule: None,
                 reason: "remote outside allowed prefix".into(),
             };
         }
-        CheckOutcome::Allow
+        CheckOutcome::Allow { rule: None }
     }
 }
 
@@ -301,10 +302,11 @@ impl crate::runtime::SecurityCheck for OnlyAliasBranch {
         use crate::runtime::security::CheckOutcome;
         if capability == "git.commit" && context["branch"] != "MAIN" {
             return CheckOutcome::Deny {
+                rule: None,
                 reason: "only MAIN is authorized".into(),
             };
         }
-        CheckOutcome::Allow
+        CheckOutcome::Allow { rule: None }
     }
 }
 
@@ -1200,6 +1202,7 @@ async fn poisoned_worker_denial_record_is_fatal() {
     impl SecurityCheck for Deny {
         fn check(&self, _: &str, _: &str, _: &serde_json::Value) -> CheckOutcome {
             CheckOutcome::Deny {
+                rule: None,
                 reason: "test denial".into(),
             }
         }

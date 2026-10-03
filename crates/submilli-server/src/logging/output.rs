@@ -21,6 +21,19 @@ impl LogOutput {
         })
     }
 
+    /// Audit collection is best-effort even when its destination cannot open.
+    pub fn best_effort_open(path: Option<PathBuf>) -> Self {
+        if let Ok(output) = Self::open(path.clone()) {
+            output
+        } else {
+            report("cannot open audit output; subsequent records will retry");
+            Self {
+                inner: Arc::new(Mutex::new(None)),
+                path,
+            }
+        }
+    }
+
     pub fn reopen(&self) -> io::Result<()> {
         let Some(path) = &self.path else {
             return Ok(());
@@ -43,6 +56,11 @@ impl LogOutput {
             .inner
             .lock()
             .map_err(|_| io::Error::other("log output lock poisoned"))?;
+        if output.is_none()
+            && let Some(path) = &self.path
+        {
+            *output = Some(open_file(path)?);
+        }
         let result = match output.as_mut() {
             Some(file) => file.write_all(bytes),
             None => io::stdout().lock().write_all(bytes),

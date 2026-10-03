@@ -76,8 +76,30 @@ impl Job {
     fn check(&self, capability: &str, context: Value) -> Result<()> {
         self.check_cancelled()?;
         match self.security.check(&self.caller, capability, &context) {
-            CheckOutcome::Allow => Ok(()),
-            CheckOutcome::Deny { reason } => {
+            CheckOutcome::Allow { rule } => {
+                self.security
+                    .audit(crate::runtime::security::AuditDecision {
+                        caller: &self.caller,
+                        capability,
+                        context: &context,
+                        allowed: true,
+                        source: "policy",
+                        rule,
+                        reason: None,
+                    });
+                Ok(())
+            }
+            CheckOutcome::Deny { reason, rule } => {
+                self.security
+                    .audit(crate::runtime::security::AuditDecision {
+                        caller: &self.caller,
+                        capability,
+                        context: &context,
+                        allowed: false,
+                        source: "policy",
+                        rule,
+                        reason: Some(&reason),
+                    });
                 let mut denial = self.denial.lock().map_err(|_| {
                     crate::runtime::host::fatal_host_error("git worker denial lock poisoned")
                 })?;

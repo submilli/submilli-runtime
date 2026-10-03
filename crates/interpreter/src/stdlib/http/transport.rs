@@ -35,6 +35,7 @@ pub struct HttpRequest {
 /// Authorizes one redirect hop before any byte of it is sent.
 pub trait RedirectGuard: Send + Sync + std::fmt::Debug {
     fn authorize(&self, hop: &RedirectHop<'_>) -> Result<(), RedirectDenied>;
+    fn audit_egress_denial(&self, _hop: &RedirectHop<'_>) {}
 }
 
 /// The request a redirect is about to send.
@@ -107,6 +108,7 @@ pub struct DownloadMeta {
 #[derive(Debug)]
 pub enum HttpError {
     Network(String),
+    EgressDenied(String),
     /// Host setup failure: must terminate execution, not enter a guest catch.
     Internal(String),
     Policy(TransportPolicyError),
@@ -128,7 +130,9 @@ impl std::fmt::Display for HttpError {
             HttpError::Internal(msg) => write!(f, "internal HTTP transport error: {msg}"),
             HttpError::Policy(error) => error.fmt(f),
             HttpError::PermissionDenied(denied) => denied.fmt(f),
-            HttpError::Network(msg) => write!(f, "network error: {msg}"),
+            HttpError::Network(msg) | HttpError::EgressDenied(msg) => {
+                write!(f, "network error: {msg}")
+            }
             HttpError::Timeout => write!(f, "request timed out"),
             HttpError::TooLarge { limit } => write!(
                 f,
@@ -272,19 +276,23 @@ impl ReqwestHttpClient {
     fn check_literal_ip(&self, url: &str) -> Result<(), HttpError> {
         self.policy
             .check_literal_host(url)
-            .map_err(HttpError::Network)
+            .map_err(HttpError::EgressDenied)
     }
 
     /// Send `req` and every redirect it earns. Each hop passes the transport
     /// policy, the network policy and the request's guard before it is sent, so
     /// a denied destination never receives a request or its body.
     async fn follow_redirects(&self, req: &HttpRequest) -> Result<reqwest::Response, HttpError> {
-        let mut hop = self.initial_hop(req)?;
+        let mut hop = self.initial_hop(req).inspect_err(|error| {
+            audit_egress(req, &req.url, &req.method, error);
+        })?;
         let initial = hop.url.clone();
         let deadline = Deadline::new(req.timeout_ms);
         let mut redirects = 0;
         loop {
-            let resp = self.send_hop(&hop, &deadline).await?;
+            let resp = self.send_hop(&hop, &deadline).await.inspect_err(|error| {
+                audit_egress(req, hop.url.as_str(), hop.method.as_str(), error);
+            })?;
             let Some(next) = redirect_location(&resp, &hop.url) else {
                 return Ok(resp);
             };
@@ -336,7 +344,10 @@ impl ReqwestHttpClient {
                 "redirect to a URL that is not http or https".into(),
             ));
         }
-        self.check_literal_ip(hop.url.as_str())?;
+        self.check_literal_ip(hop.url.as_str())
+            .inspect_err(|error| {
+                audit_egress(req, hop.url.as_str(), hop.method.as_str(), error);
+            })?;
         let Some(guard) = &req.redirect_guard else {
             return Ok(());
         };
@@ -492,8 +503,15 @@ impl HttpClient for ReqwestHttpClient {
         req: &HttpRequest,
         body: &mut (dyn std::io::Write + Send),
     ) -> Result<HttpResponse, HttpError> {
-        let hop = self.initial_hop(req)?;
-        let resp = self.send_hop(&hop, &Deadline::new(req.timeout_ms)).await?;
+        let hop = self.initial_hop(req).inspect_err(|error| {
+            audit_egress(req, &req.url, &req.method, error);
+        })?;
+        let resp = self
+            .send_hop(&hop, &Deadline::new(req.timeout_ms))
+            .await
+            .inspect_err(|error| {
+                audit_egress(req, hop.url.as_str(), hop.method.as_str(), error);
+            })?;
         let status = resp.status().as_u16();
         let status_text = resp.status().canonical_reason().unwrap_or("").to_string();
         let final_url = resp.url().to_string();
@@ -772,12 +790,27 @@ impl<W: std::io::Write> DecodeSink<W> {
     }
 }
 
+fn audit_egress(req: &HttpRequest, url: &str, method: &str, error: &HttpError) {
+    if !matches!(error, HttpError::EgressDenied(_)) {
+        return;
+    }
+    if let (Some(guard), Ok(url)) = (&req.redirect_guard, url::Url::parse(url)) {
+        guard.audit_egress_denial(&RedirectHop {
+            method,
+            url: &url,
+            method_rewritten: method != req.method,
+            body_len: 0,
+        });
+    }
+}
+
 /// Bounded outcome class for an [`crate::runtime::metrics::HttpMetric`]: the transport failure mode.
 pub(super) fn http_failure_outcome(err: &HttpError) -> &'static str {
     match err {
         HttpError::Timeout => "timeout",
         HttpError::TooLarge { .. } => "too_large",
         HttpError::Network(_)
+        | HttpError::EgressDenied(_)
         | HttpError::Internal(_)
         | HttpError::Policy(_)
         | HttpError::PermissionDenied(_)
@@ -795,6 +828,16 @@ pub(super) fn http_failure_outcome(err: &HttpError) -> &'static str {
 fn map_reqwest_error(err: reqwest::Error) -> HttpError {
     if err.is_timeout() {
         return HttpError::Timeout;
+    }
+    let mut source: Option<&(dyn std::error::Error + 'static)> = Some(&err);
+    while let Some(error) = source {
+        if error
+            .downcast_ref::<super::policy::EgressDenied>()
+            .is_some()
+        {
+            return HttpError::EgressDenied(describe_error_chain(&err.without_url()));
+        }
+        source = error.source();
     }
     HttpError::Network(describe_error_chain(&err.without_url()))
 }

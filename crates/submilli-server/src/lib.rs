@@ -1,5 +1,7 @@
 //! Submilli HTTP execution server.
 
+pub mod audit;
+
 pub mod app;
 pub mod auth;
 pub mod blueprint;

@@ -77,6 +77,7 @@ pub(crate) fn parse(code: &str) -> Result<ParsedExecute, interpreter::source::So
 /// injection, the semantic-security policy, and the HTTP client. Grouped so the
 /// run signature stays readable as the set grows.
 pub struct HostServices {
+    pub(crate) audit: Option<Arc<crate::audit::ExecutionAudit>>,
     pub git: Result<Option<interpreter::stdlib::git::GitConfig>, String>,
     pub auth_proxy: Arc<dyn AuthProxy>,
     pub secret_provider: Arc<dyn SecretProvider>,
@@ -136,6 +137,8 @@ pub(crate) async fn run(
     // This task owns the store independently of the request. Dropping the
     // request signals cancellation; the owner drains workers before exiting.
     let owner = tokio::spawn(async move {
+        let audit = services.audit.clone();
+        let budget = services.llm_budget.clone();
         let outcome = run_inner(
             &owned_code,
             parsed,
@@ -155,6 +158,10 @@ pub(crate) async fn run(
             cancelled,
         )
         .await;
+        if let Some(audit) = audit {
+            audit.result(&outcome, budget.as_ref().map_or(0, |b| b.used()));
+            audit.finish(outcome.error.is_none());
+        }
         log_execution(&blueprint, &session, started, &outcome);
         outcome
     });
@@ -349,7 +356,11 @@ async fn run_inner(
     };
     let mut outcome = tokio::select! {
         biased;
-        _ = &mut cancelled => internal_failure("execution cancelled"),
+        _ = &mut cancelled => {
+            let mut outcome = internal_failure("execution cancelled");
+            if let Some(error) = &mut outcome.error { error.kind = ErrorKind::Cancelled; }
+            outcome
+        },
         outcome = execution => outcome,
     };
     if let Err(error) = store.data_mut().blocking_work.finish().await {
@@ -476,6 +487,7 @@ fn classify_runtime_error(err: &wasmtime::Error, sources: &Sources, file: FileId
     let kind = match err.downcast_ref::<Trap>() {
         Some(Trap::Interrupt) => ErrorKind::Timeout,
         Some(Trap::OutOfFuel) => ErrorKind::FuelExhausted,
+        Some(Trap::StackOverflow) => ErrorKind::StackExhausted,
         _ if is_memory_exhausted(err) => ErrorKind::MemoryExhausted,
         _ => ErrorKind::RuntimeError,
     };
@@ -591,6 +603,8 @@ fn error_kind_tag(kind: ErrorKind) -> &'static str {
         ErrorKind::Timeout => "timeout",
         ErrorKind::FuelExhausted => "fuel_exhausted",
         ErrorKind::MemoryExhausted => "memory_exhausted",
+        ErrorKind::StackExhausted => "stack_exhausted",
+        ErrorKind::Cancelled => "cancelled",
         ErrorKind::RuntimeError => "runtime_error",
         ErrorKind::BlueprintNotFound => "blueprint_not_found",
         ErrorKind::PackageResolution => "package_resolution",
@@ -800,7 +814,7 @@ mod tests {
                     panic!("injected cancelled worker failure");
                 }
             }
-            CheckOutcome::Allow
+            CheckOutcome::Allow { rule: None }
         }
     }
 
@@ -853,6 +867,7 @@ mod tests {
             })),
             auth_proxy: defaults.auth_proxy,
             secret_provider: defaults.secret_provider,
+            audit: None,
             security_check: security.clone(),
             http_client: defaults.http_client,
             mcp_transport: Arc::new(UnusedMcp),

@@ -534,9 +534,10 @@ impl SecurityCheck for GitOnly {
     fn check(&self, caller: &str, capability: &str, context: &Value) -> CheckOutcome {
         assert_eq!(caller, "main");
         if capability == self.capability && context["path"] == "/repo" {
-            CheckOutcome::Allow
+            CheckOutcome::Allow { rule: None }
         } else {
             CheckOutcome::Deny {
+                rule: None,
                 reason: "not granted".into(),
             }
         }
@@ -1012,7 +1013,7 @@ async fn worker_panic_bypasses_guest_catch_and_allows_same_store_follow_up() {
             if self.0.swap(false, Ordering::SeqCst) {
                 panic!("injected worker failure");
             }
-            CheckOutcome::Allow
+            CheckOutcome::Allow { rule: None }
         }
     }
     let source = r#"

@@ -1903,10 +1903,11 @@ mod tests {
         ) -> CheckOutcome {
             if capability.starts_with("fs.") {
                 CheckOutcome::Deny {
+                    rule: None,
                     reason: format!("denied {capability} in test"),
                 }
             } else {
-                CheckOutcome::Allow
+                CheckOutcome::Allow { rule: None }
             }
         }
     }
@@ -2105,7 +2106,7 @@ function main(): void {
                 .lock()
                 .unwrap()
                 .push((caller.to_string(), capability.to_string()));
-            CheckOutcome::Allow
+            CheckOutcome::Allow { rule: None }
         }
     }
 
@@ -2122,7 +2123,7 @@ function main(): void {
             if capability == "fs.read" {
                 self.seen.lock().unwrap().push(context.clone());
             }
-            CheckOutcome::Allow
+            CheckOutcome::Allow { rule: None }
         }
     }
 

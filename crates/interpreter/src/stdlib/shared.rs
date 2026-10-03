@@ -9,7 +9,7 @@ use crate::runtime::host::{
     permission_denied, permission_denied_invariant, permission_denied_read_only,
     quota_exceeded_error,
 };
-use crate::runtime::security::{CheckOutcome, SecurityCheck};
+use crate::runtime::security::{AuditDecision, CheckOutcome, SecurityCheck};
 use crate::runtime::vfs::{Access, Placement};
 use crate::runtime::{DiskQuota, QuotaCharge, QuotaExceeded, StoreData};
 
@@ -72,6 +72,14 @@ pub fn check_security(
     // The backtrace capture and the policy walk, neither sized by the call.
     fuel::charge_host_fuel(&mut store, fuel::GATE)?;
     let caller = running_package(&store).map_err(|unknown| {
+        audit_denial(
+            store.as_context().data().security_check.as_ref(),
+            unknown.label,
+            capability,
+            &context,
+            "invariant",
+            unknown.reason,
+        );
         permission_denied_invariant(unknown.label, capability, unknown.reason)
     })?;
     authorize_capability(
@@ -100,12 +108,64 @@ pub(crate) fn authorize_capability(
         && let Some(reason) =
             crate::stdlib::capabilities::find(capability).and_then(|entry| entry.main_denial)
     {
+        audit_denial(
+            security_check,
+            caller,
+            capability,
+            context,
+            "invariant",
+            reason,
+        );
         return Err(permission_denied_invariant(caller, capability, reason));
     }
-    match security_check.check_with_cwd(caller, capability, context, cwd) {
-        CheckOutcome::Allow => Ok(()),
-        CheckOutcome::Deny { reason } => Err(permission_denied(caller, capability, reason)),
+    let outcome = security_check.check_with_cwd(caller, capability, context, cwd);
+    let audit_context = security_check.audit_context(capability, context, cwd);
+    let context = audit_context.as_ref();
+    match outcome {
+        CheckOutcome::Allow { rule } => {
+            security_check.audit(AuditDecision {
+                caller,
+                capability,
+                context,
+                allowed: true,
+                source: "policy",
+                rule,
+                reason: None,
+            });
+            Ok(())
+        }
+        CheckOutcome::Deny { reason, rule } => {
+            security_check.audit(AuditDecision {
+                caller,
+                capability,
+                context,
+                allowed: false,
+                source: "policy",
+                rule,
+                reason: Some(&reason),
+            });
+            Err(permission_denied(caller, capability, reason))
+        }
     }
+}
+
+pub(crate) fn audit_denial(
+    security: &dyn SecurityCheck,
+    caller: &str,
+    capability: &str,
+    context: &serde_json::Value,
+    source: &str,
+    reason: &str,
+) {
+    security.audit(AuditDecision {
+        caller,
+        capability,
+        context,
+        allowed: false,
+        source,
+        rule: None,
+        reason: Some(reason),
+    });
 }
 
 /// Resolve a guest path for an operation that reaches its contents — every component,
@@ -143,8 +203,24 @@ pub(crate) fn require_writable(
         return Ok(());
     }
     let caller = running_package(&store).map_err(|unknown| {
+        audit_denial(
+            store.as_context().data().security_check.as_ref(),
+            unknown.label,
+            capability,
+            &serde_json::json!({ "path": guest_path }),
+            "invariant",
+            unknown.reason,
+        );
         permission_denied_invariant(unknown.label, capability, unknown.reason)
     })?;
+    audit_denial(
+        store.as_context().data().security_check.as_ref(),
+        &caller,
+        capability,
+        &serde_json::json!({ "path": guest_path }),
+        "read_only",
+        "the destination volume is read-only",
+    );
     Err(read_only_denial(
         &caller,
         capability,
