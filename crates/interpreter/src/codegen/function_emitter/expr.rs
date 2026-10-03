@@ -4994,10 +4994,12 @@ pub(super) fn emit_vtable_dispatch_on_object_stack(
     ctx: &CodegenCtx,
     slot: u32,
 ) {
-    let intrinsics = ctx
-        .symbols
-        .intrinsic_type_indices()
-        .expect("intrinsics declared by codegen entry");
+    let Some(intrinsics) = ctx.require(
+        ctx.symbols.intrinsic_type_indices(),
+        "intrinsics declared by codegen entry",
+    ) else {
+        return;
+    };
     // Per-slot funcref type. Slots 0 (toString) and 1 (toJson) share
     // operational signature `(ref $Object) -> (ref $string)` but are
     // declared as distinct sub-funcrefs inside the `$Object` rec
@@ -5005,11 +5007,10 @@ pub(super) fn emit_vtable_dispatch_on_object_stack(
     let fn_type_idx = match slot {
         0 => intrinsics.to_string_fn,
         1 => intrinsics.to_json_fn,
-        _ => panic!(
-            "emit_vtable_dispatch: slot {slot} not yet routed through this helper; \
-             equals (2) goes through `emit_vtable_equality`, hash (3) \
-             has no method-call shape yet",
-        ),
+        _ => {
+            ctx.fail("vtable string dispatch requires toString or toJson slot");
+            return;
+        }
     };
     let obj_local = emitter.add_anonymous_local(ValType::Ref(RefType {
         nullable: false,

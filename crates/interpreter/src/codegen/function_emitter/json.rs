@@ -13,11 +13,17 @@ pub(super) fn emit_stringify(
     ctx: &CodegenCtx,
     args: &[ExprId],
 ) -> Result<(), crate::compiler_error::CompilerFailure> {
-    debug_assert!(
-        (1..=3).contains(&args.len()),
-        "JSON.stringify arity is enforced by the typechecker"
-    );
-    let arg = args[0];
+    let [arg, rest @ ..] = args else {
+        return Err(crate::codegen::internal_failure(
+            "JSON.stringify requires a value",
+        ));
+    };
+    if rest.len() > 2 {
+        return Err(crate::codegen::internal_failure(
+            "JSON.stringify accepts at most three arguments",
+        ));
+    }
+    let arg = *arg;
     let arg_ty = ctx
         .ta
         .try_expr(arg)
@@ -70,10 +76,12 @@ pub(crate) fn emit_stringify_value(emitter: &mut FunctionEmitter, ctx: &CodegenC
 }
 
 fn emit_stringify_nullable(emitter: &mut FunctionEmitter, ctx: &CodegenCtx) {
-    let intrinsics = ctx
-        .symbols
-        .intrinsic_type_indices()
-        .expect("intrinsics declared by codegen entry");
+    let Some(intrinsics) = ctx.require(
+        ctx.symbols.intrinsic_type_indices(),
+        "intrinsics declared by codegen entry",
+    ) else {
+        return;
+    };
     let obj_tmp = emitter.add_anonymous_local(ValType::Ref(RefType {
         nullable: true,
         heap_type: HeapType::Concrete(intrinsics.object),
@@ -97,23 +105,30 @@ fn emit_stringify_nullable(emitter: &mut FunctionEmitter, ctx: &CodegenCtx) {
 /// loop, which costs ~64 fuel/byte. The host fn takes/returns a `$rawString`, so
 /// unwrap the receiver's raw array, call it, and re-wrap with the string vtable.
 fn emit_stringify_string_host(emitter: &mut FunctionEmitter, ctx: &CodegenCtx) {
-    let intrinsics = ctx
-        .symbols
-        .intrinsic_type_indices()
-        .expect("intrinsic type indices registered");
-    let string_type_idx = ctx.symbols.string_type_idx().expect("$string registered");
+    let Some(intrinsics) = ctx.require(
+        ctx.symbols.intrinsic_type_indices(),
+        "intrinsic type indices registered",
+    ) else {
+        return;
+    };
+    let Some(string_type_idx) = ctx.require(ctx.symbols.string_type_idx(), "$string registered")
+    else {
+        return;
+    };
     emitter.instruction(Instruction::StructGet {
         struct_type_index: string_type_idx,
         field_index: 1,
     });
 
-    let stringify_idx = ctx
-        .symbols
-        .func_idx(&crate::mangle::host(
+    let Some(stringify_idx) = ctx.require(
+        ctx.symbols.func_idx(&crate::mangle::host(
             crate::runtime::JSON_MODULE_NAME,
             "stringify",
-        ))
-        .expect("submilli:json.stringify imported during codegen");
+        )),
+        "submilli:json.stringify imported during codegen",
+    ) else {
+        return;
+    };
     emitter.instruction(Instruction::Call(stringify_idx));
 
     let raw_local = emitter.add_anonymous_local(ValType::Ref(RefType {
@@ -121,10 +136,12 @@ fn emit_stringify_string_host(emitter: &mut FunctionEmitter, ctx: &CodegenCtx) {
         heap_type: HeapType::Concrete(intrinsics.raw_string),
     }));
     emitter.instruction(Instruction::LocalSet(raw_local));
-    let string_vtable_idx = ctx
-        .symbols
-        .prelude_global_idx("string_vtable")
-        .expect("string_vtable imported");
+    let Some(string_vtable_idx) = ctx.require(
+        ctx.symbols.prelude_global_idx("string_vtable"),
+        "string_vtable imported",
+    ) else {
+        return;
+    };
     emitter.instruction(Instruction::GlobalGet(string_vtable_idx));
     emitter.instruction(Instruction::LocalGet(raw_local));
     emitter.instruction(Instruction::StructNew(intrinsics.string));
@@ -137,13 +154,22 @@ fn emit_stringify_optional_args(
     arg_local: u32,
     arg_ty: &Type,
 ) -> Result<(), crate::compiler_error::CompilerFailure> {
-    emit_expr(emitter, ctx, args[1])?;
+    let [_, replacer, rest @ ..] = args else {
+        return Err(crate::codegen::internal_failure(
+            "JSON.stringify optional arguments are missing",
+        ));
+    };
+    emit_expr(emitter, ctx, *replacer)?;
     emitter.instruction(Instruction::Drop);
 
-    let space = if args.len() == 3 {
-        emit_stringify_space_arg(emitter, ctx, args[2])?
-    } else {
-        StringifySpace::None
+    let space = match rest {
+        [] => StringifySpace::None,
+        [space] => emit_stringify_space_arg(emitter, ctx, *space)?,
+        _ => {
+            return Err(crate::codegen::internal_failure(
+                "JSON.stringify has extra optional arguments",
+            ));
+        }
     };
 
     emitter.instruction(Instruction::LocalGet(arg_local));
@@ -210,8 +236,11 @@ fn emit_stringify_space_arg(
             emitter.instruction(Instruction::LocalSet(local));
             StringifySpace::Dynamic(local)
         }
-        Type::Error => StringifySpace::None,
-        other => panic!("JSON.stringify space type should be checked, got {other:?}"),
+        other => {
+            return Err(crate::codegen::internal_failure(format!(
+                "JSON.stringify space type was not validated: {other}"
+            )));
+        }
     })
 }
 
@@ -226,8 +255,11 @@ fn emit_dynamic_space(
     let number = ctx
         .symbols
         .boxed_number_type_idx()
-        .expect("boxed number registered");
-    let string = ctx.symbols.string_type_idx().expect("string registered");
+        .ok_or_else(|| crate::codegen::internal_failure("boxed number registered"))?;
+    let string = ctx
+        .symbols
+        .string_type_idx()
+        .ok_or_else(|| crate::codegen::internal_failure("string registered"))?;
     emitter.instruction(Instruction::LocalGet(space));
     emitter.instruction(Instruction::RefTestNonNull(HeapType::Concrete(number)));
     emitter.emit_if(BlockType::Result(string_type));
@@ -257,7 +289,10 @@ fn emit_dynamic_space(
 }
 
 fn emit_string_on_stack_raw(emitter: &mut FunctionEmitter, ctx: &CodegenCtx) {
-    let string_type_idx = ctx.symbols.string_type_idx().expect("$string registered");
+    let Some(string_type_idx) = ctx.require(ctx.symbols.string_type_idx(), "$string registered")
+    else {
+        return;
+    };
     emitter.instruction(Instruction::StructGet {
         struct_type_index: string_type_idx,
         field_index: 1,
@@ -265,41 +300,49 @@ fn emit_string_on_stack_raw(emitter: &mut FunctionEmitter, ctx: &CodegenCtx) {
 }
 
 fn emit_pretty_number_host(emitter: &mut FunctionEmitter, ctx: &CodegenCtx) {
-    let pretty_idx = ctx
-        .symbols
-        .func_idx(&crate::mangle::host(
+    let Some(pretty_idx) = ctx.require(
+        ctx.symbols.func_idx(&crate::mangle::host(
             crate::runtime::JSON_MODULE_NAME,
             "stringifyPrettyNumber",
-        ))
-        .expect("submilli:json.stringifyPrettyNumber imported during codegen");
+        )),
+        "submilli:json.stringifyPrettyNumber imported during codegen",
+    ) else {
+        return;
+    };
     emitter.instruction(Instruction::Call(pretty_idx));
 }
 
 fn emit_pretty_string_host(emitter: &mut FunctionEmitter, ctx: &CodegenCtx) {
-    let pretty_idx = ctx
-        .symbols
-        .func_idx(&crate::mangle::host(
+    let Some(pretty_idx) = ctx.require(
+        ctx.symbols.func_idx(&crate::mangle::host(
             crate::runtime::JSON_MODULE_NAME,
             "stringifyPrettyString",
-        ))
-        .expect("submilli:json.stringifyPrettyString imported during codegen");
+        )),
+        "submilli:json.stringifyPrettyString imported during codegen",
+    ) else {
+        return;
+    };
     emitter.instruction(Instruction::Call(pretty_idx));
 }
 
 fn emit_wrap_raw_string(emitter: &mut FunctionEmitter, ctx: &CodegenCtx) {
-    let intrinsics = ctx
-        .symbols
-        .intrinsic_type_indices()
-        .expect("intrinsic type indices registered");
+    let Some(intrinsics) = ctx.require(
+        ctx.symbols.intrinsic_type_indices(),
+        "intrinsic type indices registered",
+    ) else {
+        return;
+    };
     let raw_local = emitter.add_anonymous_local(ValType::Ref(RefType {
         nullable: false,
         heap_type: HeapType::Concrete(intrinsics.raw_string),
     }));
     emitter.instruction(Instruction::LocalSet(raw_local));
-    let string_vtable_idx = ctx
-        .symbols
-        .prelude_global_idx("string_vtable")
-        .expect("string_vtable imported");
+    let Some(string_vtable_idx) = ctx.require(
+        ctx.symbols.prelude_global_idx("string_vtable"),
+        "string_vtable imported",
+    ) else {
+        return;
+    };
     emitter.instruction(Instruction::GlobalGet(string_vtable_idx));
     emitter.instruction(Instruction::LocalGet(raw_local));
     emitter.instruction(Instruction::StructNew(intrinsics.string));
@@ -307,10 +350,11 @@ fn emit_wrap_raw_string(emitter: &mut FunctionEmitter, ctx: &CodegenCtx) {
 
 fn emit_to_json_direct(emitter: &mut FunctionEmitter, ctx: &CodegenCtx, iface: &str) {
     let mangled = crate::mangle::extend(&crate::mangle::prelude(iface), "toJson");
-    let func_idx = ctx
-        .symbols
-        .func_idx(&mangled)
-        .unwrap_or_else(|| panic!("{iface}#toJson imported from prelude"));
+    let Some(func_idx) = ctx.latch(ctx.symbols.func_idx(&mangled).ok_or_else(|| {
+        crate::codegen::internal_failure(format!("{iface}#toJson imported from prelude"))
+    })) else {
+        return;
+    };
     emitter.instruction(Instruction::Call(func_idx));
 }
 
@@ -388,10 +432,12 @@ fn is_nullable_primitive(members: &[Type]) -> bool {
 /// when null, else the boxed value's vtable `toString` (slot 0) — identity for a
 /// string (verbatim), canonical `toString` for a boxed number/boolean.
 fn emit_nullable_primitive_to_string(emitter: &mut FunctionEmitter, ctx: &CodegenCtx) {
-    let intrinsics = ctx
-        .symbols
-        .intrinsic_type_indices()
-        .expect("intrinsics declared by codegen entry");
+    let Some(intrinsics) = ctx.require(
+        ctx.symbols.intrinsic_type_indices(),
+        "intrinsics declared by codegen entry",
+    ) else {
+        return;
+    };
     let obj_tmp = emitter.add_anonymous_local(ValType::Ref(RefType {
         nullable: true,
         heap_type: HeapType::Concrete(intrinsics.object),
@@ -420,10 +466,11 @@ fn emit_number_to_string_radix10(emitter: &mut FunctionEmitter, ctx: &CodegenCtx
 
 fn emit_to_string_direct(emitter: &mut FunctionEmitter, ctx: &CodegenCtx, iface: &str) {
     let mangled = crate::mangle::extend(&crate::mangle::prelude(iface), "toString");
-    let func_idx = ctx
-        .symbols
-        .func_idx(&mangled)
-        .unwrap_or_else(|| panic!("{iface}#toString imported from prelude"));
+    let Some(func_idx) = ctx.latch(ctx.symbols.func_idx(&mangled).ok_or_else(|| {
+        crate::codegen::internal_failure(format!("{iface}#toString imported from prelude"))
+    })) else {
+        return;
+    };
     emitter.instruction(Instruction::Call(func_idx));
 }
 
@@ -432,25 +479,28 @@ pub(super) fn emit_parse(
     ctx: &CodegenCtx,
     args: &[ExprId],
 ) -> Result<(), crate::compiler_error::CompilerFailure> {
-    debug_assert_eq!(
-        args.len(),
-        1,
-        "JSON.parse arity is enforced by the typechecker",
-    );
+    let [arg] = args else {
+        return Err(crate::codegen::internal_failure(
+            "JSON.parse requires exactly one argument",
+        ));
+    };
 
     // Emit arg (the source `$string`), then extract field 1 — the host fn
     // signature takes `(ref $rawString)`, not the wrapped struct.
-    emit_expr(emitter, ctx, args[0])?;
+    emit_expr(emitter, ctx, *arg)?;
     super::cast::emit_coerce_to_slot(
         emitter,
         ctx,
         &ctx.ta
-            .try_expr(args[0])
+            .try_expr(*arg)
             .map_err(crate::codegen::arena_failure)?
             .ty,
         &Type::String,
     )?;
-    let string_type_idx = ctx.symbols.string_type_idx().expect("$string registered");
+    let string_type_idx = ctx
+        .symbols
+        .string_type_idx()
+        .ok_or_else(|| crate::codegen::internal_failure("$string registered"))?;
     emitter.instruction(Instruction::StructGet {
         struct_type_index: string_type_idx,
         field_index: 1,
@@ -462,7 +512,9 @@ pub(super) fn emit_parse(
             crate::runtime::JSON_MODULE_NAME,
             "parse",
         ))
-        .expect("submilli:json.parse imported during codegen");
+        .ok_or_else(|| {
+            crate::codegen::internal_failure("submilli:json.parse imported during codegen")
+        })?;
     // On invalid JSON the host fn raises a catchable Error directly. Valid JSON
     // returns the language's `unknown` representation: `(ref null $Object)`.
     emitter.instruction(Instruction::Call(parse_idx));
@@ -476,17 +528,21 @@ pub(crate) fn emit_inline_const_raw_string(
     ctx: &CodegenCtx,
     text: &str,
 ) {
-    let intrinsics = ctx
-        .symbols
-        .intrinsic_type_indices()
-        .expect("intrinsic type indices registered");
-    let units: Vec<u16> = text.encode_utf16().collect();
-    for unit in &units {
-        emitter.instruction(Instruction::I32Const(i32::from(*unit)));
+    let Some(intrinsics) = ctx.require(
+        ctx.symbols.intrinsic_type_indices(),
+        "intrinsic type indices registered",
+    ) else {
+        return;
+    };
+    let Some(array_size) = ctx.latch(crate::codegen::wasm_u32(text.encode_utf16().count())) else {
+        return;
+    };
+    for unit in text.encode_utf16() {
+        emitter.instruction(Instruction::I32Const(i32::from(unit)));
     }
     emitter.instruction(Instruction::ArrayNewFixed {
         array_type_index: intrinsics.raw_string,
-        array_size: units.len() as u32,
+        array_size,
     });
 }
 pub(crate) fn emit_raw_string_matches_literal(
@@ -495,25 +551,29 @@ pub(crate) fn emit_raw_string_matches_literal(
     key_raw_local: u32,
     expected: &str,
 ) {
+    let Some(expected_length) = emitter
+        .ctx
+        .latch(crate::codegen::wasm_u32(expected.encode_utf16().count()))
+    else {
+        return;
+    };
     let result_local = emitter.add_anonymous_local(ValType::I32);
     emitter.instruction(Instruction::I32Const(0));
     emitter.instruction(Instruction::LocalSet(result_local));
-
-    let expected_units: Vec<u16> = expected.encode_utf16().collect();
 
     emitter.emit_block(BlockType::Empty);
 
     emitter.instruction(Instruction::LocalGet(key_raw_local));
     emitter.instruction(Instruction::ArrayLen);
-    emitter.instruction(Instruction::I32Const(expected_units.len() as i32));
+    emitter.instruction(Instruction::I32Const(expected_length as i32));
     emitter.instruction(Instruction::I32Ne);
     emitter.instruction(Instruction::BrIf(0));
 
-    for (i, unit) in expected_units.iter().enumerate() {
+    for (unit, i) in expected.encode_utf16().zip(0..expected_length) {
         emitter.instruction(Instruction::LocalGet(key_raw_local));
         emitter.instruction(Instruction::I32Const(i as i32));
         emitter.instruction(Instruction::ArrayGetU(intrinsics.raw_string));
-        emitter.instruction(Instruction::I32Const(*unit as i32));
+        emitter.instruction(Instruction::I32Const(i32::from(unit)));
         emitter.instruction(Instruction::I32Ne);
         emitter.instruction(Instruction::BrIf(0));
     }
@@ -524,4 +584,97 @@ pub(crate) fn emit_raw_string_matches_literal(
     emitter.emit_end();
 
     emitter.instruction(Instruction::LocalGet(result_local));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::codegen::invariant_tests::{assert_internal, with_context};
+    use crate::codegen::{SymbolTable, tests::mock_symbols_with_intrinsics};
+    use crate::{Span, TypedAst, TypedExpr, TypedExprKind};
+
+    #[test]
+    fn invalid_json_arity_is_an_internal_failure_before_reading_arguments() {
+        with_context(&TypedAst::new(), &SymbolTable::default(), |ctx| {
+            let mut emitter = FunctionEmitter::new(ctx, &[]);
+            assert_internal(emit_stringify(&mut emitter, ctx, &[]).unwrap_err());
+            assert_internal(emit_parse(&mut emitter, ctx, &[]).unwrap_err());
+            let invalid = crate::ExprId(u32::MAX);
+            assert_internal(emit_stringify(&mut emitter, ctx, &[invalid; 4]).unwrap_err());
+            assert_internal(emit_parse(&mut emitter, ctx, &[invalid; 2]).unwrap_err());
+            ctx.check_failure().unwrap();
+        });
+    }
+
+    #[test]
+    fn json_emitters_latch_missing_registrations() {
+        type Emit = fn(&mut FunctionEmitter<'_>, &CodegenCtx<'_>);
+        let emitters: &[Emit] = &[
+            emit_stringify_nullable,
+            emit_stringify_string_host,
+            emit_string_on_stack_raw,
+            emit_pretty_number_host,
+            emit_pretty_string_host,
+            emit_wrap_raw_string,
+            emit_nullable_primitive_to_string,
+            |emitter, ctx| emit_to_json_direct(emitter, ctx, "Number"),
+            |emitter, ctx| emit_to_string_direct(emitter, ctx, "Boolean"),
+            |emitter, ctx| emit_inline_const_raw_string(emitter, ctx, "\u{1f642}"),
+        ];
+        for emit in emitters {
+            with_context(&TypedAst::new(), &SymbolTable::default(), |ctx| {
+                emit(&mut FunctionEmitter::new(ctx, &[]), ctx);
+                assert_internal(ctx.check_failure().unwrap_err());
+            });
+        }
+        for emit in [emit_stringify_string_host as Emit, emit_wrap_raw_string] {
+            with_context(&TypedAst::new(), &mock_symbols_with_intrinsics(), |ctx| {
+                emit(&mut FunctionEmitter::new(ctx, &[]), ctx);
+                assert_internal(ctx.check_failure().unwrap_err());
+            });
+        }
+    }
+
+    #[test]
+    fn invalid_space_metadata_returns_internal_failure() {
+        for ty in [Type::Boolean, Type::Error] {
+            let mut ta = TypedAst::new();
+            let space = ta
+                .try_push_expr(TypedExpr {
+                    kind: TypedExprKind::Boolean(true),
+                    ty,
+                    span: Span::at(crate::FileId(0)),
+                })
+                .unwrap();
+            with_context(&ta, &mock_symbols_with_intrinsics(), |ctx| {
+                let mut emitter = FunctionEmitter::new(ctx, &[]);
+                match emit_stringify_space_arg(&mut emitter, ctx, space) {
+                    Err(error) => assert_internal(error),
+                    Ok(_) => panic!("invalid space metadata was accepted"),
+                }
+            });
+        }
+    }
+
+    #[test]
+    fn inline_raw_literals_keep_utf16_units() {
+        with_context(&TypedAst::new(), &mock_symbols_with_intrinsics(), |ctx| {
+            let mut emitter = FunctionEmitter::new(ctx, &[]);
+            emit_inline_const_raw_string(&mut emitter, ctx, "a\u{1f642}");
+            ctx.check_failure().unwrap();
+            let units: Vec<_> = emitter
+                .instructions
+                .iter()
+                .filter_map(|inst| match inst {
+                    Instruction::I32Const(unit) => Some(*unit),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(units, vec![97, 0xd83d, 0xde42]);
+            assert!(matches!(
+                emitter.instructions.last(),
+                Some(Instruction::ArrayNewFixed { array_size: 3, .. })
+            ));
+        });
+    }
 }

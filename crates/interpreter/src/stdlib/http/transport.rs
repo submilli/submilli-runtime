@@ -1010,3 +1010,22 @@ mod decode_sink_tests {
         );
     }
 }
+
+#[cfg(test)]
+mod client_setup_tests {
+    use super::*;
+
+    #[test]
+    fn invalid_client_configuration_is_retained_as_an_internal_failure() {
+        let client = ReqwestHttpClient::with_client(
+            Arc::new(crate::stdlib::http::policy::NetworkPolicy::allow_all()),
+            |builder| builder.user_agent("\n"),
+        );
+        for _ in 0..2 {
+            assert!(matches!(client.client(), Err(HttpError::Internal(_))));
+        }
+        let healthy = ReqwestHttpClient::default();
+        assert!(healthy.client().is_ok());
+        assert!(healthy.client().is_ok());
+    }
+}
