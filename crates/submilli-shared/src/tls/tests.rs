@@ -89,3 +89,23 @@ fn only_the_local_probe_can_ignore_the_advertised_hostname() {
         .is_ok()
     );
 }
+
+#[test]
+fn certificate_names_print_as_host_names_and_addresses() {
+    let key = KeyPair::generate().unwrap();
+    let cert = CertificateParams::new(vec![
+        "localhost".into(),
+        "runtime.example.com".into(),
+        "10.0.0.1".into(),
+        "::1".into(),
+    ])
+    .unwrap()
+    .self_signed(&key)
+    .unwrap();
+    let (_, parsed) = parse_x509_certificate(cert.der().as_ref()).unwrap();
+    let san = parsed.subject_alternative_name().unwrap().unwrap();
+    assert_eq!(
+        display_names(&san.value.general_names),
+        "localhost, runtime.example.com, 10.0.0.1, ::1"
+    );
+}

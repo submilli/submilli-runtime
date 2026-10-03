@@ -1,7 +1,10 @@
 ---
 title: "Deploy with Compose"
-description: "How to run the server as a container beside your application with the published compose file: a port only the host's loopback and your application's container can reach, state on a volume, the store key as a file, and upgrades by release."
+description: "How to run the server as a container beside your application with the published compose file: a port only the host's loopback and your application's container can reach, state on a volume, the store key as a file, HTTPS, and upgrades by release."
 slug: server/deploy-with-compose
+# Turn on HTTPS was not run under Docker (no engine was available); the
+# SUBMILLI_TLS_* variables and --health-check over HTTPS were run with the
+# release binaries on main 51ce450b.
 sidebar:
   order: 6
 ---
@@ -15,8 +18,8 @@ volume so it survives a redeploy.
 
 This guide shows you how to run the server with Docker Compose: start it
 from the published file, put your application on its network, give it
-the store key as a file, allow a service on your Docker network, and
-upgrade and back it up.
+the store key as a file, enable HTTPS, allow a service on your Docker
+network, and upgrade and back it up.
 
 ## Start it
 
@@ -153,6 +156,64 @@ works there and then fails on the Linux server you deploy to. Set `0444`
 everywhere. Keep the key out of source control and out of your volume
 backups.
 
+## Enable HTTPS
+
+In this setup the API token never leaves the host: the port is published
+on the loopback, and your application reaches the server over a Docker
+network on the same machine. Plain HTTP is enough there. If you publish
+the port beyond the loopback, so that callers on other machines reach
+it, turn HTTPS on first, or the token crosses the network readable.
+
+Mount the certificate chain and its private key, in PEM, the way the
+store key is mounted, and name them in the two variables. The
+certificate must cover the names callers use: `submilli` for your
+application's container, and the host's name for callers elsewhere.
+
+```yaml title="compose.override.yaml (fragment)"
+services:
+  submilli:
+    environment:
+      SUBMILLI_TLS_CERT_FILE: /run/secrets/submilli-tls-cert
+      SUBMILLI_TLS_KEY_FILE: /run/secrets/submilli-tls-key
+    secrets:
+      - submilli-tls-cert
+      - submilli-tls-key
+
+secrets:
+  submilli-tls-cert:
+    file: ./server.crt
+  submilli-tls-key:
+    file: ./server.key
+```
+
+The key needs the same `0444` as the store key, for the same reason. The
+health check switches to HTTPS on its own.
+
+Your application then calls `https://submilli:8128`. For a self-signed
+certificate it must also be told to trust it, so give its container the
+certificate:
+
+```yaml title="compose.override.yaml (fragment)"
+services:
+  app:
+    environment:
+      SUBMILLI_URL: https://submilli:8128
+      NODE_EXTRA_CA_CERTS: /run/secrets/submilli-tls-cert
+    secrets:
+      - submilli-tls-cert
+```
+
+`NODE_EXTRA_CA_CERTS` is for a Node application; it adds the file to the
+authorities Node already trusts. Python's `SSL_CERT_FILE` replaces those
+authorities instead, so a Python application that also calls its model
+provider over HTTPS needs a bundle that holds both, built when the
+container starts:
+
+```sh
+cat "$(python -m certifi)" /run/secrets/submilli-tls-cert > /tmp/ca-bundle.pem
+export SSL_CERT_FILE=/tmp/ca-bundle.pem
+```
+
 ## Allow a service on your Docker network
 
 The server blocks programs from calling private addresses, which
@@ -175,7 +236,7 @@ a fixed subnet and allow that. Expect this line in the log once you do;
 it's there so that a setting like this never goes unnoticed:
 
 ```text
-WARN submilli_server: the outbound egress guard was widened by environment variables; the config file cannot revoke these vars="SUBMILLI_ALLOW_IP"
+ts=2026-10-03T17:04:41.940Z level=warn stream=log target=submilli_server msg="the outbound egress guard was widened by environment variables; the config file cannot revoke these" vars=SUBMILLI_ALLOW_IP
 ```
 
 ## Upgrade and back up

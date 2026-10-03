@@ -67,8 +67,8 @@ submilli-server &
 ```
 
 ```text
-ts=2026-10-03T15:29:42.997Z level=info stream=log target=submilli_server::auth msg="inbound authentication enabled" tokens="SUBMILLI_SERVER_TOKEN (admin)"
-ts=2026-10-03T15:29:43.021Z level=info stream=log target=submilli_server::serve msg="submilli-server listening" addr=127.0.0.1:8128
+ts=2026-10-03T17:05:23.415Z level=info stream=log target=submilli_server::auth msg="inbound authentication enabled" tokens="SUBMILLI_SERVER_TOKEN (admin)"
+ts=2026-10-03T17:05:23.423Z level=info stream=log target=submilli_server::serve msg="submilli-server listening" addr=127.0.0.1:8128 protocol=http
 ```
 
 The `submilli server` commands read the same variable, so from the same

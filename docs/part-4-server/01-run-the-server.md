@@ -45,8 +45,8 @@ submilli-server
 ```
 
 ```text
-ts=2026-10-03T15:29:43.129Z level=info stream=log target=submilli_server::auth msg="inbound authentication enabled" tokens="SUBMILLI_SERVER_TOKEN (admin)"
-ts=2026-10-03T15:29:43.145Z level=info stream=log target=submilli_server::serve msg="submilli-server listening" addr=127.0.0.1:8128
+ts=2026-10-03T17:05:10.750Z level=info stream=log target=submilli_server::auth msg="inbound authentication enabled" tokens="SUBMILLI_SERVER_TOKEN (admin)"
+ts=2026-10-03T17:05:10.758Z level=info stream=log target=submilli_server::serve msg="submilli-server listening" addr=127.0.0.1:8128 protocol=http
 ```
 
 Apart from the API token, everything the server needs it creates on
@@ -89,8 +89,8 @@ submilli-server --config server.yaml
 ```
 
 ```text
-ts=2026-10-03T15:29:43.183Z level=info stream=log target=submilli_server::auth msg="inbound authentication enabled" tokens="admin (admin)"
-ts=2026-10-03T15:29:43.199Z level=info stream=log target=submilli_server::serve msg="submilli-server listening" addr=127.0.0.1:8128
+ts=2026-10-03T17:05:12.272Z level=info stream=log target=submilli_server::auth msg="inbound authentication enabled" tokens="admin (admin)"
+ts=2026-10-03T17:05:12.327Z level=info stream=log target=submilli_server::serve msg="submilli-server listening" addr=127.0.0.1:8128 protocol=http
 ```
 
 The `submilli server` commands then read the token from the file too,
@@ -132,8 +132,8 @@ submilli-server --config server.yaml
 ```
 
 ```text
-ts=2026-10-03T15:29:43.233Z level=info stream=log target=submilli_server::auth msg="inbound authentication enabled" tokens="admin (admin), app (user)"
-ts=2026-10-03T15:29:43.249Z level=info stream=log target=submilli_server::serve msg="submilli-server listening" addr=127.0.0.1:8128
+ts=2026-10-03T17:05:13.799Z level=info stream=log target=submilli_server::auth msg="inbound authentication enabled" tokens="admin (admin), app (user)"
+ts=2026-10-03T17:05:13.813Z level=info stream=log target=submilli_server::serve msg="submilli-server listening" addr=127.0.0.1:8128 protocol=http
 ```
 
 To rotate a token, add another entry with the same role, move the
@@ -146,10 +146,8 @@ when it opens one.
 The server is a backend for your application, not a public service.
 Every request carries the API token as `Authorization: Bearer <token>`;
 without it the answer is `401`, on every endpoint except `GET /healthz`.
-The server speaks plain HTTP, so a token that crosses a network can be
-read on the way: keep the port where only your application can reach it,
-and put a reverse proxy with TLS in front when it can't be. That is why
-it listens on `127.0.0.1` unless `bind` says otherwise, and why the
+Keep the port where only your application can reach it. That is why it
+listens on `127.0.0.1` unless `bind` says otherwise, and why the
 [Compose](/docs/server/deploy-with-compose) and
 [Kubernetes](/docs/server/deploy-on-kubernetes) setups keep it
 private too. Run one server per application.
@@ -215,7 +213,7 @@ submilli-server --config server.yaml
 ```
 
 ```text
-ts=2026-10-03T15:29:43.280Z level=info stream=log target=submilli_server::serve msg="submilli-server listening" addr=127.0.0.1:8128
+ts=2026-10-03T17:05:26.518Z level=info stream=log target=submilli_server::serve msg="submilli-server listening" addr=127.0.0.1:8128 protocol=http
 ```
 
 Back up the sessions, the managed volumes, and the secrets, and keep the

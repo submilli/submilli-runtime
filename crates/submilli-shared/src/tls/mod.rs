@@ -125,7 +125,7 @@ impl ServerCertVerifier for Verifier {
             .map_err(|_| bad_encoding())?
             .map_or_else(
                 || "no subject alternative names".into(),
-                |san| format!("{:?}", san.value.general_names),
+                |san| display_names(&san.value.general_names),
             );
         let info = CertificateInfo {
             fingerprint: actual,
@@ -229,6 +229,29 @@ fn validate_leaf(
 
 fn bad_encoding() -> rustls::Error {
     rustls::Error::InvalidCertificate(CertificateError::BadEncoding)
+}
+
+/// The certificate's names as a person compares them with the host they
+/// meant: `localhost, 10.0.0.1`. Host names, addresses, e-mail names, and URIs
+/// print bare; anything rarer keeps the parser's labelled form.
+fn display_names(names: &[GeneralName<'_>]) -> String {
+    names
+        .iter()
+        .map(|name| match name {
+            GeneralName::DNSName(s) | GeneralName::RFC822Name(s) | GeneralName::URI(s) => {
+                (*s).to_owned()
+            }
+            GeneralName::IPAddress(bytes) => match *bytes {
+                [a, b, c, d] => std::net::Ipv4Addr::new(*a, *b, *c, *d).to_string(),
+                _ => <[u8; 16]>::try_from(*bytes).map_or_else(
+                    |_| name.to_string(),
+                    |octets| std::net::Ipv6Addr::from(octets).to_string(),
+                ),
+            },
+            other => other.to_string(),
+        })
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 #[cfg(test)]

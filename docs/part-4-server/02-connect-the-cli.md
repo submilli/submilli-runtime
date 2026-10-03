@@ -1,21 +1,22 @@
 ---
 title: "Connect the CLI"
-description: "How to point the submilli server commands at a server: its token from a file, its address, the first check, keeping both in your shell, switching between servers by name, and which commands need the admin token."
+description: "How to point the submilli server commands at a server: its token from a file, its address, the first check, trusting its HTTPS certificate, keeping both in your shell, switching between servers by name, and which commands need the admin token."
 slug: server/connect-the-cli
 sidebar:
   order: 2
 ---
 
-The `submilli server` commands talk to a running server over HTTP or HTTPS. Out
-of the box they call `http://127.0.0.1:8128` and send the token from
+The `submilli server` commands talk to a running server over HTTP or
+HTTPS. Out of the box they call `http://127.0.0.1:8128` and send the token from
 `SUBMILLI_SERVER_TOKEN`, which is why they need no setup in the shell
 that started the server. From another machine, or from a deploy job, the
 address is different and the token shouldn't be typed.
 
 This guide shows you how to point the `submilli server` commands at a
 server: give them its token from a file, name its address, make the
-first check, keep both in your shell, switch between servers by name,
-and know which commands need the admin token.
+first check, trust its HTTPS certificate, keep both in your shell,
+switch between servers by name, and know which commands need the admin
+token.
 
 ## Give it the token
 
@@ -55,8 +56,6 @@ active sessions: 0
 blueprints:      support
 ```
 
-With HTTPS disabled, reach the server the way your application does,
-over the private network it sits on, and not across the open internet.
 Under Compose the port is published on the host's loopback, so the
 commands work from the host without `--server`, and `docker compose exec
 submilli submilli server status` works from inside the container. On
@@ -65,20 +64,39 @@ server to your loopback for the length of a command.
 
 ## Connect over HTTPS
 
-For a server with HTTPS enabled, use its certificate's hostname in `--server`
-or `SUBMILLI_SERVER_URL`:
+A server with HTTPS turned on is named with `https://` and the host name
+on its certificate:
 
 ```sh
-submilli server status --server https://runtime.example.com:8128 --token-file admin.token
+submilli server status --server https://localhost:8128
 ```
 
-Publicly trusted certificates need no extra setup.
+A certificate from a public authority needs nothing more, and the
+command prints the status as before.
 
-### Trust a self-signed server
+### Trust a self-signed certificate
 
-For a self-signed certificate or an unknown issuer, the CLI shows the public-key
-fingerprint and asks whether to trust it. Approval defaults to No. Verify the
-fingerprint with the operator before accepting. On the server machine, obtain
+The CLI can't check a self-signed certificate, or one from your
+organization's own authority, against the authorities it knows. So the
+first time, it shows the certificate's public-key fingerprint and asks
+whether to trust it:
+
+```text
+Server: localhost:8128
+Certificate names: localhost
+Valid: Oct  3 17:03:03 2026 +00:00 to Oct  3 17:03:03 2027 +00:00
+Public-key fingerprint: sha256:5ee140a80e2613385387daa41b22fb98dddf3a6ad328d734fc369d6212dcce29
+Verify this fingerprint with the server operator before approving.
+Trust this server public key? yes
+status:          running
+bind:            127.0.0.1:8128
+pid:             48439
+active sessions: 0
+blueprints:      (none)
+```
+
+Answer yes only after checking the fingerprint with whoever runs the
+server; otherwise the answer is no, which is also the default. They read
 it from the certificate file:
 
 ```sh
@@ -88,24 +106,50 @@ openssl x509 -in server.crt -pubkey -noout \
   | awk '{print "sha256:" $NF}'
 ```
 
-Without an interactive terminal, register that verified fingerprint first.
-Replace the placeholder with the command's `sha256:` value:
-
-```sh
-submilli server trust add --server https://runtime.example.com:8128 --fingerprint 'sha256:<64 hexadecimal digits>'
+```text
+sha256:5ee140a80e2613385387daa41b22fb98dddf3a6ad328d734fc369d6212dcce29
 ```
 
-Trust is saved by hostname and port in `~/.submilli/server-trust.json`
-(or `$SUBMILLI_HOME/server-trust.json`). Inspect or remove it with:
+A deploy job has no terminal to answer in, so there the command refuses
+and names the next step:
+
+```text
+Error: server certificate is not approved; verify its public-key fingerprint independently, then run `submilli server trust add --server https://localhost:8128/ --fingerprint sha256:5ee140a80e2613385387daa41b22fb98dddf3a6ad328d734fc369d6212dcce29`
+```
+
+Register the fingerprint you checked before the job runs:
+
+```sh
+submilli server trust add --server https://localhost:8128 --fingerprint sha256:5ee140a80e2613385387daa41b22fb98dddf3a6ad328d734fc369d6212dcce29
+```
+
+```text
+Trusted localhost:8128 sha256:5ee140a80e2613385387daa41b22fb98dddf3a6ad328d734fc369d6212dcce29
+```
+
+A fingerprint that isn't the server's is refused, so a mistyped one, or
+a server that isn't the one you checked, never gets trusted:
+
+```text
+Error: server fingerprint mismatch: expected sha256:0000000000000000000000000000000000000000000000000000000000000000, received sha256:5ee140a80e2613385387daa41b22fb98dddf3a6ad328d734fc369d6212dcce29
+```
+
+Trust is kept per host and port, in `~/.submilli/server-trust.json` (or
+`$SUBMILLI_HOME/server-trust.json`):
 
 ```sh
 submilli server trust list
-submilli server trust remove --server https://runtime.example.com:8128
 ```
 
-Renewing with the same key keeps trust. For a changed key, verify the replacement,
-remove the old entry, and approve it again. Expired certificates and hostname
-mismatches still fail. Application and MCP clients configure trust separately.
+```text
+localhost:8128 sha256:5ee140a80e2613385387daa41b22fb98dddf3a6ad328d734fc369d6212dcce29
+```
+
+A certificate renewed with the same key stays trusted. When the key
+changes, check the new fingerprint, remove the old entry with
+`submilli server trust remove --server https://localhost:8128`, and
+trust the new one. An expired certificate, or one whose names don't
+include the host in `--server`, fails whatever you trusted.
 
 ## Keep them in your shell
 

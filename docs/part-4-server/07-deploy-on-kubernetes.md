@@ -1,7 +1,10 @@
 ---
 title: "Deploy on Kubernetes"
-description: "How to install the server in your cluster with the Helm chart: generated tokens, a network policy that admits only your application, the encrypted secret store and its key, blueprints registered through the API, memory sizing, storage, and upgrades."
+description: "How to install the server in your cluster with the Helm chart: generated tokens, a network policy that admits only your application, HTTPS, the encrypted secret store and its key, blueprints registered through the API, memory sizing, storage, and upgrades."
 slug: server/deploy-on-kubernetes
+# Enable HTTPS was checked against the chart templates (tls values,
+# probes, the config.tls refusal), not installed on a cluster: no cluster
+# was available when it was written.
 sidebar:
   order: 7
 ---
@@ -12,7 +15,7 @@ reaches by name.
 
 This guide shows you how to deploy it with the chart: install it, give
 your application its token, let your application in through the network
-policy, store secrets and register blueprints, allow an internal service,
+policy, turn on HTTPS, store secrets and register blueprints, allow an internal service,
 size memory, and choose storage before the first install. The chart's
 [README](https://github.com/submilli/submilli-runtime/tree/main/charts/submilli)
 is the reference for every value.
@@ -102,10 +105,17 @@ The policy has three limits worth knowing:
 
 ## Enable HTTPS
 
-HTTPS is off by default. Supply a PEM certificate chain and private key in a
-TLS Secret. The certificate must cover the names clients use and
-`submilli-0.submilli-headless`, which Helm tests use. For release `submilli` in
-namespace `default`, generate a self-signed certificate and create the Secret:
+Inside the cluster, the API token travels between your application's
+pod and the server's over the cluster network. Turn HTTPS on when that
+network isn't one you trust: shared with other teams, or crossing nodes
+without encryption.
+
+The chart reads the certificate chain and its private key, in PEM, from
+a TLS Secret. Use a certificate from your certificate authority, for
+instance one cert-manager issues into that Secret. It must cover the
+names clients use and `submilli-0.submilli-headless`, which `helm test`
+uses. To try it first, for release `submilli` in namespace `default`,
+generate a self-signed certificate and create the Secret:
 
 ```sh
 openssl req -x509 -newkey rsa:2048 -nodes -days 365 \
@@ -132,10 +142,27 @@ Apply the values:
 helm upgrade submilli oci://ghcr.io/submilli/charts/submilli -f values.yaml
 ```
 
-Clients now use `https://submilli.<namespace>.svc:8128`. Probes and Helm tests
-use HTTPS; Helm tests verify the certificate. For self-signed certificates, see
-[Connect the CLI](/docs/server/connect-the-cli#trust-a-self-signed-server).
-Application clients configure their own trust.
+Clients now use `https://submilli.<namespace>.svc:8128`. The probes and
+`helm test` switch to HTTPS, and `helm test` verifies the certificate.
+For a self-signed certificate, the CLI asks you to check and trust its
+fingerprint, as [Connect the
+CLI](/docs/server/connect-the-cli#trust-a-self-signed-certificate)
+shows. Your application trusts a self-signed certificate the way its language
+does. Node adds the file to the authorities it already trusts with
+`NODE_EXTRA_CA_CERTS`:
+
+```sh
+export NODE_EXTRA_CA_CERTS=$PWD/server.crt
+```
+
+Python's `SSL_CERT_FILE` replaces those authorities instead, so a
+Python application that also calls its model provider over HTTPS needs a
+bundle that holds both:
+
+```sh
+cat "$(python -m certifi)" server.crt > ca-bundle.pem
+export SSL_CERT_FILE=$PWD/ca-bundle.pem
+```
 
 After replacing the Secret, restart the server:
 
@@ -143,8 +170,22 @@ After replacing the Secret, restart the server:
 kubectl rollout restart statefulset/submilli
 ```
 
-Use `tls` chart values, not `config.tls`. If `ingress.tls` is also enabled,
-configure your Ingress controller to connect to the backend over HTTPS.
+Turn HTTPS on with the `tls` values, not with a `tls` block under
+`config`. The values also mount the Secret into the pod and switch the
+probes to HTTPS, so the chart refuses `config.tls`.
+
+An Ingress in front of the server forwards to it over plain HTTP unless
+told otherwise, and with HTTPS on, those connections fail. Tell your
+Ingress controller to connect to the backend over HTTPS. With
+ingress-nginx, that is an annotation:
+
+```yaml title="values.yaml (fragment)"
+ingress:
+  annotations:
+    nginx.ingress.kubernetes.io/backend-protocol: HTTPS
+```
+
+Other controllers have their own setting for the backend's protocol.
 
 ## Store secrets and register blueprints
 

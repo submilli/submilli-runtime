@@ -1,7 +1,10 @@
 ---
 title: "Deploy on Linux"
-description: "How to run the server on a Linux machine of its own under systemd: the binaries for the system, a user and directories of its own, the config and token files under /etc/submilli, the unit, upgrades, and backups."
+description: "How to run the server on a Linux machine of its own under systemd: the binaries for the system, a user and directories of its own, the config and token files under /etc/submilli, the unit, HTTPS, upgrades, and backups."
 slug: server/deploy-on-linux
+# Enable HTTPS was not run under systemd; its config, the server log, and
+# the CLI trust flow were run on macOS with the release binaries on main
+# 51ce450b (Run the server and Connect the CLI show those outputs).
 sidebar:
   order: 5
 ---
@@ -14,8 +17,8 @@ with the binaries in `/usr/local/bin`, the configuration in
 
 This guide shows you how to set that up: install the binaries for the
 system, create the user and the directories, place the config file and
-the token files, write the unit and start it, and upgrade and back it
-up. The config file is the
+the token files, write the unit and start it, turn on HTTPS, and
+upgrade and back it up. The config file is the
 one [Run the server](/docs/server/run-the-server) builds; this page
 only decides where everything lives. If your application runs in
 containers, refer to [Deploy with
@@ -136,9 +139,16 @@ blueprints in Git](/docs/tutorials/manage-blueprints-in-git) builds.
 
 ## Enable HTTPS
 
-HTTPS is off by default. Supply a PEM certificate chain and matching private
-key at `/etc/submilli/server.crt` and `/etc/submilli/server.key`. The certificate
-must cover the hostname clients use. To generate a self-signed certificate:
+Your application reaches this machine over the network, so its API token
+crosses that network with every request. Over plain HTTP it can be read
+on the way; turn HTTPS on unless the network between the two is one you
+control end to end.
+
+Put the certificate chain and its private key, in PEM, at
+`/etc/submilli/server.crt` and `/etc/submilli/server.key`. Use a
+certificate from your certificate authority, issued for the host name
+your application connects to. To try it first, generate a self-signed
+one for this machine's name:
 
 ```sh
 sudo openssl req -x509 -newkey rsa:2048 -nodes -days 365 \
@@ -170,10 +180,27 @@ sudo systemctl restart submilli
 sudo submilli server status --server "https://$(hostname -f):8128" --token-file /etc/submilli/admin.token
 ```
 
-Update application URLs to `https://<hostname>:8128`. For self-signed certificates,
-[Connect the CLI](/docs/server/connect-the-cli#trust-a-self-signed-server)
-shows how to verify and approve the fingerprint. Other clients configure trust
-separately. Restart the service after replacing certificates.
+Update your application's URL to `https://<hostname>:8128`, and restart
+the service after you replace the certificate. For a self-signed
+certificate, the CLI asks you to check and trust its fingerprint, as
+[Connect the
+CLI](/docs/server/connect-the-cli#trust-a-self-signed-certificate)
+shows. Your application trusts a self-signed certificate the way its language
+does. Node adds the file to the authorities it already trusts with
+`NODE_EXTRA_CA_CERTS`:
+
+```sh
+export NODE_EXTRA_CA_CERTS=$PWD/server.crt
+```
+
+Python's `SSL_CERT_FILE` replaces those authorities instead, so a
+Python application that also calls its model provider over HTTPS needs a
+bundle that holds both:
+
+```sh
+cat "$(python -m certifi)" server.crt > ca-bundle.pem
+export SSL_CERT_FILE=$PWD/ca-bundle.pem
+```
 
 ## Reach an internal service
 

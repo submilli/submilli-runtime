@@ -8,7 +8,7 @@ slug: server/set-limits
 # charging scheme SUB-1269 proposes, to be replaced by SUB-1270's
 # measurements. The `1B`-style counts (SUB-1272) and the `--report`
 # output (SUB-1271) are real, on main 10da5c4. The logfmt server
-# log line was recaptured for SUB-1316 with the debug server on this checkout.
+# log line was recaptured with the release server on main 51ce450b.
 sidebar:
   order: 4
 ---
@@ -154,7 +154,7 @@ how the run ended, so a limit that fires shows up in the log without
 the client's help:
 
 ```text
-ts=2026-10-03T15:29:46.783Z level=info stream=log target=submilli_server::execute msg="execution finished" blueprint=support session=9b86535d-f25b-4ce3-a9da-558918a8e9f9 fuel=38000105 wasm_fuel=38000026 host_fuel=79 memory_peak=65536 wall_ms=3398 outcome=ok
+ts=2026-10-03T17:04:47.938Z level=info stream=log target=submilli_server::execute msg="execution finished" blueprint=support session=a9644213-e11b-44fa-bfe8-2fcbe4848fe5 fuel=38000105 wasm_fuel=38000026 host_fuel=79 memory_peak=65536 wall_ms=94 outcome=ok
 ```
 
 ## Keep a time limit as the backstop

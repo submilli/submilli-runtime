@@ -194,10 +194,10 @@ warning: @mcp/local: server unavailable: blocked by network policy: 127.0.0.1 is
 
 On `submilli-server`, the same text is in `submilli server run-code`'s
 output, in the `discovery_warnings` list of the HTTP response, and in the
-server's log as a `WARN` line:
+server's log as a `level=warn` line:
 
 ```text
-2026-10-03T12:59:22.636375Z  WARN submilli_shared::mcp::discovery: MCP server omitted: not authenticated — run `submilli server mcp authenticate browse tracker` server="tracker"
+ts=2026-10-03T17:06:08.482Z level=warn stream=log target=submilli_shared::mcp::discovery msg="MCP server omitted: not authenticated — run `submilli server mcp authenticate browse tracker`" server=tracker
 ```
 
 A program that imports a package that was left out doesn't compile:
