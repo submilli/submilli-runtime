@@ -50,13 +50,11 @@ SUBMILLI_SERVER_TOKEN = os.environ["SUBMILLI_SERVER_TOKEN"]
 BLUEPRINT = "research"
 
 
-def instructions(user_id: str) -> str:
-    # The agent's brief, kept beside the blueprint; `{userId}` names the user.
-    brief = (pathlib.Path(__file__).parent.parent / "prompt.txt").read_text()
-    return brief.replace("{userId}", user_id)
+# The agent's brief, kept beside the blueprint.
+INSTRUCTIONS = (pathlib.Path(__file__).parent.parent / "prompt.txt").read_text()
 
 
-async def answer(question: str, user_id: str, model="anthropic:claude-haiku-4-5") -> str:
+async def answer(question: str, user_id: str, model="anthropic:claude-sonnet-5") -> str:
     submilli = {
         "transport": "streamable_http",
         "url": f"{SUBMILLI_SERVER}/mcp/{BLUEPRINT}",
@@ -72,7 +70,7 @@ async def answer(question: str, user_id: str, model="anthropic:claude-haiku-4-5"
         agent = create_deep_agent(
             model=model,
             tools=await load_mcp_tools(session),
-            system_prompt=instructions(user_id),
+            system_prompt=INSTRUCTIONS,
             # deepagents has file tools of its own, which keep files in the
             # conversation. Deny them, so that notes go through Submilli.
             permissions=[FilesystemPermission(operations=["read", "write"], paths=["/**"], mode="deny")],
@@ -107,13 +105,43 @@ LangGraph takes the same tools.
 ANTHROPIC_API_KEY=... python agent.py
 ```
 
-In the book's run, with Claude Haiku 4.5, the model's programs were
-its own, and another run writes different ones, so watch for the shape: the model asks what it can import before it
-writes anything; a program that oversteps, such as listing the volume's
-root, is refused, and the model moves on as the denial tells it to; the
-programs are small; and the answer ends by naming the note it saved under
-`/u_ada/notes`, which is a file on the server's volume. Ask again and the
-model reads that note before it searches.
+This is one real run, with Claude Sonnet 5 as the model, made after the
+[Mastra](/docs/tutorials/connect-mastra) tutorial's agent had answered
+the same question for the same user. The model's programs are its own,
+and another run writes different ones, so watch for the shape.
+
+The model lists `/notes` with the files tool, finds the note the other
+agent wrote, and reads it. Then it checks that the note is still true,
+in one program that asks for today's date, reads the release tracker,
+and searches:
+
+```typescript
+import jina from "@submilli/jina";
+
+function main(): string {
+    const today = Temporal.Now.plainDateISO().toString();
+    const releases = jina.read("https://releases.rs/", null);
+    const search = jina.search("Rust blog.rust-lang.org latest stable release announcement", { timeout: 20 });
+    return JSON.stringify({ today, releases, search }, null, 2);
+}
+```
+
+Nothing newer has shipped, so it writes the note back with what it had
+and a line recording today's check, and answers:
+
+```text
+## Answer
+
+**Latest stable release: Rust 1.99.0**, released **2026-10-01**. I re-verified today (2026-10-03) against releases.rs, which still lists Stable 1.99.0 — no newer stable or patch release (e.g. no 1.99.1) has shipped since.
+…
+Note updated at `/notes/rust-latest-release.md` with this information and sources (existing note was already accurate; I re-verified it and added confirmation details).
+```
+
+Notice where the note came from: another harness, in another
+conversation, under the same user. The notebook belongs to the user and
+the blueprint, not to the harness, and the model updated it rather than
+starting a new one, as the brief asks. The run took eight tool calls,
+none of which failed.
 
 ## With your coding agent
 

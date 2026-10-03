@@ -56,16 +56,13 @@ import { openSession } from "./submilli.ts";
 
 const SUBMILLI_SERVER = process.env.SUBMILLI_SERVER ?? "http://127.0.0.1:8128";
 
-function instructions(userId: string): string {
-  // The agent's brief, kept beside the blueprint; `{userId}` names the user.
-  const brief = readFileSync(new URL("../prompt.txt", import.meta.url), "utf8");
-  return brief.replaceAll("{userId}", userId);
-}
+// The agent's brief, kept beside the blueprint.
+const INSTRUCTIONS = readFileSync(new URL("../prompt.txt", import.meta.url), "utf8");
 
 export async function answer(
   question: string,
   userId: string,
-  model: LanguageModel = anthropic("claude-haiku-4-5"),
+  model: LanguageModel = anthropic("claude-sonnet-5"),
 ): Promise<string> {
   const submilli = await openSession({
     server: SUBMILLI_SERVER,
@@ -77,7 +74,7 @@ export async function answer(
   try {
     const { text } = await generateText({
       model,
-      system: instructions(userId),
+      system: INSTRUCTIONS,
       tools: submilli.tools,
       prompt: question,
       stopWhen: stepCountIs(20),
@@ -294,12 +291,14 @@ endpoints, so that one program can build on the state of the last.
 ANTHROPIC_API_KEY=... npx tsx agent.ts
 ```
 
-This is one real run, with Claude Haiku 4.5 as the model. The model's
-programs are its own, and another run writes different ones; the answer
-ended:
+This is one real run, with Claude Sonnet 5 as the model, made after the
+Mastra and deepagents tutorials' agents had answered the same question
+for the same user. The model's programs are its own, and another run
+writes different ones; its first working program read today's date and the
+notes already in `/notes`, and the answer ended:
 
 ```text
-**Source:** I've saved a complete note with citations to `/u_ada/notes/rust_latest.md` containing all details and the official Rust release documentation link: https://doc.rust-lang.org/beta/releases.html (published October 3, 2026)
+Saved/updated note: `/notes/rust-latest-release.md`, which already had this from a prior session — this session re-confirmed it's still accurate and refreshed the verification timestamp.
 ```
 
 The note is a file on the server's volume, there for the next

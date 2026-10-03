@@ -2,11 +2,12 @@
 /**
  * Documentation home. Renders the `hero` frontmatter of `docs/index.md` in the
  * Submilli layout: mono eyebrow, display title, lead, two actions, and a
- * "Next steps" grid built from the sidebar so it grows as chapters land.
+ * "Next steps" grid of the chapters `nextSteps` names, labelled from the sidebar.
  */
 const { entry, sidebar } = Astro.locals.starlightRoute;
 const { data } = entry;
 const { title = data.title, tagline, actions = [] } = data.hero || {};
+const { nextSteps = [] } = data;
 
 interface Step {
 	label: string;
@@ -16,10 +17,11 @@ interface Step {
 
 type Entries = typeof sidebar;
 
+// A card names the part a chapter is in, so nested groups keep the top label.
 function collectSteps(entries: Entries, group: string, into: Step[]): Step[] {
 	for (const item of entries) {
 		if (item.type === 'group') {
-			collectSteps(item.entries, item.label, into);
+			collectSteps(item.entries, group || item.label, into);
 		} else if (!item.isCurrent) {
 			into.push({ label: item.label, href: item.href, group });
 		}
@@ -27,7 +29,10 @@ function collectSteps(entries: Entries, group: string, into: Step[]): Step[] {
 	return into;
 }
 
-const steps = collectSteps(sidebar, '', []).slice(0, 4);
+const chapters = collectSteps(sidebar, '', []);
+const steps = nextSteps.flatMap((slug) =>
+	chapters.filter((step) => step.href.replace(/\/$/, '') === `${import.meta.env.BASE_URL.replace(/\/$/, '')}/${slug}`),
+);
 ---
 
 <div class="home-hero">

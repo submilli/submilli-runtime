@@ -3,6 +3,7 @@ of a real one, so it needs no API key. Start the server as the README says."""
 
 import asyncio
 import json
+import time
 import pathlib
 
 from agents import ModelResponse, Usage, set_tracing_disabled
@@ -43,9 +44,11 @@ class Scripted(Model):
 
 async def main() -> None:
     set_tracing_disabled(True)
-    assert "check.md" in await answer("total", "u_ada", Scripted(PROGRAM))
-    denied = await answer("total", "u_ada", Scripted(PROGRAM.replace("u_ada", "u_grace")))
-    assert "permission denied" in denied, denied
+    # Two users write the same note; each sees only their own.
+    ada, grace = f"ada_{time.time_ns()}", f"grace_{time.time_ns()}"
+    assert "notes before: none" in await answer("total", ada, Scripted(PROGRAM))
+    assert "notes before: none" in await answer("total", grace, Scripted(PROGRAM))
+    assert "notes before: check.md" in await answer("total", ada, Scripted(PROGRAM))
     try:
         await answer("total", "", Scripted(PROGRAM))
     except Exception:

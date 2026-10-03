@@ -6,15 +6,13 @@ import { query, type Options } from "@anthropic-ai/claude-agent-sdk";
 const SUBMILLI_SERVER = process.env.SUBMILLI_SERVER ?? "http://127.0.0.1:8128";
 const BLUEPRINT = "research";
 
-function instructions(userId: string): string {
-  // The agent's brief, kept beside the blueprint; `{userId}` names the user.
-  const brief = readFileSync(new URL("../prompt.txt", import.meta.url), "utf8");
-  return brief.replaceAll("{userId}", userId);
-}
+// The agent's brief, kept beside the blueprint.
+const INSTRUCTIONS = readFileSync(new URL("../prompt.txt", import.meta.url), "utf8");
 
 export function options(userId: string): Options {
   return {
-    systemPrompt: instructions(userId),
+    model: "claude-sonnet-5",
+    systemPrompt: INSTRUCTIONS,
     mcpServers: {
       // One entry per user: the binding is fixed when the agent connects.
       submilli: {

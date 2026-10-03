@@ -54,7 +54,8 @@ Under `per_session`, files and session state alike last exactly that long.
 is 24 hours, and the CLI writes `1h` back as `'3600s'`.
 
 A named volume can also sit beside the session's files, mounted at a path
-of its own under `vfs.mounts`, read-only or read-write. [Mount a shared
+of its own under `vfs.mounts`, read-only or read-write, whole or only
+the directory of the user the session is for. [Mount a shared
 volume](/docs/server/mount-a-shared-volume) declares one on the
 server and mounts it.
 

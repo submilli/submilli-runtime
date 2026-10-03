@@ -45,10 +45,8 @@ SUBMILLI_SERVER_TOKEN = os.environ["SUBMILLI_SERVER_TOKEN"]
 BLUEPRINT = "research"
 
 
-def instructions(user_id: str) -> str:
-    # The agent's brief, kept beside the blueprint; `{userId}` names the user.
-    brief = (pathlib.Path(__file__).parent.parent / "prompt.txt").read_text()
-    return brief.replace("{userId}", user_id)
+# The agent's brief, kept beside the blueprint.
+INSTRUCTIONS = (pathlib.Path(__file__).parent.parent / "prompt.txt").read_text()
 
 
 async def answer(question: str, user_id: str, model=None) -> str:
@@ -62,10 +60,13 @@ async def answer(question: str, user_id: str, model=None) -> str:
                 "submilli-variables": f"userId={user_id}",
             },
         },
+        # The SDK gives up on a tool call after 5 seconds by default; a
+        # program that searches and reads pages takes longer.
+        client_session_timeout_seconds=120,
     ) as submilli:
         agent = Agent(
             name="researcher",
-            instructions=instructions(user_id),
+            instructions=INSTRUCTIONS,
             model=model,
             mcp_servers=[submilli],
         )
@@ -80,8 +81,12 @@ if __name__ == "__main__":
 
 Notice that the `async with` block is the session. The SDK connects when
 the block opens and ends the session when it closes, so the agent is
-built and run inside it. `model=None` leaves the choice to the SDK's
-default; pass a model name to choose one. `max_turns` bounds the loop.
+built and run inside it. Keep `client_session_timeout_seconds`: the SDK
+gives up on a tool call after five seconds by default, and a program
+that searches and reads pages takes longer; without it, the run gets an
+error while the server is still working. `model=None` leaves the choice
+to the SDK's default; pass a model name to choose one. `max_turns`
+bounds the loop.
 
 ## One conversation
 
@@ -89,13 +94,38 @@ default; pass a model name to choose one. `max_turns` bounds the loop.
 OPENAI_API_KEY=... python agent.py
 ```
 
-The model's programs are its own, and another run writes different ones,
-so watch for the shape: the model asks what it can import before it
-writes anything; a program that oversteps, such as listing the volume's
-root, is refused, and the model moves on as the denial tells it to; the
-programs are small; and the answer ends by naming the note it saved under
-`/u_ada/notes`, which is a file on the server's volume. Ask again and the
-model reads that note before it searches.
+This is one real run, with the SDK's default model, gpt-5.6-luna, made
+after the other four tutorials' agents had answered the same question
+for the same user. The model's programs are its own, and another run
+writes different ones; its first program listed the notebook, got
+today's date, and searched:
+
+```typescript
+import jina from "@submilli/jina";
+import * as fs from "submilli:fs";
+
+function main(): string {
+  const entries: string[] = [];
+  for (const e of fs.list("/notes", false)) entries.push(e.path + " (" + e.kind + ")");
+  const today = Temporal.Now.plainDateISO().toString();
+  const r = jina.searchJson("latest stable Rust release release notes 2025", {site:"blog.rust-lang.org"});
+  const out: string[] = ["today=" + today, "notes=" + entries.join(", ")];
+  for (const x of r) out.push(x.title + " | " + x.url + " | " + x.description);
+  return out.join("\n");
+}
+```
+
+The answer began and ended:
+
+```text
+The latest stable Rust release is **1.99.0**, released **October 1, 2026**.
+…
+I saved and updated the research note at `/notes/rust-latest-release.md`.
+```
+
+The note it updated is the one the other agents kept: a file on the
+server's volume, there for the next conversation `u_ada` opens, on this
+harness or any other.
 
 You have the research agent running on the OpenAI Agents SDK, every
 program it writes executed on the server as the signed-in user, and the

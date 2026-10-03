@@ -15,13 +15,11 @@ SUBMILLI_SERVER_TOKEN = os.environ["SUBMILLI_SERVER_TOKEN"]
 BLUEPRINT = "research"
 
 
-def instructions(user_id: str) -> str:
-    # The agent's brief, kept beside the blueprint; `{userId}` names the user.
-    brief = (pathlib.Path(__file__).parent.parent / "prompt.txt").read_text()
-    return brief.replace("{userId}", user_id)
+# The agent's brief, kept beside the blueprint.
+INSTRUCTIONS = (pathlib.Path(__file__).parent.parent / "prompt.txt").read_text()
 
 
-async def answer(question: str, user_id: str, model="anthropic:claude-haiku-4-5") -> str:
+async def answer(question: str, user_id: str, model="anthropic:claude-sonnet-5") -> str:
     submilli = {
         "transport": "streamable_http",
         "url": f"{SUBMILLI_SERVER}/mcp/{BLUEPRINT}",
@@ -37,7 +35,7 @@ async def answer(question: str, user_id: str, model="anthropic:claude-haiku-4-5"
         agent = create_deep_agent(
             model=model,
             tools=await load_mcp_tools(session),
-            system_prompt=instructions(user_id),
+            system_prompt=INSTRUCTIONS,
             # deepagents has file tools of its own, which keep files in the
             # conversation. Deny them, so that notes go through Submilli.
             permissions=[FilesystemPermission(operations=["read", "write"], paths=["/**"], mode="deny")],

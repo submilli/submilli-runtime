@@ -2,6 +2,7 @@
 of a real one, so it needs no API key. Start the server as the README says."""
 
 import asyncio
+import time
 import pathlib
 
 from langchain_core.language_models.fake_chat_models import GenericFakeChatModel
@@ -49,13 +50,14 @@ async def tool_output(call: dict, user_id: str) -> str:
 
 
 async def main() -> None:
-    assert "check.md" in await tool_output(execute_call(PROGRAM), "u_ada")
-    denied = await tool_output(execute_call(PROGRAM.replace("u_ada", "u_grace")), "u_ada")
-    assert "permission denied" in denied, denied
-    # A file tool answers a denial as a result the model reads, too, not as an
-    # error that ends the run.
-    listed = await tool_output(files_list_call("/"), "u_ada")
-    assert "permission denied" in listed, listed
+    # Two users write the same note; each sees only their own.
+    ada, grace = f"ada_{time.time_ns()}", f"grace_{time.time_ns()}"
+    assert "notes before: none" in await tool_output(execute_call(PROGRAM), ada)
+    assert "notes before: none" in await tool_output(execute_call(PROGRAM), grace)
+    assert "notes before: check.md" in await tool_output(execute_call(PROGRAM), ada)
+    # The file tools see the same filesystem: the user's notes at /notes.
+    listed = await tool_output(files_list_call("/notes"), ada)
+    assert "check.md" in listed, listed
     try:
         await answer("total", "", scripted(execute_call(PROGRAM)))
     except Exception:

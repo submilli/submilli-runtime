@@ -14,6 +14,11 @@ hero:
     - text: Read the introduction
       link: /docs/why
       variant: secondary
+nextSteps:
+  - why
+  - quickstart
+  - blueprints
+  - tutorials/connect-a-harness
 ---
 
 Start with the [introduction](/docs/why) for the argument and a first

@@ -9,21 +9,18 @@ const BLUEPRINT = "research";
 
 type Model = ConstructorParameters<typeof Agent>[0]["model"];
 
-function instructions(userId: string): string {
-  // The agent's brief, kept beside the blueprint; `{userId}` names the user.
-  const brief = readFileSync(new URL("../prompt.txt", import.meta.url), "utf8");
-  return brief.replaceAll("{userId}", userId);
-}
+// The agent's brief, kept beside the blueprint.
+const INSTRUCTIONS = readFileSync(new URL("../prompt.txt", import.meta.url), "utf8");
 
 export async function answer(
   question: string,
   userId: string,
-  model: Model = "anthropic/claude-haiku-4-5",
+  model: Model = "anthropic/claude-sonnet-5",
 ): Promise<string> {
   const agent = new Agent({
     id: "researcher",
     name: "Researcher",
-    instructions: instructions(userId),
+    instructions: INSTRUCTIONS,
     model,
   });
 

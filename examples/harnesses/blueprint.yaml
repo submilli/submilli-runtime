@@ -44,11 +44,17 @@ llm:
     #   provider: openai
     #   description: Fast and cheap; use for summarizing pages and ranking results.
 
-# Notes outlive the conversation: every session shares the `notes` volume, and
-# the rules below give each user one directory of it.
+# Notes outlive the conversation. The `notes` volume keeps one directory
+# per user; a session sees only its own user's, at /notes, and starts
+# there. Everything else is scratch space that ends with the session.
 vfs:
-  mode: named
-  volume: notes
+  mode: per_session
+  cwd: /notes
+  mounts:
+    /notes:
+      mode: named
+      volume: notes
+      subPath: ${vars.userId}
 
 default: deny
 
@@ -62,34 +68,26 @@ permissions:
   - capability: llm.call
     action: allow
   - capability: fs.read
-    filter: path == "/${vars.userId}" or path glob "/${vars.userId}/*"
     action: allow
   - capability: fs.write
-    filter: path == "/${vars.userId}" or path glob "/${vars.userId}/*"
     action: allow
   - capability: fs.list
-    filter: path == "/${vars.userId}" or path glob "/${vars.userId}/*"
     action: allow
   - capability: fs.stat
-    filter: path == "/${vars.userId}" or path glob "/${vars.userId}/*"
     action: allow
   - capability: fs.mkdir
-    filter: path == "/${vars.userId}" or path glob "/${vars.userId}/*"
     action: allow
 
-  # What the package itself may do: reach Jina, and read its key. Its
-  # downloads save to a path the program chooses, so they get the user's
-  # directory too; unscoped, a program could write into another user's
-  # notes through the package.
+  # What the package itself may do, as `add-package` wrote it: reach
+  # Jina, read its key, and save a download where the program asks.
   '@submilli/jina':
   - capability: fs.write
-    filter: path glob "/${vars.userId}/*"
     action: allow
   - capability: http.download
-    filter: host == "r.jina.ai" and vfs_path glob "/${vars.userId}/*"
+    filter: host == "r.jina.ai"
     action: allow
   - capability: http.download
-    filter: host == "s.jina.ai" and vfs_path glob "/${vars.userId}/*"
+    filter: host == "s.jina.ai"
     action: allow
   - capability: http.post
     filter: host == "r.jina.ai" and path == "/"

@@ -28,7 +28,7 @@ The agent answers questions by searching the web and reading pages, and
 keeps notes so that the next conversation can start from what the last
 one learned. It runs on behalf of whoever is signed in to your
 application; the examples stand in for that person with one user id,
-`u_ada`, whose notebook is the directory `/u_ada`.
+`u_ada`.
 
 ## 1. Save the blueprint
 
@@ -81,11 +81,17 @@ llm:
     #   provider: openai
     #   description: Fast and cheap; use for summarizing pages and ranking results.
 
-# Notes outlive the conversation: every session shares the `notes` volume, and
-# the rules below give each user one directory of it.
+# Notes outlive the conversation. The `notes` volume keeps one directory
+# per user; a session sees only its own user's, at /notes, and starts
+# there. Everything else is scratch space that ends with the session.
 vfs:
-  mode: named
-  volume: notes
+  mode: per_session
+  cwd: /notes
+  mounts:
+    /notes:
+      mode: named
+      volume: notes
+      subPath: ${vars.userId}
 
 default: deny
 
@@ -99,34 +105,26 @@ permissions:
   - capability: llm.call
     action: allow
   - capability: fs.read
-    filter: path == "/${vars.userId}" or path glob "/${vars.userId}/*"
     action: allow
   - capability: fs.write
-    filter: path == "/${vars.userId}" or path glob "/${vars.userId}/*"
     action: allow
   - capability: fs.list
-    filter: path == "/${vars.userId}" or path glob "/${vars.userId}/*"
     action: allow
   - capability: fs.stat
-    filter: path == "/${vars.userId}" or path glob "/${vars.userId}/*"
     action: allow
   - capability: fs.mkdir
-    filter: path == "/${vars.userId}" or path glob "/${vars.userId}/*"
     action: allow
 
-  # What the package itself may do: reach Jina, and read its key. Its
-  # downloads save to a path the program chooses, so they get the user's
-  # directory too; unscoped, a program could write into another user's
-  # notes through the package.
+  # What the package itself may do, as `add-package` wrote it: reach
+  # Jina, read its key, and save a download where the program asks.
   '@submilli/jina':
   - capability: fs.write
-    filter: path glob "/${vars.userId}/*"
     action: allow
   - capability: http.download
-    filter: host == "r.jina.ai" and vfs_path glob "/${vars.userId}/*"
+    filter: host == "r.jina.ai"
     action: allow
   - capability: http.download
-    filter: host == "s.jina.ai" and vfs_path glob "/${vars.userId}/*"
+    filter: host == "s.jina.ai"
     action: allow
   - capability: http.post
     filter: host == "r.jina.ai" and path == "/"
@@ -140,9 +138,11 @@ permissions:
 ```
 
 In short: the agent may search and read through the curated
-`@submilli/jina` package, call one model, and read and write under its
-own user's directory on a volume that outlives the session; the package
-is confined to that directory too. The file names Anthropic as the
+`@submilli/jina` package, call one model, and keep notes at `/notes`.
+That path is the same for every user, but what is behind it isn't: the
+`notes` volume holds a directory per user, and `subPath` mounts only the
+one the session's `userId` names, so neither the program nor the package
+can reach another user's notes, and no rule has to name a user. The file names Anthropic as the
 provider and keeps Google and OpenAI entries commented out; uncomment
 yours. For what each block does, refer to [Keep files and
 state](/docs/blueprints/keep-files-and-state), [Allow model
@@ -152,17 +152,17 @@ volume](/docs/server/mount-a-shared-volume).
 ## 2. Save a test program
 
 Beside it, save a program to prove the setup with before any model is
-involved. It writes a note in `u_ada`'s directory and lists it:
+involved. It lists the notes already there, then writes one; a relative
+path is under `/notes`, where every program starts:
 
 ```typescript title="harnesses/note.ts"
 import fs from "submilli:fs";
 
 function main(): string {
-    fs.mkdir("/u_ada/notes", true);
-    fs.writeText("/u_ada/notes/check.md", "# Written by a check\n");
-    const names: string[] = [];
-    for (const entry of fs.list("/u_ada/notes", false)) names.push(entry.name);
-    return `notes: ${names.join(", ")}`;
+    const before: string[] = [];
+    for (const entry of fs.list(".", false)) before.push(entry.name);
+    fs.writeText("check.md", "# Written by a check\n");
+    return `notes before: ${before.join(", ") || "none"}`;
 }
 ```
 
@@ -172,13 +172,12 @@ The harness supplies no system prompt for Submilli: the instructions
 that teach a model the language arrive as the execute tool's
 description, with this blueprint's packages and rules filled in. What
 the harness does supply is the agent's own brief, and every tutorial's
-agent reads it from this file, with `{userId}` replaced by the user the
-session is for:
+agent reads it from this file:
 
 ```text title="harnesses/prompt.txt"
-You are a research assistant working for {userId}. You answer questions
-by searching the web and reading pages, and you keep a notebook so the
-next conversation can start from what this one learned.
+You are a research assistant. You answer questions by searching the web
+and reading pages, and you keep a notebook so the next conversation can
+start from what this one learned.
 
 ## Work in programs
 
@@ -197,11 +196,11 @@ another route to the same effect.
 - `@submilli/jina`: web search, and reading a page as clean text.
 - `submilli:llm`: a model you may call from a program, to summarize a
   long page or rank results without bringing the text back here.
-- `submilli:fs`: your notebook, the directory /{userId}/notes, read and
-  written from a program. It is the only path you may touch: never list
-  or read `/` or another directory, and use no other file tool for it.
-  Read it before you search; when you are done, write what you learned,
-  with its sources.
+- `submilli:fs`: your notebook, the directory /notes, where every
+  program starts. Your first program lists it, reads what is there, and
+  gets today's date from `Temporal.Now.plainDateISO()`, before any search. When you are done,
+  write what you learned, with its sources, updating an existing note
+  rather than replacing what it got right. Use no other file tool for it.
 
 ## Answer
 
@@ -223,7 +222,7 @@ submilli install submilli/submilli-runtime @submilli/jina
 ```
 
 ```text
-fetched github.com/submilli/submilli-runtime at 6d68ef78a52f
+fetched github.com/submilli/submilli-runtime at 528fd656c38a
 installed @submilli/jina v0.1.0 -> ~/.submilli/packages/@submilli/jina
 ```
 
@@ -273,27 +272,31 @@ too.
 
 ## 7. Prove it
 
-Run the test program the way an application would, bound to `u_ada`,
-and then bound to another user:
+Run the test program the way an application would, as `u_ada`, then as
+another user, then as `u_ada` again:
 
 ```sh
 submilli server run-code note.ts --blueprint research --var userId=u_ada
 submilli server run-code note.ts --blueprint research --var userId=u_grace
+submilli server run-code note.ts --blueprint research --var userId=u_ada
 ```
 
 ```text
-notes: check.md
+notes before: none
 ```
 
 ```text
-error: PermissionDeniedError: permission denied: caller=main capability=fs.mkdir: policy denied fs.mkdir on /u_ada/notes for main. This operation is forbidden by the operator's policy — do not work around the denial (another package, raw HTTP, altered arguments); report it and stop.
-  fields: caller = "main", capability = "fs.mkdir", reason = "policy denied fs.mkdir on /u_ada/notes for main"
-  at main (<execute>:4:30)  [thrown here]
+notes before: none
 ```
 
-The same program writes `u_ada`'s note when the session is hers and is
-refused at the first call when it isn't: the binding, not the program,
-decides, whichever harness opens the session.
+```text
+notes before: check.md
+```
+
+Notice the second run: `u_ada` had already written `check.md`, and
+`u_grace`, running the same program at the same path, didn't see it.
+The binding, not the program, decides whose notes `/notes` holds,
+whichever harness opens the session.
 
 Now the model. This program reads a page through the package and asks
 the model to sum it up; `llm.models()` lists the models the blueprint
@@ -336,7 +339,7 @@ no part in them:
   Take the value from what your application knows, the signed-in user,
   never from the conversation.
 - **One connection is one session.** The variables, the session's state,
-  and under `ephemeral` its files last as long as the connection. Open
+  and its files outside `/notes` last as long as the connection. Open
   one per user and close it when the conversation ends.
 
 A secret that belongs to the user rather than the server, such as their

@@ -14,8 +14,9 @@ which a blueprint mounts at a path of its own, read-only or read-write,
 and which every session and every blueprint that mounts it sees.
 
 This guide shows you how to mount a shared volume: declare it on the
-server, mount it in a blueprint, use it from a program, and know where
-its files live and how to remove them. The example gives Acme's support
+server, mount it in a blueprint, use it from a program, give each user
+a directory of their own, and know where its files live and how to
+remove them. The example gives Acme's support
 agent a memory it keeps across conversations and a read-only company
 handbook; substitute your volumes.
 
@@ -183,7 +184,8 @@ function main(): string {
 /memory project-memory read_write limit=104857600
 ```
 
-Mount points can't be moved or removed, and mounts don't nest. A move
+Mount points can't be moved or removed, and one mount can't sit inside
+another; the same volume may be mounted at two paths, under one limit. A move
 between the root and a mount, or between two mounts, copies and then
 removes, so it isn't atomic. A named volume needs a server to resolve
 it, so `submilli run` refuses a blueprint that mounts one and says what
@@ -192,6 +194,79 @@ to do instead:
 ```text
 error: blueprint.yaml: blueprint 'support' uses named volume 'company-handbook' at `/handbook`; named volumes are declared in a server config, so run it on `submilli-server`, or drop the volume for local runs (use `--vfs <dir>` to give the program a directory)
 ```
+
+## Give each user their own directory
+
+One memory every session shares suits a handbook, not notes about
+customers: the agent serving Northwind shouldn't read what it noted
+about Initech. Mount only that customer's directory of the volume,
+chosen by the variable the application binds for the session:
+
+```yaml title="blueprint.yaml (fragment)"
+variables:
+  customerId:
+    required: true
+
+vfs:
+  mode: per_session
+  cwd: /memory
+  mounts:
+    /memory:
+      mode: named
+      volume: project-memory
+      subPath: customers/${vars.customerId}
+```
+
+`subPath` is the directory inside the volume to mount instead of all of
+it. The program sees it as `/memory` whichever customer the session is
+for, and nothing above it, so neither the program nor a package it
+calls can reach another customer's notes, and no rule has to name a
+customer. `${vars.customerId}` must be a whole part of the path, and a
+writable mount creates the directory the first time it is used. `cwd`
+is where relative paths start, so this program's `notes.md` is
+`/memory/notes.md`:
+
+```typescript title="remember.ts"
+import fs from "submilli:fs";
+
+function main(): string {
+    fs.appendText("notes.md", "Asked about refunds; pointed them to the policy.\n");
+    const notes = fs.readText("notes.md") ?? "";
+    return `${fs.cwd()}/notes.md: ${notes.split("\n").length - 1} lines`;
+}
+```
+
+Run it twice for Northwind, then once for Initech:
+
+```sh
+submilli server run-code remember.ts --blueprint support --var customerId=cus_northwind
+submilli server run-code remember.ts --blueprint support --var customerId=cus_northwind
+submilli server run-code remember.ts --blueprint support --var customerId=cus_initech
+```
+
+```text
+/memory/notes.md: 1 lines
+/memory/notes.md: 2 lines
+/memory/notes.md: 1 lines
+```
+
+Notice the third run: the same path, and Initech's notes start at one
+line. The volume holds a directory per customer:
+
+```text
+project-memory/customers/cus_initech/notes.md
+project-memory/customers/cus_northwind/notes.md
+```
+
+A session bound to a value that isn't one directory name, such as `..`,
+is refused before any program runs:
+
+```text
+invalid vfs config: each path component must be nonempty and contain no separator, NUL, '.' or '..' component
+```
+
+`cwd` is a convenience, not a boundary: `..` and absolute paths still
+reach the rest of what the blueprint mounts. The boundary is `subPath`.
 
 ## Where the files live
 

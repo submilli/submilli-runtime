@@ -43,15 +43,13 @@ import { query, type Options } from "@anthropic-ai/claude-agent-sdk";
 const SUBMILLI_SERVER = process.env.SUBMILLI_SERVER ?? "http://127.0.0.1:8128";
 const BLUEPRINT = "research";
 
-function instructions(userId: string): string {
-  // The agent's brief, kept beside the blueprint; `{userId}` names the user.
-  const brief = readFileSync(new URL("../prompt.txt", import.meta.url), "utf8");
-  return brief.replaceAll("{userId}", userId);
-}
+// The agent's brief, kept beside the blueprint.
+const INSTRUCTIONS = readFileSync(new URL("../prompt.txt", import.meta.url), "utf8");
 
 export function options(userId: string): Options {
   return {
-    systemPrompt: instructions(userId),
+    model: "claude-sonnet-5",
+    systemPrompt: INSTRUCTIONS,
     mcpServers: {
       // One entry per user: the binding is fixed when the agent connects.
       submilli: {
@@ -119,28 +117,23 @@ machine.
 ANTHROPIC_API_KEY=... npx tsx agent.ts
 ```
 
-This is one real run, made after the Vercel AI SDK tutorial's agent had
-answered the same question for the same user. The model's programs are
-its own, and another run writes different ones; the answer began:
+This is one real run, with Claude Sonnet 5 as the model, made after
+three other tutorials' agents had answered the same question for the
+same user. The model's programs are its own, and another run writes
+different ones; the answer began and ended:
 
 ```text
-The latest stable release is **Rust 1.99.0**, released on 1 October 2026. Today I checked the Rust blog and it's still the newest release, with no point release since. Its main changes:
-
-**1. You can now write C-style variadic functions in Rust**
+The latest stable Rust release is **1.99.0**, released 2026-10-01. I checked this against the official blog post and releases.rs today (2026-10-03), and no newer stable release has shipped.
 …
-Most of these details come from a note I saved earlier, at `/u_ada/notes/rust-1.99.0.md`. Today I didn't re-read the full release post; I only checked the blog's list of posts. I added today's check and its source to the same note.
+**Notebook:** I updated the existing `/notes/rust-latest-release.md` (it already held a 1.99.0 note from an earlier session). I added a line recording today's verification and why the `/releases/latest/` redirect is not a usable source. The existing content is unchanged.
 
-**Sources:**
-- Release post: https://blog.rust-lang.org/2026/10/01/Rust-1.99.0/
-- Release notes: https://doc.rust-lang.org/stable/releases.html#version-1990-2026-10-01
-- Blog list of posts, checked today: https://blog.rust-lang.org/
+**Not established:** I did not read the Cargo or Clippy changelogs or the full stable release notes, so the list above covers the blog post's highlights, not every change.
 ```
 
-Notice the second paragraph from the end. The note was written by
-another harness's agent, in another conversation, under the same user;
-this one found it under `/u_ada/notes`, read it before searching, and
-added to it. The notebook belongs to the user and the blueprint, not to
-the harness.
+Notice the notebook paragraph. The note was written by another harness's
+agent, in another conversation, under the same user; this one found it
+at `/notes`, read it before searching, and added to it. The notebook
+belongs to the user and the blueprint, not to the harness.
 
 You have the research agent running on the Claude Agent SDK with nothing
 beside Submilli's tools, every program it writes executed on the server

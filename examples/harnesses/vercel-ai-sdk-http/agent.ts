@@ -7,16 +7,13 @@ import { openSession } from "./submilli.ts";
 
 const SUBMILLI_SERVER = process.env.SUBMILLI_SERVER ?? "http://127.0.0.1:8128";
 
-function instructions(userId: string): string {
-  // The agent's brief, kept beside the blueprint; `{userId}` names the user.
-  const brief = readFileSync(new URL("../prompt.txt", import.meta.url), "utf8");
-  return brief.replaceAll("{userId}", userId);
-}
+// The agent's brief, kept beside the blueprint.
+const INSTRUCTIONS = readFileSync(new URL("../prompt.txt", import.meta.url), "utf8");
 
 export async function answer(
   question: string,
   userId: string,
-  model: LanguageModel = anthropic("claude-haiku-4-5"),
+  model: LanguageModel = anthropic("claude-sonnet-5"),
 ): Promise<string> {
   const submilli = await openSession({
     server: SUBMILLI_SERVER,
@@ -28,7 +25,7 @@ export async function answer(
   try {
     const { text } = await generateText({
       model,
-      system: instructions(userId),
+      system: INSTRUCTIONS,
       tools: submilli.tools,
       prompt: question,
       stopWhen: stepCountIs(20),

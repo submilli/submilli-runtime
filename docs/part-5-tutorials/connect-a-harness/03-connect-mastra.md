@@ -46,21 +46,18 @@ const BLUEPRINT = "research";
 
 type Model = ConstructorParameters<typeof Agent>[0]["model"];
 
-function instructions(userId: string): string {
-  // The agent's brief, kept beside the blueprint; `{userId}` names the user.
-  const brief = readFileSync(new URL("../prompt.txt", import.meta.url), "utf8");
-  return brief.replaceAll("{userId}", userId);
-}
+// The agent's brief, kept beside the blueprint.
+const INSTRUCTIONS = readFileSync(new URL("../prompt.txt", import.meta.url), "utf8");
 
 export async function answer(
   question: string,
   userId: string,
-  model: Model = "anthropic/claude-haiku-4-5",
+  model: Model = "anthropic/claude-sonnet-5",
 ): Promise<string> {
   const agent = new Agent({
     id: "researcher",
     name: "Researcher",
-    instructions: instructions(userId),
+    instructions: INSTRUCTIONS,
     model,
   });
 
@@ -123,7 +120,7 @@ Now the real thing:
 ANTHROPIC_API_KEY=... npx tsx agent.ts
 ```
 
-This is one real run, with Claude Haiku 4.5 as the model. The programs
+This is one real run, with Claude Sonnet 5 as the model. The programs
 are the model's own, unedited; another run, or another model, writes
 different ones, so watch for the shape rather than the text. The
 application asks, on behalf of `u_ada`:
@@ -132,104 +129,73 @@ application asks, on behalf of `u_ada`:
 What is new in the latest stable release of Rust? Save a note with your sources.
 ```
 
-The model starts by finding out what it can import: the package search
-tool, then a first program written from a guess at the package's API,
-which doesn't compile. A compile error is an ordinary tool result, and
-the model reads it and asks for the documentation of `@submilli/jina`,
-`submilli:fs`, and `submilli:llm` before trying again. Two more programs
-fail the same way and are repaired. Then one asks the model's own model
-by a name the blueprint doesn't list:
-
-```text
-error: Error: llm.call: llm.call("claude-3-5-sonnet-20241022"): the provider does not serve that model — call llm.models() and use one of: claude-haiku-4-5
-```
-
-The next program is the one that does the work: it reads the Rust blog's
-index through the package, hands the text to the model the blueprint
-allows, and writes the note:
+The model starts where the brief tells it to: the files tool on
+`/notes`, which is empty, and a program that asks the server for
+today's date:
 
 ```typescript
-import { read, search } from "@submilli/jina";
-import { writeText } from "submilli:fs";
-import { call, models } from "submilli:llm";
-
 function main(): string {
-  // Get available models
-  const availableModels = models();
-  console.log("Available models:", availableModels.map((m: { name: string }) => m.name).join(", "));
-  
-  // Search for the latest Rust stable release
-  const searchResults = search("Rust latest stable release 2024");
-  
-  console.log("Search completed");
-  
-  // Get the official Rust blog
-  const blogContent = read("https://blog.rust-lang.org/");
-  
-  console.log("Blog content retrieved, length:", blogContent.length);
-  
-  // Use LLM to extract the latest release information
-  const prompt = `From the following Rust blog content, extract information about the latest stable release of Rust. Include:
-1. The version number
-2. The release date
-3. Key features and improvements
-4. Any breaking changes
-5. Important notes
-
-Content:
-${blogContent.slice(0, 3000)}`;
-  
-  const releaseInfo = call("claude-haiku-4-5", prompt);
-  
-  console.log("LLM analysis completed");
-  
-  // Build the note
-  let noteContent = "# Latest Rust Stable Release Information\n\n";
-  noteContent = noteContent + "## Release Details\n\n";
-  
-  const releaseText = releaseInfo.text;
-  if (releaseText !== null) {
-    noteContent = noteContent + releaseText;
-  } else {
-    noteContent = noteContent + "Unable to retrieve release information.";
-  }
-  
-  noteContent = noteContent + "\n\n## Sources\n";
-  noteContent = noteContent + "- https://blog.rust-lang.org/ (Official Rust Blog)\n";
-  noteContent = noteContent + "- Search query: 'Rust latest stable release 2024'\n";
-  noteContent = noteContent + `- Generated: ${Temporal.Now.instant().toString()}\n`;
-  
-  // Save to notebook
-  writeText("/u_ada/notes/rust_latest_release.md", noteContent);
-  
-  return "Successfully saved Rust latest release information to rust_latest_release.md";
+  return Temporal.Now.plainDateISO().toString();
 }
 ```
 
 ```text
-Successfully saved Rust latest release information to rust_latest_release.md
+2026-10-03
 ```
 
-The model reads the note back with the files tool and answers the user:
+Then the documentation of `@submilli/jina`, and two small programs: one
+searches, one reads the release post it found. This is the first:
+
+```typescript
+import jina from "@submilli/jina";
+
+function main(): string {
+  const results = jina.searchJson("Rust 1. release notes blog.rust-lang.org 2025");
+  const lines: string[] = [];
+  for (const r of results) {
+    lines.push(r.title + " — " + r.url + " — " + r.description);
+  }
+  return lines.join("\n---\n");
+}
+```
+
+Its first draft of the note doesn't compile:
 
 ```text
-## Latest Rust Stable Release
-
-Based on my search and analysis of the official Rust blog, **the latest stable release is Rust 1.99.0**, released on **October 1, 2026**.
-…
-### Note Saved:
-I've saved the information to `/u_ada/notes/rust_latest_release.md` for future reference. The note includes the release details, sources, and links to the official blog post for full feature details.
+error: `+` not defined for `string` and `number`
+  --> <execute>:61:10
+   |
+60 |   fs.writeText("/notes/rust-latest-release.md", content);
+61 |   return "Saved note to /notes/rust-latest-release.md (" + content.length + " chars)";
+   |          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+62 | }
+   |
+help: `+` does not coerce; wrap the number with `String(...)` before concatenating
 ```
 
-Four things to notice. Discovery came first, and every failure on the
-way, a wrong import, a type error, a model the blueprint doesn't serve,
-came back as a result the model read and corrected; nothing left the
-server. The real work happened in one program, the page read, the
-summary, and the note together, which is what the brief asks for. The
-run took ten tool calls, which is why the example allows twenty steps.
-And the note is a file on the server's volume, there for the next
-conversation `u_ada` opens; ask the same question again and the model
-reads it before it searches.
+A compile error is a result like any other: the model wraps the number
+in `String(...)`, as the diagnostic says, and the note is written:
+
+```text
+Saved note to /notes/rust-latest-release.md (2695 chars)
+```
+
+Then it answers the user:
+
+```text
+## Rust 1.99.0 — the latest stable release (shipped 2026‑10‑01)
+…
+Saved a note at `/notes/rust-latest-release.md` with these details and sources for future sessions.
+```
+
+Three things to notice. The model can't know today's date, so it asked
+the server before searching, and that is what lets it tell the newest
+release from an old announcement that ranks well. The programs never
+named the user: they wrote to `/notes`, and the session's binding
+decided that `/notes` is `u_ada`'s. And the note is a file on the
+server's volume, there for the next conversation `u_ada` opens, on this
+harness or another; the run took nine tool calls, within the twenty
+steps the agent allows.
 
 ## With your coding agent
 
