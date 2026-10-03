@@ -21,13 +21,24 @@ pub(super) struct FinallyFrame {
 
 /// Return values arrive on the stack. Each frame owns its saved value, so a
 /// nested try inside cleanup cannot overwrite a suspended outer return.
-pub(super) fn emit_transfer(emitter: &mut FunctionEmitter, transfer: Transfer) {
+pub(super) fn emit_transfer(
+    emitter: &mut FunctionEmitter,
+    transfer: Transfer,
+) -> Result<(), crate::compiler_error::CompilerFailure> {
     let floor = match transfer {
         Transfer::Return => 0,
         Transfer::Branch { finally_floor, .. } => finally_floor,
     };
+    if floor > emitter.finally_stack.len() {
+        return Err(crate::codegen::internal_failure(
+            "branch finally floor exceeds active frames",
+        ));
+    }
     if emitter.finally_stack.len() > floor {
-        let frame = emitter.finally_stack.last_mut().expect("pending finally");
+        let frame = emitter
+            .finally_stack
+            .last_mut()
+            .ok_or_else(|| crate::codegen::internal_failure("pending finally frame is missing"))?;
         let index = if let Some(index) = frame.transfers.iter().position(|t| *t == transfer) {
             index
         } else {
@@ -40,17 +51,18 @@ pub(super) fn emit_transfer(emitter: &mut FunctionEmitter, transfer: Transfer) {
         {
             emitter.instruction(Instruction::LocalSet(result));
         }
-        emitter.instruction(Instruction::I32Const(index as i32 + 1));
+        emitter.instruction(Instruction::I32Const(completion_action(index)?));
         emitter.instruction(Instruction::LocalSet(action));
-        emitter.instruction(Instruction::Br(emitter.wasm_block_depth - entry_depth - 1));
-        return;
+        emitter.instruction(Instruction::Br(emitter.branch_depth(entry_depth)?));
+        return Ok(());
     }
     match transfer {
         Transfer::Return => emitter.instruction(Instruction::Return),
         Transfer::Branch { depth, .. } => {
-            emitter.instruction(Instruction::Br(emitter.wasm_block_depth - depth - 1));
+            emitter.instruction(Instruction::Br(emitter.branch_depth(depth)?));
         }
     }
+    Ok(())
 }
 
 pub(super) fn emit_try_finally(
@@ -60,19 +72,25 @@ pub(super) fn emit_try_finally(
     catches: &[TypedCatchClause],
     finally: StmtId,
 ) -> Result<(), crate::compiler_error::CompilerFailure> {
-    let action = emitter.add_anonymous_local(ValType::I32);
-    let exception = emitter.add_anonymous_local(ValType::EXNREF);
-    let result = emitter.wasm_result_type(ctx)?.map(|ty| {
-        let (storage, non_null) = match ty {
-            ValType::Ref(mut reference) => {
-                let non_null = !reference.nullable;
-                reference.nullable = true;
-                (ValType::Ref(reference), non_null)
-            }
-            _ => (ty, false),
-        };
-        (emitter.add_anonymous_local(storage), non_null)
-    });
+    let action = emitter.add_anonymous_local(ValType::I32)?;
+    let exception = emitter.add_anonymous_local(ValType::EXNREF)?;
+    let result = emitter
+        .wasm_result_type(ctx)?
+        .map(|ty| {
+            let (storage, non_null) = match ty {
+                ValType::Ref(mut reference) => {
+                    let non_null = !reference.nullable;
+                    reference.nullable = true;
+                    (ValType::Ref(reference), non_null)
+                }
+                _ => (ty, false),
+            };
+            Ok::<_, crate::compiler_error::CompilerFailure>((
+                emitter.add_anonymous_local(storage)?,
+                non_null,
+            ))
+        })
+        .transpose()?;
     // This statement may execute repeatedly; normal entry resets its completion.
     emitter.instruction(Instruction::I32Const(0));
     emitter.instruction(Instruction::LocalSet(action));
@@ -97,23 +115,30 @@ pub(super) fn emit_try_finally(
     emitter.instruction(Instruction::I32Const(-1));
     emitter.instruction(Instruction::LocalSet(action));
     emitter.emit_end();
-    let frame = emitter.finally_stack.pop().expect("finally frame");
+    let frame = emitter
+        .finally_stack
+        .pop()
+        .ok_or_else(|| crate::codegen::internal_failure("finally frame is missing"))?;
     // Transfers or throws from cleanup supersede the pending completion and
     // can reach enclosing handlers, but never this try's own catch or finally.
     emitter.push_scope();
     stmt::emit_statement(emitter, ctx, finally)?;
-    emitter.pop_scope();
-    emit_completion_dispatch(emitter, frame, exception);
+    emitter.pop_scope()?;
+    emit_completion_dispatch(emitter, frame, exception)?;
     Ok(())
 }
 
-fn emit_completion_dispatch(emitter: &mut FunctionEmitter, frame: FinallyFrame, exception: u32) {
+fn emit_completion_dispatch(
+    emitter: &mut FunctionEmitter,
+    frame: FinallyFrame,
+    exception: u32,
+) -> Result<(), crate::compiler_error::CompilerFailure> {
     emit_action_test(emitter, frame.action, -1);
     emitter.instruction(Instruction::LocalGet(exception));
     emitter.instruction(Instruction::ThrowRef);
     emitter.emit_end();
     for (index, transfer) in frame.transfers.into_iter().enumerate() {
-        emit_action_test(emitter, frame.action, index as i32 + 1);
+        emit_action_test(emitter, frame.action, completion_action(index)?);
         if transfer == Transfer::Return
             && let Some((result, non_null)) = frame.result
         {
@@ -122,9 +147,17 @@ fn emit_completion_dispatch(emitter: &mut FunctionEmitter, frame: FinallyFrame, 
                 emitter.instruction(Instruction::RefAsNonNull);
             }
         }
-        emit_transfer(emitter, transfer);
+        emit_transfer(emitter, transfer)?;
         emitter.emit_end();
     }
+    Ok(())
+}
+
+fn completion_action(index: usize) -> Result<i32, crate::compiler_error::CompilerFailure> {
+    i32::try_from(index)
+        .ok()
+        .and_then(|index| index.checked_add(1))
+        .ok_or_else(|| crate::codegen::internal_failure("finally completion action overflow"))
 }
 
 fn emit_action_test(emitter: &mut FunctionEmitter, action: u32, expected: i32) {
@@ -132,4 +165,33 @@ fn emit_action_test(emitter: &mut FunctionEmitter, action: u32, expected: i32) {
     emitter.instruction(Instruction::I32Const(expected));
     emitter.instruction(Instruction::I32Eq);
     emitter.emit_if(BlockType::Empty);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::codegen::invariant_tests::{assert_internal, with_context};
+
+    #[test]
+    fn invalid_floor_fails_without_contaminating_a_fresh_emitter() {
+        with_context(
+            &crate::TypedAst::new(),
+            &crate::codegen::SymbolTable::default(),
+            |ctx| {
+                let mut emitter = FunctionEmitter::new(ctx, &[]).unwrap();
+                assert_internal(
+                    emit_transfer(
+                        &mut emitter,
+                        Transfer::Branch {
+                            depth: 0,
+                            finally_floor: 1,
+                        },
+                    )
+                    .unwrap_err(),
+                );
+                drop(emitter);
+                FunctionEmitter::new(ctx, &[]).unwrap().build().unwrap();
+            },
+        );
+    }
 }

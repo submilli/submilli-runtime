@@ -79,7 +79,7 @@ mod tests {
     fn missing_exception_metadata_is_a_compile_failure() {
         for symbols in [SymbolTable::default(), mock_symbols_with_intrinsics()] {
             with_context(&TypedAst::new(), &symbols, |ctx| {
-                emit_error_throw(&mut FunctionEmitter::new(ctx, &[]), ctx);
+                emit_error_throw(&mut FunctionEmitter::new(ctx, &[]).unwrap(), ctx);
                 assert_internal(ctx.check_failure().unwrap_err());
             });
         }
@@ -100,7 +100,11 @@ mod tests {
                 check_is_standalone: std::cell::Cell::new(false),
                 ..*ctx
             };
-            emit_type_error_throw(&mut FunctionEmitter::new(&ctx, &[]), &ctx, "test message");
+            emit_type_error_throw(
+                &mut FunctionEmitter::new(&ctx, &[]).unwrap(),
+                &ctx,
+                "test message",
+            );
             assert_internal(ctx.check_failure().unwrap_err());
         });
     }
