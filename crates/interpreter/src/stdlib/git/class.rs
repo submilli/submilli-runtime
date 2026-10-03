@@ -7,7 +7,7 @@ use wasmtime::{
 
 use super::MODULE_NAME;
 use crate::runtime::StoreData;
-use crate::runtime::host::{register_host_fn_async, write_submilli_string};
+use crate::runtime::host::{fatal_host_error, register_host_fn_async, write_submilli_string};
 use crate::runtime::intrinsic_types::{IntrinsicTypes, build_intrinsic_types, intrinsic_types};
 use crate::runtime::prelude::iterator::as_struct;
 
@@ -118,10 +118,14 @@ fn class_types(
         ))),
     ));
     def.finish();
-    let group = builder.build()?;
+    let group = builder.build().map_err(fatal_host_error)?;
     Ok((
-        group.get_struct(vtable_label).expect("declared vtable"),
-        group.get_struct(instance_label).expect("declared instance"),
+        group
+            .get_struct(vtable_label)
+            .ok_or_else(|| fatal_host_error("git class: declared vtable type is missing"))?,
+        group
+            .get_struct(instance_label)
+            .ok_or_else(|| fatal_host_error("git class: declared instance type is missing"))?,
     ))
 }
 
@@ -137,7 +141,7 @@ fn make_vtable(store: &mut Store<StoreData>, ty: StructType, methods: Vec<Func>)
         .data()
         .host_abi
         .as_ref()
-        .expect("prelude installed")
+        .ok_or_else(|| fatal_host_error("git class: prelude is not installed"))?
         .opaque_vtable;
     let value = opaque.get(&mut *store);
     let Val::AnyRef(Some(value)) = value else {
@@ -149,7 +153,7 @@ fn make_vtable(store: &mut Store<StoreData>, ty: StructType, methods: Vec<Func>)
         .data()
         .host_abi
         .as_ref()
-        .expect("prelude installed")
+        .ok_or_else(|| fatal_host_error("git class: prelude is not installed"))?
         .object_vtable;
     let Val::AnyRef(Some(value)) = object.get(&mut *store) else {
         wasmtime::bail!("missing object vtable")
@@ -180,7 +184,7 @@ fn make_field_names(store: &mut Store<StoreData>, intr: &IntrinsicTypes) -> Resu
         .data()
         .host_abi
         .as_ref()
-        .expect("prelude installed")
+        .ok_or_else(|| fatal_host_error("git class: prelude is not installed"))?
         .string_vtable;
     let vtable = string_vtable.get(&mut *store);
     let raw = write_submilli_string(&mut *store, "path")?;
@@ -402,4 +406,23 @@ fn new_instance(
         &[vtable, names, Val::AnyRef(Some(fields.to_anyref()))],
     )?;
     Ok(Val::AnyRef(Some(instance.to_anyref())))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn git_class_setup_without_prelude_returns_fatal_error() {
+        let config = crate::RuntimeConfig::default();
+        let engine = config.engine().unwrap();
+        let intr = build_intrinsic_types(&engine).unwrap();
+        let mut store = config
+            .store(&engine, StoreData::with_vfs(crate::runtime::Vfs::none()))
+            .unwrap();
+        let error = make_field_names(&mut store, &intr).unwrap_err();
+        assert!(error.is::<crate::runtime::host::FatalHostError>());
+        let error = make_vtable(&mut store, intr.class_vtable, vec![]).unwrap_err();
+        assert!(error.is::<crate::runtime::host::FatalHostError>());
+    }
 }
