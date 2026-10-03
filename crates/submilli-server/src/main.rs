@@ -95,9 +95,9 @@ pub struct Cli {
     volume_dir: Option<PathBuf>,
 
     /// Directory backing the encrypted secret store (one sealed file per
-    /// secret). Dev-only — encrypted at rest, but no rotation or audit. Not the
-    /// CLI's plaintext store at ~/.submilli/secrets, which `submilli secret put`
-    /// and `mcp authenticate` fill and `submilli run` reads.
+    /// secret). Not the CLI's store at ~/.submilli/secrets, which
+    /// `submilli secret put` and `mcp authenticate` fill and `submilli run`
+    /// reads.
     /// [default: ~/.submilli/server/secrets]
     /// Env: `$SUBMILLI_SECRET_STORE_DIR`.
     #[arg(long)]

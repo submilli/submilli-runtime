@@ -78,20 +78,25 @@ checked @acme/billing v0.1.0
 
 :::tip[The compiler checks the tag against the check]
 `submilli build check` compares the `@capability` tag with the `check`
-call in its function and warns when they disagree: a field in one and
-not the other, a tag with no `check`, a `check` with no tag, or a tag
-that names a parameter the function doesn't have. With `amount` left
-out of the tag:
+call in its function. A field the `check` sends that the tag doesn't
+declare is an error, and the build stops; with `amount` left out of the
+tag:
 
 ```text
-warning: payload key `amount` missing from `@capability` binding
+error: payload key `amount` missing from `@capability` binding
   --> packages/billing/src/lib.ts:22:37
    |
 21 |     }
 22 |     check("acme.com/credits.apply", { customerId, amount });
    |                                     ^^^^^^^^^^^^^^^^^^^^^^
 23 | 
+   |
+help: add `amount` to the matching `@capability` binding
 ```
+
+The other disagreements are warnings: a tag field the `check` doesn't
+send, a tag with no `check`, a `check` with no tag, or a tag that names
+a parameter the function doesn't have.
 :::
 
 Name a capability `<domain>/<resource>.<verb>`, one per operation, so a

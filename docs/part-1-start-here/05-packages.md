@@ -29,9 +29,7 @@ in a Git repository
 [installs straight from it](/docs/blueprints/start-a-blueprint).
 Submilli publishes
 [curated packages](/docs/reference/curated-packages) that way for
-common services, GitHub, Slack, Google Drive, Linear, Notion, and others,
-and the list is growing. A package registry, as npm and pip have, is
-coming.
+common services, GitHub, Slack, Google Drive, Linear, Notion, and others.
 
 ## Why not npm
 

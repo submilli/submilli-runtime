@@ -63,10 +63,15 @@ separately requested.
   upgrade example, explaining its starting state. Do not present future tags as
   downloadable. Without a compatible predecessor, describe the procedure without
   inventing a working previous-to-current example.
+- Always update `docs/part-1-start-here/02-install.md`: the `submilli --version`
+  output must show the new release, from the released binary.
 - Check `docs/part-4-server/05-deploy-on-linux.md` and
   `docs/part-4-server/07-deploy-on-kubernetes.md` for relevant deployment changes.
   The workflow does not attach `compose.yaml`; retain its raw tag URL unless an
   explicitly scoped workflow change adds that asset.
+- Regenerate the reference: build `submilli` and `submilli-server` in release
+  mode, then run `npm run reference` in `docs-site` with `SUBMILLI_BIN` and
+  `SUBMILLI_SERVER_BIN` naming them, and commit the changed pages.
 
 ## 3. Write release notes
 

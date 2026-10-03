@@ -80,6 +80,14 @@ Describe the machinery and nothing else: every field, flag, limit, and error,
 structured like the thing it describes. Caveats, edge cases, and full option
 lists live here, so the other types can stay short.
 
+What the binaries can print, they print: the CLI's help, the standard
+library's functions and types, the built-ins, and the capabilities and their
+fields are generated into the pages between `<!-- generated:NAME -->` and
+`<!-- /generated:NAME -->` markers. Don't edit inside a region; change the
+doc comment or help text in the code, then run `npm run reference` in
+`docs-site` with `SUBMILLI_BIN` and `SUBMILLI_SERVER_BIN` naming the freshly
+built binaries. Run it before every release.
+
 ## Start with a chapter brief
 
 Before drafting, answer these questions in a short working note:

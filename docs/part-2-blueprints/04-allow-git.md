@@ -106,8 +106,7 @@ class Repository {
 }
 ```
 
-There is no push yet; it is coming in a later release. Git has four
-capabilities:
+Git has four capabilities:
 
 ```sh
 submilli blueprint capability list submilli:git

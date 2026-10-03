@@ -304,7 +304,7 @@ mcp:
 
 No provider and no `authenticate` step: the server sends whatever token
 the session was opened with, and a session opened without one is refused.
-[Connect a harness](/docs/tutorials/connect-a-harness#secrets-that-belong-to-the-session)
+[Connect a harness](/docs/tutorials/connect-a-harness#what-every-harness-does)
 shows how each harness supplies it. The rules are the same either way; only
 whose account the call is made as changes.
 

@@ -202,7 +202,8 @@ A rule names a capability, an optional filter over the fields the
 operation reports, and an action. Rules are read top to bottom and the
 first match wins; names match exactly, so allowing `fs.write` doesn't allow
 `fs.mkdir`. `capability add` refuses a name nothing provides. Refer to
-[permissions](/docs/reference/permissions) for the filter language.
+the [filter language](/docs/reference/filter-language) reference for what
+a filter can test.
 
 ## Declare the secret
 

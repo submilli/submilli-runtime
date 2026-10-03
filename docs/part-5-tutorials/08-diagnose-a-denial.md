@@ -295,8 +295,9 @@ the filter before going on:
 | Was the legitimate work, under a binding you meant to allow it | The rule or the binding. Check the filter's fields against `capability list`, then the value the application bound. |
 | Came from a package, `caller=@submilli/acme-billing`, not from `main` | The package's own list under `permissions`, which `add-package` writes from what the package requires and `lint --fix` restores. |
 
-Refer to [Permissions](/docs/reference/permissions) for how a filter
-is evaluated, and to [Errors and limits](/docs/reference/errors-and-limits)
+Refer to [Filter
+language](/docs/reference/filter-language#how-a-filter-is-evaluated) for
+how a filter is evaluated, and to [Errors and limits](/docs/reference/errors-and-limits)
 for every error a program can get.
 
 You have read one denial all the way down: from the message to the rule

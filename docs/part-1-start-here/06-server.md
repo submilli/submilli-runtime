@@ -76,6 +76,35 @@ A run that passes a limit stops with an error the model can read. The
 limits are the operator's; a blueprint can cap its own files and narrow
 with filters, but it can't raise them.
 
+## When a program fails
+
+Every run shares the server process, so a run that fails must end alone.
+Two things make sure it does.
+
+**WebAssembly contains the failure.** A program's memory belongs to its
+instance, and the program can't address anything outside it. When a run
+does something it can't continue from, such as allocating past its memory
+limit, recursing past its stack, burning its fuel, or any other WebAssembly
+trap, the instance stops and that run ends with an error. The process and
+every other run carry on. Four programs sent to one server, one after
+another:
+
+| The program | What came back |
+| --- | --- |
+| Allocates a million megabyte strings | `memory exhausted` |
+| Recurses without end | `call stack exhausted` |
+| Loops without end | `fuel exhausted` |
+| Returns a string | `still serving` |
+
+**The server doesn't panic.** Submilli's runtime is written so that no
+program can crash it. The parser, the compiler, the runtime, and every
+function a program can call return an error instead of panicking, even for
+a state that "can't happen", and input size and nesting are bounded before
+they can exhaust the process. A program that breaks one of the runtime's
+own assumptions gets an error, not a crashed server. Every change to the
+runtime is held to this rule, and the whole path a program takes through
+the server has been reviewed against it.
+
 ## MCP
 
 The server exposes MCP, the protocol agent frameworks use to call tools,

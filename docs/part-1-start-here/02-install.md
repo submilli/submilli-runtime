@@ -11,6 +11,12 @@ Two things to install: the `submilli` command, which comes with the
 The quickstart needs the first. The tutorials later in the book use the
 second.
 
+Submilli is open source under the [Apache License
+2.0](https://github.com/submilli/submilli-runtime/blob/main/LICENSE). The
+source, the curated packages, and the releases are in the
+[`submilli/submilli-runtime`](https://github.com/submilli/submilli-runtime)
+repository.
+
 ## The CLI and the server
 
 macOS and Linux:
@@ -32,7 +38,7 @@ submilli --version
 ```
 
 ```text
-submilli 0.1.0
+submilli 0.1.6
 ```
 
 ```

@@ -14,11 +14,12 @@ sidebar:
 
 Some of the programs an agent writes will be wrong: a loop that never
 stops, a list that never stops growing, a batch that asks a model a
-million questions. Every program runs in a fresh WebAssembly instance
-inside the server process, with no process or container boundary between
-one and the next, so the limits are what keeps such a program from taking
-the server down, starving another session, or running up your model
-provider's bill. They are the operator's; a blueprint can't raise them.
+million questions. Every program runs in its own WebAssembly instance
+inside the server process, which ends a failing run without disturbing
+the others ([The server](/docs/server#when-a-program-fails)). The limits
+decide when a run like that ends: they keep it from starving another
+session or running up your model provider's bill. They are the
+operator's; a blueprint can't raise them.
 
 This guide shows you how to set the server's limits: bound CPU work with
 fuel, keep a time limit as the backstop for your callers, size memory and
@@ -136,11 +137,13 @@ submilli run --report million.ts
 
 ```text
 42
-fuel: 38,000,026   memory peak: 0.1 MB   wall: 115 ms (compile 4 ms, run 110 ms)
+fuel: 38,000,105 (wasm 38,000,026, host 79)   memory peak: 0.1 MB   wall: 94 ms (compile 5 ms, run 88 ms)
 ```
 
-The report comes after a failed run too, with the fuel the run had spent
-when it ended. The memory figure is what the program held at its peak,
+The fuel is one budget spent two ways: `wasm` is the program's own
+instructions, and `host` is what the standard library's functions charge
+for the work they do for it. The report comes after a failed run too,
+with the fuel the run had spent when it ended. The memory figure is what the program held at its peak,
 counted as the limit counts it, not what the process used.
 
 Run the programs your agent produces, or a package's tests, and set the
@@ -150,7 +153,7 @@ how the run ended, so a limit that fires shows up in the log without
 the client's help:
 
 ```text
-INFO submilli_server::execute: execution finished blueprint="support" session="1be1de26-d368-4f8d-864d-2e5496ff962b" fuel=38000026 memory_peak=65536 wall_ms=155 outcome="ok"
+INFO submilli_server::execute: execution finished blueprint="support" session="5ee90e95-8ad2-4f0a-9af7-c2a1dc1f75de" fuel=38000105 wasm_fuel=38000026 host_fuel=79 memory_peak=65536 wall_ms=118 outcome="ok"
 ```
 
 ## Keep a time limit as the backstop
