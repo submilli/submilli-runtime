@@ -57,14 +57,14 @@ separately requested.
 - Update relevant behavior, configuration, installation, and migration docs.
   Search for old version pins and assess each use; preserve historical references
   and unrelated versions.
-- Always update `docs/next/server/06-deploy-with-compose.md`: the raw GitHub
+- Always update `docs/part-4-server/06-deploy-with-compose.md`: the raw GitHub
   `compose.yaml` tag URL, `SUBMILLI_IMAGE`, and `docker compose ps` image must match
   the new release. Use a real compatible predecessor and the new release for the
   upgrade example, explaining its starting state. Do not present future tags as
   downloadable. Without a compatible predecessor, describe the procedure without
   inventing a working previous-to-current example.
-- Check `docs/next/server/05-deploy-on-linux.md` and
-  `docs/next/server/07-deploy-on-kubernetes.md` for relevant deployment changes.
+- Check `docs/part-4-server/05-deploy-on-linux.md` and
+  `docs/part-4-server/07-deploy-on-kubernetes.md` for relevant deployment changes.
   The workflow does not attach `compose.yaml`; retain its raw tag URL unless an
   explicitly scoped workflow change adds that asset.
 

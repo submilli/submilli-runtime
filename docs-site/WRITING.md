@@ -10,6 +10,76 @@ The agent that writes Submilli programs is a different reader. It gets the
 Submilli skill and `llm-prompt.md`, which are written for that job. Reference
 material that only a code-writing agent needs belongs there.
 
+## The shape of the book
+
+The book follows [Diátaxis](https://diataxis.fr/): every page is one of four
+types, and the type decides how it is written. The parts are a single reading
+line: each page assumes only what earlier pages established. Blueprints come
+before packages everywhere, the policy first and then the operation it governs.
+One scenario runs through the book: the Acme support agent, its billing
+package, the customer `cus_northwind`, and the injected ticket.
+
+| Part | Folder | Type | Read |
+| --- | --- | --- | --- |
+| 1 · Start here | `docs/part-1-start-here/` | Why and the four concepts are [explanation](https://diataxis.fr/explanation/); Install is a [how-to](https://diataxis.fr/how-to-guides/); Quickstart is a [tutorial](https://diataxis.fr/tutorials/) | In order |
+| 2 · Blueprints | `docs/part-2-blueprints/` | How-to | One page, for a task |
+| 3 · Packages | `docs/part-3-packages/` | How-to | One page, for a task |
+| 4 · Server | `docs/part-4-server/` | How-to | One page, for a task |
+| 5 · Tutorials | `docs/part-5-tutorials/` | Tutorial | In order, by group |
+| 6 · Reference | `docs/part-6-reference/` | [Reference](https://diataxis.fr/reference/) | Looked up |
+
+`docs/old/` holds the previous book, hidden from navigation, search, and the
+agent exports. Move content out of it; don't edit it. A page's URL comes from
+its `slug` frontmatter, not its path; its position comes from `sidebar.order`.
+A folder inside a part is a sidebar group, named in `astro.config.mjs`.
+
+### Explanation
+
+Say what the thing *is* before what it does, with an analogy the reader
+already holds (a blueprint is to a session what a blueprint is to a house).
+Then list its main parts and say which one the page is about. Explain why by
+contrast with what the reader uses today, named concretely. Put the concept in
+the heading, so the argument reads in the table of contents. Order ideas so
+each answers the question the previous one raised.
+
+### How-to
+
+Open with why: one paragraph on the situation that makes the reader need this
+page, then the task. Cover the whole lifecycle of the thing, author, test
+locally, register, run on the server, and link to the page that owns each
+detail. Put the bread and butter early and options late; advanced options
+belong in reference. A how-to is read on its own: never explain its output by
+what another page did. Don't hedge; one sentence beside the rule it qualifies
+is enough.
+
+### Tutorial
+
+Follow [Diátaxis tutorials](https://diataxis.fr/tutorials/): a lesson the
+reader completes with you, where every step produces a result they can see.
+
+- Open with what we will build: "In this tutorial we will…", then the
+  prerequisites, set up in the page itself.
+- Each tutorial stands alone. Build everything from scratch in the page, or
+  install it from a public repository (the book's examples live in
+  `submilli/acme`); never ask the reader to clone this repository or to have
+  done another tutorial.
+- Give one path. No options, alternatives, or "you could also"; those are
+  how-tos.
+- Concrete steps, each followed by its real output. Point at what matters with
+  "Notice that…". Keep explanation to a sentence and link to the page that
+  explains.
+- Show whole files the reader saves, not fragments, unless the step changes
+  one line of a file already shown.
+- Close with one line on what the reader built and where to go next.
+- For runs with a model, show one real run and tell the reader to watch for
+  its shape, not its text.
+
+### Reference
+
+Describe the machinery and nothing else: every field, flag, limit, and error,
+structured like the thing it describes. Caveats, edge cases, and full option
+lists live here, so the other types can stay short.
+
 ## Start with a chapter brief
 
 Before drafting, answer these questions in a short working note:
@@ -103,3 +173,26 @@ keep bug caveats and workarounds in the issues. Check links and build the docume
 
 Then read the prose aloud. Rewrite anything you would struggle to say to a
 colleague. Cut repetition without removing details needed to use the feature.
+
+Before handing a page over for review, check it against this list:
+
+- **Less is better.** Move verified content from existing pages before writing
+  new prose, and cut what is true but doesn't advance the page.
+- **Every output is real.** Capture it from a scratch run under an isolated
+  `SUBMILLI_HOME`; don't copy it from another page. After reordering steps,
+  replay the whole sequence. Say what couldn't be run, and why, in the page's
+  frontmatter or a Linear issue, not in the prose.
+- **Let the tool's output thread the page.** Lint after the step that needs
+  it, and name the warning the next step clears.
+- **Explain arguments the first time** a command appears, and define a term
+  in a sentence or two where the reader first needs it.
+- **Real examples, not stubs.** A package makes its HTTP call and reads its
+  key; names, paths, and ids stay consistent within the page.
+- **Purpose before command,** in the reader's terms and with concrete things:
+  "the customer the agent is serving", not "the session's context".
+- **No spatial references** ("above", "on the left"); name the thing or link
+  to the heading.
+- **Links are real.** A sentence about another topic at the end of a section
+  is a missing section or a missing link.
+- **A cold read helps.** A fresh agent given only the page finds
+  curse-of-knowledge gaps; treat its findings as candidates.

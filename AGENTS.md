@@ -231,7 +231,17 @@ key generation, retention, and reuse through mocked Kubernetes lookups.
 
 ## Documentation site
 
-The public user book lives in `docs/`. Build it independently with:
+The public user book lives in `docs/`, in six parts that follow
+[Diátaxis](https://diataxis.fr/): Start here (explanation, with a quickstart
+tutorial), Blueprints, Packages, and Server (how-to guides), Tutorials, and
+Reference. `docs/old/` is the previous book, kept hidden; don't edit it.
+
+Before writing or reviewing any page in `docs/`, read
+[docs-site/WRITING.md](docs-site/WRITING.md). It says which type each part is,
+how each type is written, and the checklist a page passes before review. Every
+command output in the book comes from a real run.
+
+Build it independently with:
 
 ```sh
 cd docs-site

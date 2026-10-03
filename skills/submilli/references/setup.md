@@ -96,7 +96,7 @@ programs but not change blueprints. Compose reads the token from `.env`; the
 Helm chart generates both tokens into the Secret `<release>-auth`.
 
 Still run one server per application and make sure only that application can
-reach it. Read https://submilli.ai/docs/deploying/ before advising on
+reach it. Read https://submilli.ai/docs/server/deploy-on-linux before advising on
 production; the mechanics that matter most:
 
 | The application runs | Server setup | How only the application reaches it |

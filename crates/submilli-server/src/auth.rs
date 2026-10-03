@@ -180,7 +180,7 @@ pub fn log_auth_posture(addr: IpAddr, auth: &AuthConfig) {
             "inbound authentication is disabled and the server is bound outside loopback: \
              anything that can reach this port can run code, manage blueprints, and stop the \
              server. Set `SUBMILLI_SERVER_TOKEN` to require a token \
-             (https://submilli.ai/docs/deploying/)"
+             (https://submilli.ai/docs/server/run-the-server)"
         ),
     }
 }
