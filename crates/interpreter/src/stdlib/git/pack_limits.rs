@@ -28,9 +28,10 @@ const MAX_CONTROL_RECORDS: usize = 1_000_000;
 
 /// Checks one response read from `body`. `local` says whether the repository
 /// already has an object: a delta in the pack may name one as its base.
-/// Each entry's work, this check's and gix's after it, is counted on `meter`
+/// Each entry's work is counted on `meter` as it goes: this check's share
 /// before the entry is inflated, so the fuel ceiling can stop the check part
-/// way and a fetch that fails later still pays for what it did.
+/// way; gix's once it inflates as declared; a delta's result once its chain
+/// is within limits. A fetch that fails later still pays for what it did.
 pub(super) fn validate(
     body: &mut dyn BufRead,
     advertisement: bool,
@@ -322,7 +323,7 @@ fn validate_pack<R: BufRead>(
                 let base = delta_size(&mut prefix)?;
                 let result = delta_size(&mut prefix)?;
                 let added = raw.saturating_add(result);
-                named_bases.push((base_id, added));
+                named_bases.push((base_id, base, added));
                 (base.saturating_add(added), result)
             }
             _ => (raw, 0),
@@ -338,14 +339,20 @@ fn validate_pack<R: BufRead>(
     let mut checksum = [0u8; 20];
     pack.read_exact(&mut checksum)
         .map_err(|_| invalid("incomplete pack checksum or trailing pack data"))?;
-    for (base, added) in named_bases {
+    for (base, declared, added) in named_bases {
         check_cancelled(cancelled)?;
         match whole.get(&base) {
             Some(size) if size.saturating_add(added) > limits.max_chain_bytes => {
                 return Err(super::storage::memory_limit_io("pack delta chain"));
             }
             Some(_) => {}
-            None if local(&base) => {}
+            None if local(&base) => {
+                // gix reads the base from the repository to resolve the delta,
+                // and writes and hashes it to complete the thin pack: at the
+                // size the delta declares, within its chain's limit.
+                meter.parse(declared);
+                meter.hash(declared);
+            }
             None => {
                 return Err(invalid(
                     "a pack delta's base is neither a whole object in the pack nor in the \
@@ -631,15 +638,51 @@ mod tests {
             &AtomicBool::new(false),
         )
         .unwrap();
-        let resolved = 50 * base;
         assert!(pack.len() < 2_000, "{}", pack.len());
-        assert!(
-            meter.fuel()
-                >= crate::runtime::fuel::PARSE.cost(resolved)
-                    + crate::runtime::fuel::HASH.cost(resolved),
-            "{}",
-            meter.fuel()
+        // The base inflated and hashed twice; each delta's instructions
+        // inflated twice, and the object it describes built and hashed once.
+        let delta = copy.len() as u64;
+        assert_eq!(
+            meter.fuel(),
+            crate::runtime::fuel::PARSE.cost(2 * base + 50 * (2 * delta + base))
+                + crate::runtime::fuel::HASH.cost(2 * base + 50 * base)
         );
+    }
+
+    #[test]
+    fn a_delta_declaring_too_much_is_refused_before_it_is_charged() {
+        use gix::odb::pack::data::entry::Header;
+        // A delta declaring a result of about 2 MiB, past the chain's limit.
+        let declared = [0x01, 0x80, 0x80, 0x80, 0x01];
+        // The delta's base is the blob just before it.
+        let blob = compressed_entry(Header::Blob, b"x");
+        let delta = compressed_entry(
+            Header::OfsDelta {
+                base_distance: blob.len() as u64,
+            },
+            &declared,
+        );
+        let pack = complete_pack(&[blob, delta]);
+        let cancelled = std::sync::Arc::new(AtomicBool::new(false));
+        let meter = Meter::new(
+            crate::runtime::fuel::PARSE.cost(1_000) + crate::runtime::fuel::HASH.cost(1_000),
+            Some(std::sync::Arc::clone(&cancelled)),
+        );
+        let error = super::validate(
+            &mut io::Cursor::new(&pack),
+            false,
+            Limits {
+                max_records: 16,
+                max_object_bytes: BUDGET,
+                max_chain_bytes: BUDGET,
+            },
+            &|_| true,
+            &meter,
+            &cancelled,
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("delta chain"), "{error}");
+        assert!(!meter.is_exhausted(), "{}", meter.fuel());
     }
 
     #[test]
