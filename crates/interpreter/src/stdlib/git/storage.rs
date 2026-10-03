@@ -1011,12 +1011,11 @@ fn read_file_entry(
 
 /// Creates the missing directories above the checked-out file `path`, each
 /// under the exact spelling given, refusing to go through a link, a file, or a
-/// directory spelled another way. Returns the directories created, outermost
-/// first.
-pub(super) fn prepare_parent(dir: &Dir, path: &Path) -> Result<Vec<PathBuf>> {
-    let mut created = Vec::new();
+/// directory spelled another way. Adds each directory it creates to `created`,
+/// outermost first, as it creates it, so a failure part way can be undone.
+pub(super) fn prepare_parent(dir: &Dir, path: &Path, created: &mut Vec<PathBuf>) -> Result<()> {
     let Some(parent) = path.parent() else {
-        return Ok(created);
+        return Ok(());
     };
     let mut prefix = std::path::PathBuf::new();
     for component in parent.components() {
@@ -1048,7 +1047,7 @@ pub(super) fn prepare_parent(dir: &Dir, path: &Path) -> Result<Vec<PathBuf>> {
             Err(error) => return Err(error.into()),
         }
     }
-    Ok(created)
+    Ok(())
 }
 
 #[cfg(all(test, unix))]

@@ -216,15 +216,21 @@ permissions:
 
 ## Git
 
-`submilli:git` works on a private copy of the repository in memory, so its
-limits follow the run's memory:
+`submilli:git` reads and changes a repository where it is, so a repository's
+size counts against the volume's `size_limit`, not against memory:
 
-- **Memory.** Git's work counts against `max_execution_memory`. Under the
-  default 50 MB, a repository of more than about 2 MB won't fit; raise
-  `max_execution_memory` for larger ones.
-- **Size.** A worktree, or a `.git` directory, holds at most 10,000 paths and
-  64 directory levels. A new branch or remote name is at most 250 bytes. A history
-  page returns at most 1,000 commits, 50 by default.
+- **Memory.** Git's work counts against `max_execution_memory`, but it holds
+  what one operation touches, not the repository: the paths it lists, and one
+  file at a time. Under the default 50 MB, Git takes a file of up to about
+  8 MB and a diff of up to about 4 MB, and tens of thousands of paths. A larger
+  one fails with an error that says to raise `max_execution_memory`.
+- **Size.** A fetch may bring at most half of what the `size_limit` leaves,
+  or 4 GB without one.
+  Directories nest at most 64 levels. A new branch or remote name is at most
+  250 bytes. A history page returns at most 1,000 commits, 50 by default.
+- **Packs.** Git uses a repository's packs with the indexes native Git wrote
+  for them. A pack without a valid index is refused; run `git index-pack` on
+  it.
 - **Time.** Each operation has 60 seconds, including the wait for one of the
   four Git workers a server shares among all its programs.
 - **Fetch.** A fetch downloads the history it needs without first telling the

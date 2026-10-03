@@ -843,3 +843,57 @@ async fn fuel_does_not_grow_with_pack_size() {
         );
     }
 }
+
+/// Every file under `root`, `.git` included, with its mode and contents.
+fn digest(root: &Path) -> storage::Files {
+    let dir = Dir::open_ambient_dir(root, cap_std::ambient_authority()).unwrap();
+    storage::read_files(&dir, false, &AtomicBool::new(false), 64 << 20).unwrap()
+}
+
+/// A publication that fails after any number of its steps is undone, leaving
+/// the repository, worktree and `.git` alike, exactly as it was.
+#[test]
+fn a_publication_failing_at_any_step_leaves_the_repository_as_it_was() {
+    let root = repository();
+    for (path, contents) in [("kept", "kept"), ("changed", "before"), ("removed", "gone")] {
+        std::fs::write(root.path().join(path), contents).unwrap();
+    }
+    std::fs::write(root.path().join("swap"), "a file").unwrap();
+    native(root.path(), &["add", "."]);
+    native(root.path(), &["commit", "-m", "main"]);
+    native(root.path(), &["switch", "-c", "topic"]);
+    std::fs::write(root.path().join("changed"), "after").unwrap();
+    std::fs::remove_file(root.path().join("removed")).unwrap();
+    std::fs::remove_file(root.path().join("swap")).unwrap();
+    std::fs::create_dir_all(root.path().join("swap/deeper")).unwrap();
+    std::fs::write(root.path().join("swap/deeper/inner"), "now a directory").unwrap();
+    std::fs::write(root.path().join("added"), "new").unwrap();
+    native(root.path(), &["add", "-A"]);
+    native(root.path(), &["commit", "-m", "topic"]);
+    native(root.path(), &["switch", "main"]);
+    let before = digest(root.path());
+    let mut published = false;
+    for steps in 1..200 {
+        let state = snapshot(root.path());
+        super::operations::checkout(&state, "topic").unwrap();
+        super::stage::FAIL_AFTER.with(|after| after.set(Some(steps)));
+        let result = state.publish(None);
+        super::stage::FAIL_AFTER.with(|after| after.set(None));
+        if result.is_ok() {
+            published = true;
+            break;
+        }
+        assert_eq!(digest(root.path()), before, "after failing at step {steps}");
+    }
+    assert!(published, "publication finished within 200 steps");
+    assert!(native(root.path(), &["status", "--porcelain"]).is_empty());
+    assert_eq!(
+        native(root.path(), &["symbolic-ref", "HEAD"]),
+        b"refs/heads/topic\n"
+    );
+    assert_eq!(
+        std::fs::read(root.path().join("swap/deeper/inner")).unwrap(),
+        b"now a directory"
+    );
+    native(root.path(), &["fsck", "--full"]);
+}

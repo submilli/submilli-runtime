@@ -181,8 +181,10 @@ In order. Each is reviewable alone.
    serialized and per listed entry; `llm` `IO` of the prompts before and of the
    completions after; `mcp` `IO` of the arguments before, `IO` and `PARSE` of the result
    after; `git` `PARSE` of the arguments before, `IO` of the network bytes and `PARSE` of
-   the result after. The git worker's own file and object work is not counted yet; it
-   belongs with SUB-1129, which reshapes it.
+   the result after. The git worker's own file and object work is counted by SUB-1129:
+   a meter on `Job` (`stdlib/git/meter.rs`) adds `SYSCALL`, `IO`, `PARSE`, `HASH` and
+   `ELEM` as the worker goes, settled when it returns. With the repository opened in
+   place, the per-call copy and re-index in Part 6's git formulas are gone.
 
 PR 2 found one thing PR 3 must solve: `Store::set_fuel` restarts the engine's async yield
 countdown, so once every host call charges, a program that calls host functions more often

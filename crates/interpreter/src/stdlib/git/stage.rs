@@ -333,10 +333,13 @@ impl Stage {
         for (number, removed) in plan.removed.iter().enumerate() {
             let backup = number.to_string();
             self.repo.rename(&removed.target, &old, &backup)?;
-            steps.push(Step::Removed {
-                target: removed.target.clone(),
-                backup,
-            });
+            record(
+                steps,
+                Step::Removed {
+                    target: removed.target.clone(),
+                    backup,
+                },
+            )?;
         }
         // Directories the removals emptied, deepest first, so a file can take
         // a directory's place.
@@ -351,27 +354,39 @@ impl Stage {
         emptied.dedup();
         for directory in emptied {
             if self.repo.remove_dir(directory).is_ok() {
-                steps.push(Step::RemovedDirectory(directory.to_path_buf()));
+                record(steps, Step::RemovedDirectory(directory.to_path_buf()))?;
             }
         }
         for added in &plan.added {
-            let created = match added.kind {
-                Kind::Worktree => prepare_parent(&self.repo, &added.target)?,
-                Kind::Object | Kind::Metadata => create_parents(&self.repo, &added.target)?,
+            let mut created = Vec::new();
+            let prepared = match added.kind {
+                Kind::Worktree => prepare_parent(&self.repo, &added.target, &mut created),
+                Kind::Object | Kind::Metadata => {
+                    create_parents(&self.repo, &added.target, &mut created)
+                }
             };
+            // What was created is undone even if creating the rest failed.
             steps.extend(created.into_iter().map(Step::CreatedDirectory));
+            prepared?;
+            check_injected_failure(steps)?;
             if let Some(backup) = &added.replaces {
                 self.repo.rename(&added.target, &old, backup)?;
-                steps.push(Step::Removed {
-                    target: added.target.clone(),
-                    backup: backup.clone(),
-                });
+                record(
+                    steps,
+                    Step::Removed {
+                        target: added.target.clone(),
+                        backup: backup.clone(),
+                    },
+                )?;
             }
             self.dir.rename(&added.from, &self.repo, &added.target)?;
-            steps.push(Step::Placed {
-                target: added.target.clone(),
-                from: added.from.clone(),
-            });
+            record(
+                steps,
+                Step::Placed {
+                    target: added.target.clone(),
+                    from: added.from.clone(),
+                },
+            )?;
         }
         Ok(())
     }
@@ -396,6 +411,29 @@ impl Drop for Stage {
             let _ = self.repo.remove_dir_all(&self.name);
         }
     }
+}
+
+/// Notes a step publication took, so it can be undone.
+fn record(steps: &mut Vec<Step>, step: Step) -> Result<()> {
+    steps.push(step);
+    check_injected_failure(steps)
+}
+
+/// Fails publication where a test asked it to; see [`FAIL_AFTER`].
+fn check_injected_failure(steps: &[Step]) -> Result<()> {
+    #[cfg(test)]
+    if FAIL_AFTER.with(|after| after.get().is_some_and(|after| steps.len() >= after)) {
+        bail!("git: publication failed (injected)");
+    }
+    let _ = steps;
+    Ok(())
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Fails publication once it has taken this many steps.
+    pub(super) static FAIL_AFTER: std::cell::Cell<Option<usize>> =
+        const { std::cell::Cell::new(None) };
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -545,12 +583,12 @@ fn regular_len(meta: &cap_std::fs::Metadata) -> u64 {
     if meta.is_file() { meta.len() } else { 0 }
 }
 
-/// Creates the missing directories above `path` in `repo`, returning them,
-/// outermost first. Used inside `.git`, which no program can write to.
-fn create_parents(repo: &Dir, path: &Path) -> Result<Vec<PathBuf>> {
-    let mut created = Vec::new();
+/// Creates the missing directories above `path` in `repo`, adding each to
+/// `created`, outermost first, as it creates it. Used inside `.git`, which no
+/// program can write to.
+fn create_parents(repo: &Dir, path: &Path, created: &mut Vec<PathBuf>) -> Result<()> {
     let Some(parent) = path.parent() else {
-        return Ok(created);
+        return Ok(());
     };
     let mut prefix = PathBuf::new();
     for component in parent.components() {
@@ -565,7 +603,7 @@ fn create_parents(repo: &Dir, path: &Path) -> Result<Vec<PathBuf>> {
             Err(error) => return Err(error.into()),
         }
     }
-    Ok(created)
+    Ok(())
 }
 
 fn same_contents(left: &Dir, left_path: &Path, right: &Dir, right_path: &Path) -> Result<bool> {

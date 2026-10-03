@@ -321,7 +321,7 @@ fn read_index(packs: &Dir, stem: &str, max_objects: u64, cancelled: &AtomicBool)
     let mut offsets = Vec::with_capacity(count);
     let mut seen = HashSet::with_capacity(count);
     for position in 0..count {
-        if position % 4096 == 0 && cancelled.load(Ordering::Relaxed) {
+        if position.is_multiple_of(4096) && cancelled.load(Ordering::Relaxed) {
             bail!("git: operation cancelled");
         }
         let name = &names[position * HASH..(position + 1) * HASH];
@@ -386,7 +386,7 @@ fn entry_bases(
     let mut bases = vec![Vec::new(); index.len()];
     let mut header = [0u8; MAX_HEADER as usize];
     for (rank, &(offset, position)) in by_offset.iter().enumerate() {
-        if rank % 4096 == 0 && cancelled.load(Ordering::Relaxed) {
+        if rank.is_multiple_of(4096) && cancelled.load(Ordering::Relaxed) {
             bail!("git: operation cancelled");
         }
         let end = by_offset
@@ -463,7 +463,7 @@ fn check_graph(
                 let (pack, position) = top.0;
                 let next = &mut top.1;
                 visited += 1;
-                if visited % 4096 == 0 && cancelled.load(Ordering::Relaxed) {
+                if visited.is_multiple_of(4096) && cancelled.load(Ordering::Relaxed) {
                     bail!("git: operation cancelled");
                 }
                 let edges = &bases[pack][position];

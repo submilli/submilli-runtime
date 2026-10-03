@@ -30,13 +30,12 @@ impl RepositoryLock {
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
             let slots = slots.get_or_insert_with(HashMap::new);
             slots.retain(|_, slot| slot.strong_count() > 0);
-            match slots.get(&repository).and_then(Weak::upgrade) {
-                Some(slot) => slot,
-                None => {
-                    let slot = Arc::new(Slot::default());
-                    slots.insert(repository, Arc::downgrade(&slot));
-                    slot
-                }
+            if let Some(slot) = slots.get(&repository).and_then(Weak::upgrade) {
+                slot
+            } else {
+                let slot = Arc::new(Slot::default());
+                slots.insert(repository, Arc::downgrade(&slot));
+                slot
             }
         };
         let mut held = slot

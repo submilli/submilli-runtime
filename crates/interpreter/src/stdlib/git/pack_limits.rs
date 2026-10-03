@@ -2,6 +2,7 @@
 //! declarations. Responses are read as streams from where they were spooled to
 //! disk, so a pack larger than memory can be checked holding one entry's
 //! header and a small inflation buffer.
+use gix::odb::pack::data::entry::Header;
 use std::collections::HashMap;
 use std::io::{self, BufRead, Read};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -258,7 +259,6 @@ fn validate_pack<R: BufRead>(
             ));
         }
         let prefix = inflate_entry(pack, entry.decompressed_size, cancelled)?;
-        use gix::odb::pack::data::entry::Header;
         let chain = match entry.header {
             Header::OfsDelta { base_distance } => {
                 let base = offset
