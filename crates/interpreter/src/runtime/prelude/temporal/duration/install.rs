@@ -1,3 +1,4 @@
+use crate::runtime::host::{abi_arg, abi_result};
 use wasmtime::{FuncType, HeapType, Linker, RefType, Val, ValType};
 
 use super::super::{DirectTypes, shared};
@@ -23,8 +24,8 @@ pub(crate) fn install(linker: &mut Linker<StoreData>, types: &DirectTypes) -> wa
         FuncType::new(engine, [types.object_shape.clone()], object_result.clone()),
         true,
         move |caller, params, results| {
-            let span = shared::read_duration_like(caller, &params[0], &intr, "Duration")?;
-            results[0] = shared::make_duration(caller, &span)?;
+            let span = shared::read_duration_like(caller, abi_arg(params, 0)?, &intr, "Duration")?;
+            *abi_result(results, 0)? = shared::make_duration(caller, &span)?;
             Ok(())
         },
     )?;
@@ -36,14 +37,17 @@ pub(crate) fn install(linker: &mut Linker<StoreData>, types: &DirectTypes) -> wa
         FuncType::new(engine, [object.clone()], object_result.clone()),
         true,
         move |caller, params, results| {
-            let span =
-                if crate::runtime::prelude::collection::is_a(caller, &params[0], &intr.string)? {
-                    let input = read_string_arg(caller, &params[0], "Temporal.Duration.from")?;
-                    super::parse(&input).map_err(crate::runtime::host::range_error)?
-                } else {
-                    shared::read_duration_like(caller, &params[0], &intr, "Duration.from")?
-                };
-            results[0] = shared::make_duration(caller, &span)?;
+            let span = if crate::runtime::prelude::collection::is_a(
+                caller,
+                abi_arg(params, 0)?,
+                &intr.string,
+            )? {
+                let input = read_string_arg(caller, abi_arg(params, 0)?, "Temporal.Duration.from")?;
+                super::parse(&input).map_err(crate::runtime::host::range_error)?
+            } else {
+                shared::read_duration_like(caller, abi_arg(params, 0)?, &intr, "Duration.from")?
+            };
+            *abi_result(results, 0)? = shared::make_duration(caller, &span)?;
             Ok(())
         },
     )?;
@@ -67,15 +71,15 @@ pub(crate) fn install(linker: &mut Linker<StoreData>, types: &DirectTypes) -> wa
             ),
             true,
             move |caller, params, results| {
-                let a = shared::read_duration_like(caller, &params[0], &intr, label)?;
-                let b = shared::read_duration_like(caller, &params[1], &intr, label)?;
+                let a = shared::read_duration_like(caller, abi_arg(params, 0)?, &intr, label)?;
+                let b = shared::read_duration_like(caller, abi_arg(params, 1)?, &intr, label)?;
                 let out = if add {
                     super::add(a, b)
                 } else {
                     super::subtract(a, b)
                 }
                 .map_err(crate::runtime::host::range_error)?;
-                results[0] = shared::make_duration(caller, &out)?;
+                *abi_result(results, 0)? = shared::make_duration(caller, &out)?;
                 Ok(())
             },
         )?;
@@ -99,8 +103,8 @@ pub(crate) fn install(linker: &mut Linker<StoreData>, types: &DirectTypes) -> wa
             FuncType::new(engine, [object.clone()], object_result.clone()),
             true,
             move |caller, params, results| {
-                let span = shared::read_duration_like(caller, &params[0], &intr, label)?;
-                results[0] = shared::make_duration(caller, &transform(span))?;
+                let span = shared::read_duration_like(caller, abi_arg(params, 0)?, &intr, label)?;
+                *abi_result(results, 0)? = shared::make_duration(caller, &transform(span))?;
                 Ok(())
             },
         )?;
@@ -118,7 +122,11 @@ pub(crate) fn install(linker: &mut Linker<StoreData>, types: &DirectTypes) -> wa
             "milliseconds" => "Duration.milliseconds",
             "microseconds" => "Duration.microseconds",
             "nanoseconds" => "Duration.nanoseconds",
-            _ => unreachable!(),
+            _ => {
+                return Err(crate::runtime::host::invariant_trap(
+                    "Temporal.Duration: unknown registered field",
+                ));
+            }
         };
         register_host_fn(
             linker,
@@ -127,8 +135,9 @@ pub(crate) fn install(linker: &mut Linker<StoreData>, types: &DirectTypes) -> wa
             FuncType::new(engine, [object.clone()], [ValType::F64]),
             true,
             move |caller, params, results| {
-                let value = shared::duration_field_from_val(caller, &params[0], index, label)?;
-                results[0] = Val::F64((value as f64).to_bits());
+                let value =
+                    shared::duration_field_from_val(caller, abi_arg(params, 0)?, index, label)?;
+                *abi_result(results, 0)? = Val::F64((value as f64).to_bits());
                 Ok(())
             },
         )?;
@@ -141,8 +150,9 @@ pub(crate) fn install(linker: &mut Linker<StoreData>, types: &DirectTypes) -> wa
         FuncType::new(engine, [object.clone()], [ValType::F64]),
         true,
         |caller, params, results| {
-            let sign = shared::duration_sign_from_val(caller, &params[0], "Duration.sign")?;
-            results[0] = Val::F64(f64::from(sign).to_bits());
+            let sign =
+                shared::duration_sign_from_val(caller, abi_arg(params, 0)?, "Duration.sign")?;
+            *abi_result(results, 0)? = Val::F64(f64::from(sign).to_bits());
             Ok(())
         },
     )?;
@@ -153,8 +163,9 @@ pub(crate) fn install(linker: &mut Linker<StoreData>, types: &DirectTypes) -> wa
         FuncType::new(engine, [object.clone()], [ValType::I32]),
         true,
         |caller, params, results| {
-            let sign = shared::duration_sign_from_val(caller, &params[0], "Duration.blank")?;
-            results[0] = Val::I32((sign == 0) as i32);
+            let sign =
+                shared::duration_sign_from_val(caller, abi_arg(params, 0)?, "Duration.blank")?;
+            *abi_result(results, 0)? = Val::I32((sign == 0) as i32);
             Ok(())
         },
     )?;
@@ -178,16 +189,17 @@ fn install_with(linker: &mut Linker<StoreData>, types: &DirectTypes) -> wasmtime
         ),
         true,
         move |caller, params, results| {
-            let base = shared::read_duration_like(caller, &params[0], &intr, "Duration.with")?;
+            let base =
+                shared::read_duration_like(caller, abi_arg(params, 0)?, &intr, "Duration.with")?;
             let mut fields = shared::span_fields(&base);
             if crate::runtime::prelude::collection::is_a(
                 caller,
-                &params[1],
+                abi_arg(params, 1)?,
                 &intr.temporal_duration,
             )? {
                 fields = shared::span_fields(&shared::read_duration_like(
                     caller,
-                    &params[1],
+                    abi_arg(params, 1)?,
                     &intr,
                     "Duration.with",
                 )?);
@@ -195,7 +207,7 @@ fn install_with(linker: &mut Linker<StoreData>, types: &DirectTypes) -> wasmtime
                 for (index, name) in shared::DURATION_FIELD_NAMES.iter().enumerate() {
                     if let Some(value) = shared::object_duration_field(
                         caller,
-                        &params[1],
+                        abi_arg(params, 1)?,
                         name,
                         index,
                         "Duration.with",
@@ -206,7 +218,7 @@ fn install_with(linker: &mut Linker<StoreData>, types: &DirectTypes) -> wasmtime
             }
             let out = super::from_fields(fields, "Duration.with")
                 .map_err(crate::runtime::host::range_error)?;
-            results[0] = shared::make_duration(caller, &out)?;
+            *abi_result(results, 0)? = shared::make_duration(caller, &out)?;
             Ok(())
         },
     )
@@ -229,10 +241,16 @@ fn install_round_total_compare(
         ),
         true,
         move |caller, params, results| {
-            let span = shared::read_duration_like(caller, &params[0], &intr, "Duration.round")?;
+            let span =
+                shared::read_duration_like(caller, abi_arg(params, 0)?, &intr, "Duration.round")?;
             let (smallest, largest, mode, increment, anchor) =
-                if crate::runtime::prelude::collection::is_a(caller, &params[1], &intr.string)? {
-                    let unit = read_string_arg(caller, &params[1], "Temporal.Duration.round")?;
+                if crate::runtime::prelude::collection::is_a(
+                    caller,
+                    abi_arg(params, 1)?,
+                    &intr.string,
+                )? {
+                    let unit =
+                        read_string_arg(caller, abi_arg(params, 1)?, "Temporal.Duration.round")?;
                     (
                         Some(shared::unit_from_str(&unit, "Duration.round")?),
                         None,
@@ -243,7 +261,7 @@ fn install_round_total_compare(
                 } else {
                     let smallest = shared::object_string_field(
                         caller,
-                        &params[1],
+                        abi_arg(params, 1)?,
                         "smallestUnit",
                         "Duration.round",
                     )?
@@ -251,7 +269,7 @@ fn install_round_total_compare(
                     .transpose()?;
                     let largest = shared::object_string_field(
                         caller,
-                        &params[1],
+                        abi_arg(params, 1)?,
                         "largestUnit",
                         "Duration.round",
                     )?
@@ -259,7 +277,7 @@ fn install_round_total_compare(
                     .transpose()?;
                     let mode = shared::object_string_field(
                         caller,
-                        &params[1],
+                        abi_arg(params, 1)?,
                         "roundingMode",
                         "Duration.round",
                     )?
@@ -267,16 +285,17 @@ fn install_round_total_compare(
                     .transpose()?;
                     let increment = shared::object_i64_field(
                         caller,
-                        &params[1],
+                        abi_arg(params, 1)?,
                         "roundingIncrement",
                         "Duration.round",
                     )?;
-                    let anchor = shared::object_relative_to(caller, &params[1], "Duration.round")?;
+                    let anchor =
+                        shared::object_relative_to(caller, abi_arg(params, 1)?, "Duration.round")?;
                     (smallest, largest, mode, increment, anchor)
                 };
             let out = super::round(span, smallest, largest, mode, increment, anchor)
                 .map_err(crate::runtime::host::range_error)?;
-            results[0] = shared::make_duration(caller, &out)?;
+            *abi_result(results, 0)? = shared::make_duration(caller, &out)?;
             Ok(())
         },
     )?;
@@ -293,23 +312,31 @@ fn install_round_total_compare(
         ),
         true,
         move |caller, params, results| {
-            let span = shared::read_duration_like(caller, &params[0], &intr, "Duration.total")?;
-            let (unit, anchor) =
-                if crate::runtime::prelude::collection::is_a(caller, &params[1], &intr.string)? {
-                    (
-                        read_string_arg(caller, &params[1], "Temporal.Duration.total")?,
-                        None,
-                    )
-                } else {
-                    let unit =
-                        shared::object_string_field(caller, &params[1], "unit", "Duration.total")?
-                            .ok_or_else(|| {
-                                wasmtime::Error::msg("Temporal.Duration.total: missing `unit`")
-                            })?;
-                    let anchor = shared::object_relative_to(caller, &params[1], "Duration.total")?;
-                    (unit, anchor)
-                };
-            results[0] = Val::F64(shared::span_total(&span, &unit, anchor)?.to_bits());
+            let span =
+                shared::read_duration_like(caller, abi_arg(params, 0)?, &intr, "Duration.total")?;
+            let (unit, anchor) = if crate::runtime::prelude::collection::is_a(
+                caller,
+                abi_arg(params, 1)?,
+                &intr.string,
+            )? {
+                (
+                    read_string_arg(caller, abi_arg(params, 1)?, "Temporal.Duration.total")?,
+                    None,
+                )
+            } else {
+                let unit = shared::object_string_field(
+                    caller,
+                    abi_arg(params, 1)?,
+                    "unit",
+                    "Duration.total",
+                )?
+                .ok_or_else(|| wasmtime::Error::msg("Temporal.Duration.total: missing `unit`"))?;
+                let anchor =
+                    shared::object_relative_to(caller, abi_arg(params, 1)?, "Duration.total")?;
+                (unit, anchor)
+            };
+            *abi_result(results, 0)? =
+                Val::F64(shared::span_total(&span, &unit, anchor)?.to_bits());
             Ok(())
         },
     )?;
@@ -326,10 +353,13 @@ fn install_round_total_compare(
         ),
         true,
         move |caller, params, results| {
-            let a = shared::read_duration_like(caller, &params[0], &intr, "Duration.compare")?;
-            let b = shared::read_duration_like(caller, &params[1], &intr, "Duration.compare")?;
-            let anchor = shared::object_relative_to(caller, &params[2], "Duration.compare")?;
-            results[0] = Val::F64(
+            let a =
+                shared::read_duration_like(caller, abi_arg(params, 0)?, &intr, "Duration.compare")?;
+            let b =
+                shared::read_duration_like(caller, abi_arg(params, 1)?, &intr, "Duration.compare")?;
+            let anchor =
+                shared::object_relative_to(caller, abi_arg(params, 2)?, "Duration.compare")?;
+            *abi_result(results, 0)? = Val::F64(
                 super::compare(a, b, anchor)
                     .map_err(crate::runtime::host::range_error)?
                     .to_bits(),
@@ -356,22 +386,27 @@ fn install_strings(
         ),
         true,
         move |caller, params, results| {
-            let span = shared::read_duration_like(caller, &params[0], &intr, "Duration.toString")?;
+            let span = shared::read_duration_like(
+                caller,
+                abi_arg(params, 0)?,
+                &intr,
+                "Duration.toString",
+            )?;
             let smallest = shared::object_string_field(
                 caller,
-                &params[1],
+                abi_arg(params, 1)?,
                 "smallestUnit",
                 "Duration.toString",
             )?;
             let mode = shared::object_string_field(
                 caller,
-                &params[1],
+                abi_arg(params, 1)?,
                 "roundingMode",
                 "Duration.toString",
             )?;
             let digits = shared::object_i64_field(
                 caller,
-                &params[1],
+                abi_arg(params, 1)?,
                 "fractionalSecondDigits",
                 "Duration.toString",
             )?
@@ -389,7 +424,7 @@ fn install_strings(
                 mode.as_deref(),
                 digits,
             )?;
-            results[0] = Val::AnyRef(Some(
+            *abi_result(results, 0)? = Val::AnyRef(Some(
                 write_submilli_string_struct(caller, &text)?.to_anyref(),
             ));
             Ok(())
@@ -408,8 +443,9 @@ fn install_strings(
         ),
         true,
         move |caller, params, results| {
-            let span = shared::read_duration_like(caller, &params[0], &intr, "Duration.toJSON")?;
-            results[0] = Val::AnyRef(Some(
+            let span =
+                shared::read_duration_like(caller, abi_arg(params, 0)?, &intr, "Duration.toJSON")?;
+            *abi_result(results, 0)? = Val::AnyRef(Some(
                 write_submilli_string_struct(caller, &span.to_string())?.to_anyref(),
             ));
             Ok(())

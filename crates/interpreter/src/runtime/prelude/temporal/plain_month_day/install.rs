@@ -1,3 +1,4 @@
+use crate::runtime::host::{abi_arg, abi_result};
 use wasmtime::{FuncType, Linker};
 
 use super::super::shared::*;
@@ -73,17 +74,17 @@ fn reg_plain_month_day_with(
         ty,
         true,
         |caller, params, results| {
-            let st = as_struct_val(caller, &params[0], "PlainMonthDay.with")?;
+            let st = as_struct_val(caller, abi_arg(params, 0)?, "PlainMonthDay.with")?;
             let m = clamp_month(
-                object_i64_field(caller, &params[1], "month", "PlainMonthDay.with")?
+                object_i64_field(caller, abi_arg(params, 1)?, "month", "PlainMonthDay.with")?
                     .unwrap_or_else(|| i64::from(st_i32_or(caller, st, 1))),
             );
             let dim = days_in_month(1972, m, "PlainMonthDay.with")?;
-            let d = object_i64_field(caller, &params[1], "day", "PlainMonthDay.with")?
+            let d = object_i64_field(caller, abi_arg(params, 1)?, "day", "PlainMonthDay.with")?
                 .unwrap_or_else(|| i64::from(st_i32_or(caller, st, 2)))
                 .clamp(1, dim);
             let date = y_m_d_date(1972, m, d, "PlainMonthDay.with")?;
-            results[0] =
+            *abi_result(results, 0)? =
                 make_plain_month_day(caller, i32::from(date.month()), i32::from(date.day()))?;
             Ok(())
         },
@@ -101,7 +102,7 @@ fn reg_plain_month_day_to_plain_date(
         ty,
         true,
         |caller, params, results| {
-            let st = as_struct_val(caller, &params[0], "PlainMonthDay.toPlainDate")?;
+            let st = as_struct_val(caller, abi_arg(params, 0)?, "PlainMonthDay.toPlainDate")?;
             let month = clamp_month(i64::from(st_i32(
                 caller,
                 st,
@@ -109,8 +110,13 @@ fn reg_plain_month_day_to_plain_date(
                 "PlainMonthDay.toPlainDate",
             )?));
             let recv_day = i64::from(st_i32(caller, st, 2, "PlainMonthDay.toPlainDate")?);
-            let year = object_i64_field(caller, &params[1], "year", "PlainMonthDay.toPlainDate")?
-                .ok_or_else(|| {
+            let year = object_i64_field(
+                caller,
+                abi_arg(params, 1)?,
+                "year",
+                "PlainMonthDay.toPlainDate",
+            )?
+            .ok_or_else(|| {
                 wasmtime::Error::msg("Temporal.PlainMonthDay.toPlainDate: `year` is required")
             })?;
             let dim = days_in_month(year, month, "PlainMonthDay.toPlainDate")?;
@@ -120,7 +126,7 @@ fn reg_plain_month_day_to_plain_date(
                 recv_day.clamp(1, dim),
                 "PlainMonthDay.toPlainDate",
             )?;
-            results[0] = make_plain_date(
+            *abi_result(results, 0)? = make_plain_date(
                 caller,
                 i32::from(d.year()),
                 i32::from(d.month()),

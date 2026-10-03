@@ -242,7 +242,7 @@ fn read_string_value(store: &mut Store<StoreData>, value: Val) -> Option<String>
 /// Rust `String`, returned verbatim. Errors with a `main`-specific message if the
 /// ref slot isn't the expected non-null `$string`.
 fn read_main_string(store: &mut Store<StoreData>, out: &[Val]) -> wasmtime::Result<String> {
-    let s_struct = match &out[0] {
+    let s_struct = match super::host::abi_arg(out, 0)? {
         Val::AnyRef(Some(any)) => any.unwrap_struct(&mut *store)?,
         Val::AnyRef(None) => {
             return Err(wasmtime::Error::msg(

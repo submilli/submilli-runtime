@@ -1,6 +1,7 @@
 //! Primitive operators for live values whose runtime type can differ from a
 //! retained TypeScript control-flow refinement.
 
+use crate::runtime::host::{abi_arg, abi_result};
 use num_traits::{FromPrimitive, ToPrimitive, Zero};
 use std::cmp::Ordering;
 use wasmtime::{Caller, FuncType, HeapType, Linker, RefType, Val, ValType};
@@ -34,9 +35,9 @@ pub(super) fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
             true,
             move |caller, params, results| {
                 Box::pin(async move {
-                    let lhs = primitive(caller, &params[0]).await?;
-                    let rhs = primitive(caller, &params[1]).await?;
-                    results[0] = arithmetic(caller, operation, lhs, rhs)?;
+                    let lhs = primitive(caller, abi_arg(params, 0)?).await?;
+                    let rhs = primitive(caller, abi_arg(params, 1)?).await?;
+                    *abi_result(results, 0)? = arithmetic(caller, operation, lhs, rhs)?;
                     Ok(())
                 })
             },
@@ -51,17 +52,21 @@ pub(super) fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
             true,
             move |caller, params, results| {
                 Box::pin(async move {
-                    let lhs = primitive(caller, &params[0]).await?;
-                    let rhs = primitive(caller, &params[1]).await?;
+                    let lhs = primitive(caller, abi_arg(params, 0)?).await?;
+                    let rhs = primitive(caller, abi_arg(params, 1)?).await?;
                     let ordering = compare(&lhs, &rhs)?;
                     let answer = match operation {
                         "lt" => ordering == Some(Ordering::Less),
                         "gt" => ordering == Some(Ordering::Greater),
                         "le" => matches!(ordering, Some(Ordering::Less | Ordering::Equal)),
                         "ge" => matches!(ordering, Some(Ordering::Greater | Ordering::Equal)),
-                        _ => unreachable!("registered comparison"),
+                        _ => {
+                            return Err(crate::runtime::host::invariant_trap(
+                                "value comparison: unknown operation",
+                            ));
+                        }
                     };
-                    results[0] = Val::I32(i32::from(answer));
+                    *abi_result(results, 0)? = Val::I32(i32::from(answer));
                     Ok(())
                 })
             },
@@ -76,8 +81,8 @@ pub(super) fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
             true,
             move |caller, params, results| {
                 Box::pin(async move {
-                    let value = primitive(caller, &params[0]).await?;
-                    results[0] = unary(caller, operation, value)?;
+                    let value = primitive(caller, abi_arg(params, 0)?).await?;
+                    *abi_result(results, 0)? = unary(caller, operation, value)?;
                     Ok(())
                 })
             },
@@ -91,7 +96,8 @@ pub(super) fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         true,
         |caller, params, results| {
             Box::pin(async move {
-                results[0] = Val::F64(number(primitive(caller, &params[0]).await?)?.to_bits());
+                *abi_result(results, 0)? =
+                    Val::F64(number(primitive(caller, abi_arg(params, 0)?).await?)?.to_bits());
                 Ok(())
             })
         },
@@ -104,13 +110,13 @@ pub(super) fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         true,
         |caller, params, results| {
             Box::pin(async move {
-                let key = primitive_with_hint(caller, &params[0], true).await?;
+                let key = primitive_with_hint(caller, abi_arg(params, 0)?, true).await?;
                 let units = string(key);
                 let index = number(Primitive::String(units.clone()))?;
                 if format_number_js(index).encode_utf16().collect::<Vec<_>>() != units {
                     return Err(range_error("Array index must be a canonical numeric key"));
                 }
-                results[0] = Val::F64(index.to_bits());
+                *abi_result(results, 0)? = Val::F64(index.to_bits());
                 Ok(())
             })
         },
@@ -130,8 +136,8 @@ pub(super) fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         true,
         |caller, params, results| {
             Box::pin(async move {
-                let value = primitive_with_hint(caller, &params[0], true).await?;
-                results[0] = Val::AnyRef(Some(
+                let value = primitive_with_hint(caller, abi_arg(params, 0)?, true).await?;
+                *abi_result(results, 0)? = Val::AnyRef(Some(
                     write_submilli_string_struct_units(caller, &string(value))?.to_anyref(),
                 ));
                 Ok(())
@@ -404,13 +410,17 @@ fn read_primitive(
     let intr = intrinsic_types(&mut *caller)?;
     if object.matches_ty(&*caller, &intr.boxed_number)? {
         let Val::F64(bits) = object.field(&mut *caller, 1)? else {
-            unreachable!("boxed number payload")
+            return Err(crate::runtime::host::invariant_trap(
+                "value: invalid boxed number payload",
+            ));
         };
         return Ok(Some(Primitive::Number(f64::from_bits(bits))));
     }
     if object.matches_ty(&*caller, &intr.boxed_boolean)? {
         let Val::I32(value) = object.field(&mut *caller, 1)? else {
-            unreachable!("boxed boolean payload")
+            return Err(crate::runtime::host::invariant_trap(
+                "value: invalid boxed boolean payload",
+            ));
         };
         return Ok(Some(Primitive::Boolean(value != 0)));
     }
@@ -454,7 +464,11 @@ fn arithmetic(
         "div" => lhs / rhs,
         "rem" => lhs % rhs,
         "pow" => crate::runtime::number::pow_js(lhs, rhs),
-        _ => unreachable!("registered arithmetic operation"),
+        _ => {
+            return Err(crate::runtime::host::invariant_trap(
+                "number arithmetic: unknown operation",
+            ));
+        }
     };
     Ok(Val::AnyRef(Some(
         write_boxed_number_struct(caller, result)?.to_anyref(),
@@ -511,7 +525,11 @@ fn bigint_arithmetic(
             rhs.to_u32()
                 .ok_or_else(|| range_error("BigInt exponent must fit a non-negative u32"))?,
         ),
-        _ => unreachable!("registered arithmetic operation"),
+        _ => {
+            return Err(crate::runtime::host::invariant_trap(
+                "bigint arithmetic: unknown operation",
+            ));
+        }
     };
     make_bigint_struct(caller, result)
 }

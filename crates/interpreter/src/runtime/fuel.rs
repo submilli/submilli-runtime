@@ -127,7 +127,9 @@ pub(crate) fn host_func(
     + Sync
     + 'static,
 ) -> Func {
+    let abi = ty.clone();
     Func::new(&mut store, ty, move |mut caller, params, results| {
+        super::host::check_host_abi(&abi, params, results)?;
         charge_call(&mut caller)?;
         body(&mut caller, params, results)
     })
@@ -150,7 +152,11 @@ where
         + Sync
         + 'static,
 {
+    let abi = ty.clone();
     Func::new_async(&mut store, ty, move |mut caller, params, results| {
+        if let Err(error) = super::host::check_host_abi(&abi, params, results) {
+            return Box::new(async move { Err(error) });
+        }
         if let Err(error) = charge_call(&mut caller) {
             return Box::new(async move { Err(error) });
         }

@@ -1,5 +1,6 @@
 //! The Rust port of the prelude's built-in `Math` namespace.
 
+use crate::runtime::host::{abi_arg, abi_result};
 use std::collections::BTreeMap;
 use wasmtime::{Caller, FuncType, Global, GlobalType, Linker, Mutability, Store, Val, ValType};
 
@@ -215,8 +216,8 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
             unary_ty.clone(),
             /* deterministic = */ true,
             move |_caller, params, results| -> wasmtime::Result<()> {
-                let x = read_f64(&params[0], "Math unary")?;
-                results[0] = Val::F64(op(x).to_bits());
+                let x = read_f64(abi_arg(params, 0)?, "Math unary")?;
+                *abi_result(results, 0)? = Val::F64(op(x).to_bits());
                 Ok(())
             },
         )?;
@@ -231,9 +232,9 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
             binary_ty.clone(),
             /* deterministic = */ true,
             move |_caller, params, results| -> wasmtime::Result<()> {
-                let a = read_f64(&params[0], "Math binary")?;
-                let b = read_f64(&params[1], "Math binary")?;
-                results[0] = Val::F64(op(a, b).to_bits());
+                let a = read_f64(abi_arg(params, 0)?, "Math binary")?;
+                let b = read_f64(abi_arg(params, 1)?, "Math binary")?;
+                *abi_result(results, 0)? = Val::F64(op(a, b).to_bits());
                 Ok(())
             },
         )?;
@@ -248,14 +249,18 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
             variadic_ty.clone(),
             /* deterministic = */ true,
             move |caller, params, results| -> wasmtime::Result<()> {
-                let values = read_variadic_numbers(caller, &params[0], op)?;
+                let values = read_variadic_numbers(caller, abi_arg(params, 0)?, op)?;
                 let result = match op {
                     "min" => math_min(&values),
                     "max" => math_max(&values),
                     "hypot" => math_hypot(&values),
-                    _ => unreachable!("registered Math variadic"),
+                    _ => {
+                        return Err(crate::runtime::host::invariant_trap(
+                            "Math variadic: unknown operation",
+                        ));
+                    }
                 };
-                results[0] = Val::F64(result.to_bits());
+                *abi_result(results, 0)? = Val::F64(result.to_bits());
                 Ok(())
             },
         )?;
@@ -274,7 +279,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
             let raw = u64::from_le_bytes(bytes);
             let mantissa = raw & ((1u64 << 52) - 1);
             let bits = (0x3FFu64 << 52) | mantissa;
-            results[0] = Val::F64((f64::from_bits(bits) - 1.0).to_bits());
+            *abi_result(results, 0)? = Val::F64((f64::from_bits(bits) - 1.0).to_bits());
             Ok(())
         },
     )?;

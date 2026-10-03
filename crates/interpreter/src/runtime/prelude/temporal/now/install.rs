@@ -1,3 +1,4 @@
+use crate::runtime::host::{abi_arg, abi_result};
 use std::collections::BTreeMap;
 
 use wasmtime::{FuncType, Linker, Val};
@@ -18,7 +19,7 @@ pub(crate) fn install(linker: &mut Linker<StoreData>, types: &DirectTypes) -> wa
         FuncType::new(&types.engine, [], [types.object.clone()]),
         false,
         |caller, _params, results| {
-            results[0] = shared::make_instant(caller, super::instant())?;
+            *abi_result(results, 0)? = shared::make_instant(caller, super::instant())?;
             Ok(())
         },
     )?;
@@ -31,7 +32,7 @@ pub(crate) fn install(linker: &mut Linker<StoreData>, types: &DirectTypes) -> wa
         |caller, _params, results| {
             let id = super::time_zone_id();
             let value = write_submilli_string_struct(caller, &id)?;
-            results[0] = Val::AnyRef(Some(value.to_anyref()));
+            *abi_result(results, 0)? = Val::AnyRef(Some(value.to_anyref()));
             Ok(())
         },
     )?;
@@ -46,16 +47,16 @@ pub(crate) fn install(linker: &mut Linker<StoreData>, types: &DirectTypes) -> wa
         ),
         false,
         |caller, params, results| {
-            let time_zone = match &params[0] {
+            let time_zone = match abi_arg(params, 0)? {
                 Val::AnyRef(None) => None,
                 _ => Some(read_string_arg(
                     caller,
-                    &params[0],
+                    abi_arg(params, 0)?,
                     "Temporal.Now.zonedDateTimeISO",
                 )?),
             };
             let (zoned, id) = super::zoned_date_time_iso(caller, time_zone.as_deref())?;
-            results[0] = shared::make_zoned_date_time(caller, &zoned, &id)?;
+            *abi_result(results, 0)? = shared::make_zoned_date_time(caller, &zoned, &id)?;
             Ok(())
         },
     )?;
@@ -73,16 +74,16 @@ pub(crate) fn install(linker: &mut Linker<StoreData>, types: &DirectTypes) -> wa
         ),
         false,
         |caller, params, results| {
-            let time_zone = match &params[0] {
+            let time_zone = match abi_arg(params, 0)? {
                 Val::AnyRef(None) => None,
                 _ => Some(read_string_arg(
                     caller,
-                    &params[0],
+                    abi_arg(params, 0)?,
                     "Temporal.Now.zonedDateTime",
                 )?),
             };
             let (zoned, id) = super::zoned_date_time_iso(caller, time_zone.as_deref())?;
-            results[0] = shared::make_zoned_date_time(caller, &zoned, &id)?;
+            *abi_result(results, 0)? = shared::make_zoned_date_time(caller, &zoned, &id)?;
             Ok(())
         },
     )?;
@@ -100,9 +101,9 @@ pub(crate) fn install(linker: &mut Linker<StoreData>, types: &DirectTypes) -> wa
         ),
         false,
         |caller, params, results| {
-            let z = now_zoned(caller, &params[0], "Temporal.Now.plainDateISO")?;
+            let z = now_zoned(caller, abi_arg(params, 0)?, "Temporal.Now.plainDateISO")?;
             let d = z.date();
-            results[0] = shared::make_plain_date(
+            *abi_result(results, 0)? = shared::make_plain_date(
                 caller,
                 i32::from(d.year()),
                 i32::from(d.month()),
@@ -122,9 +123,9 @@ pub(crate) fn install(linker: &mut Linker<StoreData>, types: &DirectTypes) -> wa
         ),
         false,
         |caller, params, results| {
-            let z = now_zoned(caller, &params[0], "Temporal.Now.plainTimeISO")?;
+            let z = now_zoned(caller, abi_arg(params, 0)?, "Temporal.Now.plainTimeISO")?;
             let t = z.time();
-            results[0] = shared::make_plain_time(
+            *abi_result(results, 0)? = shared::make_plain_time(
                 caller,
                 i32::from(t.hour()),
                 i32::from(t.minute()),
@@ -145,9 +146,9 @@ pub(crate) fn install(linker: &mut Linker<StoreData>, types: &DirectTypes) -> wa
         ),
         false,
         |caller, params, results| {
-            let z = now_zoned(caller, &params[0], "Temporal.Now.plainDateTimeISO")?;
+            let z = now_zoned(caller, abi_arg(params, 0)?, "Temporal.Now.plainDateTimeISO")?;
             let dt = z.datetime();
-            results[0] = shared::make_plain_date_time(
+            *abi_result(results, 0)? = shared::make_plain_date_time(
                 caller,
                 i32::from(dt.year()),
                 i32::from(dt.month()),

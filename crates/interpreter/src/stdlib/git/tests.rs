@@ -905,3 +905,29 @@ async fn fetch_fuel_follows_what_the_pack_inflates_to() {
         fuel[1]
     );
 }
+
+#[tokio::test]
+async fn timeout_drains_worker_and_preserves_invariant_trap() {
+    let cancelled = AtomicBool::new(false);
+    let cleaned = AtomicBool::new(false);
+    let worker = async {
+        tokio::task::yield_now().await;
+        cleaned.store(true, Ordering::Relaxed);
+        Err::<(), _>(crate::runtime::host::invariant_trap(
+            "git: injected worker invariant",
+        ))
+    };
+    let error = finish_worker(worker, &cancelled, tokio::time::Instant::now())
+        .await
+        .unwrap_err();
+    assert!(error.is::<wasmtime::Trap>());
+    assert!(cancelled.load(Ordering::Relaxed));
+    assert!(cleaned.load(Ordering::Relaxed));
+    finish_worker(
+        async { Ok(()) },
+        &AtomicBool::new(false),
+        tokio::time::Instant::now() + std::time::Duration::from_secs(1),
+    )
+    .await
+    .unwrap();
+}

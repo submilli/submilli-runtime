@@ -7,6 +7,7 @@
 //! Wasm prelude still imports them — exactly as Number's low-level conversions
 //! stay under `submilli:number`. They re-home when the prelude is fully ported.
 
+use crate::runtime::host::{abi_arg, abi_result};
 pub(crate) mod ops;
 
 use wasmtime::{Caller, FuncType, HeapType, Linker, RefType, Val, ValType};
@@ -47,8 +48,8 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         FuncType::new(&engine, [bigint_ref.clone(), ValType::F64], [s]),
         true,
         |caller, params, results| {
-            let (sign, limbs) = read_bigint_struct(caller, &params[0], "BigInt#toString")?;
-            let radix = match params[1] {
+            let (sign, limbs) = read_bigint_struct(caller, abi_arg(params, 0)?, "BigInt#toString")?;
+            let radix = match *abi_arg(params, 1)? {
                 Val::F64(bits) => f64::from_bits(bits),
                 ref other => wasmtime::bail!("BigInt#toString expects f64 radix, got {other:?}"),
             };
@@ -57,7 +58,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
                 wasmtime::bail!("toString radix must be between 2 and 36");
             }
             let text = limbs_to_bigint(sign, &limbs).to_str_radix(truncated as u32);
-            results[0] = string_val(caller, &text)?;
+            *abi_result(results, 0)? = string_val(caller, &text)?;
             Ok(())
         },
     )?;
@@ -71,9 +72,9 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         FuncType::new(&engine, [bigint_ref.clone()], [string_ref]),
         true,
         |caller, params, results| {
-            let (sign, limbs) = read_bigint_struct(caller, &params[0], "BigInt#toJson")?;
+            let (sign, limbs) = read_bigint_struct(caller, abi_arg(params, 0)?, "BigInt#toJson")?;
             let text = limbs_to_bigint(sign, &limbs).to_str_radix(10);
-            results[0] = string_val(caller, &text)?;
+            *abi_result(results, 0)? = string_val(caller, &text)?;
             Ok(())
         },
     )?;
@@ -95,7 +96,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         FuncType::new(&engine, [obj_param], [bigint_ref]),
         true,
         |caller, params, results| {
-            results[0] = bigint_ctor_call(caller, &params[0])?;
+            *abi_result(results, 0)? = bigint_ctor_call(caller, abi_arg(params, 0)?)?;
             Ok(())
         },
     )?;

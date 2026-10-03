@@ -1,3 +1,4 @@
+use crate::runtime::host::{abi_arg, abi_result};
 use wasmtime::{FuncType, HeapType, Linker, RefType, ValType};
 
 use super::super::shared::*;
@@ -85,15 +86,15 @@ fn reg_plain_time_duration_op(
         ty,
         true,
         move |caller, params, results| {
-            let st = as_struct_val(caller, &params[0], &label)?;
+            let st = as_struct_val(caller, abi_arg(params, 0)?, &label)?;
             let time = plain_time_from_struct(caller, st, 0, &label)?;
-            let span = read_duration_like(caller, &params[1], &intr, &label)?;
+            let span = read_duration_like(caller, abi_arg(params, 1)?, &intr, &label)?;
             let out = if add {
                 super::add(time, span)
             } else {
                 super::subtract(time, span)
             };
-            results[0] = make_plain_time(
+            *abi_result(results, 0)? = make_plain_time(
                 caller,
                 i32::from(out.hour()),
                 i32::from(out.minute()),
@@ -117,7 +118,7 @@ fn reg_plain_time_with(
         ty,
         true,
         |caller, params, results| {
-            let st = as_struct_val(caller, &params[0], "PlainTime.with")?;
+            let st = as_struct_val(caller, abi_arg(params, 0)?, "PlainTime.with")?;
             let time = merge_time(
                 (
                     st_i32(caller, st, 1, "PlainTime.with")?,
@@ -125,10 +126,10 @@ fn reg_plain_time_with(
                     st_i32(caller, st, 3, "PlainTime.with")?,
                     st_i32(caller, st, 4, "PlainTime.with")?,
                 ),
-                object_time_bag(caller, &params[1], "PlainTime.with")?,
+                object_time_bag(caller, abi_arg(params, 1)?, "PlainTime.with")?,
                 "PlainTime.with",
             )?;
-            results[0] = make_plain_time(
+            *abi_result(results, 0)? = make_plain_time(
                 caller,
                 i32::from(time.hour()),
                 i32::from(time.minute()),
@@ -154,13 +155,13 @@ fn reg_plain_time_pair_op(
         ty,
         true,
         move |caller, params, results| {
-            let a_st = as_struct_val(caller, &params[0], &label)?;
-            let b_st = as_struct_val(caller, &params[1], &label)?;
+            let a_st = as_struct_val(caller, abi_arg(params, 0)?, &label)?;
+            let b_st = as_struct_val(caller, abi_arg(params, 1)?, &label)?;
             let a = plain_time_from_struct(caller, a_st, 0, &label)?;
             let b = plain_time_from_struct(caller, b_st, 0, &label)?;
             let o = object_diff_options(
                 caller,
-                &params[2],
+                abi_arg(params, 2)?,
                 if until {
                     "PlainTime.until"
                 } else {
@@ -174,7 +175,7 @@ fn reg_plain_time_pair_op(
                 a.since(o.time(b))
                     .map_err(temporal_err("PlainTime.since"))?
             };
-            results[0] = make_duration(caller, &span)?;
+            *abi_result(results, 0)? = make_duration(caller, &span)?;
             Ok(())
         },
     )

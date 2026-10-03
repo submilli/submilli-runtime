@@ -3,6 +3,7 @@
 //! registrar. A package describes its backing layout as a field list and its
 //! getter surface as a data table; the mechanism lives here once.
 
+use crate::runtime::host::{abi_arg, abi_result};
 use wasmtime::{
     Caller, FieldType, Finality, FuncType, HeapType, Linker, Mutability, RefType, Rooted,
     StorageType, StructRef, StructRefPre, StructType, Val, ValType,
@@ -118,8 +119,8 @@ pub(crate) fn install_field_getters(
             FuncType::new(engine, [receiver.clone()], [result.clone()]),
             /* deterministic = */ true,
             move |caller, params, results| {
-                let st = backing_receiver(caller, &params[0])?;
-                results[0] = st.field(&mut *caller, field)?;
+                let st = backing_receiver(caller, abi_arg(params, 0)?)?;
+                *abi_result(results, 0)? = st.field(&mut *caller, field)?;
                 Ok(())
             },
         )?;

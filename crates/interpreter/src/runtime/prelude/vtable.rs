@@ -16,6 +16,7 @@
 //! `prelude::array`) byte-for-byte: the FNV-1a hash and JSON escaping must agree so
 //! a host-built value hashes and serializes identically to a guest-built one.
 
+use crate::runtime::host::{abi_arg, abi_result};
 use wasmtime::{
     ArrayRef, ArrayRefPre, ArrayType, Caller, Func, Global, GlobalType, HeapType, Linker,
     Mutability, RefType, Rooted, Store, StructRef, StructRefPre, StructType, Val, ValType,
@@ -214,7 +215,7 @@ fn build_string_vtable(
             // `toString` of a string is identity — the receiver already *is* the
             // `$string`; hand it back unchanged.
             Box::new(async move {
-                results[0] = params[0];
+                *abi_result(results, 0)? = *abi_arg(params, 0)?;
                 Ok(())
             })
         },
@@ -229,7 +230,8 @@ fn build_string_vtable(
             let raw_string = raw_string.clone();
             let string_ty = string_ty.clone();
             Box::new(async move {
-                results[0] = string_to_json(&mut caller, &params[0], &raw_string, &string_ty)?;
+                *abi_result(results, 0)? =
+                    string_to_json(&mut caller, abi_arg(params, 0)?, &raw_string, &string_ty)?;
                 Ok(())
             })
         },
@@ -242,8 +244,13 @@ fn build_string_vtable(
         move |mut caller, params, results| {
             let string_ty = string_ty.clone();
             Box::new(async move {
-                let eq = string_equals(&mut caller, &params[0], &params[1], &string_ty)?;
-                results[0] = Val::I32(eq as i32);
+                let eq = string_equals(
+                    &mut caller,
+                    abi_arg(params, 0)?,
+                    abi_arg(params, 1)?,
+                    &string_ty,
+                )?;
+                *abi_result(results, 0)? = Val::I32(eq as i32);
                 Ok(())
             })
         },
@@ -254,8 +261,8 @@ fn build_string_vtable(
         intr.hash_fn.clone(),
         |mut caller, params, results| {
             Box::new(async move {
-                let units = read_string_units(&mut caller, &params[0], "String#hash")?;
-                results[0] = Val::I32(fnv_hash_units(&units) as i32);
+                let units = read_string_units(&mut caller, abi_arg(params, 0)?, "String#hash")?;
+                *abi_result(results, 0)? = Val::I32(fnv_hash_units(&units) as i32);
                 Ok(())
             })
         },
@@ -313,8 +320,9 @@ fn build_array_vtable(
             let raw_string = raw_string.clone();
             let string_ty = string_ty.clone();
             Box::new(async move {
-                results[0] =
-                    array_to_string(&mut caller, &params[0], &raw_string, &string_ty).await?;
+                *abi_result(results, 0)? =
+                    array_to_string(&mut caller, abi_arg(params, 0)?, &raw_string, &string_ty)
+                        .await?;
                 Ok(())
             })
         },
@@ -329,8 +337,9 @@ fn build_array_vtable(
             let raw_string = raw_string.clone();
             let string_ty = string_ty.clone();
             Box::new(async move {
-                results[0] =
-                    array_to_json(&mut caller, &params[0], &raw_string, &string_ty).await?;
+                *abi_result(results, 0)? =
+                    array_to_json(&mut caller, abi_arg(params, 0)?, &raw_string, &string_ty)
+                        .await?;
                 Ok(())
             })
         },
@@ -343,8 +352,14 @@ fn build_array_vtable(
         move |mut caller, params, results| {
             let array_ty = array_ty.clone();
             Box::new(async move {
-                let eq = array_equals(&mut caller, &params[0], &params[1], &array_ty).await?;
-                results[0] = Val::I32(eq as i32);
+                let eq = array_equals(
+                    &mut caller,
+                    abi_arg(params, 0)?,
+                    abi_arg(params, 1)?,
+                    &array_ty,
+                )
+                .await?;
+                *abi_result(results, 0)? = Val::I32(eq as i32);
                 Ok(())
             })
         },
@@ -355,8 +370,8 @@ fn build_array_vtable(
         intr.hash_fn.clone(),
         |mut caller, params, results| {
             Box::new(async move {
-                let h = array_hash(&mut caller, &params[0]).await?;
-                results[0] = Val::I32(h as i32);
+                let h = array_hash(&mut caller, abi_arg(params, 0)?).await?;
+                *abi_result(results, 0)? = Val::I32(h as i32);
                 Ok(())
             })
         },
@@ -499,12 +514,14 @@ fn build_object_vtable(
         intr.to_string_fn.clone(),
         |mut caller, params, results| {
             Box::new(async move {
-                if let Some(value) = object_override(&mut caller, &params[0], "toString").await? {
-                    results[0] = value;
+                if let Some(value) =
+                    object_override(&mut caller, abi_arg(params, 0)?, "toString").await?
+                {
+                    *abi_result(results, 0)? = value;
                     return Ok(());
                 }
                 let st = write_submilli_string_struct(&mut caller, "[object Object]")?;
-                results[0] = Val::AnyRef(Some(st.to_anyref()));
+                *abi_result(results, 0)? = Val::AnyRef(Some(st.to_anyref()));
                 Ok(())
             })
         },
@@ -519,8 +536,9 @@ fn build_object_vtable(
             let raw_string = raw_string.clone();
             let string_ty = string_ty.clone();
             Box::new(async move {
-                results[0] =
-                    object_to_json(&mut caller, &params[0], &raw_string, &string_ty).await?;
+                *abi_result(results, 0)? =
+                    object_to_json(&mut caller, abi_arg(params, 0)?, &raw_string, &string_ty)
+                        .await?;
                 Ok(())
             })
         },
@@ -531,8 +549,9 @@ fn build_object_vtable(
         intr.equals_fn.clone(),
         |mut caller, params, results| {
             Box::new(async move {
-                let eq = object_equals(&mut caller, &params[0], &params[1]).await?;
-                results[0] = Val::I32(eq as i32);
+                let eq =
+                    object_equals(&mut caller, abi_arg(params, 0)?, abi_arg(params, 1)?).await?;
+                *abi_result(results, 0)? = Val::I32(eq as i32);
                 Ok(())
             })
         },
@@ -543,8 +562,8 @@ fn build_object_vtable(
         intr.hash_fn.clone(),
         |mut caller, params, results| {
             Box::new(async move {
-                let hash = object_hash(&mut caller, &params[0]).await?;
-                results[0] = Val::I32(hash as i32);
+                let hash = object_hash(&mut caller, abi_arg(params, 0)?).await?;
+                *abi_result(results, 0)? = Val::I32(hash as i32);
                 Ok(())
             })
         },
@@ -821,9 +840,9 @@ fn build_boxed_number_vtable(
         intr.to_string_fn.clone(),
         |mut caller, params, results| {
             Box::new(async move {
-                let n = read_boxed_f64(&mut caller, &params[0], "Number#toString")?;
+                let n = read_boxed_f64(&mut caller, abi_arg(params, 0)?, "Number#toString")?;
                 let st = write_submilli_string_struct(&mut caller, &format_number_js(n))?;
-                results[0] = Val::AnyRef(Some(st.to_anyref()));
+                *abi_result(results, 0)? = Val::AnyRef(Some(st.to_anyref()));
                 Ok(())
             })
         },
@@ -834,7 +853,7 @@ fn build_boxed_number_vtable(
         intr.to_json_fn.clone(),
         |mut caller, params, results| {
             Box::new(async move {
-                let n = read_boxed_f64(&mut caller, &params[0], "Number#toJson")?;
+                let n = read_boxed_f64(&mut caller, abi_arg(params, 0)?, "Number#toJson")?;
                 // NaN and ±Infinity are not valid JSON; both render as `null`.
                 let out = if n.is_finite() {
                     format_number_js(n)
@@ -842,7 +861,7 @@ fn build_boxed_number_vtable(
                     "null".to_string()
                 };
                 let st = write_submilli_string_struct(&mut caller, &out)?;
-                results[0] = Val::AnyRef(Some(st.to_anyref()));
+                *abi_result(results, 0)? = Val::AnyRef(Some(st.to_anyref()));
                 Ok(())
             })
         },
@@ -855,8 +874,13 @@ fn build_boxed_number_vtable(
         move |mut caller, params, results| {
             let boxed_number = boxed_number.clone();
             Box::new(async move {
-                let eq = boxed_number_equals(&mut caller, &params[0], &params[1], &boxed_number)?;
-                results[0] = Val::I32(eq as i32);
+                let eq = boxed_number_equals(
+                    &mut caller,
+                    abi_arg(params, 0)?,
+                    abi_arg(params, 1)?,
+                    &boxed_number,
+                )?;
+                *abi_result(results, 0)? = Val::I32(eq as i32);
                 Ok(())
             })
         },
@@ -867,8 +891,8 @@ fn build_boxed_number_vtable(
         intr.hash_fn.clone(),
         |mut caller, params, results| {
             Box::new(async move {
-                let n = read_boxed_f64(&mut caller, &params[0], "Number#hash")?;
-                results[0] = Val::I32(boxed_number_hash(n) as i32);
+                let n = read_boxed_f64(&mut caller, abi_arg(params, 0)?, "Number#hash")?;
+                *abi_result(results, 0)? = Val::I32(boxed_number_hash(n) as i32);
                 Ok(())
             })
         },
@@ -903,8 +927,13 @@ fn build_boxed_boolean_vtable(
         move |mut caller, params, results| {
             let boxed_boolean = boxed_boolean.clone();
             Box::new(async move {
-                let eq = boxed_boolean_equals(&mut caller, &params[0], &params[1], &boxed_boolean)?;
-                results[0] = Val::I32(eq as i32);
+                let eq = boxed_boolean_equals(
+                    &mut caller,
+                    abi_arg(params, 0)?,
+                    abi_arg(params, 1)?,
+                    &boxed_boolean,
+                )?;
+                *abi_result(results, 0)? = Val::I32(eq as i32);
                 Ok(())
             })
         },
@@ -915,8 +944,8 @@ fn build_boxed_boolean_vtable(
         intr.hash_fn.clone(),
         |mut caller, params, results| {
             Box::new(async move {
-                let v = read_boxed_i32(&mut caller, &params[0], "Boolean#hash")?;
-                results[0] = Val::I32(v);
+                let v = read_boxed_i32(&mut caller, abi_arg(params, 0)?, "Boolean#hash")?;
+                *abi_result(results, 0)? = Val::I32(v);
                 Ok(())
             })
         },
@@ -931,9 +960,9 @@ fn boxed_boolean_spell(
     params: &[Val],
     results: &mut [Val],
 ) -> wasmtime::Result<()> {
-    let truthy = read_boxed_i32(&mut caller, &params[0], "Boolean#toString")? != 0;
+    let truthy = read_boxed_i32(&mut caller, abi_arg(params, 0)?, "Boolean#toString")? != 0;
     let st = write_submilli_string_struct(&mut caller, if truthy { "true" } else { "false" })?;
-    results[0] = Val::AnyRef(Some(st.to_anyref()));
+    *abi_result(results, 0)? = Val::AnyRef(Some(st.to_anyref()));
     Ok(())
 }
 
@@ -958,7 +987,8 @@ fn build_bigint_vtable(
         intr.to_string_fn.clone(),
         |mut caller, params, results| {
             Box::new(async move {
-                results[0] = bigint_decimal_string(&mut caller, &params[0], "BigInt#toString")?;
+                *abi_result(results, 0)? =
+                    bigint_decimal_string(&mut caller, abi_arg(params, 0)?, "BigInt#toString")?;
                 Ok(())
             })
         },
@@ -970,7 +1000,8 @@ fn build_bigint_vtable(
         intr.to_json_fn.clone(),
         |mut caller, params, results| {
             Box::new(async move {
-                results[0] = bigint_decimal_string(&mut caller, &params[0], "BigInt#toJson")?;
+                *abi_result(results, 0)? =
+                    bigint_decimal_string(&mut caller, abi_arg(params, 0)?, "BigInt#toJson")?;
                 Ok(())
             })
         },
@@ -983,8 +1014,13 @@ fn build_bigint_vtable(
         move |mut caller, params, results| {
             let bigint_ty = bigint_ty.clone();
             Box::new(async move {
-                let eq = bigint_equals(&mut caller, &params[0], &params[1], &bigint_ty)?;
-                results[0] = Val::I32(eq as i32);
+                let eq = bigint_equals(
+                    &mut caller,
+                    abi_arg(params, 0)?,
+                    abi_arg(params, 1)?,
+                    &bigint_ty,
+                )?;
+                *abi_result(results, 0)? = Val::I32(eq as i32);
                 Ok(())
             })
         },
@@ -997,10 +1033,10 @@ fn build_bigint_vtable(
             Box::new(async move {
                 let (sign, limbs) = crate::runtime::prelude::bigint::ops::read_bigint_struct(
                     &mut caller,
-                    &params[0],
+                    abi_arg(params, 0)?,
                     "BigInt#hash",
                 )?;
-                results[0] = Val::I32(bigint_hash(sign, &limbs) as i32);
+                *abi_result(results, 0)? = Val::I32(bigint_hash(sign, &limbs) as i32);
                 Ok(())
             })
         },
@@ -1062,10 +1098,11 @@ fn build_uint8array_vtable(
         intr.to_string_fn.clone(),
         |mut caller, params, results| {
             Box::new(async move {
-                let bytes = read_uint8_array_arg(&mut caller, &params[0], "Uint8Array#toString")?;
+                let bytes =
+                    read_uint8_array_arg(&mut caller, abi_arg(params, 0)?, "Uint8Array#toString")?;
                 let units = crate::runtime::prelude::uint8array::join(&bytes, &[u16::from(b',')]);
                 let st = write_submilli_string_struct_units(&mut caller, &units)?;
-                results[0] = Val::AnyRef(Some(st.to_anyref()));
+                *abi_result(results, 0)? = Val::AnyRef(Some(st.to_anyref()));
                 Ok(())
             })
         },
@@ -1076,13 +1113,14 @@ fn build_uint8array_vtable(
         intr.to_json_fn.clone(),
         |mut caller, params, results| {
             Box::new(async move {
-                let bytes = read_uint8_array_arg(&mut caller, &params[0], "Uint8Array#toJson")?;
+                let bytes =
+                    read_uint8_array_arg(&mut caller, abi_arg(params, 0)?, "Uint8Array#toJson")?;
                 let text = format!(
                     "\"{}\"",
                     crate::runtime::prelude::uint8array::to_base64_standard(&bytes)
                 );
                 let st = write_submilli_string_struct(&mut caller, &text)?;
-                results[0] = Val::AnyRef(Some(st.to_anyref()));
+                *abi_result(results, 0)? = Val::AnyRef(Some(st.to_anyref()));
                 Ok(())
             })
         },
@@ -1095,8 +1133,13 @@ fn build_uint8array_vtable(
         move |mut caller, params, results| {
             let uint8_ty = uint8_ty.clone();
             Box::new(async move {
-                let eq = uint8array_equals(&mut caller, &params[0], &params[1], &uint8_ty)?;
-                results[0] = Val::I32(eq as i32);
+                let eq = uint8array_equals(
+                    &mut caller,
+                    abi_arg(params, 0)?,
+                    abi_arg(params, 1)?,
+                    &uint8_ty,
+                )?;
+                *abi_result(results, 0)? = Val::I32(eq as i32);
                 Ok(())
             })
         },
@@ -1107,8 +1150,9 @@ fn build_uint8array_vtable(
         intr.hash_fn.clone(),
         |mut caller, params, results| {
             Box::new(async move {
-                let bytes = read_uint8_array_arg(&mut caller, &params[0], "Uint8Array#hash")?;
-                results[0] = Val::I32(uint8array_hash(&bytes) as i32);
+                let bytes =
+                    read_uint8_array_arg(&mut caller, abi_arg(params, 0)?, "Uint8Array#hash")?;
+                *abi_result(results, 0)? = Val::I32(uint8array_hash(&bytes) as i32);
                 Ok(())
             })
         },
@@ -1157,7 +1201,7 @@ fn build_closure_vtable(
         |mut caller, _, results| {
             Box::new(async move {
                 let value = write_submilli_string_struct(&mut caller, "null")?;
-                results[0] = Val::AnyRef(Some(value.to_anyref()));
+                *abi_result(results, 0)? = Val::AnyRef(Some(value.to_anyref()));
                 Ok(())
             })
         },
@@ -1176,7 +1220,7 @@ fn build_regex_vtable(
         intr.to_string_fn.clone(),
         |mut caller, params, results| {
             Box::new(async move {
-                results[0] = regex_to_string(&mut caller, &params[0])?;
+                *abi_result(results, 0)? = regex_to_string(&mut caller, abi_arg(params, 0)?)?;
                 Ok(())
             })
         },
@@ -1197,8 +1241,8 @@ fn build_regex_match_box_vtable(
         |mut caller, params, results| {
             Box::new(async move {
                 // The match text ($string) sits in field 1 — hand it back as-is.
-                let st = as_struct(&mut caller, &params[0], "RegExpMatch#toString")?;
-                results[0] = st.field(&mut caller, 1)?;
+                let st = as_struct(&mut caller, abi_arg(params, 0)?, "RegExpMatch#toString")?;
+                *abi_result(results, 0)? = st.field(&mut caller, 1)?;
                 Ok(())
             })
         },
@@ -1245,7 +1289,7 @@ fn object_object_slot(store: &mut Store<StoreData>, ty: wasmtime::FuncType) -> F
     host_func_async(&mut *store, ty, |mut caller, _params, results| {
         Box::new(async move {
             let st = write_submilli_string_struct(&mut caller, "[object Object]")?;
-            results[0] = Val::AnyRef(Some(st.to_anyref()));
+            *abi_result(results, 0)? = Val::AnyRef(Some(st.to_anyref()));
             Ok(())
         })
     })
@@ -1259,7 +1303,7 @@ fn empty_object_json_slot(store: &mut Store<StoreData>, intr: &IntrinsicTypes) -
         |mut caller, _params, results| {
             Box::new(async move {
                 let st = write_submilli_string_struct(&mut caller, "{}")?;
-                results[0] = Val::AnyRef(Some(st.to_anyref()));
+                *abi_result(results, 0)? = Val::AnyRef(Some(st.to_anyref()));
                 Ok(())
             })
         },
@@ -1273,12 +1317,12 @@ fn ref_identity_equals_slot(store: &mut Store<StoreData>, intr: &IntrinsicTypes)
         intr.equals_fn.clone(),
         |caller, params, results| {
             Box::new(async move {
-                let eq = match (&params[0], &params[1]) {
+                let eq = match (abi_arg(params, 0)?, abi_arg(params, 1)?) {
                     (Val::AnyRef(Some(a)), Val::AnyRef(Some(b))) => Rooted::ref_eq(&caller, a, b)?,
                     (Val::AnyRef(None), Val::AnyRef(None)) => true,
                     _ => false,
                 };
-                results[0] = Val::I32(eq as i32);
+                *abi_result(results, 0)? = Val::I32(eq as i32);
                 Ok(())
             })
         },
@@ -1292,7 +1336,7 @@ fn zero_hash_slot(store: &mut Store<StoreData>, intr: &IntrinsicTypes) -> Func {
         intr.hash_fn.clone(),
         |_caller, _params, results| {
             Box::new(async move {
-                results[0] = Val::I32(0);
+                *abi_result(results, 0)? = Val::I32(0);
                 Ok(())
             })
         },

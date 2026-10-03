@@ -3,6 +3,7 @@
 //! codegen routes through. The string operations themselves live in the parent
 //! module — this file is the wasmtime boundary they're kept clear of.
 
+use crate::runtime::host::{abi_arg, abi_result};
 use wasmtime::{
     ArrayRef, ArrayRefPre, ArrayType, Caller, FuncType, HeapType, Linker, RefType, Rooted,
     StructRef, StructRefPre, StructType, Val, ValType,
@@ -91,10 +92,10 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         FuncType::new(&engine, [array_ref.clone()], [abi.value_type()]),
         true,
         move |caller, params, results| {
-            let codes = read_number_array(caller, &params[0], "String.fromCharCode")?;
+            let codes = read_number_array(caller, abi_arg(params, 0)?, "String.fromCharCode")?;
             let out = from_char_code(&codes);
             let st = write_submilli_string_struct_units(caller, out.units())?;
-            results[0] = Val::AnyRef(Some(st.to_anyref()));
+            *abi_result(results, 0)? = Val::AnyRef(Some(st.to_anyref()));
             Ok(())
         },
     )?;
@@ -105,10 +106,10 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         FuncType::new(&engine, [array_ref], [abi.value_type()]),
         true,
         move |caller, params, results| {
-            let codes = read_number_array(caller, &params[0], "String.fromCodePoint")?;
+            let codes = read_number_array(caller, abi_arg(params, 0)?, "String.fromCodePoint")?;
             let out = from_code_point(&codes).map_err(throw)?;
             let st = write_submilli_string_struct_units(caller, out.units())?;
-            results[0] = Val::AnyRef(Some(st.to_anyref()));
+            *abi_result(results, 0)? = Val::AnyRef(Some(st.to_anyref()));
             Ok(())
         },
     )?;
@@ -122,7 +123,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         FuncType::new(&engine, [abi.value_type()], [abi.value_type()]),
         true,
         |_caller, params, results| {
-            results[0] = params[0];
+            *abi_result(results, 0)? = *abi_arg(params, 0)?;
             Ok(())
         },
     )?;
@@ -134,10 +135,10 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         FuncType::new(&engine, [abi.value_type()], [abi.value_type()]),
         true,
         move |caller, params, results| {
-            let recv = json_abi.read(caller, &params[0], "String#toJson")?;
+            let recv = json_abi.read(caller, abi_arg(params, 0)?, "String#toJson")?;
             let escaped = crate::runtime::prelude::vtable::json_escape_units(recv.value.units());
             let st = write_submilli_string_struct_units(caller, &escaped)?;
-            results[0] = Val::AnyRef(Some(st.to_anyref()));
+            *abi_result(results, 0)? = Val::AnyRef(Some(st.to_anyref()));
             Ok(())
         },
     )?;
@@ -153,9 +154,9 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         ),
         true,
         move |caller, params, results| {
-            let a = equals_abi.read(caller, &params[0], "String#equals")?;
-            let b = equals_abi.read(caller, &params[1], "String#equals")?;
-            results[0] = Val::I32(eq(&a.value, &b.value) as i32);
+            let a = equals_abi.read(caller, abi_arg(params, 0)?, "String#equals")?;
+            let b = equals_abi.read(caller, abi_arg(params, 1)?, "String#equals")?;
+            *abi_result(results, 0)? = Val::I32(eq(&a.value, &b.value) as i32);
             Ok(())
         },
     )?;
@@ -171,9 +172,9 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         ),
         true,
         move |caller, params, results| {
-            let a = lc_abi.read(caller, &params[0], "String#localeCompare")?;
-            let b = lc_abi.read(caller, &params[1], "String#localeCompare")?;
-            results[0] = Val::F64(f64::from(cmp(&a.value, &b.value)).to_bits());
+            let a = lc_abi.read(caller, abi_arg(params, 0)?, "String#localeCompare")?;
+            let b = lc_abi.read(caller, abi_arg(params, 1)?, "String#localeCompare")?;
+            *abi_result(results, 0)? = Val::F64(f64::from(cmp(&a.value, &b.value)).to_bits());
             Ok(())
         },
     )?;
@@ -194,7 +195,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         true,
         |caller, params, results| {
             Box::pin(async move {
-                results[0] = string_ctor_call(caller, &params[0]).await?;
+                *abi_result(results, 0)? = string_ctor_call(caller, abi_arg(params, 0)?).await?;
                 Ok(())
             })
         },
@@ -212,8 +213,10 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         FuncType::new(&engine, [abi.value_type()], [obj_ret]),
         true,
         |caller, params, results| {
-            results[0] =
-                crate::runtime::prelude::iterator::make_string_iterator(caller, params[0])?;
+            *abi_result(results, 0)? = crate::runtime::prelude::iterator::make_string_iterator(
+                caller,
+                *abi_arg(params, 0)?,
+            )?;
             Ok(())
         },
     )?;
@@ -229,9 +232,9 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         FuncType::new(&engine, [s.clone(), s.clone()], [s.clone()]),
         true,
         move |caller, params, results| {
-            let recv = concat_abi.read(caller, &params[0], "string_concat")?;
-            let other = concat_abi.read(caller, &params[1], "string_concat")?;
-            results[0] =
+            let recv = concat_abi.read(caller, abi_arg(params, 0)?, "string_concat")?;
+            let other = concat_abi.read(caller, abi_arg(params, 1)?, "string_concat")?;
+            *abi_result(results, 0)? =
                 concat_abi.write(caller, recv.vtable, &concat(&recv.value, &other.value))?;
             Ok(())
         },
@@ -245,14 +248,14 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         true,
         move |caller, params, results| {
             // Different lengths differ without reading either string.
-            let a = eq_abi.payload(caller, &params[0], "string_eq")?;
-            let b = eq_abi.payload(caller, &params[1], "string_eq")?;
+            let a = eq_abi.payload(caller, abi_arg(params, 0)?, "string_eq")?;
+            let b = eq_abi.payload(caller, abi_arg(params, 1)?, "string_eq")?;
             let equal = a.len == b.len && {
                 let a = a.read_all(caller, "string_eq")?;
                 let b = b.read_all(caller, "string_eq")?;
                 eq(&a, &b)
             };
-            results[0] = Val::I32(equal as i32);
+            *abi_result(results, 0)? = Val::I32(equal as i32);
             Ok(())
         },
     )?;
@@ -264,9 +267,9 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         FuncType::new(&engine, [s.clone(), s], [ValType::I32]),
         true,
         move |caller, params, results| {
-            let a = cmp_abi.read(caller, &params[0], "string_cmp")?;
-            let b = cmp_abi.read(caller, &params[1], "string_cmp")?;
-            results[0] = Val::I32(cmp(&a.value, &b.value));
+            let a = cmp_abi.read(caller, abi_arg(params, 0)?, "string_cmp")?;
+            let b = cmp_abi.read(caller, abi_arg(params, 1)?, "string_cmp")?;
+            *abi_result(results, 0)? = Val::I32(cmp(&a.value, &b.value));
             Ok(())
         },
     )?;
@@ -509,13 +512,13 @@ fn reg_unit_to_str(
         FuncType::new(engine, [s.clone(), ValType::F64], [s]),
         true,
         move |caller, params, results| {
-            let recv = abi.payload(caller, &params[0], name)?;
-            let arg = number(&params[1], name)?;
+            let recv = abi.payload(caller, abi_arg(params, 0)?, name)?;
+            let arg = number(abi_arg(params, 1)?, name)?;
             let unit = pick(recv.len, arg)
                 .map(|i| read_code_unit(&mut *caller, recv.array, i))
                 .transpose()?;
             let out = Str::from_units(unit.map_or_else(Vec::new, |unit| vec![unit]));
-            results[0] = abi.write(caller, recv.vtable, &out)?;
+            *abi_result(results, 0)? = abi.write(caller, recv.vtable, &out)?;
             Ok(())
         },
     )
@@ -544,9 +547,9 @@ fn reg_unit_to_str_or_null(
         FuncType::new(engine, [s, ValType::F64], [object]),
         true,
         move |caller, params, results| {
-            let recv = abi.payload(caller, &params[0], name)?;
-            let arg = number(&params[1], name)?;
-            results[0] = match pick(recv.len, arg) {
+            let recv = abi.payload(caller, abi_arg(params, 0)?, name)?;
+            let arg = number(abi_arg(params, 1)?, name)?;
+            *abi_result(results, 0)? = match pick(recv.len, arg) {
                 Some(i) => {
                     let unit = read_code_unit(&mut *caller, recv.array, i)?;
                     abi.write(caller, recv.vtable, &Str::from_units(vec![unit]))?
@@ -584,8 +587,8 @@ fn reg_unit_to_num(
         FuncType::new(engine, [s, ValType::F64], [ValType::F64]),
         true,
         move |caller, params, results| {
-            let recv = abi.payload(caller, &params[0], name)?;
-            let arg = number(&params[1], name)?;
+            let recv = abi.payload(caller, abi_arg(params, 0)?, name)?;
+            let arg = number(abi_arg(params, 1)?, name)?;
             let value = match unit_index(recv.len, arg) {
                 Some(i) => {
                     let unit = read_code_unit(&mut *caller, recv.array, i)?;
@@ -603,7 +606,7 @@ fn reg_unit_to_num(
                 }
                 None => f64::NAN,
             };
-            results[0] = Val::F64(value.to_bits());
+            *abi_result(results, 0)? = Val::F64(value.to_bits());
             Ok(())
         },
     )
@@ -626,10 +629,10 @@ fn reg_str_num_to_str_fallible(
         FuncType::new(engine, [s.clone(), ValType::F64], [s]),
         true,
         move |caller, params, results| {
-            let recv = abi.read(caller, &params[0], name)?;
-            let arg = number(&params[1], name)?;
+            let recv = abi.read(caller, abi_arg(params, 0)?, name)?;
+            let arg = number(abi_arg(params, 1)?, name)?;
             let out = op(&recv.value, arg).map_err(throw)?;
-            results[0] = abi.write(caller, recv.vtable, &out)?;
+            *abi_result(results, 0)? = abi.write(caller, recv.vtable, &out)?;
             Ok(())
         },
     )
@@ -653,12 +656,12 @@ fn reg_range_to_str(
         FuncType::new(engine, [s.clone(), ValType::F64, ValType::F64], [s]),
         true,
         move |caller, params, results| {
-            let recv = abi.payload(caller, &params[0], name)?;
-            let a = number(&params[1], name)?;
-            let b = number(&params[2], name)?;
+            let recv = abi.payload(caller, abi_arg(params, 0)?, name)?;
+            let a = number(abi_arg(params, 1)?, name)?;
+            let b = number(abi_arg(params, 2)?, name)?;
             let kept = range(recv.len, a, b);
             let units = read_code_units_range(&mut *caller, recv.array, kept.start, kept.len())?;
-            results[0] = abi.write(caller, recv.vtable, &Str::from_units(units))?;
+            *abi_result(results, 0)? = abi.write(caller, recv.vtable, &Str::from_units(units))?;
             Ok(())
         },
     )
@@ -681,13 +684,13 @@ fn reg_str_str_num_to_num(
         FuncType::new(engine, [s.clone(), s, ValType::F64], [ValType::F64]),
         true,
         move |caller, params, results| {
-            let recv = abi.read(caller, &params[0], name)?;
-            let search = abi.read(caller, &params[1], name)?;
-            let from = number(&params[2], name)?;
+            let recv = abi.read(caller, abi_arg(params, 0)?, name)?;
+            let search = abi.read(caller, abi_arg(params, 1)?, name)?;
+            let from = number(abi_arg(params, 2)?, name)?;
             // A naive search; the worst case multiplies in the needle, which
             // is accepted as under-charged (SUB-1292).
             fuel::charge(&mut *caller, fuel::SCAN, recv.value.units().len() as u64)?;
-            results[0] = Val::F64(op(&recv.value, &search.value, from).to_bits());
+            *abi_result(results, 0)? = Val::F64(op(&recv.value, &search.value, from).to_bits());
             Ok(())
         },
     )
@@ -717,11 +720,13 @@ fn register_string_search_predicate(
         move |caller, params, results| {
             let abi = abi.clone();
             Box::pin(async move {
-                let recv = abi.read(caller, &params[0], name)?;
-                let search = super::super::value::search_string(caller, &params[1]).await?;
-                let from = super::super::value::to_number(caller, &params[2]).await?;
+                let recv = abi.read(caller, abi_arg(params, 0)?, name)?;
+                let search =
+                    super::super::value::search_string(caller, abi_arg(params, 1)?).await?;
+                let from = super::super::value::to_number(caller, abi_arg(params, 2)?).await?;
                 fuel::charge(&mut *caller, fuel::SCAN, recv.value.units().len() as u64)?;
-                results[0] = Val::I32(op(&recv.value, &Str::from_units(search), from) as i32);
+                *abi_result(results, 0)? =
+                    Val::I32(op(&recv.value, &Str::from_units(search), from) as i32);
                 Ok(())
             })
         },
@@ -754,9 +759,10 @@ fn reg_window_predicate(
         move |caller, params, results| {
             let abi = abi.clone();
             Box::pin(async move {
-                let recv = abi.payload(caller, &params[0], name)?;
-                let needle = super::super::value::search_string(caller, &params[1]).await?;
-                let position = super::super::value::to_number(caller, &params[2]).await?;
+                let recv = abi.payload(caller, abi_arg(params, 0)?, name)?;
+                let needle =
+                    super::super::value::search_string(caller, abi_arg(params, 1)?).await?;
+                let position = super::super::value::to_number(caller, abi_arg(params, 2)?).await?;
                 let found = match window(recv.len, needle.len(), position) {
                     Some(range) => {
                         read_code_units_range(caller, recv.array, range.start, range.len())?
@@ -764,7 +770,7 @@ fn reg_window_predicate(
                     }
                     None => false,
                 };
-                results[0] = Val::I32(found as i32);
+                *abi_result(results, 0)? = Val::I32(found as i32);
                 Ok(())
             })
         },
@@ -788,9 +794,10 @@ fn reg_str_str_to_str(
         FuncType::new(engine, [s.clone(), s.clone()], [s]),
         true,
         move |caller, params, results| {
-            let recv = abi.read(caller, &params[0], name)?;
-            let other = abi.read(caller, &params[1], name)?;
-            results[0] = abi.write(caller, recv.vtable, &op(&recv.value, &other.value))?;
+            let recv = abi.read(caller, abi_arg(params, 0)?, name)?;
+            let other = abi.read(caller, abi_arg(params, 1)?, name)?;
+            *abi_result(results, 0)? =
+                abi.write(caller, recv.vtable, &op(&recv.value, &other.value))?;
             Ok(())
         },
     )
@@ -813,11 +820,11 @@ fn reg_str_num_str_to_str(
         FuncType::new(engine, [s.clone(), ValType::F64, s.clone()], [s]),
         true,
         move |caller, params, results| {
-            let recv = abi.read(caller, &params[0], name)?;
-            let target = number(&params[1], name)?;
-            let pad = abi.read(caller, &params[2], name)?;
+            let recv = abi.read(caller, abi_arg(params, 0)?, name)?;
+            let target = number(abi_arg(params, 1)?, name)?;
+            let pad = abi.read(caller, abi_arg(params, 2)?, name)?;
             let out = op(&recv.value, target, &pad.value).map_err(throw)?;
-            results[0] = abi.write(caller, recv.vtable, &out)?;
+            *abi_result(results, 0)? = abi.write(caller, recv.vtable, &out)?;
             Ok(())
         },
     )
@@ -841,10 +848,10 @@ fn reg_str_str_to_str_fallible(
         FuncType::new(engine, [s.clone(), s.clone()], [s]),
         true,
         move |caller, params, results| {
-            let recv = abi.read(caller, &params[0], name)?;
-            let arg = abi.read(caller, &params[1], name)?;
+            let recv = abi.read(caller, abi_arg(params, 0)?, name)?;
+            let arg = abi.read(caller, abi_arg(params, 1)?, name)?;
             let out = op(&recv.value, &arg.value).map_err(throw)?;
-            results[0] = abi.write(caller, recv.vtable, &out)?;
+            *abi_result(results, 0)? = abi.write(caller, recv.vtable, &out)?;
             Ok(())
         },
     )
@@ -867,8 +874,8 @@ fn reg_str_to_bool(
         FuncType::new(engine, [s], [ValType::I32]),
         true,
         move |caller, params, results| {
-            let recv = abi.read(caller, &params[0], name)?;
-            results[0] = Val::I32(op(&recv.value) as i32);
+            let recv = abi.read(caller, abi_arg(params, 0)?, name)?;
+            *abi_result(results, 0)? = Val::I32(op(&recv.value) as i32);
             Ok(())
         },
     )
@@ -891,7 +898,7 @@ fn reg_str_to_str(
         FuncType::new(engine, [s.clone()], [s]),
         true,
         move |caller, params, results| {
-            let recv = abi.read(caller, &params[0], name)?;
+            let recv = abi.read(caller, abi_arg(params, 0)?, name)?;
             // Case mapping, trimming and normalization each pass over the
             // whole string, through UTF-8 and back.
             fuel::charge(
@@ -899,7 +906,7 @@ fn reg_str_to_str(
                 fuel::SCAN,
                 2 * recv.value.units().len() as u64,
             )?;
-            results[0] = abi.write(caller, recv.vtable, &op(&recv.value))?;
+            *abi_result(results, 0)? = abi.write(caller, recv.vtable, &op(&recv.value))?;
             Ok(())
         },
     )

@@ -2,6 +2,7 @@
 
 use super::arguments::Parameters;
 use super::{MODULE_NAME, declare_method, value};
+use crate::runtime::host::{abi_arg, abi_result};
 use crate::runtime::intrinsic_types::{build_intrinsic_types, intrinsic_types};
 use crate::runtime::{StoreData, host};
 use crate::{PackageDeclaration, Param, Type};
@@ -47,9 +48,11 @@ pub(super) fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
             true,
             move |caller, params, results| {
                 Box::pin(async move {
-                    results[0] = match name {
+                    *abi_result(results, 0)? = match name {
                         "member" => lookup(caller, params).await?,
-                        "invoke" => invoke(caller, &params[0], &params[1]).await?,
+                        "invoke" => {
+                            invoke(caller, abi_arg(params, 0)?, abi_arg(params, 1)?).await?
+                        }
                         "invoke_defaults" => invoke_defaults(caller, params).await?,
                         "defaults_fit" => defaults_fit(caller, params)?,
                         _ => property(caller, params).await?,
@@ -83,11 +86,11 @@ pub(super) fn declare(defs: &mut PackageDeclaration) {
 }
 
 async fn lookup(caller: &mut Caller<'_, StoreData>, params: &[Val]) -> wasmtime::Result<Val> {
-    require_receiver(&params[0])?;
-    let name = host::read_string_arg(caller, &params[1], "member")?;
-    let fallback = host::read_string_arg(caller, &params[2], "interface")?;
-    let method = value::conversion_method(caller, &params[0], &name).await?;
-    let interface = receiver_interface(caller, &params[0])?.unwrap_or(fallback);
+    require_receiver(abi_arg(params, 0)?)?;
+    let name = host::read_string_arg(caller, abi_arg(params, 1)?, "member")?;
+    let fallback = host::read_string_arg(caller, abi_arg(params, 2)?, "interface")?;
+    let method = value::conversion_method(caller, abi_arg(params, 0)?, &name).await?;
+    let interface = receiver_interface(caller, abi_arg(params, 0)?)?.unwrap_or(fallback);
     let key = if method.is_some() {
         String::new()
     } else {
@@ -99,7 +102,11 @@ async fn lookup(caller: &mut Caller<'_, StoreData>, params: &[Val]) -> wasmtime:
     Ok(Val::AnyRef(Some(
         host::write_submilli_array_struct(
             caller,
-            &[params[0], key, method.unwrap_or(Val::null_any_ref())],
+            &[
+                *abi_arg(params, 0)?,
+                key,
+                method.unwrap_or(Val::null_any_ref()),
+            ],
         )?
         .to_anyref(),
     )))
@@ -144,14 +151,14 @@ async fn invoke(
 }
 
 fn defaults_fit(caller: &mut Caller<'_, StoreData>, params: &[Val]) -> wasmtime::Result<Val> {
-    let argument_count = host::read_boxed_number(caller, &params[1], "arity")? as usize;
-    let results = host::read_boxed_number(caller, &params[2], "return convention")?;
+    let argument_count = host::read_boxed_number(caller, abi_arg(params, 1)?, "arity")? as usize;
+    let results = host::read_boxed_number(caller, abi_arg(params, 2)?, "return convention")?;
     let results = (results >= 0.0).then_some(results as usize);
-    let fits = value::is_callable(caller, &params[0])? && {
+    let fits = value::is_callable(caller, abi_arg(params, 0)?)? && {
         // The cast wraps this function as it is, so its own return convention
         // must fit; but an adapter takes whatever the function it wraps takes.
-        let function = super::closure::read(caller, &params[0], "function")?;
-        let original = super::closure::original(caller, params[0])?;
+        let function = super::closure::read(caller, abi_arg(params, 0)?, "function")?;
+        let original = super::closure::original(caller, *abi_arg(params, 0)?)?;
         results.is_none_or(|expected_results| function.result_count(caller) == expected_results)
             && super::closure::read(caller, &original, "function")?
                 .accepts_arguments(caller, argument_count)?
@@ -163,13 +170,13 @@ async fn invoke_defaults(
     caller: &mut Caller<'_, StoreData>,
     params: &[Val],
 ) -> wasmtime::Result<Val> {
-    if !value::is_callable(caller, &params[0])? {
+    if !value::is_callable(caller, abi_arg(params, 0)?)? {
         return Err(host::type_error("Value is not callable"));
     }
-    let args = super::array::read_array(caller, &params[2], "arguments")?;
-    let function = super::closure::original(caller, params[0])?;
+    let args = super::array::read_array(caller, abi_arg(params, 2)?, "arguments")?;
+    let function = super::closure::original(caller, *abi_arg(params, 0)?)?;
     super::closure::read(caller, &function, "function")?
-        .call_with_arguments(caller, params[1], &args)
+        .call_with_arguments(caller, *abi_arg(params, 1)?, &args)
         .await
 }
 
@@ -278,12 +285,12 @@ pub(super) fn box_result(caller: &mut Caller<'_, StoreData>, result: Val) -> was
 }
 
 async fn property(caller: &mut Caller<'_, StoreData>, params: &[Val]) -> wasmtime::Result<Val> {
-    require_receiver(&params[0])?;
-    let name = host::read_string_arg(caller, &params[1], "property")?;
-    if let Some(value) = value::conversion_method(caller, &params[0], &name).await? {
+    require_receiver(abi_arg(params, 0)?)?;
+    let name = host::read_string_arg(caller, abi_arg(params, 1)?, "property")?;
+    if let Some(value) = value::conversion_method(caller, abi_arg(params, 0)?, &name).await? {
         return Ok(value);
     }
-    let interface = receiver_interface(caller, &params[0])?;
+    let interface = receiver_interface(caller, abi_arg(params, 0)?)?;
     if name == "length"
         && interface.as_deref().is_some_and(|name| {
             [
@@ -295,9 +302,9 @@ async fn property(caller: &mut Caller<'_, StoreData>, params: &[Val]) -> wasmtim
         })
     {
         let len = if interface.as_deref() == Some("submilli:prelude#Array") {
-            crate::runtime::array_storage::ArrayStorage::read(caller, &params[0])?.len
+            crate::runtime::array_storage::ArrayStorage::read(caller, abi_arg(params, 0)?)?.len
         } else {
-            let Val::AnyRef(Some(reference)) = params[0] else {
+            let Val::AnyRef(Some(reference)) = *abi_arg(params, 0)? else {
                 return Err(host::fatal_host_error("invalid intrinsic length receiver"));
             };
             let object = reference.unwrap_struct(&mut *caller)?;

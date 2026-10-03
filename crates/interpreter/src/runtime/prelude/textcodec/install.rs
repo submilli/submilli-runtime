@@ -2,8 +2,9 @@
 //! registers each method under its dispatch key and declares the value symbols
 //! codegen routes through. Instances are stateless — `new` builds an empty
 //! `$ObjectShape` carrying the host `object` vtable; the methods ignore the
-//! receiver (`params[0]`).
+//! receiver (`*abi_arg(params, 0)?`).
 
+use crate::runtime::host::{abi_arg, abi_result};
 use wasmtime::{
     ArrayRef, ArrayRefPre, Caller, FuncType, HeapType, Linker, RefType, StructRef, StructRefPre,
     Val, ValType,
@@ -78,9 +79,9 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         ft(vec![obj_null.clone(), string.clone()], vec![uint8.clone()]),
         true,
         |caller, params, results| {
-            let s = read_string_arg(caller, &params[1], "TextEncoder#encode")?;
+            let s = read_string_arg(caller, abi_arg(params, 1)?, "TextEncoder#encode")?;
             let st = write_submilli_uint8array_struct(caller, s.as_bytes())?;
-            results[0] = Val::AnyRef(Some(st.to_anyref()));
+            *abi_result(results, 0)? = Val::AnyRef(Some(st.to_anyref()));
             Ok(())
         },
     )?;
@@ -91,7 +92,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         ft(vec![obj_null.clone(), uint8.clone()], vec![string.clone()]),
         true,
         |caller, params, results| {
-            let bytes = read_uint8_array_arg(caller, &params[1], "TextDecoder#decode")?;
+            let bytes = read_uint8_array_arg(caller, abi_arg(params, 1)?, "TextDecoder#decode")?;
             fuel::charge(&mut *caller, fuel::SCAN, bytes.len() as u64)?;
             let s = std::str::from_utf8(&bytes).map_err(|e| {
                 crate::runtime::host::type_error(format!(
@@ -100,7 +101,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
                 ))
             })?;
             let st = write_submilli_string_struct(caller, s)?;
-            results[0] = Val::AnyRef(Some(st.to_anyref()));
+            *abi_result(results, 0)? = Val::AnyRef(Some(st.to_anyref()));
             Ok(())
         },
     )?;
@@ -112,7 +113,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
             ft(Vec::new(), vec![obj_null.clone()]),
             true,
             |caller, _params, results| {
-                results[0] = new_instance(caller)?;
+                *abi_result(results, 0)? = new_instance(caller)?;
                 Ok(())
             },
         )?;

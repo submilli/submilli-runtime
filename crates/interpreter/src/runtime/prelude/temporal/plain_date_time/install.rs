@@ -1,3 +1,4 @@
+use crate::runtime::host::{abi_arg, abi_result};
 use wasmtime::{FuncType, HeapType, Linker, RefType, ValType};
 
 use super::super::shared::*;
@@ -127,17 +128,17 @@ fn reg_plain_date_time_duration_op(
         ty,
         true,
         move |caller, params, results| {
-            let st = as_struct_val(caller, &params[0], &label)?;
+            let st = as_struct_val(caller, abi_arg(params, 0)?, &label)?;
             let dt = plain_date_from_struct(caller, st, &label)?
                 .to_datetime(plain_time_from_struct(caller, st, 3, &label)?);
-            let span = read_duration_like(caller, &params[1], &intr, &label)?;
+            let span = read_duration_like(caller, abi_arg(params, 1)?, &intr, &label)?;
             let out = if add {
                 super::add(dt, span)
             } else {
                 super::subtract(dt, span)
             }
             .map_err(crate::runtime::host::range_error)?;
-            results[0] = make_plain_date_time(
+            *abi_result(results, 0)? = make_plain_date_time(
                 caller,
                 i32::from(out.date().year()),
                 i32::from(out.date().month()),
@@ -164,16 +165,16 @@ fn reg_plain_date_time_with(
         ty,
         true,
         |caller, params, results| {
-            let st = as_struct_val(caller, &params[0], "PlainDateTime.with")?;
+            let st = as_struct_val(caller, abi_arg(params, 0)?, "PlainDateTime.with")?;
             let (y, m, d) = merge_date(
                 (
                     st_i32(caller, st, 1, "PlainDateTime.with")?,
                     st_i32(caller, st, 2, "PlainDateTime.with")?,
                     st_i32(caller, st, 3, "PlainDateTime.with")?,
                 ),
-                object_i64_field(caller, &params[1], "year", "PlainDateTime.with")?,
-                object_i64_field(caller, &params[1], "month", "PlainDateTime.with")?,
-                object_i64_field(caller, &params[1], "day", "PlainDateTime.with")?,
+                object_i64_field(caller, abi_arg(params, 1)?, "year", "PlainDateTime.with")?,
+                object_i64_field(caller, abi_arg(params, 1)?, "month", "PlainDateTime.with")?,
+                object_i64_field(caller, abi_arg(params, 1)?, "day", "PlainDateTime.with")?,
                 "PlainDateTime.with",
             )?;
             let time = merge_time(
@@ -183,11 +184,11 @@ fn reg_plain_date_time_with(
                     st_i32(caller, st, 6, "PlainDateTime.with")?,
                     st_i32(caller, st, 7, "PlainDateTime.with")?,
                 ),
-                object_time_bag(caller, &params[1], "PlainDateTime.with")?,
+                object_time_bag(caller, abi_arg(params, 1)?, "PlainDateTime.with")?,
                 "PlainDateTime.with",
             )?;
             let date = super::super::shared::y_m_d_date(y, m, d, "PlainDateTime.with")?;
-            results[0] = make_plain_date_time(
+            *abi_result(results, 0)? = make_plain_date_time(
                 caller,
                 i32::from(date.year()),
                 i32::from(date.month()),
@@ -216,15 +217,15 @@ fn reg_plain_date_time_pair_op(
         ty,
         true,
         move |caller, params, results| {
-            let a_st = as_struct_val(caller, &params[0], &label)?;
-            let b_st = as_struct_val(caller, &params[1], &label)?;
+            let a_st = as_struct_val(caller, abi_arg(params, 0)?, &label)?;
+            let b_st = as_struct_val(caller, abi_arg(params, 1)?, &label)?;
             let a = plain_date_from_struct(caller, a_st, &label)?
                 .to_datetime(plain_time_from_struct(caller, a_st, 3, &label)?);
             let b = plain_date_from_struct(caller, b_st, &label)?
                 .to_datetime(plain_time_from_struct(caller, b_st, 3, &label)?);
             let o = object_diff_options(
                 caller,
-                &params[2],
+                abi_arg(params, 2)?,
                 if until {
                     "PlainDateTime.until"
                 } else {
@@ -238,7 +239,7 @@ fn reg_plain_date_time_pair_op(
                 a.since(o.datetime(b))
                     .map_err(temporal_err("PlainDateTime.since"))?
             };
-            results[0] = make_duration(caller, &span)?;
+            *abi_result(results, 0)? = make_duration(caller, &span)?;
             Ok(())
         },
     )
@@ -256,8 +257,8 @@ fn reg_plain_date_time_projection(
         ty,
         true,
         move |caller, params, results| {
-            let st = as_struct_val(caller, &params[0], method)?;
-            results[0] = if method == "toPlainDate" {
+            let st = as_struct_val(caller, abi_arg(params, 0)?, method)?;
+            *abi_result(results, 0)? = if method == "toPlainDate" {
                 let y = st_i32(caller, st, 1, method)?;
                 let m = st_i32(caller, st, 2, method)?;
                 let d = st_i32(caller, st, 3, method)?;
@@ -285,8 +286,9 @@ fn reg_plain_date_time_to_zoned(
         ty,
         true,
         |caller, params, results| {
-            let st = as_struct_val(caller, &params[0], "PlainDateTime.toZonedDateTime")?;
-            let tz_id = read_string_arg(caller, &params[1], "PlainDateTime.toZonedDateTime")?;
+            let st = as_struct_val(caller, abi_arg(params, 0)?, "PlainDateTime.toZonedDateTime")?;
+            let tz_id =
+                read_string_arg(caller, abi_arg(params, 1)?, "PlainDateTime.toZonedDateTime")?;
             let date = plain_date_from_struct(caller, st, "PlainDateTime.toZonedDateTime")?;
             let time = plain_time_from_struct(caller, st, 3, "PlainDateTime.toZonedDateTime")?;
             let (tz, canonical_id) = super::super::zoned_date_time::resolve_time_zone(
@@ -298,7 +300,7 @@ fn reg_plain_date_time_to_zoned(
                 .to_datetime(time)
                 .to_zoned(tz)
                 .map_err(temporal_err("toZonedDateTime"))?;
-            results[0] = make_zoned_date_time(caller, &z, &canonical_id)?;
+            *abi_result(results, 0)? = make_zoned_date_time(caller, &z, &canonical_id)?;
             Ok(())
         },
     )

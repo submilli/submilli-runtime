@@ -6,6 +6,7 @@
 //! `Query` maps are real prelude `Map<string, string>`s, built and consumed
 //! host-side.
 
+use crate::runtime::host::{abi_arg, abi_result};
 use std::collections::BTreeMap;
 
 use wasmtime::{Caller, FuncType, HeapType, Linker, RefType, StructType, Val, ValType};
@@ -389,11 +390,11 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         string_to_string.clone(),
         /* deterministic = */ true,
         |caller, params, results| {
-            let s = read_string_arg(&mut *caller, &params[0], "url.encodeComponent")?;
+            let s = read_string_arg(&mut *caller, abi_arg(params, 0)?, "url.encodeComponent")?;
             fuel::charge(&mut *caller, fuel::SCAN, s.len() as u64)?;
             let encoded = encode_component(&s);
             let st = write_submilli_string_struct(caller, &encoded)?;
-            results[0] = Val::AnyRef(Some(st.to_anyref()));
+            *abi_result(results, 0)? = Val::AnyRef(Some(st.to_anyref()));
             Ok(())
         },
     )?;
@@ -405,7 +406,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         string_to_string,
         /* deterministic = */ true,
         |caller, params, results| {
-            let s = read_string_arg(&mut *caller, &params[0], "url.decodeComponent")?;
+            let s = read_string_arg(&mut *caller, abi_arg(params, 0)?, "url.decodeComponent")?;
             fuel::charge(&mut *caller, fuel::SCAN, s.len() as u64)?;
             let decoded = percent_encoding::percent_decode_str(&s)
                 .decode_utf8()
@@ -416,7 +417,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
                 })?
                 .into_owned();
             let st = write_submilli_string_struct(caller, &decoded)?;
-            results[0] = Val::AnyRef(Some(st.to_anyref()));
+            *abi_result(results, 0)? = Val::AnyRef(Some(st.to_anyref()));
             Ok(())
         },
     )?;
@@ -428,10 +429,10 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         FuncType::new(&engine, [nullable_object.clone()], [string.clone()]),
         /* deterministic = */ true,
         |caller, params, results| {
-            let pairs = map::string_entries(caller, &params[0])?;
+            let pairs = map::string_entries(caller, abi_arg(params, 0)?)?;
             fuel::charge(&mut *caller, fuel::SCAN, pairs_len(&pairs))?;
             let st = write_submilli_string_struct(caller, &encode_query(&pairs))?;
-            results[0] = Val::AnyRef(Some(st.to_anyref()));
+            *abi_result(results, 0)? = Val::AnyRef(Some(st.to_anyref()));
             Ok(())
         },
     )?;
@@ -444,11 +445,11 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         /* deterministic = */ true,
         |caller, params, results| {
             Box::pin(async move {
-                let s = read_string_arg(&mut *caller, &params[0], "url.decodeQuery")?;
+                let s = read_string_arg(&mut *caller, abi_arg(params, 0)?, "url.decodeQuery")?;
                 fuel::charge(&mut *caller, fuel::SCAN, s.len() as u64)?;
                 let pairs =
                     decode_query(&s).map_err(|e| type_error(format!("url.decodeQuery: {e}")))?;
-                results[0] = map::string_map_from_pairs(caller, &pairs).await?;
+                *abi_result(results, 0)? = map::string_map_from_pairs(caller, &pairs).await?;
                 Ok(())
             })
         },
@@ -462,7 +463,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         /* deterministic = */ true,
         |caller, params, results| {
             Box::pin(async move {
-                let s = read_string_arg(&mut *caller, &params[0], "url.parse")?;
+                let s = read_string_arg(&mut *caller, abi_arg(params, 0)?, "url.parse")?;
                 fuel::charge(&mut *caller, fuel::PARSE, s.len() as u64)?;
                 let parsed =
                     url::Url::parse(&s).map_err(|e| type_error(format!("url.parse: {e}")))?;
@@ -479,7 +480,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
                     query,
                     fragment: parsed.fragment().map(str::to_string),
                 };
-                results[0] = parts.write(caller).await?;
+                *abi_result(results, 0)? = parts.write(caller).await?;
                 Ok(())
             })
         },
@@ -503,12 +504,13 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         ),
         /* deterministic = */ true,
         |caller, params, results| {
-            let protocol = read_string_arg(&mut *caller, &params[0], "url.build (protocol)")?;
-            let host = read_string_arg(&mut *caller, &params[1], "url.build (host)")?;
-            let port = read_nullable_number(caller, &params[2], "url.build (port)")?;
-            let path = read_string_arg(&mut *caller, &params[3], "url.build (path)")?;
-            let query = map::string_entries(caller, &params[4])?;
-            let fragment = match &params[5] {
+            let protocol =
+                read_string_arg(&mut *caller, abi_arg(params, 0)?, "url.build (protocol)")?;
+            let host = read_string_arg(&mut *caller, abi_arg(params, 1)?, "url.build (host)")?;
+            let port = read_nullable_number(caller, abi_arg(params, 2)?, "url.build (port)")?;
+            let path = read_string_arg(&mut *caller, abi_arg(params, 3)?, "url.build (path)")?;
+            let query = map::string_entries(caller, abi_arg(params, 4)?)?;
+            let fragment = match abi_arg(params, 5)? {
                 Val::AnyRef(None) => None,
                 v => Some(read_string_arg(&mut *caller, v, "url.build (fragment)")?),
             };
@@ -523,7 +525,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
             let serialised = build_url(&protocol, &host, port, &path, &query, fragment.as_deref())
                 .map_err(|e| type_error(format!("url.build: {e}")))?;
             let st = write_submilli_string_struct(caller, &serialised)?;
-            results[0] = Val::AnyRef(Some(st.to_anyref()));
+            *abi_result(results, 0)? = Val::AnyRef(Some(st.to_anyref()));
             Ok(())
         },
     )?;

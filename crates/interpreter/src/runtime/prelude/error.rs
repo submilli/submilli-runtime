@@ -24,6 +24,7 @@
 //! whose parent link is the `Error` vtable — the nominal-identity chain
 //! `instanceof` and typed catch walk.
 
+use crate::runtime::host::{abi_arg, abi_result};
 use wasmtime::{
     ArrayRef, ArrayRefPre, Caller, Engine, Finality, Func, FuncType, Global, GlobalType, HeapType,
     Linker, Mutability, RecGroupBuilder, RefType, Rooted, Store, StructRef, StructRefPre,
@@ -399,9 +400,18 @@ fn build_error_vtable(
         intr.to_string_fn.clone(),
         |mut caller, params, results| {
             Box::new(async move {
-                let name = payload_units(&mut caller, &params[0], NAME_SLOT, "Error#toString")?;
-                let message =
-                    payload_units(&mut caller, &params[0], MESSAGE_SLOT, "Error#toString")?;
+                let name = payload_units(
+                    &mut caller,
+                    abi_arg(params, 0)?,
+                    NAME_SLOT,
+                    "Error#toString",
+                )?;
+                let message = payload_units(
+                    &mut caller,
+                    abi_arg(params, 0)?,
+                    MESSAGE_SLOT,
+                    "Error#toString",
+                )?;
                 let text = match (name.is_empty(), message.is_empty()) {
                     (true, _) => message,
                     (_, true) => name,
@@ -413,7 +423,7 @@ fn build_error_vtable(
                     }
                 };
                 let st = write_submilli_string_struct_units(&mut caller, &text)?;
-                results[0] = Val::AnyRef(Some(st.to_anyref()));
+                *abi_result(results, 0)? = Val::AnyRef(Some(st.to_anyref()));
                 Ok(())
             })
         },
@@ -426,7 +436,7 @@ fn build_error_vtable(
             Box::new(async move {
                 let units: Vec<u16> = "{}".encode_utf16().collect();
                 let st = write_submilli_string_struct_units(&mut caller, &units)?;
-                results[0] = Val::AnyRef(Some(st.to_anyref()));
+                *abi_result(results, 0)? = Val::AnyRef(Some(st.to_anyref()));
                 Ok(())
             })
         },
@@ -437,7 +447,8 @@ fn build_error_vtable(
         intr.equals_fn.clone(),
         move |mut caller, params, results| {
             Box::new(async move {
-                results[0] = Val::I32(error_equals(&mut caller, params, class)? as i32);
+                *abi_result(results, 0)? =
+                    Val::I32(error_equals(&mut caller, params, class)? as i32);
                 Ok(())
             })
         },
@@ -448,7 +459,7 @@ fn build_error_vtable(
         intr.hash_fn.clone(),
         |_caller, _params, results| {
             Box::new(async move {
-                results[0] = Val::I32(0);
+                *abi_result(results, 0)? = Val::I32(0);
                 Ok(())
             })
         },
@@ -489,7 +500,8 @@ pub(crate) fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         FuncType::new(&engine, [string_ref.clone()], [error_ref.clone()]),
         true,
         |caller, params, results| {
-            results[0] = construct(caller, BuiltinErrorClass::Error, &params[0], &[])?;
+            *abi_result(results, 0)? =
+                construct(caller, BuiltinErrorClass::Error, abi_arg(params, 0)?, &[])?;
             Ok(())
         },
     )?;
@@ -505,7 +517,8 @@ pub(crate) fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
             FuncType::new(&engine, ctor_params, [subclass_ref.clone()]),
             true,
             move |caller, params, results| {
-                results[0] = construct(caller, class, &params[0], &params[1..])?;
+                *abi_result(results, 0)? =
+                    construct(caller, class, abi_arg(params, 0)?, &params[1..])?;
                 Ok(())
             },
         )?;
@@ -531,8 +544,8 @@ pub(crate) fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
             FuncType::new(&engine, init_params, []),
             true,
             move |caller, params, _results| {
-                let payload = payload_array(caller, &params[0], "Error#constructor_init")?;
-                payload.set(&mut *caller, MESSAGE_SLOT, params[1])?;
+                let payload = payload_array(caller, abi_arg(params, 0)?, "Error#constructor_init")?;
+                payload.set(&mut *caller, MESSAGE_SLOT, *abi_arg(params, 1)?)?;
                 let name = name_string(caller, class)?;
                 payload.set(&mut *caller, NAME_SLOT, name)?;
                 for (i, own) in params[2..].iter().enumerate() {
@@ -551,7 +564,8 @@ pub(crate) fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         FuncType::new(&engine, [nullable_object.clone()], [ValType::I32]),
         true,
         move |caller, params, results| {
-            results[0] = Val::I32(is_error(caller, &params[0], &class_vtable)? as i32);
+            *abi_result(results, 0)? =
+                Val::I32(is_error(caller, abi_arg(params, 0)?, &class_vtable)? as i32);
             Ok(())
         },
     )?;
@@ -570,7 +584,8 @@ fn error_equals(
     params: &[Val],
     class: BuiltinErrorClass,
 ) -> wasmtime::Result<bool> {
-    let (Val::AnyRef(Some(a)), Val::AnyRef(Some(b))) = (&params[0], &params[1]) else {
+    let (Val::AnyRef(Some(a)), Val::AnyRef(Some(b))) = (abi_arg(params, 0)?, abi_arg(params, 1)?)
+    else {
         return Ok(false);
     };
     if Rooted::ref_eq(&*caller, a, b)? {
@@ -594,8 +609,8 @@ fn error_equals(
         return Ok(false);
     }
     for slot in 0..(OWN_SLOT_BASE + class.own_fields().len() as u32) {
-        if payload_units(caller, &params[0], slot, "Error#equals")?
-            != payload_units(caller, &params[1], slot, "Error#equals")?
+        if payload_units(caller, abi_arg(params, 0)?, slot, "Error#equals")?
+            != payload_units(caller, abi_arg(params, 1)?, slot, "Error#equals")?
         {
             return Ok(false);
         }

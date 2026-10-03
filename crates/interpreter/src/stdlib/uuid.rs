@@ -3,6 +3,7 @@
 //! Pure Rust host functions registered directly under the package name; the
 //! linker resolves user imports (`submilli:uuid#v4`, …) with no Wasm module.
 
+use crate::runtime::host::{abi_arg, abi_result};
 use wasmtime::{FuncType, HeapType, Linker, RefType, Val, ValType};
 
 use crate::runtime::StoreData;
@@ -73,7 +74,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         /* deterministic = */ false,
         |caller, _params, results| {
             let st = write_submilli_string_struct(caller, &::uuid::Uuid::new_v4().to_string())?;
-            results[0] = Val::AnyRef(Some(st.to_anyref()));
+            *abi_result(results, 0)? = Val::AnyRef(Some(st.to_anyref()));
             Ok(())
         },
     )?;
@@ -86,7 +87,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         /* deterministic = */ false,
         |caller, _params, results| {
             let st = write_submilli_string_struct(caller, &::uuid::Uuid::now_v7().to_string())?;
-            results[0] = Val::AnyRef(Some(st.to_anyref()));
+            *abi_result(results, 0)? = Val::AnyRef(Some(st.to_anyref()));
             Ok(())
         },
     )?;
@@ -99,8 +100,8 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         validate_ty,
         /* deterministic = */ true,
         |caller, params, results| {
-            let s = read_string_arg(&mut *caller, &params[0], "uuid.validate")?;
-            results[0] = Val::I32(i32::from(::uuid::Uuid::parse_str(&s).is_ok()));
+            let s = read_string_arg(&mut *caller, abi_arg(params, 0)?, "uuid.validate")?;
+            *abi_result(results, 0)? = Val::I32(i32::from(::uuid::Uuid::parse_str(&s).is_ok()));
             Ok(())
         },
     )?;

@@ -7,6 +7,7 @@
 //! embedder-facing transport traits live in [`transport`], the SSRF policy in
 //! [`policy`].
 
+use crate::runtime::host::{abi_arg, abi_result};
 mod declaration;
 pub mod policy;
 mod redirect_guard;
@@ -148,10 +149,15 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
             move |caller, params, results| {
                 let method = method.clone();
                 Box::pin(async move {
-                    let url = read_string_arg(&mut *caller, &params[0], "http (url)")?;
-                    results[0] =
-                        perform_request(caller, &method, &url, &Val::AnyRef(None), &params[1])
-                            .await?;
+                    let url = read_string_arg(&mut *caller, abi_arg(params, 0)?, "http (url)")?;
+                    *abi_result(results, 0)? = perform_request(
+                        caller,
+                        &method,
+                        &url,
+                        &Val::AnyRef(None),
+                        abi_arg(params, 1)?,
+                    )
+                    .await?;
                     Ok(())
                 })
             },
@@ -178,9 +184,15 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
             move |caller, params, results| {
                 let method = method.clone();
                 Box::pin(async move {
-                    let url = read_string_arg(&mut *caller, &params[0], "http (url)")?;
-                    results[0] =
-                        perform_request(caller, &method, &url, &params[1], &params[2]).await?;
+                    let url = read_string_arg(&mut *caller, abi_arg(params, 0)?, "http (url)")?;
+                    *abi_result(results, 0)? = perform_request(
+                        caller,
+                        &method,
+                        &url,
+                        abi_arg(params, 1)?,
+                        abi_arg(params, 2)?,
+                    )
+                    .await?;
                     Ok(())
                 })
             },
@@ -205,9 +217,17 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         /* deterministic = */ false,
         |caller, params, results| {
             Box::pin(async move {
-                let method = read_string_arg(&mut *caller, &params[0], "http.request (method)")?;
-                let url = read_string_arg(&mut *caller, &params[1], "http.request (url)")?;
-                results[0] = perform_request(caller, &method, &url, &params[2], &params[3]).await?;
+                let method =
+                    read_string_arg(&mut *caller, abi_arg(params, 0)?, "http.request (method)")?;
+                let url = read_string_arg(&mut *caller, abi_arg(params, 1)?, "http.request (url)")?;
+                *abi_result(results, 0)? = perform_request(
+                    caller,
+                    &method,
+                    &url,
+                    abi_arg(params, 2)?,
+                    abi_arg(params, 3)?,
+                )
+                .await?;
                 Ok(())
             })
         },
@@ -225,7 +245,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         /* deterministic = */ false,
         |caller, params, results| {
             Box::pin(async move {
-                results[0] = perform_download(caller, params).await?;
+                *abi_result(results, 0)? = perform_download(caller, params).await?;
                 Ok(())
             })
         },
@@ -565,10 +585,10 @@ async fn perform_download(
     caller: &mut Caller<'_, StoreData>,
     params: &[Val],
 ) -> wasmtime::Result<Val> {
-    let url = read_string_arg(&mut *caller, &params[0], "http.download (url)")?;
+    let url = read_string_arg(&mut *caller, abi_arg(params, 0)?, "http.download (url)")?;
     refuse_dot_segments(&url).map_err(|refusal| refusal.into_error("http.download"))?;
-    let guest_path = read_string_arg(&mut *caller, &params[1], "http.download (path)")?;
-    let options = read_download_options(caller, &params[2])?;
+    let guest_path = read_string_arg(&mut *caller, abi_arg(params, 1)?, "http.download (path)")?;
+    let options = read_download_options(caller, abi_arg(params, 2)?)?;
 
     let (host_str, url_path_str) = url_host_and_path(&url);
 
@@ -929,7 +949,7 @@ fn install_response_members(
         FuncType::new(engine, [receiver.clone()], []),
         /* deterministic = */ true,
         |caller, params, _results| {
-            let st = backing_receiver(caller, &params[0])?;
+            let st = backing_receiver(caller, abi_arg(params, 0)?)?;
             if matches!(st.field(&mut *caller, R_OK)?, Val::I32(ok) if ok != 0) {
                 return Ok(());
             }
@@ -949,7 +969,7 @@ fn install_response_members(
         FuncType::new(engine, [receiver], [string]),
         /* deterministic = */ true,
         |caller, params, results| {
-            let st = backing_receiver(caller, &params[0])?;
+            let st = backing_receiver(caller, abi_arg(params, 0)?)?;
             let (status, status_text, url) = read_response_status_line(caller, &st)?;
             let text = if status_text.is_empty() {
                 format!("Response({status}, {url})")
@@ -957,7 +977,7 @@ fn install_response_members(
                 format!("Response({status} {status_text}, {url})")
             };
             let out = write_submilli_string_struct(caller, &text)?;
-            results[0] = Val::AnyRef(Some(out.to_anyref()));
+            *abi_result(results, 0)? = Val::AnyRef(Some(out.to_anyref()));
             Ok(())
         },
     )?;
@@ -1014,7 +1034,7 @@ fn install_download_result_members(
         FuncType::new(engine, [receiver], [string]),
         /* deterministic = */ true,
         |caller, params, results| {
-            let st = backing_receiver(caller, &params[0])?;
+            let st = backing_receiver(caller, abi_arg(params, 0)?)?;
             let Val::F64(status_bits) = st.field(&mut *caller, D_STATUS)? else {
                 wasmtime::bail!("DownloadResult: status is not a number");
             };
@@ -1027,7 +1047,7 @@ fn install_download_result_members(
             let bytes_written = f64::from_bits(bytes_bits) as i64;
             let text = format!("Download({status}, {bytes_written} bytes -> {path})");
             let out = write_submilli_string_struct(caller, &text)?;
-            results[0] = Val::AnyRef(Some(out.to_anyref()));
+            *abi_result(results, 0)? = Val::AnyRef(Some(out.to_anyref()));
             Ok(())
         },
     )?;

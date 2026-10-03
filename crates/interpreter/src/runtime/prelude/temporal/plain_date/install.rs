@@ -1,3 +1,4 @@
+use crate::runtime::host::{abi_arg, abi_result};
 use jiff::civil;
 use wasmtime::{Caller, FuncType, HeapType, Linker, RefType, Val, ValType};
 
@@ -88,16 +89,16 @@ fn reg_plain_date_duration_op(
         ty,
         true,
         move |caller, params, results| {
-            let st = as_struct_val(caller, &params[0], &label)?;
+            let st = as_struct_val(caller, abi_arg(params, 0)?, &label)?;
             let date = plain_date_from_struct(caller, st, &label)?;
-            let span = read_duration_like(caller, &params[1], &intr, &label)?;
+            let span = read_duration_like(caller, abi_arg(params, 1)?, &intr, &label)?;
             let out = if add {
                 super::add(date, span)
             } else {
                 super::subtract(date, span)
             }
             .map_err(crate::runtime::host::range_error)?;
-            results[0] = make_plain_date(
+            *abi_result(results, 0)? = make_plain_date(
                 caller,
                 i32::from(out.year()),
                 i32::from(out.month()),
@@ -120,20 +121,20 @@ fn reg_plain_date_with(
         ty,
         true,
         |caller, params, results| {
-            let st = as_struct_val(caller, &params[0], "PlainDate.with")?;
+            let st = as_struct_val(caller, abi_arg(params, 0)?, "PlainDate.with")?;
             let (y, m, d) = merge_date(
                 (
                     st_i32(caller, st, 1, "PlainDate.with")?,
                     st_i32(caller, st, 2, "PlainDate.with")?,
                     st_i32(caller, st, 3, "PlainDate.with")?,
                 ),
-                object_i64_field(caller, &params[1], "year", "PlainDate.with")?,
-                object_i64_field(caller, &params[1], "month", "PlainDate.with")?,
-                object_i64_field(caller, &params[1], "day", "PlainDate.with")?,
+                object_i64_field(caller, abi_arg(params, 1)?, "year", "PlainDate.with")?,
+                object_i64_field(caller, abi_arg(params, 1)?, "month", "PlainDate.with")?,
+                object_i64_field(caller, abi_arg(params, 1)?, "day", "PlainDate.with")?,
                 "PlainDate.with",
             )?;
             let date = super::super::shared::y_m_d_date(y, m, d, "PlainDate.with")?;
-            results[0] = make_plain_date(
+            *abi_result(results, 0)? = make_plain_date(
                 caller,
                 i32::from(date.year()),
                 i32::from(date.month()),
@@ -158,13 +159,13 @@ fn reg_plain_date_pair_op(
         ty,
         true,
         move |caller, params, results| {
-            let a_st = as_struct_val(caller, &params[0], &label)?;
-            let b_st = as_struct_val(caller, &params[1], &label)?;
+            let a_st = as_struct_val(caller, abi_arg(params, 0)?, &label)?;
+            let b_st = as_struct_val(caller, abi_arg(params, 1)?, &label)?;
             let a = plain_date_from_struct(caller, a_st, &label)?;
             let b = plain_date_from_struct(caller, b_st, &label)?;
             let o = object_diff_options(
                 caller,
-                &params[2],
+                abi_arg(params, 2)?,
                 if until {
                     "PlainDate.until"
                 } else {
@@ -178,7 +179,7 @@ fn reg_plain_date_pair_op(
                 a.since(o.date(b))
                     .map_err(temporal_err("PlainDate.since"))?
             };
-            results[0] = make_duration(caller, &span)?;
+            *abi_result(results, 0)? = make_duration(caller, &span)?;
             Ok(())
         },
     )
@@ -195,8 +196,8 @@ fn reg_plain_date_to_plain_date_time(
         ty,
         true,
         |caller, params, results| {
-            let d = as_struct_val(caller, &params[0], "PlainDate.toPlainDateTime")?;
-            let maybe_t = params[1];
+            let d = as_struct_val(caller, abi_arg(params, 0)?, "PlainDate.toPlainDateTime")?;
+            let maybe_t = *abi_arg(params, 1)?;
             let (h, mi, s, ns) = if let Val::AnyRef(Some(_)) = maybe_t {
                 let t = as_struct_val(caller, &maybe_t, "PlainDate.toPlainDateTime")?;
                 (
@@ -211,7 +212,7 @@ fn reg_plain_date_to_plain_date_time(
             let y = st_i32(caller, d, 1, "PlainDate.toPlainDateTime")?;
             let m = st_i32(caller, d, 2, "PlainDate.toPlainDateTime")?;
             let day = st_i32(caller, d, 3, "PlainDate.toPlainDateTime")?;
-            results[0] = make_plain_date_time(caller, y, m, day, h, mi, s, ns)?;
+            *abi_result(results, 0)? = make_plain_date_time(caller, y, m, day, h, mi, s, ns)?;
             Ok(())
         },
     )
@@ -225,9 +226,9 @@ fn reg_plain_date_to_zoned(linker: &mut Linker<StoreData>, ty: FuncType) -> wasm
         ty,
         true,
         |caller, params, results| {
-            let st = as_struct_val(caller, &params[0], "PlainDate.toZonedDateTime")?;
+            let st = as_struct_val(caller, abi_arg(params, 0)?, "PlainDate.toZonedDateTime")?;
             let date = plain_date_from_struct(caller, st, "PlainDate.toZonedDateTime")?;
-            let (tz_id, time) = plain_date_to_zoned_arg(caller, &params[1])?;
+            let (tz_id, time) = plain_date_to_zoned_arg(caller, abi_arg(params, 1)?)?;
             let (tz, canonical_id) = super::super::zoned_date_time::resolve_time_zone(
                 caller,
                 &tz_id,
@@ -237,7 +238,7 @@ fn reg_plain_date_to_zoned(linker: &mut Linker<StoreData>, ty: FuncType) -> wasm
                 .to_datetime(time)
                 .to_zoned(tz)
                 .map_err(temporal_err("toZonedDateTime"))?;
-            results[0] = make_zoned_date_time(caller, &z, &canonical_id)?;
+            *abi_result(results, 0)? = make_zoned_date_time(caller, &z, &canonical_id)?;
             Ok(())
         },
     )
@@ -247,19 +248,15 @@ fn plain_date_to_zoned_arg(
     caller: &mut Caller<'_, StoreData>,
     arg: &Val,
 ) -> wasmtime::Result<(String, civil::Time)> {
-    if read_string_arg(caller, arg, "PlainDate.toZonedDateTime").is_ok() {
-        return Ok((
-            read_string_arg(caller, arg, "PlainDate.toZonedDateTime")?,
-            civil::Time::midnight(),
-        ));
+    if let Ok(time_zone) = read_string_arg(caller, arg, "PlainDate.toZonedDateTime") {
+        return Ok((time_zone, civil::Time::midnight()));
     }
     let tz_id = object_string_field(caller, arg, "timeZone", "PlainDate.toZonedDateTime")?
         .ok_or_else(|| {
             wasmtime::Error::msg("Temporal.PlainDate.toZonedDateTime: `timeZone` is required")
         })?;
     let time = match object_field(caller, arg, "plainTime")? {
-        Some(Val::AnyRef(Some(_))) => {
-            let t = object_field(caller, arg, "plainTime")?.expect("plainTime reread");
+        Some(t @ Val::AnyRef(Some(_))) => {
             let st = as_struct_val(caller, &t, "PlainDate.toZonedDateTime")?;
             plain_time_from_struct(caller, st, 0, "PlainDate.toZonedDateTime")?
         }

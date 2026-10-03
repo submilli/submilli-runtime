@@ -13,6 +13,7 @@
 //! auth injection, and refresh-on-`401` live in the embedder (submilli-server),
 //! keeping this crate free of its async/HTTP dependencies.
 
+use crate::runtime::host::{abi_arg, abi_result};
 use std::future::Future;
 use std::pin::Pin;
 
@@ -84,9 +85,11 @@ pub fn install_mcp_async(linker: &mut Linker<StoreData>) -> wasmtime::Result<()>
         /* deterministic = */ false,
         move |caller, params, results| {
             Box::pin(async move {
-                let server = read_string_arg(&mut *caller, &params[0], "mcp.call (server)")?;
-                let tool = read_string_arg(&mut *caller, &params[1], "mcp.call (tool)")?;
-                let args_json = read_string_arg(&mut *caller, &params[2], "mcp.call (args)")?;
+                let server =
+                    read_string_arg(&mut *caller, abi_arg(params, 0)?, "mcp.call (server)")?;
+                let tool = read_string_arg(&mut *caller, abi_arg(params, 1)?, "mcp.call (tool)")?;
+                let args_json =
+                    read_string_arg(&mut *caller, abi_arg(params, 2)?, "mcp.call (args)")?;
 
                 // Deny before any network bytes leave. One capability per server
                 // (`mcp.<server>`, known when the blueprint is written); the tool is
@@ -119,7 +122,7 @@ pub fn install_mcp_async(linker: &mut Linker<StoreData>) -> wasmtime::Result<()>
                 fuel::settle(&mut *caller, fuel::IO, text.len() as u64)?;
                 fuel::settle(&mut *caller, fuel::PARSE, text.len() as u64)?;
                 let st = write_submilli_string_struct(&mut *caller, &text)?;
-                results[0] = Val::AnyRef(Some(st.to_anyref()));
+                *abi_result(results, 0)? = Val::AnyRef(Some(st.to_anyref()));
                 Ok(())
             })
         },

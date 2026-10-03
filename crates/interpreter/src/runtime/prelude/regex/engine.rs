@@ -91,94 +91,64 @@ pub fn translate_js_pattern(pattern: &str, flags: &str) -> Result<TranslatedRege
         &[]
     } else {
         &[
-            (b'd', "[0-9]"),
-            (b'D', "[^0-9]"),
-            (b'w', "[A-Za-z0-9_]"),
-            (b'W', "[^A-Za-z0-9_]"),
-            (b's', "[ \\t\\r\\n\\x0B\\x0C]"),
-            (b'S', "[^ \\t\\r\\n\\x0B\\x0C]"),
+            (b'd', "0-9"),
+            (b'D', "^0-9"),
+            (b'w', "A-Za-z0-9_"),
+            (b'W', "^A-Za-z0-9_"),
+            (b's', " \\t\\r\\n\\x0B\\x0C"),
+            (b'S', "^ \\t\\r\\n\\x0B\\x0C"),
         ]
     };
 
-    let bytes = pattern.as_bytes();
-    let mut i = 0;
+    let mut chars = pattern.chars();
     let mut in_class = false;
-    while i < bytes.len() {
-        let b = bytes[i];
-        match b {
-            b'\\' if i + 1 < bytes.len() => {
-                let next = bytes[i + 1];
-                if !in_class && next.is_ascii_digit() && next != b'0' {
-                    // Inside a character class `\1` is a literal in both JS and regex.
+    while let Some(c) = chars.next() {
+        match c {
+            '\\' => {
+                let Some(escaped) = chars.next() else {
+                    translated.push(c);
+                    break;
+                };
+                if !in_class && ((escaped.is_ascii_digit() && escaped != '0') || escaped == 'k') {
                     return Err(TranslateError::Backreference);
                 }
-                if !in_class && next == b'k' {
-                    return Err(TranslateError::Backreference);
-                }
-                if let Some((_, repl)) = escape_rewrites.iter().find(|(c, _)| *c == next) {
-                    if in_class {
-                        // Strip outer `[` / `]` from the replacement
-                        // so we contribute to the surrounding class.
-                        let inner = &repl[1..repl.len() - 1];
-                        translated.push_str(inner);
-                    } else {
-                        translated.push_str(repl);
+                if let Some((_, replacement)) = escape_rewrites
+                    .iter()
+                    .find(|(byte, _)| char::from(*byte) == escaped)
+                {
+                    if !in_class {
+                        translated.push('[');
                     }
-                    i += 2;
+                    translated.push_str(replacement);
+                    if !in_class {
+                        translated.push(']');
+                    }
                     continue;
                 }
-                let escaped = char_at(pattern, i + 1);
-                // Without `u`, JS reads `\é` as `é` (an identity escape); the `regex`
-                // crate rejects escaping a non-ASCII character, so drop the backslash.
-                // With `u`, JS rejects it too, and the crate's error stands.
-                let is_identity_escape = !escaped.is_ascii() && !flag_set.has(FlagSet::U);
-                if !is_identity_escape {
+                if escaped.is_ascii() || flag_set.has(FlagSet::U) {
                     translated.push('\\');
                 }
                 translated.push(escaped);
-                i += 1 + escaped.len_utf8();
-                continue;
             }
-            b'[' if !in_class => {
+            '[' if !in_class => {
                 in_class = true;
-                translated.push('[');
-                i += 1;
-                continue;
-            }
-            b']' if in_class => {
-                in_class = false;
-                translated.push(']');
-                i += 1;
-                continue;
-            }
-            b'(' if !in_class && i + 1 < bytes.len() && bytes[i + 1] == b'?' => {
-                let third = bytes.get(i + 2).copied();
-                match third {
-                    Some(b'=' | b'!') => return Err(TranslateError::Lookahead),
-                    Some(b'<') => {
-                        let fourth = bytes.get(i + 3).copied();
-                        if fourth == Some(b'=') || fourth == Some(b'!') {
-                            return Err(TranslateError::Lookbehind);
-                        }
-                        translated.push('(');
-                        i += 1;
-                        continue;
-                    }
-                    _ => {
-                        translated.push('(');
-                        i += 1;
-                        continue;
-                    }
-                }
-            }
-            // Every byte the cases above inspect is ASCII; anything else is copied as
-            // the whole character it starts, so `/é/` stays `é` rather than two
-            // Latin-1 characters built from its UTF-8 bytes.
-            _ => {
-                let c = char_at(pattern, i);
                 translated.push(c);
-                i += c.len_utf8();
             }
+            ']' if in_class => {
+                in_class = false;
+                translated.push(c);
+            }
+            '(' if !in_class => {
+                let rest = chars.as_str();
+                if rest.starts_with("?=") || rest.starts_with("?!") {
+                    return Err(TranslateError::Lookahead);
+                }
+                if rest.starts_with("?<=") || rest.starts_with("?<!") {
+                    return Err(TranslateError::Lookbehind);
+                }
+                translated.push(c);
+            }
+            _ => translated.push(c),
         }
     }
 
@@ -186,15 +156,6 @@ pub fn translate_js_pattern(pattern: &str, flags: &str) -> Result<TranslatedRege
         pattern: translated,
         flags: flag_set,
     })
-}
-
-/// The character starting at byte `i`, which the scan in `translate_js_pattern`
-/// only ever positions on a character boundary.
-fn char_at(pattern: &str, i: usize) -> char {
-    pattern[i..]
-        .chars()
-        .next()
-        .expect("index is inside the pattern")
 }
 
 fn parse_flags(flags: &str) -> Result<FlagSet, TranslateError> {

@@ -6,6 +6,7 @@
 //! `struct.get` of the backing's size field and works unchanged on host-built
 //! `$MapBacking` instances, so it stays on the Wasm path.
 
+use crate::runtime::host::{abi_arg, abi_result};
 use wasmtime::{FuncType, HeapType, Linker, RefType, ValType};
 
 use crate::runtime::StoreData;
@@ -42,7 +43,8 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         true,
         |caller, params, results| {
             Box::pin(async move {
-                results[0] = super::get(caller, &params[0], &params[1]).await?;
+                *abi_result(results, 0)? =
+                    super::get(caller, abi_arg(params, 0)?, abi_arg(params, 1)?).await?;
                 Ok(())
             })
         },
@@ -58,7 +60,13 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         true,
         |caller, params, results| {
             Box::pin(async move {
-                results[0] = super::set(caller, &params[0], &params[1], &params[2]).await?;
+                *abi_result(results, 0)? = super::set(
+                    caller,
+                    abi_arg(params, 0)?,
+                    abi_arg(params, 1)?,
+                    abi_arg(params, 2)?,
+                )
+                .await?;
                 Ok(())
             })
         },
@@ -71,8 +79,8 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         true,
         |caller, params, results| {
             Box::pin(async move {
-                let r = super::has(caller, &params[0], &params[1]).await?;
-                results[0] = wasmtime::Val::I32(i32::from(r));
+                let r = super::has(caller, abi_arg(params, 0)?, abi_arg(params, 1)?).await?;
+                *abi_result(results, 0)? = wasmtime::Val::I32(i32::from(r));
                 Ok(())
             })
         },
@@ -85,8 +93,8 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         true,
         |caller, params, results| {
             Box::pin(async move {
-                let r = super::delete(caller, &params[0], &params[1]).await?;
-                results[0] = wasmtime::Val::I32(i32::from(r));
+                let r = super::delete(caller, abi_arg(params, 0)?, abi_arg(params, 1)?).await?;
+                *abi_result(results, 0)? = wasmtime::Val::I32(i32::from(r));
                 Ok(())
             })
         },
@@ -98,7 +106,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         ft(vec![obj.clone()], vec![]),
         true,
         |caller, params, _results| {
-            super::clear(caller, &params[0])?;
+            super::clear(caller, abi_arg(params, 0)?)?;
             Ok(())
         },
     )?;
@@ -109,7 +117,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         ft(vec![obj.clone()], vec![ValType::F64]),
         true,
         |caller, params, results| {
-            results[0] = super::size(caller, &params[0])?;
+            *abi_result(results, 0)? = super::size(caller, abi_arg(params, 0)?)?;
             Ok(())
         },
     )?;
@@ -122,8 +130,9 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         true,
         |caller, params, _results| {
             Box::pin(async move {
-                let f = closure::read_callback(caller, &params[1], "Map#forEach callback")?;
-                super::for_each(caller, &params[0], &f).await
+                let f =
+                    closure::read_callback(caller, abi_arg(params, 1)?, "Map#forEach callback")?;
+                super::for_each(caller, abi_arg(params, 0)?, &f).await
             })
         },
     )?;
@@ -135,7 +144,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         ft(vec![obj.clone()], vec![iter_ret.clone()]),
         true,
         |caller, params, results| {
-            results[0] = super::keys(caller, &params[0])?;
+            *abi_result(results, 0)? = super::keys(caller, abi_arg(params, 0)?)?;
             Ok(())
         },
     )?;
@@ -146,7 +155,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         ft(vec![obj.clone()], vec![iter_ret.clone()]),
         true,
         |caller, params, results| {
-            results[0] = super::values(caller, &params[0])?;
+            *abi_result(results, 0)? = super::values(caller, abi_arg(params, 0)?)?;
             Ok(())
         },
     )?;
@@ -158,7 +167,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
             ft(vec![obj.clone()], vec![iter_ret.clone()]),
             true,
             |caller, params, results| {
-                results[0] = super::entries(caller, &params[0])?;
+                *abi_result(results, 0)? = super::entries(caller, abi_arg(params, 0)?)?;
                 Ok(())
             },
         )?;
@@ -173,7 +182,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         true,
         |caller, params, results| {
             Box::pin(async move {
-                results[0] = super::construct(caller, &params[0]).await?;
+                *abi_result(results, 0)? = super::construct(caller, abi_arg(params, 0)?).await?;
                 Ok(())
             })
         },

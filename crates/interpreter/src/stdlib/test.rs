@@ -17,6 +17,8 @@
 //! None of these are gated (no `check_security`): they only manipulate the
 //! in-store test ledger.
 
+use crate::runtime::host::invariant_trap;
+use crate::runtime::host::{abi_arg, abi_result};
 use wasmtime::{AsContextMut, Caller, FuncType, HeapType, Linker, RefType, Val, ValType};
 
 use crate::runtime::StoreData;
@@ -107,9 +109,17 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         FuncType::new(&engine, [string.clone()], []),
         /* deterministic = */ true,
         |caller, params, _results| {
-            let description =
-                read_string_arg(&mut *caller, &params[0], "test.label (description)")?;
-            caller.data().test_labels.borrow_mut().push(description);
+            let description = read_string_arg(
+                &mut *caller,
+                abi_arg(params, 0)?,
+                "test.label (description)",
+            )?;
+            caller
+                .data()
+                .test_labels
+                .try_borrow_mut()
+                .map_err(|_| invariant_trap("test: labels already borrowed"))?
+                .push(description);
             Ok(())
         },
     )?;
@@ -131,9 +141,12 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         /* deterministic = */ true,
         |caller, params, results| {
             Box::pin(async move {
-                let expected =
-                    read_string_arg(&mut *caller, &params[1], "expectException (errorType)")?;
-                let closure = closure::read(caller, &params[0], "expectException")?;
+                let expected = read_string_arg(
+                    &mut *caller,
+                    abi_arg(params, 1)?,
+                    "expectException (errorType)",
+                )?;
+                let closure = closure::read(caller, abi_arg(params, 0)?, "expectException")?;
                 match closure.call_void_args(caller, &[]).await {
                     Ok(()) => {
                         let detail = if expected.is_empty() {
@@ -149,7 +162,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
                         let error = take_thrown_error(caller)?;
                         let actual = error_name(caller, &error)?;
                         if expected.is_empty() || actual == expected {
-                            results[0] = error;
+                            *abi_result(results, 0)? = error;
                             Ok(())
                         } else {
                             Err(wasmtime::Error::msg(format!(
@@ -174,7 +187,7 @@ fn take_thrown_error(caller: &mut Caller<'_, StoreData>) -> wasmtime::Result<Val
         .as_context_mut()
         .take_pending_exception()
         .ok_or_else(|| {
-            wasmtime::Error::msg("expectException: throw completed without a pending exception")
+            invariant_trap("expectException: throw completed without a pending exception")
         })?;
     exn.field(&mut *caller, 0)
 }

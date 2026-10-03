@@ -1,4 +1,5 @@
 //! Contained workspace navigation and anchor-based editing, gated by existing fs grants.
+use crate::runtime::host::{abi_arg, abi_result};
 mod budget;
 pub mod declaration;
 mod patch;
@@ -81,7 +82,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> Result<()> {
             name == "diffText",
             move |caller, params, results| {
                 let mut budget = Budget::new(caller);
-                results[0] = invoke(caller, &mut budget, name, params)?;
+                *abi_result(results, 0)? = invoke(caller, &mut budget, name, params)?;
                 Ok(())
             },
         )?;
@@ -95,26 +96,26 @@ fn invoke(
     params: &[Val],
 ) -> Result<Val> {
     if op == "diffText" {
-        let a = units(caller, budget, &params[0])?;
-        let b = units(caller, budget, &params[1])?;
+        let a = units(caller, budget, abi_arg(params, 0)?)?;
+        let b = units(caller, budget, abi_arg(params, 1)?)?;
         let result = diff(caller, budget, &a, &b)?;
         return Ok(Val::AnyRef(Some(
             write_submilli_string_struct_units(caller, &result)?.to_anyref(),
         )));
     }
-    let first = argument(caller, budget, &params[0])?;
+    let first = argument(caller, budget, abi_arg(params, 0)?)?;
     let result = match op {
-        "search" => walk::search(caller, budget, &first, &params[1])?,
+        "search" => walk::search(caller, budget, &first, abi_arg(params, 1)?)?,
         "glob" => walk::glob(caller, budget, &first)?,
         "tree" => walk::tree(
             caller,
             budget,
             &normalize(&first)?,
-            integer(&params[1], "depth", 0)?,
+            integer(abi_arg(params, 1)?, "depth", 0)?,
         )?,
         "read" => read_window(caller, budget, &normalize(&first)?, params)?,
         "diffFiles" => {
-            let second = argument(caller, budget, &params[1])?;
+            let second = argument(caller, budget, abi_arg(params, 1)?)?;
             let a = read_file(caller, budget, &normalize(&first)?, op)?;
             let b = read_file(caller, budget, &normalize(&second)?, op)?;
             budget.charge(caller, (a.len() + b.len()).saturating_mul(2))?;
@@ -131,7 +132,11 @@ fn invoke(
         "edit" | "insertAt" | "applyPatch" => {
             return mutate(caller, budget, &normalize(&first)?, op, params);
         }
-        _ => unreachable!("registered code operation"),
+        _ => {
+            return Err(crate::runtime::host::invariant_trap(
+                "code: invalid registered operation",
+            ));
+        }
     };
     encode(caller, budget, &result)
 }
@@ -147,8 +152,8 @@ fn read_window(
     path: &str,
     params: &[Val],
 ) -> Result<Value> {
-    let start = integer(&params[1], "offset", 1)? - 1;
-    let limit = integer(&params[2], "limit", 1)?;
+    let start = integer(abi_arg(params, 1)?, "offset", 1)? - 1;
+    let limit = integer(abi_arg(params, 2)?, "limit", 1)?;
     let source = read_file(caller, budget, path, "read")?;
     budget.charge(
         caller,
@@ -187,11 +192,11 @@ fn mutate(
         "edit" => prepare_edit(caller, budget, &original, params)?,
         "insertAt" => text::insert(
             &original,
-            integer(&params[1], "line", 1)?,
-            &argument(caller, budget, &params[2])?,
+            integer(abi_arg(params, 1)?, "line", 1)?,
+            &argument(caller, budget, abi_arg(params, 2)?)?,
         )?,
         "applyPatch" => {
-            let patch = argument(caller, budget, &params[1])?;
+            let patch = argument(caller, budget, abi_arg(params, 1)?)?;
             budget.charge(caller, patch.len().saturating_mul(32))?;
             // Each hunk is located by scanning the original.
             fuel::charge(
@@ -202,7 +207,11 @@ fn mutate(
             fuel::charge(&mut *caller, fuel::PARSE, patch.len() as u64)?;
             patch::apply(&original, &patch)?
         }
-        _ => unreachable!(),
+        _ => {
+            return Err(crate::runtime::host::invariant_trap(
+                "code: invalid registered operation",
+            ));
+        }
     };
     budget.check_size(change.text.len())?;
     let success = change.diagnostics.is_empty();
@@ -251,8 +260,8 @@ fn prepare_edit(
     original: &str,
     params: &[Val],
 ) -> Result<text::Edit> {
-    let old = argument(caller, budget, &params[1])?;
-    let new = argument(caller, budget, &params[2])?;
+    let old = argument(caller, budget, abi_arg(params, 1)?)?;
+    let new = argument(caller, budget, abi_arg(params, 2)?)?;
     // Naive substring search: every position against the whole needle.
     fuel::charge(
         &mut *caller,
@@ -263,7 +272,11 @@ fn prepare_edit(
         bail!("code.edit: oldString must not be empty; use insertAt");
     }
     let matches = original.match_indices(&old).count();
-    let selected = if params[3].unwrap_i32() != 0 {
+    let selected = if (*abi_arg(params, 3)?)
+        .i32()
+        .ok_or_else(|| crate::runtime::host::invariant_trap("code ABI: expected i32"))?
+        != 0
+    {
         matches
     } else {
         usize::from(matches > 0)
@@ -294,8 +307,11 @@ fn prepare_edit(
         original,
         &old,
         &new,
-        params[3].unwrap_i32() != 0,
-        integer(&params[4], "nearLine", 0)?,
+        (*abi_arg(params, 3)?)
+            .i32()
+            .ok_or_else(|| crate::runtime::host::invariant_trap("code ABI: expected i32"))?
+            != 0,
+        integer(abi_arg(params, 4)?, "nearLine", 0)?,
         maximum,
     )
 }
@@ -378,7 +394,9 @@ fn diff(
     Ok(result)
 }
 fn integer(val: &Val, name: &str, min: usize) -> Result<usize> {
-    let n = val.unwrap_f64();
+    let n = val
+        .f64()
+        .ok_or_else(|| crate::runtime::host::invariant_trap("code ABI: expected f64"))?;
     if !n.is_finite() || n.fract() != 0.0 || n < min as f64 || n > u32::MAX as f64 {
         bail!(
             "code: {name} must be an integer between {min} and {}",

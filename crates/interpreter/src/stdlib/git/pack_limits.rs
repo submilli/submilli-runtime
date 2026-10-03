@@ -399,14 +399,34 @@ fn inflate_entry(
         let status = decoder
             .decompress(available, &mut output, flate2::FlushDecompress::None)
             .map_err(|_| invalid("invalid compressed pack object"))?;
-        let consumed = (decoder.total_in() - previous_in) as usize;
+        let consumed = usize::try_from(
+            decoder
+                .total_in()
+                .checked_sub(previous_in)
+                .ok_or_else(|| invalid("invalid compressed offset"))?,
+        )
+        .map_err(|_| invalid("compressed size overflow"))?;
+        if consumed > available.len() {
+            return Err(invalid("invalid compressed input size"));
+        }
         input.consume(consumed);
         if decoder.total_out() > expected {
             return Err(invalid("pack object exceeds declared inflated size"));
         }
-        let written = (decoder.total_out() - previous_out) as usize;
-        let inflated = output.get(..written).unwrap_or_default();
-        prefix.extend_from_slice(inflated.get(..20 - prefix.len()).unwrap_or(inflated));
+        let written = usize::try_from(
+            decoder
+                .total_out()
+                .checked_sub(previous_out)
+                .ok_or_else(|| invalid("invalid inflated offset"))?,
+        )
+        .map_err(|_| invalid("inflated size overflow"))?;
+        let inflated = output
+            .get(..written)
+            .ok_or_else(|| invalid("invalid inflated output size"))?;
+        let room = 20usize
+            .checked_sub(prefix.len())
+            .ok_or_else(|| invalid("invalid delta prefix length"))?;
+        prefix.extend_from_slice(&inflated[..inflated.len().min(room)]);
         if let Some(hasher) = &mut hasher {
             hasher.update(inflated);
         }

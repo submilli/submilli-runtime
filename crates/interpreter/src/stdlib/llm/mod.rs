@@ -22,6 +22,7 @@
 //! the filter context, not in an error, not in a log. The context carries
 //! `model` and `prompt_count` — the numbers, never the payload.
 
+use crate::runtime::host::{abi_arg, abi_result};
 pub mod declaration;
 
 use std::sync::Arc;
@@ -111,13 +112,15 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         /* deterministic = */ false,
         |caller, params, results| {
             Box::pin(async move {
-                let model = read_string_arg(&mut *caller, &params[0], "llm.call (model)")?;
-                let prompt = read_string_arg(&mut *caller, &params[1], "llm.call (prompt)")?;
-                let schema = read_optional_string(caller, &params[2], "llm.call (schema)")?;
+                let model = read_string_arg(&mut *caller, abi_arg(params, 0)?, "llm.call (model)")?;
+                let prompt =
+                    read_string_arg(&mut *caller, abi_arg(params, 1)?, "llm.call (prompt)")?;
+                let schema =
+                    read_optional_string(caller, abi_arg(params, 2)?, "llm.call (schema)")?;
                 let typed = schema.is_some();
                 let outcomes = dispatch(caller, "call", &model, vec![prompt], schema).await?;
                 let outcome = first_outcome(&model, outcomes)?;
-                results[0] = if typed {
+                *abi_result(results, 0)? = if typed {
                     structured_value(caller, "llm.call", outcome)?
                 } else {
                     build_completion(caller, outcome)?
@@ -144,9 +147,11 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         /* deterministic = */ false,
         |caller, params, results| {
             Box::pin(async move {
-                let model = read_string_arg(&mut *caller, &params[0], "llm.batch (model)")?;
-                let prompts = read_prompts(caller, &params[1])?;
-                let schema = read_optional_string(caller, &params[2], "llm.batch (schema)")?;
+                let model =
+                    read_string_arg(&mut *caller, abi_arg(params, 0)?, "llm.batch (model)")?;
+                let prompts = read_prompts(caller, abi_arg(params, 1)?)?;
+                let schema =
+                    read_optional_string(caller, abi_arg(params, 2)?, "llm.batch (schema)")?;
                 let typed = schema.is_some();
                 let outcomes = dispatch(caller, "batch", &model, prompts, schema).await?;
                 let mut built = Vec::with_capacity(outcomes.len());
@@ -157,7 +162,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
                         build_completion(caller, outcome)?
                     });
                 }
-                results[0] = build_array(caller, built)?;
+                *abi_result(results, 0)? = build_array(caller, built)?;
                 Ok(())
             })
         },
@@ -171,7 +176,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         /* deterministic = */ false,
         |caller, _params, results| {
             Box::pin(async move {
-                results[0] = models(caller).await?;
+                *abi_result(results, 0)? = models(caller).await?;
                 Ok(())
             })
         },
