@@ -5,6 +5,7 @@
 //! (the dispatch may run guest code for user classes), then handed to the
 //! embedder's policy engine.
 
+use crate::runtime::host::abi_arg;
 use wasmtime::{FuncType, HeapType, Linker, RefType, Val, ValType};
 
 use crate::runtime::StoreData;
@@ -76,12 +77,16 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         /* deterministic = */ false,
         |caller, params, _results| {
             Box::pin(async move {
-                let capability =
-                    read_string_arg(&mut *caller, &params[0], "security.check (capability)")?;
-                if matches!(params[1], Val::AnyRef(None)) {
+                let capability = read_string_arg(
+                    &mut *caller,
+                    abi_arg(params, 0)?,
+                    "security.check (capability)",
+                )?;
+                if matches!(*abi_arg(params, 1)?, Val::AnyRef(None)) {
                     wasmtime::bail!("security.check: context must not be null");
                 }
-                let json_val = dispatch_vtable_slot(caller, &params[1], TO_JSON_SLOT, &[]).await?;
+                let json_val =
+                    dispatch_vtable_slot(caller, abi_arg(params, 1)?, TO_JSON_SLOT, &[]).await?;
                 let context_json =
                     read_string_arg(&mut *caller, &json_val, "security.check (context)")?;
                 let context: serde_json::Value =

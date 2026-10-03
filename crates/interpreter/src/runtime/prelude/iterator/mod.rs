@@ -16,6 +16,7 @@
 //! that reads the key/value at a position, plus a `payload` carrying its state
 //! (a live ref it re-reads each step, or a snapshot captured up front).
 
+use crate::runtime::host::{abi_arg, abi_result};
 use wasmtime::{
     ArrayRef, ArrayRefPre, Caller, FieldType, Finality, Func, FuncType, HeapType, Mutability,
     RefType, Rooted, StorageType, StructRef, StructRefPre, StructType, Val, ValType,
@@ -403,7 +404,7 @@ fn string_step(
     params: &[Val],
     results: &mut [Val],
 ) -> wasmtime::Result<()> {
-    let cursor = as_struct(caller, &params[0], "string iterator env")?;
+    let cursor = as_struct(caller, abi_arg(params, 0)?, "string iterator env")?;
     let Val::I32(pos) = cursor.field(&mut *caller, 0)? else {
         return Err(wasmtime::Error::msg(
             "string iterator: position is not an i32",
@@ -417,7 +418,7 @@ fn string_step(
     };
     let len = backing.len(&mut *caller)? as i32;
     if pos >= len {
-        results[0] = iter_done(caller)?;
+        *abi_result(results, 0)? = iter_done(caller)?;
         return Ok(());
     }
     let unit_at = |caller: &mut Caller<'_, StoreData>, i: i32| -> wasmtime::Result<u16> {
@@ -437,7 +438,7 @@ fn string_step(
     let advance = units.len() as i32;
     let st = crate::runtime::host::write_submilli_string_struct_units(caller, &units)?;
     cursor.set_field(&mut *caller, 0, Val::I32(pos + advance))?;
-    results[0] = iter_yield(caller, Val::AnyRef(Some(st.to_anyref())))?;
+    *abi_result(results, 0)? = iter_yield(caller, Val::AnyRef(Some(st.to_anyref())))?;
     Ok(())
 }
 
@@ -463,7 +464,7 @@ fn make_cursor(caller: &mut Caller<'_, StoreData>, payload: Val) -> wasmtime::Re
     Ok(Val::AnyRef(Some(st.to_anyref())))
 }
 
-/// The `next` step under the closure ABI: `params[0]` is the cursor. Reads the
+/// The `next` step under the closure ABI: `*abi_arg(params, 0)?` is the cursor. Reads the
 /// pair at the current position via `step`, projects it for `kind`, advances,
 /// and yields — or returns `{done:true}` at the end.
 fn index_step(
@@ -473,7 +474,7 @@ fn index_step(
     kind: IterKind,
     step: IndexStep,
 ) -> wasmtime::Result<()> {
-    let cursor = as_struct(caller, &params[0], "index iterator env")?;
+    let cursor = as_struct(caller, abi_arg(params, 0)?, "index iterator env")?;
     let Val::I32(pos) = cursor.field(&mut *caller, 0)? else {
         return Err(wasmtime::Error::msg(
             "index iterator: position is not an i32",
@@ -481,7 +482,7 @@ fn index_step(
     };
     let payload = cursor.field(&mut *caller, 1)?;
     let Some((key, value)) = step(caller, &payload, pos)? else {
-        results[0] = iter_done(caller)?;
+        *abi_result(results, 0)? = iter_done(caller)?;
         return Ok(());
     };
     let yielded = match kind {
@@ -493,7 +494,7 @@ fn index_step(
         }
     };
     cursor.set_field(&mut *caller, 0, Val::I32(pos + 1))?;
-    results[0] = iter_yield(caller, yielded)?;
+    *abi_result(results, 0)? = iter_yield(caller, yielded)?;
     Ok(())
 }
 

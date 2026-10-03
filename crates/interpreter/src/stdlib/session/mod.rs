@@ -12,6 +12,7 @@
 //! Keys and payloads stay UTF-16 code units from the guest `$string` to the
 //! trait and back — see [`value`] for why.
 
+use crate::runtime::host::{abi_arg, abi_result};
 mod cursor;
 pub mod declaration;
 pub(crate) mod value;
@@ -73,18 +74,18 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         /* deterministic = */ false,
         |caller, params, results| {
             Box::pin(async move {
-                let key = read_key(caller, &params[0], "get")?;
+                let key = read_key(caller, abi_arg(params, 0)?, "get")?;
                 gate(caller, "session.read", &key)?;
                 let store = provider(caller, "get")?;
                 let Some(payload) = store.get(&key).map_err(|e| trap(&e))? else {
-                    results[0] = Val::AnyRef(None);
+                    *abi_result(results, 0)? = Val::AnyRef(None);
                     return Ok(());
                 };
                 // Read from the store (code units, two bytes each), then
                 // parsed back into values.
                 fuel::charge(&mut *caller, fuel::IO, 2 * payload.len() as u64)?;
                 fuel::charge(&mut *caller, fuel::PARSE, payload.len() as u64)?;
-                results[0] = value::deserialize(caller, &payload)?;
+                *abi_result(results, 0)? = value::deserialize(caller, &payload)?;
                 Ok(())
             })
         },
@@ -98,10 +99,11 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         /* deterministic = */ false,
         |caller, params, results| {
             Box::pin(async move {
-                let key = read_key(caller, &params[0], "has")?;
+                let key = read_key(caller, abi_arg(params, 0)?, "has")?;
                 gate(caller, "session.read", &key)?;
                 let store = provider(caller, "has")?;
-                results[0] = Val::I32(i32::from(store.has(&key).map_err(|e| trap(&e))?));
+                *abi_result(results, 0)? =
+                    Val::I32(i32::from(store.has(&key).map_err(|e| trap(&e))?));
                 Ok(())
             })
         },
@@ -115,11 +117,11 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         /* deterministic = */ false,
         |caller, params, _results| {
             Box::pin(async move {
-                let key = read_key(caller, &params[0], "set")?;
+                let key = read_key(caller, abi_arg(params, 0)?, "set")?;
                 gate(caller, "session.write", &key)?;
                 // Serialization runs before the provider is consulted: a value
                 // with no JSON form must leave the previous entry intact.
-                let payload = value::serialize(caller, &params[1]).await?;
+                let payload = value::serialize(caller, abi_arg(params, 1)?).await?;
                 // Written to the store: code units, two bytes each.
                 fuel::charge(&mut *caller, fuel::IO, 2 * payload.len() as u64)?;
                 let store = provider(caller, "set")?;
@@ -136,10 +138,11 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         /* deterministic = */ false,
         |caller, params, results| {
             Box::pin(async move {
-                let key = read_key(caller, &params[0], "remove")?;
+                let key = read_key(caller, abi_arg(params, 0)?, "remove")?;
                 gate(caller, "session.remove", &key)?;
                 let store = provider(caller, "remove")?;
-                results[0] = Val::I32(i32::from(store.remove(&key).map_err(|e| trap(&e))?));
+                *abi_result(results, 0)? =
+                    Val::I32(i32::from(store.remove(&key).map_err(|e| trap(&e))?));
                 Ok(())
             })
         },
@@ -157,7 +160,12 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         ),
         /* deterministic = */ false,
         |caller, params, results| {
-            results[0] = list(caller, &params[0], &params[1], &params[2])?;
+            *abi_result(results, 0)? = list(
+                caller,
+                abi_arg(params, 0)?,
+                abi_arg(params, 1)?,
+                abi_arg(params, 2)?,
+            )?;
             Ok(())
         },
     )?;
@@ -431,7 +439,14 @@ fn provider(
 /// a caller cannot tell the two apart by the shape of the failure. No variant
 /// names a key, so the message passes through whole.
 fn cursor_trap(error: cursor::CursorError) -> wasmtime::Error {
-    crate::runtime::host::type_error(error.to_string())
+    match error {
+        cursor::CursorError::Internal(_) => {
+            wasmtime::Error::new(wasmtime::Trap::UnreachableCodeReached).context(error.to_string())
+        }
+        cursor::CursorError::Malformed
+        | cursor::CursorError::PrefixMismatch
+        | cursor::CursorError::NoEntropy => crate::runtime::host::type_error(error.to_string()),
+    }
 }
 
 /// Every store failure reaches the guest as a catchable error. The `Display`

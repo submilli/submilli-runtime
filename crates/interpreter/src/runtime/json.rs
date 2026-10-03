@@ -4,6 +4,7 @@
 //! `serde_json`-parses the source string and returns the normal
 //! `(ref null $Object)` representation used by `unknown`.
 
+use crate::runtime::host::{abi_arg, abi_result};
 use std::collections::BTreeMap;
 
 use wasmtime::{
@@ -47,7 +48,7 @@ pub(super) fn install_json_module(
         ty,
         /* deterministic = */ true,
         move |caller, params, results| -> wasmtime::Result<()> {
-            let s = read_string_arg(&mut *caller, &params[0], "json.parse")?;
+            let s = read_string_arg(&mut *caller, abi_arg(params, 0)?, "json.parse")?;
             fuel::charge(&mut *caller, fuel::PARSE, s.len() as u64)?;
             // Invalid JSON raises a catchable SyntaxError carrying serde's
             // position/expectation detail, rather than trapping uncatchably.
@@ -64,7 +65,7 @@ pub(super) fn install_json_module(
                 }
             })?;
             let allocator = JsonUnknownAllocator::new(&mut *caller)?;
-            results[0] = allocator.allocate(&mut *caller, &value)?;
+            *abi_result(results, 0)? = allocator.allocate(&mut *caller, &value)?;
             Ok(())
         },
     )?;
@@ -87,12 +88,12 @@ pub(super) fn install_json_module(
         escape_ty,
         /* deterministic = */ true,
         |caller, params, results| -> wasmtime::Result<()> {
-            let s = read_string_arg(&mut *caller, &params[0], "json.stringify")?;
+            let s = read_string_arg(&mut *caller, abi_arg(params, 0)?, "json.stringify")?;
             fuel::charge(&mut *caller, fuel::SCAN, s.len() as u64)?;
             let encoded = serde_json::to_string(&s)
                 .map_err(|e| wasmtime::Error::msg(format!("JSON.stringify: {e}")))?;
             let raw = write_submilli_string(&mut *caller, &encoded)?;
-            results[0] = Val::AnyRef(Some(raw.to_anyref()));
+            *abi_result(results, 0)? = Val::AnyRef(Some(raw.to_anyref()));
             Ok(())
         },
     )?;
@@ -109,8 +110,12 @@ pub(super) fn install_json_module(
         pretty_number_ty,
         /* deterministic = */ true,
         |caller, params, results| -> wasmtime::Result<()> {
-            let json = read_string_arg(&mut *caller, &params[0], "json.stringifyPrettyNumber")?;
-            let spaces = match params[1] {
+            let json = read_string_arg(
+                &mut *caller,
+                abi_arg(params, 0)?,
+                "json.stringifyPrettyNumber",
+            )?;
+            let spaces = match *abi_arg(params, 1)? {
                 Val::F64(bits) => stringify_space_from_number(f64::from_bits(bits)),
                 ref other => {
                     wasmtime::bail!("json.stringifyPrettyNumber expects f64, got {other:?}")
@@ -119,7 +124,7 @@ pub(super) fn install_json_module(
             fuel::charge(&mut *caller, fuel::PARSE, json.len() as u64)?;
             let encoded = pretty_print_json(&json, spaces.as_bytes())?;
             let raw = write_submilli_string(&mut *caller, &encoded)?;
-            results[0] = Val::AnyRef(Some(raw.to_anyref()));
+            *abi_result(results, 0)? = Val::AnyRef(Some(raw.to_anyref()));
             Ok(())
         },
     )?;
@@ -136,13 +141,21 @@ pub(super) fn install_json_module(
         pretty_string_ty,
         /* deterministic = */ true,
         |caller, params, results| -> wasmtime::Result<()> {
-            let json = read_string_arg(&mut *caller, &params[0], "json.stringifyPrettyString")?;
-            let indent = read_string_arg(&mut *caller, &params[1], "json.stringifyPrettyString")?;
+            let json = read_string_arg(
+                &mut *caller,
+                abi_arg(params, 0)?,
+                "json.stringifyPrettyString",
+            )?;
+            let indent = read_string_arg(
+                &mut *caller,
+                abi_arg(params, 1)?,
+                "json.stringifyPrettyString",
+            )?;
             let indent = first_chars(&indent, 10);
             fuel::charge(&mut *caller, fuel::PARSE, json.len() as u64)?;
             let encoded = pretty_print_json(&json, indent.as_bytes())?;
             let raw = write_submilli_string(&mut *caller, &encoded)?;
-            results[0] = Val::AnyRef(Some(raw.to_anyref()));
+            *abi_result(results, 0)? = Val::AnyRef(Some(raw.to_anyref()));
             Ok(())
         },
     )?;
@@ -161,14 +174,15 @@ pub(super) fn install_json_module(
         /* deterministic = */ true,
         |mut caller, params, results| {
             Box::pin(async move {
-                let package = read_string_arg(caller, &params[0], "json.stringifyTypedObject")?;
+                let package =
+                    read_string_arg(caller, abi_arg(params, 0)?, "json.stringifyTypedObject")?;
                 let type_id = crate::TypeInfoId(
-                    params[1]
+                    (*abi_arg(params, 1)?)
                         .i32()
                         .ok_or_else(|| wasmtime::Error::msg("json.stringifyTypedObject type id"))?
                         as u32,
                 );
-                let value = match &params[2] {
+                let value = match abi_arg(params, 2)? {
                     Val::AnyRef(Some(any)) => any.unwrap_struct(&mut caller)?,
                     Val::AnyRef(None) => {
                         return Err(wasmtime::Error::msg(
@@ -182,10 +196,10 @@ pub(super) fn install_json_module(
                     }
                 };
                 let intr = intrinsic_types(&mut *caller)?;
-                let json = if contains_dynamic_object(caller, &params[2], &intr, 0)? {
+                let json = if contains_dynamic_object(caller, abi_arg(params, 2)?, &intr, 0)? {
                     let serialized = crate::runtime::prelude::vtable::object_to_json(
                         caller,
-                        &params[2],
+                        abi_arg(params, 2)?,
                         &intr.raw_string,
                         &intr.string,
                     )
@@ -195,7 +209,7 @@ pub(super) fn install_json_module(
                     stringify_typed_object(caller, &package, type_id, value)?
                 };
                 let raw = write_submilli_string(&mut caller, &json)?;
-                results[0] = Val::AnyRef(Some(raw.to_anyref()));
+                *abi_result(results, 0)? = Val::AnyRef(Some(raw.to_anyref()));
                 Ok(())
             })
         },
@@ -541,7 +555,10 @@ pub(crate) fn boxed_bool(
     val: Val,
 ) -> wasmtime::Result<bool> {
     let s = boxed_struct(ctx, val, "boolean")?;
-    Ok(s.field(&mut *ctx, 1)?.i32().unwrap_or_default() != 0)
+    Ok(s.field(&mut *ctx, 1)?
+        .i32()
+        .ok_or_else(|| crate::runtime::host::invariant_trap("JSON ABI: expected boolean field"))?
+        != 0)
 }
 
 pub(crate) fn boxed_number(

@@ -11,6 +11,7 @@
 //! `externref`s; the iterators are closable (`for…of` releases the OS handle
 //! on every loop exit) and GC reclaim is the backstop.
 
+use crate::runtime::host::{abi_arg, abi_result};
 pub mod declaration;
 pub mod handles;
 
@@ -212,7 +213,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         FuncType::new(&engine, [], [ValType::F64]),
         /* deterministic = */ true,
         |caller, _params, results| {
-            results[0] = Val::F64((caller.data().fs_max_read_size as f64).to_bits());
+            *abi_result(results, 0)? = Val::F64((caller.data().fs_max_read_size as f64).to_bits());
             Ok(())
         },
     )?;
@@ -224,7 +225,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         FuncType::new(&engine, [], [nullable_object.clone()]),
         /* deterministic = */ true,
         |caller, _params, results| {
-            results[0] = build_info(caller)?;
+            *abi_result(results, 0)? = build_info(caller)?;
             Ok(())
         },
     )?;
@@ -236,7 +237,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         FuncType::new(&engine, [string.clone()], [ValType::I32]),
         /* deterministic = */ false,
         |caller, params, results| {
-            let path = read_string_arg(&mut *caller, &params[0], "fs.exists")?;
+            let path = read_string_arg(&mut *caller, abi_arg(params, 0)?, "fs.exists")?;
             gate(
                 &mut *caller,
                 "fs.stat",
@@ -256,7 +257,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
                 Err(ContainError::Escape | ContainError::Io(_)) => false,
                 Err(e) => return Err(contain_trap("fs.exists", &path, &e)),
             };
-            results[0] = Val::I32(i32::from(found));
+            *abi_result(results, 0)? = Val::I32(i32::from(found));
             Ok(())
         },
     )?;
@@ -268,7 +269,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         FuncType::new(&engine, [string.clone()], [ValType::F64]),
         /* deterministic = */ false,
         |caller, params, results| {
-            let path = read_string_arg(&mut *caller, &params[0], "fs.size")?;
+            let path = read_string_arg(&mut *caller, abi_arg(params, 0)?, "fs.size")?;
             gate(
                 &mut *caller,
                 "fs.stat",
@@ -281,7 +282,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
             if meta.is_dir() {
                 wasmtime::bail!("fs.size {}: path is a directory", path);
             }
-            results[0] = Val::F64((meta.len() as f64).to_bits());
+            *abi_result(results, 0)? = Val::F64((meta.len() as f64).to_bits());
             Ok(())
         },
     )?;
@@ -293,13 +294,13 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         FuncType::new(&engine, [string.clone()], [nullable_object.clone()]),
         /* deterministic = */ false,
         |caller, params, results| {
-            let path = read_string_arg(&mut *caller, &params[0], "fs.stat")?;
+            let path = read_string_arg(&mut *caller, abi_arg(params, 0)?, "fs.stat")?;
             gate(
                 &mut *caller,
                 "fs.stat",
                 serde_json::json!({ "path": &path }),
             )?;
-            results[0] = stat_entry(caller, &path)?;
+            *abi_result(results, 0)? = stat_entry(caller, &path)?;
             Ok(())
         },
     )?;
@@ -311,13 +312,13 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         FuncType::new(&engine, [string.clone()], [nullable_object.clone()]),
         /* deterministic = */ false,
         |caller, params, results| {
-            let path = read_string_arg(&mut *caller, &params[0], "fs.peek")?;
+            let path = read_string_arg(&mut *caller, abi_arg(params, 0)?, "fs.peek")?;
             gate(
                 &mut *caller,
                 "fs.stat",
                 serde_json::json!({ "path": &path }),
             )?;
-            results[0] = peek_file(caller, &path)?;
+            *abi_result(results, 0)? = peek_file(caller, &path)?;
             Ok(())
         },
     )?;
@@ -329,8 +330,8 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         FuncType::new(&engine, [string.clone()], [nullable_object.clone()]),
         /* deterministic = */ false,
         |caller, params, results| {
-            let path = read_string_arg(&mut *caller, &params[0], "fs.read")?;
-            results[0] = match read_whole_capped(caller, &path, "read")? {
+            let path = read_string_arg(&mut *caller, abi_arg(params, 0)?, "fs.read")?;
+            *abi_result(results, 0)? = match read_whole_capped(caller, &path, "read")? {
                 Some(bytes) => {
                     let arr = write_submilli_uint8array_struct(caller, &bytes)?;
                     Val::AnyRef(Some(arr.to_anyref()))
@@ -348,8 +349,8 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         FuncType::new(&engine, [string.clone()], [nullable_object.clone()]),
         /* deterministic = */ false,
         |caller, params, results| {
-            let path = read_string_arg(&mut *caller, &params[0], "fs.readText")?;
-            results[0] = match read_whole_capped(caller, &path, "readText")? {
+            let path = read_string_arg(&mut *caller, abi_arg(params, 0)?, "fs.readText")?;
+            *abi_result(results, 0)? = match read_whole_capped(caller, &path, "readText")? {
                 Some(bytes) => {
                     // Lossy UTF-8: invalid bytes become U+FFFD rather than trapping.
                     let mut text = String::from_utf8_lossy(&bytes).into_owned();
@@ -376,9 +377,9 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         ),
         /* deterministic = */ false,
         |caller, params, results| {
-            let path = read_string_arg(&mut *caller, &params[0], "fs.readBytes")?;
-            let offset = f64_arg(&params[1], "fs.readBytes (offset)")? as i64;
-            let length = f64_arg(&params[2], "fs.readBytes (length)")? as i64;
+            let path = read_string_arg(&mut *caller, abi_arg(params, 0)?, "fs.readBytes")?;
+            let offset = f64_arg(abi_arg(params, 1)?, "fs.readBytes (offset)")? as i64;
+            let length = f64_arg(abi_arg(params, 2)?, "fs.readBytes (length)")? as i64;
             gate(
                 &mut *caller,
                 "fs.read",
@@ -389,7 +390,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
             )?;
             let bytes = read_byte_range(caller, &path, offset, length)?;
             let arr = write_submilli_uint8array_struct(caller, &bytes)?;
-            results[0] = Val::AnyRef(Some(arr.to_anyref()));
+            *abi_result(results, 0)? = Val::AnyRef(Some(arr.to_anyref()));
             Ok(())
         },
     )?;
@@ -415,11 +416,11 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
             /* deterministic = */ false,
             move |caller, params, _results| {
                 let ctx = format!("fs.{op}");
-                let path = read_string_arg(&mut *caller, &params[0], &ctx)?;
+                let path = read_string_arg(&mut *caller, abi_arg(params, 0)?, &ctx)?;
                 let bytes = if text_content {
-                    read_string_arg(&mut *caller, &params[1], &ctx)?.into_bytes()
+                    read_string_arg(&mut *caller, abi_arg(params, 1)?, &ctx)?.into_bytes()
                 } else {
-                    read_uint8_array_arg(&mut *caller, &params[1], &ctx)?
+                    read_uint8_array_arg(&mut *caller, abi_arg(params, 1)?, &ctx)?
                 };
                 gate(
                     &mut *caller,
@@ -450,8 +451,8 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         FuncType::new(&engine, [string.clone(), ValType::I32], []),
         /* deterministic = */ false,
         |caller, params, _results| {
-            let path = read_string_arg(&mut *caller, &params[0], "fs.mkdir")?;
-            let recursive = i32_flag(&params[1], "fs.mkdir (recursive)")?;
+            let path = read_string_arg(&mut *caller, abi_arg(params, 0)?, "fs.mkdir")?;
+            let recursive = i32_flag(abi_arg(params, 1)?, "fs.mkdir (recursive)")?;
             gate(
                 &mut *caller,
                 "fs.mkdir",
@@ -478,8 +479,8 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         FuncType::new(&engine, [string.clone(), ValType::I32], []),
         /* deterministic = */ false,
         |caller, params, _results| {
-            let path = read_string_arg(&mut *caller, &params[0], "fs.remove")?;
-            let recursive = i32_flag(&params[1], "fs.remove (recursive)")?;
+            let path = read_string_arg(&mut *caller, abi_arg(params, 0)?, "fs.remove")?;
+            let recursive = i32_flag(abi_arg(params, 1)?, "fs.remove (recursive)")?;
             gate(
                 &mut *caller,
                 "fs.remove",
@@ -520,8 +521,8 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         FuncType::new(&engine, [string.clone(), string.clone()], []),
         /* deterministic = */ false,
         |caller, params, _results| {
-            let from = read_string_arg(&mut *caller, &params[0], "fs.move (from)")?;
-            let to = read_string_arg(&mut *caller, &params[1], "fs.move (to)")?;
+            let from = read_string_arg(&mut *caller, abi_arg(params, 0)?, "fs.move (from)")?;
+            let to = read_string_arg(&mut *caller, abi_arg(params, 1)?, "fs.move (to)")?;
             gate(
                 &mut *caller,
                 "fs.move",
@@ -567,9 +568,9 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         FuncType::new(&engine, [string.clone(), string.clone(), ValType::I32], []),
         /* deterministic = */ false,
         |caller, params, _results| {
-            let from = read_string_arg(&mut *caller, &params[0], "fs.copy (from)")?;
-            let to = read_string_arg(&mut *caller, &params[1], "fs.copy (to)")?;
-            let recursive = i32_flag(&params[2], "fs.copy (recursive)")?;
+            let from = read_string_arg(&mut *caller, abi_arg(params, 0)?, "fs.copy (from)")?;
+            let to = read_string_arg(&mut *caller, abi_arg(params, 1)?, "fs.copy (to)")?;
+            let recursive = i32_flag(abi_arg(params, 2)?, "fs.copy (recursive)")?;
             gate(
                 &mut *caller,
                 "fs.copy",
@@ -629,13 +630,13 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         FuncType::new(&engine, [string.clone()], [nullable_object.clone()]),
         /* deterministic = */ false,
         |caller, params, results| {
-            let path = read_string_arg(&mut *caller, &params[0], "fs.writer (path)")?;
+            let path = read_string_arg(&mut *caller, abi_arg(params, 0)?, "fs.writer (path)")?;
             gate(
                 &mut *caller,
                 "fs.write",
                 serde_json::json!({ "path": &path }),
             )?;
-            results[0] = open_writer(caller, &path)?;
+            *abi_result(results, 0)? = open_writer(caller, &path)?;
             Ok(())
         },
     )?;
@@ -647,7 +648,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         FuncType::new(&engine, [string.clone()], [nullable_object.clone()]),
         /* deterministic = */ false,
         |caller, params, results| {
-            let path = read_string_arg(&mut *caller, &params[0], "fs.lines (path)")?;
+            let path = read_string_arg(&mut *caller, abi_arg(params, 0)?, "fs.lines (path)")?;
             gate(
                 &mut *caller,
                 "fs.read",
@@ -664,7 +665,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
                 held,
             )
             .map_err(|e| wasmtime::Error::new(e).context(format!("fs.lines {path}")))?;
-            results[0] = make_handle_iterator(
+            *abi_result(results, 0)? = make_handle_iterator(
                 caller,
                 reader,
                 lines_next,
@@ -685,8 +686,8 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         ),
         /* deterministic = */ false,
         |caller, params, results| {
-            let path = read_string_arg(&mut *caller, &params[0], "fs.bytes (path)")?;
-            let chunk_size = f64_arg(&params[1], "fs.bytes (chunkSize)")? as i64;
+            let path = read_string_arg(&mut *caller, abi_arg(params, 0)?, "fs.bytes (path)")?;
+            let chunk_size = f64_arg(abi_arg(params, 1)?, "fs.bytes (chunkSize)")? as i64;
             if chunk_size <= 0 {
                 return Err(crate::runtime::host::range_error(format!(
                     "fs.bytes: chunkSize must be > 0, got {chunk_size}"
@@ -709,7 +710,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
                 held,
             )
             .map_err(|e| wasmtime::Error::new(e).context(format!("fs.bytes {path}")))?;
-            results[0] = make_handle_iterator(
+            *abi_result(results, 0)? = make_handle_iterator(
                 caller,
                 reader,
                 bytes_next,
@@ -730,8 +731,8 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         ),
         /* deterministic = */ false,
         |caller, params, results| {
-            let path = read_string_arg(&mut *caller, &params[0], "fs.list (path)")?;
-            let recursive = i32_flag(&params[1], "fs.list (recursive)")?;
+            let path = read_string_arg(&mut *caller, abi_arg(params, 0)?, "fs.list (path)")?;
+            let recursive = i32_flag(abi_arg(params, 1)?, "fs.list (recursive)")?;
             gate(
                 &mut *caller,
                 "fs.list",
@@ -758,7 +759,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
                 .map_err(|e| contain_trap("fs.list", &path, &ContainError::from(e)))?;
             let dir = ChargedDirIter::new(walk, &caller.data().tenant_limits)
                 .map_err(|e| wasmtime::Error::new(e).context(format!("fs.list {path}")))?;
-            results[0] =
+            *abi_result(results, 0)? =
                 make_handle_iterator(caller, dir, list_next, close_handle_of::<ChargedDirIter>)?;
             Ok(())
         },
@@ -1105,14 +1106,14 @@ fn lines_next(
     params: &[Val],
     results: &mut [Val],
 ) -> wasmtime::Result<()> {
-    let Some(handle) = env_handle(caller, &params[0])? else {
-        results[0] = iter_done(caller)?;
+    let Some(handle) = env_handle(caller, abi_arg(params, 0)?)? else {
+        *abi_result(results, 0)? = iter_done(caller)?;
         return Ok(());
     };
     let line = handle_payload::<ChargedLineReader>(caller, &handle, "fs.lines.next")?
         .read_next()
         .map_err(|e| wasmtime::Error::msg(format!("fs.lines.next: {e}")))?;
-    results[0] = match line {
+    *abi_result(results, 0)? = match line {
         Some(text) => {
             fuel::charge(&mut *caller, fuel::IO, text.len() as u64)?;
             let st = write_submilli_string_struct(caller, &text)?;
@@ -1128,14 +1129,14 @@ fn bytes_next(
     params: &[Val],
     results: &mut [Val],
 ) -> wasmtime::Result<()> {
-    let Some(handle) = env_handle(caller, &params[0])? else {
-        results[0] = iter_done(caller)?;
+    let Some(handle) = env_handle(caller, abi_arg(params, 0)?)? else {
+        *abi_result(results, 0)? = iter_done(caller)?;
         return Ok(());
     };
     let chunk = handle_payload::<ChargedByteReader>(caller, &handle, "fs.bytes.next")?
         .read_next()
         .map_err(|e| wasmtime::Error::msg(format!("fs.bytes.next: {e}")))?;
-    results[0] = match chunk {
+    *abi_result(results, 0)? = match chunk {
         Some(bytes) => {
             fuel::charge(&mut *caller, fuel::IO, bytes.len() as u64)?;
             let arr = write_submilli_uint8array_struct(caller, &bytes)?;
@@ -1151,14 +1152,14 @@ fn list_next(
     params: &[Val],
     results: &mut [Val],
 ) -> wasmtime::Result<()> {
-    let Some(handle) = env_handle(caller, &params[0])? else {
-        results[0] = iter_done(caller)?;
+    let Some(handle) = env_handle(caller, abi_arg(params, 0)?)? else {
+        *abi_result(results, 0)? = iter_done(caller)?;
         return Ok(());
     };
     fuel::charge(&mut *caller, fuel::SYSCALL, 1)?;
     let entry = handle_payload::<ChargedDirIter>(caller, &handle, "fs.list.next")?.next_entry();
     let Some(entry) = entry else {
-        results[0] = iter_done(caller)?;
+        *abi_result(results, 0)? = iter_done(caller)?;
         return Ok(());
     };
     let size = entry.size as f64;
@@ -1177,7 +1178,7 @@ fn list_next(
             Val::I64(0),
         ],
     )?;
-    results[0] = iter_yield(caller, entry)?;
+    *abi_result(results, 0)? = iter_yield(caller, entry)?;
     Ok(())
 }
 
@@ -1189,7 +1190,7 @@ fn close_handle_of<T: handles::Closable + 'static>(
     params: &[Val],
     _results: &mut [Val],
 ) -> wasmtime::Result<()> {
-    if let Some(handle) = env_handle(caller, &params[0])?
+    if let Some(handle) = env_handle(caller, abi_arg(params, 0)?)?
         && let Some(payload) = handle
             .data_mut(&mut *caller)?
             .and_then(|d| d.downcast_mut::<T>())
@@ -1311,7 +1312,7 @@ fn install_file_writer_methods(
         FuncType::new(engine, [receiver.clone()], []),
         /* deterministic = */ false,
         |caller, params, _results| {
-            writer_payload(caller, &params[0], "fs.writer.close")?
+            writer_payload(caller, abi_arg(params, 0)?, "fs.writer.close")?
                 .close()
                 .map_err(|e| write_error("fs.writer.close", e))
         },
@@ -1324,9 +1325,9 @@ fn install_file_writer_methods(
         FuncType::new(engine, [receiver.clone(), string], []),
         /* deterministic = */ false,
         |caller, params, _results| {
-            let line = read_string_arg(&mut *caller, &params[1], "fs.writer.writeLine")?;
+            let line = read_string_arg(&mut *caller, abi_arg(params, 1)?, "fs.writer.writeLine")?;
             fuel::charge(&mut *caller, fuel::IO, line.len() as u64 + 1)?;
-            writer_payload(caller, &params[0], "fs.writer.writeLine")?
+            writer_payload(caller, abi_arg(params, 0)?, "fs.writer.writeLine")?
                 .write_line(&line)
                 .map_err(|e| write_error("fs.writer.writeLine", e))
         },
@@ -1339,9 +1340,10 @@ fn install_file_writer_methods(
         FuncType::new(engine, [receiver, uint8], []),
         /* deterministic = */ false,
         |caller, params, _results| {
-            let bytes = read_uint8_array_arg(&mut *caller, &params[1], "fs.writer.writeBytes")?;
+            let bytes =
+                read_uint8_array_arg(&mut *caller, abi_arg(params, 1)?, "fs.writer.writeBytes")?;
             fuel::charge(&mut *caller, fuel::IO, bytes.len() as u64)?;
-            writer_payload(caller, &params[0], "fs.writer.writeBytes")?
+            writer_payload(caller, abi_arg(params, 0)?, "fs.writer.writeBytes")?
                 .write_bytes(&bytes)
                 .map_err(|e| write_error("fs.writer.writeBytes", e))
         },

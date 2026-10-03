@@ -476,7 +476,7 @@ impl Snapshot {
         if self.config_changed {
             stage.write_metadata("config", &self.config)?;
         }
-        let worktree = self.pending_worktree.borrow_mut().take();
+        let worktree = self.pending_worktree.get_mut().take();
         // A repository this operation created also counts the `.git` it began with.
         let created = match (&self.quota, self.created) {
             (Some(quota), Some(written)) => {
@@ -833,9 +833,9 @@ pub(super) fn read_bounded(dir: &Dir, path: &Path, limit: u64) -> Result<Option<
 pub(super) fn validate_metadata_path(path: &str) -> Result<()> {
     validate_path(path)?;
     let mut components = path.split('/');
-    let Some(root) = components.next() else {
-        bail!("git: invalid repository-relative path");
-    };
+    let root = components
+        .next()
+        .ok_or_else(|| crate::runtime::host::invariant_trap("git: validated path has no root"))?;
     // A filesystem may fold case or ignore Unicode characters: refuse a
     // structural name spelled any way but its own, which gix might take for
     // the name, before gix reads `.git`.
@@ -1251,6 +1251,22 @@ mod tests {
             change.place.push((*path).to_owned());
         }
         *snapshot.pending_worktree.borrow_mut() = Some(change);
+    }
+
+    #[test]
+    fn conflicting_pending_borrow_traps_before_publication() {
+        let vfs = crate::runtime::Vfs::tempdir().unwrap();
+        init(&vfs).publish().unwrap();
+        let snapshot = open(&vfs, true).unwrap();
+        let original = snapshot.dir.read(".git/HEAD").unwrap();
+        let borrowed = snapshot.pending_worktree.borrow_mut();
+        let error =
+            super::super::operations::replace_worktree(&snapshot, &Entries::new()).unwrap_err();
+        assert!(error.is::<wasmtime::Trap>());
+        assert_eq!(snapshot.dir.read(".git/HEAD").unwrap(), original);
+        drop(borrowed);
+        super::super::operations::replace_worktree(&snapshot, &Entries::new()).unwrap();
+        snapshot.publish().unwrap();
     }
 
     #[test]

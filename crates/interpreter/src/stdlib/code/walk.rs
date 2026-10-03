@@ -6,6 +6,7 @@ use super::{
 };
 use crate::runtime::fs::resolve_link;
 use crate::runtime::fuel;
+use crate::runtime::host::invariant_trap;
 use crate::runtime::{
     StoreData,
     host::read_boxed_number,
@@ -165,8 +166,17 @@ impl<'a> SearchResults<'a> {
             return Ok(());
         }
         let start = index.saturating_sub(self.options.context);
-        let end = (index + 1 + self.options.context).min(lines.len());
-        let bytes = lines[start..end]
+        let line = lines
+            .get(index)
+            .ok_or_else(|| invariant_trap("code: search line out of bounds"))?;
+        let after = index
+            .checked_add(1)
+            .ok_or_else(|| invariant_trap("code: search line overflow"))?;
+        let end = after.saturating_add(self.options.context).min(lines.len());
+        let context = lines
+            .get(start..end)
+            .ok_or_else(|| invariant_trap("code: search context out of bounds"))?;
+        let bytes = context
             .iter()
             .fold(OutputBudget::line_bytes(path), |sum, line| {
                 sum.saturating_add(OutputBudget::line_bytes(line))
@@ -174,7 +184,7 @@ impl<'a> SearchResults<'a> {
         if !self.reserve(caller, budget, bytes)? {
             return Ok(());
         }
-        self.matches.push(json!({"path":path,"line":index+1,"text":text::line_text(lines[index]),"before":text::numbered(lines,start,index),"after":text::numbered(lines,index+1,end)}));
+        self.matches.push(json!({"path":path,"line":after,"text":text::line_text(line),"before":text::numbered(lines,start,index),"after":text::numbered(lines,after,end)}));
         Ok(())
     }
     fn record_file(
@@ -193,7 +203,9 @@ impl<'a> SearchResults<'a> {
         match self.options.mode {
             SearchMode::Files => self.files.push(path.into()),
             SearchMode::Counts => self.counts.push(json!({"path":path,"count":count})),
-            SearchMode::Matches => unreachable!("matches are recorded per line"),
+            SearchMode::Matches => {
+                return Err(invariant_trap("code: invalid per-file search mode"));
+            }
         }
         Ok(())
     }

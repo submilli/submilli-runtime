@@ -1,4 +1,5 @@
 //! Repository's ordinary imported-class layout and per-store vtable.
+use crate::runtime::host::{abi_arg, abi_result};
 use wasmtime::{
     ArrayRef, ArrayRefPre, Caller, Engine, FieldType, Finality, Func, FuncType, Global, GlobalType,
     HeapType, Linker, Mutability, RecGroupBuilder, RefType, Result, Rooted, StorageType, Store,
@@ -264,7 +265,7 @@ fn install_factories(
                 let class = class.clone();
                 Box::pin(async move {
                     let path = super::invoke(caller, "open", false, params).await?;
-                    results[0] = new_instance(caller, &class, path)?;
+                    *abi_result(results, 0)? = new_instance(caller, &class, path)?;
                     Ok(())
                 })
             }
@@ -289,7 +290,7 @@ fn install_factories(
                 let class = class.clone();
                 Box::pin(async move {
                     let path = super::invoke(caller, "init", false, params).await?;
-                    results[0] = new_instance(caller, &class, path)?;
+                    *abi_result(results, 0)? = new_instance(caller, &class, path)?;
                     Ok(())
                 })
             }
@@ -314,7 +315,7 @@ fn install_factories(
                 let class = class.clone();
                 Box::pin(async move {
                     let path = super::invoke(caller, "clone", false, params).await?;
-                    results[0] = new_instance(caller, &class, path)?;
+                    *abi_result(results, 0)? = new_instance(caller, &class, path)?;
                     Ok(())
                 })
             }
@@ -348,7 +349,7 @@ fn install_constructor(
             let class = class.clone();
             Box::pin(async move {
                 let path = super::invoke(caller, "open", false, params).await?;
-                results[0] = new_instance(caller, &class, path)?;
+                *abi_result(results, 0)? = new_instance(caller, &class, path)?;
                 Ok(())
             })
         },
@@ -369,7 +370,7 @@ fn install_constructor(
         |caller, params, _results| {
             Box::pin(async move {
                 let path = super::invoke(caller, "open", false, &params[1..]).await?;
-                payload(caller, &params[0])?.set(&mut *caller, 0, path)?;
+                payload(caller, abi_arg(params, 0)?)?.set(&mut *caller, 0, path)?;
                 Ok(())
             })
         },

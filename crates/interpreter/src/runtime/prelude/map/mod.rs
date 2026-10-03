@@ -19,6 +19,7 @@
 //! structural `equals`/`hash`, never back into `Map.set`/etc. So a mid-probe
 //! dispatch can't mutate the map; no in-flight-mutation guard is needed.
 
+use crate::runtime::host::{abi_arg, abi_result};
 mod install;
 
 pub(crate) use install::declare_types;
@@ -623,7 +624,7 @@ fn map_next_step(
     results: &mut [Val],
     kind: IterKind,
 ) -> wasmtime::Result<()> {
-    let cursor = as_struct(caller, &params[0], "map iterator env")?;
+    let cursor = as_struct(caller, abi_arg(params, 0)?, "map iterator env")?;
     let Val::I32(mut pos) = cursor.field(&mut *caller, 0)? else {
         return Err(wasmtime::Error::msg("map iterator: position is not an i32"));
     };
@@ -638,7 +639,7 @@ fn map_next_step(
     loop {
         if pos >= order_len {
             cursor.set_field(&mut *caller, 0, Val::I32(pos))?;
-            results[0] = iter_done(caller)?;
+            *abi_result(results, 0)? = iter_done(caller)?;
             return Ok(());
         }
         let Val::I32(probe) = order.get(&mut *caller, pos as u32)? else {
@@ -660,7 +661,7 @@ fn map_next_step(
                 }
             };
             cursor.set_field(&mut *caller, 0, Val::I32(pos))?;
-            results[0] = iter_yield(caller, yielded)?;
+            *abi_result(results, 0)? = iter_yield(caller, yielded)?;
             return Ok(());
         }
     }

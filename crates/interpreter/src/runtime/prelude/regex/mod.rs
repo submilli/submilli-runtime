@@ -18,6 +18,7 @@
 //! [3] (ref $string) input, [4] $regexCaptureArray numbered, [5]
 //! $regexCaptureArray named (alternating name/value, value null when unmatched)`.
 
+use crate::runtime::host::abi_arg;
 pub(crate) mod engine;
 mod install;
 
@@ -320,9 +321,9 @@ fn read_capture_array(
 // ---------------------------------------------------------------------------
 
 pub(super) fn test(caller: &mut Caller<'_, StoreData>, params: &[Val]) -> wasmtime::Result<bool> {
-    let st = as_struct(caller, &params[0], "RegExp#test")?;
+    let st = as_struct(caller, abi_arg(params, 0)?, "RegExp#test")?;
     let bits = flag_bits(caller, &st)?;
-    let input = read_string_arg(&mut *caller, &params[1], "RegExp#test(input)")?;
+    let input = read_string_arg(&mut *caller, abi_arg(params, 1)?, "RegExp#test(input)")?;
     let start = if uses_last_index(bits) {
         last_index(caller, &st)?
     } else {
@@ -342,9 +343,9 @@ pub(super) fn exec(caller: &mut Caller<'_, StoreData>, params: &[Val]) -> wasmti
     let params: &[Val; 2] = params
         .try_into()
         .map_err(|_| wasmtime::Error::msg("exec: invalid argument count"))?;
-    let st = as_struct(caller, &params[0], "RegExp#exec")?;
+    let st = as_struct(caller, abi_arg(params, 0)?, "RegExp#exec")?;
     let bits = flag_bits(caller, &st)?;
-    let input = read_string_arg(&mut *caller, &params[1], "RegExp#exec(input)")?;
+    let input = read_string_arg(&mut *caller, abi_arg(params, 1)?, "RegExp#exec(input)")?;
     let start = if uses_last_index(bits) {
         last_index(caller, &st)?
     } else {
@@ -358,7 +359,7 @@ pub(super) fn exec(caller: &mut Caller<'_, StoreData>, params: &[Val]) -> wasmti
         snapshot.as_ref().map(|s| s.next_last_index),
     )?;
     match snapshot {
-        Some(s) => build_match_box(caller, &input, &params[1], &s),
+        Some(s) => build_match_box(caller, &input, abi_arg(params, 1)?, &s),
         None => Ok(Val::null_any_ref()),
     }
 }
@@ -369,7 +370,7 @@ pub(super) fn string_field(
     params: &[Val],
     field: usize,
 ) -> wasmtime::Result<Val> {
-    let st = as_struct(caller, &params[0], "RegExp property")?;
+    let st = as_struct(caller, abi_arg(params, 0)?, "RegExp property")?;
     st.field(&mut *caller, field)
 }
 
@@ -377,7 +378,7 @@ pub(super) fn last_index_getter(
     caller: &mut Caller<'_, StoreData>,
     params: &[Val],
 ) -> wasmtime::Result<f64> {
-    let st = as_struct(caller, &params[0], "RegExp#lastIndex")?;
+    let st = as_struct(caller, abi_arg(params, 0)?, "RegExp#lastIndex")?;
     Ok(last_index(caller, &st)? as f64)
 }
 
@@ -387,7 +388,7 @@ pub(super) fn flag(
     params: &[Val],
     mask: i32,
 ) -> wasmtime::Result<bool> {
-    let st = as_struct(caller, &params[0], "RegExp flag")?;
+    let st = as_struct(caller, abi_arg(params, 0)?, "RegExp flag")?;
     Ok(flag_bits(caller, &st)? & mask != 0)
 }
 
@@ -401,7 +402,7 @@ pub(super) fn match_field(
     params: &[Val],
     field: usize,
 ) -> wasmtime::Result<Val> {
-    let st = as_struct(caller, &params[0], "RegExpMatch property")?;
+    let st = as_struct(caller, abi_arg(params, 0)?, "RegExpMatch property")?;
     st.field(&mut *caller, field)
 }
 
@@ -409,7 +410,7 @@ pub(super) fn match_index(
     caller: &mut Caller<'_, StoreData>,
     params: &[Val],
 ) -> wasmtime::Result<f64> {
-    let st = as_struct(caller, &params[0], "RegExpMatch#index")?;
+    let st = as_struct(caller, abi_arg(params, 0)?, "RegExpMatch#index")?;
     match st.field(&mut *caller, 2)? {
         Val::I32(v) => Ok(f64::from(v)),
         other => wasmtime::bail!("RegExpMatch#index is {other:?}, not i32"),
@@ -419,7 +420,7 @@ pub(super) fn match_index(
 /// `RegExpMatch#groups` — a fresh `(string | null)[]` wrapping each numbered
 /// capture.
 pub(super) fn groups(caller: &mut Caller<'_, StoreData>, params: &[Val]) -> wasmtime::Result<Val> {
-    let st = as_struct(caller, &params[0], "RegExpMatch#groups")?;
+    let st = as_struct(caller, abi_arg(params, 0)?, "RegExpMatch#groups")?;
     let raw = read_capture_array(caller, &st, 4)?;
     let mut elements = Vec::with_capacity(raw.len());
     for elem in raw {
@@ -439,7 +440,7 @@ pub(super) async fn named_groups(
     caller: &mut Caller<'_, StoreData>,
     params: &[Val],
 ) -> wasmtime::Result<Val> {
-    let st = as_struct(caller, &params[0], "RegExpMatch#namedGroups")?;
+    let st = as_struct(caller, abi_arg(params, 0)?, "RegExpMatch#namedGroups")?;
     let raw = read_capture_array(caller, &st, 5)?;
     let map = super::map::construct(caller, &Val::null_any_ref()).await?;
     let mut i = 0;
@@ -480,10 +481,10 @@ pub(super) fn string_match(
     let params: &[Val; 2] = params
         .try_into()
         .map_err(|_| wasmtime::Error::msg("string_match: invalid argument count"))?;
-    let input = read_string_arg(&mut *caller, &params[0], "String#match(input)")?;
-    let st = as_struct(caller, &params[1], "String#match(regex)")?;
+    let input = read_string_arg(&mut *caller, abi_arg(params, 0)?, "String#match(input)")?;
+    let st = as_struct(caller, abi_arg(params, 1)?, "String#match(regex)")?;
     match exec_at(caller, &st, &input, 0)? {
-        Some(s) => build_match_box(caller, &input, &params[0], &s),
+        Some(s) => build_match_box(caller, &input, abi_arg(params, 0)?, &s),
         None => Ok(Val::null_any_ref()),
     }
 }
@@ -493,8 +494,8 @@ pub(super) fn string_search(
     caller: &mut Caller<'_, StoreData>,
     params: &[Val],
 ) -> wasmtime::Result<f64> {
-    let input = read_string_arg(&mut *caller, &params[0], "String#search(input)")?;
-    let st = as_struct(caller, &params[1], "String#search(regex)")?;
+    let input = read_string_arg(&mut *caller, abi_arg(params, 0)?, "String#search(input)")?;
+    let st = as_struct(caller, abi_arg(params, 1)?, "String#search(regex)")?;
     Ok(match exec_at(caller, &st, &input, 0)? {
         Some(s) => s.match_start as f64,
         None => -1.0,
@@ -510,8 +511,8 @@ pub(super) fn string_match_all(
     let params: &[Val; 2] = params
         .try_into()
         .map_err(|_| wasmtime::Error::msg("string_match_all: invalid argument count"))?;
-    let input = read_string_arg(&mut *caller, &params[0], "String#matchAll(input)")?;
-    let st = as_struct(caller, &params[1], "String#matchAll(regex)")?;
+    let input = read_string_arg(&mut *caller, abi_arg(params, 0)?, "String#matchAll(input)")?;
+    let st = as_struct(caller, abi_arg(params, 1)?, "String#matchAll(regex)")?;
     let mut boxes: Vec<Val> = Vec::new();
     let mut pos = 0usize;
     while let Some(s) = exec_at(caller, &st, &input, pos)? {
@@ -521,7 +522,7 @@ pub(super) fn string_match_all(
         } else {
             s.next_last_index
         };
-        boxes.push(build_match_box(caller, &input, &params[0], &s)?);
+        boxes.push(build_match_box(caller, &input, abi_arg(params, 0)?, &s)?);
         pos = next;
     }
     let arr = write_submilli_array_struct(caller, &boxes)?;
@@ -535,19 +536,23 @@ pub(super) fn string_replace(
     caller: &mut Caller<'_, StoreData>,
     params: &[Val],
 ) -> wasmtime::Result<Val> {
-    if arg_is_string(caller, &params[1])? {
-        let input = read_string_units(caller, &params[0], "String#replace(input)")?;
-        let search = read_string_units(caller, &params[1], "String#replace(search)")?;
-        let repl = read_string_units(caller, &params[2], "String#replace(replacement)")?;
+    if arg_is_string(caller, abi_arg(params, 1)?)? {
+        let input = read_string_units(caller, abi_arg(params, 0)?, "String#replace(input)")?;
+        let search = read_string_units(caller, abi_arg(params, 1)?, "String#replace(search)")?;
+        let repl = read_string_units(caller, abi_arg(params, 2)?, "String#replace(replacement)")?;
         fuel::charge(&mut *caller, fuel::SCAN, input.len() as u64)?;
         let out = replace_literal(&input, &search, &repl, false);
         let st = write_submilli_string_struct_units(caller, &out)?;
         return Ok(Val::AnyRef(Some(st.to_anyref())));
     }
-    let st = as_struct(caller, &params[1], "String#replace(regex)")?;
+    let st = as_struct(caller, abi_arg(params, 1)?, "String#replace(regex)")?;
     let all = flag_bits(caller, &st)? & FlagSet::G.bits() as i32 != 0;
-    let input = read_string_arg(&mut *caller, &params[0], "String#replace(input)")?;
-    let repl = read_string_arg(&mut *caller, &params[2], "String#replace(replacement)")?;
+    let input = read_string_arg(&mut *caller, abi_arg(params, 0)?, "String#replace(input)")?;
+    let repl = read_string_arg(
+        &mut *caller,
+        abi_arg(params, 2)?,
+        "String#replace(replacement)",
+    )?;
     fuel::charge(&mut *caller, fuel::REGEX, input.len() as u64)?;
     let out = with_regex(caller, &st, |c| {
         if all {
@@ -566,18 +571,30 @@ pub(super) fn string_replace_all(
     caller: &mut Caller<'_, StoreData>,
     params: &[Val],
 ) -> wasmtime::Result<Val> {
-    if arg_is_string(caller, &params[1])? {
-        let input = read_string_units(caller, &params[0], "String#replaceAll(input)")?;
-        let search = read_string_units(caller, &params[1], "String#replaceAll(search)")?;
-        let repl = read_string_units(caller, &params[2], "String#replaceAll(replacement)")?;
+    if arg_is_string(caller, abi_arg(params, 1)?)? {
+        let input = read_string_units(caller, abi_arg(params, 0)?, "String#replaceAll(input)")?;
+        let search = read_string_units(caller, abi_arg(params, 1)?, "String#replaceAll(search)")?;
+        let repl = read_string_units(
+            caller,
+            abi_arg(params, 2)?,
+            "String#replaceAll(replacement)",
+        )?;
         fuel::charge(&mut *caller, fuel::SCAN, input.len() as u64)?;
         let out = replace_literal(&input, &search, &repl, true);
         let st = write_submilli_string_struct_units(caller, &out)?;
         return Ok(Val::AnyRef(Some(st.to_anyref())));
     }
-    let st = as_struct(caller, &params[1], "String#replaceAll(regex)")?;
-    let input = read_string_arg(&mut *caller, &params[0], "String#replaceAll(input)")?;
-    let repl = read_string_arg(&mut *caller, &params[2], "String#replaceAll(replacement)")?;
+    let st = as_struct(caller, abi_arg(params, 1)?, "String#replaceAll(regex)")?;
+    let input = read_string_arg(
+        &mut *caller,
+        abi_arg(params, 0)?,
+        "String#replaceAll(input)",
+    )?;
+    let repl = read_string_arg(
+        &mut *caller,
+        abi_arg(params, 2)?,
+        "String#replaceAll(replacement)",
+    )?;
     fuel::charge(&mut *caller, fuel::REGEX, input.len() as u64)?;
     let out = with_regex(caller, &st, |c| {
         c.regex.replace_all(&input, repl.as_str()).into_owned()
@@ -592,7 +609,7 @@ pub(super) fn string_split(
     caller: &mut Caller<'_, StoreData>,
     params: &[Val],
 ) -> wasmtime::Result<Val> {
-    let limit = match params[2] {
+    let limit = match *abi_arg(params, 2)? {
         Val::F64(bits) => f64::from_bits(bits) as i32,
         ref other => {
             return Err(crate::runtime::host::type_error(format!(
@@ -600,14 +617,14 @@ pub(super) fn string_split(
             )));
         }
     };
-    let parts: Vec<Vec<u16>> = if arg_is_string(caller, &params[1])? {
-        let input = read_string_units(caller, &params[0], "String#split(input)")?;
-        let sep = read_string_units(caller, &params[1], "String#split(separator)")?;
+    let parts: Vec<Vec<u16>> = if arg_is_string(caller, abi_arg(params, 1)?)? {
+        let input = read_string_units(caller, abi_arg(params, 0)?, "String#split(input)")?;
+        let sep = read_string_units(caller, abi_arg(params, 1)?, "String#split(separator)")?;
         fuel::charge(&mut *caller, fuel::SCAN, input.len() as u64)?;
         split_literal(&input, &sep, limit)
     } else {
-        let st = as_struct(caller, &params[1], "String#split(regex)")?;
-        let input = read_string_arg(&mut *caller, &params[0], "String#split(input)")?;
+        let st = as_struct(caller, abi_arg(params, 1)?, "String#split(regex)")?;
+        let input = read_string_arg(&mut *caller, abi_arg(params, 0)?, "String#split(input)")?;
         fuel::charge(&mut *caller, fuel::REGEX, input.len() as u64)?;
         with_regex(caller, &st, |c| regex_split(&c.regex, &input, limit))?
             .into_iter()

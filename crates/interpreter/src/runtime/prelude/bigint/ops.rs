@@ -1,6 +1,7 @@
 //! host-side BigInt runtime — `submilli:bigint.*` plus the
 //! `submilli:number.fromBigInt` arm.
 
+use crate::runtime::host::{abi_arg, abi_result};
 use wasmtime::{
     ArrayRef, ArrayRefPre, ArrayType, AsContextMut, Caller, Engine, FieldType, FuncType, HeapType,
     Linker, Mutability, RefType, Rooted, StorageType, StructRef, StructRefPre, Val, ValType,
@@ -46,7 +47,7 @@ pub(crate) fn install(
         from_string_ty,
         /* deterministic = */ true,
         |caller, params, results| -> wasmtime::Result<()> {
-            let s = read_string_arg(&mut *caller, &params[0], "bigint.fromString")?;
+            let s = read_string_arg(&mut *caller, abi_arg(params, 0)?, "bigint.fromString")?;
             let trimmed = s.trim();
             // Decimal parsing is quadratic: a pass over the digits per limb
             // of the result, about one limb per 19 digits.
@@ -63,8 +64,8 @@ pub(crate) fn install(
             let (sign, magnitude) = parsed.into_parts();
             let limbs = magnitude.to_u64_digits();
             let arr = write_limbs(&mut *caller, &limbs)?;
-            results[0] = Val::I32(sign_to_i32(sign));
-            results[1] = Val::AnyRef(Some(arr.to_anyref()));
+            *abi_result(results, 0)? = Val::I32(sign_to_i32(sign));
+            *abi_result(results, 1)? = Val::AnyRef(Some(arr.to_anyref()));
             Ok(())
         },
     )?;
@@ -81,7 +82,7 @@ pub(crate) fn install(
         from_number_ty,
         /* deterministic = */ true,
         |caller, params, results| -> wasmtime::Result<()> {
-            let n = match params[0] {
+            let n = match *abi_arg(params, 0)? {
                 Val::F64(bits) => f64::from_bits(bits),
                 ref other => {
                     return Err(type_error(format!(
@@ -106,8 +107,8 @@ pub(crate) fn install(
             let (sign, magnitude) = parsed.into_parts();
             let limbs = magnitude.to_u64_digits();
             let arr = write_limbs(&mut *caller, &limbs)?;
-            results[0] = Val::I32(sign_to_i32(sign));
-            results[1] = Val::AnyRef(Some(arr.to_anyref()));
+            *abi_result(results, 0)? = Val::I32(sign_to_i32(sign));
+            *abi_result(results, 1)? = Val::AnyRef(Some(arr.to_anyref()));
             Ok(())
         },
     )?;
@@ -124,11 +125,16 @@ pub(crate) fn install(
         to_string_ty,
         /* deterministic = */ true,
         |caller, params, results| -> wasmtime::Result<()> {
-            let value = read_bigint_arg(&mut *caller, &params[0], &params[1], "bigint.toString")?;
+            let value = read_bigint_arg(
+                &mut *caller,
+                abi_arg(params, 0)?,
+                abi_arg(params, 1)?,
+                "bigint.toString",
+            )?;
             fuel::charge_host_fuel(&mut *caller, radix_cost(&value))?;
             let formatted = value.to_str_radix(10);
             let arr = write_submilli_string(&mut *caller, &formatted)?;
-            results[0] = Val::AnyRef(Some(arr.to_anyref()));
+            *abi_result(results, 0)? = Val::AnyRef(Some(arr.to_anyref()));
             Ok(())
         },
     )?;
@@ -145,9 +151,13 @@ pub(crate) fn install(
         to_string_radix_ty,
         /* deterministic = */ true,
         |caller, params, results| -> wasmtime::Result<()> {
-            let value =
-                read_bigint_arg(&mut *caller, &params[0], &params[1], "bigint.toStringRadix")?;
-            let radix = match params[2] {
+            let value = read_bigint_arg(
+                &mut *caller,
+                abi_arg(params, 0)?,
+                abi_arg(params, 1)?,
+                "bigint.toStringRadix",
+            )?;
+            let radix = match *abi_arg(params, 2)? {
                 Val::F64(bits) => f64::from_bits(bits),
                 ref other => {
                     return Err(type_error(format!(
@@ -162,7 +172,7 @@ pub(crate) fn install(
             fuel::charge_host_fuel(&mut *caller, radix_cost(&value))?;
             let formatted = value.to_str_radix(truncated as u32);
             let arr = write_submilli_string(&mut *caller, &formatted)?;
-            results[0] = Val::AnyRef(Some(arr.to_anyref()));
+            *abi_result(results, 0)? = Val::AnyRef(Some(arr.to_anyref()));
             Ok(())
         },
     )?;
@@ -208,8 +218,12 @@ pub(crate) fn install(
             /* deterministic = */ true,
             move |caller, params, results| -> wasmtime::Result<()> {
                 use num_traits::Zero;
-                let divisor =
-                    read_bigint_arg(caller, &params[2], &params[3], &format!("{name} rhs"))?;
+                let divisor = read_bigint_arg(
+                    caller,
+                    abi_arg(params, 2)?,
+                    abi_arg(params, 3)?,
+                    &format!("{name} rhs"),
+                )?;
                 if divisor.is_zero() {
                     return Err(range_error("Division by zero"));
                 }
@@ -268,9 +282,19 @@ pub(crate) fn install(
         cmp_ty,
         /* deterministic = */ true,
         |caller, params, results| -> wasmtime::Result<()> {
-            let a = read_bigint_arg(&mut *caller, &params[0], &params[1], "bigint.cmp lhs")?;
-            let b = read_bigint_arg(&mut *caller, &params[2], &params[3], "bigint.cmp rhs")?;
-            results[0] = Val::I32(match a.cmp(&b) {
+            let a = read_bigint_arg(
+                &mut *caller,
+                abi_arg(params, 0)?,
+                abi_arg(params, 1)?,
+                "bigint.cmp lhs",
+            )?;
+            let b = read_bigint_arg(
+                &mut *caller,
+                abi_arg(params, 2)?,
+                abi_arg(params, 3)?,
+                "bigint.cmp rhs",
+            )?;
+            *abi_result(results, 0)? = Val::I32(match a.cmp(&b) {
                 std::cmp::Ordering::Less => -1,
                 std::cmp::Ordering::Equal => 0,
                 std::cmp::Ordering::Greater => 1,
@@ -291,18 +315,11 @@ pub(crate) fn install(
         neg_ty,
         /* deterministic = */ true,
         |caller, params, results| -> wasmtime::Result<()> {
-            let sign = match params[0] {
-                Val::I32(v) => v,
-                ref other => {
-                    return Err(type_error(format!(
-                        "bigint.neg expects i32 sign, got {other:?}"
-                    )));
-                }
-            };
-            let limbs = read_limbs_arg(&mut *caller, &params[1], "bigint.neg")?;
+            let sign = read_sign(abi_arg(params, 0)?)?;
+            let limbs = read_limbs_arg(&mut *caller, abi_arg(params, 1)?, "bigint.neg")?;
             let arr = write_limbs(&mut *caller, &limbs)?;
-            results[0] = Val::I32(-sign);
-            results[1] = Val::AnyRef(Some(arr.to_anyref()));
+            *abi_result(results, 0)? = Val::I32(-sign);
+            *abi_result(results, 1)? = Val::AnyRef(Some(arr.to_anyref()));
             Ok(())
         },
     )?;
@@ -316,9 +333,14 @@ pub(crate) fn install(
         /* deterministic = */ true,
         |caller, params, results| -> wasmtime::Result<()> {
             use num_traits::ToPrimitive;
-            let value = read_bigint_arg(&mut *caller, &params[0], &params[1], "number.fromBigInt")?;
+            let value = read_bigint_arg(
+                &mut *caller,
+                abi_arg(params, 0)?,
+                abi_arg(params, 1)?,
+                "number.fromBigInt",
+            )?;
             let n = value.to_f64().unwrap_or(f64::INFINITY);
-            results[0] = Val::F64(n.to_bits());
+            *abi_result(results, 0)? = Val::F64(n.to_bits());
             Ok(())
         },
     )?;
@@ -411,15 +433,25 @@ fn run_binop(
     cost: Cost,
     op: impl FnOnce(num_bigint::BigInt, num_bigint::BigInt) -> wasmtime::Result<num_bigint::BigInt>,
 ) -> wasmtime::Result<()> {
-    let a = read_bigint_arg(caller, &params[0], &params[1], &format!("{op_name} lhs"))?;
-    let b = read_bigint_arg(caller, &params[2], &params[3], &format!("{op_name} rhs"))?;
+    let a = read_bigint_arg(
+        caller,
+        abi_arg(params, 0)?,
+        abi_arg(params, 1)?,
+        &format!("{op_name} lhs"),
+    )?;
+    let b = read_bigint_arg(
+        caller,
+        abi_arg(params, 2)?,
+        abi_arg(params, 3)?,
+        &format!("{op_name} rhs"),
+    )?;
     fuel::charge_host_fuel(&mut *caller, cost.of(&a, &b)?)?;
     let r = op(a, b)?;
     let (sign, magnitude) = r.into_parts();
     let limbs = magnitude.to_u64_digits();
     let arr = write_limbs(caller, &limbs)?;
-    results[0] = Val::I32(sign_to_i32(sign));
-    results[1] = Val::AnyRef(Some(arr.to_anyref()));
+    *abi_result(results, 0)? = Val::I32(sign_to_i32(sign));
+    *abi_result(results, 1)? = Val::AnyRef(Some(arr.to_anyref()));
     Ok(())
 }
 
@@ -429,14 +461,7 @@ pub(crate) fn read_bigint_arg(
     limbs_val: &Val,
     name: &str,
 ) -> wasmtime::Result<num_bigint::BigInt> {
-    let sign = match sign_val {
-        Val::I32(v) => *v,
-        other => {
-            return Err(type_error(format!(
-                "{name}: expected i32 sign, got {other:?}"
-            )));
-        }
-    };
+    let sign = read_sign(sign_val)?;
     let limbs = read_limbs_arg(caller, limbs_val, name)?;
     Ok(limbs_to_bigint(sign, &limbs))
 }
@@ -478,10 +503,7 @@ pub(crate) fn read_bigint_struct(
             )));
         }
     };
-    let sign = match st.field(&mut *caller, 1)? {
-        Val::I32(v) => v,
-        other => wasmtime::bail!("{name}: sign field is {other:?}, not i32"),
-    };
+    let sign = read_sign(&st.field(&mut *caller, 1)?)?;
     let limbs_val = st.field(&mut *caller, 2)?;
     let limbs = read_limbs_arg(caller, &limbs_val, name)?;
     Ok((sign, limbs))
@@ -606,6 +628,35 @@ mod tests {
                 format!("{err}").contains("Division by zero"),
                 "{name} must run synchronously; got: {err}"
             );
+        }
+    }
+}
+
+fn read_sign(value: &Val) -> wasmtime::Result<i32> {
+    match value {
+        Val::I32(sign @ -1..=1) => Ok(*sign),
+        _ => Err(crate::runtime::host::invariant_trap(
+            "bigint: invalid canonical sign",
+        )),
+    }
+}
+
+#[cfg(test)]
+mod sign_tests {
+    use super::*;
+    #[test]
+    fn malformed_signs_trap_before_negation() {
+        for value in [
+            Val::I32(i32::MIN),
+            Val::I32(i32::MAX),
+            Val::I32(-2),
+            Val::I32(2),
+            Val::F64(0),
+        ] {
+            assert!(read_sign(&value).unwrap_err().is::<wasmtime::Trap>());
+        }
+        for sign in [-1, 0, 1] {
+            assert_eq!(-read_sign(&Val::I32(sign)).unwrap(), -sign);
         }
     }
 }

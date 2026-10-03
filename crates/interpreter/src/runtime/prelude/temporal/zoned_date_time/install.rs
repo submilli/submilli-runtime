@@ -1,3 +1,4 @@
+use crate::runtime::host::{abi_arg, abi_result};
 use jiff::Zoned;
 use num_bigint::BigInt;
 use wasmtime::{FuncType, HeapType, Linker, RefType, Val, ValType};
@@ -34,9 +35,10 @@ fn install_construction(
         ),
         true,
         |caller, params, results| {
-            let input = read_string_arg(caller, &params[0], "Temporal.ZonedDateTime.from")?;
+            let input =
+                read_string_arg(caller, abi_arg(params, 0)?, "Temporal.ZonedDateTime.from")?;
             let (zoned, tz_id) = super::parse(&input).map_err(crate::runtime::host::range_error)?;
-            results[0] = shared::make_zoned_date_time(caller, &zoned, &tz_id)?;
+            *abi_result(results, 0)? = shared::make_zoned_date_time(caller, &zoned, &tz_id)?;
             Ok(())
         },
     )?;
@@ -53,15 +55,15 @@ fn install_construction(
         |caller, params, results| {
             let a = shared::zoned_date_time_timestamp_from_val(
                 caller,
-                &params[0],
+                abi_arg(params, 0)?,
                 "ZonedDateTime.compare",
             )?;
             let b = shared::zoned_date_time_timestamp_from_val(
                 caller,
-                &params[1],
+                abi_arg(params, 1)?,
                 "ZonedDateTime.compare",
             )?;
-            results[0] = Val::F64(super::compare_timestamps(a, b).to_bits());
+            *abi_result(results, 0)? = Val::F64(super::compare_timestamps(a, b).to_bits());
             Ok(())
         },
     )
@@ -77,10 +79,10 @@ fn install_getters(linker: &mut Linker<StoreData>, types: &DirectTypes) -> wasmt
         |caller, params, results| {
             let timestamp = shared::zoned_date_time_timestamp_from_val(
                 caller,
-                &params[0],
+                abi_arg(params, 0)?,
                 "ZonedDateTime.epochMilliseconds",
             )?;
-            results[0] = Val::F64(shared::epoch_milliseconds(timestamp).to_bits());
+            *abi_result(results, 0)? = Val::F64(shared::epoch_milliseconds(timestamp).to_bits());
             Ok(())
         },
     )?;
@@ -117,8 +119,9 @@ fn install_getters(linker: &mut Linker<StoreData>, types: &DirectTypes) -> wasmt
             FuncType::new(&types.engine, [types.object.clone()], [ValType::F64]),
             true,
             move |caller, params, results| {
-                let zoned = shared::zoned_date_time_from_val(caller, &params[0], "ZonedDateTime")?;
-                results[0] = Val::F64(getter(&zoned).to_bits());
+                let zoned =
+                    shared::zoned_date_time_from_val(caller, abi_arg(params, 0)?, "ZonedDateTime")?;
+                *abi_result(results, 0)? = Val::F64(getter(&zoned).to_bits());
                 Ok(())
             },
         )?;
@@ -137,10 +140,10 @@ fn install_getters(linker: &mut Linker<StoreData>, types: &DirectTypes) -> wasmt
         |caller, params, results| {
             let text = shared::zoned_date_time_time_zone_id_from_val(
                 caller,
-                &params[0],
+                abi_arg(params, 0)?,
                 "ZonedDateTime.timeZoneId",
             )?;
-            results[0] = Val::AnyRef(Some(
+            *abi_result(results, 0)? = Val::AnyRef(Some(
                 write_submilli_string_struct(caller, &text)?.to_anyref(),
             ));
             Ok(())
@@ -162,10 +165,13 @@ fn install_getters(linker: &mut Linker<StoreData>, types: &DirectTypes) -> wasmt
             ),
             true,
             move |caller, params, results| {
-                let (zoned, tz_id) =
-                    shared::zoned_date_time_parts_from_val(caller, &params[0], "ZonedDateTime")?;
+                let (zoned, tz_id) = shared::zoned_date_time_parts_from_val(
+                    caller,
+                    abi_arg(params, 0)?,
+                    "ZonedDateTime",
+                )?;
                 let text = getter(&zoned, &tz_id);
-                results[0] = Val::AnyRef(Some(
+                *abi_result(results, 0)? = Val::AnyRef(Some(
                     write_submilli_string_struct(caller, &text)?.to_anyref(),
                 ));
                 Ok(())
@@ -180,8 +186,9 @@ fn install_getters(linker: &mut Linker<StoreData>, types: &DirectTypes) -> wasmt
         FuncType::new(&types.engine, [types.object.clone()], [ValType::I32]),
         true,
         |caller, params, results| {
-            let zoned = shared::zoned_date_time_from_val(caller, &params[0], "ZonedDateTime")?;
-            results[0] = Val::I32(zoned.in_leap_year() as i32);
+            let zoned =
+                shared::zoned_date_time_from_val(caller, abi_arg(params, 0)?, "ZonedDateTime")?;
+            *abi_result(results, 0)? = Val::I32(zoned.in_leap_year() as i32);
             Ok(())
         },
     )?;
@@ -192,8 +199,9 @@ fn install_getters(linker: &mut Linker<StoreData>, types: &DirectTypes) -> wasmt
         FuncType::new(&types.engine, [types.object.clone()], [ValType::F64]),
         true,
         |caller, params, results| {
-            let zoned = shared::zoned_date_time_from_val(caller, &params[0], "ZonedDateTime")?;
-            results[0] = Val::F64(
+            let zoned =
+                shared::zoned_date_time_from_val(caller, abi_arg(params, 0)?, "ZonedDateTime")?;
+            *abi_result(results, 0)? = Val::F64(
                 super::hours_in_day(&zoned)
                     .map_err(crate::runtime::host::range_error)?
                     .to_bits(),
@@ -215,10 +223,10 @@ fn install_getters(linker: &mut Linker<StoreData>, types: &DirectTypes) -> wasmt
         |caller, params, results| {
             let timestamp = shared::zoned_date_time_timestamp_from_val(
                 caller,
-                &params[0],
+                abi_arg(params, 0)?,
                 "ZonedDateTime.epochNanoseconds",
             )?;
-            results[0] = crate::runtime::prelude::bigint::ops::make_bigint_struct(
+            *abi_result(results, 0)? = crate::runtime::prelude::bigint::ops::make_bigint_struct(
                 caller,
                 BigInt::from(timestamp.as_nanosecond()),
             )?;
@@ -248,15 +256,15 @@ fn install_arithmetic(linker: &mut Linker<StoreData>, types: &DirectTypes) -> wa
             true,
             move |caller, params, results| {
                 let (zoned, tz_id) =
-                    shared::zoned_date_time_parts_from_val(caller, &params[0], label)?;
-                let span = shared::read_duration_like(caller, &params[1], &intr, label)?;
+                    shared::zoned_date_time_parts_from_val(caller, abi_arg(params, 0)?, label)?;
+                let span = shared::read_duration_like(caller, abi_arg(params, 1)?, &intr, label)?;
                 let out = if add {
                     super::add(&zoned, span)
                 } else {
                     super::subtract(&zoned, span)
                 }
                 .map_err(crate::runtime::host::range_error)?;
-                results[0] = shared::make_zoned_date_time(caller, &out, &tz_id)?;
+                *abi_result(results, 0)? = shared::make_zoned_date_time(caller, &out, &tz_id)?;
                 Ok(())
             },
         )?;
@@ -283,9 +291,9 @@ fn install_arithmetic(linker: &mut Linker<StoreData>, types: &DirectTypes) -> wa
             ),
             true,
             move |caller, params, results| {
-                let a = shared::zoned_date_time_from_val(caller, &params[0], label)?;
-                let b = shared::zoned_date_time_from_val(caller, &params[1], label)?;
-                let options = shared::object_diff_options(caller, &params[2], label)?;
+                let a = shared::zoned_date_time_from_val(caller, abi_arg(params, 0)?, label)?;
+                let b = shared::zoned_date_time_from_val(caller, abi_arg(params, 1)?, label)?;
+                let options = shared::object_diff_options(caller, abi_arg(params, 2)?, label)?;
                 let span = if until {
                     a.until(options.zoned(&b))
                 } else {
@@ -300,7 +308,7 @@ fn install_arithmetic(linker: &mut Linker<StoreData>, types: &DirectTypes) -> wa
                         ),
                     ))
                 })?;
-                results[0] = shared::make_duration(caller, &span)?;
+                *abi_result(results, 0)? = shared::make_duration(caller, &span)?;
                 Ok(())
             },
         )?;
@@ -321,11 +329,18 @@ fn install_updates(linker: &mut Linker<StoreData>, types: &DirectTypes) -> wasmt
         ),
         true,
         move |caller, params, results| {
-            let zoned =
-                shared::zoned_date_time_from_val(caller, &params[0], "ZonedDateTime.withTimeZone")?;
-            let tz_id = read_string_arg(caller, &params[1], "Temporal.ZonedDateTime.withTimeZone")?;
+            let zoned = shared::zoned_date_time_from_val(
+                caller,
+                abi_arg(params, 0)?,
+                "ZonedDateTime.withTimeZone",
+            )?;
+            let tz_id = read_string_arg(
+                caller,
+                abi_arg(params, 1)?,
+                "Temporal.ZonedDateTime.withTimeZone",
+            )?;
             let (out, canonical_id) = super::with_time_zone(caller, &zoned, &tz_id)?;
-            results[0] = shared::make_zoned_date_time(caller, &out, &canonical_id)?;
+            *abi_result(results, 0)? = shared::make_zoned_date_time(caller, &out, &canonical_id)?;
             Ok(())
         },
     )?;
@@ -341,8 +356,11 @@ fn install_updates(linker: &mut Linker<StoreData>, types: &DirectTypes) -> wasmt
         ),
         true,
         |caller, params, results| {
-            let (zoned, tz_id) =
-                shared::zoned_date_time_parts_from_val(caller, &params[0], "ZonedDateTime.with")?;
+            let (zoned, tz_id) = shared::zoned_date_time_parts_from_val(
+                caller,
+                abi_arg(params, 0)?,
+                "ZonedDateTime.with",
+            )?;
             let dt = zoned.datetime();
             let (year, month, day) = shared::merge_date(
                 (
@@ -350,9 +368,19 @@ fn install_updates(linker: &mut Linker<StoreData>, types: &DirectTypes) -> wasmt
                     i32::from(dt.month()),
                     i32::from(dt.day()),
                 ),
-                shared::object_i64_field(caller, &params[1], "year", "ZonedDateTime.with")?,
-                shared::object_i64_field(caller, &params[1], "month", "ZonedDateTime.with")?,
-                shared::object_i64_field(caller, &params[1], "day", "ZonedDateTime.with")?,
+                shared::object_i64_field(
+                    caller,
+                    abi_arg(params, 1)?,
+                    "year",
+                    "ZonedDateTime.with",
+                )?,
+                shared::object_i64_field(
+                    caller,
+                    abi_arg(params, 1)?,
+                    "month",
+                    "ZonedDateTime.with",
+                )?,
+                shared::object_i64_field(caller, abi_arg(params, 1)?, "day", "ZonedDateTime.with")?,
                 "ZonedDateTime.with",
             )?;
             let time = shared::merge_time(
@@ -362,13 +390,13 @@ fn install_updates(linker: &mut Linker<StoreData>, types: &DirectTypes) -> wasmt
                     i32::from(dt.second()),
                     dt.subsec_nanosecond(),
                 ),
-                shared::object_time_bag(caller, &params[1], "ZonedDateTime.with")?,
+                shared::object_time_bag(caller, abi_arg(params, 1)?, "ZonedDateTime.with")?,
                 "ZonedDateTime.with",
             )?;
             let date = shared::y_m_d_date(year, month, day, "ZonedDateTime.with")?;
             let out = super::with_fields(&zoned, date, time)
                 .map_err(crate::runtime::host::range_error)?;
-            results[0] = shared::make_zoned_date_time(caller, &out, &tz_id)?;
+            *abi_result(results, 0)? = shared::make_zoned_date_time(caller, &out, &tz_id)?;
             Ok(())
         },
     )?;
@@ -384,47 +412,51 @@ fn install_updates(linker: &mut Linker<StoreData>, types: &DirectTypes) -> wasmt
         ),
         true,
         move |caller, params, results| {
-            let (zoned, tz_id) =
-                shared::zoned_date_time_parts_from_val(caller, &params[0], "ZonedDateTime.round")?;
-            let (unit, mode, increment) =
-                if crate::runtime::prelude::collection::is_a(caller, &params[1], &string_type)? {
-                    (
-                        read_string_arg(caller, &params[1], "Temporal.ZonedDateTime.round")?,
-                        None,
-                        None,
-                    )
-                } else {
-                    let unit = shared::object_string_field(
-                        caller,
-                        &params[1],
-                        "smallestUnit",
-                        "ZonedDateTime.round",
-                    )?
-                    .ok_or_else(|| {
-                        wasmtime::Error::msg(
-                            "Temporal.ZonedDateTime.round: smallestUnit is required",
-                        )
-                    })?;
-                    let mode = shared::object_string_field(
-                        caller,
-                        &params[1],
-                        "roundingMode",
-                        "ZonedDateTime.round",
-                    )?
-                    .map(|mode| shared::round_mode_from_str(&mode, "ZonedDateTime.round"))
-                    .transpose()?;
-                    let increment = shared::object_i64_field(
-                        caller,
-                        &params[1],
-                        "roundingIncrement",
-                        "ZonedDateTime.round",
-                    )?;
-                    (unit, mode, increment)
-                };
+            let (zoned, tz_id) = shared::zoned_date_time_parts_from_val(
+                caller,
+                abi_arg(params, 0)?,
+                "ZonedDateTime.round",
+            )?;
+            let (unit, mode, increment) = if crate::runtime::prelude::collection::is_a(
+                caller,
+                abi_arg(params, 1)?,
+                &string_type,
+            )? {
+                (
+                    read_string_arg(caller, abi_arg(params, 1)?, "Temporal.ZonedDateTime.round")?,
+                    None,
+                    None,
+                )
+            } else {
+                let unit = shared::object_string_field(
+                    caller,
+                    abi_arg(params, 1)?,
+                    "smallestUnit",
+                    "ZonedDateTime.round",
+                )?
+                .ok_or_else(|| {
+                    wasmtime::Error::msg("Temporal.ZonedDateTime.round: smallestUnit is required")
+                })?;
+                let mode = shared::object_string_field(
+                    caller,
+                    abi_arg(params, 1)?,
+                    "roundingMode",
+                    "ZonedDateTime.round",
+                )?
+                .map(|mode| shared::round_mode_from_str(&mode, "ZonedDateTime.round"))
+                .transpose()?;
+                let increment = shared::object_i64_field(
+                    caller,
+                    abi_arg(params, 1)?,
+                    "roundingIncrement",
+                    "ZonedDateTime.round",
+                )?;
+                (unit, mode, increment)
+            };
             let unit = shared::unit_from_str(&unit, "ZonedDateTime.round")?;
             let out = super::round(&zoned, unit, mode, increment)
                 .map_err(crate::runtime::host::range_error)?;
-            results[0] = shared::make_zoned_date_time(caller, &out, &tz_id)?;
+            *abi_result(results, 0)? = shared::make_zoned_date_time(caller, &out, &tz_id)?;
             Ok(())
         },
     )?;
@@ -442,11 +474,11 @@ fn install_updates(linker: &mut Linker<StoreData>, types: &DirectTypes) -> wasmt
         move |caller, params, results| {
             let (zoned, tz_id) = shared::zoned_date_time_parts_from_val(
                 caller,
-                &params[0],
+                abi_arg(params, 0)?,
                 "ZonedDateTime.startOfDay",
             )?;
             let out = super::start_of_day(&zoned).map_err(crate::runtime::host::range_error)?;
-            results[0] = shared::make_zoned_date_time(caller, &out, &tz_id)?;
+            *abi_result(results, 0)? = shared::make_zoned_date_time(caller, &out, &tz_id)?;
             Ok(())
         },
     )?;
@@ -470,10 +502,10 @@ fn install_conversions(
         |caller, params, results| {
             let timestamp = shared::zoned_date_time_timestamp_from_val(
                 caller,
-                &params[0],
+                abi_arg(params, 0)?,
                 "ZonedDateTime.toInstant",
             )?;
-            results[0] = shared::make_instant(caller, timestamp)?;
+            *abi_result(results, 0)? = shared::make_instant(caller, timestamp)?;
             Ok(())
         },
     )?;
@@ -489,8 +521,9 @@ fn install_conversions(
             ),
             true,
             move |caller, params, results| {
-                let zoned = shared::zoned_date_time_from_val(caller, &params[0], "ZonedDateTime")?;
-                results[0] = match method {
+                let zoned =
+                    shared::zoned_date_time_from_val(caller, abi_arg(params, 0)?, "ZonedDateTime")?;
+                *abi_result(results, 0)? = match method {
                     "toPlainDate" => shared::make_plain_date(
                         caller,
                         i32::from(zoned.year()),
@@ -514,7 +547,11 @@ fn install_conversions(
                         i32::from(zoned.second()),
                         zoned.datetime().subsec_nanosecond(),
                     )?,
-                    _ => unreachable!(),
+                    _ => {
+                        return Err(crate::runtime::host::invariant_trap(
+                            "Temporal.ZonedDateTime: unknown conversion",
+                        ));
+                    }
                 };
                 Ok(())
             },
@@ -536,8 +573,9 @@ fn install_strings(linker: &mut Linker<StoreData>, types: &DirectTypes) -> wasmt
             ),
             true,
             move |caller, params, results| {
-                let zoned = shared::zoned_date_time_from_val(caller, &params[0], "ZonedDateTime")?;
-                results[0] = Val::AnyRef(Some(
+                let zoned =
+                    shared::zoned_date_time_from_val(caller, abi_arg(params, 0)?, "ZonedDateTime")?;
+                *abi_result(results, 0)? = Val::AnyRef(Some(
                     write_submilli_string_struct(caller, &zoned.to_string())?.to_anyref(),
                 ));
                 Ok(())
@@ -557,16 +595,16 @@ fn install_strings(linker: &mut Linker<StoreData>, types: &DirectTypes) -> wasmt
         |caller, params, results| {
             let (a, a_tz) = shared::zoned_date_time_identity_from_val(
                 caller,
-                &params[0],
+                abi_arg(params, 0)?,
                 "ZonedDateTime.equals",
             )?;
             let (b, b_tz) = shared::zoned_date_time_identity_from_val(
                 caller,
-                &params[1],
+                abi_arg(params, 1)?,
                 "ZonedDateTime.equals",
             )?;
             let equal = a == b && super::time_zone_ids_equal(caller, &a_tz, &b_tz)?;
-            results[0] = Val::I32(equal as i32);
+            *abi_result(results, 0)? = Val::I32(equal as i32);
             Ok(())
         },
     )
@@ -662,14 +700,13 @@ pub(crate) fn declare(defs: &mut PackageDeclaration) {
         vec![receiver()],
         zoned(),
     );
-    for method in ["toInstant", "toPlainDate", "toPlainTime", "toPlainDateTime"] {
-        let ret = match method {
-            "toInstant" => shared::temporal_type("Instant"),
-            "toPlainDate" => shared::temporal_type("PlainDate"),
-            "toPlainTime" => shared::temporal_type("PlainTime"),
-            "toPlainDateTime" => shared::temporal_type("PlainDateTime"),
-            _ => unreachable!(),
-        };
+    for (method, result_type) in [
+        ("toInstant", "Instant"),
+        ("toPlainDate", "PlainDate"),
+        ("toPlainTime", "PlainTime"),
+        ("toPlainDateTime", "PlainDateTime"),
+    ] {
+        let ret = shared::temporal_type(result_type);
         shared::declare_direct_fn(
             defs,
             method,

@@ -3,6 +3,7 @@
 //! the value symbols codegen routes through. The match/glue logic lives in the
 //! parent module; matching itself stays in `submilli:regex`.
 
+use crate::runtime::host::{abi_arg, abi_result};
 use wasmtime::{FuncType, HeapType, Linker, RefType, StructType, Val, ValType};
 
 use crate::runtime::StoreData;
@@ -69,7 +70,8 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         ft(vec![string.clone(), string.clone()], vec![obj.clone()]),
         true,
         |caller, params, results| {
-            results[0] = super::construct(caller, &params[0], &params[1])?;
+            *abi_result(results, 0)? =
+                super::construct(caller, abi_arg(params, 0)?, abi_arg(params, 1)?)?;
             Ok(())
         },
     )?;
@@ -82,7 +84,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         ft(vec![obj.clone(), string.clone()], vec![boolean.clone()]),
         true,
         |caller, params, results| {
-            results[0] = Val::I32(i32::from(super::test(caller, params)?));
+            *abi_result(results, 0)? = Val::I32(i32::from(super::test(caller, params)?));
             Ok(())
         },
     )?;
@@ -93,7 +95,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         ft(vec![obj.clone(), string.clone()], vec![obj.clone()]),
         true,
         |caller, params, results| {
-            results[0] = super::exec(caller, params)?;
+            *abi_result(results, 0)? = super::exec(caller, params)?;
             Ok(())
         },
     )?;
@@ -105,7 +107,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
             ft(vec![obj.clone()], vec![string.clone()]),
             true,
             move |caller, params, results| {
-                results[0] = super::string_field(caller, params, field)?;
+                *abi_result(results, 0)? = super::string_field(caller, params, field)?;
                 Ok(())
             },
         )?;
@@ -117,7 +119,8 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         ft(vec![obj.clone()], vec![num.clone()]),
         true,
         |caller, params, results| {
-            results[0] = Val::F64(super::last_index_getter(caller, params)?.to_bits());
+            *abi_result(results, 0)? =
+                Val::F64(super::last_index_getter(caller, params)?.to_bits());
             Ok(())
         },
     )?;
@@ -129,7 +132,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
             ft(vec![obj.clone()], vec![boolean.clone()]),
             true,
             move |caller, params, results| {
-                results[0] = Val::I32(i32::from(super::flag(caller, params, mask)?));
+                *abi_result(results, 0)? = Val::I32(i32::from(super::flag(caller, params, mask)?));
                 Ok(())
             },
         )?;
@@ -144,7 +147,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
             ft(vec![obj.clone()], vec![string.clone()]),
             true,
             move |caller, params, results| {
-                results[0] = super::match_field(caller, params, field)?;
+                *abi_result(results, 0)? = super::match_field(caller, params, field)?;
                 Ok(())
             },
         )?;
@@ -156,7 +159,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         ft(vec![obj.clone()], vec![num.clone()]),
         true,
         |caller, params, results| {
-            results[0] = Val::F64(super::match_index(caller, params)?.to_bits());
+            *abi_result(results, 0)? = Val::F64(super::match_index(caller, params)?.to_bits());
             Ok(())
         },
     )?;
@@ -167,7 +170,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         ft(vec![obj.clone()], vec![array.clone()]),
         true,
         |caller, params, results| {
-            results[0] = super::groups(caller, params)?;
+            *abi_result(results, 0)? = super::groups(caller, params)?;
             Ok(())
         },
     )?;
@@ -179,7 +182,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         true,
         |caller, params, results| {
             Box::pin(async move {
-                results[0] = super::named_groups(caller, params).await?;
+                *abi_result(results, 0)? = super::named_groups(caller, params).await?;
                 Ok(())
             })
         },
@@ -193,7 +196,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         ft(vec![string.clone(), obj.clone()], vec![obj.clone()]),
         true,
         |caller, params, results| {
-            results[0] = super::string_match(caller, params)?;
+            *abi_result(results, 0)? = super::string_match(caller, params)?;
             Ok(())
         },
     )?;
@@ -204,7 +207,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         ft(vec![string.clone(), obj.clone()], vec![num.clone()]),
         true,
         |caller, params, results| {
-            results[0] = Val::F64(super::string_search(caller, params)?.to_bits());
+            *abi_result(results, 0)? = Val::F64(super::string_search(caller, params)?.to_bits());
             Ok(())
         },
     )?;
@@ -215,7 +218,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         ft(vec![string.clone(), obj.clone()], vec![array.clone()]),
         true,
         |caller, params, results| {
-            results[0] = super::string_match_all(caller, params)?;
+            *abi_result(results, 0)? = super::string_match_all(caller, params)?;
             Ok(())
         },
     )?;
@@ -229,7 +232,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         ),
         true,
         |caller, params, results| {
-            results[0] = super::string_replace(caller, params)?;
+            *abi_result(results, 0)? = super::string_replace(caller, params)?;
             Ok(())
         },
     )?;
@@ -243,7 +246,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         ),
         true,
         |caller, params, results| {
-            results[0] = super::string_replace_all(caller, params)?;
+            *abi_result(results, 0)? = super::string_replace_all(caller, params)?;
             Ok(())
         },
     )?;
@@ -257,7 +260,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         ),
         true,
         |caller, params, results| {
-            results[0] = super::string_split(caller, params)?;
+            *abi_result(results, 0)? = super::string_split(caller, params)?;
             Ok(())
         },
     )?;

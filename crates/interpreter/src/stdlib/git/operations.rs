@@ -2,6 +2,7 @@ use super::storage::{
     Entries, MAX_PATHS, MAX_REQUESTED_PATHS, Snapshot, memory_limit, validate_branch,
     validate_new_ref_name, validate_path,
 };
+use crate::runtime::host::invariant_trap;
 use gix::bstr::ByteSlice;
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
@@ -646,6 +647,10 @@ pub fn replace_worktree(snapshot: &Snapshot, next: &Entries) -> Result<()> {
         bail!("git: switching and pulling require a clean working tree, including untracked files");
     }
     validate_file_set(next)?;
+    let mut pending = snapshot
+        .pending_worktree
+        .try_borrow_mut()
+        .map_err(|_| invariant_trap("git: pending worktree already borrowed"))?;
     let mut change = super::stage::WorktreeChange::default();
     // Every file that goes or changes is removed before any is placed, so a
     // file can take a directory's place, or a name differing only in case.
@@ -664,7 +669,7 @@ pub fn replace_worktree(snapshot: &Snapshot, next: &Entries) -> Result<()> {
         change.place.push(path.clone());
     }
     write_index(snapshot, next)?;
-    *snapshot.pending_worktree.borrow_mut() = Some(change);
+    *pending = Some(change);
     Ok(())
 }
 

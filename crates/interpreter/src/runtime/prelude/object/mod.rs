@@ -6,6 +6,7 @@
 //! a catchable `Error`, matching the Wasm bodies in
 //! `codegen/prelude/object_shape.rs`.
 
+use crate::runtime::host::{abi_arg, abi_result};
 mod dynamic;
 
 use wasmtime::{
@@ -460,7 +461,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
             ft(vec![obj.clone()], vec![array.clone()]),
             true,
             move |caller, params, results| {
-                results[0] = enumerate(caller, &params[0], kind)?;
+                *abi_result(results, 0)? = enumerate(caller, abi_arg(params, 0)?, kind)?;
                 Ok(())
             },
         )?;
@@ -473,7 +474,11 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         ft(vec![obj.clone(), string.clone()], vec![boolean.clone()]),
         true,
         |caller, params, results| {
-            results[0] = Val::I32(i32::from(has_own(caller, &params[0], &params[1])?));
+            *abi_result(results, 0)? = Val::I32(i32::from(has_own(
+                caller,
+                abi_arg(params, 0)?,
+                abi_arg(params, 1)?,
+            )?));
             Ok(())
         },
     )?;
@@ -484,7 +489,14 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         ctor_key("#insertField"),
         ft(vec![obj.clone(), string, obj.clone()], vec![]),
         true,
-        |caller, params, _| insert_field(caller, &params[0], &params[1], &params[2]),
+        |caller, params, _| {
+            insert_field(
+                caller,
+                abi_arg(params, 0)?,
+                abi_arg(params, 1)?,
+                abi_arg(params, 2)?,
+            )
+        },
     )?;
 
     let shape = ValType::Ref(RefType::new(
@@ -501,7 +513,13 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         ),
         true,
         |caller, params, results| {
-            results[0] = spread(caller, &params[0], &params[1], &params[2], &params[3])?;
+            *abi_result(results, 0)? = spread(
+                caller,
+                abi_arg(params, 0)?,
+                abi_arg(params, 1)?,
+                abi_arg(params, 2)?,
+                abi_arg(params, 3)?,
+            )?;
             Ok(())
         },
     )?;
@@ -520,9 +538,9 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         |caller, params, results| {
             Box::pin(async move {
                 let intr = intrinsic_types(&mut *caller)?;
-                results[0] = super::vtable::object_to_json(
+                *abi_result(results, 0)? = super::vtable::object_to_json(
                     caller,
-                    &params[0],
+                    abi_arg(params, 0)?,
                     &intr.raw_string,
                     &intr.string,
                 )
@@ -539,7 +557,9 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         true,
         |caller, params, results| {
             Box::pin(async move {
-                results[0] = Val::I32(i32::from(same_value(caller, &params[0], &params[1]).await?));
+                *abi_result(results, 0)? = Val::I32(i32::from(
+                    same_value(caller, abi_arg(params, 0)?, abi_arg(params, 1)?).await?,
+                ));
                 Ok(())
             })
         },

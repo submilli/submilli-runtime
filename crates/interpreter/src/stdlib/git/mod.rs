@@ -1,4 +1,5 @@
 //! Capability-controlled Git operations. No subprocesses or guest-visible credentials.
+use crate::runtime::host::{abi_arg, abi_result};
 pub(crate) mod class;
 pub mod declaration;
 mod history;
@@ -161,7 +162,7 @@ fn install_repository_reads(
         false,
         |caller, params, results| {
             Box::pin(async move {
-                results[0] = invoke(caller, "status", true, params).await?;
+                *abi_result(results, 0)? = invoke(caller, "status", true, params).await?;
                 Ok(())
             })
         },
@@ -178,7 +179,7 @@ fn install_repository_reads(
         false,
         |caller, params, results| {
             Box::pin(async move {
-                results[0] = invoke(caller, "log", true, params).await?;
+                *abi_result(results, 0)? = invoke(caller, "log", true, params).await?;
                 Ok(())
             })
         },
@@ -195,7 +196,7 @@ fn install_repository_reads(
         false,
         |caller, params, results| {
             Box::pin(async move {
-                results[0] = invoke(caller, "diff", true, params).await?;
+                *abi_result(results, 0)? = invoke(caller, "diff", true, params).await?;
                 Ok(())
             })
         },
@@ -212,7 +213,7 @@ fn install_repository_reads(
         false,
         |caller, params, results| {
             Box::pin(async move {
-                results[0] = invoke(caller, "show", true, params).await?;
+                *abi_result(results, 0)? = invoke(caller, "show", true, params).await?;
                 Ok(())
             })
         },
@@ -225,7 +226,7 @@ fn install_repository_reads(
         false,
         |caller, params, results| {
             Box::pin(async move {
-                results[0] = invoke(caller, "branches", true, params).await?;
+                *abi_result(results, 0)? = invoke(caller, "branches", true, params).await?;
                 Ok(())
             })
         },
@@ -238,7 +239,7 @@ fn install_repository_reads(
         false,
         |caller, params, results| {
             Box::pin(async move {
-                results[0] = invoke(caller, "remotes", true, params).await?;
+                *abi_result(results, 0)? = invoke(caller, "remotes", true, params).await?;
                 Ok(())
             })
         },
@@ -292,7 +293,7 @@ fn install_repository_writes(
         false,
         |caller, params, results| {
             Box::pin(async move {
-                results[0] = invoke(caller, "commit", true, params).await?;
+                *abi_result(results, 0)? = invoke(caller, "commit", true, params).await?;
                 Ok(())
             })
         },
@@ -373,7 +374,7 @@ fn install_repository_writes(
         false,
         |caller, params, results| {
             Box::pin(async move {
-                results[0] = invoke(caller, "fetch", true, params).await?;
+                *abi_result(results, 0)? = invoke(caller, "fetch", true, params).await?;
                 Ok(())
             })
         },
@@ -390,7 +391,7 @@ fn install_repository_writes(
         false,
         |caller, params, results| {
             Box::pin(async move {
-                results[0] = invoke(caller, "pull", true, params).await?;
+                *abi_result(results, 0)? = invoke(caller, "pull", true, params).await?;
                 Ok(())
             })
         },
@@ -456,7 +457,7 @@ async fn invoke(
     meter.settle(&mut *caller)?;
     if let Err(error) = &outcome
         && meter.is_exhausted()
-        && !error.is::<crate::runtime::host::FatalHostError>()
+        && !crate::runtime::host::ends_the_run(error)
         && !error.is::<stage::NeedsHostRecovery>()
     {
         // Stopped for fuel before publishing: the run ends as a Wasm loop
@@ -464,6 +465,16 @@ async fn invoke(
         // or a publication that needs recovery, says more and goes first.
         return Err(wasmtime::Trap::OutOfFuel.into());
     }
+
+    let outcome = match outcome {
+        Err(error)
+            if crate::runtime::host::ends_the_run(&error)
+                || error.is::<stage::NeedsHostRecovery>() =>
+        {
+            return Err(error);
+        }
+        other => other,
+    };
     if let Some((capability, reason)) = denial
         .lock()
         .map_err(|_| wasmtime::Error::msg("git: denial lock poisoned"))?
@@ -509,8 +520,15 @@ async fn finish_worker<T>(
             cancelled.store(true, Ordering::Relaxed);
             // A catchable timeout must not let guest code resume while the
             // worker is still publishing or rolling back repository changes.
-            let _ = worker.await;
-            Err(error)
+            match worker.await {
+                Err(worker_error)
+                    if crate::runtime::host::ends_the_run(&worker_error)
+                        || worker_error.is::<stage::NeedsHostRecovery>() =>
+                {
+                    Err(worker_error)
+                }
+                _ => Err(error),
+            }
         }
     }
 }
@@ -524,7 +542,10 @@ async fn decode_arguments(
 ) -> Result<(Vec<Value>, String)> {
     let mut args = Vec::new();
     let offset = usize::from(method);
-    for param in &params[offset..] {
+    for param in params
+        .get(offset..)
+        .ok_or_else(|| crate::runtime::host::invariant_trap("git ABI: missing arguments"))?
+    {
         let units = value::serialize(caller, param).await?;
         if units.len() as u64 * 2 > max_bytes {
             bail!("git: argument size limit exceeded");
@@ -535,7 +556,7 @@ async fn decode_arguments(
         args.push(serde_json::from_str::<Value>(&text)?);
     }
     let path = if method {
-        let field = class::path(caller, &params[0])?;
+        let field = class::path(caller, abi_arg(params, 0)?)?;
         read_string_arg(&mut *caller, &field, "git repository")?
     } else {
         operations::text_arg(&args, usize::from(op == "clone"))?.to_owned()

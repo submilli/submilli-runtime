@@ -6,6 +6,7 @@
 //! It also hosts `toNumber` — the string→number coercion `Number(x)` calls — the
 //! former `submilli:number` module, folded into the prelude-host surface.
 
+use crate::runtime::host::{abi_arg, abi_result};
 use wasmtime::{
     Caller, FuncType, Global, GlobalType, HeapType, Linker, Mutability, RefType, Store, Val,
     ValType,
@@ -17,8 +18,8 @@ use crate::runtime::host::{
 };
 use crate::runtime::intrinsic_types::intrinsic_types;
 use crate::runtime::number::{
-    format_number_js, parse_float_js, parse_int_js, to_exponential_js, to_fixed_js,
-    to_precision_js, to_string_radix_js,
+    format_number_js, parse_float_js, parse_int_js, to_exponential_js_checked, to_fixed_js_checked,
+    to_precision_js_checked, to_string_radix_js_checked,
 };
 use crate::runtime::prelude::{MODULE_NAME, declare_method};
 use crate::{MangledName, PackageDeclaration, Param, Span, Type, ValueKind, ValueSymbol};
@@ -103,7 +104,7 @@ fn global_key(name: &str) -> MangledName {
     crate::mangle::prelude(name)
 }
 
-type FormatOp = fn(f64, f64) -> Result<String, String>;
+type FormatOp = fn(f64, f64) -> wasmtime::Result<String>;
 
 /// Dispatch key for an instance method `Number#<m>` — the prelude's `Number`
 /// interface mangled name extended by the method.
@@ -123,35 +124,35 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
 
     // Instance formatters — receiver `f64` plus a digits/radix `f64` whose NaN /
     // default value is the omitted-optional sentinel the `*_js` ops interpret.
-    // `to_string_radix_js` treats radix 10 (the declared default) as plain
+    // `to_string_radix_js_checked` treats radix 10 (the declared default) as plain
     // `toString`.
     reg_format(
         linker,
         &engine,
         &string_ref,
         method_key("toString"),
-        to_string_radix_js,
+        to_string_radix_js_checked,
     )?;
     reg_format(
         linker,
         &engine,
         &string_ref,
         method_key("toFixed"),
-        to_fixed_js,
+        to_fixed_js_checked,
     )?;
     reg_format(
         linker,
         &engine,
         &string_ref,
         method_key("toPrecision"),
-        to_precision_js,
+        to_precision_js_checked,
     )?;
     reg_format(
         linker,
         &engine,
         &string_ref,
         method_key("toExponential"),
-        to_exponential_js,
+        to_exponential_js_checked,
     )?;
 
     // `Number#toJson` — no argument; non-finite values are not valid JSON and
@@ -164,13 +165,13 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         FuncType::new(&engine, [ValType::F64], [s]),
         true,
         |caller, params, results| {
-            let n = read_f64(&params[0], "Number#toJson")?;
+            let n = read_f64(abi_arg(params, 0)?, "Number#toJson")?;
             let out = if n.is_finite() {
                 format_number_js(n)
             } else {
                 "null".to_string()
             };
-            results[0] = string_val(caller, &out)?;
+            *abi_result(results, 0)? = string_val(caller, &out)?;
             Ok(())
         },
     )?;
@@ -184,9 +185,10 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         FuncType::new(&engine, [s, ValType::F64], [ValType::F64]),
         true,
         |caller, params, results| {
-            let input = read_string_arg(caller, &params[0], "Number.parseInt")?;
-            let radix = read_f64(&params[1], "Number.parseInt")?;
-            results[0] = Val::F64(parse_int_js(&input, to_radix_u32(radix)).to_bits());
+            let input = read_string_arg(caller, abi_arg(params, 0)?, "Number.parseInt")?;
+            let radix = read_f64(abi_arg(params, 1)?, "Number.parseInt")?;
+            *abi_result(results, 0)? =
+                Val::F64(parse_int_js(&input, to_radix_u32(radix)).to_bits());
             Ok(())
         },
     )?;
@@ -200,8 +202,8 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         FuncType::new(&engine, [s], [ValType::F64]),
         true,
         |caller, params, results| {
-            let input = read_string_arg(caller, &params[0], "Number.parseFloat")?;
-            results[0] = Val::F64(parse_float_js(&input).to_bits());
+            let input = read_string_arg(caller, abi_arg(params, 0)?, "Number.parseFloat")?;
+            *abi_result(results, 0)? = Val::F64(parse_float_js(&input).to_bits());
             Ok(())
         },
     )?;
@@ -224,7 +226,8 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         FuncType::new(&engine, [obj_param], [ValType::F64]),
         true,
         |caller, params, results| {
-            results[0] = Val::F64(number_ctor_call(caller, &params[0])?.to_bits());
+            *abi_result(results, 0)? =
+                Val::F64(number_ctor_call(caller, abi_arg(params, 0)?)?.to_bits());
             Ok(())
         },
     )?;
@@ -392,12 +395,18 @@ fn reg_format(
         FuncType::new(engine, [ValType::F64, ValType::F64], [string_ref.clone()]),
         true,
         move |caller, params, results| {
-            let x = read_f64(&params[0], "Number formatter")?;
-            let arg = read_f64(&params[1], "Number formatter")?;
+            let x = read_f64(abi_arg(params, 0)?, "Number formatter")?;
+            let arg = read_f64(abi_arg(params, 1)?, "Number formatter")?;
             // Formatter argument rejections (radix/digits/precision out of
             // range) are spec `RangeError`s.
-            let out = op(x, arg).map_err(crate::runtime::host::range_error)?;
-            results[0] = string_val(caller, &out)?;
+            let out = op(x, arg).map_err(|error| {
+                if crate::runtime::host::ends_the_run(&error) {
+                    error
+                } else {
+                    crate::runtime::host::range_error(error.to_string())
+                }
+            })?;
+            *abi_result(results, 0)? = string_val(caller, &out)?;
             Ok(())
         },
     )
@@ -425,8 +434,9 @@ fn reg_number_predicate(
         ),
         true,
         move |caller, params, results| {
-            results[0] =
-                Val::I32(super::value::number_value(caller, &params[0])?.is_some_and(op) as i32);
+            *abi_result(results, 0)? = Val::I32(
+                super::value::number_value(caller, abi_arg(params, 0)?)?.is_some_and(op) as i32,
+            );
             Ok(())
         },
     )
@@ -446,8 +456,8 @@ fn reg_predicate(
         FuncType::new(engine, [ValType::F64], [ValType::I32]),
         true,
         move |_caller, params, results| {
-            let n = read_f64(&params[0], "Number predicate")?;
-            results[0] = Val::I32(op(n) as i32);
+            let n = read_f64(abi_arg(params, 0)?, "Number predicate")?;
+            *abi_result(results, 0)? = Val::I32(op(n) as i32);
             Ok(())
         },
     )
@@ -858,4 +868,37 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
             },
         },
     );
+}
+
+#[cfg(test)]
+mod invariant_tests {
+    use super::*;
+    #[tokio::test]
+    async fn prelude_formatter_preserves_injected_trap() {
+        let config = crate::runtime::RuntimeConfig::default();
+        let engine = config.engine().unwrap();
+        let data = StoreData::with_vfs(crate::runtime::Vfs::tempdir().unwrap());
+        let mut store = config.store_async(&engine, data).unwrap();
+        let mut linker = Linker::new(&engine);
+        let key = method_key("injected_formatter");
+        reg_format(&mut linker, &engine, &ValType::I32, key.clone(), |_, _| {
+            Err(crate::runtime::host::invariant_trap(
+                "injected formatter invariant",
+            ))
+        })
+        .unwrap();
+        let wasmtime::Extern::Func(function) =
+            linker.get(&mut store, MODULE_NAME, key.as_str()).unwrap()
+        else {
+            panic!("expected formatter");
+        };
+        let error = function
+            .call_async(&mut store, &[Val::F64(0), Val::F64(0)], &mut [Val::I32(0)])
+            .await
+            .unwrap_err();
+        assert_eq!(
+            error.downcast_ref::<wasmtime::Trap>(),
+            Some(&wasmtime::Trap::UnreachableCodeReached)
+        );
+    }
 }
