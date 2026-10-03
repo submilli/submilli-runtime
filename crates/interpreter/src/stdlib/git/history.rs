@@ -13,9 +13,10 @@ pub(super) fn resolve_commit<'a>(
     for _ in 0..64 {
         snapshot.check_cancelled()?;
         let object = snapshot.repo.find_object(id)?;
+        snapshot.meter.parse(object.data.len() as u64);
         bytes = bytes.saturating_add(object.data.len() as u64);
         if bytes > snapshot.max_bytes {
-            bail!("git: revision resource limit exceeded");
+            return Err(super::storage::memory_limit("revision resource"));
         }
         match object.kind {
             gix::objs::Kind::Commit => return Ok(object.into_commit()),
@@ -62,8 +63,11 @@ pub(super) struct FetchGraph<'a>(Ancestors<'a>);
 
 pub(super) fn validate_fetch_graph(snapshot: &Snapshot) -> Result<FetchGraph<'_>> {
     let mut graph = FetchGraph(Ancestors::empty(snapshot)?);
+    snapshot.meter_packed_references()?;
     for reference in snapshot.repo.references()?.all()? {
         snapshot.check_cancelled()?;
+        snapshot.meter.syscalls(1);
+        snapshot.meter.elements(1);
         let reference = reference.map_err(|error| wasmtime::Error::msg(error.to_string()))?;
         graph
             .0
@@ -186,10 +190,13 @@ impl<'a> Ancestors<'a> {
         Ok(())
     }
 
+    /// Charges `bytes` decoded or held against the history's memory, and as
+    /// work against fuel.
     fn charge(&mut self, bytes: u64) -> Result<()> {
+        self.snapshot.meter.parse(bytes);
         self.bytes = self.bytes.saturating_add(bytes);
         if self.bytes > self.snapshot.max_bytes {
-            bail!("git: history resource limit exceeded");
+            return Err(super::storage::memory_limit("history resource"));
         }
         Ok(())
     }
@@ -214,15 +221,17 @@ mod tests {
     use super::*;
     use std::sync::atomic::Ordering;
 
-    fn snapshot(max_bytes: u64) -> Snapshot {
+    /// A new repository; the VFS holding it lives as long as it's kept.
+    fn snapshot(max_bytes: u64) -> (crate::runtime::Vfs, Snapshot) {
         let vfs = crate::runtime::Vfs::tempdir().unwrap();
-        Snapshot::init(
-            vfs.dir().unwrap().clone(),
+        let snapshot = Snapshot::init_unmetered(
+            &crate::stdlib::git::location::Location::of_vfs(&vfs),
             "main",
             Default::default(),
             max_bytes,
         )
-        .unwrap()
+        .unwrap();
+        (vfs, snapshot)
     }
 
     fn commit(snapshot: &Snapshot, parents: &[gix::ObjectId], message: &str) -> gix::ObjectId {
@@ -247,7 +256,7 @@ mod tests {
 
     #[test]
     fn breadth_first_merges_deduplicate_parents_and_find_reachability() {
-        let snapshot = snapshot(16_384);
+        let (_vfs, snapshot) = snapshot(16_384);
         let root = commit(&snapshot, &[], "root");
         let left = commit(&snapshot, &[root, root], "left");
         let right = commit(&snapshot, &[root], "right");
@@ -264,7 +273,7 @@ mod tests {
 
     #[test]
     fn aggregate_decoded_history_is_bounded_even_with_duplicate_parents() {
-        let snapshot = snapshot(4096);
+        let (_vfs, snapshot) = snapshot(4096);
         let mut head = commit(&snapshot, &[], "root");
         for _ in 0..12 {
             head = commit(&snapshot, &[head; 16], "child");
@@ -282,7 +291,7 @@ mod tests {
 
     #[test]
     fn frontier_is_bounded_before_loading_missing_parents() {
-        let snapshot = snapshot(4096);
+        let (_vfs, snapshot) = snapshot(4096);
         let parents: Vec<_> = (1..=40)
             .map(|number| gix::ObjectId::from_hex(format!("{number:040x}").as_bytes()).unwrap())
             .collect();
@@ -293,7 +302,7 @@ mod tests {
 
     #[test]
     fn cancellation_stops_an_existing_walk() {
-        let snapshot = snapshot(4096);
+        let (_vfs, snapshot) = snapshot(4096);
         let root = commit(&snapshot, &[], "root");
         let head = commit(&snapshot, &[root], "head");
         let mut walk = Ancestors::new(&snapshot, head).unwrap();
@@ -304,7 +313,7 @@ mod tests {
 
     #[test]
     fn shallow_boundaries_do_not_load_unavailable_parents() {
-        let snapshot = snapshot(4096);
+        let (_vfs, snapshot) = snapshot(4096);
         let head = commit(
             &snapshot,
             &[gix::ObjectId::null(gix::hash::Kind::Sha1)],
@@ -329,7 +338,7 @@ mod tests {
 
     #[test]
     fn plain_revisions_resolve_and_graph_expressions_are_rejected() {
-        let snapshot = snapshot(4096);
+        let (_vfs, snapshot) = snapshot(4096);
         let root = commit(&snapshot, &[], "root");
         let release = tag(&snapshot, root, "commit", "release");
         snapshot
@@ -378,7 +387,7 @@ mod tests {
 
     #[test]
     fn annotated_tag_chain_is_charged_before_following() {
-        let snapshot = snapshot(4096);
+        let (_vfs, snapshot) = snapshot(4096);
         let root = commit(&snapshot, &[], "root");
         let mut head = tag(&snapshot, root, "commit", &"x".repeat(512));
         for _ in 0..10 {
@@ -390,7 +399,7 @@ mod tests {
 
     #[test]
     fn fetch_preflight_shares_a_budget_across_native_refs() {
-        let snapshot = snapshot(4096);
+        let (_vfs, snapshot) = snapshot(4096);
         for branch in ["one", "two"] {
             let mut head = commit(&snapshot, &[], branch);
             for _ in 0..5 {
@@ -422,7 +431,7 @@ mod tests {
 
     #[test]
     fn fetch_preflight_also_bounds_advertised_dangling_history() {
-        let snapshot = snapshot(4096);
+        let (_vfs, snapshot) = snapshot(4096);
         let mut head = commit(&snapshot, &[], "dangling");
         for _ in 0..12 {
             head = commit(&snapshot, &[head; 16], "child");
@@ -443,7 +452,7 @@ mod tests {
 
     #[test]
     fn fetch_preflight_bounds_native_annotated_tag_nesting() {
-        let snapshot = snapshot(32_768);
+        let (_vfs, snapshot) = snapshot(32_768);
         let root = commit(&snapshot, &[], "root");
         let mut head = tag(&snapshot, root, "commit", "release");
         for _ in 0..64 {
@@ -469,7 +478,7 @@ mod tests {
 
     #[test]
     fn unsolicited_acknowledgements_cannot_load_dangling_history() {
-        let snapshot = snapshot(4096);
+        let (_vfs, snapshot) = snapshot(4096);
         let mut head = commit(&snapshot, &[], "dangling");
         for _ in 0..12 {
             head = commit(&snapshot, &[head; 16], "child");

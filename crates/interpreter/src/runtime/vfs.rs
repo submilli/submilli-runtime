@@ -14,7 +14,6 @@
 //! size limit, and a guest path is routed to exactly one of them by
 //! [`Vfs::locate`] before anything is opened.
 
-use std::collections::HashSet;
 use std::ffi::OsString;
 use std::fmt;
 use std::io;
@@ -80,6 +79,8 @@ pub struct Mount {
     rel: PathBuf,
     volume: Arc<str>,
     dir: Arc<Dir>,
+    /// The host directory `dir` was opened on.
+    host: Arc<Path>,
     access: Access,
     quota: Option<Arc<DiskQuota>>,
     /// The identity and exact name of each directory on the way to the mount
@@ -152,6 +153,8 @@ pub struct Placement {
     /// The mounts below this volume; only the root has any. A change to the root
     /// must not remove, replace or write through one of their mount points.
     nested: Arc<[Mount]>,
+    /// The host directory the volume's handle was opened on.
+    host: Arc<Path>,
 }
 
 impl Placement {
@@ -170,6 +173,13 @@ impl Placement {
 
     pub(crate) fn nested(&self) -> &[Mount] {
         &self.nested
+    }
+
+    /// The host directory the volume's handle was opened on. Only Git uses it,
+    /// to let gix open a repository in place after checking that the path
+    /// names the directory the handle holds; see `stdlib::git::location`.
+    pub(crate) fn host(&self) -> &Path {
+        &self.host
     }
 
     /// Whether two placements are the same volume, so a rename between them
@@ -446,6 +456,7 @@ impl Vfs {
             rel,
             volume: Arc::from(spec.volume.as_str()),
             dir,
+            host: Arc::from(spec.host.as_path()),
             access: spec.access,
             quota: spec.quota,
             placeholders: Arc::from(placeholders),
@@ -506,6 +517,7 @@ impl Vfs {
                     quota: mount.quota.clone(),
                     mount: Some(Arc::clone(&mount.guest)),
                     nested: Arc::from([]),
+                    host: Arc::clone(&mount.host),
                 };
                 return Some((Arc::clone(&mount.dir), rest, placement));
             }
@@ -515,6 +527,7 @@ impl Vfs {
             quota: self.quota.clone(),
             mount: None,
             nested: Arc::clone(&self.mounts),
+            host: Arc::from(self.root.as_path()),
         };
         Some((Arc::clone(root), rel.to_path_buf(), placement))
     }
@@ -549,27 +562,6 @@ pub fn regular_files(root: &Dir, max_entries: usize) -> io::Result<Vec<(FileIden
     let mut files = Vec::new();
     for_each_regular_file(root, max_entries, |file, bytes| files.push((file, bytes)))?;
     Ok(files)
-}
-
-/// The bytes the regular files under `root` hold, and those of them in `held` with
-/// their sizes, from one walk: what a change replacing them frees is the total less
-/// the held ones, which stay on disk until released.
-pub fn measure_with_held(
-    root: &Dir,
-    held: &HashSet<FileIdentity>,
-) -> io::Result<(u64, Vec<(FileIdentity, u64)>)> {
-    if held.is_empty() {
-        return Ok((measure_dir(root)?, Vec::new()));
-    }
-    let mut total: u64 = 0;
-    let mut held_files = Vec::new();
-    for_each_regular_file(root, MAX_MEASURED_ENTRIES, |file, bytes| {
-        total = total.saturating_add(bytes);
-        if held.contains(&file) {
-            held_files.push((file, bytes));
-        }
-    })?;
-    Ok((total, held_files))
 }
 
 /// Visit each regular file under `root`. Links are never followed, so a link cannot

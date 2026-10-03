@@ -87,10 +87,15 @@ fn test_data(vfs: Vfs) -> StoreData {
     data
 }
 
-async fn run_source(source: &str, mut data: StoreData) {
+/// Runs `source` with `fuel` to spend, returning how it ended and the host
+/// fuel it was charged.
+async fn run_program(source: &str, mut data: StoreData, fuel: u64) -> (wasmtime::Result<()>, u64) {
     let compiled = crate::compile_script(source, "git.ts", crate::FileId(0), &[], &[])
         .unwrap_or_else(|error| panic!("{error:#?}"));
-    let cfg = RuntimeConfig::default();
+    let cfg = RuntimeConfig {
+        fuel,
+        ..RuntimeConfig::default()
+    };
     let engine = cfg.engine().unwrap();
     data.install_type_info(compiled.type_info.clone());
     let mut store = cfg.store(&engine, data).unwrap();
@@ -100,8 +105,23 @@ async fn run_source(source: &str, mut data: StoreData) {
         .await
         .unwrap();
     let instance = linker.instantiate_async(&mut store, &module).await.unwrap();
-    dispatch_main_async(&mut store, &instance).await.unwrap();
+    let outcome = dispatch_main_async(&mut store, &instance).await.map(drop);
     assert_eq!(store.data().tenant_limits.host_attached_bytes(), 0);
+    (outcome, store.data().host_fuel)
+}
+
+/// Runs `source` to completion, returning the host fuel it was charged.
+async fn host_fuel_of(source: &str, data: StoreData) -> u64 {
+    let (outcome, host_fuel) = run_program(source, data, RuntimeConfig::default().fuel).await;
+    outcome.unwrap();
+    host_fuel
+}
+
+async fn run_source(source: &str, data: StoreData) {
+    run_program(source, data, RuntimeConfig::default().fuel)
+        .await
+        .0
+        .unwrap();
 }
 
 #[tokio::test]
@@ -238,10 +258,13 @@ fn patches_apply_file_lifecycle_and_mode_changes_with_native_git() {
     symlink("target", repo.join("type-change")).unwrap();
     native(repo, &["add", "."]);
     let expected_tree = native(repo, &["write-tree"]);
-    let dir =
-        Arc::new(cap_std::fs::Dir::open_ambient_dir(repo, cap_std::ambient_authority()).unwrap());
-    let snapshot =
-        storage::Snapshot::open(dir, Arc::new(AtomicBool::new(false)), storage::MAX_BYTES).unwrap();
+    let snapshot = storage::Snapshot::open_unmetered(
+        &location::Location::at(repo),
+        Arc::new(AtomicBool::new(false)),
+        storage::MAX_WORKING_BYTES,
+        false,
+    )
+    .unwrap();
     let diff = operations::read(&snapshot, "diff", &[json!({"mode":"staged"})]).unwrap();
     let patch = directory.path().join(".git/review.patch");
     std::fs::write(&patch, diff["patch"].as_str().unwrap()).unwrap();
@@ -281,9 +304,10 @@ impl HttpClient for GitServer {
     > {
         panic!("Git must not use a redirect-following transport")
     }
-    async fn send_without_redirects(
+    async fn send_without_redirects_to(
         &self,
         request: &crate::stdlib::http::transport::HttpRequest,
+        body_out: &mut (dyn std::io::Write + Send),
     ) -> std::result::Result<
         crate::stdlib::http::transport::HttpResponse,
         crate::stdlib::http::transport::HttpError,
@@ -332,11 +356,12 @@ impl HttpClient for GitServer {
             assert!(output.status.success());
             (output.stdout, "application/x-git-upload-pack-result")
         };
+        body_out.write_all(&body).unwrap();
         Ok(crate::stdlib::http::transport::HttpResponse {
             status: 200,
             status_text: "OK".into(),
             headers: vec![("content-type".into(), content_type.into())],
-            body,
+            body: Vec::new(),
             final_url: request.url.clone(),
         })
     }
@@ -682,7 +707,7 @@ async fn expired_deadline_does_not_start_ready_work() {
 async fn timeout_waits_for_worker_cleanup_and_resource_release() {
     let vfs = Vfs::tempdir().unwrap();
     let data = test_data(vfs.clone());
-    let budget = WorkingBudget::reserve(&data.tenant_limits).unwrap();
+    let budget = WorkingBudget::reserve(&data.tenant_limits, "status").unwrap();
     let cancelled = AtomicBool::new(false);
     let (started, ready) = tokio::sync::oneshot::channel();
     let (finish, cleanup) = std::sync::mpsc::channel();
@@ -723,7 +748,7 @@ async fn cancellation_keeps_resources_until_worker_cleanup() {
     let vfs = Vfs::tempdir().unwrap();
     let root = vfs.root().to_owned();
     let data = test_data(vfs.clone());
-    let budget = WorkingBudget::reserve(&data.tenant_limits).unwrap();
+    let budget = WorkingBudget::reserve(&data.tenant_limits, "status").unwrap();
     let cancelled = Arc::new(AtomicBool::new(false));
     let guard = CancelOnDrop(cancelled.clone());
     let (started, ready) = tokio::sync::oneshot::channel();
@@ -783,4 +808,100 @@ fn repository_docs_expose_class_factories_and_capabilities() {
         );
     }
     assert!(!docs.declarations.contains("function init("));
+}
+
+/// A Git operation that needs more fuel than the run has stops before it
+/// publishes, and the run ends in the runtime's own out-of-fuel trap, charged
+/// no more than it had.
+#[tokio::test]
+async fn git_runs_out_of_fuel_like_any_other_work() {
+    let source = r#"
+        import { Repository } from "submilli:git";
+        function main(): void {
+            Repository.open("/repo").add(["."]);
+        }
+    "#;
+    let repository = || {
+        let vfs = Vfs::tempdir().unwrap();
+        let repo = vfs.root().join("repo");
+        std::fs::create_dir(&repo).unwrap();
+        native(&repo, &["init", "-q", "-b", "main"]);
+        for number in 0..2_000 {
+            let path = repo.join(format!("d{:02}/f{number:05}", number % 50));
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, format!("file {number}\n")).unwrap();
+        }
+        vfs
+    };
+    let needed = host_fuel_of(source, test_data(repository())).await;
+    // With a quarter of what it needs, `add` stops before it publishes.
+    let vfs = repository();
+    let (outcome, host_fuel) = run_program(source, test_data(vfs.clone()), needed / 4).await;
+    let error = outcome.unwrap_err();
+    assert_eq!(
+        error.downcast_ref::<wasmtime::Trap>(),
+        Some(&wasmtime::Trap::OutOfFuel),
+        "{error:?}"
+    );
+    assert!(host_fuel <= needed / 4, "{host_fuel}");
+    assert!(
+        !vfs.root().join("repo/.git/index").exists(),
+        "nothing was staged into the repository"
+    );
+}
+
+/// A fetch pays for what it inflates, not for what it transfers: two packs
+/// of about the same size on the wire cost what their contents do.
+#[tokio::test]
+async fn fetch_fuel_follows_what_the_pack_inflates_to() {
+    let mut fuel = Vec::new();
+    // Repetitive, and random bytes of about the same compressed size.
+    let repetitive = vec![b'a'; 5_000_000];
+    let mut state = 0x9E37_79B9_7F4A_7C15u64;
+    let random: Vec<u8> = (0..8_000)
+        .map(|_| {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            state as u8
+        })
+        .collect();
+    for contents in [repetitive, random] {
+        let upstream = tempfile::tempdir().unwrap();
+        native(upstream.path(), &["init", "-q", "-b", "main"]);
+        native(upstream.path(), &["config", "user.name", "Upstream"]);
+        native(
+            upstream.path(),
+            &["config", "user.email", "upstream@example.com"],
+        );
+        std::fs::write(upstream.path().join("data"), &contents).unwrap();
+        native(upstream.path(), &["add", "."]);
+        native(upstream.path(), &["commit", "-q", "-m", "data"]);
+        let vfs = Vfs::tempdir().unwrap();
+        let mut data = test_data(vfs.clone());
+        data.http_client = Arc::new(GitServer {
+            repo: upstream.path().to_owned(),
+            authentication: false,
+        });
+        fuel.push(
+            host_fuel_of(
+                r#"
+                import { Repository } from "submilli:git";
+                function main(): void {
+                    const repo = Repository.init("/repo");
+                    repo.addRemote("origin", "https://example.com/repo.git");
+                    repo.fetch("origin", "main");
+                }
+            "#,
+                data,
+            )
+            .await,
+        );
+    }
+    assert!(
+        fuel[0] > 10 * fuel[1],
+        "5 MB inflated cost {}, 8 KB cost {}",
+        fuel[0],
+        fuel[1]
+    );
 }

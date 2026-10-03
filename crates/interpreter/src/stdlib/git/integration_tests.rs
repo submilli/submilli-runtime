@@ -33,11 +33,13 @@ fn repository() -> tempfile::TempDir {
     root
 }
 
+/// The repository at `root`, opened to write.
 fn snapshot(root: &Path) -> storage::Snapshot {
-    storage::Snapshot::open(
-        Arc::new(Dir::open_ambient_dir(root, cap_std::ambient_authority()).unwrap()),
+    storage::Snapshot::open_unmetered(
+        &super::location::Location::at(root),
         Arc::new(AtomicBool::new(false)),
-        storage::MAX_BYTES,
+        storage::MAX_WORKING_BYTES,
+        true,
     )
     .unwrap()
 }
@@ -71,8 +73,10 @@ fn failed_metadata_staging_does_not_leave_a_recovery_blocker() {
     let root = repository();
     let head = native(root.path(), &["rev-parse", "HEAD"]);
     let state = snapshot(root.path());
-    // A metadata path rejected by publication fails before the backup exists.
-    std::fs::write(state.repo.git_dir().join("hooks/invalid\\name"), "invalid").unwrap();
+    // A reference staged where the repository has a directory: publication
+    // refuses it before moving anything.
+    std::fs::write(state.repo.refs.git_dir().join("refs/heads/blocked"), "x").unwrap();
+    std::fs::create_dir(root.path().join(".git/refs/heads/blocked")).unwrap();
     assert!(state.publish().is_err());
     assert_eq!(native(root.path(), &["rev-parse", "HEAD"]), head);
     assert!(std::fs::read_dir(root.path()).unwrap().all(|entry| {
@@ -100,9 +104,11 @@ fn job(vfs: &Vfs, op: &str) -> Job {
         secrets: data.secret_provider.clone(),
         http: data.http_client.clone(),
         runtime: tokio::runtime::Handle::current(),
+        deadline: tokio::time::Instant::now() + std::time::Duration::from_secs(60),
         cancelled: Arc::new(AtomicBool::new(false)),
-        max_bytes: storage::MAX_BYTES,
+        max_bytes: storage::MAX_WORKING_BYTES,
         transferred: Arc::new(AtomicU64::new(0)),
+        meter: Default::default(),
         denial: Arc::new(Mutex::new(None)),
     }
 }
@@ -120,7 +126,7 @@ async fn native_merge_in_progress_refuses_mutations_without_changing_history() {
         &Dir::open_ambient_dir(root.path(), cap_std::ambient_authority()).unwrap(),
         false,
         &AtomicBool::new(false),
-        storage::MAX_BYTES,
+        storage::MAX_WORKING_BYTES,
     )
     .unwrap();
     let vfs = Vfs::external(root.path().to_owned()).unwrap();
@@ -141,7 +147,7 @@ async fn native_merge_in_progress_refuses_mutations_without_changing_history() {
         &Dir::open_ambient_dir(root.path(), cap_std::ambient_authority()).unwrap(),
         false,
         &AtomicBool::new(false),
-        storage::MAX_BYTES,
+        storage::MAX_WORKING_BYTES,
     )
     .unwrap();
     assert_eq!(before, after);
@@ -324,7 +330,7 @@ async fn filesystem_ref_aliases_cannot_bypass_branch_grants() {
             &metadata,
             false,
             &AtomicBool::new(false),
-            storage::MAX_BYTES,
+            storage::MAX_WORKING_BYTES,
         )
         .unwrap();
         let mut request = job(&vfs, operation);
@@ -342,7 +348,7 @@ async fn filesystem_ref_aliases_cannot_bypass_branch_grants() {
             &metadata,
             false,
             &AtomicBool::new(false),
-            storage::MAX_BYTES,
+            storage::MAX_WORKING_BYTES,
         )
         .unwrap();
         assert_eq!(before, after);
@@ -366,6 +372,8 @@ fn branch_listing_follows_native_symbolic_aliases_without_panicking() {
             .to_string()
             .contains("symbolic local branch")
     );
+    // One operation holds a repository at a time.
+    drop(state);
     native(
         root.path(),
         &["symbolic-ref", "refs/heads/alias", "refs/heads/alias"],
@@ -579,39 +587,6 @@ async fn a_switch_over_a_held_file_needs_room_for_both_copies() {
     assert_eq!(tight_quota.used(), tight.measure_usage().unwrap());
 }
 
-/// A tree nested too deep to measure, anywhere in the VFS, leaves a git change
-/// uncountable: refused as a write past the limit is, with a `QuotaExceededError`.
-#[tokio::test]
-async fn git_refuses_a_change_it_cannot_measure() {
-    let vfs = Vfs::tempdir().unwrap().with_size_limit(1 << 20);
-    worker::run(
-        &vfs,
-        &job(&vfs, "init"),
-        "init",
-        &[json!({ "branch": "main" })],
-    )
-    .unwrap();
-    let mut deep = vfs.root().join("elsewhere");
-    for _ in 0..65 {
-        deep = deep.join("d");
-    }
-    std::fs::create_dir_all(&deep).unwrap();
-    let Err(error) = worker::run(
-        &vfs,
-        &job(&vfs, "addRemote"),
-        "addRemote",
-        &[json!("origin"), json!("https://example.com/r.git")],
-    ) else {
-        panic!("a git change went through in a VFS too deep to measure");
-    };
-    assert!(
-        error
-            .downcast_ref::<crate::runtime::host::QuotaExceededError>()
-            .is_some(),
-        "{error}"
-    );
-}
-
 /// A git change that doesn't grow the files is still refused in a VFS that
 /// couldn't be measured: publication can't be counted there.
 #[tokio::test]
@@ -745,7 +720,7 @@ async fn mount_read_only_refuses_repository_changes_but_not_reads() {
         &Dir::open_ambient_dir(volume.path(), cap_std::ambient_authority()).unwrap(),
         true,
         &AtomicBool::new(false),
-        storage::MAX_BYTES,
+        storage::MAX_WORKING_BYTES,
     )
     .unwrap();
     let vfs = mounted(
@@ -784,7 +759,7 @@ async fn mount_read_only_refuses_repository_changes_but_not_reads() {
         &Dir::open_ambient_dir(volume.path(), cap_std::ambient_authority()).unwrap(),
         true,
         &AtomicBool::new(false),
-        storage::MAX_BYTES,
+        storage::MAX_WORKING_BYTES,
     )
     .unwrap();
     assert_eq!(before, after, "nothing in the volume changed");
@@ -821,4 +796,340 @@ async fn mount_non_ascii_alias_cannot_host_a_repository() {
             .count(),
         0
     );
+}
+
+/// A repository whose single file is `bytes` long, packed by native Git.
+fn packed_repository(bytes: usize) -> tempfile::TempDir {
+    let root = tempfile::tempdir().unwrap();
+    native(root.path(), &["init", "-b", "main"]);
+    native(root.path(), &["config", "user.name", "Native"]);
+    native(root.path(), &["config", "user.email", "native@example.com"]);
+    // Varied bytes, so the pack is as large as the file.
+    let contents: Vec<u8> = (0..bytes).map(|i| (i * 7919 % 251) as u8).collect();
+    std::fs::write(root.path().join("data"), contents).unwrap();
+    native(root.path(), &["add", "."]);
+    native(root.path(), &["commit", "-m", "data"]);
+    native(root.path(), &["gc", "--quiet"]);
+    root
+}
+
+/// The fuel `op` costs on the repository at `root`, its packs already checked.
+fn fuel_of(root: &Path, op: &str, args: &[serde_json::Value]) -> u64 {
+    let vfs = Vfs::external(root.to_path_buf()).unwrap();
+    worker::run(&vfs, &job(&vfs, "branches"), "branches", &[]).unwrap();
+    let job = job(&vfs, op);
+    worker::run(&vfs, &job, op, args).unwrap();
+    job.meter.fuel()
+}
+
+/// Reading and changing a repository costs what the operation touches, not
+/// the size of its packs: nothing is copied or re-indexed per call.
+#[tokio::test]
+async fn fuel_does_not_grow_with_pack_size() {
+    let small = packed_repository(1_000);
+    let large = packed_repository(4_000_000);
+    for (op, args) in [
+        ("branches", vec![]),
+        ("remotes", vec![]),
+        (
+            "addRemote",
+            vec![json!("origin"), json!("https://example.com/repo.git")],
+        ),
+    ] {
+        let small_fuel = fuel_of(small.path(), op, &args);
+        let large_fuel = fuel_of(large.path(), op, &args);
+        assert!(
+            large_fuel < small_fuel + small_fuel / 2,
+            "{op}: {small_fuel} fuel on a small pack, {large_fuel} on a 4 MB one"
+        );
+    }
+}
+
+/// Every file under `root`, `.git` included, with its mode and contents.
+fn digest(root: &Path) -> storage::Files {
+    let dir = Dir::open_ambient_dir(root, cap_std::ambient_authority()).unwrap();
+    storage::read_files(&dir, false, &AtomicBool::new(false), 64 << 20).unwrap()
+}
+
+/// A publication that fails after any number of its steps is undone, leaving
+/// the repository, worktree and `.git` alike, exactly as it was.
+#[test]
+fn a_publication_failing_at_any_step_leaves_the_repository_as_it_was() {
+    let root = repository();
+    for (path, contents) in [("kept", "kept"), ("changed", "before"), ("removed", "gone")] {
+        std::fs::write(root.path().join(path), contents).unwrap();
+    }
+    std::fs::write(root.path().join("swap"), "a file").unwrap();
+    native(root.path(), &["add", "."]);
+    native(root.path(), &["commit", "-m", "main"]);
+    native(root.path(), &["switch", "-c", "topic"]);
+    std::fs::write(root.path().join("changed"), "after").unwrap();
+    std::fs::remove_file(root.path().join("removed")).unwrap();
+    std::fs::remove_file(root.path().join("swap")).unwrap();
+    std::fs::create_dir_all(root.path().join("swap/deeper")).unwrap();
+    std::fs::write(root.path().join("swap/deeper/inner"), "now a directory").unwrap();
+    std::fs::write(root.path().join("added"), "new").unwrap();
+    native(root.path(), &["add", "-A"]);
+    native(root.path(), &["commit", "-m", "topic"]);
+    native(root.path(), &["switch", "main"]);
+    let before = digest(root.path());
+    let mut published = false;
+    for steps in 1..200 {
+        let state = snapshot(root.path());
+        super::operations::checkout(&state, "topic").unwrap();
+        super::stage::FAIL_AFTER.with(|after| after.set(Some(steps)));
+        let result = state.publish();
+        super::stage::FAIL_AFTER.with(|after| after.set(None));
+        if result.is_ok() {
+            published = true;
+            break;
+        }
+        assert_eq!(digest(root.path()), before, "after failing at step {steps}");
+    }
+    assert!(published, "publication finished within 200 steps");
+    assert!(native(root.path(), &["status", "--porcelain"]).is_empty());
+    assert_eq!(
+        native(root.path(), &["symbolic-ref", "HEAD"]),
+        b"refs/heads/topic\n"
+    );
+    assert_eq!(
+        std::fs::read(root.path().join("swap/deeper/inner")).unwrap(),
+        b"now a directory"
+    );
+    native(root.path(), &["fsck", "--full"]);
+
+    // And back: the directory gives way to the file again.
+    let state = snapshot(root.path());
+    super::operations::checkout(&state, "main").unwrap();
+    state.publish().unwrap();
+    assert_eq!(digest(root.path()).get("swap"), before.get("swap"));
+    assert!(native(root.path(), &["status", "--porcelain"]).is_empty());
+}
+
+/// Branches whose files differ only in case switch either way, on a
+/// filesystem that folds case as on one that doesn't.
+#[test]
+fn a_switch_renames_a_file_that_differs_only_in_case() {
+    let root = repository();
+    std::fs::create_dir(root.path().join("Docs")).unwrap();
+    std::fs::write(root.path().join("Docs/README"), "upper").unwrap();
+    native(root.path(), &["add", "."]);
+    native(root.path(), &["commit", "-m", "upper"]);
+    native(root.path(), &["switch", "-c", "lower"]);
+    native(root.path(), &["mv", "Docs/README", "Docs/readme.tmp"]);
+    native(root.path(), &["mv", "Docs/readme.tmp", "Docs/readme"]);
+    native(root.path(), &["mv", "Docs", "docs.tmp"]);
+    native(root.path(), &["mv", "docs.tmp", "docs"]);
+    native(root.path(), &["commit", "-m", "lower"]);
+    native(root.path(), &["switch", "main"]);
+    for (branch, path) in [("lower", "docs/readme"), ("main", "Docs/README")] {
+        let state = snapshot(root.path());
+        super::operations::checkout(&state, branch).unwrap();
+        state.publish().unwrap();
+        assert!(native(root.path(), &["status", "--porcelain"]).is_empty());
+        let directory = path.split('/').next().unwrap();
+        let names: Vec<_> = std::fs::read_dir(root.path())
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().into_string().unwrap())
+            .collect();
+        assert!(
+            names.iter().any(|name| name == directory),
+            "{branch}: {names:?}"
+        );
+    }
+}
+
+/// gix rewrites `shallow` during a fetch; with a stage it writes the stage's
+/// copy, which publication puts in place, or nothing reaches `.git`.
+#[test]
+fn shallow_is_staged_and_published() {
+    let root = repository();
+    let state = snapshot(root.path());
+    let shallow = state.repo.shallow_file();
+    assert!(
+        !shallow.starts_with(root.path().join(".git")),
+        "{shallow:?} is in .git"
+    );
+    let head = native(root.path(), &["rev-parse", "HEAD"]);
+    std::fs::write(&shallow, &head).unwrap();
+    drop(state);
+    assert!(!root.path().join(".git/shallow").exists());
+    let state = snapshot(root.path());
+    std::fs::write(state.repo.shallow_file(), &head).unwrap();
+    state.publish().unwrap();
+    assert_eq!(
+        std::fs::read(root.path().join(".git/shallow")).unwrap(),
+        head
+    );
+    let state = snapshot(root.path());
+    std::fs::remove_file(state.repo.shallow_file()).unwrap();
+    state.publish().unwrap();
+    assert!(!root.path().join(".git/shallow").exists());
+}
+
+/// A stage left before publication began is cleared by the next change, and
+/// left alone by a read; one left part way through publication blocks the
+/// repository. A file that only looks like a stage is neither.
+#[test]
+fn a_leftover_stage_is_cleared_unless_publication_began() {
+    let root = repository();
+    let left = root.path().join(format!(
+        "{}{}",
+        super::stage::STAGE_PREFIX,
+        uuid::Uuid::new_v4()
+    ));
+    std::fs::create_dir_all(left.join("objects")).unwrap();
+    let lookalike = root
+        .path()
+        .join(format!("{}notes", super::stage::STAGE_PREFIX));
+    std::fs::write(&lookalike, "not a stage").unwrap();
+    let open = |writes: bool| {
+        storage::Snapshot::open_unmetered(
+            &super::location::Location::at(root.path()),
+            Arc::new(AtomicBool::new(false)),
+            storage::MAX_WORKING_BYTES,
+            writes,
+        )
+    };
+    drop(open(false).unwrap());
+    assert!(left.exists(), "a read leaves a stage alone");
+    drop(open(true).unwrap());
+    assert!(!left.exists(), "a change clears it");
+    assert!(lookalike.exists());
+
+    std::fs::create_dir(&left).unwrap();
+    std::fs::write(left.join("publishing"), "").unwrap();
+    for writes in [false, true] {
+        let error = open(writes).err().unwrap();
+        assert!(error.to_string().contains("host recovery"), "{error}");
+    }
+}
+
+/// A publication that fails and can't be undone keeps what it replaced in its
+/// stage, keeps a `.git` it created, and leaves the repository refused until
+/// the host recovers it.
+#[test]
+fn a_publication_that_cannot_be_undone_needs_host_recovery() {
+    let root = tempfile::tempdir().unwrap();
+    let location = super::location::Location::at(root.path());
+    let open = |writes| {
+        storage::Snapshot::open_unmetered(
+            &location,
+            Arc::new(AtomicBool::new(false)),
+            storage::MAX_WORKING_BYTES,
+            writes,
+        )
+    };
+    let created = storage::Snapshot::init_unmetered(
+        &location,
+        "main",
+        Arc::new(AtomicBool::new(false)),
+        storage::MAX_WORKING_BYTES,
+    )
+    .unwrap();
+    created
+        .stage_worktree_file("notes.txt", 0o100644, b"notes")
+        .unwrap();
+    *created.pending_worktree.borrow_mut() = Some(super::stage::WorktreeChange {
+        remove: Vec::new(),
+        place: vec!["notes.txt".into()],
+    });
+    super::stage::FAIL_AFTER.with(|after| after.set(Some(1)));
+    super::stage::FAIL_UNDO.with(|undo| undo.set(true));
+    let result = created.publish();
+    super::stage::FAIL_AFTER.with(|after| after.set(None));
+    super::stage::FAIL_UNDO.with(|undo| undo.set(false));
+    let error = result.unwrap_err();
+    assert!(format!("{error:#}").contains("host recovery"), "{error:#}");
+    assert!(root.path().join(".git").exists(), "the created .git stays");
+    for writes in [false, true] {
+        let error = open(writes).err().unwrap();
+        assert!(error.to_string().contains("host recovery"), "{error}");
+    }
+}
+
+/// A repository of `files` small files under `d*/`, committed.
+fn wide_repository(files: usize) -> tempfile::TempDir {
+    let root = repository();
+    for number in 0..files {
+        let path = root
+            .path()
+            .join(format!("d{:02}/f{number:05}", number % 50));
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, format!("file {number}\n")).unwrap();
+    }
+    native(root.path(), &["add", "."]);
+    native(root.path(), &["commit", "-m", "wide"]);
+    root
+}
+
+/// `job` for `op` at the VFS root, its meter stopping the work past `ceiling` fuel.
+fn job_with_ceiling(vfs: &Vfs, op: &str, ceiling: u64) -> Job {
+    let mut job = job(vfs, op);
+    job.meter = Arc::new(super::meter::Meter::new(
+        ceiling,
+        Some(Arc::clone(&job.cancelled)),
+    ));
+    job
+}
+
+/// With less fuel than an operation needs, the worker stops itself near the
+/// ceiling instead of finishing and being charged after.
+#[tokio::test]
+async fn the_worker_stops_at_its_fuel_ceiling() {
+    let root = wide_repository(2_000);
+    let vfs = Vfs::external(root.path().to_path_buf()).unwrap();
+    let full = job(&vfs, "status");
+    worker::run(&vfs, &full, "status", &[]).unwrap();
+    let needed = full.meter.fuel();
+    let short = job_with_ceiling(&vfs, "status", needed / 10);
+    assert!(worker::run(&vfs, &short, "status", &[]).is_err());
+    assert!(short.meter.is_exhausted());
+    assert!(
+        short.meter.fuel() < needed / 2,
+        "stopped at {} of {needed}",
+        short.meter.fuel()
+    );
+}
+
+/// A change stopped for fuel is stopped before it publishes: the repository
+/// is as it was.
+#[tokio::test]
+async fn a_change_stopped_for_fuel_leaves_the_repository_as_it_was() {
+    let root = wide_repository(500);
+    for number in 0..500 {
+        let path = root
+            .path()
+            .join(format!("d{:02}/f{number:05}", number % 50));
+        std::fs::write(path, format!("changed {number}\n")).unwrap();
+    }
+    let before = digest(root.path());
+    // What `add` needs, measured on a copy so the repository stays untouched.
+    let probe = tempfile::tempdir().unwrap();
+    native(
+        probe.path(),
+        &[
+            "clone",
+            "-q",
+            "--no-hardlinks",
+            root.path().to_str().unwrap(),
+            ".",
+        ],
+    );
+    // A local path is no HTTPS remote Git accepts.
+    native(probe.path(), &["remote", "remove", "origin"]);
+    for number in 0..500 {
+        let path = probe
+            .path()
+            .join(format!("d{:02}/f{number:05}", number % 50));
+        std::fs::write(path, format!("changed {number}\n")).unwrap();
+    }
+    let probe_vfs = Vfs::external(probe.path().to_path_buf()).unwrap();
+    let measured = job(&probe_vfs, "add");
+    worker::run(&probe_vfs, &measured, "add", &[json!(["."])]).unwrap();
+    let vfs = Vfs::external(root.path().to_path_buf()).unwrap();
+    let short = job_with_ceiling(&vfs, "add", measured.meter.fuel() / 4);
+    assert!(worker::run(&vfs, &short, "add", &[json!(["."])]).is_err());
+    assert!(short.meter.is_exhausted());
+    assert_eq!(digest(root.path()), before);
 }

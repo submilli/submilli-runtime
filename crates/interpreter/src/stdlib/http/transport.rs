@@ -156,9 +156,20 @@ impl std::error::Error for HttpError {}
 pub trait HttpClient: Send + Sync {
     async fn send(&self, req: &HttpRequest) -> Result<HttpResponse, HttpError>;
 
-    /// Git requires an exact destination: never follow redirects, even on the same host.
-    /// Embedders must opt in to this contract before Git can use their transport.
-    async fn send_without_redirects(&self, _req: &HttpRequest) -> Result<HttpResponse, HttpError> {
+    /// Sends `req` to exactly its URL, never following a redirect, even on
+    /// the same host, and writes the body to `body` as it arrives; the
+    /// returned response's `body` is empty. Git fetches through it, streaming
+    /// packs to disk, so an implementation holds one chunk in memory however
+    /// large `max_response_size` is.
+    ///
+    /// Embedders must opt in to this contract before Git can use their
+    /// transport: there is no buffering fallback, for the reason `download`
+    /// has none.
+    async fn send_without_redirects_to(
+        &self,
+        _req: &HttpRequest,
+        _body: &mut (dyn std::io::Write + Send),
+    ) -> Result<HttpResponse, HttpError> {
         Err(HttpError::Other(
             "transport does not support requests without redirects".into(),
         ))
@@ -476,10 +487,36 @@ impl HttpClient for ReqwestHttpClient {
         read_response(resp, req.max_response_size).await
     }
 
-    async fn send_without_redirects(&self, req: &HttpRequest) -> Result<HttpResponse, HttpError> {
+    async fn send_without_redirects_to(
+        &self,
+        req: &HttpRequest,
+        body: &mut (dyn std::io::Write + Send),
+    ) -> Result<HttpResponse, HttpError> {
         let hop = self.initial_hop(req)?;
         let resp = self.send_hop(&hop, &Deadline::new(req.timeout_ms)).await?;
-        read_response(resp, req.max_response_size).await
+        let status = resp.status().as_u16();
+        let status_text = resp.status().canonical_reason().unwrap_or("").to_string();
+        let final_url = resp.url().to_string();
+        let headers = collect_headers(resp.headers());
+        let limit = req.max_response_size;
+        let mut received: u64 = 0;
+        let mut stream = resp.bytes_stream();
+        while let Some(chunk) = stream.next().await {
+            let chunk = chunk.map_err(map_reqwest_error)?;
+            received = received.saturating_add(chunk.len() as u64);
+            if received > limit {
+                return Err(HttpError::TooLarge { limit });
+            }
+            body.write_all(&chunk)
+                .map_err(|error| HttpError::Other(error.to_string()))?;
+        }
+        Ok(HttpResponse {
+            status,
+            status_text,
+            headers,
+            body: Vec::new(),
+            final_url,
+        })
     }
 
     async fn download(

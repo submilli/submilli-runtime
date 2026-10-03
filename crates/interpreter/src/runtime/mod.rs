@@ -54,8 +54,7 @@ pub use session_kv::{
     SessionKvPage, SessionKvStore, SharedKvBudget,
 };
 pub use vfs::{
-    Access, MountError, MountSpec, Vfs, VfsMode, measure_dir, measure_host_dir, measure_with_held,
-    regular_files,
+    Access, MountError, MountSpec, Vfs, VfsMode, measure_dir, measure_host_dir, regular_files,
 };
 pub use watchdog::Watchdog;
 

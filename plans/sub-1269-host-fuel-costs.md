@@ -181,8 +181,10 @@ In order. Each is reviewable alone.
    serialized and per listed entry; `llm` `IO` of the prompts before and of the
    completions after; `mcp` `IO` of the arguments before, `IO` and `PARSE` of the result
    after; `git` `PARSE` of the arguments before, `IO` of the network bytes and `PARSE` of
-   the result after. The git worker's own file and object work is not counted yet; it
-   belongs with SUB-1129, which reshapes it.
+   the result after. The git worker's own file and object work is counted by SUB-1129:
+   a meter on `Job` (`stdlib/git/meter.rs`) adds `SYSCALL`, `IO`, `PARSE`, `HASH` and
+   `ELEM` as the worker goes, settled when it returns. With the repository opened in
+   place, the per-call copy and re-index in Part 6's git formulas are gone.
 
 PR 2 found one thing PR 3 must solve: `Store::set_fuel` restarts the engine's async yield
 countdown, so once every host call charges, a program that calls host functions more often
@@ -1431,7 +1433,7 @@ The new formulas should replace these ad-hoc units with rated classes rather tha
 #### Memory accounting (NOT fuel)
 
 - `Budget::charge` (`stdlib/code/budget.rs:22`), `OutputBudget::reserve` (`:63`) and `ByteCharge` (`stdlib/fs/handles.rs:32`) call `TenantLimits::charge_host_bytes` (`runtime/limits.rs:96`). They reserve bytes against the store's memory cap and refund on drop. They bound size, they cost no fuel.
-- `WorkingBudget::reserve` (`stdlib/git/mod.rs:544`) reserves 3/4 of the tenant's free memory for one git call and derives `max_bytes = min(reserved / 16, 50 MiB)` (`:380`). With the default 50 MiB store cap that is at most about 2.3 MiB.
+- `WorkingBudget::reserve` (`stdlib/git/mod.rs`) reserves 3/4 of the tenant's free memory for one git call (refused below 4 MiB) and derives `max_bytes = min((reserved - 1 MiB) / r, 50 MiB)` with `r = 8` for `diff` and `4` otherwise, from per-operation measurements (`tests/git_memory.rs`, SUB-1129). With the default 50 MiB store cap that is about 8.7 MiB (4.4 MiB for `diff`).
 
 #### Limits that bound the work
 
@@ -1444,12 +1446,12 @@ The new formulas should replace these ad-hoc units with rated classes rather tha
 | `code` diff | `lines(a) * lines(b) <= 4,000,000` | `stdlib/code/text.rs:126` |
 | `code.search` regex | 1 MiB compiled size and 1 MiB DFA cache | `stdlib/code/walk.rs:78-79` |
 | `code.edit` diagnostics | 1,000 | `MAX_DIAGNOSTICS`, `stdlib/code/text.rs:7` |
-| git per call | 60 s deadline; `max_bytes` (above); 10,000 paths; 4 concurrent workers process-wide | `stdlib/git/mod.rs:375`, `:380`, `:405`; `stdlib/git/storage.rs:15-16` |
-| git pack | wire size <= `max_bytes`; <= `min(max_bytes/512, 10,000)` objects; total inflated size <= `max_bytes` | `stdlib/git/pack_limits.rs:11`, `:17`, `:128` |
-| git index | <= 10,000 entries, `count*256 <= max_bytes`, V2/V3 only | `stdlib/git/index_limits.rs:18` |
-| git ignore matching | `min(16 * max_bytes, 50,000,000)` units of `patterns * path bytes` | `stdlib/git/operations.rs:633` |
-| git history walk | decoded commit bytes + 128 per id <= `max_bytes` | `stdlib/git/history.rs:189` |
-| git quota measurement walk | 1,000,000 entries | `MAX_MEASURED_ENTRIES`, `runtime/vfs.rs:616` |
+| git per call | 60 s deadline, waits included; `max_bytes` per operation (above); paths bounded by `path + 128` bytes each against `max_bytes` (sanity cap 1,000,000); 4 concurrent workers process-wide, taken after the repository lock; the fuel ceiling (below) | `stdlib/git/mod.rs`, `storage.rs` (`MAX_PATHS`, `MAX_WORKING_BYTES`), `worker.rs` |
+| git pack on fetch | spooled bytes <= half of what `size_limit` leaves (4 GiB without one); <= `max_bytes / 256` objects; each object <= `max_bytes` inflated; each delta chain <= `max_bytes` summed along the chain | `stdlib/git/pack_limits.rs`, `storage.rs` (`Snapshot::transfer`) |
+| git packs on open | each index checked against its pack; <= `max_bytes / 180` objects across packs; delta depth <= 4095; each entry <= `max_bytes` | `stdlib/git/pack_index_check.rs` |
+| git index | <= `MAX_PATHS` entries, `count*256 <= max_bytes`, V2/V3 only | `stdlib/git/index_limits.rs` |
+| git ignore matching | `min(16 * max_bytes, 50,000,000)` units of `patterns * path bytes`, each unit metered as `SCAN` | `stdlib/git/operations.rs` (`remove_ignored`) |
+| git history walk | decoded commit bytes + 128 per id <= `max_bytes` | `stdlib/git/history.rs` |
 
 ### `submilli:fs` — operations
 
@@ -1531,52 +1533,64 @@ All nine share `invoke` (`stdlib/code/mod.rs:90`). Results other than the two di
 
 ### `submilli:git`
 
-Every function calls `invoke` (`stdlib/git/mod.rs:369`). Three phases:
+Rewritten for SUB-1129, which opens repositories in place instead of copying them per call. Every function calls `invoke` (`stdlib/git/mod.rs`). Three phases:
 
-1. **Store thread, before dispatch.** Reserve memory, then `decode_arguments` (`:469`): each argument is serialized by calling the guest value's `toJSON` vtable slot (`stdlib/session/value.rs:32`; this re-enters guest code, which pays its own fuel), converted UTF-16 to UTF-8 and parsed with `serde_json`. Cost: `PARSE(len(args))`. This is the only point where a charge can be made before the work, and only the argument size is known.
-2. **Blocking pool** (`worker::run`, `stdlib/git/worker.rs:19`), no access to the store. All real work.
-3. **Store thread, after the worker returns.** `encode_result` (`:503`): `Uint8Array` copy, string copy, or `serde_json::to_string` + `value::deserialize`.
+1. **Store thread, before dispatch.** Reserve working memory (`WorkingBudget`), then `decode_arguments`: `PARSE(len(args))`, refused before the work. The fuel the run has left (the engine's fuel less the pending host batch, `meter::remaining_fuel`) becomes the worker's **ceiling**.
+2. **Blocking pool** (`worker::run`), no access to the store. The worker counts its own work on `Job::meter` (`stdlib/git/meter.rs`) in the classes `SYSCALL`, `IO` (network bytes included), `SCAN`, `PARSE`, `HASH` and `ELEM`. Once the counted work passes the ceiling, the meter sets the job's cancellation flag, and every check that stops a cancelled operation stops this one: the walks, the hashing and pack checks, gix's own `should_interrupt`, and publication before its first move. No git operation has an effect before publication (there is no push, and a stage is discarded on failure), so stopping anywhere before it loses nothing.
+3. **Store thread, after the worker returns.** The meter is settled with `fuel::settle_host_fuel`, success or failure: a short budget is taken to zero. If the worker failed and the meter stopped it, the call ends in `Trap::OutOfFuel`, as Wasm out of fuel does. A publication that had begun finishes, and its result is returned; the run stops at its next fuel check. Then `encode_result`: `PARSE(2 * len(json))`, settled.
 
-So for every git function the charge point is: argument part **before**, everything else **after the worker returns and before `encode_result`**. The worker would have to count its own work (bytes read, written, inflated, hashed; entries; commits) into a counter carried on `Job`, the way `Job::transferred` already counts network bytes (`stdlib/git/transport.rs:277`). Since the store thread is suspended while the worker runs, the remaining fuel can be read before dispatch and handed to the worker as a ceiling, which lets it stop itself instead of overdrawing; without that, the work is finished before the first charge can refuse it.
+**Open cost `O`, every call** (`check_metadata`, `Snapshot::open`): a scan of `.git` by name and file type, nothing read but `config`: `SYSCALL(e + s + 8) + IO(config)`, `e` = entries in `.git` (loose objects included, listed by type, no stat), `s` = stats outside the loose objects. The pack-index check, once per pack set per process (`pack_index_check::check`, cached by file identity): `SYSCALL(2p)` when cached, else per index `SYSCALL(4 + n) + IO(idx + 30n) + HASH(idx) + ELEM(n)`, `p` = packs, `n` = objects, `idx` = index bytes. gix then opens `.git` in place.
 
-**Base cost `G` paid by every call, including `open`, `remotes` and the constructor** (`Snapshot::open`, `stdlib/git/storage.rs:32`):
+**Index read**, when an operation reads it (`Snapshot::index`): `SYSCALL(2) + IO(i) + HASH(i) + PARSE(i)`, `i` = index bytes.
 
-- `read_files` reads the whole `.git` directory into memory (`:599`): `SYSCALL(g) + IO(Gb)`, `g` = files in `.git` (<= 10,000), `Gb` = their bytes (<= `max_bytes`).
-- `copy_metadata_to_scratch` writes all of it except packs to a temp directory (`:371`): `IO(Gb) + SYSCALL(g)`; the index is checked and SHA-1 hashed twice (`stdlib/git/index_limits.rs:22`, `:53`): `HASH(2 * index bytes)`.
-- `native_packs::rebuild` re-indexes every `.pack` from scratch (`stdlib/git/native_packs.rs:10`): `validate_raw` inflates every object, then gix `Bundle::write_to_directory` inflates, resolves deltas and hashes every object again: about `PARSE(2 * Pi) + HASH(Pi)`, `Pi` = inflated pack bytes (<= `max_bytes`).
-- gix opens the scratch repository; the config is parsed twice (`worker.rs:43` and inside ops): `PARSE(config)`.
+**Stage cost `S`, every call that writes** (`Stage::create`, `copy_references`): `SYSCALL(8)` for the stage, then the references, `HEAD`, `packed-refs` and `shallow` copied: `SYSCALL(r + 3f) + IO(2 * ref bytes)`, `r` = entries under `refs/`, `f` = files copied.
 
-`G = SYSCALL(2g) + IO(2 * Gb) + PARSE(2 * Pi) + HASH(Pi + 2 * index)`.
+**Publish cost `PUB`** (`Stage::publish`): each reference compared with the repository's, `SYSCALL(4)` each; then a rename, removal or directory per step, `SYSCALL(2 * steps + added + 4)`. Proportional to what changed: adding a remote moves `config`, a commit moves its new objects, the index and a ref.
 
-**Publish cost `PUB` paid by every mutating call** (`publish_counted`, `stdlib/git/worker.rs:197`; `publish_within`, `stdlib/git/storage.rs:184`): re-read the scratch `.git` (`IO(Gb')`), measure the repository directory two to three times for the quota (`SYSCALL(r)` each, `r` = entries in the repository directory, <= 1,000,000), write the entire `.git` again into a staging directory (`IO(Gb')`), write the whole pending worktree when there is one (`IO(W)`), rename the top-level entries, then `remove_dir_all` the old copy (`SYSCALL(g)`). So adding a remote rewrites all of `.git`.
+Other counted work:
 
-`PUB = IO(2 * Gb') + SYSCALL(3r + 2g)` (+ `IO(W) + SYSCALL(w)` with a pending worktree).
+- a tree loaded (`walk_tree`): `PARSE(tree bytes) + ELEM(entries)`;
+- a commit or object decoded (`resolve_commit`, `Ancestors`): `PARSE(bytes)`;
+- the worktree hashed (`Snapshot::worktree`), per file: `SYSCALL(2) + IO(len) + HASH(len) + ELEM(1)`;
+- a blob read (`blob_contents`): `PARSE(size)`;
+- a worktree file read (`worktree_contents`): `SYSCALL(2) + IO(len)`;
+- a worktree file stored as a blob (`store_worktree_blob`): `SYSCALL(4) + IO(2 len) + HASH(len) + PARSE(len)`;
+- the index written: `SYSCALL(3) + ELEM(entries)`;
+- a checked-out file staged: `SYSCALL(3 + depth) + IO(len)`;
+- ignore matching: `SCAN(units)`, as `remove_ignored` counts them (patterns times path bytes);
+- references listed: `SYSCALL(1) + ELEM(1)` each, plus `SYSCALL(2) + IO(pr) + PARSE(pr)` for `packed-refs` of `pr` bytes;
+- a diff pair: `SCAN(len(a) + len(b))`.
 
-Other variables: `W` = bytes of a full file set (tree, index or worktree; each <= `max_bytes`), `w` = its path count (<= 10,000), `c` = commits walked, `N` = bytes received from the remote.
+**Fetch** (`transport.rs`, `pack_limits.rs`): each response is written to the stage's spool, `IO(N)` as received; it is read back by the check and by gix, and hashed whole by gix, `IO(2N) + HASH(N)`, for every response but the reference listing. The check counts each entry as it goes, so the ceiling stops it part way and a fetch that fails later still pays: an entry of `raw` inflated bytes is inflated by the check and by gix, `PARSE(2 raw)`, and a whole object hashed by both, `HASH(2 raw)`, the check's half before the entry is inflated and gix's once it inflates as declared; for a delta, once its chain is within limits, gix builds and hashes the object it describes, `PARSE(result) + HASH(result)`; for a base a thin pack takes from the repository, gix reads, writes and hashes it, `PARSE(base) + HASH(base)` at the size the delta declares. The pack written: `SYSCALL(8) + IO(pack) + ELEM(objects)`. `N` = spooled bytes.
 
-Loading a file set is never incremental: `tree_files` inflates every blob of the tree (`stdlib/git/operations.rs:43`), `read_index` inflates every blob the index names (`:134`), `Snapshot::worktree` reads every working file (`storage.rs:313`). Each is `PARSE(W) + ELEM(w)` (or `IO(W) + SYSCALL(w)` for the worktree), written `SET` below.
+| Function | Formula (meter, beyond `CALL + PARSE(len(args))` before and the result's `PARSE` after) | Notes |
+|---|---|---|
+| `submilli:git#Repository#constructor`, `constructor_init`, `static#open` | `O` | `remotes` parses `config` too. |
+| `submilli:git#Repository#static#init` | `O + S + PUB`, plus the skeleton: `SYSCALL(6) + IO(skeleton)` | |
+| `submilli:git#Repository#static#clone` | `init` + `fetch` + tree load + a staged file per path + `PUB` | Checkout stages every file of the target tree. |
+| `submilli:git#Repository#status` | `O` + index + HEAD tree + worktree hashed + ignore matching | No content loaded. |
+| `submilli:git#Repository#log` | `O` + `PARSE(commit bytes of offset + limit commits)` | Paging still re-walks earlier pages; bounded by `max_bytes`. |
+| `submilli:git#Repository#diff` | `O` + two file sets + per changed pair `PARSE` or `IO` of its contents + `SCAN(len(a) + len(b))` | One pair in memory at a time. |
+| `submilli:git#Repository#show` | `O` + the trees on the path + `PARSE(size)` of the blob | No longer loads the whole tree. |
+| `submilli:git#Repository#branches` | `O` + references listed | |
+| `submilli:git#Repository#remotes` | `O` | |
+| `submilli:git#Repository#add` | `O + S` + index + worktree hashed + ignore matching + a blob stored per changed path + index written + `PUB` | Path selection is by range over sorted sets, not `requested * all`. |
+| `submilli:git#Repository#commit` | `O + S` + index + HEAD tree + the tree and commit written + `PUB` | Blobs are already stored. |
+| `submilli:git#Repository#createBranch` | `O + S` + the start commit + `PUB` | One ref moves. |
+| `submilli:git#Repository#switchBranch` | `O + S` + index + two trees + worktree hashed + a staged file per changed path + index written + `PUB` | Only differing files move. |
+| `submilli:git#Repository#addRemote`, `setRemoteUrl` | `O + S + PUB` | Only `config` moves. |
+| `submilli:git#Repository#fetch` | `O + S` + the pre-flight history walk + references listed + **Fetch** + `PUB` | |
+| `submilli:git#Repository#pull` | `fetch` + the ancestry walk + `switchBranch`'s checkout | Fast-forward only. |
 
-| Function | What the host does | Formula | Charge point | Notes |
-|---|---|---|---|---|
-| `submilli:git#Repository#constructor` | `invoke("open")`, then allocates the instance (`stdlib/git/class.rs:330`, `:388`) | `CALL + PARSE(len(args)) + G + ELEM(1)` | before + after worker | Opening only validates, yet pays the full `G`, pack re-index included. |
-| `submilli:git#Repository#constructor_init` | `invoke("open")`, then stores the path in the instance's field array (`stdlib/git/class.rs:352`) | `CALL + PARSE(len(args)) + G` | before + after worker | Same work as `constructor`. |
-| `submilli:git#Repository#static#open` | `invoke("open")` + instance (`stdlib/git/class.rs:248`) | `CALL + PARSE(len(args)) + G + ELEM(1)` | before + after worker | |
-| `submilli:git#Repository#static#init` | Measures the existing directory for the quota, creates the `.git` skeleton, opens a snapshot, publishes (`stdlib/git/worker.rs:36`, `stdlib/git/storage.rs:77`) | `CALL + PARSE(len(args)) + SYSCALL(r) + G + PUB + ELEM(1)` | before + after worker | `r` up to 1,000,000 entries when the directory already holds files. |
-| `submilli:git#Repository#static#clone` | `init`, add remote, `fetch`, load the fetched tree, write every blob and the index, create the branch, publish with the worktree (`stdlib/git/worker.rs:356`) | `init` + `fetch` + `SET(W) + HASH(W) + PARSE(W)` (blob writes: hash and deflate) `+ SORT(w) + IO(W)` | before + after worker | Network size `N` is unknown until received; total transfer per call <= `max_bytes`. The worktree comparison in `replace_worktree` loads three more (empty) sets. |
-| `submilli:git#Repository#status` | Loads HEAD tree, index and worktree, applies ignore rules, compares all paths (`stdlib/git/operations.rs:189`) | `CALL + G + 3 * SET(W) + REGEX-like ignore matching + ELEM(w) + PARSE(len(json))` | after worker | Ignore matching has its own non-fuel work budget (`:633`): `patterns * path bytes` per untracked path and per directory prefix. No argument. Result encoding is on the store thread and can be charged before it runs. |
-| `submilli:git#Repository#log` | Breadth-first walk from HEAD; decodes `offset + limit` commits and discards the first `offset` (`stdlib/git/operations.rs:241`, `stdlib/git/history.rs:147`) | `CALL + PARSE(len(args)) + G + PARSE(commit bytes of offset + limit commits) + ELEM(limit) + PARSE(len(json))` | before + after worker | `limit <= 1000`. Paging is quadratic over a full history: page k re-walks all earlier pages. Bounded by `max_bytes` of decoded commits. |
-| `submilli:git#Repository#diff` | Loads two full file sets by mode, then for each changed text path emits the whole old file as `-` lines and the whole new file as `+` lines (`stdlib/git/operations.rs:293`, `:404`) | `CALL + PARSE(len(args)) + G + 2 * SET(W) + SCAN(changed bytes) + COPY(len(patch)) + PARSE(len(json))` | before + after worker | Not a line diff: no Myers, linear in changed file bytes. Patch <= `max_bytes`. Unchanged files still cost a full byte comparison. |
-| `submilli:git#Repository#show` | Resolves the revision, loads the ENTIRE tree with every blob, returns one file (`stdlib/git/operations.rs:285`) | `CALL + PARSE(len(args)) + G + SET(W) + COPY(len(out))` | before + after worker | Cost is the size of the whole tree, not of the file shown. The output copy runs on the store thread and can be charged before it. |
-| `submilli:git#Repository#branches` | Iterates local branch refs; for each, `follow_reference` runs `validate_reference_spelling`, which lists the ref's directory and scans it linearly per path component (`stdlib/git/operations.rs:429`, `stdlib/git/storage.rs:114`) | `CALL + G + SYSCALL(R^2) + ELEM(R) + PARSE(len(json))`, `R = branches` | after worker | Quadratic in the number of loose refs in one directory; `R <= 10,000` through the path limit. |
-| `submilli:git#Repository#remotes` | Parses the saved config, lists remote sections (`stdlib/git/storage.rs:317`) | `CALL + G + PARSE(config) + ELEM(remotes) + PARSE(len(json))` | after worker | `G` dominates. |
-| `submilli:git#Repository#add` | Loads worktree and index, applies ignores, for each requested path scans every index and worktree path, rewrites the index writing EVERY indexed file as a blob (`stdlib/git/operations.rs:447`, `:162`) | `CALL + PARSE(len(args)) + G + 2 * SET(W) + SCAN(q * 2w * len(path)) + HASH(W) + PARSE(W) + SORT(w) + PUB`, `q = paths requested` | before + after worker | Path selection is `q * (index + worktree paths)`: up to 10,000 * 20,000 prefix tests. `write_index` hashes and deflates the whole index content, not only what was added. |
-| `submilli:git#Repository#commit` | Loads index and HEAD tree, compares, builds the tree writing every blob, writes the commit (`stdlib/git/operations.rs:491`) | `CALL + PARSE(len(args)) + G + 2 * SET(W) + HASH(W) + PARSE(W) + SORT(w) + PUB` | before + after worker | Returns the commit id as a string. |
-| `submilli:git#Repository#createBranch` | Resolves the start commit, writes one ref (`stdlib/git/operations.rs:534`) | `CALL + PARSE(len(args)) + G + PUB` | before + after worker | One ref costs a full `.git` rewrite. |
-| `submilli:git#Repository#switchBranch` | Loads the target tree, verifies a clean tree by loading index, worktree and HEAD, writes the index, publishes replacing the whole worktree (`stdlib/git/operations.rs:547`, `:569`) | `CALL + PARSE(len(args)) + G + 4 * SET(W) + HASH(W) + PARSE(W) + PUB + IO(W) + SYSCALL(w * d)` | before + after worker | Checkout writes every file, changed or not. `prepare_parent` (`stdlib/git/storage.rs:766`) lists the parent directory for every path component of every file: O(w * d * directory size). |
-| `submilli:git#Repository#addRemote` | Parses and edits the config (`stdlib/git/operations.rs:581`) | `CALL + PARSE(len(args)) + G + PARSE(config) + PUB` | before + after worker | |
-| `submilli:git#Repository#setRemoteUrl` | Same as `addRemote` | `CALL + PARSE(len(args)) + G + PARSE(config) + PUB` | before + after worker | |
-| `submilli:git#Repository#fetch` | Walks ALL local history from every ref as a pre-flight (`stdlib/git/history.rs:63`), two HTTPS requests through the embedder's client, validates the pack by inflating every object (`stdlib/git/pack_limits.rs:128`), gix indexes the pack (inflate, delta-resolve, hash), publishes (`stdlib/git/transport.rs:56`) | `CALL + PARSE(len(args)) + G + PARSE(all local commit bytes) + SYSCALL(R^2) + IO(request + N) + PARSE(2 * Ni) + HASH(Ni) + PUB`, `Ni = inflated pack bytes` | before + after worker | `N` and `Ni` are unknown until the response arrives; both <= `max_bytes`. The response body is buffered whole, not streamed, so there is no per-chunk point. Network waiting is free. A private repository costs a second request after the 401. |
-| `submilli:git#Repository#pull` | `fetch`, ancestor check by walking history from the new tip (`stdlib/git/history.rs:198`), load the new tree, verify clean, write the index, move the branch, publish with the worktree (`stdlib/git/transport.rs:197`) | `fetch` + `PARSE(commit bytes walked) + 4 * SET(W) + HASH(W) + PARSE(W) + IO(W)` | before + after worker | Fast-forward only. |
+**Known gaps, accepted:**
+
+- Work counted only once it is done is lost if it is interrupted: gix's `receive` past the check, a worktree file read. Each is bounded by `max_bytes` or the response. A pack entry is charged its check's share before it is inflated, and gix's share once it inflates as declared; a delta's result once its chain is within limits.
+- A timed-out or cancelled worker runs on to its next check; that work is charged, since the store thread waits for the worker before settling.
+- Request bodies sent while fetching are not metered: they are small, bounded by the references the repository has.
+- A call the program abandons (its future dropped) is not settled: the worker is cancelled and its work counted, but nothing charges it.
+- Pack-set verification is cached process-wide: the first run to see a pack set pays for checking it, later runs pay `SYSCALL(2p)`.
+- gix resolves deltas with its caches off (`core.deltaBaseCacheLimit=0`, `gitoxide.objects.cacheLimit=0`), so reading an object decodes its whole chain again; it is charged for the decoded size only, not for each base along the chain. Depth is capped at 4095.
+- The rates are SUB-1270's; the multiples for gix internals (`write_to_directory`, `receive`, `edit_tree`) come from what those calls must do, not from measurement.
 
 ### Not linker-registered
 
@@ -1598,8 +1612,8 @@ Loading a file set is never incremental: `tree_files` inflates every blob of the
 3. **`fs.lines` `next` is unbounded per call** (see the table): a newline-free file is read whole in one host call, outside `maxReadSize` and outside the memory cap.
 4. **Recursive `fs.remove` walks the tree three times, four on failure**, and a same-volume `fs.move` of a directory scans both ends (up to 10,000 entries each) before an O(1) rename.
 5. **`code` walk, per entry and per directory.** `ignored` (`stdlib/code/walk.rs:363`) tests the path against every inherited ignore matcher, so cost per entry grows with nesting depth and rule count. Every directory pushed clones the whole inherited rule vector (`:266`), memory-charged but not fuel-charged: O(directories * inherited rules). The flat 100 fuel per entry (250 ns) is far below one policy check plus two syscalls plus matching.
-6. **git: every call pays `G`, every mutating call pays `PUB`**, independent of what the operation changes. `show` and `diff` load whole trees; `log` re-walks skipped pages; `branches` and `fetch` are quadratic in refs per directory; `add` is `requested paths * all paths`; `switchBranch` / `pull` / `clone` list a directory per path component per file.
-7. **`validate_file_set` runs once per tree object on the accumulated file set** (`stdlib/git/operations.rs:101`, called at the end of every `walk_tree` recursion): O(trees * files * log files) with a lowercase allocation per path each time. With 10,000 files in a few thousand directories this is the dominant CPU cost of any tree load. Looks like a performance bug; one call at the top level would do.
+6. **git** (resolved by SUB-1129): the per-call copy (`G`) and whole-`.git` publish (`PUB`) are gone; `show` and `diff` no longer load whole trees; `add` selects paths by range; checkout caches the directories it checks. `log` still re-walks earlier pages; `branches` and `fetch` still check each reference's spelling against its directory listing.
+7. **`validate_file_set` ran once per tree object** (resolved by SUB-1129): it runs once per tree load.
 8. **`code.glob` always walks the whole VFS from `/`**, whatever the pattern's literal prefix, and fails outright past 20,000 visited entries.
 
 #### (b) Size cannot be known before the work
@@ -1624,7 +1638,7 @@ Loading a file set is never incremental: `tree_files` inflates every blob of the
 - `diff` (`stdlib/code/mod.rs:347`): five functions; already holds the `na * nb` charge.
 - `walk` (`stdlib/code/walk.rs:213`): `tree`, `glob`, `search`. Suggested `WALK(e) = SYSCALL(3e) + SCAN(e * avg path * inherited rule files) + SORT(e)` replacing the two flat 100s.
 - `encode` (`stdlib/code/mod.rs:137`): JSON result for 7 `code` functions; same shape as git's `encode_result` (`stdlib/git/mod.rs:503`). Both end in `session::value::deserialize`, a natural single place for `PARSE(len) + ELEM`.
-- git `invoke` (`stdlib/git/mod.rs:369`): the single entry for all 19 git functions. Argument charge after `decode_arguments`; worker-work charge after `finish_worker` (`:419`) and before `encode_result` (`:429`). The counters belong in `Snapshot::open`, `read_files`, `write_files`, `walk_tree`, `read_index`, `write_index`, `Ancestors::next`, `Client::response` and `publish_within`.
+- git `invoke` (`stdlib/git/mod.rs`): the single entry for all 19 git functions. Argument charge after `decode_arguments`; the worker meters its own work (`stdlib/git/meter.rs`) under a ceiling of the fuel left, settled after `finish_worker` and before `encode_result`.
 
 #### (d) Not determined
 
