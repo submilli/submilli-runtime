@@ -1,9 +1,10 @@
 use super::storage::{
-    Files, MAX_PATHS, Snapshot, validate_branch, validate_new_ref_name, validate_path,
+    Entries, MAX_PATHS, Snapshot, validate_branch, validate_new_ref_name, validate_path,
 };
 use gix::bstr::ByteSlice;
 use serde_json::{Value, json};
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
+use std::io::Read;
 use wasmtime::{Result, bail};
 
 pub fn read(snapshot: &Snapshot, op: &str, args: &[Value]) -> Result<Value> {
@@ -29,7 +30,7 @@ pub fn text_arg(args: &[Value], index: usize) -> Result<&str> {
         .ok_or_else(|| wasmtime::Error::msg("git: expected a string argument"))
 }
 
-pub fn head_files(snapshot: &Snapshot) -> Result<Files> {
+pub fn head_entries(snapshot: &Snapshot) -> Result<Entries> {
     let tree = if snapshot.repo.head()?.is_unborn() {
         gix::ObjectId::empty_tree(gix::hash::Kind::Sha1)
     } else {
@@ -37,12 +38,14 @@ pub fn head_files(snapshot: &Snapshot) -> Result<Files> {
             .tree_id()?
             .detach()
     };
-    tree_files(snapshot, tree)
+    tree_entries(snapshot, tree)
 }
 
-pub fn tree_files(snapshot: &Snapshot, id: gix::ObjectId) -> Result<Files> {
-    let mut files = Files::new();
+/// Every file in the tree `id`, by path, without reading any blob.
+pub fn tree_entries(snapshot: &Snapshot, id: gix::ObjectId) -> Result<Entries> {
+    let mut files = Entries::new();
     walk_tree(snapshot, id, "", &mut files, &mut 0, 0)?;
+    validate_file_set(&files)?;
     Ok(files)
 }
 
@@ -50,7 +53,7 @@ fn walk_tree(
     snapshot: &Snapshot,
     id: gix::ObjectId,
     prefix: &str,
-    files: &mut Files,
+    files: &mut Entries,
     bytes: &mut usize,
     depth: usize,
 ) -> Result<()> {
@@ -88,20 +91,32 @@ fn walk_tree(
             if ![0o100644, 0o100755, 0o120000].contains(&mode) {
                 bail!("git: submodules and special tree modes are unsupported");
             }
-            let data = snapshot.repo.find_blob(entry.object_id())?.data.clone();
-            *bytes += data.len();
-            if *bytes > snapshot.max_bytes as usize || files.len() >= MAX_PATHS {
+            if files.len() >= MAX_PATHS {
                 bail!("git: tree resource limit exceeded");
             }
-            if files.insert(path, (mode, data)).is_some() {
+            if files
+                .insert(path, (mode, entry.object_id().to_owned()))
+                .is_some()
+            {
                 bail!("git: duplicate tree path");
             }
         }
     }
-    validate_file_set(files)
+    Ok(())
 }
 
-pub(super) fn validate_file_set(files: &Files) -> Result<()> {
+#[cfg(test)]
+thread_local! {
+    /// How many times this thread checked a file set, so a test can show that
+    /// loading a tree checks it once rather than once per directory.
+    pub(super) static FILE_SET_CHECKS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// Refuses a set of paths that would collide on a case-folding filesystem, or
+/// where one path's file is another's directory.
+pub(super) fn validate_file_set<V>(files: &BTreeMap<String, V>) -> Result<()> {
+    #[cfg(test)]
+    FILE_SET_CHECKS.with(|checks| checks.set(checks.get() + 1));
     let mut folded = BTreeSet::new();
     for path in files.keys() {
         if !folded.insert(path.to_lowercase()) {
@@ -127,13 +142,13 @@ pub(super) fn validate_file_set(files: &Files) -> Result<()> {
     Ok(())
 }
 
-pub fn index_files(snapshot: &Snapshot) -> Result<Files> {
+pub fn index_entries(snapshot: &Snapshot) -> Result<Entries> {
     read_index(snapshot, false)
 }
 
-fn read_index(snapshot: &Snapshot, allow_conflicts: bool) -> Result<Files> {
-    let index = snapshot.repo.index_or_empty()?;
-    let mut files = Files::new();
+fn read_index(snapshot: &Snapshot, allow_conflicts: bool) -> Result<Entries> {
+    let index = snapshot.index()?;
+    let mut files = Entries::new();
     let mut bytes = 0;
     for entry in index.entries() {
         if entry.stage() != gix::index::entry::Stage::Unconflicted {
@@ -148,36 +163,37 @@ fn read_index(snapshot: &Snapshot, allow_conflicts: bool) -> Result<Files> {
         if ![0o100644, 0o100755, 0o120000].contains(&mode) {
             bail!("git: unsupported index mode");
         }
-        let data = snapshot.repo.find_blob(entry.id)?.data.clone();
-        bytes += data.len() + path.len() + 128;
+        bytes += path.len() + 128;
         if bytes > snapshot.max_bytes as usize || files.len() >= MAX_PATHS {
             bail!("git: index resource limit exceeded");
         }
-        files.insert(path, (mode, data));
+        files.insert(path, (mode, entry.id));
     }
     validate_file_set(&files)?;
     Ok(files)
 }
 
-pub fn write_index(snapshot: &Snapshot, files: &Files) -> Result<()> {
+/// Replaces the index with `files`, whose blobs must already be stored.
+pub fn write_index(snapshot: &Snapshot, files: &Entries) -> Result<()> {
     let mut state = gix::index::State::new(gix::hash::Kind::Sha1);
-    for (path, (mode, bytes)) in files {
+    for (path, (mode, id)) in files {
         validate_path(path)?;
-        let id = snapshot.repo.write_blob(bytes)?.detach();
         state.dangerously_push_entry(
             Default::default(),
-            id,
+            *id,
             gix::index::entry::Flags::empty(),
             gix::index::entry::Mode::from_bits_truncate(*mode),
             path.as_bytes().as_bstr(),
         );
     }
     state.sort_entries();
-    gix::index::File::from_state(state, snapshot.repo.index_path()).write(Default::default())?;
-    Ok(())
+    snapshot.write_index(state)
 }
 
-fn change(before: Option<&(u32, Vec<u8>)>, after: Option<&(u32, Vec<u8>)>) -> &'static str {
+fn change(
+    before: Option<&(u32, gix::ObjectId)>,
+    after: Option<&(u32, gix::ObjectId)>,
+) -> &'static str {
     match (before, after) {
         (None, Some(_)) => "added",
         (Some(_), None) => "deleted",
@@ -187,14 +203,14 @@ fn change(before: Option<&(u32, Vec<u8>)>, after: Option<&(u32, Vec<u8>)>) -> &'
 }
 
 fn status(snapshot: &Snapshot) -> Result<Value> {
-    let raw_index = snapshot.repo.index_or_empty()?;
+    let raw_index = snapshot.index()?;
     let conflicts: BTreeSet<String> = raw_index
         .entries()
         .iter()
         .filter(|entry| entry.stage() != gix::index::entry::Stage::Unconflicted)
         .map(|entry| entry.path(&raw_index).to_str().map(str::to_owned))
         .collect::<std::result::Result<_, _>>()?;
-    let head = head_files(snapshot)?;
+    let head = head_entries(snapshot)?;
     let index = read_index(snapshot, true)?;
     let mut work = snapshot.worktree()?;
     remove_ignored(snapshot, &mut work, &index)?;
@@ -277,17 +293,47 @@ fn page_number(options: &Value, name: &str, default: u64) -> Result<u64> {
     }
 }
 
-pub fn resolve_tree(snapshot: &Snapshot, revision: &str) -> Result<Files> {
+pub fn resolve_tree(snapshot: &Snapshot, revision: &str) -> Result<Entries> {
     let commit = super::history::resolve_commit(snapshot, revision)?;
-    tree_files(snapshot, commit.tree_id()?.detach())
+    tree_entries(snapshot, commit.tree_id()?.detach())
 }
 
 pub fn show(snapshot: &Snapshot, revision: &str, path: &str) -> Result<Vec<u8>> {
     validate_path(path)?;
-    resolve_tree(snapshot, revision)?
-        .remove(path)
-        .map(|(_, data)| data)
-        .ok_or_else(|| wasmtime::Error::msg("git.show: path not found"))
+    let mut tree = super::history::resolve_commit(snapshot, revision)?.tree()?;
+    let entry = tree
+        .peel_to_entry_by_path(path)?
+        .filter(|entry| entry.mode().is_blob_or_symlink())
+        .ok_or_else(|| wasmtime::Error::msg("git.show: path not found"))?;
+    blob_contents(snapshot, entry.object_id())
+}
+
+/// A blob's contents, refused if larger than the memory available to Git.
+fn blob_contents(snapshot: &Snapshot, id: gix::ObjectId) -> Result<Vec<u8>> {
+    if snapshot.repo.find_header(id)?.size() > snapshot.max_bytes {
+        bail!("git: blob {id} exceeds the memory available to Git");
+    }
+    Ok(snapshot.repo.find_blob(id)?.detach().data)
+}
+
+/// Where the contents of a side of a diff come from.
+#[derive(Clone, Copy, PartialEq)]
+enum Source {
+    Objects,
+    Worktree,
+}
+
+fn contents(
+    snapshot: &Snapshot,
+    source: Source,
+    path: &str,
+    entry: Option<&(u32, gix::ObjectId)>,
+) -> Result<Vec<u8>> {
+    match (entry, source) {
+        (None, _) => Ok(Vec::new()),
+        (Some((_, id)), Source::Objects) => blob_contents(snapshot, *id),
+        (Some(_), Source::Worktree) => snapshot.worktree_contents(path, snapshot.max_bytes),
+    }
 }
 
 fn diff(snapshot: &Snapshot, options: &Value) -> Result<Value> {
@@ -295,9 +341,14 @@ fn diff(snapshot: &Snapshot, options: &Value) -> Result<Value> {
         .get("mode")
         .and_then(Value::as_str)
         .unwrap_or("working");
+    let after_source = if mode == "working" {
+        Source::Worktree
+    } else {
+        Source::Objects
+    };
     let (before, after) = match mode {
-        "working" => (index_files(snapshot)?, snapshot.worktree()?),
-        "staged" => (head_files(snapshot)?, index_files(snapshot)?),
+        "working" => (index_entries(snapshot)?, snapshot.worktree()?),
+        "staged" => (head_entries(snapshot)?, index_entries(snapshot)?),
         "refs" => (
             resolve_tree(
                 snapshot,
@@ -324,18 +375,17 @@ fn diff(snapshot: &Snapshot, options: &Value) -> Result<Value> {
         if mode == "working" && !before.contains_key(path) {
             continue;
         }
-        let a = before.get(path).map(|v| v.1.as_slice()).unwrap_or_default();
-        let b = after.get(path).map(|v| v.1.as_slice()).unwrap_or_default();
-        if a.contains(&0)
-            || b.contains(&0)
-            || std::str::from_utf8(a).is_err()
-            || std::str::from_utf8(b).is_err()
-        {
+        // One pair of contents in memory at a time.
+        let a = contents(snapshot, Source::Objects, path, before.get(path))?;
+        let b = contents(snapshot, after_source, path, after.get(path))?;
+        let (Ok(a), Ok(b)) = (std::str::from_utf8(&a), std::str::from_utf8(&b)) else {
+            binary.push(path);
+            continue;
+        };
+        if a.contains('\0') || b.contains('\0') {
             binary.push(path);
             continue;
         }
-        let a = std::str::from_utf8(a)?;
-        let b = std::str::from_utf8(b)?;
         append_patch(
             &mut patch,
             path,
@@ -452,21 +502,36 @@ pub fn add(snapshot: &Snapshot, paths: &[String]) -> Result<()> {
         bail!("git.add: too many paths; stage a containing directory instead");
     }
     let mut work = snapshot.worktree()?;
-    let mut index = index_files(snapshot)?;
+    let mut index = index_entries(snapshot)?;
     remove_ignored(snapshot, &mut work, &index)?;
     let mut selected = BTreeSet::new();
     for path in paths.iter().collect::<BTreeSet<_>>() {
         snapshot.check_cancelled()?;
-        if path != "." {
-            validate_path(path)?;
-        }
-        let prefix = format!("{path}/");
         let mut matched = false;
-        for candidate in index.keys().chain(work.keys()) {
-            snapshot.check_cancelled()?;
-            if path == "." || candidate == path || candidate.starts_with(&prefix) {
-                selected.insert(candidate.clone());
-                matched = true;
+        if path == "." {
+            matched = !(index.is_empty() && work.is_empty());
+            selected.extend(index.keys().chain(work.keys()).cloned());
+        } else {
+            validate_path(path)?;
+            let prefix = format!("{path}/");
+            for set in [&index, &work] {
+                if set.contains_key(path.as_str()) {
+                    matched = true;
+                    selected.insert(path.clone());
+                }
+                // The paths below `path/` sort together, from `path/` on.
+                for candidate in set
+                    .range::<str, _>((
+                        std::ops::Bound::Included(prefix.as_str()),
+                        std::ops::Bound::Unbounded,
+                    ))
+                    .map(|(candidate, _)| candidate)
+                    .take_while(|candidate| candidate.starts_with(&prefix))
+                {
+                    snapshot.check_cancelled()?;
+                    matched = true;
+                    selected.insert(candidate.clone());
+                }
             }
         }
         if !matched {
@@ -476,8 +541,9 @@ pub fn add(snapshot: &Snapshot, paths: &[String]) -> Result<()> {
     for selected in selected {
         snapshot.check_cancelled()?;
         match work.get(&selected) {
-            Some(value) => {
-                index.insert(selected, value.clone());
+            Some(&(mode, id)) => {
+                let id = snapshot.store_worktree_blob(&selected, mode, id)?;
+                index.insert(selected, (mode, id));
             }
             None => {
                 index.remove(&selected);
@@ -492,25 +558,21 @@ pub fn commit(snapshot: &Snapshot, message: &str, identity: &super::GitConfig) -
     if message.trim().is_empty() {
         bail!("git.commit: message must not be empty");
     }
-    let files = index_files(snapshot)?;
-    if files == head_files(snapshot)? {
+    let files = index_entries(snapshot)?;
+    if files == head_entries(snapshot)? {
         bail!("git.commit: no staged changes");
     }
     let mut editor = snapshot
         .repo
         .edit_tree(gix::ObjectId::empty_tree(gix::hash::Kind::Sha1))?;
-    for (path, (mode, bytes)) in &files {
+    for (path, (mode, id)) in &files {
         snapshot.check_cancelled()?;
         let kind = match mode {
             0o100755 => gix::objs::tree::EntryKind::BlobExecutable,
             0o120000 => gix::objs::tree::EntryKind::Link,
             _ => gix::objs::tree::EntryKind::Blob,
         };
-        editor.upsert(
-            path.as_str(),
-            kind,
-            snapshot.repo.write_blob(bytes)?.detach(),
-        )?;
+        editor.upsert(path.as_str(), kind, *id)?;
     }
     let tree = editor.write()?.detach();
     let signature = gix::actor::Signature {
@@ -559,22 +621,35 @@ pub fn checkout(snapshot: &Snapshot, branch: &str) -> Result<()> {
     }
     let next = resolve_tree(snapshot, &format!("refs/heads/{branch}"))?;
     replace_worktree(snapshot, &next)?;
-    std::fs::write(
-        snapshot.repo.git_dir().join("HEAD"),
-        format!("ref: refs/heads/{branch}\n"),
-    )?;
-    Ok(())
+    snapshot.write_head(branch)
 }
 
-pub fn replace_worktree(snapshot: &Snapshot, next: &Files) -> Result<()> {
-    let previous = index_files(snapshot)?;
+/// Stages the checkout of `next`, which needs a clean worktree: only the
+/// files that differ are staged, one blob in memory at a time.
+pub fn replace_worktree(snapshot: &Snapshot, next: &Entries) -> Result<()> {
+    let previous = index_entries(snapshot)?;
     let work = snapshot.worktree()?;
-    if previous != head_files(snapshot)? || previous != work {
+    if previous != head_entries(snapshot)? || previous != work {
         bail!("git: switching and pulling require a clean working tree, including untracked files");
     }
     validate_file_set(next)?;
+    let mut change = super::stage::WorktreeChange::default();
+    for path in previous.keys() {
+        if !next.contains_key(path) {
+            change.remove.push(path.clone());
+        }
+    }
+    for (path, entry) in next {
+        snapshot.check_cancelled()?;
+        if previous.get(path) == Some(entry) {
+            continue;
+        }
+        let (mode, id) = *entry;
+        snapshot.stage_worktree_file(path, mode, &blob_contents(snapshot, id)?)?;
+        change.place.push(path.clone());
+    }
     write_index(snapshot, next)?;
-    *snapshot.pending_worktree.borrow_mut() = Some(next.clone());
+    *snapshot.pending_worktree.borrow_mut() = Some(change);
     Ok(())
 }
 
@@ -612,22 +687,28 @@ pub fn set_remote(snapshot: &mut Snapshot, name: &str, url: &str, add: bool) -> 
             format!("+refs/heads/*:refs/remotes/{name}/*"),
         )?;
     }
-    snapshot.original_config = config.to_bstring().into();
-    Ok(())
+    snapshot.set_config(config.to_bstring().into())
 }
 
-fn remove_ignored(snapshot: &Snapshot, work: &mut Files, index: &Files) -> Result<()> {
+fn remove_ignored(snapshot: &Snapshot, work: &mut Entries, index: &Entries) -> Result<()> {
     snapshot.check_cancelled()?;
     let mut search = gix::ignore::Search::default();
     let mut budget = IgnoreBudget::default();
-    let excludes = snapshot.repo.git_dir().join("info/exclude");
-    if let Ok(bytes) = std::fs::read(&excludes) {
-        budget.add(snapshot, &mut search, &bytes, ".gitignore")?;
+    match snapshot.dir.open(".git/info/exclude") {
+        Ok(file) => {
+            let mut bytes = Vec::new();
+            file.take(snapshot.max_bytes.saturating_add(1))
+                .read_to_end(&mut bytes)?;
+            budget.add(snapshot, &mut search, &bytes, ".gitignore")?;
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error.into()),
     }
-    for (path, (mode, bytes)) in work.iter() {
+    for (path, (mode, _)) in work.iter() {
         snapshot.check_cancelled()?;
         if *mode != 0o120000 && (path == ".gitignore" || path.ends_with("/.gitignore")) {
-            budget.add(snapshot, &mut search, bytes, path)?;
+            let bytes = snapshot.worktree_contents(path, snapshot.max_bytes)?;
+            budget.add(snapshot, &mut search, &bytes, path)?;
         }
     }
     let mut remaining_work = snapshot.max_bytes.saturating_mul(16).min(50_000_000);
@@ -713,7 +794,7 @@ mod tests {
     fn log_accepts_large_offsets_and_returns_followable_pages() {
         let vfs = crate::runtime::Vfs::tempdir().unwrap();
         let snapshot = Snapshot::init(
-            vfs.dir().unwrap().clone(),
+            &crate::stdlib::git::location::Location::of_vfs(&vfs),
             "main",
             Default::default(),
             16_384,
@@ -752,21 +833,37 @@ mod tests {
     #[test]
     fn ignore_patterns_bound_decoded_memory_matching_work_and_cancellation() {
         let vfs = crate::runtime::Vfs::tempdir().unwrap();
-        let snapshot =
-            Snapshot::init(vfs.dir().unwrap().clone(), "main", Default::default(), 4096).unwrap();
-        let mut work = Files::from([(".gitignore".into(), (0o100644, b"a\n".repeat(2048)))]);
+        let snapshot = Snapshot::init(
+            &crate::stdlib::git::location::Location::of_vfs(&vfs),
+            "main",
+            Default::default(),
+            4096,
+        )
+        .unwrap();
+        snapshot
+            .dir
+            .write(".gitignore", b"a\n".repeat(2048))
+            .unwrap();
+        let mut work = snapshot.worktree().unwrap();
         assert!(
-            remove_ignored(&snapshot, &mut work, &Files::new())
+            remove_ignored(&snapshot, &mut work, &Entries::new())
                 .unwrap_err()
                 .to_string()
                 .contains("ignore pattern resource")
         );
-        let mut work = Files::from([(".gitignore".into(), (0o100644, b"a\n".repeat(20)))]);
+        snapshot.dir.write(".gitignore", b"a\n".repeat(20)).unwrap();
+        let mut work = Entries::from([(
+            ".gitignore".into(),
+            (0o100644, gix::ObjectId::null(gix::hash::Kind::Sha1)),
+        )]);
         for number in 0..1000 {
-            work.insert(format!("file{number:04}"), (0o100644, Vec::new()));
+            work.insert(
+                format!("file{number:04}"),
+                (0o100644, gix::ObjectId::null(gix::hash::Kind::Sha1)),
+            );
         }
         assert!(
-            remove_ignored(&snapshot, &mut work, &Files::new())
+            remove_ignored(&snapshot, &mut work, &Entries::new())
                 .unwrap_err()
                 .to_string()
                 .contains("ignore matching resource")
@@ -775,7 +872,7 @@ mod tests {
             .cancelled
             .store(true, std::sync::atomic::Ordering::Relaxed);
         assert!(
-            remove_ignored(&snapshot, &mut work, &Files::new())
+            remove_ignored(&snapshot, &mut work, &Entries::new())
                 .unwrap_err()
                 .to_string()
                 .contains("cancelled")
@@ -785,8 +882,13 @@ mod tests {
     #[test]
     fn staging_bounds_requests_and_unions_duplicate_selections() {
         let vfs = crate::runtime::Vfs::tempdir().unwrap();
-        let snapshot =
-            Snapshot::init(vfs.dir().unwrap().clone(), "main", Default::default(), 4096).unwrap();
+        let snapshot = Snapshot::init(
+            &crate::stdlib::git::location::Location::of_vfs(&vfs),
+            "main",
+            Default::default(),
+            4096,
+        )
+        .unwrap();
         snapshot.dir.write("file", "contents").unwrap();
         assert!(
             add(&snapshot, &vec![".".to_owned(); MAX_PATHS + 1])
@@ -795,9 +897,10 @@ mod tests {
                 .contains("too many paths")
         );
         assert!(add(&snapshot, &[".".into(), "missing".into()]).is_err());
-        assert!(index_files(&snapshot).unwrap().is_empty());
+        assert!(index_entries(&snapshot).unwrap().is_empty());
         add(&snapshot, &vec![".".to_owned(); MAX_PATHS]).unwrap();
-        assert_eq!(index_files(&snapshot).unwrap()["file"].1, b"contents");
+        let id = index_entries(&snapshot).unwrap()["file"].1;
+        assert_eq!(snapshot.repo.find_blob(id).unwrap().data, b"contents");
         snapshot
             .cancelled
             .store(true, std::sync::atomic::Ordering::Relaxed);
@@ -812,8 +915,13 @@ mod tests {
     #[test]
     fn nested_trees_charge_unvisited_entries_before_descending() {
         let vfs = crate::runtime::Vfs::tempdir().unwrap();
-        let snapshot =
-            Snapshot::init(vfs.dir().unwrap().clone(), "main", Default::default(), 4096).unwrap();
+        let snapshot = Snapshot::init(
+            &crate::stdlib::git::location::Location::of_vfs(&vfs),
+            "main",
+            Default::default(),
+            4096,
+        )
+        .unwrap();
         let blob = snapshot.repo.write_blob([]).unwrap().detach();
         let mut child = None;
         for _ in 0..30 {
@@ -840,7 +948,63 @@ mod tests {
                     .detach(),
             );
         }
-        let error = tree_files(&snapshot, child.unwrap()).unwrap_err();
+        let error = tree_entries(&snapshot, child.unwrap()).unwrap_err();
         assert!(error.to_string().contains("tree memory limit exceeded"));
+    }
+
+    #[test]
+    fn loading_a_tree_checks_its_file_set_once() {
+        let vfs = crate::runtime::Vfs::tempdir().unwrap();
+        let snapshot = Snapshot::init(
+            &crate::stdlib::git::location::Location::of_vfs(&vfs),
+            "main",
+            Default::default(),
+            1 << 20,
+        )
+        .unwrap();
+        let blob = snapshot.repo.write_blob(b"x").unwrap().detach();
+        let mut editor = snapshot
+            .repo
+            .edit_tree(gix::ObjectId::empty_tree(gix::hash::Kind::Sha1))
+            .unwrap();
+        for directory in 0..50 {
+            for file in 0..4 {
+                editor
+                    .upsert(
+                        format!("d{directory}/e/f{file}"),
+                        gix::objs::tree::EntryKind::Blob,
+                        blob,
+                    )
+                    .unwrap();
+            }
+        }
+        let tree = editor.write().unwrap().detach();
+        FILE_SET_CHECKS.with(|checks| checks.set(0));
+        let entries = tree_entries(&snapshot, tree).unwrap();
+        assert_eq!(entries.len(), 200);
+        assert_eq!(FILE_SET_CHECKS.with(std::cell::Cell::get), 1);
+    }
+
+    #[test]
+    fn status_and_add_hash_files_without_reading_them_whole() {
+        let vfs = crate::runtime::Vfs::tempdir().unwrap();
+        // Far less memory than the file holds.
+        let snapshot = Snapshot::init(
+            &crate::stdlib::git::location::Location::of_vfs(&vfs),
+            "main",
+            Default::default(),
+            64 * 1024,
+        )
+        .unwrap();
+        let large = vec![b'x'; 1 << 20];
+        snapshot.dir.write("large", &large).unwrap();
+        assert_eq!(status(&snapshot).unwrap()["entries"][0]["path"], "large");
+        add(&snapshot, &["large".into()]).unwrap();
+        let (_, id) = index_entries(&snapshot).unwrap()["large"];
+        assert_eq!(
+            id,
+            gix::objs::compute_hash(gix::hash::Kind::Sha1, gix::objs::Kind::Blob, &large).unwrap()
+        );
+        assert!(snapshot.repo.has_object(id));
     }
 }

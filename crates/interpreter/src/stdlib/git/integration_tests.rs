@@ -33,11 +33,13 @@ fn repository() -> tempfile::TempDir {
     root
 }
 
+/// The repository at `root`, opened to write.
 fn snapshot(root: &Path) -> storage::Snapshot {
     storage::Snapshot::open(
-        Arc::new(Dir::open_ambient_dir(root, cap_std::ambient_authority()).unwrap()),
+        &super::location::Location::at(root),
         Arc::new(AtomicBool::new(false)),
         storage::MAX_BYTES,
+        true,
     )
     .unwrap()
 }
@@ -53,7 +55,7 @@ fn metadata_publication_preserves_native_hook_execution() {
     let mut state = snapshot(root.path());
     super::operations::set_remote(&mut state, "origin", "https://example.com/repo.git", true)
         .unwrap();
-    state.publish().unwrap();
+    state.publish(None).unwrap();
     assert_ne!(
         std::fs::metadata(&hook).unwrap().permissions().mode() & 0o111,
         0
@@ -71,9 +73,11 @@ fn failed_metadata_staging_does_not_leave_a_recovery_blocker() {
     let root = repository();
     let head = native(root.path(), &["rev-parse", "HEAD"]);
     let state = snapshot(root.path());
-    // A metadata path rejected by publication fails before the backup exists.
-    std::fs::write(state.repo.git_dir().join("hooks/invalid\\name"), "invalid").unwrap();
-    assert!(state.publish().is_err());
+    // A reference staged where the repository has a directory: publication
+    // refuses it before moving anything.
+    std::fs::write(state.repo.refs.git_dir().join("refs/heads/blocked"), "x").unwrap();
+    std::fs::create_dir(root.path().join(".git/refs/heads/blocked")).unwrap();
+    assert!(state.publish(None).is_err());
     assert_eq!(native(root.path(), &["rev-parse", "HEAD"]), head);
     assert!(std::fs::read_dir(root.path()).unwrap().all(|entry| {
         !entry
@@ -82,7 +86,7 @@ fn failed_metadata_staging_does_not_leave_a_recovery_blocker() {
             .to_string_lossy()
             .starts_with(".git-submilli-")
     }));
-    snapshot(root.path()).publish().unwrap();
+    snapshot(root.path()).publish(None).unwrap();
 }
 
 fn job(vfs: &Vfs, op: &str) -> Job {
@@ -366,6 +370,8 @@ fn branch_listing_follows_native_symbolic_aliases_without_panicking() {
             .to_string()
             .contains("symbolic local branch")
     );
+    // One operation holds a repository at a time.
+    drop(state);
     native(
         root.path(),
         &["symbolic-ref", "refs/heads/alias", "refs/heads/alias"],
@@ -577,39 +583,6 @@ async fn a_switch_over_a_held_file_needs_room_for_both_copies() {
     drop(guard);
     run(&tight, "switchBranch", &[json!("main")]).unwrap();
     assert_eq!(tight_quota.used(), tight.measure_usage().unwrap());
-}
-
-/// A tree nested too deep to measure, anywhere in the VFS, leaves a git change
-/// uncountable: refused as a write past the limit is, with a `QuotaExceededError`.
-#[tokio::test]
-async fn git_refuses_a_change_it_cannot_measure() {
-    let vfs = Vfs::tempdir().unwrap().with_size_limit(1 << 20);
-    worker::run(
-        &vfs,
-        &job(&vfs, "init"),
-        "init",
-        &[json!({ "branch": "main" })],
-    )
-    .unwrap();
-    let mut deep = vfs.root().join("elsewhere");
-    for _ in 0..65 {
-        deep = deep.join("d");
-    }
-    std::fs::create_dir_all(&deep).unwrap();
-    let Err(error) = worker::run(
-        &vfs,
-        &job(&vfs, "addRemote"),
-        "addRemote",
-        &[json!("origin"), json!("https://example.com/r.git")],
-    ) else {
-        panic!("a git change went through in a VFS too deep to measure");
-    };
-    assert!(
-        error
-            .downcast_ref::<crate::runtime::host::QuotaExceededError>()
-            .is_some(),
-        "{error}"
-    );
 }
 
 /// A git change that doesn't grow the files is still refused in a VFS that

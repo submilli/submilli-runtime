@@ -1,11 +1,9 @@
 //! Repository jobs run on the blocking pool and retain their VFS through cleanup.
-use super::{Job, operations, storage, transport};
-use std::collections::HashSet;
+use super::{Job, location::Location, operations, storage, transport};
 
-use crate::runtime::fs::{ContainError, FileIdentity, check_repository_clear_of_mounts};
-use crate::runtime::host::{permission_denied_read_only, quota_exceeded_error};
+use crate::runtime::fs::{ContainError, check_repository_clear_of_mounts};
+use crate::runtime::host::permission_denied_read_only;
 use crate::runtime::vfs::Access;
-use crate::runtime::{DiskQuota, measure_dir, measure_with_held};
 use cap_std::fs::Dir;
 use serde_json::{Value, json};
 use std::sync::Arc;
@@ -26,21 +24,13 @@ pub(super) fn run(
     let branch = requested_branch(op, args)?;
     authorize_operation(job, op, args, branch)?;
     let creates = matches!(op, "init" | "clone");
-    if creates {
+    // A change stages inside the repository, so a read-only volume refuses it
+    // before anything is written.
+    if writes(op) {
         refuse_read_only_repository(job, op, &placement)?;
     }
     let quota = placement.quota();
-    // Creating a repository writes its `.git` skeleton before publication, so the
-    // measurement it is counted against has to come first. An unmeasured VFS isn't
-    // measured here: `publish_counted` refuses it.
-    let before_create = match quota {
-        Some(quota) if !quota.is_unmeasured() && creates => {
-            Some(measure_existing_repository(&root, &relative)?)
-        }
-        _ => None,
-    };
-    let mut snapshot = open_snapshot(&root, &relative, job, op, creates, branch)?;
-    snapshot.remotes()?;
+    let mut snapshot = open_snapshot(&root, &relative, &placement, job, op, creates, branch)?;
     let mut changed = op == "init";
     let result = match op {
         "open" | "init" => Value::Null,
@@ -118,11 +108,7 @@ pub(super) fn run(
         _ => operations::read(&snapshot, op, args)?,
     };
     if changed {
-        // The operation's own capability checks ran while it worked in scratch
-        // space; nothing has reached the volume yet.
-        refuse_read_only_repository(job, op, &placement)?;
-        let repo = Arc::clone(&snapshot.dir);
-        publish_counted(snapshot, &repo, quota.map(Arc::as_ref), before_create)?;
+        snapshot.publish(quota.map(Arc::as_ref))?;
     }
     Ok(Output::Json(result))
 }
@@ -156,18 +142,6 @@ fn locate_repository(
     Ok((root, relative, placement))
 }
 
-/// What a repository's directory holds before an operation creates the
-/// repository there, or 0 if the directory doesn't exist yet. Only that directory
-/// is measured: publication changes nothing outside it, and other writers to a
-/// shared volume charge their own writes.
-fn measure_existing_repository(root: &Dir, relative: &std::path::Path) -> Result<u64> {
-    match root.open_dir(relative) {
-        Ok(repo) => Ok(measure_dir(&repo).map_err(storage::measure_error)?),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(0),
-        Err(error) => Err(error.into()),
-    }
-}
-
 /// Refuse a change to a repository in a volume mounted read-only.
 fn refuse_read_only_repository(
     job: &Job,
@@ -186,80 +160,6 @@ fn refuse_read_only_repository(
             placement.mount_point()
         ),
     ))
-}
-
-/// Publish, then count the change it made to the files under `root`, the
-/// repository's directory, against the size limit, measured from `before_create`
-/// when the operation wrote before publishing. What publication frees depends on
-/// what it replaced, so the change is measured rather than tracked; git work is
-/// rare enough to afford the walk. A VFS that couldn't be measured is refused with
-/// a `QuotaExceededError`, as every other writer refuses it.
-fn publish_counted(
-    snapshot: storage::Snapshot,
-    root: &Dir,
-    quota: Option<&DiskQuota>,
-    before_create: Option<u64>,
-) -> Result<()> {
-    let Some(quota) = quota else {
-        return snapshot.publish_within(None).map(|_| ());
-    };
-    if quota.is_unmeasured() {
-        let refused = crate::runtime::QuotaExceeded::Unmeasured {
-            limit: quota.limit(),
-        };
-        return Err(quota_exceeded_error(format!("git: {refused}")));
-    }
-    // A file a handle holds stays on disk when publication replaces its name, but
-    // the measurement stops seeing it; note which ones to count again.
-    let held = quota.held_files();
-    let (before, held_before) = match before_create {
-        // Measured already, and nothing held to list: no walk needed.
-        Some(before) if held.is_empty() => (before, Vec::new()),
-        Some(before) => (
-            before,
-            measure_with_held(root, &held)
-                .map_err(storage::measure_error)?
-                .1,
-        ),
-        None => measure_with_held(root, &held).map_err(storage::measure_error)?,
-    };
-    let published = snapshot.publish_within(Some(quota));
-    // A failed publication of a new repository removes it when the snapshot drops;
-    // measure after that, so the count doesn't keep what is gone.
-    drop(snapshot);
-    match measure_with_held(root, &held) {
-        Ok((total, held_after)) => {
-            if total >= before {
-                quota.record(total - before);
-            } else {
-                quota.release(before - total);
-            }
-            count_vanished_held_files(quota, held_before, &held_after);
-        }
-        Err(_) => {
-            // Unmeasurable now: count all that was staged, a bound on the growth,
-            // and keep every held file counted, since none can be shown gone.
-            if let Ok(staged) = &published {
-                quota.record(*staged);
-            }
-        }
-    }
-    published.map(|_| ())
-}
-
-/// Count again the held files that publication took out of the VFS: the
-/// measurement no longer sees them, but they stay on disk until released.
-fn count_vanished_held_files(
-    quota: &DiskQuota,
-    held_before: Vec<(FileIdentity, u64)>,
-    held_after: &[(FileIdentity, u64)],
-) {
-    let present: HashSet<FileIdentity> = held_after.iter().map(|(file, _)| *file).collect();
-    for (file, bytes) in held_before {
-        if !present.contains(&file) {
-            quota.count_while_held(file, bytes);
-        }
-    }
 }
 
 fn requested_branch<'a>(op: &str, args: &'a [Value]) -> Result<&'a str> {
@@ -297,6 +197,7 @@ fn authorize_operation(job: &Job, op: &str, args: &[Value], branch: &str) -> Res
 fn open_snapshot(
     root: &cap_std::fs::Dir,
     relative: &std::path::Path,
+    placement: &crate::runtime::vfs::Placement,
     job: &Job,
     op: &str,
     create: bool,
@@ -324,12 +225,33 @@ fn open_snapshot(
         bail!("git: repository paths must not contain symlinks; use the canonical VFS path");
     }
     let dir = Arc::new(root.open_dir(relative)?);
+    let location = Location::new(Arc::clone(&dir), placement, relative)?;
     if op == "clone" && dir.entries()?.next().is_some() {
         bail!("git.clone: destination must be empty");
     }
-    if matches!(
+    if writes(op) && !create {
+        storage::reject_in_progress(&dir)?;
+    }
+    let snapshot = if create {
+        storage::Snapshot::init(
+            &location,
+            if branch.is_empty() { "main" } else { branch },
+            job.cancelled.clone(),
+            job.max_bytes,
+        )?
+    } else {
+        storage::Snapshot::open(&location, job.cancelled.clone(), job.max_bytes, writes(op))?
+    };
+    Ok(snapshot)
+}
+
+/// Whether `op` changes the repository, and so needs a stage.
+fn writes(op: &str) -> bool {
+    matches!(
         op,
-        "add"
+        "init"
+            | "clone"
+            | "add"
             | "commit"
             | "createBranch"
             | "switchBranch"
@@ -337,20 +259,7 @@ fn open_snapshot(
             | "setRemoteUrl"
             | "fetch"
             | "pull"
-    ) {
-        storage::reject_in_progress(&dir)?;
-    }
-    let snapshot = if create {
-        storage::Snapshot::init(
-            dir,
-            if branch.is_empty() { "main" } else { branch },
-            job.cancelled.clone(),
-            job.max_bytes,
-        )?
-    } else {
-        storage::Snapshot::open(dir, job.cancelled.clone(), job.max_bytes)?
-    };
-    Ok(snapshot)
+    )
 }
 
 fn clone_repository(
@@ -377,9 +286,5 @@ fn clone_repository(
     let next = operations::resolve_tree(snapshot, &format!("refs/remotes/origin/{branch}"))?;
     operations::replace_worktree(snapshot, &next)?;
     operations::create_branch(snapshot, branch, &format!("refs/remotes/origin/{branch}"))?;
-    std::fs::write(
-        snapshot.repo.git_dir().join("HEAD"),
-        format!("ref: refs/heads/{branch}\n"),
-    )?;
-    Ok(())
+    snapshot.write_head(branch)
 }

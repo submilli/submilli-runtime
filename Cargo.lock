@@ -2981,6 +2981,7 @@ dependencies = [
  "cap-fs-ext",
  "cap-primitives",
  "cap-std",
+ "filetime",
  "flate2",
  "futures",
  "getrandom 0.2.17",

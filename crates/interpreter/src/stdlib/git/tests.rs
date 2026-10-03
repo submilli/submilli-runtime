@@ -238,10 +238,13 @@ fn patches_apply_file_lifecycle_and_mode_changes_with_native_git() {
     symlink("target", repo.join("type-change")).unwrap();
     native(repo, &["add", "."]);
     let expected_tree = native(repo, &["write-tree"]);
-    let dir =
-        Arc::new(cap_std::fs::Dir::open_ambient_dir(repo, cap_std::ambient_authority()).unwrap());
-    let snapshot =
-        storage::Snapshot::open(dir, Arc::new(AtomicBool::new(false)), storage::MAX_BYTES).unwrap();
+    let snapshot = storage::Snapshot::open(
+        &location::Location::at(repo),
+        Arc::new(AtomicBool::new(false)),
+        storage::MAX_BYTES,
+        false,
+    )
+    .unwrap();
     let diff = operations::read(&snapshot, "diff", &[json!({"mode":"staged"})]).unwrap();
     let patch = directory.path().join(".git/review.patch");
     std::fs::write(&patch, diff["patch"].as_str().unwrap()).unwrap();

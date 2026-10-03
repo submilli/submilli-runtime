@@ -80,6 +80,8 @@ pub struct Mount {
     rel: PathBuf,
     volume: Arc<str>,
     dir: Arc<Dir>,
+    /// The host directory `dir` was opened on.
+    host: Arc<Path>,
     access: Access,
     quota: Option<Arc<DiskQuota>>,
     /// The identity and exact name of each directory on the way to the mount
@@ -152,6 +154,8 @@ pub struct Placement {
     /// The mounts below this volume; only the root has any. A change to the root
     /// must not remove, replace or write through one of their mount points.
     nested: Arc<[Mount]>,
+    /// The host directory the volume's handle was opened on.
+    host: Arc<Path>,
 }
 
 impl Placement {
@@ -170,6 +174,13 @@ impl Placement {
 
     pub(crate) fn nested(&self) -> &[Mount] {
         &self.nested
+    }
+
+    /// The host directory the volume's handle was opened on. Only Git uses it,
+    /// to let gix open a repository in place after checking that the path
+    /// names the directory the handle holds; see `stdlib::git::location`.
+    pub(crate) fn host(&self) -> &Path {
+        &self.host
     }
 
     /// Whether two placements are the same volume, so a rename between them
@@ -446,6 +457,7 @@ impl Vfs {
             rel,
             volume: Arc::from(spec.volume.as_str()),
             dir,
+            host: Arc::from(spec.host.as_path()),
             access: spec.access,
             quota: spec.quota,
             placeholders: Arc::from(placeholders),
@@ -506,6 +518,7 @@ impl Vfs {
                     quota: mount.quota.clone(),
                     mount: Some(Arc::clone(&mount.guest)),
                     nested: Arc::from([]),
+                    host: Arc::clone(&mount.host),
                 };
                 return Some((Arc::clone(&mount.dir), rest, placement));
             }
@@ -515,6 +528,7 @@ impl Vfs {
             quota: self.quota.clone(),
             mount: None,
             nested: Arc::clone(&self.mounts),
+            host: Arc::from(self.root.as_path()),
         };
         Some((Arc::clone(root), rel.to_path_buf(), placement))
     }

@@ -160,16 +160,6 @@ fn validate_pack(pack: &[u8], max_bytes: u64, cancelled: &AtomicBool) -> io::Res
     Ok(())
 }
 
-pub(super) fn validate_raw(pack: &[u8], max_bytes: u64, cancelled: &AtomicBool) -> io::Result<()> {
-    check_cancelled(cancelled)?;
-    if pack.len() as u64 > max_bytes {
-        return Err(invalid("pack wire size limit exceeded"));
-    }
-    let max_objects = (max_bytes / 512).clamp(1, 10_000) as usize;
-    PackHeader::default().accept(pack, max_objects)?;
-    validate_pack(pack, max_bytes, cancelled)
-}
-
 fn inflate_entry(
     input: &[u8],
     expected: u64,

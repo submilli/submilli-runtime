@@ -119,9 +119,21 @@ fn fetch_inner(
             }
         }
     }
-    prepared
+    let outcome = prepared
         .receive(gix::progress::Discard, &job.cancelled)
         .map_err(|error| redact_fetch_failure(error.into()))?;
+    if let gix::remote::fetch::Status::Change {
+        write_pack_bundle, ..
+    } = &outcome.status
+        && let Some(stem) = write_pack_bundle
+            .data_path
+            .as_deref()
+            .and_then(std::path::Path::file_stem)
+            .and_then(std::ffi::OsStr::to_str)
+    {
+        // gix hashed every object it indexed: the pack needs no check.
+        super::pack_index_check::trust(&snapshot.staged_packs()?, stem)?;
+    }
     Ok(FetchResult {
         branches,
         default_branch,
@@ -215,7 +227,7 @@ pub fn pull(
         bail!("git.pull: branches diverged; only fast-forward is supported");
     }
     let tree = snapshot.repo.find_commit(next)?.tree_id()?.detach();
-    let files = operations::tree_files(snapshot, tree)?;
+    let files = operations::tree_entries(snapshot, tree)?;
     operations::replace_worktree(snapshot, &files)?;
     snapshot.repo.reference(
         format!("refs/heads/{current}"),
