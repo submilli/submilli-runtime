@@ -9,6 +9,7 @@
 //! [`stage`](super::stage).
 use super::location::Location;
 use super::lock::RepositoryLock;
+use super::meter::Meter;
 use super::stage::{Stage, WorktreeChange};
 use crate::runtime::DiskQuota;
 use cap_std::fs::Dir;
@@ -50,29 +51,58 @@ pub struct Snapshot {
     /// Whether this operation created `.git`, and the bytes it wrote there.
     created: Option<u64>,
     published: bool,
+    /// The work this operation does, counted for fuel.
+    pub meter: Arc<Meter>,
     // Dropped last: the repository stays held until everything above is gone.
     _lock: RepositoryLock,
 }
 
 impl Snapshot {
-    /// Opens the repository at `location`; `writes` gives it a stage.
+    /// Opens the repository at `location`; `writes` gives it a stage. Its
+    /// work is counted nowhere: for tests.
+    #[cfg(test)]
     pub fn open(
         location: &Location,
         cancelled: Arc<AtomicBool>,
         max_bytes: u64,
         writes: bool,
     ) -> Result<Self> {
-        let lock = RepositoryLock::acquire(location.identity, &cancelled)?;
-        Self::open_locked(location, lock, cancelled, max_bytes, writes, None)
+        Self::open_metered(location, cancelled, max_bytes, writes, Default::default())
     }
 
-    /// Creates a repository at `location`, on `branch`, and opens it to write.
-    /// Its `.git` is removed again unless the operation publishes.
+    /// Opens the repository at `location`, counting the work into `meter`;
+    /// `writes` gives it a stage.
+    pub fn open_metered(
+        location: &Location,
+        cancelled: Arc<AtomicBool>,
+        max_bytes: u64,
+        writes: bool,
+        meter: Arc<Meter>,
+    ) -> Result<Self> {
+        let lock = RepositoryLock::acquire(location.identity, &cancelled)?;
+        Self::open_locked(location, lock, cancelled, max_bytes, writes, None, meter)
+    }
+
+    /// [`init_metered`](Self::init_metered), counting the work nowhere: for tests.
+    #[cfg(test)]
     pub fn init(
         location: &Location,
         branch: &str,
         cancelled: Arc<AtomicBool>,
         max_bytes: u64,
+    ) -> Result<Self> {
+        Self::init_metered(location, branch, cancelled, max_bytes, Default::default())
+    }
+
+    /// Creates a repository at `location`, on `branch`, and opens it to write,
+    /// counting the work into `meter`. Its `.git` is removed again unless the
+    /// operation publishes.
+    pub fn init_metered(
+        location: &Location,
+        branch: &str,
+        cancelled: Arc<AtomicBool>,
+        max_bytes: u64,
+        meter: Arc<Meter>,
     ) -> Result<Self> {
         validate_new_ref_name(branch)?;
         let lock = RepositoryLock::acquire(location.identity, &cancelled)?;
@@ -89,7 +119,17 @@ impl Snapshot {
             dir.write(".git/HEAD", &head)?;
             dir.write(".git/config", SKELETON_CONFIG)?;
             let written = (head.len() + SKELETON_CONFIG.len()) as u64;
-            Self::open_locked(location, lock, cancelled, max_bytes, true, Some(written))
+            meter.syscalls(6);
+            meter.io(written);
+            Self::open_locked(
+                location,
+                lock,
+                cancelled,
+                max_bytes,
+                true,
+                Some(written),
+                meter,
+            )
         })();
         if result.is_err() {
             let _ = dir.remove_dir_all(".git");
@@ -104,6 +144,7 @@ impl Snapshot {
         max_bytes: u64,
         writes: bool,
         created: Option<u64>,
+        meter: Arc<Meter>,
     ) -> Result<Self> {
         let dir = Arc::clone(&location.dir);
         let metadata = dir.symlink_metadata(".git")?;
@@ -123,7 +164,7 @@ impl Snapshot {
             }
         }
         let git = dir.open_dir(".git")?;
-        let summary = super::metadata_scan::scan(&git, &cancelled)?;
+        let summary = super::metadata_scan::scan(&git, &cancelled, &meter)?;
         validate_config_budget(&summary.config, max_bytes, &cancelled)?;
         if !summary.packs.is_empty() {
             super::pack_index_check::check(
@@ -134,11 +175,12 @@ impl Snapshot {
                     max_object_bytes: max_bytes,
                 },
                 &cancelled,
+                &meter,
             )?;
         }
         let mut repo = open_in_place(&location.git_dir()?, max_bytes)?;
         let stage = if writes {
-            let stage = Stage::create(&dir, &location.host)?;
+            let stage = Stage::create(&dir, &location.host, Arc::clone(&meter))?;
             stage.copy_references(&git, &cancelled)?;
             let objects = gix::odb::at_opts(
                 stage.host.join(super::stage::OBJECTS),
@@ -168,6 +210,7 @@ impl Snapshot {
             stage,
             created,
             published: false,
+            meter,
             _lock: lock,
         };
         snapshot.remotes()?;
@@ -201,6 +244,10 @@ impl Snapshot {
                 Err(error) => return Err(error.into()),
             },
         };
+        self.meter.syscalls(2);
+        self.meter.io(bytes.len() as u64);
+        self.meter.hash(bytes.len() as u64);
+        self.meter.parse(bytes.len() as u64);
         // gix's decoders trust the index's extensions; keep only what's checked.
         let bytes = super::index_limits::sanitize(&bytes, self.max_bytes, &self.cancelled)?;
         let (state, _) = gix::index::State::from_bytes(
@@ -219,6 +266,8 @@ impl Snapshot {
     /// Stages `state` as the index.
     pub fn write_index(&self, state: gix::index::State) -> Result<()> {
         let stage = self.stage()?;
+        self.meter.syscalls(3);
+        self.meter.elements(state.entries().len() as u64);
         gix::index::File::from_state(state, stage.metadata_path("index"))
             .write(Default::default())?;
         Ok(())
@@ -387,6 +436,10 @@ impl Snapshot {
             &mut state,
             0,
             &mut |dir, name, path, meta, _| {
+                self.meter.syscalls(2);
+                self.meter.io(meta.len());
+                self.meter.hash(meta.len());
+                self.meter.elements(1);
                 let (mode, id) = hash_entry(dir, name, meta, &self.cancelled)?;
                 entries.insert(path, (mode, id));
                 // An id stands in for the contents.
@@ -412,6 +465,8 @@ impl Snapshot {
         if contents.len() as u64 > limit {
             bail!("git: file {path} exceeds the memory available to Git");
         }
+        self.meter.syscalls(2);
+        self.meter.io(contents.len() as u64);
         Ok(contents)
     }
 
@@ -438,6 +493,11 @@ impl Snapshot {
         }
         let file = self.dir.open(path)?;
         let len = file.metadata()?.len();
+        // Read, hashed and deflated into a new loose object.
+        self.meter.syscalls(4);
+        self.meter.io(len.saturating_mul(2));
+        self.meter.hash(len);
+        self.meter.parse(len);
         let mut exact = ExactReader {
             inner: file.take(len),
             remaining: len,

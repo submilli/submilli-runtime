@@ -6,6 +6,7 @@ mod index_limits;
 mod location;
 mod lock;
 mod metadata_scan;
+mod meter;
 mod operations;
 mod pack_index_check;
 mod pack_limits;
@@ -56,6 +57,8 @@ struct Job {
     cancelled: Arc<AtomicBool>,
     max_bytes: u64,
     transferred: Arc<AtomicU64>,
+    /// The worker's own file and object work, charged when it returns.
+    meter: Arc<meter::Meter>,
     denial: Arc<Mutex<Option<(String, String)>>>,
 }
 impl Job {
@@ -404,6 +407,7 @@ async fn invoke(
         cancelled,
         max_bytes,
         transferred: Arc::new(AtomicU64::new(0)),
+        meter: Default::default(),
         denial: Arc::new(Mutex::new(None)),
     };
     let workers = WORKERS
@@ -417,12 +421,18 @@ async fn invoke(
     let denial = job.denial.clone();
     let principal = job.caller.clone();
     let transferred = job.transferred.clone();
+    let meter = job.meter.clone();
     let worker = caller.data_mut().blocking_work.spawn(move || {
         let _permit = permit;
         job.check_cancelled()?;
         worker::run(&vfs, &job, &op, &args).map(|result| (result, budget))
     });
     let outcome = finish_worker(worker, &cancel_guard.0, deadline).await;
+    // The work is done, and may be published, whether or not it succeeded:
+    // network bytes the worker moved and its own file and object work are
+    // settled, not refused.
+    fuel::settle(&mut *caller, fuel::IO, transferred.load(Ordering::Relaxed))?;
+    meter.settle(&mut *caller)?;
     if let Some((capability, reason)) = denial
         .lock()
         .map_err(|_| wasmtime::Error::msg("git: denial lock poisoned"))?
@@ -432,10 +442,6 @@ async fn invoke(
     }
     let (result, _budget) = outcome?;
     drop(cancel_guard);
-    // Network bytes the worker moved; the operation is published, so this is
-    // settled, not refused. The worker's own file and object work is not
-    // counted yet (SUB-1129 reshapes it).
-    fuel::settle(&mut *caller, fuel::IO, transferred.load(Ordering::Relaxed))?;
     encode_result(
         caller,
         result,

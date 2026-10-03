@@ -13,6 +13,7 @@
 //! A pack set that passed is remembered by the identity of its files, and so
 //! is each pack this process wrote while fetching, whose index gix computed
 //! by hashing every object.
+use super::meter::Meter;
 use cap_std::fs::Dir;
 use gix::odb::pack::data::entry::Header;
 use std::collections::{HashSet, VecDeque};
@@ -150,7 +151,9 @@ pub(super) fn check(
     stems: &[String],
     limits: Limits,
     cancelled: &AtomicBool,
+    meter: &Meter,
 ) -> Result<()> {
+    meter.syscalls(2 * stems.len() as u64);
     let mut stamps = stems
         .iter()
         .map(|stem| stamp(packs, stem))
@@ -169,7 +172,7 @@ pub(super) fn check(
                 .any(|set| *set == stamps || *set == untrusted)
     });
     if !known {
-        check_uncached(packs, stems, limits, cancelled)?;
+        check_uncached(packs, stems, limits, cancelled, meter)?;
     }
     remember(|memory| {
         if !memory.verified.contains(&stamps) {
@@ -218,6 +221,7 @@ fn check_uncached(
     stems: &[String],
     limits: Limits,
     cancelled: &AtomicBool,
+    meter: &Meter,
 ) -> Result<()> {
     let mut indexes = Vec::new();
     let mut objects = 0u64;
@@ -229,6 +233,12 @@ fn check_uncached(
             cancelled,
         )?;
         objects += index.len() as u64;
+        // The index read and hashed, then one read of each entry's header.
+        let index_bytes = (NAMES + index.len() * (HASH + 8) + 2 * HASH) as u64;
+        meter.syscalls(4 + index.len() as u64);
+        meter.io(index_bytes + index.len() as u64 * MAX_HEADER);
+        meter.hash(index_bytes);
+        meter.elements(index.len() as u64);
         indexes.push(index);
     }
     // Every entry, across packs: (pack, position in name order).

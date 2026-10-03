@@ -233,14 +233,21 @@ fn open_snapshot(
         storage::reject_in_progress(&dir)?;
     }
     let snapshot = if create {
-        storage::Snapshot::init(
+        storage::Snapshot::init_metered(
             &location,
             if branch.is_empty() { "main" } else { branch },
             job.cancelled.clone(),
             job.max_bytes,
+            Arc::clone(&job.meter),
         )?
     } else {
-        storage::Snapshot::open(&location, job.cancelled.clone(), job.max_bytes, writes(op))?
+        storage::Snapshot::open_metered(
+            &location,
+            job.cancelled.clone(),
+            job.max_bytes,
+            writes(op),
+            Arc::clone(&job.meter),
+        )?
     };
     Ok(snapshot)
 }

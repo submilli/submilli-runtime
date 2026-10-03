@@ -13,6 +13,7 @@ pub(super) fn resolve_commit<'a>(
     for _ in 0..64 {
         snapshot.check_cancelled()?;
         let object = snapshot.repo.find_object(id)?;
+        snapshot.meter.parse(object.data.len() as u64);
         bytes = bytes.saturating_add(object.data.len() as u64);
         if bytes > snapshot.max_bytes {
             bail!("git: revision resource limit exceeded");
@@ -186,7 +187,10 @@ impl<'a> Ancestors<'a> {
         Ok(())
     }
 
+    /// Charges `bytes` decoded or held against the history's memory, and as
+    /// work against fuel.
     fn charge(&mut self, bytes: u64) -> Result<()> {
+        self.snapshot.meter.parse(bytes);
         self.bytes = self.bytes.saturating_add(bytes);
         if self.bytes > self.snapshot.max_bytes {
             bail!("git: history resource limit exceeded");

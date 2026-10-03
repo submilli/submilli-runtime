@@ -62,6 +62,7 @@ fn walk_tree(
         bail!("git: tree nesting limit exceeded");
     }
     let tree = snapshot.repo.find_tree(id)?;
+    snapshot.meter.parse(tree.data.len() as u64);
     // Ancestor tree buffers remain alive during recursion. Charge each whole
     // decoded tree before descending, including entries not yet visited.
     *bytes += tree.data.len();
@@ -94,6 +95,7 @@ fn walk_tree(
             if files.len() >= MAX_PATHS {
                 bail!("git: tree resource limit exceeded");
             }
+            snapshot.meter.elements(1);
             if files
                 .insert(path, (mode, entry.object_id().to_owned()))
                 .is_some()
@@ -310,9 +312,11 @@ pub fn show(snapshot: &Snapshot, revision: &str, path: &str) -> Result<Vec<u8>> 
 
 /// A blob's contents, refused if larger than the memory available to Git.
 fn blob_contents(snapshot: &Snapshot, id: gix::ObjectId) -> Result<Vec<u8>> {
-    if snapshot.repo.find_header(id)?.size() > snapshot.max_bytes {
+    let size = snapshot.repo.find_header(id)?.size();
+    if size > snapshot.max_bytes {
         bail!("git: blob {id} exceeds the memory available to Git");
     }
+    snapshot.meter.parse(size);
     Ok(snapshot.repo.find_blob(id)?.detach().data)
 }
 

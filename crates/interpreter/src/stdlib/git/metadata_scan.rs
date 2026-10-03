@@ -3,6 +3,7 @@
 //! external object stores, linked worktrees, unknown pack files, and names a
 //! case-folding filesystem would merge. Only names and file types are read,
 //! never contents, except the small `config` and `HEAD`.
+use super::meter::Meter;
 use super::storage::validate_metadata_path;
 use cap_std::fs::Dir;
 use std::io::Read;
@@ -28,13 +29,17 @@ pub(super) struct Summary {
 }
 
 /// Scans the `.git` directory `git`.
-pub(super) fn scan(git: &Dir, cancelled: &AtomicBool) -> Result<Summary> {
+pub(super) fn scan(git: &Dir, cancelled: &AtomicBool, meter: &Meter) -> Result<Summary> {
     let mut scan = Scan {
         cancelled,
         entries: 0,
+        stats: 0,
         packs: Vec::new(),
     };
     scan.walk(git, "", 0)?;
+    // An entry listed, a stat for each file outside the loose objects, the
+    // checks of refused names, and the configuration and index read below.
+    meter.syscalls(scan.entries as u64 + scan.stats + 8);
     for refused in [
         "commondir",
         "objects/info/alternates",
@@ -60,6 +65,7 @@ pub(super) fn scan(git: &Dir, cancelled: &AtomicBool) -> Result<Summary> {
             if summary.config.len() as u64 > MAX_CONFIG_BYTES {
                 bail!("git: repository configuration is larger than {MAX_CONFIG_BYTES} bytes");
             }
+            meter.io(summary.config.len() as u64);
         }
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
         Err(error) => return Err(error.into()),
@@ -75,6 +81,7 @@ pub(super) fn scan(git: &Dir, cancelled: &AtomicBool) -> Result<Summary> {
 struct Scan<'a> {
     cancelled: &'a AtomicBool,
     entries: usize,
+    stats: u64,
     packs: Vec<String>,
 }
 
@@ -131,6 +138,7 @@ impl Scan<'_> {
             #[cfg(unix)]
             {
                 use cap_std::fs::MetadataExt;
+                self.stats += 1;
                 if dir.symlink_metadata(&name)?.nlink() > 1 {
                     bail!("git: hard-linked repository files are unsupported: {path}");
                 }
@@ -205,7 +213,7 @@ mod tests {
     #[test]
     fn accepts_a_native_repository() {
         let (_temp, git) = repository();
-        let summary = scan(&git, &AtomicBool::new(false)).unwrap();
+        let summary = scan(&git, &AtomicBool::new(false), &Meter::default()).unwrap();
         assert!(!summary.config.is_empty());
         assert!(summary.packs.is_empty());
     }
@@ -215,14 +223,14 @@ mod tests {
     fn refuses_links_and_external_stores() {
         let (temp, git) = repository();
         std::os::unix::fs::symlink(temp.path(), temp.path().join(".git/objects/ab")).unwrap();
-        assert!(scan(&git, &AtomicBool::new(false)).is_err());
+        assert!(scan(&git, &AtomicBool::new(false), &Meter::default()).is_err());
         std::fs::remove_file(temp.path().join(".git/objects/ab")).unwrap();
         std::fs::write(
             temp.path().join(".git/objects/info/alternates"),
             "/elsewhere",
         )
         .unwrap();
-        assert!(scan(&git, &AtomicBool::new(false)).is_err());
+        assert!(scan(&git, &AtomicBool::new(false), &Meter::default()).is_err());
         std::fs::remove_file(temp.path().join(".git/objects/info/alternates")).unwrap();
         std::fs::write(temp.path().join("outside"), "x").unwrap();
         std::fs::hard_link(
@@ -230,14 +238,14 @@ mod tests {
             temp.path().join(".git/description2"),
         )
         .unwrap();
-        assert!(scan(&git, &AtomicBool::new(false)).is_err());
+        assert!(scan(&git, &AtomicBool::new(false), &Meter::default()).is_err());
     }
 
     #[test]
     fn removes_unfinished_object_writes() {
         let (temp, git) = repository();
         std::fs::write(temp.path().join(".git/objects/.tmpAbC123"), "partial").unwrap();
-        scan(&git, &AtomicBool::new(false)).unwrap();
+        scan(&git, &AtomicBool::new(false), &Meter::default()).unwrap();
         assert!(!temp.path().join(".git/objects/.tmpAbC123").exists());
     }
 

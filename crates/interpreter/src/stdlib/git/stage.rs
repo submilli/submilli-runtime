@@ -10,6 +10,7 @@
 //! operation leaves the repository as it was. If undoing fails too, the stage
 //! stays behind with what it replaced, and the repository refuses further Git
 //! operations until the host recovers it.
+use super::meter::Meter;
 use super::storage::{prepare_parent, validate_path};
 use crate::runtime::DiskQuota;
 use crate::runtime::fs::FileIdentity;
@@ -40,6 +41,7 @@ pub(super) struct Stage {
     /// The host path of the stage, for gix.
     pub host: PathBuf,
     repo: Arc<Dir>,
+    meter: Arc<Meter>,
     published: bool,
 }
 
@@ -66,7 +68,7 @@ enum Step {
 
 impl Stage {
     /// Creates the stage in `repo`, whose host path is `host`.
-    pub(super) fn create(repo: &Arc<Dir>, host: &Path) -> Result<Self> {
+    pub(super) fn create(repo: &Arc<Dir>, host: &Path, meter: Arc<Meter>) -> Result<Self> {
         let name = format!(".git-submilli-{}", uuid::Uuid::new_v4());
         repo.create_dir(&name)?;
         let dir = repo.open_dir(&name)?;
@@ -75,8 +77,10 @@ impl Stage {
             name,
             dir,
             repo: Arc::clone(repo),
+            meter,
             published: false,
         };
+        stage.meter.syscalls(8);
         for directory in [
             "objects/info",
             "objects/pack",
@@ -100,14 +104,21 @@ impl Stage {
         let copy = self.dir.open_dir(REFS)?;
         for file in ["HEAD", "packed-refs"] {
             match git.open(file) {
-                Ok(source) => copy_file(source, &copy, Path::new(file))?,
+                Ok(source) => copy_file(source, &copy, Path::new(file), &self.meter)?,
                 Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
                 Err(error) => return Err(error.into()),
             }
         }
         copy.create_dir("refs")?;
         match git.open_dir("refs") {
-            Ok(refs) => copy_tree(&refs, &copy.open_dir("refs")?, Path::new(""), cancelled, 0),
+            Ok(refs) => copy_tree(
+                &refs,
+                &copy.open_dir("refs")?,
+                Path::new(""),
+                cancelled,
+                0,
+                &self.meter,
+            ),
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
             Err(error) => Err(error.into()),
         }
@@ -123,6 +134,8 @@ impl Stage {
                 .truncate(true),
         )?;
         file.write_all(contents)?;
+        self.meter.syscalls(2);
+        self.meter.io(contents.len() as u64);
         Ok(())
     }
 
@@ -139,6 +152,9 @@ impl Stage {
     /// regular file of `mode` with `contents`.
     pub(super) fn write_worktree_file(&self, path: &str, mode: u32, contents: &[u8]) -> Result<()> {
         validate_path(path)?;
+        self.meter
+            .syscalls(3 + Path::new(path).components().count() as u64);
+        self.meter.io(contents.len() as u64);
         let worktree = self.dir.open_dir(WORKTREE)?;
         if let Some(parent) = Path::new(path).parent() {
             worktree.create_dir_all(parent)?;
@@ -197,6 +213,9 @@ impl Stage {
         // no program may see half a change.
         let mut steps = Vec::new();
         let result = self.apply(&plan, &mut steps);
+        // A rename, removal or directory per step, and cleaning up the stage.
+        self.meter
+            .syscalls(2 * steps.len() as u64 + plan.added.len() as u64 + 4);
         match result {
             Ok(()) => {
                 self.published = true;
@@ -293,6 +312,7 @@ impl Stage {
                 );
             }
             let target = git.join(&reference);
+            self.meter.syscalls(4);
             if same_contents(&copy, &reference, &self.repo, &target)? {
                 continue;
             }
@@ -563,12 +583,14 @@ fn same_contents(left: &Dir, left_path: &Path, right: &Dir, right_path: &Path) -
     Ok(read(left, left_path)? == read(right, right_path)?)
 }
 
-fn copy_file(mut source: cap_std::fs::File, to: &Dir, path: &Path) -> Result<()> {
+fn copy_file(mut source: cap_std::fs::File, to: &Dir, path: &Path, meter: &Meter) -> Result<()> {
     let mut destination = to.open_with(
         path,
         cap_std::fs::OpenOptions::new().write(true).create_new(true),
     )?;
-    std::io::copy(&mut source, &mut destination)?;
+    let copied = std::io::copy(&mut source, &mut destination)?;
+    meter.syscalls(3);
+    meter.io(copied.saturating_mul(2));
     Ok(())
 }
 
@@ -578,11 +600,13 @@ fn copy_tree(
     prefix: &Path,
     cancelled: &AtomicBool,
     depth: usize,
+    meter: &Meter,
 ) -> Result<()> {
     if depth > 64 {
         bail!("git: reference nesting limit exceeded");
     }
     for entry in from.entries()? {
+        meter.syscalls(1);
         check_cancelled(cancelled)?;
         let entry = entry?;
         let name = entry.file_name();
@@ -595,6 +619,7 @@ fn copy_tree(
                 &prefix.join(&name),
                 cancelled,
                 depth + 1,
+                meter,
             )?;
         } else if kind.is_file() {
             let file = from.open(&name)?;
@@ -604,7 +629,7 @@ fn copy_tree(
                     prefix.join(&name).display()
                 );
             }
-            copy_file(file, to, Path::new(&name))?;
+            copy_file(file, to, Path::new(&name), meter)?;
         } else {
             bail!("git: special files are unsupported in references");
         }

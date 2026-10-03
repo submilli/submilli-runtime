@@ -132,7 +132,16 @@ fn fetch_inner(
             .and_then(std::ffi::OsStr::to_str)
     {
         // gix hashed every object it indexed: the pack needs no check.
-        super::pack_index_check::trust(&snapshot.staged_packs()?, stem)?;
+        let packs = snapshot.staged_packs()?;
+        super::pack_index_check::trust(&packs, stem)?;
+        // Every object inflated, resolved and hashed, the pack and index written.
+        let pack_bytes = packs.metadata(format!("{stem}.pack"))?.len();
+        let objects = u64::from(write_pack_bundle.index.num_objects);
+        snapshot.meter.syscalls(8);
+        snapshot.meter.io(pack_bytes);
+        snapshot.meter.parse(pack_bytes);
+        snapshot.meter.hash(pack_bytes);
+        snapshot.meter.elements(objects);
     }
     Ok(FetchResult {
         branches,
@@ -672,6 +681,7 @@ mod tests {
                 cancelled: providers.cancelled.clone(),
                 max_bytes: 4096,
                 transferred: Arc::new(AtomicU64::new(0)),
+                meter: Default::default(),
                 denial: Arc::new(Mutex::new(None)),
             },
         }

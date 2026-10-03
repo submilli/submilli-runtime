@@ -107,6 +107,7 @@ fn job(vfs: &Vfs, op: &str) -> Job {
         cancelled: Arc::new(AtomicBool::new(false)),
         max_bytes: storage::MAX_BYTES,
         transferred: Arc::new(AtomicU64::new(0)),
+        meter: Default::default(),
         denial: Arc::new(Mutex::new(None)),
     }
 }
@@ -794,4 +795,51 @@ async fn mount_non_ascii_alias_cannot_host_a_repository() {
             .count(),
         0
     );
+}
+
+/// A repository whose single file is `bytes` long, packed by native Git.
+fn packed_repository(bytes: usize) -> tempfile::TempDir {
+    let root = tempfile::tempdir().unwrap();
+    native(root.path(), &["init", "-b", "main"]);
+    native(root.path(), &["config", "user.name", "Native"]);
+    native(root.path(), &["config", "user.email", "native@example.com"]);
+    // Varied bytes, so the pack is as large as the file.
+    let contents: Vec<u8> = (0..bytes).map(|i| (i * 7919 % 251) as u8).collect();
+    std::fs::write(root.path().join("data"), contents).unwrap();
+    native(root.path(), &["add", "."]);
+    native(root.path(), &["commit", "-m", "data"]);
+    native(root.path(), &["gc", "--quiet"]);
+    root
+}
+
+/// The fuel `op` costs on the repository at `root`, its packs already checked.
+fn fuel_of(root: &Path, op: &str, args: &[serde_json::Value]) -> u64 {
+    let vfs = Vfs::external(root.to_path_buf()).unwrap();
+    worker::run(&vfs, &job(&vfs, "branches"), "branches", &[]).unwrap();
+    let job = job(&vfs, op);
+    worker::run(&vfs, &job, op, args).unwrap();
+    job.meter.fuel()
+}
+
+/// Reading and changing a repository costs what the operation touches, not
+/// the size of its packs: nothing is copied or re-indexed per call.
+#[tokio::test]
+async fn fuel_does_not_grow_with_pack_size() {
+    let small = packed_repository(1_000);
+    let large = packed_repository(4_000_000);
+    for (op, args) in [
+        ("branches", vec![]),
+        ("remotes", vec![]),
+        (
+            "addRemote",
+            vec![json!("origin"), json!("https://example.com/repo.git")],
+        ),
+    ] {
+        let small_fuel = fuel_of(small.path(), op, &args);
+        let large_fuel = fuel_of(large.path(), op, &args);
+        assert!(
+            large_fuel < small_fuel + small_fuel / 2,
+            "{op}: {small_fuel} fuel on a small pack, {large_fuel} on a 4 MB one"
+        );
+    }
 }
