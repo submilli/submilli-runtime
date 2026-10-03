@@ -518,6 +518,15 @@ pub(super) fn read_units(
     val: &Val,
     name: &str,
 ) -> wasmtime::Result<Vec<u16>> {
+    read_units_bounded(caller, val, name, u64::MAX)
+}
+
+pub(super) fn read_units_bounded(
+    caller: &mut Caller<'_, StoreData>,
+    val: &Val,
+    name: &str,
+    max_units: u64,
+) -> wasmtime::Result<Vec<u16>> {
     let Val::AnyRef(Some(any)) = val else {
         return Err(type_error(format!("{name} expects a string, got null")));
     };
@@ -532,5 +541,10 @@ pub(super) fn read_units(
         },
         None => any.unwrap_array(&mut *caller)?,
     };
+    if u64::from(payload.len(&mut *caller)?) > max_units {
+        return Err(crate::runtime::host::range_error(format!(
+            "{name} exceeds {max_units} code units; pass an unchanged cursor from the previous page"
+        )));
+    }
     read_code_units(&mut *caller, payload, name)
 }

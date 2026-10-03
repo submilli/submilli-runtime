@@ -211,7 +211,7 @@ fn emit_expr_value(
         }
         TypedExprKind::McpCall { server, tool, args } => {
             // No per-tool import: serialize the args to JSON, dispatch the single
-            // `submilli:mcp.call` host fn, and parse the JSON result as `unknown`.
+            // `submilli:mcp.call` host fn, which returns guest objects as `unknown`.
             // Known-return tools are wrapped in a normal `Cast` by typecheck.
             super::mcp::emit_mcp_call(emitter, ctx, server, tool, args)?;
         }

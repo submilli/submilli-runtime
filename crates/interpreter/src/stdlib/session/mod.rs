@@ -344,7 +344,8 @@ fn read_cursor(
     if matches!(val, Val::AnyRef(None)) {
         return Ok(None);
     }
-    let units = value::read_units(caller, val, "session.list (cursor)")?;
+    let max_units = cursor::max_cursor_units(provider(caller, "list")?.limits().max_key_units);
+    let units = value::read_units_bounded(caller, val, "session.list (cursor)", max_units)?;
     cursor::decode(prefix, &units)
         .map(Some)
         .map_err(cursor_trap)

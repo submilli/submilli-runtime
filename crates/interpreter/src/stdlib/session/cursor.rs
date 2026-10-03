@@ -57,6 +57,15 @@ const TAG_LEN: usize = 16;
 /// than an adversary searching for a collision.
 const DIGEST_LEN: usize = 8;
 
+/// Longest base64url cursor this store can mint, including its sealed key.
+pub(super) fn max_cursor_units(max_key_units: u64) -> u64 {
+    let overhead = (1 + NONCE_LEN + DIGEST_LEN + TAG_LEN) as u64;
+    overhead
+        .saturating_add(max_key_units.saturating_mul(2))
+        .saturating_mul(4)
+        .div_ceil(3)
+}
+
 /// Process-wide cursor secret, or `None` where `getrandom` has no entropy to
 /// give. Cursors are then refused rather than minted under a fixed key, which
 /// would silently restore the disclosure this module exists to close.

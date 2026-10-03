@@ -1115,7 +1115,8 @@ fn bigint_decimal_string(
 ) -> wasmtime::Result<Val> {
     let (sign, limbs) =
         crate::runtime::prelude::bigint::ops::read_bigint_struct(caller, val, name)?;
-    let text = crate::runtime::prelude::bigint::ops::limbs_to_bigint(sign, &limbs).to_str_radix(10);
+    let value = crate::runtime::prelude::bigint::ops::limbs_to_bigint(sign, &limbs);
+    let text = crate::runtime::prelude::bigint::ops::format_bigint(caller, &value, 10)?;
     let st = write_submilli_string_struct(caller, &text)?;
     Ok(Val::AnyRef(Some(st.to_anyref())))
 }

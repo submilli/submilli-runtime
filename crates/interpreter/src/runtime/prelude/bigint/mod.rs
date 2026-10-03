@@ -57,7 +57,8 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
             if radix.is_nan() || !(2.0..=36.0).contains(&truncated) {
                 wasmtime::bail!("toString radix must be between 2 and 36");
             }
-            let text = limbs_to_bigint(sign, &limbs).to_str_radix(truncated as u32);
+            let text =
+                ops::format_bigint(caller, &limbs_to_bigint(sign, &limbs), truncated as u32)?;
             *abi_result(results, 0)? = string_val(caller, &text)?;
             Ok(())
         },
@@ -73,7 +74,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         true,
         |caller, params, results| {
             let (sign, limbs) = read_bigint_struct(caller, abi_arg(params, 0)?, "BigInt#toJson")?;
-            let text = limbs_to_bigint(sign, &limbs).to_str_radix(10);
+            let text = ops::format_bigint(caller, &limbs_to_bigint(sign, &limbs), 10)?;
             *abi_result(results, 0)? = string_val(caller, &text)?;
             Ok(())
         },
@@ -117,12 +118,7 @@ fn bigint_ctor_call(caller: &mut Caller<'_, StoreData>, value: &Val) -> wasmtime
     };
     if wasmtime::StructType::eq(&st.ty(&*caller)?, &intr.string) {
         let s = crate::runtime::host::read_string_arg(caller, value, "BigInt(string)")?;
-        let trimmed = s.trim();
-        let parsed: num_bigint::BigInt = trimmed.parse().map_err(|_| {
-            crate::runtime::host::syntax_error(format!(
-                "BigInt(string): invalid bigint literal: {trimmed:?}"
-            ))
-        })?;
+        let parsed = ops::parse_decimal(caller, &s, "BigInt(string)")?;
         return crate::runtime::prelude::bigint::ops::make_bigint_struct(caller, parsed);
     }
     if wasmtime::StructType::eq(&st.ty(&*caller)?, &intr.boxed_number) {

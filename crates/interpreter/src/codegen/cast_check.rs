@@ -1858,7 +1858,7 @@ fn emit_inline_string_checked(
         .prelude_global_idx("string_vtable")
         .ok_or_else(|| crate::codegen::internal_failure("string_vtable imported"))?;
     emitter.instruction(Instruction::GlobalGet(string_vtable_idx));
-    emit_inline_const_raw_string(emitter, ctx, text);
+    ctx.latch(emit_inline_const_raw_string(emitter, ctx, text));
     emitter.instruction(Instruction::StructNew(intr.string));
 
     Ok(())

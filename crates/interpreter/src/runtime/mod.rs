@@ -42,7 +42,8 @@ pub use llm::{
     LlmOutcome, LlmProvider, PromptBoundKind, SharedTokenBudget,
 };
 pub use mcp::{
-    MCP_MODULE_NAME, McpCallError, McpTransport, install_mcp_async, mcp_call_package_declaration,
+    MCP_MODULE_NAME, McpCallError, McpOutcome, McpResponse, McpTransport, install_mcp_async,
+    mcp_call_package_declaration,
 };
 pub use metrics::{HttpMetric, MetricsSink, NoopMetricsSink};
 pub use prelude::bigint::ops::BIGINT_MODULE_NAME;

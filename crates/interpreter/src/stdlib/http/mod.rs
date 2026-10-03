@@ -2326,19 +2326,30 @@ function main(): void {
         security: Option<Arc<dyn SecurityCheck>>,
         vfs_root: &std::path::Path,
     ) -> Result<(), String> {
-        run_download_measured(source, client, security, vfs_root).await.0
+        run_download_measured(source, client, security, vfs_root)
+            .await
+            .0
     }
 
     async fn run_download_measured(
-        source: &str, client: Arc<dyn HttpClient>, security: Option<Arc<dyn SecurityCheck>>, vfs_root: &std::path::Path,
+        source: &str,
+        client: Arc<dyn HttpClient>,
+        security: Option<Arc<dyn SecurityCheck>>,
+        vfs_root: &std::path::Path,
     ) -> (Result<(), String>, u64) {
         run_download_measured_at(source, client, security, vfs_root, "/").await
     }
 
     async fn run_download_at(
-        source: &str, client: Arc<dyn HttpClient>, security: Option<Arc<dyn SecurityCheck>>, vfs_root: &std::path::Path, cwd: &str,
+        source: &str,
+        client: Arc<dyn HttpClient>,
+        security: Option<Arc<dyn SecurityCheck>>,
+        vfs_root: &std::path::Path,
+        cwd: &str,
     ) -> Result<(), String> {
-        run_download_measured_at(source, client, security, vfs_root, cwd).await.0
+        run_download_measured_at(source, client, security, vfs_root, cwd)
+            .await
+            .0
     }
 
     async fn run_download_measured_at(

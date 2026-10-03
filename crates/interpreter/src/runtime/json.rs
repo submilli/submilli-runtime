@@ -197,7 +197,13 @@ pub(super) fn install_json_module(
                 };
                 let intr = intrinsic_types(&mut *caller)?;
                 let mut remaining = crate::runtime::MAX_STRUCTURAL_WALK_NODES;
-                let json = if contains_dynamic_object(caller, abi_arg(params, 2)?, &intr, 0, &mut remaining)? {
+                let json = if contains_dynamic_object(
+                    caller,
+                    abi_arg(params, 2)?,
+                    &intr,
+                    0,
+                    &mut remaining,
+                )? {
                     let serialized = crate::runtime::prelude::vtable::object_to_json(
                         caller,
                         abi_arg(params, 2)?,
@@ -676,7 +682,7 @@ fn pretty_print_json(json: &str, indent: &[u8]) -> wasmtime::Result<String> {
     String::from_utf8(out).map_err(|e| wasmtime::Error::msg(format!("JSON.stringify: {e}")))
 }
 
-struct JsonUnknownAllocator {
+pub(crate) struct JsonUnknownAllocator {
     string_pre: StructRefPre,
     boxed_number_pre: StructRefPre,
     boxed_boolean_pre: StructRefPre,
@@ -693,7 +699,7 @@ struct JsonUnknownAllocator {
 }
 
 impl JsonUnknownAllocator {
-    fn new(ctx: &mut impl AsContextMut<Data = StoreData>) -> wasmtime::Result<Self> {
+    pub(crate) fn new(ctx: &mut impl AsContextMut<Data = StoreData>) -> wasmtime::Result<Self> {
         let (
             string_type,
             boxed_number_type,
@@ -742,7 +748,7 @@ impl JsonUnknownAllocator {
         })
     }
 
-    fn allocate(
+    pub(crate) fn allocate(
         &self,
         ctx: &mut impl AsContextMut<Data = StoreData>,
         value: &serde_json::Value,
@@ -780,7 +786,10 @@ impl JsonUnknownAllocator {
                 Ok(Val::AnyRef(Some(object.to_anyref())))
             }
             serde_json::Value::Array(items) => {
-                let mut elements = Vec::with_capacity(items.len());
+                let mut elements = Vec::new();
+                elements
+                    .try_reserve_exact(items.len())
+                    .map_err(crate::runtime::host::fatal_host_error)?;
                 for item in items {
                     elements.push(self.allocate(&mut *ctx, item)?);
                 }
@@ -797,8 +806,14 @@ impl JsonUnknownAllocator {
                 Ok(Val::AnyRef(Some(object.to_anyref())))
             }
             serde_json::Value::Object(map) => {
-                let mut names = Vec::with_capacity(map.len());
-                let mut values = Vec::with_capacity(map.len());
+                let mut names = Vec::new();
+                let mut values = Vec::new();
+                names
+                    .try_reserve_exact(map.len())
+                    .map_err(crate::runtime::host::fatal_host_error)?;
+                values
+                    .try_reserve_exact(map.len())
+                    .map_err(crate::runtime::host::fatal_host_error)?;
                 for (name, item) in map {
                     let raw_name = write_submilli_string(&mut *ctx, name)?;
                     let name_object = StructRef::new(

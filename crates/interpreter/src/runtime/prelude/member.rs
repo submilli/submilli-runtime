@@ -237,7 +237,8 @@ async fn coerce(
             if reference.heap_type()
                 == &HeapType::ConcreteStruct(intrinsic_types(&mut *caller)?.string.clone()) =>
         {
-            let units = value::string(value::primitive_with_hint(caller, &input, true).await?);
+            let primitive = value::primitive_with_hint(caller, &input, true).await?;
+            let units = value::string(caller, primitive)?;
             Ok(Val::AnyRef(Some(
                 host::write_submilli_string_struct_units(caller, &units)?.to_anyref(),
             )))

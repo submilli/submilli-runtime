@@ -1080,6 +1080,60 @@ fn operations_charge_for_the_input_they_process() {
     }
     assert_eq!(copy_costs[1] - copy_costs[0], SYSCALL.cost(2));
 
+    for n in [128_u64, 256] {
+        let input = format!("const s = \"x\".repeat({n});");
+        let baseline = host_fuel(
+            &format!("usage-console-{n}-baseline"),
+            &format!("function main(): number {{ {input} return 0; }}"),
+        );
+        let actual = host_fuel(
+            &format!("usage-console-{n}"),
+            &format!("function main(): number {{ {input} console.log(s); return 0; }}"),
+        ) - baseline;
+        // Previously only 2 CALL + COPY(n): conversion and output were free.
+        assert_eq!(
+            actual,
+            2 * CALL + COPY.cost(n) + SCAN.cost(n) + IO.cost(n + 1)
+        );
+    }
+
+    for (digits, limbs) in [(128_u64, 7_u64), (256, 14)] {
+        let input = format!("const s = \"7\".repeat({digits});");
+        let baseline = host_fuel(
+            &format!("usage-bigint-parse-{digits}-baseline"),
+            &format!("function main(): number {{ {input} return 0; }}"),
+        );
+        let actual = host_fuel(
+            &format!("usage-bigint-parse-{digits}"),
+            &format!("function main(): number {{ {input} BigInt(s); return 0; }}"),
+        ) - baseline;
+        // Previously 230/444 fuel: only marshalling, no decimal conversion.
+        assert_eq!(
+            actual,
+            CALL + COPY.cost(digits)
+                + SCAN.cost(digits)
+                + ELEM.cost(limbs)
+                + ELEM.cost(digits * digits.div_ceil(19))
+        );
+    }
+
+    for limbs in [8_u64, 16] {
+        let input = format!("const n = 2n ** {}n - 1n;", limbs * 64);
+        let baseline = host_fuel(
+            &format!("usage-bigint-hex-{limbs}-baseline"),
+            &format!("function main(): number {{ {input} return 0; }}"),
+        );
+        let actual = host_fuel(
+            &format!("usage-bigint-hex-{limbs}"),
+            &format!("function main(): number {{ {input} n.toString(16); return 0; }}"),
+        ) - baseline;
+        // Formatting these power-of-two radices extracts bits linearly.
+        assert_eq!(
+            actual,
+            CALL + 2 * ELEM.cost(limbs) + SCAN.cost(16 * limbs) + COPY.cost(16 * limbs)
+        );
+    }
+
     for n in [1_u64, 2] {
         let input =
             "const a = Temporal.ZonedDateTime.from(\"2024-03-09T12:00:00-05:00[US/Eastern]\");

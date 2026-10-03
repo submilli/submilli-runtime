@@ -6,8 +6,10 @@
 //! session store, and the axum router) stays in `submilli-server`; only the
 //! outbound client pieces both binaries need live here.
 
+mod bounded_client;
 pub mod catalog;
 pub mod discovery;
+mod draining_transport;
 pub mod oauth;
 pub mod schema_registry;
 pub mod transport;
