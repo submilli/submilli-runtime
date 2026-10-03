@@ -300,6 +300,50 @@ pub(crate) fn read_uint8_array_arg(
     val: &Val,
     name: &str,
 ) -> wasmtime::Result<Vec<u8>> {
+    let arr = uint8_array_backing(caller, val, name)?;
+    let len = usize::try_from(arr.len(&mut *caller)?).map_err(fatal_host_error)?;
+    read_uint8_array_range(caller, arr, 0, len, name)
+}
+
+/// `len` bytes of a `$Uint8Array` from `offset`, copied in one pass and
+/// charged for what is copied. A failed read is a catchable error labelled
+/// `name`: a raw-ABI package can pass a payload that is not an `i8` array.
+pub(crate) fn read_uint8_array_range(
+    caller: &mut Caller<'_, StoreData>,
+    arr: Rooted<ArrayRef>,
+    offset: usize,
+    len: usize,
+    name: &str,
+) -> wasmtime::Result<Vec<u8>> {
+    fuel::charge(&mut *caller, fuel::COPY, len as u64)?;
+    let offset = u32::try_from(offset).map_err(fatal_host_error)?;
+    let mut out = Vec::new();
+    out.try_reserve_exact(len).map_err(fatal_host_error)?;
+    out.resize(len, 0);
+    arr.read_i8(&mut *caller, offset, &mut out)
+        .map_err(|error| type_error(format!("{name}: {error}")))?;
+    Ok(out)
+}
+
+/// One byte of a `$Uint8Array`. The index must be in bounds.
+pub(crate) fn read_uint8(
+    caller: &mut Caller<'_, StoreData>,
+    arr: Rooted<ArrayRef>,
+    index: usize,
+) -> wasmtime::Result<u8> {
+    let index = u32::try_from(index).map_err(fatal_host_error)?;
+    match arr.get(&mut *caller, index).map_err(fatal_host_error)? {
+        Val::I32(byte) => Ok(byte as u8),
+        other => Err(fatal_host_error(format!("byte {index} is {other:?}"))),
+    }
+}
+
+/// The byte array behind a `$Uint8Array` argument, left where it is.
+pub(crate) fn uint8_array_backing(
+    caller: &mut Caller<'_, StoreData>,
+    val: &Val,
+    name: &str,
+) -> wasmtime::Result<Rooted<ArrayRef>> {
     let any = match val {
         Val::AnyRef(Some(any)) => *any,
         Val::AnyRef(None) => {
@@ -325,15 +369,7 @@ pub(crate) fn read_uint8_array_arg(
     } else {
         any.unwrap_array(&mut *caller)?
     };
-    let len = arr.len(&mut *caller)?;
-    fuel::charge(&mut *caller, fuel::COPY, u64::from(len))?;
-    let len = usize::try_from(len).map_err(fatal_host_error)?;
-    let mut out = Vec::new();
-    out.try_reserve_exact(len).map_err(fatal_host_error)?;
-    out.resize(len, 0);
-    arr.copy_to_i8_slice(&mut *caller, &mut out)
-        .map_err(|error| type_error(format!("{name}: {error}")))?;
-    Ok(out)
+    Ok(arr)
 }
 
 fn install_number_module(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
@@ -617,6 +653,39 @@ pub(crate) fn read_code_units(
     raw.copy_to_i16_slice(&mut ctx, &mut units)
         .map_err(|error| wasmtime::Error::msg(format!("{name}: {error}")))?;
     Ok(units)
+}
+
+/// `len` code units of a `$rawString` payload from `offset`, copied in one
+/// pass and charged for what is copied, so an accessor that needs a few units
+/// of a long string does not pay for all of it. Only typed `$string` receivers
+/// reach this, so a failure is the host's own mistake, not the program's.
+pub(crate) fn read_code_units_range(
+    mut ctx: impl AsContextMut<Data = StoreData>,
+    raw: Rooted<ArrayRef>,
+    offset: usize,
+    len: usize,
+) -> wasmtime::Result<Vec<u16>> {
+    fuel::charge(&mut ctx, fuel::COPY, len as u64)?;
+    let offset = u32::try_from(offset).map_err(fatal_host_error)?;
+    let mut units = Vec::new();
+    units.try_reserve_exact(len).map_err(fatal_host_error)?;
+    units.resize(len, 0);
+    raw.read_i16(&mut ctx, offset, &mut units)
+        .map_err(fatal_host_error)?;
+    Ok(units)
+}
+
+/// One code unit of a `$rawString` payload; see [`read_code_units_range`].
+pub(crate) fn read_code_unit(
+    mut ctx: impl AsContextMut<Data = StoreData>,
+    raw: Rooted<ArrayRef>,
+    index: usize,
+) -> wasmtime::Result<u16> {
+    let index = u32::try_from(index).map_err(fatal_host_error)?;
+    match raw.get(&mut ctx, index).map_err(fatal_host_error)? {
+        Val::I32(unit) => Ok(unit as u16),
+        other => Err(fatal_host_error(format!("code unit {index} is {other:?}"))),
+    }
 }
 
 /// Runtime handles host functions use to build *real* `$Object`-subtype structs

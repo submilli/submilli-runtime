@@ -69,6 +69,57 @@ impl ArrayStorage {
         Ok(elements)
     }
 
+    /// The element at `index`, which must be below the length.
+    pub fn get(&self, caller: &mut Caller<'_, StoreData>, index: u32) -> wasmtime::Result<Val> {
+        if index >= self.len {
+            return Err(fatal_host_error("Array index out of range"));
+        }
+        self.backing
+            .get(&mut *caller, index)
+            .map_err(fatal_host_error)
+    }
+
+    /// `count` elements from `start`, charged for those alone; the range must
+    /// lie within the length.
+    pub fn range(
+        &self,
+        caller: &mut Caller<'_, StoreData>,
+        start: u32,
+        count: u32,
+    ) -> wasmtime::Result<Vec<Val>> {
+        let end = start
+            .checked_add(count)
+            .filter(|&end| end <= self.len)
+            .ok_or_else(|| fatal_host_error("Array range out of range"))?;
+        fuel::charge(&mut *caller, fuel::ELEM, u64::from(count))?;
+        let mut elements = Vec::new();
+        elements
+            .try_reserve_exact(count as usize)
+            .map_err(fatal_host_error)?;
+        for index in start..end {
+            elements.push(
+                self.backing
+                    .get(&mut *caller, index)
+                    .map_err(fatal_host_error)?,
+            );
+        }
+        Ok(elements)
+    }
+
+    /// Removes and returns the last element, clearing its slot so the GC can
+    /// reclaim it; `None` when empty.
+    pub fn pop(&mut self, caller: &mut Caller<'_, StoreData>) -> wasmtime::Result<Option<Val>> {
+        let Some(last) = self.len.checked_sub(1) else {
+            return Ok(None);
+        };
+        let element = self.get(caller, last)?;
+        self.backing
+            .set(&mut *caller, last, Val::null_any_ref())
+            .map_err(fatal_host_error)?;
+        self.set_len(caller, last)?;
+        Ok(Some(element))
+    }
+
     pub fn push(
         &mut self,
         caller: &mut Caller<'_, StoreData>,

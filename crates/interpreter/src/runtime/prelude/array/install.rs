@@ -79,8 +79,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         ft(vec![array.clone(), num.clone()], vec![elem.clone()]),
         true,
         |caller, params, results| {
-            let elements = super::read_array(caller, &params[0], "Array#at")?;
-            results[0] = super::at(&elements, f64v(&params[1]));
+            results[0] = super::at(caller, &params[0], f64v(&params[1]))?;
             Ok(())
         },
     )?;
@@ -94,8 +93,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         ),
         true,
         |caller, params, results| {
-            let elements = super::read_array(caller, &params[0], "Array#slice")?;
-            let out = super::slice(&elements, f64v(&params[1]), f64v(&params[2]));
+            let out = super::slice(caller, &params[0], f64v(&params[1]), f64v(&params[2]))?;
             results[0] = super::build_array(caller, &out)?;
             Ok(())
         },
@@ -215,8 +213,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         ft(vec![array.clone()], vec![elem.clone()]),
         true,
         |caller, params, results| {
-            let elements = super::read_array(caller, &params[0], "Array#pop")?;
-            results[0] = super::pop(caller, &params[0], elements)?;
+            results[0] = super::pop(caller, &params[0])?;
             Ok(())
         },
     )?;

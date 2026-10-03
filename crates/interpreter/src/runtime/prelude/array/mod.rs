@@ -22,6 +22,7 @@ pub(crate) use sort::{Order, merge_sort};
 use wasmtime::{Caller, Rooted, StructRef, StructRefPre, Val};
 
 use crate::runtime::StoreData;
+use crate::runtime::array_storage::ArrayStorage;
 use crate::runtime::host::{
     host_boxed_number_vtable, write_submilli_array_struct, write_submilli_string_struct,
 };
@@ -208,19 +209,27 @@ fn last_from(x: f64, len: i32) -> Option<i32> {
 // Accessors
 // ---------------------------------------------------------------------------
 
-fn at(elements: &[Val], index: f64) -> Val {
-    match at_index(index, elements.len() as i32) {
-        Some(i) => elements[i],
-        None => Val::null_any_ref(),
+/// `at(index)`: one element read in place, `null` out of range.
+fn at(caller: &mut Caller<'_, StoreData>, receiver: &Val, index: f64) -> wasmtime::Result<Val> {
+    let storage = ArrayStorage::read(caller, receiver)?;
+    match at_index(index, storage.len as i32) {
+        Some(i) => storage.get(caller, i as u32),
+        None => Ok(Val::null_any_ref()),
     }
 }
 
-fn slice(elements: &[Val], start: f64, end: f64) -> Vec<Val> {
-    let len = elements.len() as i32;
+/// `slice(start, end)`: only the kept range is read.
+fn slice(
+    caller: &mut Caller<'_, StoreData>,
+    receiver: &Val,
+    start: f64,
+    end: f64,
+) -> wasmtime::Result<Vec<Val>> {
+    let storage = ArrayStorage::read(caller, receiver)?;
+    let len = storage.len as i32;
     let si = norm_clamp(start, len);
-    let ei = norm_clamp(end, len);
-    let count = (ei - si).max(0) as usize;
-    elements[si as usize..si as usize + count].to_vec()
+    let count = (norm_clamp(end, len) - si).max(0);
+    storage.range(caller, si as u32, count as u32)
 }
 
 /// `concat(...others: T[][])`: this array's elements followed by every element
@@ -317,18 +326,10 @@ fn push(caller: &mut Caller<'_, StoreData>, receiver: &Val, elem: Val) -> wasmti
     crate::runtime::array_storage::ArrayStorage::read(caller, receiver)?.push(caller, elem)
 }
 
-fn pop(
-    caller: &mut Caller<'_, StoreData>,
-    receiver: &Val,
-    mut elements: Vec<Val>,
-) -> wasmtime::Result<Val> {
-    match elements.pop() {
-        Some(last) => {
-            replace_elements(caller, receiver, &elements)?;
-            Ok(last)
-        }
-        None => Ok(Val::null_any_ref()),
-    }
+/// `pop()`: the last element, removed in place; `null` when empty.
+fn pop(caller: &mut Caller<'_, StoreData>, receiver: &Val) -> wasmtime::Result<Val> {
+    let popped = ArrayStorage::read(caller, receiver)?.pop(caller)?;
+    Ok(popped.unwrap_or_else(Val::null_any_ref))
 }
 
 fn shift(

@@ -4,21 +4,22 @@
 //! module — this file is the wasmtime boundary they're kept clear of.
 
 use wasmtime::{
-    ArrayRef, ArrayRefPre, ArrayType, Caller, FuncType, HeapType, Linker, RefType, StructRef,
-    StructRefPre, StructType, Val, ValType,
+    ArrayRef, ArrayRefPre, ArrayType, Caller, FuncType, HeapType, Linker, RefType, Rooted,
+    StructRef, StructRefPre, StructType, Val, ValType,
 };
 
 use super::{
-    RangeError, Str, at, char_at, char_code_at, cmp, code_point_at, concat, ends_with, eq,
-    from_char_code, from_code_point, includes, index_of, is_well_formed, last_index_of, normalize,
-    pad_end, pad_start, repeat, slice, starts_with, substring, to_lower_case, to_upper_case,
-    to_well_formed, trim, trim_end, trim_start,
+    RangeError, Str, at_index, cmp, code_point, concat, ends_with_window, eq, from_char_code,
+    from_code_point, includes, index_of, is_well_formed, last_index_of, normalize, pad_end,
+    pad_start, repeat, slice_range, starts_with_window, substring_range, to_lower_case,
+    to_upper_case, to_well_formed, trim, trim_end, trim_start, unit_index,
 };
 use crate::runtime::StoreData;
 use crate::runtime::fuel;
 use crate::runtime::host::{
-    intrinsic_string_type, read_code_units, register_host_fn, register_host_fn_async,
-    string_array_type, write_submilli_string_struct, write_submilli_string_struct_units,
+    intrinsic_string_type, read_code_unit, read_code_units, read_code_units_range,
+    register_host_fn, register_host_fn_async, string_array_type, write_submilli_string_struct,
+    write_submilli_string_struct_units,
 };
 use crate::runtime::intrinsic_types::{build_intrinsic_types, intrinsic_types};
 use crate::runtime::prelude::{MODULE_NAME, declare_method};
@@ -42,19 +43,21 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
     let engine = linker.engine().clone();
     let abi = StringAbi::recover(&engine)?;
 
-    reg_str_num_to_str(linker, &engine, &abi, "charAt", char_at)?;
-    reg_str_num_to_str_or_null(linker, &engine, &abi, "at", at)?;
-    reg_str_num_to_num(linker, &engine, &abi, "charCodeAt", char_code_at)?;
-    reg_str_num_to_num(linker, &engine, &abi, "codePointAt", code_point_at)?;
+    // Accessors read the few units they need straight from the payload
+    // instead of copying the whole string.
+    reg_unit_to_str(linker, &engine, &abi, "charAt", unit_index)?;
+    reg_unit_to_str_or_null(linker, &engine, &abi, "at", at_index)?;
+    reg_unit_to_num(linker, &engine, &abi, "charCodeAt", Decode::Unit)?;
+    reg_unit_to_num(linker, &engine, &abi, "codePointAt", Decode::CodePoint)?;
 
-    reg_str_2num_to_str(linker, &engine, &abi, "slice", slice)?;
-    reg_str_2num_to_str(linker, &engine, &abi, "substring", substring)?;
+    reg_range_to_str(linker, &engine, &abi, "slice", slice_range)?;
+    reg_range_to_str(linker, &engine, &abi, "substring", substring_range)?;
 
     reg_str_str_num_to_num(linker, &engine, &abi, "indexOf", index_of)?;
     reg_str_str_num_to_num(linker, &engine, &abi, "lastIndexOf", last_index_of)?;
     register_string_search_predicate(linker, &engine, &abi, "includes", includes)?;
-    register_string_search_predicate(linker, &engine, &abi, "startsWith", starts_with)?;
-    register_string_search_predicate(linker, &engine, &abi, "endsWith", ends_with)?;
+    reg_window_predicate(linker, &engine, &abi, "startsWith", starts_with_window)?;
+    reg_window_predicate(linker, &engine, &abi, "endsWith", ends_with_window)?;
 
     reg_str_str_to_str(linker, &engine, &abi, "concat", concat)?;
     reg_str_num_str_to_str(linker, &engine, &abi, "padStart", pad_start)?;
@@ -241,9 +244,15 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         FuncType::new(&engine, [s.clone(), s.clone()], [ValType::I32]),
         true,
         move |caller, params, results| {
-            let a = eq_abi.read(caller, &params[0], "string_eq")?;
-            let b = eq_abi.read(caller, &params[1], "string_eq")?;
-            results[0] = Val::I32(eq(&a.value, &b.value) as i32);
+            // Different lengths differ without reading either string.
+            let a = eq_abi.payload(caller, &params[0], "string_eq")?;
+            let b = eq_abi.payload(caller, &params[1], "string_eq")?;
+            let equal = a.len == b.len && {
+                let a = a.read_all(caller, "string_eq")?;
+                let b = b.read_all(caller, "string_eq")?;
+                eq(&a, &b)
+            };
+            results[0] = Val::I32(equal as i32);
             Ok(())
         },
     )?;
@@ -482,13 +491,14 @@ pub fn declare(defs: &mut PackageDeclaration) {
     );
 }
 
-/// `(string, f64) -> string`: `charAt`.
-fn reg_str_num_to_str(
+/// `(string, f64) -> string`: `charAt`. `pick` names the unit for the index,
+/// if any; the result is that unit or `""`.
+fn reg_unit_to_str(
     linker: &mut Linker<StoreData>,
     engine: &wasmtime::Engine,
     abi: &StringAbi,
     name: &'static str,
-    op: fn(&Str, f64) -> Str,
+    pick: fn(usize, f64) -> Option<usize>,
 ) -> wasmtime::Result<()> {
     let s = abi.value_type();
     let abi = abi.clone();
@@ -499,9 +509,13 @@ fn reg_str_num_to_str(
         FuncType::new(engine, [s.clone(), ValType::F64], [s]),
         true,
         move |caller, params, results| {
-            let recv = abi.read(caller, &params[0], name)?;
+            let recv = abi.payload(caller, &params[0], name)?;
             let arg = number(&params[1], name)?;
-            results[0] = abi.write(caller, recv.vtable, &op(&recv.value, arg))?;
+            let unit = pick(recv.len, arg)
+                .map(|i| read_code_unit(&mut *caller, recv.array, i))
+                .transpose()?;
+            let out = Str::from_units(unit.map_or_else(Vec::new, |unit| vec![unit]));
+            results[0] = abi.write(caller, recv.vtable, &out)?;
             Ok(())
         },
     )
@@ -510,12 +524,12 @@ fn reg_str_num_to_str(
 /// `(string, f64) -> string | null`: `at`, whose out-of-range answer is `null`.
 /// The result slot is the union lowering `(ref null $Object)`; a `$string` is an
 /// `$Object` subtype, so the hit case needs no extra boxing.
-fn reg_str_num_to_str_or_null(
+fn reg_unit_to_str_or_null(
     linker: &mut Linker<StoreData>,
     engine: &wasmtime::Engine,
     abi: &StringAbi,
     name: &'static str,
-    op: fn(&Str, f64) -> Option<Str>,
+    pick: fn(usize, f64) -> Option<usize>,
 ) -> wasmtime::Result<()> {
     let s = abi.value_type();
     let object = ValType::Ref(RefType::new(
@@ -530,12 +544,66 @@ fn reg_str_num_to_str_or_null(
         FuncType::new(engine, [s, ValType::F64], [object]),
         true,
         move |caller, params, results| {
-            let recv = abi.read(caller, &params[0], name)?;
+            let recv = abi.payload(caller, &params[0], name)?;
             let arg = number(&params[1], name)?;
-            results[0] = match op(&recv.value, arg) {
-                Some(hit) => abi.write(caller, recv.vtable, &hit)?,
+            results[0] = match pick(recv.len, arg) {
+                Some(i) => {
+                    let unit = read_code_unit(&mut *caller, recv.array, i)?;
+                    abi.write(caller, recv.vtable, &Str::from_units(vec![unit]))?
+                }
                 None => Val::AnyRef(None),
             };
+            Ok(())
+        },
+    )
+}
+
+/// What `charCodeAt` and `codePointAt` make of the unit at the index.
+#[derive(Clone, Copy)]
+enum Decode {
+    /// The unit itself.
+    Unit,
+    /// The code point, joining a surrogate pair with the next unit.
+    CodePoint,
+}
+
+/// `(string, f64) -> f64`: `charCodeAt`, `codePointAt`; out of range is `NaN`.
+fn reg_unit_to_num(
+    linker: &mut Linker<StoreData>,
+    engine: &wasmtime::Engine,
+    abi: &StringAbi,
+    name: &'static str,
+    decode: Decode,
+) -> wasmtime::Result<()> {
+    let s = abi.value_type();
+    let abi = abi.clone();
+    register_host_fn(
+        linker,
+        MODULE_NAME,
+        method_key(name),
+        FuncType::new(engine, [s, ValType::F64], [ValType::F64]),
+        true,
+        move |caller, params, results| {
+            let recv = abi.payload(caller, &params[0], name)?;
+            let arg = number(&params[1], name)?;
+            let value = match unit_index(recv.len, arg) {
+                Some(i) => {
+                    let unit = read_code_unit(&mut *caller, recv.array, i)?;
+                    match decode {
+                        Decode::Unit => f64::from(unit),
+                        Decode::CodePoint => {
+                            let next = if i + 1 < recv.len {
+                                Some(read_code_unit(&mut *caller, recv.array, i + 1)?)
+                            } else {
+                                None
+                            };
+                            code_point(unit, next)
+                        }
+                    }
+                }
+                None => f64::NAN,
+            };
+            results[0] = Val::F64(value.to_bits());
             Ok(())
         },
     )
@@ -567,38 +635,14 @@ fn reg_str_num_to_str_fallible(
     )
 }
 
-/// `(string, f64) -> f64`: `charCodeAt`, `codePointAt`.
-fn reg_str_num_to_num(
+/// `(string, f64, f64) -> string`: `slice`, `substring`. `range` names the
+/// units kept; only those are copied.
+fn reg_range_to_str(
     linker: &mut Linker<StoreData>,
     engine: &wasmtime::Engine,
     abi: &StringAbi,
     name: &'static str,
-    op: fn(&Str, f64) -> f64,
-) -> wasmtime::Result<()> {
-    let s = abi.value_type();
-    let abi = abi.clone();
-    register_host_fn(
-        linker,
-        MODULE_NAME,
-        method_key(name),
-        FuncType::new(engine, [s, ValType::F64], [ValType::F64]),
-        true,
-        move |caller, params, results| {
-            let recv = abi.read(caller, &params[0], name)?;
-            let arg = number(&params[1], name)?;
-            results[0] = Val::F64(op(&recv.value, arg).to_bits());
-            Ok(())
-        },
-    )
-}
-
-/// `(string, f64, f64) -> string`: `slice`, `substring`.
-fn reg_str_2num_to_str(
-    linker: &mut Linker<StoreData>,
-    engine: &wasmtime::Engine,
-    abi: &StringAbi,
-    name: &'static str,
-    op: fn(&Str, f64, f64) -> Str,
+    range: fn(usize, f64, f64) -> std::ops::Range<usize>,
 ) -> wasmtime::Result<()> {
     let s = abi.value_type();
     let abi = abi.clone();
@@ -609,10 +653,12 @@ fn reg_str_2num_to_str(
         FuncType::new(engine, [s.clone(), ValType::F64, ValType::F64], [s]),
         true,
         move |caller, params, results| {
-            let recv = abi.read(caller, &params[0], name)?;
+            let recv = abi.payload(caller, &params[0], name)?;
             let a = number(&params[1], name)?;
             let b = number(&params[2], name)?;
-            results[0] = abi.write(caller, recv.vtable, &op(&recv.value, a, b))?;
+            let kept = range(recv.len, a, b);
+            let units = read_code_units_range(&mut *caller, recv.array, kept.start, kept.len())?;
+            results[0] = abi.write(caller, recv.vtable, &Str::from_units(units))?;
             Ok(())
         },
     )
@@ -672,6 +718,49 @@ fn register_string_search_predicate(
                 let search = super::super::value::search_string(caller, &params[1]).await?;
                 let from = super::super::value::to_number(caller, &params[2]).await?;
                 results[0] = Val::I32(op(&recv.value, &Str::from_units(search), from) as i32);
+                Ok(())
+            })
+        },
+    )
+}
+
+/// `startsWith`, `endsWith`: compare the needle with the one window of the
+/// receiver it could occupy, copying nothing else. Search and position stay
+/// boxed so RegExp rejection and coercions run in order.
+fn reg_window_predicate(
+    linker: &mut Linker<StoreData>,
+    engine: &wasmtime::Engine,
+    abi: &StringAbi,
+    name: &'static str,
+    window: fn(usize, usize, f64) -> Option<std::ops::Range<usize>>,
+) -> wasmtime::Result<()> {
+    let intr = build_intrinsic_types(engine)?;
+    let value = ValType::Ref(RefType::new(true, HeapType::ConcreteStruct(intr.object)));
+    let abi = abi.clone();
+    register_host_fn_async(
+        linker,
+        MODULE_NAME,
+        method_key(name),
+        FuncType::new(
+            engine,
+            [abi.value_type(), value.clone(), value],
+            [ValType::I32],
+        ),
+        true,
+        move |caller, params, results| {
+            let abi = abi.clone();
+            Box::pin(async move {
+                let recv = abi.payload(caller, &params[0], name)?;
+                let needle = super::super::value::search_string(caller, &params[1]).await?;
+                let position = super::super::value::to_number(caller, &params[2]).await?;
+                let found = match window(recv.len, needle.len(), position) {
+                    Some(range) => {
+                        read_code_units_range(caller, recv.array, range.start, range.len())?
+                            == needle
+                    }
+                    None => false,
+                };
+                results[0] = Val::I32(found as i32);
                 Ok(())
             })
         },
@@ -821,6 +910,24 @@ struct Receiver {
     value: Str,
 }
 
+/// A `$string` receiver kept where it is: its payload array and length, for
+/// accessors that read a few units or a range rather than the whole string.
+struct Payload {
+    vtable: Val,
+    array: Rooted<ArrayRef>,
+    len: usize,
+}
+
+impl Payload {
+    fn read_all(&self, caller: &mut Caller<'_, StoreData>, name: &str) -> wasmtime::Result<Str> {
+        Ok(Str::from_units(read_code_units(
+            &mut *caller,
+            self.array,
+            name,
+        )?))
+    }
+}
+
 impl StringAbi {
     fn recover(engine: &wasmtime::Engine) -> wasmtime::Result<Self> {
         Ok(Self {
@@ -842,6 +949,19 @@ impl StringAbi {
         val: &Val,
         name: &str,
     ) -> wasmtime::Result<Receiver> {
+        let payload = self.payload(caller, val, name)?;
+        Ok(Receiver {
+            vtable: payload.vtable,
+            value: payload.read_all(caller, name)?,
+        })
+    }
+
+    fn payload(
+        &self,
+        caller: &mut Caller<'_, StoreData>,
+        val: &Val,
+        name: &str,
+    ) -> wasmtime::Result<Payload> {
         let Val::AnyRef(Some(any)) = val else {
             return Err(wasmtime::Error::msg(format!(
                 "{name} expects a string, got {val:?}"
@@ -851,7 +971,7 @@ impl StringAbi {
             .as_struct(&mut *caller)?
             .ok_or_else(|| wasmtime::Error::msg(format!("{name}: expected a $string struct")))?;
         let vtable = st.field(&mut *caller, 0)?;
-        let payload = match st.field(&mut *caller, 1)? {
+        let array = match st.field(&mut *caller, 1)? {
             Val::AnyRef(Some(arr)) => arr.unwrap_array(&mut *caller)?,
             other => {
                 return Err(wasmtime::Error::msg(format!(
@@ -859,10 +979,9 @@ impl StringAbi {
                 )));
             }
         };
-        Ok(Receiver {
-            vtable,
-            value: Str::from_units(read_code_units(&mut *caller, payload, name)?),
-        })
+        let len = usize::try_from(array.len(&mut *caller)?)
+            .map_err(crate::runtime::host::fatal_host_error)?;
+        Ok(Payload { vtable, array, len })
     }
 
     fn write(

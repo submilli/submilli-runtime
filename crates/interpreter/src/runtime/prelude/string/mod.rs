@@ -138,11 +138,10 @@ fn raw_index_of(haystack: &[u16], needle: &[u16], from: usize) -> Option<usize> 
 /// `charAt`: the single code unit at `index`, or `""` out of range.
 pub fn char_at(s: &Str, index: f64) -> Str {
     let units = s.units();
-    let i = trunc_sat_i32(index);
-    if i < 0 || i as usize >= units.len() {
-        return Str::from_units(Vec::new());
+    match unit_index(units.len(), index) {
+        Some(i) => Str::from_units(vec![units[i]]),
+        None => Str::from_units(Vec::new()),
     }
-    Str::from_units(vec![units[i as usize]])
 }
 
 /// `at`: like `charAt`, but a negative `index` counts from the end. `None` on
@@ -150,69 +149,36 @@ pub fn char_at(s: &Str, index: f64) -> Str {
 /// indistinguishable from a legitimate empty read.
 pub fn at(s: &Str, index: f64) -> Option<Str> {
     let units = s.units();
-    let len = units.len() as i64;
-    let mut i = trunc_sat_i32(index) as i64;
-    if i < 0 {
-        i += len;
-    }
-    if i < 0 || i >= len {
-        return None;
-    }
-    Some(Str::from_units(vec![units[i as usize]]))
+    at_index(units.len(), index).map(|i| Str::from_units(vec![units[i]]))
 }
 
 /// `charCodeAt`: the UTF-16 code unit at `index` as `f64`, or `NaN` out of range.
 pub fn char_code_at(s: &Str, index: f64) -> f64 {
     let units = s.units();
-    let i = trunc_sat_i32(index);
-    if i < 0 || i as usize >= units.len() {
-        return f64::NAN;
-    }
-    units[i as usize] as f64
+    unit_index(units.len(), index).map_or(f64::NAN, |i| units[i] as f64)
 }
 
 /// `codePointAt`: like `charCodeAt`, but decodes a surrogate pair into the full
 /// code point. `NaN` out of range.
 pub fn code_point_at(s: &Str, index: f64) -> f64 {
     let units = s.units();
-    let i = trunc_sat_i32(index);
-    if i < 0 || i as usize >= units.len() {
-        return f64::NAN;
-    }
-    let i = i as usize;
-    let hi = units[i];
-    if (0xD800..=0xDBFF).contains(&hi) && i + 1 < units.len() {
-        let lo = units[i + 1];
-        if (0xDC00..=0xDFFF).contains(&lo) {
-            let cp = 0x10000 + (((hi as u32) - 0xD800) << 10) + ((lo as u32) - 0xDC00);
-            return cp as f64;
-        }
-    }
-    hi as f64
+    unit_index(units.len(), index).map_or(f64::NAN, |i| {
+        code_point(units[i], units.get(i + 1).copied())
+    })
 }
 
 /// `slice`: negatives count from the end; empty when `start >= end` after
 /// normalization.
 pub fn slice(s: &Str, start: f64, end: f64) -> Str {
     let units = s.units();
-    let len = units.len();
-    let si = normalize_slice_index(trunc_sat_i32(start), len);
-    let ei = normalize_slice_index(trunc_sat_i32(end), len);
-    if ei <= si {
-        return Str::from_units(Vec::new());
-    }
-    Str::from_units(units[si..ei].to_vec())
+    Str::from_units(units[slice_range(units.len(), start, end)].to_vec())
 }
 
 /// `substring`: negatives clamp to 0 (not from the end), and the arguments swap
 /// when `start > end`.
 pub fn substring(s: &Str, start: f64, end: f64) -> Str {
     let units = s.units();
-    let len = units.len();
-    let a = clamp_to_len(trunc_sat_i32(start), len);
-    let b = clamp_to_len(trunc_sat_i32(end), len);
-    let (si, ei) = if a > b { (b, a) } else { (a, b) };
-    Str::from_units(units[si..ei].to_vec())
+    Str::from_units(units[substring_range(units.len(), start, end)].to_vec())
 }
 
 /// `indexOf`: first match at or after `fromIndex`, else `-1`.
@@ -254,19 +220,80 @@ pub fn includes(s: &Str, search: &Str, from: f64) -> bool {
 pub fn starts_with(s: &Str, search: &Str, position: f64) -> bool {
     let haystack = s.units();
     let needle = search.units();
-    let pos = clamp_to_len(trunc_sat_i32(position), haystack.len());
-    pos + needle.len() <= haystack.len() && &haystack[pos..pos + needle.len()] == needle
+    starts_with_window(haystack.len(), needle.len(), position)
+        .is_some_and(|window| &haystack[window] == needle)
 }
 
 /// `endsWith`: whether `search` ends at `endPosition` (default end).
 pub fn ends_with(s: &Str, search: &Str, end_position: f64) -> bool {
     let haystack = s.units();
     let needle = search.units();
-    let end = clamp_to_len(trunc_sat_i32(end_position), haystack.len());
-    match end.checked_sub(needle.len()) {
-        Some(start) => &haystack[start..end] == needle,
-        None => false,
+    ends_with_window(haystack.len(), needle.len(), end_position)
+        .is_some_and(|window| &haystack[window] == needle)
+}
+
+/// The unit `charAt`/`charCodeAt` read for `index`, if it is in range.
+pub(super) fn unit_index(len: usize, index: f64) -> Option<usize> {
+    let i = trunc_sat_i32(index);
+    (i >= 0 && (i as usize) < len).then_some(i as usize)
+}
+
+/// The unit `at` reads for `index`, a negative one counting from the end.
+pub(super) fn at_index(len: usize, index: f64) -> Option<usize> {
+    let len = len as i64;
+    let mut i = trunc_sat_i32(index) as i64;
+    if i < 0 {
+        i += len;
     }
+    (i >= 0 && i < len).then_some(i as usize)
+}
+
+/// The code point `codePointAt` answers for the unit at an index and the one
+/// after it, when a surrogate pair starts there.
+pub(super) fn code_point(hi: u16, next: Option<u16>) -> f64 {
+    match next {
+        Some(lo) if (0xD800..=0xDBFF).contains(&hi) && (0xDC00..=0xDFFF).contains(&lo) => {
+            (0x10000 + (((hi as u32) - 0xD800) << 10) + ((lo as u32) - 0xDC00)) as f64
+        }
+        _ => hi as f64,
+    }
+}
+
+/// The units `slice(start, end)` keeps.
+pub(super) fn slice_range(len: usize, start: f64, end: f64) -> std::ops::Range<usize> {
+    let si = normalize_slice_index(trunc_sat_i32(start), len);
+    let ei = normalize_slice_index(trunc_sat_i32(end), len);
+    si..ei.max(si)
+}
+
+/// The units `substring(start, end)` keeps: negatives clamp to 0 and the
+/// bounds swap when `start > end`.
+pub(super) fn substring_range(len: usize, start: f64, end: f64) -> std::ops::Range<usize> {
+    let a = clamp_to_len(trunc_sat_i32(start), len);
+    let b = clamp_to_len(trunc_sat_i32(end), len);
+    a.min(b)..a.max(b)
+}
+
+/// The window of a haystack `startsWith(needle, position)` compares, if the
+/// needle fits there.
+pub(super) fn starts_with_window(
+    len: usize,
+    needle_len: usize,
+    position: f64,
+) -> Option<std::ops::Range<usize>> {
+    let pos = clamp_to_len(trunc_sat_i32(position), len);
+    (pos + needle_len <= len).then_some(pos..pos + needle_len)
+}
+
+/// The window of a haystack `endsWith(needle, endPosition)` compares, if the
+/// needle fits there.
+pub(super) fn ends_with_window(
+    len: usize,
+    needle_len: usize,
+    end_position: f64,
+) -> Option<std::ops::Range<usize>> {
+    let end = clamp_to_len(trunc_sat_i32(end_position), len);
+    end.checked_sub(needle_len).map(|start| start..end)
 }
 
 /// Structural equality over code units — the `===`/`==` operator primitive.
