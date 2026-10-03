@@ -73,8 +73,8 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         ft(vec![uint8.clone()], vec![num.clone()]),
         true,
         |caller, params, results| {
-            let bytes = super::read_bytes(caller, &params[0], "Uint8Array#length")?;
-            results[0] = Val::F64(super::length(&bytes).to_bits());
+            results[0] =
+                Val::F64(super::length(caller, &params[0], "Uint8Array#length")?.to_bits());
             Ok(())
         },
     )?;
@@ -85,8 +85,8 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         ft(vec![uint8.clone()], vec![num.clone()]),
         true,
         |caller, params, results| {
-            let bytes = super::read_bytes(caller, &params[0], "Uint8Array#byteLength")?;
-            results[0] = Val::F64(super::length(&bytes).to_bits());
+            results[0] =
+                Val::F64(super::length(caller, &params[0], "Uint8Array#byteLength")?.to_bits());
             Ok(())
         },
     )?;
@@ -97,8 +97,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         ft(vec![uint8.clone(), num.clone()], vec![obj.clone()]),
         true,
         |caller, params, results| {
-            let bytes = super::read_bytes(caller, &params[0], "Uint8Array#at")?;
-            results[0] = super::at(caller, &bytes, f64v(&params[1]))?;
+            results[0] = super::at(caller, &params[0], f64v(&params[1]), "Uint8Array#at")?;
             Ok(())
         },
     )?;
@@ -113,8 +112,13 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
             ),
             true,
             |caller, params, results| {
-                let bytes = super::read_bytes(caller, &params[0], "Uint8Array#slice")?;
-                let out = super::slice(&bytes, f64v(&params[1]), f64v(&params[2]));
+                let out = super::slice(
+                    caller,
+                    &params[0],
+                    f64v(&params[1]),
+                    f64v(&params[2]),
+                    "Uint8Array#slice",
+                )?;
                 results[0] = super::build(caller, &out)?;
                 Ok(())
             },

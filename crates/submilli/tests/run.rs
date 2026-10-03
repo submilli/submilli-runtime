@@ -857,6 +857,83 @@ fn each_host_call_is_charged_its_flat_cost() {
 }
 
 #[test]
+fn accessors_do_not_pay_for_the_whole_receiver() {
+    use interpreter::runtime::fuel::CALL;
+    const N: u64 = 10_000;
+    // Each loop reads one unit, element or length from a large receiver; if
+    // an accessor copied the receiver first, the copy would show as fuel far
+    // above the flat charge per call.
+    let plain = host_fuel(
+        "usage-accessor-plain",
+        "function main(): number {
+            const s = \"x\".repeat(100000);
+            const a: number[] = [];
+            for (let i = 0; i < 10000; i++) { a.push(i); }
+            const b = Uint8Array.alloc(100000);
+            let sum = 0;
+            for (let i = 0; i < 10000; i++) { sum += i; }
+            // One digit out, whatever the loop summed, so the result's own
+            // marshalling costs the same in every case.
+            return (sum + s.length + a.length + b.length) % 10;
+        }",
+    );
+    // One case per accessor path.
+    let cases = [
+        ("usage-char-at", "sum += s.charAt(i).length;"),
+        ("usage-string-at", "if (s.at(i) !== null) { sum += 1; }"),
+        ("usage-char-code-at", "sum += s.charCodeAt(i);"),
+        ("usage-code-point-at", "sum += s.codePointAt(i);"),
+        ("usage-string-slice", "sum += s.slice(i, i + 1).length;"),
+        ("usage-substring", "sum += s.substring(i, i + 1).length;"),
+        (
+            "usage-starts-with",
+            "if (s.startsWith(\"x\", i)) { sum += 1; }",
+        ),
+        (
+            "usage-ends-with",
+            "if (s.endsWith(\"x\", i + 1)) { sum += 1; }",
+        ),
+        (
+            "usage-array-at",
+            "const v = a.at(i); if (v !== null) { sum += v; }",
+        ),
+        (
+            "usage-array-pop",
+            "const v = a.pop(); if (v !== null) { sum += v; }",
+        ),
+        ("usage-array-slice", "sum += a.slice(i, i + 1).length;"),
+        ("usage-bytes-length", "sum += b.length;"),
+        (
+            "usage-bytes-at",
+            "const v = b.at(i); if (v !== null) { sum += v; }",
+        ),
+        ("usage-bytes-slice", "sum += b.slice(i, i + 1).length;"),
+    ];
+    for (name, body) in cases {
+        let source = format!(
+            "function main(): number {{
+                const s = \"x\".repeat(100000);
+                const a: number[] = [];
+                for (let i = 0; i < 10000; i++) {{ a.push(i); }}
+                const b = Uint8Array.alloc(100000);
+                let sum = 0;
+                for (let i = 0; i < 10000; i++) {{ {body} }}
+                return (sum + s.length + a.length + b.length) % 10;
+            }}"
+        );
+        let extra = host_fuel(name, &source) - plain;
+        // At least the call itself; at most that, the copy of a one-unit
+        // result, and the unboxing of a nullable result or the building of a
+        // one-element array, each one more host call. A copied receiver would
+        // add ELEM(10,000) or COPY(100,000) per iteration on top.
+        assert!(
+            (N * CALL..=3 * N * CALL + 8 * CALL).contains(&extra),
+            "{body}: {extra}"
+        );
+    }
+}
+
+#[test]
 fn report_captures_fuel_exhaustion_in_top_level_code() {
     let out = run_script(
         "usage-top-level",

@@ -157,8 +157,13 @@ In order. Each is reviewable alone.
    BigInt limbs; callbacks; field scans; Map/Set hash, probe and resize). `submilli:test`
    exempt. Replaces the `submilli:code` charges, with the diff size check before the
    charge.
-4. **Accessor copy removal**: O(1) accessors read from the GC array directly; ranged reads
-   use `read_i8` / `read_i16`.
+4. **Accessor copy removal**: `String` `charAt`/`at`/`charCodeAt`/`codePointAt` read one or
+   two units in place, `slice`/`substring` copy only their range, `startsWith`/`endsWith` only
+   the window they compare, `string_eq` compares lengths first; `Array` `at` reads one slot,
+   `pop` clears the last slot in place, `slice` reads its range; `Uint8Array` `length`/
+   `byteLength`/`at` read in place, `slice`/`subarray` copy their range. Done on the branch
+   after PR 3. The rows in Parts 1, 2 and 4 that cite the whole-receiver copy for these
+   functions are now `CALL` (plus `COPY(range)` for the ranged ones).
 5. **Operation terms and I/O**: regex (`exec_at`), sort (`merge_sort`), JSON, BigInt
    arithmetic and radix conversion, `TZ` in `resolve_time_zone`, `GATE` in
    `check_security`, URL, crypto, base64; then `fs`, `http`, `llm`, `mcp`, `session` and

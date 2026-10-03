@@ -23,8 +23,8 @@ use wasmtime::{ArrayRef, Caller, Rooted, StructRef, StructRefPre, Val};
 use crate::runtime::StoreData;
 use crate::runtime::fuel;
 use crate::runtime::host::{
-    fatal_host_error, host_boxed_number_vtable, read_uint8_array_arg,
-    write_submilli_uint8array_struct,
+    fatal_host_error, host_boxed_number_vtable, read_uint8, read_uint8_array_arg,
+    read_uint8_array_range, uint8_array_backing, write_submilli_uint8array_struct,
 };
 use crate::runtime::intrinsic_types::intrinsic_types;
 use crate::runtime::number::format_number_js;
@@ -39,8 +39,9 @@ use crate::runtime::prelude::vtable::{read_object_entries, read_string_units};
 // ---------------------------------------------------------------------------
 
 /// Read a `$Uint8Array` (or bare `$rawUint8Array`) `Val` into its bytes — a local
-/// name so the method bodies open uniformly with `super::read_bytes`, mirroring the
-/// Array port's `read_array`. The actual struct/payload decode lives in `host`.
+/// name so the method bodies that need the whole buffer open uniformly with
+/// `super::read_bytes`, mirroring the Array port's `read_array`; the accessors
+/// read in place instead. The actual struct/payload decode lives in `host`.
 pub(crate) fn read_bytes(
     caller: &mut Caller<'_, StoreData>,
     val: &Val,
@@ -170,24 +171,43 @@ fn last_from(x: f64, len: i32) -> Option<i32> {
 // Accessors / pure value methods
 // ---------------------------------------------------------------------------
 
-fn length(bytes: &[u8]) -> f64 {
-    bytes.len() as f64
+/// `length` / `byteLength`, read off the backing without copying it.
+fn length(caller: &mut Caller<'_, StoreData>, receiver: &Val, name: &str) -> wasmtime::Result<f64> {
+    let arr = uint8_array_backing(caller, receiver, name)?;
+    Ok(f64::from(arr.len(&mut *caller)?))
 }
 
 /// `at(index)` → the byte boxed as a `$boxed_number`, or `null` when out of range.
-fn at(caller: &mut Caller<'_, StoreData>, bytes: &[u8], index: f64) -> wasmtime::Result<Val> {
-    match at_index(index, bytes.len() as i32) {
-        Some(i) => box_byte(caller, bytes[i]),
+fn at(
+    caller: &mut Caller<'_, StoreData>,
+    receiver: &Val,
+    index: f64,
+    name: &str,
+) -> wasmtime::Result<Val> {
+    let arr = uint8_array_backing(caller, receiver, name)?;
+    let len = arr.len(&mut *caller)?;
+    match at_index(index, len as i32) {
+        Some(i) => {
+            let byte = read_uint8(caller, arr, i)?;
+            box_byte(caller, byte)
+        }
         None => Ok(Val::null_any_ref()),
     }
 }
 
-fn slice(bytes: &[u8], start: f64, end: f64) -> Vec<u8> {
-    let len = bytes.len() as i32;
+/// `slice` / `subarray`: only the kept range is copied.
+fn slice(
+    caller: &mut Caller<'_, StoreData>,
+    receiver: &Val,
+    start: f64,
+    end: f64,
+    name: &str,
+) -> wasmtime::Result<Vec<u8>> {
+    let arr = uint8_array_backing(caller, receiver, name)?;
+    let len = arr.len(&mut *caller)? as i32;
     let si = norm_clamp(start, len);
-    let ei = norm_clamp(end, len);
-    let count = (ei - si).max(0) as usize;
-    bytes[si as usize..si as usize + count].to_vec()
+    let count = (norm_clamp(end, len) - si).max(0) as usize;
+    read_uint8_array_range(caller, arr, si as usize, count, name)
 }
 
 /// `with(index, value)` → a copy with `index` replaced; `None` when out of range
