@@ -655,7 +655,9 @@ fn zoned_date_time_equals_host(
     let b_secs = st_i64(caller, b, 1, "ZonedDateTime.equals")?;
     let b_nanos = st_i32(caller, b, 2, "ZonedDateTime.equals")?;
     let b_tz = st_string(caller, b, 3, "ZonedDateTime.equals")?;
-    Ok(a_secs == b_secs && a_nanos == b_nanos && a_tz == b_tz)
+    Ok(a_secs == b_secs
+        && a_nanos == b_nanos
+        && super::zoned_date_time::time_zone_ids_equal(caller, &a_tz, &b_tz)?)
 }
 
 pub(super) fn reg_plain_date_to_year_month(

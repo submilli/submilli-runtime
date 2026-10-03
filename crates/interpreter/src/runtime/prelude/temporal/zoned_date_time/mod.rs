@@ -1,6 +1,7 @@
 //! `Temporal.ZonedDateTime` operations.
 
 mod install;
+mod zone_ids;
 
 pub(super) use install::{declare, install};
 
@@ -124,51 +125,13 @@ pub(super) fn time_zone_ids_equal(
         return Ok(a == b);
     }
     fuel::charge_host_fuel(&mut *caller, 2 * fuel::TZ)?;
-    let (Ok(a), Ok(b)) = (TimeZone::get(a), TimeZone::get(b)) else {
-        return Ok(false);
-    };
-    time_zones_have_same_rules(caller, &a, &b)
+    Ok(zone_ids::primary(a).eq_ignore_ascii_case(zone_ids::primary(b)))
 }
 
 fn parse_fixed_offset(input: &str) -> std::result::Result<Offset, jiff::Error> {
     DateTimeParser::new()
         .parse_time_zone(input)
         .and_then(|time_zone| time_zone.to_fixed_offset())
-}
-
-/// Walks both zones' transitions in lockstep; charged per step, since two
-/// aliases with ongoing DST have tens of thousands of them.
-fn time_zones_have_same_rules(
-    caller: &mut Caller<'_, StoreData>,
-    a: &TimeZone,
-    b: &TimeZone,
-) -> wasmtime::Result<bool> {
-    if a == b {
-        return Ok(true);
-    }
-    let a_initial = a.to_offset_info(Timestamp::MIN);
-    let b_initial = b.to_offset_info(Timestamp::MIN);
-    if a_initial.offset() != b_initial.offset()
-        || a_initial.abbreviation() != b_initial.abbreviation()
-        || a_initial.dst() != b_initial.dst()
-    {
-        return Ok(false);
-    }
-
-    let mut a_transitions = a.following(Timestamp::MIN);
-    let mut b_transitions = b.following(Timestamp::MIN);
-    loop {
-        fuel::charge(&mut *caller, fuel::ELEM, 1)?;
-        match (a_transitions.next(), b_transitions.next()) {
-            (None, None) => return Ok(true),
-            (Some(a), Some(b))
-                if a.timestamp() == b.timestamp()
-                    && a.offset() == b.offset()
-                    && a.abbreviation() == b.abbreviation()
-                    && a.dst() == b.dst() => {}
-            _ => return Ok(false),
-        }
-    }
 }
 
 fn is_offset_identifier(time_zone: &str) -> bool {

@@ -936,7 +936,7 @@ fn accessors_do_not_pay_for_the_whole_receiver() {
 #[test]
 fn operations_charge_for_the_input_they_process() {
     use interpreter::runtime::fuel::{
-        CALL, COPY, ELEM, IO, PARSE, REGEX, SCAN, SYSCALL, sort_cost,
+        CALL, COPY, ELEM, IO, PARSE, REGEX, SCAN, SYSCALL, TZ, sort_cost,
     };
     // Each case builds a large input (the baseline) and then runs one
     // operation over it; the host fuel the operation adds must cover at
@@ -1079,6 +1079,29 @@ fn operations_charge_for_the_input_they_process() {
         );
     }
     assert_eq!(copy_costs[1] - copy_costs[0], SYSCALL.cost(2));
+
+    for n in [1_u64, 2] {
+        let input =
+            "const a = Temporal.ZonedDateTime.from(\"2024-03-09T12:00:00-05:00[US/Eastern]\");
+                     const b = a.withTimeZone(\"America/New_York\");";
+        let baseline = host_fuel(
+            &format!("usage-zone-{n}-baseline"),
+            &format!("function main(): number {{ {input} return 0; }}"),
+        );
+        let actual = host_fuel(
+            &format!("usage-zone-{n}"),
+            &format!(
+                "function main(): number {{ {input}
+                      for (let i = 0; i < {n}; i++) {{ a.equals(b); }} return 0; }}"
+            ),
+        ) - baseline;
+        // Old transition walks added 162,056 fuel per comparison. Identity
+        // lookup now costs exactly two bounded lookups plus argument reads.
+        assert_eq!(
+            actual,
+            n * (CALL + 2 * TZ + SCAN.cost(10) + COPY.cost(10) + SCAN.cost(16) + COPY.cost(16))
+        );
+    }
 }
 
 #[test]
