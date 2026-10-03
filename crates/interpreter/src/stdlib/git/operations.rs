@@ -490,7 +490,7 @@ fn branches(snapshot: &Snapshot) -> Result<Value> {
     let current = current_branch(snapshot)?;
     let mut branches = Vec::new();
     let mut bytes = 0;
-    super::history::meter_packed_references(snapshot)?;
+    snapshot.meter_packed_references()?;
     for reference in snapshot.repo.references()?.local_branches()? {
         snapshot.check_cancelled()?;
         snapshot.meter.syscalls(1);

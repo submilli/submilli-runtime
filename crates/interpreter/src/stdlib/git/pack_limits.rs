@@ -2,6 +2,7 @@
 //! declarations. Responses are read as streams from where they were spooled to
 //! disk, so a pack larger than memory can be checked holding one entry's
 //! header and a small inflation buffer.
+use super::meter::Meter;
 use gix::odb::pack::data::entry::Header;
 use std::collections::HashMap;
 use std::io::{self, BufRead, Read};
@@ -27,14 +28,15 @@ const MAX_CONTROL_RECORDS: usize = 1_000_000;
 
 /// Checks one response read from `body`. `local` says whether the repository
 /// already has an object: a delta in the pack may name one as its base.
-/// Adds the bytes the pack's entries inflate to to `inflated` as it goes, so
-/// the work is known however far the check got.
+/// Each entry's work, this check's and gix's after it, is counted on `meter`
+/// before the entry is inflated, so the fuel ceiling can stop the check part
+/// way and a fetch that fails later still pays for what it did.
 pub(super) fn validate(
     body: &mut dyn BufRead,
     advertisement: bool,
     limits: Limits,
     local: &dyn Fn(&gix::oid) -> bool,
-    inflated: &mut u64,
+    meter: &Meter,
     cancelled: &AtomicBool,
 ) -> io::Result<()> {
     check_cancelled(cancelled)?;
@@ -48,7 +50,7 @@ pub(super) fn validate(
     }
     if read == 4 && &start == b"PACK" {
         let mut pack = Counting::new(io::Cursor::new(start).chain(body));
-        validate_pack(&mut pack, limits, local, inflated, cancelled)?;
+        validate_pack(&mut pack, limits, local, meter, cancelled)?;
         if pack.fill_buf()?.is_empty() {
             return Ok(());
         }
@@ -69,7 +71,7 @@ pub(super) fn validate(
     if pack.fill_buf()?.is_empty() {
         return Ok(());
     }
-    validate_pack(&mut pack, limits, local, inflated, cancelled)?;
+    validate_pack(&mut pack, limits, local, meter, cancelled)?;
     if !pack.fill_buf()?.is_empty() {
         return Err(invalid("incomplete pack checksum or trailing pack data"));
     }
@@ -240,7 +242,7 @@ fn validate_pack<R: BufRead>(
     pack: &mut Counting<R>,
     limits: Limits,
     local: &dyn Fn(&gix::oid) -> bool,
-    inflated_total: &mut u64,
+    meter: &Meter,
     cancelled: &AtomicBool,
 ) -> io::Result<()> {
     let mut signature = [0u8; 4];
@@ -283,8 +285,13 @@ fn validate_pack<R: BufRead>(
             Header::Tag => Some(gix::objs::Kind::Tag),
             Header::OfsDelta { .. } | Header::RefDelta { .. } => None,
         };
-        let inflated = inflate_entry(pack, entry.decompressed_size, kind, cancelled)?;
-        *inflated_total = inflated_total.saturating_add(entry.decompressed_size);
+        // Inflated here and again by gix; a whole object is hashed by both.
+        let raw = entry.decompressed_size;
+        meter.parse(raw.saturating_mul(2));
+        if kind.is_some() {
+            meter.hash(raw.saturating_mul(2));
+        }
+        let inflated = inflate_entry(pack, raw, kind, cancelled)?;
         if let Some(id) = inflated.id {
             whole.insert(id, entry.decompressed_size);
         }
@@ -300,6 +307,9 @@ fn validate_pack<R: BufRead>(
                 let mut prefix = prefix.as_slice();
                 delta_size(&mut prefix)?;
                 let result = delta_size(&mut prefix)?;
+                // gix builds the object the delta describes, and hashes it.
+                meter.parse(result);
+                meter.hash(result);
                 base.saturating_add(entry.decompressed_size)
                     .saturating_add(result)
             }
@@ -310,6 +320,8 @@ fn validate_pack<R: BufRead>(
                 let mut prefix = prefix.as_slice();
                 let base = delta_size(&mut prefix)?;
                 let result = delta_size(&mut prefix)?;
+                meter.parse(result);
+                meter.hash(result);
                 let added = entry.decompressed_size.saturating_add(result);
                 named_bases.push((base_id, added));
                 base.saturating_add(added)
@@ -449,7 +461,7 @@ mod tests {
                 max_chain_bytes: budget,
             },
             &|_| true,
-            &mut 0,
+            &Meter::default(),
             &AtomicBool::new(false),
         )
     }
@@ -538,7 +550,7 @@ mod tests {
                 false,
                 limits,
                 &|_| local,
-                &mut 0,
+                &Meter::default(),
                 &AtomicBool::new(false),
             )
         };
@@ -556,27 +568,57 @@ mod tests {
     #[test]
     fn counts_what_the_pack_inflates_to_not_what_it_takes() {
         use gix::odb::pack::data::entry::Header;
-        let inflated = |contents: &[u8]| {
-            let pack = complete_pack(&[compressed_entry(Header::Blob, contents)]);
-            let mut total = 0;
-            super::validate(
-                &mut io::Cursor::new(&pack),
-                false,
-                Limits {
-                    max_records: 16,
-                    max_object_bytes: BUDGET,
-                    max_chain_bytes: BUDGET,
-                },
-                &|_| true,
-                &mut total,
-                &AtomicBool::new(false),
-            )
-            .unwrap();
-            (pack.len(), total)
-        };
-        let (small_pack, repetitive) = inflated(&[b'a'; 500_000]);
-        assert!(small_pack < 2_000, "{small_pack}");
-        assert_eq!(repetitive, 500_000);
+        let contents = [b'a'; 500_000];
+        let pack = complete_pack(&[compressed_entry(Header::Blob, &contents)]);
+        assert!(pack.len() < 2_000, "{}", pack.len());
+        let meter = Meter::default();
+        super::validate(
+            &mut io::Cursor::new(&pack),
+            false,
+            Limits {
+                max_records: 16,
+                max_object_bytes: BUDGET,
+                max_chain_bytes: BUDGET,
+            },
+            &|_| true,
+            &meter,
+            &AtomicBool::new(false),
+        )
+        .unwrap();
+        let inflated = contents.len() as u64;
+        assert_eq!(
+            meter.fuel(),
+            crate::runtime::fuel::PARSE.cost(2 * inflated)
+                + crate::runtime::fuel::HASH.cost(2 * inflated)
+        );
+    }
+
+    #[test]
+    fn the_fuel_ceiling_stops_the_check_part_way() {
+        use gix::odb::pack::data::entry::Header;
+        let entry = compressed_entry(Header::Blob, &[b'a'; 100_000]);
+        let pack = complete_pack(&vec![entry; 10]);
+        let cancelled = std::sync::Arc::new(AtomicBool::new(false));
+        // Enough for about two entries of ten.
+        let meter = Meter::new(
+            crate::runtime::fuel::PARSE.cost(400_000) + crate::runtime::fuel::HASH.cost(400_000),
+            Some(std::sync::Arc::clone(&cancelled)),
+        );
+        let error = super::validate(
+            &mut io::Cursor::new(&pack),
+            false,
+            Limits {
+                max_records: 16,
+                max_object_bytes: BUDGET,
+                max_chain_bytes: BUDGET,
+            },
+            &|_| true,
+            &meter,
+            &cancelled,
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("cancelled"), "{error}");
+        assert!(meter.is_exhausted());
     }
 
     #[test]
@@ -611,7 +653,7 @@ mod tests {
                     max_chain_bytes: BUDGET,
                 },
                 &|_| true,
-                &mut 0,
+                &Meter::default(),
                 &AtomicBool::new(true),
             )
             .is_err()

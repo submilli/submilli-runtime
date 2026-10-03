@@ -454,9 +454,14 @@ async fn invoke(
     // The work is done, and may be published, whether or not it succeeded:
     // it is settled, not refused.
     meter.settle(&mut *caller)?;
-    if outcome.is_err() && meter.is_exhausted() {
+    if let Err(error) = &outcome
+        && meter.is_exhausted()
+        && !error.is::<crate::runtime::host::FatalHostError>()
+        && !error.is::<stage::NeedsHostRecovery>()
+    {
         // Stopped for fuel before publishing: the run ends as a Wasm loop
-        // out of fuel would, and the program cannot catch it.
+        // out of fuel would, and the program cannot catch it. A host failure,
+        // or a publication that needs recovery, says more and goes first.
         return Err(wasmtime::Trap::OutOfFuel.into());
     }
     if let Some((capability, reason)) = denial

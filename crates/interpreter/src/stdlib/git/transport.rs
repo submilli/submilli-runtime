@@ -394,24 +394,19 @@ impl Client {
         let mut body = spool.file;
         // Checked from disk as a stream, then handed to gix from the start.
         body.seek(io::SeekFrom::Start(0))?;
+        // Read back twice, by the check and by gix, which also hashes it whole.
+        let spooled = body.metadata().map_or(0, |meta| meta.len());
+        self.job.meter.io(spooled.saturating_mul(2));
+        self.job.meter.hash(spooled);
         let objects = self.objects.to_handle_arc();
-        let mut inflated = 0;
-        let checked = super::pack_limits::validate(
+        super::pack_limits::validate(
             &mut io::BufReader::new(&mut body),
             request.method == "GET",
             self.limits.pack,
             &|id| gix::odb::pack::Find::contains(&objects, id),
-            &mut inflated,
+            &self.job.meter,
             &self.job.cancelled,
-        );
-        // The response is read back twice, by the check and by gix, and each
-        // inflates every object; gix also resolves and hashes each. Counted
-        // here, so a fetch that fails later still pays for what it did.
-        let spooled = body.metadata()?.len();
-        self.job.meter.io(spooled.saturating_mul(2));
-        self.job.meter.parse(inflated.saturating_mul(2));
-        self.job.meter.hash(inflated);
-        checked?;
+        )?;
         body.seek(io::SeekFrom::Start(0))?;
         self.job.check_cancelled().map_err(io_error)?;
         Ok(Response {
@@ -564,6 +559,8 @@ impl Refusal {
 impl Write for SpoolWriter {
     fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
         self.job.check_cancelled().map_err(io_error)?;
+        // Received, and written to the spool unless refused below.
+        self.job.meter.io(bytes.len() as u64);
         let total = self
             .job
             .transferred
@@ -582,8 +579,6 @@ impl Write for SpoolWriter {
             return Err(error);
         }
         self.file.write_all(bytes)?;
-        // Received, and written to the spool.
-        self.job.meter.io(bytes.len() as u64);
         Ok(bytes.len())
     }
     fn flush(&mut self) -> io::Result<()> {

@@ -25,8 +25,8 @@ pub(super) struct Meter {
     syscalls: AtomicU64,
     /// Bytes read from or written to files, or received.
     io: AtomicU64,
-    /// Bytes scanned without being decoded: ignore patterns matched, text
-    /// checked for a diff.
+    /// Units scanned without decoding: bytes of text checked for a diff, and
+    /// the units of work ignore matching counts (patterns times path bytes).
     scan: AtomicU64,
     /// Bytes decoded: trees, commits, the index, blobs, packs.
     parse: AtomicU64,

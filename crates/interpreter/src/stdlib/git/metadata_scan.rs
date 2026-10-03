@@ -29,15 +29,14 @@ pub(super) struct Summary {
 /// Scans the `.git` directory `git`.
 pub(super) fn scan(git: &Dir, cancelled: &AtomicBool, meter: &Meter) -> Result<Summary> {
     let mut scan = Scan {
+        meter,
         cancelled,
         entries: 0,
-        stats: 0,
         packs: Vec::new(),
     };
     scan.walk(git, "", 0)?;
-    // An entry listed, a stat for each file outside the loose objects, the
-    // checks of refused names, and the configuration and index read below.
-    meter.syscalls(scan.entries as u64 + scan.stats + 8);
+    // The checks of refused names, and the configuration and index read below.
+    meter.syscalls(8);
     for refused in [
         "commondir",
         "objects/info/alternates",
@@ -72,9 +71,11 @@ pub(super) fn scan(git: &Dir, cancelled: &AtomicBool, meter: &Meter) -> Result<S
 }
 
 struct Scan<'a> {
+    /// Counts each entry listed and each file stat'ed as it goes, so the fuel
+    /// ceiling can stop a scan of a large `.git` part way.
+    meter: &'a Meter,
     cancelled: &'a AtomicBool,
     entries: usize,
-    stats: u64,
     packs: Vec<String>,
 }
 
@@ -89,6 +90,7 @@ impl Scan<'_> {
                 bail!("git: operation cancelled");
             }
             self.entries += 1;
+            self.meter.syscalls(1);
             if self.entries > MAX_ENTRIES {
                 bail!("git: repository metadata holds more than {MAX_ENTRIES} entries");
             }
@@ -131,7 +133,7 @@ impl Scan<'_> {
             #[cfg(unix)]
             {
                 use cap_std::fs::MetadataExt;
-                self.stats += 1;
+                self.meter.syscalls(1);
                 if dir.symlink_metadata(&name)?.nlink() > 1 {
                     bail!("git: hard-linked repository files are unsupported: {path}");
                 }

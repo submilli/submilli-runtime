@@ -87,9 +87,9 @@ fn test_data(vfs: Vfs) -> StoreData {
     data
 }
 
-/// Runs `source` with only `fuel` to spend, returning the error it ended with
-/// and the host fuel it was charged.
-async fn run_with_fuel(source: &str, mut data: StoreData, fuel: u64) -> (wasmtime::Error, u64) {
+/// Runs `source` with `fuel` to spend, returning how it ended and the host
+/// fuel it was charged.
+async fn run_program(source: &str, mut data: StoreData, fuel: u64) -> (wasmtime::Result<()>, u64) {
     let compiled = crate::compile_script(source, "git.ts", crate::FileId(0), &[], &[])
         .unwrap_or_else(|error| panic!("{error:#?}"));
     let cfg = RuntimeConfig {
@@ -105,46 +105,23 @@ async fn run_with_fuel(source: &str, mut data: StoreData, fuel: u64) -> (wasmtim
         .await
         .unwrap();
     let instance = linker.instantiate_async(&mut store, &module).await.unwrap();
-    let error = dispatch_main_async(&mut store, &instance)
-        .await
-        .expect_err("the run runs out of fuel");
+    let outcome = dispatch_main_async(&mut store, &instance).await.map(drop);
     assert_eq!(store.data().tenant_limits.host_attached_bytes(), 0);
-    (error, store.data().host_fuel)
+    (outcome, store.data().host_fuel)
 }
 
 /// Runs `source` to completion, returning the host fuel it was charged.
-async fn host_fuel_of(source: &str, mut data: StoreData) -> u64 {
-    let compiled = crate::compile_script(source, "git.ts", crate::FileId(0), &[], &[])
-        .unwrap_or_else(|error| panic!("{error:#?}"));
-    let cfg = RuntimeConfig::default();
-    let engine = cfg.engine().unwrap();
-    data.install_type_info(compiled.type_info.clone());
-    let mut store = cfg.store(&engine, data).unwrap();
-    let module = wasmtime::Module::new(&engine, &compiled.wasm).unwrap();
-    let mut linker = Linker::new(&engine);
-    install_runtime_async(&mut linker, &mut store)
-        .await
-        .unwrap();
-    let instance = linker.instantiate_async(&mut store, &module).await.unwrap();
-    dispatch_main_async(&mut store, &instance).await.unwrap();
-    store.data().host_fuel
+async fn host_fuel_of(source: &str, data: StoreData) -> u64 {
+    let (outcome, host_fuel) = run_program(source, data, RuntimeConfig::default().fuel).await;
+    outcome.unwrap();
+    host_fuel
 }
 
-async fn run_source(source: &str, mut data: StoreData) {
-    let compiled = crate::compile_script(source, "git.ts", crate::FileId(0), &[], &[])
-        .unwrap_or_else(|error| panic!("{error:#?}"));
-    let cfg = RuntimeConfig::default();
-    let engine = cfg.engine().unwrap();
-    data.install_type_info(compiled.type_info.clone());
-    let mut store = cfg.store(&engine, data).unwrap();
-    let module = wasmtime::Module::new(&engine, &compiled.wasm).unwrap();
-    let mut linker = Linker::new(&engine);
-    install_runtime_async(&mut linker, &mut store)
+async fn run_source(source: &str, data: StoreData) {
+    run_program(source, data, RuntimeConfig::default().fuel)
         .await
+        .0
         .unwrap();
-    let instance = linker.instantiate_async(&mut store, &module).await.unwrap();
-    dispatch_main_async(&mut store, &instance).await.unwrap();
-    assert_eq!(store.data().tenant_limits.host_attached_bytes(), 0);
 }
 
 #[tokio::test]
@@ -833,37 +810,44 @@ fn repository_docs_expose_class_factories_and_capabilities() {
     assert!(!docs.declarations.contains("function init("));
 }
 
-/// A Git operation that needs more fuel than the run has ends the run with
-/// the runtime's own out-of-fuel trap, charged no more than the run had.
+/// A Git operation that needs more fuel than the run has stops before it
+/// publishes, and the run ends in the runtime's own out-of-fuel trap, charged
+/// no more than it had.
 #[tokio::test]
 async fn git_runs_out_of_fuel_like_any_other_work() {
-    let vfs = Vfs::tempdir().unwrap();
-    let repo = vfs.root().join("repo");
-    std::fs::create_dir(&repo).unwrap();
-    native(&repo, &["init", "-q", "-b", "main"]);
-    for number in 0..2_000 {
-        let path = repo.join(format!("d{:02}/f{number:05}", number % 50));
-        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-        std::fs::write(path, format!("file {number}\n")).unwrap();
-    }
-    let budget = 2_000_000;
-    let (error, host_fuel) = run_with_fuel(
-        r#"
+    let source = r#"
         import { Repository } from "submilli:git";
         function main(): void {
-            Repository.open("/repo").status();
+            Repository.open("/repo").add(["."]);
         }
-    "#,
-        test_data(vfs.clone()),
-        budget,
-    )
-    .await;
+    "#;
+    let repository = || {
+        let vfs = Vfs::tempdir().unwrap();
+        let repo = vfs.root().join("repo");
+        std::fs::create_dir(&repo).unwrap();
+        native(&repo, &["init", "-q", "-b", "main"]);
+        for number in 0..2_000 {
+            let path = repo.join(format!("d{:02}/f{number:05}", number % 50));
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, format!("file {number}\n")).unwrap();
+        }
+        vfs
+    };
+    let needed = host_fuel_of(source, test_data(repository())).await;
+    // With a quarter of what it needs, `add` stops before it publishes.
+    let vfs = repository();
+    let (outcome, host_fuel) = run_program(source, test_data(vfs.clone()), needed / 4).await;
+    let error = outcome.unwrap_err();
     assert_eq!(
         error.downcast_ref::<wasmtime::Trap>(),
         Some(&wasmtime::Trap::OutOfFuel),
         "{error:?}"
     );
-    assert!(host_fuel <= budget, "{host_fuel}");
+    assert!(host_fuel <= needed / 4, "{host_fuel}");
+    assert!(
+        !vfs.root().join("repo/.git/index").exists(),
+        "nothing was staged into the repository"
+    );
 }
 
 /// A fetch pays for what it inflates, not for what it transfers: two packs

@@ -365,6 +365,21 @@ impl Snapshot {
         Ok(stage.dir.open_dir("spool")?)
     }
 
+    /// Counts reading and parsing `packed-refs`, which listing references
+    /// does besides reading each loose one. The stage's copy is the same.
+    pub fn meter_packed_references(&self) -> Result<()> {
+        match self.dir.symlink_metadata(".git/packed-refs") {
+            Ok(meta) => {
+                self.meter.syscalls(2);
+                self.meter.io(meta.len());
+                self.meter.parse(meta.len());
+                Ok(())
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(error) => Err(error.into()),
+        }
+    }
+
     /// The stage's object store, and the repository's through it, opened to
     /// be shared with the fetch transport, which gix moves between threads.
     pub fn thread_safe_objects(&self) -> Result<gix::odb::Store> {

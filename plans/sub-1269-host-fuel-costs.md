@@ -1547,9 +1547,21 @@ Rewritten for SUB-1129, which opens repositories in place instead of copying the
 
 **Publish cost `PUB`** (`Stage::publish`): each reference compared with the repository's, `SYSCALL(4)` each; then a rename, removal or directory per step, `SYSCALL(2 * steps + added + 4)`. Proportional to what changed: adding a remote moves `config`, a commit moves its new objects, the index and a ref.
 
-Other counted work: a tree loaded (`walk_tree`), `PARSE(tree bytes) + ELEM(entries)`; a commit or object decoded (`resolve_commit`, `Ancestors`), `PARSE(bytes)`; the worktree hashed (`Snapshot::worktree`), per file `SYSCALL(2) + IO(len) + HASH(len) + ELEM(1)`; a blob read (`blob_contents`), `PARSE(size)`; a worktree file read (`worktree_contents`), `SYSCALL(2) + IO(len)`; a worktree file stored as a blob (`store_worktree_blob`), `SYSCALL(4) + IO(2 len) + HASH(len) + PARSE(len)`; the index written, `SYSCALL(3) + ELEM(entries)`; a checked-out file staged, `SYSCALL(3 + depth) + IO(len)`; ignore matching, `SCAN(units)` as `remove_ignored` counts them; listing references, `SYSCALL(1) + ELEM(1)` each, plus `SYSCALL(2) + IO(pr) + PARSE(pr)` for `packed-refs` of `pr` bytes; a diff pair, `SCAN(len(a) + len(b))`.
+Other counted work:
 
-**Fetch** (`transport.rs`): each response spooled to the stage, `IO(N)` as received; checked as a stream and then read by gix, `IO(2N)`; every object inflated twice (check and gix) and hashed by gix, `PARSE(2 Ni) + HASH(Ni)`, counted when the response is checked so a fetch that fails later still pays; the pack written, `SYSCALL(8) + IO(pack) + ELEM(objects)`. `N` = spooled bytes, `Ni` = bytes the pack inflates to.
+- a tree loaded (`walk_tree`): `PARSE(tree bytes) + ELEM(entries)`;
+- a commit or object decoded (`resolve_commit`, `Ancestors`): `PARSE(bytes)`;
+- the worktree hashed (`Snapshot::worktree`), per file: `SYSCALL(2) + IO(len) + HASH(len) + ELEM(1)`;
+- a blob read (`blob_contents`): `PARSE(size)`;
+- a worktree file read (`worktree_contents`): `SYSCALL(2) + IO(len)`;
+- a worktree file stored as a blob (`store_worktree_blob`): `SYSCALL(4) + IO(2 len) + HASH(len) + PARSE(len)`;
+- the index written: `SYSCALL(3) + ELEM(entries)`;
+- a checked-out file staged: `SYSCALL(3 + depth) + IO(len)`;
+- ignore matching: `SCAN(units)`, as `remove_ignored` counts them (patterns times path bytes);
+- references listed: `SYSCALL(1) + ELEM(1)` each, plus `SYSCALL(2) + IO(pr) + PARSE(pr)` for `packed-refs` of `pr` bytes;
+- a diff pair: `SCAN(len(a) + len(b))`.
+
+**Fetch** (`transport.rs`, `pack_limits.rs`): each response is written to the stage's spool, `IO(N)` as received; it is read back by the check and by gix, and hashed whole by gix, `IO(2N) + HASH(N)`. The check counts each entry before inflating it, so the ceiling stops it part way and a fetch that fails later still pays: an entry of `raw` inflated bytes is inflated by the check and by gix, `PARSE(2 raw)`; a whole object is hashed by both, `HASH(2 raw)`; for a delta, gix builds and hashes the object it describes, `PARSE(result) + HASH(result)`. The pack written: `SYSCALL(8) + IO(pack) + ELEM(objects)`. `N` = spooled bytes.
 
 | Function | Formula (meter, beyond `CALL + PARSE(len(args))` before and the result's `PARSE` after) | Notes |
 |---|---|---|
@@ -1572,7 +1584,8 @@ Other counted work: a tree loaded (`walk_tree`), `PARSE(tree bytes) + ELEM(entri
 
 **Known gaps, accepted:**
 
-- After a timeout or cancellation, the work the worker does before its next check isn't charged.
+- Work counted only once it is done is lost if it is interrupted: an entry the check fails part way through inflating, gix's `receive`, a worktree file read. Each is bounded by `max_bytes` or the response.
+- A call the program abandons (its future dropped) is not settled: the worker is cancelled and its work counted, but nothing charges it.
 - Pack-set verification is cached process-wide: the first run to see a pack set pays for checking it, later runs pay `SYSCALL(2p)`.
 - gix resolves deltas with its caches off (`core.deltaBaseCacheLimit=0`, `gitoxide.objects.cacheLimit=0`), so reading an object decodes its whole chain again; it is charged for the decoded size only, not for each base along the chain. Depth is capped at 4095.
 - The rates are SUB-1270's; the multiples for gix internals (`write_to_directory`, `receive`, `edit_tree`) come from what those calls must do, not from measurement.
