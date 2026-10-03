@@ -113,6 +113,13 @@ fn imported_signatures_are_checked_on_use_and_unused_surface_is_allowed() {
     *params = (0..256)
         .map(|i| interpreter::Param::new(format!("a{i}"), Type::Number))
         .collect();
+    // Keep the physical ABI consistent so this tests payload arity, not corrupt metadata.
+    let runtime_name = declaration.values.get("bad").unwrap().mangled_name.clone();
+    declaration
+        .runtime_functions
+        .get_mut(&runtime_name)
+        .unwrap()
+        .params = vec![Type::Number; 256];
     let args = (0..256)
         .map(|i| i.to_string())
         .collect::<Vec<_>>()
@@ -192,14 +199,7 @@ fn inherited_dependency_methods_require_supported_payload_signatures() {
     )
     .unwrap()
     .declaration;
-    let interpreter::TypeKind::Class { methods, .. } =
-        &mut declaration.types.get_mut("Base").unwrap().kind
-    else {
-        panic!("class")
-    };
-    methods.get_mut("f").unwrap().params = (0..256)
-        .map(|i| interpreter::Param::new(format!("a{i}"), Type::Number))
-        .collect();
+    set_oversized_method(&mut declaration, "Base", "f");
     for source in [
         "import { Base } from \"aritydep\"; class Child extends Base {} function main(): number { return 42; }",
         "import { Base } from \"aritydep\"; function main(): number { const b = new Base(); return 42; }",
@@ -393,14 +393,7 @@ fn inherited_statics_validate_the_declaring_class_only() {
     ).unwrap().declaration;
     for (class, method) in [("Derived", "derivedMethod"), ("Base", "baseMethod")] {
         let mut declaration = declaration.clone();
-        let interpreter::TypeKind::Class { methods, .. } =
-            &mut declaration.types.get_mut(class).unwrap().kind
-        else {
-            panic!("class")
-        };
-        methods.get_mut(method).unwrap().params = (0..256)
-            .map(|i| interpreter::Param::new(format!("a{i}"), Type::Number))
-            .collect();
+        set_oversized_method(&mut declaration, class, method);
         for body in [
             "return Derived.healthy();",
             "const f = Derived.healthy; return f();",
@@ -436,4 +429,32 @@ fn inherited_statics_validate_the_declaring_class_only() {
             }
         }
     }
+}
+
+// Public exports and hidden runtime class surfaces share the physical signature.
+fn set_oversized_method(
+    declaration: &mut interpreter::PackageDeclaration,
+    class: &str,
+    method: &str,
+) {
+    let class_name = declaration.types.get(class).unwrap().mangled_name.clone();
+    for symbol in declaration
+        .types
+        .values_mut()
+        .chain(declaration.runtime_types.values_mut())
+        .filter(|symbol| symbol.mangled_name == class_name)
+    {
+        let interpreter::TypeKind::Class { methods, .. } = &mut symbol.kind else {
+            panic!("class")
+        };
+        methods.get_mut(method).unwrap().params = (0..256)
+            .map(|i| interpreter::Param::new(format!("a{i}"), Type::Number))
+            .collect();
+    }
+    let runtime_name = interpreter::mangle::extend(&class_name, method);
+    declaration
+        .runtime_functions
+        .get_mut(&runtime_name)
+        .unwrap()
+        .params = vec![Type::Number; 256];
 }
