@@ -88,6 +88,12 @@ pub struct Cli {
     #[arg(long)]
     session_store_dir: Option<PathBuf>,
 
+    /// Server SQLite database file. The parent directory is created at boot.
+    /// [default: ~/.submilli/server/db/submilli.db]
+    /// Env: `$SUBMILLI_DATABASE_PATH`.
+    #[arg(long, value_name = "PATH")]
+    database_path: Option<PathBuf>,
+
     /// Durable root for `per_session` VFS directories. Mount on a
     /// PersistentVolume so a session's files survive a server restart.
     /// [default: ~/.submilli/server/vfs/sessions]

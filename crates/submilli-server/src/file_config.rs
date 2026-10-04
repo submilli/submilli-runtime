@@ -33,9 +33,9 @@ use ipnet::IpNet;
 use serde::Deserialize;
 use submilli_server::config::{
     OAuthProvider, ServerDirectories, VolumeTable, default_blueprint_dir,
-    default_cli_package_store_dir, default_managed_volume_root, default_package_store_dir,
-    default_secret_store_dir, default_session_storage_root, default_session_store_dir,
-    validate_volumes,
+    default_cli_package_store_dir, default_database_path, default_managed_volume_root,
+    default_package_store_dir, default_secret_store_dir, default_session_storage_root,
+    default_session_store_dir, validate_volumes,
 };
 use submilli_server::{
     ApiToken, AuthConfig, DEFAULT_MAX_EXECUTION_TOKENS, DEFAULT_MAX_STORE_BYTES, FileSecretStore,
@@ -72,6 +72,7 @@ pub struct FileConfig {
     pub tls: TlsFileConfig,
     pub blueprint_dir: Option<PathBuf>,
     pub session_store_dir: Option<PathBuf>,
+    pub database_path: Option<PathBuf>,
     pub vfs_session_dir: Option<PathBuf>,
     pub vfs_ephemeral_dir: Option<PathBuf>,
     /// Root for `managed-local` volumes; see `--volume-dir`.
@@ -254,6 +255,7 @@ pub(crate) struct EnvConfig {
     max_llm_concurrency: Option<String>,
     blueprint_dir: Option<PathBuf>,
     session_store_dir: Option<PathBuf>,
+    database_path: Option<PathBuf>,
     vfs_session_dir: Option<PathBuf>,
     vfs_ephemeral_dir: Option<PathBuf>,
     volume_dir: Option<PathBuf>,
@@ -341,6 +343,7 @@ impl EnvConfig {
             max_llm_concurrency: var("SUBMILLI_MAX_LLM_CONCURRENCY"),
             blueprint_dir: path("SUBMILLI_BLUEPRINT_DIR"),
             session_store_dir: path("SUBMILLI_SESSION_STORE_DIR"),
+            database_path: path("SUBMILLI_DATABASE_PATH"),
             vfs_session_dir: path("SUBMILLI_VFS_SESSION_DIR"),
             vfs_ephemeral_dir: path("SUBMILLI_VFS_EPHEMERAL_DIR"),
             volume_dir: path("SUBMILLI_VOLUME_DIR"),
@@ -564,6 +567,14 @@ fn guarded_directories(cli: &Cli, file: &FileConfig, env: &EnvConfig) -> ServerD
                 file.session_store_dir.clone(),
             )
             .unwrap_or_else(default_session_store_dir),
+        ),
+        database_path: Some(
+            explicit(
+                cli.database_path.clone(),
+                env.database_path.clone(),
+                file.database_path.clone(),
+            )
+            .unwrap_or_else(default_database_path),
         ),
         ephemeral_storage_root: explicit(
             cli.vfs_ephemeral_dir.clone(),
@@ -985,6 +996,8 @@ fn merge(cli: Cli, file: FileConfig, env: EnvConfig) -> Result<(SocketAddr, Serv
         file.session_store_dir,
     )
     .unwrap_or_else(default_session_store_dir);
+    let database_path = explicit(cli.database_path, env.database_path, file.database_path)
+        .unwrap_or_else(default_database_path);
     let ephemeral_storage_root = explicit(
         cli.vfs_ephemeral_dir,
         env.vfs_ephemeral_dir,
@@ -1020,6 +1033,7 @@ fn merge(cli: Cli, file: FileConfig, env: EnvConfig) -> Result<(SocketAddr, Serv
         auth,
         blueprint_dir: Some(blueprint_dir),
         session_store_dir: Some(session_store_dir),
+        database_path: Some(database_path),
         session_storage_root: Some(session_storage_root),
         ephemeral_storage_root,
         package_store_root,
@@ -1421,6 +1435,7 @@ mod tests {
             port: None,
             blueprint_dir: None,
             session_store_dir: None,
+            database_path: None,
             vfs_session_dir: None,
             vfs_ephemeral_dir: None,
             volume_dir: None,
@@ -1591,6 +1606,7 @@ network:
             tls_cert_file: Some(root.join("tls/cert.pem")),
             session_storage_root: Some(root.join("vfs/sessions")),
             session_store_dir: Some(root.join("sessions")),
+            database_path: Some(root.join("db/submilli.db")),
             ephemeral_storage_root: Some(root.join("scratch")),
             managed_volume_root: Some(root.join("volumes")),
             config_file: Some(root.join("etc/submilli.yaml")),
@@ -1621,6 +1637,7 @@ network:
             github_token_file,
             session_storage_root,
             session_store_dir,
+            database_path,
             ephemeral_storage_root,
             managed_volume_root,
             config_file,
@@ -1638,6 +1655,7 @@ network:
             (tls_cert_file, "TLS certificate file"),
             (session_storage_root, "per-session VFS root"),
             (session_store_dir, "durable session store"),
+            (database_path, "server database"),
             (ephemeral_storage_root, "ephemeral storage root"),
             (managed_volume_root, "managed volume root"),
             (config_file, "server config file"),
@@ -2117,6 +2135,7 @@ network:
             merge(empty_cli(), FileConfig::default(), EnvConfig::default()).unwrap();
         assert_eq!(addr, "127.0.0.1:8128".parse().unwrap());
         assert_eq!(config.blueprint_dir.unwrap(), default_blueprint_dir());
+        assert_eq!(config.database_path.unwrap(), default_database_path());
         assert_eq!(
             config.session_storage_root.unwrap(),
             default_session_storage_root()
@@ -2379,6 +2398,7 @@ network:
             ("SUBMILLI_PORT", "9100"),
             ("SUBMILLI_BLUEPRINT_DIR", "/env/bp"),
             ("SUBMILLI_SESSION_STORE_DIR", "/env/sessions"),
+            ("SUBMILLI_DATABASE_PATH", "/env/submilli.db"),
             ("SUBMILLI_VFS_SESSION_DIR", "/env/vfs"),
             ("SUBMILLI_VFS_EPHEMERAL_DIR", "/env/scratch"),
             ("SUBMILLI_PACKAGE_STORE_DIR", "/env/packages"),
@@ -2388,6 +2408,7 @@ network:
             port: Some(9000),
             blueprint_dir: Some("/file/bp".into()),
             session_store_dir: Some("/file/sessions".into()),
+            database_path: Some("/file/submilli.db".into()),
             vfs_session_dir: Some("/file/vfs".into()),
             vfs_ephemeral_dir: Some("/file/scratch".into()),
             package_store_dir: Some("/file/packages".into()),
@@ -2399,6 +2420,10 @@ network:
         assert_eq!(
             config.session_store_dir.unwrap(),
             PathBuf::from("/env/sessions")
+        );
+        assert_eq!(
+            config.database_path.unwrap(),
+            PathBuf::from("/env/submilli.db")
         );
         assert_eq!(
             config.session_storage_root.unwrap(),
@@ -2419,15 +2444,21 @@ network:
         let cli = Cli {
             port: Some(7777),
             blueprint_dir: Some("/cli/bp".into()),
+            database_path: Some("/cli/submilli.db".into()),
             ..empty_cli()
         };
         let env = env_from(&[
             ("SUBMILLI_PORT", "9100"),
             ("SUBMILLI_BLUEPRINT_DIR", "/env/bp"),
+            ("SUBMILLI_DATABASE_PATH", "/env/submilli.db"),
         ]);
         let (addr, config) = merge(cli, FileConfig::default(), env).unwrap();
         assert_eq!(addr.port(), 7777);
         assert_eq!(config.blueprint_dir.unwrap(), PathBuf::from("/cli/bp"));
+        assert_eq!(
+            config.database_path.unwrap(),
+            PathBuf::from("/cli/submilli.db")
+        );
     }
 
     #[test]
