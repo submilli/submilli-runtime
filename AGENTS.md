@@ -71,6 +71,25 @@ and cleanup. It applies through CLI, HTTP, MCP, and direct library entry points.
   must distinguish a confirmed policy violation from a demonstrated input-triggered
   failure; an exploit reproducer is not required to remove an explicit panic.
 
+### Accepted idempotency poison exception
+
+The two poisoned-lock `expect` checks in
+[`crates/submilli-server/src/idempotency.rs`](crates/submilli-server/src/idempotency.rs),
+`InFlight::lock` (reservation resolution) and `Coordinator::lock` (in-flight
+claims), are an accepted exception to the no-panic requirement above. Retain
+these checks: poisoning indicates an unexpected panic while a lock was held,
+and the duplicate-execution state may have been only partly updated. Recovery
+of that state is intentionally unsupported; a panic on poisoned access is
+accepted instead.
+
+This exception does not establish that poisoning is impossible or that execution
+is panic-free. Poisoned access during guard cleanup can cause a second panic
+during unwinding and abort the process. The exception covers only these two
+poison checks, including their use by claim/reservation guard cleanup. It does
+not permit a panic that causes the poison, or exempt other locks, stores,
+execution paths, or broader SUB-633 audits. Record these sites as accepted
+exceptions in SUB-633 rather than as removed panics.
+
 ## Code style
 
 - Rust 2024; typed errors in library APIs. `anyhow` is appropriate at the CLI
