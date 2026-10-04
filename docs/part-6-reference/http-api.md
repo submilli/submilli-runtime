@@ -3,7 +3,7 @@ title: "HTTP API"
 description: "The endpoints a harness calls to run programs over HTTP: sessions and their execute, rebind, last-run, and delete; the execute result; the prompt, package, and built-in descriptions; and one-off runs."
 slug: reference/http-api
 sidebar:
-  order: 12
+  order: 13
 ---
 
 This page describes the endpoints of `submilli-server` a harness calls to run
@@ -213,6 +213,7 @@ object.
 
 | Field | Type | Value |
 | --- | --- | --- |
+| `execution_id` | string | The run, as named in the [audit trail](/docs/reference/audit-trail#execution) |
 | `session_id` | string | The session the program ran in |
 | `result` | string or null | What `main` returned: a string as is, any other value as JSON text, `null` for no value or on failure |
 | `console` | string[] | Lines the program logged. Empty after a successful run; on failure, what it logged before it stopped |
@@ -232,6 +233,7 @@ successful run.
 | `timeout` | The run passed `max_execution_time` |
 | `fuel_exhausted` | The run burned `max_execution_fuel` |
 | `memory_exhausted` | The run passed `max_execution_memory` |
+| `stack_exhausted` | The run passed `max_execution_stack` |
 | `package_resolution` | An imported package could not be prepared |
 | `blueprint_not_found` | `POST /v1/execute` only: the blueprint is not registered or not usable |
 | `invalid_request` | `POST /v1/execute` only: variables, secrets, or the `vfs` or `git` paths they fill are invalid |
@@ -239,19 +241,19 @@ successful run.
 Examples, from real runs:
 
 ```json
-{"session_id":"8ef7b6d5-6d80-4849-a2df-cbfee4ebc90d","result":"2","console":[],"error":null}
+{"execution_id":"f0fbcebf-ce95-4df5-ba4b-ba645a09b470","session_id":"3abfead8-1e3c-4be9-b8c7-622f27938d5a","result":"2","console":[],"error":null}
 ```
 
 ```json
-{"session_id":"651aa5e4-ac15-41cf-b4f5-9f75434d450a","result":"{\"label\":\"two\",\"total\":2}","console":[],"error":null}
+{"execution_id":"30ae2b06-c066-43c1-a5be-e3e37ebbeb09","session_id":"876321aa-da28-4d9b-99d9-91c20508d12b","result":"{\"label\":\"two\",\"total\":2}","console":[],"error":null}
 ```
 
 ```json
-{"session_id":"57b2c063-7674-444d-b872-040346bc2514","result":null,"console":["before"],"error":{"kind":"runtime_error","message":"error: Error: boom\n  at main (<execute>:1:73)  [thrown here]\n1 | export function main(): number { console.log(\"before\"); throw new Error(\"boom\"); }\n  |                                                                         ^\n"}}
+{"execution_id":"f3aa2f85-cc80-4725-b603-b321c05ab2c5","session_id":"b7f51b45-6ba9-45f8-ae34-fbfb461dfa06","result":null,"console":["before"],"error":{"kind":"runtime_error","message":"error: Error: boom\n  at main (<execute>:1:73)  [thrown here]\n1 | export function main(): number { console.log(\"before\"); throw new Error(\"boom\"); }\n  |                                                                         ^\n"}}
 ```
 
 ```json
-{"session_id":"7c86c7af-880c-4bbb-adb5-be3927145102","result":null,"console":[],"error":{"kind":"compile_error","message":"error: expected `number`, got `string`\n --> <execute>:1:52\n  |\n1 | export function main(): number { const x: number = \"a\"; return x; }\n  |                                                    ^^^\n","diagnostics":[{"severity":"error","line":1,"column":52,"message":"expected `number`, got `string`"}]}}
+{"execution_id":"704a5868-7459-4c1f-8f5a-8a6d09a6312f","session_id":"3a0f75d1-2d5e-4c3a-a5d8-3ecfbab7015c","result":null,"console":[],"error":{"kind":"compile_error","message":"error: expected `number`, got `string`\n --> <execute>:1:52\n  |\n1 | export function main(): number { const x: number = \"a\"; return x; }\n  |                                                    ^^^\n","diagnostics":[{"severity":"error","line":1,"column":52,"message":"expected `number`, got `string`"}]}}
 ```
 
 ## Blueprint discovery
@@ -360,5 +362,5 @@ unknown blueprint (`error.kind` `blueprint_not_found`) and invalid variables
 or secrets (`error.kind` `invalid_request`):
 
 ```json
-{"session_id":"7c826220-7999-410a-8886-ec618fb04b98","result":null,"console":[],"error":{"kind":"invalid_request","message":"invalid variables: required variable 'userId' was not supplied"}}
+{"execution_id":"06c8d2b3-bd65-4ec5-95c6-92426962ead9","session_id":"de5c829e-6520-4563-86be-9acfa84e900d","result":null,"console":[],"error":{"kind":"invalid_request","message":"invalid variables: required variable 'userId' was not supplied"}}
 ```

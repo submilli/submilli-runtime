@@ -1,6 +1,6 @@
 ---
 title: "Run the server"
-description: "How to run submilli-server for an application: start it, configure its admin and user credentials, keep the server private, put its state on a persistent disk, and turn on the secret store."
+description: "How to run submilli-server for an application: start it, configure its admin and user credentials, keep the server private, put its state on a persistent disk, turn on the secret store, and keep its audit trail."
 slug: server/run-the-server
 sidebar:
   order: 1
@@ -9,7 +9,7 @@ sidebar:
 This guide shows you how to run `submilli-server` for an application:
 start it, configure its admin and user credentials, keep the server
 reachable only by your application, put its state on a persistent disk,
-and turn on the secret store.
+turn on the secret store, and keep its audit trail.
 
 You can configure `submilli-server` through a config file or through
 command-line arguments. This page configures it through the file, named
@@ -265,3 +265,34 @@ customer's own API token for instance, is a `harness:` secret that the
 application supplies when it opens the session; the server keeps it in
 memory only. The [Connect a harness](/docs/tutorials/connect-a-harness)
 tutorials show how an application supplies it.
+
+## Keep an audit trail
+
+The server records what it decided and what changed: every operation a
+program was refused, the operations it was allowed, each run and
+session, every change an admin made, and every request it turned away
+for a bad token. The records are on from the start, written to the same
+output as the log and marked `stream=audit`, so a log collector can
+route them apart. A refused write, from a program that tried to write
+outside its notes:
+
+```text
+ts=2026-10-03T20:02:39.695Z level=info stream=audit target=submilli_server::audit msg=decision blueprint=support blueprint_hash=5a2a1e61c440e6b36c43c60b2eff7ecad0ed7989bf5dee30d486678206a480d0 caller=main capability=fs.write context.length=1 context.path=/etc/passwd decision=deny event_id=4760971b-3dee-412c-9dea-b1d77bcb1420 execution_id=0dfa846a-4483-4b8a-b271-45339daecbaf principal=SUBMILLI_SERVER_TOKEN reason="policy denied the capability" rule=default schema=submilli.audit/1 source=policy type=decision
+```
+
+The record names the run, the blueprint and the exact version of it in
+force, who called, what the program asked for and with which values,
+and the rule that decided, here the blueprint's `default`. To keep the
+trail in a file of its own:
+
+```yaml title="server.yaml (fragment)"
+logging:
+  audit:
+    file: /var/log/submilli/audit.log
+```
+
+Allowed operations are summarized, one record per rule a run used, with
+a count; `allows: all` records each one. [Audit
+trail](/docs/reference/audit-trail) lists every record and its fields,
+and [Server settings](/docs/reference/server-settings#audit-trail) the
+settings.

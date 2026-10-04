@@ -115,7 +115,9 @@ denial is final; what it may reach, in the words the model will see in
 an agent behaves on Submilli: a model told to fetch, filter, and join in
 one program does the work in a few runs instead of a few dozen.
 
-The execute tool answers with three fields:
+The execute tool answers with three fields the model reads, and an
+`execution_id` that names the run in the server's [audit
+trail](/docs/reference/audit-trail), left out here:
 
 ```json
 { "result": "2 charges, 6150 cents", "console": [], "error": null }

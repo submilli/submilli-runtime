@@ -1,6 +1,6 @@
 ---
 title: "Server settings"
-description: "Every submilli-server setting with its config-file key, flag, and SUBMILLI_* variable, the precedence between them, and the tokens, directories, secret store, volumes, outbound network block, limits, telemetry, health, logs, and shutdown they control."
+description: "Every submilli-server setting with its config-file key, flag, and SUBMILLI_* variable, the precedence between them, and the tokens, directories, secret store, volumes, outbound network block, limits, telemetry, health, logs, audit trail, and shutdown they control."
 slug: reference/server-settings
 sidebar:
   order: 9
@@ -61,6 +61,9 @@ flat names listed. A dash means the form doesn't exist.
 | `telemetry` | — | `SUBMILLI_TELEMETRY` | boolean | `false` | Report to the Submilli maintainers. See [`telemetry`](#telemetry). |
 | `telemetry_include_source` | — | `SUBMILLI_TELEMETRY_INCLUDE_SOURCE` | boolean | `false` | Attach failed programs' source to reports. |
 | `logging.file` | `--log-file` | `SUBMILLI_LOG_FILE` | path | standard output | Append server logs to a file. See [Logs](#logs). |
+| `logging.audit.enabled` | — | — | boolean | `true` | Write audit records. See [Audit trail](#audit-trail). |
+| `logging.audit.file` | — | — | path | the log's output | Append audit records to a file of their own. |
+| `logging.audit.allows` | — | — | `summary`, `all`, or `none` | `summary` | How allowed operations are recorded. |
 | `shutdown_grace` | `--shutdown-grace` | `SUBMILLI_SHUTDOWN_GRACE` | seconds | `5` | How long running requests may finish after a stop. See [Shutdown](#shutdown). |
 | — | `--health-check` | — | — | — | Probe a running server and exit. See [Health and status](#health-and-status). |
 
@@ -346,6 +349,29 @@ ts=2026-10-03T15:29:46.963Z level=info stream=log target=submilli_server::execut
 | `memory_peak` | The most memory the run held, in bytes. |
 | `wall_ms` | Elapsed milliseconds. |
 | `outcome` | `ok`, `fuel_exhausted`, `timeout`, `memory_exhausted`, or `error`. |
+
+## Audit trail
+
+The server writes audit records alongside its log, as logfmt lines with
+`stream=audit`. `RUST_LOG` doesn't filter them. They go to the log's
+output, or to `logging.audit.file`, which, like the log file, is
+appended to and reopened on `SIGHUP`.
+
+```yaml title="server.yaml (fragment)"
+logging:
+  audit:
+    file: /var/log/submilli/audit.log
+    allows: summary
+```
+
+`allows` decides how operations a program was allowed are recorded:
+`summary` writes one record per run for each caller, capability, and
+rule, with a count; `all` writes one per operation; `none` writes none.
+Refusals are always recorded one by one.
+
+Writing a record never stops a run: if the output can't be written, the
+server reports it to standard error and keeps serving. [Audit
+trail](/docs/reference/audit-trail) lists every record and its fields.
 
 ## Shutdown
 

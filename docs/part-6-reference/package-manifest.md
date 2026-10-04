@@ -3,7 +3,7 @@ title: "Package manifest"
 description: "A package project: its layout, every key of submilli.toml and the dependency forms, submilli.lock, the doc-comment tags the build reads, the derived capabilities.yaml, docs/readme.md, and the test API of submilli build test."
 slug: reference/package-manifest
 sidebar:
-  order: 10
+  order: 11
 ---
 
 This page describes a package project as `submilli build` reads and writes

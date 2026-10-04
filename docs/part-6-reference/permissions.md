@@ -3,7 +3,7 @@ title: "Permissions"
 description: "How a call is decided, callers, actions, the refusals no rule changes, the capabilities and their fields, the errors when a blueprint is read, and the denials at run time."
 slug: reference/permissions
 sidebar:
-  order: 13
+  order: 14
 ---
 
 This page describes the `permissions` and `default` blocks of a blueprint:
