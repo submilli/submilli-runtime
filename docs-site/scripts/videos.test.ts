@@ -1,13 +1,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
-import { films, introduction, videoSource } from '../src/lib/videos.ts';
+import { films, introduction, videoSource, challenges, previewPath } from '../src/lib/videos.ts';
 import { readChapters } from '../src/lib/agent-docs.ts';
 
 test('unpublished and planned films never produce a production player', () => {
   for (const film of films) assert.equal(videoSource(film), undefined);
   assert.equal(videoSource({ status: 'published', src: 'https://example.com/movie.mp4' }), undefined);
-  for (const src of ['http://example.com/movie.mp4', 'https://localhost/movie.mp4', 'https://127.0.0.1/movie.mp4', 'https://[::1]/movie.mp4', 'https://192.168.0.1/movie.mp4', 'https://user:pass@example.com/movie.mp4', 'not a URL']) {
+  for (const src of ['http://example.com/movie.mp4', 'https://localhost/movie.mp4', 'https://127.0.0.1/movie.mp4', 'https://[::1]/movie.mp4', 'https://[::]/movie.mp4', 'https://[0:0:0:0:0:0:0:1]/movie.mp4', 'https://[0:0:0:0:0:0:0:0]/movie.mp4', 'https://[fc00::1]/movie.mp4', 'https://[fd12::1]/movie.mp4', 'https://[fe80::1]/movie.mp4', 'https://[::ffff:192.168.0.1]/movie.mp4', 'https://192.168.0.1/movie.mp4', 'https://user:pass@example.com/movie.mp4', 'not a URL']) {
     assert.equal(videoSource({ status: 'published', src, publishedVersion: 'v1' }), undefined);
   }
   const preview = '/docs/_video-preview/introduction.mp4';
@@ -52,4 +52,14 @@ test('completed film has valid canonical, transcript and caption destinations', 
     previousEnd = end;
     assert.ok(transcript.includes(lines.join(' ')), lines.join(' '));
   }
+});
+
+test('local preview overrides stay bound to their film identities', () => {
+  const intro = '/docs/_video-preview/introduction.mp4';
+  const challenge = '/docs/_video-preview/challenges.mp4';
+  assert.equal(previewPath(introduction, intro, challenge), intro);
+  assert.equal(previewPath(challenges, intro, challenge), challenge);
+  assert.equal(previewPath(films.find(film => film.id === 'helps')!, intro, challenge), '');
+  assert.equal(challenges.canonicalPath, '/docs/why/#this-code-is-a-stranger');
+  assert.equal(challenges.embedPath, '/docs/videos/embed/challenges/');
 });

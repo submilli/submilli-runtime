@@ -1,0 +1,20 @@
+---
+import { videoSource, previewPath, type Film } from '../lib/videos';
+import VideoPlayer from './VideoPlayer.astro';
+interface Props { film: Film; }
+const { film } = Astro.props;
+const source = videoSource(film, import.meta.env.DEV, previewPath(film, import.meta.env.SUBMILLI_VIDEO_PREVIEW_PATH, import.meta.env.SUBMILLI_CHALLENGES_PREVIEW_PATH));
+const seconds = Math.round(film.durationSeconds ?? 0);
+---
+{source && <figure class="video-introduction" data-video-id={film.id} aria-label={film.title}>
+  <div class="video-heading"><strong>{film.title}</strong><span>{Math.floor(seconds / 60)}:{String(seconds % 60).padStart(2,'0')}</span></div>
+  <div class="video-frame"><VideoPlayer film={film} /></div>
+  <figcaption>{film.description}</figcaption>
+</figure>}
+<style>
+  figure { margin: 0 0 2rem; padding: 1.25rem; border: 1px solid var(--sl-color-hairline); border-radius: 12px; background: var(--sl-color-bg-sidebar); }
+  .video-heading { display: flex; flex-wrap: wrap; gap: .5rem 1rem; justify-content: space-between; }
+  .video-heading span { font-size: .875rem; color: var(--sl-color-gray-2); }
+  .video-frame { margin-top: 1rem; border-radius: 8px; overflow: hidden; }
+  figcaption { font-size: .9375rem; margin-top: 1rem; }
+</style>

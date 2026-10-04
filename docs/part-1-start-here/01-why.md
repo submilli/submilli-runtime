@@ -92,6 +92,8 @@ total, added by a CPU rather than reasoned out token by token.
 
 ## This code is a stranger
 
+<!-- video:challenges -->
+
 Look at what we just agreed to run. That program was written by a model,
 seconds before it executed. No human reviewed it. No CI ran on it. And its
 author is suggestible: to do its job, the agent must *read* things —

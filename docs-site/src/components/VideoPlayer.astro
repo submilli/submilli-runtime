@@ -1,0 +1,22 @@
+---
+import { videoSource, previewPath, type Film } from '../lib/videos';
+interface Props { film: Film; }
+const { film } = Astro.props;
+const source = videoSource(film, import.meta.env.DEV, previewPath(film, import.meta.env.SUBMILLI_VIDEO_PREVIEW_PATH, import.meta.env.SUBMILLI_CHALLENGES_PREVIEW_PATH));
+const captions = import.meta.env.DEV && film.id === 'challenges' && source?.startsWith('/docs/_video-preview/') ? '/docs/_video-preview/challenges.vtt' : film.captionsPath;
+const languageLabel = new Intl.DisplayNames(['en'], { type: 'language' }).of(film.language ?? 'en');
+---
+<div class="player" aria-label={film.title}>
+  {source ? (
+    <video controls playsinline preload="metadata" poster={film.posterPath} aria-label={film.title}>
+      <source src={source} type="video/mp4" />
+      {captions && <track kind="captions" src={captions} srclang={film.language} label={languageLabel} />}
+      Your browser does not support video.
+    </video>
+  ) : <p>Video unavailable.</p>}
+</div>
+<style>
+  .player { width: 100%; aspect-ratio: 16 / 9; background: #131313; overflow: hidden; }
+  video { display: block; width: 100%; height: 100%; object-fit: contain; }
+  p { margin: 0; padding: 1rem; color: #b6b6b6; font: 500 14px/1.5 Nunito,Arial,sans-serif; }
+</style>

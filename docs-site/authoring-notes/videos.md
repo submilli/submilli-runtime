@@ -40,9 +40,9 @@ part of this PR. Never commit the MP4. Once cleared, set `src` to the approved
 HTTPS asset URL, `publishedVersion` to the approved immutable version ID, and
 `status` to `published` in a reviewed change. Verify content
 type, byte-range support and browser playback; the same-origin VTT stays with the
-docs build. Update publication-pending wording in the library and transcript in
-that same change. Until then, production shows the transcript fallback without
-a video request or broken player.
+docs build. Publish the matching captions and transcript in that same reviewed
+change. Until then, public chapters and the library omit unpublished films; the stable
+embed responds with a neutral unavailable message without a video request.
 
 ## Local review
 
@@ -61,12 +61,11 @@ English captions, keyboard access, transcript navigation, mobile width, and them
 ## Companion site and analytics
 
 The separate `submilli-private/website` companion links directly to
-`/docs/videos/`. The docs own the visual gallery, with numbered planned cards and
-a separate transcript page. `IntroductionPlayer.astro` is shared with contextual docs
+`/docs/videos/`. The docs own the video gallery and the separate transcript page. Only films
+with an available reviewed source appear in the viewing flow. `IntroductionPlayer.astro` is shared with contextual docs
 pages and the standalone embed route, keeping source, captions, poster and
-publication state in one registry. Planned films have no play controls or
-invented durations. The original SVG poster uses the approved film's
-tool→program→report motif and brand palette. Verify the docs library route
+publication state in one registry. Unpublished films have no public cards or play controls. Each SVG poster uses
+only a title and one recognizable symbol in the brand palette. Verify the docs library route
 before making the homepage link live. This draft authorizes no deployment.
 
 Analytics impact: new docs routes and site-to-docs links. No new events or player
@@ -104,10 +103,22 @@ The approved introduction remains the 90.688-second original. Inspection of
 `oct4-revision-handoff.json` found no approval replacing that original. The
 four later films have delivered review cuts, with human listening pending.
 Challenges and Helps have newer staged revisions with dirty/missing narration;
-their gallery records say Revision pending. Using and Understanding say In review.
+these records remain internal and are omitted from the public gallery.
 No review cut is used as a public source or described as final. The October 4
 handoff is an editor import of separate catalog versions, not a publish receipt.
 
 Hosting, production ElevenLabs licensing and final listening/review remain
 publication gates. This PR performs no recording, paid generation, asset upload,
 editor-source change or deployment.
+
+Public players keep captions available through native CC controls and leave them off by default. Posters use only the title and a single code-window symbol. Transcript links and production-status messages do not appear in the viewing flow.
+
+The Challenges local review uses `challenges-review.mp4`, 57.322667 seconds,
+SHA-256 `7d0780e70c5e640ace03c611998a3631c0bce3acb23b8694a508c890f352d558`.
+Its figure is inserted after the “This code is a stranger” heading in Why Submilli;
+`/docs/videos/embed/challenges/` is the stable embed endpoint. The local override
+is `SUBMILLI_CHALLENGES_PREVIEW_PATH=/docs/_video-preview/challenges.mp4`;
+matching local captions are `_video-preview/challenges.vtt`, converted from the
+cut's SRT by changing only timestamp separators. Human listening approval remains
+pending. The newer `challenges-payoff-20261004` draft is not used: its revised
+ending has no recorded narration.
