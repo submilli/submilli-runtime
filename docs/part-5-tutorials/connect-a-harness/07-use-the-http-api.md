@@ -9,26 +9,25 @@ sidebar:
 The HTTP API offers the same operations as plain requests. Use it when
 your harness has no MCP client, or when you want to decide which tools
 the model gets and what they are called. The cost is that you build the
-tools yourself, and one thing about them is not yours to write: the
-execute tool's description. It is the text that teaches the model the
-language, with this blueprint's packages and rules filled in, and the
-server publishes it for you to fetch.
+tools yourself. The execute tool's description is not yours to write.
+That text teaches the model the language, with this blueprint's
+packages and rules filled in, and the server publishes it for you to
+fetch.
 
 In this tutorial we will run the research agent on the Vercel AI SDK
-with no MCP client: the tools built on the server's HTTP API, the
-blueprint and the signed-in user, `u_ada` in the examples, fixed in our
-own code, then one real conversation. You need the server and the `research`
+with tools built on the server's HTTP API, and the blueprint and the
+signed-in user (`u_ada` in the examples) fixed in our own code. You need the server and the `research`
 blueprint from [Connect a harness](/docs/tutorials/connect-a-harness),
 with `SUBMILLI_SERVER_TOKEN` still exported, Node.js 20 or later, and a
 key from your model provider for the conversation. The agent file
-imports `@ai-sdk/anthropic`; for Google or OpenAI, `@ai-sdk/google` or
+imports `@ai-sdk/anthropic`. For Google or OpenAI, `@ai-sdk/google` or
 `@ai-sdk/openai` takes its place, with that provider's key in the
 environment.
 
 ## Start the project
 
 In `harnesses`, make a directory for this harness and install the
-dependencies; the files use top-level `await`, hence `type=module`. The
+dependencies. The files use top-level `await`, hence `type=module`. The
 full project is
 [`examples/harnesses/vercel-ai-sdk-http/`](https://github.com/submilli/submilli-runtime/tree/main/examples/harnesses/vercel-ai-sdk-http).
 
@@ -43,7 +42,7 @@ npm install --save-dev tsx typescript @types/node
 ## The agent
 
 The agent looks like the ones on the other pages, with `openSession` in
-place of an MCP client. Save it as `agent.ts`; it reads the brief from
+place of an MCP client. Save it as `agent.ts`. It reads the brief from
 `../prompt.txt`:
 
 ```typescript title="agent.ts"
@@ -98,7 +97,7 @@ if (import.meta.filename === process.argv[1]) {
 }
 ```
 
-`stopWhen` matters: the SDK stops after one step by default, which would
+`stopWhen` matters, because the SDK stops after one step by default, which would
 end the run on the tool call, before the model has seen the result. The
 example is written for version 7 of the SDK.
 
@@ -106,9 +105,9 @@ example is written for version 7 of the SDK.
 
 `openSession` is the part you write. It makes two requests, then builds
 six tools, one for each of the MCP tools the HTTP API can serve. Watch
-the first request, `GET /v1/blueprints/research/prompt`: its answer is
+the first request, `GET /v1/blueprints/research/prompt`. Its answer is
 the execute tool's description, and the descriptions of the other five.
-Over MCP the server hands these to the harness; over HTTP you fetch them
+Over MCP the server hands these to the harness. Over HTTP you fetch them
 and pass them through unchanged:
 
 ```typescript title="submilli.ts"
@@ -233,29 +232,28 @@ async function json(response: Response): Promise<any> {
 ```
 
 Notice `description: describe.prompt` on the execute tool. That text is
-the model's whole instruction in the language: the subset of TypeScript
-it may write, the modules this blueprint lets it import, its filesystem
-and hosts, and what to do with a denial. Write your own description
+all the model is told about the language. It covers the subset of
+TypeScript it may write, the modules this blueprint lets it import, its
+filesystem and hosts, and what to do with a denial. Write your own description
 there and the model writes Node.js, imports packages the blueprint
 doesn't list, and retries denials. Fetch it from the server, per
 blueprint, and never cache it across blueprint changes. The second
-request opens the session. That is where the blueprint
-and the variables are fixed, the step the address and the header perform
-over MCP. A missing variable is refused there with HTTP 400, and an
+request opens the session and fixes the blueprint and the variables,
+the step the address and the header perform over MCP. A missing variable is refused there with HTTP 400, and an
 unknown blueprint with 404.
 
-Notice the execute tool's schema: `code`, and nothing else. The model
+Notice the execute tool's schema. It takes `code` and nothing else. The model
 fills in the arguments of a tool, so an argument named `blueprint` or
 `userId` would hand the model that choice. Keep both in your own code, as
 here.
 
 A failed program still answers HTTP 200, with `error` set as it is over
-MCP and the session's id beside it. Only a request the server can't act
+MCP and the session's id beside it. A request the server can't act
 on, such as an unknown session, gets an error status.
 
 | Request | Serves |
 | --- | --- |
-| `POST /v1/sessions` | Opens a session; takes `blueprint`, `variables`, `secrets` |
+| `POST /v1/sessions` | Opens a session. Takes `blueprint`, `variables`, `secrets` |
 | `POST /v1/sessions/{id}/execute` | Runs `code` in the session |
 | `GET /v1/sessions/{id}/last-run` | The last run, with its logs |
 | `DELETE /v1/sessions/{id}` | Ends the session |
@@ -275,7 +273,7 @@ request that opens the session, beside the variables:
 Over MCP the same object goes base64url-encoded in a `submilli-secrets`
 header. A session opened without a required secret is refused with HTTP
 400. The server keeps these values in memory only, so a session outlives
-a server restart but its secrets don't: a program then answers HTTP 409
+a server restart but its secrets don't. A program then answers HTTP 409
 with `session_requires_secrets` until the harness supplies them again,
 with `POST /v1/sessions/{id}/rebind`, or over MCP a new connection.
 
@@ -294,7 +292,7 @@ ANTHROPIC_API_KEY=... npx tsx agent.ts
 This is one real run, with Claude Sonnet 5 as the model, made after the
 Mastra and deepagents tutorials' agents had answered the same question
 for the same user. The model's programs are its own, and another run
-writes different ones; its first working program read today's date and the
+writes different ones. Its first working program read today's date and the
 notes already in `/notes`, and the answer ended:
 
 ```text
@@ -304,8 +302,8 @@ Saved/updated note: `/notes/rust-latest-release.md`, which already had this from
 The note is a file on the server's volume, there for the next
 conversation `u_ada` opens, on this harness or any other.
 
-You have the research agent running on the Vercel AI SDK with tools of
-your own on the HTTP API, the blueprint and the user fixed where the
+You have the research agent running on the Vercel AI SDK with your own
+tools on the HTTP API, the blueprint and the user fixed where the
 model can't reach them, and the binding proved on the index before
 any model was involved. Project:
 [`examples/harnesses/vercel-ai-sdk-http/`](https://github.com/submilli/submilli-runtime/tree/main/examples/harnesses/vercel-ai-sdk-http).

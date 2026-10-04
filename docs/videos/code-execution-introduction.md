@@ -6,34 +6,6 @@ prev: false
 next: false
 ---
 
-[Why Submilli](/docs/why/) is this film’s home. The video is 1 minute 35 seconds (95.488 seconds), in English.
+The current film is maintained independently. [Watch Why agents execute code](https://submilli-videos.onrender.com/watch/why-code/).
 
-The failed-payment workflow is illustrative. The research results at the end concern different tasks and are not a benchmark of Submilli.
-
-## 0:00 — Investigating payment failures
-
-Consider an agent used by a small business. The agent is asked to summarize yesterday's failed payments.
-
-## 0:08 — Tool calls, context and inference
-
-The agent uses external tools such as APIs or MCPs to fetch failed payments, identify the affected accounts, and retrieve relevant support tickets. Each result returns to the model before it can choose the next request. That adds inference work and makes the next request wait.
-
-## 0:29 — Managing model rounds
-
-In this sequence, three requests and a final interpretation take four model rounds.
-
-## 0:36 — Coordinating with code
-
-Instead of sequential tool calling, the model may write a program that calls the three tools. Inside the program, it totals the failed payments, identifies the impacted accounts, and links them to three support tickets - without another model round.
-
-## 0:52 — Delivering clear insights
-
-The program returns the final report. The model provides the requested summary, financial impact, and customer list while keeping raw records separate from the primary output.
-
-## 1:05 — Efficiency comparison
-
-The process is reduced from four model rounds to two. Routine work runs as code, maintaining a smaller, more focused conversation context.
-
-## 1:16 — Code execution in the agent stack
-
-Anthropic demonstrated lower context use. CodeAct improved task success. Cloudflare built a compact interface to thousands of API endpoints. These results help explain why code execution is becoming part of the agent stack.
+The narration and timing are maintained with the independently published film. This page intentionally contains no copied transcript that could become stale.

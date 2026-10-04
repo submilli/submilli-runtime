@@ -34,7 +34,7 @@ ts=2026-10-03T20:02:39.647Z level=info stream=audit target=submilli_server::audi
 | `schema` | `submilli.audit/1`. A field added keeps the version; a field renamed or removed changes it |
 
 After the first five keys the fields are in alphabetical order. A
-nested value is flattened into dotted keys, and a list by position:
+nested value is flattened into dotted keys, and a list by position, as in
 `vars.0.name=customerId vars.0.value=cus_northwind`. The selected
 quick-search `context.*` text fields are cut at 512 characters, and a
 URL loses its user, password, query string, and fragment. The full
@@ -51,7 +51,7 @@ ts=2026-10-04T05:44:32.121Z level=info stream=audit target=submilli_server::audi
 
 | Field | Value |
 | --- | --- |
-| `execution_id` | The run that asked; absent for the MCP file tools, which read a session's files outside a run |
+| `execution_id` | The run that asked. Absent for the MCP file tools, which read a session's files outside a run |
 | `session_id` | The session, when there is one |
 | `blueprint`, `blueprint_hash` | The blueprint, and a SHA-256 of the version in force |
 | `principal` | The name of the API token the request carried |
@@ -61,13 +61,13 @@ ts=2026-10-04T05:44:32.121Z level=info stream=audit target=submilli_server::audi
 | `decision` | `allow` or `deny` |
 | `source` | What decided: `policy`, the blueprint's rules; `invariant`, a refusal no rule can change, such as `secrets.get` from `main`; `read_only`, a write into a read-only volume; `egress_guard`, the block on private addresses; `quota`, a model-token or session-state budget |
 | `rule` | The rule that decided, by its position in the caller's list from `0`, or `default` |
-| `reason` | Why it was refused; refusals only |
+| `reason` | Why it was refused, on refusals only |
 
 `context.payload_json` is the complete JSON context passed to the policy
 check, serialized as one logfmt text value. Parse that value as JSON to
 recover objects, arrays, numbers, booleans, and nulls. It is written for
 package `check()` calls and built-in operations alike, including refusals.
-It is not redacted or shortened: package authors and operators should treat
+It is not redacted or shortened, so package authors and operators should treat
 the audit destination as a store of the data passed to permission checks.
 An encoded audit record over 1 MiB is rejected in full, reported to
 standard error, and does not stop the program.
@@ -98,8 +98,8 @@ ts=2026-10-04T05:44:32.155Z level=info stream=audit target=submilli_server::audi
 | Field | Value |
 | --- | --- |
 | `count` | How many operations the record stands for |
-| `contexts.*` | Distinct contexts, each numbered from `0`; each includes `payload_json` |
-| `summary_overflow` | `true` when the summary count, context count, or encoded size limit is reached; further distinct operations are written one by one |
+| `contexts.*` | Distinct contexts numbered from `0`, each including `payload_json` |
+| `summary_overflow` | `true` when the summary count, context count, or encoded size limit is reached. Further distinct operations are written one by one |
 
 ## `execution`
 
@@ -113,13 +113,13 @@ ts=2026-10-03T20:02:39.695Z level=info stream=audit target=submilli_server::audi
 
 | Field | Value |
 | --- | --- |
-| `execution_id` | The run; the execute response carries the same ID |
+| `execution_id` | The run. The execute response carries the same ID |
 | `entry_point` | `http`, a one-off `POST /v1/execute`; `session`, a session's execute endpoint; `mcp`, the MCP execute tool |
 | `session_id` | The session, when there is one |
 | `principal` | The name of the API token |
 | `blueprint`, `blueprint_hash` | The blueprint, and a SHA-256 of the version in force |
-| `vars.*` | The variables bound for the run, each a `name` and a `value`; a value is `[redacted]` when the name contains `secret`, `token`, `password`, `credential`, `authorization`, or `api_key` |
-| `source_hash`, `source_size` | A SHA-256 of the program's source, and its length in bytes; never the source |
+| `vars.*` | The variables bound for the run, each a `name` and a `value`. A value is `[redacted]` when the name contains `secret`, `token`, `password`, `credential`, `authorization`, or `api_key` |
+| `source_hash`, `source_size` | A SHA-256 of the program's source and its length in bytes, never the source |
 
 `event=finished` adds:
 
@@ -178,7 +178,7 @@ Every `admin` record has:
 | `blueprint_created` | `POST /v1/blueprints`, or `PUT /v1/blueprints/{name}` for a name the server didn't hold | `name`, `new_hash`, `old_hash` |
 | `blueprint_replaced` | `PUT /v1/blueprints/{name}` for a name it held | `name`, `new_hash`, `old_hash` |
 | `blueprint_deleted` | `DELETE /v1/blueprints/{name}` | `name`, `old_hash` |
-| `secret_put` | `POST /v1/secrets` | `key`; never the value |
+| `secret_put` | `POST /v1/secrets` | `key`, never the value |
 | `secret_deleted` | `DELETE /v1/secrets/{key}` | `key` |
 | `package_installed` | `POST /v1/packages/install` | `packages.*`, each a `name`, `version`, and `digest` |
 | `package_removed` | `DELETE /v1/packages/{name}` | `name`, `version`, `digest` |
@@ -187,7 +187,7 @@ Every `admin` record has:
 | `oauth_code_exchanged` | `POST /v1/mcp/{blueprint}/{server}/oauth/exchange` | `blueprint`, `server` |
 | `shutdown_requested` | `POST /v1/shutdown` | |
 
-`new_hash` and `old_hash` are SHA-256s of the blueprint; `old_hash` is
+`new_hash` and `old_hash` are SHA-256s of the blueprint. `old_hash` is
 `null` when there was none.
 
 ## `auth`

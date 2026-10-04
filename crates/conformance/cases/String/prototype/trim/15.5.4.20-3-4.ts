@@ -1,5 +1,4 @@
 // test262: test/built-ins/String/prototype/trim/15.5.4.20-3-4.js
-// expect-fail: trim should strip U+FEFF (ZWNBSP is ECMA WhiteSpace); the Unicode White_Space set used by the host leaves it in place
 
 function main(): void {
   const lineTerminatorsStr = "\u000A\u000D\u2028\u2029";

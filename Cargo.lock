@@ -963,7 +963,7 @@ dependencies = [
 
 [[package]]
 name = "conformance"
-version = "0.1.6"
+version = "0.2.0"
 dependencies = [
  "interpreter",
  "submilli-wasm",
@@ -3048,7 +3048,7 @@ dependencies = [
 
 [[package]]
 name = "interpreter"
-version = "0.1.6"
+version = "0.2.0"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
@@ -4935,7 +4935,7 @@ checksum = "7da8b5736845d9f2fcb837ea5d9e2628564b3b043a70948a3f0b778838c5fb4f"
 
 [[package]]
 name = "submilli"
-version = "0.1.6"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -4966,7 +4966,7 @@ dependencies = [
 
 [[package]]
 name = "submilli-blueprint"
-version = "0.1.6"
+version = "0.2.0"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
@@ -4981,7 +4981,7 @@ dependencies = [
 
 [[package]]
 name = "submilli-build"
-version = "0.1.6"
+version = "0.2.0"
 dependencies = [
  "interpreter",
  "serde",
@@ -4994,7 +4994,7 @@ dependencies = [
 
 [[package]]
 name = "submilli-server"
-version = "0.1.6"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -5037,7 +5037,7 @@ dependencies = [
 
 [[package]]
 name = "submilli-shared"
-version = "0.1.6"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "async-trait",

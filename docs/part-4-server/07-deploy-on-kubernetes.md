@@ -13,22 +13,25 @@ If your application runs on Kubernetes, the server runs in the same
 cluster, installed with the Helm chart, as a Service your application
 reaches by name.
 
-This guide shows you how to deploy it with the chart: install it, give
-your application its token, let your application in through the network
-policy, turn on HTTPS, store secrets and register blueprints, allow an internal service,
-size memory, and choose storage before the first install. The chart's
+This guide shows you how to deploy it with the chart. The chart's
 [README](https://github.com/submilli/submilli-runtime/tree/main/charts/submilli)
 is the reference for every value.
 
 ## Install it
 
+The chart is included in the source repository and is not published to an
+OCI registry. Check out the runtime release to pin both the chart and its
+default image:
+
 ```sh
-helm install submilli oci://ghcr.io/submilli/charts/submilli -f values.yaml
+git clone --branch v0.2.0 --depth 1 https://github.com/submilli/submilli-runtime.git
+cd submilli-runtime
+helm install submilli ./charts/submilli -f values.yaml
 ```
 
-`values.yaml` holds your settings; the sections below build it up, and an
-empty file is a valid start. Add `--version` to pin a chart version, so
-upgrades happen when you choose them. This gives you one server pod, a
+`values.yaml` holds your settings. The sections below build it up, and an
+empty file is a valid start. Create it in the checkout before installing.
+Chart 0.3.3 deploys runtime 0.2.0. This gives you one server pod, a
 Service called `submilli`, a persistent volume for its state, an
 encrypted secret store with its key in a Secret, and a network policy
 that lets nothing reach it yet.
@@ -49,10 +52,10 @@ env:
 ```
 
 The admin token is under `admin-token` in the same Secret, for the
-`submilli server` commands; [Connect the
+`submilli server` commands. [Connect the
 CLI](/docs/server/connect-the-cli) reads it into a file. With Argo
 CD, or any pipeline that applies `helm template` output, create the
-Secret yourself and name it in `auth.existingSecret`: rendered without
+Secret yourself and name it in `auth.existingSecret`. Rendered without
 access to the cluster, the chart would generate new tokens on every sync.
 
 ## Let your application in
@@ -76,12 +79,12 @@ namespace". Written as two separate items, it would mean "any pod in this
 namespace, or any pod with this label anywhere", which is much wider.
 Your application then calls `http://submilli.<namespace>.svc:8128`. An
 application that connects over MCP needs the server to accept that name
-as a `Host` header, and the chart arranges it: the Service's short and
+as a `Host` header, and the chart arranges it. It writes the Service's short and
 namespace-qualified names, each pod's headless name, and any Ingress
-host are written into the server's `mcp_allowed_hosts`. A name the chart
+host into the server's `mcp_allowed_hosts`. A name the chart
 can't know, such as one under a cluster DNS suffix other than
 `cluster.local`, goes under `config:`, which passes settings to the
-server's config file in the server's own names and here extends the
+server's config file under the server's setting names and here extends the
 generated list:
 
 ```yaml title="values.yaml"
@@ -92,22 +95,22 @@ config:
 
 The policy has three limits worth knowing:
 
-- **Your cluster has to enforce it.** A NetworkPolicy is only a request;
-  the cluster's network plugin enforces it, and some don't. Where it
+- Your cluster has to enforce it. A NetworkPolicy is a request, and
+  the cluster's network plugin enforces it. Some plugins don't. Where it
   isn't enforced, nothing warns you. `helm test submilli` checks this
-  directly: it starts a pod that shouldn't get through and fails if it
+  directly. It starts a pod that shouldn't get through and fails if it
   does.
-- **It admits pods, not requests.** What an admitted pod may call is up
+- The policy admits pods. What an admitted pod may call is up
   to the token it holds.
-- **`kubectl port-forward` is a separate way in.** It's handy for
+- `kubectl port-forward` is a separate way in. It's handy for
   debugging, and it's worth deciding who on your team should have that
   permission.
 
 ## Enable HTTPS
 
 Inside the cluster, the API token travels between your application's
-pod and the server's over the cluster network. Turn HTTPS on when that
-network isn't one you trust: shared with other teams, or crossing nodes
+pod and the server's over the cluster network. Turn HTTPS on when you don't trust that
+network, for example when it is shared with other teams or crosses nodes
 without encryption.
 
 The chart reads the certificate chain and its private key, in PEM, from
@@ -127,7 +130,7 @@ kubectl create secret tls submilli-tls --cert=server.crt --key=server.key
 ```
 
 Adjust names for your release, namespace, and cluster DNS suffix. Create the
-Secret in the server's namespace; for a private issuer, include its chain in
+Secret in the server's namespace. For a private issuer, include its chain in
 `server.crt`. Add to `values.yaml`:
 
 ```yaml title="values.yaml"
@@ -139,7 +142,7 @@ tls:
 Apply the values:
 
 ```sh
-helm upgrade submilli oci://ghcr.io/submilli/charts/submilli -f values.yaml
+helm upgrade submilli ./charts/submilli -f values.yaml
 ```
 
 Clients now use `https://submilli.<namespace>.svc:8128`. The probes and
@@ -155,7 +158,7 @@ does. Node adds the file to the authorities it already trusts with
 export NODE_EXTRA_CA_CERTS=$PWD/server.crt
 ```
 
-Python's `SSL_CERT_FILE` replaces those authorities instead, so a
+Python's `SSL_CERT_FILE` replaces those authorities, so a
 Python application that also calls its model provider over HTTPS needs a
 bundle that holds both:
 
@@ -192,7 +195,7 @@ Other controllers have their own setting for the backend's protocol.
 The server's secret store is on from the first install. The chart
 generates its 32-byte key into a Secret named `submilli-secret-store`,
 reuses it on every upgrade, and keeps it when the release is
-uninstalled, like the volume. Back up the two together: a volume
+uninstalled, like the volume. Back up the two together. A volume
 restored without its key can't give its secrets back, and a key without
 the volume has nothing to open.
 
@@ -215,20 +218,20 @@ Added blueprint 'support'
 
 A deploy job does the same with the admin token in its secrets, as
 [Manage blueprints in Git](/docs/tutorials/manage-blueprints-in-git)
-builds; what registration checks, and how to replace or remove a
-blueprint, is [Register a
-blueprint](/docs/server/register-a-blueprint). For a package in a
-private repository the server needs a GitHub token from a Secret; refer
+builds. [Register a
+blueprint](/docs/server/register-a-blueprint) covers what registration
+checks and how to replace or remove a blueprint. For a package in a
+private repository the server needs a GitHub token from a Secret. Refer
 to [Install private packages](/docs/server/install-private-packages).
 
 With Argo CD, or any pipeline that renders the chart without the cluster,
-the key needs the same treatment as the tokens: create the Secret
+the key needs the same treatment as the tokens. Create the Secret
 yourself, holding the output of `head -c 32 /dev/urandom | base64` under
 the key `key`, and name it in `secretStore.existingSecret`, or the chart
 would generate a different key on every sync and lock the store.
 
 Run `helm test submilli` after every install and upgrade. It registers a
-small blueprint of its own through the API, runs a program under it, and
+small test blueprint through the API, runs a program under it, and
 removes it when it is done.
 
 ## Allow an internal service
@@ -250,12 +253,12 @@ config:
 ```
 
 Programs keep calling the service by name
-(`http://inventory.internal.svc/`); the server checks the address the
+(`http://inventory.internal.svc/`). The server checks the address the
 name resolves to. A Service keeps its cluster IP until it's deleted, so
-allow that one address rather than the cluster's whole Service range.
+allow that one address rather than the cluster's Service range.
 
-The chart's NetworkPolicy only controls who can call the server, not what
-the server calls. The address check above is what limits outbound calls.
+The chart's NetworkPolicy controls who can call the server, and the
+address check above limits what the server calls.
 
 ## Size memory
 
@@ -270,10 +273,10 @@ pod memory = 128 Mi + 16 × maxMemoryMB    (928 Mi at the defaults)
 The multiplier is large because the limit counts memory a program holds,
 not memory the process uses on the way. One execution near its limit has
 been measured at more than 12 times that in process memory, all released
-when it finishes. The formula covers one such execution at a time;
-several at once can use more, so if your programs handle large data,
-measure your own peak. Other limits go under `config:`, in the server's
-own names; [Set limits](/docs/server/set-limits) chooses them.
+when it finishes. The formula covers one such execution at a time.
+Several at once can use more, so if your programs handle large data,
+measure your own peak. Other limits go under `config:`, under the server's
+setting names. [Set limits](/docs/server/set-limits) chooses them.
 
 ## Choose storage before the first install
 
@@ -286,15 +289,15 @@ claim.
 
 The chart runs the server as a StatefulSet, and its volume uses the
 `ReadWriteOncePod` access mode (Kubernetes 1.29 and later). Both exist
-for the same reason: the server's stores assume one process at a time,
-and the chart makes sure only one pod ever writes to a volume. On an
+for the same reason. The server's stores assume one process at a time,
+and the chart makes sure only one pod writes to a volume. On an
 older cluster, set `persistence.accessMode: ReadWriteOnce`.
 
 Access mode, storage class, and size are fixed when the claim is created,
 and `helm upgrade` can't change them, so choose them before installing.
 
-`replicaCount` above 1 gives you several independent servers, not one
-bigger server: anything done over the API (registered blueprints,
+`replicaCount` above 1 gives you several independent servers. Anything
+done over the API (registered blueprints,
 sessions, packages, secrets) lands only on the pod that handled it. A
 client that opens a session has to keep talking to the same pod, through
 the headless Service:
@@ -307,8 +310,11 @@ Leave it at 1 unless your application does that.
 
 ## Upgrade and back up
 
+Check out the source at the next published release tag, review its migration
+instructions, and apply the chart from that checkout:
+
 ```sh
-helm upgrade submilli oci://ghcr.io/submilli/charts/submilli -f values.yaml --version <new version>
+helm upgrade submilli ./charts/submilli -f values.yaml
 ```
 
 Each chart version deploys a matching server version unless you set

@@ -23,7 +23,7 @@ path == "/${vars.userId}" or path glob "/${vars.userId}/*"
 ```
 
 A comparison is a field name, an operator, and a value, in that order. The
-value is a literal or a variable; it is never another field.
+value is a literal or a variable. It is never another field.
 
 ## Operators
 
@@ -38,26 +38,26 @@ value is a literal or a variable; it is never another field.
 
 In a `glob` pattern, `*` stands for any run of characters, including none,
 `?` for exactly one, and `\` makes the next character literal. `*` crosses
-`/`: `path glob "/notes/*"` matches `/notes/2026/a.md`. Matching is
+`/`, so `path glob "/notes/*"` matches `/notes/2026/a.md`. Matching is
 case-sensitive, and `[` has no special meaning.
 
 `matches` uses the syntax of Rust's `regex` crate, which has no
 backreferences or lookaround. It succeeds when the expression matches
-anywhere in the field: `host matches "internal"` matches
+anywhere in the field, so `host matches "internal"` matches
 `api.internal.example.com`. Write `^` and `$` around the expression to match
 the whole field.
 
 ## Combining conditions
 
 Conditions combine with `and`, `or`, and `not`. `not` binds tightest, then
-`and`, then `or`; parentheses group. `a or b and not c` reads as
+`and`, then `or`, and parentheses group. `a or b and not c` reads as
 `a or (b and (not c))`.
 
 ## Literals
 
 | Literal | Form |
 | --- | --- |
-| String | Double quotes. `\"`, `\\`, `\n`, `\t`, and `\r` are escapes; any other `\` is kept with the character after it. |
+| String | Double quotes. `\"`, `\\`, `\n`, `\t`, and `\r` are escapes. Any other `\` is kept with the character after it. |
 | Number | Digits with an optional leading `-`, decimal point, and exponent: `500`, `-1`, `2.5`, `1e6`. |
 | Boolean | `true`, `false` |
 | Null | `null`, with `==` and `!=` only |
@@ -79,13 +79,13 @@ under `variables:`. `NAME` holds letters, digits, `_`, and `-`.
   sits inside a quoted string, as in `path glob "/users/${vars.userId}/*"`.
 - A variable's value is a string. Standing alone beside a number field it is
   read as a number, and beside a boolean field as `true` or `false`.
-- Inside a quoted string it takes the place of its text: with `==`, `!=`,
-  and `contains` the result is compared as a string; inside a `glob` pattern
+- Inside a quoted string it takes the place of its text. With `==`, `!=`,
+  and `contains` the result is compared as a string. Inside a `glob` pattern
   the value is taken literally, so a value of `*` matches an asterisk and
   can't widen the pattern.
 - `matches` doesn't take variables.
 - A session supplies the values when it opens. A variable the session
-  doesn't supply, or supplies empty, takes its `default`; without one it has
+  doesn't supply, or supplies empty, takes its `default`. Without one it has
   no value.
 
 ## How a filter is evaluated
@@ -107,7 +107,7 @@ no `owner`, while `owner != "ops"` is false for it.
 
 A filter tests the fields of the operation's context. The fields each
 capability reports, and their types, are listed under
-[Capabilities](/docs/reference/permissions#capabilities); some fields are
+[Capabilities](/docs/reference/permissions#capabilities). Some fields are
 [normalized](/docs/reference/permissions#normalized-fields) before a rule
 sees them, and [some are reported by only some calls](/docs/reference/permissions#fields-only-some-calls-report).
 `submilli blueprint capability list` prints them for a blueprint.
@@ -126,5 +126,5 @@ by the server when it registers the blueprint, and by
 | A variable the blueprint doesn't declare | `filter references undeclared variable '${vars.customer}'` |
 
 A filter that tests a field the capability doesn't report is an error in
-`submilli blueprint lint` and at registration; it is listed with the other
+`submilli blueprint lint` and at registration. It is listed with the other
 [errors when the blueprint is read](/docs/reference/permissions#errors-when-the-blueprint-is-read).

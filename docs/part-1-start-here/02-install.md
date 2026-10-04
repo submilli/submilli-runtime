@@ -38,7 +38,7 @@ submilli --version
 ```
 
 ```text
-submilli 0.1.6
+submilli 0.2.0
 ```
 
 ```
@@ -101,7 +101,7 @@ test them, and connect your agent harness. Choose your assistant:
 | Cursor | `submilli skill install --agent cursor` | `~/.cursor/skills/submilli` |
 
 Add `--project .` to install into the current project instead of your home
-directory; commit the installed folder to share it with your team. Restart
+directory, and commit the installed folder to share it with your team. Restart
 your assistant afterwards, then invoke the skill: `/submilli` in Claude Code,
 `$submilli` in Codex, or ask "Help me adopt Submilli in this project."
 

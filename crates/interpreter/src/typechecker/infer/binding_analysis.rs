@@ -94,9 +94,6 @@ fn visit_stmt(ast: &Ast, id: StmtId, out: &mut Analysis) -> Result<(), CompilerF
         } => {
             // At the top level there is no scope, and the function is no closure.
             let declaring_scope = out.scopes.len().checked_sub(1);
-            if declaring_scope.is_some() && out.function_depth == 0 {
-                out.reject_top_level_block_function(name);
-            }
             if let Some(scope) = declaring_scope {
                 out.nested_functions.push((name.span, scope));
             }
@@ -489,21 +486,6 @@ impl Analysis {
             );
         }
         Some(binding)
-    }
-
-    /// A closure in a top-level block can't yet capture that block's bindings
-    /// (SUB-1070), which a function declared there nearly always needs, even
-    /// just to call itself.
-    fn reject_top_level_block_function(&mut self, name: &Ident) {
-        self.diagnostics.push(Diagnostic {
-            severity: Severity::Error,
-            span: name.span,
-            message: "a function can't be declared in a top-level block yet".to_string(),
-            help: vec![
-                "declare it at the top level of the module, or inside a function".to_string(),
-            ],
-            notes: Vec::new(),
-        });
     }
 
     fn note_capture(&mut self, scope: usize, local: Ident) {

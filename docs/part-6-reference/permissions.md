@@ -6,8 +6,8 @@ sidebar:
   order: 15
 ---
 
-This page describes the `permissions` and `default` blocks of a blueprint:
-how a gated operation is decided, the capabilities and their fields, and
+This page describes how the `permissions` and `default` blocks of a
+blueprint decide a gated operation, the capabilities and their fields, and
 the errors and denials a rule produces. A rule's `filter` is written in the
 [filter language](/docs/reference/filter-language).
 
@@ -37,8 +37,8 @@ top. The first rule whose `capability` equals the operation's and whose
 `filter`, if any, is true decides. If none matches, or the caller has no
 list, `default` decides.
 
-Names are matched exactly, with no wildcards: a rule for `fs.write` doesn't
-match `fs.mkdir`. A rule without a filter matches every use of its
+Names are matched exactly, with no wildcards, so a rule for `fs.write`
+doesn't match `fs.mkdir`. A rule without a filter matches every use of its
 capability.
 
 | Field | Type | Required | Meaning |
@@ -71,7 +71,7 @@ The caller is the code that is running, not anything the program passes. A
 standard-library operation is attributed to the code that calls it, so a
 package's HTTP request is judged under the package's list. An operation a
 package checks with `check` is attributed to the code that called the
-package: a program calling `listCharges` is judged under `main` for
+package. A program calling `listCharges` is judged under `main` for
 `acme.com/charges.list`, and the request the package then sends under
 `'@acme/billing'`. A package with no list may do only what `default` allows.
 
@@ -94,7 +94,7 @@ These are refused before the rules are read, whatever `default` says:
 `submilli blueprint capability list` prints every capability a blueprint can
 use, with its fields and the rules written for it.
 
-A field is a `string`, a `number`, or a `boolean`; a package field may also
+A field is a `string`, a `number`, or a `boolean`. A package field may also
 be an object, whose members a filter names with a dot.
 
 ### Fields only some calls report
@@ -116,14 +116,14 @@ missing field is false.
 
 | Field | Capabilities | A rule sees |
 | --- | --- | --- |
-| `path`, `from`, `to`, `vfs_path` | `fs.*`, `git.*`, `http.download` | The absolute path, resolved against the working directory, with `.` and `..` resolved: `/notes/../secrets.txt` is `/secrets.txt` |
-| `host` | `http.*` | The host without port or trailing dot: `https://api.example.com./` is `api.example.com` |
-| `remote` | `git.clone`, `git.fetch` | The full HTTPS URL, host in lowercase, default port removed: `https://GitHub.com:443/acme/./project.git` is `https://github.com/acme/project.git` |
+| `path`, `from`, `to`, `vfs_path` | `fs.*`, `git.*`, `http.download` | The absolute path, resolved against the working directory, with `.` and `..` resolved (`/notes/../secrets.txt` is `/secrets.txt`) |
+| `host` | `http.*` | The host without port or trailing dot (`https://api.example.com./` is `api.example.com`) |
+| `remote` | `git.clone`, `git.fetch` | The full HTTPS URL, host in lowercase, default port removed (`https://GitHub.com:443/acme/./project.git` is `https://github.com/acme/project.git`) |
 
 ### Checks some operations make
 
 - **Git:** `git.clone` and `git.fetch` are checked with the branch the call
-  names, then once for each branch fetched; a call that names none is
+  names, then once for each branch fetched. A call that names none is
   checked with `branch` set to `""`, so a rule testing `branch` matches only
   calls that name it. `git.clone` needs no `git.init` or `fs.*` rule.
   Reading history, staging, and branching aren't gated.
@@ -131,11 +131,11 @@ missing field is false.
   new URL's `host` and `path`, under the same caller. A redirect that turns
   the request into a `GET` is checked as `http.get`.
 - **Models:** `prompt_count` is `1` for `call` and the number of prompts for
-  `batch`; the prompt text is never in the context. `models()` lists only
+  `batch`. The prompt text is never in the context. `models()` lists only
   the models a rule allows.
 - **Session state:** `session.list` is checked with `prefix`, and each key it
-  would return as `session.read`; a refused key is left out.
-- **MCP tools:** the tool is a field, not part of the name: write
+  would return as `session.read`. A refused key is left out.
+- **MCP tools:** the tool is a field, not part of the name. Write
   `capability: mcp.linear` with `filter: tool == "save_issue"`.
 
 <!-- generated:capabilities -->
@@ -180,7 +180,7 @@ missing field is false.
 
 | Capability | Fields | Operation | Example filter |
 | --- | --- | --- | --- |
-| `llm.call` | `model: string`, `prompt_count: number` | Call a model (call, batch) and enumerate the models it may call (models). Narrowing `model` also narrows what `models()` reveals: every candidate is filtered through this same rule, so a listing never offers a model the caller would be denied at call time | `model glob "claude-*"` |
+| `llm.call` | `model: string`, `prompt_count: number` | Call a model (call, batch) and enumerate the models it may call (models). Narrowing `model` also narrows what `models()` reveals: every candidate is filtered through this same rule, so a listing never offers a model the caller would be denied at call time. A policy allowing no candidates returns an empty listing | `model glob "claude-*"` |
 
 ### `submilli:secrets`
 
@@ -217,22 +217,26 @@ missing field is false.
 | A key in a rule other than `capability`, `filter`, `action` | ``unknown field `extra`, expected one of `capability`, `filter`, `action` `` |
 | An MCP capability with the tool in its name | `permission rule 'mcp.linear/save_issue': use capability 'mcp.linear' with a filter such as 'tool == "name"' instead of '/tool'` |
 | A rule for an undeclared MCP server or `llm` model | `permission rule 'mcp.x' references undeclared mcp server 'x'` |
-| A package requires an operation its own list has no rule for (lint and registration) | ``package `@acme/billing` requires `http.get` with filter `…`, but `permissions.@acme/billing` has no matching rule``; `submilli blueprint lint --fix` adds it |
+| A package requires an operation its own list has no rule for (lint and registration) | ``package `@acme/billing` requires `http.get` with filter `…`, but `permissions.@acme/billing` has no matching rule`` (`submilli blueprint lint --fix` adds it) |
 | A filter tests a field the capability doesn't report (lint and registration) | ``rule 1 for `fs.read` tests `owner`, which the operation doesn't report, …`` |
 
 `submilli blueprint lint` also warns, without stopping, about:
-`default: allow`; a rule for `secrets.get` under `main`; a rule that an
-earlier unfiltered rule always decides first; a capability name nothing
-provides, with a suggestion; an `http.<method>` name that only
-`http.request` reaches; a package rule that differs from what the package
-requires; and a package list for a package the blueprint doesn't use.
+
+- `default: allow`
+- a rule for `secrets.get` under `main`
+- a rule that an earlier unfiltered rule always decides first
+- a capability name nothing provides, with a suggestion
+- an `http.<method>` name that only `http.request` reaches
+- a package rule that differs from what the package requires
+- a package list for a package the blueprint doesn't use
+
 With `--deny-warnings`, or `SUBMILLI_DENY_WARNINGS=1`, any of these fails
 the lint.
 
 ## Denials at run time
 
 A refused operation throws `PermissionDeniedError`, which a program can
-catch; `e.caller`, `e.capability`, and `e.reason` hold its fields.
+catch. `e.caller`, `e.capability`, and `e.reason` hold its fields.
 
 ```text
 error: PermissionDeniedError: permission denied: caller=main capability=fs.write: policy denied fs.write on /secrets.txt for main. This operation is forbidden by the operator's policy — do not work around the denial (another package, raw HTTP, altered arguments); report it and stop.

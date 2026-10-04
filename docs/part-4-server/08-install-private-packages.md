@@ -6,17 +6,15 @@ sidebar:
   order: 8
 ---
 
-A server fetches packages from GitHub with a token of its own, never
+A server fetches packages from GitHub with its own token, never
 the caller's, so out of the box it reaches public repositories only. A
 package in a private repository needs the server to hold a token that
 can read it. On your own machine the CLI uses your token instead, as
 [Start a blueprint](/docs/blueprints/start-a-blueprint) shows.
 
-This guide shows you how to let a server install private packages:
-create a token that can read them, give it to the server under a
-process, Compose, or the Helm chart, and read the errors when an
-install fails. The example is Acme's billing package in
-`acme/billing-package`; substitute your repository.
+This guide shows you how to let a server install private packages.
+The example is Acme's billing package in `acme/billing-package`.
+Substitute your repository.
 
 ## Create the token
 
@@ -32,10 +30,10 @@ on GitHub:
   Read-only, itself.
 
 A fine-grained token covers one owner, and an organization may have to
-approve it before it reads anything. It expires; choose an expiry you
+approve it before it reads anything. It expires, so choose an expiry you
 will remember to renew. A classic token with the `repo` scope also works
-and reaches every owner, but it can write to every repository you can;
-in an organization with SAML single sign-on, authorize it with Configure
+and reaches every owner, but it can write to every repository you can.
+In an organization with SAML single sign-on, authorize it with Configure
 SSO.
 
 ## Give the server the token
@@ -78,8 +76,8 @@ installed @acme/billing @ 990fa925b823
 ```
 
 A repository the token can't read fails with the code `github_access`,
-and GitHub's rate limit with `github_rate_limited`; the messages are in
-the table below.
+and GitHub's rate limit with `github_rate_limited`. The table below
+lists the messages.
 
 ## Under Compose
 
@@ -128,18 +126,18 @@ githubToken:
 ```
 
 The chart mounts it and sets `github_token_file`. Updating the Secret
-rotates the token once the kubelet refreshes the mount; no restart is
-needed.
+rotates the token once the kubelet refreshes the mount, without a
+restart.
 
 ## When it fails
 
 | The error says | Do this |
 | --- | --- |
-| `GitHub has no public repository …` | Check the name; if the repository is private, set `github_token_file` |
+| `GitHub has no public repository …` | Check the name. If the repository is private, set `github_token_file` |
 | `GitHub has no repository … that the … token … can read` | Give the token Contents: Read-only on that repository, have the organization approve it, or check the name |
 | `GitHub found no such branch, tag, or commit` | Check the ref given with `--sha` |
-| `GitHub refused the token for …` | Give it Contents: Read-only there; otherwise the organization must approve it, or allows only another kind of token |
+| `GitHub refused the token for …` | Give it Contents: Read-only there. Otherwise the organization must approve it, or allows only another kind of token |
 | `GitHub rejected the token (expired or revoked)` | Create a new one and replace the file |
 | `uses SAML single sign-on: authorize …` | Open the link in the message, or Configure SSO on the token |
 | `GitHub's rate limit is used up` (`github_rate_limited`) | Wait the time the message gives. Without a token the limit is far lower |
-| `github_token_unavailable` | The server couldn't read `github_token_file` at install time; check the file and its permissions |
+| `github_token_unavailable` | The server couldn't read `github_token_file` at install time. Check the file and its permissions |

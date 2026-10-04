@@ -7,23 +7,20 @@ sidebar:
 ---
 
 A session's files end with the session. Some things an agent works with
-must outlive it: the notes it keeps between conversations, a handbook
-every agent should be able to read, a workspace two blueprints share. For
-those there is the named volume: storage the server owns and declares,
-which a blueprint mounts at a path of its own, read-only or read-write,
-and which every session and every blueprint that mounts it sees.
+must outlive it, such as the notes it keeps between conversations, a
+handbook every agent should be able to read, or a workspace two blueprints
+share. For those there is the named volume. The server owns and declares
+it, a blueprint mounts it at a path it chooses, read-only or read-write,
+and every session and blueprint that mounts it sees it.
 
-This guide shows you how to mount a shared volume: declare it on the
-server, mount it in a blueprint, use it from a program, give each user
-a directory of their own, and know where its files live and how to
-remove them. The example gives Acme's support
-agent a memory it keeps across conversations and a read-only company
-handbook; substitute your volumes.
+This guide shows you how to mount a shared volume. The example gives
+Acme's support agent a memory it keeps across conversations and a
+read-only company handbook. Substitute your volumes.
 
 ## Declare it on the server
 
 Volumes are declared in the server's config file, under `volumes:`, and
-nowhere else; a blueprint can only name them. Each has a kind, a size
+nowhere else. A blueprint can only name them. Each has a kind, a size
 limit, and the most access any blueprint may have:
 
 ```yaml title="server.yaml (fragment)"
@@ -40,7 +37,7 @@ volumes:
 
 | Kind | Where its files live |
 | --- | --- |
-| `managed-local` | A directory the server creates the first time a program uses the volume, under `volume_dir`: `$SUBMILLI_HOME/server/volumes/<name>` by default |
+| `managed-local` | A directory the server creates the first time a program uses the volume, under `volume_dir` (`$SUBMILLI_HOME/server/volumes/<name>` by default) |
 | `local-path` | The directory at `path`, which you created and the server never creates or deletes |
 
 `size_limit` is required, a size such as `100MB` or `10GB`, or
@@ -53,7 +50,7 @@ restart it after a change.
 ## Mount it in a blueprint
 
 A blueprint mounts a volume at a path under `vfs.mounts`, beside its
-own root, which stays `ephemeral` or `per_session` as [Keep files and
+root, which stays `ephemeral` or `per_session` as [Keep files and
 state](/docs/blueprints/keep-files-and-state) describes. The
 support agent keeps its session files at `/`, its memory at `/memory`,
 and reads the handbook at `/handbook`:
@@ -72,11 +69,11 @@ vfs:
       access: read_only
 ```
 
-`access` can only narrow what the server declared; leave it out to take
+`access` can only narrow what the server declared. Leave it out to take
 the server's setting. A volume can also be the root itself, `vfs:
-{mode: named, volume: project-memory}`, for a blueprint whose whole
+{mode: named, volume: project-memory}`, for a blueprint whose
 filesystem should outlive the session. The blueprint's filesystem rules
-apply under a mount as anywhere else; the example allows `fs.read`,
+apply under a mount as anywhere else. The example allows `fs.read`,
 `fs.write`, `fs.stat`, and `fs.list` to `main`.
 
 Registration checks the mounts against the declarations:
@@ -124,7 +121,7 @@ function main(): string {
 }
 ```
 
-Run it twice. Each `run-code` is a session of its own, so the session's
+Run it twice. Each `run-code` opens a new session, so the session's
 files start empty each time, and the notes under `/memory` don't:
 
 ```sh
@@ -161,7 +158,7 @@ error: PermissionDeniedError: permission denied: caller=main capability=fs.write
 5 |     return "rewrote the handbook";
 ```
 
-`fs.info()` tells a program what it has: the root's mode, access, and
+`fs.info()` reports the root's mode, access, and
 size limit, and each mount's path, volume, access, and limit, with `-1`
 where no limit applies:
 
@@ -185,7 +182,7 @@ function main(): string {
 ```
 
 Mount points can't be moved or removed, and one mount can't sit inside
-another; the same volume may be mounted at two paths, under one limit. A move
+another. The same volume may be mounted at two paths, under one limit. A move
 between the root and a mount, or between two mounts, copies and then
 removes, so it isn't atomic. A named volume needs a server to resolve
 it, so `submilli run` refuses a blueprint that mounts one and says what
@@ -197,8 +194,8 @@ error: blueprint.yaml: blueprint 'support' uses named volume 'company-handbook' 
 
 ## Give each user their own directory
 
-One memory every session shares suits a handbook, not notes about
-customers: the agent serving Northwind shouldn't read what it noted
+One memory every session shares suits a handbook but not notes about
+customers. The agent serving Northwind shouldn't read what it noted
 about Initech. Mount only that customer's directory of the volume,
 chosen by the variable the application binds for the session:
 
@@ -217,8 +214,7 @@ vfs:
       subPath: customers/${vars.customerId}
 ```
 
-`subPath` is the directory inside the volume to mount instead of all of
-it. The program sees it as `/memory` whichever customer the session is
+`subPath` names the directory inside the volume to mount. The program sees it as `/memory` whichever customer the session is
 for, and nothing above it, so neither the program nor a package it
 calls can reach another customer's notes, and no rule has to name a
 customer. `${vars.customerId}` must be a whole part of the path, and a
@@ -250,8 +246,8 @@ submilli server run-code remember.ts --blueprint support --var customerId=cus_in
 /memory/notes.md: 1 lines
 ```
 
-Notice the third run: the same path, and Initech's notes start at one
-line. The volume holds a directory per customer:
+Notice the third run. The path is the same, and Initech's notes start
+at one line. The volume holds a directory per customer:
 
 ```text
 project-memory/customers/cus_initech/notes.md
@@ -265,13 +261,13 @@ is refused before any program runs:
 invalid vfs config: each path component must be nonempty and contain no separator, NUL, '.' or '..' component
 ```
 
-`cwd` is a convenience, not a boundary: `..` and absolute paths still
+`cwd` is a convenience. `..` and absolute paths still
 reach the rest of what the blueprint mounts. The boundary is `subPath`.
 
 ## Where the files live
 
 A managed volume's files are under `volume_dir`, in a directory named
-after the volume; a `local-path` volume's are where you put them:
+after the volume, and a `local-path` volume's are where you put them:
 
 ```text
 ~/.submilli/server/volumes/project-memory/notes.md
@@ -279,9 +275,9 @@ after the volume; a `local-path` volume's are where you put them:
 
 Nothing the server does deletes a volume's files. Ending a session or
 removing a blueprint leaves them, and removing the declaration from the
-config only stops blueprints from naming the volume: declare it again
+config only stops blueprints from naming the volume. Declare it again
 and its files are still there. To remove a managed volume for good,
 delete its directory under `volume_dir` while the server is stopped.
 Back up `volume_dir` with the sessions, as [Run the
-server](/docs/server/run-the-server) says: like a session's files,
+server](/docs/server/run-the-server) says. As with a session's files,
 nothing can rebuild what programs kept there.

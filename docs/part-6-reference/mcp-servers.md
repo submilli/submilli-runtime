@@ -63,12 +63,12 @@ block.
 
 | `add-mcp` option | Writes |
 | --- | --- |
-| none | `auth: {type: oauth2}` if a probe of the server finds it requires OAuth; otherwise no auth |
-| `--authorization-bearer <SECRET>` | `headers: {Authorization: Bearer ${secrets.<SECRET>}}`; the secret must be declared |
+| none | `auth: {type: oauth2}` if a probe of the server finds it requires OAuth, and otherwise no auth |
+| `--authorization-bearer <SECRET>` | `headers: {Authorization: Bearer ${secrets.<SECRET>}}`. The secret must be declared |
 | `--header 'Name: value'` (repeatable) | That header |
 | `--oauth` | `auth: {type: oauth2}` |
-| `--client-id <ID>` | `auth.client_id`; implies `--oauth` |
-| `--scope <SCOPE>` (repeatable) | `auth.scopes`; implies `--oauth` |
+| `--client-id <ID>` | `auth.client_id`, and implies `--oauth` |
+| `--scope <SCOPE>` (repeatable) | `auth.scopes`, and implies `--oauth` |
 | `--no-probe` | Skips the probe |
 
 ### Errors
@@ -163,8 +163,8 @@ and gives the server 10 seconds.
 | --- | --- | --- |
 | `submilli run --blueprint` | Every server in the block | At each run |
 | `submilli docs @mcp/<name>` | The named server | At each call |
-| `submilli-server`, running a program | The servers the program imports | At first use; then cached |
-| `submilli-server`, package docs and search | Every server in the block | At first use; then cached |
+| `submilli-server`, running a program | The servers the program imports | At first use, then cached |
+| `submilli-server`, package docs and search | Every server in the block | At first use, then cached |
 
 The server keeps a blueprint's discovered tools until the blueprint is
 applied again or removed, a login for it is stored or removed, or the server
@@ -176,10 +176,10 @@ session and not cached.
 A server is left out of the package catalog, and the rest of the blueprint
 works, when:
 
-- it has `auth: oauth2` and no login is stored for it;
-- the connection or `tools/list` fails;
-- it doesn't answer within 10 seconds;
-- on `submilli-server`, the network rules refuse its address.
+- it has `auth: oauth2` and no login is stored for it
+- the connection or `tools/list` fails
+- it doesn't answer within 10 seconds
+- on `submilli-server`, the network rules refuse its address
 
 Each is a warning that begins `warning: @mcp/<name>: server unavailable:`
 and gives the reason:
@@ -216,8 +216,8 @@ help: no MCP servers are currently available; declared servers may need authenti
 ### PENDING and ACTIVE
 
 A blueprint is `PENDING` while any of its `auth: oauth2` servers has no
-stored login, and `ACTIVE` otherwise. A `PENDING` blueprint runs programs;
-its servers without a login are left out. `auth-status` prints the state and
+stored login, and `ACTIVE` otherwise. A `PENDING` blueprint runs programs.
+Its servers without a login are left out. `auth-status` prints the state and
 one line per server:
 
 ```text
@@ -246,7 +246,7 @@ is. Calls are synchronous.
 | `inputSchema` with properties, none required | `args?`, which may be omitted |
 | `inputSchema` without properties | No parameter |
 | A property not in `required` | An optional field |
-| `outputSchema` | The return type; see [Output schemas](#output-schemas) |
+| `outputSchema` | The return type (see [Output schemas](#output-schemas)) |
 
 | JSON Schema | Type |
 | --- | --- |
@@ -262,14 +262,14 @@ is. Calls are synchronous.
 | A type list of scalar types, such as `["string", "null"]` | A union |
 
 An input property whose schema has no type here becomes `unknown`, and the
-MCP server validates the value: `allOf`, `$ref`, `not`, an object without
-properties, a non-string `enum`, `anyOf` or `oneOf` with an object or array
-member, or nesting deeper than 12 levels.
+MCP server validates the value. Schemas with no type are `allOf`, `$ref`,
+`not`, an object without properties, a non-string `enum`, `anyOf` or `oneOf`
+with an object or array member, and nesting deeper than 12 levels.
 
 A tool is dropped, with a warning, when its name isn't a TypeScript
 identifier or is one of `await`, `delete`, `with`, `debugger`, `yield`,
 `eval`, `arguments`, `implements`, `interface`, `package`, `private`,
-`protected`, `public`, `static`, `let`; and when two tools have the same
+`protected`, `public`, `static`, `let`. When two tools have the same
 name, both are dropped. A dropped tool isn't callable.
 
 A server whose `tools/list` has these tools:
@@ -306,7 +306,7 @@ function list_tickets(args?: { query?: string }): unknown;
 function two_texts(): unknown;
 ```
 
-`get_ticket`'s `extra` property is an `allOf`; `limit` is an `integer`;
+`get_ticket`'s `extra` property is an `allOf`, `limit` is an `integer`, and
 `note` is `["string", "null"]`. `submilli docs @mcp/<name>` and the package
 docs tool the agent reads list every discovered tool, whether or not the
 blueprint allows it.
@@ -319,7 +319,7 @@ A function's return type comes from the first of:
    the table above.
 2. A schema Submilli carries for the tool. Submilli carries schemas for 18
    tool names of GitHub's MCP server, for a `url` whose host is
-   `api.githubcopilot.com`; a server at any other host gets none.
+   `api.githubcopilot.com`. A server at any other host gets none.
 3. Otherwise, `unknown`.
 
 The documentation line says which:
@@ -331,7 +331,7 @@ The documentation line says which:
 | `unknown`, `outputSchema` not representable | ``Returns `unknown` (the server's outputSchema is not representable) — cast to a declared type (`as T`) after checking the shape.`` |
 
 Discovery warns once per server with the count of tools that return
-`unknown`. A cast from `unknown` is checked when it runs: a field the type
+`unknown`. A cast from `unknown` is checked when it runs. A field the type
 declares must be present with that type, and fields it doesn't declare are
 ignored.
 
@@ -356,7 +356,7 @@ error: TypeError: type mismatch: expected Tickets, got object at $["tickets"][0]
 
 | The tool's result | The function returns |
 | --- | --- |
-| `isError: true` | Nothing; it throws (see [Failures](#failures)) |
+| `isError: true` | Nothing. It throws (see [Failures](#failures)) |
 | `structuredContent` | That value |
 | One text part | The text parsed as JSON, or the text as a string when it isn't JSON |
 | Several text parts | The texts joined with newlines, as a string |
@@ -395,7 +395,7 @@ opens a new one. Each program run gets its own sessions.
 A server with `auth: type: oauth2` needs a login, made once per blueprint
 and server with `submilli mcp authenticate` locally or
 `submilli server mcp authenticate` for a registered blueprint. Both run on
-the machine where the command is typed: they print an authorization URL and
+the machine where the command is typed. They print an authorization URL and
 wait for the browser's redirect on `http://127.0.0.1:8765/callback`.
 `SUBMILLI_OAUTH_REDIRECT_PORT` changes the port. The flow uses PKCE.
 
@@ -412,31 +412,31 @@ The first of:
 3. A client registered at login through the server's dynamic client
    registration endpoint, when it advertises one.
 
-Without any of them, the login fails and names the two fixes: setting
-`auth.client_id`, or configuring a provider.
+Without any of them, the login fails and names the two fixes, setting
+`auth.client_id` or configuring a provider.
 
 ### Scopes
 
-The first non-empty list of: `auth.scopes`, the provider's `scopes`, and
+The first non-empty list of `auth.scopes`, the provider's `scopes`, and
 the `scopes_supported` the server advertises.
 
 ### Providers
 
-A provider holds an OAuth application registered with a service: its client
-id, and a client secret for a confidential client.
+A provider holds the client id of an OAuth application registered with a
+service, and a client secret for a confidential client.
 
 | Field | Type | Required | Value |
 | --- | --- | --- | --- |
-| `match` | string | yes | The OAuth host, such as `github.com`; not the MCP server's host |
+| `match` | string | yes | The OAuth host, such as `github.com`, and not the MCP server's host |
 | `client_id` | string | yes | A literal, `${secrets.NAME}`, or `${env.VAR}` |
-| `client_secret` | string | no | `${secrets.NAME}` or `${env.VAR}`; absent for a public client |
+| `client_secret` | string | no | `${secrets.NAME}` or `${env.VAR}`. Absent for a public client |
 | `scopes` | list of strings | no | Scopes to request |
 
 | | Local | `submilli-server` |
 | --- | --- | --- |
-| Where | `$SUBMILLI_HOME/mcp_oauth.yaml` (default `~/.submilli/mcp_oauth.yaml`), under `providers` | The config file, under `mcp_oauth.providers`; see [Server settings](/docs/reference/server-settings) |
+| Where | `$SUBMILLI_HOME/mcp_oauth.yaml` (default `~/.submilli/mcp_oauth.yaml`), under `providers` | The config file, under `mcp_oauth.providers` (see [Server settings](/docs/reference/server-settings)) |
 | Edited with | `submilli mcp provider add`, `list`, `remove` | The config file |
-| `match` compared with | The token endpoint's host | The authorization endpoint's host when choosing the client id; the token endpoint's host for the token exchange |
+| `match` compared with | The token endpoint's host | The authorization endpoint's host when choosing the client id, and the token endpoint's host for the token exchange |
 | `${secrets.NAME}` from | The local secret store | The server's secret store |
 
 ```yaml title="~/.submilli/mcp_oauth.yaml"
@@ -450,10 +450,10 @@ providers:
 
 ### Credentials and tokens
 
-A login is stored in the secret store under
-`mcp_oauth/<blueprint>/<server>/credential`: the local store for
-`submilli mcp authenticate`, the server's store for
-`submilli server mcp authenticate`. The two are separate. The server's
+A login is stored in a secret store under
+`mcp_oauth/<blueprint>/<server>/credential`. `submilli mcp authenticate`
+uses the local store, and `submilli server mcp authenticate` uses the
+server's. The two are separate. The server's
 login needs the server to have a secret store. One login serves every
 program run under the blueprint, and on a server every session of it.
 
@@ -461,11 +461,11 @@ program run under the blueprint, and on a server every session of it.
 | --- | --- |
 | The service issues a refresh token | Only the refresh token is stored |
 | The service issues only an access token | The access token is stored |
-| A call needs an access token | Obtained with the refresh token and kept in memory, never stored; replaced 60 seconds before it expires, or after 5 minutes when the service gives no lifetime |
+| A call needs an access token | Obtained with the refresh token and kept in memory, never stored. It is replaced 60 seconds before it expires, or after 5 minutes when the service gives no lifetime |
 | The service issues a new refresh token | It replaces the stored one |
-| The service refuses the refresh token (`invalid_grant`) | Retried after 1 and 2 more seconds, then `McpAuthExpiredError`; the stored login is kept |
+| The service refuses the refresh token (`invalid_grant`) | Retried after 1 and 2 more seconds, then `McpAuthExpiredError`. The stored login is kept |
 | A call fails | The token is refreshed and the call retried once |
-| `deauthenticate` | The login is removed; the blueprint is `PENDING` |
+| `deauthenticate` | The login is removed and the blueprint is `PENDING` |
 
 Running `authenticate` again replaces the stored login.
 
@@ -474,12 +474,12 @@ Running `authenticate` again replaces the stored login.
 | Limit | Value |
 | --- | --- |
 | Transport | HTTP only (`streamable_http`). A server that speaks MCP over standard input and output needs an HTTP endpoint in front of it |
-| MCP features | Tools only; resources, prompts, and sampling aren't used |
+| MCP features | Tools only. Resources, prompts, and sampling aren't used |
 | Discovery | 10 seconds per server |
-| One call | 60 seconds, including obtaining a token and connecting; not configurable |
-| Results | Text parts and structured content; other content is dropped |
-| Streaming | None; a call returns when the tool finishes, and progress messages are ignored |
-| Network | Locally, any address. On `submilli-server`, the server's outbound network rules apply to discovery, calls, and the OAuth exchange; private and loopback addresses are refused unless the server allows them (see [Server settings](/docs/reference/server-settings)) |
+| One call | 60 seconds, including obtaining a token and connecting. Not configurable |
+| Results | Text parts and structured content. Other content is dropped |
+| Streaming | None. A call returns when the tool finishes, and progress messages are ignored |
+| Network | Locally, any address. On `submilli-server`, the server's outbound network rules apply to discovery, calls, and the OAuth exchange. Private and loopback addresses are refused unless the server allows them (see [Server settings](/docs/reference/server-settings)) |
 
 ## Local and server commands
 

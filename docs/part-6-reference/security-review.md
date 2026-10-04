@@ -27,10 +27,10 @@ lists the options. Beyond their help text:
 | --- | --- |
 | `-a`, `--agent` | Runs the `codex`, `claude`, or `copilot` executable found on `PATH` |
 | `-m`, `--model` | Passed to the agent as given, except `astra`, which becomes `gpt-6-astra` for Codex and Copilot and is refused for Claude |
-| `-e`, `--effort` | Passed to the agent; whether the model honors it is up to the provider |
+| `-e`, `--effort` | Passed to the agent. Whether the model honors it is up to the provider |
 | `--output` | Never replaces an existing file. The file is created, marked incomplete, before the review begins |
 
-The review procedure is built into the CLI; nothing is installed or
+The review procedure is built into the CLI. Nothing is installed or
 downloaded for it. Which models an account can use, and what a review
 costs, is up to the provider.
 
@@ -44,16 +44,16 @@ Outside `src`, it skips hidden entries, `node_modules`, `target`, `dist`, and
 `graphify-out`.
 Imports requiring omitted source must be reported as coverage gaps.
 
-Local package dependencies are included. External package source is not fetched:
-each declared external dependency produces a coverage gap, so that review exits
+Local package dependencies are included. External package source is not fetched.
+Each declared external dependency produces a coverage gap, so that review exits
 2 even if the agent finds no defect. Review such dependencies in their source
 projects. Standard library operations are covered by the bundled review procedure.
 
 Source symlinks and nonregular source files are rejected. Input is bounded to
 512 KiB of file content, 1024 files, 20,000 directory entries, and 64 directory
 levels. Exceeding a limit fails without truncating the review. Use `-p` to reduce
-the selected scope. Individual models can have lower usable context limits;
-an agent that cannot inspect the full snapshot must report an incomplete review.
+the selected scope. Individual models can have lower usable context limits.
+An agent that cannot inspect the full snapshot must report an incomplete review.
 
 The agent receives the snapshot through standard input from a temporary working
 directory. Package code and repository hooks are not executed. The adapters
@@ -64,12 +64,12 @@ its JSON event stream. A missing or failed terminal result, multiple final
 answers, or tool-use events make the review incomplete. Codex also runs with its
 read-only sandbox.
 Beyond these
-settings, Submilli doesn't confine the agent executable; it runs as
+settings, Submilli doesn't confine the agent executable. It runs as
 installed. Source is sent to the
 chosen model provider under that account's terms.
 
-Agent output is bounded to 4 MiB. Timeout or interruption stops the child process;
-on Unix it also terminates the child's process group. Temporary review files are
+Agent output is bounded to 4 MiB. Timeout or interruption stops the child process.
+On Unix it also terminates the child's process group. Temporary review files are
 removed after cleanup. Raw agent stderr is not copied into reports because it
 can contain credentials or private configuration, so an authentication
 failure appears only as an incomplete review.
@@ -82,7 +82,7 @@ Submilli does not create accounts, mint tokens, or manage subscription refresh.
 | --- | --- |
 | Codex | Existing Codex login or `CODEX_API_KEY` for `codex exec`. User configuration is ignored, but the existing authentication store is retained, including normal token refresh. |
 | Claude Code | Existing subscription login, `CLAUDE_CODE_OAUTH_TOKEN`, or `ANTHROPIC_API_KEY`. User/project settings are ignored. `--bare` is not used because it disables subscription OAuth. |
-| Copilot | `COPILOT_GITHUB_TOKEN`, `GH_TOKEN`, or `GITHUB_TOKEN`, or GitHub CLI authentication. A temporary Copilot configuration directory is used; personal Copilot login/configuration files are not loaded. |
+| Copilot | `COPILOT_GITHUB_TOKEN`, `GH_TOKEN`, or `GITHUB_TOKEN`, or GitHub CLI authentication. A temporary Copilot configuration directory is used, and personal Copilot login/configuration files are not loaded. |
 
 With both `CLAUDE_CODE_OAUTH_TOKEN` and `ANTHROPIC_API_KEY` set, Claude Code
 uses the API key. Copilot with `GITHUB_TOKEN` needs the workflow permission
@@ -107,7 +107,7 @@ each agent in CI.
 | `findings` | Findings with severity, title, path, one-based line, evidence, and recommendation. Paths and lines are checked against the snapshot. |
 | `error` | Execution or report-validation failure, or `null`. |
 
-The CLI validates the report's structure and source references; it cannot
+The CLI validates the report's structure and source references. It cannot
 verify that the model reasoned about each file it lists. File hashes identify
 content, including local edits, not a Git revision.
 
@@ -119,12 +119,12 @@ content, including local edits, not a Git revision.
 | 1 | Complete review with at least one finding meeting the threshold. |
 | 2 | Incomplete review, invalid arguments, missing agent, authentication/model failure, timeout, missing source, invalid output, or report-file failure. |
 
-An agent process exiting 0 is insufficient: its report must validate and cover
-every supplied file. Existing report files are refused; a failed attempt never
+An agent process exiting 0 is insufficient. Its report must validate and cover
+every supplied file. Existing report files are refused, so a failed attempt never
 reuses an earlier clean report. If the output destination itself cannot be
 created or written, the command fails and a usable report may be absent.
 
 [Review a package's security](/docs/packages/review-package-security) runs
-the review locally and in CI; [Verify a package in
+the review locally and in CI. [Verify a package in
 CI](/docs/tutorials/verify-a-package-in-ci#have-an-agent-review-it) walks
 through one review.

@@ -140,6 +140,7 @@ pub fn infer_with_transitive_checked<'a>(
         local_class_mangles: std::collections::BTreeSet::new(),
         pending_implements: Vec::new(),
         unresolved_parents: std::collections::BTreeSet::new(),
+        hidden_parent_constructors: std::collections::BTreeSet::new(),
         rejected_class_names: Default::default(),
         invalid_class_hierarchies: std::collections::BTreeSet::new(),
         current_type_predicate: None,
@@ -395,6 +396,7 @@ pub fn infer_package_checked<'a>(
         local_class_mangles: BTreeSet::new(),
         pending_implements: Vec::new(),
         unresolved_parents: BTreeSet::new(),
+        hidden_parent_constructors: BTreeSet::new(),
         rejected_class_names: Default::default(),
         invalid_class_hierarchies: BTreeSet::new(),
         current_type_predicate: None,
@@ -767,6 +769,12 @@ pub(super) struct Inferer<'a> {
     /// missing. Never cleared between modules: an importer of a broken class
     /// must stay silent too.
     pub(super) unresolved_parents: std::collections::BTreeSet<crate::MangledName>,
+    /// Classes whose `extends` names a class with a constructor private to
+    /// another module. The clause is diagnosed and the parent link kept, so
+    /// members and subtyping still check; only the hidden constructor is left
+    /// out: `super(...)` and an implicit constructor take any arguments. Never
+    /// cleared between modules, like `unresolved_parents`.
+    pub(super) hidden_parent_constructors: std::collections::BTreeSet<crate::MangledName>,
     /// Names whose signatures were skipped after source errors in this module.
     pub(super) rejected_class_names: BTreeSet<String>,
     /// Source-declared cycles already diagnosed during signature validation.

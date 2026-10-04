@@ -6,7 +6,7 @@ sidebar:
   order: 6
 ---
 
-This page describes the `submilli:` modules: what each does, the capabilities
+This page describes what each `submilli:` module does, the capabilities
 that gate it, and the rules its functions share, followed by every module's
 functions and types. The globals that need no import, such as `Map`, `JSON`,
 and `Temporal`, are on [Built-ins](/docs/reference/built-ins).
@@ -39,28 +39,28 @@ import fs from "submilli:fs";
 import { sha256 } from "submilli:crypto";
 ```
 
-`submilli search` and `submilli docs` list the modules a program may import;
-with `--blueprint`, only those the blueprint lets it use.
+`submilli search` and `submilli docs` list the modules a program may import.
+With `--blueprint`, they list only those the blueprint lets it use.
 
 ## Rules for every module
 
-- **Calls are synchronous.** Every function returns its result directly.
+- Calls are synchronous. Every function returns its result directly.
   `llm.batch` sends its prompts concurrently and returns when all are done.
-- **Paths are the program's own.** `submilli:fs`, `submilli:code`,
+- Paths are the program's own. `submilli:fs`, `submilli:code`,
   `submilli:git`, and `http.download` take paths in the program's
   filesystem, never the host's. A relative path resolves against the working
   directory, `fs.cwd()`.
-- **A denied call throws** a catchable `PermissionDeniedError`; a filesystem
+- A denied call throws a catchable `PermissionDeniedError`. A filesystem
   or token budget a call would pass throws `QuotaExceededError`
   ([Errors and limits](/docs/reference/errors-and-limits)).
 
 ## HTTP requests
 
-- **HTTPS**, unless the blueprint sets `allow_insecure_http: true`.
-- **Redirects**, up to 10, are each checked against the caller's rules before
+- HTTPS, unless the blueprint sets `allow_insecure_http: true`.
+- Redirects, up to 10, are each checked against the caller's rules before
   they are sent. A redirect to another origin drops the credential headers.
-- **Timeouts and sizes:** 30 seconds per request, 60 per download; a
-  response body up to 50 MB, and a download up to its `maxBytes`.
+- A request times out after 30 seconds and a download after 60. A
+  response body may be up to 50 MB, and a download up to its `maxBytes`.
 - On a server, hosts that resolve to private addresses are refused unless the
   server allows them ([Server settings](/docs/reference/server-settings)).
 
@@ -77,7 +77,7 @@ with `--blueprint`, only those the blueprint lets it use.
 
 
 Traversal honors `.gitignore` and `.ignore` files and skips hidden entries.
-An edit that fails writes nothing; one that succeeds replaces the file
+An edit that fails writes nothing. One that succeeds replaces the file
 atomically and returns the change as a unified diff.
 
 ## Git repositories
@@ -90,22 +90,22 @@ blueprint's `git` block sets the identity that authors every commit and the
 
 | Method | Capability | Behavior |
 | --- | --- | --- |
-| `Repository.init` | `git.init` | Creates the directory; refuses an existing repository |
+| `Repository.init` | `git.init` | Creates the directory and refuses an existing repository |
 | `Repository.clone` | `git.clone` | Needs no `git.init`, `git.fetch` or `fs.*` rule |
 | `Repository.open`, constructor | None | Opens `path`'s `.git` directory |
 | `status`, `log`, `diff`, `show`, `branches`, `remotes` | None | Read only |
-| `add` | None | At most 10,000 paths per call; `.` selects the working tree; stages deletions |
+| `add` | None | At most 10,000 paths per call, `.` selects the working tree, and deletions are staged |
 | `commit` | `git.commit` (`branch` is the current branch) | Refuses an empty message and an empty commit |
 | `createBranch` | None | Never overwrites an existing branch |
 | `switchBranch` | None | Requires a clean working tree, untracked files included |
 | `addRemote`, `setRemoteUrl` | None | HTTPS URLs only |
-| `fetch` | `git.fetch` | Defaults to `origin`; no branch fetches every remote branch, each checked |
-| `pull` | `git.fetch` | Fetches and fast-forwards the current branch; refuses divergence and a dirty working tree |
+| `fetch` | `git.fetch` | Defaults to `origin`. With no branch, fetches every remote branch and checks each |
+| `pull` | `git.fetch` | Fetches and fast-forwards the current branch. Refuses divergence and a dirty working tree |
 
 
 A revision is `HEAD`, a branch or tag name, a full ref, or a full commit ID.
 Remotes are `https://` URLs. Repositories created by standard Git work as
-they are; advanced layouts, such as linked worktrees, submodules, partial
+they are. Advanced layouts, such as linked worktrees, submodules, partial
 clones, and SHA-256 object format, aren't supported.
 
 | Limit | Value |
@@ -128,21 +128,21 @@ An operation that passes a limit throws and leaves the repository as it was.
 | `call(model, prompt)` | One `Completion` |
 | `call<T>(model, prompt)` | A `T`, checked field by field against the response |
 | `batch(model, prompts)` | A `Completion[]`, `result[i]` for `prompts[i]` |
-| `batch<T[]>(model, prompts)` | A `T[]`; one non-conforming element throws for the whole batch |
+| `batch<T[]>(model, prompts)` | A `T[]`. One non-conforming element throws for the whole batch |
 | `models()` | The `Model`s this caller may call |
 
 
 - A `Completion` has `ok`, `true` when the model stopped naturally, and
-  `text`; a truncated completion is `ok: false` with a `reason`.
+  `text`. A truncated completion is `ok: false` with a `reason`.
 - The typed form sends a JSON Schema for `T` with the request and checks the
-  response against it; a response that doesn't match throws `TypeError`.
+  response against it. A response that doesn't match throws `TypeError`.
 - A batch takes up to 128 prompts, each up to 256 KB. A call's tokens are
   reserved against the run's and the server's budgets before it is sent.
 
 ## Modules for packages and tests
 
 `secrets.get(name)` returns a declared secret's value to a package. From the
-program itself, `main`, it always throws: a secret's value never reaches
+program itself, `main`, it always throws, so a secret's value never reaches
 generated code.
 
 `check(capability, context)` from `submilli:security` asks the blueprint
@@ -382,7 +382,7 @@ Gated model calls: call/batch, and models() to discover them.
 | --- | --- | --- |
 | `batch<T>(model: string, prompts: string[], schema?: string \| null): T` | `llm.call { model, prompt_count: $prompts.length }` | Send every prompt to `model` and return one completion each, positionally: `result[i]` is the outcome of `prompts[i]`, including when that element failed. |
 | `call<T>(model: string, prompt: string, schema?: string \| null): T` | `llm.call { model, prompt_count: 1 }` | Send one prompt to `model` and return its completion. |
-| `models(): Model[]` | `` llm.call { model: "", prompt_count: 0 } - for the call, then per candidate with that candidate's `model` `` | The models this runtime serves and this caller may call. |
+| `models(): Model[]` | `llm.call { prompt_count: 0 }` | The models this runtime serves and this caller may call. |
 
 ### `Completion`
 

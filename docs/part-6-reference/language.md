@@ -9,10 +9,10 @@ sidebar:
 You write Submilli programs in TypeScript. Submilli makes deliberate choices
 about which TypeScript features it supports and how some of them behave.
 Without TypeScript's need to accommodate existing JavaScript code, it can
-enforce stricter checks: it excludes `any`, and `as` checks that a value
+enforce stricter checks. It excludes `any`, and `as` checks that a value
 matches its type. This page describes the shape of a program and those
 choices. The globals a program has are on
-[Built-ins](/docs/reference/built-ins); the `submilli:` modules are on
+[Built-ins](/docs/reference/built-ins). The `submilli:` modules are on
 [Standard library](/docs/reference/standard-library).
 
 ## A program
@@ -44,13 +44,13 @@ function main(): { count: number; hours: number } {
 | `void` | Nothing |
 
 `console.log` writes to a separate log, not to the result. `submilli run
-<file>` runs a program; `submilli check <file>` only compiles it.
+<file>` runs a program. `submilli check <file>` only compiles it.
 
 Modules are imported by name: `submilli:<name>` for the standard library,
 `@<org>/<name>` for installed packages, and `@mcp/<server>` for MCP servers
 a blueprint declares. Namespace (`import * as fs`), default
 (`import fs`), and named (`import { sha256 }`) imports all work. Built-ins
-need no import. Importing a module grants nothing; every gated call is
+need no import. Importing a module grants nothing. Every gated call is
 checked against the blueprint.
 
 ## Stricter by design
@@ -70,8 +70,8 @@ const tickets = JSON.parse(text) as Ticket[];
 
 A cast checks the value when it runs: every required field present with its
 type, every array element matching, extra fields allowed. Data of the wrong
-shape throws `TypeError` at the cast, where it arrived, rather than
-somewhere later. A cast doesn't convert; the string `"3"` stays a string.
+shape throws `TypeError` at the cast, where it arrived. A cast doesn't
+convert, so the string `"3"` stays a string.
 
 ### One absent value: `null`
 
@@ -84,7 +84,7 @@ record key all read as `null`.
 | `if (x !== null)` | `x` is `T` inside the branch |
 | `x?.field`, `x?.method()` | `null` when `x` is `null` |
 | `x ?? fallback` | `fallback` when `x` is `null` |
-| `x!` | `x` as `T`; throws `TypeError` when it is `null` |
+| `x!` | `x` as `T`. Throws `TypeError` when it is `null` |
 
 ### Calls return their result
 
@@ -113,9 +113,9 @@ for (const word of words) {
 
 | Feature | In Submilli |
 | --- | --- |
-| `==` and `!=` | Strict, like `===` and `!==`; `1 == "1"` is a compile error |
+| `==` and `!=` | Strict, like `===` and `!==`, so `1 == "1"` is a compile error |
 | Return types | Declared on functions and methods; arrow functions infer them |
-| `items[i]` | Out-of-range reads and writes throw `RangeError`; `push` appends |
+| `items[i]` | Out-of-range reads and writes throw `RangeError`. `push` appends |
 | Runtime APIs | The standard library and Submilli packages, in place of Node.js APIs, browser globals, and npm |
 | Dates and times | `Temporal`, in place of `Date` |
 | `Symbol`, `Proxy`, prototype reflection | Not available |
@@ -155,7 +155,7 @@ threw. A call the blueprint doesn't allow throws `PermissionDeniedError`
 | Command | Prints |
 | --- | --- |
 | `submilli search <query>` | Modules and packages whose name, description, or exports match, such as `submilli search writeText` |
-| `submilli docs <module>` | A module's declarations, such as `submilli docs submilli:http`; with `--blueprint <file>`, only what that blueprint's programs can import |
+| `submilli docs <module>` | A module's declarations, such as `submilli docs submilli:http`. With `--blueprint <file>`, only what that blueprint's programs can import |
 | `submilli builtins` | The built-in types and namespaces |
 | `submilli builtins <name>` | A built-in's declarations, or one member, such as `submilli builtins Map.get` |
 

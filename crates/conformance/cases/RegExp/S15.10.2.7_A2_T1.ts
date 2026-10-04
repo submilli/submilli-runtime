@@ -1,5 +1,4 @@
 // test262: test/built-ins/RegExp/S15.10.2.7_A2_T1.js
-// expect-fail: RegExpMatch.index is a UTF-8 byte offset (9 here), not the UTF-16 code-unit offset 5 ECMA-262 specifies — non-ASCII prefixes shift it
 // RegExpExecArray shape adapted to RegExpMatch (.match/.index/.input/.groups).
 
 function main(): void {

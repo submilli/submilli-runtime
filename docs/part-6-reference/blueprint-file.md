@@ -33,7 +33,7 @@ Any other top-level key is a parse error, and so is an unknown field in any
 block. A key repeated at the top level or within one block's fields is
 refused. In maps keyed by a name the file chooses (`secrets`, `variables`,
 `permissions`, `mcp`, `llm.providers`, `llm.models`), a repeated name keeps
-the last entry; `vfs.mounts` refuses a repeated path.
+the last entry. `vfs.mounts` refuses a repeated path.
 
 ```text
 error: case.yaml: blueprint parse error: unknown field `permision`, expected one of `kind`, `name`, `allow_insecure_http`, `idle_timeout`, `vfs`, `secrets`, `variables`, `packages`, `auth_proxy`, `git`, `default`, `permissions`, `mcp`, `llm` at line 2 column 1
@@ -115,7 +115,7 @@ llm:
 `${vars.NAME}` is replaced by the session's value of a declared
 [variable](#variables). `${secrets.NAME}` is replaced, outside the program,
 by the value of a declared [secret](#secrets). Each may appear only in these
-fields; elsewhere the text is taken literally. A reference to a name the
+fields. Elsewhere the text is taken literally. A reference to a name the
 file doesn't declare is an error.
 
 | Reference | Fields |
@@ -142,7 +142,7 @@ error: case.yaml: invalid blueprint kind: unknown kind 'policy': expected `bluep
 | --- | --- |
 | Type | string |
 | Required | yes |
-| Constraints | non-empty; ASCII letters, digits, `_` and `-` only |
+| Constraints | non-empty, with only ASCII letters, digits, `_` and `-` |
 
 The name a server registers the blueprint under and an application names
 when it opens a session. `submilli server blueprint apply` registers the
@@ -173,12 +173,12 @@ The check applies to every redirect too.
 
 | | |
 | --- | --- |
-| Type | duration: a whole number followed by `s`, `m` or `h` |
+| Type | duration, a whole number followed by `s`, `m` or `h` |
 | Default | `24h` |
 
 How long a session may go unused before the server closes it. Closing a
 session deletes its `submilli:session` state and its `per_session` files.
-The CLI writes the value back in seconds: `1h` becomes `'3600s'`.
+The CLI writes the value back in seconds, so `1h` becomes `'3600s'`.
 
 ```text
 error: case.yaml: blueprint parse error: invalid vfs config: duration '10' needs a unit (s, m, or h)
@@ -195,16 +195,16 @@ with `mode` and that mode's fields.
 
 | `mode` | The program's `/` |
 | --- | --- |
-| `none` | No filesystem; every `submilli:fs` call fails |
+| `none` | No filesystem. Every `submilli:fs` call fails |
 | `ephemeral` (default) | A directory created for the run and deleted when it returns |
 | `per_session` | A directory that lasts as long as the session |
-| `named` | A named volume declared in the server's config; kept across sessions and restarts, and shared with every blueprint that names it |
+| `named` | A named volume declared in the server's config. It is kept across sessions and restarts, and shared with every blueprint that names it |
 
 | Field | Type | Modes | Default | Constraints |
 | --- | --- | --- | --- | --- |
 | `mode` | `none`, `ephemeral`, `per_session`, `named` | all | `ephemeral` | |
 | `size_limit` | size | `ephemeral`, `per_session` | no limit | A named volume's limit is set in the server's config |
-| `volume` | string | `named` | | Required under `named`; non-empty; a volume declared on the server |
+| `volume` | string | `named` | | Required under `named`. The non-empty name of a volume declared on the server |
 | `subPath` | string | `named` | the volume's root | A relative, normalized path inside the volume |
 | `access` | `read_only`, `read_write` | `named` | the server's declaration | Can only narrow the server's declaration |
 | `cwd` | string | `ephemeral`, `per_session`, `named` | `/` | An absolute, normalized guest path |
@@ -239,14 +239,14 @@ error: case.yaml: blueprint parse error: vfs.path: the `path` key is retired: a 
 ```
 
 `submilli run` refuses a blueprint that names a volume, as the root or as a
-mount: volumes are declared only in a server's config.
+mount, because volumes are declared only in a server's config.
 
 ### Sizes
 
 A size is a byte count, `104857600`, or a whole number followed by a unit:
 `B`, `KB`, `MB`, `GB`, `TB`, with `K`, `M`, `G`, `T` and `KiB`, `MiB`,
 `GiB`, `TiB` accepted as the same units. Units are 1024-based and
-case-insensitive: `100MB` is 104,857,600 bytes.
+case-insensitive, so `100MB` is 104,857,600 bytes.
 
 ```text
 error: case.yaml: blueprint parse error: vfs: invalid vfs config: unknown size unit 'XB' in '10XB' (use B, KB, MB, GB, TB) at line 3 column 3
@@ -277,19 +277,19 @@ vfs:
 | Field | Type | Required | Default | Constraints |
 | --- | --- | --- | --- | --- |
 | `mode` | `named` | yes | | The only mount mode |
-| `volume` | string | yes | | Non-empty; a volume declared on the server |
+| `volume` | string | yes | | The non-empty name of a volume declared on the server |
 | `subPath` | string | no | the volume's root | A relative, normalized path inside the volume |
 | `access` | `read_only`, `read_write` | no | the server's declaration | Can only narrow the server's declaration |
 
 A mount path:
 
-- is absolute and is not `/`;
-- has at most 4,096 bytes and 64 components;
-- contains only ASCII letters, digits, `.`, `_`, `-` and `/`;
-- has no empty, `.` or `..` component, no trailing `/`, and no component ending in `.`;
-- names no `.git` component;
+- is absolute and is not `/`
+- has at most 4,096 bytes and 64 components
+- contains only ASCII letters, digits, `.`, `_`, `-` and `/`
+- has no empty, `.` or `..` component, no trailing `/`, and no component ending in `.`
+- names no `.git` component
 - is not inside another mount, does not contain one, and differs from every
-  other mount by more than letter case.
+  other mount by more than letter case
 
 A blueprint has at most 16 mounts. The same volume may be mounted at several
 paths. `mounts` under `mode: none` is refused.
@@ -311,7 +311,7 @@ error: case.yaml: blueprint parse error: vfs.mounts./a.size_limit: unknown field
 `subPath` (on a named root or a mount) is relative to the volume's root. The
 program sees the selected directory as the root of that volume. `cwd` is an
 absolute guest path, and the directory relative paths resolve against for
-`submilli:fs`, packages, and `http.download` destinations; `fs.cwd()`
+`submilli:fs`, packages, and `http.download` destinations. `fs.cwd()`
 returns it. In both, `${vars.NAME}` may stand for one whole component, and
 must resolve to a non-empty name containing no `/`, `\` or NUL that is not
 `.` or `..`. A path is at most 4,096 bytes, before and after substitution.
@@ -344,13 +344,13 @@ error: case.yaml: invalid vfs config: must be an absolute guest path of at most 
 
 ## secrets
 
-A map from secret name to the one source its value comes from. A name
-declared here is what `${secrets.NAME}` and `auth_proxy` `auth` fields
-reference. The file holds names, never values.
+A map from secret name to the source its value comes from.
+`${secrets.NAME}` and `auth_proxy` `auth` fields reference a name declared
+here. The file holds names, never values.
 
 | Source | YAML | The value comes from |
 | --- | --- | --- |
-| `store` | `store: <key>` | The secret store under `<key>`: on a server, the server's encrypted store (`submilli server secret put`); in `submilli run`, the local store (`submilli secret put`). Read on each use. |
+| `store` | `store: <key>` | The secret store under `<key>`. On a server, that is the server's encrypted store (`submilli server secret put`), and in `submilli run`, the local store (`submilli secret put`). Read on each use. |
 | `harness` | `harness: {}` or `harness: {required: true}` | The application, when it opens or rebinds a session |
 
 | Field | Type | Default | |
@@ -378,18 +378,18 @@ error: case.yaml: blueprint parse error: secrets.A: unknown field `env`, expecte
 ```
 
 Registration on a server checks that every `store` secret has a value in
-the server's store; see [Registration](#registration).
+the server's store. See [Registration](#registration).
 
 ## variables
 
 A map from variable name to its rule. An application supplies variable
-values, as strings, when it opens a session; the program can't read or
+values, as strings, when it opens a session. The program can't read or
 change them.
 
 | Field | Type | Default | Constraints |
 | --- | --- | --- | --- |
 | `required` | boolean | `false` | `true` refuses a session that doesn't supply a non-empty value |
-| `default` | string | none | The value bound when the session supplies none; can't be combined with `required: true` |
+| `default` | string | none | The value bound when the session supplies none. Can't be combined with `required: true` |
 
 An optional variable with no value and no default is unbound, and a filter
 comparing against it doesn't match. A session that supplies a name the file
@@ -406,17 +406,17 @@ error: case.yaml: invalid variables config: permissions for 'main': filter refer
 ## packages
 
 A list of package names a program may import. A map whose keys are the
-names is accepted as well; its values are ignored.
+names is accepted as well, and its values are ignored.
 
 Each name:
 
-- has the scoped form `@org/name`, with exactly one `/`;
+- has the scoped form `@org/name`, with exactly one `/`
 - has an `org` of 1 to 39 ASCII letters, digits, and single inner hyphens,
-  with no leading or trailing hyphen;
+  with no leading or trailing hyphen
 - has a `name` of ASCII letters, digits, `.`, `_` and `-`, other than `.`
-  and `..`;
-- is not a `submilli:*` module and not an `@mcp/*` package;
-- is listed once.
+  and `..`
+- is not a `submilli:*` module and not an `@mcp/*` package
+- is listed once
 
 ```text
 error: case.yaml: invalid packages config: package `@acme.co/billing` scope `@acme.co` must be a GitHub org: ASCII letters, digits, and single internal hyphens only (no dots), 1–39 characters
@@ -452,7 +452,7 @@ port.
 | `auth.bearer` | secret name | one of `auth`, `headers`, `query` | | Sends `Authorization: Bearer <value>` |
 | `auth.basic.username` | string | with `auth.basic` | | A literal |
 | `auth.basic.password` | secret name | with `auth.basic` | | Sends `Authorization: Basic <base64(username:value)>` |
-| `headers` | map of name to string | one of `auth`, `headers`, `query` | | Values may hold `${secrets.NAME}`; no `Authorization` header alongside `auth` |
+| `headers` | map of name to string | one of `auth`, `headers`, `query` | | Values may hold `${secrets.NAME}`. No `Authorization` header alongside `auth` |
 | `query` | map of name to string | one of `auth`, `headers`, `query` | | Values may hold `${secrets.NAME}` |
 
 `auth` sets exactly one of `bearer` and `basic`.
@@ -490,11 +490,11 @@ import `submilli:git`.
 
 | Field | Type | Required | Constraints |
 | --- | --- | --- | --- |
-| `identity.name` | string | yes | Non-empty; no control characters, `<` or `>` |
-| `identity.email` | string | yes | Non-empty; no control characters, `<` or `>` |
-| `username` | string | no | Non-empty; no control characters or `:`. The HTTPS username for private repositories, sent with the secret named `GIT_TOKEN` |
+| `identity.name` | string | yes | Non-empty, with no control characters, `<` or `>` |
+| `identity.email` | string | yes | Non-empty, with no control characters, `<` or `>` |
+| `username` | string | no | Non-empty, with no control characters or `:`. The HTTPS username for private repositories, sent with the secret named `GIT_TOKEN` |
 
-Each value may hold `${vars.NAME}`, resolved when the session opens; no
+Each value may hold `${vars.NAME}`, resolved when the session opens. No
 other `${…}` reference is accepted.
 
 ```yaml title="blueprint.yaml (fragment)"
@@ -552,7 +552,7 @@ permissions:
 ```
 
 How rules are matched, and every capability and its fields, are in
-[Permissions](/docs/reference/permissions); the filter grammar is in
+[Permissions](/docs/reference/permissions). The filter grammar is in
 [Filter language](/docs/reference/filter-language). A filter is
 parsed with the file, so a malformed one is a parse error:
 
@@ -611,7 +611,7 @@ llm:
       provider: anthropic
 ```
 
-The block has no budget fields. Token budgets are server settings; see
+The block has no budget fields. Token budgets are server settings. See
 [Server settings](/docs/reference/server-settings).
 
 ### providers
@@ -619,7 +619,7 @@ The block has no budget fields. Token budgets are server settings; see
 | Field | Type | Required | Default | Constraints |
 | --- | --- | --- | --- | --- |
 | `type` | `anthropic`, `google`, `openai`, `openai-compatible` | yes | | |
-| `base_url` | string | for `openai-compatible` | the provider's own endpoint | An absolute `https://` URL; not `localhost`, nor a loopback, unspecified, link-local, private, broadcast, or carrier-grade NAT address literal. May hold `${secrets.NAME}` |
+| `base_url` | string | for `openai-compatible` | the provider's own endpoint | An absolute `https://` URL that is not `localhost` or a loopback, unspecified, link-local, private, broadcast, or carrier-grade NAT address literal. May hold `${secrets.NAME}` |
 | `api_key` | string | no | none | Normally `${secrets.NAME}` |
 | `supports_structured_outputs` | boolean | no | `true` | `false` sends no JSON Schema with typed calls |
 
@@ -653,11 +653,11 @@ name `llm.models()` returns.
 | `provider` | string | yes | | A key of `llm.providers` |
 | `context_window` | non-negative integer | no | unknown | Returned by `models()` as `contextWindow` |
 | `output_reserve` | non-negative integer | no | 64,000 reserved, no output cap sent | Output tokens per prompt |
-| `description` | string | no | none | One line; at most 512 characters; no control or invisible formatting characters. Returned by `models()` |
+| `description` | string | no | none | One line of at most 512 characters, with no control or invisible formatting characters. Returned by `models()` |
 
 `output_reserve` is counted against the run's and the server's token budgets
 for each prompt, with the prompt's estimated size, before the prompt is
-sent; a prompt that doesn't fit is refused with `QuotaExceededError`
+sent. A prompt that doesn't fit is refused with `QuotaExceededError`
 without being sent. When set, it is also sent as the request's output cap.
 When absent, 64,000 tokens are reserved and the request sets no cap, except
 Anthropic requests, which always carry one and use 4,096.
@@ -687,7 +687,7 @@ error: case.yaml: invalid llm config: caller 'main': permission filter names und
 parse the file the same way, and parsing stops at the first error. The CLI prints it
 as `error: <file>: <prefix>: <message>`, with the YAML path and the line and
 column when they are known. Over HTTP, the same error is a `400` response
-whose `error` field names the class; see [HTTP API](/docs/reference/http-api).
+whose `error` field names the class. See [HTTP API](/docs/reference/http-api).
 
 | Prefix | `error` over HTTP | Raised by |
 | --- | --- | --- |
@@ -727,4 +727,4 @@ error: case.yaml: `permissions.main` rule 2 for `fs.read` tests `host`, which th
 ```
 
 `harness` secrets aren't checked at registration. The secret check is made
-once: a value removed from the store later fails the call that needs it.
+once, so a value removed from the store later fails the call that needs it.

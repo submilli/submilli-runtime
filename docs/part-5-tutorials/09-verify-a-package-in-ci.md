@@ -4,8 +4,8 @@ description: "Build a GitHub Actions job that fails a pull request when a packag
 slug: tutorials/verify-a-package-in-ci
 # The workflows have not run on GitHub: the installer is not public yet.
 # SUB-1309 runs them. Every command inside them was run locally. The
-# security review needs a release with `build security-review`; the pins
-# assume it is v0.1.7. Its outputs are from Codex 0.160.0 with gpt-6.1-sol
+# security review needs `build security-review`, included in v0.2.0.
+# Its outputs are from Codex 0.160.0 with gpt-6.1-sol
 # on 2026-10-04, with the CLI built from main b5002307.
 sidebar:
   order: 9
@@ -13,7 +13,7 @@ sidebar:
 
 A package is reviewed once and then called by programs nobody reviews,
 so a change to it has to prove itself before it merges. The diff can't
-tell the reviewer whether the package still does what its tests say; a
+tell the reviewer whether the package still does what its tests say. A
 job can.
 
 In this tutorial we will build a GitHub Actions job that runs a
@@ -106,9 +106,9 @@ ok   packages/billing/tests/lib.test.ts :: scopes the lookup to the customer ask
 2 passed, 0 failed across 1 files
 ```
 
-Tests run with no blueprint, so every `check` is allowed and printed;
-the `[security]` lines are what a rule would see. That is what the job
-will print when the pull request is good.
+Tests run with no blueprint, so every `check` is allowed and printed.
+A rule would see the `[security]` lines. The job prints the same when
+the pull request is good.
 
 ## The workflow
 
@@ -128,7 +128,7 @@ jobs:
 
       - name: Install Submilli
         run: |
-          curl -fsSL https://submilli.ai/install.sh | sh -s -- --version v0.1.7
+          curl -fsSL https://submilli.ai/install.sh | sh -s -- --version v0.2.0
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
 
       - name: Test the package
@@ -139,12 +139,12 @@ The job runs on pull requests, to stop a bad change before it merges,
 and on pushes to main, to catch what reached it another way. The
 installer is pinned to a release, so a new CLI can't change what the
 job does until you change the line. `submilli build test` exits 1 when a
-test fails, which is what fails the job. Commit the workflow, open a pull
+test fails, and that fails the job. Commit the workflow, open a pull
 request, and the check runs and passes.
 
 ## See it fail
 
-Now break the package the way a careless edit would: drop the comparison
+Now break the package the way a careless edit would. Drop the comparison
 that keeps a lookup to one customer, so every charge comes back.
 
 ```typescript title="packages/billing/src/lib.ts (fragment)"
@@ -172,9 +172,9 @@ error: Error: cus_northwind has two charges in the fixture
 0 passed, 1 failed across 1 files
 ```
 
-Notice that the `check` still passed: the package asked about
-`cus_northwind` and was told yes. A blueprint can't catch this; only the
-package's own tests can, which is why they gate the merge. Restore the
+Notice that the `check` still passed. The package asked about
+`cus_northwind` and was told yes. A blueprint can't catch this. Only the
+package's tests can, so they gate the merge. Restore the
 line.
 
 ## Tests that call the service
@@ -185,7 +185,7 @@ service's key. Three steps get it to them in CI, and only to them.
 **1. Keep them apart.** Put every test that calls the service in
 `tests/network.test.ts`, or `tests/network_<name>.test.ts`, with nothing
 else in those files. `--skip-network` leaves those files out by name,
-which matters for the one case below where there is no key.
+which matters below, when there is no key.
 
 **2. Add the key to the repository's secrets.** On GitHub, open the
 repository's **Settings**, then **Secrets and variables**, **Actions**,
@@ -198,7 +198,7 @@ gh secret set BILLING_API_KEY
 ```
 
 It prompts for the value, so the key never lands in your shell history.
-Use the service's test key, not the live one: the tests will run on every
+Use the service's test key, because the tests will run on every
 pull request.
 
 **3. Give the key to the test step.** A secret reaches a step only when
@@ -221,7 +221,7 @@ jobs:
 
       - name: Install Submilli
         run: |
-          curl -fsSL https://submilli.ai/install.sh | sh -s -- --version v0.1.7
+          curl -fsSL https://submilli.ai/install.sh | sh -s -- --version v0.2.0
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
 
       - name: Test the package
@@ -239,12 +239,12 @@ ok   packages/billing/tests/network.test.ts
 ```
 
 Every run now tests against the service, and a run without the key
-fails: a test that should have reached the service can't, and the job
+fails. A test that should have reached the service can't, and the job
 turns red rather than passing on less than it claims.
 
-Pull requests from forks are the one case to decide on, since GitHub
-runs them without your secrets. To test those without the service rather
-than fail them, give them a step of their own; pushes to main, and pull
+Pull requests from forks need a decision, since GitHub
+runs them without your secrets. To test those without the service instead
+of failing them, give them a separate step. Pushes to main, and pull
 requests from branches of this repository, keep the key:
 
 ```yaml title=".github/workflows/test.yml"
@@ -263,7 +263,7 @@ jobs:
 
       - name: Install Submilli
         run: |
-          curl -fsSL https://submilli.ai/install.sh | sh -s -- --version v0.1.7
+          curl -fsSL https://submilli.ai/install.sh | sh -s -- --version v0.2.0
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
 
       - name: Test the package
@@ -291,7 +291,7 @@ skip packages/billing/tests/network.test.ts (--skip-network)
 Tests see no credential unless the command passes one, so the key
 reaches only the run that names it, and the package reads it the way it
 would on a server. Keep live tests read-only unless they have a target
-that is safe to change, such as the service's test mode; [Write
+that is safe to change, such as the service's test mode. [Write
 tests](/docs/packages/write-tests) has the details.
 
 ## Have an agent review it
@@ -319,8 +319,8 @@ export function getCharge(customerId: string, chargeId: string): Charge | null {
 }
 ```
 
-A test that looks up Northwind's own charge passes, and so would any rule:
-`check` was asked about the right customer. An agent reading the source
+A test that looks up Northwind's own charge passes, and so would any rule,
+because `check` was asked about the right customer. An agent reading the source
 catches it. Install Codex, sign in, and review the project:
 
 ```sh
@@ -337,10 +337,10 @@ Medium packages/billing/src/lib.ts:34 — Read operations expose mutable interna
   …
 ```
 
-The high finding fails the command, which exits 1; the medium one, that
-callers get the ledger's own objects rather than copies, is below the
+The high finding fails the command, which exits 1. The medium one, that
+callers get the ledger's objects rather than copies, is below the
 default `--fail-on high`. Wording and severity vary between runs, and a
-review can miss a bug, so it sits beside the tests, not in their place.
+review can miss a bug, so it sits beside the tests.
 Fix the lookup, and the review exits 0:
 
 ```typescript title="packages/billing/src/lib.ts (fragment)"
@@ -349,7 +349,7 @@ Fix the lookup, and the review exits 0:
 
 In CI the review needs an OpenAI API key, from [API
 keys](https://platform.openai.com/api-keys), as a secret
-(`gh secret set CODEX_API_KEY`), and a job of its own under `jobs:`:
+(`gh secret set CODEX_API_KEY`), and a separate job under `jobs:`:
 
 ```yaml title=".github/workflows/test.yml (added under jobs:)"
   review:
@@ -362,7 +362,7 @@ keys](https://platform.openai.com/api-keys), as a secret
           node-version: "22"
       - run: npm install -g @openai/codex@0.160.0
       - run: |
-          curl -fsSL https://submilli.ai/install.sh | sh -s -- --version v0.1.7
+          curl -fsSL https://submilli.ai/install.sh | sh -s -- --version v0.2.0
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
       - env:
           CODEX_API_KEY: ${{ secrets.CODEX_API_KEY }}
@@ -375,13 +375,13 @@ keys](https://platform.openai.com/api-keys), as a secret
 ```
 
 The report is kept even when the review fails, with a hash of every file
-it read. A review that can't finish exits 2 and fails the job too; a
+it read. A review that can't finish exits 2 and fails the job too. A
 pull request from a fork has no secrets, so it is reviewed after the
 merge.
 
 You have a job that tests a package on every pull request and an
-agent's review beside it, each catching a bug no rule would; [Review a
-package's security](/docs/packages/review-package-security) uses Claude
-Code instead. Next: [Manage blueprints in
+agent's review beside it, each catching a bug no rule would. [Review a
+package's security](/docs/packages/review-package-security) runs the
+review with Claude Code. Next: [Manage blueprints in
 Git](/docs/tutorials/manage-blueprints-in-git), the same idea for the
 blueprints that grant the package.

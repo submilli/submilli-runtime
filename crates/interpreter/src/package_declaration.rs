@@ -304,6 +304,7 @@ fn type_symbol_types(symbol: &TypeSymbol, visit: &mut dyn FnMut(&Type)) {
             method_visibility: _,
             accessors,
             constructor,
+            constructor_visibility: _,
             statics,
             static_visibility: _,
             static_fields,
@@ -788,6 +789,10 @@ pub enum TypeKind {
         accessors: Vec<AccessorSig>,
         /// Constructor parameter signature (no return type).
         constructor: Vec<Param>,
+        /// A `private` constructor may be called, and the class extended, only in
+        /// the module that declares the class.
+        #[serde(default, skip_serializing_if = "crate::Visibility::is_public")]
+        constructor_visibility: crate::Visibility,
         /// Static methods — self-less functions dispatched by name on the class
         /// object (`Class#static#name`), never through the vtable. Inherited down
         /// the `extends` chain by name resolution at the use site.

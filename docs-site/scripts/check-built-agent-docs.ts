@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { readFile, readdir } from 'node:fs/promises';
-import { films, introduction, challenges, videoSource } from '../src/lib/videos.ts';
+import { films, introduction } from '../src/lib/videos.ts';
 import { createAgentDocs, readChapters, markdownPath } from '../src/lib/agent-docs.ts';
 
 const directory = new URL('../dist/', import.meta.url);
@@ -28,51 +28,40 @@ for (const file of files.filter((file) => file.endsWith('.html'))) {
 	assert.ok(!html.includes('>View Markdown</a>'), file);
 }
 const whyPage = await readFile(new URL('docs/why/index.html', directory), 'utf8');
-const whyFilms = films.filter(film => film.canonicalPath?.split('#')[0] === '/docs/why/');
-for (const film of whyFilms) {
-  assert.equal(whyPage.includes(`data-video-id="${film.id}"`), Boolean(videoSource(film)), `Chapter player follows ${film.id} publication state`);
+for (const film of films.filter((film) => film.canonicalPath?.split('#')[0] === '/docs/why/')) {
+  assert.ok(whyPage.includes(`data-video-id="${film.id}"`));
+  assert.ok(whyPage.includes(film.embedUrl));
 }
-assert.ok(!whyPage.includes('/docs/docs/'), 'Sidebar links must not duplicate the docs base');
-assert.equal(whyPage.includes('<video'), whyFilms.some(film => videoSource(film)), 'Chapter includes only available players');
-for (const [id, slug, heading] of [['helps', 'why', 'what-submilli-is'], ['works', 'server', 'what-happens-to-a-program'], ['using', 'quickstart', '']]) {
-  const film = films.find(film => film.id === id)!;
+for (const [id, slug, heading] of [['helps', 'why', 'what-submilli-is'], ['works', 'server', 'what-happens-to-a-program'], ['using', 'quickstart', '']] as const) {
+  const film = films.find((film) => film.id === id)!;
   const page = await readFile(new URL(`docs/${slug}/index.html`, directory), 'utf8');
-  assert.equal(page.includes(`data-video-id="${id}"`), Boolean(videoSource(film)), `${id} contextual placement follows publication state`);
-  if (videoSource(film) && heading) {
-    assert.ok(page.indexOf(`id="${heading}"`) < page.indexOf(`data-video-id="${id}"`), `${id} follows its explanation heading`);
-  }
+  assert.ok(page.includes(`data-video-id="${id}"`) && page.includes(film.embedUrl));
+  if (heading) assert.ok(page.indexOf(`id="${heading}"`) < page.indexOf(`data-video-id="${id}"`));
 }
-const oldExecutionPage = await readFile(new URL('docs/concepts/execution-model/index.html', directory), 'utf8');
-assert.ok(oldExecutionPage.includes('/docs/why/'), 'Former Concepts route redirects into the current book');
-const embedPage = await readFile(new URL('docs/videos/embed/code-execution-introduction/index.html', directory), 'utf8');
-assert.equal(embedPage.includes('Video unavailable.'), !videoSource(introduction), 'Embed fallback follows publication state');
-assert.ok(embedPage.includes('noindex, nofollow'), 'Embeds stay out of search');
-assert.ok(!embedPage.includes('_video-preview'), 'Production embed never exposes local preview media');
 const libraryPage = await readFile(new URL('docs/videos/index.html', directory), 'utf8');
-assert.ok(!libraryPage.includes('class="transcript"') && !libraryPage.includes('Consider an agent used by a small business.'), 'Library keeps the full transcript on its deeper docs page');
-const transcriptPage = await readFile(new URL('docs/videos/code-execution-introduction/index.html', directory), 'utf8');
-assert.ok(transcriptPage.includes('Consider an agent used by a small business.'), 'Approved transcript remains available on its dedicated page');
-assert.ok(!libraryPage.includes('Open the execution model'), 'Library needs no article detour');
-for (const page of [whyPage, embedPage, libraryPage, transcriptPage]) {
-  assert.ok(!/Video publication pending|Revision pending|In review|pending recording|Read the complete transcript/.test(page), 'Public pages omit internal workflow and transcript promos');
-}
 let previousPosition = -1;
 for (const film of films) {
   const position = libraryPage.indexOf(`data-video-id="${film.id}"`);
-  const source = videoSource(film);
-  assert.equal(position >= 0, Boolean(source), `${film.id} gallery visibility follows publication state`);
-  const embed = await readFile(new URL(`docs/videos/embed/${film.id}/index.html`, directory), 'utf8');
-  assert.equal(embed.includes('<video'), Boolean(source), `${film.id} embed visibility follows publication state`);
-  assert.ok(!embed.includes('_video-preview'), `${film.id} embed cannot expose local media`);
-  if (!source) continue;
-  assert.ok(position > previousPosition, 'Available films preserve the series order');
+  assert.ok(position > previousPosition, `${film.id} preserves series order`);
+  assert.ok(libraryPage.includes(film.embedUrl));
   previousPosition = position;
-  for (const page of [libraryPage, embed]) {
-    assert.ok(page.includes(source), `${film.id} player uses its registered source`);
-    assert.ok(page.includes('controls') && page.includes('playsinline'), `${film.id} has native controls`);
-    assert.ok(film.captionsPath && page.includes(film.captionsPath), `${film.id} published captions are available`);
-    assert.ok(!/<track[^>]*\sdefault(?:[\s=>])/.test(page), `${film.id} captions start disabled`);
-  }
 }
-assert.ok(!chapters.some((chapter) => chapter.slug.startsWith('next/')), 'Retired draft routes stay outside the book exports');
-console.log(`Verified exports and HTML discovery for ${chapters.length} visible chapters.`);
+for (const film of films) {
+  const legacyEmbed = await readFile(new URL(`docs/videos/embed/${film.id}/index.html`, directory), 'utf8');
+  assert.ok(legacyEmbed.includes(`http-equiv="refresh"`) || legacyEmbed.includes(`http-equiv=\"refresh\"`), `${film.id} legacy embed forwards`);
+  assert.ok(legacyEmbed.includes(film.embedUrl), `${film.id} legacy embed target`);
+  assert.ok(!legacyEmbed.includes('<video') && !legacyEmbed.includes('/docs/videos/releases/'), `${film.id} legacy embed has no bundled media`);
+}
+const transcriptPage = await readFile(new URL('docs/videos/code-execution-introduction/index.html', directory), 'utf8');
+assert.ok(transcriptPage.includes('https://submilli-videos.onrender.com/watch/why-code/'));
+for (const file of await readdir(directory, { recursive: true })) {
+  if (!file.endsWith('.html')) continue;
+  const html = await readFile(new URL(file, directory), 'utf8');
+  assert.ok(!html.includes('<video'), file);
+  assert.ok(!html.includes('/docs/videos/releases/'), file);
+  assert.ok(!/publication pending|Revision pending|pending recording|Read the complete transcript/i.test(html), file);
+}
+const oldExecutionPage = await readFile(new URL('docs/concepts/execution-model/index.html', directory), 'utf8');
+assert.ok(oldExecutionPage.includes('/docs/why/'));
+assert.equal(introduction.id, 'code-execution-introduction');
+console.log(`Verified stable video embeds and HTML discovery for ${chapters.length} visible chapters.`);

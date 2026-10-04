@@ -7,9 +7,9 @@ sidebar:
 ---
 
 The agent's program is going to call a function of yours, and the program
-was written by a model that reads untrusted text. What makes the function
-safe to hand it is that the function asks the blueprint before it acts,
-with the facts a rule can test: which customer, how much, what kind of
+was written by a model that reads untrusted text. The function is safe to
+hand it because it asks the blueprint before it acts, with the facts a
+rule can test, such as which customer, how much, and what kind of
 account. In the package, that is two lines:
 
 ```typescript
@@ -25,18 +25,17 @@ those facts, before anything runs. The facts you choose decide what a
 policy can ever be precise about.
 
 This guide shows you how to export a function that a blueprint can
-allow, filter, or deny, an **operation**: declare it, enforce it, design
-its payload, call the service with a key the program never sees, and
-build it. The example is `applyCredit` in Acme's billing package, which runs on
-Stripe in test mode; substitute your operation and your service.
+allow, filter, or deny, called an **operation**. The example is
+`applyCredit` in Acme's billing package, which runs on Stripe in test
+mode. Substitute your operation and your service.
 
 ## Declare and enforce it
 
 Replace the scaffold's `src/lib.ts`. The `@capability` tag in the doc
-comment **declares** the operation: a name, and the fields a rule may
-test. The `check` call, from `submilli:security`, **enforces** it: it
-asks the blueprint whether the caller may do this with these values, and
-throws `PermissionDeniedError` if not. Until the service call is written,
+comment **declares** the operation by giving it a name and the fields a
+rule may test. The `check` call, from `submilli:security`, **enforces**
+it. It asks the blueprint whether the caller may do this with these
+values, and throws `PermissionDeniedError` if not. Until the service call is written,
 the function returns the credit it was asked for:
 
 ```typescript title="packages/billing/src/lib.ts"
@@ -79,8 +78,8 @@ checked @acme/billing v0.1.0
 :::tip[The compiler checks the tag against the check]
 `submilli build check` compares the `@capability` tag with the `check`
 call in its function. A field the `check` sends that the tag doesn't
-declare is an error, and the build stops; with `amount` left out of the
-tag:
+declare is an error, and the build stops. With `amount` left out of the
+tag, it prints:
 
 ```text
 error: payload key `amount` missing from `@capability` binding
@@ -94,14 +93,14 @@ error: payload key `amount` missing from `@capability` binding
 help: add `amount` to the matching `@capability` binding
 ```
 
-The other disagreements are warnings: a tag field the `check` doesn't
-send, a tag with no `check`, a `check` with no tag, or a tag that names
+The other disagreements are warnings. They are a tag field the `check`
+doesn't send, a tag with no `check`, a `check` with no tag, or a tag that names
 a parameter the function doesn't have.
 :::
 
 Name a capability `<domain>/<resource>.<verb>`, one per operation, so a
 blueprint can allow reading without allowing writing. The tag alone
-enforces nothing: only the `check` call does, by throwing. So call
+enforces nothing. The `check` call does, by throwing. So call
 `check` before the request, the write, or whatever else the operation
 does, and that effect never happens when the blueprint says no. A field
 in the tag is written one of four ways:
@@ -114,9 +113,9 @@ in the tag is written one of four ways:
 | `kind: "order"` | A fixed value |
 
 Call `check` directly in the body of the exported function. The compiler
-warns about a `check` anywhere else: in a function the package doesn't
-export, which runs only if some exported function happens to call it, or
-in a nested function, which may run later, more than once, or never:
+warns about a `check` anywhere else. A function the package doesn't
+export runs only if some exported function happens to call it, and a
+nested function may run later, more than once, or never:
 
 ```text
 warning: `check()` is called inside a nested function in `applyCredit`
@@ -138,11 +137,11 @@ note: the nested function starts here
 23 |     guard();
 ```
 
-A warning doesn't stop the build: after it, `submilli build check` still
+A warning doesn't stop the build. After it, `submilli build check` still
 prints `checked @acme/billing v0.1.0`. Each of these warnings is a gap in
-what a blueprint can enforce, so make them fail where it counts, in CI or
-before you publish, with `--deny-warnings`, or `SUBMILLI_DENY_WARNINGS=1`
-for a whole job:
+what a blueprint can enforce, so make them fail in CI or before you
+publish, with `--deny-warnings`, or set `SUBMILLI_DENY_WARNINGS=1` for a
+CI job:
 
 ```sh
 submilli build check --deny-warnings
@@ -161,28 +160,29 @@ the capability's name and the payload the package passes to `check`, and
 nothing else, so a fact that isn't in the payload can never appear in a
 rule. Build the payload for the rules people will want to write, not from
 the arguments the function happens to take. Ask what an operator would
-want to limit: which customer, how much, from which state to which.
+want to limit, such as which customer, how much, or from which state to
+which.
 
-**The scope the session works in.** The field that matters most is the
-scope the application authorizes a session for: here the customer, in a
-multi-tenant system the tenant, in Linear the team. Put it in every
+The field that matters most is the scope the application authorizes a
+session for. Here that is the customer. In a multi-tenant system it is
+the tenant, and in Linear the team. Put it in every
 operation's payload, including operations that take only an id. An
 operation that comments on an issue fetches the issue, reads its team,
-and checks `{ teamId, issueId }`; then one rule,
-`teamId == ${vars.teamId}`, holds across every operation, and an
+and checks `{ teamId, issueId }`. Then one rule,
+`teamId == ${vars.teamId}`, holds across every operation. An
 operation that leaves the scope out is the way around it.
 
-**Facts the caller didn't pass.** `applyCredit` takes a customer and an
+Add facts the caller didn't pass. `applyCredit` takes a customer and an
 amount. Whether the customer is premium is a fact about the account, so
 the package looks it up and puts `customerClass` in the payload, and a
 blueprint can then allow credits for premium customers only. Don't take
-such a fact from the caller: the caller is the program you are guarding
-against.
+such a fact from the caller, because the caller is the program you are
+guarding against.
 
-**Normalize before the check.** Check the value you will send, so the
-rule sees exactly what the service receives. If the program passes an
+Normalize before the check. Check the value you will send, so the
+rule sees what the service receives. If the program passes an
 object, read each property you need once, into a `const`, before the
-`check`, and use that `const` for the effect too: a property can return
+`check`, and use that `const` for the effect too. A property can return
 a different value each time it is read, and the compiler warns about a
 second read of any value that reaches a `check`.
 
@@ -220,8 +220,8 @@ function lookUpClass(customerId: string): string {
 }
 ```
 
-The new field goes in both places; add it to the `check` alone and the
-build warns that `customerClass` is missing from the tag.
+The new field goes in both places. If you add it to the `check` alone,
+the build warns that `customerClass` is missing from the tag.
 
 ## Call the service
 
@@ -293,7 +293,7 @@ function requestHeaders(form: boolean): Map<string, string> {
 Three habits keep the package's own grants narrow and the credential
 inside it:
 
-- **Keep the host in a constant.** The build reads the host out of `BASE`
+- Keep the host in a constant. The build reads the host out of `BASE`
   and writes `host == "api.stripe.com"` into what the package requires. A
   host that arrives in a parameter can't be derived, and the build says
   the filter is lost:
@@ -302,16 +302,16 @@ inside it:
   warning: cannot statically resolve the host in the URL passed to `http.post`; no host capability filter was derived
   ```
 
-- **Read the secret by its literal name.** `secrets.get("BILLING_API_KEY")`
+- Read the secret by its literal name. `secrets.get("BILLING_API_KEY")`
   becomes `name == "BILLING_API_KEY"`. The blueprint says where the value
-  comes from; the package only names it. A program can't call
+  comes from, and the package only names it. A program can't call
   `secrets.get` itself, whatever the blueprint says, so the package is the
   only place the value exists.
-- **Never return the credential.** Don't export a function that returns
+- Never return the credential. Don't export a function that returns
   the key, accept a destination that will carry it, or log the headers.
 
-Give the service's shapes types of your own, with only the fields the
-package reads, and return the package's own type; the program never sees
+Give the service's shapes their own types, with only the fields the
+package reads, and return the package's type, so the program never sees
 the service's field names. `Credit` gains the balance Stripe reports:
 
 ```typescript title="packages/billing/src/lib.ts (fragment)"
@@ -339,7 +339,7 @@ interface BalanceTransaction {
 ```
 
 `submilli:http` and `submilli:url` are two modules of the standard
-library; files, Git, session state, and model calls are reached the same
+library. Files, Git, session state, and model calls are reached the same
 way. Refer to the
 [standard library reference](/docs/reference/standard-library) for
 each module and what gates it.
@@ -354,8 +354,8 @@ submilli build check
 checked @acme/billing v0.1.0
 ```
 
-No warning: the tag and the `check` agree, the `check` is where it should
-be, and the host was derived. The build also generates `capabilities.yaml`
+There is no warning, because the tag and the `check` agree, the `check`
+is where it should be, and the host was derived. The build also generates `capabilities.yaml`
 beside the source. It is derived from the tags and the calls, and
 rewritten on every build, so don't edit it:
 
@@ -380,11 +380,11 @@ requires:
   filter: name == "BILLING_API_KEY"
 ```
 
-`provides` is what the package offers: the capabilities a blueprint grants
-to programs, and the fields their rules may test. `requires` is what the
-package itself needs. A blueprint reads this file once the package is
-published: [Publish a package](/docs/packages/publish-a-package)
-adds it to one and runs it.
+`provides` lists the capabilities a blueprint grants to programs, and the
+fields their rules may test. `requires` is what the package itself needs.
+A blueprint reads this file once the package is published.
+[Publish a package](/docs/packages/publish-a-package) adds it to one and
+runs it.
 
 ## The whole file
 

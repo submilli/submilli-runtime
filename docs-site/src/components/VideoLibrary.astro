@@ -1,10 +1,9 @@
 ---
-import { films, videoSource, previewPath } from '../lib/videos';
+import { films } from '../lib/videos';
 import VideoPlayer from './VideoPlayer.astro';
-const availableFilms = films.filter(film => videoSource(film, import.meta.env.DEV, previewPath(film, import.meta.env.SUBMILLI_VIDEO_PREVIEW_PATH, import.meta.env.SUBMILLI_CHALLENGES_PREVIEW_PATH)));
 ---
 <section class="video-library not-content" aria-label="Video series">
-  {availableFilms.length ? availableFilms.map(film => <article data-video-id={film.id}>
+  {films.length ? films.map(film => <article data-video-id={film.id}>
     <div class="player"><VideoPlayer film={film} /></div>
     <h2><span class="number">{String(films.indexOf(film) + 1).padStart(2,'0')}</span> {film.title}</h2>
     <p>{film.description}</p>

@@ -297,6 +297,7 @@ fn insert_repository_class(defs: &mut PackageDeclaration, statics: BTreeMap<Stri
                 method_visibility: BTreeMap::new(),
                 accessors: vec![],
                 constructor: vec![string("path")],
+                constructor_visibility: crate::Visibility::Public,
                 statics,
                 static_visibility: BTreeMap::new(),
                 static_fields: BTreeMap::new(),

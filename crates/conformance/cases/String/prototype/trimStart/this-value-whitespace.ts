@@ -1,5 +1,4 @@
 // test262: test/built-ins/String/prototype/trimStart/this-value-whitespace.js
-// expect-fail: trimStart should strip U+FEFF (ZWNBSP is ECMA WhiteSpace); the Unicode White_Space set used by the host leaves it in place
 // The original's `\xHH` escapes are spelled `\u00HH`; the prototype
 // `.call(str)` is a plain method call.
 

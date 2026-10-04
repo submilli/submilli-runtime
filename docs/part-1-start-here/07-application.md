@@ -6,15 +6,15 @@ sidebar:
   order: 7
 ---
 
-Your application, or the agent framework it uses, is the **harness**: the
+Your application, or the agent framework it uses, is the **harness**, the
 code that runs the agent's loop. It sends the conversation to a model,
 carries out the tool calls the model asks for, and sends the results back.
 It may be Mastra, LangChain, or a loop you wrote yourself. Submilli replaces
-none of it. The harness keeps the model and the loop, and gains one thing:
-a tool that takes a program the model wrote and runs it under your
+none of it. The harness keeps the model and the loop, and gains a tool
+that takes a program the model wrote and runs it under your
 blueprint.
 
-The quickstart's application was that tool in miniature: forty lines that
+The quickstart's application was that tool in miniature. Its forty lines
 sent a program to the server with a blueprint's name and a customer id, and
 printed the result. A real harness does the same for a model instead of a
 file, and does it once per conversation.
@@ -30,12 +30,12 @@ application did.
 Whatever the harness, connecting comes down to three things your
 application decides.
 
-**The address names the blueprint.** The MCP endpoint is
+The address names the blueprint. The MCP endpoint is
 `http://127.0.0.1:8128/mcp/<blueprint>`. A harness connected to
 `/mcp/quickstart` runs every program under that blueprint. The model can't
 choose another, because the blueprint isn't an argument of any tool.
 
-**A header binds the variables.** A blueprint that requires a variable, such
+A header binds the variables. A blueprint that requires a variable, such
 as the quickstart's `customerId`, gets it from the harness when it
 connects:
 
@@ -46,10 +46,10 @@ submilli-variables: customerId=cus_northwind
 The server checks the values against the blueprint before it accepts the
 connection, and refuses one that leaves out a required variable. The value
 must come from what your application knows, such as the signed-in user.
-Never take it from the conversation: anything there could have been written
+Never take it from the conversation, because anything there could have been written
 by the model or by someone instructing it.
 
-**One connection is one session.** The variables are bound for the life of
+One connection is one session. The variables are bound for the life of
 the connection, which is also the life of the session, and so are the
 session's files and state. Open a connection per user and close it when the
 conversation ends.
@@ -66,8 +66,8 @@ Connected, the model gets Submilli as a set of tools. The ones that matter:
 
 The harness supplies no system prompt for Submilli. The instructions that
 teach a model the language arrive as the description of the execute tool,
-with this blueprint's packages and permissions already filled in. What you
-supply is the agent's own brief: what it is for, and how to work. This is
+with this blueprint's packages and permissions already filled in. You supply
+the agent's brief: what it is for, and how to work. This is
 the brief the book's research agent runs with, from [Connect a
 harness](/docs/tutorials/connect-a-harness):
 
@@ -108,12 +108,12 @@ evidence establishes from what you infer and what remains unknown. Never
 claim you read or saved something unless a program's result shows it.
 ```
 
-Four things, and nothing about the language: what the agent is for; how
-to work in programs rather than one call at a time, including that a
-denial is final; what it may reach, in the words the model will see in
-`docs`; and how to answer. The second part is the one that changes how
-an agent behaves on Submilli: a model told to fetch, filter, and join in
-one program does the work in a few runs instead of a few dozen.
+The brief covers four things and says nothing about the language. It says
+what the agent is for, how to work in programs rather than one call at a
+time (including that a denial is final), what it may reach in the words the
+model will see in `docs`, and how to answer. The second part matters most
+on Submilli. A model told to fetch, filter, and join in one program does
+the work in a few runs instead of a few dozen.
 
 The execute tool answers with three fields the model reads, and an
 `execution_id` that names the run in the server's [audit
@@ -124,7 +124,7 @@ trail](/docs/reference/audit-trail), left out here:
 ```
 
 `result` is what `main` returned. `console` is empty after a successful run,
-to keep logs out of the conversation; the last-run tool returns them when
+to keep logs out of the conversation. The last-run tool returns them when
 the model wants them. A program that fails, whether it doesn't compile,
 throws, or is denied, is also an ordinary answer, with `error` set and
 `console` holding whatever the program logged before it stopped:

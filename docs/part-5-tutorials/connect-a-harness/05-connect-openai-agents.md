@@ -6,12 +6,12 @@ sidebar:
   order: 5
 ---
 
-In this tutorial we will run the research agent on the OpenAI Agents SDK:
-its programs executed on the server as the signed-in user, `u_ada` in the examples, then one real conversation. You need the server and the `research`
+In this tutorial we will run the research agent on the OpenAI Agents SDK,
+with its programs executed on the server as the signed-in user (`u_ada` in the examples). You need the server and the `research`
 blueprint from [Connect a harness](/docs/tutorials/connect-a-harness),
 with `SUBMILLI_SERVER_TOKEN` still exported, Python 3.10 or later, and an
-OpenAI key for the conversation; this SDK speaks to OpenAI's models,
-whichever provider the blueprint's own model uses.
+OpenAI key for the conversation. This SDK speaks to OpenAI's models,
+whichever provider the blueprint's model uses.
 
 ## Start the project
 
@@ -81,11 +81,11 @@ if __name__ == "__main__":
 
 Notice that the `async with` block is the session. The SDK connects when
 the block opens and ends the session when it closes, so the agent is
-built and run inside it. Keep `client_session_timeout_seconds`: the SDK
+built and run inside it. Keep `client_session_timeout_seconds`. The SDK
 gives up on a tool call after five seconds by default, and a program
-that searches and reads pages takes longer; without it, the run gets an
+that searches and reads pages takes longer. Without it, the run gets an
 error while the server is still working. `model=None` leaves the choice
-to the SDK's default; pass a model name to choose one. `max_turns`
+to the SDK's default. Pass a model name to choose one. `max_turns`
 bounds the loop.
 
 ## One conversation
@@ -97,7 +97,7 @@ OPENAI_API_KEY=... python agent.py
 This is one real run, with the SDK's default model, gpt-5.6-luna, made
 after the other four tutorials' agents had answered the same question
 for the same user. The model's programs are its own, and another run
-writes different ones; its first program listed the notebook, got
+writes different ones. Its first program listed the notebook, got
 today's date, and searched:
 
 ```typescript
@@ -123,11 +123,11 @@ The latest stable Rust release is **1.99.0**, released **October 1, 2026**.
 I saved and updated the research note at `/notes/rust-latest-release.md`.
 ```
 
-The note it updated is the one the other agents kept: a file on the
-server's volume, there for the next conversation `u_ada` opens, on this
-harness or any other.
+It updated the note the other agents kept, a file on the server's
+volume, there for the next conversation `u_ada` opens, on this harness
+or any other.
 
-You have the research agent running on the OpenAI Agents SDK, every
+You have the research agent running on the OpenAI Agents SDK, each
 program it writes executed on the server as the signed-in user, and the
 binding proved on the index before any model was involved. Project:
 [`examples/harnesses/openai-agents/`](https://github.com/submilli/submilli-runtime/tree/main/examples/harnesses/openai-agents).

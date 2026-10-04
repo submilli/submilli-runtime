@@ -1,0 +1,9 @@
+---
+import { films } from '../../../lib/videos';
+
+export function getStaticPaths() {
+  return films.map((film) => ({ params: { id: film.id }, props: { embedUrl: film.embedUrl } }));
+}
+
+return Astro.redirect(Astro.props.embedUrl);
+---

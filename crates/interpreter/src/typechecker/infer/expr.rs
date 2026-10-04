@@ -36,6 +36,13 @@ pub(super) struct StaticCallTarget<'a> {
     mangled: crate::MangledName,
 }
 
+/// What a use of a class's constructor does, for the help a private one gets.
+#[derive(Clone, Copy)]
+pub(super) enum ConstructorUse {
+    New,
+    Extend,
+}
+
 /// How [`Inferer::bind_param_call_args`] names the callee in its arity
 /// diagnostic and which signature shape it lifts into the `help:` block.
 #[derive(Clone, Copy)]
@@ -132,6 +139,65 @@ fn variant_matches(
         .all(|(name, field)| field.optional || lit_names.contains(name.as_str()));
     let no_excess = lit_names.iter().all(|name| fields.contains_key(*name));
     required_satisfied && no_excess
+}
+
+/// A field value an object literal spells as a literal. tsc uses such values
+/// to pick the union members a literal could be constructing.
+enum TagValue {
+    Null,
+    Literal(narrowing::LiteralValue),
+}
+
+/// Whether `ty` is a primitive or a unit type: it has no fields an object
+/// literal could provide.
+fn is_primitive(ty: &Type) -> bool {
+    matches!(
+        ty.peel(),
+        Type::Null
+            | Type::String
+            | Type::Number
+            | Type::Boolean
+            | Type::StringLiteral(_)
+            | Type::NumberLiteral(_)
+            | Type::BooleanLiteral(_)
+    )
+}
+
+/// Whether a field typed `ty` can tell union members apart. As in tsc, it
+/// must be a unit type (a literal, `boolean` or `null`) or a union made only
+/// of them: `"a" | "b"` is a tag, `string | null` isn't.
+fn is_tag_type(ty: &Type) -> bool {
+    fn is_unit(ty: &Type) -> bool {
+        matches!(
+            ty.peel(),
+            Type::StringLiteral(_)
+                | Type::NumberLiteral(_)
+                | Type::BooleanLiteral(_)
+                | Type::Boolean
+                | Type::Null
+        )
+    }
+    match ty.peel() {
+        Type::Union(members) => members.iter().all(is_unit),
+        _ => is_unit(ty),
+    }
+}
+
+/// Whether a field typed `ty` can hold `value`. A type this doesn't decide
+/// holds it, so a member is ruled out only when it certainly can't.
+fn tag_fits(ty: &Type, value: &TagValue) -> bool {
+    use narrowing::LiteralValue;
+    match (ty.peel(), value) {
+        (Type::Union(members), _) => members.iter().any(|m| tag_fits(m, value)),
+        (Type::Null, TagValue::Null)
+        | (Type::String, TagValue::Literal(LiteralValue::String(_)))
+        | (Type::Number, TagValue::Literal(LiteralValue::Number(_)))
+        | (Type::Boolean, TagValue::Literal(LiteralValue::Boolean(_))) => true,
+        (Type::StringLiteral(s), TagValue::Literal(LiteralValue::String(v))) => s == v,
+        (Type::NumberLiteral(n), TagValue::Literal(LiteralValue::Number(v))) => n == v,
+        (Type::BooleanLiteral(b), TagValue::Literal(LiteralValue::Boolean(v))) => b == v,
+        (other, _) => !is_primitive(other),
+    }
 }
 
 fn valid_fields_help(fields: &std::collections::BTreeMap<String, crate::ObjectField>) -> String {
@@ -2713,6 +2779,17 @@ impl Inferer<'_> {
                     _ => None,
                 })
         {
+            if self.reject_private_constructor(&class_mangled, ConstructorUse::New, span) {
+                // The parameters are private too: type the arguments on their
+                // own rather than report how they miss a hidden signature.
+                for annotation in type_args.iter().flatten() {
+                    self.resolve_type(annotation)?;
+                }
+                for arg in args {
+                    self.infer_expr(arg, None)?;
+                }
+                return Ok((TypedExprKind::Null, Type::Error));
+            }
             let package = self.type_package(&ident.name);
             let ctor_mangled = crate::mangle::extend(&class_mangled, "constructor");
             // Generic class: the constructor is a receiver-less generic call —
@@ -3529,6 +3606,52 @@ impl Inferer<'_> {
                 (TypedExprKind::Null, Type::Error)
             }
         }
+    }
+
+    /// A `private` constructor is callable, and its class extendable, only in the
+    /// module that declares the class (spec §2.2's module-scoped privacy). Reports
+    /// a use from another module, and says whether it did.
+    pub(super) fn reject_private_constructor(
+        &mut self,
+        class: &crate::MangledName,
+        usage: ConstructorUse,
+        span: Span,
+    ) -> bool {
+        let Some(sym) = self.types.lookup_by_mangled(class) else {
+            return false;
+        };
+        let crate::TypeKind::Class {
+            constructor_visibility: crate::Visibility::Private,
+            ..
+        } = sym.kind
+        else {
+            return false;
+        };
+        if self.local_class_mangles.contains(class) {
+            return false;
+        }
+        // The declared name: the symbol table keys a class by its local names,
+        // import aliases included.
+        let name = class
+            .as_str()
+            .rsplit_once(crate::mangle::SEP)
+            .map_or(class.as_str(), |(_, name)| name)
+            .to_string();
+        let help = match usage {
+            ConstructorUse::New => format!(
+                "only `{name}`'s own module can call it; use what that module exports to \
+                 create one, such as a static method"
+            ),
+            ConstructorUse::Extend => {
+                format!("only a class in `{name}`'s own module can extend it")
+            }
+        };
+        self.error_with_help(
+            span,
+            format!("the constructor of class `{name}` is private"),
+            vec![help],
+        );
+        true
     }
 
     pub(super) fn check_static_privacy(
@@ -4423,6 +4546,159 @@ impl Inferer<'_> {
             .map_err(crate::typechecker::arena_failure)
     }
 
+    /// The value of an object literal's field when it is spelled as a literal.
+    fn literal_tag_value(&self, value: crate::ExprId) -> Result<Option<TagValue>, CompilerFailure> {
+        let expr = self.ast.try_expr(value).map_err(super::arena_failure)?;
+        Ok(match &expr.kind {
+            crate::ExprKind::Null => Some(TagValue::Null),
+            crate::ExprKind::String(s) => Some(TagValue::Literal(narrowing::LiteralValue::String(
+                s.clone(),
+            ))),
+            crate::ExprKind::Boolean(b) => {
+                Some(TagValue::Literal(narrowing::LiteralValue::Boolean(*b)))
+            }
+            crate::ExprKind::Number(n) => {
+                // Mirror the number-literal inference's -0.0 → 0.0.
+                let canonical = if *n == 0.0 { 0.0 } else { *n };
+                Some(TagValue::Literal(narrowing::LiteralValue::Number(
+                    crate::types::LiteralF64(canonical),
+                )))
+            }
+            _ => None,
+        })
+    }
+
+    /// Report an object literal's fields that no member of its target union
+    /// declares, when no single member was picked as the literal's hint (see
+    /// [`Self::select_union_variant`]).
+    ///
+    /// As in tsc, fields spelled as literals first narrow the union to the
+    /// members they fit (see [`Self::rule_out_by_tags`]): `{ a: null, b: "f",
+    /// c: 4 }` against `{ a: null; b: string } | { a: string; c: number }`
+    /// keeps only the first member, so `c` is unknown. With a spread nothing is
+    /// ruled out, since the spread may overwrite a tag.
+    fn report_unknown_union_fields(
+        &mut self,
+        union_members: &[Type],
+        literal: &[crate::ObjectLiteralMember],
+    ) -> Result<(), CompilerFailure> {
+        let Some(shapes) = self.union_object_shapes(union_members) else {
+            return Ok(());
+        };
+        let has_spread = literal
+            .iter()
+            .any(|m| matches!(m, crate::ObjectLiteralMember::Spread { .. }));
+        let literal_fields: Vec<&crate::ObjectLiteralField> = literal
+            .iter()
+            .filter_map(|m| match m {
+                crate::ObjectLiteralMember::Field(f) => Some(f),
+                crate::ObjectLiteralMember::Spread { .. }
+                | crate::ObjectLiteralMember::Computed { .. } => None,
+            })
+            .collect();
+        let candidates = if has_spread {
+            shapes.iter().collect()
+        } else {
+            let Some(candidates) = self.rule_out_by_tags(&shapes, &literal_fields)? else {
+                return Ok(());
+            };
+            candidates
+        };
+
+        let mut known = std::collections::BTreeMap::new();
+        for shape in candidates {
+            for (name, field) in shape {
+                known.entry(name.clone()).or_insert_with(|| field.clone());
+            }
+        }
+        for field in literal_fields {
+            if !known.contains_key(&field.name.name) {
+                self.report_unknown_field(field, &known);
+            }
+        }
+        Ok(())
+    }
+
+    /// The field maps of a union's object members, skipping its primitives.
+    /// `None`, so nothing is checked, when there are none or a member could
+    /// take any field: one with an index signature, an empty shape, or a type
+    /// whose fields aren't known here (a class, an array, a type parameter).
+    fn union_object_shapes(&self, union_members: &[Type]) -> Option<Vec<ObjectFields>> {
+        let mut shapes = Vec::new();
+        for member in union_members {
+            if is_primitive(member) {
+                continue;
+            }
+            let fields = match member.peel() {
+                Type::Object {
+                    fields,
+                    index: None,
+                } => fields.clone(),
+                Type::InterfaceRef {
+                    mangled,
+                    name,
+                    args,
+                    ..
+                } if self.resolver().index_signature(member).is_none() => {
+                    self.structural_form(mangled, name, args)?
+                }
+                // An index signature, or a type whose fields aren't known here.
+                _ => return None,
+            };
+            if fields.is_empty() {
+                return None;
+            }
+            shapes.push(fields);
+        }
+        (!shapes.is_empty()).then_some(shapes)
+    }
+
+    /// The union members an object literal could be constructing, judged by
+    /// its fields spelled as literals, following tsc. A field narrows when a
+    /// member declaring it types it as a tag ([`is_tag_type`]): the members
+    /// left are those whose field can hold the value, and those without the
+    /// field, which would accept the literal structurally. `None` when no
+    /// member is left: the literal can't be any member, which assignability
+    /// reports, and tsc reports no unknown field.
+    fn rule_out_by_tags<'s>(
+        &self,
+        shapes: &'s [ObjectFields],
+        literal_fields: &[&crate::ObjectLiteralField],
+    ) -> Result<Option<Vec<&'s ObjectFields>>, CompilerFailure> {
+        let mut candidates: Vec<_> = shapes.iter().collect();
+        for field in literal_fields {
+            let name = &field.name.name;
+            let is_tag = shapes
+                .iter()
+                .any(|shape| shape.get(name).is_some_and(|f| is_tag_type(&f.ty)));
+            if !is_tag {
+                continue;
+            }
+            let Some(value) = self.literal_tag_value(field.value)? else {
+                continue;
+            };
+            candidates.retain(|shape| shape.get(name).is_none_or(|f| tag_fits(&f.ty, &value)));
+            if candidates.is_empty() {
+                return Ok(None);
+            }
+        }
+        Ok(Some(candidates))
+    }
+
+    fn report_unknown_field(&mut self, field: &crate::ObjectLiteralField, known: &ObjectFields) {
+        self.error_with_help(
+            field.name.span,
+            format!(
+                "object literal has unknown field `{}` for the target type",
+                field.name.name,
+            ),
+            vec![
+                valid_fields_help(known),
+                excess_field_fix_help(&field.name.name, known),
+            ],
+        );
+    }
+
     /// Pick the union variant an object literal is constructing, so its
     /// fields get per-variant hints instead of being inferred hint-free —
     /// which widens literal-typed fields (`kind: "circle"` → `string`) so the
@@ -4452,26 +4728,9 @@ impl Inferer<'_> {
                 .map(|m| {
                     Ok::<_, CompilerFailure>(match m {
                         crate::ObjectLiteralMember::Field(f) if f.name.name == key => {
-                            match &self
-                                .ast
-                                .try_expr(f.value)
-                                .map_err(super::arena_failure)?
-                                .kind
-                            {
-                                crate::ExprKind::String(s) => {
-                                    Some(narrowing::LiteralValue::String(s.clone()))
-                                }
-                                crate::ExprKind::Boolean(b) => {
-                                    Some(narrowing::LiteralValue::Boolean(*b))
-                                }
-                                crate::ExprKind::Number(n) => {
-                                    // Mirror the number-literal inference's -0.0 → 0.0.
-                                    let canonical = if *n == 0.0 { 0.0 } else { *n };
-                                    Some(narrowing::LiteralValue::Number(crate::types::LiteralF64(
-                                        canonical,
-                                    )))
-                                }
-                                _ => None,
+                            match self.literal_tag_value(f.value)? {
+                                Some(TagValue::Literal(value)) => Some(value),
+                                Some(TagValue::Null) | None => None,
                             }
                         }
                         _ => None,
@@ -4582,6 +4841,11 @@ impl Inferer<'_> {
             }
             other => other,
         };
+        // Still the union only when no member was picked above, so this check
+        // and the single-shape one below never both run.
+        if let Some(Type::Union(union_members)) = peeled {
+            self.report_unknown_union_fields(union_members, &members)?;
+        }
         let interface_target: Option<(crate::Package, String, crate::MangledName, Vec<Type>)> =
             match peeled {
                 Some(Type::InterfaceRef {
@@ -4609,17 +4873,7 @@ impl Inferer<'_> {
                 if let crate::ObjectLiteralMember::Field(field) = member
                     && !want.contains_key(&field.name.name)
                 {
-                    self.error_with_help(
-                        field.name.span,
-                        format!(
-                            "object literal has unknown field `{}` for the target type",
-                            field.name.name,
-                        ),
-                        vec![
-                            valid_fields_help(want),
-                            excess_field_fix_help(&field.name.name, want),
-                        ],
-                    );
+                    self.report_unknown_field(field, want);
                 }
             }
         }

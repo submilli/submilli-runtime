@@ -87,6 +87,36 @@ doc comment or help text in the code, then run `npm run reference` in
 `docs-site` with `SUBMILLI_BIN` and `SUBMILLI_SERVER_BIN` naming the freshly
 built binaries. Run it before every release.
 
+## People write, AI proofreads
+
+A person writes each page: the argument, the order, the examples, and
+the sentences. An AI assistant proofreads it. It checks claims against
+the code, runs the examples, captures outputs, and points out what is
+unclear. It suggests, and the author decides. A page an assistant
+drafted gets rewritten by its author before review.
+
+Machine-written prose has a texture readers recognize, and once they
+notice it they stop trusting the page. Avoid:
+
+- **Semicolons.** Use two sentences, or join with *and*, *but*, or *so*.
+- **Colons that explain.** A colon introduces a list, a code block, or a
+  table. "It is suggestible: it must read things" is two sentences.
+- **Em dashes in prose.** Use a comma, parentheses, or a full stop.
+- **Contrast pairs.** "X, not Y", "rather than", "not only… but". Keep
+  one only where a reader would otherwise get it wrong.
+- **Cleft sentences.** "A session is what your application opens" is
+  "Your application opens a session."
+- **Absolutes and intensifiers.** *every*, *whole*, *exactly*, *truly*,
+  *crucial*, *robust*, *seamless*, *powerful*, *ensure*, *leverage*.
+  Say how many, or say nothing.
+- **Bold lead-ins.** A bolded phrase opening every bullet or paragraph.
+- **Lists of three by reflex.** Name as many things as there are.
+- **The same shape on every page.** Openings, section rhythm, and
+  closing lines that read like a template.
+
+Read the page aloud. If it sounds like a press release or a chatbot,
+rewrite it in your own words.
+
 ## Start with a chapter brief
 
 Before drafting, answer these questions in a short working note:

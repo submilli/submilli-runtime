@@ -7,22 +7,19 @@ sidebar:
 ---
 
 Coding assistants write the code. A Submilli agent more often needs to
-read it: an agent on the support line hears about a bug or a feature
-request, and the fastest way to triage it is the repository itself, to
-find where the feature lives and say how deep the change goes. And a
-repository is not only for code. Notes and memory kept in Git get
-history, diffs, and review for free, which is why some memory
-frameworks store an agent's memory that way. In a program,
-`submilli:git` does the repository work and `submilli:code` the finding
-and editing, both inside the program's own filesystem, and the blueprint
-decides which repository, which directory, and whether the program may
-commit at all.
+read it. An agent on the support line hears about a bug or a feature
+request, and the fastest way to triage it is the repository itself. The
+agent finds where the feature lives and says how deep the change goes.
+Repositories also hold more than code. Notes and memory kept in Git get
+history, diffs, and review for free, so some memory frameworks store an
+agent's memory that way. In a program, `submilli:git` does the repository
+work and `submilli:code` the finding and editing, both inside the
+program's filesystem. The blueprint decides which repository, which
+directory, and whether the program may commit at all.
 
 This guide shows you how to let a program clone a repository, search and
-edit it, and commit. It starts from an empty blueprint: set the Git
-identity and its token, grant the Git and file operations, and run a
-program that does the work. The example clones GitHub's
-Hello-World repository into `/repo`; substitute your remote and paths.
+edit it, and commit. The example clones GitHub's Hello-World repository
+into `/repo`. Substitute your remote and paths.
 
 ## Start from an empty blueprint
 
@@ -37,8 +34,8 @@ submilli blueprint init coder
 ## Set the identity
 
 `submilli:git` is off until the blueprint gives it an identity, because
-every commit it makes is authored by the blueprint, not the program. The
-module speaks HTTPS only, not SSH, so the identity also carries the
+the blueprint, not the program, authors the commits it makes. The
+module speaks HTTPS and not SSH, so the identity also carries the
 username a remote will ask for:
 
 ```sh
@@ -59,7 +56,7 @@ git:
 
 When a remote asks for credentials, Submilli sends the secret named
 `GIT_TOKEN` with that username, and the program never sees it. Declare it
-and put the value in the store; a public repository never asks, and the
+and put the value in the store. A public repository never asks, and the
 token goes unused:
 
 ```sh
@@ -74,10 +71,10 @@ Stored secret 'git_token'
 ```
 
 If you want the session recorded in the author, a value may include a
-variable: `--name 'Support Agent (${vars.customerId})'`, single-quoted so
-the shell leaves it alone. `submilli blueprint git show` prints the
-identity and whether `GIT_TOKEN` is declared, without the value; `git
-remove` drops the block and leaves the secret and the rules in place.
+variable, as in `--name 'Support Agent (${vars.customerId})'`. Single
+quotes keep the shell from expanding it. `submilli blueprint git show`
+prints the identity and whether `GIT_TOKEN` is declared, without the
+value. `git remove` drops the block and leaves the secret and the rules in place.
 
 ## What programs can do with it
 
@@ -130,9 +127,9 @@ submilli:git
 
 ## The workspace tools
 
-Finding and changing code is `submilli:code`, the workspace tools a
-coding agent expects: numbered reads, search, tree, and anchored edits
-that return a diff:
+`submilli:code` finds and changes code. It has the workspace tools a
+coding agent expects, such as numbered reads, search, tree, and anchored
+edits that return a diff:
 
 ```sh
 submilli docs submilli:code
@@ -148,7 +145,7 @@ function edit(path: string, oldString: string, newString: string, replaceAll?: b
 …
 ```
 
-It has no capabilities of its own: reads use `fs.read`, navigation uses
+It has no capabilities of its own. Reads use `fs.read`, navigation uses
 `fs.list` and `fs.stat`, and edits use `fs.read` and `fs.write`.
 
 ## Grant the operations
@@ -187,12 +184,12 @@ submilli blueprint capability add fs.stat
   filter fields: path: string, recursive: boolean
 ```
 
-Each operation needs only its own rule: `git.clone` creates and fills
-`/repo` with no `fs` rule, and reading history, staging, creating or
+Each operation needs its own rule and no other. `git.clone` creates and
+fills `/repo` with no `fs` rule. Reading history, staging, creating or
 switching branches, and adding remotes need no rule at all. `fs.stat` is
-left unfiltered: before a search, the workspace tools look for ignore
-files up to the root, and `stat` reveals only metadata. `remote` is the
-full HTTPS URL; refer to [permissions](/docs/reference/permissions)
+left unfiltered because the workspace tools look for ignore files up to
+the root before a search, and `stat` reveals only metadata. `remote` is
+the full HTTPS URL. Refer to [permissions](/docs/reference/permissions)
 for how it is normalized and for filtering on `branch`.
 
 If the program should fetch or pull later, grant `git.fetch` for the same
@@ -240,8 +237,8 @@ submilli run --blueprint blueprint.yaml review.ts
 +Hello World! Reviewed by the support agent.
 ```
 
-The repository lives in the program's filesystem, so how long the commit
-lasts is the `vfs` mode's decision: refer to [Keep files and
+The repository lives in the program's filesystem, so the `vfs` mode
+decides how long the commit lasts. Refer to [Keep files and
 state](/docs/blueprints/keep-files-and-state).
 
 ## The result
