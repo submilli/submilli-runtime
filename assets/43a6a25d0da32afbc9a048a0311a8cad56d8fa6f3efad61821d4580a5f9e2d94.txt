@@ -1,0 +1,11 @@
+Start with the architecture. Your agent writes a program. Your application selects a human-approved blueprint and supplies trusted context. Submilli provides the compiler and execution runtime. The server is one way to host that runtime, not the runtime itself.
+
+Submilli implements its own parser, type checker, and code generator for a stricter form of familiar TypeScript. Types catch mistakes before execution. The compiler produces WebAssembly for an isolated instance, using existing WebAssembly libraries and engine technology underneath.
+
+Node and npm libraries target a general-purpose host, without Submilli’s operation-level checks. So generated programs use Submilli’s standard library and selected packages instead. Building the language boundary makes those imports explicit; package authors supply typed operations and checks the runtime can enforce.
+
+A package exposes operations in business terms. Its author explicitly places a permission check, passing the operation and relevant arguments. The runtime evaluates those facts against the blueprint. A human creates and approves those rules; an agent may help draft them.
+
+Here, the application binds Customer A. The package asks to list charges for Customer A, and the rule matches. Asking for Customer B fails that same rule. These labels represent the quickstart’s local fixture, not a live billing service. The program cannot choose its trusted binding.
+
+The tradeoff is deliberate. You use the supported language and expose integrations through Submilli packages or configured MCP tools. You give up drop-in npm compatibility. In return, the runtime gets a controlled set of operations to check, while your application keeps the agent loop.

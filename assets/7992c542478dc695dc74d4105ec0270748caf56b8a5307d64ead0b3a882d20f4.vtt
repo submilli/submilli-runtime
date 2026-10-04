@@ -1,0 +1,139 @@
+WEBVTT
+
+00:00:00.500 --> 00:00:01.940
+Start with the architecture.
+
+00:00:02.220 --> 00:00:04.100
+Your agent writes a program.
+
+00:00:04.580 --> 00:00:07.620
+Your application selects a human-approved
+blueprint and
+
+00:00:07.700 --> 00:00:09.460
+supplies trusted context.
+
+00:00:10.020 --> 00:00:13.380
+Submilli provides the compiler and
+execution runtime.
+
+00:00:13.860 --> 00:00:17.380
+The server is one way to host that
+runtime, not the runtime
+
+00:00:17.500 --> 00:00:18.211
+itself.
+
+00:00:19.533 --> 00:00:23.533
+Submilli implements its own parser, type
+checker, and code
+
+00:00:23.613 --> 00:00:26.973
+generator for a stricter form of familiar
+TypeScript.
+
+00:00:27.533 --> 00:00:30.093
+Types catch mistakes before execution.
+
+00:00:30.573 --> 00:00:34.413
+The compiler produces WebAssembly for an
+isolated instance,
+
+00:00:34.573 --> 00:00:37.853
+using existing WebAssembly libraries and
+engine technology
+
+00:00:37.933 --> 00:00:38.681
+underneath.
+
+00:00:40.000 --> 00:00:44.560
+Node and npm libraries target a general-
+purpose host, without
+
+00:00:44.640 --> 00:00:47.040
+Submilli’s operation-level checks.
+
+00:00:47.120 --> 00:00:50.560
+So generated programs use Submilli’s
+standard library and
+
+00:00:50.800 --> 00:00:52.800
+selected packages instead.
+
+00:00:53.000 --> 00:00:56.480
+Building the language boundary makes those
+imports explicit;
+
+00:00:56.560 --> 00:01:00.240
+package authors supply typed operations
+and checks the runtime
+
+00:01:00.320 --> 00:01:01.316
+can enforce.
+
+00:01:02.633 --> 00:01:06.233
+A package exposes operations in business
+terms.
+
+00:01:06.313 --> 00:01:09.913
+Its author explicitly places a permission
+check, passing
+
+00:01:09.953 --> 00:01:12.553
+the operation and relevant arguments.
+
+00:01:12.593 --> 00:01:16.233
+The runtime evaluates those facts against
+the blueprint.
+
+00:01:16.313 --> 00:01:19.193
+A human creates and approves those rules;
+
+00:01:19.273 --> 00:01:21.154
+an agent may help draft them.
+
+00:01:22.467 --> 00:01:25.507
+Here, the application binds Customer A.
+
+00:01:25.987 --> 00:01:29.427
+The package asks to list charges for
+Customer A, and the
+
+00:01:29.507 --> 00:01:30.387
+rule matches.
+
+00:01:30.947 --> 00:01:33.987
+Asking for Customer B fails that same
+rule.
+
+00:01:34.467 --> 00:01:37.987
+These labels represent the quickstart’s
+local fixture, not
+
+00:01:38.067 --> 00:01:39.587
+a live billing service.
+
+00:01:39.827 --> 00:01:42.738
+The program cannot choose its trusted
+binding.
+
+00:01:44.067 --> 00:01:45.907
+The tradeoff is deliberate.
+
+00:01:46.307 --> 00:01:49.667
+You use the supported language and expose
+integrations through
+
+00:01:49.747 --> 00:01:52.947
+Submilli packages or configured MCP tools.
+
+00:01:53.507 --> 00:01:56.147
+You give up drop-in npm compatibility.
+
+00:01:56.707 --> 00:02:00.147
+In return, the runtime gets a controlled
+set of operations
+
+00:02:00.227 --> 00:02:03.476
+to check, while your application keeps the
+agent loop.
