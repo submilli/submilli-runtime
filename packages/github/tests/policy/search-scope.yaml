@@ -1,0 +1,17 @@
+kind: blueprint
+name: github-search-scope-test
+packages:
+  - '@submilli/github'
+default: deny
+permissions:
+  main:
+    - capability: github.com/code.search
+      filter: owner == "allowed-org"
+      action: allow
+    - capability: github.com/issues.search
+      filter: owner == "allowed-org"
+      action: allow
+    - capability: github.com/pulls.search
+      filter: owner == "allowed-org"
+      action: allow
+  '@submilli/github': []

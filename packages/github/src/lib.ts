@@ -13,10 +13,12 @@ const MAX_FILE_BYTES = 10485760;
 // could be read as search syntax or as a second path segment.
 const OWNER_NAME = /^[A-Za-z0-9_-]+$/;
 const REPOSITORY_NAME = /^[A-Za-z0-9._-]+$/;
-// What ends a word of a search query: whitespace of any kind, a control or zero-width character,
-// or a parenthesis. They are listed because `\s` matches only the ASCII spaces here, and because
-// how GitHub splits on the others is not documented.
-const SEARCH_WORD_END = /[\u0000-\u0020\u007f-\u00a0\u1680\u180e\u2000-\u200d\u2028\u2029\u202f\u205f\u2060\u3000\ufeff()]/;
+// Scope names are refused anywhere outside phrases; relying on GitHub's undocumented
+// punctuation/format-character tokenization would leave the repository boundary ambiguous.
+const SEARCH_SCOPE = /repo:|org:|user:|owner:/;
+const SEARCH_KIND_PREFIX = /(^|[^a-z0-9_])(is|type):$/;
+const SEARCH_KIND = /(^|[^a-z0-9_])(is|type):(issue|pr|pull-request)($|[^a-z0-9_-])/;
+const SEARCH_OR = /(^|[^a-z0-9_-])or($|[^a-z0-9_-])/;
 
 /** Identifies a repository by owner and name. */
 export interface RepositoryRef {
@@ -2529,42 +2531,44 @@ function pageToken(value: string | null, numeric: boolean): string | null {
 function scopedSearch(query: string, owner: string, name: string, kind: string): string {
     requireText(query, "query");
     checkedRepository(owner, name);
-    const lower = query.toLowerCase();
-    let quoted = false;
-    let word = "";
-    const words: string[] = [];
-    for (let i = 0; i < lower.length; i += 1) {
-        const char = lower.charAt(i);
-        if (char === "\"") {
-            quoted = !quoted;
-            continue;
-        }
-        if (quoted) continue;
-        if (SEARCH_WORD_END.test(char)) {
-            if (word.length > 0) {
-                words.push(word);
-                word = "";
-            }
-        } else {
-            word += char;
-        }
-    }
-    if (word.length > 0) words.push(word);
-    if (quoted) throw validationError("unsafe_search_query", "Search query contains an unterminated quote");
-    for (const item of words) {
-        if (
-            item === "or"
-            || item.startsWith("repo:")
-            || item.startsWith("org:")
-            || item.startsWith("user:")
-            || item.startsWith("is:issue")
-            || item.startsWith("is:pr")
-        ) {
-            throw validationError("unsafe_search_query", "Repository-scoped search cannot contain scope-changing qualifiers or OR");
-        }
+    const syntax = searchSyntax(query);
+    if (SEARCH_SCOPE.test(syntax) || SEARCH_KIND.test(syntax) || SEARCH_OR.test(syntax)) {
+        throw validationError("unsafe_search_query", "Repository-scoped search cannot contain scope-changing qualifiers or OR");
     }
     const suffix = kind.length === 0 ? "" : " " + kind;
     return query + " repo:" + owner + "/" + name + suffix;
+}
+
+function searchSyntax(query: string): string {
+    let quoted = false;
+    let quotedKind = false;
+    let syntax = "";
+    for (let i = 0; i < query.length; i += 1) {
+        const char = query.charAt(i);
+        if (char === "\"") {
+            // Search endpoints differ in escape syntax. Refuse ambiguous quotes rather than
+            // letting our phrase boundary disagree with the remote parser.
+            if (i > 0 && query.charAt(i - 1) === "\\") {
+                throw validationError("unsafe_search_query", "Repository-scoped search cannot contain escaped quotes");
+            }
+            if (!quoted) {
+                // A quoted qualifier value is active syntax, unlike a standalone phrase.
+                quotedKind = SEARCH_KIND_PREFIX.test(syntax.toLowerCase());
+                if (!quotedKind) syntax += " ";
+            } else {
+                syntax += " ";
+                quotedKind = false;
+            }
+            quoted = !quoted;
+            continue;
+        }
+        if (quoted && !quotedKind) continue;
+        // Fold fullwidth ASCII only for validation. Send the caller's original query unchanged.
+        const code = query.charCodeAt(i);
+        syntax += code >= 0xff01 && code <= 0xff5e ? String.fromCharCode(code - 0xfee0) : char;
+    }
+    if (quoted) throw validationError("unsafe_search_query", "Search query contains an unterminated quote");
+    return syntax.toLowerCase();
 }
 
 // The owner and name the check reads are put in paths and search queries as they are, so each
