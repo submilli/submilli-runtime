@@ -5386,7 +5386,6 @@ dependencies = [
  "base64 0.22.1",
  "clap",
  "futures",
- "getrandom 0.4.2",
  "http-body-util",
  "httpmock",
  "insta",

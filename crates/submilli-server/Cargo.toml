@@ -44,7 +44,6 @@ ipnet = { workspace = true }
 rmcp = { workspace = true }
 tower = { workspace = true, features = ["util"] }
 futures = { workspace = true }
-getrandom = "0.4"
 ureq = { workspace = true }
 sqlx = { version = "0.9", default-features = false, features = ["sqlite", "runtime-tokio", "macros", "migrate"] }
 thiserror = "2"

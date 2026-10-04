@@ -3,7 +3,7 @@ use futures::executor::block_on;
 use futures::poll;
 
 #[test]
-fn identity_survives_restart_without_tokio_and_second_owner_is_refused() {
+fn reopens_without_tokio_and_second_owner_is_refused() {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("server.db");
     block_on(async {
@@ -12,8 +12,6 @@ fn identity_survives_restart_without_tokio_and_second_owner_is_refused() {
             ServerDatabase::open(&path).await,
             Err(DatabaseError::AlreadyOpen(_))
         ));
-        let store_id = first.store_id();
-        let generation = first.startup_generation();
         let answer: i64 = first
             .transaction(|connection| {
                 Box::pin(async move {
@@ -27,8 +25,6 @@ fn identity_survives_restart_without_tokio_and_second_owner_is_refused() {
         assert_eq!(answer, 42);
         first.close().await.unwrap();
         let second = ServerDatabase::open(&path).await.unwrap();
-        assert_eq!(second.store_id(), store_id);
-        assert_ne!(second.startup_generation(), generation);
         second.close().await.unwrap();
     });
 }
@@ -89,11 +85,11 @@ async fn transaction_errors_and_callback_panics_roll_back() {
                 sqlx::raw_sql("CREATE TABLE rolled_back (value INTEGER)")
                     .execute(&mut *connection)
                     .await?;
-                Err(DatabaseError::InvalidMetadata)
+                Err(DatabaseError::Import("injected failure".into()))
             })
         })
         .await;
-    assert!(matches!(result, Err(DatabaseError::InvalidMetadata)));
+    assert!(matches!(result, Err(DatabaseError::Import(_))));
     let result: Result<(), DatabaseError> = database
         .transaction(|connection| {
             Box::pin(async move {
@@ -175,57 +171,6 @@ async fn concurrent_claims_serialize_before_reading() {
     }
     assert_eq!(winners, 1);
     database.close().await.unwrap();
-}
-
-#[test]
-fn invalid_schema_refuses_startup_without_changing_identity() {
-    let directory = tempfile::tempdir().unwrap();
-    let path = directory.path().join("server.db");
-    block_on(async {
-        let first = ServerDatabase::open(&path).await.unwrap();
-        let store_id = first.store_id();
-        first
-            .read(|connection| {
-                Box::pin(async move {
-                    sqlx::raw_sql("PRAGMA user_version=999")
-                        .execute(connection)
-                        .await?;
-                    Ok(())
-                })
-            })
-            .await
-            .unwrap();
-        first.close().await.unwrap();
-        assert!(matches!(
-            ServerDatabase::open(&path).await,
-            Err(DatabaseError::NewerSchema { found: 999 })
-        ));
-        let mut connection =
-            SqliteConnection::connect_with(&SqliteConnectOptions::new().filename(&path))
-                .await
-                .unwrap();
-        sqlx::raw_sql("PRAGMA user_version=-1")
-            .execute(&mut connection)
-            .await
-            .unwrap();
-        connection.close().await.unwrap();
-        assert!(matches!(
-            ServerDatabase::open(&path).await,
-            Err(DatabaseError::InvalidSchemaVersion { found: -1 })
-        ));
-        let mut connection =
-            SqliteConnection::connect_with(&SqliteConnectOptions::new().filename(&path))
-                .await
-                .unwrap();
-        sqlx::raw_sql("PRAGMA user_version=2")
-            .execute(&mut connection)
-            .await
-            .unwrap();
-        connection.close().await.unwrap();
-        let reopened = ServerDatabase::open(&path).await.unwrap();
-        assert_eq!(reopened.store_id(), store_id);
-        reopened.close().await.unwrap();
-    });
 }
 
 #[tokio::test]
@@ -345,16 +290,21 @@ fn destroying_tokio_runtime_does_not_release_worker_lock() {
 async fn cancelled_startup_retains_lock_until_native_setup_finishes() {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("server.db");
-    let initial = ServerDatabase::open(&path).await.unwrap();
-    initial.close().await.unwrap();
-    let mut writer = SqliteConnection::connect_with(&SqliteConnectOptions::new().filename(&path))
-        .await
-        .unwrap();
+    let mut writer = SqliteConnection::connect_with(
+        &SqliteConnectOptions::new()
+            .filename(&path)
+            .create_if_missing(true)
+            .journal_mode(SqliteJournalMode::Wal),
+    )
+    .await
+    .unwrap();
     sqlx::raw_sql("BEGIN IMMEDIATE")
         .execute(&mut writer)
         .await
         .unwrap();
     let probe = OpenOptions::new()
+        .create(true)
+        .truncate(false)
         .read(true)
         .write(true)
         .open(directory.path().join("server.db.lock"))
@@ -601,59 +551,10 @@ async fn cancelled_result_destructor_cannot_terminate_worker() {
 }
 
 #[tokio::test]
-async fn adopts_legacy_metadata_and_preserves_store_identity() {
-    let directory = tempfile::tempdir().unwrap();
-    let path = directory.path().join("legacy.db");
-    let store = Uuid::new_v4();
-    let mut legacy = SqliteConnection::connect_with(
-        &SqliteConnectOptions::new()
-            .filename(&path)
-            .create_if_missing(true),
-    )
-    .await
-    .unwrap();
-    sqlx::raw_sql("CREATE TABLE server_metadata (singleton INTEGER PRIMARY KEY CHECK (singleton=1), store_id TEXT NOT NULL, startup_generation TEXT NOT NULL);
-        CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, name TEXT NOT NULL);
-        INSERT INTO schema_migrations VALUES (1, 'server_metadata'); PRAGMA user_version=1;")
-        .execute(&mut legacy).await.unwrap();
-    sqlx::query("INSERT INTO server_metadata VALUES (1, ?1, ?2)")
-        .bind(store.to_string())
-        .bind(Uuid::nil().to_string())
-        .execute(&mut legacy)
-        .await
-        .unwrap();
-    legacy.close().await.unwrap();
-    let database = ServerDatabase::open(&path).await.unwrap();
-    assert_eq!(database.store_id(), store);
-    let (version, count, old): (i64, i64, i64) = database
-        .read(|connection| {
-            Box::pin(async move {
-                let version = sqlx::query_scalar("PRAGMA user_version")
-                    .fetch_one(&mut *connection)
-                    .await?;
-                let count =
-                    sqlx::query_scalar("SELECT COUNT(*) FROM _sqlx_migrations WHERE success=1")
-                        .fetch_one(&mut *connection)
-                        .await?;
-                let old = sqlx::query_scalar(
-                    "SELECT COUNT(*) FROM sqlite_master WHERE name='schema_migrations'",
-                )
-                .fetch_one(connection)
-                .await?;
-                Ok((version, count, old))
-            })
-        })
-        .await
-        .unwrap();
-    assert_eq!((version, count, old), (2, 2, 0));
-    database.close().await.unwrap();
-}
-
-#[tokio::test]
 async fn migration_checksum_and_unknown_version_are_rejected() {
     for sql in [
         "UPDATE _sqlx_migrations SET checksum=X'00' WHERE version=1",
-        "UPDATE _sqlx_migrations SET version=999 WHERE version=2",
+        "UPDATE _sqlx_migrations SET version=999 WHERE version=1",
     ] {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("db");
@@ -689,7 +590,7 @@ async fn failed_sqlx_migration_rolls_back_schema_and_completion() {
             Box::pin(async move {
                 let mut migrations: Vec<_> = MIGRATOR.iter().cloned().collect();
                 migrations.push(sqlx::migrate::Migration::new(
-                    3,
+                    2,
                     "failing".into(),
                     sqlx::migrate::MigrationType::Simple,
                     "CREATE TABLE partial (value INTEGER); INSERT INTO missing VALUES (1);"
@@ -709,7 +610,7 @@ async fn failed_sqlx_migration_rolls_back_schema_and_completion() {
                         .await?;
                 assert_eq!(count, 0);
                 let count: i64 =
-                    sqlx::query_scalar("SELECT COUNT(*) FROM _sqlx_migrations WHERE version=3")
+                    sqlx::query_scalar("SELECT COUNT(*) FROM _sqlx_migrations WHERE version=2")
                         .fetch_one(connection)
                         .await?;
                 assert_eq!(count, 0);
@@ -722,40 +623,34 @@ async fn failed_sqlx_migration_rolls_back_schema_and_completion() {
 }
 
 #[tokio::test]
-async fn resumes_after_first_sqlx_migration_committed() {
+async fn one_builtin_migration_creates_only_blueprint_tables() {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("db");
-    let mut connection = SqliteConnection::connect_with(
-        &SqliteConnectOptions::new()
-            .filename(&path)
-            .create_if_missing(true),
-    )
-    .await
-    .unwrap();
-    let first =
-        sqlx::migrate::Migrator::with_migrations(MIGRATOR.iter().take(1).cloned().collect());
-    first.run(&mut connection).await.unwrap();
-    let id: String = sqlx::query_scalar("SELECT store_id FROM server_metadata")
-        .fetch_one(&mut connection)
-        .await
-        .unwrap();
-    connection.close().await.unwrap();
-    let database = ServerDatabase::open(&path).await.unwrap();
-    assert_eq!(database.store_id(), Uuid::parse_str(&id).unwrap());
-    let count: i64 = database
-        .read(|connection| {
-            Box::pin(async move {
-                Ok(
-                    sqlx::query_scalar("SELECT COUNT(*) FROM _sqlx_migrations WHERE success=1")
-                        .fetch_one(connection)
-                        .await?,
-                )
+    for _ in 0..2 {
+        let database = ServerDatabase::open(&path).await.unwrap();
+        let tables: Vec<String> = database.read(|connection| Box::pin(async move {
+            Ok(sqlx::query_scalar("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name")
+                .fetch_all(&mut *connection).await?)
+        })).await.unwrap();
+        assert_eq!(
+            tables,
+            ["_sqlx_migrations", "blueprint_revisions", "blueprints"]
+        );
+        let versions: Vec<i64> = database
+            .read(|connection| {
+                Box::pin(async move {
+                    Ok(
+                        sqlx::query_scalar("SELECT version FROM _sqlx_migrations WHERE success=1")
+                            .fetch_all(connection)
+                            .await?,
+                    )
+                })
             })
-        })
-        .await
-        .unwrap();
-    assert_eq!(count, 2);
-    database.close().await.unwrap();
+            .await
+            .unwrap();
+        assert_eq!(versions, [1]);
+        database.close().await.unwrap();
+    }
 }
 
 #[tokio::test]

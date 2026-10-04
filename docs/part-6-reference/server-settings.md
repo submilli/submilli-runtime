@@ -202,16 +202,24 @@ Mount and persist the containing `db/` directory, including the journal and
 lock files. SQLite requires local or block-backed storage. Each database has
 one owning server process.
 
-On the first startup with the database-backed blueprint store, the server
-imports revision files from `blueprint_dir` and their active selections from
-`index.json`. Stop the old server before upgrading. All revisions and the
-import-completion record commit together. An interrupted import retries on
-the next startup.
+On startup with an empty blueprint revision table, the server imports revision
+files from `blueprint_dir` and their active selections from `index.json` in one
+transaction. Stop the old server before upgrading. A failed import rolls back
+and leaves the files in place.
 
-The source files remain untouched. After completion they are ignored, even
-if `blueprint_dir` changes. They contain no subsequent database updates and
-cannot serve as a current downgrade copy. An absent source completes an empty
-import. Without an index, revision files are retained as inactive history.
+After commit, the server moves the imported files into `archive/blueprints/`
+beside the source directory: by default, `~/.submilli/server/archive/blueprints/`.
+The index moves last. Archiving uses filesystem renames, so the source and archive
+must share a filesystem. Existing archive files are never overwritten.
+
+An archive failure stops startup after the database commit. On retry, the server
+checks the remaining files against immutable database revisions and finishes
+archiving without restoring old active selections. Conflicting source files stop
+startup. An absent or empty source needs no import. Without an index, revision
+files become inactive history.
+
+Archived files are not read on later startups. They contain no subsequent
+database updates and cannot serve as a current downgrade copy.
 
 Unreadable files, a corrupt index, or missing indexed revisions stop the
 import. Readable YAML that no longer validates is retained. Its active name
@@ -431,7 +439,7 @@ Options:
       --tls-key-file <PATH>
           Private key PEM file matching the certificate. Read at startup; restart to rotate. Env: `$SUBMILLI_TLS_KEY_FILE`
       --blueprint-dir <BLUEPRINT_DIR>
-          Source directory for the one-time blueprint import into SQLite. Files are retained and ignored after import. [default: ~/.submilli/server/blueprints (override the base with $SUBMILLI_HOME)] Env: `$SUBMILLI_BLUEPRINT_DIR`
+          Source directory for the one-time blueprint import into SQLite. Imported files move to archive/blueprints/ beside the source directory. [default: ~/.submilli/server/blueprints (override the base with $SUBMILLI_HOME)] Env: `$SUBMILLI_BLUEPRINT_DIR`
       --session-store-dir <SESSION_STORE_DIR>
           Directory the session lifecycle store persists to and loads from on startup — the bookkeeping that makes resume and idle reaping survive a restart. Mount on durable storage. [default: ~/.submilli/server/sessions] Env: `$SUBMILLI_SESSION_STORE_DIR`
       --database-path <PATH>

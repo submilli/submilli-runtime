@@ -252,7 +252,7 @@ tag, set `SUBMILLI_IMAGE` in `.env` to the same version, and run
 `docker compose up -d`. Keep the API token and the store key. The volume
 carries the state across, including `server/db/submilli.db` and its SQLite
 sidecar files. Stop the old server before the first database-backed startup.
-Blueprint revision files are imported once and retained untouched. See
+Blueprint revision files are imported, then moved to `server/archive/blueprints/`. See
 [Database settings](/docs/reference/server-settings#database). Check the release's migration instructions before
 reusing it.
 

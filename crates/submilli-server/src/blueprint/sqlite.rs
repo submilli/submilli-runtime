@@ -7,7 +7,9 @@ use submilli_blueprint::Blueprint;
 use super::{BlueprintStore, StoreError, StoredBlueprint};
 use crate::database::{DatabaseError, ServerDatabase};
 
-/// SQLite is authoritative after initialization. Original files are never mutated.
+mod archive;
+
+/// SQLite is authoritative after initialization; imported files are archived.
 pub struct SqliteBlueprintStore {
     database: Arc<ServerDatabase>,
     source: Option<PathBuf>,
@@ -66,10 +68,16 @@ impl SqliteBlueprintStore {
 impl BlueprintStore for SqliteBlueprintStore {
     async fn initialize(&self) -> Result<(), StoreError> {
         let source = self.source.clone();
-        self.database
+        let files = self
+            .database
             .transaction(move |connection| {
                 Box::pin(async move { import_files(connection, source).await })
             })
+            .await?;
+        // This runs only after commit, on the database supervisor rather than a
+        // request Tokio thread. A cancelled caller can retry archiving at startup.
+        self.database
+            .read(move |_| Box::pin(async move { archive_files(files) }))
             .await
             .map_err(Into::into)
     }
@@ -146,28 +154,25 @@ fn parse_current(name: &str, yaml: &str) -> Result<Blueprint, String> {
 async fn import_files(
     connection: &mut SqliteConnection,
     source: Option<PathBuf>,
-) -> Result<(), DatabaseError> {
-    let complete: bool =
-        sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM store_imports WHERE store='blueprints')")
-            .fetch_one(&mut *connection)
-            .await?;
-    if complete {
-        return Ok(());
-    }
-    let count: i64 = sqlx::query_scalar(
-        "SELECT (SELECT COUNT(*) FROM blueprints) + (SELECT COUNT(*) FROM blueprint_revisions)",
-    )
-    .fetch_one(&mut *connection)
-    .await?;
-    if count != 0 {
-        return Err(DatabaseError::Import(
-            "blueprint records exist without an import completion marker".into(),
-        ));
-    }
-    let (revisions, active) = match source {
-        Some(source) => read_source(&source)?,
-        None => (Vec::new(), std::collections::BTreeMap::new()),
+) -> Result<Vec<PathBuf>, DatabaseError> {
+    let Some(source) = source else {
+        return Ok(Vec::new());
     };
+    let SourceRecords {
+        revisions,
+        active,
+        files,
+    } = read_source(&source)?;
+    let populated: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM blueprint_revisions)")
+        .fetch_one(&mut *connection)
+        .await?;
+    if populated {
+        // A committed import may have been interrupted before all files moved.
+        // Immutable history proves the remaining files are already in SQLite;
+        // active selections may since have changed or been deleted.
+        verify_imported(connection, &revisions, &active).await?;
+        return Ok(files);
+    }
     for (name, revision, yaml) in &revisions {
         sqlx::query("INSERT INTO blueprint_revisions VALUES (?1, ?2, ?3)")
             .bind(name)
@@ -196,34 +201,72 @@ async fn import_files(
             .execute(&mut *connection)
             .await?;
     }
-    sqlx::query("INSERT INTO store_imports VALUES ('blueprints')")
-        .execute(connection)
-        .await?;
     tracing::info!(
         revisions = revisions.len(),
         active = active.len(),
         "blueprint file import prepared"
     );
+    Ok(files)
+}
+
+async fn verify_imported(
+    connection: &mut SqliteConnection,
+    revisions: &[(String, i64, String)],
+    active: &std::collections::BTreeMap<String, u64>,
+) -> Result<(), DatabaseError> {
+    for (name, revision, yaml) in revisions {
+        let stored: Option<String> = sqlx::query_scalar(
+            "SELECT yaml FROM blueprint_revisions WHERE name=?1 AND revision=?2",
+        )
+        .bind(name)
+        .bind(revision)
+        .fetch_optional(&mut *connection)
+        .await?;
+        if stored.as_ref() != Some(yaml) {
+            return Err(DatabaseError::Import(format!(
+                "source revision '{name}' ({revision}) conflicts with existing database history; source files were not archived"
+            )));
+        }
+    }
+    for (name, revision) in active {
+        let exists: bool = sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM blueprint_revisions WHERE name=?1 AND revision=?2)",
+        )
+        .bind(name)
+        .bind(checked_revision(name, *revision)?)
+        .fetch_one(&mut *connection)
+        .await?;
+        if !exists {
+            return Err(DatabaseError::Import(format!(
+                "indexed revision '{name}' ({revision}) is missing from existing database history"
+            )));
+        }
+    }
     Ok(())
 }
 
-type SourceRecords = (
-    Vec<(String, i64, String)>,
-    std::collections::BTreeMap<String, u64>,
-);
+struct SourceRecords {
+    revisions: Vec<(String, i64, String)>,
+    active: std::collections::BTreeMap<String, u64>,
+    files: Vec<PathBuf>,
+}
 
 fn read_source(source: &std::path::Path) -> Result<SourceRecords, DatabaseError> {
     let entries = match std::fs::read_dir(source) {
         Ok(entries) => entries,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            return Ok((Vec::new(), Default::default()));
+            return Ok(SourceRecords {
+                revisions: Vec::new(),
+                active: Default::default(),
+                files: Vec::new(),
+            });
         }
         Err(error) => return Err(import_io(source, error)),
     };
-    let active = super::read_index(source)
-        .map_err(|error| import_io(source, error))?
-        .unwrap_or_default();
+    let active = super::read_index(source).map_err(|error| import_io(source, error))?;
+    let index = active.as_ref().map(|_| source.join("index.json"));
     let mut revisions = Vec::new();
+    let mut files = Vec::new();
     let mut seen = std::collections::HashSet::new();
     for entry in entries {
         let entry = entry.map_err(|error| import_io(source, error))?;
@@ -239,8 +282,50 @@ fn read_source(source: &std::path::Path) -> Result<SourceRecords, DatabaseError>
         let revision = checked_revision(&name, revision)?;
         let yaml = std::fs::read_to_string(&path).map_err(|error| import_io(&path, error))?;
         revisions.push((name, revision, yaml));
+        files.push(path);
     }
-    Ok((revisions, active))
+    files.sort();
+    // Archive the index last so an interruption retains its active selections
+    // until all revision files have moved.
+    files.extend(index);
+    Ok(SourceRecords {
+        revisions,
+        active: active.unwrap_or_default(),
+        files,
+    })
+}
+
+fn archive_files(files: Vec<PathBuf>) -> Result<(), DatabaseError> {
+    for source in files {
+        let parent = source
+            .parent()
+            .and_then(std::path::Path::parent)
+            .ok_or_else(|| {
+                DatabaseError::Import(format!(
+                    "cannot locate archive directory for {}",
+                    source.display()
+                ))
+            })?;
+        let archive = parent.join("archive/blueprints");
+        let name = source
+            .file_name()
+            .ok_or_else(|| DatabaseError::InvalidPath(source.clone()))?;
+        let destination = archive.join(name);
+        // Another initialization may already have archived this batch.
+        if !source
+            .try_exists()
+            .map_err(|error| import_io(&source, error))?
+            && destination
+                .try_exists()
+                .map_err(|error| import_io(&destination, error))?
+        {
+            continue;
+        }
+        std::fs::create_dir_all(&archive).map_err(|error| import_io(&archive, error))?;
+        archive::move_file(&source, &destination)
+            .map_err(|error| import_io(&destination, error))?;
+    }
+    Ok(())
 }
 
 fn checked_revision(name: &str, revision: u64) -> Result<i64, DatabaseError> {

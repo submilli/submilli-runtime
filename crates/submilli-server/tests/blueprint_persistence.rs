@@ -523,7 +523,7 @@ async fn sqlx_import_and_http_changes_survive_restart_without_reimport() {
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body["yaml"], yaml);
     assert_eq!(
-        fs::read_to_string(source.join("index.json"))
+        fs::read_to_string(directory.path().join("archive/blueprints/index.json"))
             .unwrap()
             .trim(),
         "{\n  \"tenant\": 1\n}"

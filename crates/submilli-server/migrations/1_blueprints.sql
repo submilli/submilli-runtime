@@ -9,6 +9,3 @@ CREATE TABLE blueprints (
     current_revision INTEGER NOT NULL,
     FOREIGN KEY (name, current_revision) REFERENCES blueprint_revisions(name, revision)
 );
-CREATE TABLE store_imports (
-    store TEXT PRIMARY KEY NOT NULL
-);

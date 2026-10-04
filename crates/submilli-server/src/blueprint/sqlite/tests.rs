@@ -15,7 +15,7 @@ async fn open(
 }
 
 #[tokio::test]
-async fn imports_history_and_active_index_once_and_keeps_source() {
+async fn imports_history_and_active_index_then_archives_source() {
     let directory = tempfile::tempdir().unwrap();
     let source = directory.path().join("blueprints");
     let files = FileBlueprintStore::new(source.clone()).unwrap();
@@ -36,7 +36,10 @@ async fn imports_history_and_active_index_once_and_keeps_source() {
         store.get_yaml("demo").await.unwrap().unwrap(),
         "name: demo\n# second"
     );
-    assert!(source.join("index.json").exists());
+    let archive = directory.path().join("archive/blueprints");
+    assert!(archive.join("index.json").exists());
+    assert!(!source.join("index.json").exists());
+    assert!(!source.join("demo.000001.yaml").exists());
     assert!(!store.upsert_yaml(stored(original)).await.unwrap());
     let revision: i64 = database
         .read(|connection| {
@@ -54,8 +57,8 @@ async fn imports_history_and_active_index_once_and_keeps_source() {
     assert!(store.remove("demo").await.unwrap());
     store.add_yaml(stored(original)).await.unwrap();
     database.close().await.unwrap();
-    // Retained files must not become authoritative on restart, even when damaged.
-    std::fs::write(source.join("index.json"), "{").unwrap();
+    // Archived files are never used as an import source, even when damaged.
+    std::fs::write(archive.join("index.json"), "{").unwrap();
     let (database, store) = open(&path, Some(source)).await;
     store.initialize().await.unwrap();
     assert_eq!(store.get_yaml("demo").await.unwrap().unwrap(), original);
@@ -102,9 +105,11 @@ async fn failed_import_rolls_back_and_can_retry() {
     let (database, store) = open(&directory.path().join("db"), Some(source.clone())).await;
     assert!(store.initialize().await.is_err());
     let count: i64 = database.read(|connection| Box::pin(async move {
-        Ok(sqlx::query_scalar("SELECT (SELECT COUNT(*) FROM blueprint_revisions) + (SELECT COUNT(*) FROM store_imports)").fetch_one(connection).await?)
+        Ok(sqlx::query_scalar("SELECT (SELECT COUNT(*) FROM blueprint_revisions) + (SELECT COUNT(*) FROM blueprints)").fetch_one(connection).await?)
     })).await.unwrap();
     assert_eq!(count, 0);
+    assert!(source.join("demo.000001.yaml").exists());
+    assert!(!directory.path().join("archive").exists());
     std::fs::write(source.join("demo.000002.yaml"), "name: demo").unwrap();
     store.initialize().await.unwrap();
     assert_eq!(store.list().await.unwrap(), vec!["demo"]);
@@ -188,7 +193,7 @@ async fn no_index_preserves_orphans_without_activating_them() {
 }
 
 #[tokio::test]
-async fn absent_source_and_changed_source_do_not_reimport() {
+async fn absent_source_is_allowed_but_conflicting_new_source_is_rejected() {
     let directory = tempfile::tempdir().unwrap();
     let (database, store) = open(
         &directory.path().join("db"),
@@ -199,11 +204,153 @@ async fn absent_source_and_changed_source_do_not_reimport() {
     store.add_yaml(stored("name: demo")).await.unwrap();
     let source = directory.path().join("new");
     std::fs::create_dir(&source).unwrap();
-    std::fs::write(source.join("index.json"), "{").unwrap();
-    SqliteBlueprintStore::new(database.clone(), Some(source))
+    std::fs::write(source.join("other.000001.yaml"), "name: other").unwrap();
+    SqliteBlueprintStore::new(database.clone(), Some(source.clone()))
         .initialize()
         .await
-        .unwrap();
+        .unwrap_err();
+    assert!(source.join("other.000001.yaml").exists());
     assert_eq!(store.list().await.unwrap(), vec!["demo"]);
     database.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn archive_failure_after_commit_retries_without_resurrecting_deleted_blueprints() {
+    let directory = tempfile::tempdir().unwrap();
+    let source = directory.path().join("blueprints");
+    let files = FileBlueprintStore::new(source.clone()).unwrap();
+    files.add_yaml(stored("name: demo")).await.unwrap();
+    // Block archive directory creation after the import commits.
+    std::fs::write(directory.path().join("archive"), "occupied").unwrap();
+    let path = directory.path().join("db");
+    let (database, store) = open(&path, Some(source.clone())).await;
+    assert!(store.initialize().await.is_err());
+    assert_eq!(store.list().await.unwrap(), ["demo"]);
+    assert!(source.join("index.json").exists());
+    store.remove("demo").await.unwrap();
+    database.close().await.unwrap();
+    std::fs::remove_file(directory.path().join("archive")).unwrap();
+    let (database, store) = open(&path, Some(source.clone())).await;
+    store.initialize().await.unwrap();
+    assert!(store.list().await.unwrap().is_empty());
+    assert!(!source.join("index.json").exists());
+    assert!(
+        directory
+            .path()
+            .join("archive/blueprints/demo.000001.yaml")
+            .exists()
+    );
+    store.add_yaml(stored("name: demo")).await.unwrap();
+    let revision: i64 = database
+        .read(|connection| {
+            Box::pin(async move {
+                Ok(
+                    sqlx::query_scalar("SELECT current_revision FROM blueprints WHERE name='demo'")
+                        .fetch_one(connection)
+                        .await?,
+                )
+            })
+        })
+        .await
+        .unwrap();
+    assert_eq!(revision, 2);
+    database.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn interrupted_archiving_resumes_with_missing_source_revisions() {
+    let directory = tempfile::tempdir().unwrap();
+    let source = directory.path().join("blueprints");
+    let files = FileBlueprintStore::new(source.clone()).unwrap();
+    files.add_yaml(stored("name: demo")).await.unwrap();
+    files
+        .upsert_yaml(stored("name: demo\n# new"))
+        .await
+        .unwrap();
+    let path = directory.path().join("db");
+    let (database, _) = open(&path, Some(source.clone())).await;
+    let import_source = source.clone();
+    let mut pending = database
+        .transaction(move |connection| {
+            Box::pin(async move { import_files(connection, Some(import_source)).await })
+        })
+        .await
+        .unwrap();
+    let first = pending.remove(0);
+    database
+        .read(move |_| Box::pin(async move { archive_files(vec![first]) }))
+        .await
+        .unwrap();
+    database.close().await.unwrap();
+    let (database, store) = open(&path, Some(source.clone())).await;
+    store.initialize().await.unwrap();
+    assert_eq!(
+        store.get_yaml("demo").await.unwrap().unwrap(),
+        "name: demo\n# new"
+    );
+    assert!(std::fs::read_dir(&source).unwrap().next().is_none());
+    for file in ["demo.000001.yaml", "demo.000002.yaml", "index.json"] {
+        assert!(
+            directory
+                .path()
+                .join("archive/blueprints")
+                .join(file)
+                .exists()
+        );
+    }
+    database.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn empty_import_archives_index_and_restart_does_not_read_archive() {
+    let directory = tempfile::tempdir().unwrap();
+    let source = directory.path().join("blueprints");
+    std::fs::create_dir(&source).unwrap();
+    std::fs::write(source.join("index.json"), "{}").unwrap();
+    let (database, store) = open(&directory.path().join("db"), Some(source.clone())).await;
+    store.initialize().await.unwrap();
+    assert!(!source.join("index.json").exists());
+    std::fs::write(
+        directory.path().join("archive/blueprints/index.json"),
+        "broken",
+    )
+    .unwrap();
+    store.initialize().await.unwrap();
+    assert!(store.list().await.unwrap().is_empty());
+    database.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn archive_collision_preserves_both_source_and_existing_archive() {
+    let directory = tempfile::tempdir().unwrap();
+    let source = directory.path().join("blueprints");
+    let files = FileBlueprintStore::new(source.clone()).unwrap();
+    files.add_yaml(stored("name: demo")).await.unwrap();
+    let archive = directory.path().join("archive/blueprints");
+    std::fs::create_dir_all(&archive).unwrap();
+    std::fs::write(archive.join("demo.000001.yaml"), "keep").unwrap();
+    let (database, store) = open(&directory.path().join("db"), Some(source.clone())).await;
+    assert!(store.initialize().await.is_err());
+    assert_eq!(
+        std::fs::read_to_string(archive.join("demo.000001.yaml")).unwrap(),
+        "keep"
+    );
+    assert!(source.join("demo.000001.yaml").exists());
+    assert_eq!(store.list().await.unwrap(), ["demo"]);
+    database.close().await.unwrap();
+}
+
+#[test]
+fn archive_move_atomically_refuses_an_existing_destination() {
+    let directory = tempfile::tempdir().unwrap();
+    let source = directory.path().join("source");
+    let destination = directory.path().join("destination");
+    std::fs::write(&source, "imported").unwrap();
+    std::fs::write(&destination, "previous archive").unwrap();
+    assert!(archive::move_file(&source, &destination).is_err());
+    assert_eq!(std::fs::read_to_string(&source).unwrap(), "imported");
+    assert_eq!(
+        std::fs::read_to_string(&destination).unwrap(),
+        "previous archive"
+    );
 }

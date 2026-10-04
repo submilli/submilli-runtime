@@ -11,10 +11,8 @@ use sqlx::{
     sqlite::{SqliteConnectOptions, SqliteJournalMode, SqliteSynchronous},
 };
 use tokio::sync::{oneshot, watch};
-use uuid::Uuid;
 
 const MAX_WAITING: usize = 64;
-const SCHEMA_VERSION: i64 = 2;
 static MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("./migrations");
 
 type Job = Box<dyn for<'a> FnOnce(&'a mut SqliteConnection) -> BoxFuture<'a, ()> + Send>;
@@ -34,14 +32,8 @@ pub enum DatabaseError {
     AlreadyOpen(PathBuf),
     #[error("database path {0} has multiple hard links")]
     MultipleLinks(PathBuf),
-    #[error("database identity generation failed: {0}")]
-    Entropy(String),
     #[error("SQLite operation failed: {0}")]
     Sql(#[from] sqlx::Error),
-    #[error("database schema version {found} is newer than supported version {SCHEMA_VERSION}")]
-    NewerSchema { found: i64 },
-    #[error("database schema version {found} is invalid")]
-    InvalidSchemaVersion { found: i64 },
     #[error("database migration failed: {0}")]
     Migration(#[from] sqlx::migrate::MigrateError),
     #[error("blueprint import failed: {0}")]
@@ -66,8 +58,6 @@ pub enum DatabaseError {
     CallbackPanicked,
     #[error("database cleanup failed: {0}")]
     Cleanup(#[source] Arc<DatabaseError>),
-    #[error("database metadata is missing or malformed")]
-    InvalidMetadata,
 }
 
 /// An async handle to one SQLite worker, with a bounded work queue. The worker
@@ -77,8 +67,6 @@ pub struct ServerDatabase {
     path: PathBuf,
     sender: Mutex<Option<mpsc::SyncSender<Job>>>,
     completion: watch::Receiver<CloseResult>,
-    store_id: Uuid,
-    startup_generation: Uuid,
 }
 
 impl ServerDatabase {
@@ -91,23 +79,12 @@ impl ServerDatabase {
             .name("submilli-sqlite".into())
             .spawn(move || database_worker(path, receiver, ready, finished))
             .map_err(DatabaseError::WorkerStart)?;
-        let (path, store_id, startup_generation) =
-            startup.await.map_err(|_| DatabaseError::WorkerStopped)??;
+        let path = startup.await.map_err(|_| DatabaseError::WorkerStopped)??;
         Ok(Self {
             path,
             sender: Mutex::new(Some(sender)),
             completion,
-            store_id,
-            startup_generation,
         })
-    }
-
-    pub fn store_id(&self) -> Uuid {
-        self.store_id
-    }
-
-    pub fn startup_generation(&self) -> Uuid {
-        self.startup_generation
     }
 
     pub fn path(&self) -> &Path {
@@ -196,7 +173,7 @@ impl ServerDatabase {
 fn database_worker(
     path: PathBuf,
     receiver: mpsc::Receiver<Job>,
-    ready: oneshot::Sender<Result<(PathBuf, Uuid, Uuid), DatabaseError>>,
+    ready: oneshot::Sender<Result<PathBuf, DatabaseError>>,
     finished: watch::Sender<CloseResult>,
 ) {
     let runtime = match tokio::runtime::Builder::new_current_thread()
@@ -216,11 +193,7 @@ fn database_worker(
             return;
         }
     };
-    let _ = ready.send(Ok((
-        database.path.clone(),
-        database.store_id,
-        database.startup_generation,
-    )));
+    let _ = ready.send(Ok(database.path.clone()));
     while let Ok(job) = receiver.recv() {
         if let Err(payload) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             runtime.block_on(job(&mut database.connection));
@@ -254,8 +227,6 @@ struct OwnedDatabase {
     connection: SqliteConnection,
     lock: DatabaseLock,
     path: PathBuf,
-    store_id: Uuid,
-    startup_generation: Uuid,
 }
 
 impl OwnedDatabase {
@@ -274,23 +245,19 @@ impl OwnedDatabase {
         let mut connection = SqliteConnection::connect_with(&options).await?;
         let initialized = async {
             reject_multiple_links(&path)?;
-            migrate(&mut connection).await
+            MIGRATOR.run(&mut connection).await?;
+            Ok::<(), DatabaseError>(())
         }
         .await;
-        let (store_id, startup_generation) = match initialized {
-            Ok(identity) => identity,
-            Err(error) => {
-                connection.close().await?;
-                drop(lock.0.take());
-                return Err(error);
-            }
-        };
+        if let Err(error) = initialized {
+            connection.close().await?;
+            drop(lock.0.take());
+            return Err(error);
+        }
         Ok(Self {
             connection,
             lock,
             path,
-            store_id,
-            startup_generation,
         })
     }
 
@@ -458,91 +425,6 @@ fn windows_link_count(path: &Path) -> std::io::Result<u64> {
     Ok(u64::from(
         unsafe { information.assume_init() }.nNumberOfLinks,
     ))
-}
-
-fn random_uuid() -> Result<Uuid, DatabaseError> {
-    let mut bytes = [0; 16];
-    getrandom::fill(&mut bytes).map_err(|error| DatabaseError::Entropy(error.to_string()))?;
-    Ok(uuid::Builder::from_random_bytes(bytes).into_uuid())
-}
-
-async fn migrate(connection: &mut SqliteConnection) -> Result<(Uuid, Uuid), DatabaseError> {
-    let version: i64 = sqlx::query_scalar("PRAGMA user_version")
-        .fetch_one(&mut *connection)
-        .await?;
-    if version > SCHEMA_VERSION {
-        return Err(DatabaseError::NewerSchema { found: version });
-    }
-    if version < 0 {
-        return Err(DatabaseError::InvalidSchemaVersion { found: version });
-    }
-    let adopted: bool = sqlx::query_scalar(
-        "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE name='_sqlx_migrations')",
-    )
-    .fetch_one(&mut *connection)
-    .await?;
-    if version < SCHEMA_VERSION {
-        validate_legacy(connection, version).await?;
-    } else if !adopted {
-        return Err(DatabaseError::InvalidMetadata);
-    }
-    MIGRATOR.run(&mut *connection).await?;
-    let mut transaction = connection.begin_with("BEGIN IMMEDIATE").await?;
-    let identity: Option<String> =
-        sqlx::query_scalar("SELECT store_id FROM server_metadata WHERE singleton=1")
-            .fetch_optional(&mut *transaction)
-            .await?;
-    let store_id = match identity {
-        Some(value) => Uuid::parse_str(&value).map_err(|_| DatabaseError::InvalidMetadata)?,
-        None => return Err(DatabaseError::InvalidMetadata),
-    };
-    let generation = random_uuid()?;
-    sqlx::query("UPDATE server_metadata SET startup_generation=?1 WHERE singleton=1")
-        .bind(generation.to_string())
-        .execute(&mut *transaction)
-        .await?;
-    transaction.commit().await?;
-    Ok((store_id, generation))
-}
-
-async fn validate_legacy(
-    connection: &mut SqliteConnection,
-    version: i64,
-) -> Result<(), DatabaseError> {
-    if version == 0 {
-        let count: i64 = sqlx::query_scalar(
-            "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' AND name != '_sqlx_migrations'",
-        )
-        .fetch_one(connection)
-        .await?;
-        return if count == 0 {
-            Ok(())
-        } else {
-            Err(DatabaseError::InvalidMetadata)
-        };
-    }
-    if version != 1 {
-        return Err(DatabaseError::InvalidMetadata);
-    }
-    let migrations: Vec<(i64, String)> =
-        sqlx::query_as("SELECT version, name FROM schema_migrations")
-            .fetch_all(&mut *connection)
-            .await?;
-    if migrations != vec![(1, "server_metadata".into())] {
-        return Err(DatabaseError::InvalidMetadata);
-    }
-    let metadata: Vec<(i64, String, String)> =
-        sqlx::query_as("SELECT singleton, store_id, startup_generation FROM server_metadata")
-            .fetch_all(connection)
-            .await?;
-    match metadata.as_slice() {
-        [(1, store, generation)]
-            if Uuid::parse_str(store).is_ok() && Uuid::parse_str(generation).is_ok() =>
-        {
-            Ok(())
-        }
-        _ => Err(DatabaseError::InvalidMetadata),
-    }
 }
 
 #[cfg(test)]

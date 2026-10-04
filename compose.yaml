@@ -38,7 +38,7 @@ services:
     # Persist SQLite at /var/lib/submilli/server/db/submilli.db together with
     # its journal and lock files. Sessions, VFS files, secrets, and packages
     # remain under the same server/ root. Existing blueprint revision files
-    # are imported once at startup and retained untouched afterward.
+    # are imported at startup, then moved to server/archive/blueprints/.
     volumes:
       - submilli-state:/var/lib/submilli
 

@@ -74,7 +74,7 @@ pub struct Cli {
     tls_key_file: Option<PathBuf>,
 
     /// Source directory for the one-time blueprint import into SQLite.
-    /// Files are retained and ignored after import. [default: ~/.submilli/server/blueprints
+    /// Imported files move to archive/blueprints/ beside the source directory. [default: ~/.submilli/server/blueprints
     /// (override the base with $SUBMILLI_HOME)]
     /// Env: `$SUBMILLI_BLUEPRINT_DIR`.
     #[arg(long)]
