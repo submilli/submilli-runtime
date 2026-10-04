@@ -1,0 +1,114 @@
+WEBVTT
+
+00:00:00.500 --> 00:00:04.220
+Submilli is a runtime for code written by
+agents.
+
+00:00:04.500 --> 00:00:08.180
+It runs useful programs while enforcing
+controls outside
+
+00:00:08.220 --> 00:00:08.938
+the model.
+
+00:00:10.267 --> 00:00:13.947
+Packages expose the operations that code
+can use.
+
+00:00:14.067 --> 00:00:17.627
+Their authors place explicit permission
+checks before protected
+
+00:00:17.707 --> 00:00:18.234
+work.
+
+00:00:19.567 --> 00:00:23.407
+You define and approve a blueprint: the
+available packages
+
+00:00:23.487 --> 00:00:25.087
+and permitted operations.
+
+00:00:25.567 --> 00:00:28.287
+Your application supplies trusted context.
+
+00:00:28.687 --> 00:00:31.034
+The runtime enforces the rules.
+
+00:00:32.367 --> 00:00:34.847
+Let’s total charges for Customer A.
+
+00:00:35.167 --> 00:00:38.447
+This illustrative blueprint allows the
+billing lookup only
+
+00:00:38.527 --> 00:00:41.167
+for the customer supplied by the
+application.
+
+00:00:41.407 --> 00:00:43.567
+Here, that is Customer A.
+
+00:00:43.647 --> 00:00:46.656
+Other protected operations are denied by
+default.
+
+00:00:47.967 --> 00:00:51.567
+The agent writes this program in
+Submilli’s curated subset
+
+00:00:51.647 --> 00:00:52.527
+of TypeScript.
+
+00:00:53.007 --> 00:00:55.567
+It reads the charges and totals their
+amounts.
+
+00:00:56.127 --> 00:01:00.447
+Unsupported APIs and unavailable imports
+fail validation
+
+00:01:00.527 --> 00:01:01.807
+before execution.
+
+00:01:02.367 --> 00:01:04.633
+Valid code still needs permission.
+
+00:01:05.933 --> 00:01:09.293
+Before reading the local billing ledger,
+the package checks
+
+00:01:09.333 --> 00:01:11.453
+the operation and customer ID.
+
+00:01:11.933 --> 00:01:13.933
+The runtime applies the blueprint.
+
+00:01:14.413 --> 00:01:17.662
+Customer A matches, so the lookup
+proceeds.
+
+00:01:18.967 --> 00:01:20.727
+Now request Customer B.
+
+00:01:21.287 --> 00:01:24.727
+The code still passes language validation,
+but the permission
+
+00:01:24.887 --> 00:01:26.407
+check denies this lookup.
+
+00:01:26.887 --> 00:01:31.323
+Customer B does not match the
+application’s Customer A context.
+
+00:01:32.633 --> 00:01:36.873
+Customer A’s program returns two charges,
+totaling six thousand
+
+00:01:37.033 --> 00:01:39.113
+one hundred and fifty cents.
+
+00:01:39.193 --> 00:01:42.037
+Useful code runs with the access you
+approved.

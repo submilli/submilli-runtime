@@ -1,0 +1,15 @@
+Submilli is a runtime for code written by agents. It runs useful programs while enforcing controls outside the model.
+
+Packages expose the operations that code can use. Their authors place explicit permission checks before protected work.
+
+You define and approve a blueprint: the available packages and permitted operations. Your application supplies trusted context. The runtime enforces the rules.
+
+Let’s total charges for Customer A. This illustrative blueprint allows the billing lookup only for the customer supplied by the application. Here, that is Customer A. Other protected operations are denied by default.
+
+The agent writes this program in Submilli’s curated subset of TypeScript. It reads the charges and totals their amounts. Unsupported APIs and unavailable imports fail validation before execution. Valid code still needs permission.
+
+Before reading the local billing ledger, the package checks the operation and customer ID. The runtime applies the blueprint. Customer A matches, so the lookup proceeds.
+
+Now request Customer B. The code still passes language validation, but the permission check denies this lookup. Customer B does not match the application’s Customer A context.
+
+Customer A’s program returns two charges, totaling six thousand one hundred and fifty cents. Useful code runs with the access you approved.
