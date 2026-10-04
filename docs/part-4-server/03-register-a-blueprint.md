@@ -6,21 +6,19 @@ sidebar:
   order: 3
 ---
 
-A blueprint reaches a server as a file you register; the server keeps its
-own copy and never reads the file again. Registration is where a mistake
-is caught, so a blueprint whose secret isn't in the store yet fails here
-rather than on the first program, and it is where an edit takes effect
-and where removing one ends the sessions bound to it.
+A blueprint reaches a server as a file you register. The server keeps a
+copy and never reads the file again. Registration catches mistakes, so a
+blueprint whose secret isn't in the store yet fails here and not on the
+first program. An edit takes effect when you register it, and removing a
+blueprint ends the sessions bound to it.
 
-This guide shows you how to register a blueprint on a server: put the
-packages and secrets it depends on in place, register it, prove it with a
-program, and update or remove it later. The example is the support
-blueprint from [Start a
-blueprint](/docs/blueprints/start-a-blueprint); substitute yours.
+This guide shows you how to register a blueprint on a server. The example
+is the support blueprint from [Start a
+blueprint](/docs/blueprints/start-a-blueprint). Substitute yours.
 
 ## Put its dependencies in place
 
-The server has a package store of its own, filled from GitHub:
+The server has a separate package store, filled from GitHub:
 
 ```sh
 submilli server packages install acme/billing-package @acme/billing
@@ -34,23 +32,23 @@ The server fetches the repository, builds the package, and pins it to the
 commit it resolved. A server on the same machine as your CLI also reads
 the CLI's store, so a package you published locally is already there.
 For a private repository, refer to [Install private
-packages](/docs/server/install-private-packages); refer to the [CLI
-reference](/docs/reference/cli) for pinning and upgrading.
+packages](/docs/server/install-private-packages). The [CLI
+reference](/docs/reference/cli) covers pinning and upgrading.
 
-The build's warnings are printed and the package is installed anyway.
+The server prints the build's warnings and installs the package anyway.
 For a package you didn't write, a warning such as a `check` that
 disagrees with its `@capability` tag is a gap in what your blueprint can
-enforce, so refuse it instead:
+enforce. Refuse such a package:
 
 ```sh
 submilli server packages install --deny-warnings acme/billing-package @acme/billing
 ```
 
 With a warning, the command fails and the server installs nothing. To
-hold every install on the server to that, whatever the caller asks,
+apply this rule to all installs on the server, whatever the caller asks,
 start the server with `SUBMILLI_DENY_WARNINGS=1`.
 
-Every `store:` secret the blueprint declares must be in the server's
+Each `store:` secret the blueprint declares must be in the server's
 store before registration. The blueprint names the secret as the package
 reads it, and the store key it comes from:
 
@@ -79,11 +77,11 @@ submilli server blueprint apply blueprint.yaml
 Added blueprint 'support'
 ```
 
-Registration checks the blueprint, so a mistake fails here rather than on
-the first program: the YAML and every filter must parse, every `store:`
-secret must exist in the server's store, every package in `packages:`
-and every package those depend on must be installed, each package's own
-list must hold the rules it requires, as `lint` checks, and every named
+Registration checks the blueprint, so a mistake fails here and not on
+the first program. The YAML and its filters must parse. Each `store:`
+secret must exist in the server's store. Each package in `packages:`,
+and each package those depend on, must be installed. Each package's list
+must hold the rules the package requires, as `lint` checks. Each named
 volume the blueprint mounts must be one the server declares, with no more
 access than the server allows. Registered before the secret was put, the
 same file is refused:
@@ -104,11 +102,11 @@ And with the package's `secrets.get` rule deleted from its list:
 error: package check failed: package `@acme/billing` requires `secrets.get` with filter `name == "BILLING_API_KEY"`, but `permissions.@acme/billing` has no matching rule
 ```
 
-The checks run when the blueprint is registered; a package uninstalled
-afterwards still fails the first program that imports it.
+The checks run when the blueprint is registered. If a package is
+uninstalled afterwards, the first program that imports it fails.
 
 A blueprint that declares MCP servers registers the same way, but the
-server has to reach them itself, and log in to any that use OAuth: until
+server has to reach them itself and log in to any that use OAuth. Until
 it does, the blueprint is `PENDING` and runs programs without those
 servers. [Add an MCP server](/docs/blueprints/add-an-mcp-server#register-it-on-a-server)
 covers the server side.
@@ -128,7 +126,7 @@ credited 1500 cents, balance -9400
 
 ## Update or remove it
 
-`apply` registers or replaces; run it again after an edit:
+`apply` registers or replaces. Run it again after an edit:
 
 ```text
 Updated blueprint 'support'
@@ -138,7 +136,7 @@ Updated blueprint 'support'
 taken. `list` prints the registered names and `show <name>` prints the
 YAML the server holds.
 
-`remove <name>` unregisters a blueprint and ends every open session bound
+`remove <name>` unregisters a blueprint and ends the open sessions bound
 to it. On a live server that cuts off the people using it:
 
 ```sh
@@ -162,4 +160,4 @@ blueprints:      (none)
 ```
 
 A client that comes back to its session gets `unknown session`. To change
-a blueprint under open sessions, `apply` the new version instead.
+a blueprint under open sessions, `apply` the new version.

@@ -13,20 +13,17 @@ sidebar:
 ---
 
 If your application runs in containers on one host, the server runs as
-one more container. Docker changes two things about keeping it private:
-a published port goes around the host's firewall, and other containers
-reach a container over Docker's networks, not through the published
+one more container. Docker changes two things about keeping it private.
+A published port goes around the host's firewall, and other containers
+reach a container over Docker's networks, bypassing the published
 port. The published `compose.yaml` handles both, and keeps the state on a
 volume so it survives a redeploy.
 
-This guide shows you how to run the server with Docker Compose: start it
-from the published file, put your application on its network, give it
-the store key as a file, enable HTTPS, allow a service on your Docker
-network, and upgrade and back it up.
+This guide shows you how to run the server with Docker Compose.
 
 ## Start it
 
-The published file is the stack's `compose.yaml`; your application joins
+The published file is the stack's `compose.yaml`. Your application joins
 it as another service. The file and the image come from the same
 release, so download the file at the release's tag and pin the image to
 the same version in `.env`, beside the token. Into a new directory:
@@ -54,30 +51,30 @@ submilli server status
 
 The file also sets up:
 
-- **State on a named volume.** `submilli-state` holds `$SUBMILLI_HOME`,
+- A named volume, `submilli-state`, holds `$SUBMILLI_HOME`,
   so blueprints, sessions, packages, and secrets survive `docker compose
   down` and image upgrades. `docker compose down -v` deletes it.
-- **Scratch space in memory.** Each run's scratch directory lives in a
+- Each run's scratch directory lives in a
   256 MB `tmpfs` at `/tmp`, so it never grows the container's disk.
-- **A locked-down container.** The server runs as a non-root user on a
+- The server runs as a non-root user on a
   read-only filesystem with every Linux capability dropped. The image has
   no shell. These are extra layers beneath the sandbox itself.
-- **A health check** using `submilli-server --health-check`, which is why
+- A health check runs `submilli-server --health-check`, so
   `docker compose ps` can say `healthy`.
-- **Ten seconds to stop.** Docker waits that long before forcing the
-  container to stop, which covers the server's own five-second drain. If
+- Docker waits ten seconds before forcing the
+  container to stop, which covers the server's five-second drain. If
   you raise `--shutdown-grace`, raise `stop_grace_period` with it.
 
 ## Put your application on its network
 
 The file publishes the server's port as `127.0.0.1:8128`, not `8128`.
-That difference matters more with Docker than it looks: Docker routes
+That difference matters more with Docker than it looks. Docker routes
 published ports around the host's firewall, so a plain `8128:8128` is
-reachable from your whole network even on a host where `ufw` says the
+reachable from your network even on a host where `ufw` says the
 port is closed.
 
 Loopback publishing only covers the host, though. Other containers reach
-the server over Docker's networks, not the published port. So the server
+the server over Docker's networks. So the server
 sits on its own network, `submilli-net`, and only containers you put on
 that network can reach it. Add your application to it and call the
 server by its service name:
@@ -93,7 +90,7 @@ services:
       - submilli-net
 ```
 
-The two variables are your application's own; name them as it expects.
+Your application defines the two variables, so name them as it expects.
 This hands it the admin token. To give it a `user` token instead,
 declare one in a config file as [Run the
 server](/docs/server/run-the-server) shows, and mount the file and
@@ -101,27 +98,26 @@ the token the way the store key is mounted below.
 
 Any container on `submilli-net` can reach the API, so don't put anything
 else there. A container on Docker's default network can't connect at
-all; its requests time out.
+all. Its requests time out.
 
 An application that connects over MCP also needs the server to accept
 the service name as a `Host` header, or its requests are refused with
-`403 Forbidden: Host header is not allowed`. The shipped file takes care
-of it: it sets `SUBMILLI_MCP_ALLOWED_HOSTS: submilli:8128` on the
-service. Change that value if you rename the service or its port.
+`403 Forbidden: Host header is not allowed`. The shipped file sets
+`SUBMILLI_MCP_ALLOWED_HOSTS: submilli:8128` on the service for this. Change that value if you rename the service or its port.
 
 ## Register blueprints and install packages
 
 The port is published on the host, so blueprints, secrets, and packages
 reach the server from the host with the same commands as anywhere,
-through [Register a blueprint](/docs/server/register-a-blueprint);
-a deploy job does the same with the token from `.env`. For a package in
-a private repository the server needs a GitHub token of its own; refer
+through [Register a blueprint](/docs/server/register-a-blueprint).
+A deploy job does the same with the token from `.env`. For a package in
+a private repository the server needs its own GitHub token. Refer
 to [Install private packages](/docs/server/install-private-packages).
 
 ## Give it the store key as a file
 
 The secret store stays off until the server has a key. Give it one as a
-file, not an environment variable: environment variables show up in
+file, because environment variables show up in
 `docker inspect` and `docker compose config`.
 
 ```sh
@@ -161,7 +157,7 @@ backups.
 
 ## Enable HTTPS
 
-In this setup the API token never leaves the host: the port is published
+In this setup the API token never leaves the host. The port is published
 on the loopback, and your application reaches the server over a Docker
 network on the same machine. Plain HTTP is enough there. If you publish
 the port beyond the loopback, so that callers on other machines reach
@@ -169,8 +165,8 @@ it, turn HTTPS on first, or the token crosses the network readable.
 
 Mount the certificate chain and its private key, in PEM, the way the
 store key is mounted, and name them in the two variables. The
-certificate must cover the names callers use: `submilli` for your
-application's container, and the host's name for callers elsewhere.
+certificate must cover the names callers use, which are `submilli` for your
+application's container and the host's name for callers elsewhere.
 
 ```yaml title="compose.override.yaml (fragment)"
 services:
@@ -190,7 +186,7 @@ secrets:
 ```
 
 The key needs the same `0444` as the store key, for the same reason. The
-health check switches to HTTPS on its own.
+health check switches to HTTPS automatically.
 
 Your application then calls `https://submilli:8128`. For a self-signed
 certificate it must also be told to trust it, so give its container the
@@ -206,9 +202,9 @@ services:
       - submilli-tls-cert
 ```
 
-`NODE_EXTRA_CA_CERTS` is for a Node application; it adds the file to the
+`NODE_EXTRA_CA_CERTS` is for a Node application. It adds the file to the
 authorities Node already trusts. Python's `SSL_CERT_FILE` replaces those
-authorities instead, so a Python application that also calls its model
+authorities, so a Python application that also calls its model
 provider over HTTPS needs a bundle that holds both, built when the
 container starts:
 
@@ -233,10 +229,10 @@ services:
 ```
 
 `SUBMILLI_ALLOW_IP` takes an address or a range, comma-separated for more
-than one. Allow the narrowest thing that works: a container's address can
+than one. Allow the narrowest thing that works. A container's address can
 change when it's recreated, so for a service that moves, give its network
-a fixed subnet and allow that. Expect this line in the log once you do;
-it's there so that a setting like this never goes unnoticed:
+a fixed subnet and allow that. Once you do, the server logs this line so that a setting like this
+never goes unnoticed:
 
 ```text
 ts=2026-10-03T17:04:41.940Z level=warn stream=log target=submilli_server msg="the outbound egress guard was widened by environment variables; the config file cannot revoke these" vars=SUBMILLI_ALLOW_IP
@@ -247,18 +243,18 @@ ts=2026-10-03T17:04:41.940Z level=warn stream=log target=submilli_server msg="th
 Both the file and the image are pinned to a release. Version 0.2.0 is the
 first published release compatible with this guide's token authentication
 and health check. An older installation needs its configuration and
-blueprints migrated before starting the new server; read the
+blueprints migrated before starting the new server. Read the
 [0.2.0 release notes](https://github.com/submilli/submilli-runtime/releases/tag/v0.2.0)
 and back up its state first.
 
 For a later upgrade, download `compose.yaml` from that published release's
 tag, set `SUBMILLI_IMAGE` in `.env` to the same version, and run
 `docker compose up -d`. Keep the API token and the store key. The volume
-carries the state across; check the release's migration instructions before
+carries the state across. Check the release's migration instructions before
 reusing it.
 
 To back up, copy the volume while the server is stopped. Compose prefixes
-the volume name with the project name, usually the directory name;
+the volume name with the project name, usually the directory name, and
 `docker volume ls` shows it:
 
 ```sh

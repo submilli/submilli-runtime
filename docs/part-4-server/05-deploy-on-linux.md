@@ -9,26 +9,22 @@ sidebar:
   order: 5
 ---
 
-In production, `submilli-server` runs on a machine of its own, and your
-application calls it over the network. On a Linux machine that means
-running it like any other service: under systemd, as a dedicated user,
-with the binaries in `/usr/local/bin`, the configuration in
-`/etc/submilli`, and the state in `/var/lib/submilli`.
+In production, `submilli-server` runs on a dedicated machine, and your
+application calls it over the network. On Linux, run it like any other
+service. It runs under systemd as a dedicated user, with the binaries in
+`/usr/local/bin`, the configuration in `/etc/submilli`, and the state in
+`/var/lib/submilli`.
 
-This guide shows you how to set that up: install the binaries for the
-system, create the user and the directories, place the config file and
-the token files, write the unit and start it, turn on HTTPS, and
-upgrade and back it up. The config file is the
-one [Run the server](/docs/server/run-the-server) builds; this page
-only decides where everything lives. If your application runs in
-containers, refer to [Deploy with
-Compose](/docs/server/deploy-with-compose); on Kubernetes, to
-[Deploy on Kubernetes](/docs/server/deploy-on-kubernetes).
+This guide shows you how to set that up on Linux. The config file is the
+one [Run the server](/docs/server/run-the-server) builds, and this page
+decides where everything lives. If your application runs in containers,
+use [Deploy with Compose](/docs/server/deploy-with-compose). On
+Kubernetes, use [Deploy on Kubernetes](/docs/server/deploy-on-kubernetes).
 
 ## Install for the system
 
 The install script puts the binaries under your home directory unless
-told otherwise. For a service, put them where every user finds them:
+told otherwise. For a service, put them where all users find them:
 
 ```sh
 curl -fsSL https://submilli.ai/install.sh | sudo sh -s -- --install-dir /usr/local/bin
@@ -48,7 +44,7 @@ sudo install -d -o submilli -g submilli -m 0750 /etc/submilli
 ## Place the config and token files
 
 Generate the admin token, the application's token, and the secret
-store's key into `/etc/submilli`, readable by the server's user alone:
+store's key into `/etc/submilli`, readable only by the server's user:
 
 ```sh
 sudo sh -c 'openssl rand -hex 32 > /etc/submilli/admin.token'
@@ -60,14 +56,14 @@ sudo chmod 0400 /etc/submilli/admin.token /etc/submilli/app.token /etc/submilli/
 
 Then write the config file, with your editor or with `tee` as below,
 with the paths of those three files in it. Your application is on
-another machine, so the server listens on every interface, and an
-application that connects over MCP needs the name it will use for this
-machine under `mcp_allowed_hosts`; `hostname -f` gives the machine's
-own, which is that name unless you point a DNS alias at it. The state
-directories aren't in the file: they
-keep their defaults under the state directory, which the server takes
-from the `SUBMILLI_HOME` environment variable (`~/.submilli` when it is
-unset), and the unit below sets it to `/var/lib/submilli`:
+another machine, so the server listens on all interfaces. An application
+that connects over MCP needs the name it will use for this machine under
+`mcp_allowed_hosts`. `hostname -f` gives the machine's name, which is
+that name unless you point a DNS alias at it. The state directories
+aren't in the file. They keep their defaults under the state directory,
+which the server takes from the `SUBMILLI_HOME` environment variable
+(`~/.submilli` when it is unset). The unit below sets it to
+`/var/lib/submilli`:
 
 ```sh
 sudo tee /etc/submilli/server.yaml >/dev/null <<EOF
@@ -111,7 +107,7 @@ EOF
 ```
 
 On stop, systemd sends SIGTERM and the server lets running requests
-finish for five seconds before it exits; `TimeoutStopSec` gives it that
+finish for five seconds before it exits. `TimeoutStopSec` gives it that
 and a margin, so a program still running isn't killed mid-request.
 
 ```sh
@@ -130,19 +126,19 @@ sudo submilli server status --token-file /etc/submilli/admin.token
 
 Your application connects to `http://<the machine's name>:8128` with
 the value in `/etc/submilli/app.token`, given to it through whatever keeps
-its other secrets. From your own machine, [Connect the
+its other secrets. From your machine, [Connect the
 CLI](/docs/server/connect-the-cli) reaches the server with the
 admin token. Register blueprints, store their secrets, and install their
 packages as [Register a blueprint](/docs/server/register-a-blueprint)
-shows; a deploy job does the same with the admin token, which [Manage
-blueprints in Git](/docs/tutorials/manage-blueprints-in-git) builds.
+shows. A deploy job does the same with the admin token, and [Manage
+blueprints in Git](/docs/tutorials/manage-blueprints-in-git) builds one.
 
 ## Enable HTTPS
 
 Your application reaches this machine over the network, so its API token
-crosses that network with every request. Over plain HTTP it can be read
-on the way; turn HTTPS on unless the network between the two is one you
-control end to end.
+crosses that network with every request. Over plain HTTP anyone on the
+way can read it. Turn HTTPS on unless you control the network between
+the two end to end.
 
 Put the certificate chain and its private key, in PEM, at
 `/etc/submilli/server.crt` and `/etc/submilli/server.key`. Use a
@@ -193,7 +189,7 @@ does. Node adds the file to the authorities it already trusts with
 export NODE_EXTRA_CA_CERTS=$PWD/server.crt
 ```
 
-Python's `SSL_CERT_FILE` replaces those authorities instead, so a
+Python's `SSL_CERT_FILE` replaces those authorities, so a
 Python application that also calls its model provider over HTTPS needs a
 bundle that holds both:
 
@@ -214,10 +210,9 @@ network:
     - 10.0.12.7
 ```
 
-Allow the one address rather than `allow_private`, which opens your whole
-internal network. Refer to the [server
-settings](/docs/reference/server-settings) reference for the block
-and its settings.
+Allow the single address. `allow_private` opens your entire internal
+network. The [server settings](/docs/reference/server-settings)
+reference covers the block and its settings.
 
 ## Upgrade and back up
 
@@ -229,6 +224,6 @@ sudo systemctl restart submilli
 ```
 
 Back up `/var/lib/submilli` with the rest of the machine. `/etc/submilli`
-holds the store's key and the tokens: leave it out of that backup, and
-keep its contents in your secrets manager instead, since keeping the key
-apart from the store is what makes the encryption worth having.
+holds the store's key and the tokens. Leave it out of that backup and
+keep its contents in your secrets manager. The encryption is only worth
+having while the key stays apart from the store.

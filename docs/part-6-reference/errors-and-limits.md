@@ -20,7 +20,7 @@ A failure is one of two kinds:
 ## Limits set by the operator
 
 These limits are server settings, each with a config-file key, a flag, and a
-`SUBMILLI_*` variable; [Server settings](/docs/reference/server-settings)
+`SUBMILLI_*` variable. [Server settings](/docs/reference/server-settings)
 gives all three forms and their precedence. A blueprint can't raise them.
 
 | Limit | Setting | Default | Unit | Scope | When passed | Catchable |
@@ -33,33 +33,33 @@ gives all three forms and their precedence. A blueprint can't raise them.
 | Model tokens, all runs | `max_llm_tokens` | 20,000,000 | count, with suffixes | All live runs on the server | `QuotaExceededError` | Yes |
 | Prompts in flight | `max_llm_concurrency` | 4 | prompts | One `llm.batch` call | Further prompts wait | — |
 | Session state, all sessions | `max_session_state_memory` | 1,024 | megabytes | All live sessions on the server | `QuotaExceededError` | Yes |
-| Named volume size | `size_limit` of an entry under `volumes` | none; required | bytes, or a size such as `1GB` (binary units), or `unlimited` | The volume, across every session and blueprint that uses it | `QuotaExceededError` | Yes |
+| Named volume size | `size_limit` of an entry under `volumes` | none (required) | bytes, or a size such as `1GB` (binary units), or `unlimited` | The volume, across every session and blueprint that uses it | `QuotaExceededError` | Yes |
 
-Fuel counts work: about one unit per WebAssembly instruction of the program,
+Fuel counts work, at about one unit per WebAssembly instruction of the program,
 plus what the standard library charges for work it does on the program's
 behalf. Waiting on a call costs no fuel.
 
 The time limit starts when the first top-level statement runs, the imported
 packages' and then the program's, and ends the run up to one second after it
-passes. A call the program is waiting on isn't interrupted; the run ends when
+passes. A call the program is waiting on isn't interrupted. The run ends when
 the call returns, so a run can pass the limit by as long as the call takes
 ([Call timeouts](#call-timeouts)).
 
-Memory counts what the run holds, including memory the server holds for it:
-open file handles and compiled regular expressions. It doesn't count the
+Memory counts what the run holds, including memory the server holds for it
+(open file handles and compiled regular expressions). It doesn't count the
 stack, and it isn't the process's memory use.
 
-A model call is counted before it is sent: the prompt plus the output
-reserved for it, 64,000 tokens unless the blueprint's model sets
-`output_reserve`. A call that wouldn't fit either budget is refused and never
+A model call is counted before it is sent, as the prompt plus the output
+reserved for it (64,000 tokens unless the blueprint's model sets
+`output_reserve`). A call that wouldn't fit either budget is refused and never
 sent.
 
 ## Limits set by the blueprint
 
 | Limit | Blueprint key | Default | Scope | When passed | Catchable |
 | --- | --- | --- | --- | --- | --- |
-| Filesystem size | `vfs.size_limit` | none | The run, under `ephemeral`; the session, under `per_session` | `QuotaExceededError` | Yes |
-| Session idle time | `idle_timeout` | 24 hours | The session | The session is closed; its state and `per_session` files are deleted | — |
+| Filesystem size | `vfs.size_limit` | none | The run under `ephemeral`, the session under `per_session` | `QuotaExceededError` | Yes |
+| Session idle time | `idle_timeout` | 24 hours | The session | The session is closed, and its state and `per_session` files are deleted | — |
 
 The [Blueprint file](/docs/reference/blueprint-file) reference describes
 both keys. Deleting files frees space under a size limit. `fs.info()`
@@ -98,11 +98,11 @@ These limits are fixed. No setting changes them.
 | A string built by `repeat`, `padStart`, `padEnd`, `join`, and the like | 33,554,432 UTF-16 code units | `RangeError` |
 | A `Uint8Array` | 1,073,741,824 bytes | `RangeError` |
 | `JSON.parse` nesting | 128 levels | `SyntaxError` |
-| Object nesting, when compared, hashed, or serialized | 128 levels; a cycle reaches it too | `RangeError` |
+| Object nesting, when compared, hashed, or serialized | 128 levels. A cycle reaches it too | `RangeError` |
 | A compiled regular expression | 1,048,576 bytes | `SyntaxError` |
 
 Regular expressions match in linear time and support no backreferences or
-lookaround; a pattern with either throws `SyntaxError`.
+lookaround. A pattern with either throws `SyntaxError`.
 
 ### `submilli:fs`
 
@@ -121,14 +121,14 @@ time, so they handle files larger than the memory limit.
 
 | Limit | Value | When passed |
 | --- | --- | --- |
-| A response body (`http.get` and the other verbs) | 52,428,800 bytes | `RangeError`; the message suggests `http.download` |
+| A response body (`http.get` and the other verbs) | 52,428,800 bytes | `RangeError`, whose message suggests `http.download` |
 | `http.download` body | 52,428,800 bytes, or the call's `maxBytes` | `RangeError` |
 | Redirects followed | 10 | `Error` |
 | A request | 30 seconds | `Error` |
 | `http.download` | 60 seconds, or the call's `timeout` | `Error` |
 
-`http.download` writes to a file, so `maxBytes` has no upper bound of its
-own; the filesystem's size limit bounds it. A blueprint can bound it per call
+`http.download` writes to a file, so `maxBytes` has no upper bound. The
+filesystem's size limit bounds it. A blueprint can bound it per call
 with a `max_bytes` filter on `http.download`.
 
 ### `submilli:git`
@@ -147,16 +147,16 @@ counts against the filesystem's `size_limit`, not against memory.
 
 An operation that passes a limit fails with an error naming it and leaves
 the repository as it was. Git reads packs through the indexes native Git
-wrote for them and refuses a pack without a valid index; `git index-pack`
+wrote for them and refuses a pack without a valid index. `git index-pack`
 rebuilds one. A fetch downloads the history it needs without first telling
 the remote what is already present.
 
 A change is staged in a `.git-submilli-…` directory beside `.git` and moved
-into place at the end; the next change removes one a stopped server left
-behind. If the server stops while it is moving files, or a move fails and
+into place at the end. The next change removes one that a stopped server
+left behind. If the server stops while it is moving files, or a move fails and
 can't be undone, Git refuses the repository until it is restored, from a
 backup or a fresh clone, and the directory removed. Operations on one
-repository take turns within a server; two servers sharing a repository's
+repository take turns within a server. Two servers sharing a repository's
 volume can undo each other's changes.
 
 ### `submilli:llm`
@@ -167,7 +167,7 @@ volume can undo each other's changes.
 | One prompt | 262,144 bytes of UTF-8 | `RangeError` |
 | Output reserved per prompt | 64,000 tokens, or the model's `output_reserve` | Sent as the request's output cap |
 | Reserve held for calls whose usage the provider didn't report | 200,000 tokens per run | `QuotaExceededError` |
-| A model call | 10 minutes; 10 seconds to connect | `Error` |
+| A model call | 10 minutes, and 10 seconds to connect | `Error` |
 
 ### `submilli:session`
 
@@ -197,7 +197,7 @@ refused, and nothing another session holds is evicted.
 
 | Limit | Value | When passed |
 | --- | --- | --- |
-| Discovering a server's tools | 10 seconds | The server is left out with a warning; a program that imports it doesn't compile |
+| Discovering a server's tools | 10 seconds | The server is left out with a warning. A program that imports it doesn't compile |
 | A tool call | 60 seconds | `Error` |
 | Nesting of a tool's input or output schema | 12 levels | Deeper parts are typed `unknown` |
 
@@ -214,7 +214,7 @@ refused, and nothing another session holds is evicted.
 ## Catchable errors
 
 The standard library throws these classes. Each extends `Error` and has
-`name` and `message`; `catch (e: PermissionDeniedError)` catches one class.
+`name` and `message`. `catch (e: PermissionDeniedError)` catches one class.
 
 | Class | Thrown when | Example message |
 | --- | --- | --- |
@@ -222,7 +222,7 @@ The standard library throws these classes. Each extends `Error` and has
 | `QuotaExceededError` | A filesystem size limit, a model-token budget, or a session-state limit would be passed | `fs.writeText /big.txt: the filesystem's size limit of 1024 bytes would be exceeded: 0 bytes are in use and this needs 2000 more` |
 | `RangeError` | A value is outside a fixed bound | `crypto.randomBytes: length 1048577 exceeds maximum 1048576` |
 | `TypeError` | An argument has the wrong form, or a service the call needs isn't present | ``http GET: the URL path "/a/../b" has the dot segment ".."; a URL parser removes a `.` segment, and a `..` segment with the segment before it, so build the path without them`` |
-| `SyntaxError` | Text doesn't parse: JSON, a regular expression | `JSON.parse: EOF while parsing an object at line 1 column 1` |
+| `SyntaxError` | JSON or a regular expression doesn't parse | `JSON.parse: EOF while parsing an object at line 1 column 1` |
 | `Error` | Any other failure: network errors, the outbound network block, an MCP tool error, a timed-out call, a program's own `throw new Error(…)` | `http GET: network error: error sending request: blocked by network policy: localhost resolves only to private/loopback IP space; allow-list it on the server with --allow-ip / --allow-localhost / --allow-private` |
 
 ### `PermissionDeniedError`
@@ -244,10 +244,10 @@ error: PermissionDeniedError: permission denied: caller=main capability=http.get
 | `reason` | Cause |
 | --- | --- |
 | `policy denied <capability> for <caller>` | A `deny` rule, or the blueprint's `default` |
-| `secret values are never available to main-module code, and no policy can grant this. …` | `secrets.get` called from the program rather than a package |
+| `secret values are never available to main-module code, and no policy can grant this. …` | `secrets.get` called from the program |
 
 For a capability on files, `<capability>` is followed by the path, after
-`.` and `..` are resolved: `policy denied fs.write on /big.txt for main`.
+`.` and `..` are resolved, as in `policy denied fs.write on /big.txt for main`.
 The [Permissions](/docs/reference/permissions) reference describes how a
 call is decided.
 
@@ -278,8 +278,8 @@ SyntaxError: RegExp: invalid regex pattern: Compiled regex exceeds size limit of
 TypeError: session.set: this runtime has no session store configured, so session state cannot be read or written. The embedder installs one; nothing in the program can create it.
 ```
 
-The last is what `submilli:session` throws under `submilli run`, which has
-no session store.
+`submilli:session` throws the last one under `submilli run`, which has no
+session store.
 
 ## Errors that end the run
 
@@ -288,7 +288,7 @@ no session store.
 | `fuel exhausted` | The run used `max_execution_fuel` | `fuel_exhausted` | `fuel_exhausted` |
 | `timeout exceeded` | The run passed `max_execution_time` | `timeout` | `timeout` |
 | `memory exhausted` | An allocation would pass `max_execution_memory` | `memory_exhausted` | `memory_exhausted` |
-| `call stack exhausted` | Calls went deeper than `max_execution_stack` allows; the default holds about 2,000 levels of recursion | `runtime_error` | `error` |
+| `call stack exhausted` | Calls went deeper than `max_execution_stack` allows. The default holds about 2,000 levels of recursion | `runtime_error` | `error` |
 | An uncaught error | A thrown error no `catch` handled | `runtime_error` | `error` |
 | `internal host error: …` | A fault in the runtime, not the program | `runtime_error` | `error` |
 
@@ -373,7 +373,7 @@ The server reports a failed run as an `error` object with a `kind`, a
 | `memory_exhausted` | The run passed `max_execution_memory`. | `memory exhausted: GC heap out of memory: no capacity for allocation of 2000044 bytes` |
 | `runtime_error` | An uncaught error, a stack overflow, or a runtime fault. | `error: Error: customer cus_northwind not found` and the source excerpt |
 | `blueprint_not_found` | The request names a blueprint the server doesn't hold. | `unknown blueprint: nope` |
-| `invalid_request` | The request's variables don't match the blueprint: a required one missing, or one it doesn't declare. | `invalid variables: variable 'userId' is not declared in the blueprint` |
+| `invalid_request` | A required variable is missing from the request, or the request has one the blueprint doesn't declare. | `invalid variables: variable 'userId' is not declared in the blueprint` |
 | `package_resolution` | A package the program imports can't be loaded from the server's package store. | — |
 
 The [HTTP API](/docs/reference/http-api) reference describes the response

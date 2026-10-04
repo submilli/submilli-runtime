@@ -6,12 +6,12 @@ sidebar:
   order: 4
 ---
 
-In this tutorial we will run the research agent on LangChain deepagents:
-its programs executed on the server as the signed-in user, `u_ada` in the examples, then one real conversation. You need the server and the `research`
+In this tutorial we will run the research agent on LangChain deepagents,
+with its programs executed on the server as the signed-in user (`u_ada` in the examples). You need the server and the `research`
 blueprint from [Connect a harness](/docs/tutorials/connect-a-harness),
 with `SUBMILLI_SERVER_TOKEN` still exported, Python 3.11 or later, and a
 key from your model provider for the conversation. The agent file
-names Claude; for Google or OpenAI, the `model` argument takes
+names Claude. For Google or OpenAI, the `model` argument takes
 `google_genai:gemini-3.8-flash` or `openai:gpt-4o-mini` instead, with
 that provider's LangChain package installed and its key in the
 environment.
@@ -88,12 +88,12 @@ Notice that the agent is built and run inside the `create_session`
 block. That block opens one connection, which the tools share for as
 long as it runs. Tools loaded without a session, as
 `MultiServerMCPClient.get_tools()` does, open a new connection for every
-call, and each program would run in a session of its own and find none
+call, and each program would run in a separate session and find none
 of the state the last one left.
 
 Notice the `permissions` line too. deepagents gives its agent a planning
-tool and file tools of its own, which keep files in the conversation's
-state. Those files are not the notebook: they never reach Submilli and
+tool and its own file tools, which keep files in the conversation's
+state. Those files are not the notebook. They never reach Submilli and
 are gone when the conversation ends. Run without the line, a model asked
 to save a note used those tools, and the note was never written. The
 line denies them. An agent built with LangChain's `create_agent` or with
@@ -137,9 +137,9 @@ and a line recording today's check, and answers:
 Note updated at `/notes/rust-latest-release.md` with this information and sources (existing note was already accurate; I re-verified it and added confirmation details).
 ```
 
-Notice where the note came from: another harness, in another
+Notice where the note came from. Another harness wrote it, in another
 conversation, under the same user. The notebook belongs to the user and
-the blueprint, not to the harness, and the model updated it rather than
+the blueprint, not to the harness, and the model updated it instead of
 starting a new one, as the brief asks. The run took eight tool calls,
 none of which failed.
 
@@ -158,11 +158,11 @@ My deepagents agent saves pages under /pages in one program, and the next progra
 The assistant reads `agent.py` and the blueprint and names the cause in a
 few steps. Tools loaded without a session open a new MCP session for
 every call. Under `per_session`, each program therefore gets a new,
-empty filesystem. Its fix is the one above: one session, held open for
-the whole run. It adds that files still won't survive between separate
+empty filesystem. Its fix is the one above, a single session held open
+for the run. It adds that files still won't survive between separate
 runs of the script, which takes a named volume.
 
-You have the research agent running on deepagents, every program it
+You have the research agent running on deepagents, each program it
 writes executed on the server as the signed-in user, and the binding proved on
 the index before any model was involved. Project:
 [`examples/harnesses/deepagents/`](https://github.com/submilli/submilli-runtime/tree/main/examples/harnesses/deepagents).

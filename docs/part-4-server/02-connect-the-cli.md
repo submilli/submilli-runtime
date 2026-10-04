@@ -8,15 +8,12 @@ sidebar:
 
 The `submilli server` commands talk to a running server over HTTP or
 HTTPS. Out of the box they call `http://127.0.0.1:8128` and send the token from
-`SUBMILLI_SERVER_TOKEN`, which is why they need no setup in the shell
-that started the server. From another machine, or from a deploy job, the
-address is different and the token shouldn't be typed.
+`SUBMILLI_SERVER_TOKEN`, so they need no setup in the shell that started
+the server. From another machine, or from a deploy job, the address is
+different and the token shouldn't be typed.
 
 This guide shows you how to point the `submilli server` commands at a
-server: give them its token from a file, name its address, make the
-first check, trust its HTTPS certificate, keep both in your shell,
-switch between servers by name, and know which commands need the admin
-token.
+server.
 
 ## Give it the token
 
@@ -30,7 +27,7 @@ Set `SUBMILLI_SERVER_TOKEN` in the shell, or point `--token-file`, or
 `SUBMILLI_SERVER_TOKEN_FILE`, at a file holding it. No flag takes the
 token itself, so it never lands in the process list or in shell history.
 
-On Kubernetes the chart keeps the tokens in a Secret; read the admin one
+On Kubernetes the chart keeps the tokens in a Secret. Read the admin one
 into a file first:
 
 ```sh
@@ -40,8 +37,8 @@ kubectl get secret submilli-auth -o jsonpath='{.data.admin-token}' | base64 -d >
 ## Name the address
 
 `--server` names the server, on every `submilli server` command, and
-`SUBMILLI_SERVER_URL` sets it for a whole shell. `status` is the first
-check; it needs the admin token:
+`SUBMILLI_SERVER_URL` sets it for a shell. Check the connection with
+`status`, which needs the admin token:
 
 ```sh
 export SUBMILLI_SERVER_URL=http://10.0.12.7:8128
@@ -77,7 +74,7 @@ command prints the status as before.
 ### Trust a self-signed certificate
 
 The CLI can't check a self-signed certificate, or one from your
-organization's own authority, against the authorities it knows. So the
+organization's authority, against the authorities it knows. So the
 first time, it shows the certificate's public-key fingerprint and asks
 whether to trust it:
 
@@ -96,8 +93,8 @@ blueprints:      (none)
 ```
 
 Answer yes only after checking the fingerprint with whoever runs the
-server; otherwise the answer is no, which is also the default. They read
-it from the certificate file:
+server. Otherwise answer no, which is also the default. The operator
+reads the fingerprint from the certificate file:
 
 ```sh
 openssl x509 -in server.crt -pubkey -noout \
@@ -127,8 +124,8 @@ submilli server trust add --server https://localhost:8128 --fingerprint sha256:5
 Trusted localhost:8128 sha256:5ee140a80e2613385387daa41b22fb98dddf3a6ad328d734fc369d6212dcce29
 ```
 
-A fingerprint that isn't the server's is refused, so a mistyped one, or
-a server that isn't the one you checked, never gets trusted:
+The command refuses a fingerprint that isn't the server's. A mistyped
+one, or a server other than the one you checked, never gets trusted:
 
 ```text
 Error: server fingerprint mismatch: expected sha256:0000000000000000000000000000000000000000000000000000000000000000, received sha256:5ee140a80e2613385387daa41b22fb98dddf3a6ad328d734fc369d6212dcce29
@@ -153,22 +150,22 @@ include the host in `--server`, fails whatever you trusted.
 
 ## Keep them in your shell
 
-To stop passing the two on every command, put them in your shell's
-startup file, `~/.zshrc` or `~/.bashrc`, with the token in a file only
-you can read:
+To stop passing the two on each command, put them in your shell's
+startup file (`~/.zshrc` or `~/.bashrc`), with the token in a file that
+only you can read:
 
 ```sh title="~/.zshrc"
 export SUBMILLI_SERVER_URL=http://10.0.12.7:8128
 export SUBMILLI_SERVER_TOKEN_FILE=$HOME/.submilli/servers/prod/token
 ```
 
-From then on every new shell is connected, and `submilli server status`
+From then on each new shell is connected, and `submilli server status`
 needs no flags.
 
 ## Switch between servers
 
-With more than one server, staging and production say, keep each one's
-address and token in a directory of its own:
+With more than one server, say staging and production, keep each one's
+address and token in a separate directory:
 
 ```text
 ~/.submilli/servers/staging/url      http://10.0.12.7:8128
@@ -202,26 +199,27 @@ active sessions: 0
 blueprints:      support
 ```
 
-The switch lasts for the shell it runs in. To start every shell on one
-server, call the function as the last line of `~/.zshrc` or
-`~/.bashrc`: `submilli-use staging`.
+The switch lasts for the shell it runs in. To start each shell on one
+server, make `submilli-use staging` the last line of `~/.zshrc` or
+`~/.bashrc`.
 
 ## Which commands need the admin token
 
-A `user` token, the kind an application holds, runs programs and reads;
-everything that changes the server needs `admin`:
+A `user` token, the kind an application holds, runs programs and reads.
+Anything that changes the server needs `admin`:
 
 | Token | Commands |
 | --- | --- |
 | `user` or `admin` | `run-code`, `session open` and `close`, `docs` |
 | `admin` only | `status`, `blueprint …`, `packages …`, `secret …`, `mcp …`, `stop` |
 
-A `user` token on an admin command is refused by role, not by value:
+The server refuses a `user` token on an admin command because of its
+role, not its value:
 
 ```text
 error: this endpoint needs a token with the `admin` role; the token sent has the `user` role
 ```
 
 [Run the server](/docs/server/run-the-server) shows how to declare a
-`user` token. Refer to the [CLI reference](/docs/reference/cli) for
-every `submilli server` command and its options.
+`user` token. The [CLI reference](/docs/reference/cli) lists each
+`submilli server` command and its options.

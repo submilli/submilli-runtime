@@ -12,10 +12,9 @@ reads the package's readme. The model reads the declarations and
 `docs/readme.md` through its documentation tool, seconds before it writes
 a program nobody reviews. What each file leaves out, that reader guesses.
 
-This guide shows you how to document a package for both: the doc comments
-the declarations are printed from, the readme the model reads, whose
-examples the build compiles, and the readme people read. The example is
-Acme's billing package; substitute your operations and your service.
+This guide shows you how to document a package for both readers. The
+example is Acme's billing package. Substitute your operations and your
+service.
 
 ## Doc comments are the API
 
@@ -35,8 +34,8 @@ warning: parameter `customerId` is undocumented (missing `@param customerId`)
 23 |     if (amount <= 0) {
 ```
 
-The comments are what `submilli docs` prints, and what the model's
-documentation tool returns:
+`submilli docs` prints the comments, and the model's documentation tool
+returns them:
 
 ```sh
 submilli docs @acme/billing
@@ -73,9 +72,9 @@ interface Credit {
 }
 ```
 
-The first line is the description from `submilli.toml`. Write a comment for the
-reader who sees only this: what the operation does, in which unit, and
-what the fields mean.
+The first line is the description from `submilli.toml`. Write each comment
+for a reader who sees only this. Say what the operation does, in which
+unit, and what the fields mean.
 
 ## The readme the model reads
 
@@ -144,14 +143,14 @@ FAIL packages/billing/docs/readme.md :: example 2 (compile)
 2 passed, 1 failed across 2 files
 ```
 
-Examples are compiled, not run. Mark a fragment that isn't a whole
+Examples are compiled, not run. Mark a fragment that isn't a complete
 program as `ts ignore` and it is left alone.
 
 ## The readme people read
 
 `README.md` in the package's directory is for the person deciding to use
 the package, and for the coding agent doing it for them. Replace the
-scaffold's placeholder: say what the package is for, which credential to
+scaffold's placeholder. Say what the package is for, which credential to
 bind and how the service issues it, what the credential needs on the
 service's side, which operations to grant and the fields their filters
 can test, and give the install and grant commands:

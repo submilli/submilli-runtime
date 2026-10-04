@@ -11,11 +11,8 @@ Tests are how it stays correct as the service and the package change.
 `submilli build test` compiles the project, runs every test file, and
 compiles the examples in each readme.
 
-This guide shows you how to test a package: write a test file, keep the
-first failure from hiding the rest, add a live test and run it with the
-key or skip it, and know what the tests don't prove. The example is
-Acme's billing package on Stripe; substitute your package and its
-credential.
+This guide shows you how to test a package. The example is Acme's
+billing package on Stripe. Substitute your package and its credential.
 
 ## A test file
 
@@ -46,7 +43,7 @@ ok   packages/billing/docs/readme.md :: example 1 (compile)
 ```
 
 Test files are named `*.test.ts` and live anywhere under the package's
-`tests/` directory; `-p` runs one package's tests. The zero amount is
+`tests/` directory. `-p` runs one package's tests. The zero amount is
 refused before the service is reached, so this test needs no key. The
 second line is the readme's example, compiled as [Document the
 package](/docs/packages/document-the-package) describes.
@@ -58,14 +55,14 @@ package](/docs/packages/document-the-package) describes.
 | `expectException(fn, errorType)` | From `submilli:test`. Fails unless `fn` throws, and returns the error it threw. |
 
 `errorType` is the error's name as a string, `"RangeError"`, not the
-class; leave it out to accept any error. `submilli:test` is importable
+class. Leave it out to accept any error. `submilli:test` is importable
 only under `submilli build test`.
 
 ## Labels and failures
 
 Each `label` starts a test that runs to the next `label`, or to the end
-of `main`; a file with no labels is one test. The first failure ends the
-file: the tests before it passed, the one it happened in failed, and the
+of `main`. A file with no labels is one test. The first failure ends the
+file. The tests before it passed, the one it happened in failed, and the
 ones after it didn't run and aren't counted:
 
 ```text
@@ -100,8 +97,8 @@ function main(): void {
 }
 ```
 
-Tests see no credentials unless you pass them, so run as before this
-test fails, and says which secret it lacked:
+Tests see no credentials unless you pass them. Run as before, and this
+test fails and says which secret it lacked:
 
 ```text
 ok   packages/billing/tests/lib.test.ts :: refuses a zero amount
@@ -164,9 +161,9 @@ ok   packages/billing/docs/readme.md :: example 1 (compile)
 
 The credit was applied, in Stripe's test mode. A live test that writes
 needs a target that is safe to change, such as a test mode or a test
-account; without one, keep live tests read-only. Keep `.env` out of
+account. Without one, keep live tests read-only. Keep `.env` out of
 source control. On a machine that has no key, don't let the live tests
-fail the run: `--skip-network` leaves out every file named
+fail the run. `--skip-network` leaves out every file named
 `network.test.ts` or `network_<something>.test.ts`, by name alone, and
 says so:
 
@@ -186,16 +183,16 @@ ok   packages/billing/docs/readme.md :: example 1 (compile)
 ## What package tests don't prove
 
 Tests run with no blueprint. Every `check` is allowed, and printed, as
-the `[security]` lines above show. The line for the package's own
-operation is worth reading, because it is what a rule would see:
+the `[security]` lines above show. Read the line for the package's
+operation, because a rule would see the same thing:
 
 ```text
 [security] caller=main capability=acme.com/credits.apply context={"amount":100,"customerClass":"premium","customerId":"cus_VMQR3azuTWVAWs"}
 ```
 
 The customer's class is there, looked up from the account, and so is the
-package's own side of the contract: the key it read and the two requests
-it made. But a passing test says nothing about what a program is
-refused. For that, publish the package and run programs under a
-blueprint, one that should be allowed and one that shouldn't:
-[Publish a package](/docs/packages/publish-a-package).
+package's side of the contract, meaning the key it read and the two
+requests it made. But a passing test says nothing about what a program
+is refused. For that, publish the package and run programs under a
+blueprint, one that should be allowed and one that shouldn't, as
+[Publish a package](/docs/packages/publish-a-package) shows.

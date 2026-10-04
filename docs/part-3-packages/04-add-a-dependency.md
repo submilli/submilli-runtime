@@ -7,17 +7,15 @@ sidebar:
 ---
 
 A package often builds on another. Acme's support package apologizes to
-a customer with a credit, so it imports the billing package rather than
-calling Stripe again; a package that reads a web page imports the curated
-Jina package. The build has to know where each import comes from, and the
-blueprint needs rules for every package in the chain, not only the one
-the program imports; `add-package` writes them.
+a customer with a credit, so it imports the billing package and doesn't
+call Stripe again. A package that reads a web page imports the curated
+Jina package. The build has to know where each import comes from. The
+blueprint needs rules for every package in the chain, including the ones
+the program doesn't import directly, and `add-package` writes them.
 
-This guide shows you how to make a package import another: from the same
-project, from your local store, or from a GitHub repository, and what the
-dependency adds to what the package requires and to the blueprint. The
-example is `@acme/support`, which imports `@acme/billing`; substitute
-your packages.
+This guide shows you how to make a package import another, and what the
+dependency adds to the blueprint. The example is `@acme/support`, which
+imports `@acme/billing`. Substitute your packages.
 
 ## Import it
 
@@ -60,7 +58,7 @@ error: package `@acme/billing` not found
 | Another package in the project | In the package's `dependencies` |
 | A package in the local store | There, and in `[dependencies]` with its version |
 | A package in a GitHub repository | There, and in `[dependencies]` as `{ github = "github.com/org/repo", rev = "<commit>" }` |
-| A package in a private GitHub repository | The same; whoever builds needs a GitHub token that can read it |
+| A package in a private GitHub repository | The same, and whoever builds needs a GitHub token that can read it |
 
 The billing package is a sibling, so one line in the support package's
 block declares it:
@@ -100,11 +98,12 @@ dependencies = ["@acme/billing", "@submilli/jina", "@acme/crm"]
 
 A GitHub dependency is fetched into the local store by the build, which
 records the commits it used in `submilli.lock`. `rev` is the full
-40-character commit SHA; a branch, tag, or short SHA is refused. A private
+40-character commit SHA. A branch, tag, or short SHA is refused. A private
 one, such as `@acme/crm` above, is fetched with the GitHub token of whoever
-builds or installs: yours on your machine (`submilli github authenticate`),
-the server's own on a server; refer to [Install private
-packages](/docs/server/install-private-packages). The token needs
+builds or installs. That is your token on your machine
+(`submilli github authenticate`) and the server's token on a server, as
+[Install private
+packages](/docs/server/install-private-packages) explains. The token needs
 Contents: Read-only on every private repository in the dependencies,
 including the ones your dependencies depend on.
 
@@ -121,9 +120,9 @@ requires:
 ```
 
 A blueprint grants that to `@acme/support` as it would to a program. The
-billing package makes calls of its own, as the caller `@acme/billing`,
+billing package makes its own calls, as the caller `@acme/billing`,
 so it needs rules too, and so does the secret it reads. `add-package`
-adds the whole chain:
+adds rules for the chain:
 
 ```sh
 submilli blueprint init support
@@ -180,7 +179,7 @@ credited $15
 
 The program called the support package, the support package called the
 billing package, and the billing package called Stripe, each under its
-own rules. The whole file:
+own rules. The complete blueprint:
 
 ```yaml title="blueprint.yaml"
 kind: blueprint

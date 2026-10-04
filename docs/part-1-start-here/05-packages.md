@@ -6,30 +6,30 @@ sidebar:
   order: 5
 ---
 
-A package in Submilli is what a package is in npm or pip: a library you
+A package in Submilli is like a package in npm or pip, a library you
 install and import. The language is TypeScript, but npm packages can't be
-used. Submilli resets the ecosystem, with packages built for AI agents:
-every function that reaches outside names its operation and asks the
+used. Submilli resets the ecosystem with packages built for AI agents.
+Each function that reaches outside names its operation and asks the
 blueprint before it acts. Why the reset is worth it comes later in this
 chapter. In the quickstart you wrote one with a single function.
 
 Packages are also Submilli's answer to MCP servers. Other code-execution
 platforms take the MCP servers you run and turn them into an interface the
-agent's code can call. Submilli can do that too: declare a server in the
-blueprint and it becomes a package, each tool a function the blueprint can
-allow or deny. But MCP was designed for tool calling, not for code. Most
+agent's code can call. Submilli can do that too. Declare a server in the
+blueprint and it becomes a package, with each tool a function the blueprint
+can allow or deny. But MCP was designed for tool calling. Most
 MCP servers publish no output schema, so a program can't know the shape of
 what a tool returns, and a rule over an MCP tool can see only the tool's
 name. A package needs no server to deploy or maintain, calls the API
 directly, returns typed values, and tells the runtime what each call means.
 
 A package can be one you write for an internal system, one you write for a
-third-party service you consume, or one someone else published: any package
+third-party service you consume, or one someone else published. Any package
 in a Git repository
 [installs straight from it](/docs/blueprints/start-a-blueprint).
 Submilli publishes
 [curated packages](/docs/reference/curated-packages) that way for
-common services, GitHub, Slack, Google Drive, Linear, Notion, and others.
+common services such as GitHub, Slack, Google Drive, Linear, Notion, and others.
 
 ## Why not npm
 
@@ -37,7 +37,7 @@ Generated code can't import npm packages or Node.js modules. An npm package
 is written for Node, and Node gives it the whole operating system: files,
 sockets, processes, anything a system call can reach. Submilli is designed
 for agents, and the ways a program can reach the outside world are designed
-for that: a small set of operations, each named, each checked. An npm
+for that. A program gets a small set of operations, each named and checked. An npm
 package also has no semantic security (no `check` calls), so a blueprint
 would have nothing to govern. You pay by wrapping your systems as packages.
 
@@ -80,9 +80,9 @@ export function applyCredit(customerId: string, amount: number): Credit {
 }
 ```
 
-Two lines make it an operation. The `@capability` tag **declares** it: a
-name, and the fields a rule may test. The `check` call, from
-`submilli:security`, **enforces** it: it takes the capability's name and
+Two lines make it an operation. The `@capability` tag **declares** it with a
+name and the fields a rule may test. The `check` call, from
+`submilli:security`, **enforces** it. It takes the capability's name and
 those fields, asks the blueprint whether the caller may do this with these
 values, and throws `PermissionDeniedError` if not.
 
@@ -165,7 +165,7 @@ function main(): string {
 }
 ```
 
-Calls are synchronous: no `await`, the program gets the value back. Run
+Calls are synchronous. There is no `await`, and the program gets the value back. Run
 under the previous chapter's blueprint, bound to `cus_northwind`:
 
 ```text
@@ -173,17 +173,17 @@ credited 1500 cents
 ```
 
 The program never sees the billing API, its URL, or the key that
-authenticates the request; the package holds all three. When the blueprint
+authenticates the request. The package holds all three. When the blueprint
 refuses the call, the program gets the error you saw in the quickstart, and
 the model reads it.
 
 ## The tools to build one
 
-`submilli build` is to a package what `npm` is to a Node project: it
+`submilli build` is to a package what `npm` is to a Node project. It
 scaffolds the project, compiles it, derives what it can be granted from the
 `@capability` tags, runs its tests, and installs it where programs can
 import it. And with the skill installed, your coding assistant does the
-writing: give it a service's API documentation and what the agent may do,
+writing. Give it a service's API documentation and what the agent may do,
 and it writes the package, the readme the model reads, and the tests, then
 tests it under a blueprint.
 

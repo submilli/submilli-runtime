@@ -7,10 +7,10 @@ sidebar:
 ---
 
 The blueprint pages showed the commands. With the Submilli skill, your
-coding assistant runs them for you, and the work is in knowing what a
-good result looks like: it reads before it writes, tests both directions,
-hands its work to a verifier, asks instead of guessing, and says what it
-didn't test. Runs vary by model, so each step below says what to look
+coding assistant runs them for you, and your work is in knowing what a
+good result looks like. A good assistant reads before it writes, tests
+both directions, hands its work to a verifier, asks when unsure, and says
+what it didn't test. Runs vary by model, so each step below says what to look
 for, not what the assistant will type.
 
 In this tutorial we will have the assistant craft a research agent's
@@ -23,7 +23,7 @@ prove it as two users.
 
 Three things, none of them long. Install the skill for your assistant,
 as [Install](/docs/install#the-skill) shows, and restart it. Then,
-in an empty directory, start a blueprint and install the one package the
+in an empty directory, start a blueprint and install the package the
 tutorial uses, Submilli's curated package for web search and reading:
 
 ```sh
@@ -50,8 +50,8 @@ Value for 'jina_api_key': [hidden]
 Stored secret 'jina_api_key'
 ```
 
-Now open your assistant in that directory and invoke the skill:
-`/submilli` in Claude Code, `$submilli` in Codex.
+Now open your assistant in that directory and invoke the skill, with
+`/submilli` in Claude Code or `$submilli` in Codex.
 
 ## Grant a package, narrowly
 
@@ -63,10 +63,10 @@ What capabilities does the @submilli/jina package offer, and what fields can a r
 
 The assistant runs `submilli docs @submilli/jina` and answers with the
 two capabilities, `jina.ai/read` and `jina.ai/search`, the functions
-each one covers, and the one field a rule can test: `host` on
-`jina.ai/read`. Notice the last thing it says: `jina.ai/search` has no
-fields, so a rule can only allow or deny search as a whole. That is the
-reading a blueprint starts from. You can check it yourself:
+each one covers, and the field a rule can test, `host` on
+`jina.ai/read`. Notice the last thing it says. `jina.ai/search` has no
+fields, so a rule can only allow or deny search as a whole. A blueprint
+starts from this reading. You can check it yourself:
 
 ```sh
 submilli docs @submilli/jina
@@ -144,13 +144,13 @@ permissions:
     action: deny
 ```
 
-Notice the two lists under `permissions`. The package's own list,
-written by `add-package` from what the package declares it needs, lets
-it reach Jina and read its key; `main`, the agent's programs, got only
-the two rules you asked for.
+Notice the two lists under `permissions`. The package's list, written
+by `add-package` from what the package declares it needs, lets it reach
+Jina and read its key. `main`, the agent's programs, got only the two
+rules you asked for.
 
 Then it tests, with `submilli run --blueprint`, and this is the part to
-watch. A page on docs.python.org is read; another site, a look-alike host
+watch. A page on docs.python.org is read. Another site, a look-alike host
 such as `docs.python.org.evil.com`, and a search are each refused:
 
 ```text
@@ -169,7 +169,7 @@ Then the skill hands the change to its verifier, which reads the
 blueprint and the package looking for a way around the rule, and the
 assistant reports what it found and what you still need to do, such as
 storing the key on a server. Expect this request to take several
-minutes; testing the rule and reviewing it is most of the work.
+minutes. Most of that time goes to testing the rule and reviewing it.
 
 ## Call an API without handing over its token
 
@@ -203,8 +203,7 @@ another host, a POST, and a program calling `secrets.get` each refused.
 
 Notice that it doesn't ask for the token. It gives you the `submilli
 secret put` command to run yourself, so the value never passes through
-the conversation. That is the behavior to expect whenever a credential
-is involved.
+the conversation. Expect this whenever a credential is involved.
 
 ## Add a tool server with only the tools the task needs
 
@@ -239,11 +238,11 @@ mcp:
 It tests the rules with `submilli run`. Opening example.com and taking a
 snapshot returns the page. `browser_evaluate`, `browser_run_code_unsafe`,
 and `browser_click` are each refused before the call reaches Playwright.
-With the filter removed, `browser_evaluate` runs, which shows the filter
-is what refuses it.
+With the filter removed, `browser_evaluate` runs, which shows that the
+filter refuses it.
 
 Then its review looks past the tool names, and this is the part to read
-closely. The report says the request isn't fully met: `browser_navigate`
+closely. The report says the request isn't fully met. A `browser_navigate`
 to a `javascript:` or `data:` address runs script, and `browser_snapshot`
 takes a `filename` that writes a file on Playwright's machine. No
 blueprint rule can close either. The assistant proposes restricting
@@ -313,11 +312,11 @@ grant a `userId` variable and file rules that give each user a
 directory. As `alice`, a search and a page read returned real results,
 and a note written in one run was read back in the next. Writing to
 `bob`'s directory, reading `bob`'s notes, calling Jina's API directly,
-and running with no `userId` were each refused. It also found a hole:
-the rules confined the program to the user's directory, but not the
+and running with no `userId` were each refused. It also found a hole.
+The rules confined the program to the user's directory but not the
 package, and through `@submilli/jina`'s download function `alice` saved
 a file into `bob`'s directory. The assistant reported it with a fix and
-left the change to you; the example blueprint now has that fix. Expect
+left the change to you, and the example blueprint now has that fix. Expect
 a report that separates what it proved from what it found and what it
 left for you to decide.
 

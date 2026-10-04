@@ -7,18 +7,18 @@ sidebar:
 ---
 
 In this tutorial we will run the research agent on the Claude Agent SDK,
-with every action going through Submilli: its programs executed on the
-server as the signed-in user, `u_ada` in the examples, then one real conversation.
+with every action going through Submilli and its programs executed on the
+server as the signed-in user (`u_ada` in the examples).
 You need the server and the `research` blueprint from [Connect a
 harness](/docs/tutorials/connect-a-harness), with
 `SUBMILLI_SERVER_TOKEN` still exported, Node.js 20 or later, and an
-Anthropic key for the conversation; this SDK speaks to Claude,
-whichever provider the blueprint's own model uses.
+Anthropic key for the conversation. This SDK speaks to Claude,
+whichever provider the blueprint's model uses.
 
 ## Start the project
 
 In `harnesses`, make a directory for this harness and install the
-dependencies; the files use top-level `await`, hence `type=module`. The
+dependencies. The files use top-level `await`, hence `type=module`. The
 full project is
 [`examples/harnesses/claude-agent-sdk/`](https://github.com/submilli/submilli-runtime/tree/main/examples/harnesses/claude-agent-sdk).
 
@@ -97,13 +97,13 @@ Notice the four options after the server. This SDK gives its agent a
 shell, file access, and web fetch unless told otherwise, and those tools
 run outside Submilli, where no blueprint applies. `tools: []` removes
 them, and `allowedTools` lets the agent call Submilli's without asking.
-The SDK also loads the MCP servers of whoever runs the process: run under
+The SDK also loads the MCP servers of whoever runs the process. Run under
 a Claude login that had two connectors attached, this agent started with
 84 tools, eight of them Submilli's. `strictMcpConfig` limits it to the
 server named here, and `settingSources: []` keeps that person's other
 settings out.
 
-The same caution holds for every harness. A blueprint governs what
+The same caution holds for any harness. A blueprint governs what
 programs do. It can't govern a tool the harness offers beside Submilli's.
 
 The SDK takes its credentials from `ANTHROPIC_API_KEY`, from Amazon
@@ -120,7 +120,7 @@ ANTHROPIC_API_KEY=... npx tsx agent.ts
 This is one real run, with Claude Sonnet 5 as the model, made after
 three other tutorials' agents had answered the same question for the
 same user. The model's programs are its own, and another run writes
-different ones; the answer began and ended:
+different ones. The answer began and ended:
 
 ```text
 The latest stable Rust release is **1.99.0**, released 2026-10-01. I checked this against the official blog post and releases.rs today (2026-10-03), and no newer stable release has shipped.
@@ -130,13 +130,13 @@ The latest stable Rust release is **1.99.0**, released 2026-10-01. I checked thi
 **Not established:** I did not read the Cargo or Clippy changelogs or the full stable release notes, so the list above covers the blog post's highlights, not every change.
 ```
 
-Notice the notebook paragraph. The note was written by another harness's
-agent, in another conversation, under the same user; this one found it
+Notice the notebook paragraph. Another harness's agent wrote the note,
+in another conversation, under the same user. This one found it
 at `/notes`, read it before searching, and added to it. The notebook
 belongs to the user and the blueprint, not to the harness.
 
 You have the research agent running on the Claude Agent SDK with nothing
-beside Submilli's tools, every program it writes executed on the server
+beside Submilli's tools, each program it writes executed on the server
 as the signed-in user, and the binding proved on the index before
 any model was involved. Project:
 [`examples/harnesses/claude-agent-sdk/`](https://github.com/submilli/submilli-runtime/tree/main/examples/harnesses/claude-agent-sdk).

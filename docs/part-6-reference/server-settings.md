@@ -6,8 +6,8 @@ sidebar:
   order: 9
 ---
 
-This page describes how `submilli-server` is configured: every setting with
-its config-file key, flag, and environment variable, how the three combine,
+This page describes how `submilli-server` is configured. It covers every
+setting with its config-file key, flag, and environment variable, how the three combine,
 and what each group of settings controls.
 
 ## Config file
@@ -20,7 +20,7 @@ stops it from starting, ``unknown field `prot`, expected one of `bind`,
 ## Settings
 
 A top-level key has the flag `--` plus the key with `-` for `_`, and the
-variable `SUBMILLI_` plus the key in capitals; keys inside a block have the
+variable `SUBMILLI_` plus the key in capitals. Keys inside a block have the
 flat names listed. A dash means the form doesn't exist.
 
 | File key | Flag | Variable | Type | Default | Description |
@@ -79,7 +79,7 @@ When sources disagree, the most specific wins:
 | 4 | The `HOST` and `PORT` variables, for `bind` and `port` only |
 | 5 | The default |
 
-Some settings add up instead: the `network` grants and `mcp_allowed_hosts`
+Some settings add up instead. The `network` grants and `mcp_allowed_hosts`
 combine across every source, and `allow_unauthenticated` is on when any
 source turns it on. For `telemetry`, `false` in the file wins over the
 variable. `SUBMILLI_HOME` moves the base of every default path
@@ -91,7 +91,7 @@ variable. `SUBMILLI_HOME` moves the base of every default path
 | --- | --- |
 | Boolean variable | `1`, `true`, `yes`, or `on`, in any case, mean true. Any other value means false. |
 | Boolean in the file | `true` or `false`. |
-| Count | A whole number with an optional decimal suffix: `K` (thousand), `M` (million), `B` (billion), or `T` (trillion), case-insensitive, with no space before it. Underscores may separate digits: `10_000_000_000`. Fractions and scientific notation are refused. |
+| Count | A whole number with an optional decimal suffix: `K` (thousand), `M` (million), `B` (billion), or `T` (trillion), case-insensitive, with no space before it. Underscores may separate digits, as in `10_000_000_000`. Fractions and scientific notation are refused. |
 | Megabytes, kibibytes | Whole numbers. A megabyte is 1,048,576 bytes and a kibibyte 1,024 bytes. |
 | Seconds | Whole numbers. |
 | List variable | Comma-separated. Whitespace around each item is ignored. |
@@ -107,7 +107,7 @@ Error: $SUBMILLI_PORT: expected a port number, got `abc`
 
 The defaults, `127.0.0.1` and `8128`, accept connections from the same
 machine only. The plain `HOST` and `PORT` variables that hosting platforms
-set rank below the config file; `PORT` alone also binds `0.0.0.0`, unless a
+set rank below the config file. `PORT` alone also binds `0.0.0.0`, unless a
 flag, a `SUBMILLI_*` variable, the file, or `HOST` names the address.
 
 ## TLS
@@ -123,25 +123,25 @@ tls:
   key_file: /etc/submilli/server.key
 ```
 
-Certificates are loaded at startup; restart to rotate them. The listener limits
+Certificates are loaded at startup. Restart to rotate them. The listener limits
 pending TLS handshakes to 128 and gives each ten seconds. Authentication and
 MCP hostname checks still apply. `--health-check` uses the configured public
 key to verify the local HTTPS server, without the CLI trust store or a hostname
-check against the loopback probe address; certificate validity still applies.
+check against the loopback probe address. Certificate validity still applies.
 
 ## `api_tokens`
 
 Every request except `GET /healthz` carries an API token as
 `Authorization: Bearer <token>`. Tokens come from `SUBMILLI_SERVER_TOKEN`,
-one `admin` token, and from `api_tokens` in the file; both may be used. The
+one `admin` token, and from `api_tokens` in the file. Both may be used. The
 server doesn't start without at least one token, unless
 `allow_unauthenticated` is on.
 
 | Key | Value |
 | --- | --- |
-| `name` | A unique name, shown in logs; the token itself never is |
+| `name` | A unique name, shown in logs. The token itself never is |
 | `role` | `admin` or `user` |
-| `token_file` | A file holding the token; surrounding whitespace is removed |
+| `token_file` | A file holding the token. Surrounding whitespace is removed |
 
 ```yaml title="server.yaml (fragment)"
 api_tokens:
@@ -151,7 +151,7 @@ api_tokens:
 ```
 
 A token is at least 32 characters of letters, digits, and `- . _ ~ + /`,
-with optional trailing `=`; `openssl rand -hex 32` makes one. The server
+with optional trailing `=`. `openssl rand -hex 32` makes one. The server
 keeps only a digest of each token. To rotate one, add an entry with the same
 role, restart, move the callers, remove the old entry, and restart again.
 
@@ -167,7 +167,7 @@ runs this way.
 ## `mcp_allowed_hosts`
 
 The MCP endpoint accepts a request only when its `Host` header is
-`localhost`, `127.0.0.1`, or `::1`; any other answers `403 Forbidden: Host
+`localhost`, `127.0.0.1`, or `::1`. Any other answers `403 Forbidden: Host
 header is not allowed`. `mcp_allowed_hosts` adds names, each as the client
 sends it, with the port when the client includes one:
 
@@ -194,7 +194,7 @@ store, `$SUBMILLI_HOME/packages`, as a read-only fallback.
 ## `secret_store`
 
 The secret store holds the values of a blueprint's `store:` secrets and the
-OAuth tokens of MCP logins, encrypted with a key: base64 of 32 bytes, such as
+OAuth tokens of MCP logins, encrypted with a key. The key is base64 of 32 bytes, such as
 `head -c 32 /dev/urandom | base64`.
 
 | Key | Value |
@@ -204,7 +204,7 @@ OAuth tokens of MCP logins, encrypted with a key: base64 of 32 bytes, such as
 | `key_env` | The variable holding the key, `SUBMILLI_SECRET_KEY` by default |
 
 `key_file` wins when both are set. Without a key the store is off and secret
-commands answer `no secret store is configured on this server`; a key that
+commands answer `no secret store is configured on this server`. A key that
 can't be read stops the server from starting. Values go in and never come
 back out through the API.
 
@@ -218,7 +218,7 @@ Named volumes a blueprint may use as its filesystem root or mount under
 | `kind` | Required. `managed-local`: the server keeps the files at `<volume_dir>/<name>`, created on first use. `local-path`: the files are in the directory `path` names, which the server never creates or deletes. |
 | `path` | Required for `local-path`, refused for `managed-local`. An absolute path. |
 | `access` | `read_write` (default) or `read_only`. A blueprint can narrow it, never widen it. |
-| `size_limit` | Required. A size such as `500MB` or `10GB`, or `unlimited`. Units are binary: `KB` is 1,024 bytes, `MB` 1,024 KB, `GB` 1,024 MB, `TB` 1,024 GB; `B` or no unit means bytes. |
+| `size_limit` | Required. A size such as `500MB` or `10GB`, or `unlimited`. Units are binary: `KB` is 1,024 bytes, `MB` 1,024 KB, `GB` 1,024 MB, `TB` 1,024 GB. `B` or no unit means bytes. |
 
 ```yaml title="server.yaml (fragment)"
 volumes:
@@ -254,7 +254,7 @@ name resolves to, so a public name pointing inside is blocked too.
 
 Grants add up across the flags, variables, and file, and none revokes
 another's. A blocked call throws an `Error` the program can catch. Inside a
-container, `localhost` is the container itself; reach a service on the host
+container, `localhost` is the container itself. Reach a service on the host
 or in another container through its address, with `allow_ip`.
 
 ## Limits
@@ -262,7 +262,7 @@ or in another container through its address, with `allow_ip`.
 The `max_*` settings bound each run and the server as a whole, and a
 blueprint can't raise them. [Errors and
 limits](/docs/reference/errors-and-limits) lists what each one bounds and
-what a program sees; [Set limits](/docs/server/set-limits) shows how to
+what a program sees. [Set limits](/docs/server/set-limits) shows how to
 choose them.
 
 ## `mcp_oauth`
@@ -288,7 +288,7 @@ mcp_oauth:
 ## `github_token_file`
 
 A file holding the GitHub token the server sends when it installs packages,
-so installs can reach private repositories; without it, only public ones.
+so installs can reach private repositories. Without it, installs reach only public ones.
 The file is read again on every install, so replacing it rotates the token.
 [Install private packages on a server](/docs/server/install-private-packages)
 shows it in use.
@@ -313,7 +313,7 @@ the bind address, process ID, open sessions, and registered blueprints.
 
 ## Logs
 
-The server logs to standard output at `info` and above; `RUST_LOG` sets the
+The server logs to standard output at `info` and above. `RUST_LOG` sets the
 filter, such as `RUST_LOG=submilli_server=debug`. To append to a file instead:
 
 ```yaml title="server.yaml (fragment)"
@@ -322,7 +322,7 @@ logging:
 ```
 
 `--log-file` overrides `SUBMILLI_LOG_FILE`, which overrides `logging.file`.
-The parent directory must exist; an invalid or inaccessible file fails startup.
+The parent directory must exist. An invalid or inaccessible file fails startup.
 Existing contents are retained across restarts.
 
 On Unix, `SIGHUP` reopens the configured path after external rotation. If it
@@ -343,7 +343,7 @@ ts=2026-10-03T15:29:46.963Z level=info stream=log target=submilli_server::execut
 | --- | --- |
 | `blueprint` | The blueprint the program ran under. |
 | `session` | The session ID. |
-| `fuel` | Fuel consumed: `wasm_fuel` plus `host_fuel`. |
+| `fuel` | Fuel consumed, `wasm_fuel` plus `host_fuel`. |
 | `wasm_fuel` | Fuel the program's own instructions consumed. |
 | `host_fuel` | Fuel the standard library charged for work done on the program's behalf. |
 | `memory_peak` | The most memory the run held, in bytes. |
@@ -364,14 +364,14 @@ logging:
     allows: summary
 ```
 
-`allows` decides how operations a program was allowed are recorded:
+`allows` decides how operations a program was allowed are recorded.
 `summary` writes one record per run for each caller, capability, and
-rule, with a count; `all` writes one per operation; `none` writes none.
+rule, with a count. `all` writes one per operation, and `none` writes none.
 Refusals are always recorded one by one. The complete JSON context passed
-to a package or built-in permission check is recorded; secure the audit
+to a package or built-in permission check is recorded. Secure the audit
 destination accordingly.
 
-Writing a record never stops a run: if the output can't be written, the
+Writing a record never stops a run. If the output can't be written, the
 server reports it to standard error and keeps serving. [Audit
 trail](/docs/reference/audit-trail) lists every record and its fields.
 
@@ -379,7 +379,7 @@ trail](/docs/reference/audit-trail) lists every record and its fields.
 
 SIGTERM, SIGINT, `submilli server stop`, and `POST /v1/shutdown` each stop the
 server. It stops accepting connections and lets running requests finish for
-up to `shutdown_grace` seconds; a program still running then is cut off. A
+up to `shutdown_grace` seconds. A program still running then is cut off. A
 second signal skips the wait.
 
 ## Command-line help

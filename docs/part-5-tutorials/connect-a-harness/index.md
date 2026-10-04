@@ -6,15 +6,15 @@ sidebar:
   order: 0
 ---
 
-Your application, or the agent framework it uses, is the **harness**: the
+Your application, or the agent framework it uses, is the **harness**, the
 code that runs the agent's loop. Submilli replaces none of it. The harness
-keeps the model and the loop, and gains one tool: it takes a program the
+keeps the model and the loop, and gains one tool that takes a program the
 model wrote and runs it on the server under your blueprint.
 
 The tutorials in this part build the same research agent on five
 harnesses, one per page. This page sets up what they share, the server
-and the blueprint, in seven steps, then says the three things every
-harness does when it connects. Take the page for yours when you are done:
+and the blueprint, then says what every harness decides when it
+connects. Take the page for yours when you are done:
 
 | Harness | Language | Connects over |
 | --- | --- | --- |
@@ -27,7 +27,7 @@ harness does when it connects. Take the page for yours when you are done:
 The agent answers questions by searching the web and reading pages, and
 keeps notes so that the next conversation can start from what the last
 one learned. It runs on behalf of whoever is signed in to your
-application; the examples stand in for that person with one user id,
+application. The examples stand in for that person with one user id,
 `u_ada`.
 
 ## 1. Save the blueprint
@@ -137,13 +137,13 @@ permissions:
     action: allow
 ```
 
-In short: the agent may search and read through the curated
+In short, the agent may search and read through the curated
 `@submilli/jina` package, call one model, and keep notes at `/notes`.
-That path is the same for every user, but what is behind it isn't: the
-`notes` volume holds a directory per user, and `subPath` mounts only the
-one the session's `userId` names, so neither the program nor the package
+That path is the same for each user, but what is behind it isn't. The
+`notes` volume holds a directory per user, and `subPath` mounts the one
+the session's `userId` names, so neither the program nor the package
 can reach another user's notes, and no rule has to name a user. The file names Anthropic as the
-provider and keeps Google and OpenAI entries commented out; uncomment
+provider and keeps Google and OpenAI entries commented out. Uncomment
 yours. For what each block does, refer to [Keep files and
 state](/docs/blueprints/keep-files-and-state), [Allow model
 calls](/docs/blueprints/allow-model-calls), and [Mount a shared
@@ -152,7 +152,7 @@ volume](/docs/server/mount-a-shared-volume).
 ## 2. Save a test program
 
 Beside it, save a program to prove the setup with before any model is
-involved. It lists the notes already there, then writes one; a relative
+involved. It lists the notes already there, then writes one. A relative
 path is under `/notes`, where every program starts:
 
 ```typescript title="harnesses/note.ts"
@@ -168,11 +168,11 @@ function main(): string {
 
 ## 3. Save the agent's brief
 
-The harness supplies no system prompt for Submilli: the instructions
+The harness supplies no system prompt for Submilli. The instructions
 that teach a model the language arrive as the execute tool's
-description, with this blueprint's packages and rules filled in. What
-the harness does supply is the agent's own brief, and every tutorial's
-agent reads it from this file:
+description, with this blueprint's packages and rules filled in. The
+harness does supply the agent's brief, and each tutorial's agent reads
+it from this file:
 
 ```text title="harnesses/prompt.txt"
 You are a research assistant. You answer questions by searching the web
@@ -211,9 +211,9 @@ evidence establishes from what you infer and what remains unknown. Never
 claim you read or saved something unless a program's result shows it.
 ```
 
-Its shape is the one that works: what the agent is for, how to work in
-programs rather than one call at a time, what it may reach, and how to
-answer. Edit it for your agent.
+Its shape works. It says what the agent is for, how to work in programs
+rather than one call at a time, what it may reach, and how to answer.
+Edit it for your agent.
 
 ## 4. Install the package
 
@@ -263,10 +263,10 @@ Stored secret 'anthropic_api_key'
 Added blueprint 'research'
 ```
 
-Jina issues a key at [jina.ai](https://jina.ai); the second key is your
+Jina issues a key at [jina.ai](https://jina.ai). The second key is your
 model provider's. The checks make no request to either, so any value
-will do for them; the conversations need real ones. Keep
-`SUBMILLI_SERVER_TOKEN` exported, and the server up: the agents send the
+will do for them, but the conversations need real ones. Keep
+`SUBMILLI_SERVER_TOKEN` exported and the server up. The agents send the
 token with every request, and the `submilli server` commands read it
 too.
 
@@ -293,13 +293,13 @@ notes before: none
 notes before: check.md
 ```
 
-Notice the second run: `u_ada` had already written `check.md`, and
+Notice the second run. `u_ada` had already written `check.md`, and
 `u_grace`, running the same program at the same path, didn't see it.
 The binding, not the program, decides whose notes `/notes` holds,
 whichever harness opens the session.
 
 Now the model. This program reads a page through the package and asks
-the model to sum it up; `llm.models()` lists the models the blueprint
+the model to sum it up. `llm.models()` lists the models the blueprint
 allows, so it works whichever provider you uncommented:
 
 ```typescript title="harnesses/summarize.ts"
@@ -321,7 +321,7 @@ submilli server run-code summarize.ts --blueprint research --var userId=u_ada
 Rust 1.99.0 stabilizes defining C-ABI variadic functions with "C" and "C-unwind" ABIs, allowing variadic functions to be written in Rust itself, as well as stabilizing functions for retrieving size and alignment information from raw pointers to both sized and unsized types. The release also includes updated documentation recommending against unsafe round-trip unleaking patterns after `Box::leak`, along with numerous other stabilized APIs and standard library improvements.
 ```
 
-The page never reached the conversation: the program fetched it, the
+The page never reached the conversation. The program fetched it, the
 model read it, and two sentences came back.
 
 ## What every harness does
@@ -330,27 +330,28 @@ Whatever the harness, three things are its decision, and the model has
 no part in them:
 
 - **The address names the blueprint.** The MCP endpoint is
-  `http://127.0.0.1:8128/mcp/research`; every program the harness sends
+  `http://127.0.0.1:8128/mcp/research`. Every program the harness sends
   there runs under that blueprint, and no tool takes a blueprint as an
   argument.
 - **A header binds the variables.** `submilli-variables: userId=u_ada`.
   The server checks the values against the blueprint before it accepts
   the connection and refuses one that leaves out a required variable.
-  Take the value from what your application knows, the signed-in user,
+  Take the value from what your application knows (the signed-in user),
   never from the conversation.
 - **One connection is one session.** The variables, the session's state,
   and its files outside `/notes` last as long as the connection. Open
   one per user and close it when the conversation ends.
 
-A secret that belongs to the user rather than the server, such as their
-own token for a service, is declared with a `harness` source and sent
-the same way, in a `submilli-secrets` header; [Start a
+A secret that belongs to the user, such as their own token for a
+service, is declared with a `harness` source and sent the same way, in
+a `submilli-secrets` header. [Start a
 blueprint](/docs/blueprints/start-a-blueprint#declare-the-secret)
 shows the declaration, and the [HTTP API](/docs/tutorials/use-the-http-api)
 page shows the request. Connected, the model gets the tools [Your
 application](/docs/application#what-the-agent-gets) describes, with
 the execute tool's description already carrying this blueprint's
-packages and rules; the harness adds only the brief from step 3.
+packages and rules. The harness adds the brief from step 3 and nothing
+else.
 
 Now take the tutorial for your harness:
 [Mastra](/docs/tutorials/connect-mastra),

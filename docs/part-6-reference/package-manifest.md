@@ -7,17 +7,17 @@ sidebar:
 ---
 
 This page describes a package project as `submilli build` reads and writes
-it: the files in the project, `submilli.toml`, `submilli.lock`, the
+it. It covers the files in the project, `submilli.toml`, `submilli.lock`, the
 doc-comment tags in a package's source, the derived `capabilities.yaml`,
 `docs/readme.md`, and the test files and test API. The commands themselves
-are in the [CLI reference](/docs/reference/cli); the how-to pages start at
+are in the [CLI reference](/docs/reference/cli). The how-to pages start at
 [Start a project](/docs/packages/start-a-project).
 
 ## Project layout
 
 A project is a directory that holds a `submilli.toml`. `submilli build check`,
 `test`, and `publish-local` use the first `submilli.toml` found in the
-current directory or a parent of it; `init` and `new` use the one in the
+current directory or a parent of it. `init` and `new` use the one in the
 current directory.
 
 `submilli build init @acme/billing packages/billing` creates:
@@ -38,20 +38,20 @@ files.
 
 | Path | Created by | Holds |
 | --- | --- | --- |
-| `submilli.toml` | `init`; `new` appends | The [manifest](#submillitoml) |
-| `<path>/src/lib.ts` | `init`, `new` | The entry point: its exports are the package's API |
+| `submilli.toml` | `init`, and `new` appends | The [manifest](#submillitoml) |
+| `<path>/src/lib.ts` | `init`, `new` | The entry point, whose exports are the package's API |
 | `<path>/src/**/*.ts` | You | Other modules, imported by relative path |
-| `<path>/docs/readme.md` | `init`, `new` | [The readme the model reads](#docsreadmemd); required |
-| `<path>/README.md` | `init`, `new` | The readme for the person who installs and grants the package; not read by the build |
+| `<path>/docs/readme.md` | `init`, `new` | [The readme the model reads](#docsreadmemd). Required |
+| `<path>/README.md` | `init`, `new` | The readme for the person who installs and grants the package. Not read by the build |
 | `<path>/tests/**/*.test.ts` | `init`, `new` (`lib.test.ts`) | [Test files](#test-files) |
-| `<path>/capabilities.yaml` | Every `check`, `test`, `publish-local` | [What the package provides and requires](#capabilitiesyaml); rewritten on every build |
+| `<path>/capabilities.yaml` | Every `check`, `test`, `publish-local` | [What the package provides and requires](#capabilitiesyaml). Rewritten on every build |
 | `submilli.lock` | A build with a GitHub dependency | [The resolved GitHub dependencies](#submillilock) |
 | `tsconfig.json` | `init` | One line extending `.submilli/tsconfig.submilli.json` |
 | `.vscode/tasks.json` | `init` | A build task that runs `submilli build check` |
 | `.gitignore` | `init` | The entry `.submilli/` |
-| `.submilli/` | `init`; refreshed on every build | Editor configuration and type declarations of the standard library, the project's packages, and their dependencies |
+| `.submilli/` | `init`, and refreshed on every build | Editor configuration and type declarations of the standard library, the project's packages, and their dependencies |
 
-The `.subm` extension is accepted wherever `.ts` is: `src/lib.subm`, other
+The `.subm` extension is accepted wherever `.ts` is, in `src/lib.subm`, other
 modules, and `*.test.subm`. A package with both `src/lib.ts` and
 `src/lib.subm` is an error, and so is one with neither.
 
@@ -86,21 +86,21 @@ At least one `[[package]]` table is required.
 | Key | Type | Required | Default | Constraints |
 | --- | --- | --- | --- | --- |
 | `name` | string | Yes | — | `@org/name`. `org`: 1–39 ASCII letters, digits, and single internal hyphens. `name`: ASCII letters, digits, `.`, `_`, `-`. Unique in the manifest. |
-| `version` | string | Yes | — | Any string; not parsed as a semantic version. |
+| `version` | string | Yes | — | Any string. Not parsed as a semantic version. |
 | `description` | string | Yes | — | Not empty or whitespace. |
 | `keywords` | array of strings | No | `[]` | Each not empty or whitespace. |
-| `path` | string | When the manifest has two or more packages | `.` | Relative to `submilli.toml`; may not be absolute or climb above the manifest's directory. |
+| `path` | string | When the manifest has two or more packages | `.` | Relative to `submilli.toml`. May not be absolute or climb above the manifest's directory. |
 | `dependencies` | array of strings | No | `[]` | Each the `name` of another `[[package]]`, or a key of `[dependencies]`. |
 
-`name` is the name programs import. `name`, `description`, `keywords`, and
-the names of the package's exports are what `submilli search` and the
-agent's package search match, case-insensitively, as substrings.
+`name` is the name programs import. `submilli search` and the agent's
+package search match `name`, `description`, `keywords`, and the names of
+the package's exports, case-insensitively, as substrings.
 `description` is the line `submilli search` and `submilli docs` print after
 the name.
 
 ### [dependencies]
 
-A key is a package name; its value is one of two forms.
+A key is a package name, and its value takes one of two forms.
 
 | Form | Example | Resolved from |
 | --- | --- | --- |
@@ -109,10 +109,10 @@ A key is a package name; its value is one of two forms.
 
 In the GitHub table, `github` must name a `github.com/` repository
 (`https://` and `http://` prefixes are accepted) and `rev` must be a full
-40-character hexadecimal commit SHA; branches and tags are refused. A GitHub
+40-character hexadecimal commit SHA. Branches and tags are refused. A GitHub
 dependency takes its version from the fetched package's own manifest. A
-private repository needs a GitHub token that can read it; see
-[Add a dependency](/docs/packages/add-a-dependency).
+private repository needs a GitHub token that can read it (see
+[Add a dependency](/docs/packages/add-a-dependency)).
 
 A package's `dependencies` entry resolves to a sibling `[[package]]` first,
 then to `[dependencies]`.
@@ -176,10 +176,10 @@ JSDoc, is skipped.
 
 | Tag | Form | Read by the build | Produces |
 | --- | --- | --- | --- |
-| Summary | Text before the first tag | Yes | The declaration's description in `submilli docs`; the `description` of a capability in `capabilities.yaml` |
-| `@param` | `@param <name> <description>` | Yes | The parameter's description in `submilli docs`; the `description` of a `capabilities.yaml` field bound to that parameter |
+| Summary | Text before the first tag | Yes | The declaration's description in `submilli docs`, and the `description` of a capability in `capabilities.yaml` |
+| `@param` | `@param <name> <description>` | Yes | The parameter's description in `submilli docs`, and the `description` of a `capabilities.yaml` field bound to that parameter |
 | `@returns`, `@return` | `@returns <description>` | Yes | The return value's description in `submilli docs` |
-| `@capability` | `@capability <name> [{ <bindings> }] [<description>]` | Yes | A capability the function provides; see [@capability](#capability) |
+| `@capability` | `@capability <name> [{ <bindings> }] [<description>]` | Yes | A capability the function provides (see [@capability](#capability)) |
 | `@throws`, `@throw` | `@throws <text>` | Accepted | Not shown by `submilli docs` |
 | `@deprecated` | `@deprecated <text>` | Accepted | Not shown by `submilli docs` |
 | `@example` | `@example <text>` | Accepted | Not shown by `submilli docs` |
@@ -212,8 +212,8 @@ On a property, `@param` and `@returns` are warned about too.
 ```
 
 `<name>` runs to the first space or `{`. The braces list the payload's
-fields; `{}` is a capability with no fields. Text after the closing brace is
-the tag's description, with a leading `-` or `—` removed; `submilli docs`
+fields. `{}` is a capability with no fields. Text after the closing brace is
+the tag's description, with a leading `-` or `—` removed. `submilli docs`
 shows it on the tag's line, and `capabilities.yaml` doesn't contain it. A
 function may carry several `@capability` tags.
 
@@ -314,30 +314,30 @@ export function listInvoices(query: InvoiceQuery): string[] {
 
 | Key | Holds |
 | --- | --- |
-| `namespace` | The package name's scope, without `@`: `acme` for `@acme/billing` |
+| `namespace` | The package name's scope, without `@` (`acme` for `@acme/billing`) |
 | `provides` | One entry per capability name declared by an `@capability` tag, sorted by name |
 | `provides[].name` | The capability's name |
-| `provides[].description` | The summary of the first documented callable that declares it; omitted when empty |
+| `provides[].description` | The summary of the first documented callable that declares it. Omitted when empty |
 | `provides[].fields` | Each field, sorted by name, with its `type` and, for a field bound to a parameter, that parameter's `@param` description |
 | `requires` | One entry per distinct capability and filter the package's code calls, sorted |
-| `requires[].capability` | The capability of a called function: a standard-library function or a function of a dependency |
-| `requires[].filter` | The filter derived from the call; omitted when nothing was derived |
+| `requires[].capability` | The capability of a called standard-library function or function of a dependency |
+| `requires[].filter` | The filter derived from the call. Omitted when nothing was derived |
 
-**`provides`.** The callables read are the exported functions, in name
-order, then the public static and instance methods of each exported class,
+For `provides`, the build reads the exported functions, in name order, then
+the public static and instance methods of each exported class,
 including instance methods inherited from a class of the same package.
 When several callables declare one capability, their fields are merged into
 one entry.
 
-**`requires`.** For each call to a function that carries a `@capability`
-tag, the build writes the tag's capability, and a filter with one
+For each call to a function that carries a `@capability` tag, the build
+writes the tag's capability to `requires`, and a filter with one
 `<field> == <value>` term per field whose value is known at build time,
 joined with `and`:
 
 | The tag's field is | The term is derived when |
 | --- | --- |
 | A fixed value (`kind: "goodwill"`) | Always |
-| A parameter (`name`, `name: $param`, `name: $param.path`) | The argument is a literal, a top-level constant, or a `+` concatenation of string literals and constants; for a path, an object literal holding one at that path |
+| A parameter (`name`, `name: $param`, `name: $param.path`) | The argument is a literal, a top-level constant, or a `+` concatenation of string literals and constants. For a path, an object literal holding one at that path |
 | `$url.host` on an `http.*` function | The URL is built only from string literals and top-level string constants joined with `+`, or begins with such a part holding the scheme, the host, and the `/` after it |
 | `$url.path` on an `http.*` function | The URL is built only from string literals and top-level string constants joined with `+` |
 | A computed value (`host: string`) | Never |
@@ -357,10 +357,10 @@ depends on the session's working directory. A package that calls
 
 ## docs/readme.md
 
-`<path>/docs/readme.md` is required: a package without it fails to build. It
+`<path>/docs/readme.md` is required, and a package without it fails to build. It
 is copied into the installed package. The server's documentation tool and
 HTTP API return it, followed by a `## Declarations` section with
-the package's declarations; `submilli docs` prints the declarations only.
+the package's declarations. `submilli docs` prints only the declarations.
 
 `submilli build test` compiles every fenced block in it whose info string is
 exactly `ts` or `typescript`, against the package and its dependencies, and
@@ -378,11 +378,11 @@ or `*.test.subm` anywhere under `<path>/tests/`, in path order, then
 compiles the package's readme examples. `-p <@scope/name>` limits the run to
 one package.
 
-A test file is a program: it imports the package by name, as a program does,
+A test file is a program. It imports the package by name, as a program does,
 and defines `function main(): void`. Each file runs on its own, with a
-fresh, empty filesystem, and with no blueprint: every `check` is allowed
+fresh, empty filesystem, and with no blueprint, so every `check` is allowed
 and printed on a `[security]` line. Calls made by the test's `main` have the
-caller `main`; calls made inside a package have the package's name as the
+caller `main`, and calls made inside a package have the package's name as the
 caller.
 
 A file named `network.test.ts` or `network_<anything>.test.ts` (or the
@@ -394,7 +394,7 @@ is by file name only.
 
 `label` divides a file into segments. A segment runs from one `label` to the
 next, or to the end of `main`. A file with no `label` is one segment, named
-by its path. The first uncaught error ends the file: the segments before it
+by its path. The first uncaught error ends the file. The segments before it
 pass, the one it happened in fails, and the ones after it don't run and
 aren't counted. An error in a package's or the file's top-level statements
 fails the first segment.
@@ -422,9 +422,9 @@ ok   packages/billing/docs/readme.md :: example 1 (compile)
 | Line | Meaning |
 | --- | --- |
 | `ok   <file> :: <label>` | A segment passed |
-| `FAIL <file> :: <label>` | A segment failed; the error and its trace follow on standard error |
-| `FAIL <file>  (compile error)` | The file didn't compile; the diagnostics precede it |
-| `skip <file> (--skip-network)` | A network test file left out; the path is absolute |
+| `FAIL <file> :: <label>` | A segment failed. The error and its trace follow on standard error |
+| `FAIL <file>  (compile error)` | The file didn't compile. The diagnostics precede it |
+| `skip <file> (--skip-network)` | A network test file left out. The path is absolute |
 | `ok   <path>/docs/readme.md :: example <n> (compile)` | A readme example compiled |
 | `<p> passed, <f> failed across <n> files` | The totals. The readme counts as one file when it has examples. |
 | `<n> HTTP test files skipped (--skip-network)` | Printed when files were skipped |
@@ -457,7 +457,7 @@ help: `submilli:test` is only available to test files run via `submilli build te
 
 ### Test credentials
 
-Tests receive no credentials by default: `secrets.get` returns `null` for
+Tests receive no credentials by default, so `secrets.get` returns `null` for
 every name. These options supply them:
 
 | Option | Supplies |

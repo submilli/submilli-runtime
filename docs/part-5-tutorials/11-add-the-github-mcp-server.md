@@ -7,22 +7,20 @@ sidebar:
 ---
 
 The curated `@submilli/github` package covers what most agents need from
-GitHub: repositories, issues, pull requests, releases, and search, each
-operation reporting the repository it acts on, so a rule can allow
+GitHub (repositories, issues, pull requests, releases, and search). Each
+operation reports the repository it acts on, so a rule can allow
 `github.com/issues.create` for one repository and no other. When an
 agent needs something the package doesn't have, such as sub-issues,
-issue types, or a Copilot review, GitHub's hosted MCP server has it, and
-declared in a blueprint that server becomes a package the agent imports.
-The trade is in the rules: a rule over an MCP server sees which tool is
-called, not its arguments. GitHub is also the common case of a service
-that won't take a login from an application it hasn't heard of, so this
-is where you meet an OAuth provider.
+issue types, or a Copilot review, GitHub's hosted MCP server has it.
+Declared in a blueprint, that server becomes a package the agent imports.
+The trade is in the rules, because a rule over an MCP server sees which
+tool is called but not its arguments. GitHub is also the common case of
+a service that won't take a login from an application it hasn't heard
+of, so this is where you meet an OAuth provider.
 
-In this tutorial we will wire up GitHub's hosted MCP server end to end:
-declare it, register an OAuth application with GitHub and log in once,
-allow one tool and call it from a program, put the same blueprint on a
-server and log in there, and see where a per-user token belongs instead
-of one login. You need the CLI and a GitHub account.
+In this tutorial we will give an agent GitHub through its hosted MCP
+server, on your machine and then on a server. You need the CLI and a
+GitHub account.
 
 ## Declare it
 
@@ -47,7 +45,7 @@ mcp:
       type: oauth2
 ```
 
-Notice `(oauth)`: `add-mcp` asked the server how it authenticates and
+Notice `(oauth)`. `add-mcp` asked the server how it authenticates and
 wrote the answer. Until someone logs in, the blueprint is `PENDING`:
 
 ```sh
@@ -62,24 +60,24 @@ tracker: PENDING
 ## Register an application with GitHub
 
 An OAuth login names the application that is asking. Linear's server
-lets Submilli register one on the spot; GitHub's doesn't, so you
-register one yourself, a GitHub OAuth App, and give Submilli its id and
+lets Submilli register one on the spot. GitHub's doesn't, so you
+register a GitHub OAuth App yourself and give Submilli its id and
 secret as a **provider**. It has to be an OAuth App, not a GitHub App.
 
 On GitHub, open **Settings**, **Developer settings**, **OAuth Apps**,
 and **New OAuth App**, or go straight to
 [github.com/settings/applications/new](https://github.com/settings/applications/new).
-To own the app as an organization rather than yourself, start from the
-organization's settings instead. Fill in:
+To own the app as an organization, start from the organization's
+settings. Fill in:
 
 - **Application name**: what you will recognize on the approval page,
   such as `Submilli tracker`.
-- **Homepage URL**: any page of yours; GitHub only shows it.
+- **Homepage URL**: any page of yours. GitHub only displays it.
 - **Authorization callback URL**: `http://127.0.0.1:8765/callback`, the
   address the login comes back to on your machine. It must match
-  exactly.
+  character for character.
 
-Register it. GitHub shows the app's **Client ID**; click **Generate a
+Register it. GitHub shows the app's **Client ID**. Click **Generate a
 new client secret** and copy the secret, which GitHub shows only once.
 
 Put the secret in the local store, and configure the provider with a
@@ -127,14 +125,14 @@ Waiting for the redirect on http://127.0.0.1:8765/callback …
 
 Open the address, approve the application, and the command finishes with
 the blueprint `ACTIVE`. The login lands in the local secret store, and one
-login serves every program run under the blueprint. If GitHub answers
+login serves each program run under the blueprint. If GitHub answers
 "The redirect_uri is not associated with this application", the app's
-callback URL isn't the one above; fix it in the app's settings and open
+callback URL isn't the one above. Fix it in the app's settings and open
 the address again.
 
 ## Allow a tool and call it
 
-The server's 46 tools are now a package, `@mcp/github`; `submilli docs
+The server's 46 tools are now a package, `@mcp/github`, and `submilli docs
 @mcp/github --blueprint blueprint.yaml` lists them as declarations. One
 capability, `mcp.github`, covers them all, and a rule picks tools by
 name. Replace the deny rule `add-mcp` wrote with one that allows listing
@@ -180,15 +178,15 @@ warning: @mcp/github: 29 tool(s) return unknown: result schemas are unavailable 
 
 The warning is about types. GitHub's server publishes no result schemas,
 so most tools return `unknown` and a program casts the result to a type
-it declares; for 17 of them, `list_issues` among them, Submilli carries
-the result type itself, which is why `issue.number` needs no cast. Every
-tool the rule doesn't name is refused before a request leaves; [Add an
+it declares. For 17 of them, `list_issues` among them, Submilli carries
+the result type itself, so `issue.number` needs no cast. Any tool the
+rule doesn't name is refused before a request leaves. [Add an
 MCP server](/docs/blueprints/add-an-mcp-server) covers choosing
 tools and what a rule over them can and can't see.
 
 ## The same blueprint on a server
 
-Registered on a server, the blueprint gives every session the same
+Registered on a server, the blueprint gives each session the same
 package, but the login and the provider are now the server's. The
 provider goes under `mcp_oauth` in the server's config file, with the
 client secret in the server's store:
@@ -265,15 +263,15 @@ warning: @mcp/github: 29 tool(s) return unknown: result schemas are unavailable 
 #163674 `str::parse::()` returns 1.0 for an overflowing decimal with a long fractional part
 ```
 
-Notice what the login is: one GitHub account, used by every session of
-the blueprint, for every user of your application. Log in as an account
+Notice what the login is. It is one GitHub account, used by every session
+of the blueprint, for every user of your application. Log in as an account
 that may do what you are willing to let any user's agent do, and keep the
 rule as narrow as the task needs.
 
 ## Where a per-user token belongs
 
 One login means every user's agent acts as that account. When users must
-act on GitHub as themselves, there is no login to make: your application
+act on GitHub as themselves, there is no login to make. Your application
 holds each user's own token, and the blueprint declares it as a secret
 the harness supplies when it opens the session, written straight into
 the server's header:
@@ -302,15 +300,15 @@ mcp:
       Authorization: Bearer ${secrets.GITHUB_TOKEN}
 ```
 
-No provider and no `authenticate` step: the server sends whatever token
-the session was opened with, and a session opened without one is refused.
+There is no provider and no `authenticate` step. The server sends whatever
+token the session was opened with, and a session opened without one is refused.
 [Connect a harness](/docs/tutorials/connect-a-harness#what-every-harness-does)
-shows how each harness supplies it. The rules are the same either way; only
-whose account the call is made as changes.
+shows how each harness supplies it. The rules are the same either way.
+What changes is whose account the call is made as.
 
-You have given an agent GitHub through its hosted MCP server: declared
-in a blueprint, logged in once through an application you registered,
-its read tools allowed and its write tools refused until you said
-otherwise, on your machine and on a server. Where to go from here is
-the part on [Blueprints](/docs/blueprints/start-a-blueprint), for
+You have given an agent GitHub through its hosted MCP server, declared
+in a blueprint and logged in once through an application you registered.
+Its read tools are allowed and its write tools refused until you say
+otherwise, on your machine and on a server. From here, go to
+the part on [Blueprints](/docs/blueprints/start-a-blueprint) for
 everything else a blueprint can grant.

@@ -6,18 +6,15 @@ sidebar:
   order: 3
 ---
 
-An agent often needs more than one program to finish a job: download a
-report and work through it over several turns, edit a file in place, or
-remember how far it got. Without somewhere to keep that, every program
+An agent often needs more than one program to finish a job. It downloads a
+report and works through it over several turns, edits a file in place, or
+remembers how far it got. Without somewhere to keep that, each program
 starts over, and whatever it must carry forward passes through the
 model's context window.
 
 This guide shows you how to let the programs in one session keep files
-and state between them. It starts from an empty blueprint: choose the
-filesystem, grant its operations, run a program that keeps notes, cap the
-files, then grant session state and use it in a session on the server.
-The example keeps notes under
-`/notes`; substitute your paths.
+and state between them. The example keeps notes under `/notes`.
+Substitute your paths.
 
 ## Start from an empty blueprint
 
@@ -31,7 +28,7 @@ submilli blueprint init notes
 
 ## The filesystem
 
-Every program gets a filesystem of its own, rooted at `/`. The blueprint's
+Each program gets its own filesystem, rooted at `/`. The blueprint's
 `vfs` line says what backs it and how long it lasts. It has no command, so
 add it by hand, with `idle_timeout`:
 
@@ -44,18 +41,18 @@ Pick the mode by how long the files should last:
 
 | Mode | The program's `/` is |
 | --- | --- |
-| `none` | Nothing; every `submilli:fs` call fails |
+| `none` | Nothing. Every `submilli:fs` call fails |
 | `ephemeral` (the default) | A scratch directory created for the run and deleted after it |
 | `per_session` | A directory that lasts as long as the session |
 | `named` | A volume the server's operator declared, kept across sessions and restarts, and shared with every blueprint that names it |
 
-Under `per_session`, files and session state alike last exactly that long.
-`idle_timeout` closes a session nobody has used for that long; the default
-is 24 hours, and the CLI writes `1h` back as `'3600s'`.
+Under `per_session`, files and session state both last as long as the
+session. `idle_timeout` closes a session nobody has used for that long. The
+default is 24 hours, and the CLI writes `1h` back as `'3600s'`.
 
-A named volume can also sit beside the session's files, mounted at a path
-of its own under `vfs.mounts`, read-only or read-write, whole or only
-the directory of the user the session is for. [Mount a shared
+A named volume can also sit beside the session's files, mounted at its own
+path under `vfs.mounts`. The mount is read-only or read-write, and covers
+the volume or the directory of the user the session is for. [Mount a shared
 volume](/docs/server/mount-a-shared-volume) declares one on the
 server and mounts it.
 
@@ -83,7 +80,7 @@ function writeText(path: string, content: string): void;
 ```
 
 Under a blueprint that grants nothing, a program can call none of it. The
-module's operations fall under eight capabilities; list them with the
+module's operations fall under eight capabilities. List them with the
 fields a filter can test:
 
 ```sh
@@ -148,7 +145,7 @@ submilli blueprint capability add fs.stat
 Paths are checked after `.` and `..` are resolved, so a write to
 `/notes/../secrets.md` is checked as `/secrets.md` and refused. In a
 `glob`, `*` crosses `/`, so `path glob "/notes/*"` also matches
-`/notes/2026/a.md`. Each operation has its own capability: `fs.remove`,
+`/notes/2026/a.md`. Each operation has its own capability, so `fs.remove`,
 `fs.move`, and `fs.copy` stay denied here.
 
 ## Run a program
@@ -175,14 +172,14 @@ submilli run --blueprint blueprint.yaml note.ts
 - call Northwind about the credit
 ```
 
-Run it again and the file has one line again: `submilli run` has no
+Run it again and the file still has one line. `submilli run` has no
 session, so each run gets a fresh directory whatever `vfs` says. To stand
 in for a session, point `--vfs` at a directory, and the runs share it:
 
 :::note[Sessions live on the server]
-A session is what your application opens on `submilli-server` for one
-conversation, and then runs each program inside. There, `vfs: per_session`
-gives every program of that conversation the same directory, with no
+Your application opens a session on `submilli-server` for one
+conversation, and then runs each program inside it. There, `vfs: per_session`
+gives all programs of that conversation the same directory, with no
 flag. [Session state](#session-state) below opens one by hand.
 :::
 
@@ -215,7 +212,7 @@ vfs:
 `size_limit` takes a byte count or a size such as `500KB`, `100MB`, or
 `1GB`, and the CLI writes it back as bytes. Under `per_session` it covers
 all the session's files. A write that would pass it is refused with a
-`QuotaExceededError` the program can catch; with a `1KB` limit, writing 2,000
+`QuotaExceededError` the program can catch. With a `1KB` limit, writing 2,000
 bytes gets:
 
 ```text
@@ -223,14 +220,14 @@ error: QuotaExceededError: fs.writeText /notes/big.md: the filesystem's size lim
 ```
 
 Deleting files frees the space. A named volume takes no `size_limit`
-here: the operator sets one where the server declares the volume, and
-that one limit covers every session and blueprint using it.
+here. The operator sets one where the server declares the volume, and
+that limit covers all sessions and blueprints using it.
 
 ## Session state
 
 Files are one way for a program to leave something for the next.
-`submilli:session` is the other: a key-value store that lasts the session,
-kept in memory, and checked against a type when read:
+`submilli:session` is the other. It is a key-value store that lasts the
+session, kept in memory, and checked against a type when read:
 
 ```sh
 submilli docs submilli:session
@@ -310,7 +307,7 @@ function main(): string {
 }
 ```
 
-The store exists only inside a session, which the application opens;
+The store exists only inside a session, which the application opens.
 `submilli run` has none, so use `submilli-server`. [Run the
 server](/docs/server/run-the-server) starts one and [Connect the
 CLI](/docs/server/connect-the-cli) points the commands at it.
@@ -352,8 +349,8 @@ reviewed 3, next up cus_initech
 ```
 
 The second program found what the first saved. Files behave the same
-here: `note.ts` run twice in this session returns both lines, with no
-`--vfs`. Without `--session`, `run-code` opens a fresh session for every
+here, and `note.ts` run twice in this session returns both lines with no
+`--vfs`. Without `--session`, `run-code` opens a fresh session for each
 run, and the second program would find nothing. Close the session when the
 conversation ends:
 

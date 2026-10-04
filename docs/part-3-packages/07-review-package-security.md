@@ -13,13 +13,12 @@ sidebar:
 
 A blueprint's rules see only what a package passes to `check()`. A package
 can check one customer and still return another customer's data, and
-neither its tests nor the compiler need notice: the tag and the `check`
+neither its tests nor the compiler need notice. The tag and the `check`
 agree, and a test that asks for a customer's charges passes when it gets
 too many. An agent that reads the package with that question in mind can.
 
 This guide shows you how to review a package's authorization with a coding
-agent: run the review locally, read and keep its report, require it in CI
-with the agent your team uses, and make deployment wait for it. [Verify a
+agent. [Verify a
 package in CI](/docs/tutorials/verify-a-package-in-ci#have-an-agent-review-it)
 walks through one review end to end with Codex.
 
@@ -33,7 +32,7 @@ submilli build security-review -a codex -m gpt-6.1-sol -e high --fail-on high --
 
 `-a` picks the agent, `-m` its model, and `-e` how hard it reasons.
 `--fail-on` is the lowest severity that fails the command, and
-`--output` saves the report to a new file; the command refuses to
+`--output` saves the report to a new file. The command refuses to
 overwrite one. `-p @acme/billing` limits the review to one package and
 the local packages it depends on.
 
@@ -44,7 +43,7 @@ the local packages it depends on.
 
 The agent runs with its tools turned off and sees only the package's
 source, which goes to that agent's model provider under your account's
-terms. Install the agents from a pinned version, as here; the review runs
+terms. Install the agents from a pinned version, as here, because the review runs
 the executable it finds on `PATH`.
 
 ## Read the result
@@ -55,7 +54,7 @@ The exit code is the verdict:
 | --- | --- |
 | `0` | The review finished, with no finding at or above `--fail-on` |
 | `1` | The review finished, with at least one such finding |
-| `2` | The review didn't finish: the agent couldn't sign in, timed out, or didn't cover every file |
+| `2` | The review didn't finish because the agent couldn't sign in, timed out, or didn't cover every file |
 
 The findings print with their file, line, evidence, and fix. The report
 adds what was reviewed, down to a hash of every file:
@@ -81,10 +80,10 @@ jq '{status, agent, agent_version, model, files, findings}' review.json
 }
 ```
 
-Keep the report with the revision it reviewed: the hashes say exactly
+Keep the report with the revision it reviewed, because the hashes say
 which source the verdict covers. A package that depends on a package
 from another repository reviews incomplete, with a coverage gap for the
-dependency, and exits `2`; review that dependency in its own project.
+dependency, and exits `2`. Review that dependency in its own project.
 
 ## Require it in CI
 
@@ -116,7 +115,7 @@ The review step then names the agent and its model:
 ```
 
 Give the credential to the review step only, and require the review job
-in the branch's protection rules. Don't add `continue-on-error`: a
+in the branch's protection rules. Don't add `continue-on-error`. A
 review that can't sign in exits `2` and should fail the check, not skip
 it.
 
@@ -126,13 +125,13 @@ keys](https://platform.openai.com/api-keys) and save it as the
 `CODEX_API_KEY` repository secret. A ChatGPT subscription works only on
 a private repository's self-hosted runner that keeps Codex's sign-in
 between jobs, which run one at a time, and never restore an older
-sign-in over the one Codex refreshed; OpenAI excludes public
+sign-in over the one Codex refreshed. OpenAI excludes public
 repositories from it. See [Codex
 automation](https://developers.openai.com/codex/noninteractive).
 
 **Claude Code** in CI uses your Claude subscription (Pro, Max, Team, or
 Enterprise) through a long-lived token. Create it, after `claude auth
-login`, and save it as a repository secret; `gh` prompts for the value,
+login`, and save it as a repository secret. `gh` prompts for the value,
 so it never lands in your shell history:
 
 ```sh
@@ -140,8 +139,8 @@ claude setup-token
 gh secret set CLAUDE_CODE_OAUTH_TOKEN
 ```
 
-Don't also set `ANTHROPIC_API_KEY` for the step: Claude Code prefers it
-and bills the API instead. Renew the token when it expires. See [Claude
+Don't also set `ANTHROPIC_API_KEY` for the step, because Claude Code
+prefers it and bills the API instead. Renew the token when it expires. See [Claude
 authentication](https://code.claude.com/docs/en/authentication#generate-a-long-lived-token).
 
 ## Make deployment wait for it
@@ -163,5 +162,5 @@ deployment need both checks, and keep its condition:
 ```
 
 A merge commit is a different revision from the one the pull request
-reviewed; the workflow's push to main reviews it again before the
+reviewed. The workflow's push to main reviews it again before the
 deployment runs.

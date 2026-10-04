@@ -7,7 +7,7 @@ next: false
 ---
 
 [Why Submilli](/docs/why/) is this film’s home. The video
-is 1 minute 31 seconds (90.688 seconds), in English. Publication is pending; this
+is 1 minute 31 seconds (90.688 seconds), in English. Publication is pending. This
 page contains the complete narration of the approved introduction.
 
 The failed-payment workflow is illustrative. The reported research results at

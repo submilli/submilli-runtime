@@ -8,17 +8,17 @@ sidebar:
 
 This guide shows you how to let programs call an HTTP endpoint that has no
 package, and how to give that endpoint a credential the program never
-sees. The example is GitHub's REST API with a personal access token;
-substitute your host and its authentication.
+sees. The example is GitHub's REST API with a personal access token.
+Substitute your host and its authentication.
 
 ## Authorization proxy
 
-The program can't hold the credential itself. Anything generated code can
-read, the model can be talked into repeating, so `secrets.get` is refused
-from `main` whatever the blueprint says. Instead, the blueprint names the
-secret and the host, and the **authorization proxy** adds the credential
-to each matching request outside the program: the program sends a plain
-request and sees the response, never the header.
+The program can't hold the credential itself. The model can be talked into
+repeating anything generated code can read, so `secrets.get` is refused
+from `main` whatever the blueprint says. The blueprint names the secret and
+the host, and the **authorization proxy** adds the credential to each
+matching request outside the program. The program sends a plain request and
+sees the response, but never the header.
 
 ## Allow the request
 
@@ -74,7 +74,7 @@ submilli blueprint capability add http.get --filter 'host == "api.github.com"'
   filter fields: host: string, path: string, body_size: number, timeout_ms: number
 ```
 
-This allows GET only; if the program also posts, add an `http.post` rule.
+This allows GET alone. If the program also posts, add an `http.post` rule.
 Each redirect is checked before it is sent, under the same rules.
 
 ## Run a program
@@ -108,9 +108,9 @@ submilli run --blueprint blueprint.yaml rate.ts
 51 of 60 requests left this hour
 ```
 
-The request went through, as an anonymous caller: GitHub allows sixty of
-those an hour. The `User-Agent` header is GitHub's own requirement;
-without one it answers 403.
+The request went through as an anonymous caller, and GitHub allows sixty
+of those an hour. GitHub requires the `User-Agent` header and answers 403
+without one.
 
 ## Add the credential
 
@@ -165,9 +165,9 @@ go only to the same scheme, host, and port.
 
 ## Register it on a server
 
-The server has a secret store of its own, so put the token there before
-you register the blueprint; registration checks that every `store:` secret
-exists:
+The server has its own secret store. Put the token there before you
+register the blueprint, because registration checks that every `store:`
+secret exists:
 
 ```sh
 submilli server secret put github_token
@@ -193,8 +193,8 @@ submilli server run-code rate.ts --blueprint support
 ## If the endpoint is plain HTTP
 
 Blueprints require HTTPS. For a host that speaks only HTTP, such as an
-internal service, opt in twice: on the proxy entry for that host, and at
-the top level of the file, which has no command:
+internal service, opt in twice. Set the flag on the proxy entry for that
+host and at the top level of the file. The top-level flag has no command:
 
 ```sh
 submilli blueprint secret add LEGACY_TOKEN --store legacy_token
@@ -219,6 +219,6 @@ auth_proxy:
     bearer: LEGACY_TOKEN
 ```
 
-Both flags default to `false`. The top-level one covers every HTTP call
-the blueprint allows, including a package's; the entry's one covers the
+Both flags default to `false`. The top-level one covers all HTTP calls
+the blueprint allows, including a package's. The entry's one covers the
 credential.

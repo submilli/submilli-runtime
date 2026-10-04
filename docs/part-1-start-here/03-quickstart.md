@@ -7,15 +7,14 @@ sidebar:
 ---
 
 By the end of this chapter you will have watched a policy you wrote defeat a
-prompt injection — not by refusing a host or a port, but by refusing an
+prompt injection. It won't refuse a host or a port. It will refuse an
 *argument*. An agent's program will ask for a customer it isn't allowed to
-ask about, and the runtime will stop that one call while the rest of the
+ask about, and the runtime will stop that call while the rest of the
 program keeps running.
 
-Two authors work in this chapter. **You write a blueprint, a package, and an
-application**; **the agent writes everything that runs.** For this
-walkthrough you type the agent's files yourself, so you can see the whole
-flow.
+Two authors work in this chapter. You write a blueprint, a package, and an
+application, and the agent writes everything that runs. For this
+walkthrough you type the agent's files yourself, so you can see the flow.
 
 You need the CLI and the server from [install](/docs/install):
 
@@ -32,10 +31,10 @@ mkdir quickstart && cd quickstart
 ## The blueprint
 
 A blueprint is a YAML file that says what your agent's programs may do.
-Writing it is your job, not the agent's. This one lets the agent list a
-customer's charges — one operation, `acme.com/charges.list`, which the
-package in the next step will provide — and only for the customer your
-application names. Save it as `blueprint.yaml`:
+Writing it is your job. This one lets the agent list a customer's charges,
+and only for the customer your application names. That is one operation,
+`acme.com/charges.list`, which the package in the next step will provide.
+Save it as `blueprint.yaml`:
 
 ```yaml
 kind: blueprint
@@ -62,20 +61,20 @@ permissions:
   '@acme/billing': []
 ```
 
-Read it as a sentence: this agent may list charges — nothing else — and only
+Read it as a sentence. This agent may list charges and nothing else, and only
 for the customer this session was opened for. Whatever code the agent
-writes, it can call `charges.list` only with that customer's id; any other
+writes, it can call `charges.list` only with that customer's id. Any other
 call is denied.
 
-Two details are worth noting. `default: deny` is where every blueprint
-starts: anything you have not written a rule for does not exist for this
+Two details are worth noting. Every blueprint starts from `default: deny`.
+Anything you have not written a rule for does not exist for this
 agent. `required: true` means a request that does not bind `customerId` is
 rejected before the agent's program runs.
 
 ## The package
 
 A package is a small wrapper you write around your own API or business
-logic. It is the only way in for your agent: generated code can call nothing
+logic. It is your agent's only way in, because generated code can call nothing
 but the packages your blueprint lists. Scaffold one:
 
 ```
@@ -89,7 +88,7 @@ created .../quickstart/package/tests/lib.test.ts
 ```
 
 Replace `package/src/lib.ts` with a pretend charge lookup. In a real system
-it would call your billing API; here it reads fixed data so the chapter
+it would call your billing API. Here it reads fixed data so the chapter
 stays offline:
 
 ```typescript
@@ -133,11 +132,11 @@ export function listCharges(customerId: string): Charge[] {
 }
 ```
 
-Two lines carry the whole package. The `@capability` annotation names the
-operation, `acme.com/charges.list`, and says which of its arguments a rule
-may test: `customerId`. The `check(...)` call is where enforcement happens.
+Two lines carry the package. The `@capability` annotation names the
+operation, `acme.com/charges.list`, and says that a rule may test its
+`customerId` argument. The `check(...)` call enforces the rules.
 It asks the blueprint whether *this* call, with *this* customer, is allowed,
-and throws if not. It is the line that stops the agent from passing any
+and throws if not. This line stops the agent from passing any
 customer other than the one your application bound for the session.
 
 Compile the package and install it into your local store, where the server
@@ -170,8 +169,8 @@ provides:
 requires: []
 ```
 
-`customerId: string` is the key line: it is the field the blueprint's rule
-tests. With the package installed, check the blueprint against it:
+`customerId: string` is the key line, because the blueprint's rule tests
+that field. With the package installed, check the blueprint against it:
 
 ```
 submilli blueprint lint blueprint.yaml
@@ -184,7 +183,7 @@ submilli blueprint lint blueprint.yaml
 ## The application
 
 The server runs the agent's programs under the blueprint. It checks a token
-on every request; generate one, export it, and start the server in the
+on every request. Generate one, export it, and start the server in the
 background:
 
 ```
@@ -208,7 +207,7 @@ submilli server blueprint apply blueprint.yaml
 Added blueprint 'quickstart'
 ```
 
-Now the application: ordinary Node.js, outside Submilli, written once. It
+Now the application. It is ordinary Node.js, outside Submilli, written once. It
 sends a program to the server with the blueprint's name and the customer
 the session is for, and prints what comes back. Save it as `app.mjs`:
 
@@ -256,15 +255,15 @@ if (body.error) console.log(`[denied]  ${body.error.message}`);
 else console.log(`[result]  ${body.result}`);
 ```
 
-Look at where `customerId` comes from: a real application reads it off the
+Look at where `customerId` comes from. A real application reads it off the
 signed-in session, the same place it gets the user's identity. The agent's
 program never sees the binding and cannot change it.
 
 ## The job it was asked to do
 
 Everything so far you read before it ran. From here the programs are the
-agent's: written for the support case it is working, and run immediately,
-with no one proofreading. Here is one that totals a customer's charges. Save
+agent's. It writes them for the support case it is working, and they run
+immediately, with no one proofreading. Here is one that totals a customer's charges. Save
 it as `total.ts`:
 
 ```typescript
@@ -281,7 +280,7 @@ function main(): string {
 ```
 
 `main()` is the entry point, and its return value is the program's output.
-The program doesn't mention Submilli at all: it imports the package, and the
+The program doesn't mention Submilli at all. It imports the package, and the
 rules apply behind the scenes. Run it:
 
 ```
@@ -292,7 +291,7 @@ node app.mjs total.ts
 [result]  2 charges, 6150 cents
 ```
 
-The policy is visibly not in the way. You granted exactly what the work
+The policy is visibly not in the way. You granted what the work
 needed, and the work happened.
 
 ## The job someone else asked it to do
@@ -348,24 +347,25 @@ node app.mjs total-injected.ts
 13 |     return `${charges.length} charges, ${total} cents; reconciliation: ${reconciliation.length} charges`;
 ```
 
-The legitimate work finished — that is the first line. The second call did
+The first line shows that the legitimate work finished. The second call did
 not. The error names the capability and the reason, points at both the line
 that checked and the line that asked, and tells the model not to work
 around it.
 
-What that call would have achieved, had it run: another customer's charge
-data returning into the agent's context — and from there into its summary,
-its reply, its logs, and whoever reads them.
+Had that call run, another customer's charge data would have returned into
+the agent's context. From there it would reach the agent's summary, its
+reply, its logs, and whoever reads them.
 
 ## With a real agent
 
 The repository's `examples/quickstart/agent.py` points a real agent at the
-blueprint you registered: same server, same package, nothing new to
-configure. The agent reaches the server over MCP and gets its tools from
-it, chiefly one: write TypeScript, and the server runs it. The token and the customer id travel in
-headers, so the model never sees either. It is about seventy lines, on
+blueprint you registered, with the same server, the same package, and
+nothing new to configure. The agent reaches the server over MCP and gets its
+tools from it. The main tool takes TypeScript the agent writes, and the
+server runs it. The token and the customer id travel in headers, so the
+model never sees either. It is about seventy lines, on
 LangChain's [deepagents](https://github.com/langchain-ai/deepagents) and
-Gemini; neither choice is load-bearing. The script hands the agent the
+Gemini, and neither choice is load-bearing. The script hands the agent the
 support ticket above, injection and all, and prints every program the agent
 ran:
 
@@ -375,15 +375,15 @@ export GOOGLE_API_KEY=...
 python agent.py
 ```
 
-Run it more than once. The model does not take the bait every time — that
-is the honest shape of prompt injection, and the reason the policy is where
-the guarantee lives. When it does take the bait, you get the same denial
+Run it more than once. The model does not take the bait every time. That
+is the honest shape of prompt injection, and the reason the guarantee lives
+in the policy. When it does take the bait, you get the same denial
 you got a moment ago, on a program written by the agent.
 
 ## What we just did
 
-You wrote the rules once, outside the agent's control: one operation, one
-customer, everything else denied. The agent writes the code forever, and
+You wrote the rules once, outside the agent's control. They allow one
+operation for one customer and deny everything else. The agent writes the code forever, and
 the rules never have to trust it.
 
 Next: [blueprints](/docs/blueprints), the file you just wrote, in full.

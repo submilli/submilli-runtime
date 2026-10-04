@@ -7,14 +7,11 @@ sidebar:
 ---
 
 The package compiles and its tests pass, but nothing can import it yet.
-Programs import from a package store, yours or a server's, and the only
-test of the policy is a program running under a blueprint.
+Programs import from a package store, yours or a server's, and you test
+the policy by running a program under a blueprint.
 
-This guide shows you how to publish a package: install it into your
-local store, see what programs will see, add it to a blueprint and run a
-program under it, make it installable from your repository, and put it
-on a server. The example is Acme's billing package on Stripe; substitute your
-package.
+This guide shows you how to publish a package. The example is Acme's
+billing package on Stripe. Substitute your package.
 
 ## Install it locally
 
@@ -45,12 +42,12 @@ submilli search billing
 
 `submilli docs @acme/billing` prints the declarations and doc comments,
 as [Document the package](/docs/packages/document-the-package)
-shows; what the description in `submilli.toml` and the doc comments say is all
-the model knows about the package.
+shows. The description in `submilli.toml` and the doc comments are all the
+model knows about the package.
 
 ## Add it to a blueprint
 
-In a directory of its own, start a blueprint and add the package. The
+In a new directory, start a blueprint and add the package. The
 blueprint commands read the `capabilities.yaml` the build derived on
 [Export a function](/docs/packages/export-a-function):
 
@@ -70,11 +67,11 @@ warning: blueprint.yaml: package `@acme/billing` requires secret `BILLING_API_KE
     allow secrets.get (filter: name == "BILLING_API_KEY")
 ```
 
-The three rules under the package's own caller are `requires`, written
-as grants: the host from the constant, the secret by its name. The
+The three rules under the package's caller are `requires`, written as
+grants, with the host from the constant and the secret by its name. The
 warning is the secret the package reads, which the blueprint must
-declare. The one capability not selected is `provides`, with the fields
-the payload reports:
+declare. The capability not selected comes from `provides`, with the
+fields the payload reports:
 
 ```sh
 submilli blueprint capability list @acme/billing
@@ -89,7 +86,7 @@ submilli blueprint capability list @acme/billing
 ## Try it under a blueprint
 
 Finish the blueprint as [Start a
-blueprint](/docs/blueprints/start-a-blueprint) does: declare the key,
+blueprint](/docs/blueprints/start-a-blueprint) does. Declare the key,
 the customer the session is for, and one rule over the payload's fields:
 
 ```sh
@@ -146,7 +143,7 @@ submilli install acme/billing-package @acme/billing
 ```
 
 The first argument is the repository, `owner/repo`, with `@<ref>` to pin
-a branch, tag, or commit; the second is the package, since one repository
+a branch, tag, or commit. The second is the package, since one repository
 can hold several. A private repository installs the same way once the CLI
 has a GitHub token that can read it, as [Start a
 blueprint](/docs/blueprints/start-a-blueprint) shows:
@@ -160,7 +157,7 @@ submilli install acme/billing-package @acme/billing
 
 A server on the same machine reads the local store, so it already has the
 package. Any other server installs it from the repository with
-`submilli server packages install`, the same way; for a private
+`submilli server packages install`, the same way. For a private
 repository, refer to
 [Install private packages](/docs/server/install-private-packages).
 Then put the Stripe key in the server's store, register the blueprint,

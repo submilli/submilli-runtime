@@ -6,11 +6,11 @@ sidebar:
   order: 5
 ---
 
-Built-ins are the globals in scope in every program without an `import`: a
-subset of the ECMA-262 globals, `TextEncoder` and `TextDecoder`, and
+Built-ins are the globals in scope in every program without an `import`. They
+are a subset of the ECMA-262 globals, `TextEncoder` and `TextDecoder`, and
 `PermissionDeniedError` and `QuotaExceededError`. This page lists them, what is
 absent and what to use instead, and each built-in's members. The language
-itself is on [Language](/docs/reference/language); the importable `submilli:`
+itself is on [Language](/docs/reference/language). The importable `submilli:`
 modules are on [Standard library](/docs/reference/standard-library).
 
 ## Catalog
@@ -25,22 +25,22 @@ Namespaces: JSON, Math, Temporal
 | Built-in | Kind | Describes |
 | --- | --- | --- |
 | `Array<T>` | Type | A homogeneous array |
-| `Map<K, V>` | Type | A key-value collection; keys compared by structural equality |
-| `Set<T>` | Type | A unique-value collection; elements compared by structural equality |
+| `Map<K, V>` | Type | A key-value collection whose keys are compared by structural equality |
+| `Set<T>` | Type | A unique-value collection whose elements are compared by structural equality |
 | `String` | Type | UTF-16 strings |
 | `Number` | Type | IEEE 754 doubles |
-| `BigInt` | Type | Arbitrary-precision integers; literals use the `n` suffix |
+| `BigInt` | Type | Arbitrary-precision integers. Literals use the `n` suffix |
 | `Boolean` | Type | `true` and `false` |
-| `Object` | Type | The base of every object type; `Object.keys`, `values`, `entries`, `hasOwn`, `is` |
+| `Object` | Type | The base of every object type, with `Object.keys`, `values`, `entries`, `hasOwn`, `is` |
 | `Record<K, V>` | Type | String-keyed objects ([Language](/docs/reference/language#recordstring-v-for-runtime-keys)) |
 | `RegExp` | Type | Regular expressions, without lookaround or backreferences |
 | `Uint8Array` | Type | Byte arrays, with hex and base64 conversion |
 | `TextEncoder`, `TextDecoder` | Type | UTF-8 encoding and decoding |
-| `Error` | Error class | The base error class; `throw` takes `Error` and its subclasses |
+| `Error` | Error class | The base error class. `throw` takes `Error` and its subclasses |
 | `TypeError` | Error class | Failed runtime type checks: a failed `as` cast, `x!` on `null`, invalid UTF-8, an invalid URL |
-| `RangeError` | Error class | Out-of-range values: an array index, bigint division by zero, invalid Temporal values; argument-size caps |
+| `RangeError` | Error class | Out-of-range values: an array index, bigint division by zero, invalid Temporal values, and argument-size caps |
 | `SyntaxError` | Error class | Text that fails to parse: `JSON.parse`, `BigInt()`, `Uint8Array.fromHex`, `new RegExp()` |
-| `PermissionDeniedError` | Error class | A denied capability; fields `caller`, `capability`, `reason` ([Permissions](/docs/reference/permissions)) |
+| `PermissionDeniedError` | Error class | A denied capability, with fields `caller`, `capability`, `reason` ([Permissions](/docs/reference/permissions)) |
 | `QuotaExceededError` | Error class | A budget refusal: filesystem space, model tokens, or session state ([Errors and limits](/docs/reference/errors-and-limits)) |
 | `JSON` | Namespace | `JSON.parse`, returning `unknown`, and `JSON.stringify` |
 | `Math` | Namespace | Constants and functions, including `Math.random()` |
@@ -63,7 +63,7 @@ Every error class extends `Error` and can be named in a typed `catch`
 | `Temporal.Duration` | A span of time |
 | `Temporal.Now` | The clock: `instant()`, `plainDateISO()`, `plainTimeISO()`, `plainDateTimeISO()`, `zonedDateTimeISO()`, `timeZoneId()` |
 
-Temporal values are immutable; arithmetic returns a new value. The calendar is
+Temporal values are immutable. Arithmetic returns a new value. The calendar is
 ISO 8601. `Temporal.Now` functions take an optional IANA time-zone id and
 default to the system zone. A Temporal value in a template literal is written
 with an explicit `.toString()`.
@@ -93,26 +93,26 @@ These globals are in scope and are not in the `submilli builtins` catalog.
 | --- | --- |
 | `console.log(first, ...rest)` | Writes the values, separated by spaces, to the log stream |
 | `assert(condition, message?)` | Throws `Error(message)` when `condition` is `false` |
-| `parseInt(string, radix = 10)` | Parses an integer prefix; `NaN` when there are no digits |
-| `parseFloat(string)` | Parses a decimal number; `NaN` when the text is not one |
+| `parseInt(string, radix = 10)` | Parses an integer prefix, or returns `NaN` when there are no digits |
+| `parseFloat(string)` | Parses a decimal number, or returns `NaN` when the text is not one |
 | `isNaN(value)`, `isFinite(value)` | Number tests |
 | `encodeURIComponent(uri)`, `encodeURI(uri)` | Percent-encoding |
-| `decodeURIComponent(uri)`, `decodeURI(uri)` | Percent-decoding; throws `Error` (`"URI malformed"`) on an invalid escape |
+| `decodeURIComponent(uri)`, `decodeURI(uri)` | Percent-decoding. Throws `Error` (`"URI malformed"`) on an invalid escape |
 | `NaN`, `Infinity` | Number constants |
 
 ## Not available
 
 | Global | Use instead |
 | --- | --- |
-| `Date` | `Temporal`; `Temporal.Now.instant()` for the current time |
+| `Date` | `Temporal`, with `Temporal.Now.instant()` for the current time |
 | `Symbol` | None |
 | `Proxy`, `Reflect` | None |
 | Prototype reflection: `Object.getPrototypeOf`, `Object.defineProperty`, `obj.hasOwnProperty`, `.prototype` | `Object.hasOwn(obj, key)` or `key in obj` for presence |
-| `Object.assign`, `Object.freeze` | Object spread `{ ...a, ...b }`; `readonly` types |
+| `Object.assign`, `Object.freeze` | Object spread `{ ...a, ...b }`, and `readonly` types |
 | `WeakMap`, `WeakSet` | `Map`, `Set` |
-| `Promise`, `queueMicrotask`, `setTimeout`, `setInterval` | None; calls are synchronous |
+| `Promise`, `queueMicrotask`, `setTimeout`, `setInterval` | None. Calls are synchronous |
 | Typed arrays other than `Uint8Array`, `ArrayBuffer`, `DataView` | `Uint8Array` |
-| `Intl` | None; `localeCompare` compares UTF-16 code units |
+| `Intl` | None. `localeCompare` compares UTF-16 code units |
 | `globalThis`, `window` | None |
 | `fetch` | `submilli:http` |
 | `URL`, `URLSearchParams` | `submilli:url` |
@@ -149,12 +149,12 @@ followed by the type's declaration.
 ## Looking a built-in up
 
 The live declarations, with doc comments, come from the CLI, which reads
-the same source as the compiler. `submilli builtins` lists the catalog;
+the same source as the compiler. `submilli builtins` lists the catalog.
 `submilli builtins <name>…` prints declarations, such as
 `submilli builtins Map Temporal`.
 
-A dotted path prints one member: `submilli builtins Temporal.Instant`,
-`submilli builtins Map.get`. A name that is not a built-in fails with a
+A dotted path prints one member, such as `submilli builtins Temporal.Instant`
+or `submilli builtins Map.get`. A name that is not a built-in fails with a
 suggestion:
 
 ```text

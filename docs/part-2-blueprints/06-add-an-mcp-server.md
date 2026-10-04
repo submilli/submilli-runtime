@@ -9,18 +9,15 @@ sidebar:
 The curated packages cover common services, and you can write a package
 for your own. For a service that has neither yet, or whose package lacks
 a feature you need, there is often an MCP server. Declared in a
-blueprint, that server becomes a package: Submilli
-reads its tools and their JSON schemas and turns them into a TypeScript
-library, one typed function per tool, that a program imports and calls
-like any other package, under the same rules. The blueprint says which of
-its tools a program may call, and the credential stays outside the
-program.
+blueprint, that server becomes a package. Submilli reads its tools and
+their JSON schemas and turns them into a TypeScript library with one typed
+function per tool. A program imports and calls it like any other package,
+under the same rules. The blueprint says which of its tools a program may
+call, and the credential stays outside the program.
 
-This guide shows you how to make an MCP server importable as a package:
-declare it, allow the tools the task needs, give it a credential or log
-in, register the blueprint on a server, and handle a server that can't be
-reached. The examples are Playwright's server, which needs no account,
-and Linear's, which takes an API key or an OAuth login; substitute your
+This guide shows you how to make an MCP server importable as a package.
+The examples are Playwright's server, which needs no account, and
+Linear's, which takes an API key or an OAuth login. Substitute your
 server's URL and tools.
 
 To follow the Playwright example, start its server first:
@@ -53,7 +50,7 @@ mcp:
 
 The name you give becomes the key in the `mcp` block, the package name
 `@mcp/playwright`, and the capability `mcp.playwright`. The server must
-speak MCP over HTTP; if yours speaks it over standard input and output,
+speak MCP over HTTP. If yours speaks it over standard input and output,
 put it behind an HTTP endpoint first, as `--port` does for Playwright's.
 Refer to [MCP servers](/docs/reference/mcp-servers) for the block's
 fields.
@@ -61,9 +58,9 @@ fields.
 ## Allow its tools
 
 The deny rule that `add-mcp` wrote says nothing `default: deny` doesn't,
-so drop it first; `capability remove` takes every rule for a capability,
-which is why it goes before the grant. One capability covers the whole
-server; pick tools with the `tool` field of a filter:
+so drop it first. `capability remove` takes all the rules for a
+capability, so it goes before the grant. One capability covers the
+server, and the `tool` field of a filter picks tools:
 
 ```sh
 submilli blueprint capability remove mcp.playwright
@@ -84,12 +81,12 @@ permissions:
     action: allow
 ```
 
-The three tools are allowed and every other tool meets the default. If
-you want every tool whose name starts the same way, use `glob`:
-`tool glob "list_*"`. Don't write the tool into the capability name,
-`mcp.playwright/browser_click`; the blueprint is refused.
+The three tools are allowed and other tools meet the default. To allow
+the tools whose names start the same way, use `glob`, as in
+`tool glob "list_*"`. Don't write the tool into the capability name, as in
+`mcp.playwright/browser_click`, because the blueprint is refused.
 
-Choose tools by what their arguments can do, not only by their names. A
+Choose tools by what their arguments can do as well as by their names. A
 rule sees the tool's name and nothing else, and `browser_navigate` asked
 for a `javascript:` address runs script in the page as `browser_evaluate`
 would. If an allowed tool is that broad, restrict it where the server runs
@@ -127,15 +124,15 @@ submilli run --blueprint blueprint.yaml link.ts
 ````
 
 A program's calls to one server share one MCP session, closed when the
-program ends, so with a server that keeps state, do a whole task in one
+program ends. With a server that keeps state, do a task in one
 program. `submilli docs @mcp/playwright` lists the server's tools as
-declarations; a tool without an output schema returns `unknown`, so cast
+declarations. A tool without an output schema returns `unknown`, so cast
 the result to the type you expect, as above.
 
 ## Give it a credential
 
 Linear's server takes an API key as a bearer token. Declare the secret,
-store the value, and declare the server with it; `--authorization-bearer`
+store the value, and declare the server with it. `--authorization-bearer`
 writes the header for you:
 
 ```sh
@@ -163,10 +160,10 @@ mcp:
 The credential is added outside the program, and a tool's arguments never
 carry it. If users must reach the server as themselves, declare the
 secret with `--harness` and write the header yourself with
-`--header 'Authorization: Bearer ${secrets.LINEAR_API_KEY}'`; the value
-is then the one your application supplied when it opened the session.
+`--header 'Authorization: Bearer ${secrets.LINEAR_API_KEY}'`. The value
+then comes from your application when it opens the session.
 
-Allow two of its tools, and read their declarations; `docs` connects to
+Allow two of its tools, and read their declarations. `docs` connects to
 the server with the key to get them:
 
 ```sh
@@ -189,8 +186,8 @@ function get_issue(args: { id: string; includeCustomerNeeds?: boolean; includeRe
 …
 ```
 
-Linear publishes no output schemas, so every tool returns `unknown`, and
-a program declares the shape it expects and casts:
+Linear publishes no output schemas, so all its tools return `unknown`.
+A program declares the shape it expects and casts:
 
 ```typescript title="teams.ts"
 import linear from "@mcp/linear";
@@ -224,7 +221,7 @@ error: PermissionDeniedError: permission denied: caller=main capability=mcp.line
 ## Log in with OAuth
 
 Linear also takes an OAuth login, which spares you a key. In a blueprint
-that doesn't declare `linear` yet, give `add-mcp` no credential flag: it
+that doesn't declare `linear` yet, give `add-mcp` no credential flag. It
 asks the server whether it requires OAuth and writes `auth: type: oauth2`
 if it does:
 
@@ -247,7 +244,7 @@ mcp:
       type: oauth2
 ```
 
-Until someone logs in, the blueprint is `PENDING`: it still runs programs,
+Until someone logs in, the blueprint is `PENDING`. It still runs programs,
 without that server:
 
 ```sh
@@ -284,15 +281,14 @@ browse: ACTIVE
 ```
 
 The same `teams.ts` runs under the login and answers the same. Discovery
-found 68 tools this time where the key saw 59: what a credential may see
-is the server's decision.
+found 68 tools this time where the key saw 59, because the server decides
+what a credential may see.
 
 The credential lands in the local secret store, and `deauthenticate`
-forgets it. One login serves every program run under the blueprint, and
-on a server every user's session. Log in as an account that may do what
+forgets it. One login serves all programs run under the blueprint, and
+on a server all users' sessions. Log in as an account that may do what
 you are willing to let any user's agent do, and narrow it with the `tool`
-filter; if users must act as themselves, use a per-user token in a header
-instead.
+filter. If users must act as themselves, use a per-user token in a header.
 
 If the service requires a registered application, as GitHub does,
 configure a provider for its login host before authenticating:
@@ -303,15 +299,14 @@ submilli mcp provider add --match github.com --client-id Iv1.example \
 ```
 
 If a service refuses a login's refresh token, programs get
-`McpAuthExpiredError`; when the refusal lasts, log in again.
+`McpAuthExpiredError`. When the refusal lasts, log in again.
 
 ## Register it on a server
 
 Registered on `submilli-server`, the same blueprint (here with Linear
-declared for OAuth) gives every session the same packages, but three
-things are now the server's: the network it connects from, the store its
-logins are kept in, and the list of tools it has read. Register it and
-check its logins:
+declared for OAuth) gives all sessions the same packages. The server now
+owns the network it connects from, the store its logins are kept in, and
+the list of tools it has read. Register it and check its logins:
 
 ```sh
 submilli server blueprint apply blueprint.yaml
@@ -377,9 +372,9 @@ warning: @mcp/linear: 68 tool(s) return unknown: result schemas are unavailable 
 Submilli
 ```
 
-`submilli server mcp deauthenticate browse linear` removes the login. A
-provider for a service such as GitHub goes under `mcp_oauth` in the
-server's config file, not the local provider file:
+`submilli server mcp deauthenticate browse linear` removes the login. On a
+server, a provider for a service such as GitHub goes under `mcp_oauth` in
+the server's config file:
 
 ```yaml title="server.yaml (fragment)"
 mcp_oauth:
@@ -399,7 +394,7 @@ or loses a tool, apply the blueprint again.
 When discovery can't reach an MCP server within ten seconds, the network
 rules block it, or it has no login yet, the blueprint still works without
 that package. Locally, a run warns `warning: @mcp/playwright: server
-unavailable:` with the reason; on a server, the same line is in
+unavailable:` with the reason. On a server, the same line is in
 `run-code`'s output, in the HTTP response's `discovery_warnings` list,
 and as a `WARN` line in the server's log. A program that imports the
 missing package doesn't compile:
@@ -409,4 +404,4 @@ error: MCP server `playwright` is unavailable — `@mcp/playwright` is absent fr
 ```
 
 Each tool call has sixty seconds, including login and connection. Results
-come back as text; images are dropped, and nothing streams.
+come back as text. Images are dropped, and nothing streams.

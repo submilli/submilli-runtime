@@ -6,19 +6,19 @@ sidebar:
   order: 3
 ---
 
-In this tutorial we will run the research agent on Mastra: its programs
-executed on the server as the signed-in user, `u_ada` in the examples, then one real conversation watched end to end. You need the server and the `research`
+In this tutorial we will run the research agent on Mastra, with its programs
+executed on the server as the signed-in user (`u_ada` in the examples). You need the server and the `research`
 blueprint from [Connect a harness](/docs/tutorials/connect-a-harness),
 with `SUBMILLI_SERVER_TOKEN` still exported, Node.js 20 or later, and a
 key from your model provider for the conversation. The agent file
-names Claude; for Google or OpenAI, the `model` argument takes
+names Claude. For Google or OpenAI, the `model` argument takes
 `google/gemini-3.8-flash` or `openai/gpt-4o-mini` instead, with that
 provider's key in the environment.
 
 ## Start the project
 
 In `harnesses`, make a directory for this harness and install the
-dependencies; the files use top-level `await`, hence `type=module`. The
+dependencies. The files use top-level `await`, hence `type=module`. The
 full project is
 [`examples/harnesses/mastra/`](https://github.com/submilli/submilli-runtime/tree/main/examples/harnesses/mastra).
 
@@ -102,14 +102,14 @@ if (import.meta.filename === process.argv[1]) {
 }
 ```
 
-Notice where the tools go: to `generate`, as `toolsets`, per request,
-and not to the agent when it is constructed. An agent is usually built
+Notice where the tools go. They go to `generate`, as `toolsets`, per
+request, and not to the agent when it is constructed. An agent is usually built
 once and shared, and tools given to it would carry one user's binding
 into another's conversation.
 
 Keep the check on `toolsets.submilli`. When the server refuses the
 connection, Mastra logs the error and returns no tools, and the model
-would answer without them. `maxSteps` bounds the loop: the agent stops
+would answer without them. `maxSteps` bounds the loop. The agent stops
 after twenty rounds of tool calls whether or not it has an answer.
 
 ## One conversation
@@ -121,15 +121,15 @@ ANTHROPIC_API_KEY=... npx tsx agent.ts
 ```
 
 This is one real run, with Claude Sonnet 5 as the model. The programs
-are the model's own, unedited; another run, or another model, writes
-different ones, so watch for the shape rather than the text. The
-application asks, on behalf of `u_ada`:
+are the model's own, unedited. Another run, or another model, writes
+different ones, so watch for the shape. The application asks, on behalf
+of `u_ada`:
 
 ```text
 What is new in the latest stable release of Rust? Save a note with your sources.
 ```
 
-The model starts where the brief tells it to: the files tool on
+The model starts where the brief tells it to, with the files tool on
 `/notes`, which is empty, and a program that asks the server for
 today's date:
 
@@ -143,8 +143,9 @@ function main(): string {
 2026-10-03
 ```
 
-Then the documentation of `@submilli/jina`, and two small programs: one
-searches, one reads the release post it found. This is the first:
+Then it reads the documentation of `@submilli/jina` and runs two small
+programs. One searches, and the other reads the release post it found.
+This is the first:
 
 ```typescript
 import jina from "@submilli/jina";
@@ -173,7 +174,7 @@ error: `+` not defined for `string` and `number`
 help: `+` does not coerce; wrap the number with `String(...)` before concatenating
 ```
 
-A compile error is a result like any other: the model wraps the number
+A compile error is a result like any other. The model wraps the number
 in `String(...)`, as the diagnostic says, and the note is written:
 
 ```text
@@ -188,21 +189,21 @@ Then it answers the user:
 Saved a note at `/notes/rust-latest-release.md` with these details and sources for future sessions.
 ```
 
-Three things to notice. The model can't know today's date, so it asked
-the server before searching, and that is what lets it tell the newest
+Notice a few things. The model can't know today's date, so it asked
+the server before searching, and the date lets it tell the newest
 release from an old announcement that ranks well. The programs never
-named the user: they wrote to `/notes`, and the session's binding
+named the user. They wrote to `/notes`, and the session's binding
 decided that `/notes` is `u_ada`'s. And the note is a file on the
 server's volume, there for the next conversation `u_ada` opens, on this
-harness or another; the run took nine tool calls, within the twenty
+harness or another. The run took nine tool calls, within the twenty
 steps the agent allows.
 
 ## With your coding agent
 
 With the [skill](/docs/install#the-skill) installed, your coding
 assistant does this for an application you already have. The project
-was a small Mastra app with no Submilli in it: an agent, and an HTTP
-handler that takes the signed-in user from an `x-user-id` header set by
+was a small Mastra app with no Submilli in it, made of an agent and an
+HTTP handler that takes the signed-in user from an `x-user-id` header set by
 the company's login proxy.
 
 ```text
@@ -210,22 +211,23 @@ Connect this app's Mastra agent to the research blueprint on my local Submilli s
 ```
 
 The assistant adds `@mastra/mcp` and writes a `research` function that
-follows this page: a new `MCPClient` for each request, the user in the
-`submilli-variables` header, the tools passed to `generate` as
-`toolsets`, a check that the Submilli toolset loaded, and `disconnect`
-in a `finally`. The handler answers 502 when the tools are missing. It
-noticed on its own that the user id ends up in the blueprint's path
-filters, and accepts only ids of letters, digits, and `_ . @ -`; then it
-says it guessed that format and asks what your ids look like.
+follows this page. It opens a new `MCPClient` for each request, puts the
+user in the `submilli-variables` header, passes the tools to `generate`
+as `toolsets`, checks that the Submilli toolset loaded, and calls
+`disconnect` in a `finally`. The handler answers 502 when the tools are
+missing. The assistant noticed unprompted that the user id ends up in
+the blueprint's path filters, so it accepts ids of letters, digits, and
+`_ . @ -` alone. Then it says it guessed that format and asks what your
+ids look like.
 
-It tests with a real MCP client and no model: the eight tools load, the
-user's own directory can be read, while another user's directory, the
+It tests with a real MCP client and no model. The eight tools load and
+the user's own directory can be read. Another user's directory, the
 volume's root, and a look-alike directory that starts with the user's id
 are refused, and a connection with no user gets no tools. It reports that
 it did not run a model. Run afterwards, the app answered the
 question above in about a minute and saved its note under `/u_ada`.
 
-You have the research agent running on Mastra, every program it writes
+You have the research agent running on Mastra, each program it writes
 executed on the server as the signed-in user, and the binding proved on the index
 before any model was involved. Project:
 [`examples/harnesses/mastra/`](https://github.com/submilli/submilli-runtime/tree/main/examples/harnesses/mastra).

@@ -11,7 +11,7 @@ an agent's programs over HTTP: sessions, the execute result, the
 descriptions a harness builds its tools from, and one-off runs.
 [Use the HTTP API](/docs/tutorials/use-the-http-api) walks through them. A
 harness that speaks MCP connects to `/mcp/<blueprint>` instead, as
-[Connect a harness](/docs/tutorials/connect-a-harness) shows; the server's
+[Connect a harness](/docs/tutorials/connect-a-harness) shows. The server's
 other endpoints serve the `submilli server` commands. For the settings named
 here, see [Server settings](/docs/reference/server-settings).
 
@@ -24,7 +24,7 @@ relative to that address.
 
 Every endpoint on this page requires `Authorization: Bearer <token>`, with a
 token of either role, `user` or `admin`. `SUBMILLI_SERVER_TOKEN` is an
-`admin` token; tokens declared under `api_tokens` in the config file carry
+`admin` token. Tokens declared under `api_tokens` in the config file carry
 the role given there. A server started with `--allow-unauthenticated`
 checks no token.
 
@@ -53,8 +53,8 @@ refused before the endpoint runs, with a plain-text body:
 
 Most errors answer `{ "error": <code>, "message": <text> }`, where `error` is
 a stable code and `message` is for people. Some endpoints add fields to it,
-and the session endpoints use other shapes; each endpoint's section lists
-its own. A program that fails is not an HTTP error: `POST /v1/execute` and
+and the session endpoints use other shapes. Each endpoint's section lists
+its own. A program that fails is not an HTTP error. `POST /v1/execute` and
 `POST /v1/sessions/{session_id}/execute` answer `200` with the failure in the
 [execute result](#the-execute-result).
 
@@ -76,11 +76,11 @@ its own. A program that fails is not an HTTP error: `POST /v1/execute` and
 
 ## Sessions
 
-A session binds a blueprint, variables, and harness secrets once; every
+A session binds a blueprint, variables, and harness secrets once, and every
 program run in it uses them. Its files last as long as the blueprint's `vfs`
 keeps them. A session ends on `DELETE`, when its blueprint is removed, or
 after the blueprint's `idle_timeout` without a request. Sessions survive a
-server restart; harness secrets do not, because the server keeps them in
+server restart. Harness secrets do not, because the server keeps them in
 memory only.
 
 ### POST /v1/sessions
@@ -148,7 +148,7 @@ body without running anything. The record lasts as long as the session.
 
 | Situation | Status | `error` |
 | --- | --- | --- |
-| First use of the key | `200` | The program runs; its result is recorded |
+| First use of the key | `200` | The program runs and its result is recorded |
 | Same key, same code, outcome recorded | `200` | The recorded body, replayed |
 | Same key, same code, first request still running | — | The request waits up to 300 seconds for that outcome |
 | Same key, different code | `409` | `idempotency_conflict` |
@@ -216,12 +216,12 @@ object.
 | `execution_id` | string | The run, as named in the [audit trail](/docs/reference/audit-trail#execution) |
 | `session_id` | string | The session the program ran in |
 | `result` | string or null | What `main` returned: a string as is, any other value as JSON text, `null` for no value or on failure |
-| `console` | string[] | Lines the program logged. Empty after a successful run; on failure, what it logged before it stopped |
+| `console` | string[] | Lines the program logged. Empty after a successful run. On failure, what it logged before it stopped |
 | `error` | object or null | `null` on success |
 | `error.kind` | string | One of the kinds below |
 | `error.message` | string | Rendered message, with source excerpts for compile and runtime errors |
 | `error.diagnostics` | object[] | Present on compile errors only: `severity`, `line`, `column`, `message`, and `notes` (each `line`, `column`, `message`) when there are any |
-| `discovery_warnings` | string[] | Present only when non-empty: tools of an imported `@mcp/<server>` package that were dropped or degraded at discovery |
+| `discovery_warnings` | string[] | Present only when non-empty. Tools of an imported `@mcp/<server>` package that were dropped or degraded at discovery |
 
 `GET /v1/sessions/{session_id}/last-run` returns the console of a
 successful run.
@@ -235,8 +235,8 @@ successful run.
 | `memory_exhausted` | The run passed `max_execution_memory` |
 | `stack_exhausted` | The run passed `max_execution_stack` |
 | `package_resolution` | An imported package could not be prepared |
-| `blueprint_not_found` | `POST /v1/execute` only: the blueprint is not registered or not usable |
-| `invalid_request` | `POST /v1/execute` only: variables, secrets, or the `vfs` or `git` paths they fill are invalid |
+| `blueprint_not_found` | The blueprint is not registered or not usable (`POST /v1/execute` only) |
+| `invalid_request` | Variables, secrets, or the `vfs` or `git` paths they fill are invalid (`POST /v1/execute` only) |
 
 Examples, from real runs:
 
@@ -283,7 +283,7 @@ tools on this API.
 
 ### GET /v1/blueprints/{name}/packages/search
 
-Role: `user`. Query parameter `q` (optional, default empty): a substring
+Role: `user`. Query parameter `q` (optional, default empty) is a substring
 matched against package names, descriptions, and exported symbols. Searches
 the standard-library modules, the blueprint's packages, and its
 `@mcp/<server>` packages.
@@ -292,8 +292,8 @@ the standard-library modules, the blueprint's packages, and its
 {"results":[{"description":"UUID v4/v7 generation and validation.","name":"submilli:uuid","source":"host"}]}
 ```
 
-Each result has `name`, `description`, and `source`: `host` for a
-standard-library module, `registry` for an installed package, `mcp` for an
+Each result has `name`, `description`, and `source`, which is `host` for a
+standard-library module, `registry` for an installed package, or `mcp` for an
 `@mcp/<server>` package. A search with no hits answers `results: []` with
 `available_packages` (the same entries), `builtins` (a pointer to the
 built-ins endpoint), and `available_packages_omitted` when the listing is
@@ -301,7 +301,7 @@ cut short.
 
 ### GET /v1/blueprints/{name}/packages/docs
 
-Role: `user`. Query parameter `name` (required): a package name.
+Role: `user`. Query parameter `name` (required) is a package name.
 
 A standard-library module answers `200` with JSON `name`, `source`,
 `description`, and `declarations` (TypeScript declarations):
@@ -310,10 +310,10 @@ A standard-library module answers `200` with JSON `name`, `source`,
 {"declarations":"/**\n * Generate a random UUID v4 (RFC 4122). Returns the canonical lowercase hyphenated form.\n */\nfunction v4(): string;\n\n/**\n * Generate a time-ordered UUID v7 (RFC 9562). Sortable / index-friendly; prefer over `v4` when the destination is a sorted store. Returns the canonical lowercase hyphenated form.\n */\nfunction v7(): string;\n\n/**\n * Returns `true` if `string` is a valid UUID (any version), `false` otherwise.\n * @param string The candidate UUID text.\n */\nfunction validate(string: string): boolean;","description":"UUID v4/v7 generation and validation.","name":"submilli:uuid","source":"host"}
 ```
 
-An installed package and an `@mcp/<server>` package answer `200` with
-`Content-Type: text/markdown; charset=utf-8`: its documentation followed by
-its declarations. A built-in name answers JSON with `source` `builtin`. An
-unknown name answers `404`:
+An installed package and an `@mcp/<server>` package answer `200` with its
+documentation followed by its declarations, as
+`Content-Type: text/markdown; charset=utf-8`. A built-in name answers JSON
+with `source` `builtin`. An unknown name answers `404`:
 
 ```json
 {"did_you_mean":"submilli:code","error":"unknown_package","message":"unknown package: submilli:nope. Did you mean `submilli:code`?"}
@@ -334,7 +334,7 @@ Role: `user`. Lists the built-ins in scope without an `import`:
 
 Role: `user`. Query parameter `name`, repeated once per built-in
 (`?name=Math&name=Array`). Answers `200` with `results`, one entry per name
-in order: `{name, declarations}` when found, otherwise `{name, error,
+in order. An entry is `{name, declarations}` when found, otherwise `{name, error,
 message}` and, when there is a suggestion, `did_you_mean`. `error` is
 `unknown_builtin`, or `not_a_builtin` for a package name:
 

@@ -9,16 +9,14 @@ sidebar:
 The agent is a model already, so why would its program call another?
 Because a program can read more than any context window holds. It can
 loop over a thousand tickets, hand each one to a cheap model, and keep
-every ticket out of the agent's context; it can ask a stronger model for
-one typed verdict at the end, and return only that. The blueprint holds
-the provider's key so the program never sees it, names the models a
-program may use, gates every call, and bounds what each prompt may spend.
+the tickets out of the agent's context. At the end it can ask a stronger
+model for one typed verdict and return only that. The blueprint holds
+the provider's key so the program never sees it. It also names the models
+a program may use, gates each call, and bounds what each prompt may spend.
 
 This guide shows you how to let a program call a model through
-`submilli:llm`. It starts from an empty blueprint: declare the provider's
-key, list the models, grant the capability, run a program that triages
-tickets, and register it on a server. The example uses two Anthropic
-models; substitute your provider and models.
+`submilli:llm`. The example uses two Anthropic models. Substitute your
+provider and models.
 
 ## Start from an empty blueprint
 
@@ -48,7 +46,7 @@ Stored secret 'anthropic_api_key'
 
 ## List the models
 
-The `llm` block is the catalog: a model it doesn't name can't be called.
+The `llm` block is the catalog. A model it doesn't name can't be called.
 It has no command, so write it by hand:
 
 ```yaml title="blueprint.yaml (fragment)"
@@ -66,7 +64,7 @@ llm:
 ```
 
 A provider's `type` is one of `anthropic`, `google`, `openai`, or
-`openai-compatible`; the last one has no default endpoint, so it also
+`openai-compatible`. The last one has no default endpoint, so it also
 takes `base_url`, the `https://` address of the service. Each provider
 takes its own key, and a model names the provider it belongs to. The
 descriptions reach the model writing the program, so use them to say
@@ -82,7 +80,7 @@ submilli blueprint lint blueprint.yaml
 
 ## What programs can do with it
 
-`submilli docs` shows the module: `call` sends one prompt, `batch` sends
+`submilli docs` shows the module. `call` sends one prompt, `batch` sends
 many at once, and `models` lists what the program may use:
 
 ```sh
@@ -126,8 +124,8 @@ submilli blueprint capability add llm.call --filter 'model glob "claude-*"'
 ```
 
 If some listed models should be off limits to the program, filter on
-`model`; the listing the program sees is filtered the same way. With
-`model == "claude-sonnet-5"` instead of the glob, the program below is
+`model`. The listing the program sees is filtered the same way. With
+`model == "claude-sonnet-5"` in place of the glob, the program below is
 refused at its first call, before any prompt is sent:
 
 ```text
@@ -136,7 +134,7 @@ error: PermissionDeniedError: permission denied: caller=main capability=llm.call
 
 ## Run a program
 
-Create `triage.ts`. It asks the cheap model about every ticket, keeps
+Create `triage.ts`. It asks the cheap model about each ticket, keeps
 the ones that report a billing bug, and asks the stronger model for one
 typed verdict on those:
 
@@ -185,7 +183,7 @@ submilli run --blueprint blueprint.yaml triage.ts
 
 Haiku said yes to the two billing tickets and no to the dark-mode
 request, so Sonnet saw two. The three prompts and their answers stayed
-inside the program; only the verdict came out, and it has the shape the
+inside the program. The verdict alone came out, in the shape the
 program declared. A completion cut off at the output limit or stopped by
 a content filter has `ok: false` and still carries its text, and one
 failed prompt never fails the batch.
