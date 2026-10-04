@@ -217,7 +217,7 @@ fn download_verified(source: &str, tag: &str, binary: &str) -> anyhow::Result<Ve
 
 /// Stage in the install directory so the final step is a rename on one
 /// filesystem, and prove the download runs here before anything is replaced.
-fn stage(directory: &Path, replacement: &[u8]) -> anyhow::Result<tempfile::NamedTempFile> {
+fn stage(directory: &Path, replacement: &[u8]) -> anyhow::Result<tempfile::TempPath> {
     let staged = tempfile::Builder::new()
         .prefix(".submilli-upgrade-")
         .suffix(std::env::consts::EXE_SUFFIX)
@@ -229,17 +229,23 @@ fn stage(directory: &Path, replacement: &[u8]) -> anyhow::Result<tempfile::Named
         use std::os::unix::fs::PermissionsExt;
         fs::set_permissions(staged.path(), fs::Permissions::from_mode(0o755))?;
     }
-    let runs = Command::new(staged.path())
+    // Linux refuses to execute a file while a writable handle remains open.
+    // Keep the path's cleanup guard after closing the NamedTempFile handle.
+    let staged = staged.into_temp_path();
+    let output = Command::new(&staged)
         .arg("--version")
         .output()
-        .is_ok_and(|output| output.status.success());
-    if !runs {
-        bail!("the downloaded executable does not run here; nothing was changed");
+        .context("the downloaded executable does not run here; nothing was changed")?;
+    if !output.status.success() {
+        bail!(
+            "the downloaded executable failed its version check ({}); nothing was changed",
+            output.status
+        );
     }
     Ok(staged)
 }
 
-fn install_staged(staged: tempfile::NamedTempFile, destination: &Path) -> anyhow::Result<()> {
+fn install_staged(staged: tempfile::TempPath, destination: &Path) -> anyhow::Result<()> {
     // Windows cannot overwrite a running executable but can rename it aside.
     #[cfg(windows)]
     if destination.exists() {
@@ -249,7 +255,6 @@ fn install_staged(staged: tempfile::NamedTempFile, destination: &Path) -> anyhow
     }
     staged
         .persist(destination)
-        .map(drop)
         .with_context(|| format!("replacing {}", destination.display()))
 }
 
