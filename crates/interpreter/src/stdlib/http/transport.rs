@@ -3,6 +3,7 @@
 //! bounded download/decompression plumbing. No Wasm ABI here; the package's
 //! host fns live in [`super`].
 
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, OnceLock};
 
 use super::{HttpTransportPolicy, TransportPolicyError};
@@ -148,6 +149,57 @@ impl std::fmt::Display for HttpError {
 
 impl std::error::Error for HttpError {}
 
+/// Progress remains observable when a download fails or is cancelled.
+#[derive(Default)]
+pub struct DownloadProgress {
+    received: AtomicU64,
+    written: AtomicU64,
+}
+
+impl DownloadProgress {
+    /// Record wire bytes as they arrive, before decoding or limit checks.
+    pub fn received(&self, bytes: u64) {
+        let _ = self
+            .received
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |total| {
+                Some(total.saturating_add(bytes))
+            });
+    }
+
+    pub fn bytes_received(&self) -> u64 {
+        self.received.load(Ordering::Relaxed)
+    }
+
+    pub(crate) fn written(&self, bytes: u64) {
+        let _ = self
+            .written
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |total| {
+                Some(total.saturating_add(bytes))
+            });
+    }
+
+    pub(crate) fn bytes_written(&self) -> u64 {
+        self.written.load(Ordering::Relaxed)
+    }
+}
+
+struct ReceivedWriter<'a> {
+    writer: &'a mut (dyn std::io::Write + Send),
+    progress: &'a DownloadProgress,
+}
+
+impl std::io::Write for ReceivedWriter<'_> {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        let n = self.writer.write(bytes)?;
+        self.progress.received(n as u64);
+        Ok(n)
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.writer.flush()
+    }
+}
+
 /// Embedder-supplied HTTP transport. 4xx/5xx are not errors; only transport
 /// failures return `Err(HttpError)`. `Send + Sync` for sharing across stores.
 /// Implementations must enforce `HttpRequest::transport_policy`, including
@@ -181,11 +233,26 @@ pub trait HttpClient: Send + Sync {
 
     /// No default impl: the obvious "buffer via `send` then `write_all`" fallback
     /// would silently break the bounded-memory guarantee `http.download` advertises.
+    /// Implementations must enforce the request's timeout across the entire
+    /// transfer and its byte limit on both wire and decoded output.
     async fn download(
         &self,
         req: &HttpRequest,
         writer: &mut (dyn std::io::Write + Send),
     ) -> Result<DownloadMeta, HttpError>;
+
+    /// Existing embedders report the bytes accepted by the destination.
+    /// Override to count actual wire bytes, including bytes rejected before a
+    /// write and compressed bytes. The default cannot observe those bytes.
+    async fn download_with_progress(
+        &self,
+        req: &HttpRequest,
+        writer: &mut (dyn std::io::Write + Send),
+        progress: &DownloadProgress,
+    ) -> Result<DownloadMeta, HttpError> {
+        self.download(req, &mut ReceivedWriter { writer, progress })
+            .await
+    }
 }
 
 /// Default `HttpClient` — async `reqwest`, built with the SSRF policy resolver.
@@ -542,6 +609,16 @@ impl HttpClient for ReqwestHttpClient {
         req: &HttpRequest,
         writer: &mut (dyn std::io::Write + Send),
     ) -> Result<DownloadMeta, HttpError> {
+        self.download_with_progress(req, writer, &DownloadProgress::default())
+            .await
+    }
+
+    async fn download_with_progress(
+        &self,
+        req: &HttpRequest,
+        writer: &mut (dyn std::io::Write + Send),
+        progress: &DownloadProgress,
+    ) -> Result<DownloadMeta, HttpError> {
         // GET-only in v1; trap here so a future "download via POST" doesn't
         // silently break the bounded-memory guarantee.
         if req.method != "GET" {
@@ -568,6 +645,7 @@ impl HttpClient for ReqwestHttpClient {
         let mut stream = resp.bytes_stream();
         while let Some(chunk) = stream.next().await {
             let chunk = chunk.map_err(map_reqwest_error)?;
+            progress.received(chunk.len() as u64);
             wire = wire.saturating_add(chunk.len() as u64);
             if wire > limit {
                 return Err(HttpError::TooLarge { limit });

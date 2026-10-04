@@ -28,7 +28,7 @@ use crate::runtime::host::{
 };
 use crate::runtime::intrinsic_types::intrinsic_types;
 use crate::runtime::number::format_number_js;
-use crate::runtime::prelude::array::{ElementCallback, Order, merge_sort};
+use crate::runtime::prelude::array::{ElementCallback, merge_sort};
 use crate::runtime::prelude::closure::Closure;
 use crate::runtime::prelude::iterator::as_struct;
 use crate::runtime::prelude::keep::KeptValue;
@@ -285,65 +285,94 @@ fn reverse(
 fn fill(
     caller: &mut Caller<'_, StoreData>,
     receiver: &Val,
-    mut bytes: Vec<u8>,
     value: f64,
     start: f64,
     end: f64,
 ) -> wasmtime::Result<Val> {
-    let len = bytes.len() as i32;
-    let si = norm_clamp(start, len);
-    let ei = norm_clamp(end, len);
-    let v = to_byte(value);
-    for slot in bytes.iter_mut().take(ei as usize).skip(si as usize) {
-        *slot = v;
+    let raw = backing(caller, receiver)?;
+    let len = i32::try_from(raw.len(&mut *caller)?).map_err(fatal_host_error)?;
+    let start = norm_clamp(start, len) as u32;
+    let end = norm_clamp(end, len) as u32;
+    let count = end.saturating_sub(start);
+    fuel::charge(&mut *caller, fuel::COPY, u64::from(count))?;
+    let chunk = [to_byte(value); 4096];
+    let mut offset = start;
+    while offset < end {
+        let count = (end - offset).min(chunk.len() as u32);
+        let bytes = chunk
+            .get(..count as usize)
+            .ok_or_else(|| fatal_host_error("invalid fill chunk"))?;
+        raw.write_i8(&mut *caller, offset, bytes)?;
+        offset += count;
     }
-    store_bytes(caller, receiver, &bytes)?;
     Ok(*receiver)
 }
 
 fn copy_within(
     caller: &mut Caller<'_, StoreData>,
     receiver: &Val,
-    mut bytes: Vec<u8>,
     target: f64,
     start: f64,
     end: f64,
 ) -> wasmtime::Result<Val> {
-    let len = bytes.len() as i32;
-    let ti = norm_clamp(target, len);
-    let si = norm_clamp(start, len);
-    let ei = norm_clamp(end, len);
-    let mut count = (ei - si).max(0);
-    let rem = len - ti;
-    if count > rem {
-        count = rem;
-    }
-    // Snapshot the source span first so overlapping ranges stay memmove-correct.
-    let src: Vec<u8> = bytes[si as usize..(si + count) as usize].to_vec();
-    for (k, v) in src.into_iter().enumerate() {
-        bytes[ti as usize + k] = v;
-    }
-    store_bytes(caller, receiver, &bytes)?;
+    let raw = backing(caller, receiver)?;
+    let len = i32::try_from(raw.len(&mut *caller)?).map_err(fatal_host_error)?;
+    let target = norm_clamp(target, len) as usize;
+    let start = norm_clamp(start, len) as usize;
+    let end = norm_clamp(end, len) as usize;
+    let count = end.saturating_sub(start).min(len as usize - target);
+    // A snapshot of only the requested span preserves overlapping copies.
+    let bytes = read_uint8_array_range(caller, raw, start, count, "Uint8Array#copyWithin")?;
+    fuel::charge(&mut *caller, fuel::COPY, count as u64)?;
+    raw.write_i8(&mut *caller, target as u32, &bytes)?;
     Ok(*receiver)
 }
 
-/// `set(source, offset)` — copy `source`'s bytes into the receiver at `offset`;
-/// `None` when the span overflows ([`install`] raises `Error("offset is out of
-/// bounds")`).
+/// Validate both ranges before copying or changing the receiver.
 fn set(
     caller: &mut Caller<'_, StoreData>,
     receiver: &Val,
-    mut bytes: Vec<u8>,
-    source: &[u8],
+    source: &Val,
     offset: f64,
-) -> wasmtime::Result<Option<Val>> {
-    let off = trunc_sat(offset);
-    if off < 0 || (off as usize) + source.len() > bytes.len() {
-        return Ok(None);
+) -> wasmtime::Result<()> {
+    let target = backing(caller, receiver)?;
+    let source = backing(caller, source)?;
+    let target_len = target.len(&mut *caller)?;
+    let source_len = source.len(&mut *caller)?;
+    let offset = trunc_sat(offset);
+    if offset < 0
+        || (offset as u32)
+            .checked_add(source_len)
+            .is_none_or(|end| end > target_len)
+    {
+        return Err(crate::runtime::host::range_error("offset is out of bounds"));
     }
-    bytes[off as usize..off as usize + source.len()].copy_from_slice(source);
-    store_bytes(caller, receiver, &bytes)?;
-    Ok(Some(*receiver))
+    let bytes = read_uint8_array_range(
+        caller,
+        source,
+        0,
+        source_len as usize,
+        "Uint8Array#set source",
+    )?;
+    fuel::charge(&mut *caller, fuel::COPY, u64::from(source_len))?;
+    target.write_i8(&mut *caller, offset as u32, &bytes)
+}
+
+fn allocate(caller: &mut Caller<'_, StoreData>, len: usize) -> wasmtime::Result<Val> {
+    use wasmtime::ArrayRefPre;
+    let intr = intrinsic_types(&mut *caller)?;
+    fuel::charge(&mut *caller, fuel::COPY, len as u64)?;
+    let len = u32::try_from(len).map_err(fatal_host_error)?;
+    let pre = ArrayRefPre::new(&mut *caller, intr.raw_uint8_array.clone());
+    let raw = ArrayRef::new_zeroed_i8(&mut *caller, &pre, len)?;
+    let vtable = crate::runtime::host::host_uint8_array_vtable(caller)?;
+    let pre = StructRefPre::new(&mut *caller, intr.uint8_array.clone());
+    let value = StructRef::new(
+        &mut *caller,
+        &pre,
+        &[vtable, Val::AnyRef(Some(raw.to_anyref()))],
+    )?;
+    Ok(Val::AnyRef(Some(value.to_anyref())))
 }
 
 async fn sort_bytes(
@@ -364,7 +393,7 @@ async fn sort_bytes(
     for byte in 0..=u8::MAX {
         boxes.push(box_byte(caller, byte)?);
     }
-    merge_sort(caller, bytes, &Order::Comparator(cmp), |_, byte| {
+    merge_sort(caller, bytes, cmp, |_, byte| {
         boxes
             .get(usize::from(byte))
             .copied()
@@ -551,18 +580,21 @@ fn encode_base64(bytes: &[u8], url_safe: bool, omit_padding: bool) -> String {
     GeneralPurpose::new(alpha, config).encode(bytes)
 }
 
-/// Forgiving on padding: try `PAD`, fall back to `NO_PAD`.
+/// Accept canonical padding or no padding without decoding the input twice.
 fn decode_base64(s: &str, url_safe: bool) -> wasmtime::Result<Vec<u8>> {
     let alpha = if url_safe {
         &alphabet::URL_SAFE
     } else {
         &alphabet::STANDARD
     };
-    let padded = GeneralPurpose::new(alpha, PAD);
-    let decoded = padded
+    let config = if s.as_bytes().last() == Some(&b'=') {
+        PAD
+    } else {
+        NO_PAD
+    };
+    GeneralPurpose::new(alpha, config)
         .decode(s.as_bytes())
-        .or_else(|_| GeneralPurpose::new(alpha, NO_PAD).decode(s.as_bytes()));
-    decoded.map_err(|e| crate::runtime::host::syntax_error(format!("Uint8Array.fromBase64: {e}")))
+        .map_err(|e| crate::runtime::host::syntax_error(format!("Uint8Array.fromBase64: {e}")))
 }
 
 fn to_hex(bytes: &[u8]) -> String {
@@ -727,6 +759,35 @@ mod tests {
         // url-safe encodes 0xfb 0xff as `-_`, standard as `+/`.
         assert!(encode_base64(&[0xfb, 0xff], true, false).contains('-'));
         assert!(encode_base64(&[0xfb, 0xff], false, false).contains('+'));
+    }
+
+    #[test]
+    fn base64_padding_selection_preserves_previous_acceptance() {
+        // Enumerate short padding, alphabet and trailing-bit combinations
+        // against the previous two-decoder acceptance rule.
+        let alphabet = b"AQf=_-";
+        for length in 0..=5_u32 {
+            for mut code in 0..alphabet.len().pow(length) {
+                let mut input = Vec::new();
+                for _ in 0..length {
+                    input.push(alphabet[code % alphabet.len()]);
+                    code /= alphabet.len();
+                }
+                let text = std::str::from_utf8(&input).unwrap();
+                for url_safe in [false, true] {
+                    let alpha = if url_safe {
+                        &alphabet::URL_SAFE
+                    } else {
+                        &alphabet::STANDARD
+                    };
+                    let old = GeneralPurpose::new(alpha, PAD)
+                        .decode(&input)
+                        .or_else(|_| GeneralPurpose::new(alpha, NO_PAD).decode(&input));
+                    let new = decode_base64(text, url_safe);
+                    assert_eq!(new.ok(), old.ok(), "{text:?}, url_safe={url_safe}");
+                }
+            }
+        }
     }
 
     #[test]

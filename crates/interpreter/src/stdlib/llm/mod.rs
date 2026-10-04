@@ -278,9 +278,13 @@ async fn dispatch(
     // bound by reserving the same cap the request is sent with.
     let output_reserve = provider.output_reserve(model);
     let reservation =
-        reserve(budget.as_deref(), op, model, &prompts, output_reserve).inspect_err(|_error| {
+        reserve(budget.as_deref(), op, model, &prompts, output_reserve).map_err(|error| {
             let who = crate::stdlib::shared::running_package(caller)
-                .unwrap_or_else(|p| p.label.to_string());
+                .or_else(crate::stdlib::shared::PrincipalError::label_or_error);
+            let who = match who {
+                Ok(who) => who,
+                Err(error) => return error,
+            };
             crate::stdlib::shared::audit_denial(
                 caller.data().security_check.as_ref(),
                 &who,
@@ -289,6 +293,7 @@ async fn dispatch(
                 "quota",
                 "model-token budget exceeded",
             );
+            error
         })?;
     let dispatched = provider
         .call(model, &prompts, schema.as_deref())
@@ -296,7 +301,11 @@ async fn dispatch(
         .map_err(|e| {
             if e.is_budget_exceeded() {
                 let who = crate::stdlib::shared::running_package(caller)
-                    .unwrap_or_else(|p| p.label.to_string());
+                    .or_else(crate::stdlib::shared::PrincipalError::label_or_error);
+                let who = match who {
+                    Ok(who) => who,
+                    Err(error) => return error,
+                };
                 crate::stdlib::shared::audit_denial(
                     caller.data().security_check.as_ref(),
                     &who,

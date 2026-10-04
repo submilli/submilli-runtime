@@ -54,7 +54,7 @@ pub(super) fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
                 Box::pin(async move {
                     let lhs = primitive(caller, abi_arg(params, 0)?).await?;
                     let rhs = primitive(caller, abi_arg(params, 1)?).await?;
-                    let ordering = compare(&lhs, &rhs)?;
+                    let ordering = compare(caller, &lhs, &rhs)?;
                     let answer = match operation {
                         "lt" => ordering == Some(Ordering::Less),
                         "gt" => ordering == Some(Ordering::Greater),
@@ -111,7 +111,7 @@ pub(super) fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         |caller, params, results| {
             Box::pin(async move {
                 let key = primitive_with_hint(caller, abi_arg(params, 0)?, true).await?;
-                let units = string(key);
+                let units = string(caller, key)?;
                 let index = number(Primitive::String(units.clone()))?;
                 if format_number_js(index).encode_utf16().collect::<Vec<_>>() != units {
                     return Err(range_error("Array index must be a canonical numeric key"));
@@ -137,8 +137,9 @@ pub(super) fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         |caller, params, results| {
             Box::pin(async move {
                 let value = primitive_with_hint(caller, abi_arg(params, 0)?, true).await?;
+                let text = string(caller, value)?;
                 *abi_result(results, 0)? = Val::AnyRef(Some(
-                    write_submilli_string_struct_units(caller, &string(value))?.to_anyref(),
+                    write_submilli_string_struct_units(caller, &text)?.to_anyref(),
                 ));
                 Ok(())
             })
@@ -216,15 +217,19 @@ pub(super) enum Primitive {
     BigInt(num_bigint::BigInt),
 }
 
-fn compare(lhs: &Primitive, rhs: &Primitive) -> wasmtime::Result<Option<Ordering>> {
+fn compare(
+    caller: &mut Caller<'_, StoreData>,
+    lhs: &Primitive,
+    rhs: &Primitive,
+) -> wasmtime::Result<Option<Ordering>> {
     match (lhs, rhs) {
         (Primitive::String(lhs), Primitive::String(rhs)) => Ok(Some(lhs.cmp(rhs))),
         (Primitive::BigInt(lhs), Primitive::BigInt(rhs)) => Ok(Some(lhs.cmp(rhs))),
         (Primitive::BigInt(lhs), Primitive::String(rhs)) => {
-            Ok(parse_bigint(rhs).map(|rhs| lhs.cmp(&rhs)))
+            Ok(parse_bigint(caller, rhs)?.map(|rhs| lhs.cmp(&rhs)))
         }
         (Primitive::String(lhs), Primitive::BigInt(rhs)) => {
-            Ok(parse_bigint(lhs).map(|lhs| lhs.cmp(rhs)))
+            Ok(parse_bigint(caller, lhs)?.map(|lhs| lhs.cmp(rhs)))
         }
         (Primitive::BigInt(lhs), rhs) => Ok(compare_bigint_number(lhs, number(rhs.clone())?)),
         (lhs, Primitive::BigInt(rhs)) => {
@@ -234,11 +239,21 @@ fn compare(lhs: &Primitive, rhs: &Primitive) -> wasmtime::Result<Option<Ordering
     }
 }
 
-fn parse_bigint(units: &[u16]) -> Option<num_bigint::BigInt> {
-    let text = String::from_utf16(units).ok()?;
+fn parse_bigint(
+    caller: &mut Caller<'_, StoreData>,
+    units: &[u16],
+) -> wasmtime::Result<Option<num_bigint::BigInt>> {
+    if units.len() > super::bigint::ops::MAX_DECIMAL_INPUT_BYTES {
+        return Err(range_error(
+            "BigInt comparison: input exceeds 65536 code units; use a shorter value",
+        ));
+    }
+    let Ok(text) = String::from_utf16(units) else {
+        return Ok(None);
+    };
     let text = text.trim_matches(crate::runtime::number::is_js_whitespace);
     if text.is_empty() {
-        return Some(num_bigint::BigInt::zero());
+        return Ok(Some(num_bigint::BigInt::zero()));
     }
     for (prefix, radix) in [
         ("0x", 16),
@@ -249,7 +264,7 @@ fn parse_bigint(units: &[u16]) -> Option<num_bigint::BigInt> {
         ("0B", 2),
     ] {
         if let Some(digits) = text.strip_prefix(prefix) {
-            return parse_bigint_digits(digits, radix);
+            return parse_bigint_digits(caller, digits, radix);
         }
     }
     let (negative, digits) = if let Some(digits) = text.strip_prefix('-') {
@@ -257,14 +272,31 @@ fn parse_bigint(units: &[u16]) -> Option<num_bigint::BigInt> {
     } else {
         (false, text.strip_prefix('+').unwrap_or(text))
     };
-    parse_bigint_digits(digits, 10).map(|value| if negative { -value } else { value })
+    Ok(parse_bigint_digits(caller, digits, 10)?.map(|value| if negative { -value } else { value }))
 }
 
-fn parse_bigint_digits(digits: &str, radix: u32) -> Option<num_bigint::BigInt> {
+fn parse_bigint_digits(
+    caller: &mut Caller<'_, StoreData>,
+    digits: &str,
+    radix: u32,
+) -> wasmtime::Result<Option<num_bigint::BigInt>> {
+    crate::runtime::fuel::charge(
+        &mut *caller,
+        crate::runtime::fuel::SCAN,
+        digits.len() as u64,
+    )?;
     if digits.is_empty() || !digits.chars().all(|digit| digit.is_digit(radix)) {
-        return None;
+        return Ok(None);
     }
-    num_bigint::BigInt::parse_bytes(digits.as_bytes(), radix)
+    if radix == 10 {
+        let n = digits.len() as u64;
+        crate::runtime::fuel::charge(
+            &mut *caller,
+            crate::runtime::fuel::ELEM,
+            n.saturating_mul(n.div_ceil(19)),
+        )?;
+    }
+    Ok(num_bigint::BigInt::parse_bytes(digits.as_bytes(), radix))
 }
 
 fn compare_bigint_number(lhs: &num_bigint::BigInt, rhs: f64) -> Option<Ordering> {
@@ -433,7 +465,7 @@ fn read_primitive(
     }
     if object.matches_ty(&*caller, &intr.bigint)? {
         let (sign, limbs) = read_bigint_struct(caller, value, "arithmetic")?;
-        return Ok(Some(Primitive::BigInt(limbs_to_bigint(sign, &limbs))));
+        return Ok(Some(Primitive::BigInt(limbs_to_bigint(sign, &limbs)?)));
     }
     Ok(None)
 }
@@ -447,8 +479,8 @@ fn arithmetic(
     if operation == "add"
         && (matches!(lhs, Primitive::String(_)) || matches!(rhs, Primitive::String(_)))
     {
-        let mut text = string(lhs);
-        text.extend(string(rhs));
+        let mut text = string(caller, lhs)?;
+        text.extend(string(caller, rhs)?);
         let value = write_submilli_string_struct_units(caller, &text)?;
         return Ok(Val::AnyRef(Some(value.to_anyref())));
     }
@@ -495,15 +527,18 @@ fn number(value: Primitive) -> wasmtime::Result<f64> {
     })
 }
 
-pub(super) fn string(value: Primitive) -> Vec<u16> {
+pub(super) fn string(
+    caller: &mut Caller<'_, StoreData>,
+    value: Primitive,
+) -> wasmtime::Result<Vec<u16>> {
     let text = match value {
-        Primitive::String(units) => return units,
+        Primitive::String(units) => return Ok(units),
         Primitive::Null => "null".to_owned(),
         Primitive::Number(value) => format_number_js(value),
         Primitive::Boolean(value) => value.to_string(),
-        Primitive::BigInt(value) => value.to_string(),
+        Primitive::BigInt(value) => super::bigint::ops::format_bigint(caller, &value, 10)?,
     };
-    text.encode_utf16().collect()
+    Ok(text.encode_utf16().collect())
 }
 
 fn bigint_arithmetic(
@@ -568,10 +603,22 @@ pub(super) fn number_value(
     caller: &mut Caller<'_, StoreData>,
     value: &Val,
 ) -> wasmtime::Result<Option<f64>> {
-    Ok(match read_primitive(caller, value)? {
-        Some(Primitive::Number(value)) => Some(value),
-        _ => None,
-    })
+    let Val::AnyRef(Some(reference)) = value else {
+        return Ok(None);
+    };
+    let Some(object) = reference.as_struct(&mut *caller)? else {
+        return Ok(None);
+    };
+    let intr = intrinsic_types(&mut *caller)?;
+    if !object.matches_ty(&*caller, &intr.boxed_number)? {
+        return Ok(None);
+    }
+    match object.field(&mut *caller, 1)? {
+        Val::F64(bits) => Ok(Some(f64::from_bits(bits))),
+        _ => Err(crate::runtime::host::fatal_host_error(
+            "invalid boxed number payload",
+        )),
+    }
 }
 
 pub(super) async fn search_string(
@@ -585,5 +632,6 @@ pub(super) async fn search_string(
     {
         return Err(type_error("String search argument must not be a RegExp"));
     }
-    Ok(string(primitive_with_hint(caller, value, true).await?))
+    let value = primitive_with_hint(caller, value, true).await?;
+    string(caller, value)
 }

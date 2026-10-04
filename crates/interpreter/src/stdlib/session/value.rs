@@ -149,7 +149,8 @@ fn reject_unsupported(
     depth: u32,
 ) -> wasmtime::Result<()> {
     let shapes = Shapes::recover(caller)?;
-    walk(caller, value, depth, &shapes)
+    let mut remaining = crate::runtime::MAX_STRUCTURAL_WALK_NODES;
+    walk(caller, value, depth, &shapes, &mut remaining)
 }
 
 fn walk(
@@ -157,6 +158,7 @@ fn walk(
     value: &Val,
     depth: u32,
     shapes: &Shapes,
+    remaining: &mut u32,
 ) -> wasmtime::Result<()> {
     if depth > MAX_DEPTH {
         return Err(type_error(format!(
@@ -164,6 +166,12 @@ fn walk(
              JSON form — a value reachable from itself reaches this bound too"
         )));
     }
+    *remaining = remaining.checked_sub(1).ok_or_else(|| {
+        type_error(format!(
+            "session: the value exceeds {} structural visits; store a smaller value or reduce shared nesting",
+            crate::runtime::MAX_STRUCTURAL_WALK_NODES,
+        ))
+    })?;
     if let Some(what) = shapes.refusal(caller, value)? {
         return Err(unsupported(what));
     }
@@ -171,7 +179,7 @@ fn walk(
     fuel::charge(&mut *caller, fuel::ELEM, 1)?;
     if is_a(caller, value, &shapes.array)? {
         for element in crate::runtime::prelude::collection::read_array_vals(caller, value)? {
-            walk(caller, &element, depth + 1, shapes)?;
+            walk(caller, &element, depth + 1, shapes, remaining)?;
         }
         return Ok(());
     }
@@ -184,7 +192,7 @@ fn walk(
         for (_, field) in
             crate::runtime::prelude::vtable::read_object_entries(caller, value, "session value")?
         {
-            walk(caller, &field, depth + 1, shapes)?;
+            walk(caller, &field, depth + 1, shapes, remaining)?;
         }
     }
     Ok(())
@@ -481,6 +489,7 @@ fn build_object(
             vtable,
             Val::AnyRef(Some(names.to_anyref())),
             Val::AnyRef(Some(values.to_anyref())),
+            Val::AnyRef(None),
         ],
     )?;
     Ok(Val::AnyRef(Some(st.to_anyref())))
@@ -510,6 +519,15 @@ pub(super) fn read_units(
     val: &Val,
     name: &str,
 ) -> wasmtime::Result<Vec<u16>> {
+    read_units_bounded(caller, val, name, u64::MAX)
+}
+
+pub(super) fn read_units_bounded(
+    caller: &mut Caller<'_, StoreData>,
+    val: &Val,
+    name: &str,
+    max_units: u64,
+) -> wasmtime::Result<Vec<u16>> {
     let Val::AnyRef(Some(any)) = val else {
         return Err(type_error(format!("{name} expects a string, got null")));
     };
@@ -524,5 +542,10 @@ pub(super) fn read_units(
         },
         None => any.unwrap_array(&mut *caller)?,
     };
+    if u64::from(payload.len(&mut *caller)?) > max_units {
+        return Err(crate::runtime::host::range_error(format!(
+            "{name} exceeds {max_units} code units; pass an unchanged cursor from the previous page"
+        )));
+    }
     read_code_units(&mut *caller, payload, name)
 }

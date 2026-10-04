@@ -89,7 +89,7 @@ pub fn declare_intrinsic_types(types: &mut TypeSection) -> IntrinsicTypeIndices 
     let closure = 19u32;
     // `$ClassVTable` — nominal-identity base for class vtables (SUB-631). A
     // self-referential singleton rec group `(sub $VTable (4 funcrefs, parent
-    // (ref null $ClassVTable)))`. Only class vtables (and `$Error_vtable`)
+    // (ref null $ClassVTable), default-JSON i32))`. Only class vtables (and `$Error_vtable`)
     // subtype it; every other vtable stays a plain `$VTable` subtype, so a
     // `ref.cast (ref $ClassVTable)` classifies "is a class instance" and the
     // parent field carries the `extends` chain for `instanceof`'s ref.eq walk.
@@ -177,6 +177,10 @@ pub fn declare_intrinsic_types(types: &mut TypeSection) -> IntrinsicTypeIndices 
                             element_type: StorageType::Val(ref_to(raw_string)),
                             mutable: false,
                         },
+                        FieldType {
+                            element_type: StorageType::Val(ValType::I64),
+                            mutable: true,
+                        },
                     ]
                     .into_boxed_slice(),
                 }),
@@ -230,7 +234,7 @@ pub fn declare_intrinsic_types(types: &mut TypeSection) -> IntrinsicTypeIndices 
             composite_type: CompositeType {
                 inner: CompositeInnerType::Array(wasm_encoder::ArrayType(FieldType {
                     element_type: StorageType::Val(ref_to(string)),
-                    mutable: false,
+                    mutable: true,
                 })),
                 shared: false,
                 descriptor: None,
@@ -263,6 +267,10 @@ pub fn declare_intrinsic_types(types: &mut TypeSection) -> IntrinsicTypeIndices 
                         },
                         FieldType {
                             element_type: StorageType::Val(ref_to(object_fields)),
+                            mutable: true,
+                        },
+                        FieldType {
+                            element_type: StorageType::Val(ValType::Ref(RefType::ANYREF)),
                             mutable: true,
                         },
                     ]
@@ -373,6 +381,10 @@ pub fn declare_intrinsic_types(types: &mut TypeSection) -> IntrinsicTypeIndices 
                 element_type: StorageType::Val(ref_null(class_vtable)),
                 mutable: false,
             },
+            FieldType {
+                element_type: StorageType::Val(ValType::I32),
+                mutable: false,
+            },
         ],
         Some(vtable),
     )]);
@@ -389,6 +401,10 @@ pub fn declare_intrinsic_types(types: &mut TypeSection) -> IntrinsicTypeIndices 
                     element_type: StorageType::Val(ref_null(class_vtable)),
                     mutable: false,
                 },
+                FieldType {
+                    element_type: StorageType::Val(ValType::I32),
+                    mutable: false,
+                },
             ],
             Some(class_vtable),
         ),
@@ -402,6 +418,14 @@ pub fn declare_intrinsic_types(types: &mut TypeSection) -> IntrinsicTypeIndices 
                 FieldType {
                     mutable: true,
                     ..fieldtype_ref(object_fields)
+                },
+                FieldType {
+                    element_type: StorageType::Val(ValType::Ref(RefType::ANYREF)),
+                    mutable: true,
+                },
+                FieldType {
+                    element_type: StorageType::Val(ValType::I64),
+                    mutable: true,
                 },
             ],
             Some(object_shape),
@@ -515,6 +539,10 @@ pub fn declare_intrinsic_types(types: &mut TypeSection) -> IntrinsicTypeIndices 
                         element_type: StorageType::Val(ValType::I32),
                         mutable: false,
                     },
+                    FieldType {
+                        element_type: StorageType::Val(ValType::I64),
+                        mutable: true,
+                    },
                 ]
                 .into_boxed_slice(),
             }),
@@ -551,6 +579,10 @@ pub fn declare_intrinsic_types(types: &mut TypeSection) -> IntrinsicTypeIndices 
                     FieldType {
                         element_type: StorageType::Val(ref_to(regex_capture_array)),
                         mutable: false,
+                    },
+                    FieldType {
+                        element_type: StorageType::Val(ValType::I64),
+                        mutable: true,
                     },
                 ]
                 .into_boxed_slice(),
@@ -643,7 +675,7 @@ pub fn declare_intrinsic_types(types: &mut TypeSection) -> IntrinsicTypeIndices 
         },
     });
 
-    // $temporal_zdt: same (secs, nanos) as $temporal_instant plus IANA tz id in field 3.
+    // $temporal_zdt: epoch fields, zone ID, and host-owned resolved Zoned value.
     types.ty().subtype(&SubType {
         is_final: false,
         supertype_idx: Some(object),
@@ -661,6 +693,13 @@ pub fn declare_intrinsic_types(types: &mut TypeSection) -> IntrinsicTypeIndices 
                     },
                     FieldType {
                         element_type: StorageType::Val(ref_to(string)),
+                        mutable: false,
+                    },
+                    FieldType {
+                        element_type: StorageType::Val(ValType::Ref(RefType {
+                            nullable: false,
+                            heap_type: HeapType::EXTERN,
+                        })),
                         mutable: false,
                     },
                 ]
@@ -700,6 +739,12 @@ pub fn declare_intrinsic_types(types: &mut TypeSection) -> IntrinsicTypeIndices 
                     mutable_i32,
                     order_field,
                     mutable_i32,
+                    order_field,
+                    order_field,
+                    FieldType {
+                        element_type: StorageType::Val(ValType::I64),
+                        mutable: true,
+                    },
                 ]
                 .into_boxed_slice(),
             }),
@@ -719,6 +764,12 @@ pub fn declare_intrinsic_types(types: &mut TypeSection) -> IntrinsicTypeIndices 
                     mutable_i32,
                     order_field,
                     mutable_i32,
+                    order_field,
+                    order_field,
+                    FieldType {
+                        element_type: StorageType::Val(ValType::I64),
+                        mutable: true,
+                    },
                 ]
                 .into_boxed_slice(),
             }),
@@ -1066,6 +1117,7 @@ pub(crate) fn push_string_literal(
         array_type_index: intrinsics.raw_string,
         array_size: super::wasm_u32(len)?,
     });
+    f.instruction(&Instruction::I64Const(0));
     f.instruction(&Instruction::StructNew(intrinsics.string));
     Ok(())
 }

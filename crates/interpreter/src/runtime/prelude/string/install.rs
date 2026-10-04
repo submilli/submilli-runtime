@@ -10,7 +10,7 @@ use wasmtime::{
 };
 
 use super::{
-    RangeError, Str, at_index, cmp, code_point, concat, ends_with_window, eq, from_char_code,
+    RangeError, Str, at_index, cmp, code_point, concat, ends_with_window, from_char_code,
     from_code_point, includes, index_of, is_well_formed, last_index_of, normalize, pad_end,
     pad_start, repeat, slice_range, starts_with_window, substring_range, to_lower_case,
     to_upper_case, to_well_formed, trim, trim_end, trim_start, unit_index,
@@ -67,14 +67,12 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
     reg_str_to_bool(linker, &engine, &abi, "isWellFormed", is_well_formed)?;
     reg_str_to_str(linker, &engine, &abi, "toWellFormed", to_well_formed)?;
 
-    // Case / whitespace / normalization — formerly the `submilli:string`
-    // module; they decode to UTF-8 for the Unicode crates (the sanctioned
-    // round-trip) and now live alongside the rest of the String surface.
-    reg_str_to_str(linker, &engine, &abi, "toUpperCase", to_upper_case)?;
-    reg_str_to_str(linker, &engine, &abi, "toLowerCase", to_lower_case)?;
-    reg_str_to_str(linker, &engine, &abi, "trim", trim)?;
-    reg_str_to_str(linker, &engine, &abi, "trimStart", trim_start)?;
-    reg_str_to_str(linker, &engine, &abi, "trimEnd", trim_end)?;
+    super::transforms::prepare_case_properties()?;
+    reg_str_transform(linker, &engine, &abi, "toUpperCase", to_upper_case)?;
+    reg_str_transform(linker, &engine, &abi, "toLowerCase", to_lower_case)?;
+    reg_str_transform(linker, &engine, &abi, "trim", trim)?;
+    reg_str_transform(linker, &engine, &abi, "trimStart", trim_start)?;
+    reg_str_transform(linker, &engine, &abi, "trimEnd", trim_end)?;
     reg_str_str_to_str_fallible(linker, &engine, &abi, "normalize", normalize)?;
 
     reg_str_num_to_str_fallible(linker, &engine, &abi, "repeat", repeat)?;
@@ -136,9 +134,8 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         true,
         move |caller, params, results| {
             let recv = json_abi.read(caller, abi_arg(params, 0)?, "String#toJson")?;
-            let escaped = crate::runtime::prelude::vtable::json_escape_units(recv.value.units());
-            let st = write_submilli_string_struct_units(caller, &escaped)?;
-            *abi_result(results, 0)? = Val::AnyRef(Some(st.to_anyref()));
+            *abi_result(results, 0)? =
+                crate::runtime::prelude::vtable::quote_string(caller, recv.value.units())?;
             Ok(())
         },
     )?;
@@ -154,9 +151,12 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         ),
         true,
         move |caller, params, results| {
-            let a = equals_abi.read(caller, abi_arg(params, 0)?, "String#equals")?;
-            let b = equals_abi.read(caller, abi_arg(params, 1)?, "String#equals")?;
-            *abi_result(results, 0)? = Val::I32(eq(&a.value, &b.value) as i32);
+            *abi_result(results, 0)? = Val::I32(super::super::vtable::string_equals(
+                caller,
+                abi_arg(params, 0)?,
+                abi_arg(params, 1)?,
+                &equals_abi.string_ty,
+            )? as i32);
             Ok(())
         },
     )?;
@@ -247,14 +247,12 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         FuncType::new(&engine, [s.clone(), s.clone()], [ValType::I32]),
         true,
         move |caller, params, results| {
-            // Different lengths differ without reading either string.
-            let a = eq_abi.payload(caller, abi_arg(params, 0)?, "string_eq")?;
-            let b = eq_abi.payload(caller, abi_arg(params, 1)?, "string_eq")?;
-            let equal = a.len == b.len && {
-                let a = a.read_all(caller, "string_eq")?;
-                let b = b.read_all(caller, "string_eq")?;
-                eq(&a, &b)
-            };
+            let equal = super::super::vtable::string_equals(
+                caller,
+                abi_arg(params, 0)?,
+                abi_arg(params, 1)?,
+                &eq_abi.string_ty,
+            )?;
             *abi_result(results, 0)? = Val::I32(equal as i32);
             Ok(())
         },
@@ -687,9 +685,11 @@ fn reg_str_str_num_to_num(
             let recv = abi.read(caller, abi_arg(params, 0)?, name)?;
             let search = abi.read(caller, abi_arg(params, 1)?, name)?;
             let from = number(abi_arg(params, 2)?, name)?;
-            // A naive search; the worst case multiplies in the needle, which
-            // is accepted as under-charged (SUB-1292).
-            fuel::charge(&mut *caller, fuel::SCAN, recv.value.units().len() as u64)?;
+            fuel::charge(
+                &mut *caller,
+                fuel::SCAN,
+                (recv.value.len() + search.value.len()) as u64,
+            )?;
             *abi_result(results, 0)? = Val::F64(op(&recv.value, &search.value, from).to_bits());
             Ok(())
         },
@@ -724,7 +724,11 @@ fn register_string_search_predicate(
                 let search =
                     super::super::value::search_string(caller, abi_arg(params, 1)?).await?;
                 let from = super::super::value::to_number(caller, abi_arg(params, 2)?).await?;
-                fuel::charge(&mut *caller, fuel::SCAN, recv.value.units().len() as u64)?;
+                fuel::charge(
+                    &mut *caller,
+                    fuel::SCAN,
+                    (recv.value.len() + search.len()) as u64,
+                )?;
                 *abi_result(results, 0)? =
                     Val::I32(op(&recv.value, &Str::from_units(search), from) as i32);
                 Ok(())
@@ -899,14 +903,45 @@ fn reg_str_to_str(
         true,
         move |caller, params, results| {
             let recv = abi.read(caller, abi_arg(params, 0)?, name)?;
-            // Case mapping, trimming and normalization each pass over the
-            // whole string, through UTF-8 and back.
+            // toWellFormed scans the input and its mutable copy.
             fuel::charge(
                 &mut *caller,
                 fuel::SCAN,
                 2 * recv.value.units().len() as u64,
             )?;
             *abi_result(results, 0)? = abi.write(caller, recv.vtable, &op(&recv.value))?;
+            Ok(())
+        },
+    )
+}
+
+fn reg_str_transform(
+    linker: &mut Linker<StoreData>,
+    engine: &wasmtime::Engine,
+    abi: &StringAbi,
+    name: &'static str,
+    op: fn(&Str) -> wasmtime::Result<Str>,
+) -> wasmtime::Result<()> {
+    let s = abi.value_type();
+    let abi = abi.clone();
+    register_host_fn(
+        linker,
+        MODULE_NAME,
+        method_key(name),
+        FuncType::new(engine, [s.clone()], [s]),
+        true,
+        move |caller, params, results| {
+            let payload = abi.payload(caller, &params[0], name)?;
+            let _native = crate::runtime::limits::HostBytes::new(
+                &caller.data().tenant_limits,
+                (payload.len as u64).saturating_mul(8),
+            )?;
+            let recv = Receiver {
+                vtable: payload.vtable,
+                value: payload.read_all(caller, name)?,
+            };
+            fuel::charge(&mut *caller, fuel::SCAN, recv.value.len() as u64)?;
+            results[0] = abi.write(caller, recv.vtable, &op(&recv.value)?)?;
             Ok(())
         },
     )
@@ -1015,7 +1050,7 @@ impl StringAbi {
         let st = StructRef::new(
             &mut *caller,
             &pre,
-            &[vtable, Val::AnyRef(Some(payload.to_anyref()))],
+            &[vtable, Val::AnyRef(Some(payload.to_anyref())), Val::I64(0)],
         )?;
         Ok(Val::AnyRef(Some(st.to_anyref())))
     }
@@ -1042,8 +1077,8 @@ async fn string_ctor_call(
             value,
             "String(bigint)",
         )?;
-        let text =
-            crate::runtime::prelude::bigint::ops::limbs_to_bigint(sign, &limbs).to_str_radix(10);
+        let value = crate::runtime::prelude::bigint::ops::limbs_to_bigint(sign, &limbs)?;
+        let text = crate::runtime::prelude::bigint::ops::format_bigint(caller, &value, 10)?;
         let st = write_submilli_string_struct(caller, &text)?;
         return Ok(Val::AnyRef(Some(st.to_anyref())));
     }

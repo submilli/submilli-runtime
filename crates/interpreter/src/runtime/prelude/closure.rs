@@ -53,8 +53,9 @@ impl Closure {
         caller: &mut Caller<'_, StoreData>,
         supplied: usize,
     ) -> wasmtime::Result<bool> {
+        let declared = self.declared_arity(caller)?;
         let Some(params) = super::arguments::metadata(caller, &self.env)? else {
-            return Ok(self.declared_arity(caller) <= supplied);
+            return Ok(declared <= supplied);
         };
         Ok(!params.iter().any(|(_, rest)| *rest)
             && params
@@ -71,7 +72,15 @@ impl Closure {
         args: &[Val],
         out: &mut [Val],
     ) -> wasmtime::Result<()> {
-        let mut call_args = Vec::with_capacity(args.len() + 1);
+        self.declared_arity(caller)?;
+        let count = args.len().checked_add(1).ok_or_else(|| {
+            crate::runtime::host::fatal_host_error("Closure argument count overflow")
+        })?;
+        let _arguments = reserve_arguments(caller, count)?;
+        let mut call_args = Vec::new();
+        call_args
+            .try_reserve_exact(count)
+            .map_err(crate::runtime::host::fatal_host_error)?;
         call_args.push(self.env);
         call_args.extend_from_slice(args);
         self.func.call_async(&mut *caller, &call_args, out).await
@@ -108,10 +117,11 @@ impl Closure {
         &self,
         caller: &mut Caller<'_, StoreData>,
     ) -> wasmtime::Result<usize> {
+        let declared = self.declared_arity(caller)?;
         Ok(match super::arguments::metadata(caller, &self.env)? {
             Some(params) if params.iter().any(|(_, rest)| *rest) => usize::MAX,
             Some(params) => params.len(),
-            None => self.declared_arity(caller),
+            None => declared,
         })
     }
 
@@ -123,8 +133,17 @@ impl Closure {
 
     /// The parameters the function declares: its Wasm parameters but the
     /// leading environment.
-    fn declared_arity(&self, caller: &mut Caller<'_, StoreData>) -> usize {
-        self.func.ty(&*caller).params().len() - 1
+    fn declared_arity(&self, caller: &mut Caller<'_, StoreData>) -> wasmtime::Result<usize> {
+        self.func
+            .ty(&*caller)
+            .params()
+            .len()
+            .checked_sub(1)
+            .ok_or_else(|| {
+                crate::runtime::host::fatal_host_error(
+                    "Closure function is missing its environment parameter",
+                )
+            })
     }
 
     /// Call with as many of `args` as the function declares, its defaults
@@ -135,17 +154,24 @@ impl Closure {
         caller: &mut Caller<'_, StoreData>,
         args: &[Val],
     ) -> wasmtime::Result<Val> {
+        let declared = self.declared_arity(caller)?;
         // The host's overhead of one callback; the callee pays its own fuel.
         fuel::charge_call(&mut *caller)?;
         let signature = self.func.ty(&*caller);
-        let inputs = if let Some(params) = super::arguments::metadata(caller, &self.env)? {
-            super::arguments::bind(caller, &params, args)?
-        } else {
-            let count = signature.params().len().saturating_sub(1);
-            let mut inputs = args.iter().take(count).copied().collect::<Vec<_>>();
-            inputs.resize(count, Val::null_any_ref());
-            inputs
-        };
+        let (inputs, _arguments) =
+            if let Some(params) = super::arguments::metadata(caller, &self.env)? {
+                let reservation = reserve_arguments(caller, params.len())?;
+                (super::arguments::bind(caller, &params, args)?, reservation)
+            } else {
+                let reservation = reserve_arguments(caller, declared)?;
+                let mut inputs = Vec::new();
+                inputs
+                    .try_reserve_exact(declared)
+                    .map_err(crate::runtime::host::fatal_host_error)?;
+                inputs.extend(args.iter().take(declared).copied());
+                inputs.resize(declared, Val::null_any_ref());
+                (inputs, reservation)
+            };
         if signature.results().len() == 0 {
             self.invoke(caller, &inputs, &mut []).await?;
             return Ok(Val::null_any_ref());
@@ -166,6 +192,22 @@ impl Closure {
     }
 }
 
+fn reserve_arguments(
+    caller: &Caller<'_, StoreData>,
+    count: usize,
+) -> wasmtime::Result<crate::runtime::limits::HostBytes> {
+    let bytes = u64::try_from(count)
+        .ok()
+        .and_then(|count| count.checked_mul(std::mem::size_of::<Val>() as u64))
+        .ok_or_else(|| {
+            crate::runtime::host::fatal_host_error("Closure argument storage size overflow")
+        })?;
+    Ok(crate::runtime::limits::HostBytes::new(
+        &caller.data().tenant_limits,
+        bytes,
+    )?)
+}
+
 /// The function an adapter wraps, following adapters of adapters; any other
 /// value is returned as is. An adapter's vtable has an extra field holding
 /// the original (see `closure_coercions::ADAPTER_ORIGINAL_FIELD`); ordinary
@@ -174,6 +216,7 @@ impl Closure {
 pub(crate) fn original(caller: &mut Caller<'_, StoreData>, val: Val) -> wasmtime::Result<Val> {
     let mut current = val;
     while let Some(inner) = adapter_target(caller, &current)? {
+        fuel::charge(&mut *caller, fuel::ELEM, 1)?;
         current = inner;
     }
     Ok(current)
@@ -300,4 +343,145 @@ fn bind_receiver(
     Ok(Val::AnyRef(Some(
         wasmtime::StructRef::new(&mut *caller, &pre, &[inner, receiver])?.to_anyref(),
     )))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::runtime::{RuntimeConfig, Vfs};
+    use wasmtime::{FuncType, ValType};
+
+    #[tokio::test]
+    async fn missing_environment_is_fatal_and_store_remains_usable() {
+        let config = RuntimeConfig::default();
+        let engine = config.engine().unwrap();
+        let mut store = config
+            .store_async(&engine, StoreData::with_vfs(Vfs::none()))
+            .unwrap();
+        let invalid = Func::new(&mut store, FuncType::new(&engine, [], []), |_, _, _| Ok(()));
+        let healthy = Func::new(
+            &mut store,
+            FuncType::new(&engine, [ValType::ANYREF], []),
+            |_, _, _| Ok(()),
+        );
+        let callback = Func::new_async(
+            &mut store,
+            FuncType::new(&engine, [], []),
+            move |mut caller, _, _| {
+                Box::new(async move {
+                    let invalid = Closure {
+                        func: invalid,
+                        env: Val::null_any_ref(),
+                    };
+                    let error = invalid.accepts_arguments(&mut caller, 0).unwrap_err();
+                    assert!(
+                        error
+                            .downcast_ref::<crate::runtime::host::FatalHostError>()
+                            .is_some()
+                    );
+                    assert!(invalid.arguments_read(&mut caller).is_err());
+                    assert!(invalid.call_dynamic(&mut caller, &[]).await.is_err());
+                    assert!(invalid.call_void_args(&mut caller, &[]).await.is_err());
+                    let healthy = Closure {
+                        func: healthy,
+                        env: Val::null_any_ref(),
+                    };
+                    assert!(healthy.accepts_arguments(&mut caller, 0)?);
+                    assert!(matches!(
+                        healthy.call_dynamic(&mut caller, &[]).await?,
+                        Val::AnyRef(None)
+                    ));
+                    Ok(())
+                })
+            },
+        );
+        store.set_fuel(10000).unwrap();
+        callback.call_async(&mut store, &[], &mut []).await.unwrap();
+        assert_eq!(store.data().tenant_limits.host_attached_bytes(), 0);
+    }
+    #[tokio::test]
+    async fn metadata_cannot_bypass_environment_validation_or_argument_admission() {
+        let config = RuntimeConfig::default();
+        let engine = config.engine().unwrap();
+        let mut store = config
+            .store_async(&engine, StoreData::with_vfs(Vfs::none()))
+            .unwrap();
+        let mut linker = wasmtime::Linker::new(&engine);
+        crate::runtime::install_runtime_async(&mut linker, &mut store)
+            .await
+            .unwrap();
+        let invalid = Func::new(&mut store, FuncType::new(&engine, [], []), |_, _, _| Ok(()));
+        let healthy = Func::new(
+            &mut store,
+            FuncType::new(&engine, [ValType::ANYREF, ValType::ANYREF], []),
+            |_, _, _| Ok(()),
+        );
+        let callback = Func::new_async(
+            &mut store,
+            FuncType::new(&engine, [], []),
+            move |mut caller, _, _| {
+                Box::new(async move {
+                    let ty = super::super::arguments::metadata_type(&mut caller)?;
+                    let encoded = crate::runtime::host::write_submilli_string_struct(
+                        &mut caller,
+                        "[[null,false]]",
+                    )?;
+                    let pre = wasmtime::StructRefPre::new(&mut caller, ty);
+                    let wrapper = wasmtime::StructRef::new(
+                        &mut caller,
+                        &pre,
+                        &[
+                            Val::null_any_ref(),
+                            Val::AnyRef(Some(encoded.to_anyref())),
+                            Val::I64(0),
+                        ],
+                    )?;
+                    let env = Val::AnyRef(Some(wrapper.to_anyref()));
+                    let before = caller.data().tenant_limits.host_attached_bytes();
+                    let invalid = Closure { func: invalid, env };
+                    for error in [
+                        invalid.accepts_arguments(&mut caller, 0).unwrap_err(),
+                        invalid.arguments_read(&mut caller).unwrap_err(),
+                        invalid
+                            .call_with_arguments(&mut caller, Val::null_any_ref(), &[])
+                            .await
+                            .unwrap_err(),
+                        invalid.call_dynamic(&mut caller, &[]).await.unwrap_err(),
+                    ] {
+                        assert!(
+                            error
+                                .downcast_ref::<crate::runtime::host::FatalHostError>()
+                                .is_some()
+                        );
+                    }
+                    assert!(matches!(wrapper.field(&mut caller, 2)?, Val::I64(0)));
+                    assert_eq!(caller.data().tenant_limits.host_attached_bytes(), before);
+                    let healthy = Closure { func: healthy, env };
+                    assert!(healthy.accepts_arguments(&mut caller, 1)?);
+                    healthy
+                        .call_dynamic(&mut caller, &[Val::null_any_ref()])
+                        .await?;
+                    let retained = caller.data().tenant_limits.host_attached_bytes();
+                    let old_cap = caller.data().tenant_limits.max_total_bytes;
+                    caller.data_mut().tenant_limits.max_total_bytes =
+                        caller.data().tenant_limits.observed_bytes();
+                    assert!(
+                        healthy
+                            .call_dynamic(&mut caller, &[Val::null_any_ref()])
+                            .await
+                            .is_err()
+                    );
+                    assert_eq!(caller.data().tenant_limits.host_attached_bytes(), retained);
+                    caller.data_mut().tenant_limits.max_total_bytes = old_cap;
+                    healthy
+                        .call_dynamic(&mut caller, &[Val::null_any_ref()])
+                        .await?;
+                    assert_eq!(caller.data().tenant_limits.host_attached_bytes(), retained);
+                    Ok(())
+                })
+            },
+        );
+        store.set_fuel(100000).unwrap();
+        callback.call_async(&mut store, &[], &mut []).await.unwrap();
+    }
 }

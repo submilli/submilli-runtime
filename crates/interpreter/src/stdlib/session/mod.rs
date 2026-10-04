@@ -344,7 +344,8 @@ fn read_cursor(
     if matches!(val, Val::AnyRef(None)) {
         return Ok(None);
     }
-    let units = value::read_units(caller, val, "session.list (cursor)")?;
+    let max_units = cursor::max_cursor_units(provider(caller, "list")?.limits().max_key_units);
+    let units = value::read_units_bounded(caller, val, "session.list (cursor)", max_units)?;
     cursor::decode(prefix, &units)
         .map(Some)
         .map_err(cursor_trap)
@@ -463,7 +464,11 @@ fn trap(caller: &wasmtime::Caller<'_, StoreData>, error: &SessionKvError) -> was
         } => crate::runtime::host::range_error(error.to_string()),
         SessionKvError::LimitExceeded { .. } => {
             let who = crate::stdlib::shared::running_package(caller)
-                .unwrap_or_else(|p| p.label.to_string());
+                .or_else(crate::stdlib::shared::PrincipalError::label_or_error);
+            let who = match who {
+                Ok(who) => who,
+                Err(error) => return error,
+            };
             crate::stdlib::shared::audit_denial(
                 caller.data().security_check.as_ref(),
                 &who,

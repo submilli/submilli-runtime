@@ -14,7 +14,9 @@ use super::stage::{Stage, WorktreeChange};
 use crate::runtime::DiskQuota;
 use cap_std::fs::Dir;
 use gix::bstr::ByteSlice;
-use std::collections::BTreeMap;
+use std::cell::RefCell;
+use std::collections::{BTreeMap, HashMap, HashSet};
+use std::ffi::{OsStr, OsString};
 use std::io::Read;
 use std::path::{Component, Path, PathBuf};
 use std::sync::{
@@ -104,6 +106,9 @@ impl Opening {
 
 pub struct Snapshot {
     pub max_bytes: u64,
+    pub(super) algorithm_fuel: Arc<super::work::AlgorithmWork>,
+    reference_cache: RefCell<ReferenceCache>,
+    pub(super) history_cache: Option<Arc<super::log_cache::Cache>>,
     pub repo: gix::Repository,
     pub dir: Arc<Dir>,
     /// The repository's own configuration, which Git parses itself; replaced
@@ -125,6 +130,12 @@ pub struct Snapshot {
     pub meter: Arc<Meter>,
     // Dropped last: the repository stays held until everything above is gone.
     _lock: RepositoryLock,
+}
+
+#[derive(Default)]
+struct ReferenceCache {
+    directories: HashMap<PathBuf, HashSet<OsString>>,
+    bytes: usize,
 }
 
 impl Snapshot {
@@ -238,6 +249,9 @@ impl Snapshot {
         };
         let snapshot = Self {
             max_bytes,
+            algorithm_fuel: Arc::new(super::work::AlgorithmWork::new(u64::MAX)),
+            reference_cache: RefCell::new(ReferenceCache::default()),
+            history_cache: None,
             repo,
             dir,
             config,
@@ -333,6 +347,7 @@ impl Snapshot {
 
     /// Points `HEAD` at the local branch `branch`.
     pub fn write_head(&self, branch: &str) -> Result<()> {
+        self.invalidate_reference_cache()?;
         self.stage()?;
         std::fs::write(
             self.repo.refs.git_dir().join("HEAD"),
@@ -405,6 +420,10 @@ impl Snapshot {
         Ok(self.stage()?.dir.open_dir("objects/pack")?)
     }
 
+    pub fn record_algorithm_fuel(&self, units: u64) -> Result<()> {
+        self.algorithm_fuel.charge(units)
+    }
+
     pub fn validate_reference_spelling(&self, name: &str) -> Result<()> {
         if name.is_empty()
             || Path::new(name)
@@ -423,18 +442,66 @@ impl Snapshot {
                 bail!("git: invalid reference path");
             };
             let path = directory.join(component);
+            self.record_algorithm_fuel(crate::runtime::fuel::SYSCALL.cost(1))?;
             if !references.try_exists(&path)? {
                 return Ok(());
             }
-            // Gix retains the requested spelling even when the filesystem
-            // resolves a case or Unicode alias. Capability checks need the
-            // actual ref spelling, including each directory component.
-            let above = super::stage::open_relative(&references, &directory)?;
-            if !super::stage::has_exact_entry(&above, component)? {
+            if !self.reference_component_is_exact(&references, &directory, component)? {
                 bail!("git: reference spelling aliases an existing reference path");
             }
             directory = path;
         }
+        Ok(())
+    }
+
+    fn reference_component_is_exact(
+        &self,
+        references: &Dir,
+        directory: &Path,
+        name: &OsStr,
+    ) -> Result<bool> {
+        self.record_algorithm_fuel(crate::runtime::fuel::SCAN.cost(name.len() as u64))?;
+        let mut cache = self.reference_cache.try_borrow_mut().map_err(|_| {
+            crate::runtime::host::fatal_host_error("git: reference cache is already borrowed")
+        })?;
+        if let Some(names) = cache.directories.get(directory) {
+            return Ok(names.contains(name));
+        }
+        let mut names = HashSet::new();
+        for entry in super::stage::open_relative(references, directory)?.entries()? {
+            self.check_cancelled()?;
+            self.record_algorithm_fuel(crate::runtime::fuel::SYSCALL.cost(1))?;
+            let name = entry?.file_name();
+            cache.bytes = cache.bytes.saturating_add(name.len().saturating_add(256));
+            if cache.bytes as u64 > self.max_bytes {
+                bail!("git: reference spelling cache resource limit exceeded");
+            }
+            self.record_algorithm_fuel(crate::runtime::fuel::SCAN.cost(name.len() as u64))?;
+            names
+                .try_reserve(1)
+                .map_err(crate::runtime::host::fatal_host_error)?;
+            names.insert(name);
+        }
+        let exact = names.contains(name);
+        cache.bytes = cache
+            .bytes
+            .saturating_add(directory.as_os_str().len().saturating_add(256));
+        if cache.bytes as u64 > self.max_bytes {
+            bail!("git: reference spelling cache resource limit exceeded");
+        }
+        cache
+            .directories
+            .try_reserve(1)
+            .map_err(crate::runtime::host::fatal_host_error)?;
+        cache.directories.insert(directory.to_owned(), names);
+        Ok(exact)
+    }
+
+    pub fn invalidate_reference_cache(&self) -> Result<()> {
+        let mut cache = self.reference_cache.try_borrow_mut().map_err(|_| {
+            crate::runtime::host::fatal_host_error("git: reference cache is already borrowed")
+        })?;
+        *cache = ReferenceCache::default();
         Ok(())
     }
 

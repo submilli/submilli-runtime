@@ -2,18 +2,22 @@
 use crate::runtime::host::{abi_arg, abi_result};
 pub(crate) mod class;
 pub mod declaration;
+mod diff;
 mod history;
 mod index_limits;
 mod location;
 mod lock;
+pub(crate) mod log_cache;
 mod metadata_scan;
 mod meter;
+mod object;
 mod operations;
 mod pack_index_check;
 mod pack_limits;
 mod stage;
 mod storage;
 mod transport;
+mod work;
 mod worker;
 
 use crate::runtime::fuel;
@@ -62,7 +66,9 @@ struct Job {
     transferred: Arc<AtomicU64>,
     /// The worker's own file and object work, charged when it returns.
     meter: Arc<meter::Meter>,
+    algorithm_fuel: Arc<work::AlgorithmWork>,
     denial: Arc<Mutex<Option<(String, String)>>>,
+    history_cache: Option<Arc<log_cache::Cache>>,
 }
 impl Job {
     fn remote_capability(&self) -> &'static str {
@@ -438,6 +444,17 @@ async fn invoke(
     let config = caller.data().git.clone().ok_or_else(|| {
         wasmtime::Error::msg("submilli:git is disabled; configure the blueprint git block")
     })?;
+    if op == "log" && caller.data().git_history.is_none() {
+        let cache = log_cache::Cache::new(&caller.data().tenant_limits)?;
+        caller.data_mut().git_history = Some(Arc::new(cache));
+    }
+    if matches!(
+        op,
+        "init" | "clone" | "add" | "commit" | "createBranch" | "switchBranch" | "fetch" | "pull"
+    ) && let Some(cache) = &caller.data().git_history
+    {
+        cache.invalidate()?;
+    }
     let budget = WorkingBudget::reserve(&caller.data().tenant_limits, op)?;
     let max_bytes = budget.max_bytes(op);
     let (args, path) = before_deadline(
@@ -470,7 +487,9 @@ async fn invoke(
         max_bytes,
         transferred: Arc::new(AtomicU64::new(0)),
         meter: Arc::clone(&meter),
+        algorithm_fuel: Arc::new(work::AlgorithmWork::with_meter(Arc::clone(&meter))),
         denial: Arc::new(Mutex::new(None)),
+        history_cache: caller.data().git_history.clone(),
     };
     let vfs = caller.data().vfs.clone();
     let op = op.to_owned();
@@ -513,25 +532,30 @@ async fn invoke(
         }
         other => other,
     };
-    if let Some((capability, reason)) = denial
+    let denial = denial
         .lock()
         .map_err(|_| crate::runtime::host::fatal_host_error("git: denial lock poisoned"))?
-        .take()
-    {
-        return Err(permission_denied(&principal, &capability, reason));
-    }
-    let (result, budget) = outcome?;
+        .take();
     drop(cancel_guard);
-    // The worker is done with it; the result is charged as guest memory.
-    drop(budget);
-    encode_result(
-        caller,
-        result,
-        &path,
-        is_constructor,
-        returns_string,
-        max_bytes,
-    )
+    fuel::settle_result(caller, |caller| {
+        if let Some((capability, reason)) = denial {
+            return Err(crate::runtime::host::throw_host_error(
+                caller,
+                permission_denied(&principal, &capability, reason),
+            ));
+        }
+        let (result, _budget) =
+            outcome.map_err(|error| crate::runtime::host::throw_host_error(caller, error))?;
+        encode_result(
+            caller,
+            result,
+            &path,
+            is_constructor,
+            returns_string,
+            max_bytes,
+        )
+        .map_err(|error| crate::runtime::host::throw_host_error(caller, error))
+    })
 }
 
 async fn before_deadline<T>(

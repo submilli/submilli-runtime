@@ -372,15 +372,53 @@ fn plain_vtable_slots(
                     *abi_result(results, 0)? = Val::I32(0);
                     return Ok(());
                 };
-                *abi_result(results, 0)? = Val::I32(equals_op(&mut caller, a, b)? as i32);
+                // WasmGC types are structural. The vtable distinguishes nominal
+                // Temporal kinds even when their backing layouts coincide.
+                let (Val::AnyRef(Some(a_vtable)), Val::AnyRef(Some(b_vtable))) =
+                    (a.field(&mut caller, 0)?, b.field(&mut caller, 0)?)
+                else {
+                    return Err(crate::runtime::host::fatal_host_error(
+                        "Temporal.equals: invalid vtable",
+                    ));
+                };
+                *abi_result(results, 0)? = Val::I32(
+                    (Rooted::ref_eq(&caller, &a_vtable, &b_vtable)?
+                        && equals_op(&mut caller, a, b)?) as i32,
+                );
                 Ok(())
             })
         },
     );
 
-    let hash = host_func_async(&mut *store, hash_ty, move |_caller, _params, results| {
+    let hash = host_func_async(&mut *store, hash_ty, move |mut caller, params, results| {
+        let ty = ty.clone();
         Box::new(async move {
-            *abi_result(results, 0)? = Val::I32(0);
+            let value = cast_struct(&mut caller, abi_arg(params, 0)?, &ty, "Temporal.hash")?;
+            let fields = ty.fields().count();
+            crate::runtime::fuel::charge(
+                &mut caller,
+                crate::runtime::fuel::ELEM,
+                fields.saturating_sub(1) as u64,
+            )?;
+            let mut hash = 0_u32;
+            for field in 1..fields {
+                let bits = match value.field(&mut caller, field)? {
+                    Val::I32(n) => n as u64,
+                    Val::I64(n) => n as u64,
+                    // Zone aliases may compare equal. The instant alone is a
+                    // valid hash for zoned values, independent of zone spelling.
+                    Val::AnyRef(_) => continue,
+                    // The resolved ZonedDateTime attachment is not semantic data.
+                    Val::ExternRef(_) if fields == 5 && field == 4 => continue,
+                    _ => {
+                        return Err(crate::runtime::host::fatal_host_error(
+                            "Temporal: invalid hash field",
+                        ));
+                    }
+                };
+                hash = hash.rotate_left(5) ^ super::super::vtable::mix_hash_bits(bits);
+            }
+            *abi_result(results, 0)? = Val::I32(hash as i32);
             Ok(())
         })
     });
@@ -415,12 +453,15 @@ fn cast_struct(
 fn try_cast_struct(
     caller: &mut Caller<'_, StoreData>,
     val: &Val,
-    _ty: &StructType,
+    ty: &StructType,
 ) -> wasmtime::Result<Option<Rooted<StructRef>>> {
-    match val {
-        Val::AnyRef(Some(any)) => any.as_struct(&mut *caller),
-        _ => Ok(None),
-    }
+    let Val::AnyRef(Some(any)) = val else {
+        return Ok(None);
+    };
+    let Some(value) = any.as_struct(&mut *caller)? else {
+        return Ok(None);
+    };
+    Ok(value.matches_ty(&*caller, ty)?.then_some(value))
 }
 
 pub(super) fn st_i32(
@@ -655,7 +696,9 @@ fn zoned_date_time_equals_host(
     let b_secs = st_i64(caller, b, 1, "ZonedDateTime.equals")?;
     let b_nanos = st_i32(caller, b, 2, "ZonedDateTime.equals")?;
     let b_tz = st_string(caller, b, 3, "ZonedDateTime.equals")?;
-    Ok(a_secs == b_secs && a_nanos == b_nanos && a_tz == b_tz)
+    Ok(a_secs == b_secs
+        && a_nanos == b_nanos
+        && super::zoned_date_time::time_zone_ids_equal(caller, &a_tz, &b_tz)?)
 }
 
 pub(super) fn reg_plain_date_to_year_month(
@@ -1066,6 +1109,14 @@ pub(super) fn make_zoned_date_time(
         let abi = temporal_abi(caller)?;
         (abi.zoned_date_time.clone(), abi.zoned_date_time_vtable)
     };
+    let bytes = (std::mem::size_of::<CachedZoned>() + 128) as u64;
+    caller.data().tenant_limits.charge_host_bytes(bytes)?;
+    let payload = CachedZoned {
+        value: zoned.clone(),
+        bytes,
+        counter: caller.data().tenant_limits.host_attached_counter(),
+    };
+    let cached = wasmtime::ExternRef::new(&mut *caller, payload)?;
     let ts = zoned.timestamp();
     let tz = write_submilli_string_struct(caller, tz_id)?;
     make_temporal_struct(
@@ -1076,6 +1127,7 @@ pub(super) fn make_zoned_date_time(
             Val::I64(ts.as_second()),
             Val::I32(ts.subsec_nanosecond()),
             Val::AnyRef(Some(tz.to_anyref())),
+            Val::ExternRef(Some(cached)),
         ],
     )
 }
@@ -1228,15 +1280,35 @@ pub(super) fn span_from_duration_struct(
     super::duration::from_fields(fields, label).map_err(crate::runtime::host::range_error)
 }
 
+struct CachedZoned {
+    value: Zoned,
+    counter: std::sync::Arc<std::sync::atomic::AtomicU64>,
+    bytes: u64,
+}
+impl Drop for CachedZoned {
+    fn drop(&mut self) {
+        self.counter
+            .fetch_sub(self.bytes, std::sync::atomic::Ordering::Relaxed);
+    }
+}
+
 pub(super) fn zoned_date_time_from_struct(
     caller: &mut Caller<'_, StoreData>,
     st: Rooted<StructRef>,
-    label: &'static str,
+    _label: &'static str,
 ) -> wasmtime::Result<Zoned> {
-    let secs = st_i64(caller, st, 1, label)?;
-    let nanos = st_i32(caller, st, 2, label)?;
-    let tz_id = st_string(caller, st, 3, label)?;
-    make_zoned(caller, secs, nanos, &tz_id, label)
+    let Val::ExternRef(Some(cached)) = st.field(&mut *caller, 4)? else {
+        return Err(crate::runtime::host::fatal_host_error(
+            "Temporal.ZonedDateTime: missing resolved value",
+        ));
+    };
+    let payload = cached
+        .data(&*caller)?
+        .and_then(|data| data.downcast_ref::<CachedZoned>())
+        .ok_or_else(|| {
+            crate::runtime::host::fatal_host_error("Temporal.ZonedDateTime: invalid resolved value")
+        })?;
+    Ok(payload.value.clone())
 }
 
 pub(super) fn zoned_date_time_from_val(

@@ -38,9 +38,10 @@ use crate::{MangledName, TypedAst, TypedClassDecl, TypedTypeDecl};
 pub(crate) const UNIVERSAL_STUB_COUNT: usize = 4;
 /// `$ClassVTable` field index of the nominal-identity parent link.
 pub(crate) const VTABLE_PARENT_SLOT: u32 = UNIVERSAL_STUB_COUNT as u32;
-/// Class-vtable fields preceding method slots: the universal funcrefs plus the
-/// parent link.
-pub(crate) const VTABLE_METHOD_SLOT_BASE: u32 = VTABLE_PARENT_SLOT + 1;
+/// Whether JSON uses the runtime's default property serializer.
+pub(crate) const VTABLE_DEFAULT_JSON_SLOT: u32 = VTABLE_PARENT_SLOT + 1;
+/// Universal funcrefs, parent link and default-serializer marker precede methods.
+pub(crate) const VTABLE_METHOD_SLOT_BASE: u32 = VTABLE_DEFAULT_JSON_SLOT + 1;
 
 /// One method slot in a class vtable. `name` is the method name; `owner` is the
 /// most-derived class that supplies the body (the class itself for an override,
@@ -661,6 +662,10 @@ impl ClassPlan {
             fieldtype_ref(intrinsics.equals_fn),
             fieldtype_ref(intrinsics.hash_fn),
             fieldtype_ref_null(intrinsics.class_vtable),
+            FieldType {
+                element_type: StorageType::Val(ValType::I32),
+                mutable: false,
+            },
         ];
         for slot in &class.methods {
             fields.push(fieldtype_ref(slot.sig_idx));
@@ -687,6 +692,14 @@ impl ClassPlan {
             FieldType {
                 mutable: true,
                 ..fieldtype_ref(intrinsics.object_fields)
+            },
+            FieldType {
+                element_type: StorageType::Val(ValType::Ref(RefType::ANYREF)),
+                mutable: true,
+            },
+            FieldType {
+                element_type: StorageType::Val(ValType::I64),
+                mutable: true,
             },
         ];
         Ok(substruct(fields, Some(supertype)))
@@ -877,6 +890,9 @@ impl ClassPlan {
                 Instruction::RefFunc(class.equals_func_idx),
                 Instruction::RefFunc(class.hash_func_idx),
                 parent_link,
+                Instruction::I32Const(i32::from(
+                    !class.methods.iter().any(|slot| slot.name == "toJson"),
+                )),
             ];
             for slot in &class.methods {
                 let func = symbols
@@ -1030,13 +1046,41 @@ impl ClassPlan {
                 ctx.symbols,
             )?);
             let field_count = wasm_u32(class.fields.len())?;
-            code.function(&emit_class_equals_body(field_count, intrinsics));
+            let identity_error = ctx
+                .symbols
+                .class_struct_type_idx(&crate::mangle::prelude("Error"))
+                .is_some_and(|error_type| {
+                    ctx.symbols.ref_fits_slot(
+                        RefType {
+                            nullable: false,
+                            heap_type: HeapType::Concrete(class.struct_type_idx),
+                        },
+                        RefType {
+                            nullable: false,
+                            heap_type: HeapType::Concrete(error_type),
+                        },
+                    )
+                });
+            if identity_error {
+                let mut equals = Function::new([]);
+                equals.instruction(&Instruction::LocalGet(0));
+                equals.instruction(&Instruction::LocalGet(1));
+                equals.instruction(&Instruction::RefEq);
+                equals.instruction(&Instruction::End);
+                code.function(&equals);
+            } else {
+                code.function(&emit_class_equals_body(field_count, intrinsics));
+            }
             let to_json = match user_method_thunk("toJson")? {
                 Some(thunk) => thunk,
                 None => emit_class_to_json_body(ctx.symbols)?,
             };
             code.function(&to_json);
-            code.function(&emit_class_hash_body(field_count, intrinsics));
+            if identity_error {
+                code.function(&emit_error_hash_body(ctx.symbols, intrinsics)?);
+            } else {
+                code.function(&emit_class_hash_body(field_count, intrinsics));
+            }
         }
         Ok(())
     }
@@ -1292,6 +1336,8 @@ impl ClassPlan {
             array_type_index: intrinsics.object_fields,
             array_size: payload_len,
         });
+        emitter.instruction(Instruction::RefNull(HeapType::ANY));
+        emitter.instruction(Instruction::I64Const(0));
         emitter.instruction(Instruction::StructNew(class.struct_type_idx));
         emitter.instruction(Instruction::LocalSet(this_slot));
 
@@ -1350,6 +1396,7 @@ impl ClassPlan {
                 if let Some(metadata) = &method.argument_metadata {
                     super::call_arguments::wrap(&mut emitter, ctx, metadata)?;
                 }
+                emitter.instruction(Instruction::I64Const(0));
                 emitter.instruction(Instruction::StructNew(closure_struct));
                 emitter.instruction(Instruction::ArraySet(intrinsics.object_fields));
             }
@@ -1959,6 +2006,25 @@ fn stub_body() -> Function {
     f.instruction(&Instruction::Unreachable);
     f.instruction(&Instruction::End);
     f
+}
+
+fn emit_error_hash_body(
+    symbols: &SymbolTable,
+    intrinsics: IntrinsicTypeIndices,
+) -> Result<Function, CompilerFailure> {
+    let vtable = symbols
+        .class_vtable_global_idx(&crate::mangle::prelude("Error"))
+        .ok_or_else(|| internal_failure("Error vtable is not imported for its subclass"))?;
+    let mut body = Function::new([]);
+    body.instruction(&Instruction::LocalGet(0));
+    body.instruction(&Instruction::GlobalGet(vtable));
+    body.instruction(&Instruction::StructGet {
+        struct_type_index: intrinsics.vtable,
+        field_index: 3,
+    });
+    body.instruction(&Instruction::CallRef(intrinsics.hash_fn));
+    body.instruction(&Instruction::End);
+    Ok(body)
 }
 
 /// The class's `equals` vtable body: nominal exact-class guard + structural

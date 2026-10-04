@@ -78,7 +78,7 @@ fn install_direct(
                 abi_arg(params, 0)?,
                 "Temporal.Instant.fromEpochNanoseconds",
             )?;
-            let big = crate::runtime::prelude::bigint::ops::limbs_to_bigint(sign, &limbs);
+            let big = crate::runtime::prelude::bigint::ops::limbs_to_bigint(sign, &limbs)?;
             let ts =
                 super::from_epoch_nanoseconds(&big).map_err(crate::runtime::host::range_error)?;
             *abi_result(results, 0)? = make_instant(caller, ts)?;

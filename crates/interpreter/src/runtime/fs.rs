@@ -19,6 +19,8 @@ use cap_std::fs::{Dir, File, Metadata, OpenOptions, ReadDir};
 use crate::runtime::Vfs;
 use crate::runtime::vfs::{Access, Mount, Placement};
 
+pub(crate) mod removal;
+
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub enum ResolveError {
     Escape,
@@ -719,9 +721,12 @@ impl LinkPath {
     /// only after establishing it is not a symlink — dereferencing one here is what
     /// would turn a copy into an exfiltration.
     pub fn copy_to(&self, dest: &Self) -> Result<(), ContainError> {
+        self.copy_to_counted(dest).map(|_| ())
+    }
+
+    pub(crate) fn copy_to_counted(&self, dest: &Self) -> Result<u64, ContainError> {
         dest.guard.check_mutation(true)?;
-        self.parent.copy(&self.name, &dest.parent, &dest.name)?;
-        Ok(())
+        Ok(self.parent.copy(&self.name, &dest.parent, &dest.name)?)
     }
 
     /// Rename onto `dest`. Neither final component is followed, so this relocates a
@@ -1131,21 +1136,12 @@ fn check_metadata_mutation(
     if protected_metadata(path) {
         return Err(metadata_denied());
     }
-    // Check existing prefixes as well as the full path: a new file can be below
-    // an alias into .git even though canonicalizing that file returns NotFound.
-    for prefix in path.ancestors() {
-        if prefix == path && !follow_final {
-            continue;
-        }
-        if prefix.as_os_str().is_empty() {
-            continue;
-        }
-        match root.canonicalize(prefix) {
-            Ok(resolved) if protected_metadata(&resolved) => return Err(metadata_denied()),
-            Ok(_) => {}
-            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
-            Err(error) => return Err(error.into()),
-        }
+    match check_metadata_prefixes(root, path, follow_final, &mut |_| {
+        Ok::<_, std::convert::Infallible>(())
+    }) {
+        Ok(()) => {}
+        Err(PrefixError::Filesystem(error)) => return Err(error),
+        Err(PrefixError::Work(never)) => match never {},
     }
     match root.symlink_metadata(path) {
         Ok(meta) => {
@@ -1162,6 +1158,76 @@ fn check_metadata_mutation(
         }
         Err(error) if error.kind() == io::ErrorKind::NotFound => {}
         Err(error) => return Err(error.into()),
+    }
+    Ok(())
+}
+
+#[derive(Debug)]
+enum PrefixError<E> {
+    Filesystem(ContainError),
+    Work(E),
+}
+
+impl<E> From<io::Error> for PrefixError<E> {
+    fn from(error: io::Error) -> Self {
+        Self::Filesystem(error.into())
+    }
+}
+
+fn check_metadata_prefixes<E>(
+    root: &Dir,
+    path: &Path,
+    follow_final: bool,
+    work: &mut impl FnMut(u64) -> Result<(), E>,
+) -> Result<(), PrefixError<E>> {
+    if protected_metadata(path) {
+        return Err(PrefixError::Filesystem(metadata_denied()));
+    }
+    work(1).map_err(PrefixError::Work)?;
+    let mut directory = root.try_clone()?;
+    let mut prefix = PathBuf::new();
+    let mut parts = path
+        .components()
+        .filter(|part| *part != Component::CurDir)
+        .peekable();
+    let mut hops = 0;
+    while let Some(part) = parts.next() {
+        prefix.push(part);
+        let more = parts.peek().is_some();
+        if !more && !follow_final {
+            break;
+        }
+        work(1).map_err(PrefixError::Work)?;
+        let metadata = match directory.symlink_metadata(part.as_os_str()) {
+            Ok(metadata) => metadata,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
+            Err(error) => return Err(error.into()),
+        };
+        if metadata.file_type().is_symlink() {
+            hops += 1;
+            if hops > MAX_LINK_HOPS {
+                return Err(io::Error::other("too many levels of symbolic links").into());
+            }
+            // Canonicalize only aliases. Ordinary prefixes use one-component
+            // directory handles, so they do not reopen every ancestor.
+            work((prefix.components().count() as u64).saturating_mul(2))
+                .map_err(PrefixError::Work)?;
+            let resolved = match root.canonicalize(&prefix) {
+                Ok(resolved) => resolved,
+                Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
+                Err(error) => return Err(error.into()),
+            };
+            if protected_metadata(&resolved) {
+                return Err(PrefixError::Filesystem(metadata_denied()));
+            }
+            if more {
+                work(resolved.components().count() as u64 + 1).map_err(PrefixError::Work)?;
+                directory = root.open_dir(&resolved)?;
+            }
+        } else if more {
+            work(1).map_err(PrefixError::Work)?;
+            directory = directory.open_dir_nofollow(part.as_os_str())?;
+        }
     }
     Ok(())
 }
@@ -1203,6 +1269,64 @@ mod tests {
     use super::*;
 
     const ROOT: &str = "/";
+
+    #[test]
+    fn metadata_ancestors_use_one_component_handles() {
+        let mut measured = Vec::new();
+        for depth in [64, 128] {
+            let temporary = tempfile::tempdir().unwrap();
+            let relative = std::iter::repeat_n("d", depth)
+                .collect::<Vec<_>>()
+                .join("/");
+            std::fs::create_dir_all(temporary.path().join(&relative)).unwrap();
+            let root =
+                Dir::open_ambient_dir(temporary.path(), cap_std::ambient_authority()).unwrap();
+            let path = Path::new(&relative);
+            let before = std::time::Instant::now();
+            let mut previous_work = 0;
+            for prefix in path
+                .ancestors()
+                .filter(|prefix| !prefix.as_os_str().is_empty())
+            {
+                root.canonicalize(prefix).unwrap();
+                previous_work += prefix.components().count();
+            }
+            let old_time = before.elapsed();
+            let before = std::time::Instant::now();
+            let mut work = 0;
+            check_metadata_prefixes(&root, path, true, &mut |units| {
+                work += units;
+                Ok::<_, std::convert::Infallible>(())
+            })
+            .unwrap();
+            eprintln!(
+                "metadata depth {depth}: old {previous_work} components/{old_time:?}, new {work} calls/{:?}",
+                before.elapsed()
+            );
+            assert_eq!(previous_work, depth * (depth + 1) / 2);
+            assert_eq!(work, 2 * depth as u64);
+            assert!(work < previous_work as u64 / 2);
+            measured.push(work);
+        }
+        assert_eq!(measured[1], measured[0] * 2);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn metadata_prefixes_protect_aliases_but_allow_unlinking_final_alias() {
+        let temporary = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(temporary.path().join("repo/.git")).unwrap();
+        std::fs::create_dir(temporary.path().join("ordinary")).unwrap();
+        std::os::unix::fs::symlink("repo/.git", temporary.path().join("metadata")).unwrap();
+        std::os::unix::fs::symlink("ordinary", temporary.path().join("alias")).unwrap();
+        let root = Dir::open_ambient_dir(temporary.path(), cap_std::ambient_authority()).unwrap();
+        let mut work = |_| Ok::<_, std::convert::Infallible>(());
+        let error = check_metadata_prefixes(&root, Path::new("metadata/config"), false, &mut work)
+            .unwrap_err();
+        assert!(matches!(error, PrefixError::Filesystem(_)));
+        check_metadata_prefixes(&root, Path::new("metadata"), false, &mut work).unwrap();
+        check_metadata_prefixes(&root, Path::new("alias/new"), false, &mut work).unwrap();
+    }
 
     fn rel(cwd: &str, path: &str) -> PathBuf {
         relative(cwd, path).expect("must resolve")

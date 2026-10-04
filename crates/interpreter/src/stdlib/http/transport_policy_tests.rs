@@ -29,6 +29,65 @@ fn request(url: String, policy: Option<Arc<HttpTransportPolicy>>) -> HttpRequest
     }
 }
 
+#[cfg_attr(skip_http_tests, ignore = "HTTP tests disabled")]
+#[tokio::test]
+async fn download_progress_survives_decoder_failure() {
+    use super::transport::DownloadProgress;
+    let server = httpmock::MockServer::start_async().await;
+    server
+        .mock_async(|when, then| {
+            when.path("/invalid-gzip");
+            then.status(200)
+                .header("content-encoding", "gzip")
+                .body("not a gzip stream");
+        })
+        .await;
+    let client = ReqwestHttpClient::default();
+    let mut req = request(server.url("/invalid-gzip"), None);
+    req.decompress = true;
+    let progress = DownloadProgress::default();
+    let mut output = Vec::new();
+    assert!(
+        client
+            .download_with_progress(&req, &mut output, &progress)
+            .await
+            .is_err()
+    );
+    assert_eq!(progress.bytes_received(), 17);
+    assert!(output.is_empty());
+}
+
+#[cfg_attr(skip_http_tests, ignore = "HTTP tests disabled")]
+#[tokio::test]
+async fn download_progress_survives_body_timeout() {
+    use super::transport::DownloadProgress;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.unwrap();
+        let mut request = [0_u8; 4096];
+        assert!(socket.read(&mut request).await.unwrap() > 0);
+        socket
+            .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 16\r\n\r\n12345678")
+            .await
+            .unwrap();
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    });
+    let client = ReqwestHttpClient::default();
+    let mut req = request(format!("http://{address}/slow"), None);
+    req.timeout_ms = 100;
+    let progress = DownloadProgress::default();
+    let mut output = Vec::new();
+    let result = client
+        .download_with_progress(&req, &mut output, &progress)
+        .await;
+    server.await.unwrap();
+    assert!(matches!(result, Err(HttpError::Timeout)), "{result:?}");
+    assert_eq!(progress.bytes_received(), 8);
+    assert_eq!(output, b"12345678");
+}
+
 #[test]
 fn redirect_policy_checks_scheme_host_and_effective_port() {
     let initial = Url::parse("https://EXAMPLE.com:443/start?key=secret").unwrap();

@@ -176,6 +176,13 @@ async fn run_program(source: &str, mut data: StoreData, fuel: u64) -> (wasmtime:
         .unwrap();
     let instance = linker.instantiate_async(&mut store, &module).await.unwrap();
     let outcome = dispatch_main_async(&mut store, &instance).await.map(drop);
+    if store.data().git_history.is_some() {
+        assert_eq!(
+            store.data().tenant_limits.host_attached_bytes(),
+            4 * 1024 * 1024
+        );
+        store.data_mut().git_history = None;
+    }
     assert_eq!(store.data().tenant_limits.host_attached_bytes(), 0);
     (outcome, store.data().host_fuel)
 }
@@ -185,6 +192,12 @@ async fn host_fuel_of(source: &str, data: StoreData) -> u64 {
     let (outcome, host_fuel) = run_program(source, data, RuntimeConfig::default().fuel).await;
     outcome.unwrap();
     host_fuel
+}
+
+async fn run_source_fuel(source: &str, data: StoreData, fuel: Option<u64>) -> Result<()> {
+    run_program(source, data, fuel.unwrap_or(RuntimeConfig::default().fuel))
+        .await
+        .0
 }
 
 async fn run_source(source: &str, data: StoreData) {
@@ -361,6 +374,7 @@ fn checkout_rejects_case_folded_file_directory_aliases() {
 struct GitServer {
     repo: std::path::PathBuf,
     authentication: bool,
+    oversized_response: bool,
 }
 
 #[async_trait::async_trait]
@@ -406,6 +420,9 @@ impl HttpClient for GitServer {
                 &self.repo,
                 &["upload-pack", "--stateless-rpc", "--advertise-refs", "."],
             ));
+            if self.oversized_response {
+                body.resize(4 * 1024 * 1024, b'x');
+            }
             (body, "application/x-git-upload-pack-advertisement")
         } else {
             let mut child = std::process::Command::new("git")
@@ -462,6 +479,7 @@ async fn smart_http_clone_and_fast_forward_pull() {
     let http = Arc::new(GitServer {
         repo: upstream.path().to_owned(),
         authentication: false,
+        oversized_response: false,
     });
     let vfs = Vfs::tempdir().unwrap();
     let mut data = test_data(vfs.clone());
@@ -559,6 +577,7 @@ async fn clone_grant_includes_authentication_without_other_grants() {
     let http = Arc::new(GitServer {
         repo: upstream.path().to_owned(),
         authentication: true,
+        oversized_response: false,
     });
     let secret = Arc::new(Token(std::sync::atomic::AtomicU64::new(0)));
     let mut data = test_data(Vfs::tempdir().unwrap());
@@ -954,6 +973,7 @@ async fn fetch_fuel_follows_what_the_pack_inflates_to() {
         data.http_client = Arc::new(GitServer {
             repo: upstream.path().to_owned(),
             authentication: false,
+            oversized_response: false,
         });
         fuel.push(
             host_fuel_of(
@@ -1099,4 +1119,46 @@ async fn worker_panic_after_deadline_remains_fatal() {
     assert!(crate::runtime::host::ends_the_run(&error));
     assert!(error.is::<crate::runtime::blocking::BlockingWorkError>());
     assert_eq!(workers.spawn(|| 42).await.unwrap(), 42);
+}
+
+#[tokio::test]
+async fn failed_remote_preserves_its_error_after_settlement_exhausts_fuel() {
+    let vfs = Vfs::tempdir().unwrap();
+    let repo = vfs.root().join("repo");
+    std::fs::create_dir(&repo).unwrap();
+    native(&repo, &["init", "-b", "main"]);
+    native(
+        &repo,
+        &["remote", "add", "origin", "https://example.com/repo.git"],
+    );
+    let http = Arc::new(GitServer {
+        repo,
+        authentication: false,
+        oversized_response: true,
+    });
+    let source = r#"
+        import { Repository } from "submilli:git";
+        function main(): void { Repository.open("/repo").fetch(); }
+    "#;
+    let mut errors = Vec::new();
+    for fuel in [None, Some(50_000)] {
+        let mut data = test_data(vfs.clone());
+        data.http_client = http.clone();
+        errors.push(
+            run_source_fuel(source, data, fuel)
+                .await
+                .unwrap_err()
+                .to_string(),
+        );
+    }
+    assert!(errors[0].contains("IO error"), "{}", errors[0]);
+    assert_eq!(errors[0], errors[1]);
+    run_source(
+        r#"
+        import { Repository } from "submilli:git";
+        function main(): void { assert(Repository.open("/repo").status().clean); }
+    "#,
+        test_data(vfs),
+    )
+    .await;
 }

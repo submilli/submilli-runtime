@@ -153,6 +153,11 @@ pub(crate) fn build_intrinsic_types(engine: &Engine) -> wasmtime::Result<Intrins
         imm,
         StorageType::ValType(ValType::Ref(RefType::new(false, raw_string.clone().into()))),
     ));
+    // Zero means not hashed; nonzero stores the unsigned 32-bit hash plus one.
+    def.field(FieldType::new(
+        Mutability::Var,
+        StorageType::ValType(ValType::I64),
+    ));
     def.finish();
 
     let mut def = b.define_struct(boxed_number);
@@ -178,7 +183,7 @@ pub(crate) fn build_intrinsic_types(engine: &Engine) -> wasmtime::Result<Intrins
     let mut def = b.define_array(field_names);
     def.finality(NonFinal);
     def.forward_ref_element(string)
-        .mutability(imm)
+        .mutability(mutv)
         .nullable(false)
         .finish();
     def.finish();
@@ -206,6 +211,10 @@ pub(crate) fn build_intrinsic_types(engine: &Engine) -> wasmtime::Result<Intrins
         .mutability(mutv)
         .nullable(false)
         .finish();
+    def.field(FieldType::new(
+        mutv,
+        StorageType::ValType(ValType::Ref(RefType::ANYREF)),
+    ));
     def.finish();
 
     let mut def = b.define_func(to_string_fn);
@@ -347,7 +356,7 @@ pub(crate) fn build_intrinsic_types(engine: &Engine) -> wasmtime::Result<Intrins
     )?;
 
     // `(rec $ClassVTable)` — the class-only vtable base: the 4 universal slots
-    // plus the self-referential nominal-identity parent link, its own singleton
+    // plus the nominal-identity parent link and default-JSON marker, its own singleton
     // rec group (mirrors `declare_intrinsic_types`).
     let mut b = RecGroupBuilder::new(engine);
     let class_vtable_label = b.declare_struct();
@@ -364,6 +373,7 @@ pub(crate) fn build_intrinsic_types(engine: &Engine) -> wasmtime::Result<Intrins
         .mutability(imm)
         .nullable(true)
         .finish();
+    def.field(FieldType::new(imm, StorageType::ValType(ValType::I32)));
     def.finish();
     let g = b.build().map_err(crate::runtime::host::fatal_host_error)?;
     let class_vtable = g
@@ -372,9 +382,9 @@ pub(crate) fn build_intrinsic_types(engine: &Engine) -> wasmtime::Result<Intrins
 
     // `(rec $Error_vtable $Error)` — the class-shaped pair, one 2-member rec
     // group mirroring the user-class emitter's output (`classes.rs`): the vtable
-    // is the `$ClassVTable` prefix (universal slots + parent link, no methods);
-    // the struct is the 3 `$ObjectShape` header slots with fields in the
-    // object-fields payload.
+    // is the `$ClassVTable` prefix (universal slots + parent link + default-JSON marker, no methods);
+    // the struct has the 4 `$ObjectShape` header slots and an identity ID;
+    // named fields remain in the object-fields payload.
     let mut b = RecGroupBuilder::new(engine);
     let error_vtable_label = b.declare_struct();
     let error_label = b.declare_struct();
@@ -395,6 +405,7 @@ pub(crate) fn build_intrinsic_types(engine: &Engine) -> wasmtime::Result<Intrins
             class_vtable.clone().into(),
         ))),
     ));
+    def.field(FieldType::new(imm, StorageType::ValType(ValType::I32)));
     def.finish();
 
     let mut def = b.define_struct(error_label);
@@ -418,6 +429,11 @@ pub(crate) fn build_intrinsic_types(engine: &Engine) -> wasmtime::Result<Intrins
             object_fields.clone().into(),
         ))),
     ));
+    def.field(FieldType::new(
+        mutv,
+        StorageType::ValType(ValType::Ref(RefType::ANYREF)),
+    ));
+    def.field(FieldType::new(mutv, StorageType::ValType(ValType::I64)));
     def.finish();
 
     let g = b.build().map_err(crate::runtime::host::fatal_host_error)?;
@@ -509,6 +525,7 @@ pub(crate) fn build_intrinsic_types(engine: &Engine) -> wasmtime::Result<Intrins
                 StorageType::ValType(ValType::Ref(RefType::new(false, string.clone().into()))),
             ),
             FieldType::new(imm, StorageType::ValType(ValType::I32)),
+            FieldType::new(mutv, StorageType::ValType(ValType::I64)),
         ],
     )?;
     let regex_match_box = singleton_struct(
@@ -543,6 +560,7 @@ pub(crate) fn build_intrinsic_types(engine: &Engine) -> wasmtime::Result<Intrins
                     regex_capture_array.clone().into(),
                 ))),
             ),
+            FieldType::new(mutv, StorageType::ValType(ValType::I64)),
         ],
     )?;
 
@@ -594,6 +612,13 @@ pub(crate) fn build_intrinsic_types(engine: &Engine) -> wasmtime::Result<Intrins
             FieldType::new(
                 imm,
                 StorageType::ValType(ValType::Ref(RefType::new(false, string.clone().into()))),
+            ),
+            FieldType::new(
+                imm,
+                StorageType::ValType(ValType::Ref(RefType::new(
+                    false,
+                    wasmtime::HeapType::Extern,
+                ))),
             ),
         ],
     )?;

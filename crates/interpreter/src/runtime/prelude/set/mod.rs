@@ -3,7 +3,7 @@
 //!
 //! Mirrors the `Map` port (`super::map`) with a single `elements` array instead
 //! of separate `keys`/`values`: the same `$Object`-subtype backing struct
-//! (`$SetBacking { vtable, elements, size, order, order_len }`), the same
+//! (`$SetBacking { vtable, elements, size, order, order_len, hashes, order_positions, identity }`), the same
 //! open-addressing probe, insertion-order ledger, tombstones, resize, and
 //! compaction. Storage stays in the GC heap; host fns drive the logic through
 //! the struct ABI.
@@ -12,9 +12,8 @@
 //! slot 2 (`equals`) via [`dispatch_vtable_slot`] — so `add`/`has`/`delete` (and
 //! the algebra/relation ops that probe through them) are async; `size`/`clear`
 //! and iterator construction stay sync. The tombstone sentinel
-//! ([`host_map_tombstone`]) is shared with `Map`, as are the deferred SUB-584
-//! optimisations (primitive sync fast-path, per-entry hash cache) — this is the
-//! minimal unified port.
+//! ([`host_map_tombstone`]) is shared with `Map`, as are cached bucket hashes
+//! and reverse ledger positions for resize and indexed deletion.
 
 use crate::runtime::host::{abi_arg, abi_result};
 mod install;
@@ -28,7 +27,7 @@ use wasmtime::{
 };
 
 use crate::runtime::StoreData;
-use crate::runtime::fuel::{self, host_func};
+use crate::runtime::fuel;
 use crate::runtime::gc_singleton::singleton_struct;
 use crate::runtime::host::{host_map_tombstone, host_object_vtable, write_submilli_array_struct};
 use crate::runtime::intrinsic_types::{IntrinsicTypes, intrinsic_types};
@@ -38,7 +37,8 @@ use crate::runtime::prelude::collection::{
 };
 use crate::runtime::prelude::collection::{is_a, object_field, read_array_vals, unbox_bool};
 use crate::runtime::prelude::iterator::{
-    IterKind, as_struct, build_iterator, iter_done, iter_yield, next_closure_type,
+    IterKind, IteratorSource, as_struct, build_iterator, iter_done, iter_yield, next_closure_type,
+    shared_next,
 };
 use crate::runtime::prelude::keep::{KeptValue, keep_all};
 use crate::runtime::prelude::map::raw_index_array_type;
@@ -53,8 +53,8 @@ const INITIAL_CAPACITY: i32 = 8;
 // ---------------------------------------------------------------------------
 
 /// `$SetBacking` — a non-final `$Object` subtype
-/// `{ vtable, elements, size, order, order_len }`, mirroring
-/// `add_set_backing_subtype` in codegen. Built as a singleton so it
+/// `{ vtable, elements, size, order, order_len, hashes, order_positions, identity }`, mirroring
+/// `declare_intrinsic_types` in codegen. Built as a singleton so it
 /// canonicalizes to the same engine type the guest's `ref.cast` targets.
 /// [`set_backing_matches_codegen`] pins the agreement.
 pub(crate) fn set_backing_struct(
@@ -86,9 +86,18 @@ pub(crate) fn set_backing_struct(
             FieldType::new(mutv, StorageType::ValType(ValType::I32)),
             FieldType::new(
                 mutv,
-                StorageType::ValType(ValType::Ref(RefType::new(false, raw_index.into()))),
+                StorageType::ValType(ValType::Ref(RefType::new(false, raw_index.clone().into()))),
             ),
             FieldType::new(mutv, StorageType::ValType(ValType::I32)),
+            FieldType::new(
+                mutv,
+                StorageType::ValType(ValType::Ref(RefType::new(false, raw_index.clone().into()))),
+            ),
+            FieldType::new(
+                mutv,
+                StorageType::ValType(ValType::Ref(RefType::new(false, raw_index.into()))),
+            ),
+            FieldType::new(mutv, StorageType::ValType(ValType::I64)),
         ],
     )
 }
@@ -98,6 +107,8 @@ const F_ELEMENTS: usize = 1;
 const F_SIZE: usize = 2;
 const F_ORDER: usize = 3;
 const F_ORDER_LEN: usize = 4;
+const F_HASHES: usize = 5;
+const F_ORDER_POSITIONS: usize = 6;
 
 /// The set's `$SetBacking` receiver, cast from the erased `(ref $Object)`.
 fn backing(caller: &mut Caller<'_, StoreData>, recv: &Val) -> wasmtime::Result<Rooted<StructRef>> {
@@ -154,8 +165,6 @@ async fn hash(caller: &mut Caller<'_, StoreData>, elem: &Val) -> wasmtime::Resul
     if is_null_key(caller, elem)? {
         return Ok(0);
     }
-    // One probe step; the hook charges its own walk.
-    fuel::charge(&mut *caller, fuel::ELEM, 1)?;
     match dispatch_vtable_slot(caller, elem, 3, &[]).await? {
         Val::I32(h) => Ok(h),
         other => Err(wasmtime::Error::msg(format!(
@@ -175,13 +184,28 @@ async fn equals(
     if left_null || right_null {
         return Ok(left_null && right_null);
     }
-    // One probe step; the hook charges its own walk.
-    fuel::charge(&mut *caller, fuel::ELEM, 1)?;
     match dispatch_vtable_slot(caller, elem, 2, &[*slot]).await? {
         Val::I32(b) => Ok(b != 0),
         other => Err(wasmtime::Error::msg(format!(
             "Set element equals returned {other:?}, expected i32"
         ))),
+    }
+}
+
+fn index_value(
+    caller: &mut Caller<'_, StoreData>,
+    array: &Rooted<ArrayRef>,
+    index: u32,
+) -> wasmtime::Result<i32> {
+    #[cfg(test)]
+    {
+        caller.data_mut().collection_index_reads += 1;
+    }
+    match array.get(&mut *caller, index)? {
+        Val::I32(value) => Ok(value),
+        _ => Err(crate::runtime::host::fatal_host_error(
+            "Invalid collection index/hash array",
+        )),
     }
 }
 
@@ -221,15 +245,19 @@ pub(super) async fn add(
     let encoded_key = encode_key(caller, value)?;
     let value = &encoded_key;
     let b = backing(caller, recv)?;
+    let key_hash = hash(caller, value).await?;
 
     let size = field_i32(caller, &b, F_SIZE)?;
     let cap0 = field_array(caller, &b, F_ELEMENTS)?.len(&mut *caller)?;
     let order_len = field_i32(caller, &b, F_ORDER_LEN)?;
     if let Some(capacity) = rehash_capacity(cap0, size, order_len)? {
-        if find_slot(caller, &b, value).await?.is_some() {
+        if find_slot_hashed(caller, &b, value, key_hash)
+            .await?
+            .is_some()
+        {
             return Ok(*recv);
         }
-        rehash(caller, &b, capacity).await?;
+        rehash(caller, &b, capacity)?;
     }
 
     let elements = field_array(caller, &b, F_ELEMENTS)?;
@@ -237,14 +265,19 @@ pub(super) async fn add(
     let order_len = field_i32(caller, &b, F_ORDER_LEN)?;
     let cap = probe_capacity(elements.len(&mut *caller)?)?;
 
-    let mut i = hash(caller, value).await? & (cap - 1);
+    let hashes = field_array(caller, &b, F_HASHES)?;
+    let positions = field_array(caller, &b, F_ORDER_POSITIONS)?;
+    let mut i = key_hash & (cap - 1);
     let mut first_tomb: i32 = -1;
     for _ in 0..cap {
+        fuel::charge(&mut *caller, fuel::ELEM, 1)?;
         let slot = elements.get(&mut *caller, i as u32)?;
         if is_null(&slot) {
             let ins = if first_tomb == -1 { i } else { first_tomb };
             elements.set(&mut *caller, ins as u32, *value)?;
             order.set(&mut *caller, order_len as u32, Val::I32(ins))?;
+            hashes.set(&mut *caller, ins as u32, Val::I32(key_hash))?;
+            positions.set(&mut *caller, ins as u32, Val::I32(order_len))?;
             b.set_field(&mut *caller, F_ORDER_LEN, Val::I32(order_len + 1))?;
             b.set_field(&mut *caller, F_SIZE, Val::I32(size + 1))?;
             return Ok(*recv);
@@ -253,7 +286,9 @@ pub(super) async fn add(
             if first_tomb == -1 {
                 first_tomb = i;
             }
-        } else if equals(caller, value, &slot).await? {
+        } else if index_value(caller, &hashes, i as u32)? == key_hash
+            && equals(caller, value, &slot).await?
+        {
             return Ok(*recv);
         }
         i = (i + 1) & (cap - 1);
@@ -278,15 +313,30 @@ async fn find_slot(
     b: &Rooted<StructRef>,
     key: &Val,
 ) -> wasmtime::Result<Option<u32>> {
+    let key_hash = hash(caller, key).await?;
+    find_slot_hashed(caller, b, key, key_hash).await
+}
+
+async fn find_slot_hashed(
+    caller: &mut Caller<'_, StoreData>,
+    b: &Rooted<StructRef>,
+    key: &Val,
+    key_hash: i32,
+) -> wasmtime::Result<Option<u32>> {
     let elements = field_array(caller, b, F_ELEMENTS)?;
     let cap = probe_capacity(elements.len(&mut *caller)?)?;
-    let mut i = hash(caller, key).await? & (cap - 1);
+    let hashes = field_array(caller, b, F_HASHES)?;
+    let mut i = key_hash & (cap - 1);
     for _ in 0..cap {
+        fuel::charge(&mut *caller, fuel::ELEM, 1)?;
         let slot = elements.get(&mut *caller, i as u32)?;
         if is_null(&slot) {
             return Ok(None);
         }
-        if !is_tombstone(caller, &slot)? && equals(caller, key, &slot).await? {
+        if !is_tombstone(caller, &slot)?
+            && index_value(caller, &hashes, i as u32)? == key_hash
+            && equals(caller, key, &slot).await?
+        {
             return Ok(Some(i as u32));
         }
         i = (i + 1) & (cap - 1);
@@ -306,37 +356,21 @@ pub(super) async fn delete(
     let b = backing(caller, recv)?;
     let elements = field_array(caller, &b, F_ELEMENTS)?;
     let order = field_array(caller, &b, F_ORDER)?;
-    let order_len = field_i32(caller, &b, F_ORDER_LEN)?;
-    let cap = probe_capacity(elements.len(&mut *caller)?)?;
+    let positions = field_array(caller, &b, F_ORDER_POSITIONS)?;
+    let Some(index) = find_slot(caller, &b, value).await? else {
+        return Ok(false);
+    };
+    let position = index_value(caller, &positions, index)?;
+    let position = u32::try_from(position).map_err(crate::runtime::host::fatal_host_error)?;
+    let size = field_i32(caller, &b, F_SIZE)?;
+    let remaining = size.checked_sub(1).filter(|n| *n >= 0).ok_or_else(|| {
+        crate::runtime::host::fatal_host_error("Invalid collection size on deletion")
+    })?;
     let tomb = host_map_tombstone(caller)?;
-
-    let mut i = hash(caller, value).await? & (cap - 1);
-    for _ in 0..cap {
-        let slot = elements.get(&mut *caller, i as u32)?;
-        if is_null(&slot) {
-            return Ok(false);
-        }
-        if !is_tombstone(caller, &slot)? && equals(caller, value, &slot).await? {
-            elements.set(&mut *caller, i as u32, tomb)?;
-            for j in 0..order_len {
-                if let Val::I32(idx) = order.get(&mut *caller, j as u32)?
-                    && idx == i
-                {
-                    order.set(&mut *caller, j as u32, Val::I32(-1))?;
-                    break;
-                }
-            }
-            let size = field_i32(caller, &b, F_SIZE)?;
-            let remaining = size
-                .checked_sub(1)
-                .filter(|n| *n >= 0)
-                .ok_or_else(|| wasmtime::Error::msg("Invalid collection size on deletion"))?;
-            b.set_field(&mut *caller, F_SIZE, Val::I32(remaining))?;
-            return Ok(true);
-        }
-        i = (i + 1) & (cap - 1);
-    }
-    Ok(false)
+    elements.set(&mut *caller, index, tomb)?;
+    order.set(&mut *caller, position, Val::I32(-1))?;
+    b.set_field(&mut *caller, F_SIZE, Val::I32(remaining))?;
+    Ok(true)
 }
 
 /// `Set#clear(self) -> void`. Swaps in fresh empty backing arrays.
@@ -344,6 +378,8 @@ pub(super) fn clear(caller: &mut Caller<'_, StoreData>, recv: &Val) -> wasmtime:
     let b = backing(caller, recv)?;
     let elements = new_raw_array(caller, INITIAL_CAPACITY)?;
     let order = new_index_array(caller, INITIAL_CAPACITY)?;
+    let hashes = new_index_array(caller, INITIAL_CAPACITY)?;
+    let positions = new_index_array(caller, INITIAL_CAPACITY)?;
     b.set_field(
         &mut *caller,
         F_ELEMENTS,
@@ -352,6 +388,16 @@ pub(super) fn clear(caller: &mut Caller<'_, StoreData>, recv: &Val) -> wasmtime:
     b.set_field(&mut *caller, F_SIZE, Val::I32(0))?;
     b.set_field(&mut *caller, F_ORDER, Val::AnyRef(Some(order.to_anyref())))?;
     b.set_field(&mut *caller, F_ORDER_LEN, Val::I32(0))?;
+    b.set_field(
+        &mut *caller,
+        F_HASHES,
+        Val::AnyRef(Some(hashes.to_anyref())),
+    )?;
+    b.set_field(
+        &mut *caller,
+        F_ORDER_POSITIONS,
+        Val::AnyRef(Some(positions.to_anyref())),
+    )?;
     Ok(())
 }
 
@@ -365,23 +411,28 @@ pub(super) fn size(caller: &mut Caller<'_, StoreData>, recv: &Val) -> wasmtime::
 
 /// Rehash live elements into a fresh array at the requested capacity, rebuilding
 /// the insertion-order ledger from the old one (skipping `-1` tombstones).
-async fn rehash(
+fn rehash(
     caller: &mut Caller<'_, StoreData>,
     b: &Rooted<StructRef>,
     new_cap: i32,
 ) -> wasmtime::Result<()> {
     let old_elements = field_array(caller, b, F_ELEMENTS)?;
     let old_order = field_array(caller, b, F_ORDER)?;
+    let old_hashes = field_array(caller, b, F_HASHES)?;
     let old_order_len = field_i32(caller, b, F_ORDER_LEN)?;
     // A fresh elements array, then one reinsertion per ledger entry.
     fuel::charge(
         &mut *caller,
         fuel::ELEM,
-        (new_cap as u64).saturating_add(old_order_len as u64),
+        (new_cap as u64)
+            .saturating_mul(4)
+            .saturating_add(old_order_len as u64),
     )?;
 
     let new_elements = new_raw_array(caller, new_cap)?;
     let new_order = new_index_array(caller, new_cap)?;
+    let new_hashes = new_index_array(caller, new_cap)?;
+    let new_positions = new_index_array(caller, new_cap)?;
     let mut new_order_len: i32 = 0;
 
     for o in 0..old_order_len {
@@ -392,12 +443,16 @@ async fn rehash(
             continue;
         }
         let elem = old_elements.get(&mut *caller, probe_idx as u32)?;
-        let mut k = hash(caller, &elem).await? & (new_cap - 1);
+        let key_hash = index_value(caller, &old_hashes, probe_idx as u32)?;
+        let mut k = key_hash & (new_cap - 1);
         let mut inserted = false;
         for _ in 0..new_cap {
+            fuel::charge(&mut *caller, fuel::ELEM, 1)?;
             if is_null(&new_elements.get(&mut *caller, k as u32)?) {
                 new_elements.set(&mut *caller, k as u32, elem)?;
                 new_order.set(&mut *caller, new_order_len as u32, Val::I32(k))?;
+                new_hashes.set(&mut *caller, k as u32, Val::I32(key_hash))?;
+                new_positions.set(&mut *caller, k as u32, Val::I32(new_order_len))?;
                 new_order_len += 1;
                 inserted = true;
                 break;
@@ -420,6 +475,16 @@ async fn rehash(
         Val::AnyRef(Some(new_order.to_anyref())),
     )?;
     b.set_field(&mut *caller, F_ORDER_LEN, Val::I32(new_order_len))?;
+    b.set_field(
+        &mut *caller,
+        F_HASHES,
+        Val::AnyRef(Some(new_hashes.to_anyref())),
+    )?;
+    b.set_field(
+        &mut *caller,
+        F_ORDER_POSITIONS,
+        Val::AnyRef(Some(new_positions.to_anyref())),
+    )?;
     Ok(())
 }
 
@@ -479,9 +544,13 @@ fn make_set_iterator(
 
     let intr = intrinsic_types(&mut *caller)?;
     let (next_ty, next_struct) = next_closure_type(caller.engine(), &intr)?;
-    let next = host_func(&mut *caller, next_ty, move |caller, params, results| {
-        set_next_step(caller, params, results, kind)
-    });
+    let next = shared_next(
+        caller,
+        IteratorSource::Set,
+        kind,
+        next_ty,
+        move |caller, params, results| set_next_step(caller, params, results, kind),
+    )?;
     build_iterator(caller, next_struct, next, cursor)
 }
 
@@ -855,6 +924,8 @@ fn build_empty(caller: &mut Caller<'_, StoreData>) -> wasmtime::Result<Val> {
     let vtable = host_object_vtable(caller)?;
     let elements = new_raw_array(caller, INITIAL_CAPACITY)?;
     let order = new_index_array(caller, INITIAL_CAPACITY)?;
+    let hashes = new_index_array(caller, INITIAL_CAPACITY)?;
+    let positions = new_index_array(caller, INITIAL_CAPACITY)?;
     let pre = StructRefPre::new(&mut *caller, ty);
     let st = StructRef::new(
         &mut *caller,
@@ -865,6 +936,9 @@ fn build_empty(caller: &mut Caller<'_, StoreData>) -> wasmtime::Result<Val> {
             Val::I32(0),
             Val::AnyRef(Some(order.to_anyref())),
             Val::I32(0),
+            Val::AnyRef(Some(hashes.to_anyref())),
+            Val::AnyRef(Some(positions.to_anyref())),
+            Val::I64(0),
         ],
     )?;
     Ok(Val::AnyRef(Some(st.to_anyref())))
@@ -877,13 +951,12 @@ mod tests {
     use crate::runtime::intrinsic_types::build_intrinsic_types;
     use wasm_encoder::{
         ConstExpr, ExportKind, ExportSection, GlobalSection, GlobalType as EncGlobalType,
-        HeapType as EncHeapType, Module, RefType as EncRefType, StorageType as EncStorageType,
-        TypeSection, ValType as EncValType,
+        HeapType as EncHeapType, Module, RefType as EncRefType, TypeSection, ValType as EncValType,
     };
     use wasmtime::{Config, Engine};
 
     /// The host `$SetBacking` must canonically equal the `$Object` subtype
-    /// codegen emits (`add_set_backing_subtype`); otherwise a host-built set's
+    /// codegen emits (`declare_intrinsic_types`); otherwise a host-built set's
     /// `ref.cast` to `$SetBacking` would trap at the receiver of every method.
     #[test]
     fn set_backing_matches_codegen() {
@@ -898,19 +971,7 @@ mod tests {
         let mut module = Module::new();
         let mut types = TypeSection::new();
         let idx = declare_intrinsic_types(&mut types);
-        // $rawIndexArray, then $SetBacking referencing it.
-        types
-            .ty()
-            .array(&EncStorageType::Val(EncValType::I32), true);
-        let raw_index_idx = crate::codegen::intrinsics::INTRINSIC_TYPE_COUNT;
-        add_set_backing_subtype(
-            &mut types,
-            idx.object,
-            idx.vtable,
-            idx.raw_array,
-            raw_index_idx,
-        );
-        let backing_idx = raw_index_idx + 1;
+        let backing_idx = idx.set;
         module.section(&types);
 
         let mut globals = GlobalSection::new();
@@ -944,65 +1005,5 @@ mod tests {
             .unwrap()
             .clone();
         assert!(StructType::eq(&host, &recovered));
-    }
-
-    fn add_set_backing_subtype(
-        types: &mut TypeSection,
-        object_type_idx: u32,
-        vtable_type_idx: u32,
-        raw_array_type_idx: u32,
-        raw_index_array_type_idx: u32,
-    ) {
-        use wasm_encoder::{
-            CompositeInnerType, CompositeType, FieldType, StorageType, StructType, SubType,
-        };
-        let vtable_field = FieldType {
-            element_type: StorageType::Val(EncValType::Ref(EncRefType {
-                nullable: false,
-                heap_type: EncHeapType::Concrete(vtable_type_idx),
-            })),
-            mutable: false,
-        };
-        let bucket_field = FieldType {
-            element_type: StorageType::Val(EncValType::Ref(EncRefType {
-                nullable: false,
-                heap_type: EncHeapType::Concrete(raw_array_type_idx),
-            })),
-            mutable: true,
-        };
-        let size_field = FieldType {
-            element_type: StorageType::Val(EncValType::I32),
-            mutable: true,
-        };
-        let order_field = FieldType {
-            element_type: StorageType::Val(EncValType::Ref(EncRefType {
-                nullable: false,
-                heap_type: EncHeapType::Concrete(raw_index_array_type_idx),
-            })),
-            mutable: true,
-        };
-        let order_len_field = FieldType {
-            element_type: StorageType::Val(EncValType::I32),
-            mutable: true,
-        };
-        types.ty().subtype(&SubType {
-            is_final: false,
-            supertype_idx: Some(object_type_idx),
-            composite_type: CompositeType {
-                inner: CompositeInnerType::Struct(StructType {
-                    fields: vec![
-                        vtable_field,
-                        bucket_field,
-                        size_field,
-                        order_field,
-                        order_len_field,
-                    ]
-                    .into_boxed_slice(),
-                }),
-                shared: false,
-                descriptor: None,
-                describes: None,
-            },
-        });
     }
 }

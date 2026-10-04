@@ -31,7 +31,7 @@ pub(crate) fn install(linker: &mut Linker<StoreData>, types: &DirectTypes) -> wa
         false,
         |caller, _params, results| {
             let id = super::time_zone_id();
-            let value = write_submilli_string_struct(caller, &id)?;
+            let value = write_submilli_string_struct(caller, id)?;
             *abi_result(results, 0)? = Val::AnyRef(Some(value.to_anyref()));
             Ok(())
         },

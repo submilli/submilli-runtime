@@ -211,7 +211,7 @@ fn emit_expr_value(
         }
         TypedExprKind::McpCall { server, tool, args } => {
             // No per-tool import: serialize the args to JSON, dispatch the single
-            // `submilli:mcp.call` host fn, and parse the JSON result as `unknown`.
+            // `submilli:mcp.call` host fn, which returns guest objects as `unknown`.
             // Known-return tools are wrapped in a normal `Cast` by typecheck.
             super::mcp::emit_mcp_call(emitter, ctx, server, tool, args)?;
         }
@@ -633,6 +633,7 @@ fn emit_function_ref(
     if let Some(metadata) = ctx.symbols.function_argument_metadata.get(mangled) {
         crate::codegen::call_arguments::wrap(emitter, ctx, metadata)?;
     }
+    emitter.instruction(Instruction::I64Const(0));
     emitter.instruction(Instruction::StructNew(closure_struct_idx));
 
     Ok(())
@@ -1143,6 +1144,7 @@ fn emit_object_literal(
         array_type_index: intrinsics.object_fields,
         array_size: crate::codegen::wasm_u32(declared_fields.len())?,
     });
+    emitter.instruction(Instruction::RefNull(HeapType::ANY));
     emitter.instruction(Instruction::StructNew(object_shape_idx));
 
     Ok(())
@@ -1383,7 +1385,8 @@ fn emit_closure_value(
     }
     // Stack: vtable, funcref, env — `(ref $env_N)` subtypes
     // `(ref any)` so the env flows into field 2 implicitly.
-    // Closure struct allocation consumes all three.
+    // Closure struct allocation consumes all four fields.
+    emitter.instruction(Instruction::I64Const(0));
     emitter.instruction(Instruction::StructNew(closure_struct_idx));
     if let Some(environment) = self_environment {
         let closure = emitter.add_anonymous_local(ctx.symbols.value_type(result_ty)?)?;
@@ -2642,6 +2645,7 @@ fn emit_spread_mask(
         array_type_index: intrinsics.object_fields,
         array_size: crate::codegen::wasm_u32(fields.len())?,
     });
+    emitter.instruction(Instruction::RefNull(HeapType::ANY));
     emitter.instruction(Instruction::StructNew(intrinsics.object_shape));
     Ok(())
 }
@@ -2714,6 +2718,7 @@ fn emit_spread_shape_checked(
         crate::codegen::wasm_u32(fields.len())? as i32,
     ));
     emitter.instruction(Instruction::ArrayNewDefault(intrinsics.object_fields));
+    emitter.instruction(Instruction::RefNull(HeapType::ANY));
     emitter.instruction(Instruction::StructNew(intrinsics.object_shape));
 
     Ok(())
@@ -4366,6 +4371,7 @@ fn emit_direct_call(
             })?;
         emitter.instruction(Instruction::GlobalGet(vtable_global));
         emitter.instruction(Instruction::LocalGet(scratch));
+        emitter.instruction(Instruction::I64Const(0));
         emitter.instruction(Instruction::StructNew(string_type_idx));
     };
     Ok(())

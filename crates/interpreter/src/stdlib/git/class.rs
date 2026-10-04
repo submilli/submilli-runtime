@@ -93,6 +93,10 @@ fn class_types(
         def.field(ref_field(ty.clone().into(), false));
     }
     def.field(ref_field(intr.class_vtable.clone().into(), true));
+    def.field(FieldType::new(
+        Mutability::Const,
+        StorageType::ValType(ValType::I32),
+    ));
     for ty in methods {
         def.field(ref_field(ty.into(), false));
     }
@@ -117,6 +121,14 @@ fn class_types(
             false,
             intr.object_fields.clone().into(),
         ))),
+    ));
+    def.field(wasmtime::FieldType::new(
+        wasmtime::Mutability::Var,
+        wasmtime::StorageType::ValType(ValType::Ref(RefType::ANYREF)),
+    ));
+    def.field(FieldType::new(
+        Mutability::Var,
+        StorageType::ValType(ValType::I64),
     ));
     def.finish();
     let group = builder.build().map_err(fatal_host_error)?;
@@ -166,6 +178,7 @@ fn make_vtable(store: &mut Store<StoreData>, ty: StructType, methods: Vec<Func>)
         opaque.field(&mut *store, 2)?,
         opaque.field(&mut *store, 3)?,
         Val::AnyRef(None),
+        Val::I32(1),
     ];
     slots.extend(methods.into_iter().map(|method| Val::FuncRef(Some(method))));
     let pre = StructRefPre::new(&mut *store, ty.clone());
@@ -197,6 +210,7 @@ fn make_field_names(store: &mut Store<StoreData>, intr: &IntrinsicTypes) -> Resu
         &[
             vtable,
             Val::AnyRef(Some(raw.to_anyref())),
+            Val::I64(0),
             Val::I32(1),
             Val::I32(1),
         ],
@@ -404,7 +418,13 @@ fn new_instance(
     let instance = StructRef::new(
         &mut *caller,
         &pre,
-        &[vtable, names, Val::AnyRef(Some(fields.to_anyref()))],
+        &[
+            vtable,
+            names,
+            Val::AnyRef(Some(fields.to_anyref())),
+            Val::AnyRef(None),
+            Val::I64(0),
+        ],
     )?;
     Ok(Val::AnyRef(Some(instance.to_anyref())))
 }

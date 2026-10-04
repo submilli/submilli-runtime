@@ -212,18 +212,13 @@ fn install_internal_module(
             } else {
                 &alphabet::STANDARD
             };
-            // Forgiving on padding: try `PAD` first, fall back to
-            // `NO_PAD`. Avoids requiring callers to know which form
-            // they have.
-            let decoded = {
-                let padded = GeneralPurpose::new(alphabet, PAD);
-                if let Ok(b) = padded.decode(s.as_bytes()) {
-                    Ok(b)
-                } else {
-                    let unpadded = GeneralPurpose::new(alphabet, NO_PAD);
-                    unpadded.decode(s.as_bytes())
-                }
+            // A terminal '=' selects canonical padding; otherwise require none.
+            let config = if s.as_bytes().last() == Some(&b'=') {
+                PAD
+            } else {
+                NO_PAD
             };
+            let decoded = GeneralPurpose::new(alphabet, config).decode(s.as_bytes());
             let bytes =
                 decoded.map_err(|e| wasmtime::Error::msg(format!("Uint8Array.fromBase64: {e}")))?;
             let arr = write_uint8_array(
@@ -945,7 +940,7 @@ pub fn write_submilli_string_struct_units(
     StructRef::new(
         &mut *caller,
         &pre,
-        &[vtable, Val::AnyRef(Some(raw.to_anyref()))],
+        &[vtable, Val::AnyRef(Some(raw.to_anyref())), Val::I64(0)],
     )
 }
 
@@ -1022,6 +1017,15 @@ pub fn write_submilli_array_struct(
 ) -> wasmtime::Result<Rooted<StructRef>> {
     let len = super::array_storage::checked_length(elements.len())?;
     fuel::charge(&mut *caller, fuel::ELEM, u64::from(len))?;
+    write_submilli_array_struct_precharged(caller, elements)
+}
+
+/// The caller has admitted ELEM once for each element while producing it.
+pub(crate) fn write_submilli_array_struct_precharged(
+    caller: &mut Caller<'_, StoreData>,
+    elements: &[Val],
+) -> wasmtime::Result<Rooted<StructRef>> {
+    let len = super::array_storage::checked_length(elements.len())?;
     let (array_type, raw_array_type) = {
         let abi = caller
             .data()

@@ -608,6 +608,10 @@ fn reconstruct_one(
         fieldtype_ref(intrinsics.equals_fn),
         fieldtype_ref(intrinsics.hash_fn),
         fieldtype_ref_null(intrinsics.class_vtable),
+        FieldType {
+            element_type: StorageType::Val(ValType::I32),
+            mutable: false,
+        },
     ];
     for slot in &slots {
         let sig = symbols
@@ -627,6 +631,14 @@ fn reconstruct_one(
             FieldType {
                 mutable: true,
                 ..fieldtype_ref(intrinsics.object_fields)
+            },
+            FieldType {
+                element_type: StorageType::Val(ValType::Ref(RefType::ANYREF)),
+                mutable: true,
+            },
+            FieldType {
+                element_type: StorageType::Val(ValType::I64),
+                mutable: true,
             },
         ],
         Some(struct_super),

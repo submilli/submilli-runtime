@@ -42,7 +42,8 @@ pub use llm::{
     LlmOutcome, LlmProvider, PromptBoundKind, SharedTokenBudget,
 };
 pub use mcp::{
-    MCP_MODULE_NAME, McpCallError, McpTransport, install_mcp_async, mcp_call_package_declaration,
+    MCP_MODULE_NAME, McpCallError, McpOutcome, McpResponse, McpTransport, install_mcp_async,
+    mcp_call_package_declaration,
 };
 pub use metrics::{HttpMetric, MetricsSink, NoopMetricsSink};
 pub use prelude::bigint::ops::BIGINT_MODULE_NAME;
@@ -91,6 +92,7 @@ pub struct StoreData {
     /// reusing or releasing the store. Blocking work may still be cleaning up.
     pub blocking_work: blocking::BlockingWork,
     pub git: Option<crate::stdlib::git::GitConfig>,
+    pub(crate) git_history: Option<Arc<crate::stdlib::git::log_cache::Cache>>,
     pub console: Box<dyn Write + Send>,
     pub vfs: Vfs,
     pub vfs_info: VfsInfo,
@@ -98,6 +100,8 @@ pub struct StoreData {
     pub fs_max_read_size: u64,
     pub http_client: Arc<dyn HttpClient>,
     pub http_max_response_size: u64,
+    /// Operator ceiling for a download, including streaming its body.
+    pub http_max_download_timeout_ms: u64,
     pub auth_proxy: Arc<dyn AuthProxy>,
     pub secret_provider: Arc<dyn SecretProvider>,
     /// The outbound `@mcp/<server>` transport the `submilli:mcp.call` host fn
@@ -129,6 +133,11 @@ pub struct StoreData {
     /// Fuel charged by host functions for their own work; the rest of the fuel
     /// spent went to Wasm instructions. See [`fuel::charge_host_fuel`].
     pub host_fuel: u64,
+    pub(crate) next_identity_hash: u64,
+    #[cfg(test)]
+    pub(crate) collection_index_reads: u64,
+    #[cfg(test)]
+    pub(crate) object_index_probes: u64,
     /// Host charges not yet applied to the engine's fuel (see
     /// [`fuel::HOST_FUEL_BATCH`]).
     pub host_fuel_pending: u64,
@@ -154,11 +163,20 @@ pub struct StoreData {
     /// The call-metadata closure environment type, built on first use for the
     /// same reason as [`Self::intrinsic_types`].
     pub(crate) call_metadata_type: Option<wasmtime::StructType>,
+    pub(crate) iterator_functions: [Option<wasmtime::Func>; 10],
+    pub(crate) iterator_constants: [Option<wasmtime::Global>; 6],
+    pub(crate) parameter_cache: prelude::arguments::ParameterCache,
+    pub(crate) regex_input: Option<prelude::regex::input::InputCache>,
     /// Runtime type metadata keyed by package name.
     pub type_info: std::collections::BTreeMap<String, TypeInfoTable>,
     /// Depth of the in-flight universal-vtable walk; see
     /// [`MAX_VTABLE_WALK_DEPTH`].
     pub vtable_walk_depth: u32,
+    /// Hook entries in the current outer structural walk, including repeated
+    /// visits to shared children. Reset only when the outer walk finishes.
+    pub(crate) vtable_walk_nodes: u32,
+    /// Host-only result marshalling after an effect must not refuse for fuel.
+    pub(crate) settling_host_result: bool,
 }
 
 /// The nesting the universal-vtable walk allows before it reports a runaway.
@@ -170,6 +188,9 @@ pub struct StoreData {
 /// test-harness thread aborts between 160 and 200 levels, so the bound sits
 /// below the point where the native stack runs out.
 pub(crate) const MAX_VTABLE_WALK_DEPTH: u32 = 128;
+
+/// Bounds shared-substructure expansion independently of available fuel.
+pub(crate) const MAX_STRUCTURAL_WALK_NODES: u32 = 100_000;
 
 pub const DEFAULT_FS_MAX_READ_SIZE: u64 = 50 * 1024 * 1024;
 
@@ -200,10 +221,12 @@ impl StoreData {
             vfs_info,
             security_check: security::default_check(),
             git: None,
+            git_history: None,
             blocking_work: blocking::BlockingWork::default(),
             fs_max_read_size: DEFAULT_FS_MAX_READ_SIZE,
             http_client: crate::stdlib::http::default_http_client(),
             http_max_response_size: DEFAULT_HTTP_MAX_RESPONSE_SIZE,
+            http_max_download_timeout_ms: 60_000,
             auth_proxy: crate::stdlib::http::default_auth_proxy(),
             secret_provider: Arc::new(secrets::NoopSecretProvider),
             mcp_transport: None,
@@ -213,6 +236,11 @@ impl StoreData {
             metrics: Arc::new(metrics::NoopMetricsSink),
             tenant_limits: TenantLimits::new(max_store_bytes),
             host_fuel: 0,
+            #[cfg(test)]
+            collection_index_reads: 0,
+            #[cfg(test)]
+            object_index_probes: 0,
+            next_identity_hash: 0,
             host_fuel_pending: 0,
             host_fuel_applied_at: None,
             test_labels: RefCell::new(Vec::new()),
@@ -220,8 +248,14 @@ impl StoreData {
             intrinsic_types: None,
             closure_receiver_type: None,
             call_metadata_type: None,
+            iterator_functions: [None; 10],
+            iterator_constants: [None; 6],
+            parameter_cache: Default::default(),
+            regex_input: None,
             type_info: std::collections::BTreeMap::new(),
             vtable_walk_depth: 0,
+            vtable_walk_nodes: 0,
+            settling_host_result: false,
         }
     }
 

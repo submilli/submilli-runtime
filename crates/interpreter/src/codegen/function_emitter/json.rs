@@ -148,6 +148,7 @@ fn emit_stringify_string_host(emitter: &mut FunctionEmitter, ctx: &CodegenCtx) {
     };
     emitter.instruction(Instruction::GlobalGet(string_vtable_idx));
     emitter.instruction(Instruction::LocalGet(raw_local));
+    emitter.instruction(Instruction::I64Const(0));
     emitter.instruction(Instruction::StructNew(intrinsics.string));
 }
 
@@ -351,6 +352,7 @@ fn emit_wrap_raw_string(emitter: &mut FunctionEmitter, ctx: &CodegenCtx) {
     };
     emitter.instruction(Instruction::GlobalGet(string_vtable_idx));
     emitter.instruction(Instruction::LocalGet(raw_local));
+    emitter.instruction(Instruction::I64Const(0));
     emitter.instruction(Instruction::StructNew(intrinsics.string));
 }
 
@@ -535,16 +537,13 @@ pub(crate) fn emit_inline_const_raw_string(
     emitter: &mut FunctionEmitter,
     ctx: &CodegenCtx,
     text: &str,
-) {
-    let Some(intrinsics) = ctx.require(
-        ctx.symbols.intrinsic_type_indices(),
-        "intrinsic type indices registered",
-    ) else {
-        return;
-    };
-    let Some(array_size) = ctx.latch(crate::codegen::wasm_u32(text.encode_utf16().count())) else {
-        return;
-    };
+) -> Result<(), crate::compiler_error::CompilerFailure> {
+    let intrinsics = ctx.symbols.intrinsic_type_indices().ok_or_else(|| {
+        crate::codegen::internal_failure("inline string intrinsic types are missing")
+    })?;
+    let array_size = u32::try_from(text.encode_utf16().count()).map_err(|_| {
+        crate::codegen::internal_failure("inline string exceeds the array length representation")
+    })?;
     for unit in text.encode_utf16() {
         emitter.instruction(Instruction::I32Const(i32::from(unit)));
     }
@@ -552,7 +551,9 @@ pub(crate) fn emit_inline_const_raw_string(
         array_type_index: intrinsics.raw_string,
         array_size,
     });
+    Ok(())
 }
+
 pub(crate) fn emit_raw_string_matches_literal(
     emitter: &mut FunctionEmitter,
     intrinsics: IntrinsicTypeIndices,
@@ -629,7 +630,9 @@ mod tests {
             emit_nullable_primitive_to_string,
             |emitter, ctx| emit_to_json_direct(emitter, ctx, "Number"),
             |emitter, ctx| emit_to_string_direct(emitter, ctx, "Boolean"),
-            |emitter, ctx| emit_inline_const_raw_string(emitter, ctx, "\u{1f642}"),
+            |emitter, ctx| {
+                ctx.latch(emit_inline_const_raw_string(emitter, ctx, "\u{1f642}"));
+            },
         ];
         for emit in emitters {
             with_context(&TypedAst::new(), &SymbolTable::default(), |ctx| {
@@ -670,7 +673,7 @@ mod tests {
     fn inline_raw_literals_keep_utf16_units() {
         with_context(&TypedAst::new(), &mock_symbols_with_intrinsics(), |ctx| {
             let mut emitter = FunctionEmitter::new(ctx, &[]).unwrap();
-            emit_inline_const_raw_string(&mut emitter, ctx, "a\u{1f642}");
+            emit_inline_const_raw_string(&mut emitter, ctx, "a\u{1f642}").unwrap();
             ctx.check_failure().unwrap();
             let units: Vec<_> = emitter
                 .instructions

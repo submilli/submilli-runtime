@@ -144,20 +144,6 @@ impl KeptValues {
         &self.values
     }
 
-    /// Stops keeping the values, so a collection may free them. The room
-    /// stays reserved.
-    pub(in crate::runtime::prelude) fn clear(
-        &mut self,
-        caller: &mut Caller<'_, StoreData>,
-    ) -> wasmtime::Result<()> {
-        for index in 0..self.values.len() {
-            let index = u32::try_from(index).map_err(crate::runtime::host::fatal_host_error)?;
-            self.slots.set(&mut *caller, index, Val::null_any_ref())?;
-        }
-        self.values.clear();
-        Ok(())
-    }
-
     fn capacity(&self, caller: &mut Caller<'_, StoreData>) -> wasmtime::Result<usize> {
         Ok(self.slots.len(&*caller)? as usize)
     }

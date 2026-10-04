@@ -10,7 +10,7 @@
 //! selected top-level bindings (`isNaN`, `NaN`, …) are loaded into user scope by
 //! the typechecker.
 
-mod arguments;
+pub(crate) mod arguments;
 pub mod array;
 pub mod bigint;
 pub mod boolean;

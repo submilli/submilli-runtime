@@ -971,6 +971,8 @@ fn codegen_inner(
         (crate::runtime::prelude::MODULE_NAME, "boxed_number_vtable"),
         (crate::runtime::prelude::MODULE_NAME, "boxed_boolean_vtable"),
         (crate::runtime::prelude::MODULE_NAME, "array_vtable"),
+        (crate::runtime::prelude::MODULE_NAME, "closure_vtable"),
+        (crate::runtime::prelude::MODULE_NAME, "object_vtable"),
     ] {
         let mangled = crate::mangle::prelude(name);
         import_section.import(
@@ -2117,6 +2119,7 @@ fn emit_package_string_init(
         array_type_index: raw_string_type_idx,
         array_size: wasm_u32(package_name.encode_utf16().count())?,
     });
+    emitter.instruction(Instruction::I64Const(0));
     emitter.instruction(Instruction::StructNew(string_type_idx));
     emitter.instruction(Instruction::GlobalSet(pkg_string_global_idx));
     Ok(())

@@ -62,6 +62,32 @@ pub(crate) fn name_memory_exhaustion(err: wasmtime::Error) -> wasmtime::Error {
     err.context(MemoryExhausted)
 }
 
+/// Native working memory admitted before allocating and refunded on every exit.
+pub(crate) struct HostBytes {
+    counter: Arc<AtomicU64>,
+    bytes: u64,
+}
+
+impl HostBytes {
+    pub(crate) fn new(limits: &TenantLimits, bytes: u64) -> Result<Self, MemoryCapExceeded> {
+        limits.charge_host_bytes(bytes)?;
+        Ok(Self {
+            counter: limits.host_attached_counter(),
+            bytes,
+        })
+    }
+}
+
+impl Drop for HostBytes {
+    fn drop(&mut self) {
+        let _ = self
+            .counter
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
+                Some(current.saturating_sub(self.bytes))
+            });
+    }
+}
+
 pub struct TenantLimits {
     pub max_total_bytes: u64,
     observed_bytes: u64,

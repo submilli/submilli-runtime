@@ -39,6 +39,10 @@ pub fn declare_optional_name_type(
         })
         .to_vec();
     fields.push(wasm_encoder::FieldType {
+        element_type: StorageType::Val(ValType::I64),
+        mutable: true,
+    });
+    fields.push(wasm_encoder::FieldType {
         element_type: StorageType::Val(ValType::I32),
         mutable: true,
     });
@@ -133,6 +137,7 @@ fn build_init_expr(
             array_type_index: intrinsics.raw_string,
             array_size: wasm_u32(code_units.len())?,
         });
+        instrs.push(Instruction::I64Const(0));
         if name.optional || name.is_accessor || name.is_private {
             instrs.push(Instruction::I32Const(if name.is_accessor {
                 -1
@@ -188,6 +193,7 @@ pub(crate) fn emit_instance_names(
                     field_index,
                 });
             }
+            emitter.instruction(Instruction::I64Const(0));
             emitter.instruction(Instruction::I32Const(i32::from(present(&name.name))));
             emitter.instruction(Instruction::I32Const(i32::from(name.is_private)));
             emitter.instruction(Instruction::StructNew(optional_name_type));
@@ -218,7 +224,7 @@ pub(crate) fn emit_name_is_accessor(
     emitter.instruction(Instruction::RefCastNonNull(HeapType::Concrete(marked)));
     emitter.instruction(Instruction::StructGet {
         struct_type_index: marked,
-        field_index: 2,
+        field_index: 3,
     });
     emitter.instruction(Instruction::I32Const(-1));
     emitter.instruction(Instruction::I32Eq);
@@ -247,7 +253,7 @@ pub(crate) fn emit_name_presence(
     emitter.instruction(Instruction::RefCastNonNull(HeapType::Concrete(optional)));
     emitter.instruction(Instruction::StructGet {
         struct_type_index: optional,
-        field_index: 2,
+        field_index: 3,
     });
     emitter.instruction(Instruction::I32Eqz);
     emitter.instruction(Instruction::I32Eqz);
@@ -284,7 +290,7 @@ pub(crate) fn emit_mark_present(
     emitter.instruction(Instruction::RefCastNonNull(HeapType::Concrete(optional)));
     emitter.instruction(Instruction::StructGet {
         struct_type_index: optional,
-        field_index: 2,
+        field_index: 3,
     });
     emitter.instruction(Instruction::I32Eqz);
     emitter.emit_if(wasm_encoder::BlockType::Empty);
@@ -293,7 +299,7 @@ pub(crate) fn emit_mark_present(
     emitter.instruction(Instruction::I32Const(1));
     emitter.instruction(Instruction::StructSet {
         struct_type_index: optional,
-        field_index: 2,
+        field_index: 3,
     });
     emitter.emit_end();
     emitter.emit_end();
@@ -327,7 +333,7 @@ pub(crate) fn emit_optional_presence(
         Instruction::RefCastNonNull(HeapType::Concrete(optional_name_type)),
         Instruction::StructGet {
             struct_type_index: optional_name_type,
-            field_index: 2,
+            field_index: 3,
         },
         Instruction::LocalGet(value),
         Instruction::RefIsNull,

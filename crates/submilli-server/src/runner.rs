@@ -677,12 +677,32 @@ fn captured_console(buf: &Mutex<Vec<u8>>) -> Result<String, String> {
 
 struct Sink(Arc<Mutex<Vec<u8>>>);
 
+const MAX_CONSOLE_BYTES: usize = 1024 * 1024;
+
 impl Write for Sink {
     fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-        self.0
+        let mut output = self
+            .0
             .lock()
-            .map_err(|_| std::io::Error::other("console buffer lock poisoned"))?
-            .write(buf)
+            .map_err(|_| std::io::Error::other("console buffer lock poisoned"))?;
+        if buf.len() > MAX_CONSOLE_BYTES.saturating_sub(output.len()) {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::FileTooLarge,
+                "console output exceeds 1 MiB; print less output",
+            ));
+        }
+        let needed = output.len() + buf.len();
+        if needed > output.capacity() {
+            let capacity = needed
+                .max(output.capacity().saturating_mul(2))
+                .min(MAX_CONSOLE_BYTES);
+            let additional = capacity - output.len();
+            output
+                .try_reserve_exact(additional)
+                .map_err(|error| std::io::Error::new(std::io::ErrorKind::OutOfMemory, error))?;
+        }
+        output.extend_from_slice(buf);
+        Ok(buf.len())
     }
     fn flush(&mut self) -> std::io::Result<()> {
         Ok(())
@@ -709,6 +729,21 @@ mod tests {
         assert_eq!(captured_console(&buffer), Err("before\n".to_owned()));
         let healthy = Mutex::new(b"healthy\n".to_vec());
         assert_eq!(captured_console(&healthy), Ok("healthy\n".to_owned()));
+    }
+
+    #[test]
+    fn console_sink_caps_retained_output_without_losing_prior_bytes() {
+        let buffer = Arc::new(Mutex::new(Vec::new()));
+        let mut sink = Sink(buffer.clone());
+        let chunk = vec![b'x'; MAX_CONSOLE_BYTES / 2];
+        sink.write_all(&chunk).unwrap();
+        sink.write_all(&chunk).unwrap();
+        let error = sink.write_all(b"extra").unwrap_err();
+        assert_eq!(error.kind(), std::io::ErrorKind::FileTooLarge);
+        let output = buffer.lock().unwrap();
+        assert_eq!(output.len(), MAX_CONSOLE_BYTES);
+        assert!(output.capacity() <= MAX_CONSOLE_BYTES);
+        assert!(output.iter().all(|byte| *byte == b'x'));
     }
 
     #[test]
@@ -827,12 +862,7 @@ mod tests {
             _: &'a str,
             _: &'a str,
         ) -> std::pin::Pin<
-            Box<
-                dyn std::future::Future<
-                        Output = Result<serde_json::Value, interpreter::runtime::mcp::McpCallError>,
-                    > + Send
-                    + 'a,
-            >,
+            Box<dyn std::future::Future<Output = interpreter::runtime::McpOutcome> + Send + 'a>,
         > {
             Box::pin(async { panic!("test must not call MCP") })
         }

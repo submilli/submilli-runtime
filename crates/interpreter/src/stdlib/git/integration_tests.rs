@@ -109,7 +109,10 @@ fn job(vfs: &Vfs, op: &str) -> Job {
         max_bytes: storage::MAX_WORKING_BYTES,
         transferred: Arc::new(AtomicU64::new(0)),
         meter: Default::default(),
+        algorithm_fuel: Arc::new(super::work::AlgorithmWork::new(u64::MAX)),
         denial: Arc::new(Mutex::new(None)),
+        history_cache: (op == "log")
+            .then(|| Arc::new(super::log_cache::Cache::new(&data.tenant_limits).unwrap())),
     }
 }
 
@@ -1222,4 +1225,230 @@ async fn poisoned_worker_denial_record_is_fatal() {
     let error = job.check("git.init", json!({"path":"/"})).unwrap_err();
     assert!(error.is::<crate::runtime::host::FatalHostError>());
     assert!(error.to_string().contains("denial lock poisoned"));
+}
+
+#[test]
+fn reference_spelling_lists_each_directory_once() {
+    let mut measurements = Vec::new();
+    for count in [128, 256] {
+        let root = repository();
+        let head = String::from_utf8(native(root.path(), &["rev-parse", "HEAD"])).unwrap();
+        for index in 0..count {
+            std::fs::write(
+                root.path()
+                    .join(format!(".git/refs/heads/branch{index:04}")),
+                &head,
+            )
+            .unwrap();
+        }
+        let state = snapshot(root.path());
+        for index in 0..count {
+            state
+                .validate_reference_spelling(&format!("refs/heads/branch{index:04}"))
+                .unwrap();
+        }
+        let actual = state.algorithm_fuel.spent();
+        eprintln!("reference spelling {count}: {actual}");
+        // The old heads-directory scan alone visited every prefix once.
+        let old = crate::runtime::fuel::SYSCALL.cost((count * (count + 1) / 2) as u64);
+        measurements.push((actual, old));
+    }
+    for (actual, old) in measurements {
+        assert!(actual < old / 2, "{actual} versus old lower bound {old}");
+    }
+}
+
+#[test]
+fn tree_file_validation_runs_once_per_loaded_set() {
+    let mut measurements = Vec::new();
+    for count in [128, 256] {
+        let root = repository();
+        for index in 0..count {
+            let directory = root.path().join(format!("dir{index:04}"));
+            std::fs::create_dir(&directory).unwrap();
+            std::fs::write(directory.join("file"), "x").unwrap();
+        }
+        native(root.path(), &["add", "."]);
+        native(root.path(), &["commit", "-m", "files"]);
+        let state = snapshot(root.path());
+        let tree = state
+            .repo
+            .head_commit()
+            .unwrap()
+            .tree_id()
+            .unwrap()
+            .detach();
+        let files = super::operations::tree_entries(&state, tree).unwrap();
+        assert_eq!(files.len(), count + 1);
+        measurements.push(state.algorithm_fuel.spent());
+    }
+    eprintln!("tree validation128/256: {measurements:?}");
+    assert!(measurements[1] < measurements[0] * 5 / 2);
+}
+
+#[test]
+fn show_inflates_only_the_requested_blob() {
+    let mut measurements = Vec::new();
+    for count in [128, 256] {
+        let root = repository();
+        for index in 0..count {
+            std::fs::write(
+                root.path().join(format!("other{index:04}")),
+                "x".repeat(count * 128),
+            )
+            .unwrap();
+        }
+        native(root.path(), &["add", "."]);
+        native(root.path(), &["commit", "-m", "large siblings"]);
+        let state = snapshot(root.path());
+        assert_eq!(
+            super::operations::show(&state, "HEAD", "base").unwrap(),
+            b"base"
+        );
+        measurements.push(state.algorithm_fuel.spent());
+    }
+    eprintln!("show unrelated128/256: {measurements:?}");
+    assert!(measurements[1] < measurements[0] * 5 / 2);
+}
+
+#[test]
+fn add_selects_requested_ranges_without_scanning_every_path() {
+    let mut measurements = Vec::new();
+    for count in [128, 256] {
+        let root = repository();
+        let mut paths = Vec::new();
+        for index in 0..count {
+            let name = format!("file{index:04}");
+            std::fs::write(root.path().join(&name), "x").unwrap();
+            paths.push(name);
+        }
+        native(root.path(), &["add", "."]);
+        native(root.path(), &["commit", "-m", "files"]);
+        let state = snapshot(root.path());
+        super::operations::add(&state, &paths).unwrap();
+        measurements.push(state.algorithm_fuel.spent());
+        assert_eq!(
+            super::operations::index_entries(&state).unwrap().len(),
+            count + 1
+        );
+    }
+    eprintln!("add individual128/256: {measurements:?}");
+    assert!(measurements[1] < measurements[0] * 5 / 2);
+}
+
+#[test]
+fn add_ranges_preserve_overlap_missing_children_and_deletions() {
+    let root = repository();
+    std::fs::create_dir(root.path().join("a")).unwrap();
+    std::fs::create_dir(root.path().join("a-")).unwrap();
+    std::fs::write(root.path().join("a/removed"), "old").unwrap();
+    native(root.path(), &["add", "."]);
+    native(root.path(), &["commit", "-m", "tracked child"]);
+    std::fs::remove_file(root.path().join("a/removed")).unwrap();
+    std::fs::write(root.path().join("a/new"), "new").unwrap();
+    std::fs::write(root.path().join("a-/sibling"), "sibling").unwrap();
+    let state = snapshot(root.path());
+    let before = super::operations::index_entries(&state).unwrap();
+    assert!(super::operations::add(&state, &["a".into(), "a/missing".into()]).is_err());
+    assert_eq!(super::operations::index_entries(&state).unwrap(), before);
+    super::operations::add(
+        &state,
+        &[
+            "a".into(),
+            "a-/sibling".into(),
+            "a/new".into(),
+            "a/removed".into(),
+        ],
+    )
+    .unwrap();
+    let files = super::operations::index_entries(&state).unwrap();
+    assert_eq!(files.len(), 3);
+    assert!(files.contains_key("a/new") && files.contains_key("a-/sibling"));
+    assert!(!files.contains_key("a/removed"));
+}
+
+#[test]
+fn diff_inflates_only_changed_blobs() {
+    let mut measurements = Vec::new();
+    for count in [128, 256] {
+        let root = repository();
+        for index in 0..count {
+            std::fs::write(
+                root.path().join(format!("other{index:04}")),
+                "x".repeat(count * 128),
+            )
+            .unwrap();
+        }
+        native(root.path(), &["add", "."]);
+        native(root.path(), &["commit", "-m", "large siblings"]);
+        let from = String::from_utf8(native(root.path(), &["rev-parse", "HEAD"])).unwrap();
+        std::fs::write(root.path().join("base"), "changed\n").unwrap();
+        native(root.path(), &["add", "."]);
+        native(root.path(), &["commit", "-m", "small change"]);
+        let state = snapshot(root.path());
+        let result = super::operations::read(
+            &state,
+            "diff",
+            &[json!({"mode":"refs","from":from.trim(),"to":"HEAD"})],
+        )
+        .unwrap();
+        assert!(result["patch"].as_str().unwrap().contains("+changed"));
+        measurements.push(state.algorithm_fuel.spent());
+    }
+    eprintln!("diff unrelated128/256: {measurements:?}");
+    assert!(measurements[1] < measurements[0] * 5 / 2);
+    for (actual, old) in measurements.iter().zip([25_790_448, 102_963_724]) {
+        assert!(*actual < old / 2);
+    }
+}
+
+#[test]
+fn selective_diff_preserves_staged_working_and_binary_changes() {
+    let root = repository();
+    std::fs::write(root.path().join("base"), "staged\n").unwrap();
+    std::fs::write(root.path().join("binary"), [0, 1, 2]).unwrap();
+    native(root.path(), &["add", "."]);
+    let state = snapshot(root.path());
+    let staged = super::operations::read(&state, "diff", &[json!({"mode":"staged"})]).unwrap();
+    assert!(staged["patch"].as_str().unwrap().contains("+staged"));
+    assert_eq!(staged["binaryPaths"], json!(["binary"]));
+    drop(state);
+    std::fs::write(root.path().join("base"), "working\n").unwrap();
+    std::fs::write(root.path().join("untracked"), "not in diff\n").unwrap();
+    let state = snapshot(root.path());
+    let working = super::operations::read(&state, "diff", &[json!({"mode":"working"})]).unwrap();
+    let patch = working["patch"].as_str().unwrap();
+    assert!(patch.contains("-staged") && patch.contains("+working"));
+    assert!(!patch.contains("untracked"));
+}
+
+#[test]
+fn diff_uses_bounded_sanitized_native_index_and_recovers() {
+    let root = repository();
+    let mut state = snapshot(root.path());
+    let path = root.path().join(".git/index");
+    let healthy = std::fs::read(&path).unwrap();
+    let payload = [b"a\0-1 1\n".repeat(1000), b"a\0-1 0\n".to_vec()].concat();
+    let mut bytes = [b"DIRC".as_slice(), &2u32.to_be_bytes(), &0u32.to_be_bytes()].concat();
+    bytes.extend_from_slice(b"TREE");
+    bytes.extend_from_slice(&u32::try_from(payload.len()).unwrap().to_be_bytes());
+    bytes.extend_from_slice(&payload);
+    let mut hasher = gix::hash::hasher(gix::hash::Kind::Sha1);
+    hasher.update(&bytes);
+    bytes.extend_from_slice(hasher.try_finalize().unwrap().as_slice());
+    std::fs::write(&path, &bytes).unwrap();
+    for mode in ["working", "staged"] {
+        super::operations::read(&state, "diff", &[json!({"mode":mode})]).unwrap();
+    }
+    let original_limit = state.max_bytes;
+    state.max_bytes = 128;
+    for mode in ["working", "staged"] {
+        assert!(super::operations::read(&state, "diff", &[json!({"mode":mode})]).is_err());
+    }
+    state.max_bytes = original_limit;
+    std::fs::write(&path, healthy).unwrap();
+    for mode in ["working", "staged"] {
+        let result = super::operations::read(&state, "diff", &[json!({"mode":mode})]).unwrap();
+        assert_eq!(result["patch"], "");
+    }
 }

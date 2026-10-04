@@ -29,18 +29,28 @@ use crate::runtime::{DiskQuota, Holder, OpenFileGuard, QuotaCharge, QuotaExceede
 const HANDLE_BUF_BYTES: u64 = 8 * 1024;
 
 /// Bytes charged against the store's host-attached counter, refunded on `release`/`drop`.
-struct ByteCharge {
+pub(super) struct ByteCharge {
     bytes: u64,
     counter: Arc<AtomicU64>,
 }
 
 impl ByteCharge {
-    fn new(limits: &TenantLimits, bytes: u64) -> Result<Self, MemoryCapExceeded> {
+    pub(super) fn new(limits: &TenantLimits, bytes: u64) -> Result<Self, MemoryCapExceeded> {
         limits.charge_host_bytes(bytes)?;
         Ok(Self {
             bytes,
             counter: limits.host_attached_counter(),
         })
+    }
+
+    pub(super) fn grow(
+        &mut self,
+        limits: &TenantLimits,
+        bytes: u64,
+    ) -> Result<(), MemoryCapExceeded> {
+        limits.charge_host_bytes(bytes)?;
+        self.bytes = self.bytes.saturating_add(bytes);
+        Ok(())
     }
 
     /// Refunds the charged bytes once; subsequent calls are no-ops.
@@ -74,6 +84,10 @@ pub struct ChargedLineReader {
     reader: Option<BufReader<File>>,
     buf: Vec<u8>,
     bom_handled: bool,
+    /// OS-read bytes (including buffered read-ahead) and scanned line bytes,
+    /// retained for settlement on errors too.
+    pub(super) bytes_read: u64,
+    pub(super) bytes_scanned: u64,
     charge: ByteCharge,
     /// Keeps the file's bytes counted against the size limit while it is open,
     /// even after its name is removed.
@@ -90,20 +104,62 @@ impl ChargedLineReader {
             reader: Some(reader),
             buf: Vec::new(),
             bom_handled: false,
+            bytes_read: 0,
+            bytes_scanned: 0,
             charge: ByteCharge::new(limits, HANDLE_BUF_BYTES)?,
             held,
         })
     }
 
-    /// Next line with the trailing `\n`/`\r\n` stripped; a leading UTF-8 BOM is dropped
-    /// from the first line. `Ok(None)` at EOF or once closed.
-    pub fn read_next(&mut self) -> std::io::Result<Option<String>> {
+    /// Read one bounded line, accounting for the retained buffer and returned
+    /// text before allocation. The byte limit includes BOM and line delimiters.
+    pub fn read_next(
+        &mut self,
+        limits: &TenantLimits,
+        max_bytes: u64,
+    ) -> wasmtime::Result<Option<ChargedLine>> {
         let Some(reader) = self.reader.as_mut() else {
             return Ok(None);
         };
         self.buf.clear();
-        let n = reader.read_until(b'\n', &mut self.buf)?;
-        if n == 0 {
+        loop {
+            let needs_read = reader.buffer().is_empty();
+            let available = reader.fill_buf()?;
+            if needs_read {
+                self.bytes_read = self.bytes_read.saturating_add(available.len() as u64);
+            }
+            if available.is_empty() {
+                break;
+            }
+            let newline = available.iter().position(|&byte| byte == b'\n');
+            let count = newline.map_or(available.len(), |index| index + 1);
+            self.bytes_scanned = self.bytes_scanned.saturating_add(count as u64);
+            let length = self.buf.len().checked_add(count).ok_or_else(|| {
+                crate::runtime::host::range_error("fs.lines: line length exceeds host capacity")
+            })?;
+            if length as u64 > max_bytes {
+                return Err(crate::runtime::host::range_error(format!(
+                    "fs.lines: line exceeds maxReadSize of {max_bytes} bytes; read smaller chunks with fs.bytes"
+                )));
+            }
+            if length > self.buf.capacity() {
+                let maximum = usize::try_from(max_bytes).unwrap_or(usize::MAX);
+                let capacity = length
+                    .max(self.buf.capacity().saturating_mul(2))
+                    .min(maximum);
+                self.charge
+                    .grow(limits, (capacity - self.buf.capacity()) as u64)?;
+                self.buf
+                    .try_reserve_exact(capacity - self.buf.len())
+                    .map_err(crate::runtime::host::fatal_host_error)?;
+            }
+            self.buf.extend_from_slice(&available[..count]);
+            reader.consume(count);
+            if newline.is_some() {
+                break;
+            }
+        }
+        if self.buf.is_empty() {
             return Ok(None);
         }
         if self.buf.last() == Some(&b'\n') {
@@ -112,20 +168,48 @@ impl ChargedLineReader {
                 self.buf.pop();
             }
         }
-        let mut text = String::from_utf8_lossy(&self.buf).into_owned();
+        // Every invalid UTF-8 byte can become a three-byte replacement character.
+        let text_charge = ByteCharge::new(limits, (self.buf.len() as u64).saturating_mul(3))?;
+        let mut text = String::new();
+        text.try_reserve_exact(self.buf.len().saturating_mul(3))
+            .map_err(crate::runtime::host::fatal_host_error)?;
+        for part in self.buf.utf8_chunks() {
+            text.push_str(part.valid());
+            if !part.invalid().is_empty() {
+                text.push('\u{FFFD}');
+            }
+        }
         if !self.bom_handled {
             self.bom_handled = true;
             if text.starts_with('\u{FEFF}') {
-                text.remove(0);
+                text.drain(..'\u{FEFF}'.len_utf8());
             }
         }
-        Ok(Some(text))
+        Ok(Some(ChargedLine {
+            text,
+            _charge: text_charge,
+        }))
     }
 
     pub fn close(&mut self) {
         self.reader = None;
+        self.buf = Vec::new();
         self.charge.release();
         self.held = None;
+    }
+}
+
+/// Keeps returned native text charged until the caller finishes marshalling it.
+pub struct ChargedLine {
+    pub text: String,
+    _charge: ByteCharge,
+}
+
+impl Closable for Option<ChargedLineReader> {
+    fn close(&mut self) {
+        if let Some(mut reader) = self.take() {
+            reader.close();
+        }
     }
 }
 
@@ -701,6 +785,58 @@ mod tests {
 
     fn temp_file() -> File {
         tempfile::tempfile().expect("anonymous temp file")
+    }
+
+    fn line_reader(contents: &[u8], limits: &TenantLimits) -> ChargedLineReader {
+        use std::io::{Seek, SeekFrom};
+        let mut file = temp_file();
+        file.write_all(contents).unwrap();
+        file.seek(SeekFrom::Start(0)).unwrap();
+        ChargedLineReader::new(BufReader::new(file), limits, None).unwrap()
+    }
+
+    #[test]
+    fn line_limit_includes_delimiters_and_bounds_retained_memory() {
+        let limits = TenantLimits::new(1024 * 1024);
+        let mut reader = line_reader(b"abc\nx", &limits);
+        let line = reader.read_next(&limits, 4).unwrap().unwrap();
+        assert_eq!(line.text, "abc");
+        assert_eq!(reader.bytes_read, 5);
+        assert!(limits.host_attached_bytes() >= HANDLE_BUF_BYTES + 4 + 9);
+        drop(line);
+        assert_eq!(reader.read_next(&limits, 4).unwrap().unwrap().text, "x");
+        reader.close();
+        assert_eq!(limits.host_attached_bytes(), 0);
+
+        let mut too_long = line_reader(b"abcde", &limits);
+        let error = too_long.read_next(&limits, 4).err().unwrap();
+        assert!(error.to_string().contains("maxReadSize"));
+        assert_eq!(too_long.buf.capacity(), 0);
+        assert_eq!(too_long.bytes_read, 5);
+    }
+
+    #[test]
+    fn line_buffer_admission_uses_the_current_tenant_memory() {
+        let limits = TenantLimits::new(HANDLE_BUF_BYTES + 4);
+        let mut reader = line_reader(b"abcd", &limits);
+        // The input fits, but its returned String must also be admitted.
+        let error = reader.read_next(&limits, 4).err().unwrap();
+        assert!(error.is::<MemoryCapExceeded>());
+        assert_eq!(reader.bytes_read, 4);
+        reader.close();
+        assert_eq!(limits.host_attached_bytes(), 0);
+    }
+
+    #[test]
+    fn line_decoding_preserves_bom_crlf_and_lossy_utf8_behavior() {
+        let limits = TenantLimits::new(1024 * 1024);
+        let mut reader = line_reader(b"\xef\xbb\xbfhi\r\n\xff\n", &limits);
+        assert_eq!(reader.read_next(&limits, 32).unwrap().unwrap().text, "hi");
+        assert_eq!(
+            reader.read_next(&limits, 32).unwrap().unwrap().text,
+            "\u{fffd}"
+        );
+        assert!(reader.read_next(&limits, 32).unwrap().is_none());
     }
 
     #[test]

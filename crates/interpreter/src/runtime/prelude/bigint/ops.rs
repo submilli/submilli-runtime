@@ -15,6 +15,24 @@ use crate::runtime::{NUMBER_MODULE_NAME, StoreData, fuel};
 
 pub const BIGINT_MODULE_NAME: &str = "submilli:bigint";
 
+/// A finite integer double has at most 1024 magnitude bits. Convert its exact
+/// represented value rather than saturating it through a fixed-width integer.
+pub(super) fn integer_number(n: f64, name: &str) -> wasmtime::Result<num_bigint::BigInt> {
+    if !n.is_finite() {
+        return Err(range_error(format!(
+            "{name}: cannot convert non-finite number to bigint ({n})"
+        )));
+    }
+    if n.fract() != 0.0 {
+        return Err(range_error(format!(
+            "{name}: cannot convert non-integer number to bigint ({n})"
+        )));
+    }
+    <num_bigint::BigInt as num_traits::FromPrimitive>::from_f64(n).ok_or_else(|| {
+        crate::runtime::host::fatal_host_error("BigInt conversion refused a finite integer double")
+    })
+}
+
 /// Standalone so cross-module canonicalization aligns with the consumer's `$rawBigInt`.
 pub(crate) fn limbs_array_type(engine: &Engine) -> ArrayType {
     ArrayType::new(
@@ -48,19 +66,7 @@ pub(crate) fn install(
         /* deterministic = */ true,
         |caller, params, results| -> wasmtime::Result<()> {
             let s = read_string_arg(&mut *caller, abi_arg(params, 0)?, "bigint.fromString")?;
-            let trimmed = s.trim();
-            // Decimal parsing is quadratic: a pass over the digits per limb
-            // of the result, about one limb per 19 digits.
-            let digits = trimmed.len() as u64;
-            fuel::charge_host_fuel(
-                &mut *caller,
-                fuel::bigint_product_cost(digits, digits.div_ceil(19)),
-            )?;
-            let parsed: num_bigint::BigInt = trimmed.parse().map_err(|_| {
-                crate::runtime::host::syntax_error(format!(
-                    "bigint.fromString: invalid bigint literal: {trimmed:?}",
-                ))
-            })?;
+            let parsed = parse_decimal(caller, &s, "bigint.fromString")?;
             let (sign, magnitude) = parsed.into_parts();
             let limbs = magnitude.to_u64_digits();
             let arr = write_limbs(&mut *caller, &limbs)?;
@@ -90,20 +96,7 @@ pub(crate) fn install(
                     )));
                 }
             };
-            if !n.is_finite() {
-                return Err(range_error(format!(
-                    "bigint.fromNumber: cannot convert non-finite number to bigint ({n})",
-                )));
-            }
-            if n.fract() != 0.0 {
-                return Err(range_error(format!(
-                    "bigint.fromNumber: cannot convert non-integer number to bigint ({n})",
-                )));
-            }
-            // For integer doubles up to 2^53 the cast is exact; beyond,
-            // the f64 itself already lost precision (matches JS
-            // `BigInt(N)` for unsafe-range N).
-            let parsed = num_bigint::BigInt::from(n as i128);
+            let parsed = integer_number(n, "bigint.fromNumber")?;
             let (sign, magnitude) = parsed.into_parts();
             let limbs = magnitude.to_u64_digits();
             let arr = write_limbs(&mut *caller, &limbs)?;
@@ -131,8 +124,7 @@ pub(crate) fn install(
                 abi_arg(params, 1)?,
                 "bigint.toString",
             )?;
-            fuel::charge_host_fuel(&mut *caller, radix_cost(&value))?;
-            let formatted = value.to_str_radix(10);
+            let formatted = format_bigint(caller, &value, 10)?;
             let arr = write_submilli_string(&mut *caller, &formatted)?;
             *abi_result(results, 0)? = Val::AnyRef(Some(arr.to_anyref()));
             Ok(())
@@ -169,8 +161,7 @@ pub(crate) fn install(
             if radix.is_nan() || !(2.0..=36.0).contains(&truncated) {
                 return Err(range_error("toString radix must be between 2 and 36"));
             }
-            fuel::charge_host_fuel(&mut *caller, radix_cost(&value))?;
-            let formatted = value.to_str_radix(truncated as u32);
+            let formatted = format_bigint(caller, &value, truncated as u32)?;
             let arr = write_submilli_string(&mut *caller, &formatted)?;
             *abi_result(results, 0)? = Val::AnyRef(Some(arr.to_anyref()));
             Ok(())
@@ -227,12 +218,14 @@ pub(crate) fn install(
                 if divisor.is_zero() {
                     return Err(range_error("Division by zero"));
                 }
-                run_binop(caller, params, results, name, Cost::Product, |a, b| {
-                    Ok(match kind {
-                        DivKind::Div => a / b,
-                        DivKind::Rem => a % b,
-                    })
-                })
+                let dividend =
+                    read_bigint_arg(caller, &params[0], &params[1], &format!("{name} lhs"))?;
+                fuel::charge_host_fuel(&mut *caller, Cost::Product.of(&dividend, &divisor)?)?;
+                let result = match kind {
+                    DivKind::Div => dividend / divisor,
+                    DivKind::Rem => dividend % divisor,
+                };
+                write_binop_result(caller, results, result)
             },
         )?;
     }
@@ -361,11 +354,59 @@ enum DivKind {
     Rem,
 }
 
-/// Formatting in a radix is quadratic in the limbs: each output chunk divides
-/// the remaining magnitude.
-fn radix_cost(value: &num_bigint::BigInt) -> u64 {
-    let limbs = limbs_of(value);
-    fuel::bigint_product_cost(limbs, limbs)
+/// Bounds conversion work independently of the program's total fuel budget.
+pub(crate) const MAX_DECIMAL_INPUT_BYTES: usize = 65_536;
+const MAX_FORMAT_LIMBS: u64 = 4_096;
+
+pub(crate) fn parse_decimal(
+    caller: &mut Caller<'_, StoreData>,
+    text: &str,
+    operation: &str,
+) -> wasmtime::Result<num_bigint::BigInt> {
+    if text.len() > MAX_DECIMAL_INPUT_BYTES {
+        return Err(range_error(format!(
+            "{operation}: decimal input exceeds {MAX_DECIMAL_INPUT_BYTES} bytes; use a smaller integer"
+        )));
+    }
+    let trimmed = text.trim();
+    let digits = trimmed.len() as u64;
+    // Decimal conversion uses repeated multiplication, unlike the faster
+    // multiplication algorithms priced by bigint_product_cost.
+    fuel::charge(
+        &mut *caller,
+        fuel::ELEM,
+        digits.saturating_mul(digits.div_ceil(19)),
+    )?;
+    trimmed.parse().map_err(|_| {
+        crate::runtime::host::syntax_error(format!(
+            "{operation}: invalid bigint literal: {trimmed:?}"
+        ))
+    })
+}
+
+/// Power-of-two radices extract bits linearly; other radices repeatedly divide
+/// the remaining magnitude and need a quadratic work bound.
+pub(crate) fn format_bigint(
+    caller: &mut Caller<'_, StoreData>,
+    value: &num_bigint::BigInt,
+    radix: u32,
+) -> wasmtime::Result<String> {
+    if !(2..=36).contains(&radix) {
+        return Err(range_error("toString radix must be between 2 and 36"));
+    }
+    let limbs = value.bits().div_ceil(64);
+    if limbs > MAX_FORMAT_LIMBS {
+        return Err(range_error(format!(
+            "BigInt.toString: exceeds {MAX_FORMAT_LIMBS} limbs; format a smaller integer"
+        )));
+    }
+    let work = if radix.is_power_of_two() {
+        limbs.max(1)
+    } else {
+        limbs.max(1).saturating_mul(limbs.max(1))
+    };
+    fuel::charge(&mut *caller, fuel::ELEM, work)?;
+    Ok(value.to_str_radix(radix))
 }
 
 /// Limbs of the magnitude: the size variable of every BigInt cost.
@@ -447,7 +488,15 @@ fn run_binop(
     )?;
     fuel::charge_host_fuel(&mut *caller, cost.of(&a, &b)?)?;
     let r = op(a, b)?;
-    let (sign, magnitude) = r.into_parts();
+    write_binop_result(caller, results, r)
+}
+
+fn write_binop_result(
+    caller: &mut Caller<'_, StoreData>,
+    results: &mut [Val],
+    value: num_bigint::BigInt,
+) -> wasmtime::Result<()> {
+    let (sign, magnitude) = value.into_parts();
     let limbs = magnitude.to_u64_digits();
     let arr = write_limbs(caller, &limbs)?;
     *abi_result(results, 0)? = Val::I32(sign_to_i32(sign));
@@ -463,14 +512,20 @@ pub(crate) fn read_bigint_arg(
 ) -> wasmtime::Result<num_bigint::BigInt> {
     let sign = read_sign(sign_val)?;
     let limbs = read_limbs_arg(caller, limbs_val, name)?;
-    Ok(limbs_to_bigint(sign, &limbs))
+    limbs_to_bigint(sign, &limbs)
 }
 
 /// Reconstruct a `num_bigint::BigInt` from the canonical `$bigint` payload —
 /// `sign` ∈ {−1, 0, 1} and little-endian u64 `limbs`. Shared by the host
 /// arithmetic ABI and the host-owned `$bigint` vtable.
-pub(crate) fn limbs_to_bigint(sign: i32, limbs: &[u64]) -> num_bigint::BigInt {
-    let mut u32s = Vec::with_capacity(limbs.len() * 2);
+pub(crate) fn limbs_to_bigint(sign: i32, limbs: &[u64]) -> wasmtime::Result<num_bigint::BigInt> {
+    let count = limbs
+        .len()
+        .checked_mul(2)
+        .ok_or_else(|| crate::runtime::host::fatal_host_error("BigInt limb count overflow"))?;
+    let mut u32s = Vec::new();
+    u32s.try_reserve_exact(count)
+        .map_err(crate::runtime::host::fatal_host_error)?;
     for w in limbs {
         u32s.push((*w & 0xFFFF_FFFF) as u32);
         u32s.push((*w >> 32) as u32);
@@ -481,7 +536,7 @@ pub(crate) fn limbs_to_bigint(sign: i32, limbs: &[u64]) -> num_bigint::BigInt {
         v if v < 0 => num_bigint::Sign::Minus,
         _ => num_bigint::Sign::NoSign,
     };
-    num_bigint::BigInt::from_biguint(signum, magnitude)
+    Ok(num_bigint::BigInt::from_biguint(signum, magnitude))
 }
 
 /// Read a `$bigint` struct ref's `sign` (field 1) and little-endian u64 `limbs`
@@ -526,20 +581,12 @@ fn read_limbs_arg(
         }
     };
     let len = arr.len(&mut *caller)?;
-    fuel::charge(&mut *caller, fuel::ELEM, u64::from(len))?;
-    let mut out = Vec::with_capacity(len as usize);
-    for i in 0..len {
-        let elem = arr.get(&mut *caller, i)?;
-        let limb = match elem {
-            Val::I64(v) => v as u64,
-            other => {
-                return Err(type_error(format!(
-                    "{name} limb {i}: expected i64, got {other:?}"
-                )));
-            }
-        };
-        out.push(limb);
-    }
+    fuel::charge(&mut *caller, fuel::COPY, u64::from(len).saturating_mul(8))?;
+    let mut out = Vec::new();
+    out.try_reserve_exact(len as usize)
+        .map_err(crate::runtime::host::fatal_host_error)?;
+    out.resize(len as usize, 0);
+    arr.copy_to_i64_slice(&*caller, &mut out)?;
     Ok(out)
 }
 
@@ -547,11 +594,10 @@ pub(crate) fn write_limbs(
     mut ctx: impl AsContextMut<Data = StoreData>,
     limbs: &[u64],
 ) -> wasmtime::Result<Rooted<ArrayRef>> {
-    fuel::charge(&mut ctx, fuel::ELEM, limbs.len() as u64)?;
+    fuel::charge(&mut ctx, fuel::COPY, (limbs.len() as u64).saturating_mul(8))?;
     let array_ty = limbs_array_type(ctx.as_context().engine());
     let pre = ArrayRefPre::new(&mut ctx, array_ty);
-    let units: Vec<Val> = limbs.iter().map(|w| Val::I64(*w as i64)).collect();
-    ArrayRef::new_fixed(&mut ctx, &pre, &units)
+    ArrayRef::new_from_i64_slice(&mut ctx, &pre, limbs)
 }
 
 pub(crate) fn make_bigint_struct(

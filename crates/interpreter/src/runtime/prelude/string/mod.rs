@@ -9,6 +9,8 @@
 //! [`install`]; this file is just the strings.
 
 mod install;
+pub(crate) mod search;
+mod transforms;
 
 pub(crate) use install::declare_types;
 pub use install::{declare, install};
@@ -126,13 +128,7 @@ fn normalize_slice_index(x: i32, len: usize) -> usize {
 /// First index `>= from` at which `needle` occurs in `haystack`. An empty
 /// `needle` matches at `min(from, len)` — JS `indexOf`/`includes` search order.
 fn raw_index_of(haystack: &[u16], needle: &[u16], from: usize) -> Option<usize> {
-    if needle.is_empty() {
-        return Some(from.min(haystack.len()));
-    }
-    if needle.len() > haystack.len() {
-        return None;
-    }
-    (from..=haystack.len() - needle.len()).find(|&i| &haystack[i..i + needle.len()] == needle)
+    search::Search::new(needle, false).find(haystack, from.min(haystack.len()))
 }
 
 /// `charAt`: the single code unit at `index`, or `""` out of range.
@@ -203,10 +199,10 @@ pub fn last_index_of(s: &Str, search: &Str, from: f64) -> f64 {
     if needle.is_empty() {
         return from as f64;
     }
-    (0..=from)
-        .rev()
-        .find(|&i| &haystack[i..i + needle.len()] == needle)
-        .map_or(-1.0, |i| i as f64)
+    let end = from + needle.len();
+    search::Search::new(needle, true)
+        .find(&haystack[..end], 0)
+        .map_or(-1.0, |i| (end - i - needle.len()) as f64)
 }
 
 /// `includes`: whether `search` occurs at or after `fromIndex`.
@@ -406,8 +402,7 @@ pub fn to_well_formed(s: &Str) -> Str {
     Str::from_units(out)
 }
 
-/// Decode to a Rust `String` for the Unicode-crate operations (case folding,
-/// normalization). This is the one sanctioned UTF-8 round-trip — those crates
+/// Decode to a Rust `String` for Unicode normalization. This is the one sanctioned UTF-8 round-trip — those crates
 /// work on `char`s — and matches the prior `submilli:string` decode
 /// (`String::from_utf16_lossy`, so a lone surrogate becomes U+FFFD).
 fn decode(s: &Str) -> String {
@@ -418,30 +413,7 @@ fn encode(s: String) -> Str {
     Str::from_units(s.encode_utf16().collect())
 }
 
-/// `toUpperCase`: Unicode-correct upper-casing.
-pub fn to_upper_case(s: &Str) -> Str {
-    encode(decode(s).to_uppercase())
-}
-
-/// `toLowerCase`: Unicode-correct lower-casing.
-pub fn to_lower_case(s: &Str) -> Str {
-    encode(decode(s).to_lowercase())
-}
-
-/// `trim`: strip leading and trailing whitespace.
-pub fn trim(s: &Str) -> Str {
-    encode(decode(s).trim().to_string())
-}
-
-/// `trimStart`: strip leading whitespace.
-pub fn trim_start(s: &Str) -> Str {
-    encode(decode(s).trim_start().to_string())
-}
-
-/// `trimEnd`: strip trailing whitespace.
-pub fn trim_end(s: &Str) -> Str {
-    encode(decode(s).trim_end().to_string())
-}
+pub use transforms::{to_lower_case, to_upper_case, trim, trim_end, trim_start};
 
 /// `normalize`: Unicode normalization. `form` must be `"NFC"`/`"NFD"`/`"NFKC"`/
 /// `"NFKD"` (default `"NFC"`); any other value throws.

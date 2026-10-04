@@ -37,7 +37,13 @@ fn install_construction(
         |caller, params, results| {
             let input =
                 read_string_arg(caller, abi_arg(params, 0)?, "Temporal.ZonedDateTime.from")?;
-            let (zoned, tz_id) = super::parse(&input).map_err(crate::runtime::host::range_error)?;
+            crate::runtime::fuel::charge(
+                &mut *caller,
+                crate::runtime::fuel::PARSE,
+                input.len() as u64,
+            )?;
+            crate::runtime::fuel::charge_host_fuel(&mut *caller, crate::runtime::fuel::TZ)?;
+            let (zoned, tz_id) = super::parse(&input)?;
             *abi_result(results, 0)? = shared::make_zoned_date_time(caller, &zoned, &tz_id)?;
             Ok(())
         },

@@ -8,7 +8,6 @@
 use wasmtime::{Caller, StructType, Val};
 
 use crate::runtime::StoreData;
-use crate::runtime::fuel;
 use crate::runtime::host::write_submilli_string_struct_units;
 use crate::runtime::prelude::iterator::as_struct;
 use crate::runtime::prelude::vtable::read_string_units;
@@ -66,15 +65,15 @@ pub(crate) fn read_array_vals(
     crate::runtime::array_storage::ArrayStorage::read(caller, val)?.snapshot(caller)
 }
 
-/// Read a named field from an `$ObjectShape` (the structural getter): scan
-/// `field_names` for `name`, return the parallel `object_fields` entry, or `None`
+/// Read a named field from an `$ObjectShape` using its cached name index,
+/// returning the parallel `object_fields` entry, or `None`
 /// if `obj` isn't object-shaped or lacks the field.
 pub(crate) fn object_field(
     caller: &mut Caller<'_, StoreData>,
     obj: &Val,
     name: &str,
 ) -> wasmtime::Result<Option<Val>> {
-    object_field_kind(caller, obj, name, false)
+    object_field_kind(caller, obj, name, false, false)
 }
 
 pub(crate) fn object_accessor(
@@ -82,7 +81,16 @@ pub(crate) fn object_accessor(
     obj: &Val,
     name: &str,
 ) -> wasmtime::Result<Option<Val>> {
-    object_field_kind(caller, obj, name, true)
+    object_field_kind(caller, obj, name, true, false)
+}
+
+/// Serialization omits unwritten optional slots but preserves a written null.
+pub(crate) fn object_field_present(
+    caller: &mut Caller<'_, StoreData>,
+    obj: &Val,
+    name: &str,
+) -> wasmtime::Result<Option<Val>> {
+    object_field_kind(caller, obj, name, false, true)
 }
 
 fn object_field_kind(
@@ -90,6 +98,7 @@ fn object_field_kind(
     obj: &Val,
     name: &str,
     accessor: bool,
+    require_present: bool,
 ) -> wasmtime::Result<Option<Val>> {
     let Val::AnyRef(Some(any)) = obj else {
         return Ok(None);
@@ -106,26 +115,36 @@ fn object_field_kind(
     if !st.matches_ty(&*caller, &shape)? {
         return Ok(None);
     }
-    let names = match st.field(&mut *caller, 1)? {
-        Val::AnyRef(Some(a)) => a.unwrap_array(&mut *caller)?,
-        _ => return Ok(None),
-    };
     let fields = match st.field(&mut *caller, 2)? {
         Val::AnyRef(Some(a)) => a.unwrap_array(&mut *caller)?,
         _ => return Ok(None),
     };
-    let target: Vec<u16> = name.encode_utf16().collect();
-    let count = names.len(&mut *caller)?;
-    fuel::charge(&mut *caller, fuel::ELEM, u64::from(count))?;
-    for i in 0..count {
-        let nm = names.get(&mut *caller, i)?;
-        if read_string_units(caller, &nm, FIELD_NAME)? == target
-            && super::object::is_accessor_slot(caller, &nm)? == accessor
-        {
-            return Ok(Some(fields.get(&mut *caller, i)?));
+    let mut target = Vec::new();
+    target
+        .try_reserve_exact(name.len())
+        .map_err(crate::runtime::host::fatal_host_error)?;
+    target.extend(name.encode_utf16());
+    match super::object::find_field_slot(caller, &st, &target, accessor)? {
+        Some(slot) => {
+            let value = fields.get(&mut *caller, slot)?;
+            if require_present {
+                let names = match st.field(&mut *caller, 1)? {
+                    Val::AnyRef(Some(names)) => names.unwrap_array(&mut *caller)?,
+                    _ => {
+                        return Err(crate::runtime::host::fatal_host_error(
+                            "Object has invalid field names",
+                        ));
+                    }
+                };
+                let name = names.get(&mut *caller, slot)?;
+                if !super::object::field_is_present(caller, &name, &value)? {
+                    return Ok(None);
+                }
+            }
+            Ok(Some(value))
         }
+        None => Ok(None),
     }
-    Ok(None)
 }
 
 /// Labels an object field name that is not a well-formed `$string`.
@@ -216,5 +235,65 @@ mod table_capacity_tests {
             assert!(rehash_capacity(8, size, order_len).is_err());
         }
         assert!(rehash_capacity(1 << 30, 1 << 30, 1 << 30).is_err());
+    }
+}
+
+#[cfg(test)]
+mod work_tests {
+    use crate::runtime::{RuntimeConfig, StoreData, Vfs, install_runtime_async};
+    use wasmtime::{Linker, Module};
+
+    #[tokio::test]
+    async fn draining_collections_reads_linear_index_slots() {
+        for (kind, insert) in [
+            ("Map<string, number>", "m.set(key, i)"),
+            ("Set<string>", "m.add(key)"),
+        ] {
+            let mut reads = Vec::new();
+            for n in [128_u64, 256] {
+                let input = format!(
+                    "const keys: string[] = []; const m = new {kind}(); for(let i=0; i<{n}; i++) {{ const key=i.toString(); keys.push(key); {insert}; }}"
+                );
+                let base =
+                    index_reads(&format!("function main(): number {{ {input} return 0; }}")).await;
+                let deleted = index_reads(&format!("function main(): number {{ {input} for(const key of keys) {{ assert(m.delete(key)); }} return 0; }}")).await;
+                // One hash-array read for every occupied probe plus one reverse
+                // position read per deletion. The old ledger walk inspected
+                // n*(n+1)/2 positions while charging none of those reads.
+                let work = deleted - base;
+                assert!(
+                    work >= 2 * n && work < n * (n + 1) / 2,
+                    "{kind}/{n}: {work}"
+                );
+                reads.push(work);
+            }
+            assert!(reads[1] * 10 <= reads[0] * 22, "{kind}: {reads:?}");
+        }
+    }
+
+    async fn index_reads(source: &str) -> u64 {
+        let compiled = crate::compile::compile_script(
+            source,
+            "collection-work.ts",
+            crate::FileId(0),
+            &[],
+            &[],
+        )
+        .unwrap();
+        let config = RuntimeConfig::default();
+        let engine = config.engine().unwrap();
+        let mut data = StoreData::with_vfs(Vfs::none());
+        data.install_type_info(compiled.type_info.clone());
+        let mut store = config.store_async(&engine, data).unwrap();
+        let mut linker = Linker::new(&engine);
+        install_runtime_async(&mut linker, &mut store)
+            .await
+            .unwrap();
+        let module = Module::new(&engine, &compiled.wasm).unwrap();
+        let instance = linker.instantiate_async(&mut store, &module).await.unwrap();
+        crate::dispatch_main_async(&mut store, &instance)
+            .await
+            .unwrap();
+        store.data().collection_index_reads
     }
 }

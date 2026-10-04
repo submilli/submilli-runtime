@@ -4,14 +4,12 @@
 //! its own work here as it goes, and the store thread charges it when the
 //! worker returns, whether or not the operation succeeded.
 //!
-//! The fuel the run had left when the worker started is the meter's ceiling.
-//! Once the counted work passes it, the meter cancels the operation, and
-//! every check that stops a cancelled operation stops this one. That is safe
-//! until publication: nothing a Git operation does is seen before it
-//! publishes, and publication checks for cancellation only before its first
-//! move. A publication that has begun finishes, and its work is settled
-//! after, never refused: a short budget is taken to zero and the run stops
-//! at its next fuel check.
+//! Filesystem/object counters and algorithm admission share the fuel ceiling.
+//! Before an externally visible effect, exhausting it stops the worker. Before
+//! repository creation, a remote send, or publication, the worker switches the
+//! meter to forgiveness: later work is counted without refusal or fuel-driven
+//! cancellation. The store settles the complete count after the worker drains,
+//! preserving its effect or error, then stops at the next guest instruction.
 use crate::runtime::StoreData;
 use crate::runtime::fuel;
 use std::sync::Arc;
@@ -37,6 +35,8 @@ pub(super) struct Meter {
     elements: AtomicU64,
     /// The fuel the run had left when the worker started.
     ceiling: u64,
+    algorithm: AtomicU64,
+    forgiving: AtomicBool,
     /// Set to stop the operation once the counted work passes the ceiling.
     cancel: Option<Arc<AtomicBool>>,
     /// Whether the meter stopped the operation.
@@ -61,6 +61,8 @@ impl Meter {
             hash: AtomicU64::new(0),
             elements: AtomicU64::new(0),
             ceiling,
+            algorithm: AtomicU64::new(0),
+            forgiving: AtomicBool::new(false),
             cancel,
             exhausted: AtomicBool::new(false),
         }
@@ -91,13 +93,37 @@ impl Meter {
     }
 
     fn add(&self, counter: &AtomicU64, n: u64) {
-        counter.fetch_add(n, Ordering::Relaxed);
-        if self.fuel() > self.ceiling {
+        let _ = counter.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
+            Some(value.saturating_add(n))
+        });
+        if !self.forgiving.load(Ordering::Relaxed) && self.fuel() > self.ceiling {
             self.exhausted.store(true, Ordering::Relaxed);
             if let Some(cancel) = &self.cancel {
                 cancel.store(true, Ordering::Relaxed);
             }
         }
+    }
+
+    pub(super) fn charge_algorithm(&self, fuel: u64) -> wasmtime::Result<()> {
+        let forgiving = self.forgiving.load(Ordering::Relaxed);
+        let remaining = self.ceiling.saturating_sub(self.fuel());
+        self.add(
+            &self.algorithm,
+            if forgiving { fuel } else { fuel.min(remaining) },
+        );
+        if !forgiving && fuel > remaining {
+            return Err(wasmtime::Trap::OutOfFuel.into());
+        }
+        Ok(())
+    }
+
+    #[cfg(test)]
+    pub(super) fn algorithm_fuel(&self) -> u64 {
+        self.algorithm.load(Ordering::Relaxed)
+    }
+
+    pub(super) fn before_effect(&self) {
+        self.forgiving.store(true, Ordering::Relaxed);
     }
 
     /// Whether the work passed the ceiling, which stopped the operation.
@@ -115,6 +141,7 @@ impl Meter {
             fuel::PARSE.cost(load(&self.parse)),
             fuel::HASH.cost(load(&self.hash)),
             fuel::ELEM.cost(load(&self.elements)),
+            load(&self.algorithm),
         ]
         .into_iter()
         .fold(0u64, u64::saturating_add)
@@ -149,5 +176,22 @@ mod tests {
         meter.syscalls(1);
         assert!(cancel.load(Ordering::Relaxed));
         assert!(meter.is_exhausted());
+    }
+    #[test]
+    fn algorithm_and_native_work_share_a_ceiling_and_forgive_effects() {
+        let cancel = Arc::new(AtomicBool::new(false));
+        let meter = Arc::new(Meter::new(10, Some(Arc::clone(&cancel))));
+        let work = super::super::work::AlgorithmWork::with_meter(Arc::clone(&meter));
+        meter.io(12);
+        work.charge(7).unwrap();
+        assert_eq!(meter.fuel(), 10);
+        assert!(work.charge(1).unwrap_err().is::<wasmtime::Trap>());
+        assert_eq!(meter.fuel(), 10);
+        work.before_effect();
+        meter.io(80);
+        work.charge(30).unwrap();
+        assert_eq!(meter.fuel(), 60);
+        assert!(!cancel.load(Ordering::Relaxed));
+        assert!(!meter.is_exhausted());
     }
 }
