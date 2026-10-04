@@ -9,7 +9,6 @@ use submilli_server::serve;
 
 mod count;
 mod file_config;
-mod migrate;
 
 /// Long enough for a loaded server to answer `/healthz`, short enough to land
 /// inside the image's `HEALTHCHECK --timeout=5s` — so a hung probe reports its
@@ -315,10 +314,6 @@ fn main() -> Result<()> {
         .try_init()
         .map_err(|error| anyhow::anyhow!("cannot initialize server logging: {error}"))?;
 
-    // Only now is there a subscriber to warn to.
-    if let Some(migration) = &resolved.migration {
-        log_migration(migration);
-    }
     let egress_grants = file_config::env_egress_grants();
     if !egress_grants.is_empty() {
         tracing::warn!(
@@ -362,123 +357,6 @@ fn main() -> Result<()> {
     // preceding it — the drop is what would otherwise wait indefinitely.
     runtime.shutdown_timeout(RUNTIME_TEARDOWN_BUDGET);
     result.and_then(|()| reopen_result.map_err(Into::into))
-}
-
-/// Report what the boot migration did. It ran before the subscriber existed,
-/// so this is the first chance to say so.
-fn log_migration(migration: &migrate::MigrationReport) {
-    if !migration.moved.is_empty() {
-        tracing::info!(
-            root = %migration.root.display(),
-            moved = migration.moved.join(", "),
-            "moved the server's state directories under <root>/server; the CLI's packages/ \
-             stays where it was"
-        );
-    }
-    if !migration.published.is_empty() {
-        tracing::info!(
-            from = %migration.staging_dir().display(),
-            to = %migration.server_dir().display(),
-            published = migration.published.join(", "),
-            "published state directories an interrupted migration had staged"
-        );
-    }
-    if migration.resumed
-        && migration.moved.is_empty()
-        && migration.published.is_empty()
-        && migration.secrets.is_none()
-        && migration.staged_secrets.is_none()
-        && migration.stale_staging.is_none()
-        && migration.legacy_split_failed.is_none()
-        && migration.beside_server.is_empty()
-        && migration.linked_defaults.is_empty()
-    {
-        tracing::info!(
-            root = %migration.root.display(),
-            "picked up an interrupted migration; nothing further to move"
-        );
-    }
-    if let Some(secrets) = &migration.secrets {
-        tracing::info!(
-            moved = secrets.moved.len(),
-            left = secrets.left.len(),
-            skipped = secrets.skipped.len(),
-            legacy = %migration.legacy_secrets_dir().display(),
-            "split the secret store by key: entries that open under the configured key moved \
-             to server/secrets; entries that do not (the CLI's plaintext values, or blobs \
-             sealed under another key) stay in the legacy directory"
-        );
-        if !secrets.collided.is_empty() {
-            tracing::warn!(
-                keys = secrets.collided.join(", "),
-                legacy = %migration.legacy_secrets_dir().display(),
-                "sealed entries left in the CLI's secrets/ because server/secrets already holds \
-                 them; the server reads the copies under server/. If a legacy copy is the value \
-                 wanted (written by an older release after the split), re-enter it with \
-                 `submilli server secret put <key>`; then delete the legacy file \
-                 (`submilli secret delete <key>` removes it by name) to silence this"
-            );
-        }
-    }
-    if let Some(staged) = &migration.staged_secrets {
-        tracing::info!(
-            moved = staged.moved.len(),
-            left = staged.left.len(),
-            staged = %migration.staged_secrets_dir().display(),
-            "merged sealed entries an interrupted migration had staged into server/secrets; \
-             entries that do not open under the configured key stay staged"
-        );
-        if !staged.collided.is_empty() {
-            tracing::warn!(
-                keys = staged.collided.join(", "),
-                staged = %migration.staged_secrets_dir().display(),
-                "staged sealed entries left in place because server/secrets already holds \
-                 them; the copies under server/ are the live ones. Remove the staged files by \
-                 hand to silence this"
-            );
-        }
-    }
-    if let Some(reason) = &migration.legacy_split_failed {
-        tracing::warn!(
-            legacy = %migration.legacy_secrets_dir().display(),
-            reason,
-            "could not finish moving sealed entries from the CLI's secrets/ into \
-             server/secrets; entries not moved stay there and are retried on the next keyed boot"
-        );
-    }
-    for path in &migration.linked_defaults {
-        tracing::warn!(
-            path = %path.display(),
-            server = %migration.server_dir().display(),
-            "default state directory is a symlink and was not moved; the server now reads the \
-             same-named directory under server/. Point the setting at the link's target, or \
-             move the target's contents under server/ and remove the link"
-        );
-    }
-    for path in &migration.beside_server {
-        tracing::warn!(
-            path = %path.display(),
-            "legacy state directory found beside an already migrated server/; it is not read. \
-             Move any contents under server/ by hand if they are wanted, then remove it"
-        );
-    }
-    for path in &migration.left_behind {
-        tracing::warn!(
-            path = %path.display(),
-            "legacy directory left in place: it still holds something the server does not own, \
-             or it could not be removed"
-        );
-    }
-    if let Some(path) = &migration.stale_staging {
-        tracing::warn!(
-            path = %path.display(),
-            "an interrupted migration left state staged here that could not be published: \
-             server/ already holds it, it is a sealed secret store this boot's key cannot open \
-             (no key, a different key, or an explicit secret-store directory), or it is \
-             nothing this migration stages. Move what is wanted under server/ by hand before \
-             removing it"
-        );
-    }
 }
 
 /// `GET /healthz` against the address this process's configuration resolves
