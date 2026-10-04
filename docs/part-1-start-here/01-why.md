@@ -182,9 +182,6 @@ means no microVM and no cold start. It works with the harness you already
 run (LangChain, Mastra, or a loop you wrote yourself), connected over MCP or
 an SDK. Your agent keeps its brain, and Submilli runs its code.
 
-[The essay](https://submilli.ai/blog/why-submilli/) makes the full argument,
-with every attack replayed.
-
 Next: [install](/docs/install) the CLI and the server, then the
 [quickstart](/docs/quickstart), where you write a blueprint and a
 package of your own and watch a rule fire.
