@@ -64,12 +64,6 @@ impl ServerTarget {
     }
 }
 
-/// The agent for a command with no `--token-file` flag of its own.
-pub fn server_agent_from_env() -> Result<ureq::Agent> {
-    let base = std::env::var("SUBMILLI_SERVER_URL").context("SUBMILLI_SERVER_URL is not set")?;
-    server_agent(base.trim(), token_file_from_env().as_deref(), None)
-}
-
 /// Read here rather than through clap's `env`, which rejects a variable that
 /// is exported but empty instead of treating it as unset. Blank counts as
 /// empty, as it does for the server URL.

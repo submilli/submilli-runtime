@@ -193,6 +193,11 @@ fn code_blocks<'a>(text: &'a str, language: &str) -> Vec<&'a str> {
         .collect()
 }
 
+fn read_markdown(path: impl AsRef<Path>) -> String {
+    // Windows checkouts may use CRLF; Markdown delimiters are line-oriented.
+    fs::read_to_string(path).unwrap().replace("\r\n", "\n")
+}
+
 /// The "real service" package and blueprint documented in the references must
 /// keep compiling, deriving the host and secret filters the prose describes, and
 /// linting against each other — they are the pattern users copy.
@@ -210,8 +215,8 @@ fn documented_real_service_package_and_blueprint_agree() {
             .unwrap()
     };
     let references = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../skills/submilli/references");
-    let package_doc = fs::read_to_string(references.join("packages.md")).unwrap();
-    let blueprint_doc = fs::read_to_string(references.join("blueprints.md")).unwrap();
+    let package_doc = read_markdown(references.join("packages.md"));
+    let blueprint_doc = read_markdown(references.join("blueprints.md"));
     let source = code_blocks(&package_doc, "typescript")[1];
     assert!(
         source.contains("acme.com/orders.cancel"),
@@ -277,7 +282,7 @@ fn documented_real_service_package_and_blueprint_agree() {
 #[test]
 fn skill_frontmatter_and_relative_links_are_valid() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../skills/submilli");
-    let core = fs::read_to_string(root.join("SKILL.md")).unwrap();
+    let core = read_markdown(root.join("SKILL.md"));
     let yaml = core
         .strip_prefix("---\n")
         .unwrap()
@@ -352,8 +357,8 @@ async fn documented_package_and_blueprint_enforce_the_bound_customer() {
             .unwrap()
     };
     let references = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../skills/submilli/references");
-    let package_doc = fs::read_to_string(references.join("packages.md")).unwrap();
-    let blueprint_doc = fs::read_to_string(references.join("blueprints.md")).unwrap();
+    let package_doc = read_markdown(references.join("packages.md"));
+    let blueprint_doc = read_markdown(references.join("blueprints.md"));
     ok(cli(&["build", "init", "@acme/billing", "package"]));
     fs::write(
         root.path().join("package/src/lib.ts"),
@@ -540,8 +545,9 @@ fn sync_installs_a_newer_release_then_answers_from_its_cache() {
     // release without the network: this source refuses connections.
     ok(run(project.path(), "install", "cursor"));
     let output = sync(project.path(), home.path(), Some("http://127.0.0.1:1/repo"));
+    let cursor = Path::new(".cursor").join("skills/submilli");
     assert!(
-        output.contains(".cursor/skills/submilli: updated to skill v900"),
+        output.contains(&format!("{}: updated to skill v900", cursor.display())),
         "{output}"
     );
 }

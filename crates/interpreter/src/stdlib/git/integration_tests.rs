@@ -9,6 +9,9 @@ fn native(repo: &Path, args: &[&str]) -> Vec<u8> {
     let output = std::process::Command::new("git")
         .arg("-C")
         .arg(repo)
+        // Fixtures must stay unchanged after Git exits: background maintenance
+        // can remove loose objects or leave temporary files during a scan.
+        .args(["-c", "maintenance.auto=false", "-c", "gc.auto=0"])
         .env("GIT_CONFIG_NOSYSTEM", "1")
         .env("GIT_CONFIG_GLOBAL", "/dev/null")
         .args(args)
@@ -1196,35 +1199,6 @@ async fn missing_add_worker_arguments_fail_without_stranding_repository_lock() {
     assert!(error.is::<crate::runtime::host::FatalHostError>());
     assert!(error.to_string().contains("missing decoded paths"));
     assert!(super::worker::run(&vfs, &job(&vfs, "status"), "status", &[]).is_ok());
-}
-
-#[tokio::test]
-async fn poisoned_worker_denial_record_is_fatal() {
-    use crate::runtime::security::{CheckOutcome, SecurityCheck};
-    struct Deny;
-    impl SecurityCheck for Deny {
-        fn check(&self, _: &str, _: &str, _: &serde_json::Value) -> CheckOutcome {
-            CheckOutcome::Deny {
-                rule: None,
-                reason: "test denial".into(),
-            }
-        }
-    }
-    let vfs = Vfs::tempdir().unwrap();
-    let mut job = job(&vfs, "init");
-    job.security = Arc::new(Deny);
-    let denial = job.denial.clone();
-    assert!(
-        std::thread::spawn(move || {
-            let _guard = denial.lock().unwrap();
-            panic!("injected denial poison");
-        })
-        .join()
-        .is_err()
-    );
-    let error = job.check("git.init", json!({"path":"/"})).unwrap_err();
-    assert!(error.is::<crate::runtime::host::FatalHostError>());
-    assert!(error.to_string().contains("denial lock poisoned"));
 }
 
 #[test]

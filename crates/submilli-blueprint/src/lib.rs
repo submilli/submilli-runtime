@@ -5,6 +5,7 @@ mod diag;
 mod filter;
 mod git;
 mod llm;
+mod maps;
 mod mcp;
 mod permissions;
 mod secrets;
@@ -38,7 +39,7 @@ pub use variables::{VariableDecl, VariableError, resolve_variables};
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct Blueprint {
-    /// Document discriminator for kind-routed tooling (`submilli apply`).
+    /// Document discriminator for kind-routed tooling (`submilli server apply`).
     /// Optional for back-compat; when present it must be `blueprint`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub kind: Option<String>,
@@ -61,12 +62,20 @@ pub struct Blueprint {
     pub vfs: VfsConfig,
     /// Declared secret names → where each value comes from. The allow-list that
     /// `${secrets.X}` references must name.
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    #[serde(
+        default,
+        skip_serializing_if = "BTreeMap::is_empty",
+        deserialize_with = "crate::maps::deserialize"
+    )]
     pub secrets: BTreeMap<String, SecretSource>,
     /// Declared session variables → their `required` / `default` rules. The
     /// allow-list that `${vars.NAME}` filter references must name; caller-supplied
     /// values are bound per session and validated at init.
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    #[serde(
+        default,
+        skip_serializing_if = "BTreeMap::is_empty",
+        deserialize_with = "crate::maps::deserialize"
+    )]
     pub variables: BTreeMap<String, VariableDecl>,
     /// Curated/registry packages the script may import. `submilli:*` host
     /// modules and `@mcp/*` virtual packages are configured elsewhere.
@@ -93,11 +102,19 @@ pub struct Blueprint {
     /// Per-caller capability rules. Keyed by caller id (`main` for the user
     /// script, package name for library code); each value is an ordered,
     /// first-match-wins rule list.
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    #[serde(
+        default,
+        skip_serializing_if = "BTreeMap::is_empty",
+        deserialize_with = "crate::maps::deserialize"
+    )]
     pub permissions: BTreeMap<String, Vec<PermissionRule>>,
     /// Outbound MCP servers the script reaches via `@mcp/<server>` virtual
     /// packages. Keyed by local server identifier.
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    #[serde(
+        default,
+        skip_serializing_if = "BTreeMap::is_empty",
+        deserialize_with = "crate::maps::deserialize"
+    )]
     pub mcp: BTreeMap<String, McpServer>,
     /// Model providers the script reaches through `submilli:llm`, and the models
     /// it may name. Unlike `mcp:`, which discovers its sub-entities live, this
@@ -202,7 +219,7 @@ where
     D: serde::Deserializer<'de>,
 {
     let raw = String::deserialize(deserializer)?;
-    parse_duration(&raw).map_err(de::Error::custom)
+    parse_duration(&raw).map_err(|message| de::Error::custom(format!("idle_timeout: {message}")))
 }
 
 /// The `vfs:` block: which filesystem a script gets, and the per-mode settings.
@@ -1109,7 +1126,9 @@ fn build_vfs(full: Full) -> Result<VfsConfig, BlueprintError> {
     let grace = full
         .grace_period
         .as_deref()
-        .map(parse_duration)
+        .map(|raw| {
+            parse_duration(raw).map_err(|message| BlueprintError::InvalidVfs(message.into()))
+        })
         .transpose()?;
     let mode = full.mode.unwrap_or_default();
 
@@ -1222,11 +1241,59 @@ fn parse_fault(err: serde_path_to_error::Error<serde_yml::Error>) -> BlueprintEr
         .collect();
     let inner = err.into_inner();
     let location = inner.location().map(|l| (l.line(), l.column()));
+    let message = readable_yaml_error_path(inner.to_string(), &path);
     BlueprintError::Parse(Fault {
-        message: inner.to_string(),
+        message,
         path: (!path.is_empty()).then_some(path),
         location,
     })
+}
+
+/// serde_yml escapes sequence brackets in its textual path and inserts a dot
+/// before each index. Match a complete path prefix so punctuation in a map key
+/// and backslashes in the diagnostic body remain unchanged.
+fn readable_yaml_error_path(message: String, path: &[PathSeg]) -> String {
+    if !path.iter().any(|seg| matches!(seg, PathSeg::Index(_))) {
+        return message;
+    }
+    let mut raw = String::new();
+    let mut readable = String::new();
+    let mut prefix_lengths = Vec::with_capacity(path.len());
+    for (position, segment) in path.iter().enumerate() {
+        if position > 0 {
+            raw.push('.');
+            if matches!(segment, PathSeg::Key(_)) {
+                readable.push('.');
+            }
+        }
+        match segment {
+            PathSeg::Key(key) => {
+                raw.push_str(key);
+                readable.push_str(key);
+            }
+            PathSeg::Index(index) => {
+                raw.push_str(&format!(r"\[{index}\]"));
+                readable.push_str(&format!("[{index}]"));
+            }
+        }
+        prefix_lengths.push((raw.len(), readable.len()));
+    }
+    for (raw_len, readable_len) in prefix_lengths.into_iter().rev() {
+        let Some(raw_prefix) = raw.get(..raw_len) else {
+            continue;
+        };
+        let Some(detail) = message
+            .strip_prefix(raw_prefix)
+            .and_then(|remainder| remainder.strip_prefix(": "))
+        else {
+            continue;
+        };
+        let Some(readable_prefix) = readable.get(..readable_len) else {
+            continue;
+        };
+        return format!("{readable_prefix}: {detail}");
+    }
+    message
 }
 
 /// Render a blueprint back to YAML. Used by `show` to echo a registered
@@ -1275,28 +1342,35 @@ fn deserialize_packages<'de, D>(deserializer: D) -> Result<BTreeSet<String>, D::
 where
     D: serde::Deserializer<'de>,
 {
-    #[derive(Deserialize)]
-    #[serde(untagged)]
-    enum Repr {
-        List(Vec<String>),
-        Map(BTreeMap<String, serde::de::IgnoredAny>),
+    deserializer.deserialize_any(PackagesVisitor)
+}
+
+struct PackagesVisitor;
+
+impl<'de> de::Visitor<'de> for PackagesVisitor {
+    type Value = BTreeSet<String>;
+
+    fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("a list of package names or a map with unique package names")
     }
 
-    let repr = Repr::deserialize(deserializer)?;
-    let names: Vec<String> = match repr {
-        Repr::List(names) => names,
-        Repr::Map(map) => map.into_keys().collect(),
-    };
-
-    let mut packages = BTreeSet::new();
-    for name in names {
-        if !packages.insert(name.clone()) {
-            return Err(de::Error::custom(format!(
-                "duplicate package `{name}` in packages:"
-            )));
+    fn visit_seq<A: de::SeqAccess<'de>>(self, mut sequence: A) -> Result<Self::Value, A::Error> {
+        let mut packages = BTreeSet::new();
+        while let Some(name) = sequence.next_element::<String>()? {
+            if !packages.insert(name.clone()) {
+                return Err(de::Error::custom(format!(
+                    "duplicate package `{name}` in packages:"
+                )));
+            }
         }
+        Ok(packages)
     }
-    Ok(packages)
+
+    fn visit_map<A: de::MapAccess<'de>>(self, map: A) -> Result<Self::Value, A::Error> {
+        let names =
+            maps::deserialize::<_, de::IgnoredAny>(de::value::MapAccessDeserializer::new(map))?;
+        Ok(names.into_keys().collect())
+    }
 }
 
 // The `packages:` path stops at the block — `BTreeSet` drops source order, so
@@ -1382,30 +1456,26 @@ fn is_valid_leaf(leaf: &str) -> bool {
 }
 
 /// Parse a human duration like `5m`, `30m`, `90s`, `1h`. Units: s, m, h.
-fn parse_duration(raw: &str) -> Result<Duration, BlueprintError> {
+fn parse_duration(raw: &str) -> Result<Duration, String> {
     let s = raw.trim();
     let (digits, unit) = split_numeric(s);
-    let value: u64 = digits.parse().map_err(|_| {
-        BlueprintError::InvalidVfs(
-            format!("invalid duration '{raw}': expected <number><s|m|h>").into(),
-        )
-    })?;
+    let value: u64 = digits
+        .parse()
+        .map_err(|_| format!("invalid duration '{raw}': expected <number><s|m|h>"))?;
     let secs = match unit.to_ascii_lowercase().as_str() {
         "s" => Some(value),
         "m" => value.checked_mul(60),
         "h" => value.checked_mul(3600),
         "" => {
-            return Err(BlueprintError::InvalidVfs(
-                format!("duration '{raw}' needs a unit (s, m, or h)").into(),
-            ));
+            return Err(format!("duration '{raw}' needs a unit (s, m, or h)"));
         }
         other => {
-            return Err(BlueprintError::InvalidVfs(
-                format!("unknown duration unit '{other}' in '{raw}' (use s, m, or h)").into(),
+            return Err(format!(
+                "unknown duration unit '{other}' in '{raw}' (use s, m, or h)"
             ));
         }
     }
-    .ok_or_else(|| BlueprintError::InvalidVfs(format!("duration '{raw}' overflows").into()))?;
+    .ok_or_else(|| format!("duration '{raw}' overflows"))?;
     Ok(Duration::from_secs(secs))
 }
 
@@ -1713,6 +1783,35 @@ permissions:
     }
 
     #[test]
+    fn rejects_duplicate_names_in_blueprint_maps() {
+        for block in [
+            "secrets:\n  repeated: { store: first }\n  repeated: { store: second }\n",
+            "variables:\n  repeated: {}\n  repeated: {}\n",
+            "permissions:\n  repeated: []\n  repeated: []\n",
+            "mcp:\n  repeated: { url: 'https://example.com' }\n  repeated: { url: 'https://other.example.com' }\n",
+            "mcp:\n  server:\n    url: https://example.com\n    headers: { repeated: first, repeated: second }\n",
+            "auth_proxy:\n  - host: example.com\n    headers: { repeated: first, repeated: second }\n",
+            "auth_proxy:\n  - host: example.com\n    query: { repeated: first, repeated: second }\n",
+            "llm:\n  providers:\n    repeated: { type: openai }\n    repeated: { type: google }\n",
+            "llm:\n  models:\n    repeated: { provider: openai }\n    repeated: { provider: google }\n",
+            "packages:\n  repeated: {}\n  repeated: {}\n",
+        ] {
+            let error = parse(&format!("name: duplicates\n{block}")).expect_err(block);
+            let BlueprintError::Parse(fault) = error else {
+                panic!("expected parse error for {block}: {error}");
+            };
+            assert!(
+                fault.message.contains("duplicate key `repeated`"),
+                "{block}: {fault:?}"
+            );
+            assert!(
+                fault.path.as_ref().is_some_and(|path| !path.is_empty()),
+                "{block}: missing field path"
+            );
+        }
+    }
+
+    #[test]
     fn rejects_stdlib_host_module_in_packages() {
         let err = parse("name: x\npackages:\n  - \"submilli:http\"\n").unwrap_err();
         assert!(
@@ -1858,6 +1957,27 @@ permissions:
         let b = parse("name: x\nidle_timeout: 1h\nvfs: none\n").unwrap();
         assert_eq!(b.idle_timeout, Duration::from_secs(3600));
         assert_eq!(b.vfs, VfsConfig::None);
+    }
+
+    #[test]
+    fn invalid_idle_timeout_names_its_field() {
+        for (value, reason) in [
+            ("10", "duration '10' needs a unit"),
+            ("1d", "unknown duration unit 'd'"),
+        ] {
+            let yaml = format!("name: x\nidle_timeout: {value}\n");
+            let err = parse(&yaml).expect_err("invalid duration");
+            assert!(matches!(err, BlueprintError::Parse(_)), "{err:?}");
+            let fault = err.fault().expect("parse fault");
+            assert_eq!(fault.path.as_deref(), Some(&yaml_path!["idle_timeout"][..]));
+            assert!(fault.message.contains(reason), "{}", fault.message);
+            assert!(
+                fault.message.starts_with("idle_timeout: "),
+                "{}",
+                fault.message
+            );
+            assert!(!fault.message.contains("vfs"), "{}", fault.message);
+        }
     }
 
     #[test]
@@ -2388,6 +2508,29 @@ permissions:
         assert_eq!(
             fault_path(filter),
             yaml_path!["permissions", "main", 0_usize, "filter"]
+        );
+        let message = parse(filter)
+            .expect_err("invalid filter")
+            .fault()
+            .expect("parse fault")
+            .message
+            .clone();
+        assert!(
+            message.starts_with("permissions.main[0]: invalid filter `amount <> 5`"),
+            "{message}"
+        );
+        let colon_key = filter.replace("main:", "'team: east':");
+        let message = parse(&colon_key).expect_err("invalid filter").to_string();
+        assert!(
+            message.contains("permissions.team: east[0]: invalid filter"),
+            "{message}"
+        );
+
+        let escaped_key = filter.replace("main:", "'team\\[east\\]':");
+        let message = parse(&escaped_key).expect_err("invalid filter").to_string();
+        assert!(
+            message.contains(r"permissions.team\[east\][0]: invalid filter"),
+            "{message}"
         );
         assert_eq!(
             fault_path("name: x\nsecrets:\n  A: { vault: x }\n"),

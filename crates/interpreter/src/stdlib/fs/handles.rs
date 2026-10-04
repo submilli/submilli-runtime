@@ -312,7 +312,7 @@ struct Level {
     /// platform allows but UTF-8 does not still reopens — the lossy [`Level::prefix`]
     /// would have replaced it with U+FFFD and lost the subtree.
     path: PathBuf,
-    /// Lossy rendering of [`Level::path`] with a trailing separator: `""` at the top,
+    /// Lossy rendering of [`Level::path`] with guest `/` separators: `""` at the top,
     /// `"sub/"` one down. Guest paths are built from this.
     prefix: String,
     /// Names of subdirectories of this level whose descent was postponed — because the
@@ -329,11 +329,11 @@ struct Level {
 
 impl Level {
     fn new(path: PathBuf, iter: ReadDir) -> Self {
-        let prefix = if path.as_os_str().is_empty() {
-            String::new()
-        } else {
-            format!("{}/", path.to_string_lossy())
-        };
+        let mut prefix = String::new();
+        for component in &path {
+            prefix.push_str(&component.to_string_lossy());
+            prefix.push('/');
+        }
         Self {
             iter: Some(iter),
             path,

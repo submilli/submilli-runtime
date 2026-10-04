@@ -75,13 +75,19 @@ pub struct DeleteResponse {
     pub key: String,
 }
 
-/// `DELETE /v1/secrets/{*key}` — remove a secret (idempotent).
+/// `DELETE /v1/secrets/{*key}` — remove a secret, or return 404 if absent.
 pub async fn remove(
     State(state): State<AppState>,
     Path(key): Path<String>,
 ) -> Result<Json<DeleteResponse>, Failure> {
     crate::audit::annotate(serde_json::json!({"key": key}));
-    store(&state)?.delete(&key).await.map_err(internal)?;
+    if !store(&state)?.delete(&key).await.map_err(internal)? {
+        return Err(err(
+            StatusCode::NOT_FOUND,
+            "secret_not_found",
+            format!("secret '{key}' was not found"),
+        ));
+    }
     Ok(Json(DeleteResponse { key }))
 }
 

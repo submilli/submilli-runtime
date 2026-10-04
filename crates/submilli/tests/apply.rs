@@ -1,4 +1,4 @@
-//! End-to-end tests for `submilli apply` against a running submilli-server
+//! End-to-end tests for `submilli server apply` against a running submilli-server
 //! using blueprint files and multi-document YAML streams.
 
 use std::path::{Path, PathBuf};
@@ -22,14 +22,14 @@ fn stderr(out: &Output) -> String {
 
 fn apply(path: &Path, env: &[(&str, &str)]) -> Output {
     let mut cmd = Command::new(submilli_bin());
-    cmd.args(["apply", "-f"]).arg(path);
+    cmd.args(["server", "apply", "-f"]).arg(path);
     cmd.env_remove("SUBMILLI_SERVER_URL");
     cmd.env_remove("SUBMILLI_SERVER_TOKEN");
     cmd.env_remove("SUBMILLI_SERVER_TOKEN_FILE");
     for (key, value) in env {
         cmd.env(key, value);
     }
-    cmd.output().expect("invoke submilli apply")
+    cmd.output().expect("invoke submilli server apply")
 }
 
 async fn spawn_server() -> (String, std::sync::Arc<tokio::sync::Notify>) {
@@ -135,16 +135,21 @@ async fn applies_a_directory_of_files() {
 }
 
 #[test]
-fn missing_server_env_names_the_variable() {
-    let dir = tempfile::tempdir().expect("tempdir");
-    let file = write(dir.path(), "prod.yaml", "name: prod\n");
-    let out = apply(&file, &[]);
+fn server_apply_has_standard_target_options_and_no_top_level_alias() {
+    let out = Command::new(submilli_bin())
+        .args(["server", "apply", "--help"])
+        .output()
+        .expect("help");
+    assert!(out.status.success());
+    let help = stdout(&out);
+    assert!(help.contains("--server <URL>"));
+    assert!(help.contains("--token-file <PATH>"));
+    assert!(help.contains("http://127.0.0.1:8128"));
+    let out = Command::new(submilli_bin())
+        .args(["apply", "--help"])
+        .output()
+        .expect("old command");
     assert!(!out.status.success());
-    assert!(
-        stderr(&out).contains("SUBMILLI_SERVER_URL"),
-        "stderr: {}",
-        stderr(&out)
-    );
 }
 
 #[cfg_attr(skip_http_tests, ignore = "HTTP tests disabled")]
@@ -237,6 +242,7 @@ async fn apply_sends_the_admin_token_from_the_environment() {
     let message = stderr(&refused);
     assert!(message.contains("SUBMILLI_SERVER_TOKEN"), "{message}");
 
+    let file_for_flags = file.clone();
     let accepted = tokio::task::spawn_blocking({
         let server = server.clone();
         move || {
@@ -253,5 +259,21 @@ async fn apply_sends_the_admin_token_from_the_environment() {
     .unwrap();
     assert!(accepted.status.success(), "stderr: {}", stderr(&accepted));
     assert!(stdout(&accepted).contains("Added blueprint 'prod'"));
+    let token_file = write(dir.path(), "token", ADMIN_TOKEN);
+    let accepted = tokio::task::spawn_blocking(move || {
+        Command::new(submilli_bin())
+            .args(["server", "apply", "-f"])
+            .arg(file_for_flags)
+            .args(["--server", &server, "--token-file"])
+            .arg(token_file)
+            .env("SUBMILLI_SERVER_URL", "http://127.0.0.1:1")
+            .env("SUBMILLI_SERVER_TOKEN", "wrong-token")
+            .output()
+            .expect("apply with explicit target")
+    })
+    .await
+    .expect("join");
+    assert!(accepted.status.success(), "stderr: {}", stderr(&accepted));
+    assert!(stdout(&accepted).contains("Updated blueprint 'prod'"));
     shutdown.notify_one();
 }

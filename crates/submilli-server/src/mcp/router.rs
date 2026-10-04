@@ -8,6 +8,7 @@ use axum::body::Body;
 use axum::extract::{Path, Request, State};
 use axum::http::{Method, StatusCode};
 use axum::response::{IntoResponse, Response};
+use rmcp::transport::common::http_header::HEADER_SESSION_ID;
 use rmcp::transport::streamable_http_server::{StreamableHttpServerConfig, StreamableHttpService};
 use submilli_blueprint::Blueprint;
 use tower::ServiceExt;
@@ -17,7 +18,11 @@ use crate::handlers::execute::blueprint_miss_message;
 use crate::mcp::server::SubmilliMcp;
 use crate::mcp::session::{RmcpSessionStore, VfsSessionManager, initialize_binding_error};
 
-type McpService = StreamableHttpService<SubmilliMcp, VfsSessionManager>;
+pub(crate) struct McpService {
+    transport: StreamableHttpService<SubmilliMcp, VfsSessionManager>,
+    sessions: Arc<VfsSessionManager>,
+    deletion: tokio::sync::Mutex<()>,
+}
 
 /// Lazily-built MCP service per blueprint name. A service outlives blueprint
 /// updates so its live `MCP-Session-Id` map survives — the execute path and
@@ -65,10 +70,31 @@ pub(crate) async fn mcp_handler(
     // blueprint stays usable. See `discover_all`.
     let service = get_or_build(&state, &blueprint, &bp);
     let terminates_session = req.method() == Method::DELETE;
+    // Serialize DELETE requests so concurrent retries observe the first
+    // deletion before checking whether the session still exists.
+    let _deletion = if terminates_session {
+        let guard = service.deletion.lock().await;
+        if let Some(id) = req
+            .headers()
+            .get(HEADER_SESSION_ID)
+            .and_then(|v| v.to_str().ok())
+        {
+            match service.sessions.contains_session(id).await {
+                Ok(true) => {}
+                Ok(false) => return StatusCode::NOT_FOUND.into_response(),
+                Err(error) => {
+                    return crate::blueprint::store_failure_response(error).into_response();
+                }
+            }
+        }
+        Some(guard)
+    } else {
+        None
+    };
 
     // `oneshot` consumes the service; the inner state is `Arc`-shared, so the
     // clone is cheap and shares sessions across requests.
-    let mut response = match (*service).clone().oneshot(req).await {
+    let mut response = match service.transport.clone().oneshot(req).await {
         Ok(resp) => resp.map(Body::new),
         Err(infallible) => match infallible {},
     };
@@ -109,6 +135,7 @@ async fn reject_invalid_variables(
 }
 
 fn get_or_build(state: &AppState, name: &str, blueprint: &Blueprint) -> Arc<McpService> {
+    // Poisoned state is unsupported; see AGENTS.md accepted poisoned-lock panics.
     let mut cache = state
         .mcp_services()
         .lock()
@@ -145,7 +172,11 @@ fn get_or_build(state: &AppState, name: &str, blueprint: &Blueprint) -> Arc<McpS
         ))
     };
 
-    let service = Arc::new(StreamableHttpService::new(factory, session_manager, config));
+    let service = Arc::new(McpService {
+        transport: StreamableHttpService::new(factory, session_manager.clone(), config),
+        sessions: session_manager,
+        deletion: tokio::sync::Mutex::new(()),
+    });
     cache.insert(name.to_string(), service.clone());
     service
 }

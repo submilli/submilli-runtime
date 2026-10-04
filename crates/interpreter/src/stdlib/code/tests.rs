@@ -359,23 +359,31 @@ async fn grants_narrowed_to_a_nested_root() {
 #[tokio::test]
 async fn ancestor_errors_name_only_the_root() {
     let vfs = crate::runtime::Vfs::tempdir().unwrap();
+    std::fs::create_dir_all(vfs.root().join("work")).unwrap();
+    assert_ancestor_error(vfs, "/work/nope/x", "tree /work/nope/x: ").await;
+}
+#[cfg(unix)]
+#[tokio::test]
+async fn symlink_ancestor_errors_name_only_the_root() {
+    let vfs = crate::runtime::Vfs::tempdir().unwrap();
     std::fs::create_dir_all(vfs.root().join("work/real/sub")).unwrap();
     std::os::unix::fs::symlink("real", vfs.root().join("work/link")).unwrap();
-    for (root, message) in [
-        ("/work/nope/x", "tree /work/nope/x: "),
-        (
-            "/work/link/sub",
-            "navigation root /work/link/sub must not traverse a symlink",
-        ),
-    ] {
-        let mut data = crate::runtime::StoreData::with_vfs(vfs.clone());
-        data.security_check = std::sync::Arc::new(Within { root, also: &[] });
-        let source = format!(
-            "import {{ tree }} from 'submilli:code'; function main(): void {{ tree('{root}', 1); }}"
-        );
-        let error = run(&source, data).await.unwrap_err().to_string();
-        assert!(error.contains(message), "{root}: {error}");
-    }
+    assert_ancestor_error(
+        vfs,
+        "/work/link/sub",
+        "navigation root /work/link/sub must not traverse a symlink",
+    )
+    .await;
+}
+
+async fn assert_ancestor_error(vfs: crate::runtime::Vfs, root: &'static str, message: &str) {
+    let mut data = crate::runtime::StoreData::with_vfs(vfs);
+    data.security_check = std::sync::Arc::new(Within { root, also: &[] });
+    let source = format!(
+        "import {{ tree }} from 'submilli:code'; function main(): void {{ tree('{root}', 1); }}"
+    );
+    let error = run(&source, data).await.unwrap_err().to_string();
+    assert!(error.contains(message), "{root}: {error}");
 }
 #[tokio::test]
 async fn invalid_utf8_limits_and_disabled_vfs() {

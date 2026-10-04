@@ -1162,7 +1162,16 @@ fn build_test_http_skip_preserves_local_tests_and_docs() {
     let out = run_network_test(&project, tmp.path(), true, Some("1"));
     assert!(out.status.success(), "{}", stderr(&out));
     assert!(stdout(&out).contains("2 passed, 0 failed across 2 files"));
-    assert!(stdout(&out).contains("4 HTTP test files skipped (--skip-network)"));
+    assert!(stdout(&out).contains("4 network test files skipped (--skip-network)"));
+    for name in [
+        "network.test.ts",
+        "nested/network_read.test.subm",
+        "nested/network.test.subm",
+        "network_write.test.ts",
+    ] {
+        assert!(stdout(&out).contains(&format!("skip tests/{name} (--skip-network)")));
+    }
+    assert!(!stdout(&out).contains(&project.display().to_string()));
     assert!(stdout(&out).contains("networking.test.ts"));
     assert!(stdout(&out).contains("docs/readme.md :: example 1 (compile)"));
 
@@ -1191,12 +1200,12 @@ fn build_test_network_skip_requires_the_flag() {
             "{}",
             stderr(&out)
         );
-        assert!(!stdout(&out).contains("HTTP test files skipped"));
+        assert!(!stdout(&out).contains("network test files skipped"));
     }
     let out = run_network_test(&project, tmp.path(), true, Some("1"));
     assert!(out.status.success(), "{}", stderr(&out));
     assert!(stdout(&out).contains("0 passed, 0 failed across 0 files"));
-    assert!(stdout(&out).contains("1 HTTP test files skipped"));
+    assert!(stdout(&out).contains("1 network test files skipped"));
     assert!(!stderr(&out).contains("no test files found"));
 }
 
@@ -1861,14 +1870,14 @@ fn build_test_skip_network_is_independent_of_credentials_and_legacy_variable() {
         assert_eq!(out.status.success(), skip, "{}", stderr(&out));
         assert!(!stderr(&out).contains("deprecated"));
         assert_eq!(
-            stdout(&out).contains("1 HTTP test files skipped (--skip-network)"),
+            stdout(&out).contains("1 network test files skipped (--skip-network)"),
             skip
         );
     }
     for setting in [None, Some("0"), Some("true"), Some("1")] {
         let out = run_network_test(&project, tmp.path(), true, setting);
         // The credential assertions fail, but the network file must still be skipped.
-        assert!(stdout(&out).contains("1 HTTP test files skipped (--skip-network)"));
+        assert!(stdout(&out).contains("1 network test files skipped (--skip-network)"));
     }
 }
 
@@ -1921,7 +1930,7 @@ fn build_test_empty_project_reports_no_test_files() {
         let out = build_test(&project, tmp.path(), args);
         assert!(out.status.success(), "{}", stderr(&out));
         assert!(stderr(&out).contains("no test files found"));
-        assert!(!stdout(&out).contains("HTTP test files skipped"));
+        assert!(!stdout(&out).contains("network test files skipped"));
     }
 }
 
@@ -2161,7 +2170,7 @@ fn deny_warnings_respects_package_selection_and_skipped_network_files() {
         &["-p", "@acme/clean", "--skip-network", "--deny-warnings"],
     );
     assert!(out.status.success(), "{}", stderr(&out));
-    assert!(stdout(&out).contains("HTTP test files skipped"));
+    assert!(stdout(&out).contains("network test files skipped"));
     let out = build_test(
         &project,
         tmp.path(),

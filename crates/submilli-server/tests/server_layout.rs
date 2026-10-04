@@ -1,10 +1,4 @@
-//! The boot-time layout migration as a deployment sees it: a `SUBMILLI_HOME`
-//! populated by an earlier release, the real binary started against it, and
-//! the state still served afterwards from its new place under `server/`.
-//!
-//! In-process tests cover the move itself; this one proves the binary runs it
-//! at the right point in boot — before the stores open — and that an
-//! explicitly configured directory is left where the operator put it.
+//! Server defaults use the server/ directory and leave legacy state untouched.
 
 #![cfg(unix)]
 
@@ -20,7 +14,7 @@ use submilli_server::blueprint::{BlueprintStore, FileBlueprintStore};
 
 #[cfg_attr(skip_http_tests, ignore = "HTTP tests disabled")]
 #[test]
-fn a_legacy_home_is_served_from_under_server_after_boot() {
+fn legacy_state_is_left_untouched_when_server_directory_is_missing() {
     let home = tempfile::tempdir().expect("temp home");
     seed_blueprint(&home.path().join("blueprints"), "legacy");
     let port = free_port();
@@ -30,9 +24,12 @@ fn a_legacy_home_is_served_from_under_server_after_boot() {
     let names = blueprint_names(port);
     stop(&mut server);
 
-    assert_eq!(names, vec!["legacy".to_string()]);
+    assert!(names.is_empty(), "legacy blueprints must not be imported");
     assert!(home.path().join("server/blueprints").is_dir());
-    assert!(!home.path().join("blueprints").exists(), "legacy dir moved");
+    assert!(
+        home.path().join("blueprints").is_dir(),
+        "legacy dir stays untouched"
+    );
     assert!(!home.path().join("server.migrating").exists());
 }
 

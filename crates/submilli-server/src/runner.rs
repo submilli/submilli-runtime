@@ -324,18 +324,7 @@ async fn run_inner(
         };
         crate::metrics::runtime_phases(&rt);
         log_phase_breakdown(&compiled.timings, &rt);
-        let console_raw = match captured_console(&buf) {
-            Ok(console) => console,
-            Err(console) => {
-                let mut outcome = internal_failure("console buffer lock poisoned");
-                if let Err(error) = &dispatch {
-                    outcome = internal_failure(&format!("{error:#}; console buffer lock poisoned"));
-                }
-                outcome.console_raw = console;
-                outcome.discovery_warnings = discovery_warnings;
-                return outcome;
-            }
-        };
+        let console_raw = captured_console(&buf);
 
         match dispatch {
             Ok(value) => RunOutcome {
@@ -666,25 +655,19 @@ fn internal_failure(msg: &str) -> RunOutcome {
     }
 }
 
-// The buffer contains only output bytes, not execution or authorization state.
-// Poisoned bytes can still be reported, but the run must remain a failure.
-fn captured_console(buf: &Mutex<Vec<u8>>) -> Result<String, String> {
-    match buf.lock() {
-        Ok(buffer) => Ok(String::from_utf8_lossy(&buffer).into_owned()),
-        Err(poisoned) => Err(String::from_utf8_lossy(&poisoned.into_inner()).into_owned()),
-    }
+// Poisoned state is unsupported; see AGENTS.md accepted poisoned-lock panics.
+fn captured_console(buf: &Mutex<Vec<u8>>) -> String {
+    String::from_utf8_lossy(&buf.lock().expect("console buffer lock poisoned")).into_owned()
 }
 
+// Poisoned state is unsupported; see AGENTS.md accepted poisoned-lock panics.
 struct Sink(Arc<Mutex<Vec<u8>>>);
 
 const MAX_CONSOLE_BYTES: usize = 1024 * 1024;
 
 impl Write for Sink {
     fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-        let mut output = self
-            .0
-            .lock()
-            .map_err(|_| std::io::Error::other("console buffer lock poisoned"))?;
+        let mut output = self.0.lock().expect("console buffer lock poisoned");
         if buf.len() > MAX_CONSOLE_BYTES.saturating_sub(output.len()) {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::FileTooLarge,
@@ -715,21 +698,6 @@ mod tests {
     use interpreter::runtime::security::CheckOutcome;
     use interpreter::runtime::{InMemorySessionKv, install_runtime_host_functions};
     use std::time::Duration;
-
-    #[test]
-    fn poisoned_console_capture_preserves_output_and_reports_failure() {
-        let buffer = Arc::new(Mutex::new(b"before\n".to_vec()));
-        let poisoned = Arc::clone(&buffer);
-        let _ = std::thread::spawn(move || {
-            let _guard = poisoned.lock().unwrap();
-            panic!("injected console poison");
-        })
-        .join();
-        assert!(Sink(Arc::clone(&buffer)).write_all(b"after\n").is_err());
-        assert_eq!(captured_console(&buffer), Err("before\n".to_owned()));
-        let healthy = Mutex::new(b"healthy\n".to_vec());
-        assert_eq!(captured_console(&healthy), Ok("healthy\n".to_owned()));
-    }
 
     #[test]
     fn console_sink_caps_retained_output_without_losing_prior_bytes() {

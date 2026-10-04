@@ -14,6 +14,7 @@ but as a check outside the model's control.
 [![CI](https://github.com/submilli/submilli-runtime/actions/workflows/ci.yml/badge.svg)](https://github.com/submilli/submilli-runtime/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/submilli/submilli-runtime?include_prereleases&label=release)](https://github.com/submilli/submilli-runtime/releases)
 [![Container image](https://img.shields.io/badge/container-ghcr.io-blue)](https://github.com/submilli/submilli-runtime/pkgs/container/submilli-runtime)
+[![Helm chart](https://img.shields.io/badge/dynamic/yaml?url=https%3A%2F%2Fraw.githubusercontent.com%2Fsubmilli%2Fsubmilli-runtime%2Fmain%2Fcharts%2Fsubmilli%2FChart.yaml&query=%24.version&label=helm%20chart&logo=helm&color=0F1689)](https://github.com/submilli/submilli-runtime/pkgs/container/charts%2Fsubmilli)
 [![License: Apache 2.0](https://img.shields.io/badge/license-Apache%202.0-blue)](LICENSE)
 [![Docs](https://img.shields.io/badge/docs-submilli.ai-informational)](https://submilli.ai/docs/)
 [![Discord](https://img.shields.io/discord/1553732232928165958?label=discord)](https://discord.gg/VphpukeGGj)

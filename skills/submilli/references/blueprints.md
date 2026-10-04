@@ -48,7 +48,7 @@ Every top-level key, all optional except `name`:
 
 | Key | Meaning |
 | --- | --- |
-| `kind: blueprint` | Document discriminator for `submilli apply` |
+| `kind: blueprint` | Document discriminator for `submilli server apply` |
 | `name` | Registered name; the REST `blueprint` field and the MCP path `/mcp/<name>` |
 | `variables` | Session variables. Each has `required: true` or `default: "value"`, never both. Referenced as `${vars.NAME}` in filters |
 | `packages` | Packages the program may import. Unlisted packages do not exist for it |
@@ -371,7 +371,7 @@ Register and run:
 export SUBMILLI_SERVER_TOKEN=...                 # the token the server was started with
 submilli-server                                  # separate terminal, same variable
 submilli server packages install submilli/submilli-runtime @submilli/jina
-submilli server blueprint apply blueprint.yaml   # or: submilli apply -f dir/
+submilli server blueprint apply blueprint.yaml   # or: submilli server apply -f dir/
 submilli server run-code --blueprint support-orders program.ts
 ```
 
