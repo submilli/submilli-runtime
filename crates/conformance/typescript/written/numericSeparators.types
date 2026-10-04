@@ -1,0 +1,80 @@
+=== numericSeparators.ts ===
+// Written for Submilli: no upstream case Submilli can run checks a numeric
+// separator (`1_000`).
+
+let million = 1_000_000;
+>million : number
+>        : ^^^^^^
+>1_000_000 : 1000000
+>          : ^^^^^^^
+
+let fraction: number = 1_000.000_5;
+>fraction : number
+>         : ^^^^^^
+>1_000.000_5 : 1000.0005
+>            : ^^^^^^^^^
+
+let exponent = 1e1_0 + 2.5e-1_0;
+>exponent : number
+>         : ^^^^^^
+>1e1_0 + 2.5e-1_0 : number
+>                 : ^^^^^^
+>1e1_0 : 10000000000
+>      : ^^^^^^^^^^^
+>2.5e-1_0 : 2.5e-10
+>         : ^^^^^^^
+
+let radix = 0xFF_FF + 0b1010_1010 + 0o7_7;
+>radix : number
+>      : ^^^^^^
+>0xFF_FF + 0b1010_1010 + 0o7_7 : number
+>                              : ^^^^^^
+>0xFF_FF + 0b1010_1010 : number
+>                      : ^^^^^^
+>0xFF_FF : 65535
+>        : ^^^^^
+>0b1010_1010 : 170
+>            : ^^^
+>0o7_7 : 63
+>      : ^^
+
+let big: bigint = 1_000n * 0xF_Fn;
+>big : bigint
+>    : ^^^^^^
+>1_000n * 0xF_Fn : bigint
+>                : ^^^^^^
+>1_000n : 1000n
+>       : ^^^^^
+>0xF_Fn : 255n
+>       : ^^^^
+
+let wrong: string = 1_000;
+>wrong : string
+>      : ^^^^^^
+>1_000 : 1000
+>      : ^^^^
+
+let trailing = 1_;
+>trailing : number
+>         : ^^^^^^
+>1_ : 1
+>   : ^
+
+let doubled = 1__000;
+>doubled : number
+>        : ^^^^^^
+>1__000 : 1000
+>       : ^^^^
+
+let afterZero = 0_1;
+>afterZero : number
+>          : ^^^^^^
+>0_1 : 1
+>    : ^
+
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

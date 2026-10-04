@@ -434,5 +434,6 @@ the next `port-suite.cjs` run leaves it out too.
 | `written/customErrorClasses` | A class extending `Error` |
 | `written/staticReadonlyFields` | `static readonly` fields |
 | `written/radixBigIntLiterals` | A radix prefix on a `bigint` |
+| `written/numericSeparators` | Numeric separators in each digit run, and misplaced ones |
 | `written/instanceofUint8Array` | `instanceof Uint8Array` |
 | `written/gettersAndSetters` | Setters |
