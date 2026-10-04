@@ -1,0 +1,137 @@
+---
+const setupPrompt = `Help me set up Submilli in my project. Read the official setup instructions at https://github.com/submilli/submilli-runtime/blob/main/skills/submilli/references/setup.md and the quickstart at https://submilli.ai/docs/quickstart/ first. Confirm the project directory, check whether submilli and submilli-server are already installed, and use the documented installer for my OS only if needed. Preserve existing pinned versions and local edits. Install the skill for this assistant in the project: use submilli skill install --agent claude --project . for Claude Code, or submilli skill install --agent codex --project . for Codex. Verify the installation and run a small local example without paid model calls or external side effects. Tell me if I need to restart the assistant to discover the skill, and report what you actually verified.`;
+const encodedPrompt = encodeURIComponent(setupPrompt);
+---
+<aside class="agent-setup" aria-labelledby="agent-setup-title">
+	<p id="agent-setup-title" class="setup-label">Optional: set up with your coding agent</p>
+	<div class="setup-actions">
+		<a href={`claude://code/new?q=${encodedPrompt}`} data-ph-no-capture>Claude Code <span aria-hidden="true">↗</span></a>
+		<a href={`codex://threads/new?prompt=${encodedPrompt}`} data-ph-no-capture>Codex <span aria-hidden="true">↗</span></a>
+	</div>
+	<p class="setup-help">Opens a setup prompt in the desktop app. Review it, then send.</p>
+	<details>
+		<summary>Copy setup prompt</summary>
+		<div class="prompt-fallback">
+			<label for="agent-setup-prompt">Paste into Claude Code or Codex</label>
+			<textarea id="agent-setup-prompt" readonly rows="6" data-ph-no-capture>{setupPrompt}</textarea>
+			<button type="button" data-copy-setup hidden>Copy prompt</button>
+			<span data-copy-status role="status"></span>
+		</div>
+	</details>
+</aside>
+<script>
+	const button = document.querySelector<HTMLButtonElement>('[data-copy-setup]');
+	const prompt = document.querySelector<HTMLTextAreaElement>('#agent-setup-prompt');
+	const status = document.querySelector<HTMLElement>('[data-copy-status]');
+	if (button && prompt && status) {
+		button.hidden = false;
+		button.addEventListener('click', async () => {
+			try {
+				await navigator.clipboard.writeText(prompt.value);
+				status.textContent = 'Copied.';
+			} catch {
+				prompt.focus();
+				prompt.select();
+				status.textContent = 'Select and copy the prompt above.';
+			}
+		});
+	}
+</script>
+<style>
+	.agent-setup {
+		margin: 0 0 2rem;
+		padding: 1rem 1.125rem;
+		border: 1px solid var(--sl-color-hairline);
+		border-radius: 12px;
+		background: var(--sl-color-bg-sidebar);
+	}
+	.setup-label {
+		margin: 0 0 0.75rem;
+		font-size: 0.9375rem;
+		font-weight: 600;
+		color: var(--sl-color-white);
+	}
+	.setup-actions {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 0.75rem;
+	}
+	.setup-actions a {
+		display: inline-flex;
+		align-items: center;
+		justify-content: space-between;
+		gap: 1.75rem;
+		min-height: 2.75rem;
+		padding: 0.625rem 1rem;
+		border: 1px solid var(--sl-color-hairline);
+		border-radius: 8px;
+		margin: 0;
+		text-decoration: none;
+		font-size: 0.9375rem;
+		font-weight: 700;
+		color: var(--sl-color-text-accent);
+	}
+	.setup-actions a:hover {
+		border-color: var(--sl-color-text-accent);
+	}
+	.setup-help {
+		margin: 0.75rem 0 0;
+		font-size: 0.8125rem;
+		color: var(--sl-color-gray-2);
+	}
+	summary {
+		display: flex;
+		align-items: center;
+		min-height: 2.75rem;
+		width: fit-content;
+		font-size: 0.8125rem;
+		text-decoration: underline;
+		text-underline-offset: 4px;
+		color: var(--sl-color-gray-2);
+		cursor: pointer;
+	}
+	.prompt-fallback {
+		max-width: 38.75rem;
+		padding: 1rem;
+		border: 1px solid var(--sl-color-hairline);
+		border-radius: 8px;
+	}
+	label {
+		display: block;
+		margin-bottom: 0.5rem;
+		font-size: 0.875rem;
+		color: var(--sl-color-white);
+	}
+	textarea {
+		display: block;
+		width: 100%;
+		box-sizing: border-box;
+		resize: vertical;
+		font: 0.8125rem/1.6 var(--sl-font-mono);
+		color: var(--sl-color-white);
+		background: var(--sl-color-bg-inline-code);
+		border: 1px solid var(--sl-color-hairline);
+		border-radius: 4px;
+		padding: 0.75rem;
+	}
+	button {
+		min-height: 2.75rem;
+		margin-top: 0.75rem;
+		padding: 0.5rem 0.875rem;
+		font: 700 0.875rem var(--sl-font);
+		background: var(--sl-color-bg-accent);
+		color: var(--sl-color-text-invert);
+		border: 0;
+		border-radius: 6px;
+		cursor: pointer;
+	}
+	[data-copy-status] {
+		font-size: 0.8125rem;
+		margin-left: 0.75rem;
+		color: var(--sl-color-gray-2);
+	}
+	:is(a, summary, button, textarea):focus-visible {
+		outline: 2px solid var(--sl-color-text-accent);
+		outline-offset: 4px;
+	}
+</style>
