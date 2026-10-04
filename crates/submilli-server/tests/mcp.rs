@@ -23,6 +23,9 @@ use submilli_server::config::{VolumeSpec, VolumeTable};
 use submilli_server::{AppState, ServerConfig, app};
 use tower::ServiceExt;
 
+#[path = "common/last_run_store.rs"]
+mod last_run_store;
+
 const EPH: &str = "eph";
 const SESS: &str = "sess";
 const MCP: &str = "mcp-bp";
@@ -53,11 +56,19 @@ impl Harness {
     /// Build a harness over an arbitrary blueprint set (used by tests that point
     /// an `mcp:` server at a mock upstream on a dynamic port).
     fn from_blueprints(bps: Vec<Blueprint>) -> Self {
+        Self::from_blueprints_with_sessions(bps, None)
+    }
+
+    fn from_blueprints_with_sessions(
+        bps: Vec<Blueprint>,
+        sessions: Option<Arc<dyn submilli_server::session::SessionStore>>,
+    ) -> Self {
         let session_root = tempfile::tempdir().expect("session root");
         let session_root_path = session_root.path().to_path_buf();
         let blueprints = Arc::new(InMemoryBlueprintStore::seed(bps).expect("seed blueprints"));
         let config = ServerConfig {
             blueprints: Some(blueprints),
+            sessions,
             session_storage_root: Some(session_root_path.clone()),
             ..ServerConfig::default()
         };
@@ -3006,4 +3017,104 @@ async fn execute_ids_cover_argument_validation_and_compile_errors() {
             .expect("execution ID on refusal");
         uuid::Uuid::parse_str(id).unwrap();
     }
+}
+
+#[tokio::test]
+async fn last_run_recording_failure_preserves_execution_and_recovers() {
+    use std::sync::atomic::Ordering;
+    let store = Arc::new(last_run_store::FaultStore::default());
+    store.fail_writes.store(true, Ordering::SeqCst);
+    let h = Harness::from_blueprints_with_sessions(
+        vec![Blueprint {
+            name: EPH.into(),
+            ..Default::default()
+        }],
+        Some(store.clone()),
+    );
+    let session = h.handshake(EPH).await;
+    let (_, _, success) = h
+        .post(
+            EPH,
+            tools_call(
+                2,
+                r#"function main(): number { console.log("captured"); return 7; }"#,
+            ),
+            Some(&session),
+        )
+        .await;
+    assert_eq!(output(&success)["result"], "7");
+    assert_eq!(output(&success)["console"], json!([]));
+    assert!(output(&success)["error"].is_null());
+    let (_, _, failed) = h.post(EPH, tools_call(3, r#"function main(): void { console.log("before throw"); throw new Error("original failure"); }"#), Some(&session)).await;
+    assert_eq!(output(&failed)["console"], json!(["before throw"]));
+    assert!(
+        output(&failed)["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("original failure")
+    );
+    assert!(!failed.to_string().contains("private backend detail"));
+    assert_eq!(store.writes.load(Ordering::SeqCst), 2);
+    store.fail_writes.store(false, Ordering::SeqCst);
+    let (_, _, healthy) = h
+        .post(
+            EPH,
+            tools_call(4, "function main(): number { return 42; }"),
+            Some(&session),
+        )
+        .await;
+    assert_eq!(output(&healthy)["result"], "42");
+    let (_, _, stored) = h
+        .post(
+            EPH,
+            rpc_call(5, "submilli__typescript__last_run", json!({})),
+            Some(&session),
+        )
+        .await;
+    assert_eq!(output(&stored)["result"], "42");
+}
+
+#[tokio::test]
+async fn last_run_read_failure_is_internal_and_hides_backend_details() {
+    use std::sync::atomic::Ordering;
+    let store = Arc::new(last_run_store::FaultStore::default());
+    let h = Harness::from_blueprints_with_sessions(
+        vec![Blueprint {
+            name: EPH.into(),
+            ..Default::default()
+        }],
+        Some(store.clone()),
+    );
+    let session = h.handshake(EPH).await;
+    store.fail_reads.store(true, Ordering::SeqCst);
+    for id in [2, 4] {
+        if id == 4 {
+            h.post(
+                EPH,
+                tools_call(3, "function main(): number { return 7; }"),
+                Some(&session),
+            )
+            .await;
+        }
+        let (status, _, response) = h
+            .post(
+                EPH,
+                rpc_call(id, "submilli__typescript__last_run", json!({})),
+                Some(&session),
+            )
+            .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(response["error"]["code"], -32603, "{response}");
+        assert_eq!(response["error"]["message"], "last-run storage unavailable");
+        assert!(!response.to_string().contains("private backend detail"));
+    }
+    store.fail_reads.store(false, Ordering::SeqCst);
+    let (_, _, stored) = h
+        .post(
+            EPH,
+            rpc_call(5, "submilli__typescript__last_run", json!({})),
+            Some(&session),
+        )
+        .await;
+    assert_eq!(output(&stored)["result"], "7");
 }

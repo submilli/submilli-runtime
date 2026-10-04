@@ -439,7 +439,7 @@ pub(crate) async fn execute_core(state: &AppState, inputs: ExecuteInputs<'_>) ->
 
     // The success response omits console output; the session keeps the full
     // capture so `/v1/last-run/{id}` can still return it.
-    state
+    if let Err(error) = state
         .sessions()
         .record(
             session_id,
@@ -449,7 +449,11 @@ pub(crate) async fn execute_core(state: &AppState, inputs: ExecuteInputs<'_>) ->
                 error: response.error.clone(),
             },
         )
-        .await;
+        .await
+    {
+        // Execution already finished; losing its output would invite a retry of effects.
+        tracing::warn!(operation = "record", session = session_id, %error, "last-run storage failed");
+    }
 
     ExecuteOutcome::dispatched(response)
 }
