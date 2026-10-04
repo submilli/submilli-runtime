@@ -412,11 +412,11 @@ error: Error: expectException: expected a TypeError error, but caught RangeError
 [security] caller=main capability=acme.com/credits.apply context={"amount":1500,"customerClass":"standard","customerId":"cus_northwind","kind":"goodwill"}
 ok   packages/billing/tests/lib.test.ts :: credits the customer named
 ok   packages/billing/tests/lib.test.ts :: refuses a zero amount
-skip …/packages/billing/tests/network.test.ts (--skip-network)
+skip packages/billing/tests/network.test.ts (--skip-network)
 ok   packages/billing/docs/readme.md :: example 1 (compile)
 
 4 passed, 1 failed across 3 files
-1 HTTP test files skipped (--skip-network)
+1 network test files skipped (--skip-network)
 ```
 
 | Line | Meaning |
@@ -424,10 +424,10 @@ ok   packages/billing/docs/readme.md :: example 1 (compile)
 | `ok   <file> :: <label>` | A segment passed |
 | `FAIL <file> :: <label>` | A segment failed. The error and its trace follow on standard error |
 | `FAIL <file>  (compile error)` | The file didn't compile. The diagnostics precede it |
-| `skip <file> (--skip-network)` | A network test file left out. The path is absolute |
+| `skip <file> (--skip-network)` | A network test file left out. The path is relative to `submilli.toml` |
 | `ok   <path>/docs/readme.md :: example <n> (compile)` | A readme example compiled |
 | `<p> passed, <f> failed across <n> files` | The totals. The readme counts as one file when it has examples. |
-| `<n> HTTP test files skipped (--skip-network)` | Printed when files were skipped |
+| `<n> network test files skipped (--skip-network)` | Printed when files were skipped |
 
 The run exits 0 when nothing failed and 1 otherwise. With no test files and
 no readme examples it prints

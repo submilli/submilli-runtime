@@ -156,10 +156,10 @@ impl SecretStore for FileSecretStore {
         self.atomic_write(&key_to_filename(key), &blob).map_err(io)
     }
 
-    async fn delete(&self, key: &str) -> Result<(), SecretStoreError> {
+    async fn delete(&self, key: &str) -> Result<bool, SecretStoreError> {
         match fs::remove_file(self.dir.join(key_to_filename(key))) {
-            Ok(()) => self.sync_dir().map_err(io),
-            Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(()),
+            Ok(()) => self.sync_dir().map(|()| true).map_err(io),
+            Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(false),
             Err(e) => Err(io(e)),
         }
     }
@@ -242,10 +242,13 @@ impl SecretStore for PlaintextFileSecretStore {
             .map_err(io)
     }
 
-    async fn delete(&self, key: &str) -> Result<(), SecretStoreError> {
+    async fn delete(&self, key: &str) -> Result<bool, SecretStoreError> {
         match fs::remove_file(self.dir.join(key_to_filename(key))) {
-            Ok(()) => File::open(&self.dir).and_then(|d| d.sync_all()).map_err(io),
-            Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(()),
+            Ok(()) => File::open(&self.dir)
+                .and_then(|d| d.sync_all())
+                .map(|()| true)
+                .map_err(io),
+            Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(false),
             Err(e) => Err(io(e)),
         }
     }
@@ -332,10 +335,10 @@ mod tests {
         let all = store.list(None).await.unwrap();
         assert_eq!(all, vec![key.to_string(), "other/key".to_string()]);
 
-        store.delete(key).await.unwrap();
+        assert!(store.delete(key).await.unwrap());
         assert_eq!(store.get(key).await.unwrap(), None);
         // Deleting an absent key is a no-op.
-        store.delete(key).await.unwrap();
+        assert!(!store.delete(key).await.unwrap());
     }
 
     #[cfg(unix)]
@@ -368,10 +371,10 @@ mod tests {
         let all = store.list(None).await.unwrap();
         assert_eq!(all, vec![key.to_string(), "other/key".to_string()]);
 
-        store.delete(key).await.unwrap();
+        assert!(store.delete(key).await.unwrap());
         assert_eq!(store.get(key).await.unwrap(), None);
         // Deleting an absent key is a no-op.
-        store.delete(key).await.unwrap();
+        assert!(!store.delete(key).await.unwrap());
     }
 
     #[tokio::test]

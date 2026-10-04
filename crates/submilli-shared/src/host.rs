@@ -200,7 +200,8 @@ impl std::error::Error for SecretStoreError {}
 pub trait SecretStore: Send + Sync + 'static {
     async fn get(&self, key: &str) -> Result<Option<String>, SecretStoreError>;
     async fn put(&self, key: &str, value: &str) -> Result<(), SecretStoreError>;
-    async fn delete(&self, key: &str) -> Result<(), SecretStoreError>;
+    /// Remove a key, returning whether it existed.
+    async fn delete(&self, key: &str) -> Result<bool, SecretStoreError>;
     async fn list(&self, prefix: Option<&str>) -> Result<Vec<String>, SecretStoreError>;
 }
 
