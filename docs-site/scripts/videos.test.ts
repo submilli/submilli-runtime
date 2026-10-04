@@ -6,12 +6,16 @@ import { readChapters } from '../src/lib/agent-docs.ts';
 
 test('unpublished and planned films never produce a production player', () => {
   for (const film of films) assert.equal(videoSource(film), undefined);
+  assert.equal(videoSource({ status: 'published', src: 'https://example.com/movie.mp4' }), undefined);
+  for (const src of ['http://example.com/movie.mp4', 'https://localhost/movie.mp4', 'https://127.0.0.1/movie.mp4', 'https://[::1]/movie.mp4', 'https://192.168.0.1/movie.mp4', 'https://user:pass@example.com/movie.mp4', 'not a URL']) {
+    assert.equal(videoSource({ status: 'published', src, publishedVersion: 'v1' }), undefined);
+  }
   const preview = '/docs/_video-preview/introduction.mp4';
   assert.equal(videoSource(introduction, true, preview), preview);
   assert.equal(videoSource(introduction, false, preview), undefined);
   assert.equal(videoSource(introduction, true, 'https://example.com/movie.mp4'), undefined);
   assert.equal(videoSource({ status: 'awaiting-publication', src: 'https://example.com/movie.mp4' }), undefined);
-  assert.equal(videoSource({ status: 'published', src: 'https://example.com/movie.mp4' }), 'https://example.com/movie.mp4');
+  assert.equal(videoSource({ status: 'published', src: 'https://example.com/movie.mp4', publishedVersion: 'v1' }), 'https://example.com/movie.mp4');
 });
 
 test('completed film has valid canonical, transcript and caption destinations', async () => {

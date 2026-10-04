@@ -2,7 +2,7 @@
 import { films, introduction } from '../lib/videos';
 import IntroductionPlayer from './IntroductionPlayer.astro';
 import VideoDiagram from './VideoDiagram.astro';
-const plannedFilms = films.filter((film) => film.status === 'planned');
+const reviewFilms = films.filter((film) => film.id !== introduction.id);
 const durationSeconds = Math.round(introduction.durationSeconds ?? 0);
 const durationLabel = `${Math.floor(durationSeconds / 60)}:${String(durationSeconds % 60).padStart(2, '0')}`;
 const languageLabel = new Intl.DisplayNames(['en'], { type: 'language' }).of(introduction.language ?? 'en');
@@ -17,13 +17,13 @@ const languageLabel = new Intl.DisplayNames(['en'], { type: 'language' }).of(int
     </div>
     <p>{introduction.description}</p>
   </article>
-  <h2 class="planned-heading">Planned videos</h2>
+  <h2 class="planned-heading">Next videos</h2>
   <div class="planned-grid">
-    {plannedFilms.map((film) => (
+    {reviewFilms.map((film) => (
       <article class="planned-film" data-video-id={film.id}>
         <VideoDiagram id={film.id} />
         <div class="card-copy">
-          <span class="status">Planned</span>
+          <span class="status">{film.reviewStatus === 'revision-pending' ? 'Revision pending' : 'In review'}</span>
           <h3><span class="number">{String(films.indexOf(film) + 1).padStart(2, '0')}</span> {film.title}</h3>
           <p>{film.description}</p>
         </div>

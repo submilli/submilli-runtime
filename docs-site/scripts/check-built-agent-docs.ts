@@ -26,10 +26,12 @@ for (const file of files.filter((file) => file.endsWith('.html'))) {
 	assert.ok(!html.includes('rel="alternate" type="text/markdown"'), file);
 	assert.ok(!html.includes('>View Markdown</a>'), file);
 }
-const executionPage = await readFile(new URL('docs/concepts/execution-model/index.html', directory), 'utf8');
-assert.ok(executionPage.includes('href="/docs/videos/"'), 'Video library is linked under the docs base');
-assert.ok(!executionPage.includes('/docs/docs/'), 'Sidebar links must not duplicate the docs base');
-assert.ok(!executionPage.includes('<video'), 'Unpublished video must not create a production player');
+const whyPage = await readFile(new URL('docs/why/index.html', directory), 'utf8');
+assert.ok(whyPage.includes('Why agents execute code'), 'Introduction lives in the current Start here chapter');
+assert.ok(!whyPage.includes('/docs/docs/'), 'Sidebar links must not duplicate the docs base');
+assert.ok(!whyPage.includes('<video'), 'Unpublished video must not create a production player');
+const oldExecutionPage = await readFile(new URL('docs/concepts/execution-model/index.html', directory), 'utf8');
+assert.ok(oldExecutionPage.includes('/docs/why/'), 'Former Concepts route redirects into the current book');
 const embedPage = await readFile(new URL('docs/videos/embed/code-execution-introduction/index.html', directory), 'utf8');
 assert.ok(embedPage.includes('/docs/videos/code-execution-introduction.svg'), 'Embed renders the registered poster');
 assert.ok(embedPage.includes('Video publication pending'), 'Embed names unpublished state');
@@ -47,8 +49,5 @@ for (const id of galleryOrder) {
   assert.ok(card > previousCard, `Series order preserves ${id}`);
   previousCard = card;
 }
-const nextWhy = await readFile(new URL('docs/next/why/index.html', directory), 'utf8');
-assert.ok(nextWhy.includes('Why agents execute code') && nextWhy.includes('Video publication pending'), 'Draft Why chapter includes the existing introduction');
-assert.ok(!nextWhy.includes('<video') && !nextWhy.includes('_video-preview'), 'Draft chapter preserves the publication gate');
-assert.ok(!chapters.some((chapter) => chapter.slug.startsWith('next/')), 'Draft chapters remain outside agent exports');
+assert.ok(!chapters.some((chapter) => chapter.slug.startsWith('next/')), 'Retired draft routes stay outside the book exports');
 console.log(`Verified exports and HTML discovery for ${chapters.length} visible chapters.`);

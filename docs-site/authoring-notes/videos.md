@@ -76,35 +76,38 @@ joined journeys are unverified. After separately authorized deployment, the
 publishing owner should verify route coverage and cross-site continuity in the
 existing analytics stack, without assuming it from the site's SDK alone.
 
-## October 1 draft-book compatibility
+## Current book placement and stable publication
 
-The newer `/docs/next/` book on main supersedes the earlier structural proposal:
-Part 1 is Start here/explanation, Parts 2–4 are Blueprint, Package and Server
-how-tos, Part 5 is Tutorials, and Part 6 is Reference. Its `next/why` chapter
-already explains the same failed-payment program and evidence as this film.
-The introduction registry therefore includes `/docs/next/why/` as a contextual
-placement. The shared content override adds the film without changing Doron's
-chapter source, sidebar visibility, search settings, or agent-export exclusion.
+The Diátaxis book is now the default: Start here, Blueprints, Packages, Server,
+Tutorials, and Reference. The introduction belongs on `/docs/why/`. The former
+`/docs/concepts/execution-model/` route redirects there, and no competing Concepts
+sidebar group is added. The library remains `/docs/videos/`; its deeper transcript
+page and stable `/docs/videos/embed/code-execution-introduction/` endpoint are
+unchanged. Retired `next/` routes are not part of this integration.
 
-At cutover, coordinate changing this contextual path to `/docs/why/`. The draft
-book has no Concepts section: decide with Doron whether the current execution-model
-page stays as a supplementary deep link or redirects into Why, and whether its
-separate sidebar group is retained. Do not make that book-wide decision in this
-video PR. Existing canonical, transcript and embed URLs stay stable meanwhile;
-the site gallery must not send ordinary readers into hidden draft pages.
+Film IDs are stable and define the series order: `code-execution-introduction`,
+`challenges`, `helps`, `using`, `works`. The viewing sequence is concepts,
+challenges, what Submilli is and how it helps, using it, then understanding it.
+The gallery keeps transcripts off the main viewing page.
 
-## Library ownership and viewing
+An editor save is a draft revision, not publication. An authorized Publish version
+handoff must supply the reviewed public HTTPS asset URL, immutable version ID,
+matching captions/transcript and approval receipt. Only then may the publishing
+owner update `src`, `publishedVersion`, and `status: published` together. The
+stable embed URL resolves the registry record, so consumers do not change URLs
+for each export. A public source requires both published state and a version ID;
+Mac-local/loopback URLs and credentials are rejected. No publisher backend or
+external media service is introduced by this draft.
 
-`/docs/videos/` is the single visual library. Its completed introduction uses the
-shared native player, with captions available on the player. The exact transcript is kept on its
-dedicated docs page, outside the main viewing flow. Viewers do not need to visit
-another article to watch the film.
-The main site links directly here; it has no second gallery or video registry.
+The approved introduction remains the 90.688-second original. Inspection of
+`final-media-handoff.json`, `intro-v4/library-delivery.json`, and the October 4
+`oct4-revision-handoff.json` found no approval replacing that original. The
+four later films have delivered review cuts, with human listening pending.
+Challenges and Helps have newer staged revisions with dirty/missing narration;
+their gallery records say Revision pending. Using and Understanding say In review.
+No review cut is used as a public source or described as final. The October 4
+handoff is an editor import of separate catalog versions, not a publish receipt.
 
-Registry array order is the series order: the approved introduction is first,
-followed by Challenges, What Submilli is and how it helps, Using Submilli,
-and Understanding Submilli. This moves from concepts and the problem, through
-orientation and use, to deeper explanation. The gallery shows
-numbered cards in that order. All later films remain Planned, without players or
-invented durations. Reordering the registry changes their displayed positions;
-update the built-output order assertion with the editorial decision.
+Hosting, production ElevenLabs licensing and final listening/review remain
+publication gates. This PR performs no recording, paid generation, asset upload,
+editor-source change or deployment.

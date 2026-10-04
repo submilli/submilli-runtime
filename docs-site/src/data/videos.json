@@ -8,45 +8,56 @@
       "language": "en",
       "status": "awaiting-publication",
       "src": null,
-      "canonicalPath": "/docs/concepts/execution-model/",
-      "contextualPaths": [
-        "/docs/next/why/"
-      ],
+      "canonicalPath": "/docs/why/",
+      "contextualPaths": [],
       "transcriptPath": "/docs/videos/code-execution-introduction/",
       "captionsPath": "/docs/videos/code-execution-introduction.en.vtt",
       "sha256": "d6d505ba502b08ff13274c704df27f0fe1006571f1cf489598a9a5e370a682e1",
       "exportFile": "editor-export-1790685929055.mp4",
       "snapshotFile": "export-51c09794-8edf-4fe8-bb28-fa7613f54e18.json",
       "posterPath": "/docs/videos/code-execution-introduction.svg",
-      "embedPath": "/docs/videos/embed/code-execution-introduction/"
+      "embedPath": "/docs/videos/embed/code-execution-introduction/",
+      "publishedVersion": null
     },
     {
       "id": "challenges",
       "title": "Agent execution challenges",
-      "status": "planned",
+      "status": "in-review",
       "destination": "Start here \u2192 Why Submilli",
-      "description": "Latency, context, permissions, and recovery in agent execution."
+      "description": "Latency, context, permissions, and recovery in agent execution.",
+      "publishedVersion": null,
+      "src": null,
+      "reviewStatus": "revision-pending"
     },
     {
       "id": "helps",
       "title": "What Submilli is and how it helps",
-      "status": "planned",
+      "status": "in-review",
       "destination": "Start here \u2192 Why Submilli",
-      "description": "What Submilli provides and where it fits in an agent workflow."
+      "description": "What Submilli provides and where it fits in an agent workflow.",
+      "publishedVersion": null,
+      "src": null,
+      "reviewStatus": "revision-pending"
     },
     {
       "id": "using",
       "title": "Using Submilli",
-      "status": "planned",
+      "status": "in-review",
       "destination": "Tutorials \u2192 Build a package and Connect a harness",
-      "description": "Building and running a Submilli integration."
+      "description": "Building and running a Submilli integration.",
+      "publishedVersion": null,
+      "src": null,
+      "reviewStatus": "listening-pending"
     },
     {
       "id": "works",
       "title": "Understanding Submilli",
-      "status": "planned",
+      "status": "in-review",
       "destination": "Start here \u2192 Blueprints, Packages, and The server",
-      "description": "How programs, packages, blueprints, and the runtime work together."
+      "description": "How programs, packages, blueprints, and the runtime work together.",
+      "publishedVersion": null,
+      "src": null,
+      "reviewStatus": "listening-pending"
     }
   ]
 }
