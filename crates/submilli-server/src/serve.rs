@@ -41,7 +41,7 @@ pub async fn serve(addr: SocketAddr, config: ServerConfig, shutdown_grace: Durat
     let audit = state.audit().clone();
     // Rehydrate persisted sessions and sweep orphan directories before serving,
     // so an immediate reconnect resolves instead of 404-ing.
-    state.boot().await;
+    state.boot().await?;
     let listener = tokio::net::TcpListener::bind(addr).await?;
     let bound = listener.local_addr()?;
     audit.emit(
