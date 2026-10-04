@@ -1,0 +1,9 @@
+In about ninety seconds, we’ll set up an agent with a Submilli runtime that allows it to process a customer's billing inquiry, without giving it access to any data it doesn't need in order to resolve the ticket. We will create a local "billing package" that will expose the billing services, and serve it to the agent under a blueprint you approve. The host application will provide the customer ID in question, and the package will explicitly check access, according to the blueprint.
+
+Create the billing package and add its charge lookup. Before reading the local ledger, the package checks the named operation and the requested customer ID. Check the package, then publish it to the local store.
+
+Define, review and approve the blueprint yourself, with an agent's help if useful. Require customer ID from the application, deny by default, and allow this lookup only when its argument matches that context. Then lint the blueprint.
+
+Start the server with a fresh local token. The application selects the configured blueprint, binds the customer ID for this request, and sends the program with that token. The response reports two charges and their total.
+
+Now run the second program. It keeps the useful total, then tries the same lookup for another customer. That customer ID fails the blueprint rule, so the runtime denies the lookup and returns an error instead of a result. The application supplies request context; the runtime enforces the configured check.

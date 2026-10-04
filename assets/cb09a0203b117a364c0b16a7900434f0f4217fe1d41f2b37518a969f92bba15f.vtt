@@ -1,0 +1,107 @@
+WEBVTT
+
+00:00:00.500 --> 00:00:04.020
+In about ninety seconds, we’ll set up an
+agent with a Submilli
+
+00:00:04.100 --> 00:00:08.180
+runtime that allows it to process a
+customer's billing inquiry,
+
+00:00:08.380 --> 00:00:11.540
+without giving it access to any data it
+doesn't need in
+
+00:00:11.700 --> 00:00:13.380
+order to resolve the ticket.
+
+00:00:13.460 --> 00:00:16.660
+We will create a local "billing package"
+that will expose
+
+00:00:16.740 --> 00:00:19.860
+the billing services, and serve it to the
+agent under a
+
+00:00:19.980 --> 00:00:21.620
+blueprint you approve.
+
+00:00:21.700 --> 00:00:25.460
+The host application will provide the
+customer ID in question,
+
+00:00:25.540 --> 00:00:28.740
+and the package will explicitly check
+access, according
+
+00:00:28.780 --> 00:00:29.731
+to the blueprint.
+
+00:00:31.116 --> 00:00:34.636
+Create the billing package and add its
+charge lookup. Before
+
+00:00:34.796 --> 00:00:38.156
+reading the local ledger, the package
+checks the named operation
+
+00:00:38.236 --> 00:00:42.156
+and the requested customer ID. Check the
+package, then publish
+
+00:00:42.236 --> 00:00:43.276
+it to the local store.
+
+00:00:45.096 --> 00:00:48.296
+Define, review and approve the blueprint
+yourself, with an
+
+00:00:48.416 --> 00:00:52.376
+agent's help if useful. Require customer
+ID from the application,
+
+00:00:52.896 --> 00:00:55.816
+deny by default, and allow this lookup
+only when its
+
+00:00:55.896 --> 00:00:59.416
+argument matches that context. Then lint
+the blueprint.
+
+00:01:01.160 --> 00:01:04.840
+Start the server with a fresh local token.
+The application
+
+00:01:04.920 --> 00:01:08.280
+selects the configured blueprint, binds
+the customer ID for this
+
+00:01:08.720 --> 00:01:12.200
+request, and sends the program with that
+token. The response
+
+00:01:12.480 --> 00:01:14.280
+reports two charges and their total.
+
+00:01:16.287 --> 00:01:19.887
+Now run the second program. It keeps the
+useful total,
+
+00:01:20.207 --> 00:01:23.967
+then tries the same lookup for another
+customer. That customer
+
+00:01:24.127 --> 00:01:27.487
+ID fails the blueprint rule, so the
+runtime denies the
+
+00:01:27.567 --> 00:01:30.927
+lookup and returns an error instead of a
+result. The
+
+00:01:31.247 --> 00:01:35.047
+application supplies request context; the
+runtime enforces the
+
+00:01:35.087 --> 00:01:36.047
+configured check.
