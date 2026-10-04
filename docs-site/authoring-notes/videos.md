@@ -10,15 +10,14 @@ how Submilli works or run the quickstart. This is not a benchmark, product demo,
 or a rewrite of the introduction and book hierarchy.
 
 `src/data/videos.json` owns film identity, asset metadata, publication state, and
-future destinations. The canonical home is `/docs/concepts/execution-model/`;
+future destinations. The canonical home is `/docs/why/`;
 the index is `/docs/videos/`. The transcript is Markdown and included in the
-existing agent exports. Planned records create no pages or players. Helps, Works,
-Using, and Challenges are editorial slots, not finished films.
+existing agent exports. Unpublished records create no players. Challenges, Helps,
+Using, and Understanding have review cuts; their publication remains pending.
 
-The September 30 restructuring proposal places this topic under Concepts →
-Execution model. This change adds only that leaf and the library; it does not
-move or rename Doron's chapters. No open runtime restructure PR was present when
-inspected on October 1. Preserve these stable paths when the migration lands.
+The current book supersedes the September 30 Concepts → Execution model
+proposal. This integration retains the book's hierarchy and adds the library;
+the former execution-model URL redirects to Why Submilli.
 
 ## Approved asset and release gate
 
@@ -38,7 +37,8 @@ part of publication QA.
 Publication requires owner confirmation of the production ElevenLabs account's
 commercial-use license and an approved media host. No upload or new service is
 part of this PR. Never commit the MP4. Once cleared, set `src` to the approved
-HTTPS asset URL and `status` to `published` in a reviewed change. Verify content
+HTTPS asset URL, `publishedVersion` to the approved immutable version ID, and
+`status` to `published` in a reviewed change. Verify content
 type, byte-range support and browser playback; the same-origin VTT stays with the
 docs build. Update publication-pending wording in the library and transcript in
 that same change. Until then, production shows the transcript fallback without
