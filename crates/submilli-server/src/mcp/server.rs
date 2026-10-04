@@ -454,8 +454,9 @@ impl SubmilliMcp {
         let (result, console, error) = outcome_to_parts(&outcome, &console_lines);
 
         // Record the full (un-suppressed) console so `lastRun` can recover it.
-        if let Some(sid) = &session_id {
-            self.state
+        if let Some(sid) = &session_id
+            && let Err(error) = self
+                .state
                 .sessions()
                 .record(
                     sid,
@@ -465,7 +466,9 @@ impl SubmilliMcp {
                         error: error.clone(),
                     },
                 )
-                .await;
+                .await
+        {
+            tracing::warn!(operation = "record", session = %sid, %error, "last-run storage failed");
         }
 
         structured_result(ExecuteOutput {
@@ -485,15 +488,22 @@ impl SubmilliMcp {
         let session_id = session_header(&parts)
             .ok_or_else(|| ErrorData::invalid_request("no session for lastRun", None))?;
         match self.state.sessions().get(&session_id).await {
-            Some(run) => structured_result(ExecuteOutput {
+            Ok(Some(run)) => structured_result(ExecuteOutput {
                 result: run.result,
                 console: run.console,
                 error: run.error,
             }),
-            None => Err(ErrorData::invalid_request(
+            Ok(None) => Err(ErrorData::invalid_request(
                 "no previous run in this session",
                 None,
             )),
+            Err(error) => {
+                tracing::warn!(operation = "get", session = %session_id, %error, "last-run storage failed");
+                Err(ErrorData::internal_error(
+                    "last-run storage unavailable",
+                    None,
+                ))
+            }
         }
     }
 
