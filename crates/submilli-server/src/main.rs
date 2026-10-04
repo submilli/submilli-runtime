@@ -195,7 +195,7 @@ pub struct Cli {
     max_execution_memory: Option<u64>,
 
     /// Execution timeout in whole seconds; 0 disables it. [default: disabled]
-    /// Starts at main; epoch checks may interrupt up to one tick later.
+    /// Starts at imported packages' top-level statements; epoch checks may interrupt up to one tick later.
     /// Pending host calls are not cancelled by this timeout.
     /// Env: `$SUBMILLI_MAX_EXECUTION_TIME`, which outranks the config file.
     #[arg(long, value_name = "SECONDS")]

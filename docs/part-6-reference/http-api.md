@@ -15,6 +15,9 @@ harness that speaks MCP connects to `/mcp/<blueprint>` instead, as
 other endpoints serve the `submilli server` commands. For the settings named
 here, see [Server settings](/docs/reference/server-settings).
 
+`DELETE /mcp/<blueprint>` with an `MCP-Session-Id` header ends the MCP
+session and returns `204`. An unknown or already-ended session returns `404`.
+
 ## Conventions
 
 The server listens on `http://127.0.0.1:8128` by default. Paths below are

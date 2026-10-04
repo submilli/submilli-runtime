@@ -75,7 +75,7 @@ pub fn execute(args: Args) -> anyhow::Result<ExitCode> {
 
 fn mcp_docs(server: &str, path: &Path) -> anyhow::Result<ExitCode> {
     use interpreter::runtime::{NetworkPolicy, ReqwestHttpClient};
-    use submilli_shared::mcp::discovery::{DiscoveryAuth, discover_selected};
+    use submilli_shared::mcp::discovery::{DiscoveryAuth, discover_selected_local};
     use submilli_shared::mcp_token::OAuthTokenManager;
 
     let yaml =
@@ -94,7 +94,7 @@ fn mcp_docs(server: &str, path: &Path) -> anyhow::Result<ExitCode> {
         Arc::new(super::mcp::provider_config::load()?),
     ));
     let selected = std::collections::BTreeSet::from([server.to_string()]);
-    let catalog = super::local::block_on(discover_selected(
+    let catalog = super::local::block_on(discover_selected_local(
         DiscoveryAuth {
             secret_store: Some(&store),
             oauth: Some(&oauth),

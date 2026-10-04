@@ -19,6 +19,8 @@ pub struct Args {
     /// YAML file (multi-document ok) or directory of .yaml files to apply.
     #[arg(short, long)]
     file: PathBuf,
+    #[command(flatten)]
+    target: http::ServerTarget,
 }
 
 pub fn execute(args: Args) -> Result<ExitCode> {
@@ -43,7 +45,10 @@ fn run(args: &Args) -> Result<()> {
     if docs.is_empty() {
         bail!("no YAML documents found in {}", args.file.display());
     }
-    let target = BlueprintTarget::from_env()?;
+    let target = BlueprintTarget {
+        base: args.target.base().to_string(),
+        client: args.target.agent()?,
+    };
     for doc in &docs {
         apply_blueprint(&target, doc)?;
     }
@@ -76,18 +81,6 @@ struct BlueprintTarget {
     client: ureq::Agent,
 }
 
-impl BlueprintTarget {
-    fn from_env() -> Result<Self> {
-        match std::env::var("SUBMILLI_SERVER_URL") {
-            Ok(v) if !v.trim().is_empty() => Ok(BlueprintTarget {
-                base: v.trim_end_matches('/').to_string(),
-                client: http::server_agent_from_env()?,
-            }),
-            _ => bail!("SUBMILLI_SERVER_URL is not set; export the submilli-server's base URL"),
-        }
-    }
-}
-
 #[derive(Deserialize)]
 struct AppliedBlueprint {
     name: String,
@@ -96,20 +89,15 @@ struct AppliedBlueprint {
 
 fn apply_blueprint(target: &BlueprintTarget, doc: &ProbedDoc) -> Result<()> {
     let mut url = url::Url::parse(&target.base)
-        .with_context(|| format!("SUBMILLI_SERVER_URL is not a valid URL: {}", target.base))?;
+        .with_context(|| format!("server URL is not a valid URL: {}", target.base))?;
     url.path_segments_mut()
-        .map_err(|()| anyhow::anyhow!("SUBMILLI_SERVER_URL cannot be a base URL"))?
+        .map_err(|()| anyhow::anyhow!("server URL cannot be a base URL"))?
         .extend(["v1", "blueprints", &doc.name]);
     let resp = target
         .client
         .put(url.as_str())
         .send_json(json!({ "yaml": doc.text }))
-        .with_context(|| {
-            format!(
-                "cannot reach the submilli-server at {} (SUBMILLI_SERVER_URL)",
-                target.base
-            )
-        })?;
+        .with_context(|| format!("cannot reach the submilli-server at {}", target.base))?;
     let status = resp.status().as_u16();
     if status != 200 {
         let message = http::error_message(resp);

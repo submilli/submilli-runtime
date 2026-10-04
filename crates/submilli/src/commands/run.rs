@@ -25,7 +25,7 @@ use submilli_build::{Artifact, PackageStore};
 use submilli_shared::llm::provider::DEFAULT_MAX_CONCURRENCY;
 use submilli_shared::llm::{BlueprintLlmProvider, HttpModelDispatch, ModelDispatch};
 use submilli_shared::mcp::StreamableHttpTransport;
-use submilli_shared::mcp::discovery::{DiscoveryAuth, McpCatalog, discover_all};
+use submilli_shared::mcp::discovery::{DiscoveryAuth, McpCatalog, discover_all_local};
 use submilli_shared::mcp_token::OAuthTokenManager;
 use submilli_shared::secret_store::SecretStore;
 use submilli_shared::{BlueprintAuthProxy, BlueprintSecretProvider, PolicyCheck};
@@ -82,12 +82,12 @@ pub struct Args {
     /// is memory-only, a blueprint-configured provider spends real money against
     /// the operator's credential, and a CLI run has no server-wide ceiling
     /// behind it. [default: 1000000]
-    /// Env: `$SUBMILLI_MAX_EXECUTION_LLM_TOKENS`, which outranks the config file.
+    /// Env: `$SUBMILLI_MAX_EXECUTION_LLM_TOKENS`.
     #[arg(long, value_name = "TOKENS")]
     max_llm_tokens: Option<u64>,
 
     /// Prompts one `llm.batch` dispatches at once. [default: 4]
-    /// Env: `$SUBMILLI_MAX_LLM_CONCURRENCY`, which outranks the config file.
+    /// Env: `$SUBMILLI_MAX_LLM_CONCURRENCY`.
     #[arg(long, value_name = "PROMPTS")]
     max_llm_concurrency: Option<usize>,
 }
@@ -319,7 +319,7 @@ fn execute_on_this_thread(
                 http,
                 Arc::new(Vec::new()),
             ));
-            let catalog = rt.block_on(discover_all(
+            let catalog = rt.block_on(discover_all_local(
                 DiscoveryAuth {
                     secret_store: Some(&store),
                     oauth: Some(&oauth),

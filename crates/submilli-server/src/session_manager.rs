@@ -604,6 +604,13 @@ impl SessionManager {
             .map(|entry| entry.blueprint_name.clone())
     }
 
+    pub(crate) fn is_bound_to(&self, session_id: &str, blueprint_name: &str) -> bool {
+        self.lock()
+            .sessions
+            .get(session_id)
+            .is_some_and(|entry| entry.blueprint_name == blueprint_name)
+    }
+
     /// Idempotently register a session under `session_id`. Callers invoke this
     /// so any client-chosen id works and a `per_session` VFS persists across
     /// executes that reuse the same id.

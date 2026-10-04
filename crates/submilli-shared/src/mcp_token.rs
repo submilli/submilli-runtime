@@ -188,11 +188,12 @@ impl OAuthTokenManager {
             Some(credential) => {
                 write_credential(blueprint, server, credential, &self.store).await?;
             }
-            None => self
-                .store
-                .delete(&credential_key(blueprint, server))
-                .await
-                .map_err(|error| McpTokenError::Store(error.to_string()))?,
+            None => {
+                self.store
+                    .delete(&credential_key(blueprint, server))
+                    .await
+                    .map_err(|error| McpTokenError::Store(error.to_string()))?;
+            }
         }
         slot.cached = None;
         Ok(())

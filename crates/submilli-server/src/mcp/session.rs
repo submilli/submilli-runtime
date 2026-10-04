@@ -50,6 +50,36 @@ impl VfsSessionManager {
             blueprint_name,
         }
     }
+
+    pub(crate) async fn contains_session(
+        &self,
+        id: &str,
+    ) -> Result<bool, crate::blueprint::StoreError> {
+        // rmcp generates UUID session IDs. Reject arbitrary header values
+        // before the file store turns them into filesystem paths.
+        if uuid::Uuid::parse_str(id).is_err() {
+            return Ok(false);
+        }
+        // Persistence is best effort during initialization. A live worker
+        // bound in the runtime ledger must remain terminable if writing fails.
+        if self
+            .state
+            .session_manager()
+            .is_bound_to(id, &self.blueprint_name)
+            && self.inner.sessions.read().await.contains_key(id)
+        {
+            return Ok(true);
+        }
+        // Persisted sessions survive restarts; the idle reaper removes their
+        // records even if rmcp still has a worker in memory.
+        let Some(record) = self.state.session_store().load(id).await? else {
+            return Ok(false);
+        };
+        if record.blueprint_name != self.blueprint_name {
+            return Ok(false);
+        }
+        Ok(record.mcp_state.is_some())
+    }
 }
 
 /// The HTTP header carrying `${vars.NAME}` bindings as `key=value;key=value` —
@@ -454,6 +484,78 @@ fn store_error(err: crate::blueprint::StoreError) -> SessionStoreError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn session_lookup_accepts_unpersisted_worker_until_runtime_session_expires() {
+        let state = AppState::new(crate::ServerConfig::default()).expect("state");
+        let manager = VfsSessionManager::new(state.clone(), "test".into());
+        let (id, _transport) = manager.inner.create_session().await.expect("session");
+        let record = crate::session_store::SessionRecord {
+            session_id: id.to_string(),
+            blueprint_name: "test".into(),
+            idle_timeout: std::time::Duration::from_secs(60),
+            last_activity: std::time::SystemTime::now(),
+            owns_vfs_dir: false,
+            mcp_state: Some(SessionState::new(
+                rmcp::model::InitializeRequestParams::default(),
+            )),
+            variables: BTreeMap::new(),
+        };
+        state.session_store().put(record).await.expect("record");
+        assert!(manager.contains_session(id.as_ref()).await.expect("lookup"));
+        let mut record = state
+            .session_store()
+            .load(id.as_ref())
+            .await
+            .expect("load")
+            .expect("record");
+        record.mcp_state = None;
+        state
+            .session_manager()
+            .bind(
+                id.as_ref(),
+                &Blueprint {
+                    name: "test".into(),
+                    idle_timeout: std::time::Duration::from_secs(60),
+                    ..Default::default()
+                },
+                Arc::new(BTreeMap::new()),
+                Arc::new(HarnessSecretBindings::new()),
+            )
+            .await
+            .expect("bind");
+        state
+            .session_store()
+            .put(record)
+            .await
+            .expect("record without handshake");
+        assert!(
+            manager
+                .contains_session(id.as_ref())
+                .await
+                .expect("live worker")
+        );
+        state
+            .session_store()
+            .remove(id.as_ref())
+            .await
+            .expect("remove");
+        assert!(
+            manager
+                .contains_session(id.as_ref())
+                .await
+                .expect("unpersisted worker")
+        );
+        assert_eq!(
+            state
+                .session_manager()
+                .reap(std::time::SystemTime::now() + std::time::Duration::from_secs(3600))
+                .await,
+            1
+        );
+        assert!(manager.inner.has_session(&id).await.expect("worker"));
+        assert!(!manager.contains_session(id.as_ref()).await.expect("lookup"));
+    }
 
     fn parse(raw: &str) -> BTreeMap<String, String> {
         parse_variable_header(raw).expect("valid header")

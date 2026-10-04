@@ -92,6 +92,10 @@ async fn put_list_delete_round_trip() {
     let (status, _) = delete(&router, &format!("/v1/secrets/{key}")).await;
     assert_eq!(status, StatusCode::OK);
 
+    let (status, body) = delete(&router, &format!("/v1/secrets/{key}")).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(body["error"], json!("secret_not_found"));
+
     let (status, body) = get(&router, "/v1/secrets").await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(
@@ -99,6 +103,14 @@ async fn put_list_delete_round_trip() {
         json!(["other/k"]),
         "deleted key should be gone"
     );
+}
+
+#[tokio::test]
+async fn deleting_a_missing_secret_returns_404() {
+    let router = router_with_store();
+    let (status, body) = delete(&router, "/v1/secrets/missing/key").await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(body["error"], json!("secret_not_found"));
 }
 
 #[tokio::test]

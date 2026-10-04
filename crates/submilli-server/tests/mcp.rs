@@ -1597,6 +1597,86 @@ async fn delete_wipes_session_vfs() {
 
     assert_eq!(h.delete(SESS, &session).await, StatusCode::NO_CONTENT);
     assert!(!dir.exists(), "DELETE must wipe the session VFS");
+    assert_eq!(h.delete(SESS, &session).await, StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn delete_unknown_or_other_blueprint_session_is_404() {
+    let h = Harness::new();
+    assert_eq!(
+        h.delete(SESS, "unknown-session").await,
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        h.delete(SESS, &"x".repeat(1024)).await,
+        StatusCode::NOT_FOUND
+    );
+    let session = h.handshake(SESS).await;
+    assert_eq!(h.delete(EPH, &session).await, StatusCode::NOT_FOUND);
+    let (status, _, _) = h.post(SESS, tools_list(2), Some(&session)).await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "wrong-blueprint DELETE must preserve the session"
+    );
+    assert_eq!(h.delete(SESS, &session).await, StatusCode::NO_CONTENT);
+}
+
+#[tokio::test]
+async fn concurrent_deletes_return_one_204_and_one_404() {
+    let h = Harness::new();
+    let session = h.handshake(SESS).await;
+    let (first, second) = tokio::join!(h.delete(SESS, &session), h.delete(SESS, &session));
+    assert!(
+        (first == StatusCode::NO_CONTENT && second == StatusCode::NOT_FOUND)
+            || (second == StatusCode::NO_CONTENT && first == StatusCode::NOT_FOUND)
+    );
+}
+
+#[tokio::test]
+async fn delete_persisted_mcp_session_before_restore() {
+    let session_root = tempfile::tempdir().expect("session root");
+    let session_store = tempfile::tempdir().expect("session store");
+    let blueprints = || {
+        vec![Blueprint {
+            name: SESS.into(),
+            vfs: VfsConfig::PerSession {
+                size_limit: None,
+                mounts: Default::default(),
+                cwd: None,
+            },
+            permissions: allow_fs(),
+            ..Default::default()
+        }]
+    };
+    let first = Harness::from_blueprints_with_session_paths(
+        blueprints(),
+        session_root.path().to_path_buf(),
+        session_store.path().to_path_buf(),
+    );
+    let session = first.handshake(SESS).await;
+    let (_, _, result) = first.post(SESS, tools_call(2, WRITE), Some(&session)).await;
+    assert!(output(&result)["error"].is_null(), "write failed: {result}");
+    drop(first);
+    let restarted = Harness::from_blueprints_with_session_paths(
+        blueprints(),
+        session_root.path().to_path_buf(),
+        session_store.path().to_path_buf(),
+    );
+    restarted.state.boot().await.expect("boot");
+    assert_eq!(
+        restarted.delete(SESS, &"x".repeat(1024)).await,
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        restarted.delete(SESS, &session).await,
+        StatusCode::NO_CONTENT
+    );
+    assert!(!session_root.path().join(&session).exists());
+    assert_eq!(
+        restarted.delete(SESS, &session).await,
+        StatusCode::NOT_FOUND
+    );
 }
 
 #[tokio::test]
