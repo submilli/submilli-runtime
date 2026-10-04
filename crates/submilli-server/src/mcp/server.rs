@@ -358,6 +358,15 @@ impl SubmilliMcp {
             audit.error(crate::error::ErrorKind::CompileError);
             ErrorData::internal_error(message, None)
         })?;
+        let network_policy = audit.network_policy(self.state.network_policy());
+        let llm_provider = self
+            .state
+            .llm_provider_for(&blueprint, &harness_secrets, &network_policy)
+            .map_err(|error| {
+                tracing::error!(error = ?error, "LLM dispatch initialization failed");
+                audit.error(crate::error::ErrorKind::RuntimeError);
+                ErrorData::internal_error(error.to_string(), None)
+            })?;
         let (vfs, vfs_info) = self
             .acquire_vfs(
                 &blueprint,
@@ -373,7 +382,6 @@ impl SubmilliMcp {
         let manager = self.state.session_manager();
         let http_client = manager.http_client(session_id.as_deref().unwrap_or(""));
         let session_kv = manager.session_kv_for_execute(session_id.as_deref().unwrap_or(""));
-        let network_policy = audit.network_policy(self.state.network_policy());
         let mcp_transport = Arc::new(
             submilli_shared::mcp::transport::StreamableHttpTransport::new(
                 self.blueprint_name.clone(),
@@ -408,11 +416,7 @@ impl SubmilliMcp {
             http_client,
             mcp_transport,
             session_kv,
-            llm_provider: self.state.llm_provider_for(
-                &blueprint,
-                &harness_secrets,
-                &network_policy,
-            ),
+            llm_provider,
             llm_budget: Some(manager.llm_budget_for_execute()),
         };
         let mcp_catalog = self

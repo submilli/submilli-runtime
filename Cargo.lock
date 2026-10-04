@@ -5048,6 +5048,7 @@ dependencies = [
  "jiff",
  "libc",
  "rcgen",
+ "reqwest",
  "rmcp",
  "rusqlite",
  "rustls",

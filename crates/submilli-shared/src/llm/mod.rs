@@ -9,7 +9,7 @@ pub mod dispatch;
 pub mod provider;
 pub mod wire;
 
-pub use dispatch::HttpModelDispatch;
+pub use dispatch::{HttpModelDispatch, HttpModelDispatchError};
 pub use provider::{
     BlueprintLlmProvider, ModelDispatch, ModelRequest, ProviderFailure, ProviderResponse,
     ProviderUsage, StopReason,

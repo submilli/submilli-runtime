@@ -60,6 +60,7 @@ signal-hook = "0.3"
 windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Storage_FileSystem"] }
 
 [dev-dependencies]
+reqwest = { workspace = true }
 insta = { workspace = true }
 rcgen.workspace = true
 wasm-encoder = { workspace = true }
