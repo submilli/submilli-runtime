@@ -709,7 +709,8 @@ mod test_runner {
                 .with_context(|| format!("scanning {}", tests_dir.display()))?;
             for test_file in test_files {
                 if args.skip_network && is_network_test_file(&test_file) {
-                    println!("skip {} (--skip-network)", test_file.display());
+                    let path = test_file.strip_prefix(&manifest_dir).unwrap_or(&test_file);
+                    println!("skip {} (--skip-network)", path.display());
                     skipped += 1;
                     continue;
                 }
@@ -747,7 +748,7 @@ mod test_runner {
         }
         println!("\n{passed} passed, {failed} failed across {files} files");
         if skipped > 0 {
-            println!("{skipped} HTTP test files skipped (--skip-network)");
+            println!("{skipped} network test files skipped (--skip-network)");
         }
         if deny_warnings && warning_count > 0 {
             eprintln!(

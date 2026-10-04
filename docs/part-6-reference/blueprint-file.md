@@ -31,9 +31,10 @@ errors that refuse a file when it is linted or registered.
 
 Any other top-level key is a parse error, and so is an unknown field in any
 block. A key repeated at the top level or within one block's fields is
-refused. In maps keyed by a name the file chooses (`secrets`, `variables`,
-`permissions`, `mcp`, `llm.providers`, `llm.models`), a repeated name keeps
-the last entry. `vfs.mounts` refuses a repeated path.
+refused. Repeated names in `secrets`, `variables`, `permissions`, `mcp`,
+`llm.providers`, `llm.models`, and the map form of `packages` are also
+refused. The same rule applies to MCP and auth-proxy header maps,
+auth-proxy query maps, and paths in `vfs.mounts`.
 
 ```text
 error: case.yaml: blueprint parse error: unknown field `permision`, expected one of `kind`, `name`, `allow_insecure_http`, `idle_timeout`, `vfs`, `secrets`, `variables`, `packages`, `auth_proxy`, `git`, `default`, `permissions`, `mcp`, `llm` at line 2 column 1
@@ -181,11 +182,11 @@ session deletes its `submilli:session` state and its `per_session` files.
 The CLI writes the value back in seconds, so `1h` becomes `'3600s'`.
 
 ```text
-error: case.yaml: blueprint parse error: invalid vfs config: duration '10' needs a unit (s, m, or h)
+error: case.yaml: blueprint parse error: idle_timeout: duration '10' needs a unit (s, m, or h)
 ```
 
 ```text
-error: case.yaml: blueprint parse error: invalid vfs config: unknown duration unit 'd' in '1d' (use s, m, or h)
+error: case.yaml: blueprint parse error: idle_timeout: unknown duration unit 'd' in '1d' (use s, m, or h)
 ```
 
 ## vfs
@@ -557,7 +558,7 @@ How rules are matched, and every capability and its fields, are in
 parsed with the file, so a malformed one is a parse error:
 
 ```text
-error: case.yaml: blueprint parse error: permissions.main.\[0\]: invalid filter `path ===`: expected `==`; a single `=` is not an operator
+error: case.yaml: blueprint parse error: permissions.main[0]: invalid filter `path ===`: expected `==`; a single `=` is not an operator
   path ===
          ^ at line 4 column 5
 ```

@@ -435,7 +435,7 @@ Options:
       --max-execution-memory <MEGABYTES>
           Memory one execution may hold live, in megabytes. An allocation that would pass it ends the run with `memory exhausted`, instead of growing until the host or the container's own limit stops it. This is what makes a container's `--memory` sizeable: budget roughly this times peak concurrency. Note that strings are UTF-16, so text costs two bytes per character — a 25 MB document needs ~50 MB here. [default: 50] Env: `$SUBMILLI_MAX_EXECUTION_MEMORY`, which outranks the config file
       --max-execution-time <SECONDS>
-          Execution timeout in whole seconds; 0 disables it. [default: disabled] Starts at main; epoch checks may interrupt up to one tick later. Pending host calls are not cancelled by this timeout. Env: `$SUBMILLI_MAX_EXECUTION_TIME`, which outranks the config file
+          Execution timeout in whole seconds; 0 disables it. [default: disabled] Starts at imported packages' top-level statements; epoch checks may interrupt up to one tick later. Pending host calls are not cancelled by this timeout. Env: `$SUBMILLI_MAX_EXECUTION_TIME`, which outranks the config file
       --max-execution-fuel <FUEL>
           Fuel one execution may burn, roughly one unit per Wasm instruction; a program that runs out ends with `fuel exhausted`. The backstop for a runaway loop when no execution time is set. [default: 1000000000000] Env: `$SUBMILLI_MAX_EXECUTION_FUEL`, which outranks the config file. Accepts decimal K/M/B/T suffixes and digit separators, e.g. 1T or 10_000
       --max-execution-stack <KIBIBYTES>

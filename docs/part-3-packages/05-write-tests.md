@@ -177,7 +177,7 @@ skip packages/billing/tests/network.test.ts (--skip-network)
 ok   packages/billing/docs/readme.md :: example 1 (compile)
 
 2 passed, 0 failed across 2 files
-1 HTTP test files skipped (--skip-network)
+1 network test files skipped (--skip-network)
 ```
 
 ## What package tests don't prove

@@ -37,8 +37,6 @@ enum Cmd {
     Skill(commands::skill::SkillCmd),
     /// Replace this executable with the latest published release.
     Upgrade(commands::upgrade::Args),
-    /// Apply blueprint YAML documents to a running submilli-server.
-    Apply(commands::apply::Args),
     /// Author a blueprint file locally (scaffold, edit).
     #[command(subcommand)]
     Blueprint(commands::blueprint::BlueprintCmd),
@@ -87,7 +85,6 @@ fn execute(cmd: Cmd) -> anyhow::Result<ExitCode> {
         Cmd::Builtins(args) => commands::builtins::execute(args),
         Cmd::Skill(cmd) => commands::skill::execute(cmd),
         Cmd::Upgrade(args) => commands::upgrade::execute(args),
-        Cmd::Apply(args) => commands::apply::execute(args),
         Cmd::Blueprint(cmd) => commands::blueprint::execute(cmd),
         Cmd::Secret(cmd) => commands::secret::execute(cmd),
         Cmd::Mcp(cmd) => commands::mcp::execute(cmd),
@@ -119,7 +116,6 @@ fn invocation_attrs(cmd: &Cmd) -> (&'static str, Vec<(&'static str, bool)>) {
         Cmd::Builtins(a) => ("builtins", a.metric_flags()),
         Cmd::Skill(_) => ("skill", Vec::new()),
         Cmd::Upgrade(_) => ("upgrade", Vec::new()),
-        Cmd::Apply(_) => ("apply", Vec::new()),
         Cmd::Blueprint(sub) => (blueprint_label(sub), Vec::new()),
         Cmd::Secret(sub) => (secret_label(sub), Vec::new()),
         Cmd::Mcp(sub) => (mcp_label(sub), Vec::new()),
@@ -176,6 +172,7 @@ fn server_label(cmd: &commands::server::ServerCmd) -> &'static str {
     use commands::server::ServerCmd;
     match cmd {
         ServerCmd::RunCode(_) => "server.run_code",
+        ServerCmd::Apply(_) => "server.apply",
         ServerCmd::Packages(_) => "server.packages",
         ServerCmd::Status(_) => "server.status",
         ServerCmd::Stop(_) => "server.stop",

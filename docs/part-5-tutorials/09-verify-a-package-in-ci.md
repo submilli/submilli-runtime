@@ -285,7 +285,7 @@ ok   packages/billing/tests/lib.test.ts :: scopes the lookup to the customer ask
 skip packages/billing/tests/network.test.ts (--skip-network)
 
 2 passed, 0 failed across 1 files
-1 HTTP test files skipped (--skip-network)
+1 network test files skipped (--skip-network)
 ```
 
 Tests see no credential unless the command passes one, so the key

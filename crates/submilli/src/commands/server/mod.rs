@@ -3,6 +3,7 @@ use std::process::ExitCode;
 use anyhow::Result;
 use clap::Subcommand;
 
+pub mod apply;
 pub mod blueprint;
 pub mod docs;
 pub mod mcp;
@@ -16,6 +17,8 @@ pub mod trust;
 
 #[derive(Subcommand)]
 pub enum ServerCmd {
+    /// Apply blueprint YAML documents to a running submilli-server.
+    Apply(apply::Args),
     /// Manage approved HTTPS server public keys.
     #[command(subcommand)]
     Trust(trust::TrustCmd),
@@ -47,6 +50,7 @@ pub enum ServerCmd {
 
 pub fn execute(cmd: ServerCmd) -> Result<ExitCode> {
     match cmd {
+        ServerCmd::Apply(args) => apply::execute(args),
         ServerCmd::Trust(cmd) => trust::execute(cmd),
         ServerCmd::Docs(args) => docs::execute(args),
         ServerCmd::RunCode(args) => run_code::execute(args),

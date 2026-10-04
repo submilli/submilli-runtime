@@ -14,7 +14,7 @@ mcp auth-status`, generated from the binary's `--help`.
 
 ## Command tree
 
-`submilli` has fifteen top-level commands. Local commands run on this
+`submilli` has fourteen top-level commands. Local commands run on this
 machine and need no server. Server commands send HTTP requests to a
 running `submilli-server`.
 
@@ -29,7 +29,6 @@ running `submilli-server`.
 | `builtins` | List the language built-ins, or print the declarations of named ones | Local |
 | `skill` | Install, check, and update the coding-assistant skill | Local, and `sync` fetches releases |
 | `upgrade` | Replace `submilli` and `submilli-server` with a published release | Local, fetches releases |
-| `apply` | Register blueprint files on a server, replacing any with the same name | Server |
 | `blueprint` | Create and edit a local `blueprint.yaml` | Local |
 | `secret` | Manage the local secret store | Local |
 | `mcp` | Authenticate a blueprint's OAuth MCP servers into the local secret store | Local, contacts the MCP server's OAuth host |
@@ -55,6 +54,10 @@ package store, and secret store.
 A server on the same machine and with the same `SUBMILLI_HOME` also reads
 the local `packages/` directory, as a fallback store it never writes.
 
+`submilli server secret delete` returns HTTP 404 when the secret does not
+exist, including after it has already been deleted. Local `submilli secret
+delete` succeeds when the secret is already absent.
+
 ## Server connection
 
 Every `submilli server` command that sends a request takes two options,
@@ -74,13 +77,6 @@ unset. A token the server does not accept gives:
 
 ```text
 error: the server did not accept this command's API token. Set `SUBMILLI_SERVER_TOKEN` to the token the server was started with, or `SUBMILLI_SERVER_TOKEN_FILE` to a file holding one
-```
-
-`submilli apply` has neither option. It requires `SUBMILLI_SERVER_URL`
-and has no default address:
-
-```text
-error: SUBMILLI_SERVER_URL is not set; export the submilli-server's base URL
 ```
 
 A token has the role `user` or `admin`. `run-code`, `session open` and
@@ -108,9 +104,9 @@ An error that stopped the command before it could report one begins with
 | Variable | Read by | Effect |
 | --- | --- | --- |
 | `SUBMILLI_HOME` | Every command | The state directory (see [State directory](#state-directory)) |
-| `SUBMILLI_SERVER_URL` | `server …`, `apply` | The server's base URL. An empty value means the default, except for `apply`, which requires it |
-| `SUBMILLI_SERVER_TOKEN` | `server …`, `apply` | The API token, when no token file is named |
-| `SUBMILLI_SERVER_TOKEN_FILE` | `server …`, `apply` | A file holding the API token. `--token-file` takes precedence |
+| `SUBMILLI_SERVER_URL` | `server …` | The server's base URL. An empty value means the default |
+| `SUBMILLI_SERVER_TOKEN` | `server …` | The API token, when no token file is named |
+| `SUBMILLI_SERVER_TOKEN_FILE` | `server …` | A file holding the API token. `--token-file` takes precedence |
 | `GH_TOKEN`, `GITHUB_TOKEN` | `install`, `build`, `github …` | A GitHub token (see [GitHub token](#github-token)) |
 | `SUBMILLI_MAX_EXECUTION_LLM_TOKENS` | `run` | Default for `--max-llm-tokens` |
 | `SUBMILLI_MAX_LLM_CONCURRENCY` | `run` | Default for `--max-llm-concurrency` |
@@ -240,7 +236,7 @@ up to date @submilli/acme-billing
 ```
 
 ```text
-error: @submilli/acme-billing already installed at a different commit; retry with upgrade to replace with 88656b81c537
+error: @submilli/acme-billing already installed at a different commit; retry with --upgrade to replace with 88656b81c537
 ```
 
 `submilli install` writes only to the store. It changes no blueprint and
@@ -407,10 +403,10 @@ Options:
       --max-llm-tokens <TOKENS>
           Tokens this run's `submilli:llm` calls may spend in total. A run that asks for more raises a catchable `QuotaExceededError` rather than being billed.
           
-          Finite by default, deliberately: unlike `submilli:session`, whose state is memory-only, a blueprint-configured provider spends real money against the operator's credential, and a CLI run has no server-wide ceiling behind it. [default: 1000000] Env: `$SUBMILLI_MAX_EXECUTION_LLM_TOKENS`, which outranks the config file.
+          Finite by default, deliberately: unlike `submilli:session`, whose state is memory-only, a blueprint-configured provider spends real money against the operator's credential, and a CLI run has no server-wide ceiling behind it. [default: 1000000] Env: `$SUBMILLI_MAX_EXECUTION_LLM_TOKENS`.
 
       --max-llm-concurrency <PROMPTS>
-          Prompts one `llm.batch` dispatches at once. [default: 4] Env: `$SUBMILLI_MAX_LLM_CONCURRENCY`, which outranks the config file
+          Prompts one `llm.batch` dispatches at once. [default: 4] Env: `$SUBMILLI_MAX_LLM_CONCURRENCY`
 
   -h, --help
           Print help (see a summary with '-h')
@@ -683,18 +679,6 @@ Options:
       --version <TAG>  Release tag to install (for example v0.2.0). Defaults to the latest release
       --check          Report the latest release without installing it; exit 1 if it is newer
   -h, --help           Print help
-```
-
-## `submilli apply`
-
-```text
-Apply blueprint YAML documents to a running submilli-server
-
-Usage: submilli apply --file <FILE>
-
-Options:
-  -f, --file <FILE>  YAML file (multi-document ok) or directory of .yaml files to apply
-  -h, --help         Print help
 ```
 
 ## `submilli blueprint`
@@ -1353,6 +1337,7 @@ Interact with a running submilli-server
 Usage: submilli server <COMMAND>
 
 Commands:
+  apply      Apply blueprint YAML documents to a running submilli-server
   trust      Manage approved HTTPS server public keys
   docs       Read package declarations, including a blueprint's MCP tools
   run-code   Execute a Submilli script on a running submilli-server
@@ -1367,6 +1352,20 @@ Commands:
 
 Options:
   -h, --help  Print help
+```
+
+### `submilli server apply`
+
+```text
+Apply blueprint YAML documents to a running submilli-server
+
+Usage: submilli server apply [OPTIONS] --file <FILE>
+
+Options:
+  -f, --file <FILE>        YAML file (multi-document ok) or directory of .yaml files to apply
+      --server <URL>       Base URL of the running submilli-server [env: SUBMILLI_SERVER_URL=] [default: http://127.0.0.1:8128]
+      --token-file <PATH>  File holding the API token to send. Without it the token is read from `$SUBMILLI_SERVER_TOKEN`; with neither, no token is sent, which only a server started with `--allow-unauthenticated` accepts. There is no flag taking the token itself, so it never lands in the process list. Env: `$SUBMILLI_SERVER_TOKEN_FILE`
+  -h, --help               Print help
 ```
 
 ### `submilli server trust`

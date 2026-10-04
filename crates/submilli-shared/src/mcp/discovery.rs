@@ -162,7 +162,30 @@ pub async fn discover_all(
     blueprint_name: &str,
     blueprint: &Blueprint,
 ) -> McpCatalog {
-    discover_matching(auth, blueprint_name, blueprint, None).await
+    discover_matching(
+        auth,
+        blueprint_name,
+        blueprint,
+        None,
+        DiscoveryOrigin::Server,
+    )
+    .await
+}
+
+/// Discover for local execution, whose OAuth credentials are managed by the CLI.
+pub async fn discover_all_local(
+    auth: DiscoveryAuth<'_>,
+    blueprint_name: &str,
+    blueprint: &Blueprint,
+) -> McpCatalog {
+    discover_matching(
+        auth,
+        blueprint_name,
+        blueprint,
+        None,
+        DiscoveryOrigin::Local,
+    )
+    .await
 }
 
 pub async fn discover_selected(
@@ -171,7 +194,36 @@ pub async fn discover_selected(
     blueprint: &Blueprint,
     servers: &BTreeSet<String>,
 ) -> McpCatalog {
-    discover_matching(auth, blueprint_name, blueprint, Some(servers)).await
+    discover_matching(
+        auth,
+        blueprint_name,
+        blueprint,
+        Some(servers),
+        DiscoveryOrigin::Server,
+    )
+    .await
+}
+
+/// Discover selected servers for local package documentation.
+pub async fn discover_selected_local(
+    auth: DiscoveryAuth<'_>,
+    blueprint_name: &str,
+    blueprint: &Blueprint,
+    servers: &BTreeSet<String>,
+) -> McpCatalog {
+    discover_matching(
+        auth,
+        blueprint_name,
+        blueprint,
+        Some(servers),
+        DiscoveryOrigin::Local,
+    )
+    .await
+}
+
+enum DiscoveryOrigin {
+    Local,
+    Server,
 }
 
 async fn discover_matching(
@@ -179,6 +231,7 @@ async fn discover_matching(
     blueprint_name: &str,
     blueprint: &Blueprint,
     servers: Option<&BTreeSet<String>>,
+    origin: DiscoveryOrigin,
 ) -> McpCatalog {
     let unauthenticated: HashSet<String> =
         match blueprint_auth_state(blueprint, auth.secret_store).await {
@@ -193,14 +246,21 @@ async fn discover_matching(
             continue;
         }
         if unauthenticated.contains(server_name) {
+            let (command, reason) = match origin {
+                DiscoveryOrigin::Local => (
+                    format!("submilli mcp authenticate {server_name} --blueprint <path>"),
+                    "not authenticated — run `submilli mcp authenticate`",
+                ),
+                DiscoveryOrigin::Server => (
+                    format!("submilli server mcp authenticate {blueprint_name} {server_name}"),
+                    "not authenticated — run `submilli server mcp authenticate`",
+                ),
+            };
             warn!(
                 server = server_name,
-                "MCP server omitted: not authenticated — run `submilli server mcp authenticate {blueprint_name} {server_name}`"
+                "MCP server omitted: not authenticated — run `{command}`"
             );
-            unavailable.push(ToolWarning::server_unavailable(
-                server_name,
-                "not authenticated — run `submilli server mcp authenticate`",
-            ));
+            unavailable.push(ToolWarning::server_unavailable(server_name, reason));
             continue;
         }
         match discover_server(auth, blueprint_name, blueprint, server_name, server).await {
@@ -432,6 +492,51 @@ async fn resolve_auth(
 
 #[cfg(test)]
 mod tests {
+    #[tokio::test]
+    async fn unauthenticated_guidance_matches_local_and_server_execution() {
+        let bp = submilli_blueprint::parse(
+            "name: x\nmcp:\n  pending:\n    url: https://example.com/mcp\n    auth: { type: oauth2 }\n",
+        )
+        .expect("blueprint");
+        let policy = Arc::new(NetworkPolicy::deny_private());
+        let auth = DiscoveryAuth {
+            secret_store: None,
+            oauth: None,
+            harness_secrets: None,
+            network_policy: &policy,
+        };
+        let local = discover_all_local(auth, "x", &bp).await;
+        let server = discover_all(auth, "x", &bp).await;
+        let selected = BTreeSet::from(["pending".to_string()]);
+        let local_selected = discover_selected_local(auth, "x", &bp, &selected).await;
+        let server_selected = discover_selected(auth, "x", &bp, &selected).await;
+        let local_selected: Vec<_> = local_selected.warnings().collect();
+        let server_selected: Vec<_> = server_selected.warnings().collect();
+        assert_eq!(local_selected.len(), 1);
+        assert_eq!(server_selected.len(), 1);
+        assert!(
+            local_selected[0]
+                .message
+                .contains("`submilli mcp authenticate`")
+        );
+        assert!(
+            server_selected[0]
+                .message
+                .contains("`submilli server mcp authenticate`")
+        );
+        let local: Vec<_> = local.warnings().collect();
+        let server: Vec<_> = server.warnings().collect();
+        assert_eq!(local.len(), 1);
+        assert_eq!(server.len(), 1);
+        assert!(local[0].message.contains("`submilli mcp authenticate`"));
+        assert!(!local[0].message.contains("submilli server"));
+        assert!(
+            server[0]
+                .message
+                .contains("`submilli server mcp authenticate`")
+        );
+    }
+
     #[tokio::test]
     async fn discovery_reports_network_policy_failure() {
         let bp = submilli_blueprint::parse(

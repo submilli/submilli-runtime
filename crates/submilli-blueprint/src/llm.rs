@@ -56,10 +56,18 @@ const LOOPBACK_HOSTS: [&str; 3] = ["localhost", "127.0.0.1", "::1"];
 #[serde(deny_unknown_fields)]
 pub struct LlmConfig {
     /// Credential-and-endpoint rows, keyed by local provider identifier.
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    #[serde(
+        default,
+        skip_serializing_if = "BTreeMap::is_empty",
+        deserialize_with = "crate::maps::deserialize"
+    )]
     pub providers: BTreeMap<String, LlmProviderDecl>,
     /// The models a program may call, keyed by the name it calls them by.
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    #[serde(
+        default,
+        skip_serializing_if = "BTreeMap::is_empty",
+        deserialize_with = "crate::maps::deserialize"
+    )]
     pub models: BTreeMap<String, LlmModelDecl>,
 }
 

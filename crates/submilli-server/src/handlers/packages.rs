@@ -609,7 +609,7 @@ fn map_install_error(err: InstallError) -> InstallFailure {
             StatusCode::CONFLICT,
             "already_installed",
             format!(
-                "{} already installed at a different commit; retry with upgrade to replace with {incoming}",
+                "{} already installed at a different commit; retry with --upgrade to replace with {incoming}",
                 conflicts
                     .iter()
                     .map(|conflict| conflict.name.as_str().to_string())
