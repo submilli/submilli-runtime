@@ -1,5 +1,5 @@
-// Written for Submilli: no upstream case Submilli can run checks a numeric
-// separator (`1_000`).
+// Written for Submilli: none of TypeScript's own tests that Submilli can run
+// uses a numeric separator (`1_000`).
 
 let million = 1_000_000;
 let fraction: number = 1_000.000_5;
