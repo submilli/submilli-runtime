@@ -263,6 +263,8 @@ interface GoogleErrorDetail {
 
 /**
  * Fetch one Drive file, returning null when absent.
+  * @param fileId Drive file ID.
+  * @returns The file's metadata, or `null` when it does not exist.
  * @capability submilli/google-drive.getFile { fileId: string }
  */
 export function getFile(fileId: string): DriveFile | null {
@@ -273,6 +275,8 @@ export function getFile(fileId: string): DriveFile | null {
 /**
  * Search Drive files with structured filters plus an optional raw Drive query.
  * Shared Drive searches set `driveId` and use `corpora=drive`.
+  * @param options Optional name, MIME type, parent folder, trashed/starred filters, raw Drive query, Shared Drive, page size (1-1000, default 20), continuation token, and sort order; `null` lists non-trashed files with the defaults.
+  * @returns One page of matching files; `items` is empty when nothing matches and `nextPageToken` is empty on the last page.
  * @capability submilli/google-drive.searchFiles {}
  */
 export function searchFiles(options: SearchFilesOptions | null = null): Page<DriveFile> {
@@ -315,6 +319,8 @@ export function searchFiles(options: SearchFilesOptions | null = null): Page<Dri
 
 /**
  * List recently modified, non-trashed files.
+  * @param options Optional Shared Drive, page size (1-100, default 20), and continuation token; `null` uses the defaults.
+  * @returns One page of files ordered by last modification, newest first; `nextPageToken` is empty on the last page.
  * @capability submilli/google-drive.listRecentFiles {}
  */
 export function listRecentFiles(options: RecentFilesOptions | null = null): Page<DriveFile> {
@@ -333,6 +339,8 @@ export function listRecentFiles(options: RecentFilesOptions | null = null): Page
 
 /**
  * Read a text file or export a Google Doc as UTF-8 text.
+  * @param fileId Drive file ID of a text file (`text/*`, JSON, or XML) or a Google Doc.
+  * @returns The file's text content; a Google Doc is exported as plain text. Throws `DriveError` `unsupported_mime_type` for other file types.
  * @capability submilli/google-drive.readText { fileId: string }
  */
 export function readText(fileId: string): string {
@@ -354,6 +362,10 @@ export function readText(fileId: string): string {
 
 /**
  * Stream a Drive file or native-document export into the VFS.
+  * @param fileId Drive file ID to download.
+  * @param path Destination path in the session VFS.
+  * @param options Optional export MIME type (required for native Google files), overwrite flag, and byte limit; `null` downloads binary content without overwriting.
+  * @returns The download result for the file saved at `path`; throws `DriveError` `download_failed` on a non-2xx response.
  * @capability submilli/google-drive.downloadFile { fileId: string, path: string }
  */
 export function downloadFile(fileId: string, path: string, options: FileDownloadOptions | null = null): DownloadResult {
@@ -390,6 +402,9 @@ export function downloadFile(fileId: string, path: string, options: FileDownload
  * `parentId` in the check is the destination folder as the caller named it, or "" when the caller
  * names none and the file goes to My Drive root. The alias `root` names that folder too, so a rule
  * on `parentId` lists the folders it allows.
+  * @param sourcePath Path of the VFS file to upload.
+  * @param options Name and MIME type for the uploaded file, with optional parent folder ID and Shared Drive ID.
+  * @returns The metadata of the created Drive file.
  * @capability submilli/google-drive.uploadFile { path: string, parentId: string }
  */
 export function uploadFile(sourcePath: string, options: FileUploadOptions): DriveFile {
@@ -444,6 +459,9 @@ export function uploadFile(sourcePath: string, options: FileUploadOptions): Driv
 
 /**
  * Create a folder, optionally under a parent.
+  * @param name Folder name.
+  * @param parentId ID of the parent folder; the empty string creates the folder in My Drive root.
+  * @returns The created folder's metadata.
  * @capability submilli/google-drive.createFolder { parentId: string }
  */
 export function createFolder(name: string, parentId: string = ""): DriveFile {
@@ -465,6 +483,9 @@ export function createFolder(name: string, parentId: string = ""): DriveFile {
 /**
  * Copy a file with an optional new name or parent. `parentId` in the check is the destination
  * folder, or "" when the copy stays beside the source.
+  * @param fileId ID of the file to copy.
+  * @param options Optional name for the copy and destination folder ID; `null` copies with the source's name beside the source.
+  * @returns The metadata of the new copy.
  * @capability submilli/google-drive.copyFile { fileId: string, parentId: string }
  */
 export function copyFile(fileId: string, options: FileCopyOptions | null = null): DriveFile {
@@ -482,6 +503,9 @@ export function copyFile(fileId: string, options: FileCopyOptions | null = null)
 
 /**
  * Rename a file.
+  * @param fileId ID of the file to rename.
+  * @param name New file name.
+  * @returns The file's metadata after the rename.
  * @capability submilli/google-drive.renameFile { fileId: string }
  */
 export function renameFile(fileId: string, name: string): DriveFile {
@@ -491,6 +515,9 @@ export function renameFile(fileId: string, name: string): DriveFile {
 
 /**
  * Move a file to one parent, removing its current parents.
+  * @param fileId ID of the file to move.
+  * @param parentId ID of the destination folder; must be non-empty.
+  * @returns The file's metadata after the move.
  * @capability submilli/google-drive.moveFile { fileId: string, parentId: string }
  */
 export function moveFile(fileId: string, parentId: string): DriveFile {
@@ -509,6 +536,8 @@ export function moveFile(fileId: string, parentId: string): DriveFile {
 
 /**
  * Move a file to trash. This package intentionally has no permanent-delete API.
+  * @param fileId ID of the file to trash.
+  * @returns The file's metadata, with `trashed` set to true.
  * @capability submilli/google-drive.trashFile { fileId: string }
  */
 export function trashFile(fileId: string): DriveFile {
@@ -518,6 +547,8 @@ export function trashFile(fileId: string): DriveFile {
 
 /**
  * Restore a trashed file.
+  * @param fileId ID of the file to restore from the trash.
+  * @returns The file's metadata, with `trashed` set to false.
  * @capability submilli/google-drive.restoreFile { fileId: string }
  */
 export function restoreFile(fileId: string): DriveFile {
@@ -527,6 +558,8 @@ export function restoreFile(fileId: string): DriveFile {
 
 /**
  * List permissions on a Drive file.
+  * @param fileId ID of the file whose permissions are listed.
+  * @returns The file's permissions; an empty array when none are returned.
  * @capability submilli/google-drive.listPermissions { fileId: string }
  */
 export function listPermissions(fileId: string): Permission[] {
@@ -547,6 +580,9 @@ export function listPermissions(fileId: string): Permission[] {
  * for a type that does not use it is refused. `sendNotificationEmail` is true for a user or
  * group unless set to false; for the other types, which Drive does not email, it is ignored and
  * false. `allowFileDiscovery` is false when unset.
+  * @param fileId ID of the file to share.
+  * @param input Principal type, role (`reader`, `commenter`, or `writer`), the matching email address or domain, and optional discovery and notification flags.
+  * @returns The created permission, including its `id` for `removePermission`.
  * @capability submilli/google-drive.shareFile { fileId: string, principal: string, type: string, role: string, sendNotificationEmail: boolean, allowFileDiscovery: boolean }
  */
 export function shareFile(fileId: string, input: ShareFileInput): Permission {
@@ -625,6 +661,8 @@ function invalidPrincipal(message: string): DriveError {
 
 /**
  * Remove a permission from a Drive file.
+  * @param fileId ID of the file whose permission is removed.
+  * @param permissionId Permission ID from `Permission.id`; a permission that is already absent is not an error.
  * @capability submilli/google-drive.removePermission { fileId: string }
  */
 export function removePermission(fileId: string, permissionId: string): void {

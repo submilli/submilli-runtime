@@ -1,9 +1,11 @@
 //! Wasmtime engine configuration for Submilli.
 
+pub(crate) mod array_storage;
 pub mod blocking;
 pub mod disk_quota;
 pub mod exec;
 pub mod fs;
+pub mod fuel;
 pub mod gc_singleton;
 pub mod host;
 pub mod intrinsic_types;
@@ -40,7 +42,8 @@ pub use llm::{
     LlmOutcome, LlmProvider, PromptBoundKind, SharedTokenBudget,
 };
 pub use mcp::{
-    MCP_MODULE_NAME, McpCallError, McpTransport, install_mcp_async, mcp_call_package_declaration,
+    MCP_MODULE_NAME, McpCallError, McpOutcome, McpResponse, McpTransport, install_mcp_async,
+    mcp_call_package_declaration,
 };
 pub use metrics::{HttpMetric, MetricsSink, NoopMetricsSink};
 pub use prelude::bigint::ops::BIGINT_MODULE_NAME;
@@ -51,7 +54,9 @@ pub use session_kv::{
     InMemorySessionKv, SessionKvEntry, SessionKvError, SessionKvLimitKind, SessionKvLimits,
     SessionKvPage, SessionKvStore, SharedKvBudget,
 };
-pub use vfs::{Vfs, VfsMode, measure_dir, measure_with_held, regular_files};
+pub use vfs::{
+    Access, MountError, MountSpec, Vfs, VfsMode, measure_dir, measure_host_dir, regular_files,
+};
 pub use watchdog::Watchdog;
 
 pub use crate::stdlib::http::{
@@ -65,7 +70,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use wasmtime::{
-    ArrayRef, AsContextMut, Config, Engine, Instance, Linker, Module, OptLevel, Rooted, Store, Val,
+    ArrayRef, AsContextMut, Config, Engine, Instance, Linker, Module, OptLevel, Rooted, Store,
     WasmBacktraceDetails,
 };
 
@@ -81,10 +86,13 @@ pub struct VfsInfo {
 }
 
 pub struct StoreData {
+    #[cfg(test)]
+    pub(crate) array_growth: array_storage::GrowthStats,
     /// After cancelling a host call, the execution owner drains this before
     /// reusing or releasing the store. Blocking work may still be cleaning up.
     pub blocking_work: blocking::BlockingWork,
     pub git: Option<crate::stdlib::git::GitConfig>,
+    pub(crate) git_history: Option<Arc<crate::stdlib::git::log_cache::Cache>>,
     pub console: Box<dyn Write + Send>,
     pub vfs: Vfs,
     pub vfs_info: VfsInfo,
@@ -92,6 +100,8 @@ pub struct StoreData {
     pub fs_max_read_size: u64,
     pub http_client: Arc<dyn HttpClient>,
     pub http_max_response_size: u64,
+    /// Operator ceiling for a download, including streaming its body.
+    pub http_max_download_timeout_ms: u64,
     pub auth_proxy: Arc<dyn AuthProxy>,
     pub secret_provider: Arc<dyn SecretProvider>,
     /// The outbound `@mcp/<server>` transport the `submilli:mcp.call` host fn
@@ -120,6 +130,20 @@ pub struct StoreData {
     /// Defaults to [`NoopMetricsSink`]; the server installs a Sentry-backed one.
     pub metrics: Arc<dyn metrics::MetricsSink>,
     pub tenant_limits: TenantLimits,
+    /// Fuel charged by host functions for their own work; the rest of the fuel
+    /// spent went to Wasm instructions. See [`fuel::charge_host_fuel`].
+    pub host_fuel: u64,
+    pub(crate) next_identity_hash: u64,
+    #[cfg(test)]
+    pub(crate) collection_index_reads: u64,
+    #[cfg(test)]
+    pub(crate) object_index_probes: u64,
+    /// Host charges not yet applied to the engine's fuel (see
+    /// [`fuel::HOST_FUEL_BATCH`]).
+    pub host_fuel_pending: u64,
+    /// The engine's fuel right after the last application of pending host
+    /// charges; `None` before the first.
+    pub host_fuel_applied_at: Option<u64>,
     /// Test-segment labels recorded by `submilli:test.label`, in call order.
     /// Only the test runner installs that host fn; an ordinary run leaves this
     /// empty. The runner reads it after `main()` returns to attribute the
@@ -130,11 +154,29 @@ pub struct StoreData {
     /// raw arrays. `None` until the prelude instantiates; set by
     /// `install_prelude_async`. See [`crate::runtime::host::HostAbi`].
     pub host_abi: Option<crate::runtime::host::HostAbi>,
+    /// This store's intrinsic types, built on first use; see
+    /// [`crate::runtime::intrinsic_types::intrinsic_types`].
+    pub(crate) intrinsic_types: Option<Arc<crate::runtime::intrinsic_types::IntrinsicTypes>>,
+    /// The bound-receiver closure environment type, built on first use for the
+    /// same reason as [`Self::intrinsic_types`].
+    pub(crate) closure_receiver_type: Option<wasmtime::StructType>,
+    /// The call-metadata closure environment type, built on first use for the
+    /// same reason as [`Self::intrinsic_types`].
+    pub(crate) call_metadata_type: Option<wasmtime::StructType>,
+    pub(crate) iterator_functions: [Option<wasmtime::Func>; 10],
+    pub(crate) iterator_constants: [Option<wasmtime::Global>; 6],
+    pub(crate) parameter_cache: prelude::arguments::ParameterCache,
+    pub(crate) regex_input: Option<prelude::regex::input::InputCache>,
     /// Runtime type metadata keyed by package name.
     pub type_info: std::collections::BTreeMap<String, TypeInfoTable>,
     /// Depth of the in-flight universal-vtable walk; see
     /// [`MAX_VTABLE_WALK_DEPTH`].
     pub vtable_walk_depth: u32,
+    /// Hook entries in the current outer structural walk, including repeated
+    /// visits to shared children. Reset only when the outer walk finishes.
+    pub(crate) vtable_walk_nodes: u32,
+    /// Host-only result marshalling after an effect must not refuse for fuel.
+    pub(crate) settling_host_result: bool,
 }
 
 /// The nesting the universal-vtable walk allows before it reports a runaway.
@@ -146,6 +188,9 @@ pub struct StoreData {
 /// test-harness thread aborts between 160 and 200 levels, so the bound sits
 /// below the point where the native stack runs out.
 pub(crate) const MAX_VTABLE_WALK_DEPTH: u32 = 128;
+
+/// Bounds shared-substructure expansion independently of available fuel.
+pub(crate) const MAX_STRUCTURAL_WALK_NODES: u32 = 100_000;
 
 pub const DEFAULT_FS_MAX_READ_SIZE: u64 = 50 * 1024 * 1024;
 
@@ -169,15 +214,19 @@ impl StoreData {
             size_limit: None,
         };
         Self {
+            #[cfg(test)]
+            array_growth: array_storage::GrowthStats::default(),
             console: Box::new(std::io::stderr()),
             vfs,
             vfs_info,
             security_check: security::default_check(),
             git: None,
+            git_history: None,
             blocking_work: blocking::BlockingWork::default(),
             fs_max_read_size: DEFAULT_FS_MAX_READ_SIZE,
             http_client: crate::stdlib::http::default_http_client(),
             http_max_response_size: DEFAULT_HTTP_MAX_RESPONSE_SIZE,
+            http_max_download_timeout_ms: 60_000,
             auth_proxy: crate::stdlib::http::default_auth_proxy(),
             secret_provider: Arc::new(secrets::NoopSecretProvider),
             mcp_transport: None,
@@ -186,10 +235,27 @@ impl StoreData {
             session_kv: None,
             metrics: Arc::new(metrics::NoopMetricsSink),
             tenant_limits: TenantLimits::new(max_store_bytes),
+            host_fuel: 0,
+            #[cfg(test)]
+            collection_index_reads: 0,
+            #[cfg(test)]
+            object_index_probes: 0,
+            next_identity_hash: 0,
+            host_fuel_pending: 0,
+            host_fuel_applied_at: None,
             test_labels: RefCell::new(Vec::new()),
             host_abi: None,
+            intrinsic_types: None,
+            closure_receiver_type: None,
+            call_metadata_type: None,
+            iterator_functions: [None; 10],
+            iterator_constants: [None; 6],
+            parameter_cache: Default::default(),
+            regex_input: None,
             type_info: std::collections::BTreeMap::new(),
             vtable_walk_depth: 0,
+            vtable_walk_nodes: 0,
+            settling_host_result: false,
         }
     }
 
@@ -433,19 +499,9 @@ impl RuntimeConfig {
         wasm_bytes: &[u8],
         type_info: Option<TypeInfoTable>,
     ) -> wasmtime::Result<RunResult> {
-        struct Sink(Arc<Mutex<Vec<u8>>>);
-        impl Write for Sink {
-            fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-                self.0.lock().unwrap().write(buf)
-            }
-            fn flush(&mut self) -> std::io::Result<()> {
-                Ok(())
-            }
-        }
-
         let buf = Arc::new(Mutex::new(Vec::new()));
         let mut data = StoreData::with_vfs_and_cap(Vfs::tempdir()?, self.max_store_bytes);
-        data.console = Box::new(Sink(Arc::clone(&buf)));
+        data.console = Box::new(ConsoleSink(Arc::clone(&buf)));
         if let Some(type_info) = type_info {
             data.install_type_info(type_info);
         }
@@ -458,26 +514,61 @@ impl RuntimeConfig {
         let _watchdog = self.arm_timeout(&engine);
         let inst = instantiate_program_async(&linker, &mut store, &module).await?;
         let value = dispatch_main_async(&mut store, &inst).await?;
-        let captured = buf.lock().unwrap().clone();
+        let captured = buf
+            .lock()
+            .map_err(|_| host::fatal_host_error("console buffer lock poisoned"))?
+            .clone();
         let console = String::from_utf8(captured)
             .map_err(|e| wasmtime::Error::msg(format!("console output not utf-8: {e}")))?;
         Ok(RunResult { value, console })
     }
 }
 
+struct ConsoleSink(Arc<Mutex<Vec<u8>>>);
+
+impl Write for ConsoleSink {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.0
+            .lock()
+            .map_err(|_| std::io::Error::other("console buffer lock poisoned"))?
+            .write(buf)
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
 /// Decode a Submilli `(ref $string)` (packed UTF-16) into a Rust `String`.
-/// Wasmtime returns each `i16` element as `Val::I32` zero-extended.
 pub(crate) fn read_submilli_string(
-    mut ctx: impl AsContextMut,
+    mut ctx: impl AsContextMut<Data = StoreData>,
     msg: Rooted<ArrayRef>,
 ) -> wasmtime::Result<String> {
-    let len = msg.len(&mut ctx)?;
-    let mut units = Vec::with_capacity(len as usize);
-    for i in 0..len {
-        match msg.get(&mut ctx, i)? {
-            Val::I32(v) => units.push(v as u16),
-            other => wasmtime::bail!("expected i16 array element, got {other:?}"),
-        }
-    }
+    let units = host::read_code_units(&mut ctx, msg, "string")?;
+    fuel::charge(ctx, fuel::SCAN, units.len() as u64)?;
     Ok(String::from_utf16_lossy(&units))
+}
+
+#[cfg(test)]
+mod console_capture_tests {
+    use super::*;
+
+    #[test]
+    fn poisoned_console_writer_returns_error_without_discarding_bytes() {
+        let buffer = Arc::new(Mutex::new(b"before\n".to_vec()));
+        let poisoned = Arc::clone(&buffer);
+        let _ = std::thread::spawn(move || {
+            let _guard = poisoned.lock().unwrap();
+            panic!("injected console poison");
+        })
+        .join();
+        let mut sink = ConsoleSink(Arc::clone(&buffer));
+        assert!(sink.write_all(b"after\n").is_err());
+        assert_eq!(*buffer.lock().unwrap_err().into_inner(), b"before\n");
+        let healthy = Arc::new(Mutex::new(Vec::new()));
+        ConsoleSink(Arc::clone(&healthy))
+            .write_all(b"healthy\n")
+            .unwrap();
+        assert_eq!(*healthy.lock().unwrap(), b"healthy\n");
+    }
 }

@@ -7,6 +7,7 @@
 //! embedder-facing transport traits live in [`transport`], the SSRF policy in
 //! [`policy`].
 
+use crate::runtime::host::{abi_arg, abi_result};
 mod declaration;
 pub mod policy;
 mod redirect_guard;
@@ -20,11 +21,12 @@ use wasmtime::{
 };
 
 use crate::runtime::fs::{ContainError, ContentPath};
+use crate::runtime::fuel;
 use crate::runtime::host::{
     read_boxed_number, read_string_arg, read_uint8_array_arg, register_host_fn,
     register_host_fn_async, write_submilli_string_struct,
 };
-use crate::runtime::intrinsic_types::{IntrinsicTypes, build_intrinsic_types};
+use crate::runtime::intrinsic_types::{IntrinsicTypes, build_intrinsic_types, intrinsic_types};
 use crate::runtime::metrics::{HttpMetric, MetricsSink};
 use crate::runtime::prelude::collection::{is_a, object_field, unbox_bool};
 use crate::runtime::prelude::map;
@@ -34,11 +36,15 @@ use crate::stdlib::abi::{
     self, backing_receiver, backing_struct, f64_field, i32_field, install_field_getters,
     nullable_object_field, string_field,
 };
-use crate::stdlib::shared::{check_security, contain_trap, quota_refusal, resolve_content_or_trap};
+use crate::stdlib::dot_segments::refuse_dot_segments;
+use crate::stdlib::shared::{
+    check_security, contain_trap, quota_refusal, refuse_volume_root, require_writable,
+    resolve_content_or_trap,
+};
 use redirect_guard::{
     CapabilityGuard, DownloadTarget, GuardedRequest, host_and_path, verb_context,
 };
-use transport::{DownloadMeta, http_failure_outcome};
+use transport::{DownloadMeta, DownloadProgress, http_failure_outcome};
 
 pub const MODULE_NAME: &str = "submilli:http";
 
@@ -143,10 +149,15 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
             move |caller, params, results| {
                 let method = method.clone();
                 Box::pin(async move {
-                    let url = read_string_arg(&mut *caller, &params[0], "http (url)")?;
-                    results[0] =
-                        perform_request(caller, &method, &url, &Val::AnyRef(None), &params[1])
-                            .await?;
+                    let url = read_string_arg(&mut *caller, abi_arg(params, 0)?, "http (url)")?;
+                    *abi_result(results, 0)? = perform_request(
+                        caller,
+                        &method,
+                        &url,
+                        &Val::AnyRef(None),
+                        abi_arg(params, 1)?,
+                    )
+                    .await?;
                     Ok(())
                 })
             },
@@ -173,9 +184,15 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
             move |caller, params, results| {
                 let method = method.clone();
                 Box::pin(async move {
-                    let url = read_string_arg(&mut *caller, &params[0], "http (url)")?;
-                    results[0] =
-                        perform_request(caller, &method, &url, &params[1], &params[2]).await?;
+                    let url = read_string_arg(&mut *caller, abi_arg(params, 0)?, "http (url)")?;
+                    *abi_result(results, 0)? = perform_request(
+                        caller,
+                        &method,
+                        &url,
+                        abi_arg(params, 1)?,
+                        abi_arg(params, 2)?,
+                    )
+                    .await?;
                     Ok(())
                 })
             },
@@ -200,9 +217,17 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         /* deterministic = */ false,
         |caller, params, results| {
             Box::pin(async move {
-                let method = read_string_arg(&mut *caller, &params[0], "http.request (method)")?;
-                let url = read_string_arg(&mut *caller, &params[1], "http.request (url)")?;
-                results[0] = perform_request(caller, &method, &url, &params[2], &params[3]).await?;
+                let method =
+                    read_string_arg(&mut *caller, abi_arg(params, 0)?, "http.request (method)")?;
+                let url = read_string_arg(&mut *caller, abi_arg(params, 1)?, "http.request (url)")?;
+                *abi_result(results, 0)? = perform_request(
+                    caller,
+                    &method,
+                    &url,
+                    abi_arg(params, 2)?,
+                    abi_arg(params, 3)?,
+                )
+                .await?;
                 Ok(())
             })
         },
@@ -220,7 +245,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         /* deterministic = */ false,
         |caller, params, results| {
             Box::pin(async move {
-                results[0] = perform_download(caller, params).await?;
+                *abi_result(results, 0)? = perform_download(caller, params).await?;
                 Ok(())
             })
         },
@@ -273,7 +298,7 @@ async fn read_request_body(
     if matches!(val, Val::AnyRef(None)) {
         return Ok(RequestBody::Empty);
     }
-    let intr = build_intrinsic_types(caller.engine())?;
+    let intr = intrinsic_types(&mut *caller)?;
     if is_a(caller, val, &intr.string)? {
         let text = read_string_arg(caller, val, "http (body)")?;
         return Ok(RequestBody::Text(text.into_bytes()));
@@ -340,6 +365,9 @@ async fn perform_request(
     body_val: &Val,
     headers_val: &Val,
 ) -> wasmtime::Result<Val> {
+    // Before the body, whose `toJson` may run guest code, so a refused URL has no effects.
+    refuse_dot_segments(url)
+        .map_err(|refusal| refusal.into_error(&format!("http {}", method.to_ascii_uppercase())))?;
     let body = read_request_body(caller, body_val).await?;
     let mut headers = read_headers(caller, headers_val)?;
 
@@ -357,7 +385,7 @@ async fn perform_request(
     let capability = format!("http.{}", method.to_ascii_lowercase());
     let (host_str, path_str) = url_host_and_path(url);
     check_security(
-        &*caller,
+        &mut *caller,
         &capability,
         verb_context(&host_str, &path_str, body.len() as u64, DEFAULT_TIMEOUT_MS),
     )?;
@@ -367,7 +395,7 @@ async fn perform_request(
         GuardedRequest::Verb {
             timeout_ms: DEFAULT_TIMEOUT_MS,
         },
-    );
+    )?;
     let req = HttpRequest {
         method: method.to_ascii_uppercase(),
         url: url.to_string(),
@@ -388,6 +416,9 @@ async fn perform_request(
     // Attached after the proxy, so no proxy can drop it and leave hops unchecked.
     req.redirect_guard = Some(guard);
 
+    // The request's bytes are the work before any effect; the response's are
+    // charged once it is here, since a stop in between would lose it.
+    fuel::charge(&mut *caller, fuel::IO, request_bytes(&req))?;
     let metrics = std::sync::Arc::clone(&caller.data().metrics);
     let start = std::time::Instant::now();
     let send_result = http_client.send(&req).await;
@@ -401,21 +432,48 @@ async fn perform_request(
             .as_ref()
             .map(|resp| (resp.status, resp.body.len() as u64)),
     );
-    let resp = send_result.map_err(|e| {
-        let msg = format!("http {method}: {e}");
-        // An over-limit response body is a spec `RangeError` (out-of-range
-        // size) and a bad verb a `TypeError`; other transport failures stay
-        // base `Error`s.
-        match e {
-            HttpError::TooLarge { .. } => crate::runtime::host::range_error(msg),
-            HttpError::UnsupportedMethod(_) => crate::runtime::host::type_error(msg),
-            HttpError::Internal(_) => crate::runtime::host::fatal_host_error(msg),
-            HttpError::PermissionDenied(denied) => denied.into_error(),
-            _ => wasmtime::Error::msg(msg),
-        }
-    })?;
+    settle_response(caller, send_result, method)
+}
 
-    write_response(caller, resp).await
+fn settle_response(
+    caller: &mut Caller<'_, StoreData>,
+    send_result: std::result::Result<HttpResponse, HttpError>,
+    method: &str,
+) -> wasmtime::Result<Val> {
+    fuel::settle_result(caller, |caller| {
+        let result = (|| {
+            let resp = send_result.map_err(|e| {
+                let msg = format!("http {method}: {e}");
+                // An over-limit response body is a spec `RangeError` (out-of-range
+                // size) and a bad verb a `TypeError`; other transport failures stay
+                // base `Error`s.
+                match e {
+                    HttpError::TooLarge { .. } => crate::runtime::host::range_error(msg),
+                    HttpError::UnsupportedMethod(_) => crate::runtime::host::type_error(msg),
+                    HttpError::Internal(_) => crate::runtime::host::fatal_host_error(msg),
+                    HttpError::PermissionDenied(denied) => denied.into_error(),
+                    _ => wasmtime::Error::msg(msg),
+                }
+            })?;
+
+            fuel::settle(&mut *caller, fuel::IO, response_bytes(&resp))?;
+            fuel::settle(&mut *caller, fuel::SCAN, resp.body.len() as u64)?;
+            write_response(caller, resp)
+        })();
+        result.map_err(|error| crate::runtime::host::throw_host_error(caller, error))
+    })
+}
+
+/// The bytes a request sends: method, URL, headers and body.
+fn request_bytes(req: &HttpRequest) -> u64 {
+    let headers: usize = req.headers.iter().map(|(k, v)| k.len() + v.len()).sum();
+    (req.method.len() + req.url.len() + headers + req.body.len()) as u64
+}
+
+/// The bytes a response carried: status text, final URL, headers and body.
+fn response_bytes(resp: &HttpResponse) -> u64 {
+    let headers: usize = resp.headers.iter().map(|(k, v)| k.len() + v.len()).sum();
+    (resp.status_text.len() + resp.final_url.len() + headers + resp.body.len()) as u64
 }
 
 /// The principal a request is attributed to, and the guard that checks its
@@ -427,27 +485,24 @@ async fn perform_request(
 fn request_principal(
     caller: &Caller<'_, StoreData>,
     request: GuardedRequest,
-) -> (String, std::sync::Arc<CapabilityGuard>) {
+) -> wasmtime::Result<(String, std::sync::Arc<CapabilityGuard>)> {
     let who = crate::stdlib::shared::running_package(caller)
-        .unwrap_or_else(|unknown| unknown.label.to_string());
+        .or_else(crate::stdlib::shared::PrincipalError::label_or_error)?;
     let guard = CapabilityGuard::new(
         who.clone(),
         std::sync::Arc::clone(&caller.data().security_check),
         request,
+        caller.data().vfs.cwd().to_owned(),
     );
-    (who, std::sync::Arc::new(guard))
+    Ok((who, std::sync::Arc::new(guard)))
 }
 
 /// Build the `$ResponseBacking` from a transport [`HttpResponse`].
-async fn write_response(
-    caller: &mut Caller<'_, StoreData>,
-    resp: HttpResponse,
-) -> wasmtime::Result<Val> {
+fn write_response(caller: &mut Caller<'_, StoreData>, resp: HttpResponse) -> wasmtime::Result<Val> {
     let body_text = std::str::from_utf8(&resp.body)
-        .map_err(|e| wasmtime::Error::msg(format!("http: response body is not UTF-8: {e}")))?
-        .to_string();
-    let body = write_submilli_string_struct(caller, &body_text)?.to_anyref();
-    let headers = map::string_map_from_pairs(caller, &resp.headers).await?;
+        .map_err(|e| wasmtime::Error::msg(format!("http: response body is not UTF-8: {e}")))?;
+    let body = write_submilli_string_struct(caller, body_text)?.to_anyref();
+    let headers = map::host_string_map_from_pairs(caller, &resp.headers)?;
     let ok = (200..300).contains(&resp.status);
     let status_text = write_submilli_string_struct(caller, &resp.status_text)?.to_anyref();
     let url = write_submilli_string_struct(caller, &resp.final_url)?.to_anyref();
@@ -489,7 +544,7 @@ fn read_download_options(
         overwrite: false,
         max_bytes: caller.data().http_max_response_size,
         headers: Vec::new(),
-        timeout_ms: DOWNLOAD_TIMEOUT_MS,
+        timeout_ms: DOWNLOAD_TIMEOUT_MS.min(caller.data().http_max_download_timeout_ms),
         decompress: false,
     };
     if matches!(val, Val::AnyRef(None)) {
@@ -500,25 +555,29 @@ fn read_download_options(
     }
     if let Some(v) = present_field(caller, val, "maxBytes")? {
         let n = read_boxed_number(caller, &v, "http.download (maxBytes)")?;
-        if n < 0.0 {
-            wasmtime::bail!("http.download: maxBytes must be non-negative, got {n}");
-        }
-        options.max_bytes = n as u64;
+        options.max_bytes = download_limit(n, caller.data().http_max_response_size, "maxBytes")?;
     }
     if let Some(v) = present_field(caller, val, "headers")? {
         options.headers = read_headers(caller, &v)?;
     }
     if let Some(v) = present_field(caller, val, "timeout")? {
         let n = read_boxed_number(caller, &v, "http.download (timeout)")?;
-        if n < 0.0 {
-            wasmtime::bail!("http.download: timeout must be non-negative, got {n}");
-        }
-        options.timeout_ms = n as u64;
+        options.timeout_ms =
+            download_limit(n, caller.data().http_max_download_timeout_ms, "timeout")?;
     }
     if let Some(v) = present_field(caller, val, "decompress")? {
         options.decompress = unbox_bool(caller, &v)?;
     }
     Ok(options)
+}
+
+fn download_limit(value: f64, ceiling: u64, name: &str) -> wasmtime::Result<u64> {
+    if !value.is_finite() || value < 0.0 || value.fract() != 0.0 || value > ceiling as f64 {
+        return Err(crate::runtime::host::range_error(format!(
+            "http.download: {name} must be a finite integer between 0 and {ceiling}; use a smaller value"
+        )));
+    }
+    Ok((value as u64).min(ceiling))
 }
 
 /// An options-bag field, `None` when absent — an omitted optional field may
@@ -538,9 +597,10 @@ async fn perform_download(
     caller: &mut Caller<'_, StoreData>,
     params: &[Val],
 ) -> wasmtime::Result<Val> {
-    let url = read_string_arg(&mut *caller, &params[0], "http.download (url)")?;
-    let guest_path = read_string_arg(&mut *caller, &params[1], "http.download (path)")?;
-    let options = read_download_options(caller, &params[2])?;
+    let url = read_string_arg(&mut *caller, abi_arg(params, 0)?, "http.download (url)")?;
+    refuse_dot_segments(&url).map_err(|refusal| refusal.into_error("http.download"))?;
+    let guest_path = read_string_arg(&mut *caller, abi_arg(params, 1)?, "http.download (path)")?;
+    let options = read_download_options(caller, abi_arg(params, 2)?)?;
 
     let (host_str, url_path_str) = url_host_and_path(&url);
 
@@ -552,12 +612,12 @@ async fn perform_download(
     };
     // http-side check first; remote-only policies can deny without path-context cost.
     check_security(
-        &*caller,
+        &mut *caller,
         "http.download",
         target.context(&host_str, &url_path_str),
     )?;
     check_security(
-        &*caller,
+        &mut *caller,
         "fs.write",
         serde_json::json!({
             "path": guest_path,
@@ -568,6 +628,10 @@ async fn perform_download(
     // Resolution follows the policy checks, matching every `fs` module's ordering: no
     // filesystem work happens until the call is authorized.
     let resolved = resolve_content_or_trap(caller.data(), &guest_path, "http.download")?;
+    // Before the request goes out, so a target that can never be written costs no
+    // network traffic.
+    require_writable(&*caller, resolved.placement(), "fs.write", &guest_path)?;
+    refuse_volume_root(&resolved, "http.download", &guest_path)?;
 
     if !options.overwrite
         && resolved
@@ -578,8 +642,13 @@ async fn perform_download(
             "http.download {guest_path}: file exists (pass {{ overwrite: true }} to clobber)"
         );
     }
+    // The checks the final rename runs, so a target spelled by an alias of a
+    // mount point is refused before the request rather than after the body.
+    resolved
+        .check_rename_end()
+        .map_err(|err| contain_trap("http.download", &guest_path, &err))?;
 
-    let (who, guard) = request_principal(caller, GuardedRequest::Download(target));
+    let (who, guard) = request_principal(caller, GuardedRequest::Download(target))?;
     let req = HttpRequest {
         method: "GET".to_string(),
         url: url.clone(),
@@ -605,8 +674,16 @@ async fn perform_download(
     let start = std::time::Instant::now();
     // No program code runs while the download streams, so an overwrite draws on the
     // size of the file it replaces and reserves only what goes beyond it.
-    let disk_charge = QuotaCharge::new(caller.data().vfs.quota().cloned(), resolved.regular_file());
-    let streamed = stream_to_temp(caller, &req, &tmp, &guest_path, disk_charge).await;
+    let disk_charge = QuotaCharge::new(
+        resolved.placement().quota().cloned(),
+        resolved.regular_file(),
+    );
+    fuel::charge(&mut *caller, fuel::IO, request_bytes(&req))?;
+    let progress = DownloadProgress::default();
+    let streamed = stream_to_temp(caller, &req, &tmp, &guest_path, disk_charge, &progress).await;
+    // Network receipt and disk writes already happened, even on failure.
+    fuel::settle(&mut *caller, fuel::IO, progress.bytes_received())?;
+    fuel::settle(&mut *caller, fuel::IO, progress.bytes_written())?;
     // A filesystem failure has no transport outcome to record.
     match &streamed {
         Ok(streamed) => record_http_metric(
@@ -625,15 +702,19 @@ async fn perform_download(
         ),
         Err(DownloadFailure::Fs(_) | DownloadFailure::Full(..)) => {}
     }
-    let Streamed {
-        meta,
-        file,
-        disk_charge,
-    } = streamed.map_err(DownloadFailure::into_error)?;
-    commit_temp(file, disk_charge, &tmp, &resolved, &guest_path)?;
-
-    let duration_ms = start.elapsed().as_millis() as f64;
-    write_download_result(caller, &meta, &guest_path, duration_ms)
+    fuel::settle_result(caller, |caller| {
+        let result = (|| {
+            let Streamed {
+                meta,
+                file,
+                disk_charge,
+            } = streamed.map_err(DownloadFailure::into_error)?;
+            commit_temp(file, disk_charge, &tmp, &resolved, &guest_path)?;
+            let duration_ms = start.elapsed().as_millis() as f64;
+            write_download_result(caller, &meta, &guest_path, duration_ms)
+        })();
+        result.map_err(|error| crate::runtime::host::throw_host_error(caller, error))
+    })
 }
 
 /// Why a download attempt failed before commit. Transport failures carry the
@@ -679,6 +760,7 @@ async fn stream_to_temp(
     tmp: &ContentPath,
     guest_path: &str,
     disk_charge: QuotaCharge,
+    progress: &DownloadProgress,
 ) -> Result<Streamed, DownloadFailure> {
     let file = tmp
         .create()
@@ -687,9 +769,12 @@ async fn stream_to_temp(
         file,
         disk_charge,
         refused: None,
+        progress,
     });
     let http_client = std::sync::Arc::clone(&caller.data().http_client);
-    let result = http_client.download(req, &mut writer).await;
+    let result = http_client
+        .download_with_progress(req, &mut writer, progress)
+        .await;
     // Flush explicitly; BufWriter swallows errors on drop. Every failure below removes
     // the temp file, and dropping the writer's disk charge gives back what it held.
     let inner = match writer.into_inner() {
@@ -733,13 +818,14 @@ struct Streamed {
 /// The temp file a download streams into, reserving each chunk against the VFS's
 /// size limit before writing it, so a download stops at the limit rather than
 /// after it.
-struct QuotaWriter {
+struct QuotaWriter<'a> {
+    progress: &'a DownloadProgress,
     file: cap_std::fs::File,
     disk_charge: QuotaCharge,
     refused: Option<QuotaExceeded>,
 }
 
-impl std::io::Write for QuotaWriter {
+impl std::io::Write for QuotaWriter<'_> {
     fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
         let asked = buf.len() as u64;
         if let Err(exceeded) = self.disk_charge.reserve(asked) {
@@ -750,6 +836,7 @@ impl std::io::Write for QuotaWriter {
         // A short or failed write keeps less than it reserved; settle on what landed.
         let kept = written.as_ref().map_or(0, |n| *n as u64);
         self.disk_charge.unreserve(asked.saturating_sub(kept));
+        self.progress.written(kept);
         written
     }
 
@@ -880,7 +967,7 @@ fn install_response_members(
         FuncType::new(engine, [receiver.clone()], []),
         /* deterministic = */ true,
         |caller, params, _results| {
-            let st = backing_receiver(caller, &params[0])?;
+            let st = backing_receiver(caller, abi_arg(params, 0)?)?;
             if matches!(st.field(&mut *caller, R_OK)?, Val::I32(ok) if ok != 0) {
                 return Ok(());
             }
@@ -900,7 +987,7 @@ fn install_response_members(
         FuncType::new(engine, [receiver], [string]),
         /* deterministic = */ true,
         |caller, params, results| {
-            let st = backing_receiver(caller, &params[0])?;
+            let st = backing_receiver(caller, abi_arg(params, 0)?)?;
             let (status, status_text, url) = read_response_status_line(caller, &st)?;
             let text = if status_text.is_empty() {
                 format!("Response({status}, {url})")
@@ -908,7 +995,7 @@ fn install_response_members(
                 format!("Response({status} {status_text}, {url})")
             };
             let out = write_submilli_string_struct(caller, &text)?;
-            results[0] = Val::AnyRef(Some(out.to_anyref()));
+            *abi_result(results, 0)? = Val::AnyRef(Some(out.to_anyref()));
             Ok(())
         },
     )?;
@@ -965,7 +1052,7 @@ fn install_download_result_members(
         FuncType::new(engine, [receiver], [string]),
         /* deterministic = */ true,
         |caller, params, results| {
-            let st = backing_receiver(caller, &params[0])?;
+            let st = backing_receiver(caller, abi_arg(params, 0)?)?;
             let Val::F64(status_bits) = st.field(&mut *caller, D_STATUS)? else {
                 wasmtime::bail!("DownloadResult: status is not a number");
             };
@@ -978,7 +1065,7 @@ fn install_download_result_members(
             let bytes_written = f64::from_bits(bytes_bits) as i64;
             let text = format!("Download({status}, {bytes_written} bytes -> {path})");
             let out = write_submilli_string_struct(caller, &text)?;
-            results[0] = Val::AnyRef(Some(out.to_anyref()));
+            *abi_result(results, 0)? = Val::AnyRef(Some(out.to_anyref()));
             Ok(())
         },
     )?;
@@ -1063,10 +1150,11 @@ mod tests {
         ) -> CheckOutcome {
             if capability.starts_with("http.") {
                 CheckOutcome::Deny {
+                    rule: None,
                     reason: format!("denied {capability} in test"),
                 }
             } else {
-                CheckOutcome::Allow
+                CheckOutcome::Allow { rule: None }
             }
         }
     }
@@ -1094,6 +1182,70 @@ mod tests {
             .await
             .expect("main ran without trap");
         mock
+    }
+
+    #[tokio::test]
+    async fn response_marshalling_settles_after_short_fuel_and_preserves_errors() {
+        let config = RuntimeConfig::default();
+        let engine = config.engine().unwrap();
+        let mut store = config
+            .store_async(&engine, StoreData::with_vfs(Vfs::none()))
+            .unwrap();
+        let mut linker = wasmtime::Linker::new(&engine);
+        install_runtime_async(&mut linker, &mut store)
+            .await
+            .unwrap();
+        let probe = wasmtime::Func::new(
+            &mut store,
+            wasmtime::FuncType::new(&engine, [wasmtime::ValType::I32], []),
+            |mut caller, params, _| {
+                let invalid = params[0].i32().unwrap() != 0;
+                caller.set_fuel(1)?;
+                super::fuel::settle(&mut caller, super::fuel::IO, 128)?;
+                let mut response = ok_response(200, "café");
+                response.headers = vec![
+                    ("a".into(), "first".into()),
+                    ("a".into(), "last".into()),
+                    ("b".into(), "second".into()),
+                ];
+                if invalid {
+                    response.body = vec![0xFF];
+                }
+                let response = super::settle_response(&mut caller, Ok(response), "GET")?;
+                super::fuel::settle_result(&mut caller, |caller| {
+                    let response = crate::runtime::prelude::iterator::as_struct(
+                        caller, &response, "response",
+                    )?;
+                    let body = response.field(&mut *caller, 1)?;
+                    assert_eq!(
+                        super::read_string_arg(caller, &body, "response body")?,
+                        "café"
+                    );
+                    let headers = response.field(&mut *caller, 2)?;
+                    assert_eq!(
+                        super::map::string_entries(caller, &headers)?,
+                        vec![("a".into(), "last".into()), ("b".into(), "second".into())]
+                    );
+                    Ok(())
+                })
+            },
+        );
+        for invalid in [0, 1, 0] {
+            store.set_fuel(1_000_000).unwrap();
+            let result = probe
+                .call_async(&mut store, &[wasmtime::Val::I32(invalid)], &mut [])
+                .await;
+            if invalid != 0 {
+                let error = result.unwrap_err();
+                assert!(error.is::<wasmtime::ThrownException>());
+                let original = crate::runtime::exec::uncaught_error(&mut store, error);
+                assert!(original.to_string().contains("response body is not UTF-8"));
+            } else {
+                result.unwrap();
+            }
+            assert_eq!(store.get_fuel().unwrap(), 0);
+            assert!(!store.data().settling_host_result);
+        }
     }
 
     fn ok_response(status: u16, body: &str) -> HttpResponse {
@@ -1272,7 +1424,11 @@ function main(): void {
             &[(
                 "lib",
                 r#"
-                /** Pass-through JSON encoder. */
+                /**
+                 * Pass-through JSON encoder.
+                 * @param value Value to encode.
+                 * @returns `value` as JSON.
+                 */
                 export function passthrough(value: unknown): string {
                     return JSON.stringify(value);
                 }
@@ -1525,7 +1681,7 @@ function main(): void {
                     "timeout_ms": super::DEFAULT_TIMEOUT_MS,
                 })
             );
-            CheckOutcome::Allow
+            CheckOutcome::Allow { rule: None }
         }
     }
 
@@ -1588,7 +1744,7 @@ function main(): void {
                 .lock()
                 .unwrap()
                 .push((caller.to_string(), capability.to_string()));
-            CheckOutcome::Allow
+            CheckOutcome::Allow { rule: None }
         }
     }
 
@@ -1872,6 +2028,78 @@ function main(): void {
                 0
             );
         }
+    }
+
+    #[tokio::test]
+    async fn download_into_a_read_only_mount_is_refused_before_any_request() {
+        struct CountingClient(std::sync::atomic::AtomicUsize);
+        #[async_trait::async_trait]
+        impl HttpClient for CountingClient {
+            async fn send(&self, _: &HttpRequest) -> Result<HttpResponse, HttpError> {
+                self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                Err(HttpError::Network("unexpected".into()))
+            }
+            async fn download(
+                &self,
+                _: &HttpRequest,
+                _: &mut (dyn std::io::Write + Send),
+            ) -> Result<DownloadMeta, HttpError> {
+                self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                Err(HttpError::Network("unexpected".into()))
+            }
+        }
+        let source = r#"
+            import { download } from "submilli:http";
+            function main(): string {
+                let mountPoint = "allowed";
+                try { download("https://example.com/", "/rw", { overwrite: true }); }
+                catch (e) { mountPoint = String(e).includes("mount point") ? "refused" : String(e); }
+                try { download("https://example.com/", "/ro/payload"); }
+                catch (e: PermissionDeniedError) { return e.capability + "|" + mountPoint; }
+                return "allowed";
+            }
+        "#;
+        let volume = tempfile::tempdir().unwrap();
+        let writable = tempfile::tempdir().unwrap();
+        let vfs = Vfs::tempdir()
+            .unwrap()
+            .with_mount(crate::runtime::vfs::MountSpec {
+                guest_path: "/ro".into(),
+                host: volume.path().to_path_buf(),
+                volume: "ro".into(),
+                access: crate::runtime::vfs::Access::ReadOnly,
+                quota: None,
+            })
+            .unwrap()
+            .with_mount(crate::runtime::vfs::MountSpec {
+                guest_path: "/rw".into(),
+                host: writable.path().to_path_buf(),
+                volume: "rw".into(),
+                access: crate::runtime::vfs::Access::ReadWrite,
+                quota: None,
+            })
+            .unwrap();
+        let compiled = compile_script(source, "test.ts", crate::FileId(0), &[], &[]).unwrap();
+        let cfg = RuntimeConfig::default();
+        let engine = cfg.engine().unwrap();
+        let client = Arc::new(CountingClient(std::sync::atomic::AtomicUsize::new(0)));
+        let mut data = StoreData::with_vfs(vfs);
+        data.http_client = client.clone();
+        let mut store = cfg.store(&engine, data).unwrap();
+        let module = wasmtime::Module::new(&engine, &compiled.wasm).unwrap();
+        let mut linker = wasmtime::Linker::<StoreData>::new(&engine);
+        install_runtime_async(&mut linker, &mut store)
+            .await
+            .unwrap();
+        let instance = linker.instantiate_async(&mut store, &module).await.unwrap();
+        let value = dispatch_main_async(&mut store, &instance).await.unwrap();
+        assert!(
+            format!("{value:?}").contains("fs.write|refused"),
+            "{value:?}"
+        );
+        assert_eq!(client.0.load(std::sync::atomic::Ordering::SeqCst), 0);
+        assert_eq!(std::fs::read_dir(volume.path()).unwrap().count(), 0);
+        assert_eq!(std::fs::read_dir(writable.path()).unwrap().count(), 0);
     }
 
     #[tokio::test]
@@ -2169,11 +2397,47 @@ function main(): void {
         security: Option<Arc<dyn SecurityCheck>>,
         vfs_root: &std::path::Path,
     ) -> Result<(), String> {
+        run_download_measured(source, client, security, vfs_root)
+            .await
+            .0
+    }
+
+    async fn run_download_measured(
+        source: &str,
+        client: Arc<dyn HttpClient>,
+        security: Option<Arc<dyn SecurityCheck>>,
+        vfs_root: &std::path::Path,
+    ) -> (Result<(), String>, u64) {
+        run_download_measured_at(source, client, security, vfs_root, "/").await
+    }
+
+    async fn run_download_at(
+        source: &str,
+        client: Arc<dyn HttpClient>,
+        security: Option<Arc<dyn SecurityCheck>>,
+        vfs_root: &std::path::Path,
+        cwd: &str,
+    ) -> Result<(), String> {
+        run_download_measured_at(source, client, security, vfs_root, cwd)
+            .await
+            .0
+    }
+
+    async fn run_download_measured_at(
+        source: &str,
+        client: Arc<dyn HttpClient>,
+        security: Option<Arc<dyn SecurityCheck>>,
+        vfs_root: &std::path::Path,
+        cwd: &str,
+    ) -> (Result<(), String>, u64) {
         let compiled =
             compile_script(source, "test.subm", crate::FileId(0), &[], &[]).expect("compile clean");
         let cfg = RuntimeConfig::default();
         let engine = cfg.engine().expect("engine");
-        let vfs = Vfs::external(vfs_root.to_path_buf()).expect("external vfs");
+        let vfs = Vfs::external(vfs_root.to_path_buf())
+            .expect("external vfs")
+            .with_cwd(cwd)
+            .expect("cwd");
         let mut data = StoreData::with_vfs(vfs);
         data.http_client = client;
         if let Some(sec) = security {
@@ -2189,10 +2453,89 @@ function main(): void {
             .instantiate_async(&mut store, &module)
             .await
             .expect("instantiate");
-        dispatch_main_async(&mut store, &inst)
+        let result = dispatch_main_async(&mut store, &inst)
             .await
             .map(|_| ())
-            .map_err(|e| format!("{e:?}"))
+            .map_err(|e| format!("{e:?}"));
+        (result, store.data().host_fuel)
+    }
+
+    #[test]
+    fn download_options_cannot_exceed_operator_limits() {
+        for value in [-1.0, 0.5, f64::NAN, f64::INFINITY, 129.0] {
+            assert!(super::download_limit(value, 128, "maxBytes").is_err());
+        }
+        assert_eq!(super::download_limit(0.0, 128, "maxBytes").unwrap(), 0);
+        assert_eq!(super::download_limit(128.0, 128, "maxBytes").unwrap(), 128);
+    }
+
+    #[tokio::test]
+    async fn download_over_limit_options_throw_before_request() {
+        let source = r#"
+            import { download } from "submilli:http";
+            function main(): void {
+                let caught = 0;
+                try { download("https://example.test/f", "/out", {maxBytes: 52428801}); }
+                catch (e: RangeError) { caught += 1; }
+                try { download("https://example.test/f", "/out", {timeout: 60001}); }
+                catch (e: RangeError) { caught += 1; }
+                assert(caught === 2);
+            }
+        "#;
+        let root = tempfile::tempdir().unwrap();
+        let (mock, result) = run_download_with_mock(source, vec![], None, root.path()).await;
+        result.unwrap();
+        assert!(mock.seen.lock().unwrap().is_empty());
+        assert!(dir_is_empty(root.path()));
+    }
+
+    struct CwdPolicy;
+    impl SecurityCheck for CwdPolicy {
+        fn check(&self, _: &str, _: &str, _: &serde_json::Value) -> CheckOutcome {
+            CheckOutcome::Deny {
+                rule: None,
+                reason: "missing cwd".into(),
+            }
+        }
+        fn check_with_cwd(
+            &self,
+            _: &str,
+            capability: &str,
+            context: &serde_json::Value,
+            cwd: &str,
+        ) -> CheckOutcome {
+            let field = if capability == "http.download" {
+                "vfs_path"
+            } else {
+                "path"
+            };
+            let path = context
+                .get(field)
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("");
+            if crate::runtime::fs::guest_normalize(cwd, path)
+                .is_ok_and(|path| path == "/notes/out.bin")
+            {
+                CheckOutcome::Allow { rule: None }
+            } else {
+                CheckOutcome::Deny {
+                    rule: None,
+                    reason: "outside notes".into(),
+                }
+            }
+        }
+    }
+    #[tokio::test]
+    async fn download_uses_cwd_for_policy_and_io() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mock = Arc::new(MockHttpClient::new(vec![ok_response(200, "hello")]));
+        run_download_at(r#"import { download } from "submilli:http"; function main(): void { download("https://example.test/file", "out.bin"); }"#,
+            mock, Some(Arc::new(CwdPolicy)), tmp.path(), "/notes").await.unwrap();
+        assert_eq!(
+            std::fs::read(tmp.path().join("notes/out.bin")).unwrap(),
+            b"hello"
+        );
+        assert!(!tmp.path().join("out.bin").exists());
     }
 
     #[tokio::test]
@@ -2379,10 +2722,11 @@ function main(): void {
             ) -> CheckOutcome {
                 if capability == "http.download" {
                     CheckOutcome::Deny {
+                        rule: None,
                         reason: "denied http.download in test".into(),
                     }
                 } else {
-                    CheckOutcome::Allow
+                    CheckOutcome::Allow { rule: None }
                 }
             }
         }
@@ -2422,10 +2766,11 @@ function main(): void {
             ) -> CheckOutcome {
                 if capability == "fs.write" {
                     CheckOutcome::Deny {
+                        rule: None,
                         reason: "denied fs.write in test".into(),
                     }
                 } else {
-                    CheckOutcome::Allow
+                    CheckOutcome::Allow { rule: None }
                 }
             }
         }
@@ -2574,10 +2919,11 @@ function main(): void {
             ) -> CheckOutcome {
                 if capability == "fs.write" {
                     CheckOutcome::Deny {
+                        rule: None,
                         reason: "denied fs.write in test".into(),
                     }
                 } else {
-                    CheckOutcome::Allow
+                    CheckOutcome::Allow { rule: None }
                 }
             }
         }
@@ -2681,6 +3027,44 @@ function main(): void {
             dir_is_empty(&outside),
             "the swapped-in link must not receive the download",
         );
+    }
+
+    #[tokio::test]
+    async fn failed_download_settles_received_bytes() {
+        struct PartialTransfer(usize);
+        #[async_trait::async_trait]
+        impl HttpClient for PartialTransfer {
+            async fn send(&self, _: &HttpRequest) -> Result<HttpResponse, HttpError> {
+                Err(HttpError::Other("unused".into()))
+            }
+            async fn download(
+                &self,
+                _: &HttpRequest,
+                writer: &mut (dyn std::io::Write + Send),
+            ) -> Result<DownloadMeta, HttpError> {
+                writer.write_all(&vec![b'x'; self.0]).unwrap();
+                Err(HttpError::Network("interrupted".into()))
+            }
+        }
+        let source = r#"
+            import { download } from "submilli:http";
+            function main(): void {
+                try { download("https://example.test/f", "/out.bin"); }
+                catch (e: Error) { assert(e.message.includes("interrupted")); }
+            }
+        "#;
+        let root = tempfile::tempdir().unwrap();
+        let mut costs = Vec::new();
+        for n in [0, 128, 256] {
+            let (result, fuel) =
+                run_download_measured(source, Arc::new(PartialTransfer(n)), None, root.path())
+                    .await;
+            result.unwrap();
+            assert!(dir_is_empty(root.path()));
+            costs.push(fuel);
+        }
+        assert_eq!(costs[1] - costs[0], 2 * super::fuel::IO.cost(128));
+        assert_eq!(costs[2] - costs[0], 2 * super::fuel::IO.cost(256));
     }
 
     #[tokio::test]
@@ -3074,10 +3458,11 @@ function main(): void {
             ));
             if context["host"] == "evil.test" {
                 CheckOutcome::Deny {
+                    rule: None,
                     reason: "evil.test is not allowed".into(),
                 }
             } else {
-                CheckOutcome::Allow
+                CheckOutcome::Allow { rule: None }
             }
         }
     }

@@ -104,6 +104,9 @@ export class ExaError extends Error {
 }
 
 /** Retrieve web sources with highlights for the calling agent to use.
+ * @param query Natural-language search text; must not be blank.
+ * @param options Optional result count, domain and date filters and content settings; `null` uses Exa's defaults with highlights.
+ * @returns Sources in provider order with request metadata; `results` is empty when nothing matched.
  * @capability exa.ai/search {}
  */
 export function search(query: string, options: SearchOptions | null = null): SearchResponse {
@@ -147,6 +150,9 @@ export function search(query: string, options: SearchOptions | null = null): Sea
 }
 
 /** Extract known URLs. Every host must be allowed before any request is sent.
+ * @param urls Absolute HTTP or HTTPS URLs to extract, 1–100 entries of at most 2048 characters each.
+ * @param options Optional extraction settings; `null` uses highlights with Exa's defaults.
+ * @returns Extracted sources plus a per-URL status list; crawl failures appear in `statuses` rather than throwing.
  * @capability exa.ai/contents { host: string }
  */
 export function getContents(urls: string[], options: ContentOptions | null = null): ContentsResponse {
@@ -168,7 +174,12 @@ export function getContents(urls: string[], options: ContentOptions | null = nul
     return normalizeContentsJson(requireOk(response));
 }
 
-/** Build the exact search payload without credentials or network access. */
+/**
+ * Build the exact search payload without credentials or network access.
+ * @param query Search text; must not be blank.
+ * @param options Optional search settings; `null` uses the defaults. Throws `ExaError` with code `invalid_argument` on out-of-range values.
+ * @returns JSON request body for the search endpoint.
+ */
 export function buildSearchBody(query: string, options: SearchOptions | null = null): string {
     requireText(query, "query");
     const opts: SearchOptions = options === null ? {} : options;
@@ -188,14 +199,23 @@ export function buildSearchBody(query: string, options: SearchOptions | null = n
     return "{" + fields.join(",") + "}";
 }
 
-/** Build a known-URL request with extraction fields at the top level. */
+/**
+ * Build a known-URL request with extraction fields at the top level.
+ * @param urls URLs to extract; validated like `contentsHosts`.
+ * @param options Optional extraction settings; `null` uses the defaults.
+ * @returns JSON request body for the contents endpoint, with extraction fields at the top level.
+ */
 export function buildContentsBody(urls: string[], options: ContentOptions | null = null): string {
     contentsHosts(urls);
     const extraction = contentBody(options);
     return "{" + field("urls", JSON.stringify(urls)) + "," + extraction.slice(1);
 }
 
-/** Validate a batch and return hosts for caller permission checks. */
+/**
+ * Validate a batch and return hosts for caller permission checks.
+ * @param urls URLs to validate, 1–100 entries; each must be an absolute HTTP or HTTPS URL of at most 2048 characters with no surrounding whitespace.
+ * @returns Host of each URL, in input order. Throws `ExaError` with code `invalid_argument` for an invalid batch.
+ */
 export function contentsHosts(urls: string[]): string[] {
     integerRange(urls.length, 1, 100, "URL count");
     const hosts: string[] = [];
@@ -203,7 +223,7 @@ export function contentsHosts(urls: string[]): string[] {
         if (url.length > 2048 || url.trim() !== url) throw invalidArgument("URLs must be at most 2048 characters with no surrounding whitespace");
         try {
             const parsed = parse(url);
-            if ((parsed.protocol !== "https" && parsed.protocol !== "http") || parsed.host.length === 0) {
+            if ((parsed.protocol !== "https" && parsed.protocol !== "http") || /^\.*$/.test(parsed.host)) {
                 throw invalidArgument("URLs must be absolute HTTP or HTTPS URLs");
             }
             hosts.push(parsed.host);
@@ -230,7 +250,11 @@ interface ApiCrawlError { tag?: string; httpStatusCode?: number; }
 interface ApiStatus { id: string; status: string; source?: string; error?: ApiCrawlError; }
 interface ApiContents { results: ApiResult[]; statuses: ApiStatus[]; requestId?: string; costDollars?: ApiCost; }
 
-/** Normalize search metadata and reject malformed response shapes. */
+/**
+ * Normalize search metadata and reject malformed response shapes.
+ * @param body Raw JSON response body from the search endpoint.
+ * @returns Parsed results and metadata; throws `ExaError` with code `invalid_response` if the body is malformed.
+ */
 export function normalizeSearchJson(body: string): SearchResponse {
     try {
         const data = JSON.parse(body) as ApiSearch;
@@ -240,7 +264,11 @@ export function normalizeSearchJson(body: string): SearchResponse {
     }
 }
 
-/** Preserve successful results and per-URL failures independently. */
+/**
+ * Preserve successful results and per-URL failures independently.
+ * @param body Raw JSON response body from the contents endpoint.
+ * @returns Parsed results and per-URL statuses; throws `ExaError` with code `invalid_response` if the body is malformed.
+ */
 export function normalizeContentsJson(body: string): ContentsResponse {
     try {
         const data = JSON.parse(body) as ApiContents;
@@ -259,7 +287,12 @@ export function normalizeContentsJson(body: string): ContentsResponse {
     }
 }
 
-/** Map HTTP status without exposing request credentials or raw response bodies. */
+/**
+ * Map HTTP status without exposing request credentials or raw response bodies.
+ * @param status HTTP status code of the failed response.
+ * @param retryAfter Value of the `Retry-After` header, or `null` when absent.
+ * @returns Error with a code such as `invalid_request`, `unauthorized`, `quota_exceeded`, `forbidden`, `rate_limited` or `http_error`.
+ */
 export function exaHttpError(status: number, retryAfter: string | null = null): ExaError {
     let code = "http_error";
     let message = "Exa request failed: HTTP " + status.toString();

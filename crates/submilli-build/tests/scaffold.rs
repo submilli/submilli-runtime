@@ -26,6 +26,8 @@ fn init_scaffolds_a_buildable_root_package() {
         tmp.path().join("docs").join("readme.md")
     );
     assert!(scaffolded.docs_readme.is_file());
+    assert_eq!(scaffolded.readme, tmp.path().join("README.md"));
+    assert!(scaffolded.readme.is_file());
     assert!(
         tmp.path()
             .join(".submilli/tsconfig.submilli.json")
@@ -98,6 +100,11 @@ fn init_scaffolds_into_a_subdirectory() {
             .join("readme.md")
     );
     assert!(scaffolded.docs_readme.is_file());
+    assert_eq!(
+        scaffolded.readme,
+        tmp.path().join("packages").join("util").join("README.md")
+    );
+    assert!(scaffolded.readme.is_file());
     assert!(manifest_text(tmp.path()).contains("path = \"packages/util\""));
 }
 
@@ -152,6 +159,8 @@ fn add_makes_an_implicit_root_path_explicit() {
     assert_eq!(manifest.packages[0].path.as_path(), Path::new("."));
     assert_eq!(manifest.packages[1].name.as_str(), "@acme/util");
     assert!(tmp.path().join("util/src/lib.ts").is_file());
+    assert!(tmp.path().join("util/docs/readme.md").is_file());
+    assert!(tmp.path().join("util/README.md").is_file());
     let generated =
         fs::read_to_string(tmp.path().join(".submilli/tsconfig.submilli.json")).expect("tsconfig");
     assert!(generated.contains("\"@acme/app\""), "got: {generated}");

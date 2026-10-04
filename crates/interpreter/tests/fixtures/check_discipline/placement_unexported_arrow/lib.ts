@@ -30,7 +30,11 @@ const guard = (channelId: string): void => {
   check("test.com/send", { channelId: channelId });
 };
 
-/** Sends the message. */
+/**
+ * Sends the message.
+ * @param channelId Conversation to post in.
+ * @param text Message text.
+ */
 export function send(channelId: string, text: string): void {
   guard(channelId);
   post(channelId, text);

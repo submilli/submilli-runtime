@@ -20,18 +20,24 @@ pub(super) fn signature() -> ClosureSig {
     }
 }
 
-pub(super) fn allocate(ta: &TypedAst, symbols: &mut SymbolTable, next: &mut u32) -> Vec<Guard> {
+pub(super) fn allocate(
+    ta: &TypedAst,
+    symbols: &mut SymbolTable,
+    next: &mut u32,
+) -> Result<Vec<Guard>, crate::compiler_error::CompilerFailure> {
     let mut guards = Vec::new();
     for (class, descriptors) in &ta.runtime_field_guards {
         let Type::ClassRef { .. } = class else {
-            continue;
+            return Err(crate::codegen::internal_failure(
+                "field guard target requires a class",
+            ));
         };
         for descriptor in descriptors {
-            let Some(declaration) = &descriptor.check.declaration else {
-                continue;
-            };
+            let declaration = descriptor.check.declaration.as_ref().ok_or_else(|| {
+                crate::codegen::internal_failure("field guard declaration is missing")
+            })?;
             let function = *next;
-            *next += 1;
+            crate::codegen::next_index(next)?;
             symbols.record_instance_field_guard(
                 class.clone(),
                 declaration.clone(),
@@ -48,7 +54,7 @@ pub(super) fn allocate(ta: &TypedAst, symbols: &mut SymbolTable, next: &mut u32)
             });
         }
     }
-    guards
+    Ok(guards)
 }
 
 pub(super) fn body(
@@ -81,12 +87,12 @@ pub(super) fn body(
             }),
         ),
     ];
-    let mut emitter = FunctionEmitter::new(ctx, &params);
+    let mut emitter = FunctionEmitter::new(ctx, &params)?;
     super::runtime_descriptors::bind(
         &mut emitter,
         &super::runtime_descriptors::parameters(&guard.target),
         0,
-    );
+    )?;
     emitter.instruction(Instruction::LocalGet(1));
     let mut check = guard.check.clone();
     if !emitter.runtime_type_params.is_empty() {
@@ -96,19 +102,22 @@ pub(super) fn body(
         super::cast_check::emit_narrowed_field_read(&mut emitter, ctx, &check, &guard.target)
     })?;
     cast::emit_box(&mut emitter, ctx, &guard.target)?;
-    Ok(emitter.build())
+    emitter.build()
 }
 
 pub(super) fn guarded_constructor(
     ctx: &CodegenCtx,
     function: &crate::MangledName,
     result: &Type,
-) -> bool {
+) -> Result<bool, crate::compiler_error::CompilerFailure> {
     let Type::ClassRef { mangled, .. } = result.peel() else {
-        return false;
+        return Ok(false);
     };
-    *function == crate::mangle::extend(mangled, "constructor")
-        && ctx.symbols.class_guard_layout(mangled).has_instance_guards
+    Ok(*function == crate::mangle::extend(mangled, "constructor")
+        && ctx
+            .symbols
+            .recorded_class_guard_layout(mangled)?
+            .has_instance_guards)
 }
 
 /// Build the constructor's hidden argument before its initializer can read fields.
@@ -122,9 +131,13 @@ pub(super) fn constructor_argument(
             "guarded constructor requires a class type",
         ));
     };
-    let layout = ctx.symbols.class_guard_layout(mangled);
+    let layout = ctx.symbols.recorded_class_guard_layout(mangled)?;
     let depth = layout.inheritance_depth;
     let named_len = layout.named_payload_len;
+    let payload_count = super::classes::guard_slot_count(depth, named_len)?;
+    let width = named_len
+        .checked_add(1)
+        .ok_or_else(|| super::internal_failure("field guard width overflow"))?;
     let intr = ctx
         .symbols
         .intrinsic_type_indices()
@@ -132,10 +145,8 @@ pub(super) fn constructor_argument(
     let array = emitter.add_anonymous_local(ValType::Ref(RefType {
         nullable: false,
         heap_type: HeapType::Concrete(intr.object_fields),
-    }));
-    emitter.instruction(Instruction::I32Const(
-        ((depth + 1) * (named_len + 1)) as i32,
-    ));
+    }))?;
+    emitter.instruction(Instruction::I32Const(payload_count as i32));
     emitter.instruction(Instruction::ArrayNewDefault(intr.object_fields));
     emitter.instruction(Instruction::LocalSet(array));
     let guards: Vec<_> = ctx.symbols.instance_field_guards(class).collect();
@@ -149,15 +160,15 @@ pub(super) fn constructor_argument(
             .closure_vtable_global_idx()
             .ok_or_else(|| crate::codegen::internal_failure("closure vtable"))?;
         for (declaration, field, function) in guards {
-            let offset = ctx
+            let row = ctx
                 .symbols
-                .class_guard_layout(declaration)
-                .inheritance_depth
-                * (named_len + 1)
-                + ctx
-                    .symbols
-                    .class_field_slot(declaration, field)
-                    .ok_or_else(|| crate::codegen::internal_failure("guard field"))?;
+                .recorded_class_guard_layout(declaration)?
+                .inheritance_depth;
+            let slot = ctx
+                .symbols
+                .class_field_slot(declaration, field)
+                .ok_or_else(|| super::internal_failure("guard field"))?;
+            let offset = guard_offset(row, width, slot, payload_count)?;
             emitter.instruction(Instruction::LocalGet(array));
             emitter.instruction(Instruction::I32Const(offset as i32));
             emitter.instruction(Instruction::GlobalGet(vtable));
@@ -172,18 +183,18 @@ pub(super) fn constructor_argument(
                         crate::codegen::internal_failure("field guard target is not registered")
                     })?,
             )?;
+            emitter.instruction(Instruction::I64Const(0));
             emitter.instruction(Instruction::StructNew(closure));
             emitter.instruction(Instruction::ArraySet(intr.object_fields));
         }
     }
     if let Some(contexts) = ctx.ta.runtime_class_contexts.get(class) {
         for context in contexts {
-            let offset = ctx
+            let row = ctx
                 .symbols
-                .class_guard_layout(&context.declaration)
-                .inheritance_depth
-                * (named_len + 1)
-                + named_len;
+                .recorded_class_guard_layout(&context.declaration)?
+                .inheritance_depth;
+            let offset = guard_offset(row, width, named_len, payload_count)?;
             emitter.instruction(Instruction::LocalGet(array));
             emitter.instruction(Instruction::I32Const(offset as i32));
             emitter.instruction(Instruction::GlobalGet(
@@ -202,6 +213,7 @@ pub(super) fn constructor_argument(
                     })?,
             ));
             super::runtime_descriptors::environment(emitter, ctx, &context.args)?;
+            emitter.instruction(Instruction::I64Const(0));
             emitter.instruction(Instruction::StructNew(
                 ctx.symbols
                     .closure_struct_type_idx(signature())
@@ -213,6 +225,23 @@ pub(super) fn constructor_argument(
     emitter.instruction(Instruction::LocalGet(array));
 
     Ok(())
+}
+
+fn guard_offset(
+    row: u32,
+    width: u32,
+    slot: u32,
+    count: u32,
+) -> Result<u32, crate::compiler_error::CompilerFailure> {
+    if slot >= width {
+        return Err(super::internal_failure(
+            "field guard column exceeds its row",
+        ));
+    }
+    row.checked_mul(width)
+        .and_then(|base| base.checked_add(slot))
+        .filter(|&offset| offset < count)
+        .ok_or_else(|| super::internal_failure("field guard offset exceeds its payload"))
 }
 
 /// Constructor result on the stack; retain the concrete validators on its payload.
@@ -229,7 +258,7 @@ pub(super) fn attach(
         attach_non_null(emitter, ctx, &class)?;
         return Ok(());
     }
-    let value = emitter.add_anonymous_local(ctx.symbols.value_type(result)?);
+    let value = emitter.add_anonymous_local(ctx.symbols.value_type(result)?)?;
     emitter.instruction(Instruction::LocalSet(value));
     emitter.instruction(Instruction::LocalGet(value));
     emitter.instruction(Instruction::RefIsNull);
@@ -254,7 +283,7 @@ fn attach_non_null(
     if guards.is_empty() {
         return Ok(());
     }
-    let object = emitter.add_anonymous_local(ctx.symbols.value_type(class)?);
+    let object = emitter.add_anonymous_local(ctx.symbols.value_type(class)?)?;
     emitter.instruction(Instruction::LocalSet(object));
     let closure = ctx
         .symbols
@@ -271,7 +300,7 @@ fn attach_non_null(
             .ok_or_else(|| crate::codegen::internal_failure("guarded field slot"))?;
         let depth = ctx
             .symbols
-            .class_guard_layout(declaration)
+            .recorded_class_guard_layout(declaration)?
             .inheritance_depth;
         emit_slot(emitter, ctx, object, depth, slot)?;
         emitter.instruction(Instruction::ArrayGet(
@@ -295,6 +324,7 @@ fn attach_non_null(
                     crate::codegen::internal_failure("field guard target is not registered")
                 })?,
         )?;
+        emitter.instruction(Instruction::I64Const(0));
         emitter.instruction(Instruction::StructNew(closure));
         emitter.instruction(Instruction::ArraySet(
             ctx.symbols
@@ -317,7 +347,11 @@ pub(super) fn check(
     class: &crate::MangledName,
     field: &str,
 ) -> Result<(), crate::compiler_error::CompilerFailure> {
-    if !ctx.symbols.class_guard_layout(class).has_instance_guards {
+    if !ctx
+        .symbols
+        .recorded_class_guard_layout(class)?
+        .has_instance_guards
+    {
         return Ok(());
     }
     let slot = ctx
@@ -331,7 +365,7 @@ pub(super) fn check(
         .unwrap_or(class);
     let depth = ctx
         .symbols
-        .class_guard_layout(declaration)
+        .recorded_class_guard_layout(declaration)?
         .inheritance_depth;
     let closure_type = ctx
         .symbols
@@ -346,11 +380,11 @@ pub(super) fn check(
     let raw = emitter.add_anonymous_local(ValType::Ref(RefType {
         nullable: true,
         heap_type: HeapType::Concrete(intr.object),
-    }));
+    }))?;
     let closure = emitter.add_anonymous_local(ValType::Ref(RefType {
         nullable: true,
         heap_type: HeapType::Concrete(intr.object),
-    }));
+    }))?;
     emitter.instruction(Instruction::LocalSet(raw));
     emit_slot(emitter, ctx, object, depth, slot)?;
     emitter.instruction(Instruction::ArrayGet(intr.object_fields));
@@ -413,9 +447,17 @@ fn emit_slot(
         field_index: 1,
     });
     emitter.instruction(Instruction::ArrayLen);
-    emitter.instruction(Instruction::I32Const((depth + 1) as i32));
+    emitter.instruction(Instruction::I32Const(
+        depth
+            .checked_add(1)
+            .ok_or_else(|| super::internal_failure("field guard row overflow"))? as i32,
+    ));
     emitter.instruction(Instruction::I32Mul);
-    emitter.instruction(Instruction::I32Const((depth + slot) as i32));
+    emitter.instruction(Instruction::I32Const(
+        depth
+            .checked_add(slot)
+            .ok_or_else(|| super::internal_failure("field guard slot overflow"))? as i32,
+    ));
     emitter.instruction(Instruction::I32Add);
 
     Ok(())
@@ -436,7 +478,7 @@ pub(super) fn bind_receiver(
     else {
         return Ok(());
     };
-    let layout = ctx.symbols.class_guard_layout(class);
+    let layout = ctx.symbols.recorded_class_guard_layout(class)?;
     if !layout.has_instance_guards {
         return Ok(());
     }
@@ -449,7 +491,7 @@ pub(super) fn bind_receiver(
         .closure_struct_type_idx(signature())
         .ok_or_else(|| crate::codegen::internal_failure("descriptor closure"))?;
     let env =
-        emitter.add_anonymous_local(super::runtime_descriptors::environment_type(ctx.symbols)?);
+        emitter.add_anonymous_local(super::runtime_descriptors::environment_type(ctx.symbols)?)?;
     emit_slot(emitter, ctx, object, layout.inheritance_depth, 0)?;
     emitter.instruction(Instruction::LocalGet(object));
     emitter.instruction(Instruction::StructGet {
@@ -468,7 +510,42 @@ pub(super) fn bind_receiver(
         intr.object_fields,
     )));
     emitter.instruction(Instruction::LocalSet(env));
-    super::runtime_descriptors::bind(emitter, names, env);
+    super::runtime_descriptors::bind(emitter, names, env)?;
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::codegen::invariant_tests::{assert_internal, with_context};
+
+    #[test]
+    fn recorded_guard_layout_cannot_wrap_payload_size() {
+        let name = crate::mangle::package_symbol("main", "Box");
+        let class = Type::class_ref(crate::Package("main".into()), "Box", name.clone(), vec![]);
+        let mut symbols = crate::codegen::tests::mock_symbols_with_intrinsics();
+        symbols
+            .record_class_guard_layout(name, None, u32::MAX, true)
+            .unwrap();
+        with_context(&TypedAst::new(), &symbols, |ctx| {
+            let mut emitter = FunctionEmitter::new(ctx, &[]).unwrap();
+            assert_internal(constructor_argument(&mut emitter, ctx, &class).unwrap_err());
+            assert_internal(emit_slot(&mut emitter, ctx, 0, u32::MAX, 0).unwrap_err());
+            assert_internal(emit_slot(&mut emitter, ctx, 0, 1, u32::MAX).unwrap_err());
+        });
+    }
+
+    #[test]
+    fn guard_offsets_stay_within_the_recorded_rows() {
+        assert_eq!(guard_offset(2, 4, 3, 12).unwrap(), 11);
+        for (row, width, slot, count) in [
+            (u32::MAX, 2, 0, 12),
+            (3, 4, 0, 12),
+            (0, 4, 4, 12),
+            (1, u32::MAX, 1, u32::MAX),
+        ] {
+            assert_internal(guard_offset(row, width, slot, count).unwrap_err());
+        }
+    }
 }

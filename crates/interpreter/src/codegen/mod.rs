@@ -155,7 +155,7 @@ fn import_value_symbol(
     match &value.kind {
         ValueKind::Function { params, ret, .. } => {
             let sig_idx = *next_type_idx;
-            *next_type_idx += 1;
+            crate::codegen::next_index(next_type_idx)?;
             // `submilli:json` is the last host package on the raw ABI: its host
             // fns take/return `$rawString` (codegen re-wraps at the boundary).
             // Every other host package speaks the real `$string`/`$Array` ABI,
@@ -200,7 +200,7 @@ fn import_value_symbol(
                 ret.clone(),
                 raw_string_abi,
             );
-            *next_func_idx += 1;
+            crate::codegen::next_index(next_func_idx)?;
         }
         ValueKind::Let { ty, .. } | ValueKind::Const { ty, .. } => {
             // Static-interface receiver bindings are inert (see
@@ -225,7 +225,7 @@ fn import_value_symbol(
                 EntityType::Global(global_ty),
             );
             symbols.record_typed_global(value.mangled_name.clone(), *next_global_idx, ty.clone());
-            *next_global_idx += 1;
+            crate::codegen::next_index(next_global_idx)?;
         }
     };
     Ok(())
@@ -259,7 +259,7 @@ fn declared_wrapper_abi(
 ) -> Result<symbol_table::MethodSlotAbi, crate::compiler_error::CompilerFailure> {
     let receiver_offset = usize::from(has_receiver);
     if let Some(imported) = symbols.top_level_fn(mangled)
-        && imported.params.len() == sig.params.len() + receiver_offset
+        && sig.params.len().checked_add(receiver_offset) == Some(imported.params.len())
     {
         return Ok(symbol_table::MethodSlotAbi {
             params: imported
@@ -297,7 +297,7 @@ fn import_json_host_function(
     }
 
     let sig_idx = *next_type_idx;
-    *next_type_idx += 1;
+    crate::codegen::next_index(next_type_idx)?;
     let (param_types, result_types) = json_host_signature(name, &[], symbols, intrinsics)?;
     types.ty().function(param_types, result_types);
     import_section.import(
@@ -306,7 +306,7 @@ fn import_json_host_function(
         EntityType::Function(sig_idx),
     );
     symbols.record_func(mangled, *next_func_idx);
-    *next_func_idx += 1;
+    crate::codegen::next_index(next_func_idx)?;
 
     Ok(())
 }
@@ -775,7 +775,7 @@ fn codegen_inner(
     let lowered_dependencies: Vec<_> = dependencies
         .iter()
         .map(|defs| runtime_values::lower_declaration(defs))
-        .collect();
+        .collect::<Result<_, _>>()?;
     let dependencies: Vec<_> = lowered_dependencies.iter().collect();
     let dependencies = dependencies.as_slice();
     let analysis = CodegenAnalysis::collect(ta, dependencies)?;
@@ -795,7 +795,9 @@ fn codegen_inner(
     // stay in their owning module — consumers see them as (ref null $Object) via InterfaceRef.
     let intrinsics = intrinsics::declare_intrinsic_types(&mut types);
     symbols.set_intrinsic_type_indices(intrinsics);
-    next_type_idx += intrinsics::INTRINSIC_TYPE_COUNT;
+    next_type_idx = next_type_idx
+        .checked_add(intrinsics::INTRINSIC_TYPE_COUNT)
+        .ok_or_else(|| crate::codegen::internal_failure("Wasm index count overflow"))?;
     field_names::declare_optional_name_type(
         &mut types,
         &mut symbols,
@@ -819,7 +821,7 @@ fn codegen_inner(
         })],
         Vec::<ValType>::new(),
     );
-    next_type_idx += 1;
+    crate::codegen::next_index(&mut next_type_idx)?;
     import_section.import(
         crate::runtime::prelude::MODULE_NAME,
         crate::mangle::prelude("__error_tag").as_str(),
@@ -969,6 +971,8 @@ fn codegen_inner(
         (crate::runtime::prelude::MODULE_NAME, "boxed_number_vtable"),
         (crate::runtime::prelude::MODULE_NAME, "boxed_boolean_vtable"),
         (crate::runtime::prelude::MODULE_NAME, "array_vtable"),
+        (crate::runtime::prelude::MODULE_NAME, "closure_vtable"),
+        (crate::runtime::prelude::MODULE_NAME, "object_vtable"),
     ] {
         let mangled = crate::mangle::prelude(name);
         import_section.import(
@@ -981,7 +985,7 @@ fn codegen_inner(
             }),
         );
         symbols.record_global(crate::mangle::prelude(name), next_global_idx);
-        next_global_idx += 1;
+        crate::codegen::next_index(&mut next_global_idx)?;
     }
     if dependency_usage.uses_bigint() {
         let mangled = crate::mangle::prelude("bigint_vtable");
@@ -995,7 +999,7 @@ fn codegen_inner(
             }),
         );
         symbols.record_global(crate::mangle::prelude("bigint_vtable"), next_global_idx);
-        next_global_idx += 1;
+        crate::codegen::next_index(&mut next_global_idx)?;
     }
 
     // Bigint host calls use `(ref $rawBigInt) + i32 sign`, which is not expressible
@@ -1005,13 +1009,7 @@ fn codegen_inner(
         heap_type: HeapType::Concrete(intrinsics.raw_bigint),
     });
     let mut bigint_binop_sig_idx = None;
-    let mut bigint_unary_sig_idx = None;
-    let mut bigint_cmp_sig_idx = None;
-    let mut bigint_from_number_sig_idx = None;
-    let mut bigint_from_string_sig_idx = None;
-    let mut bigint_to_string_sig_idx = None;
-    let mut number_from_bigint_sig_idx = None;
-    let mut import_bigint_host = |name: &str, sig_idx: u32| {
+    let mut import_bigint_host = |name: &str, sig_idx: u32| -> Result<(), CompilerFailure> {
         let mangled = crate::mangle::host(crate::runtime::BIGINT_MODULE_NAME, name);
         import_section.import(
             crate::runtime::BIGINT_MODULE_NAME,
@@ -1019,13 +1017,16 @@ fn codegen_inner(
             EntityType::Function(sig_idx),
         );
         symbols.record_func(mangled, next_func_idx);
-        next_func_idx += 1;
+        crate::codegen::next_index(&mut next_func_idx)?;
+        Ok(())
     };
     for name in ["add", "sub", "mul", "div", "mod", "pow"] {
         if dependency_usage.is_host_value_used(crate::runtime::BIGINT_MODULE_NAME, name) {
-            let sig_idx = *bigint_binop_sig_idx.get_or_insert_with(|| {
+            let sig_idx = if let Some(sig_idx) = bigint_binop_sig_idx {
+                sig_idx
+            } else {
                 let sig_idx = next_type_idx;
-                next_type_idx += 1;
+                crate::codegen::next_index(&mut next_type_idx)?;
                 types.ty().function(
                     [
                         ValType::I32,
@@ -1035,15 +1036,16 @@ fn codegen_inner(
                     ],
                     [ValType::I32, raw_bigint_val_type],
                 );
+                bigint_binop_sig_idx = Some(sig_idx);
                 sig_idx
-            });
-            import_bigint_host(name, sig_idx);
+            };
+            import_bigint_host(name, sig_idx)?;
         }
     }
     if dependency_usage.is_host_value_used(crate::runtime::BIGINT_MODULE_NAME, "cmp") {
-        let sig_idx = *bigint_cmp_sig_idx.get_or_insert_with(|| {
+        let sig_idx = {
             let sig_idx = next_type_idx;
-            next_type_idx += 1;
+            crate::codegen::next_index(&mut next_type_idx)?;
             types.ty().function(
                 [
                     ValType::I32,
@@ -1054,71 +1056,71 @@ fn codegen_inner(
                 [ValType::I32],
             );
             sig_idx
-        });
-        import_bigint_host("cmp", sig_idx);
+        };
+        import_bigint_host("cmp", sig_idx)?;
     }
     if dependency_usage.is_host_value_used(crate::runtime::BIGINT_MODULE_NAME, "neg") {
-        let sig_idx = *bigint_unary_sig_idx.get_or_insert_with(|| {
+        let sig_idx = {
             let sig_idx = next_type_idx;
-            next_type_idx += 1;
+            crate::codegen::next_index(&mut next_type_idx)?;
             types.ty().function(
                 [ValType::I32, raw_bigint_val_type],
                 [ValType::I32, raw_bigint_val_type],
             );
             sig_idx
-        });
-        import_bigint_host("neg", sig_idx);
+        };
+        import_bigint_host("neg", sig_idx)?;
     }
     if dependency_usage.is_host_value_used(crate::runtime::BIGINT_MODULE_NAME, "fromNumber") {
-        let sig_idx = *bigint_from_number_sig_idx.get_or_insert_with(|| {
+        let sig_idx = {
             let sig_idx = next_type_idx;
-            next_type_idx += 1;
+            crate::codegen::next_index(&mut next_type_idx)?;
             types
                 .ty()
                 .function([ValType::F64], [ValType::I32, raw_bigint_val_type]);
             sig_idx
-        });
-        import_bigint_host("fromNumber", sig_idx);
+        };
+        import_bigint_host("fromNumber", sig_idx)?;
     }
     if dependency_usage.is_host_value_used(crate::runtime::BIGINT_MODULE_NAME, "fromString") {
         let raw_string_val_type = ValType::Ref(RefType {
             nullable: false,
             heap_type: HeapType::Concrete(intrinsics.raw_string),
         });
-        let sig_idx = *bigint_from_string_sig_idx.get_or_insert_with(|| {
+        let sig_idx = {
             let sig_idx = next_type_idx;
-            next_type_idx += 1;
+            crate::codegen::next_index(&mut next_type_idx)?;
             types
                 .ty()
                 .function([raw_string_val_type], [ValType::I32, raw_bigint_val_type]);
             sig_idx
-        });
-        import_bigint_host("fromString", sig_idx);
+        };
+        import_bigint_host("fromString", sig_idx)?;
     }
     if dependency_usage.is_host_value_used(crate::runtime::BIGINT_MODULE_NAME, "toString") {
         let raw_string_val_type = ValType::Ref(RefType {
             nullable: false,
             heap_type: HeapType::Concrete(intrinsics.raw_string),
         });
-        let sig_idx = *bigint_to_string_sig_idx.get_or_insert_with(|| {
+        let sig_idx = {
             let sig_idx = next_type_idx;
-            next_type_idx += 1;
+            crate::codegen::next_index(&mut next_type_idx)?;
             types
                 .ty()
                 .function([ValType::I32, raw_bigint_val_type], [raw_string_val_type]);
             sig_idx
-        });
-        import_bigint_host("toString", sig_idx);
+        };
+        import_bigint_host("toString", sig_idx)?;
     }
     if dependency_usage.is_host_value_used(crate::runtime::NUMBER_MODULE_NAME, "fromBigInt") {
-        let sig_idx = *number_from_bigint_sig_idx.get_or_insert_with(|| {
+        let sig_idx = {
             let sig_idx = next_type_idx;
-            next_type_idx += 1;
+            crate::codegen::next_index(&mut next_type_idx)?;
             types
                 .ty()
                 .function([ValType::I32, raw_bigint_val_type], [ValType::F64]);
             sig_idx
-        });
+        };
         let from_bigint = crate::mangle::host(crate::runtime::NUMBER_MODULE_NAME, "fromBigInt");
         import_section.import(
             crate::runtime::NUMBER_MODULE_NAME,
@@ -1126,7 +1128,7 @@ fn codegen_inner(
             EntityType::Function(sig_idx),
         );
         symbols.record_func(from_bigint, next_func_idx);
-        next_func_idx += 1;
+        crate::codegen::next_index(&mut next_func_idx)?;
     }
 
     let intrinsic_string_ref = ValType::Ref(RefType {
@@ -1168,7 +1170,11 @@ fn codegen_inner(
                 "BigInt" => intrinsic_bigint_ref,
                 _ => intrinsic_object_ref,
             }),
-            crate::Dispatch::VTable => unreachable!(),
+            crate::Dispatch::VTable => {
+                return Err(crate::codegen::internal_failure(
+                    "invalid compiler emission dispatch",
+                ));
+            }
         };
         for (method_name, sig) in methods {
             if !dependency_usage.is_interface_member_used(ty_sym, method_name) {
@@ -1206,7 +1212,7 @@ fn codegen_inner(
             params.extend(abi.params.iter().copied());
             let results: Vec<ValType> = abi.ret.into_iter().collect();
             let sig_idx = next_type_idx;
-            next_type_idx += 1;
+            crate::codegen::next_index(&mut next_type_idx)?;
             types.ty().function(params, results);
             import_section.import(
                 defs.package_name.as_str(),
@@ -1214,7 +1220,7 @@ fn codegen_inner(
                 EntityType::Function(sig_idx),
             );
             symbols.record_func(mangled, next_func_idx);
-            next_func_idx += 1;
+            crate::codegen::next_index(&mut next_func_idx)?;
         }
         for (prop_name, sig) in properties {
             // An intrinsic member is emitted inline by codegen (`String#length`
@@ -1252,13 +1258,13 @@ fn codegen_inner(
                     }),
                 );
                 symbols.record_typed_global(mangled, next_global_idx, sig.ty.clone());
-                next_global_idx += 1;
+                crate::codegen::next_index(&mut next_global_idx)?;
                 continue;
             };
             let params = vec![recv];
             let results = symbols.wasm_result(&sig.ty)?;
             let sig_idx = next_type_idx;
-            next_type_idx += 1;
+            crate::codegen::next_index(&mut next_type_idx)?;
             types.ty().function(params, results);
             import_section.import(
                 defs.package_name.as_str(),
@@ -1266,7 +1272,7 @@ fn codegen_inner(
                 EntityType::Function(sig_idx),
             );
             symbols.record_func(mangled, next_func_idx);
-            next_func_idx += 1;
+            crate::codegen::next_index(&mut next_func_idx)?;
         }
     }
     if needs_host_object_to_json {
@@ -1292,19 +1298,19 @@ fn codegen_inner(
 
     // _start is always emitted even when empty, for uniform module shape.
     let start_type_idx = next_type_idx;
-    next_type_idx += 1;
+    crate::codegen::next_index(&mut next_type_idx)?;
     types
         .ty()
         .function(Vec::<ValType>::new(), Vec::<ValType>::new());
     let start_func_idx = next_func_idx;
-    next_func_idx += 1;
+    crate::codegen::next_index(&mut next_func_idx)?;
 
     // Allocate function indices before emitting bodies, enabling forward references.
     let mut user_funcs: Vec<UserFunc> = Vec::new();
     let mut user_func_type_idx: BTreeMap<MangledName, u32> = BTreeMap::new();
     for f in &ta.functions {
         let sig_idx = next_type_idx;
-        next_type_idx += 1;
+        crate::codegen::next_index(&mut next_type_idx)?;
         let mut params: Vec<_> = f
             .params
             .iter()
@@ -1320,7 +1326,7 @@ fn codegen_inner(
             .ty()
             .function(params, symbols.wasm_result(&f.return_type)?);
         let func_idx = next_func_idx;
-        next_func_idx += 1;
+        crate::codegen::next_index(&mut next_func_idx)?;
         let param_types: Vec<Type> = f.params.iter().map(|p| p.ty.clone()).collect();
         if let Some(metadata) = call_arguments::typed_metadata(&f.params)? {
             symbols
@@ -1360,13 +1366,13 @@ fn codegen_inner(
 
     for meta in &closure_metas {
         let func_idx = next_func_idx;
-        next_func_idx += 1;
+        crate::codegen::next_index(&mut next_func_idx)?;
         symbols.record_closure_func_idx(meta.expr_id, func_idx);
     }
 
     for meta in &adapter_metas {
         let func_idx = next_func_idx;
-        next_func_idx += 1;
+        crate::codegen::next_index(&mut next_func_idx)?;
         symbols.record_adapter_func_idx(meta.mangled.clone(), func_idx);
     }
 
@@ -1386,7 +1392,7 @@ fn codegen_inner(
 
     // Class method stubs + per-class getter/setter (vtable/header globals ref.func these).
     class_plan.allocate_funcs(&mut next_func_idx, &mut symbols)?;
-    let instance_field_guards = field_guards::allocate(ta, &mut symbols, &mut next_func_idx);
+    let instance_field_guards = field_guards::allocate(ta, &mut symbols, &mut next_func_idx)?;
     let type_descriptors = runtime_descriptors::allocate(
         ta,
         &recursive_validators.descriptor_types,
@@ -1418,7 +1424,7 @@ fn codegen_inner(
     let mut runtime_validator_sigs: Vec<u32> = Vec::with_capacity(recursive_validators.plans.len());
     for plan in &recursive_validators.plans {
         let sig_idx = next_type_idx;
-        next_type_idx += 1;
+        crate::codegen::next_index(&mut next_type_idx)?;
         types.ty().function(
             [
                 object_ref_null,
@@ -1430,7 +1436,7 @@ fn codegen_inner(
             [ValType::I32],
         );
         let func_idx = next_func_idx;
-        next_func_idx += 1;
+        crate::codegen::next_index(&mut next_func_idx)?;
         symbols.record_runtime_validator(plan.key.clone(), func_idx);
         runtime_validator_sigs.push(sig_idx);
     }
@@ -1463,18 +1469,21 @@ fn codegen_inner(
 
     let pkg_string_global_idx = if needs_host_object_to_json {
         let idx = next_global_idx;
-        next_global_idx += 1;
+        crate::codegen::next_index(&mut next_global_idx)?;
         Some(idx)
     } else {
         None
     };
 
     let main_mangled = main_func.map(|f| f.mangled_name.clone());
-    let main_func_idx = main_mangled.as_ref().map(|mangled| {
-        symbols
-            .func_idx(mangled)
-            .expect("`main` recorded during user-function pre-pass")
-    });
+    let main_func_idx = main_mangled
+        .as_ref()
+        .map(|mangled| {
+            symbols.func_idx(mangled).ok_or_else(|| {
+                crate::codegen::internal_failure("`main` recorded during user-function pre-pass")
+            })
+        })
+        .transpose()?;
 
     module.section(&types);
     module.section(&import_section);
@@ -1510,7 +1519,11 @@ fn codegen_inner(
     closure_coercions::emit_entries(&closure_coercion_targets, &mut functions, &symbols)?;
     user_subtypes::emit_method_function_entries(&mut functions, &user_subtypes_alloc, intrinsics);
     class_plan.emit_function_entries(&mut functions, &symbols, intrinsics)?;
-    for _ in 0..instance_field_guards.len() + type_descriptors.len() {
+    for _ in instance_field_guards
+        .iter()
+        .map(|_| ())
+        .chain(type_descriptors.iter().map(|_| ()))
+    {
         functions.function(
             symbols
                 .closure_func_type_idx(field_guards::signature())
@@ -1541,7 +1554,9 @@ fn codegen_inner(
             },
             &ConstExpr::ref_null(HeapType::Concrete(intrinsics.string)),
         );
-        globals_count += 1;
+        globals_count = globals_count
+            .checked_add(1)
+            .ok_or_else(|| crate::codegen::internal_failure("Wasm index count overflow"))?;
     }
     for g in &ta.globals {
         let val_type = global_val_type(&g.ty, &symbols)?;
@@ -1551,11 +1566,13 @@ fn codegen_inner(
                 mutable: true,
                 shared: false,
             },
-            &default_const_expr(val_type),
+            &default_const_expr(val_type)?,
         );
         symbols.record_typed_global(g.mangled_name.clone(), next_global_idx, g.ty.clone());
-        next_global_idx += 1;
-        globals_count += 1;
+        crate::codegen::next_index(&mut next_global_idx)?;
+        globals_count = globals_count
+            .checked_add(1)
+            .ok_or_else(|| crate::codegen::internal_failure("Wasm index count overflow"))?;
     }
     let vtable_globals_count = wasm_u32(user_subtypes_alloc.len())?;
     user_subtypes::emit_vtable_globals(
@@ -1573,10 +1590,13 @@ fn codegen_inner(
             field_names_shapes.push(class_fields);
         }
     }
-    let string_vtable_global_idx = symbols
-        .prelude_global_idx("string_vtable")
-        .expect("string_vtable imported from prelude in the hard-coded import bootstrap");
-    let field_names_globals_count = field_names_shapes.len() as u32;
+    let string_vtable_global_idx =
+        symbols.prelude_global_idx("string_vtable").ok_or_else(|| {
+            crate::codegen::internal_failure(
+                "string_vtable imported from prelude in the hard-coded import bootstrap",
+            )
+        })?;
+    let field_names_globals_count = wasm_u32(field_names_shapes.len())?;
     field_names::emit(
         &field_names_shapes,
         &mut globals,
@@ -1635,7 +1655,7 @@ fn codegen_inner(
     // even though they back no data slot, so they need their own `$string` globals.
     extra_field_names.extend(class_plan.accessor_property_names());
     let field_name_strings = field_name_strings::collect(&user_emitted_types, &extra_field_names);
-    let field_name_strings_count = field_name_strings.len() as u32;
+    let field_name_strings_count = wasm_u32(field_name_strings.len())?;
     field_name_strings::emit(
         &field_name_strings,
         &mut globals,
@@ -1661,13 +1681,16 @@ fn codegen_inner(
     };
     let descriptor_globals_count =
         runtime_descriptors::allocate_globals(&mut globals, &mut symbols, &mut next_global_idx)?;
-    if descriptor_globals_count
-        + globals_count
-        + vtable_globals_count
-        + field_names_globals_count
-        + field_name_strings_count
-        + closure_vtable_count
-        > 0
+    if [
+        descriptor_globals_count,
+        globals_count,
+        vtable_globals_count,
+        field_names_globals_count,
+        field_name_strings_count,
+        closure_vtable_count,
+    ]
+    .iter()
+    .any(|&count| count > 0)
     {
         module.section(&globals);
     }
@@ -1685,13 +1708,17 @@ fn codegen_inner(
                 let func_idx = symbols
                     .top_level_fn(&entry.target)
                     .map(|f| f.wasm_idx)
-                    .expect("checked package export function target exists");
+                    .ok_or_else(|| {
+                        crate::codegen::internal_failure(
+                            "checked package export function target exists",
+                        )
+                    })?;
                 exports.export(entry.public_name.as_str(), WasmExportKind::Func, func_idx);
             }
             crate::ExportKind::Global => {
-                let global_idx = symbols
-                    .global_idx(&entry.target)
-                    .expect("checked package export global target exists");
+                let global_idx = symbols.global_idx(&entry.target).ok_or_else(|| {
+                    crate::codegen::internal_failure("checked package export global target exists")
+                })?;
                 exports.export(
                     entry.public_name.as_str(),
                     WasmExportKind::Global,
@@ -1739,19 +1766,24 @@ fn codegen_inner(
     for meta in &closure_metas {
         let idx = symbols
             .closure_func_idx(meta.expr_id)
-            .expect("closure func index allocated");
+            .ok_or_else(|| crate::codegen::internal_failure("closure func index allocated"))?;
         declared.push(idx);
     }
     for meta in &adapter_metas {
         let idx = symbols
             .adapter_func_idx(&meta.mangled)
-            .expect("adapter func index allocated");
+            .ok_or_else(|| crate::codegen::internal_failure("adapter func index allocated"))?;
         declared.push(idx);
     }
     declared.extend(
         closure_coercion_targets
             .iter()
-            .map(|&sig| symbols.closure_coercion(sig).expect("coercion allocated")),
+            .map(|&sig| {
+                symbols
+                    .closure_coercion(sig)
+                    .ok_or_else(|| crate::codegen::internal_failure("coercion allocated"))
+            })
+            .collect::<Result<Vec<_>, _>>()?,
     );
     declared.extend(class_plan.declared_funcs(&symbols));
     declared.extend(instance_field_guards.iter().map(|guard| guard.function));
@@ -1763,10 +1795,14 @@ fn codegen_inner(
     }
 
     // DataCount must precede Code per Wasm spec.
-    let total_data_segments = pool.strings.len() + bigint_pool.literals.len();
+    let total_data_segments = pool
+        .strings
+        .len()
+        .checked_add(bigint_pool.literals.len())
+        .ok_or_else(|| internal_failure("data segment count overflow"))?;
     if total_data_segments > 0 {
         module.section(&DataCountSection {
-            count: total_data_segments as u32,
+            count: wasm_u32(total_data_segments)?,
         });
     }
 
@@ -1790,7 +1826,7 @@ fn codegen_inner(
     };
 
     let mut code = CodeSection::new();
-    let mut start_emitter = FunctionEmitter::new(&ctx, &[]);
+    let mut start_emitter = FunctionEmitter::new(&ctx, &[])?;
     if let Some(pkg_string_global_idx) = pkg_string_global_idx {
         emit_package_string_init(
             &mut start_emitter,
@@ -1799,7 +1835,7 @@ fn codegen_inner(
             intrinsics.raw_string,
             intrinsics.string,
             string_vtable_global_idx,
-        );
+        )?;
     }
     for &stmt_id in &ctx.ta.top_level_statements {
         emit_statement(&mut start_emitter, &ctx, stmt_id)?;
@@ -1808,7 +1844,7 @@ fn codegen_inner(
     let mut debug_functions = dwarf::DebugFunctions::default();
     debug_functions.write(
         &mut code,
-        start_emitter.build_with_lines(),
+        start_emitter.build_with_lines()?,
         TOP_LEVEL_FRAME_NAME.to_string(),
         crate::Span::at(ctx.file),
     )?;
@@ -1867,7 +1903,8 @@ fn codegen_inner(
                 &plan.key,
                 &plan.body,
                 plan.rejects_polymorphic_edge,
-                validator_id as i32,
+                i32::try_from(validator_id)
+                    .map_err(|_| internal_failure("validator id exceeds i32"))?,
             )
         })?;
         code.function(&validator);
@@ -1881,7 +1918,7 @@ fn codegen_inner(
             main_func_idx,
             main_return_ty,
             source_main_return_ty.as_ref().unwrap_or(main_return_ty),
-        ));
+        )?);
     }
 
     ctx.check_failure()?;
@@ -1889,7 +1926,9 @@ fn codegen_inner(
 
     // DWARF sections appear after Code, before Data — LLVM/Emscripten convention.
     let vec_count_size = leb128_u32_size(code.len()) as u64;
-    let code_content_size = vec_count_size + code.byte_len() as u64;
+    let code_content_size = vec_count_size
+        .checked_add(u64::try_from(code.byte_len()).map_err(|_| index_space_exhausted())?)
+        .ok_or_else(index_space_exhausted)?;
 
     let funcs = debug_functions.into_debug_info(vec_count_size)?;
     for (sect_name, bytes) in
@@ -2051,13 +2090,17 @@ fn global_val_type(
 }
 
 /// Zero/null const-expr placeholder — value is overwritten by _start before any user code runs.
-fn default_const_expr(val_type: ValType) -> ConstExpr {
-    match val_type {
+fn default_const_expr(val_type: ValType) -> Result<ConstExpr, CompilerFailure> {
+    Ok(match val_type {
         ValType::F64 => ConstExpr::f64_const(Ieee64::from(0.0_f64)),
         ValType::I32 => ConstExpr::i32_const(0),
         ValType::Ref(RefType { heap_type, .. }) => ConstExpr::ref_null(heap_type),
-        other => unimplemented!("default const-expr for {other:?} arrives in a later codegen task"),
-    }
+        other => {
+            return Err(crate::codegen::internal_failure(format!(
+                "unsupported default constant type {other:?}"
+            )));
+        }
+    })
 }
 
 fn emit_package_string_init(
@@ -2067,17 +2110,19 @@ fn emit_package_string_init(
     raw_string_type_idx: u32,
     string_type_idx: u32,
     string_vtable_global_idx: u32,
-) {
+) -> Result<(), CompilerFailure> {
     emitter.instruction(Instruction::GlobalGet(string_vtable_global_idx));
     for code_unit in package_name.encode_utf16() {
         emitter.instruction(Instruction::I32Const(code_unit as i32));
     }
     emitter.instruction(Instruction::ArrayNewFixed {
         array_type_index: raw_string_type_idx,
-        array_size: package_name.encode_utf16().count() as u32,
+        array_size: wasm_u32(package_name.encode_utf16().count())?,
     });
+    emitter.instruction(Instruction::I64Const(0));
     emitter.instruction(Instruction::StructNew(string_type_idx));
     emitter.instruction(Instruction::GlobalSet(pkg_string_global_idx));
+    Ok(())
 }
 
 fn arena_failure(error: crate::arena::ArenaError) -> CompilerFailure {
@@ -2367,6 +2412,7 @@ function main(): string {
             http_download_result: 47,
             session_entry: 48,
             session_page: 49,
+            fs_mount_info: 50,
 
             temporal_plain_date: 36,
             temporal_plain_time: 37,
@@ -2524,7 +2570,7 @@ function main(): string {
             "test:pkg",
             &[(
                 "lib",
-                "/** Identity. */\nexport function noop(x: number): number { return x; }",
+                "/** Identity.\n * @param x Value to return.\n * @returns `x`. */\nexport function noop(x: number): number { return x; }",
             )],
             &[],
         );
@@ -2579,7 +2625,7 @@ function main(): string {
                 .lock()
                 .expect("mutex")
                 .push((caller.to_string(), capability.to_string()));
-            crate::runtime::CheckOutcome::Allow
+            crate::runtime::CheckOutcome::Allow { rule: None }
         }
     }
 
@@ -2611,7 +2657,11 @@ function main(): string {
             &[(
                 "lib",
                 r#"
-                /** Pass-through JSON encoder. */
+                /**
+                 * Pass-through JSON encoder.
+                 * @param value Value to encode.
+                 * @returns `value` as JSON.
+                 */
                 export function passthrough(value: unknown): string {
                     return JSON.stringify(value);
                 }
@@ -2796,7 +2846,11 @@ function main(): string {
             &[(
                 "lib",
                 r#"
-                /** Pass-through JSON encoder for a collection. */
+                /**
+                 * Pass-through JSON encoder for a collection.
+                 * @param values Values to encode.
+                 * @returns `values` as JSON.
+                 */
                 export function passthroughAll(values: unknown[]): string {
                     return JSON.stringify(values);
                 }
@@ -2860,7 +2914,9 @@ function main(): string {
                     token: string;
                     constructor() { this.token = "none"; }
 
-                    /** Reads the token. */
+                    /** Reads the token.
+                     * @returns The credential, or "none" when it is absent.
+                     */
                     load(): string {
                         const t = get("TOKEN");
                         return t === null ? "none" : t;
@@ -2907,7 +2963,10 @@ function main(): string {
 
                 const TOKEN: string | null = get("TOKEN");
 
-                /** Reports whether the module-level read succeeded. */
+                /**
+                 * Reports whether the module-level read succeeded.
+                 * @returns Whether the read succeeded.
+                 */
                 export function loaded(): boolean {
                     return TOKEN !== null;
                 }
@@ -3485,7 +3544,7 @@ function main(): string {
                 ),
                 (
                     "util",
-                    "/** Inner function. */\nexport function inner(): number { return 1; }",
+                    "/** Inner function.\n * @returns One. */\nexport function inner(): number { return 1; }",
                 ),
             ],
             &[],
@@ -3533,10 +3592,11 @@ function main(): string {
                 .push((caller.to_string(), capability.to_string()));
             if capability == "test.denied" {
                 crate::runtime::CheckOutcome::Deny {
+                    rule: None,
                     reason: "blocked by test".to_string(),
                 }
             } else {
-                crate::runtime::CheckOutcome::Allow
+                crate::runtime::CheckOutcome::Allow { rule: None }
             }
         }
     }
@@ -3761,10 +3821,11 @@ function main(): string {
                 .push((caller.to_string(), capability.to_string()));
             if self.deny_caller == Some(caller) {
                 crate::runtime::CheckOutcome::Deny {
+                    rule: None,
                     reason: "blocked by test".to_string(),
                 }
             } else {
-                crate::runtime::CheckOutcome::Allow
+                crate::runtime::CheckOutcome::Allow { rule: None }
             }
         }
     }
@@ -6087,6 +6148,7 @@ function main(): void {
             http_download_result: 47,
             session_entry: 48,
             session_page: 49,
+            fs_mount_info: 50,
 
             temporal_plain_date: 36,
             temporal_plain_time: 37,

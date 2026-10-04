@@ -48,6 +48,10 @@ enum Cmd {
     /// Authenticate outbound OAuth MCP servers locally (no running server).
     #[command(subcommand)]
     Mcp(commands::mcp::McpCmd),
+    /// Manage the GitHub token used to install packages from private
+    /// repositories.
+    #[command(subcommand)]
+    Github(commands::github::GithubCmd),
     /// Interact with a running submilli-server.
     #[command(subcommand)]
     Server(commands::server::ServerCmd),
@@ -87,6 +91,7 @@ fn execute(cmd: Cmd) -> anyhow::Result<ExitCode> {
         Cmd::Blueprint(cmd) => commands::blueprint::execute(cmd),
         Cmd::Secret(cmd) => commands::secret::execute(cmd),
         Cmd::Mcp(cmd) => commands::mcp::execute(cmd),
+        Cmd::Github(cmd) => commands::github::execute(cmd),
         Cmd::Server(cmd) => commands::server::execute(cmd),
     }
 }
@@ -118,6 +123,7 @@ fn invocation_attrs(cmd: &Cmd) -> (&'static str, Vec<(&'static str, bool)>) {
         Cmd::Blueprint(sub) => (blueprint_label(sub), Vec::new()),
         Cmd::Secret(sub) => (secret_label(sub), Vec::new()),
         Cmd::Mcp(sub) => (mcp_label(sub), Vec::new()),
+        Cmd::Github(sub) => (github_label(sub), Vec::new()),
         Cmd::Server(sub) => (server_label(sub), Vec::new()),
     }
 }
@@ -138,6 +144,15 @@ fn mcp_label(cmd: &commands::mcp::McpCmd) -> &'static str {
         McpCmd::Deauthenticate(_) => "mcp.deauthenticate",
         McpCmd::AuthStatus(_) => "mcp.auth_status",
         McpCmd::Provider(_) => "mcp.provider",
+    }
+}
+
+fn github_label(cmd: &commands::github::GithubCmd) -> &'static str {
+    use commands::github::GithubCmd;
+    match cmd {
+        GithubCmd::Authenticate(_) => "github.authenticate",
+        GithubCmd::Deauthenticate(_) => "github.deauthenticate",
+        GithubCmd::AuthStatus(_) => "github.auth_status",
     }
 }
 
@@ -166,7 +181,9 @@ fn server_label(cmd: &commands::server::ServerCmd) -> &'static str {
         ServerCmd::Stop(_) => "server.stop",
         ServerCmd::Blueprint(_) => "server.blueprint",
         ServerCmd::Secret(_) => "server.secret",
+        ServerCmd::Session(_) => "server.session",
         ServerCmd::Mcp(_) => "server.mcp",
         ServerCmd::Docs(_) => "server.docs",
+        ServerCmd::Trust(_) => "server.trust",
     }
 }

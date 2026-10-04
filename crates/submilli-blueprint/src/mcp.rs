@@ -212,7 +212,7 @@ mod tests {
     const HEADERS_BP: &str = "\
 name: x
 secrets:
-  LINEAR_API_KEY: { env: LINEAR_API_KEY }
+  LINEAR_API_KEY: { store: LINEAR_API_KEY }
 mcp:
   linear:
     transport: streamable_http
@@ -224,7 +224,7 @@ mcp:
     const OAUTH_BP: &str = "\
 name: x
 secrets:
-  SF_CLIENT_ID: { env: SF_CLIENT_ID }
+  SF_CLIENT_ID: { store: SF_CLIENT_ID }
 mcp:
   salesforce:
     transport: streamable_http
@@ -327,7 +327,7 @@ mcp:
         let yaml = "\
 name: x
 secrets:
-  K: { env: K }
+  K: { store: K }
 mcp:
   s:
     transport: streamable_http

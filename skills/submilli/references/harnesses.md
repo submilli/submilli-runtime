@@ -31,8 +31,8 @@ service. Install the CLI/server using [setup](setup.md), then:
 3. Save the **smallest slice** YAML in [blueprints](blueprints.md) as
    `blueprint.yaml`. It registers `support-read`, requires `customerId`, and
    permits only the bound customer's balance.
-4. Run `submilli build check`, `submilli build test`,
-   `submilli build publish-local`, and `submilli blueprint lint blueprint.yaml`.
+4. Run `submilli build check --deny-warnings`, `submilli build test --deny-warnings`,
+   `submilli build publish-local --deny-warnings`, and `submilli blueprint lint --deny-warnings blueprint.yaml`.
 5. Export `SUBMILLI_SERVER_TOKEN` (`openssl rand -hex 32`) and start
    `submilli-server --bind 127.0.0.1 --port 8128` in another terminal with
    the same variable ([setup](setup.md)).

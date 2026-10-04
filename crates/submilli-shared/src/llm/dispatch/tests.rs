@@ -31,15 +31,10 @@ use super::*;
 const MODEL: &str = "m-1";
 const PROMPT: &str = "the-prompt-text-that-must-not-leak";
 const KEY: &str = "sk-live-secret-key-that-must-not-leak";
-const SECRET_ENV: &str = "SUBMILLI_TEST_LLM_KEY";
+const SECRET_NAME: &str = "TEST_LLM_KEY";
 
-/// A secret name nothing in this process ever sets.
-///
-/// The unresolvable-credential test needs a placeholder that cannot resolve.
-/// Relying on `SECRET_ENV` merely being *unset* would be flaky: environment
-/// variables are process-global and `with_key` runs concurrently in other tests
-/// here, so that test would resolve their key and pass for the wrong reason.
-const NEVER_SET: &str = "SUBMILLI_TEST_LLM_KEY_NEVER_SET";
+/// A harness secret deliberately left unbound.
+const NEVER_SET: &str = "TEST_LLM_KEY_NEVER_SET";
 
 /// A blueprint with one provider of the given kind and one model on it.
 ///
@@ -50,7 +45,7 @@ const NEVER_SET: &str = "SUBMILLI_TEST_LLM_KEY_NEVER_SET";
 /// a valid https URL and the field is pointed at the mock server afterwards.
 fn blueprint(kind: &str, base_url: &str, with_key: bool) -> Arc<Blueprint> {
     let key_line = if with_key {
-        format!("      api_key: \"${{secrets.{SECRET_ENV}}}\"\n")
+        format!("      api_key: \"${{secrets.{SECRET_NAME}}}\"\n")
     } else {
         String::new()
     };
@@ -58,8 +53,8 @@ fn blueprint(kind: &str, base_url: &str, with_key: bool) -> Arc<Blueprint> {
         "\
 name: t
 secrets:
-  {SECRET_ENV}:
-    env: {SECRET_ENV}
+  {SECRET_NAME}:
+    harness: {{}}
 llm:
   providers:
     p:
@@ -77,6 +72,9 @@ llm:
 
 fn dispatcher(blueprint: Arc<Blueprint>) -> HttpModelDispatch {
     HttpModelDispatch::new(blueprint, None, Arc::new(NetworkPolicy::allow_all()))
+        .with_harness_secrets(Arc::new(submilli_blueprint::HarnessSecretBindings::from([
+            (SECRET_NAME.into(), KEY.into()),
+        ])))
 }
 
 fn request<'a>(schema_json: Option<&'a str>) -> ModelRequest<'a> {
@@ -87,27 +85,6 @@ fn request<'a>(schema_json: Option<&'a str>) -> ModelRequest<'a> {
         schema_json,
         output_cap: Some(256),
     }
-}
-
-/// Serializes the environment-variable window below. Without it these tests
-/// race: `cargo test` runs them on a thread pool, the variable is
-/// process-global, and one test's `remove_var` lands inside another's call.
-static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-
-/// The credential resolves through the blueprint's `${secrets.X}` placeholder
-/// from the environment, so a test asserting on it sets the variable for exactly
-/// the duration of the call and clears it after.
-fn with_key<T>(body: impl FnOnce() -> T) -> T {
-    let guard = ENV_LOCK
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
-    // SAFETY: `ENV_LOCK` is held for the whole set/read/remove window, and the
-    // variable is a test-only name no other code in this process reads.
-    unsafe { std::env::set_var(SECRET_ENV, KEY) };
-    let out = body();
-    unsafe { std::env::remove_var(SECRET_ENV) };
-    drop(guard);
-    out
 }
 
 fn ok_body(kind: &str) -> Value {
@@ -183,12 +160,10 @@ fn each_kind_round_trips_against_its_own_endpoint_and_header() {
                 .json_body(ok_body(kind));
         });
 
-        let response = with_key(|| {
-            block_on(async {
-                dispatcher(blueprint(kind, &server.base_url(), true))
-                    .dispatch(request(None))
-                    .await
-            })
+        let response = block_on(async {
+            dispatcher(blueprint(kind, &server.base_url(), true))
+                .dispatch(request(None))
+                .await
         });
 
         // The path, the auth header, and the prompt's position in the body were
@@ -222,12 +197,10 @@ fn a_mismatched_body_is_not_routed_which_is_what_makes_the_matchers_real() {
         then.status(200).json_body(ok_body("openai"));
     });
 
-    let outcome = with_key(|| {
-        block_on(async {
-            dispatcher(blueprint("openai", &server.base_url(), true))
-                .dispatch(request(None))
-                .await
-        })
+    let outcome = block_on(async {
+        dispatcher(blueprint("openai", &server.base_url(), true))
+            .dispatch(request(None))
+            .await
     });
 
     mock.assert_hits(0);
@@ -280,12 +253,10 @@ fn a_redirect_is_refused_rather_than_carrying_the_key_to_another_host() {
                 .header("location", format!("{}/collected", attacker.base_url()));
         });
 
-        let outcome = with_key(|| {
-            block_on(async {
-                dispatcher(blueprint(kind, &upstream.base_url(), true))
-                    .dispatch(request(None))
-                    .await
-            })
+        let outcome = block_on(async {
+            dispatcher(blueprint(kind, &upstream.base_url(), true))
+                .dispatch(request(None))
+                .await
         });
 
         redirect.assert_hits(1);
@@ -349,12 +320,10 @@ fn a_typed_call_puts_the_schema_on_the_wire_per_kind() {
             then.status(200).json_body(ok_body(kind));
         });
 
-        with_key(|| {
-            block_on(async {
-                dispatcher(blueprint(kind, &server.base_url(), true))
-                    .dispatch(request(Some(schema)))
-                    .await
-            })
+        block_on(async {
+            dispatcher(blueprint(kind, &server.base_url(), true))
+                .dispatch(request(Some(schema)))
+                .await
         })
         .unwrap_or_else(|e| panic!("{kind} did not send the schema envelope: {e:?}"));
 
@@ -379,12 +348,10 @@ fn the_openai_kinds_never_send_the_shapeless_json_object_form() {
             then.status(200).json_body(ok_body(kind));
         });
 
-        with_key(|| {
-            block_on(async {
-                dispatcher(blueprint(kind, &server.base_url(), true))
-                    .dispatch(request(Some(r#"{"type":"object"}"#)))
-                    .await
-            })
+        block_on(async {
+            dispatcher(blueprint(kind, &server.base_url(), true))
+                .dispatch(request(Some(r#"{"type":"object"}"#)))
+                .await
         })
         .unwrap_or_else(|e| panic!("{kind} failed: {e:?}"));
 
@@ -409,12 +376,10 @@ fn a_structured_response_returns_parseable_text() {
         }));
     });
 
-    let response = with_key(|| {
-        block_on(async {
-            dispatcher(blueprint("openai", &server.base_url(), true))
-                .dispatch(request(Some(r#"{"type":"object"}"#)))
-                .await
-        })
+    let response = block_on(async {
+        dispatcher(blueprint("openai", &server.base_url(), true))
+            .dispatch(request(Some(r#"{"type":"object"}"#)))
+            .await
     })
     .expect("the call resolved");
 
@@ -451,12 +416,10 @@ fn the_structured_output_opt_out_sends_no_schema_at_all() {
         .unwrap()
         .supports_structured_outputs = false;
 
-    with_key(|| {
-        block_on(async {
-            dispatcher(bp)
-                .dispatch(request(Some(r#"{"type":"object"}"#)))
-                .await
-        })
+    block_on(async {
+        dispatcher(bp)
+            .dispatch(request(Some(r#"{"type":"object"}"#)))
+            .await
     })
     .expect("the call resolved");
 
@@ -547,20 +510,11 @@ fn a_connection_failure_is_transport_with_no_status() {
         format!("http://127.0.0.1:{port}")
     };
 
-    let outcome = with_key(|| {
-        block_on(async {
-            let bp = blueprint("openai", &dead, true);
-            BlueprintLlmProvider::new(
-                Arc::clone(&bp),
-                Arc::new(HttpModelDispatch::new(
-                    bp,
-                    None,
-                    Arc::new(NetworkPolicy::allow_all()),
-                )),
-            )
+    let outcome = block_on(async {
+        let bp = blueprint("openai", &dead, true);
+        BlueprintLlmProvider::new(Arc::clone(&bp), Arc::new(dispatcher(bp)))
             .call(MODEL, &[PROMPT.to_string()], None)
             .await
-        })
     })
     .expect("the provider resolved")
     .remove(0);
@@ -757,7 +711,7 @@ llm:
     let dispatch = HttpModelDispatch::new(Arc::new(bp), None, Arc::new(NetworkPolicy::allow_all()))
         .with_harness_secrets(Arc::new(bindings));
 
-    // No `with_key`: the value comes from the bindings, not the environment.
+    // The value comes from the session bindings.
     block_on(async { dispatch.dispatch(request(None)).await }).expect("the call resolved");
 
     with_auth.assert_hits(1);
@@ -780,7 +734,7 @@ fn an_unresolvable_credential_leaks_nothing() {
 name: t
 secrets:
   {NEVER_SET}:
-    env: {NEVER_SET}
+    harness: {{}}
 llm:
   providers:
     p:
@@ -858,12 +812,10 @@ fn the_key_reaches_the_wire_only_as_a_header() {
         then.status(200).json_body(ok_body("openai"));
     });
 
-    with_key(|| {
-        block_on(async {
-            dispatcher(blueprint("openai", &server.base_url(), true))
-                .dispatch(request(None))
-                .await
-        })
+    block_on(async {
+        dispatcher(blueprint("openai", &server.base_url(), true))
+            .dispatch(request(None))
+            .await
     })
     .expect("the call resolved");
 
@@ -888,12 +840,10 @@ fn google_sends_the_key_as_a_header_not_as_a_query_parameter() {
         then.status(200).json_body(ok_body("google"));
     });
 
-    with_key(|| {
-        block_on(async {
-            dispatcher(blueprint("google", &server.base_url(), true))
-                .dispatch(request(None))
-                .await
-        })
+    block_on(async {
+        dispatcher(blueprint("google", &server.base_url(), true))
+            .dispatch(request(None))
+            .await
     })
     .expect("the call resolved");
 
@@ -919,12 +869,10 @@ fn an_undecodable_body_is_a_transport_failure_carrying_none_of_it() {
             .body(vec![0x7b, 0x80, 0x7d]);
     });
 
-    let outcome = with_key(|| {
-        block_on(async {
-            dispatcher(blueprint("openai", &server.base_url(), true))
-                .dispatch(request(None))
-                .await
-        })
+    let outcome = block_on(async {
+        dispatcher(blueprint("openai", &server.base_url(), true))
+            .dispatch(request(None))
+            .await
     });
 
     let Err(ProviderFailure::Transport { detail }) = outcome else {
@@ -967,20 +915,11 @@ fn ladder_outcome(
     _expected_status: u16,
     schema_json: Option<&str>,
 ) -> LlmOutcome {
-    with_key(|| {
-        block_on(async {
-            let bp = blueprint(kind, &server.base_url(), true);
-            BlueprintLlmProvider::new(
-                Arc::clone(&bp),
-                Arc::new(HttpModelDispatch::new(
-                    bp,
-                    None,
-                    Arc::new(NetworkPolicy::allow_all()),
-                )),
-            )
+    block_on(async {
+        let bp = blueprint(kind, &server.base_url(), true);
+        BlueprintLlmProvider::new(Arc::clone(&bp), Arc::new(dispatcher(bp)))
             .call(MODEL, &[PROMPT.to_string()], schema_json)
             .await
-        })
     })
     .expect("the provider resolved")
     .remove(0)

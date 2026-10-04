@@ -2,6 +2,7 @@
 
 import asyncio
 import os
+import pathlib
 
 from deepagents import create_deep_agent
 from deepagents.middleware.filesystem import FilesystemPermission
@@ -14,16 +15,11 @@ SUBMILLI_SERVER_TOKEN = os.environ["SUBMILLI_SERVER_TOKEN"]
 BLUEPRINT = "research"
 
 
-def instructions(user_id: str) -> str:
-    return (
-        "You are a research assistant. Search the web and read pages by writing programs for Submilli. "
-        "Do the whole job in one program where you can, and return only what you need to answer. "
-        f"Keep a note of what you learn, with its sources, under /{user_id}/notes. "
-        "Read your earlier notes before you search again."
-    )
+# The agent's brief, kept beside the blueprint.
+INSTRUCTIONS = (pathlib.Path(__file__).parent.parent / "prompt.txt").read_text()
 
 
-async def answer(question: str, user_id: str, model="google_genai:gemini-3.8-flash") -> str:
+async def answer(question: str, user_id: str, model="anthropic:claude-sonnet-5") -> str:
     submilli = {
         "transport": "streamable_http",
         "url": f"{SUBMILLI_SERVER}/mcp/{BLUEPRINT}",
@@ -39,7 +35,7 @@ async def answer(question: str, user_id: str, model="google_genai:gemini-3.8-fla
         agent = create_deep_agent(
             model=model,
             tools=await load_mcp_tools(session),
-            system_prompt=instructions(user_id),
+            system_prompt=INSTRUCTIONS,
             # deepagents has file tools of its own, which keep files in the
             # conversation. Deny them, so that notes go through Submilli.
             permissions=[FilesystemPermission(operations=["read", "write"], paths=["/**"], mode="deny")],

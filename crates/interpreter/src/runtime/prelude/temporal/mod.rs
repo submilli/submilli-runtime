@@ -63,6 +63,8 @@ pub(crate) fn install_abi(
 }
 
 pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
+    zoned_date_time::prepare_zones()?;
+    now::prepare_system_zone()?;
     let types = DirectTypes::new(linker)?;
     duration::install(linker, &types)?;
     instant::install(linker, &types)?;

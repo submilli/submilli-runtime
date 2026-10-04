@@ -5,7 +5,9 @@ use std::fs;
 use std::path::PathBuf;
 use std::process::ExitCode;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
+
+use interpreter::runtime::limits::ExecutionUsage;
 
 use anyhow::{Context, anyhow};
 use interpreter::diagnostics;
@@ -39,6 +41,10 @@ pub struct Args {
     #[arg(long)]
     fuel: Option<u64>,
 
+    /// Print fuel, peak accounted memory, and timings to stderr after execution.
+    #[arg(long)]
+    report: bool,
+
     /// Maximum wasm stack in bytes.
     #[arg(long = "max-stack")]
     max_stack: Option<usize>,
@@ -56,8 +62,8 @@ pub struct Args {
 
     /// Apply a blueprint's policy (capability gating, deny-by-default) and
     /// `auth_proxy:` secret injection to this local run. Without it, the run is
-    /// unrestricted (allow-all). `env` / `file` / `store` secret sources all
-    /// resolve (`store:` from the local secret store), and authenticated
+    /// unrestricted (allow-all). `store:` secrets resolve from the local
+    /// secret store, and authenticated
     /// `@mcp/<server>` servers are called in-process — no running server needed.
     #[arg(long)]
     blueprint: Option<PathBuf>,
@@ -70,7 +76,7 @@ pub struct Args {
     vars: Vec<String>,
 
     /// Tokens this run's `submilli:llm` calls may spend in total. A run that
-    /// asks for more raises a catchable `RangeError` rather than being billed.
+    /// asks for more raises a catchable `QuotaExceededError` rather than being billed.
     ///
     /// Finite by default, deliberately: unlike `submilli:session`, whose state
     /// is memory-only, a blueprint-configured provider spends real money against
@@ -165,6 +171,7 @@ impl Args {
     pub(crate) fn metric_flags(&self) -> Vec<(&'static str, bool)> {
         vec![
             ("has_fuel", self.fuel.is_some()),
+            ("report", self.report),
             ("has_max_stack", self.max_stack.is_some()),
             ("has_timeout", self.timeout.is_some()),
             ("has_vfs", self.vfs.is_some()),
@@ -214,6 +221,7 @@ fn execute_on_this_thread(
     args: Args,
     llm_dispatch: Option<Arc<dyn ModelDispatch>>,
 ) -> anyhow::Result<ExitCode> {
+    let started = Instant::now();
     let (llm_limits, llm_concurrency) = llm_settings(&args)?;
     let source = fs::read_to_string(&args.script)
         .with_context(|| format!("reading {}", args.script.display()))?;
@@ -227,7 +235,13 @@ fn execute_on_this_thread(
             let yaml =
                 fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
             match submilli_blueprint::parse(&yaml) {
-                Ok(bp) => Some(Arc::new(bp)),
+                Ok(bp) => {
+                    if let Some(message) = named_volume_refusal(&bp) {
+                        eprintln!("error: {}: {message}", path.display());
+                        return Ok(ExitCode::from(1));
+                    }
+                    Some(Arc::new(bp))
+                }
                 Err(err) => {
                     eprintln!("error: {}: {err}", path.display());
                     return Ok(ExitCode::from(1));
@@ -367,6 +381,14 @@ fn execute_on_this_thread(
         Some(path) => Vfs::external(path).context("opening --vfs directory")?,
         None => Vfs::tempdir().context("allocating temporary VFS directory")?,
     };
+    if let Some(blueprint) = &blueprint {
+        let config = blueprint.vfs.resolve(&variables)?;
+        if !matches!(config, submilli_blueprint::VfsConfig::None) {
+            vfs = vfs
+                .with_cwd(config.cwd())
+                .context("preparing blueprint cwd")?;
+        }
+    }
     let size_limit = blueprint.as_ref().and_then(|bp| bp.vfs.size_limit());
     if let Some(limit) = size_limit {
         let measured = vfs.measure_usage();
@@ -427,6 +449,8 @@ fn execute_on_this_thread(
     let module = Module::new(&engine, &compiled.wasm)?;
     let mut linker = Linker::<StoreData>::new(&engine);
 
+    let compile_elapsed = started.elapsed();
+    let run_started = Instant::now();
     let dispatch = rt.block_on(async {
         let linked_packages: Vec<_> = package_modules
             .iter()
@@ -445,7 +469,10 @@ fn execute_on_this_thread(
         let instance = instantiate_program_async(&linker, &mut store, &module).await?;
         dispatch_main_async(&mut store, &instance).await
     });
-    match dispatch {
+    let cleanup = rt.block_on(store.data_mut().blocking_work.finish());
+    let (dispatch, secondary_cleanup) = settle_worker_cleanup(dispatch, cleanup);
+    let run_elapsed = run_started.elapsed();
+    let exit = match dispatch {
         Ok(Some(json)) => {
             println!("{json}");
             Ok(ExitCode::SUCCESS)
@@ -459,7 +486,55 @@ fn execute_on_this_thread(
             }
             Ok(ExitCode::from(1))
         }
+    };
+    if let Some(error) = secondary_cleanup {
+        eprintln!("worker cleanup failure: {error}");
     }
+    if args.report {
+        let usage = ExecutionUsage::capture(&store, cfg.fuel)?;
+        eprintln!(
+            "fuel: {} (wasm {}, host {})   memory peak: {:.1} MB   wall: {} ms (compile {} ms, run {} ms)",
+            grouped_fuel(usage.fuel),
+            grouped_fuel(usage.wasm_fuel),
+            grouped_fuel(usage.host_fuel),
+            usage.memory_peak as f64 / 1_000_000.0,
+            (compile_elapsed + run_elapsed).as_millis(),
+            compile_elapsed.as_millis(),
+            run_elapsed.as_millis(),
+        );
+    }
+    exit
+}
+
+fn settle_worker_cleanup<T>(
+    dispatch: wasmtime::Result<T>,
+    cleanup: Result<(), interpreter::runtime::blocking::BlockingWorkDrainError>,
+) -> (
+    wasmtime::Result<T>,
+    Option<interpreter::runtime::blocking::BlockingWorkDrainError>,
+) {
+    match (dispatch, cleanup) {
+        (Ok(_), Err(error)) => (
+            Err(
+                interpreter::runtime::host::fatal_host_error("worker cleanup failed")
+                    .context(error),
+            ),
+            None,
+        ),
+        (dispatch, cleanup) => (dispatch, cleanup.err()),
+    }
+}
+
+fn grouped_fuel(fuel: u64) -> String {
+    let digits = fuel.to_string();
+    let mut out = String::new();
+    for (index, digit) in digits.chars().enumerate() {
+        if index > 0 && (digits.len() - index).is_multiple_of(3) {
+            out.push(',');
+        }
+        out.push(digit);
+    }
+    out
 }
 
 struct LocalPackageModule {
@@ -495,6 +570,22 @@ fn bind_variables(blueprint: &Blueprint, raw: &[String]) -> anyhow::Result<VarBi
     }
     resolve_variables(&blueprint.variables, &supplied)
         .map_err(|err| anyhow!("invalid variables: {err}"))
+}
+
+/// Why a blueprint cannot run locally: named volumes are declared in a server's
+/// config, and a local run has no server to resolve them through.
+fn named_volume_refusal(blueprint: &Blueprint) -> Option<String> {
+    let reference = blueprint.vfs.named_references().into_iter().next()?;
+    let place = match reference.mount {
+        None => "as its vfs root".to_string(),
+        Some(path) => format!("at `{path}`"),
+    };
+    Some(format!(
+        "blueprint '{}' uses named volume '{}' {place}; named volumes are declared in a server \
+         config, so run it on `submilli-server`, or drop the volume for local runs (use \
+         `--vfs <dir>` to give the program a directory)",
+        blueprint.name, reference.volume
+    ))
 }
 
 fn load_blueprint_packages(blueprint: &Blueprint) -> anyhow::Result<Vec<Artifact>> {
@@ -611,6 +702,7 @@ function main(): string {
             args: Args {
                 script,
                 fuel: None,
+                report: false,
                 max_stack: None,
                 timeout: None,
                 vfs: None,
@@ -620,6 +712,27 @@ function main(): string {
                 max_llm_concurrency: None,
             },
         }
+    }
+
+    #[test]
+    fn a_blueprint_with_named_volumes_is_refused_locally() {
+        for (yaml, expected) in [
+            (
+                "name: x\nvfs:\n  mode: named\n  volume: notes\n",
+                "named volume 'notes' as its vfs root",
+            ),
+            (
+                "name: x\nvfs:\n  mounts:\n    /memory: {mode: named, volume: memory}\n",
+                "named volume 'memory' at `/memory`",
+            ),
+        ] {
+            let blueprint = submilli_blueprint::parse(yaml).unwrap();
+            let message = named_volume_refusal(&blueprint).expect(yaml);
+            assert!(message.contains(expected), "{message}");
+            assert!(message.contains("submilli-server"), "{message}");
+        }
+        let plain = submilli_blueprint::parse("name: x\nvfs: per_session\n").unwrap();
+        assert_eq!(named_volume_refusal(&plain), None);
     }
 
     /// `submilli run` with a blueprint-configured provider executes a call.
@@ -657,7 +770,7 @@ function main(): string {
         // a ceiling of 10 cannot cover it.
         let f = fixture("llm_over", Some(10));
         let code = execute_with_dispatch(f.args, Some(Arc::new(AlwaysOk(Arc::clone(&calls)))))
-            .expect("a caught RangeError still exits cleanly");
+            .expect("a caught QuotaExceededError still exits cleanly");
 
         assert_eq!(code, ExitCode::SUCCESS, "the guest caught the refusal");
         assert_eq!(
@@ -755,6 +868,55 @@ function main(): string {
                 .iter()
                 .find(|(key, _)| key == name)
                 .and_then(|(_, value)| value.clone())
+        }
+    }
+}
+
+#[cfg(test)]
+mod worker_cleanup_tests {
+    use super::*;
+
+    async fn injected_drain_failure() -> interpreter::runtime::blocking::BlockingWorkDrainError {
+        let mut workers = interpreter::runtime::blocking::BlockingWork::default();
+        let (started, ready) = tokio::sync::oneshot::channel();
+        let (release, gate) = std::sync::mpsc::channel();
+        let mut waiter = Box::pin(workers.spawn(move || {
+            started.send(()).unwrap();
+            gate.recv_timeout(std::time::Duration::from_secs(5))
+                .unwrap();
+            panic!("injected abandoned worker failure");
+        }));
+        tokio::select! {
+            _ = &mut waiter => panic!("worker ended early"),
+            result = ready => result.unwrap(),
+        }
+        drop(waiter);
+        release.send(()).unwrap();
+        workers.finish().await.unwrap_err()
+    }
+
+    #[tokio::test]
+    async fn cleanup_failure_turns_success_into_fatal_failure() {
+        let cleanup = injected_drain_failure().await;
+        let (result, secondary) = settle_worker_cleanup(Ok(42), Err(cleanup));
+        let error = result.unwrap_err();
+        assert!(error.is::<interpreter::runtime::host::FatalHostError>());
+        assert!(error.is::<interpreter::runtime::blocking::BlockingWorkDrainError>());
+        assert!(error.to_string().contains("blocking worker panicked"));
+        assert!(secondary.is_none());
+    }
+
+    #[tokio::test]
+    async fn cleanup_failure_preserves_original_execution_error() {
+        for message in ["execution failed", "execution cancelled"] {
+            let cleanup = injected_drain_failure().await;
+            let (result, secondary) =
+                settle_worker_cleanup::<()>(Err(wasmtime::Error::msg(message)), Err(cleanup));
+            assert_eq!(result.unwrap_err().to_string(), message);
+            assert_eq!(
+                secondary.unwrap().errors(),
+                &[interpreter::runtime::blocking::BlockingWorkError::WorkerPanicked]
+            );
         }
     }
 }

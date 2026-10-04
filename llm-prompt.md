@@ -92,6 +92,10 @@ package resolves the value internally and never returns it — e.g.
 no route around this: not another package, not asking a package to
 fetch the value and hand it back, not raw HTTP.
 
+Budget refusals (filesystem space, model tokens, and session state) throw
+`QuotaExceededError`, a catchable `Error`. Free space, reduce the request,
+or report the budget to the operator. Argument-size caps remain `RangeError`.
+
 Language deltas: no `undefined`, no `async`/`await`, no `Symbol` /
 `Proxy`, no `any` (`unknown` requires narrowing), no `Date` (use the
 `Temporal` global), `==` aliases `===`. Truthiness and `&&` / `||` /
@@ -155,7 +159,7 @@ resolved values.
 | Placeholder | Resolves to | Source |
 |:---|:---|:---|
 | `{t_search}`, `{t_docs}`, `{t_builtins_docs}` | registered discovery tool names | MCP or REST caller |
-| `{sandbox}` | empty when FS and Code are hidden; otherwise `none` / `ephemeral` / `per_session` / `persistent`, with limits where applicable | policy `vfs:` block |
+| `{sandbox}` | empty when FS and Code are hidden; otherwise `none` / `ephemeral` / `per_session` / `named`, with limits where applicable, followed by any named volumes mounted below the root | policy `vfs:` block |
 | `{http_access}` | empty when HTTP is hidden; otherwise per-method host reachability (`GET → api.example.com; …`), `any host`, or an approval-policy note | policy default and `permissions:` HTTP rules for `main` |
 | `{stdlib_modules}` | visible standard-library names | non-deny default or relevant non-deny rules for `main` |
 | `{http_guidance}` | HTTP credential guidance, only when HTTP is visible | same visibility rule |

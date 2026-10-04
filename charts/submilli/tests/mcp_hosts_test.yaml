@@ -1,0 +1,92 @@
+suite: MCP deployment host allowlist
+templates:
+  - configmap-config.yaml
+release:
+  name: submilli
+  namespace: agents
+tests:
+  - it: allows the service DNS names with its port
+    asserts:
+      - matchRegex:
+          path: data["server.yaml"]
+          pattern: '(?m)^mcp_allowed_hosts:\n- submilli:8128\n- submilli.agents:8128\n- submilli.agents.svc:8128\n- submilli.agents.svc.cluster.local:8128\n'
+
+  - it: uses the service port for service names and container port for pod names
+    set:
+      fullnameOverride: runtime
+      service.port: 9000
+      server.port: 9001
+      replicaCount: 2
+    asserts:
+      - matchRegex:
+          path: data["server.yaml"]
+          pattern: '(?m)^- runtime.agents.svc:9000$'
+      - matchRegex:
+          path: data["server.yaml"]
+          pattern: '(?m)^- runtime-0.runtime-headless.agents.svc:9001$'
+      - matchRegex:
+          path: data["server.yaml"]
+          pattern: '(?m)^- runtime-1.runtime-headless.agents.svc.cluster.local:9001$'
+      - notMatchRegex:
+          path: data["server.yaml"]
+          pattern: 'runtime-2\.'
+
+  - it: adds enabled ingress hosts and operator hosts
+    set:
+      ingress.enabled: true
+      ingress.hosts:
+        - host: mcp.example.com
+          paths:
+            - path: /
+      config.mcp_allowed_hosts:
+        - custom.example.com:9443
+        - submilli:8128
+    asserts:
+      - matchRegex:
+          path: data["server.yaml"]
+          pattern: '(?m)^- mcp.example.com$'
+      - matchRegex:
+          path: data["server.yaml"]
+          pattern: '(?m)^- custom.example.com:9443$'
+      - matchRegex:
+          path: data["server.yaml"]
+          pattern: '(?m)^- submilli.agents.svc:8128$'
+
+  - it: excludes disabled ingress hosts and preserves defaults with an empty extra list
+    set:
+      ingress.hosts:
+        - host: disabled.example.com
+          paths:
+            - path: /
+      config.mcp_allowed_hosts: []
+    asserts:
+      - notMatchRegex:
+          path: data["server.yaml"]
+          pattern: 'disabled.example.com'
+      - matchRegex:
+          path: data["server.yaml"]
+          pattern: '(?m)^- submilli:8128$'
+
+  - it: allows omitted default HTTP ports without dropping explicit port entries
+    set:
+      service.port: 80
+      server.port: 80
+    asserts:
+      - matchRegex:
+          path: data["server.yaml"]
+          pattern: '(?m)^- submilli:80\n- submilli$'
+      - matchRegex:
+          path: data["server.yaml"]
+          pattern: '(?m)^- submilli.agents.svc:80\n- submilli.agents.svc$'
+      - matchRegex:
+          path: data["server.yaml"]
+          pattern: '(?m)^- submilli-0.submilli-headless.agents.svc:80\n- submilli-0.submilli-headless.agents.svc$'
+
+  - it: uses the truncated headless service name for long overrides
+    set:
+      fullnameOverride: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+      replicaCount: 2
+    asserts:
+      - matchRegex:
+          path: data["server.yaml"]
+          pattern: '(?m)^- a{60}-1.a{54}-headless.agents.svc:8128$'

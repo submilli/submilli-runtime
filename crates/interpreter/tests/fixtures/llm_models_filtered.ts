@@ -1,5 +1,5 @@
 // deny-llm-model: internal-secret-model
-// `models()` is double-gated: once for the operation, then once per candidate
+// `models()` filters each candidate
 // under the same `model` filter that gates calling. A listing must therefore
 // never offer a model the caller would be refused at `call` time — otherwise
 // discovery becomes a way to enumerate the operator's catalog behind the
@@ -27,11 +27,6 @@ function main(): void {
   }
   assert(sawHaiku, "a permitted model is listed");
   assert(sawSonnet, "every permitted model is listed");
-
-  // The op-level gate is separate from the per-candidate filter: `models()`
-  // itself was allowed, so it returns rather than throwing. A policy that
-  // denied the operation would be the `llm_denied` case instead.
-  assert(models.length > 0, "the operation itself was permitted");
 
   // The filter is the same one that gates calling, so the hidden model is
   // refused at `call` time too — discovery and dispatch agree.

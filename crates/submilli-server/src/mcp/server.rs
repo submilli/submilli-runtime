@@ -6,15 +6,15 @@
 use std::borrow::Cow;
 use std::sync::Arc;
 
-use interpreter::runtime::fs::{ContainError, ContentPath, resolve_content};
+use interpreter::runtime::fs::{ContainError, ContentPath, guest_normalize, resolve_content};
 use interpreter::runtime::{CheckOutcome, SecurityCheck, Vfs, VfsInfo};
 use interpreter::stdlib::fs::handles::kind_of;
 use rmcp::handler::server::router::tool::ToolRouter;
 use rmcp::handler::server::tool::{Extension, ToolCallContext};
 use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::{
-    CallToolRequestParams, CallToolResult, Content, ListToolsResult, PaginatedRequestParams,
-    ServerCapabilities, ServerInfo, Tool,
+    CallToolRequestParams, CallToolResult, Content, ErrorCode, ListToolsResult,
+    PaginatedRequestParams, ServerCapabilities, ServerInfo, Tool,
 };
 use rmcp::service::RequestContext;
 use rmcp::{ErrorData, RoleServer, ServerHandler, schemars, tool, tool_router};
@@ -29,7 +29,7 @@ use crate::handlers::execute::{blueprint_miss_message, outcome_to_parts, split_c
 use crate::packages;
 use crate::runner;
 use crate::session::LastRun;
-use crate::session_manager::{attach_size_limit, build_vfs, vfs_info};
+use crate::session_manager::{attach_limits, build_vfs, vfs_info};
 
 const TOOL_NAME: &str = "submilli__typescript__execute";
 
@@ -149,12 +149,13 @@ fn session_header(parts: &axum::http::request::Parts) -> Option<String> {
         .map(str::to_string)
 }
 
-/// Wrap an `ExecuteOutput` as the tool's structured result (shared by `execute`
-/// and `lastRun`).
-fn execute_result(output: ExecuteOutput) -> Result<CallToolResult, ErrorData> {
-    let value =
-        serde_json::to_value(output).map_err(|e| ErrorData::internal_error(e.to_string(), None))?;
-    Ok(CallToolResult::structured(value))
+/// Wrap a tool's output as its structured result.
+fn structured_result(output: impl Serialize) -> Result<CallToolResult, ErrorData> {
+    Ok(CallToolResult::structured(tool_value(output)?))
+}
+
+fn tool_value(output: impl Serialize) -> Result<serde_json::Value, ErrorData> {
+    serde_json::to_value(output).map_err(|e| ErrorData::internal_error(e.to_string(), None))
 }
 
 #[derive(Clone)]
@@ -184,10 +185,18 @@ impl SubmilliMcp {
     /// runnable blueprint, so the refusal names that reason instead of telling the
     /// agent the endpoint it is connected to addresses nothing.
     async fn require_blueprint(&self) -> Result<Blueprint, ErrorData> {
-        match self.state.blueprints().get(&self.blueprint_name).await {
+        match self
+            .state
+            .blueprints()
+            .get(&self.blueprint_name)
+            .await
+            .map_err(blueprint_store_error)?
+        {
             Some(blueprint) => Ok(blueprint),
             None => Err(ErrorData::invalid_request(
-                blueprint_miss_message(&self.state, &self.blueprint_name).await,
+                blueprint_miss_message(&self.state, &self.blueprint_name)
+                    .await
+                    .map_err(blueprint_store_error)?,
                 None,
             )),
         }
@@ -195,27 +204,31 @@ impl SubmilliMcp {
 
     /// The current blueprint, re-fetched from the store so a mid-session update is
     /// reflected; falls back to the build-time snapshot if it was removed.
-    async fn current_blueprint(&self) -> Blueprint {
-        self.state
+    async fn current_blueprint(&self) -> Result<Blueprint, ErrorData> {
+        Ok(self
+            .state
             .blueprints()
             .get(&self.blueprint_name)
             .await
-            .unwrap_or_else(|| self.blueprint.clone())
+            .map_err(blueprint_store_error)?
+            .unwrap_or_else(|| self.blueprint.clone()))
     }
 
     /// Open the VFS a tool operates on. `per_session` resolves the session's
     /// durable directory (and keeps it alive); every other mode gets a standalone
     /// VFS per call. A cross-call workflow — write in `execute`, read with
-    /// `files.read` — therefore needs a mode whose *directory* is the same one
-    /// each time: `per_session`, or `persistent`, which remounts the same declared
-    /// volume. Only `ephemeral` hands out a fresh temp directory per call. Shared
-    /// by `execute`, `files.read` and `files.list`; only a program run enforces
-    /// the size limit, which costs a walk of the whole directory.
+    /// `files.read` — therefore needs a directory that is the same one each
+    /// time: a `per_session` root, a `named` root, or a path under a mount, which
+    /// remount the same declared volume. Only an `ephemeral` root is a fresh
+    /// temp directory per call. Shared by `execute`, `files.read` and
+    /// `files.list`; only a program run enforces the size limits, which costs a
+    /// walk of each limited directory.
     async fn acquire_vfs(
         &self,
         blueprint: &Blueprint,
         session_id: Option<&str>,
         purpose: VfsUse,
+        variables: &submilli_blueprint::VarBindings,
     ) -> Result<(Vfs, VfsInfo), ErrorData> {
         let manager = self.state.session_manager();
         if matches!(blueprint.vfs, VfsConfig::PerSession { .. }) {
@@ -226,18 +239,26 @@ impl SubmilliMcp {
                 .await
                 .map_err(|e| ErrorData::internal_error(e.to_string(), None))?;
             let pair = if purpose == VfsUse::RunProgram {
-                manager.vfs_for_execute(sid, blueprint).await
+                manager
+                    .vfs_for_execute_with_variables(sid, blueprint, variables)
+                    .await
             } else {
-                manager.session_vfs(sid, blueprint)
+                manager.session_vfs_with_variables(sid, blueprint, variables)
             }
             .map_err(|e| ErrorData::internal_error(e.to_string(), None))?;
             manager.touch(sid).await;
             Ok(pair)
         } else {
-            let vfs = build_vfs(blueprint, None, manager.ephemeral_root(), manager.volumes())
-                .map_err(|e| ErrorData::internal_error(e.to_string(), None))?;
+            let vfs = build_vfs(
+                blueprint,
+                variables,
+                None,
+                manager.ephemeral_root(),
+                manager.volume_registry(),
+            )
+            .map_err(|e| ErrorData::internal_error(e.to_string(), None))?;
             let vfs = if purpose == VfsUse::RunProgram {
-                attach_size_limit(vfs, blueprint)
+                attach_limits(vfs, blueprint, manager.volume_registry())
                     .await
                     .map_err(|e| ErrorData::internal_error(e.to_string(), None))?
             } else {
@@ -270,11 +291,45 @@ impl SubmilliMcp {
         Parameters(args): Parameters<ExecuteArgs>,
         Extension(parts): Extension<axum::http::request::Parts>,
     ) -> Result<CallToolResult, ErrorData> {
-        let blueprint = Arc::new(self.require_blueprint().await?);
+        let audit = parts
+            .extensions
+            .get::<Arc<crate::audit::ExecutionAudit>>()
+            .cloned()
+            .ok_or_else(|| ErrorData::internal_error("missing execution audit context", None))?;
+        self.execute_inner(args, parts, audit).await
+    }
+
+    async fn execute_inner(
+        &self,
+        args: ExecuteArgs,
+        parts: axum::http::request::Parts,
+        audit: Arc<crate::audit::ExecutionAudit>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let blueprint = Arc::new(self.require_blueprint().await.inspect_err(|error| {
+            audit.error(if error.code == ErrorCode::INTERNAL_ERROR {
+                crate::error::ErrorKind::RuntimeError
+            } else {
+                crate::error::ErrorKind::BlueprintNotFound
+            });
+        })?);
 
         // Stateful transport: every connection has a session id (rmcp rejects a
         // non-initialize request without one before we get here).
         let session_id = session_header(&parts);
+        // Variables were bound and validated at `initialize`; read this session's
+        // resolved bindings (empty if none) for the policy filter.
+        let variables = self
+            .state
+            .session_manager()
+            .variables(session_id.as_deref().unwrap_or(""));
+
+        audit.annotate(
+            &args.code,
+            &self.blueprint_name,
+            Some(&blueprint),
+            &variables,
+        );
+        audit.begin();
         let harness_secrets = match self
             .state
             .session_manager()
@@ -285,6 +340,7 @@ impl SubmilliMcp {
                 Arc::new(HarnessSecretBindings::new())
             }
             None => {
+                audit.error(crate::error::ErrorKind::InvalidRequest);
                 return Err(ErrorData::invalid_request(
                     "session_requires_secrets",
                     Some(serde_json::json!({
@@ -294,35 +350,41 @@ impl SubmilliMcp {
             }
         };
 
-        // Variables were bound and validated at `initialize`; read this session's
-        // resolved bindings (empty if none) for the policy filter.
-        let variables = self
-            .state
-            .session_manager()
-            .variables(session_id.as_deref().unwrap_or(""));
-
-        let parsed = runner::parse(&args.code)
-            .map_err(|error| ErrorData::internal_error(error.to_string(), None))?;
-        let script_imports = parsed
-            .imports()
-            .map_err(|message| ErrorData::internal_error(message, None))?;
+        let parsed = runner::parse(&args.code).map_err(|error| {
+            audit.error(crate::error::ErrorKind::CompileError);
+            ErrorData::internal_error(error.to_string(), None)
+        })?;
+        let script_imports = parsed.imports().map_err(|message| {
+            audit.error(crate::error::ErrorKind::CompileError);
+            ErrorData::internal_error(message, None)
+        })?;
         let (vfs, vfs_info) = self
-            .acquire_vfs(&blueprint, session_id.as_deref(), VfsUse::RunProgram)
-            .await?;
+            .acquire_vfs(
+                &blueprint,
+                session_id.as_deref(),
+                VfsUse::RunProgram,
+                &variables,
+            )
+            .await
+            .inspect_err(|_| {
+                audit.error(crate::error::ErrorKind::RuntimeError);
+            })?;
 
         let manager = self.state.session_manager();
         let http_client = manager.http_client(session_id.as_deref().unwrap_or(""));
+        let network_policy = audit.network_policy(self.state.network_policy());
         let mcp_transport = Arc::new(
             submilli_shared::mcp::transport::StreamableHttpTransport::new(
                 self.blueprint_name.clone(),
                 Arc::clone(&blueprint),
                 self.state.oauth_token_manager().cloned(),
                 self.state.secret_store().cloned(),
-                Arc::clone(self.state.network_policy()),
+                Arc::clone(&network_policy),
             )
             .with_harness_secrets(Arc::clone(&harness_secrets)),
         );
         let services = runner::HostServices {
+            audit: Some(audit.clone()),
             git: submilli_shared::resolve_git(&blueprint, &variables)
                 .map_err(|error| error.to_string()),
             auth_proxy: Arc::new(BlueprintAuthProxy::with_harness(
@@ -335,14 +397,21 @@ impl SubmilliMcp {
                 self.state.secret_store().cloned(),
                 Arc::clone(&harness_secrets),
             )),
-            security_check: Arc::new(PolicyCheck::with_variables(
-                Arc::clone(&blueprint),
-                variables,
-            )),
+            security_check: Arc::new(crate::audit::AuditedPolicy {
+                policy: Arc::new(PolicyCheck::with_variables(
+                    Arc::clone(&blueprint),
+                    variables,
+                )),
+                execution: audit.clone(),
+            }),
             http_client,
             mcp_transport,
             session_kv: manager.session_kv_for_execute(session_id.as_deref().unwrap_or("")),
-            llm_provider: self.state.llm_provider_for(&blueprint, &harness_secrets),
+            llm_provider: self.state.llm_provider_for(
+                &blueprint,
+                &harness_secrets,
+                &network_policy,
+            ),
             llm_budget: Some(manager.llm_budget_for_execute()),
         };
         let mcp_catalog = self
@@ -352,16 +421,22 @@ impl SubmilliMcp {
                 &blueprint,
                 &script_imports.mcp_servers,
                 &harness_secrets,
+                &network_policy,
             )
             .await;
         let packages = self
             .state
             .prepared_packages_for_imports(&self.blueprint_name, &blueprint, &script_imports)
-            .map_err(|err| ErrorData::internal_error(err.to_string(), None))?;
+            .map_err(|err| {
+                audit.error(crate::error::ErrorKind::PackageResolution);
+                ErrorData::internal_error(err.to_string(), None)
+            })?;
         let outcome = runner::run(
             &args.code,
             parsed,
             runner::RunnerRuntime {
+                blueprint: &self.blueprint_name,
+                session: session_id.as_deref().unwrap_or(""),
                 engine: self.state.engine(),
                 base_linker: self.state.base_linker(),
                 config: self.state.runtime(),
@@ -379,8 +454,9 @@ impl SubmilliMcp {
         let (result, console, error) = outcome_to_parts(&outcome, &console_lines);
 
         // Record the full (un-suppressed) console so `lastRun` can recover it.
-        if let Some(sid) = &session_id {
-            self.state
+        if let Some(sid) = &session_id
+            && let Err(error) = self
+                .state
                 .sessions()
                 .record(
                     sid,
@@ -390,10 +466,12 @@ impl SubmilliMcp {
                         error: error.clone(),
                     },
                 )
-                .await;
+                .await
+        {
+            tracing::warn!(operation = "record", session = %sid, %error, "last-run storage failed");
         }
 
-        execute_result(ExecuteOutput {
+        structured_result(ExecuteOutput {
             result,
             console,
             error,
@@ -410,15 +488,22 @@ impl SubmilliMcp {
         let session_id = session_header(&parts)
             .ok_or_else(|| ErrorData::invalid_request("no session for lastRun", None))?;
         match self.state.sessions().get(&session_id).await {
-            Some(run) => execute_result(ExecuteOutput {
+            Ok(Some(run)) => structured_result(ExecuteOutput {
                 result: run.result,
                 console: run.console,
                 error: run.error,
             }),
-            None => Err(ErrorData::invalid_request(
+            Ok(None) => Err(ErrorData::invalid_request(
                 "no previous run in this session",
                 None,
             )),
+            Err(error) => {
+                tracing::warn!(operation = "get", session = %session_id, %error, "last-run storage failed");
+                Err(ErrorData::internal_error(
+                    "last-run storage unavailable",
+                    None,
+                ))
+            }
         }
     }
 
@@ -430,7 +515,13 @@ impl SubmilliMcp {
         &self,
         Parameters(args): Parameters<PackageDocsArgs>,
     ) -> Result<CallToolResult, ErrorData> {
-        let lookup = match self.state.blueprints().get(&self.blueprint_name).await {
+        let lookup = match self
+            .state
+            .blueprints()
+            .get(&self.blueprint_name)
+            .await
+            .map_err(blueprint_store_error)?
+        {
             Some(blueprint) => {
                 let catalog = self
                     .state
@@ -464,7 +555,13 @@ impl SubmilliMcp {
         // Fold this blueprint's `@mcp/<server>` packages in alongside the stdlib
         // hits, so search can discover MCP tooling — not just `packages.docs` once
         // the server name is already known.
-        let value = match self.state.blueprints().get(&self.blueprint_name).await {
+        let value = match self
+            .state
+            .blueprints()
+            .get(&self.blueprint_name)
+            .await
+            .map_err(blueprint_store_error)?
+        {
             Some(blueprint) => {
                 let catalog = self
                     .state
@@ -493,20 +590,25 @@ impl SubmilliMcp {
     ) -> Result<CallToolResult, ErrorData> {
         // The bound blueprint's `@mcp/*` names, so a package name asked of this
         // tool gets the correcting call rather than a bare unknown.
-        let (mcp_packages, visibility) =
-            match self.state.blueprints().get(&self.blueprint_name).await {
-                Some(blueprint) => {
-                    let catalog = self
-                        .state
-                        .mcp_catalog(&self.blueprint_name, &blueprint)
-                        .await;
-                    (
-                        packages::mcp_package_names(&catalog),
-                        LibraryVisibility::for_blueprint(&blueprint),
-                    )
-                }
-                None => (Vec::new(), LibraryVisibility::unscoped()),
-            };
+        let (mcp_packages, visibility) = match self
+            .state
+            .blueprints()
+            .get(&self.blueprint_name)
+            .await
+            .map_err(blueprint_store_error)?
+        {
+            Some(blueprint) => {
+                let catalog = self
+                    .state
+                    .mcp_catalog(&self.blueprint_name, &blueprint)
+                    .await;
+                (
+                    packages::mcp_package_names(&catalog),
+                    LibraryVisibility::for_blueprint(&blueprint),
+                )
+            }
+            None => (Vec::new(), LibraryVisibility::unscoped()),
+        };
         Ok(CallToolResult::structured(packages::builtins_docs_json(
             &args.names,
             &mcp_packages,
@@ -532,8 +634,10 @@ impl SubmilliMcp {
             (1-based line, default 1) and `limit` (lines, default 2000). Returns \
             { content, line_start, line_end, has_more, next_offset, bytes }; pass \
             `next_offset` back to page on. Files survive across calls under a \
-            per_session or persistent VFS; an ephemeral one is emptied after \
-            every execute. Requires fs.read as caller main with op readText."
+            per_session or named root and under a mounted volume; an \
+            ephemeral root is emptied after every execute. Requires fs.read \
+            as caller main with op readText. A denial or a missing file returns \
+            { error: { kind, message } }."
     )]
     async fn read_file(
         &self,
@@ -543,42 +647,54 @@ impl SubmilliMcp {
         let blueprint = Arc::new(self.require_blueprint().await?);
 
         let session_id = session_header(&parts);
-        self.check_file_permission(
+        let variables = self
+            .state
+            .session_manager()
+            .variables(session_id.as_deref().unwrap_or(""));
+        if let Err(refused) = self.authorize_file_call(
+            &parts,
             Arc::clone(&blueprint),
-            session_id.as_deref(),
+            Arc::clone(&variables),
             "fs.read",
-            serde_json::json!({ "path": &args.path }),
-        )?;
+            &args.path,
+            None,
+        ) {
+            return file_tool_failure(refused);
+        }
         let (vfs, _info) = self
-            .acquire_vfs(&blueprint, session_id.as_deref(), VfsUse::ReadFiles)
+            .acquire_vfs(
+                &blueprint,
+                session_id.as_deref(),
+                VfsUse::ReadFiles,
+                &variables,
+            )
             .await?;
-
-        let resolved = resolve_content(&vfs, "/", &args.path)
-            .map_err(|e| ErrorData::invalid_request(format!("{}: {e}", args.path), None))?;
 
         let offset = args.offset.unwrap_or(1).max(1);
         let limit = args
             .limit
             .unwrap_or(READ_DEFAULT_LIMIT)
             .clamp(1, READ_MAX_LIMIT);
-        let output = read_window(&args.path, &resolved, offset, limit)
-            .map_err(|e| ErrorData::invalid_request(format!("{}: {e}", args.path), None))?;
-
-        let value = serde_json::to_value(output)
-            .map_err(|e| ErrorData::internal_error(e.to_string(), None))?;
-        Ok(CallToolResult::structured(value))
+        let read = resolve_content(&vfs, vfs.cwd(), &args.path)
+            .and_then(|resolved| read_window(&args.path, &resolved, offset, limit));
+        match read {
+            Ok(output) => structured_result(output),
+            Err(error) => file_tool_failure(FileToolError::file(&args.path, error)),
+        }
     }
 
     #[tool(
         name = "submilli__files__list",
         description = "List files in the session workspace (VFS). Use it to discover \
             what an `execute` run wrote to disk before reading with `submilli__files__read`. \
-            Args: optional `path` (directory, default the workspace root) and \
+            Args: optional `path` (directory, default the working directory) and \
             `recursive` (default false). Returns { entries: [{ path, kind, bytes }], \
             count, truncated }, capped at 1000 entries. Files survive across calls \
-            under a per_session or persistent VFS; an ephemeral one is emptied \
-            after every execute. Requires fs.list as caller main with op list; \
-            policy checks the starting directory, including recursive listings."
+            under a per_session or named root and under a mounted volume; an \
+            ephemeral root is emptied after every execute. Requires fs.list as \
+            caller main with op list; policy checks the starting directory, \
+            including recursive listings. A denial or a missing directory returns \
+            { error: { kind, message } }."
     )]
     async fn list_files(
         &self,
@@ -588,62 +704,145 @@ impl SubmilliMcp {
         let blueprint = Arc::new(self.require_blueprint().await?);
 
         let session_id = session_header(&parts);
-        let dir = args.path.as_deref().unwrap_or("/");
+        let variables = self
+            .state
+            .session_manager()
+            .variables(session_id.as_deref().unwrap_or(""));
+        let dir = args.path.as_deref().unwrap_or(".");
         let recursive = args.recursive.unwrap_or(false);
-        self.check_file_permission(
+        if let Err(refused) = self.authorize_file_call(
+            &parts,
             Arc::clone(&blueprint),
-            session_id.as_deref(),
+            Arc::clone(&variables),
             "fs.list",
-            serde_json::json!({ "path": dir, "recursive": recursive }),
-        )?;
+            dir,
+            Some(recursive),
+        ) {
+            return file_tool_failure(refused);
+        }
         let (vfs, _info) = self
-            .acquire_vfs(&blueprint, session_id.as_deref(), VfsUse::ReadFiles)
+            .acquire_vfs(
+                &blueprint,
+                session_id.as_deref(),
+                VfsUse::ReadFiles,
+                &variables,
+            )
             .await?;
 
-        let resolved = resolve_content(&vfs, "/", dir)
-            .map_err(|e| ErrorData::invalid_request(format!("{dir}: {e}"), None))?;
-
-        let (mut entries, truncated) =
-            list_entries(&resolved, &guest_dir_prefix(dir), recursive)
-                .map_err(|e| ErrorData::invalid_request(format!("{dir}: {e}"), None))?;
+        let listed = resolve_content(&vfs, vfs.cwd(), dir).and_then(|resolved| {
+            list_entries(
+                &resolved,
+                &guest_dir_prefix(&guest_normalize(vfs.cwd(), dir)?),
+                recursive,
+            )
+        });
+        let (mut entries, truncated) = match listed {
+            Ok(listed) => listed,
+            Err(error) => return file_tool_failure(FileToolError::file(dir, error)),
+        };
         entries.sort_by(|a, b| a.path.cmp(&b.path));
 
-        let output = ListFilesOutput {
+        structured_result(ListFilesOutput {
             path: dir.to_string(),
             count: entries.len(),
             truncated,
             entries,
-        };
-        let value = serde_json::to_value(output)
-            .map_err(|e| ErrorData::internal_error(e.to_string(), None))?;
-        Ok(CallToolResult::structured(value))
+        })
     }
 }
 
 impl SubmilliMcp {
     /// File tools act as the session's main program, including on isolated VFSs.
-    fn check_file_permission(
+    ///
+    /// The path is checked lexically before the policy sees it. The policy refuses
+    /// a path that cannot name anything in the VFS (`..` past the root, a NUL byte)
+    /// too, but as a denial, which tells the model a rule stopped it rather than
+    /// that the path is wrong.
+    fn authorize_file_call(
         &self,
+        parts: &axum::http::request::Parts,
         blueprint: Arc<Blueprint>,
-        session_id: Option<&str>,
+        variables: Arc<submilli_blueprint::VarBindings>,
         capability: &str,
-        context: serde_json::Value,
-    ) -> Result<(), ErrorData> {
-        let variables = self
-            .state
-            .session_manager()
-            .variables(session_id.unwrap_or(""));
-        let policy = PolicyCheck::with_variables(blueprint, variables);
-        let reason = match policy.check("main", capability, &context) {
-            CheckOutcome::Allow => return Ok(()),
-            CheckOutcome::Deny { reason } => reason,
+        path: &str,
+        recursive: Option<bool>,
+    ) -> Result<(), FileToolError> {
+        let mut context = serde_json::Map::new();
+        context.insert("path".into(), path.into());
+        if let Some(recursive) = recursive {
+            context.insert("recursive".into(), recursive.into());
+        }
+        let context = serde_json::Value::Object(context);
+        let config = blueprint
+            .vfs
+            .resolve(&variables)
+            .map_err(|error| FileToolError::denied(capability, &error.to_string()))?;
+        guest_normalize(config.cwd(), path)
+            .map_err(|error| FileToolError::file(path, error.into()))?;
+        let policy = PolicyCheck::with_variables(blueprint.clone(), variables);
+        let outcome = policy.check_with_cwd("main", capability, &context, config.cwd());
+        let audit_context = policy.audit_context(capability, &context, config.cwd());
+        self.state.audit().file_decision(
+            parts,
+            &blueprint,
+            capability,
+            audit_context.as_ref(),
+            &outcome,
+        );
+        let reason = match outcome {
+            CheckOutcome::Allow { .. } => return Ok(()),
+            CheckOutcome::Deny { reason, .. } => reason,
             _ => "unrecognized policy outcome".to_string(),
         };
-        Err(ErrorData::invalid_request(
-            format!("permission denied: caller=main capability={capability}: {reason}"),
-            None,
-        ))
+        Err(FileToolError::denied(capability, &reason))
     }
+}
+
+/// A file tool call that failed for this call alone: a denial, a missing file, a
+/// path outside the VFS. It is answered as an `isError` result the model reads,
+/// carrying a `{ kind, message }` error like the one `execute` reports, because
+/// clients such as `langchain-mcp-adapters` raise on a JSON-RPC error and end the
+/// agent run. JSON-RPC errors stay for protocol problems: no session, unknown tool,
+/// malformed request envelopes.
+#[derive(Serialize)]
+struct FileToolError {
+    kind: FileToolErrorKind,
+    message: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "snake_case")]
+enum FileToolErrorKind {
+    PermissionDenied,
+    FileError,
+}
+
+impl FileToolError {
+    fn denied(capability: &str, reason: &str) -> Self {
+        Self {
+            kind: FileToolErrorKind::PermissionDenied,
+            message: format!("permission denied: caller=main capability={capability}: {reason}"),
+        }
+    }
+
+    fn file(path: &str, error: ContainError) -> Self {
+        Self {
+            kind: FileToolErrorKind::FileError,
+            message: format!("{path}: {error}"),
+        }
+    }
+}
+
+/// The `{ error }` result a failed file tool call answers with.
+#[derive(Serialize)]
+struct FileToolErrorOutput {
+    error: FileToolError,
+}
+
+fn file_tool_failure(error: FileToolError) -> Result<CallToolResult, ErrorData> {
+    Ok(CallToolResult::structured_error(tool_value(
+        FileToolErrorOutput { error },
+    )?))
 }
 
 /// Walk `base` (optionally recursing) through the contained handle, naming each
@@ -652,7 +851,9 @@ impl SubmilliMcp {
 ///
 /// Entry metadata does not follow symlinks, so a link to a directory is reported
 /// as an entry and never descended into — which is also what keeps the walk from
-/// leaving the root once `base` itself has been opened under containment.
+/// leaving the root once `base` itself has been opened under containment. A mount
+/// point below `base` is descended into through its volume's handle, not the
+/// empty directory the root holds there.
 fn list_entries(
     base: &ContentPath,
     base_guest: &str,
@@ -663,8 +864,14 @@ fn list_entries(
     // its own: siblings share one parent, so the descriptors this holds open are
     // bounded by the tree's depth instead of its width.
     let mut pending = Vec::new();
+    let mounts = if recursive {
+        base.mounts_below()
+    } else {
+        Vec::new()
+    };
     let mut dir = Arc::new(base.open_dir()?);
     let mut prefix = base_guest.to_string();
+    let mut rel = std::path::PathBuf::new();
     loop {
         for item in dir.entries()? {
             if entries.len() >= LIST_MAX_ENTRIES {
@@ -677,7 +884,8 @@ fn list_entries(
             let name = item.file_name();
             let path = format!("{prefix}/{}", name.to_string_lossy());
             if recursive && is_dir {
-                pending.push((Arc::clone(&dir), name, path.clone()));
+                let child = rel.join(&name);
+                pending.push((Arc::clone(&dir), name, path.clone(), child));
             }
             entries.push(FileEntry {
                 path,
@@ -688,11 +896,15 @@ fn list_entries(
                 bytes: if file_type.is_file() { meta.len() } else { 0 },
             });
         }
-        let Some((parent, name, next)) = pending.pop() else {
+        let Some((parent, name, next, child)) = pending.pop() else {
             return Ok((entries, false));
         };
-        dir = Arc::new(parent.open_dir(&name)?);
+        dir = match mounts.iter().find(|(mount, _)| *mount == child) {
+            Some((_, volume)) => Arc::new(volume.try_clone()?),
+            None => Arc::new(parent.open_dir(&name)?),
+        };
         prefix = next;
+        rel = child;
     }
 }
 
@@ -792,7 +1004,7 @@ fn read_window(
 
 // Hand-written rather than `#[tool_handler]` so `list_tools` can serve a
 // per-blueprint description (the canonical prompt with `{vfs_mode}` resolved).
-// `call_tool` / `get_tool` mirror exactly what the macro would generate.
+// Argument normalization and tool failures are handled before returning to clients.
 impl ServerHandler for SubmilliMcp {
     fn get_info(&self) -> ServerInfo {
         ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
@@ -801,22 +1013,88 @@ impl ServerHandler for SubmilliMcp {
 
     async fn call_tool(
         &self,
-        request: CallToolRequestParams,
-        context: RequestContext<RoleServer>,
+        mut request: CallToolRequestParams,
+        mut context: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, ErrorData> {
+        let audit = if request.name.as_ref() == TOOL_NAME {
+            let parts = context.extensions.get::<axum::http::request::Parts>();
+            let principal = parts
+                .and_then(|p| p.extensions.get::<crate::audit::Principal>())
+                .map_or("unauthenticated", |p| p.0.as_str());
+            let session = parts.and_then(session_header);
+            let audit = crate::audit::ExecutionAudit::new(
+                self.state.audit().clone(),
+                principal,
+                "mcp",
+                session.as_deref(),
+            );
+            let code = request
+                .arguments
+                .as_ref()
+                .and_then(|a| a.get("code"))
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or_default();
+            audit.annotate(
+                code,
+                &self.blueprint_name,
+                None,
+                &self
+                    .state
+                    .session_manager()
+                    .variables(session.as_deref().unwrap_or("")),
+            );
+            if let Some(parts) = context.extensions.get_mut::<axum::http::request::Parts>() {
+                parts.extensions.insert(audit.clone());
+            }
+            Some(audit)
+        } else {
+            None
+        };
+        let tool = self
+            .tool_router
+            .get(&request.name)
+            .ok_or_else(|| ErrorData::invalid_params("tool not found", None))?;
+        if let Some(arguments) = request.arguments.as_mut() {
+            normalize_tool_arguments(arguments, &tool.input_schema);
+        }
         let tcc = ToolCallContext::new(self, request, context);
-        self.tool_router.call(tcc).await
+        let result = self.tool_router.call(tcc).await;
+        if let (Some(audit), Err(error)) = (&audit, &result)
+            && error.code == rmcp::model::ErrorCode::INVALID_PARAMS
+        {
+            audit.error(crate::error::ErrorKind::InvalidRequest);
+        }
+        let result = result.or_else(tool_call_failure);
+        let Some(audit) = audit else {
+            return result;
+        };
+        let success = result.as_ref().is_ok_and(|r| !r.is_error.unwrap_or(false));
+        audit.finish(success);
+        with_execution_id(result, &audit.id)
     }
 
     async fn list_tools(
         &self,
         _request: Option<PaginatedRequestParams>,
-        _context: RequestContext<RoleServer>,
+        context: RequestContext<RoleServer>,
     ) -> Result<ListToolsResult, ErrorData> {
         use submilli_shared::prompt::tools as shared;
         let mut tools = self.tool_router.list_all();
+        let mut blueprint = self.current_blueprint().await?;
+        let session_id = context
+            .extensions
+            .get::<axum::http::request::Parts>()
+            .and_then(session_header);
+        let variables = self
+            .state
+            .session_manager()
+            .variables(session_id.as_deref().unwrap_or(""));
+        blueprint.vfs = blueprint
+            .vfs
+            .resolve(&variables)
+            .map_err(|error| ErrorData::invalid_request(error.to_string(), None))?;
         let execute = submilli_shared::prompt::execute_tool_description(
-            &self.current_blueprint().await,
+            &blueprint,
             submilli_shared::prompt::PromptSurface::Mcp,
         );
         for tool in &mut tools {
@@ -844,5 +1122,126 @@ impl ServerHandler for SubmilliMcp {
 
     fn get_tool(&self, name: &str) -> Option<Tool> {
         self.tool_router.get(name).cloned()
+    }
+}
+
+fn blueprint_store_error(error: crate::blueprint::StoreError) -> ErrorData {
+    ErrorData::internal_error(crate::blueprint::store_failure_message(error), None)
+}
+
+fn with_execution_id(
+    result: Result<CallToolResult, ErrorData>,
+    id: &str,
+) -> Result<CallToolResult, ErrorData> {
+    match result {
+        Ok(mut result) => {
+            if let Some(mut value) = result.structured_content.take() {
+                if let Some(fields) = value.as_object_mut() {
+                    fields.insert("execution_id".into(), serde_json::json!(id));
+                }
+                return Ok(if result.is_error.unwrap_or(false) {
+                    CallToolResult::structured_error(value)
+                } else {
+                    CallToolResult::structured(value)
+                });
+            }
+            Ok(result)
+        }
+        Err(mut error) => {
+            let mut data = error
+                .data
+                .take()
+                .and_then(|v| v.as_object().cloned())
+                .unwrap_or_default();
+            data.insert("execution_id".into(), serde_json::json!(id));
+            error.data = Some(serde_json::Value::Object(data));
+            Err(error)
+        }
+    }
+}
+
+fn tool_call_failure(error: ErrorData) -> Result<CallToolResult, ErrorData> {
+    // rmcp also uses INVALID_PARAMS for missing internal extensions.
+    // Only parameter deserialization failures are correctable by the model.
+    if error.code != ErrorCode::INVALID_PARAMS
+        || !error
+            .message
+            .starts_with("failed to deserialize parameters:")
+    {
+        return Err(error);
+    }
+    Ok(CallToolResult::structured_error(serde_json::json!({
+        "error": {
+            "kind": "invalid_arguments",
+            "message": error.message,
+        }
+    })))
+}
+
+// Only coerce declared scalar parameters; strings such as source code and paths
+// must retain their original values. Serde still validates ranges and required fields.
+fn normalize_tool_arguments(
+    arguments: &mut serde_json::Map<String, serde_json::Value>,
+    schema: &serde_json::Map<String, serde_json::Value>,
+) {
+    let Some(properties) = schema
+        .get("properties")
+        .and_then(serde_json::Value::as_object)
+    else {
+        return;
+    };
+    for (name, value) in arguments {
+        let Some(text) = value.as_str() else {
+            continue;
+        };
+        let Some(property) = properties.get(name) else {
+            continue;
+        };
+        let replacement = match scalar_parameter_type(property) {
+            Some("boolean") => text.parse::<bool>().ok().map(serde_json::Value::Bool),
+            Some("integer" | "number") => text
+                .parse::<serde_json::Number>()
+                .ok()
+                .map(serde_json::Value::Number),
+            _ => None,
+        };
+        if let Some(replacement) = replacement {
+            *value = replacement;
+        }
+    }
+}
+
+fn scalar_parameter_type(schema: &serde_json::Value) -> Option<&str> {
+    let kind = schema.get("type")?;
+    if let Some(kind) = kind.as_str() {
+        return Some(kind);
+    }
+    // Optional parameters use a type array containing the scalar and null.
+    // Ambiguous unions must retain the supplied value.
+    let mut kinds = kind
+        .as_array()?
+        .iter()
+        .filter(|kind| kind.as_str() != Some("null"));
+    let scalar = kinds.next()?.as_str()?;
+    if kinds.next().is_some() {
+        return None;
+    }
+    Some(scalar)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tool_call_failure_preserves_protocol_and_internal_errors() {
+        for error in [
+            ErrorData::invalid_params("Missing extension: HTTP request parts", None),
+            ErrorData::invalid_params("tool not found", None),
+            ErrorData::invalid_request("missing mcp-session-id", None),
+            ErrorData::internal_error("failed to deserialize parameters: internal failure", None),
+        ] {
+            assert_eq!(tool_call_failure(error.clone()).unwrap_err(), error);
+        }
     }
 }

@@ -1,15 +1,26 @@
 //! Capability-controlled Git operations. No subprocesses or guest-visible credentials.
+use crate::runtime::host::{abi_arg, abi_result};
 pub(crate) mod class;
 pub mod declaration;
+mod diff;
 mod history;
 mod index_limits;
-mod native_packs;
+mod location;
+mod lock;
+pub(crate) mod log_cache;
+mod metadata_scan;
+mod meter;
+mod object;
 mod operations;
+mod pack_index_check;
 mod pack_limits;
+mod stage;
 mod storage;
 mod transport;
+mod work;
 mod worker;
 
+use crate::runtime::fuel;
 use crate::runtime::host::{
     permission_denied, read_string_arg, register_host_fn_async, write_submilli_string_struct,
     write_submilli_uint8array_struct,
@@ -29,6 +40,7 @@ static WORKERS: OnceLock<Arc<tokio::sync::Semaphore>> = OnceLock::new();
 
 pub const MODULE_NAME: &str = "submilli:git";
 pub use declaration::package_declaration;
+pub(crate) use transport::canonical_url;
 
 #[derive(Clone, Debug)]
 pub struct GitConfig {
@@ -47,10 +59,16 @@ struct Job {
     secrets: Arc<dyn SecretProvider>,
     http: Arc<dyn HttpClient>,
     runtime: tokio::runtime::Handle,
+    /// When the operation times out, waits included.
+    deadline: tokio::time::Instant,
     cancelled: Arc<AtomicBool>,
     max_bytes: u64,
     transferred: Arc<AtomicU64>,
+    /// The worker's own file and object work, charged when it returns.
+    meter: Arc<meter::Meter>,
+    algorithm_fuel: Arc<work::AlgorithmWork>,
     denial: Arc<Mutex<Option<(String, String)>>>,
+    history_cache: Option<Arc<log_cache::Cache>>,
 }
 impl Job {
     fn remote_capability(&self) -> &'static str {
@@ -64,15 +82,64 @@ impl Job {
     fn check(&self, capability: &str, context: Value) -> Result<()> {
         self.check_cancelled()?;
         match self.security.check(&self.caller, capability, &context) {
-            CheckOutcome::Allow => Ok(()),
-            CheckOutcome::Deny { reason } => {
-                if let Ok(mut denial) = self.denial.lock() {
-                    *denial = Some((capability.to_owned(), reason.clone()));
-                }
+            CheckOutcome::Allow { rule } => {
+                self.security
+                    .audit(crate::runtime::security::AuditDecision {
+                        caller: &self.caller,
+                        capability,
+                        context: &context,
+                        allowed: true,
+                        source: "policy",
+                        rule,
+                        reason: None,
+                    });
+                Ok(())
+            }
+            CheckOutcome::Deny { reason, rule } => {
+                self.security
+                    .audit(crate::runtime::security::AuditDecision {
+                        caller: &self.caller,
+                        capability,
+                        context: &context,
+                        allowed: false,
+                        source: "policy",
+                        rule,
+                        reason: Some(&reason),
+                    });
+                let mut denial = self.denial.lock().map_err(|_| {
+                    crate::runtime::host::fatal_host_error("git worker denial lock poisoned")
+                })?;
+                *denial = Some((capability.to_owned(), reason.clone()));
                 Err(permission_denied(&self.caller, capability, reason))
             }
         }
     }
+
+    /// One of the workers Git shares across the process, waited for until
+    /// the operation's deadline or its cancellation.
+    fn worker_permit(&self) -> Result<tokio::sync::OwnedSemaphorePermit> {
+        let workers = WORKERS
+            .get_or_init(|| Arc::new(tokio::sync::Semaphore::new(4)))
+            .clone();
+        // Polled from the worker's own thread, which is not the runtime's.
+        loop {
+            match workers.clone().try_acquire_owned() {
+                Ok(permit) => return Ok(permit),
+                Err(tokio::sync::TryAcquireError::Closed) => {
+                    return Err(crate::runtime::host::fatal_host_error(
+                        "git: workers closed",
+                    ));
+                }
+                Err(tokio::sync::TryAcquireError::NoPermits) => {}
+            }
+            self.check_cancelled()?;
+            if tokio::time::Instant::now() >= self.deadline {
+                bail!("git: operation timed out");
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+    }
+
     fn check_cancelled(&self) -> Result<()> {
         if self.cancelled.load(Ordering::Relaxed) {
             bail!("git: operation cancelled");
@@ -128,7 +195,7 @@ fn install_repository_reads(
         false,
         |caller, params, results| {
             Box::pin(async move {
-                results[0] = invoke(caller, "status", true, params).await?;
+                *abi_result(results, 0)? = invoke(caller, "status", true, params).await?;
                 Ok(())
             })
         },
@@ -145,7 +212,7 @@ fn install_repository_reads(
         false,
         |caller, params, results| {
             Box::pin(async move {
-                results[0] = invoke(caller, "log", true, params).await?;
+                *abi_result(results, 0)? = invoke(caller, "log", true, params).await?;
                 Ok(())
             })
         },
@@ -162,7 +229,7 @@ fn install_repository_reads(
         false,
         |caller, params, results| {
             Box::pin(async move {
-                results[0] = invoke(caller, "diff", true, params).await?;
+                *abi_result(results, 0)? = invoke(caller, "diff", true, params).await?;
                 Ok(())
             })
         },
@@ -179,7 +246,7 @@ fn install_repository_reads(
         false,
         |caller, params, results| {
             Box::pin(async move {
-                results[0] = invoke(caller, "show", true, params).await?;
+                *abi_result(results, 0)? = invoke(caller, "show", true, params).await?;
                 Ok(())
             })
         },
@@ -192,7 +259,7 @@ fn install_repository_reads(
         false,
         |caller, params, results| {
             Box::pin(async move {
-                results[0] = invoke(caller, "branches", true, params).await?;
+                *abi_result(results, 0)? = invoke(caller, "branches", true, params).await?;
                 Ok(())
             })
         },
@@ -205,7 +272,7 @@ fn install_repository_reads(
         false,
         |caller, params, results| {
             Box::pin(async move {
-                results[0] = invoke(caller, "remotes", true, params).await?;
+                *abi_result(results, 0)? = invoke(caller, "remotes", true, params).await?;
                 Ok(())
             })
         },
@@ -259,7 +326,7 @@ fn install_repository_writes(
         false,
         |caller, params, results| {
             Box::pin(async move {
-                results[0] = invoke(caller, "commit", true, params).await?;
+                *abi_result(results, 0)? = invoke(caller, "commit", true, params).await?;
                 Ok(())
             })
         },
@@ -340,7 +407,7 @@ fn install_repository_writes(
         false,
         |caller, params, results| {
             Box::pin(async move {
-                results[0] = invoke(caller, "fetch", true, params).await?;
+                *abi_result(results, 0)? = invoke(caller, "fetch", true, params).await?;
                 Ok(())
             })
         },
@@ -357,7 +424,7 @@ fn install_repository_writes(
         false,
         |caller, params, results| {
             Box::pin(async move {
-                results[0] = invoke(caller, "pull", true, params).await?;
+                *abi_result(results, 0)? = invoke(caller, "pull", true, params).await?;
                 Ok(())
             })
         },
@@ -371,21 +438,39 @@ async fn invoke(
     method: bool,
     params: &[Val],
 ) -> Result<Val> {
-    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(60);
+    let deadline = tokio::time::Instant::now()
+        .checked_add(std::time::Duration::from_secs(60))
+        .ok_or_else(|| crate::runtime::host::fatal_host_error("git deadline is out of range"))?;
     let config = caller.data().git.clone().ok_or_else(|| {
         wasmtime::Error::msg("submilli:git is disabled; configure the blueprint git block")
     })?;
-    let budget = WorkingBudget::reserve(&caller.data().tenant_limits)?;
-    let max_bytes = (budget.bytes / 16).min(storage::MAX_BYTES);
+    if op == "log" && caller.data().git_history.is_none() {
+        let cache = log_cache::Cache::new(&caller.data().tenant_limits)?;
+        caller.data_mut().git_history = Some(Arc::new(cache));
+    }
+    if matches!(
+        op,
+        "init" | "clone" | "add" | "commit" | "createBranch" | "switchBranch" | "fetch" | "pull"
+    ) && let Some(cache) = &caller.data().git_history
+    {
+        cache.invalidate()?;
+    }
+    let budget = WorkingBudget::reserve(&caller.data().tenant_limits, op)?;
+    let max_bytes = budget.max_bytes(op);
     let (args, path) = before_deadline(
         deadline,
         decode_arguments(caller, op, method, params, max_bytes),
     )
     .await??;
     let principal = running_package(&*caller)
-        .map_err(|_| wasmtime::Error::msg("git: cannot identify caller"))?;
+        .map_err(|_| crate::runtime::host::fatal_host_error("git: cannot identify caller"))?;
     let cancelled = Arc::new(AtomicBool::new(false));
     let cancel_guard = CancelOnDrop(cancelled.clone());
+    // The worker stops itself once its work passes what the run has left.
+    let meter = Arc::new(meter::Meter::new(
+        meter::remaining_fuel(&mut *caller)?,
+        Some(cancelled.clone()),
+    ));
     let job = Job {
         op: op.to_owned(),
         path: path.clone(),
@@ -394,45 +479,83 @@ async fn invoke(
         security: caller.data().security_check.clone(),
         secrets: caller.data().secret_provider.clone(),
         http: caller.data().http_client.clone(),
-        runtime: tokio::runtime::Handle::current(),
+        runtime: tokio::runtime::Handle::try_current().map_err(|_| {
+            crate::runtime::host::fatal_host_error("git worker requires a Tokio runtime")
+        })?,
+        deadline,
         cancelled,
         max_bytes,
         transferred: Arc::new(AtomicU64::new(0)),
+        meter: Arc::clone(&meter),
+        algorithm_fuel: Arc::new(work::AlgorithmWork::with_meter(Arc::clone(&meter))),
         denial: Arc::new(Mutex::new(None)),
+        history_cache: caller.data().git_history.clone(),
     };
-    let workers = WORKERS
-        .get_or_init(|| Arc::new(tokio::sync::Semaphore::new(4)))
-        .clone();
-    let permit = before_deadline(deadline, workers.acquire_owned()).await??;
     let vfs = caller.data().vfs.clone();
     let op = op.to_owned();
     let is_constructor = !method;
     let returns_string = op == "commit";
     let denial = job.denial.clone();
     let principal = job.caller.clone();
-    let worker = caller.data_mut().blocking_work.spawn(move || {
-        let _permit = permit;
-        job.check_cancelled()?;
-        worker::run(&vfs, &job, &op, &args).map(|result| (result, budget))
-    });
+    let worker = async {
+        caller
+            .data_mut()
+            .blocking_work
+            .spawn(move || {
+                job.check_cancelled()?;
+                worker::run(&vfs, &job, &op, &args).map(|result| (result, budget))
+            })
+            .await
+            .map_err(blocking_worker_failure)?
+    };
     let outcome = finish_worker(worker, &cancel_guard.0, deadline).await;
-    if let Some((capability, reason)) = denial
-        .lock()
-        .map_err(|_| wasmtime::Error::msg("git: denial lock poisoned"))?
-        .take()
+    // The work is done, and may be published, whether or not it succeeded:
+    // it is settled, not refused.
+    meter.settle(&mut *caller)?;
+    if let Err(error) = &outcome
+        && meter.is_exhausted()
+        && !crate::runtime::host::ends_the_run(error)
+        && !error.is::<stage::NeedsHostRecovery>()
     {
-        return Err(permission_denied(&principal, &capability, reason));
+        // Stopped for fuel before publishing: the run ends as a Wasm loop
+        // out of fuel would, and the program cannot catch it. A host failure,
+        // or a publication that needs recovery, says more and goes first.
+        return Err(wasmtime::Trap::OutOfFuel.into());
     }
-    let (result, _budget) = outcome?;
+
+    let outcome = match outcome {
+        Err(error)
+            if crate::runtime::host::ends_the_run(&error)
+                || error.is::<stage::NeedsHostRecovery>() =>
+        {
+            return Err(error);
+        }
+        other => other,
+    };
+    let denial = denial
+        .lock()
+        .map_err(|_| crate::runtime::host::fatal_host_error("git: denial lock poisoned"))?
+        .take();
     drop(cancel_guard);
-    encode_result(
-        caller,
-        result,
-        &path,
-        is_constructor,
-        returns_string,
-        max_bytes,
-    )
+    fuel::settle_result(caller, |caller| {
+        if let Some((capability, reason)) = denial {
+            return Err(crate::runtime::host::throw_host_error(
+                caller,
+                permission_denied(&principal, &capability, reason),
+            ));
+        }
+        let (result, _budget) =
+            outcome.map_err(|error| crate::runtime::host::throw_host_error(caller, error))?;
+        encode_result(
+            caller,
+            result,
+            &path,
+            is_constructor,
+            returns_string,
+            max_bytes,
+        )
+        .map_err(|error| crate::runtime::host::throw_host_error(caller, error))
+    })
 }
 
 async fn before_deadline<T>(
@@ -459,10 +582,21 @@ async fn finish_worker<T>(
             cancelled.store(true, Ordering::Relaxed);
             // A catchable timeout must not let guest code resume while the
             // worker is still publishing or rolling back repository changes.
-            let _ = worker.await;
-            Err(error)
+            match worker.await {
+                Err(worker_error)
+                    if crate::runtime::host::ends_the_run(&worker_error)
+                        || worker_error.is::<stage::NeedsHostRecovery>() =>
+                {
+                    Err(worker_error)
+                }
+                _ => Err(error),
+            }
         }
     }
+}
+
+fn blocking_worker_failure(error: crate::runtime::blocking::BlockingWorkError) -> wasmtime::Error {
+    crate::runtime::host::fatal_host_error("git blocking worker failed").context(error)
 }
 
 async fn decode_arguments(
@@ -474,25 +608,29 @@ async fn decode_arguments(
 ) -> Result<(Vec<Value>, String)> {
     let mut args = Vec::new();
     let offset = usize::from(method);
-    for param in &params[offset..] {
+    for param in params
+        .get(offset..)
+        .ok_or_else(|| crate::runtime::host::invariant_trap("git ABI: missing arguments"))?
+    {
         let units = value::serialize(caller, param).await?;
         if units.len() as u64 * 2 > max_bytes {
             bail!("git: argument size limit exceeded");
         }
+        fuel::charge(&mut *caller, fuel::PARSE, units.len() as u64)?;
         let text = String::from_utf16(&units)
             .map_err(|_| wasmtime::Error::msg("git: arguments must be valid Unicode"))?;
         args.push(serde_json::from_str::<Value>(&text)?);
     }
     let path = if method {
-        let field = class::path(caller, &params[0])?;
+        let field = class::path(caller, abi_arg(params, 0)?)?;
         read_string_arg(&mut *caller, &field, "git repository")?
     } else {
         operations::text_arg(&args, usize::from(op == "clone"))?.to_owned()
     };
-    let path = crate::runtime::fs::guest_normalize("/", &path)?;
+    let path = crate::runtime::fs::guest_normalize(caller.data().vfs.cwd(), &path)?;
     if path
         .split('/')
-        .any(|part| part.eq_ignore_ascii_case(".git") || part.starts_with(".git-submilli-"))
+        .any(|part| part.eq_ignore_ascii_case(".git") || stage::is_reserved_stage_name(part))
     {
         bail!("git: repository path targets protected metadata");
     }
@@ -529,31 +667,59 @@ fn encode_result(
     if text.len() > max_bytes as usize {
         bail!("git: result limit exceeded");
     }
+    // Serialized and parsed back; the operation is already published.
+    fuel::settle(&mut *caller, fuel::PARSE, 2 * text.len() as u64)?;
     value::deserialize(caller, &text.encode_utf16().collect::<Vec<_>>())
 }
 
-// Reserve working memory against the same tenant cap as Wasm. Snapshot and
-// transport limits use a fraction of this reservation to cover simultaneous
-// trees, index data, diff/JSON expansion, and gix decoding buffers.
+/// The least Git works with: what opening a repository and a fetch's index
+/// buffers take, measured at under 1 MB, with room to spare.
+const MIN_WORKING_BYTES: u64 = 4 * 1024 * 1024;
+
+/// Working memory reserved for one Git operation against the same cap as
+/// Wasm, while the program waits for it.
+///
+/// gix runs natively, outside the metered heap, so the operation reserves
+/// three quarters of what the run has free, and bounds what it holds by
+/// counting: trees, the index, worktree paths, a blob, a diff, a fetched
+/// pack's delta chains. Each count is held to the reservation divided by
+/// what the operation was measured to need per byte counted, beyond its
+/// fixed working set (`tests/git_memory.rs`).
 struct WorkingBudget {
     bytes: u64,
     counter: Arc<std::sync::atomic::AtomicU64>,
 }
 impl WorkingBudget {
-    fn reserve(limits: &crate::runtime::limits::TenantLimits) -> Result<Self> {
+    fn reserve(limits: &crate::runtime::limits::TenantLimits, op: &str) -> Result<Self> {
         let available = limits
             .max_total_bytes
             .saturating_sub(limits.observed_bytes())
             .saturating_sub(limits.host_attached_bytes());
         let bytes = available / 4 * 3;
-        if bytes < 2 * 1024 * 1024 {
-            bail!("git: insufficient tenant memory for repository work");
+        if bytes < MIN_WORKING_BYTES {
+            const MB: u64 = 1024 * 1024;
+            bail!(
+                "git.{op} needs at least {} MB of working memory; {} MB is free under \
+                 max_execution_memory ({} MB). Raise max_execution_memory",
+                MIN_WORKING_BYTES * 4 / 3 / MB,
+                available / MB,
+                limits.max_total_bytes / MB
+            );
         }
         limits.charge_host_bytes(bytes)?;
         Ok(Self {
             bytes,
             counter: limits.host_attached_counter(),
         })
+    }
+
+    /// What `op` may count while it works: the reservation divided by what
+    /// it was measured to hold per byte counted. A diff holds its patch two
+    /// or three times over as it is built and encoded; everything else
+    /// holds at most about three times what it counts.
+    fn max_bytes(&self, op: &str) -> u64 {
+        let ratio = if op == "diff" { 8 } else { 4 };
+        (self.bytes.saturating_sub(MIN_WORKING_BYTES / 4) / ratio).min(storage::MAX_WORKING_BYTES)
     }
 }
 impl Drop for WorkingBudget {

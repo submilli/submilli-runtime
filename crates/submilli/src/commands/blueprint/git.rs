@@ -80,10 +80,10 @@ fn run(cmd: GitCmd) -> Result<String> {
                 return Ok("Git is disabled.".into());
             };
             Ok(format!(
-                "name: {:?}\nemail: {:?}\nusername: {:?}\nGIT_TOKEN declared: {}",
+                "name: {}\nemail: {}\nusername: {}\nGIT_TOKEN declared: {}",
                 git.identity.name,
                 git.identity.email,
-                git.username,
+                git.username.as_deref().unwrap_or("(not set)"),
                 blueprint.secrets.contains_key("GIT_TOKEN")
             ))
         }
@@ -102,7 +102,7 @@ mod tests {
     fn configure_update_and_remove_preserve_other_fields() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("blueprint.yaml");
-        std::fs::write(&path, "name: test\nsecrets:\n  GIT_TOKEN: {env: TOKEN}\n").unwrap();
+        std::fs::write(&path, "name: test\nsecrets:\n  GIT_TOKEN: {store: TOKEN}\n").unwrap();
         for username in [Some("git".into()), None] {
             run(GitCmd::Set(SetArgs {
                 name: "Agent".into(),
@@ -116,6 +116,16 @@ mod tests {
         assert_eq!(
             load(&path).unwrap().git.unwrap().username.as_deref(),
             Some("git")
+        );
+        let show = || {
+            run(GitCmd::Show(FileArgs {
+                blueprint: Some(path.clone()),
+            }))
+            .unwrap()
+        };
+        assert_eq!(
+            show(),
+            "name: Agent\nemail: agent@example.com\nusername: git\nGIT_TOKEN declared: true"
         );
         let before = std::fs::read(&path).unwrap();
         assert!(
@@ -135,6 +145,7 @@ mod tests {
         .unwrap();
         let bp = load(&path).unwrap();
         assert!(bp.git.is_none());
+        assert_eq!(show(), "Git is disabled.");
         assert!(bp.secrets.contains_key("GIT_TOKEN"));
     }
 }

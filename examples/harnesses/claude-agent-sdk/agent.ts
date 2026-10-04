@@ -1,22 +1,18 @@
 // A Claude Agent SDK agent that runs its programs on submilli-server, over MCP.
 
+import { readFileSync } from "node:fs";
 import { query, type Options } from "@anthropic-ai/claude-agent-sdk";
 
 const SUBMILLI_SERVER = process.env.SUBMILLI_SERVER ?? "http://127.0.0.1:8128";
 const BLUEPRINT = "research";
 
-function instructions(userId: string): string {
-  return [
-    "You are a research assistant. Search the web and read pages by writing programs for Submilli.",
-    "Do the whole job in one program where you can, and return only what you need to answer.",
-    `Keep a note of what you learn, with its sources, under /${userId}/notes.`,
-    "Read your earlier notes before you search again.",
-  ].join(" ");
-}
+// The agent's brief, kept beside the blueprint.
+const INSTRUCTIONS = readFileSync(new URL("../prompt.txt", import.meta.url), "utf8");
 
 export function options(userId: string): Options {
   return {
-    systemPrompt: instructions(userId),
+    model: "claude-sonnet-5",
+    systemPrompt: INSTRUCTIONS,
     mcpServers: {
       // One entry per user: the binding is fixed when the agent connects.
       submilli: {

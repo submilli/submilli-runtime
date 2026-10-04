@@ -30,6 +30,7 @@ function deliver(input: Input): void {}
 
 /**
  * Sends the message.
+ * @param input Message and where to send it.
  * @capability test.com/send { channelId: string }
  */
 export function send(input: Input): void {

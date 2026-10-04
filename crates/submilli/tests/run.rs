@@ -136,7 +136,7 @@ fn write_acme_util_package_with_source(home: &Path, source: &str) {
         &dir,
         &package.wasm,
         &package.type_info,
-        &derive_capability_schema(&package.declaration, &package.required_capabilities),
+        &derive_capability_schema(&package.declaration, &[], &package.required_capabilities),
         &package.declaration,
         &ArtifactMetadata::new("@acme/util", "0.0.0-test", Vec::new()),
         "",
@@ -239,7 +239,7 @@ fn blueprint_transitive_ancestor_is_available_but_not_importable() {
             tmp.path().join("packages/@acme").join(name),
             &package.wasm,
             &package.type_info,
-            &derive_capability_schema(&package.declaration, &package.required_capabilities),
+            &derive_capability_schema(&package.declaration, &[], &package.required_capabilities),
             &package.declaration,
             &ArtifactMetadata::new(format!("@acme/{name}"), "0.0.0-test", dependencies),
             "",
@@ -793,4 +793,1004 @@ fn run_help_lists_flags() {
     for flag in ["--fuel", "--max-stack", "--timeout"] {
         assert!(text.contains(flag), "help missing {flag}: {text}");
     }
+}
+
+#[test]
+fn report_is_opt_in_and_keeps_the_result_on_stdout() {
+    let source = "function main(): number { return 42; }";
+    let plain = run_script("usage-plain", source, &[]);
+    assert!(plain.status.success());
+    assert_eq!(stdout(&plain), "42\n");
+    assert!(!stderr(&plain).contains("fuel:"));
+    let reported = run_script("usage-report", source, &["--report"]);
+    assert!(reported.status.success(), "{}", stderr(&reported));
+    assert_eq!(stdout(&reported), "42\n");
+    let line = stderr(&reported);
+    assert!(line.starts_with("fuel: "), "{line}");
+    let (total, split) = line
+        .trim_start_matches("fuel: ")
+        .split_once(" (wasm ")
+        .unwrap();
+    let (wasm, rest) = split.split_once(", host ").unwrap();
+    let (host, _) = rest.split_once(')').unwrap();
+    let number = |grouped: &str| -> u64 { grouped.replace(',', "").parse().unwrap() };
+    assert_eq!(number(total), number(wasm) + number(host), "{line}");
+    assert!(number(wasm) > 0, "{line}");
+    assert!(line.contains("memory peak:"), "{line}");
+    assert!(line.contains(" ms (compile "), "{line}");
+    assert!(line.contains(" ms, run "), "{line}");
+}
+
+/// The host fuel a program reports under `--report`.
+fn host_fuel(name: &str, source: &str) -> u64 {
+    let out = run_script(name, source, &["--report"]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    let line = stderr(&out);
+    let (_, rest) = line.split_once(", host ").unwrap();
+    let (host, _) = rest.split_once(')').unwrap();
+    host.replace(',', "").parse().unwrap()
+}
+
+#[test]
+fn each_host_call_is_charged_its_flat_cost() {
+    use interpreter::runtime::fuel::CALL;
+    const N: u64 = 10_000;
+    // The same loop, once in Wasm alone and once calling a host function
+    // that marshals nothing, so the difference is the flat charge per call.
+    let plain = host_fuel(
+        "usage-plain-loop",
+        "function main(): number {
+            let sum = 0;
+            for (let i = 0; i < 10000; i++) { sum += i; }
+            return sum;
+        }",
+    );
+    let calling = host_fuel(
+        "usage-calling-loop",
+        "function main(): number {
+            let sum = 0;
+            for (let i = 0; i < 10000; i++) { sum += Math.abs(i); }
+            return sum;
+        }",
+    );
+    assert_eq!(calling - plain, N * CALL);
+}
+
+#[test]
+fn accessors_do_not_pay_for_the_whole_receiver() {
+    use interpreter::runtime::fuel::CALL;
+    const N: u64 = 10_000;
+    // Each loop reads one unit, element or length from a large receiver; if
+    // an accessor copied the receiver first, the copy would show as fuel far
+    // above the flat charge per call.
+    let plain = host_fuel(
+        "usage-accessor-plain",
+        "function main(): number {
+            const s = \"x\".repeat(100000);
+            const a: number[] = [];
+            for (let i = 0; i < 10000; i++) { a.push(i); }
+            const b = Uint8Array.alloc(100000);
+            let sum = 0;
+            for (let i = 0; i < 10000; i++) { sum += i; }
+            // One digit out, whatever the loop summed, so the result's own
+            // marshalling costs the same in every case.
+            return (sum + s.length + a.length + b.length) % 10;
+        }",
+    );
+    // One case per accessor path.
+    let cases = [
+        ("usage-char-at", "sum += s.charAt(i).length;"),
+        ("usage-string-at", "if (s.at(i) !== null) { sum += 1; }"),
+        ("usage-char-code-at", "sum += s.charCodeAt(i);"),
+        ("usage-code-point-at", "sum += s.codePointAt(i);"),
+        ("usage-string-slice", "sum += s.slice(i, i + 1).length;"),
+        ("usage-substring", "sum += s.substring(i, i + 1).length;"),
+        (
+            "usage-starts-with",
+            "if (s.startsWith(\"x\", i)) { sum += 1; }",
+        ),
+        (
+            "usage-ends-with",
+            "if (s.endsWith(\"x\", i + 1)) { sum += 1; }",
+        ),
+        (
+            "usage-array-at",
+            "const v = a.at(i); if (v !== null) { sum += v; }",
+        ),
+        (
+            "usage-array-pop",
+            "const v = a.pop(); if (v !== null) { sum += v; }",
+        ),
+        ("usage-array-slice", "sum += a.slice(i, i + 1).length;"),
+        ("usage-bytes-length", "sum += b.length;"),
+        (
+            "usage-bytes-at",
+            "const v = b.at(i); if (v !== null) { sum += v; }",
+        ),
+        ("usage-bytes-slice", "sum += b.slice(i, i + 1).length;"),
+    ];
+    for (name, body) in cases {
+        let source = format!(
+            "function main(): number {{
+                const s = \"x\".repeat(100000);
+                const a: number[] = [];
+                for (let i = 0; i < 10000; i++) {{ a.push(i); }}
+                const b = Uint8Array.alloc(100000);
+                let sum = 0;
+                for (let i = 0; i < 10000; i++) {{ {body} }}
+                return (sum + s.length + a.length + b.length) % 10;
+            }}"
+        );
+        let extra = host_fuel(name, &source) - plain;
+        // At least the call itself; at most that, the copy of a one-unit
+        // result, and the unboxing of a nullable result or the building of a
+        // one-element array, each one more host call. A copied receiver would
+        // add ELEM(10,000) or COPY(100,000) per iteration on top.
+        assert!(
+            (N * CALL..=3 * N * CALL + 8 * CALL).contains(&extra),
+            "{body}: {extra}"
+        );
+    }
+    for n in [128_u64, 256] {
+        let setup = "const z = Temporal.ZonedDateTime.from(\"2024-03-09T12:00:00-05:00[America/New_York]\");";
+        let baseline = host_fuel(
+            &format!("usage-zone-getter-{n}-base"),
+            &format!("function main(): number {{ {setup} return 0; }}"),
+        );
+        let actual = host_fuel(
+            &format!("usage-zone-getter-{n}"),
+            &format!(
+                "function main(): number {{ {setup} for (let i=0; i<{n}; i++) {{ const day = z.daysInWeek; }} return 0; }}"
+            ),
+        ) - baseline;
+        eprintln!("zone getter {n}: {actual}");
+        assert_eq!(actual, n * CALL);
+        let old = if n == 128 { 29_952 } else { 59_904 };
+        assert!(actual < old / 2);
+    }
+}
+
+#[test]
+fn operations_charge_for_the_input_they_process() {
+    use interpreter::runtime::fuel::{
+        CALL, COPY, ELEM, IO, PARSE, REGEX, SCAN, SYSCALL, TZ, sort_cost,
+    };
+    // Each case builds a large input (the baseline) and then runs one
+    // operation over it; the host fuel the operation adds must cover at
+    // least its class charge for that input. The floors include what the
+    // operation's own callbacks and allocations cost, so that dropping the
+    // class charge itself would fall short.
+    let text_input = "const s = \"x\".repeat(100000);";
+    let json_input = "const s = \"[\" + \"1,\".repeat(50000) + \"1]\";";
+    let sort_input = "const a: number[] = []; for (let i = 0; i < 8192; i++) { a.push(8192 - i); }";
+    // Bottom-up merge sort of a descending power-of-two array: n/2 * log2(n)
+    // comparisons, each one callback.
+    let sort_comparisons: u64 = 8192 / 2 * 13;
+    let cases = [
+        (
+            "regex",
+            text_input,
+            "return /y/.test(s) ? 1 : s.length % 10;",
+            REGEX.cost(100_000),
+        ),
+        (
+            "json-parse",
+            json_input,
+            "return JSON.parse(s) === null ? 0 : s.length % 10;",
+            PARSE.cost(2 * 50_000 + 2) + ELEM.cost(50_001),
+        ),
+        (
+            "sort",
+            sort_input,
+            "a.sort((x: number, y: number) => x - y); return a[0] % 10;",
+            sort_cost(8192) + sort_comparisons * CALL,
+        ),
+        (
+            "upper",
+            text_input,
+            "return s.toUpperCase().length % 10;",
+            SCAN.cost(100_000),
+        ),
+    ];
+    for (name, input, operation, floor) in cases {
+        let baseline = host_fuel(
+            &format!("usage-{name}-baseline"),
+            &format!("function main(): number {{ {input} return 0; }}"),
+        );
+        let with_operation = host_fuel(
+            &format!("usage-{name}"),
+            &format!("function main(): number {{ {input} {operation} }}"),
+        );
+        let added = with_operation - baseline;
+        assert!(added >= floor, "{name}: {added} < {floor}");
+    }
+
+    // Measured on commit 12, before the UTF-16 shared serializer and token
+    // formatter: these assertions reject the old charges as well as regressions.
+    for (name, operation, old) in [
+        ("json-bare", "JSON.stringify(s);", [53267_u64, 106515]),
+        ("json-typed", "JSON.stringify({text:s});", [36963, 73827]),
+        (
+            "json-pretty",
+            "JSON.stringify({text:s},null,2);",
+            [172244, 344276],
+        ),
+        (
+            "json-indent",
+            "JSON.stringify({text:\"x\"},null,s);",
+            [18665, 37097],
+        ),
+    ] {
+        let mut measured = Vec::new();
+        for (index, count) in [16384_u64, 32768].into_iter().enumerate() {
+            let input = format!("const s=\"x\".repeat({count});");
+            let baseline = host_fuel(
+                name,
+                &format!("function main(): number {{ {input} return 0; }}"),
+            );
+            let actual = host_fuel(
+                name,
+                &format!("function main(): number {{ {input} {operation} return 0; }}"),
+            ) - baseline;
+            eprintln!("{name} {count}: {actual}");
+            assert!(
+                actual * 10 < old[index] * 9,
+                "{name}: {actual} versus old {}",
+                old[index]
+            );
+            measured.push(actual);
+        }
+        assert!(measured[1] <= measured[0] * 22 / 10, "{name}: {measured:?}");
+        if name == "json-indent" {
+            assert_eq!(measured[0], measured[1]);
+        }
+    }
+
+    let mut unicode_exec = Vec::new();
+    for count in [128_u64, 256] {
+        let input = format!("const s=\"éx\".repeat({count}); const r=/x/g;");
+        let baseline = host_fuel(
+            "unicode-exec-base",
+            &format!("function main(): number {{ {input} return 0; }}"),
+        );
+        let actual = host_fuel(
+            "unicode-exec",
+            &format!(
+                "function main(): number {{ {input} for(let i=0;i<{count};i++) {{ r.exec(s); }} return 0; }}"
+            ),
+        ) - baseline;
+        // UTF-16/UTF-8 offsets are built and charged once, then looked up in
+        // constant time. Old decoding ran on every call, giving this exact cost.
+        let per_call = CALL + REGEX.cost(3) + SCAN.cost(1) + COPY.cost(1);
+        let old = count * (COPY.cost(2 * count) + SCAN.cost(2 * count) + per_call);
+        let expected = COPY.cost(2 * count)
+            + SCAN.cost(2 * count)
+            + ELEM.cost(5 * count + 2)
+            + count * per_call;
+        assert_eq!(actual, expected);
+        assert!(actual < old / 2, "unicode exec: {actual} versus old {old}");
+        unicode_exec.push(actual);
+    }
+    assert!(
+        unicode_exec[1] <= unicode_exec[0] * 21 / 10,
+        "unicode exec: {unicode_exec:?}"
+    );
+
+    for (name, operation) in [
+        (
+            "replace-literal",
+            "return s.replaceAll(\"a\", \"bb\").length % 10;",
+        ),
+        (
+            "replace-regex",
+            "return s.replaceAll(/a/g, \"bb\").length % 10;",
+        ),
+        ("split-literal", "return s.split(\",\").length % 10;"),
+        ("split-regex", "return s.split(/,/).length % 10;"),
+    ] {
+        let mut costs = Vec::new();
+        for count in [128, 256] {
+            let setup = format!("const s=\"a,\".repeat({count});");
+            let baseline = host_fuel(
+                "incremental-output-baseline",
+                &format!("function main():number{{ {setup} return 0; }}"),
+            );
+            let actual = host_fuel(
+                name,
+                &format!("function main():number{{ {setup} {operation} }}"),
+            ) - baseline;
+            let old_literal = CALL
+                + COPY.cost((2 * count) as u64)
+                + COPY.cost(1)
+                + COPY.cost(2)
+                + SCAN.cost((2 * count + 1) as u64)
+                + COPY.cost((3 * count) as u64);
+            if name == "replace-literal" {
+                assert!(actual >= old_literal + SCAN.cost((2 * count) as u64));
+            }
+            if name == "split-literal" {
+                let old = CALL
+                    + COPY.cost((2 * count) as u64)
+                    + COPY.cost(1)
+                    + SCAN.cost((2 * count + 1) as u64)
+                    + count as u64 * COPY.cost(1)
+                    + ELEM.cost((count + 1) as u64);
+                assert_eq!(
+                    actual, old,
+                    "split preserves its charge while moving admission into the loop"
+                );
+            }
+            eprintln!("{name} {count}: {actual}");
+            costs.push(actual);
+        }
+        assert!(costs[1] > costs[0]);
+        assert!(costs[1] < costs[0] * 5 / 2);
+    }
+    let stopped = run_script(
+        "bounded-prefix-replacement",
+        "function main():number{ const s=\"a\".repeat(8192); try { s.replaceAll(\"a\", \"$`$'\"); } catch(e) { return 7; } return 0; }",
+        &["--fuel", "200000", "--timeout", "2000"],
+    );
+    assert!(!stopped.status.success());
+    assert!(
+        stderr(&stopped).contains("fuel exhausted"),
+        "{}",
+        stderr(&stopped)
+    );
+
+    let mut iterator_costs = Vec::new();
+    for count in [128, 256] {
+        let setup =
+            format!("const values:number[]=[]; for(let i=0;i<{count};i++){{ values.push(i); }}");
+        let baseline = host_fuel(
+            "iterator-baseline",
+            &format!("function main():number{{ {setup} return 0; }}"),
+        );
+        let actual = host_fuel(
+            "iterator-results",
+            &format!(
+                "function main():number{{ {setup} let sum=0; for(const value of values.values()){{ sum+=value; }} return sum % 10; }}"
+            ),
+        ) - baseline;
+        eprintln!("iterator {count}: {actual}");
+        let old = if count == 128 { 16_262 } else { 32_390 };
+        assert!(
+            actual < old - (count as u64) * 8,
+            "iterator allocation fuel: {actual}, old {old}"
+        );
+        iterator_costs.push(actual);
+    }
+    assert!(iterator_costs[1] < iterator_costs[0] * 5 / 2);
+
+    let mut metadata_costs = Vec::new();
+    for count in [128, 256] {
+        let padding = "x".repeat(count * 32);
+        let declaration =
+            format!("function work(n:number, padding:unknown=\"{padding}\"):void {{ }}");
+        let setup =
+            format!("const values:number[]=[]; for(let i=0;i<{count};i++){{ values.push(i); }}");
+        let baseline = host_fuel(
+            "metadata-baseline",
+            &format!("{declaration} function main(): number {{ {setup} return 0; }}"),
+        );
+        let actual = host_fuel(
+            "metadata",
+            &format!(
+                "{declaration} function main(): number {{ {setup} values.forEach(work); return 0; }}"
+            ),
+        ) - baseline;
+        eprintln!("metadata {count}: {actual}");
+        assert!(
+            actual > PARSE.cost((count * 32) as u64),
+            "metadata fixture must exercise the cache miss"
+        );
+        metadata_costs.push(actual);
+        let old = if count == 128 { 593_152 } else { 2_365_952 };
+        assert!(actual < old / 2);
+    }
+    assert!(metadata_costs[1] < metadata_costs[0] * 5 / 2);
+
+    let mut options_costs = Vec::new();
+    for count in [128, 256] {
+        let fields = (0..count)
+            .map(|i| format!("p{i}: {i},"))
+            .collect::<String>();
+        let setup = format!("const bag = {{ days: 1, {fields} }};");
+        let baseline = host_fuel(
+            "options-baseline",
+            &format!("function main(): number {{ {setup} return 0; }}"),
+        );
+        let actual = host_fuel(
+            "options",
+            &format!(
+                "function main(): number {{ {setup} for (let i=0;i<{count};i++) {{ Temporal.Duration.from(bag); }} return 0; }}"
+            ),
+        ) - baseline;
+        eprintln!("options {count}: {actual}");
+        options_costs.push(actual);
+        let old = if count == 128 { 1_801_984 } else { 7_175_680 };
+        assert!(actual < old / 2, "options: {actual} >= half of old {old}");
+    }
+
+    assert!(options_costs[1] < options_costs[0] * 5 / 2);
+
+    for method in ["trim", "trimStart", "trimEnd", "toUpperCase", "toLowerCase"] {
+        let mut costs = Vec::new();
+        for count in [65536, 131072] {
+            let setup = format!("const s = \"x\".repeat({count});");
+            let baseline = host_fuel(
+                "string-transform-baseline",
+                &format!("function main(): number {{ {setup} return 0; }}"),
+            );
+            let actual = host_fuel(
+                "string-transform",
+                &format!("function main(): number {{ {setup} return s.{method}().length % 10; }}"),
+            ) - baseline;
+            eprintln!("{method} {count}: {actual}");
+            let old = if count == 65536 { 147_472 } else { 294_928 };
+            assert!(
+                actual < old - SCAN.cost(count as u64) / 2,
+                "{method}: {actual}, old {old}"
+            );
+            costs.push(actual);
+        }
+        assert!(costs[1] < costs[0] * 5 / 2, "{method}: {costs:?}");
+    }
+
+    for (method, statement, per_call, old_cost) in [
+        (
+            "fill",
+            "bytes.fill(7,i,i+1);",
+            CALL + COPY.cost(1),
+            [6144_u64, 20480],
+        ),
+        (
+            "copy",
+            "bytes.copyWithin(i,0,1);",
+            CALL + 2 * COPY.cost(1),
+            [6144, 20480],
+        ),
+        (
+            "set",
+            "bytes.set(source,i);",
+            CALL + 2 * COPY.cost(1),
+            [6272, 20736],
+        ),
+    ] {
+        for (index, count) in [128_u64, 256].into_iter().enumerate() {
+            let input =
+                format!("const bytes=Uint8Array.alloc({count}); const source=Uint8Array.new([1]);");
+            let baseline = host_fuel(
+                "usage-byte-range-base",
+                &format!("function main():number{{{input} return 0;}}"),
+            );
+            let actual = host_fuel(
+                "usage-byte-range",
+                &format!(
+                    "function main():number{{{input} for(let i=0;i<{count};i++){{{statement}}} return 0;}}"
+                ),
+            ) - baseline;
+            assert_eq!(actual, count * per_call, "{method}");
+            assert!(actual < old_cost[index] / 2, "{method}: {actual}");
+        }
+    }
+    for count in [128_u64, 256] {
+        let input = format!("const s=\"x\".repeat({count});");
+        let baseline = host_fuel(
+            "usage-number-predicate-base",
+            &format!("function main():number{{{input} return 0;}}"),
+        );
+        let actual = host_fuel(
+            "usage-number-predicate",
+            &format!(
+                "function main():number{{{input} for(let i=0;i<{count};i++){{Number.isNaN(s);Number.isFinite(s);Number.isInteger(s);Number.isSafeInteger(s);}} return 0;}}"
+            ),
+        ) - baseline;
+        assert_eq!(actual, 4 * count * CALL);
+        assert!(actual < 4 * count * (CALL + COPY.cost(count)));
+    }
+
+    // Adding unrelated files must not increase work below a literal glob prefix.
+    let mut glob_fuel = Vec::new();
+    for (index, count) in [128, 256].into_iter().enumerate() {
+        let setup = format!(
+            "mkdir('/wanted/nested',true); mkdir('/unrelated',true); writeText('/wanted/nested/file.ts','x'); for(let i=0;i<{count};i++){{writeText('/unrelated/'+i.toString()+'.ts','x');}}"
+        );
+        let prefix =
+            "import { mkdir, writeText } from 'submilli:fs'; import { glob } from 'submilli:code';";
+        let baseline = host_fuel(
+            "usage-glob-base",
+            &format!("{prefix} function main():number{{{setup} return 0;}}"),
+        );
+        let actual = host_fuel(
+            "usage-glob-prefix",
+            &format!(
+                "{prefix} function main():number{{{setup} assert(glob('wanted/nested/*.ts').entries.length===1); return 0;}}"
+            ),
+        ) - baseline;
+        assert!(actual < [112_162, 214_562][index] / 2, "glob: {actual}");
+        glob_fuel.push(actual);
+    }
+    assert_eq!(glob_fuel[0], glob_fuel[1]);
+
+    let mut diff_fuel = Vec::new();
+    for (index, lines) in [128, 256].into_iter().enumerate() {
+        let setup = format!("const a=\"x\\n\".repeat({lines});const b=\"y\\n\"+a.slice(2);");
+        let prefix = "import { diffText } from 'submilli:code';";
+        let baseline = host_fuel(
+            "usage-diff-base",
+            &format!("{prefix} function main():number{{{setup} return 0;}}"),
+        );
+        let actual = host_fuel(
+            "usage-diff-linear",
+            &format!("{prefix} function main():number{{{setup} diffText(a,b); return 0;}}"),
+        ) - baseline;
+        assert!(actual < [98_902, 394_390][index] / 2, "diff: {actual}");
+        diff_fuel.push(actual);
+    }
+    assert!(diff_fuel[1] <= diff_fuel[0] * 21 / 10, "{diff_fuel:?}");
+
+    // Double both text and nesting: the old intermediate-string charge grew
+    // nearly fourfold. Shared default serialization copies output linearly.
+    for (method, old) in [
+        ("JSON.stringify(value)", [17_925_u64, 68_729]),
+        ("(value as unknown[]).toString()", [16_832, 66_400]),
+    ] {
+        let mut added = Vec::new();
+        for (index, units) in [4096, 8192].into_iter().enumerate() {
+            let input = format!(
+                "let value: unknown = \"x\".repeat({units}); for (let i=0; i<{}; i++) {{ value=[value]; }}",
+                units / 256
+            );
+            let baseline = host_fuel(
+                "usage-shared-serializer-base",
+                &format!("function main(): number {{ {input} return 0; }}"),
+            );
+            let actual = host_fuel(
+                "usage-shared-serializer",
+                &format!("function main(): number {{ {input} {method}; return 0; }}"),
+            ) - baseline;
+            assert!(
+                actual < old[index] / 2,
+                "{method}: {actual} versus old {}",
+                old[index]
+            );
+            added.push(actual);
+        }
+        assert!(added[1] <= added[0] * 22 / 10, "{method}: {added:?}");
+    }
+
+    // Identical keys share a prefix group. Doubling key length adds precisely
+    // one key copy per item and one pair scan per other item, rather than
+    // copies for every merge comparison in the old implementation.
+    let mut key_costs = Vec::new();
+    for units in [1024_u64, 2048] {
+        let input = format!(
+            "const key = \"x\".repeat({units}); const values: string[] = []; for (let i=0; i<128; i++) {{ values.push(key); }}"
+        );
+        let baseline = host_fuel(
+            "usage-sort-keys-base",
+            &format!("function main(): number {{ {input} return 0; }}"),
+        );
+        key_costs.push(
+            host_fuel(
+                "usage-sort-keys",
+                &format!("function main(): number {{ {input} values.sort(); return 0; }}"),
+            ) - baseline,
+        );
+    }
+    assert_eq!(
+        key_costs[1] - key_costs[0],
+        128 * COPY.cost(1024) + 127 * SCAN.cost(2048)
+    );
+
+    for n in [128_u64, 256] {
+        for (method, per_call) in [
+            ("exec", CALL + REGEX.cost(1) + SCAN.cost(1) + COPY.cost(1)),
+            ("test", CALL + REGEX.cost(1)),
+        ] {
+            let input = format!("const s = \"x\".repeat({n}); const r = /x/g;");
+            let baseline = host_fuel(
+                &format!("usage-regex-{method}-{n}-base"),
+                &format!("function main(): number {{ {input} return 0; }}"),
+            );
+            let actual = host_fuel(
+                &format!("usage-regex-{method}-{n}"),
+                &format!(
+                    "function main(): number {{ {input} for (let i = 0; i < {n}; i++) {{ r.{method}(s); }} return 0; }}"
+                ),
+            ) - baseline;
+            let decoding = COPY.cost(n) + SCAN.cost(n);
+            assert_eq!(actual, decoding + n * per_call);
+            // Old exec cost 21,760/80,384: every call paid full decoding.
+            assert!(actual < n * (decoding + per_call));
+        }
+        for (pattern, slots) in [("/x/g", 0_u64), ("/x|()()()()()()()()/g", 8)] {
+            let input = format!("const s = \"x\".repeat({n}); const r = {pattern};");
+            let baseline = host_fuel(
+                &format!("usage-matchall-{slots}-{n}-base"),
+                &format!("function main(): number {{ {input} return 0; }}"),
+            );
+            let actual = host_fuel(
+                &format!("usage-matchall-{slots}-{n}"),
+                &format!("function main(): number {{ {input} s.matchAll(r); return 0; }}"),
+            ) - baseline;
+            // The empty alternative also matches once at the end of the input.
+            let end_match = if slots == 0 {
+                0
+            } else {
+                ELEM.cost(slots) + ELEM.cost(1)
+            };
+            // Input was already shared; only capture-array slots were missing.
+            assert_eq!(
+                actual,
+                CALL + COPY.cost(n)
+                    + SCAN.cost(n)
+                    + n * (REGEX.cost(1) + SCAN.cost(1) + COPY.cost(1) + ELEM.cost(slots))
+                    + ELEM.cost(n)
+                    + end_match
+            );
+        }
+    }
+
+    for n in [128_u64, 256] {
+        let input = format!(
+            "const key = \"x\".repeat({n}); const m = new Map<string, number>(); m.set(key, 1);"
+        );
+        let baseline = host_fuel(
+            &format!("usage-cached-key-{n}-base"),
+            &format!("function main(): number {{ {input} return 0; }}"),
+        );
+        let actual = host_fuel(
+            &format!("usage-cached-key-{n}"),
+            &format!(
+                "function main(): number {{ {input} for (let i=0; i<{n}; i++) {{ m.get(key); }} return 0; }}"
+            ),
+        ) - baseline;
+        // Old cost was 14,848/41,984: key hashing and equality copied units
+        // on every lookup. Now just get/hash/equals calls and one probe.
+        assert_eq!(actual, n * (3 * CALL + ELEM.cost(1)));
+
+        let input = format!("const a = \"x\".repeat({n}); const b = \"x\".repeat({n}+1);");
+        let baseline = host_fuel(
+            &format!("usage-length-equals-{n}-base"),
+            &format!("function main(): number {{ {input} return 0; }}"),
+        );
+        let actual = host_fuel(
+            &format!("usage-length-equals-{n}"),
+            &format!(
+                "function main(): number {{ {input} for (let i=0; i<{n}; i++) {{ Object.is(a,b); }} return 0; }}"
+            ),
+        ) - baseline;
+        assert_eq!(actual, n * 2 * CALL);
+    }
+
+    // These measured pre-fix costs include constant-hash collision chains.
+    // Subtract key construction so this checks insertion, including resizes.
+    for (name, key_type, make_key, old_cost) in [
+        ("number", "number", "i", [238_286_u64, 903_144]),
+        (
+            "instant",
+            "Temporal.Instant",
+            "Temporal.Instant.fromEpochMilliseconds(i)",
+            [238_286, 903_144],
+        ),
+        (
+            "map",
+            "Map<number, number>",
+            "new Map<number, number>()",
+            [238_286, 903_144],
+        ),
+        (
+            "set",
+            "Set<number>",
+            "new Set<number>()",
+            [238_286, 903_144],
+        ),
+        (
+            "error",
+            "Error",
+            "new Error(i.toString())",
+            [254_914, 969_180],
+        ),
+        (
+            "regex",
+            "RegExp",
+            "new RegExp(\"x\", \"\")",
+            [238_286, 903_144],
+        ),
+        ("closure", "() => number", "() => i", [100_158, 364_616]),
+    ] {
+        let mut measured = [0_u64; 2];
+        for (index, n) in [128, 256].into_iter().enumerate() {
+            let input = format!(
+                "const keys: ({key_type})[] = []; for (let i=0; i<{n}; i++) {{ keys.push({make_key}); }} const m = new Map<{key_type}, number>();"
+            );
+            let baseline = host_fuel(
+                &format!("usage-hash-{name}-{n}-base"),
+                &format!("function main(): number {{ {input} return 0; }}"),
+            );
+            measured[index] = host_fuel(
+                &format!("usage-hash-{name}-{n}"),
+                &format!(
+                    "function main(): number {{ {input} for (let i=0; i<keys.length; i++) {{ m.set(keys[i], i); }} return 0; }}"
+                ),
+            ) - baseline;
+            assert!(
+                measured[index] * 2 < old_cost[index],
+                "{name}/{n}: {}",
+                measured[index]
+            );
+        }
+        // Capacity doubles; a small allowance covers hash-dependent probes.
+        // The measured old ratios were 3.6–3.8, so they fail this bound.
+        assert!(measured[1] * 10 <= measured[0] * 22, "{name}: {measured:?}");
+    }
+
+    // Dynamic field insertion and lookup formerly scanned the entire receiver.
+    // These baselines include key construction; subtract it and, for reads,
+    // subtract insertion as well to isolate each operation's work.
+    for (operation, old_cost) in [
+        ("insert", [254_144_u64, 1_016_192]),
+        ("read", [174_272_u64, 692_608]),
+        ("hasOwn", [12_736_u64, 41_856]),
+    ] {
+        let mut measured = [0_u64; 2];
+        for (index, n) in [128, 256].into_iter().enumerate() {
+            let input = format!(
+                "const keys: string[] = []; for (let i=0; i<{n}; i++) {{ keys.push(i.toString()); }} const r: Record<string, number> = {{}};"
+            );
+            let insert = "for (let i=0; i<keys.length; i++) { r[keys[i]]=i; }";
+            let (setup, work) = if operation == "insert" {
+                (input, insert.to_string())
+            } else {
+                (
+                    format!("{input} {insert}"),
+                    if operation == "hasOwn" {
+                        "for (let i=0; i<keys.length; i++) { Object.hasOwn(r, keys[i]); }"
+                    } else {
+                        "for (let i=0; i<keys.length; i++) { r[keys[i]]; }"
+                    }
+                    .to_string(),
+                )
+            };
+            let baseline = host_fuel(
+                &format!("usage-object-{operation}-{n}-base"),
+                &format!("function main(): number {{ {setup} return 0; }}"),
+            );
+            measured[index] = host_fuel(
+                &format!("usage-object-{operation}-{n}"),
+                &format!("function main(): number {{ {setup} {work} return 0; }}"),
+            ) - baseline;
+            let improvement_factor = if operation == "hasOwn" { 1 } else { 2 };
+            assert!(
+                measured[index] * improvement_factor < old_cost[index],
+                "{operation}/{n}: {}",
+                measured[index]
+            );
+        }
+        assert!(
+            measured[1] * 10 <= measured[0] * 22,
+            "{operation}: {measured:?}"
+        );
+    }
+
+    for (name, operation, calls_per_entry) in [
+        ("remove", "remove(\"/tree\", true);", 4),
+        ("move", "move(\"/tree\", \"/renamed\");", 2),
+    ] {
+        let mut empty_cost = 0;
+        for n in [0_u64, 128, 256] {
+            let input = format!(
+                "mkdir(\"/tree\", true); for (let i = 0; i < {n}; i++) {{ writeText(\"/tree/file\" + String(i), \"x\"); }}"
+            );
+            let import = "import { mkdir, writeText, remove, move } from \"submilli:fs\";";
+            let baseline = host_fuel(
+                &format!("usage-fs-{name}-{n}-baseline"),
+                &format!("{import} function main(): number {{ {input} return 0; }}"),
+            );
+            let actual = host_fuel(
+                &format!("usage-fs-{name}-{n}"),
+                &format!("{import} function main(): number {{ {input} {operation} return 0; }}"),
+            ) - baseline;
+            if n == 0 {
+                empty_cost = actual;
+                continue;
+            }
+            // Both old host bodies charged only their flat gated syscall, so
+            // their entry-dependent delta was zero despite the native walks.
+            assert_eq!(
+                actual - empty_cost,
+                SYSCALL.cost(calls_per_entry * n),
+                "{name}"
+            );
+        }
+    }
+
+    // A structural visit budget does not change the cost of accepted walks:
+    // two array snapshots, one hook per element, and the outer call + hook.
+    for n in [128_u64, 256] {
+        let input = format!(
+            "const a: number[] = []; const b: number[] = [];
+             for (let i = 0; i < {n}; i++) {{ a.push(i); b.push(i); }}"
+        );
+        let baseline = host_fuel(
+            &format!("usage-structural-{n}-baseline"),
+            &format!("function main(): number {{ {input} return 0; }}"),
+        );
+        let actual = host_fuel(
+            &format!("usage-structural-{n}"),
+            &format!("function main(): number {{ {input} Object.is(a, b); return 0; }}"),
+        ) - baseline;
+        assert_eq!(actual, 2 * CALL + ELEM.cost(2 * n) + n * CALL);
+    }
+
+    let mut empty_json_cost = 0;
+    for n in [0_u64, 128, 256] {
+        let input =
+            format!("const a: number[] = []; for (let i = 0; i < {n}; i++) {{ a.push(7); }}");
+        let baseline = host_fuel(
+            &format!("usage-typed-json-{n}-baseline"),
+            &format!("function main(): number {{ {input} return 0; }}"),
+        );
+        let actual = host_fuel(
+            &format!("usage-typed-json-{n}"),
+            &format!(
+                "function main(): number {{ {input} JSON.stringify({{items:a}}); return 0; }}"
+            ),
+        ) - baseline;
+        if n == 0 {
+            empty_json_cost = actual;
+            continue;
+        }
+        // Both passes still charge each value. Streaming adds individually
+        // rounded leaf/append/growth charges rather than a whole-output SCAN.
+        // These measured deltas pin those terms as well as the visit charge.
+        let string_work = match n {
+            128 => 470,
+            256 => 942,
+            _ => unreachable!(),
+        };
+        assert_eq!(actual - empty_json_cost, ELEM.cost(2 * n) + string_work);
+    }
+
+    for (name, operation, expected_delta) in [
+        (
+            "file-copy",
+            "copy(\"/input\", \"/output\", false);",
+            IO.cost(128),
+        ),
+        (
+            "line-read",
+            "for (const line of lines(\"/input\")) { const n = line.length; }",
+            IO.cost(128) + SCAN.cost(2 * 128) + COPY.cost(128),
+        ),
+    ] {
+        let mut costs = Vec::new();
+        for n in [128, 256] {
+            let input = format!("writeText(\"/input\", \"x\".repeat({n}));");
+            let source = |operation: &str| {
+                format!(
+                    "import {{writeText, copy, lines}} from \"submilli:fs\";
+                 function main(): number {{ {input} {operation} return 0; }}"
+                )
+            };
+            let baseline = host_fuel(&format!("usage-{name}-{n}-baseline"), &source(""));
+            costs.push(host_fuel(&format!("usage-{name}-{n}"), &source(operation)) - baseline);
+        }
+        assert_eq!(costs[1] - costs[0], expected_delta, "{name}");
+    }
+
+    let mut copy_costs = Vec::new();
+    for n in [2, 4] {
+        let source = |operation: &str| {
+            format!(
+                "import {{mkdir, writeText, copy}} from \"submilli:fs\";
+             function main(): number {{ mkdir(\"/input\", false);
+             for (let i = 0; i < {n}; i++) {{ writeText(\"/input/\" + i.toString(), \"\"); }}
+             {operation} return 0; }}"
+            )
+        };
+        let baseline = host_fuel(&format!("usage-copy-entries-{n}-baseline"), &source(""));
+        copy_costs.push(
+            host_fuel(
+                &format!("usage-copy-entries-{n}"),
+                &source("copy(\"/input\", \"/output\", true);"),
+            ) - baseline,
+        );
+    }
+    assert_eq!(copy_costs[1] - copy_costs[0], SYSCALL.cost(2));
+
+    for n in [128_u64, 256] {
+        let input = format!("const s = \"x\".repeat({n});");
+        let baseline = host_fuel(
+            &format!("usage-console-{n}-baseline"),
+            &format!("function main(): number {{ {input} return 0; }}"),
+        );
+        let actual = host_fuel(
+            &format!("usage-console-{n}"),
+            &format!("function main(): number {{ {input} console.log(s); return 0; }}"),
+        ) - baseline;
+        // Previously only 2 CALL + COPY(n): conversion and output were free.
+        assert_eq!(
+            actual,
+            2 * CALL + COPY.cost(n) + SCAN.cost(n) + IO.cost(n + 1)
+        );
+    }
+
+    for (digits, limbs) in [(128_u64, 7_u64), (256, 14)] {
+        let input = format!("const s = \"7\".repeat({digits});");
+        let baseline = host_fuel(
+            &format!("usage-bigint-parse-{digits}-baseline"),
+            &format!("function main(): number {{ {input} return 0; }}"),
+        );
+        let actual = host_fuel(
+            &format!("usage-bigint-parse-{digits}"),
+            &format!("function main(): number {{ {input} BigInt(s); return 0; }}"),
+        ) - baseline;
+        // Previously 230/444 fuel: only marshalling, no decimal conversion.
+        assert_eq!(
+            actual,
+            CALL + COPY.cost(digits)
+                + SCAN.cost(digits)
+                + COPY.cost(8 * limbs)
+                + ELEM.cost(digits * digits.div_ceil(19))
+        );
+    }
+
+    for limbs in [8_u64, 16] {
+        let input = format!("const n = 2n ** {}n - 1n;", limbs * 64);
+        let baseline = host_fuel(
+            &format!("usage-bigint-hex-{limbs}-baseline"),
+            &format!("function main(): number {{ {input} return 0; }}"),
+        );
+        let actual = host_fuel(
+            &format!("usage-bigint-hex-{limbs}"),
+            &format!("function main(): number {{ {input} n.toString(16); return 0; }}"),
+        ) - baseline;
+        // Formatting these power-of-two radices extracts bits linearly.
+        assert_eq!(
+            actual,
+            CALL + COPY.cost(8 * limbs)
+                + ELEM.cost(limbs)
+                + SCAN.cost(16 * limbs)
+                + COPY.cost(16 * limbs)
+        );
+    }
+
+    for n in [1_u64, 2] {
+        let input =
+            "const a = Temporal.ZonedDateTime.from(\"2024-03-09T12:00:00-05:00[US/Eastern]\");
+                     const b = a.withTimeZone(\"America/New_York\");";
+        let baseline = host_fuel(
+            &format!("usage-zone-{n}-baseline"),
+            &format!("function main(): number {{ {input} return 0; }}"),
+        );
+        let actual = host_fuel(
+            &format!("usage-zone-{n}"),
+            &format!(
+                "function main(): number {{ {input}
+                      for (let i = 0; i < {n}; i++) {{ a.equals(b); }} return 0; }}"
+            ),
+        ) - baseline;
+        // Old transition walks added 162,056 fuel per comparison. Identity
+        // lookup now costs exactly two bounded lookups plus argument reads.
+        assert_eq!(
+            actual,
+            n * (CALL + 2 * TZ + SCAN.cost(10) + COPY.cost(10) + SCAN.cost(16) + COPY.cost(16))
+        );
+    }
+}
+
+#[test]
+fn report_captures_fuel_exhaustion_in_top_level_code() {
+    let out = run_script(
+        "usage-top-level",
+        "while (true) {} function main(): void {}",
+        &["--report", "--fuel", "100000"],
+    );
+    assert!(!out.status.success());
+    assert!(stdout(&out).is_empty());
+    assert!(stderr(&out).contains("fuel exhausted"), "{}", stderr(&out));
+    assert!(stderr(&out).contains("fuel: 100,000"), "{}", stderr(&out));
 }

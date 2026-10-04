@@ -11,15 +11,15 @@ pub(super) fn allocate(
     next_function: &mut u32,
 ) -> Result<u32, crate::compiler_error::CompilerFailure> {
     let signature = *next_type;
-    *next_type += 1;
+    crate::codegen::next_index(next_type)?;
     types.ty().function(
         [
             ValType::Ref(RefType {
                 nullable: false,
                 heap_type: HeapType::Concrete(
-                    symbols
-                        .object_shape_type_idx()
-                        .expect("ObjectShape registered"),
+                    symbols.object_shape_type_idx().ok_or_else(|| {
+                        crate::codegen::internal_failure("ObjectShape registered")
+                    })?,
                 ),
             }),
             symbols.value_type(&crate::Type::String)?,
@@ -28,7 +28,7 @@ pub(super) fn allocate(
         [ValType::I32],
     );
     symbols.field_lookup_function = Some(*next_function);
-    *next_function += 1;
+    crate::codegen::next_index(next_function)?;
     Ok(signature)
 }
 
@@ -36,7 +36,7 @@ pub(super) fn body(ctx: &CodegenCtx) -> Result<Function, crate::compiler_error::
     let intrinsics = ctx
         .symbols
         .intrinsic_type_indices()
-        .expect("intrinsic types registered");
+        .ok_or_else(|| crate::codegen::internal_failure("intrinsic types registered"))?;
     let params = [
         (
             "object",
@@ -57,9 +57,9 @@ pub(super) fn body(ctx: &CodegenCtx) -> Result<Function, crate::compiler_error::
             ty,
         )
     });
-    let mut emitter = FunctionEmitter::new(ctx, &params);
+    let mut emitter = FunctionEmitter::new(ctx, &params)?;
     emit_lookup(&mut emitter, ctx)?;
-    Ok(emitter.build())
+    emitter.build()
 }
 
 fn emit_lookup(
@@ -69,17 +69,17 @@ fn emit_lookup(
     let object_shape_idx = ctx
         .symbols
         .object_shape_type_idx()
-        .expect("ObjectShape type registered");
+        .ok_or_else(|| crate::codegen::internal_failure("ObjectShape type registered"))?;
     let field_names_type_idx = ctx
         .symbols
         .field_names_type_idx()
-        .expect("field_names type registered");
+        .ok_or_else(|| crate::codegen::internal_failure("field_names type registered"))?;
     let names_local = emitter.add_anonymous_local(ValType::Ref(RefType {
         nullable: false,
         heap_type: HeapType::Concrete(field_names_type_idx),
-    }));
-    let i_local = emitter.add_anonymous_local(ValType::I32);
-    let len_local = emitter.add_anonymous_local(ValType::I32);
+    }))?;
+    let i_local = emitter.add_anonymous_local(ValType::I32)?;
+    let len_local = emitter.add_anonymous_local(ValType::I32)?;
     emitter.instruction(Instruction::LocalGet(0));
     emitter.instruction(Instruction::StructGet {
         struct_type_index: object_shape_idx,
@@ -92,7 +92,7 @@ fn emit_lookup(
     let string_eq_idx = ctx
         .symbols
         .prelude_func_idx("string_eq")
-        .expect("submilli:prelude.string_eq imported");
+        .ok_or_else(|| crate::codegen::internal_failure("submilli:prelude.string_eq imported"))?;
 
     emitter.emit_block(BlockType::Result(ValType::I32));
     emit_field_name_scan_pass(

@@ -1,5 +1,5 @@
 //! The `submilli:fs` package declaration — the LLM-facing type surface
-//! (functions, `Stat` / `Peek` / `DirEntry` / `Info` / `FileWriter`).
+//! (functions, `Stat` / `Peek` / `DirEntry` / `Info` / `MountInfo` / `FileWriter`).
 
 use std::collections::BTreeMap;
 
@@ -21,8 +21,16 @@ pub fn package_declaration() -> PackageDeclaration {
     insert_peek_interface(&mut defs);
     insert_file_writer_interface(&mut defs);
     insert_dir_entry_interface(&mut defs);
+    insert_mount_info_interface(&mut defs);
     insert_info_interface(&mut defs);
 
+    insert_fn(
+        &mut defs,
+        "cwd",
+        Vec::new(),
+        Type::String,
+        "/** The absolute guest working directory used by relative paths. Shared by the program and packages; no capability required. Defaults to `/`. */",
+    );
     insert_fn(
         &mut defs,
         "maxReadSize",
@@ -40,7 +48,7 @@ pub fn package_declaration() -> PackageDeclaration {
             name: "Info".to_string(),
             args: Vec::new(),
         },
-        "/**\n * The active VFS configuration: `mode` (`\"none\"` / `\"ephemeral\"` / `\"per_session\"` / `\"persistent\"`) and `sizeLimit`, the cap on the bytes its files may hold, or `-1` when none applies. Deterministic; no capability required. The host directory backing the VFS is never exposed.\n */",
+        "/**\n * The active VFS configuration: the root's `mode` (`\"none\"` / `\"ephemeral\"` / `\"per_session\"` / `\"named\"`), `access`, `volume` and `sizeLimit` (the cap on the bytes its files may hold, or `-1` when none applies), plus `mounts`, the named volumes grafted below the root. Deterministic; no capability required. The host directories backing the VFS are never exposed.\n */",
     );
     insert_fn(
         &mut defs,
@@ -158,7 +166,7 @@ pub fn package_declaration() -> PackageDeclaration {
             Param::new("to", Type::String),
         ],
         Type::Void,
-        "/**\n * Move / rename. Atomic when source and destination share a filesystem (true within the VFS by construction).\n * @param from Source path under the VFS root.\n * @param to Destination path under the VFS root.\n * @capability fs.move { from, to }\n */",
+        "/**\n * Move / rename. Atomic within one volume. Between volumes (the root and a mount, or two mounts — see `info().mounts`) it copies, then removes the source, so it is not atomic: if removing the source fails, the destination is kept and the call throws with both copies present. Replacing a file in another volume needs room there for both versions until the move completes, and a link the copy cannot reproduce fails the move before the source is touched.\n * @param from Source path under the VFS root.\n * @param to Destination path under the VFS root.\n * @capability fs.move { from, to }\n */",
     );
     insert_fn(
         &mut defs,
@@ -381,13 +389,31 @@ fn insert_info_interface(defs: &mut PackageDeclaration) {
         &mut properties,
         "mode",
         Type::String,
-        "/** Active VFS mode: `\"none\"` / `\"ephemeral\"` / `\"per_session\"` / `\"persistent\"`. */",
+        "/** The root's mode: `\"none\"` / `\"ephemeral\"` / `\"per_session\"` / `\"named\"`. */",
     );
     insert_property(
         &mut properties,
         "sizeLimit",
         Type::Number,
-        "/** The most bytes the files in the VFS may hold, or `-1` when no limit applies. A write that would pass it throws a `RangeError`. */",
+        "/** The most bytes the files in the root may hold, or `-1` when no limit applies. A write that would pass it throws a `QuotaExceededError`. A named volume's limit is shared with every session and blueprint that uses it. */",
+    );
+    insert_property(
+        &mut properties,
+        "access",
+        Type::String,
+        "/** `\"read_write\"`, or `\"read_only\"` when every write to the root throws a `PermissionDeniedError`. */",
+    );
+    insert_property(
+        &mut properties,
+        "volume",
+        Type::String,
+        "/** The named volume backing the root under `mode: \"named\"`; `\"\"` otherwise, and for a directory `submilli run --vfs` exposes. */",
+    );
+    insert_property(
+        &mut properties,
+        "mounts",
+        Type::Array(Box::new(mount_info_type())),
+        "/** The named volumes mounted below the root, sorted by path; empty when there are none. Paths under a mount's `path` read and write that volume. */",
     );
     defs.types.insert(
         "Info".to_string(),
@@ -401,7 +427,67 @@ fn insert_info_interface(defs: &mut PackageDeclaration) {
                 properties,
                 dispatch: Dispatch::Direct,
                 doc: crate::doc(crate::FileId::FS,
-                    "/** VFS configuration returned by `info()`: `mode` plus `sizeLimit`, the cap on the bytes its files may hold (`-1` when no limit applies). Never carries the host path. */",
+                    "/** VFS configuration returned by `info()`: the root's `mode`, `access`, `volume` and `sizeLimit` (`-1` when no limit applies), plus its `mounts`. Never carries a host path. */",
+                ),
+            },
+        },
+    );
+}
+
+fn mount_info_type() -> Type {
+    Type::InterfaceRef {
+        mangled: crate::mangle::package_symbol(MODULE_NAME, "MountInfo"),
+        package: crate::Package(MODULE_NAME.to_string()),
+        name: "MountInfo".to_string(),
+        args: Vec::new(),
+    }
+}
+
+fn insert_mount_info_interface(defs: &mut PackageDeclaration) {
+    let mut properties = BTreeMap::new();
+    insert_property(
+        &mut properties,
+        "path",
+        Type::String,
+        "/** The guest path the volume is mounted at, such as `/memory`. */",
+    );
+    insert_property(
+        &mut properties,
+        "mode",
+        Type::String,
+        "/** Always `\"named\"`: mounts are named volumes the server declares. */",
+    );
+    insert_property(
+        &mut properties,
+        "volume",
+        Type::String,
+        "/** The volume's name. Its files persist across runs and sessions, and other blueprints that mount it see them. */",
+    );
+    insert_property(
+        &mut properties,
+        "access",
+        Type::String,
+        "/** `\"read_write\"`, or `\"read_only\"` when every write under `path` throws a `PermissionDeniedError`. */",
+    );
+    insert_property(
+        &mut properties,
+        "sizeLimit",
+        Type::Number,
+        "/** The most bytes the volume may hold, shared with everyone who mounts it, or `-1` when no limit applies. */",
+    );
+    defs.types.insert(
+        "MountInfo".to_string(),
+        TypeSymbol {
+            name: "MountInfo".to_string(),
+            mangled_name: crate::mangle::package_symbol(MODULE_NAME, "MountInfo"),
+            declaration_span: Span::at(crate::FileId::FS),
+            kind: TypeKind::Interface { index: None,
+                generics: Vec::new(),
+                methods: BTreeMap::new(),
+                properties,
+                dispatch: Dispatch::Direct,
+                doc: crate::doc(crate::FileId::FS,
+                    "/** One volume mounted below the VFS root, as `info().mounts` lists it. Mount points cannot be removed or moved. Never carries a host path. */",
                 ),
             },
         },

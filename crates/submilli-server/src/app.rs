@@ -1,7 +1,7 @@
 use std::collections::{BTreeSet, HashMap};
 use std::fmt;
 use std::net::SocketAddr;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
@@ -18,7 +18,6 @@ use interpreter::runtime::{
 use interpreter::{PackageDeclaration, ScriptImports};
 use submilli_blueprint::Blueprint;
 use submilli_build::{ArtifactMetadata, PackageStore, PackageStoreError};
-use submilli_shared::EnvFileSecretResolver;
 use submilli_shared::llm::{BlueprintLlmProvider, HttpModelDispatch, ModelDispatch};
 use submilli_shared::secret_store::SecretStore;
 use tokio::sync::Notify;
@@ -27,7 +26,6 @@ use wasmtime::{Engine, Linker, Module};
 use crate::ServerConfig;
 use crate::auth::{Access, AuthConfig, Guard};
 use crate::blueprint::{BlueprintStore, FileBlueprintStore, InMemoryBlueprintStore};
-use crate::blueprint_seed::seed_blueprints;
 use crate::config::{OAuthProvider, VolumeTable};
 use crate::idempotency::Coordinator;
 use crate::idempotency_store::{FileIdempotencyStore, IdempotencyStore, InMemoryIdempotencyStore};
@@ -59,14 +57,13 @@ pub struct AppState {
 }
 
 struct AppStateInner {
+    audit: crate::audit::AuditLog,
     auth: Arc<AuthConfig>,
     engine: Engine,
     base_linker: Linker<StoreData>,
     runtime: RuntimeConfig,
     sessions: Arc<dyn SessionStore>,
     blueprints: Arc<dyn BlueprintStore>,
-    /// See [`ServerConfig::blueprint_seed_dir`].
-    blueprint_seed_dir: Option<PathBuf>,
     secret_store: Option<Arc<dyn SecretStore>>,
     /// Mints/rotates `@mcp/<server>` OAuth access tokens. `Some` only when a
     /// secret store is configured (OAuth refresh tokens have nowhere to live
@@ -93,6 +90,9 @@ struct AppStateInner {
     mcp_catalogs: Mutex<HashMap<String, Arc<McpCatalog>>>,
     mcp_catalog_generation: AtomicU64,
     package_store: PackageStore,
+    /// Where package installs read the GitHub token from; read on each
+    /// install so a replaced file takes effect without a restart.
+    github_token_file: Option<PathBuf>,
     prepared_packages: Mutex<HashMap<String, Arc<PreparedBlueprintPackages>>>,
     /// Bumped by every eviction. A prepare snapshots it before reading the
     /// store and only caches its result if no eviction happened in between:
@@ -110,6 +110,9 @@ struct AppStateInner {
 
 impl AppState {
     pub fn new(config: ServerConfig) -> Result<Self> {
+        let audit = config
+            .audit_log
+            .unwrap_or_else(|| crate::audit::AuditLog::new(config.audit, None));
         let runtime = config.runtime;
         let engine = server_engine(&runtime)?;
         if runtime.timeout.is_some_and(|timeout| !timeout.is_zero()) {
@@ -175,35 +178,44 @@ impl AppState {
                 }
                 (None, None) => Arc::new(InMemoryIdempotencyStore::default()),
             };
-        let session_manager = Arc::new(SessionManager::new(
-            session_root,
-            config.ephemeral_storage_root,
-            Arc::new(config.volumes),
-            http_client_factory,
-            Arc::clone(&session_store),
-            Arc::clone(&idempotency_store),
-            CapabilitySettings {
-                session_kv: SessionKvSettings::new(
-                    config.session_kv_limits,
+        let session_manager = Arc::new(
+            SessionManager::new(
+                session_root,
+                config.ephemeral_storage_root,
+                Arc::new(crate::volumes::VolumeRegistry::new(
+                    config.volumes,
                     config
-                        .max_session_state_memory
-                        .unwrap_or(DEFAULT_TOTAL_SESSION_KV_BYTES),
-                ),
-                llm: LlmSettings::new(
-                    config.llm_limits,
-                    config
-                        .max_llm_tokens
-                        .unwrap_or(DEFAULT_MAX_ALL_EXECUTIONS_TOKENS),
-                    config
-                        .max_llm_concurrency
-                        .unwrap_or(DEFAULT_MAX_CONCURRENCY),
-                ),
-            },
-        ));
+                        .managed_volume_root
+                        .unwrap_or_else(crate::config::default_managed_volume_root),
+                )),
+                http_client_factory,
+                Arc::clone(&session_store),
+                Arc::clone(&idempotency_store),
+                CapabilitySettings {
+                    session_kv: SessionKvSettings::new(
+                        config.session_kv_limits,
+                        config
+                            .max_session_state_memory
+                            .unwrap_or(DEFAULT_TOTAL_SESSION_KV_BYTES),
+                    ),
+                    llm: LlmSettings::new(
+                        config.llm_limits,
+                        config
+                            .max_llm_tokens
+                            .unwrap_or(DEFAULT_MAX_ALL_EXECUTIONS_TOKENS),
+                        config
+                            .max_llm_concurrency
+                            .unwrap_or(DEFAULT_MAX_CONCURRENCY),
+                    ),
+                },
+            )
+            .with_audit(audit.clone()),
+        );
         session_manager.spawn_reaper(REAP_INTERVAL);
 
         Ok(Self {
             inner: Arc::new(AppStateInner {
+                audit,
                 auth: Arc::new(config.auth),
                 network_policy: Arc::clone(&policy),
                 engine,
@@ -211,7 +223,6 @@ impl AppState {
                 runtime,
                 sessions,
                 blueprints,
-                blueprint_seed_dir: config.blueprint_seed_dir,
                 secret_store,
                 oauth_tokens,
                 session_manager,
@@ -227,6 +238,7 @@ impl AppState {
                     config.package_store_root,
                     config.package_fallback_root,
                 ),
+                github_token_file: config.github_token_file,
                 prepared_packages: Mutex::new(HashMap::new()),
                 prepared_generation: AtomicU64::new(0),
                 shutdown: Arc::new(Notify::new()),
@@ -236,23 +248,11 @@ impl AppState {
         })
     }
 
-    /// Rehydrate persisted sessions, sweep orphan directories, and reconcile the
-    /// blueprint store against the seed directory. Must be awaited once before
-    /// serving so a reconnect resolves, stale `per_session` directories are
-    /// reclaimed, and seeded blueprints are present on the first request; `serve`
-    /// does this, and any embedded host that bypasses `serve` should too.
+    /// Rehydrate persisted sessions and sweep orphan directories. Await once
+    /// before serving so reconnects resolve and stale directories are reclaimed.
     pub async fn boot(&self) {
         self.inner.session_manager.boot().await;
-        if let Some(dir) = &self.inner.blueprint_seed_dir {
-            let resolver = EnvFileSecretResolver::new(self.secret_store().cloned());
-            seed_blueprints(
-                self.inner.blueprints.as_ref(),
-                &resolver,
-                dir,
-                self.inner.session_manager.volumes(),
-            )
-            .await;
-        }
+        self.inner.session_manager.volume_registry().prepare();
     }
 
     /// Handle `serve` awaits for graceful shutdown; `POST /v1/shutdown` signals it.
@@ -267,6 +267,10 @@ impl AppState {
 
     pub(crate) fn bind_addr(&self) -> Option<SocketAddr> {
         self.inner.bind_addr.get().copied()
+    }
+
+    pub fn audit(&self) -> &crate::audit::AuditLog {
+        &self.inner.audit
     }
 
     pub(crate) fn auth(&self) -> Arc<AuthConfig> {
@@ -341,6 +345,7 @@ impl AppState {
         &self,
         blueprint: &Arc<Blueprint>,
         harness_secrets: &Arc<submilli_blueprint::HarnessSecretBindings>,
+        network_policy: &Arc<interpreter::runtime::NetworkPolicy>,
     ) -> Option<Arc<dyn LlmProvider>> {
         let dispatch = match self.inner.llm_dispatch.as_ref() {
             Some(installed) => Arc::clone(installed),
@@ -348,7 +353,7 @@ impl AppState {
                 HttpModelDispatch::new(
                     Arc::clone(blueprint),
                     self.secret_store().cloned(),
-                    Arc::clone(self.network_policy()),
+                    Arc::clone(network_policy),
                 )
                 .with_harness_secrets(Arc::clone(harness_secrets)),
             ) as Arc<dyn ModelDispatch>,
@@ -447,6 +452,7 @@ impl AppState {
         blueprint: &Blueprint,
         servers: &BTreeSet<String>,
         harness_secrets: &Arc<submilli_blueprint::HarnessSecretBindings>,
+        network_policy: &Arc<interpreter::runtime::NetworkPolicy>,
     ) -> Arc<McpCatalog> {
         if servers.is_empty() || blueprint.mcp.is_empty() {
             return Arc::new(McpCatalog::empty());
@@ -467,7 +473,10 @@ impl AppState {
         }
         let discovered = Arc::new(
             discover_selected(
-                self.discovery_auth(Some(harness_secrets)),
+                DiscoveryAuth {
+                    network_policy,
+                    ..self.discovery_auth(Some(harness_secrets))
+                },
                 blueprint_name,
                 blueprint,
                 &declared,
@@ -490,6 +499,10 @@ impl AppState {
 
     pub(crate) fn package_store(&self) -> &PackageStore {
         &self.inner.package_store
+    }
+
+    pub(crate) fn github_token_file(&self) -> Option<&Path> {
+        self.inner.github_token_file.as_deref()
     }
 
     fn cached_prepared_packages(&self, key: &str) -> Option<Arc<PreparedBlueprintPackages>> {
@@ -750,21 +763,33 @@ fn layered_package_store(root: Option<PathBuf>, fallback: Option<PathBuf>) -> Pa
 }
 
 pub fn app(state: AppState) -> Router {
-    routes(state.auth()).router.with_state(state)
+    routes(state.auth(), state.audit().clone())
+        .router
+        .with_state(state)
 }
 
 /// Every route and the access it requires, in registration order.
 pub fn route_table() -> Vec<(&'static str, Access)> {
-    routes(Arc::new(AuthConfig::Disabled)).table
+    routes(
+        Arc::new(AuthConfig::Disabled),
+        crate::audit::AuditLog::new(
+            crate::audit::AuditConfig {
+                enabled: false,
+                ..Default::default()
+            },
+            None,
+        ),
+    )
+    .table
 }
 
-fn routes(auth: Arc<AuthConfig>) -> Routes {
+fn routes(auth: Arc<AuthConfig>, audit: crate::audit::AuditLog) -> Routes {
     use crate::handlers::{
         admin, blueprint, capabilities, execute, last_run, mcp_auth, packages, secret, sessions,
         volumes,
     };
 
-    Routes::new(auth)
+    Routes::new(auth, audit)
         .route("/healthz", Access::Public, get(admin::healthz))
         .route("/v1/status", Access::Admin, get(admin::status))
         .route("/v1/shutdown", Access::Admin, post(admin::shutdown))
@@ -888,14 +913,16 @@ fn routes(auth: Arc<AuthConfig>) -> Routes {
 struct Routes {
     router: Router<AppState>,
     auth: Arc<AuthConfig>,
+    audit: crate::audit::AuditLog,
     table: Vec<(&'static str, Access)>,
 }
 
 impl Routes {
-    fn new(auth: Arc<AuthConfig>) -> Self {
+    fn new(auth: Arc<AuthConfig>, audit: crate::audit::AuditLog) -> Self {
         Self {
             router: Router::new(),
             auth,
+            audit,
             table: Vec::new(),
         }
     }
@@ -912,7 +939,7 @@ impl Routes {
             // request with a method the path does not serve is refused for its
             // missing token before it learns which methods exist.
             Access::User | Access::Admin => handlers.layer(middleware::from_fn_with_state(
-                Guard::new(Arc::clone(&self.auth), access),
+                Guard::new(self.auth.clone(), access, self.audit.clone()),
                 crate::auth::require,
             )),
         };
@@ -969,7 +996,9 @@ mod tests {
         let blueprint = submilli_blueprint::parse("name: test\nmcp:\n  local:\n    url: http://127.0.0.1:1/mcp\n    auth:\n      type: oauth2\n").unwrap();
         let state = AppState::new(ServerConfig {
             secret_store: Some(store),
-            blueprints: Some(Arc::new(InMemoryBlueprintStore::seed([blueprint.clone()]))),
+            blueprints: Some(Arc::new(
+                InMemoryBlueprintStore::seed([blueprint.clone()]).expect("seed blueprints"),
+            )),
             ..ServerConfig::default()
         })
         .unwrap();

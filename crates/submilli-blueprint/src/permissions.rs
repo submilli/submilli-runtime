@@ -95,20 +95,30 @@ pub(crate) fn resolve(
     ctx: &serde_json::Value,
     vars: &VarBindings,
 ) -> Action {
-    let Some(rules) = permissions.get(caller) else {
-        return default_action.into();
-    };
-    for rule in rules {
-        if rule.capability == capability
-            && rule
-                .filter
-                .as_ref()
-                .is_none_or(|f| f.matches_with(ctx, vars))
-        {
-            return rule.action;
+    resolve_with_rule(permissions, default_action, caller, capability, ctx, vars).0
+}
+
+pub(crate) fn resolve_with_rule(
+    permissions: &BTreeMap<String, Vec<PermissionRule>>,
+    default_action: DefaultAction,
+    caller: &str,
+    capability: &str,
+    ctx: &serde_json::Value,
+    vars: &VarBindings,
+) -> (Action, Option<usize>) {
+    if let Some(rules) = permissions.get(caller) {
+        for (index, rule) in rules.iter().enumerate() {
+            if rule.capability == capability
+                && rule
+                    .filter
+                    .as_ref()
+                    .is_none_or(|f| f.matches_with(ctx, vars))
+            {
+                return (rule.action, Some(index));
+            }
         }
     }
-    default_action.into()
+    (default_action.into(), None)
 }
 
 #[cfg(test)]

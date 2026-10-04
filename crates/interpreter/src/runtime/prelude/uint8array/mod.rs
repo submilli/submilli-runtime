@@ -6,9 +6,9 @@
 //! [`Closure`](crate::runtime::prelude::closure::Closure) handles callbacks.
 //!
 //! In-place mutators (`reverse`/`fill`/`copyWithin`/`set`/`sort`) overwrite the
-//! receiver's existing `$rawUint8Array` backing element-wise and return the
+//! receiver's existing `$rawUint8Array` backing in place and return the
 //! receiver: unlike `$Array`, the `$Uint8Array` struct's field 1 is an immutable
-//! reference, so the backing is never swapped — `array.set` mutates it in place.
+//! reference, so the backing is never swapped.
 
 mod install;
 
@@ -21,24 +21,27 @@ use base64::engine::general_purpose::{GeneralPurpose, GeneralPurposeConfig, NO_P
 use wasmtime::{ArrayRef, Caller, Rooted, StructRef, StructRefPre, Val};
 
 use crate::runtime::StoreData;
+use crate::runtime::fuel;
 use crate::runtime::host::{
-    host_boxed_number_vtable, read_uint8_array_arg, write_submilli_uint8array_struct,
+    fatal_host_error, host_boxed_number_vtable, read_uint8, read_uint8_array_arg,
+    read_uint8_array_range, uint8_array_backing, write_submilli_uint8array_struct,
 };
-use crate::runtime::intrinsic_types::build_intrinsic_types;
+use crate::runtime::intrinsic_types::intrinsic_types;
 use crate::runtime::number::format_number_js;
-use crate::runtime::prelude::array::ElementCallback;
+use crate::runtime::prelude::array::{ElementCallback, merge_sort};
 use crate::runtime::prelude::closure::Closure;
 use crate::runtime::prelude::iterator::as_struct;
 use crate::runtime::prelude::keep::KeptValue;
-use crate::runtime::prelude::vtable::read_object_entries;
+use crate::runtime::prelude::vtable::{read_object_entries, read_string_units};
 
 // ---------------------------------------------------------------------------
 // Marshalling
 // ---------------------------------------------------------------------------
 
 /// Read a `$Uint8Array` (or bare `$rawUint8Array`) `Val` into its bytes — a local
-/// name so the method bodies open uniformly with `super::read_bytes`, mirroring the
-/// Array port's `read_array`. The actual struct/payload decode lives in `host`.
+/// name so the method bodies that need the whole buffer open uniformly with
+/// `super::read_bytes`, mirroring the Array port's `read_array`; the accessors
+/// read in place instead. The actual struct/payload decode lives in `host`.
 pub(crate) fn read_bytes(
     caller: &mut Caller<'_, StoreData>,
     val: &Val,
@@ -53,18 +56,17 @@ fn build(caller: &mut Caller<'_, StoreData>, bytes: &[u8]) -> wasmtime::Result<V
     Ok(Val::AnyRef(Some(st.to_anyref())))
 }
 
-/// Overwrite the receiver's `$rawUint8Array` backing element-wise (`bytes.len()`
-/// must equal the backing length) — the in-place primitive for the mutators.
+/// Overwrite the receiver's `$rawUint8Array` backing from its start
+/// (`bytes.len()` must not exceed the backing length) — the in-place
+/// primitive for the mutators.
 fn store_bytes(
     caller: &mut Caller<'_, StoreData>,
     receiver: &Val,
     bytes: &[u8],
 ) -> wasmtime::Result<()> {
     let raw = backing(caller, receiver)?;
-    for (i, &b) in bytes.iter().enumerate() {
-        raw.set(&mut *caller, i as u32, Val::I32(i32::from(b)))?;
-    }
-    Ok(())
+    fuel::charge(&mut *caller, fuel::COPY, bytes.len() as u64)?;
+    raw.write_i8(&mut *caller, 0, bytes)
 }
 
 /// The receiver's field-1 `$rawUint8Array` backing.
@@ -89,7 +91,7 @@ fn to_byte(n: f64) -> u8 {
 
 /// Box a byte into a `$boxed_number` for a callback argument or boxed return.
 fn box_byte(caller: &mut Caller<'_, StoreData>, b: u8) -> wasmtime::Result<Val> {
-    let boxed = build_intrinsic_types(caller.engine())?.boxed_number;
+    let boxed = intrinsic_types(&mut *caller)?.boxed_number.clone();
     let vtable = host_boxed_number_vtable(caller)?;
     let pre = StructRefPre::new(&mut *caller, boxed);
     let st = StructRef::new(
@@ -169,24 +171,43 @@ fn last_from(x: f64, len: i32) -> Option<i32> {
 // Accessors / pure value methods
 // ---------------------------------------------------------------------------
 
-fn length(bytes: &[u8]) -> f64 {
-    bytes.len() as f64
+/// `length` / `byteLength`, read off the backing without copying it.
+fn length(caller: &mut Caller<'_, StoreData>, receiver: &Val, name: &str) -> wasmtime::Result<f64> {
+    let arr = uint8_array_backing(caller, receiver, name)?;
+    Ok(f64::from(arr.len(&mut *caller)?))
 }
 
 /// `at(index)` → the byte boxed as a `$boxed_number`, or `null` when out of range.
-fn at(caller: &mut Caller<'_, StoreData>, bytes: &[u8], index: f64) -> wasmtime::Result<Val> {
-    match at_index(index, bytes.len() as i32) {
-        Some(i) => box_byte(caller, bytes[i]),
+fn at(
+    caller: &mut Caller<'_, StoreData>,
+    receiver: &Val,
+    index: f64,
+    name: &str,
+) -> wasmtime::Result<Val> {
+    let arr = uint8_array_backing(caller, receiver, name)?;
+    let len = arr.len(&mut *caller)?;
+    match at_index(index, len as i32) {
+        Some(i) => {
+            let byte = read_uint8(caller, arr, i)?;
+            box_byte(caller, byte)
+        }
         None => Ok(Val::null_any_ref()),
     }
 }
 
-fn slice(bytes: &[u8], start: f64, end: f64) -> Vec<u8> {
-    let len = bytes.len() as i32;
+/// `slice` / `subarray`: only the kept range is copied.
+fn slice(
+    caller: &mut Caller<'_, StoreData>,
+    receiver: &Val,
+    start: f64,
+    end: f64,
+    name: &str,
+) -> wasmtime::Result<Vec<u8>> {
+    let arr = uint8_array_backing(caller, receiver, name)?;
+    let len = arr.len(&mut *caller)? as i32;
     let si = norm_clamp(start, len);
-    let ei = norm_clamp(end, len);
-    let count = (ei - si).max(0) as usize;
-    bytes[si as usize..si as usize + count].to_vec()
+    let count = (norm_clamp(end, len) - si).max(0) as usize;
+    read_uint8_array_range(caller, arr, si as usize, count, name)
 }
 
 /// `with(index, value)` → a copy with `index` replaced; `None` when out of range
@@ -264,95 +285,121 @@ fn reverse(
 fn fill(
     caller: &mut Caller<'_, StoreData>,
     receiver: &Val,
-    mut bytes: Vec<u8>,
     value: f64,
     start: f64,
     end: f64,
 ) -> wasmtime::Result<Val> {
-    let len = bytes.len() as i32;
-    let si = norm_clamp(start, len);
-    let ei = norm_clamp(end, len);
-    let v = to_byte(value);
-    for slot in bytes.iter_mut().take(ei as usize).skip(si as usize) {
-        *slot = v;
+    let raw = backing(caller, receiver)?;
+    let len = i32::try_from(raw.len(&mut *caller)?).map_err(fatal_host_error)?;
+    let start = norm_clamp(start, len) as u32;
+    let end = norm_clamp(end, len) as u32;
+    let count = end.saturating_sub(start);
+    fuel::charge(&mut *caller, fuel::COPY, u64::from(count))?;
+    let chunk = [to_byte(value); 4096];
+    let mut offset = start;
+    while offset < end {
+        let count = (end - offset).min(chunk.len() as u32);
+        let bytes = chunk
+            .get(..count as usize)
+            .ok_or_else(|| fatal_host_error("invalid fill chunk"))?;
+        raw.write_i8(&mut *caller, offset, bytes)?;
+        offset += count;
     }
-    store_bytes(caller, receiver, &bytes)?;
     Ok(*receiver)
 }
 
 fn copy_within(
     caller: &mut Caller<'_, StoreData>,
     receiver: &Val,
-    mut bytes: Vec<u8>,
     target: f64,
     start: f64,
     end: f64,
 ) -> wasmtime::Result<Val> {
-    let len = bytes.len() as i32;
-    let ti = norm_clamp(target, len);
-    let si = norm_clamp(start, len);
-    let ei = norm_clamp(end, len);
-    let mut count = (ei - si).max(0);
-    let rem = len - ti;
-    if count > rem {
-        count = rem;
-    }
-    // Snapshot the source span first so overlapping ranges stay memmove-correct.
-    let src: Vec<u8> = bytes[si as usize..(si + count) as usize].to_vec();
-    for (k, v) in src.into_iter().enumerate() {
-        bytes[ti as usize + k] = v;
-    }
-    store_bytes(caller, receiver, &bytes)?;
+    let raw = backing(caller, receiver)?;
+    let len = i32::try_from(raw.len(&mut *caller)?).map_err(fatal_host_error)?;
+    let target = norm_clamp(target, len) as usize;
+    let start = norm_clamp(start, len) as usize;
+    let end = norm_clamp(end, len) as usize;
+    let count = end.saturating_sub(start).min(len as usize - target);
+    // A snapshot of only the requested span preserves overlapping copies.
+    let bytes = read_uint8_array_range(caller, raw, start, count, "Uint8Array#copyWithin")?;
+    fuel::charge(&mut *caller, fuel::COPY, count as u64)?;
+    raw.write_i8(&mut *caller, target as u32, &bytes)?;
     Ok(*receiver)
 }
 
-/// `set(source, offset)` — copy `source`'s bytes into the receiver at `offset`;
-/// `None` when the span overflows ([`install`] raises `Error("offset is out of
-/// bounds")`).
+/// Validate both ranges before copying or changing the receiver.
 fn set(
     caller: &mut Caller<'_, StoreData>,
     receiver: &Val,
-    mut bytes: Vec<u8>,
-    source: &[u8],
+    source: &Val,
     offset: f64,
-) -> wasmtime::Result<Option<Val>> {
-    let off = trunc_sat(offset);
-    if off < 0 || (off as usize) + source.len() > bytes.len() {
-        return Ok(None);
+) -> wasmtime::Result<()> {
+    let target = backing(caller, receiver)?;
+    let source = backing(caller, source)?;
+    let target_len = target.len(&mut *caller)?;
+    let source_len = source.len(&mut *caller)?;
+    let offset = trunc_sat(offset);
+    if offset < 0
+        || (offset as u32)
+            .checked_add(source_len)
+            .is_none_or(|end| end > target_len)
+    {
+        return Err(crate::runtime::host::range_error("offset is out of bounds"));
     }
-    bytes[off as usize..off as usize + source.len()].copy_from_slice(source);
-    store_bytes(caller, receiver, &bytes)?;
-    Ok(Some(*receiver))
+    let bytes = read_uint8_array_range(
+        caller,
+        source,
+        0,
+        source_len as usize,
+        "Uint8Array#set source",
+    )?;
+    fuel::charge(&mut *caller, fuel::COPY, u64::from(source_len))?;
+    target.write_i8(&mut *caller, offset as u32, &bytes)
+}
+
+fn allocate(caller: &mut Caller<'_, StoreData>, len: usize) -> wasmtime::Result<Val> {
+    use wasmtime::ArrayRefPre;
+    let intr = intrinsic_types(&mut *caller)?;
+    fuel::charge(&mut *caller, fuel::COPY, len as u64)?;
+    let len = u32::try_from(len).map_err(fatal_host_error)?;
+    let pre = ArrayRefPre::new(&mut *caller, intr.raw_uint8_array.clone());
+    let raw = ArrayRef::new_zeroed_i8(&mut *caller, &pre, len)?;
+    let vtable = crate::runtime::host::host_uint8_array_vtable(caller)?;
+    let pre = StructRefPre::new(&mut *caller, intr.uint8_array.clone());
+    let value = StructRef::new(
+        &mut *caller,
+        &pre,
+        &[vtable, Val::AnyRef(Some(raw.to_anyref()))],
+    )?;
+    Ok(Val::AnyRef(Some(value.to_anyref())))
 }
 
 async fn sort_bytes(
     caller: &mut Caller<'_, StoreData>,
-    bytes: &mut [u8],
+    bytes: &mut Vec<u8>,
     cmp: Option<&Closure>,
 ) -> wasmtime::Result<()> {
-    let Some(c) = cmp else {
+    let Some(cmp) = cmp else {
         bytes.sort_unstable();
         return Ok(());
     };
-    // Insertion sort that re-enters the guest comparator on boxed bytes — stable,
-    // matching the Wasm body's adjacent-swap shape.
-    let n = bytes.len();
-    let mut i = 1;
-    while i < n {
-        let mut j = i;
-        while j > 0 {
-            let a = box_byte(caller, bytes[j - 1])?;
-            let b = box_byte(caller, bytes[j])?;
-            if c.compare(caller, a, b).await? > 0.0 {
-                bytes.swap(j - 1, j);
-                j -= 1;
-            } else {
-                break;
-            }
-        }
-        i += 1;
+    if bytes.len() < 2 {
+        return Ok(());
     }
-    Ok(())
+    // Every box stays alive until the host call returns, so each byte value is
+    // boxed once rather than once per comparison.
+    let mut boxes = Vec::with_capacity(256);
+    for byte in 0..=u8::MAX {
+        boxes.push(box_byte(caller, byte)?);
+    }
+    merge_sort(caller, bytes, cmp, |_, byte| {
+        boxes
+            .get(usize::from(byte))
+            .copied()
+            .ok_or_else(|| fatal_host_error("Uint8Array#sort: byte has no box"))
+    })
+    .await
 }
 
 async fn sort(
@@ -533,18 +580,21 @@ fn encode_base64(bytes: &[u8], url_safe: bool, omit_padding: bool) -> String {
     GeneralPurpose::new(alpha, config).encode(bytes)
 }
 
-/// Forgiving on padding: try `PAD`, fall back to `NO_PAD`.
+/// Accept canonical padding or no padding without decoding the input twice.
 fn decode_base64(s: &str, url_safe: bool) -> wasmtime::Result<Vec<u8>> {
     let alpha = if url_safe {
         &alphabet::URL_SAFE
     } else {
         &alphabet::STANDARD
     };
-    let padded = GeneralPurpose::new(alpha, PAD);
-    let decoded = padded
+    let config = if s.as_bytes().last() == Some(&b'=') {
+        PAD
+    } else {
+        NO_PAD
+    };
+    GeneralPurpose::new(alpha, config)
         .decode(s.as_bytes())
-        .or_else(|_| GeneralPurpose::new(alpha, NO_PAD).decode(s.as_bytes()));
-    decoded.map_err(|e| crate::runtime::host::syntax_error(format!("Uint8Array.fromBase64: {e}")))
+        .map_err(|e| crate::runtime::host::syntax_error(format!("Uint8Array.fromBase64: {e}")))
 }
 
 fn to_hex(bytes: &[u8]) -> String {
@@ -610,7 +660,7 @@ fn read_base64_options(
         }
         match String::from_utf16_lossy(&name).as_str() {
             "alphabet" => {
-                let alphabet = read_string_units(caller, &value)?;
+                let alphabet = read_string_units(caller, &value, "Base64Options.alphabet")?;
                 url_safe = String::from_utf16_lossy(&alphabet) == "base64url";
             }
             "omitPadding" => omit_padding = read_boolean(caller, &value)?,
@@ -618,23 +668,6 @@ fn read_base64_options(
         }
     }
     Ok((url_safe, omit_padding))
-}
-
-fn read_string_units(caller: &mut Caller<'_, StoreData>, val: &Val) -> wasmtime::Result<Vec<u16>> {
-    let st = as_struct(caller, val, "Base64Options.alphabet")?;
-    let raw = match st.field(&mut *caller, 1)? {
-        Val::AnyRef(Some(arr)) => arr.unwrap_array(&mut *caller)?,
-        other => wasmtime::bail!("Base64Options.alphabet: malformed $string backing {other:?}"),
-    };
-    let len = raw.len(&mut *caller)?;
-    let mut units = Vec::with_capacity(len as usize);
-    for i in 0..len {
-        match raw.get(&mut *caller, i)? {
-            Val::I32(u) => units.push(u as u16),
-            other => wasmtime::bail!("Base64Options.alphabet: non-i32 code unit {other:?}"),
-        }
-    }
-    Ok(units)
 }
 
 fn read_boolean(caller: &mut Caller<'_, StoreData>, val: &Val) -> wasmtime::Result<bool> {
@@ -726,6 +759,35 @@ mod tests {
         // url-safe encodes 0xfb 0xff as `-_`, standard as `+/`.
         assert!(encode_base64(&[0xfb, 0xff], true, false).contains('-'));
         assert!(encode_base64(&[0xfb, 0xff], false, false).contains('+'));
+    }
+
+    #[test]
+    fn base64_padding_selection_preserves_previous_acceptance() {
+        // Enumerate short padding, alphabet and trailing-bit combinations
+        // against the previous two-decoder acceptance rule.
+        let alphabet = b"AQf=_-";
+        for length in 0..=5_u32 {
+            for mut code in 0..alphabet.len().pow(length) {
+                let mut input = Vec::new();
+                for _ in 0..length {
+                    input.push(alphabet[code % alphabet.len()]);
+                    code /= alphabet.len();
+                }
+                let text = std::str::from_utf8(&input).unwrap();
+                for url_safe in [false, true] {
+                    let alpha = if url_safe {
+                        &alphabet::URL_SAFE
+                    } else {
+                        &alphabet::STANDARD
+                    };
+                    let old = GeneralPurpose::new(alpha, PAD)
+                        .decode(&input)
+                        .or_else(|_| GeneralPurpose::new(alpha, NO_PAD).decode(&input));
+                    let new = decode_base64(text, url_safe);
+                    assert_eq!(new.ok(), old.ok(), "{text:?}, url_safe={url_safe}");
+                }
+            }
+        }
     }
 
     #[test]

@@ -9,8 +9,8 @@
 //! denying `llm.call` only for that model — the shape a blueprint `model`
 //! filter has. `deny-capability` cannot express it: it matches on the
 //! capability name and ignores context, and `call`, `batch`, and `models()`
-//! share the single `llm.call` capability, so denying by name would refuse
-//! `models()` outright rather than filtering its candidates.
+//! share the single `llm.call` capability, so denying by name hides every
+//! candidate instead of selecting individual models.
 //!
 //! A fixture whose name contains `llm_` also gets a canned [`FixtureLlm`]
 //! provider, and the budget-oriented ones get ceilings small enough to reach.
@@ -1112,9 +1112,8 @@ fn install_llm_fixture_support(data: &mut StoreData, fixture: &str) {
 ///
 /// `// deny-capability:` cannot express this. It matches on the capability name
 /// and ignores context, and `call`, `batch`, and `models()` all share the single
-/// `llm.call` capability — so denying by name would refuse `models()` itself
-/// before it ever reached the per-candidate filter, and the filtering this
-/// exists to test would never run. A blueprint `model` filter is precisely a
+/// `llm.call` capability — so denying by name would hide every candidate.
+/// A blueprint `model` filter is precisely a
 /// context-keyed rule, so the fixture policy has to be one too.
 ///
 /// This is a *policy* denial, which is the half that filters candidates. An
@@ -1133,10 +1132,11 @@ impl interpreter::runtime::SecurityCheck for FixtureDenyLlmModel {
         let model = context.get("model").and_then(serde_json::Value::as_str);
         if capability == "llm.call" && model.is_some_and(|m| self.0.iter().any(|d| d == m)) {
             return interpreter::runtime::CheckOutcome::Deny {
+                rule: None,
                 reason: "denied by fixture model filter".to_string(),
             };
         }
-        interpreter::runtime::CheckOutcome::Allow
+        interpreter::runtime::CheckOutcome::Allow { rule: None }
     }
 }
 
@@ -1153,10 +1153,11 @@ impl interpreter::runtime::SecurityCheck for FixtureDeny {
     ) -> interpreter::runtime::CheckOutcome {
         if self.0.iter().any(|needle| capability.contains(needle)) {
             interpreter::runtime::CheckOutcome::Deny {
+                rule: None,
                 reason: "denied by fixture policy".to_string(),
             }
         } else {
-            interpreter::runtime::CheckOutcome::Allow
+            interpreter::runtime::CheckOutcome::Allow { rule: None }
         }
     }
 }

@@ -3,7 +3,7 @@
 {{/* A named pod, matching test-api. Through the load-balanced Service this
      would still be blocked, but a timeout there could equally mean no pod was
      ready; addressing pod 0 directly makes the block the only explanation. */}}
-{{- $base := printf "http://%s-0.%s:%v" $fullname (include "submilli.headlessName" .) .Values.server.port -}}
+{{- $base := printf "%s://%s-0.%s:%v" (ternary "https" "http" .Values.tls.enabled) $fullname (include "submilli.headlessName" .) .Values.server.port -}}
 {{/*
 Exists because a NetworkPolicy is not self-verifying. On a CNI that does not
 implement NetworkPolicy the object is accepted by the API server and enforces
@@ -53,6 +53,12 @@ spec:
         allowPrivilegeEscalation: false
         capabilities:
           drop: [ALL]
+      {{- if .Values.tls.enabled }}
+      volumeMounts:
+        - name: tls-cert
+          mountPath: /etc/submilli/tls
+          readOnly: true
+      {{- end }}
       command: ["/bin/sh", "-c"]
       args:
         - |
@@ -74,7 +80,11 @@ spec:
           # connection — i.e. on a probe that never reached the server and proved
           # nothing about the policy. Those are the failure modes a typo in this
           # URL, or a pod that is simply not up, actually produce.
-          code=$(curl -sS -o /dev/null -w '%{http_code}' \
+          TLS=""
+          {{- if .Values.tls.enabled }}
+          TLS="--cacert /etc/submilli/tls/server.crt"
+          {{- end }}
+          code=$(curl $TLS -sS -o /dev/null -w '%{http_code}' \
                    --connect-timeout 5 --max-time 10 "$BASE/healthz") || rc=$?
           rc=${rc:-0}
 
@@ -127,4 +137,13 @@ spec:
           echo "ok: blocked (curl timed out — no response from the server)"
           echo
           echo "PASS"
+  {{- if .Values.tls.enabled }}
+  volumes:
+    - name: tls-cert
+      secret:
+        secretName: {{ .Values.tls.existingSecret | quote }}
+        items:
+          - key: {{ .Values.tls.certKey | quote }}
+            path: server.crt
+  {{- end }}
 {{- end }}

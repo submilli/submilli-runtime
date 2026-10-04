@@ -10,17 +10,20 @@ use std::process::ExitCode;
 
 use interpreter::{Severity, Sources, Span, diagnostics};
 use submilli_build::{
-    BuildDiagnostic, BuildSeverity, DriverError, GithubSource, InstallError, Lockfile, PackageName,
-    PackageSource, PackageStore, ResolveError, install_from_dir, install_plan, load_manifest,
-    resolve_github_closure,
+    BuildDiagnostic, BuildSeverity, DriverError, GithubSource, InstallError, InstallPreparation,
+    Lockfile, PackageName, PackageSource, PackageStore, ResolveError, deny_warnings_from_env,
+    load_manifest, resolve_github_closure, warning_denial_message,
 };
 use submilli_shared::github;
-use submilli_shared::github::GithubRepoFetcher;
+
+use crate::commands::github::retry::{self, LazyAuth};
 
 #[derive(clap::Args)]
 pub struct Args {
     /// GitHub repo to install from: `org/repo`, `github.com/org/repo`, or a full
-    /// URL — optionally pinned with `@<ref>` (branch, tag, or commit SHA).
+    /// URL — optionally pinned with `@<ref>` (branch, tag, or commit SHA). A
+    /// private repository needs a GitHub token: see `submilli github
+    /// authenticate`.
     url: String,
 
     /// Install only this package (`@org/name`). Omit to install every package
@@ -30,6 +33,10 @@ pub struct Args {
     /// Re-install over a package already in the store at a different commit.
     #[arg(long)]
     upgrade: bool,
+
+    /// Fail on code warnings; also enabled by SUBMILLI_DENY_WARNINGS=1.
+    #[arg(long)]
+    deny_warnings: bool,
 }
 
 impl Args {
@@ -42,7 +49,11 @@ impl Args {
 }
 
 pub fn execute(args: Args) -> anyhow::Result<ExitCode> {
-    let fetched = match github::fetch(&args.url) {
+    retry::with_authentication_retry(|auth| install(&args, auth))
+}
+
+fn install(args: &Args, auth: &LazyAuth) -> anyhow::Result<ExitCode> {
+    let fetched = match github::fetch(&args.url, auth.get()) {
         Ok(fetched) => fetched,
         Err(err) => {
             eprintln!("error: {err}");
@@ -58,7 +69,7 @@ pub fn execute(args: Args) -> anyhow::Result<ExitCode> {
     );
 
     let store = PackageStore::default();
-    let only = args.package.map(PackageName::new);
+    let only = args.package.clone().map(PackageName::new);
     let source = PackageSource::Github(GithubSource {
         org: resolved.org.clone(),
         repo: resolved.repo.clone(),
@@ -79,31 +90,28 @@ pub fn execute(args: Args) -> anyhow::Result<ExitCode> {
         }
     };
     let existing_lock = Lockfile::read(fetched.dir.path()).ok().flatten();
-    let closure = match resolve_github_closure(
-        &store,
-        &manifest,
-        &GithubRepoFetcher,
-        existing_lock.as_ref(),
-    ) {
-        Ok(closure) => closure,
-        Err(err) => {
-            render_resolve_error(&err);
-            return Ok(ExitCode::from(1));
-        }
-    };
-    if let Err(err) = install_plan(&store, &closure.plan, args.upgrade) {
-        render_install_error(&err);
-        return Ok(ExitCode::from(1));
-    }
-
-    match install_from_dir(
-        &store,
-        fetched.dir.path(),
-        only.as_ref(),
-        &source,
-        args.upgrade,
-    ) {
-        Ok(report) => {
+    let closure =
+        match resolve_github_closure(&store, &manifest, &auth.fetcher(), existing_lock.as_ref()) {
+            Ok(closure) => closure,
+            Err(err) => {
+                render_resolve_error(&err);
+                return Ok(ExitCode::from(1));
+            }
+        };
+    let result = (|| {
+        let mut preparation = InstallPreparation::new(&store)?;
+        preparation.prepare_plan(&closure.plan, args.upgrade)?;
+        let report =
+            preparation.prepare_repo(fetched.dir.path(), only.as_ref(), &source, args.upgrade)?;
+        let warnings = preparation.warnings.clone();
+        preparation.publish(args.deny_warnings || deny_warnings_from_env())?;
+        Ok::<_, InstallError>((report, warnings))
+    })();
+    match result {
+        Ok((report, warnings)) => {
+            for warning in warnings {
+                eprint!("{warning}");
+            }
             for name in &report.up_to_date {
                 eprintln!("up to date {}", name.as_str());
             }
@@ -126,6 +134,13 @@ pub fn execute(args: Args) -> anyhow::Result<ExitCode> {
 
 pub(crate) fn render_install_error(err: &InstallError) {
     match err {
+        InstallError::WarningsDenied { warnings } => {
+            for warning in warnings {
+                eprint!("{warning}");
+            }
+            eprintln!("error: {}", warning_denial_message(warnings.len()));
+        }
+        InstallError::Preparation(error) => eprintln!("error: preparing install: {error}"),
         InstallError::NoManifest { repo_dir } => {
             eprintln!(
                 "error: {} has no submilli.toml at its root; only Submilli package repos can be installed",

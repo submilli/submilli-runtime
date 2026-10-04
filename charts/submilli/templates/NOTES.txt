@@ -9,7 +9,12 @@ Reach the server:
 {{- end }}
 {{- else if eq .Values.service.type "ClusterIP" }}
   kubectl --namespace {{ .Release.Namespace }} port-forward svc/{{ $fullname }} {{ .Values.service.port }}:{{ .Values.service.port }}
+{{- if .Values.tls.enabled }}
+  Use an HTTPS URL with a hostname from the certificate when connecting through
+  this tunnel. See /docs/server/connect-the-cli for hostname setup and trust.
+{{- else }}
   curl -i http://127.0.0.1:{{ .Values.service.port }}/healthz
+{{- end }}
 {{- else }}
   kubectl --namespace {{ .Release.Namespace }} get svc {{ $fullname }} -w
 {{- end }}
@@ -50,9 +55,15 @@ AUTHENTICATION
     kubectl get secret {{ $secret }} -n {{ .Release.Namespace }} -o jsonpath='{.data.{{ .Values.auth.adminTokenKey | replace "." "\\." }}}' | base64 -d
     kubectl get secret {{ $secret }} -n {{ .Release.Namespace }} -o jsonpath='{.data.{{ .Values.auth.userTokenKey | replace "." "\\." }}}' | base64 -d
 
+  {{- if not .Values.tls.enabled }}
   Use one:
     TOKEN=$(kubectl get secret {{ $secret }} -n {{ .Release.Namespace }} -o jsonpath='{.data.{{ .Values.auth.adminTokenKey | replace "." "\\." }}}' | base64 -d)
     curl -H "Authorization: Bearer $TOKEN" http://127.0.0.1:{{ .Values.service.port }}/v1/status
+
+  {{- else }}
+  Use `submilli server status --server https://<certificate-hostname>:{{ .Values.service.port }}`
+  with SUBMILLI_SERVER_TOKEN_FILE pointing at a file holding the admin token.
+  {{- end }}
 
   Tokens are read at boot. After changing the Secret:
     kubectl --namespace {{ .Release.Namespace }} rollout restart statefulset/{{ $fullname }}
@@ -105,28 +116,21 @@ NETWORK
 {{- else }}.
 {{- end }}
 {{- end }}
-{{- if .Values.blueprints }}
 
-BLUEPRINTS
-----------
-{{ len .Values.blueprints }} blueprint(s) are deployed from values.yaml and
-reconciled into the store on every pod start.
-
-  The files win. Editing one through the API, or deleting it, is undone the next
-  time the pod restarts. To change a blueprint, change it in values.yaml and run
-  `helm upgrade`. The overwritten version is kept on disk as a revision, so a
-  revert is auditable rather than silent.
-
-  The chart never deletes. Blueprints you registered through the API and did not
-  list in values.yaml are left alone.
+BLUEPRINTS AND SECRETS
+----------------------
+  Apply blueprints using `submilli server blueprint apply` with an admin token.
+  Populate their store secrets first using `submilli server secret put`.
+{{- if .Values.secretStore.enabled }}
+  The encryption key is in Secret {{ include "submilli.secretStoreSecretName" . }}.
+  Back up this Secret along with the persistent volume.
 {{- end }}
 {{- if not .Values.persistence.enabled }}
 
 STORAGE
 -------
   persistence.enabled is FALSE. Sessions, installed packages, secrets, and any
-  blueprint registered through the API are lost when the pod restarts. Only
-  blueprints from values.yaml come back.
+  blueprint registered through the API are lost when the pod restarts.
 {{- else }}
 
 STORAGE
@@ -137,4 +141,12 @@ STORAGE
 
   Node-local volumes cannot follow a pod to another node. Surviving a node drain
   needs a StorageClass whose volumes are not node-local.
+{{- end }}
+
+{{- if .Values.tls.enabled }}
+Native HTTPS is enabled on port {{ .Values.server.port }}.
+Clients must trust the certificate and use a hostname in its subject alternative names.
+The CLI offers an interactive trust prompt for a self-signed certificate.
+After rotating Secret {{ .Values.tls.existingSecret }}, restart the server:
+  kubectl rollout restart statefulset/{{ include "submilli.fullname" . }} -n {{ .Release.Namespace }}
 {{- end }}

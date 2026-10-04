@@ -30,6 +30,7 @@ provides:
   fields:
     teamId:
       type: string
+      description: Team UUID.
 - name: linear.app/getViewer
   description: Fetch the authenticated user (whoever owns the API token).
   fields: {}

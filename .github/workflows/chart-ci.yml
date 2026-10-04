@@ -179,11 +179,6 @@ jobs:
             --docker-server=ghcr.io \
             --docker-username='${{ github.actor }}' \
             --docker-password="$GHCR_TOKEN"
-          # Referenced by ci/seeded-values.yaml. A wrong key name here is not a
-          # silent failure: the kubelet refuses the mount and the pod never
-          # starts.
-          kubectl create secret generic submilli-ci-stripe --namespace chart-ci \
-            --from-literal=api-key=ci-placeholder
 
       # The class of failure nothing else here can see. lint, template,
       # kubeconform, unittest and a fresh `ct install` are all structurally blind
@@ -200,6 +195,22 @@ jobs:
           helm install upgrade-probe charts/submilli --namespace chart-ci --wait --timeout 6m \
             --set 'imagePullSecrets[0].name=ghcr-creds'
 
+          # Provision through the same CLI users use. Reapplying after upgrade
+          # decrypts the persisted value during blueprint registration.
+          probe_pod=upgrade-probe-submilli-0
+          probe_key=upgrade-probe-submilli-secret-store
+          key_before=$(kubectl get secret "$probe_key" -n chart-ci -o jsonpath='{.data.key}' | sha256sum)
+          printf %s ci-placeholder | kubectl exec -i "$probe_pod" -n chart-ci -- \
+            /usr/local/bin/submilli server secret put upgrade-probe \
+            --token-file /etc/submilli/auth/admin-token
+          apply_probe() {
+            printf 'name: upgrade-probe\nsecrets:\n  TOKEN: { store: upgrade-probe }\n' | \
+              kubectl exec -i "$probe_pod" -n chart-ci -- \
+              /usr/local/bin/submilli server blueprint apply /dev/stdin \
+              --token-file /etc/submilli/auth/admin-token
+          }
+          apply_probe
+
           # Bump in a scratch copy so the committed chart is untouched.
           cp -r charts/submilli /tmp/bumped
           sed -i 's/^version: .*/version: 9.9.9/' /tmp/bumped/Chart.yaml
@@ -215,6 +226,11 @@ jobs:
             fi
             exit 1
           fi
+          key_after=$(kubectl get secret "$probe_key" -n chart-ci -o jsonpath='{.data.key}' | sha256sum)
+          test "$key_before" = "$key_after"
+          kubectl rollout restart statefulset/upgrade-probe-submilli -n chart-ci
+          kubectl rollout status statefulset/upgrade-probe-submilli -n chart-ci --timeout=6m
+          apply_probe
           helm uninstall upgrade-probe --namespace chart-ci --wait
           kubectl delete pvc -l app.kubernetes.io/instance=upgrade-probe -n chart-ci --ignore-not-found
           echo "upgrade across a version bump succeeded"

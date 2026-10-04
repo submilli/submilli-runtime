@@ -88,6 +88,8 @@ services:
     environment:
       SUBMILLI_BIND: 0.0.0.0
       SUBMILLI_PORT: 8128
+      # Update this host and port if you rename the service or change its container port.
+      SUBMILLI_MCP_ALLOWED_HOSTS: submilli:8128
       SUBMILLI_SERVER_TOKEN: ${SUBMILLI_SERVER_TOKEN:?set SUBMILLI_SERVER_TOKEN in .env, for example with `openssl rand -hex 32`}
 
     # Supply the secret-store key as a file, not as an environment variable: an
@@ -109,6 +111,22 @@ services:
     #     - submilli-store-key
     #
     # Without a key the secret store is simply off and the server boots normally.
+    #
+    # To install packages from private GitHub repositories, give the server a
+    # GitHub token: a fine-grained token with Repository permissions → Contents:
+    # Read-only on the package repositories. The server reads it from the file
+    # its config file names as `github_token_file`, again on every install, so
+    # overwriting the file in place rotates it. Same file-mode caveat as the
+    # key above:
+    #
+    #   printf '%s' "$GITHUB_TOKEN" > github-token && chmod 0444 github-token
+    #   printf 'github_token_file: /run/secrets/github-token\n' > server.yaml
+    #
+    #   environment:
+    #     SUBMILLI_CONFIG: /run/secrets/submilli-config
+    #   secrets:
+    #     - github-token
+    #     - submilli-config
 
 volumes:
   submilli-state:
@@ -119,3 +137,7 @@ networks:
 # secrets:
 #   submilli-store-key:
 #     file: ./submilli-store-key
+#   github-token:
+#     file: ./github-token
+#   submilli-config:
+#     file: ./server.yaml

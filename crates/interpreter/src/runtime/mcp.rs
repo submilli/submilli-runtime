@@ -1,10 +1,9 @@
 //! Outbound `@mcp/<server>` transport dispatch.
 //!
 //! Every `@mcp/<server>.<tool>(...)` call lowers (in codegen) to **one** host
-//! import — `submilli:mcp.call(server, tool, argsJson) -> string` — rather than a
-//! per-tool import. Codegen passes the server and tool names as constants and the
-//! args serialized to JSON, then turns the returned JSON text into the declared
-//! return type (a `string`, or a typed value via the `JSON.parse` validator).
+//! import — `submilli:mcp.call(server, tool, argsJson) -> unknown`. The host
+//! converts the transport's bounded JSON tree directly to guest objects; normal
+//! runtime casts validate declared tool return types.
 //!
 //! This module provides that host fn. It runs the `mcp.<server>` capability check
 //! (one per server, with the tool in the filter context) *before* dispatch (a
@@ -19,19 +18,26 @@ use std::pin::Pin;
 use wasmtime::{FuncType, HeapType, Linker, RefType, Val, ValType};
 
 use crate::runtime::StoreData;
-use crate::runtime::host::{
-    intrinsic_string_type, read_string_arg, register_host_fn_async, write_submilli_string_struct,
-};
+use crate::runtime::fuel;
+use crate::runtime::host::{intrinsic_string_type, read_string_arg, register_host_fn_async};
 use crate::stdlib::shared::check_security;
 use crate::{PackageDeclaration, Param, Span, Type, ValueKind, ValueSymbol};
 
 /// The single internal host module every MCP call dispatches through.
 pub const MCP_MODULE_NAME: &str = "submilli:mcp";
+pub const MCP_MAX_RESPONSE_BYTES: usize = 8 * 1024 * 1024;
+
+mod response;
+pub use response::McpResponse;
 
 /// Why an outbound MCP `tools/call` failed. The host fn maps each to a catchable
 /// script error (see [`mcp_error_to_throw`]).
 #[derive(Debug)]
 pub enum McpCallError {
+    /// The tool ran but its response exceeded the host's bounded output buffer.
+    ResponseTooLarge,
+    /// Internal allocation or serialization failure; never a guest exception.
+    Internal { message: &'static str },
     /// OAuth authentication failed. A provider rejection may be transient;
     /// surfaces to the script as a catchable `McpAuthExpiredError`.
     AuthExpired,
@@ -43,9 +49,17 @@ pub enum McpCallError {
     Transport(String),
 }
 
+/// Completed transport work, retained even when the tool result is an error.
+pub struct McpOutcome {
+    pub result: Result<McpResponse, McpCallError>,
+    pub received_bytes: u64,
+    pub parsed_bytes: u64,
+}
+
 /// The embedder-provided outbound MCP transport: performs the JSON-RPC
 /// `tools/call` (resolving auth, refreshing on `401`, reusing connections) and
-/// returns the tool result as a `serde_json::Value`.
+/// returns a bounded JSON tree. Transport decoders must bound response bytes
+/// and nesting before allocating recursive JSON values.
 ///
 /// Object-safe boxed-future trait (rather than `async fn`) so the interpreter
 /// stays free of the embedder's async stack while still `await`-ing the call from
@@ -56,23 +70,25 @@ pub trait McpTransport: Send + Sync {
         server: &'a str,
         tool: &'a str,
         args_json: &'a str,
-    ) -> Pin<Box<dyn Future<Output = Result<serde_json::Value, McpCallError>> + Send + 'a>>;
+    ) -> Pin<Box<dyn Future<Output = McpOutcome> + Send + 'a>>;
 }
 
 fn mcp_call_func_type(linker: &Linker<StoreData>) -> wasmtime::Result<FuncType> {
     let engine = linker.engine();
     let string_struct = intrinsic_string_type(engine)?;
     let string = ValType::Ref(RefType::new(false, HeapType::ConcreteStruct(string_struct)));
+    let object = crate::runtime::intrinsic_types::build_intrinsic_types(engine)?.object;
+    let unknown = ValType::Ref(RefType::new(true, HeapType::ConcreteStruct(object)));
     Ok(FuncType::new(
         engine,
         [string.clone(), string.clone(), string.clone()],
-        [string],
+        [unknown],
     ))
 }
 
 /// Install the async `submilli:mcp.call` dispatch host fn. Reads `(server, tool,
 /// argsJson)`, runs the capability check, dispatches through
-/// [`StoreData::mcp_transport`], and returns the result serialized as JSON text.
+/// [`StoreData::mcp_transport`], and builds guest values directly from its tree.
 pub fn install_mcp_async(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
     let ty = mcp_call_func_type(linker)?;
     register_host_fn_async(
@@ -83,6 +99,12 @@ pub fn install_mcp_async(linker: &mut Linker<StoreData>) -> wasmtime::Result<()>
         /* deterministic = */ false,
         move |caller, params, results| {
             Box::pin(async move {
+                let params: &[Val; 3] = params.try_into().map_err(|_| {
+                    crate::runtime::host::fatal_host_error("MCP argument count is invalid")
+                })?;
+                let result_slot = results.first_mut().ok_or_else(|| {
+                    crate::runtime::host::fatal_host_error("MCP result slot is missing")
+                })?;
                 let server = read_string_arg(&mut *caller, &params[0], "mcp.call (server)")?;
                 let tool = read_string_arg(&mut *caller, &params[1], "mcp.call (tool)")?;
                 let args_json = read_string_arg(&mut *caller, &params[2], "mcp.call (args)")?;
@@ -91,7 +113,7 @@ pub fn install_mcp_async(linker: &mut Linker<StoreData>) -> wasmtime::Result<()>
                 // (`mcp.<server>`, known when the blueprint is written); the tool is
                 // in the filter context so a policy can constrain by tool.
                 check_security(
-                    &*caller,
+                    &mut *caller,
                     &format!("mcp.{server}"),
                     serde_json::json!({ "tool": tool, "transport": "streamable_http" }),
                 )?;
@@ -102,27 +124,40 @@ pub fn install_mcp_async(linker: &mut Linker<StoreData>) -> wasmtime::Result<()>
                     ))
                 })?;
 
-                let value = transport
-                    .call(&server, &tool, &args_json)
-                    .await
-                    .map_err(|err| mcp_error_to_throw(&server, &tool, err))?;
-
-                let text = serde_json::to_string(&value).map_err(|e| {
-                    wasmtime::Error::msg(format!(
-                        "@mcp/{server}.{tool}: result is not serializable: {e}"
-                    ))
-                })?;
-                let st = write_submilli_string_struct(&mut *caller, &text)?;
-                results[0] = Val::AnyRef(Some(st.to_anyref()));
-                Ok(())
+                fuel::charge(&mut *caller, fuel::IO, args_json.len() as u64)?;
+                let outcome = transport.call(&server, &tool, &args_json).await;
+                fuel::settle(&mut *caller, fuel::IO, outcome.received_bytes)?;
+                fuel::settle(&mut *caller, fuel::PARSE, outcome.parsed_bytes)?;
+                fuel::settle_result(caller, |caller| {
+                    let result = (|| {
+                        let response = outcome
+                            .result
+                            .map_err(|error| mcp_error_to_throw(&server, &tool, error))?;
+                        let value = allocate_response(caller, &response)?;
+                        *result_slot = value;
+                        Ok(())
+                    })();
+                    result.map_err(|error| crate::runtime::host::throw_host_error(caller, error))
+                })
             })
         },
     )
 }
 
+fn allocate_response(
+    caller: &mut wasmtime::Caller<'_, StoreData>,
+    response: &McpResponse,
+) -> wasmtime::Result<Val> {
+    fuel::settle_result(caller, |caller| {
+        fuel::settle(&mut *caller, fuel::ELEM, response.visited_nodes())?;
+        let allocator = crate::runtime::json::JsonUnknownAllocator::new(caller)?;
+        allocator.allocate(caller, response.value())
+    })
+}
+
 /// Codegen-facing definitions for the internal `submilli:mcp.call` host fn:
-/// `call(server: string, tool: string, args: string): string`. Lowered as
-/// `(ref $string) x3 -> (ref $string)` by the generic host-import path.
+/// `call(server: string, tool: string, args: string): unknown`. Lowered as
+/// `(ref $string) x3 -> (ref null $Object)` by the generic host-import path.
 pub fn mcp_call_package_declaration() -> PackageDeclaration {
     let mut defs = PackageDeclaration::with_package(MCP_MODULE_NAME);
     defs.values.insert(
@@ -138,7 +173,7 @@ pub fn mcp_call_package_declaration() -> PackageDeclaration {
                     Param::new("tool", Type::String),
                     Param::new("args", Type::String),
                 ],
-                ret: Type::String,
+                ret: Type::Unknown,
                 type_predicate: None,
                 doc: None,
             },
@@ -152,11 +187,21 @@ pub fn mcp_call_package_declaration() -> PackageDeclaration {
 /// as the permission-denied throw).
 fn mcp_error_to_throw(server: &str, tool: &str, err: McpCallError) -> wasmtime::Error {
     let message = match err {
+        McpCallError::Internal { message, .. } => {
+            return crate::runtime::host::fatal_host_error(message);
+        }
+        McpCallError::ResponseTooLarge => {
+            return crate::runtime::host::range_error(format!(
+                "@mcp/{server}.{tool}: response exceeds the size, node or depth limit; request a smaller result"
+            ));
+        }
         McpCallError::AuthExpired => format!(
             "McpAuthExpiredError: @mcp/{server}.{tool}: OAuth authentication failed; \
              retry later or authenticate the MCP server again"
         ),
-        McpCallError::Mcp { message } => format!("@mcp/{server}.{tool}: {message}"),
+        McpCallError::Mcp { message } => {
+            format!("@mcp/{server}.{tool}: {message}")
+        }
         McpCallError::Upstream { status, body } => {
             format!("@mcp/{server}.{tool}: server returned HTTP {status}: {body}")
         }
@@ -170,11 +215,12 @@ fn mcp_error_to_throw(server: &str, tool: &str, err: McpCallError) -> wasmtime::
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
+
     use std::sync::{Arc, Mutex};
 
     use wasmtime::{Linker, Module};
 
-    use super::{McpCallError, McpTransport};
+    use super::{McpOutcome, McpResponse, McpTransport};
     use crate::runtime::security::{CheckOutcome, SecurityCheck};
     use crate::runtime::{
         RuntimeConfig, StoreData, Vfs, dispatch_main_async, install_runtime_async,
@@ -260,20 +306,20 @@ mod tests {
             server: &'a str,
             tool: &'a str,
             args_json: &'a str,
-        ) -> std::pin::Pin<
-            Box<
-                dyn std::future::Future<Output = Result<serde_json::Value, McpCallError>>
-                    + Send
-                    + 'a,
-            >,
-        > {
+        ) -> std::pin::Pin<Box<dyn std::future::Future<Output = McpOutcome> + Send + 'a>> {
             self.calls.lock().unwrap().push((
                 server.to_string(),
                 tool.to_string(),
                 args_json.to_string(),
             ));
-            let result = self.result.clone();
-            Box::pin(async move { Ok(result) })
+            let mut result = self.result.clone();
+            Box::pin(async move {
+                McpOutcome {
+                    result: McpResponse::take(&mut result),
+                    received_bytes: 0,
+                    parsed_bytes: 0,
+                }
+            })
         }
     }
 
@@ -281,6 +327,7 @@ mod tests {
     impl SecurityCheck for DenyAll {
         fn check(&self, _: &str, capability: &str, _: &serde_json::Value) -> CheckOutcome {
             CheckOutcome::Deny {
+                rule: None,
                 reason: format!("denied {capability}"),
             }
         }
@@ -320,6 +367,65 @@ mod tests {
         let inst = linker.instantiate_async(&mut store, &module).await.unwrap();
         let out = dispatch_main_async(&mut store, &inst).await;
         (out, calls)
+    }
+
+    #[tokio::test]
+    async fn completed_response_is_fully_allocated_before_exhausted_fuel_stops_execution() {
+        use wasmtime::{Func, FuncType, Val, ValType};
+        let config = RuntimeConfig::default();
+        let engine = config.engine().unwrap();
+        let mut store = config
+            .store_async(&engine, StoreData::with_vfs(Vfs::none()))
+            .unwrap();
+        let mut linker = Linker::new(&engine);
+        install_runtime_async(&mut linker, &mut store)
+            .await
+            .unwrap();
+        let complete = Func::new(
+            &mut store,
+            FuncType::new(&engine, [ValType::I32], [ValType::I32, ValType::F64]),
+            |mut caller, params, results| {
+                let count = params[0].i32().unwrap();
+                let mut value = serde_json::json!((0..count).collect::<Vec<_>>());
+                let response = McpResponse::take(&mut value).unwrap();
+                let value = super::allocate_response(&mut caller, &response)?;
+                let storage =
+                    crate::runtime::array_storage::ArrayStorage::read(&mut caller, &value)?;
+                results[0] = Val::I32(storage.len as i32);
+                let last = storage.get(&mut caller, (count - 1) as u32)?;
+                let Val::AnyRef(Some(last)) = last else {
+                    panic!("missing last value")
+                };
+                results[1] = last.unwrap_struct(&mut caller)?.field(&mut caller, 1)?;
+                Ok(())
+            },
+        );
+        let mut result = [Val::I32(0), Val::F64(0)];
+        for count in [128, 256] {
+            store.set_fuel(100_000).unwrap();
+            let before = store.data().host_fuel;
+            complete
+                .call_async(&mut store, &[Val::I32(count)], &mut result)
+                .await
+                .unwrap();
+            let actual = store.data().host_fuel - before;
+            assert_eq!(
+                actual,
+                2 * crate::runtime::fuel::ELEM.cost(count as u64 + 1)
+            );
+            // The former path additionally serialized and parsed all result bytes.
+            assert_eq!(result[0].i32(), Some(count));
+        }
+        store.set_fuel(1).unwrap();
+        complete
+            .call_async(&mut store, &[Val::I32(256)], &mut result)
+            .await
+            .unwrap();
+        assert_eq!(result[0].i32(), Some(256));
+        assert_eq!(result[1].f64(), Some(255.0));
+        assert_eq!(store.get_fuel().unwrap(), 0);
+        assert!(!store.data().settling_host_result);
+        assert!(crate::runtime::fuel::charge_call(&mut store).is_err());
     }
 
     #[tokio::test]

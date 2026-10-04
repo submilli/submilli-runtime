@@ -60,6 +60,31 @@ fn a_missing_token_file_refuses_to_start() {
     assert!(error.contains("absent.token"), "{error}");
 }
 
+#[test]
+fn a_missing_github_token_file_refuses_to_start() {
+    let home = tempfile::tempdir().expect("temp home");
+    let config = home.path().join("server.yaml");
+    let token_file = home.path().join("absent-github.token");
+    std::fs::write(
+        &config,
+        format!(
+            "allow_unauthenticated: true\ngithub_token_file: {}\n",
+            token_file.display()
+        ),
+    )
+    .expect("write config");
+    let output = server(home.path())
+        .arg("--config")
+        .arg(&config)
+        .output()
+        .expect("run server");
+    assert!(!output.status.success());
+    let error = String::from_utf8_lossy(&output.stderr);
+    assert!(error.contains("github_token_file"), "{error}");
+    assert!(error.contains("absent-github.token"), "{error}");
+    assert!(!home.path().join("server").exists());
+}
+
 #[cfg(unix)]
 #[test]
 fn a_server_token_that_is_not_unicode_refuses_to_start() {

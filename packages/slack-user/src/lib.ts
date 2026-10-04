@@ -408,6 +408,7 @@ interface ApiSearchUser { user_id: string; name?: string; display_name?: string;
 /**
  * Return the Slack user and workspace represented by `SLACK_USER_TOKEN`.
  * Use this to verify a per-user OAuth binding before performing other operations.
+  * @returns The authenticated user's identity and workspace as reported by `auth.test`.
  * @capability slack.com/user/getIdentity {}
  */
 export function getIdentity(): SlackIdentity {
@@ -423,6 +424,7 @@ export function getIdentity(): SlackIdentity {
  * search features, the token's search scopes, and the user's own access.
  * @param query Natural-language or keyword search query.
  * @param options Optional result types, context channel, time bounds, sort, and cursor.
+  * @returns One page of results grouped by type (messages, files, channels, users); a type with no matches is an empty array, and `nextCursor` is empty on the last page.
  * @capability slack.com/user/search {}
  */
 export function search(query: string, options: SearchOptions | null = null): SearchPage {
@@ -530,6 +532,7 @@ interface SearchRequest {
  * Fetch one message by channel and Slack timestamp, returning null when absent.
  * When reading a thread reply, set `ref.threadTs` to the root message timestamp.
  * @param ref Stable Slack coordinates for the root message or reply.
+  * @returns The message, or `null` when no message with that timestamp is found.
  * @capability slack.com/user/getMessage { channelId: string }
  */
 export function getMessage(ref: MessageRef): SlackMessage | null {
@@ -549,6 +552,7 @@ export function getMessage(ref: MessageRef): SlackMessage | null {
  * Public-channel and private-conversation access follows the user's Slack access.
  * @param channelId Conversation whose history should be read.
  * @param options Optional page size, cursor, and Slack timestamp bounds.
+  * @returns One page of messages and a `nextCursor` that is empty on the last page.
  * @capability slack.com/user/listMessages { channelId: string }
  */
 export function listMessages(channelId: string, options: MessageListOptions | null = null): MessagePage {
@@ -574,6 +578,7 @@ export function listMessages(channelId: string, options: MessageListOptions | nu
  * @param channelId Conversation containing the thread.
  * @param threadTs Timestamp of the thread's root message.
  * @param page Optional page size and continuation cursor.
+  * @returns The thread root and replies on this page, with a `nextCursor` that is empty on the last page.
  * @capability slack.com/user/getThread { channelId: string }
  */
 export function getThread(channelId: string, threadTs: string, page: PageOptions | null = null): MessagePage {
@@ -590,6 +595,7 @@ export function getThread(channelId: string, threadTs: string, page: PageOptions
  * Set `threadTs` to reply in a thread. The action is attributed to the user whose
  * OAuth token is bound to the session.
  * @param input Message text, destination, and optional thread/unfurl settings.
+  * @returns The message as stored by Slack, including its `ts` for later updates or threading.
  * @capability slack.com/user/sendMessage { channelId: string }
  */
 export function sendMessage(input: SendMessageInput): SlackMessage {
@@ -611,6 +617,7 @@ export function sendMessage(input: SendMessageInput): SlackMessage {
  * Requires Slack's `im:write` and `chat:write` user-token scopes.
  * @param userId Workspace user ID that should receive the message.
  * @param text Message text.
+  * @returns The message as stored by Slack, posted in the DM conversation.
  * @capability slack.com/user/sendDirectMessage { userId: string }
  */
 export function sendDirectMessage(userId: string, text: string): SlackMessage {
@@ -630,6 +637,7 @@ export function sendDirectMessage(userId: string, text: string): SlackMessage {
  * Requires Slack's `mpim:write` and `chat:write` user-token scopes.
  * @param userIds Workspace user IDs that should receive the message.
  * @param text Message text.
+  * @returns The message as stored by Slack, posted in the group DM conversation.
  * @capability slack.com/user/sendGroupDirectMessage { userIds }
  */
 export function sendGroupDirectMessage(userIds: string[], text: string): SlackMessage {
@@ -661,6 +669,7 @@ export function addReaction(ref: MessageRef, emoji: string): void {
 /**
  * Fetch metadata for one channel, private group, or direct-message conversation.
  * @param channelId Slack conversation ID.
+  * @returns The conversation's metadata.
  * @capability slack.com/user/getChannel { channelId: string }
  */
 export function getChannel(channelId: string): SlackChannel {
@@ -675,6 +684,7 @@ export function getChannel(channelId: string): SlackChannel {
 /**
  * List channels, private groups, DMs, and group DMs visible to the user.
  * @param page Optional page size and continuation cursor.
+  * @returns One page of conversations and a `nextCursor` that is empty on the last page.
  * @capability slack.com/user/listChannels {}
  */
 export function listChannels(page: PageOptions | null = null): ChannelPage {
@@ -693,6 +703,7 @@ export function listChannels(page: PageOptions | null = null): ChannelPage {
 /**
  * Fetch one workspace user by Slack user ID.
  * @param userId Slack user ID, such as `U012ABCDEF`.
+  * @returns The user's profile data.
  * @capability slack.com/user/getUser { userId: string }
  */
 export function getUser(userId: string): SlackUser {
@@ -708,6 +719,7 @@ export function getUser(userId: string): SlackUser {
  * List workspace users visible to the authenticated user, including bots and
  * deactivated accounts.
  * @param page Optional page size and continuation cursor.
+  * @returns One page of users and a `nextCursor` that is empty on the last page.
  * @capability slack.com/user/listUsers {}
  */
 export function listUsers(page: PageOptions | null = null): UserPage {
@@ -727,6 +739,7 @@ export function listUsers(page: PageOptions | null = null): UserPage {
  * Find a workspace user by their registered email address.
  * Requires Slack's `users:read.email` user-token scope and throws when no user matches.
  * @param email Exact workspace email address.
+  * @returns The matching user.
  * @capability slack.com/user/findUserByEmail { email: string }
  */
 export function findUserByEmail(email: string): SlackUser {
@@ -741,6 +754,7 @@ export function findUserByEmail(email: string): SlackUser {
 /**
  * Fetch metadata and authenticated private URLs for a Slack-hosted file.
  * @param fileId Slack file ID, such as `F012ABCDEF`.
+  * @returns The file's metadata, including its authenticated private URLs.
  * @capability slack.com/user/getFile {}
  */
 export function getFile(fileId: string): SlackFile {
@@ -754,6 +768,7 @@ export function getFile(fileId: string): SlackFile {
  * not overwritten unless the underlying download policy permits it.
  * @param fileId Slack file ID to download.
  * @param path Destination path in the session VFS.
+  * @returns The download result for the file saved at `path` in the VFS.
  * @capability slack.com/user/downloadFile { path: string }
  */
 export function downloadFile(fileId: string, path: string): DownloadResult {

@@ -24,6 +24,23 @@ pub fn lower(mut ast: Ast) -> Result<Ast, CompilerFailure> {
     Ok(ast)
 }
 
+/// Starts every `fresh` name, so none can collide with a source identifier.
+const FRESH_MARKER: &str = "#pattern_";
+
+/// The `fresh` prefix of a lowered destructured parameter.
+const PATTERN_PARAM: &str = "p";
+
+/// Whether `name` stands in for a destructured parameter, which has no source
+/// name: either the fresh `#pattern_p_N` from lowering, or the parser's empty
+/// placeholder on an interface method signature, which has no body to lower.
+pub(crate) fn is_pattern_param(name: &str) -> bool {
+    name.is_empty()
+        || name
+            .strip_prefix(FRESH_MARKER)
+            .and_then(|rest| rest.strip_prefix(PATTERN_PARAM))
+            .is_some_and(|rest| rest.starts_with('_'))
+}
+
 struct LowerCtx {
     next_tmp: u32,
 }
@@ -42,7 +59,7 @@ impl LowerCtx {
             })?;
         Ok(Ident {
             // Distinct from source identifiers and the later desugar pass.
-            name: format!("#pattern_{prefix}_{n}"),
+            name: format!("{FRESH_MARKER}{prefix}_{n}"),
             span,
         })
     }
@@ -418,7 +435,7 @@ impl LowerCtx {
             let Some(pattern) = param.pattern.take() else {
                 continue;
             };
-            let fresh = self.fresh("p", pattern.span())?;
+            let fresh = self.fresh(PATTERN_PARAM, pattern.span())?;
             param.name = fresh.clone();
             decompose.extend(self.emit_decompose(ast, pattern, fresh, /*is_const=*/ true, None)?);
         }

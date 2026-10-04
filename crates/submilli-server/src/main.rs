@@ -7,6 +7,7 @@ use clap::Parser;
 use ipnet::IpNet;
 use submilli_server::serve;
 
+mod count;
 mod file_config;
 mod migrate;
 
@@ -44,6 +45,12 @@ pub struct Cli {
     #[arg(long)]
     config: Option<PathBuf>,
 
+    /// Append server logs to this file instead of standard output. The parent
+    /// directory must exist. On Unix, SIGHUP reopens it for external rotation.
+    /// Env: `$SUBMILLI_LOG_FILE`, which outranks the config file.
+    #[arg(long, value_name = "PATH")]
+    log_file: Option<PathBuf>,
+
     /// Address to bind. Falls back to the `$HOST` env var, or `0.0.0.0` when
     /// `$PORT` is set (so it's reachable on Render and similar hosts).
     /// [default: 127.0.0.1]
@@ -57,22 +64,22 @@ pub struct Cli {
     #[arg(long)]
     port: Option<u16>,
 
+    /// Certificate chain PEM file. HTTPS is enabled only when both TLS files are set.
+    /// Env: `$SUBMILLI_TLS_CERT_FILE`.
+    #[arg(long, value_name = "PATH")]
+    tls_cert_file: Option<PathBuf>,
+
+    /// Private key PEM file matching the certificate. Read at startup; restart to rotate.
+    /// Env: `$SUBMILLI_TLS_KEY_FILE`.
+    #[arg(long, value_name = "PATH")]
+    tls_key_file: Option<PathBuf>,
+
     /// Directory the registered blueprints are persisted to and loaded from on
     /// startup. Created if absent. [default: ~/.submilli/server/blueprints
     /// (override the base with $SUBMILLI_HOME)]
     /// Env: `$SUBMILLI_BLUEPRINT_DIR`.
     #[arg(long)]
     blueprint_dir: Option<PathBuf>,
-
-    /// Read-only directory of blueprint YAML reconciled into the store on every
-    /// start. Use it to deploy blueprints declaratively — a Kubernetes ConfigMap
-    /// mount, a bind-mounted git checkout, `/etc/submilli/blueprints`. The files
-    /// win: a blueprint seeded from here is restored on the next start if it was
-    /// edited or removed through the API. Blueprints the directory does not name
-    /// are left alone. Distinct from `--blueprint-dir`, which is the writable
-    /// store. Off by default. Env: `$SUBMILLI_BLUEPRINT_SEED_DIR`
-    #[arg(long)]
-    blueprint_seed_dir: Option<PathBuf>,
 
     /// Directory the session lifecycle store persists to and loads from on
     /// startup — the bookkeeping that makes resume and idle reaping survive a
@@ -95,10 +102,18 @@ pub struct Cli {
     #[arg(long)]
     vfs_ephemeral_dir: Option<PathBuf>,
 
+    /// Root for `managed-local` named volumes, one directory per volume name.
+    /// Mount on durable storage: named volumes outlive sessions and restarts.
+    /// The server creates a volume's directory on first use and never deletes
+    /// it. [default: ~/.submilli/server/volumes]
+    /// Env: `$SUBMILLI_VOLUME_DIR`.
+    #[arg(long)]
+    volume_dir: Option<PathBuf>,
+
     /// Directory backing the encrypted secret store (one sealed file per
-    /// secret). Dev-only — encrypted at rest, but no rotation or audit. Not the
-    /// CLI's plaintext store at ~/.submilli/secrets, which `submilli secret put`
-    /// and `mcp authenticate` fill and `submilli run` reads.
+    /// secret). Not the CLI's store at ~/.submilli/secrets, which
+    /// `submilli secret put` and `mcp authenticate` fill and `submilli run`
+    /// reads.
     /// [default: ~/.submilli/server/secrets]
     /// Env: `$SUBMILLI_SECRET_STORE_DIR`.
     #[arg(long)]
@@ -185,7 +200,8 @@ pub struct Cli {
     /// program that runs out ends with `fuel exhausted`. The backstop for a
     /// runaway loop when no execution time is set. [default: 1000000000000]
     /// Env: `$SUBMILLI_MAX_EXECUTION_FUEL`, which outranks the config file.
-    #[arg(long, value_name = "FUEL")]
+    /// Accepts decimal K/M/B/T suffixes and digit separators, e.g. 1T or 10_000.
+    #[arg(long, value_name = "FUEL", value_parser = count::parse_count)]
     max_execution_fuel: Option<u64>,
 
     /// Wasm stack one execution may use, in kibibytes; deeper recursion ends
@@ -209,14 +225,16 @@ pub struct Cli {
     /// output before dispatch, so a call that would push the server past this is
     /// refused rather than billed. [default: 20000000]
     /// Env: `$SUBMILLI_MAX_LLM_TOKENS`, which outranks the config file.
-    #[arg(long, value_name = "TOKENS")]
+    /// Accepts decimal K/M/B/T suffixes and digit separators, e.g. 20M or 10_000.
+    #[arg(long, value_name = "TOKENS", value_parser = count::parse_count)]
     max_llm_tokens: Option<u64>,
 
     /// Tokens a *single* execution's `submilli:llm` calls may spend. Bounds one
     /// run where `--max-llm-tokens` bounds the process, so one program cannot
     /// consume the whole server's budget. [default: 1000000]
     /// Env: `$SUBMILLI_MAX_EXECUTION_LLM_TOKENS`, which outranks the config file.
-    #[arg(long, value_name = "TOKENS")]
+    /// Accepts decimal K/M/B/T suffixes and digit separators, e.g. 1M or 10_000.
+    #[arg(long, value_name = "TOKENS", value_parser = count::parse_count)]
     max_execution_llm_tokens: Option<u64>,
 
     /// Prompts one `llm.batch` dispatches at once. Bounded deliberately:
@@ -256,7 +274,7 @@ fn main() -> Result<()> {
         return health_check(&cli);
     }
 
-    let resolved = file_config::resolve(cli)?;
+    let mut resolved = file_config::resolve(cli)?;
 
     // Init before the async runtime starts so the guard binds the Sentry hub for
     // every worker thread the runtime spawns. Skipped when telemetry is disabled
@@ -277,12 +295,19 @@ fn main() -> Result<()> {
         ))
     });
 
+    let log_output = submilli_server::logging::LogOutput::open(resolved.log_file)?;
     tracing_subscriber::fmt()
+        .with_ansi(false)
+        .log_internal_errors(false)
+        .event_format(submilli_server::logging::Logfmt::default())
+        .fmt_fields(submilli_server::logging::LogfmtFields)
+        .with_writer(log_output.clone())
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
                 .unwrap_or_else(|_| "submilli_server=info,info".into()),
         )
-        .init();
+        .try_init()
+        .map_err(|error| anyhow::anyhow!("cannot initialize server logging: {error}"))?;
 
     // Only now is there a subscriber to warn to.
     if let Some(migration) = &resolved.migration {
@@ -297,15 +322,40 @@ fn main() -> Result<()> {
     }
 
     let runtime = submilli_server::runtime(&resolved.config)?;
+    let audit = submilli_server::audit::AuditLog::new(
+        resolved.config.audit.clone(),
+        Some(log_output.clone()),
+    );
+    resolved.config.audit_log = Some(audit.clone());
+    let audit_reopen = submilli_server::logging::ReopenTask::start(audit.output())
+        .map_err(|_| {
+            use std::io::Write;
+            let _ = writeln!(
+                std::io::stderr().lock(),
+                "cannot start audit log rotation monitor"
+            );
+        })
+        .ok();
+    let reopen = submilli_server::logging::ReopenTask::start(log_output)?;
     let result = runtime.block_on(serve(
         resolved.addr,
         resolved.config,
         resolved.shutdown_grace,
     ));
+    let reopen_result = reopen.stop();
+    if let Some(audit_reopen) = audit_reopen
+        && audit_reopen.stop().is_err()
+    {
+        use std::io::Write;
+        let _ = writeln!(
+            std::io::stderr().lock(),
+            "cannot stop audit log rotation monitor"
+        );
+    }
     // Consumes the runtime, so this replaces the implicit drop rather than
     // preceding it — the drop is what would otherwise wait indefinitely.
     runtime.shutdown_timeout(RUNTIME_TEARDOWN_BUDGET);
-    result
+    result.and_then(|()| reopen_result.map_err(Into::into))
 }
 
 /// Report what the boot migration did. It ran before the subscriber existed,
@@ -430,11 +480,22 @@ fn log_migration(migration: &migrate::MigrationReport) {
 /// non-zero. The endpoint needs no token, so the probe never reads one.
 fn health_check(cli: &Cli) -> Result<()> {
     let addr = file_config::resolve_bind_addr(cli)?;
-    let url = format!("http://{}/healthz", probe_target(addr));
-    let agent: ureq::Agent = ureq::Agent::config_builder()
+    let tls_files = file_config::resolve_tls_files(cli)?;
+    let protocol = if tls_files.is_some() { "https" } else { "http" };
+    let url = format!("{protocol}://{}/healthz", probe_target(addr));
+    let config = ureq::Agent::config_builder()
+        .max_redirects(0)
         .timeout_global(Some(HEALTH_CHECK_TIMEOUT))
-        .build()
-        .into();
+        .build();
+    let agent = if let Some((cert_file, _)) = tls_files {
+        let certs = submilli_server::tls::certificates(&cert_file)?;
+        let leaf = certs.first().context("TLS certificate chain is empty")?;
+        let pin = submilli_shared::tls::fingerprint(leaf)?;
+        let verifier = submilli_shared::tls::Verifier::local_probe(pin)?;
+        submilli_shared::tls::agent(config, submilli_shared::tls::client_config(verifier)?, &url)?
+    } else {
+        config.into()
+    };
     agent
         .get(&url)
         .call()

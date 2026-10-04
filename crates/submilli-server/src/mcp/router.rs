@@ -36,15 +36,19 @@ pub(crate) async fn mcp_handler(
     Path(blueprint): Path<String>,
     req: Request,
 ) -> Response {
-    let Some(bp) = state.blueprints().get(&blueprint).await else {
+    let found = match state.blueprints().get(&blueprint).await {
+        Ok(found) => found,
+        Err(error) => return crate::blueprint::store_failure_response(error).into_response(),
+    };
+    let Some(bp) = found else {
         // The blueprint is part of the endpoint identity; a name with no runnable
         // blueprint is an addressing failure, distinct from an MCP handshake
         // rejection.
-        return (
-            StatusCode::NOT_FOUND,
-            blueprint_miss_message(&state, &blueprint).await,
-        )
-            .into_response();
+        let message = match blueprint_miss_message(&state, &blueprint).await {
+            Ok(message) => message,
+            Err(error) => return crate::blueprint::store_failure_response(error).into_response(),
+        };
+        return (StatusCode::NOT_FOUND, message).into_response();
     };
 
     // Validate `initialize` variables here, not in rmcp's session layer: rmcp maps

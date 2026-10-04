@@ -62,9 +62,36 @@ pub(crate) fn name_memory_exhaustion(err: wasmtime::Error) -> wasmtime::Error {
     err.context(MemoryExhausted)
 }
 
+/// Native working memory admitted before allocating and refunded on every exit.
+pub(crate) struct HostBytes {
+    counter: Arc<AtomicU64>,
+    bytes: u64,
+}
+
+impl HostBytes {
+    pub(crate) fn new(limits: &TenantLimits, bytes: u64) -> Result<Self, MemoryCapExceeded> {
+        limits.charge_host_bytes(bytes)?;
+        Ok(Self {
+            counter: limits.host_attached_counter(),
+            bytes,
+        })
+    }
+}
+
+impl Drop for HostBytes {
+    fn drop(&mut self) {
+        let _ = self
+            .counter
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
+                Some(current.saturating_sub(self.bytes))
+            });
+    }
+}
+
 pub struct TenantLimits {
     pub max_total_bytes: u64,
     observed_bytes: u64,
+    peak_bytes: AtomicU64,
     host_attached_bytes: Arc<AtomicU64>,
 }
 
@@ -73,12 +100,18 @@ impl TenantLimits {
         Self {
             max_total_bytes,
             observed_bytes: 0,
+            peak_bytes: AtomicU64::new(0),
             host_attached_bytes: Arc::new(AtomicU64::new(0)),
         }
     }
 
     pub fn observed_bytes(&self) -> u64 {
         self.observed_bytes
+    }
+
+    /// High-water mark of admitted engine memory plus charged host bytes, not RSS.
+    pub fn peak_bytes(&self) -> u64 {
+        self.peak_bytes.load(Ordering::Relaxed)
     }
 
     pub fn host_attached_bytes(&self) -> u64 {
@@ -97,7 +130,14 @@ impl TenantLimits {
                 let next = current.checked_add(n)?;
                 (self.observed_bytes.saturating_add(next) <= self.max_total_bytes).then_some(next)
             })
-            .map(|_| ())
+            .map(|previous| {
+                self.peak_bytes.fetch_max(
+                    self.observed_bytes
+                        .saturating_add(previous)
+                        .saturating_add(n),
+                    Ordering::Relaxed,
+                );
+            })
             .map_err(|current| MemoryCapExceeded {
                 requested: n,
                 already_observed: self.observed_bytes,
@@ -130,6 +170,8 @@ impl ResourceLimiter for TenantLimits {
             return Ok(false);
         }
         self.observed_bytes = next;
+        self.peak_bytes
+            .fetch_max(next.saturating_add(host), Ordering::Relaxed);
         Ok(true)
     }
 
@@ -146,4 +188,62 @@ impl ResourceLimiter for TenantLimits {
 /// Call once, immediately after constructing the `Store`, before instantiating any module.
 pub fn install_tenant_limits(store: &mut Store<StoreData>) {
     store.limiter(|data| &mut data.tenant_limits);
+}
+
+/// Usage survives successful execution, traps, and cleanup of host allocations.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct ExecutionUsage {
+    /// All fuel spent: `wasm_fuel + host_fuel`.
+    pub fuel: u64,
+    /// Fuel burnt by the program's own Wasm instructions.
+    pub wasm_fuel: u64,
+    /// Fuel charged by host functions for the work they did on the program's
+    /// behalf (see [`super::fuel::charge_host_fuel`]).
+    pub host_fuel: u64,
+    pub memory_peak: u64,
+}
+
+impl ExecutionUsage {
+    pub fn capture(store: &Store<StoreData>, initial_fuel: u64) -> wasmtime::Result<Self> {
+        let remaining = store.get_fuel()?;
+        let fuel = initial_fuel
+            .checked_sub(remaining)
+            .ok_or_else(|| wasmtime::Error::msg("remaining fuel exceeds initial budget"))?;
+        // Batched host charges the engine has not seen yet; a run that Wasm
+        // exhausted with a batch pending overran the budget by that much, and
+        // the report stays within the budget.
+        let fuel = fuel
+            .saturating_add(store.data().host_fuel_pending)
+            .min(initial_fuel);
+        let host_fuel = store.data().host_fuel;
+        let wasm_fuel = fuel
+            .checked_sub(host_fuel)
+            .ok_or_else(|| wasmtime::Error::msg("host fuel exceeds the fuel spent"))?;
+        Ok(Self {
+            fuel,
+            wasm_fuel,
+            host_fuel,
+            memory_peak: store.data().tenant_limits.peak_bytes(),
+        })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn memory_peak_retains_released_host_allocations_and_excludes_refusals() {
+        let mut limits = TenantLimits::new(1000);
+        assert!(limits.memory_growing(0, 200, None).unwrap());
+        limits.charge_host_bytes(500).unwrap();
+        limits.release_host_bytes(500);
+        assert_eq!(limits.peak_bytes(), 700);
+        limits.charge_host_bytes(100).unwrap();
+        assert!(limits.memory_growing(200, 650, None).unwrap());
+        assert_eq!(limits.peak_bytes(), 750);
+        assert!(limits.charge_host_bytes(300).is_err());
+        assert!(!limits.memory_growing(650, 950, None).unwrap());
+        assert_eq!(limits.peak_bytes(), 750);
+    }
 }

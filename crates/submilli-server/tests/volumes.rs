@@ -9,7 +9,7 @@ use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use http_body_util::BodyExt;
 use serde_json::Value;
-use submilli_server::config::VolumeTable;
+use submilli_server::config::{VolumeSpec, VolumeTable};
 use submilli_server::{AppState, ServerConfig, app};
 use tower::ServiceExt;
 
@@ -53,8 +53,14 @@ async fn lists_every_declared_volume_name() {
     let alpha = tempfile::tempdir().expect("alpha dir");
     let scratch = tempfile::tempdir().expect("scratch dir");
     let volumes = VolumeTable::from([
-        ("project-alpha".to_string(), alpha.path().to_path_buf()),
-        ("scratch".to_string(), scratch.path().to_path_buf()),
+        (
+            "project-alpha".to_string(),
+            VolumeSpec::local_path(alpha.path()),
+        ),
+        (
+            "scratch".to_string(),
+            VolumeSpec::local_path(scratch.path()),
+        ),
     ]);
 
     let (status, body, _) = list(volumes).await;
@@ -69,8 +75,11 @@ async fn never_reveals_the_host_directory_behind_a_name() {
     let scratch = tempfile::tempdir().expect("scratch dir");
     let targets = [alpha.path().to_path_buf(), scratch.path().to_path_buf()];
     let volumes = VolumeTable::from([
-        ("project-alpha".to_string(), targets[0].clone()),
-        ("scratch".to_string(), targets[1].clone()),
+        (
+            "project-alpha".to_string(),
+            VolumeSpec::local_path(&targets[0]),
+        ),
+        ("scratch".to_string(), VolumeSpec::local_path(&targets[1])),
     ]);
 
     let (status, _, text) = list(volumes).await;

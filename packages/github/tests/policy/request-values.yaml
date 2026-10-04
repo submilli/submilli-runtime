@@ -4,11 +4,8 @@ packages:
   - '@submilli/github'
 default: deny
 secrets:
-  # Not a credential: a placeholder read from a file beside this blueprint, so the
-  # run touches neither the secret store nor the environment. The path is relative
-  # to the repository root, where the policy test runs.
   GITHUB_TOKEN:
-    file: packages/github/tests/policy/fake-token.txt
+    store: policy-token
 permissions:
   main:
     - capability: github.com/repositories.get

@@ -7,6 +7,7 @@
 //! Wasm prelude still imports them — exactly as Number's low-level conversions
 //! stay under `submilli:number`. They re-home when the prelude is fully ported.
 
+use crate::runtime::host::{abi_arg, abi_result};
 pub(crate) mod ops;
 
 use wasmtime::{Caller, FuncType, HeapType, Linker, RefType, Val, ValType};
@@ -15,6 +16,7 @@ use crate::runtime::StoreData;
 use crate::runtime::host::{
     intrinsic_bigint_type, intrinsic_string_type, register_host_fn, write_submilli_string_struct,
 };
+use crate::runtime::intrinsic_types::intrinsic_types;
 use crate::runtime::prelude::bigint::ops::{limbs_to_bigint, read_bigint_struct};
 use crate::runtime::prelude::{MODULE_NAME, declare_method};
 use crate::{MangledName, PackageDeclaration, Param, Type};
@@ -46,8 +48,8 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         FuncType::new(&engine, [bigint_ref.clone(), ValType::F64], [s]),
         true,
         |caller, params, results| {
-            let (sign, limbs) = read_bigint_struct(caller, &params[0], "BigInt#toString")?;
-            let radix = match params[1] {
+            let (sign, limbs) = read_bigint_struct(caller, abi_arg(params, 0)?, "BigInt#toString")?;
+            let radix = match *abi_arg(params, 1)? {
                 Val::F64(bits) => f64::from_bits(bits),
                 ref other => wasmtime::bail!("BigInt#toString expects f64 radix, got {other:?}"),
             };
@@ -55,8 +57,9 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
             if radix.is_nan() || !(2.0..=36.0).contains(&truncated) {
                 wasmtime::bail!("toString radix must be between 2 and 36");
             }
-            let text = limbs_to_bigint(sign, &limbs).to_str_radix(truncated as u32);
-            results[0] = string_val(caller, &text)?;
+            let text =
+                ops::format_bigint(caller, &limbs_to_bigint(sign, &limbs)?, truncated as u32)?;
+            *abi_result(results, 0)? = string_val(caller, &text)?;
             Ok(())
         },
     )?;
@@ -70,9 +73,9 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         FuncType::new(&engine, [bigint_ref.clone()], [string_ref]),
         true,
         |caller, params, results| {
-            let (sign, limbs) = read_bigint_struct(caller, &params[0], "BigInt#toJson")?;
-            let text = limbs_to_bigint(sign, &limbs).to_str_radix(10);
-            results[0] = string_val(caller, &text)?;
+            let (sign, limbs) = read_bigint_struct(caller, abi_arg(params, 0)?, "BigInt#toJson")?;
+            let text = ops::format_bigint(caller, &limbs_to_bigint(sign, &limbs)?, 10)?;
+            *abi_result(results, 0)? = string_val(caller, &text)?;
             Ok(())
         },
     )?;
@@ -94,7 +97,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         FuncType::new(&engine, [obj_param], [bigint_ref]),
         true,
         |caller, params, results| {
-            results[0] = bigint_ctor_call(caller, &params[0])?;
+            *abi_result(results, 0)? = bigint_ctor_call(caller, abi_arg(params, 0)?)?;
             Ok(())
         },
     )?;
@@ -109,18 +112,13 @@ fn bigint_ctor_call(caller: &mut Caller<'_, StoreData>, value: &Val) -> wasmtime
     let Val::AnyRef(Some(any)) = value else {
         return Err(wasmtime::Error::msg("BigInt(value): value is null"));
     };
-    let intr = crate::runtime::intrinsic_types::build_intrinsic_types(caller.engine())?;
+    let intr = intrinsic_types(&mut *caller)?;
     let Some(st) = any.as_struct(&mut *caller)? else {
         return Err(wasmtime::Error::msg("BigInt(value): not a struct value"));
     };
     if wasmtime::StructType::eq(&st.ty(&*caller)?, &intr.string) {
         let s = crate::runtime::host::read_string_arg(caller, value, "BigInt(string)")?;
-        let trimmed = s.trim();
-        let parsed: num_bigint::BigInt = trimmed.parse().map_err(|_| {
-            crate::runtime::host::syntax_error(format!(
-                "BigInt(string): invalid bigint literal: {trimmed:?}"
-            ))
-        })?;
+        let parsed = ops::parse_decimal(caller, &s, "BigInt(string)")?;
         return crate::runtime::prelude::bigint::ops::make_bigint_struct(caller, parsed);
     }
     if wasmtime::StructType::eq(&st.ty(&*caller)?, &intr.boxed_number) {
@@ -128,22 +126,8 @@ fn bigint_ctor_call(caller: &mut Caller<'_, StoreData>, value: &Val) -> wasmtime
             Val::F64(bits) => f64::from_bits(bits),
             other => wasmtime::bail!("BigInt(number): field 1 is {other:?}, not f64"),
         };
-        if !n.is_finite() {
-            return Err(crate::runtime::host::range_error(format!(
-                "BigInt(number): cannot convert non-finite number to bigint ({n})"
-            )));
-        }
-        if n.fract() != 0.0 {
-            return Err(crate::runtime::host::range_error(format!(
-                "BigInt(number): cannot convert non-integer number to bigint ({n})"
-            )));
-        }
-        // For integer doubles up to 2^53 the cast is exact; beyond, the f64
-        // itself already lost precision (matches JS `BigInt(N)`).
-        return crate::runtime::prelude::bigint::ops::make_bigint_struct(
-            caller,
-            num_bigint::BigInt::from(n as i128),
-        );
+        let parsed = ops::integer_number(n, "BigInt(number)")?;
+        return ops::make_bigint_struct(caller, parsed);
     }
     Err(wasmtime::Error::msg(
         "BigInt(value): expected a string or number",
@@ -286,4 +270,64 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
             },
         },
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::runtime::{RuntimeConfig, Vfs, install_runtime_async};
+    use wasmtime::Func;
+
+    #[tokio::test]
+    async fn boxed_and_raw_numbers_convert_exactly_at_full_double_range() {
+        let config = RuntimeConfig::default();
+        let engine = config.engine().unwrap();
+        let mut store = config
+            .store_async(&engine, StoreData::with_vfs(Vfs::none()))
+            .unwrap();
+        let mut linker = Linker::new(&engine);
+        install_runtime_async(&mut linker, &mut store)
+            .await
+            .unwrap();
+        let callback = Func::new(
+            &mut store,
+            FuncType::new(&engine, [], []),
+            |mut caller, _, _| {
+                for (number, expected) in [
+                    (0.0, num_bigint::BigInt::from(0)),
+                    (-0.0, num_bigint::BigInt::from(0)),
+                    (
+                        9007199254740992.0,
+                        num_bigint::BigInt::from(1u64) << 53usize,
+                    ),
+                    (2f64.powi(127), num_bigint::BigInt::from(1u64) << 127usize),
+                    (
+                        -2f64.powi(128),
+                        -(num_bigint::BigInt::from(1u64) << 128usize),
+                    ),
+                    (
+                        f64::MAX,
+                        (num_bigint::BigInt::from(1u64) << 1024usize)
+                            - (num_bigint::BigInt::from(1u64) << 971usize),
+                    ),
+                ] {
+                    assert_eq!(ops::integer_number(number, "test")?, expected);
+                    let boxed =
+                        crate::runtime::host::write_boxed_number_struct(&mut caller, number)?;
+                    let converted =
+                        bigint_ctor_call(&mut caller, &Val::AnyRef(Some(boxed.to_anyref())))?;
+                    let (sign, limbs) = read_bigint_struct(&mut caller, &converted, "test")?;
+                    assert_eq!(limbs_to_bigint(sign, &limbs)?, expected);
+                    assert!(limbs.len() <= 16);
+                }
+                for number in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY, 1.5, -1.5] {
+                    let error = ops::integer_number(number, "test").unwrap_err();
+                    assert!(format!("{error}").contains("cannot convert"));
+                }
+                Ok(())
+            },
+        );
+        store.set_fuel(100000).unwrap();
+        callback.call_async(&mut store, &[], &mut []).await.unwrap();
+    }
 }

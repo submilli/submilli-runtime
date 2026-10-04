@@ -2,6 +2,7 @@
 //!
 //! Read-only: produces additional diagnostics, never modifies the tree.
 
+mod body_walk;
 mod capability_consistency;
 mod check_calls;
 mod check_discipline;
@@ -19,7 +20,7 @@ mod super_call;
 mod unreachable;
 
 use crate::compiler_error::{CompileError, CompilerFailure, CompilerStage};
-use crate::{Diagnostic, ExportEntry, PackageDeclaration, TypedAst, tree_height};
+use crate::{Diagnostic, ExportEntry, PackageDeclaration, Type, TypedAst, tree_height};
 
 use super::infer::module_symbols::ModuleSymbols;
 use declarations::TypeDeclarations;
@@ -44,6 +45,23 @@ pub fn check_script(
         fatal: Some(fatal),
     })?;
     Ok(diags)
+}
+
+/// The type a `@capability` binding path reads from a parameter of type `ty`
+/// in `package`, resolved as the capability-consistency rule resolves it.
+/// `None` when a segment names no field or reaches an unknown declaration.
+pub fn capability_binding_type(
+    package: &PackageDeclaration,
+    dependencies: &[&PackageDeclaration],
+    ty: &Type,
+    path: &[String],
+) -> Option<Type> {
+    let declarations = TypeDeclarations::for_package(package, dependencies);
+    match capability_consistency::binding_target(&declarations, ty, path) {
+        capability_consistency::BindingTarget::Found(ty) => Some(ty),
+        capability_consistency::BindingTarget::Missing(_)
+        | capability_consistency::BindingTarget::Unresolved => None,
+    }
 }
 
 pub(in crate::typechecker) struct PackageModuleSurface<'a> {
@@ -106,10 +124,8 @@ fn run_rules(
     if source == Source::Script {
         // Inference reports a package that declares `main`.
         main_required::run(ta, diags);
-        // First-party packages leave parameters and results undocumented, so
-        // packages are not held to this yet.
-        doc_consistency::run(ta, diags);
     }
+    doc_consistency::run(ta, diags)?;
     capability_consistency::run(ta, declarations, diags)
 }
 
@@ -132,6 +148,18 @@ mod test_util {
 
     pub fn run_raw(source: &str) -> Vec<Diagnostic> {
         pipeline(source)
+    }
+
+    /// Each diagnostic of [`run_raw`] as its message and 1-based line, so a
+    /// test can tell apart several reports that share a message.
+    pub fn run_lines(source: &str) -> Vec<(String, usize)> {
+        run_raw(source)
+            .into_iter()
+            .map(|diag| {
+                let line = source[..diag.span.start as usize].lines().count().max(1);
+                (diag.message, line)
+            })
+            .collect()
     }
 
     /// Infers a script against the runtime and the standard library, without

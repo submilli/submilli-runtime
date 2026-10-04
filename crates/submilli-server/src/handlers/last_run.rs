@@ -20,11 +20,15 @@ pub async fn handle(
     Path(session_id): Path<String>,
 ) -> Result<Json<LastRunResponse>, StatusCode> {
     match state.sessions().get(&session_id).await {
-        Some(run) => Ok(Json(LastRunResponse {
+        Ok(Some(run)) => Ok(Json(LastRunResponse {
             result: run.result,
             console: run.console,
             error: run.error,
         })),
-        None => Err(StatusCode::NOT_FOUND),
+        Ok(None) => Err(StatusCode::NOT_FOUND),
+        Err(error) => {
+            tracing::warn!(operation = "get", session = %session_id, %error, "last-run storage failed");
+            Err(StatusCode::INTERNAL_SERVER_ERROR)
+        }
     }
 }

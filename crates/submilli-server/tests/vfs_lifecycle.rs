@@ -10,7 +10,7 @@ use http_body_util::BodyExt;
 use serde_json::{Value, json};
 use submilli_blueprint::{Action, Blueprint, PermissionRule, VfsConfig};
 use submilli_server::blueprint::InMemoryBlueprintStore;
-use submilli_server::config::VolumeTable;
+use submilli_server::config::{VolumeSpec, VolumeTable};
 use submilli_server::{AppState, ServerConfig, app};
 use tower::ServiceExt;
 
@@ -43,12 +43,15 @@ impl Harness {
 
     fn with_vfs_and_volumes(vfs: VfsConfig, volumes: VolumeTable) -> Self {
         let vfs_root = tempfile::tempdir().expect("vfs root");
-        let blueprints = Arc::new(InMemoryBlueprintStore::seed([Blueprint {
-            name: BLUEPRINT.into(),
-            vfs,
-            permissions: allow_fs(),
-            ..Default::default()
-        }]));
+        let blueprints = Arc::new(
+            InMemoryBlueprintStore::seed([Blueprint {
+                name: BLUEPRINT.into(),
+                vfs,
+                permissions: allow_fs(),
+                ..Default::default()
+            }])
+            .expect("seed blueprints"),
+        );
         let config = ServerConfig {
             blueprints: Some(blueprints),
             session_storage_root: Some(vfs_root.path().to_path_buf()),
@@ -120,7 +123,11 @@ impl Harness {
 }
 
 fn per_session() -> VfsConfig {
-    VfsConfig::PerSession { size_limit: None }
+    VfsConfig::PerSession {
+        size_limit: None,
+        mounts: Default::default(),
+        cwd: None,
+    }
 }
 
 const WRITE: &str = r#"import { writeText } from "submilli:fs"; function main(): void { writeText("/a.txt", "hi"); }"#;
@@ -148,6 +155,8 @@ async fn per_session_persists_across_executes() {
 async fn per_session_size_limit_spans_the_session() {
     let h = Harness::with_vfs(VfsConfig::PerSession {
         size_limit: Some(100),
+        mounts: Default::default(),
+        cwd: None,
     });
     let (_, created) = h
         .post("/v1/sessions", json!({ "blueprint": BLUEPRINT }), None)
@@ -165,14 +174,18 @@ async fn per_session_size_limit_spans_the_session() {
     let (_, second) = h.execute(&write("b.txt"), Some(&session)).await;
     let message = second["error"]["message"].as_str().unwrap_or_default();
     assert!(
-        message.contains("RangeError") && message.contains("size limit of 100 bytes"),
+        message.contains("QuotaExceededError") && message.contains("size limit of 100 bytes"),
         "the second program starts from the first one's 60 bytes: {second}"
     );
 }
 
 #[tokio::test]
 async fn ephemeral_does_not_persist_across_executes() {
-    let h = Harness::with_vfs(VfsConfig::Ephemeral { size_limit: None });
+    let h = Harness::with_vfs(VfsConfig::Ephemeral {
+        size_limit: None,
+        mounts: Default::default(),
+        cwd: None,
+    });
     let (_, created) = h
         .post("/v1/sessions", json!({ "blueprint": BLUEPRINT }), None)
         .await;
@@ -235,12 +248,15 @@ async fn disconnect_wipes_known_204_unknown_404() {
 /// Build a server over explicit durable dirs so two instances can share them
 /// across a simulated restart.
 fn restartable_state(vfs_root: &Path, store_dir: &Path) -> AppState {
-    let blueprints = Arc::new(InMemoryBlueprintStore::seed([Blueprint {
-        name: BLUEPRINT.into(),
-        vfs: per_session(),
-        permissions: allow_fs(),
-        ..Default::default()
-    }]));
+    let blueprints = Arc::new(
+        InMemoryBlueprintStore::seed([Blueprint {
+            name: BLUEPRINT.into(),
+            vfs: per_session(),
+            permissions: allow_fs(),
+            ..Default::default()
+        }])
+        .expect("seed blueprints"),
+    );
     let config = ServerConfig {
         blueprints: Some(blueprints),
         session_storage_root: Some(vfs_root.to_path_buf()),
@@ -341,16 +357,23 @@ async fn restart_sweeps_orphan_session_dir() {
 /// `target`.
 fn with_volume(target: &Path) -> Harness {
     Harness::with_vfs_and_volumes(
-        VfsConfig::Persistent {
+        VfsConfig::Named {
             volume: "work".into(),
+            access: None,
+            mounts: Default::default(),
+            cwd: None,
+            sub_path: None,
         },
-        VolumeTable::from([("work".to_string(), target.to_path_buf())]),
+        VolumeTable::from([(
+            "work".to_string(),
+            VolumeSpec::local_path(target.to_path_buf()),
+        )]),
     )
 }
 
 #[tokio::test]
-async fn persistent_rejects_path_traversal() {
-    let dir = tempfile::tempdir().expect("persistent dir");
+async fn a_named_root_rejects_path_traversal() {
+    let dir = tempfile::tempdir().expect("volume dir");
     let h = with_volume(dir.path());
     let escape = r#"import { writeText } from "submilli:fs"; function main(): void { writeText("../escape.txt", "x"); }"#;
     let (_, r) = h.execute(escape, None).await;
@@ -367,7 +390,7 @@ async fn persistent_rejects_path_traversal() {
 const WRITE_NOTE: &str = r#"import { writeText } from "submilli:fs"; function main(): void { writeText("note.txt", "hi"); }"#;
 
 #[tokio::test]
-async fn persistent_mounts_the_declared_volume() {
+async fn a_named_root_mounts_the_declared_volume() {
     let dir = tempfile::tempdir().expect("volume dir");
     let h = with_volume(dir.path());
     let (_, w) = h.execute(WRITE_NOTE, None).await;
@@ -379,12 +402,16 @@ async fn persistent_mounts_the_declared_volume() {
     );
 }
 
-/// The three ways a `persistent` mount fails, and what the client is allowed to
+/// The three ways a named root fails to mount, and what the client is allowed to
 /// learn: the volume name, never the host directory behind it.
 async fn mount_failure(target: PathBuf, volumes: VolumeTable) -> String {
     let h = Harness::with_vfs_and_volumes(
-        VfsConfig::Persistent {
+        VfsConfig::Named {
             volume: "work".into(),
+            access: None,
+            mounts: Default::default(),
+            cwd: None,
+            sub_path: None,
         },
         volumes,
     );
@@ -414,7 +441,7 @@ async fn a_volume_whose_target_vanished_fails_by_name() {
     let dir = tempfile::tempdir().expect("volume parent");
     let target = dir.path().join("work");
     std::fs::create_dir(&target).unwrap();
-    let volumes = VolumeTable::from([("work".to_string(), target.clone())]);
+    let volumes = VolumeTable::from([("work".to_string(), VolumeSpec::local_path(target.clone()))]);
     std::fs::remove_dir(&target).unwrap();
     let body = mount_failure(target, volumes).await;
     assert!(body.contains("unavailable"), "got {body}");
@@ -425,7 +452,7 @@ async fn a_volume_whose_target_became_a_file_fails_by_name() {
     let dir = tempfile::tempdir().expect("volume parent");
     let target = dir.path().join("work");
     std::fs::write(&target, b"not a directory").unwrap();
-    let volumes = VolumeTable::from([("work".to_string(), target.clone())]);
+    let volumes = VolumeTable::from([("work".to_string(), VolumeSpec::local_path(target.clone()))]);
     let body = mount_failure(target, volumes).await;
     assert!(body.contains("unavailable"), "got {body}");
 }
@@ -472,13 +499,17 @@ fn server_log() -> &'static LogBuf {
 async fn a_failed_mount_logs_the_host_path_it_withheld() {
     let dir = tempfile::tempdir().expect("volume parent");
     let target = dir.path().join("work");
-    let volumes = VolumeTable::from([("work".to_string(), target.clone())]);
+    let volumes = VolumeTable::from([("work".to_string(), VolumeSpec::local_path(target.clone()))]);
 
     let log = server_log();
 
     let h = Harness::with_vfs_and_volumes(
-        VfsConfig::Persistent {
+        VfsConfig::Named {
             volume: "work".into(),
+            access: None,
+            mounts: Default::default(),
+            cwd: None,
+            sub_path: None,
         },
         volumes,
     );

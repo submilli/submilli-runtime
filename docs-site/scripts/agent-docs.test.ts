@@ -24,8 +24,8 @@ test('the index and exports cover exactly the visible book, with summaries', asy
 	assert.deepEqual(links.map((link) => link[1]).sort(), expectedPaths.sort());
 	assert.deepEqual([...outputs.keys()].filter((path) => path.endsWith('.md')).sort(), expectedPaths);
 	assert.equal(chapters[0].slug, '');
-	assert.ok(chapters.findIndex((chapter) => chapter.slug === 'skill') <
-		chapters.findIndex((chapter) => chapter.slug === 'the-language'));
+	assert.ok(chapters.findIndex((chapter) => chapter.slug === 'application') <
+		chapters.findIndex((chapter) => chapter.slug === 'blueprints/start-a-blueprint'));
 	for (const path of expectedPaths) {
 		const markdown = outputs.get(path)!;
 		assert.match(markdown, /^# .+\n/);

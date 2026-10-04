@@ -47,7 +47,9 @@ async fn mcp_docs_work_locally_and_through_a_registered_blueprint() {
     let yaml = format!("name: test\nmcp:\n  tracker:\n    url: {upstream}/mcp\n");
     let blueprint = submilli_blueprint::parse(&yaml).unwrap();
     let server = serve(app(AppState::new(ServerConfig {
-        blueprints: Some(Arc::new(InMemoryBlueprintStore::seed([blueprint]))),
+        blueprints: Some(Arc::new(
+            InMemoryBlueprintStore::seed([blueprint]).expect("seed blueprints"),
+        )),
         ..ServerConfig::default()
     })
     .unwrap()))
@@ -305,4 +307,68 @@ fn no_discovery_command_carries_its_own_catalog_dump() {
             "{file} still dumps the catalog itself"
         );
     }
+}
+
+#[test]
+fn docs_and_search_show_the_whole_library_unless_a_blueprint_is_passed() {
+    let temporary = tempfile::tempdir().unwrap();
+    // Present but never read without `--blueprint`: it grants nothing, so
+    // reading it would hide Git and HTTP.
+    std::fs::write(temporary.path().join("blueprint.yaml"), "name: empty\n").unwrap();
+    let with_git = temporary.path().join("with-git.yaml");
+    std::fs::write(
+        &with_git,
+        "name: coder\ngit:\n  identity:\n    name: Agent\n    email: agent@acme.example\n",
+    )
+    .unwrap();
+    let submilli = |args: &[&str]| {
+        Command::new(submilli_bin())
+            .args(args)
+            .current_dir(temporary.path())
+            .env("SUBMILLI_HOME", temporary.path().join("home"))
+            .output()
+            .unwrap()
+    };
+
+    let docs = submilli(&["docs", "submilli:git"]);
+    assert!(docs.status.success(), "stderr: {}", stderr(&docs));
+    assert!(
+        stdout(&docs).contains("class Repository"),
+        "got: {}",
+        stdout(&docs)
+    );
+    let search = submilli(&["search"]);
+    for module in ["submilli:git —", "submilli:http —"] {
+        assert!(stdout(&search).contains(module), "got: {}", stdout(&search));
+    }
+
+    let hidden = submilli(&["docs", "submilli:git", "--blueprint", "blueprint.yaml"]);
+    assert!(!hidden.status.success());
+    assert!(
+        stderr(&hidden).contains("submilli blueprint git set"),
+        "got: {}",
+        stderr(&hidden)
+    );
+    let scoped = submilli(&["search", "--blueprint", "blueprint.yaml"]);
+    assert!(scoped.status.success(), "stderr: {}", stderr(&scoped));
+    for module in ["submilli:git —", "submilli:http —"] {
+        assert!(
+            !stdout(&scoped).contains(module),
+            "got: {}",
+            stdout(&scoped)
+        );
+    }
+    assert!(
+        stdout(&scoped).contains("submilli:crypto —"),
+        "got: {}",
+        stdout(&scoped)
+    );
+
+    let shown = submilli(&["docs", "submilli:git", "--blueprint", "with-git.yaml"]);
+    assert!(shown.status.success(), "stderr: {}", stderr(&shown));
+    assert!(
+        stdout(&shown).contains("class Repository"),
+        "got: {}",
+        stdout(&shown)
+    );
 }

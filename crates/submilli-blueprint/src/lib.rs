@@ -9,6 +9,7 @@ mod mcp;
 mod permissions;
 mod secrets;
 mod variables;
+mod vfs_paths;
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
@@ -141,6 +142,25 @@ impl Blueprint {
     /// permission rules. Pure — no parsing happens here (filter ASTs are parsed
     /// at registration), so it is cheap to call per check. The fall-through is
     /// `default:` when set, else `deny`.
+    /// Resolve a permission and its zero-based index within the caller's rules.
+    /// `None` identifies the blueprint's fall-through default.
+    pub fn resolve_permission_with_rule(
+        &self,
+        caller: &str,
+        capability: &str,
+        context: &serde_json::Value,
+        vars: &VarBindings,
+    ) -> (Action, Option<usize>) {
+        permissions::resolve_with_rule(
+            &self.permissions,
+            self.default_action.unwrap_or_default(),
+            caller,
+            capability,
+            context,
+            vars,
+        )
+    }
+
     pub fn resolve_permission(
         &self,
         caller: &str,
@@ -187,11 +207,9 @@ where
 
 /// The `vfs:` block: which filesystem a script gets, and the per-mode settings.
 /// Each mode's settings live on its variant, so invalid combinations — a
-/// `volume` under `none`, a `grace_period` under `ephemeral`, a `persistent`
-/// with no `volume` — can't be represented; the parser rejects them at the YAML
-/// boundary.
-///
-/// See the VFS section of the v1 release plan for the mode semantics.
+/// `volume` under `none`, a `grace_period` under `ephemeral`, `mounts` with no
+/// root to mount them in — can't be represented; the parser rejects them at the
+/// YAML boundary.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum VfsConfig {
     /// `submilli:fs.*` always fails. Pure-compute scripts.
@@ -199,22 +217,101 @@ pub enum VfsConfig {
     /// A fresh disk-backed scratch directory per execute, wiped at return. The
     /// default when `vfs:` is omitted — scripts get a filesystem without the
     /// operator having to opt in.
-    Ephemeral { size_limit: Option<u64> },
+    Ephemeral {
+        size_limit: Option<u64>,
+        mounts: Mounts,
+        cwd: Option<String>,
+    },
     /// A disk-backed directory that persists across executes within one session
     /// and is wiped when the session ends.
-    PerSession { size_limit: Option<u64> },
-    /// A volume the operator declared in the server config; files persist across
-    /// calls, sessions, and restarts. No automatic cleanup, no caps. The
-    /// blueprint names the volume — only the operator knows which host directory
-    /// that name maps to.
-    Persistent { volume: String },
+    PerSession {
+        size_limit: Option<u64>,
+        mounts: Mounts,
+        cwd: Option<String>,
+    },
+    /// A named volume the operator declared in the server config as the root;
+    /// files persist across calls, sessions, and restarts, and other blueprints
+    /// naming the same volume share them. Its size limit and the most access it
+    /// allows are the operator's; `access` here can only narrow it. The
+    /// blueprint names the volume — only the operator knows where it is stored.
+    Named {
+        volume: String,
+        sub_path: Option<String>,
+        access: Option<Access>,
+        mounts: Mounts,
+        cwd: Option<String>,
+    },
+}
+
+/// Whether a script may change a named volume. A blueprint can only narrow
+/// what the server's declaration of the volume allows.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Access {
+    ReadOnly,
+    ReadWrite,
+}
+
+impl Access {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Access::ReadOnly => "read_only",
+            Access::ReadWrite => "read_write",
+        }
+    }
+}
+
+/// A named volume mounted below the root, under `vfs.mounts`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MountConfig {
+    pub volume: String,
+    pub sub_path: Option<String>,
+    /// `None` takes the access the server declares for the volume.
+    pub access: Option<Access>,
+}
+
+/// Mounts keyed by their absolute guest path, such as `/memory`. The parser
+/// admits only normalized paths that neither nest nor overlap.
+pub type Mounts = BTreeMap<String, MountConfig>;
+
+/// One use of a named volume by a blueprint: as the root (`mount: None`) or
+/// mounted at a guest path.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct NamedReference<'a> {
+    pub mount: Option<&'a str>,
+    pub volume: &'a str,
+    pub access: Option<Access>,
+}
+
+impl NamedReference<'_> {
+    /// Where the reference sits in the blueprint, for diagnostics.
+    pub fn yaml_path(&self, field: &str) -> YamlPath {
+        match self.mount {
+            None => yaml_path!["vfs", field],
+            Some(mount) => yaml_path!["vfs", "mounts", mount, field],
+        }
+    }
 }
 
 const DEFAULT_IDLE_TIMEOUT: Duration = Duration::from_secs(24 * 60 * 60);
 
+/// Bounds on a mount's guest path, so a hostile blueprint cannot make every
+/// path lookup expensive.
+const MAX_MOUNT_PATH_BYTES: usize = 4096;
+const MAX_MOUNT_PATH_COMPONENTS: usize = 64;
+
+/// The most mounts one blueprint may declare; the runtime routes every path
+/// through all of them. Matches the interpreter's own cap
+/// (`interpreter::runtime::vfs::MAX_MOUNTS`), which backs this one up.
+pub const MAX_MOUNTS: usize = 16;
+
 impl Default for VfsConfig {
     fn default() -> Self {
-        VfsConfig::Ephemeral { size_limit: None }
+        VfsConfig::Ephemeral {
+            size_limit: None,
+            mounts: Mounts::new(),
+            cwd: None,
+        }
     }
 }
 
@@ -229,30 +326,62 @@ impl VfsConfig {
             VfsConfig::None => "none",
             VfsConfig::Ephemeral { .. } => "ephemeral",
             VfsConfig::PerSession { .. } => "per_session",
-            VfsConfig::Persistent { .. } => "persistent",
+            VfsConfig::Named { .. } => "named",
         }
     }
 
-    /// Byte cap on the files a program keeps, where one applies (`ephemeral` /
-    /// `per_session`).
+    /// Byte cap on the files a program keeps in the root, where the blueprint
+    /// sets one (`ephemeral` / `per_session`). A named root's limit belongs to
+    /// the server's declaration of the volume.
     pub fn size_limit(&self) -> Option<u64> {
         match self {
-            VfsConfig::Ephemeral { size_limit } | VfsConfig::PerSession { size_limit } => {
+            VfsConfig::Ephemeral { size_limit, .. } | VfsConfig::PerSession { size_limit, .. } => {
                 *size_limit
             }
             _ => None,
         }
     }
+
+    /// The named volumes mounted below the root.
+    pub fn mounts(&self) -> &Mounts {
+        static EMPTY: Mounts = Mounts::new();
+        match self {
+            VfsConfig::None => &EMPTY,
+            VfsConfig::Ephemeral { mounts, .. }
+            | VfsConfig::PerSession { mounts, .. }
+            | VfsConfig::Named { mounts, .. } => mounts,
+        }
+    }
+
+    /// Every named volume the blueprint uses: the root first, when named, then
+    /// each mount in path order.
+    pub fn named_references(&self) -> Vec<NamedReference<'_>> {
+        let mut references = Vec::new();
+        if let VfsConfig::Named { volume, access, .. } = self {
+            references.push(NamedReference {
+                mount: None,
+                volume,
+                access: *access,
+            });
+        }
+        for (path, mount) in self.mounts() {
+            references.push(NamedReference {
+                mount: Some(path),
+                volume: &mount.volume,
+                access: mount.access,
+            });
+        }
+        references
+    }
 }
 
-#[derive(Deserialize, Default, Clone, Copy)]
-#[serde(rename_all = "snake_case")]
+#[derive(Default, Clone, Copy, PartialEq, Eq)]
 enum ModeTag {
     None,
     #[default]
     Ephemeral,
     PerSession,
-    Persistent,
+    Named,
 }
 
 impl ModeTag {
@@ -261,7 +390,7 @@ impl ModeTag {
             ModeTag::None => "none",
             ModeTag::Ephemeral => "ephemeral",
             ModeTag::PerSession => "per_session",
-            ModeTag::Persistent => "persistent",
+            ModeTag::Named => "named",
         }
     }
 
@@ -272,12 +401,54 @@ impl ModeTag {
     /// carry both, so they keep parsing rather than failing on an unknown key.
     fn allows(self, field: &str) -> bool {
         match field {
-            "volume" => matches!(self, ModeTag::Persistent),
+            "volume" | "access" | "subPath" => matches!(self, ModeTag::Named),
+            "mounts" | "cwd" => !matches!(self, ModeTag::None),
             "grace_period" => matches!(self, ModeTag::PerSession),
             "size_limit" | "path_limit" => {
                 matches!(self, ModeTag::Ephemeral | ModeTag::PerSession)
             }
             _ => true,
+        }
+    }
+}
+
+/// What a blueprint still using the removed `persistent` mode is told, wherever
+/// it names it.
+const PERSISTENT_REMOVED: &str = "vfs mode `persistent` was removed: write `mode: named` and keep \
+                                  the `volume:` line (`vfs: {mode: named, volume: <name>}`). A \
+                                  named volume keeps its files across calls, sessions and \
+                                  restarts as before; leave `access:` out to keep the access the \
+                                  server declares for it";
+
+impl<'de> Deserialize<'de> for ModeTag {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        deserializer.deserialize_str(ModeTagVisitor)
+    }
+}
+
+struct ModeTagVisitor;
+
+impl de::Visitor<'_> for ModeTagVisitor {
+    type Value = ModeTag;
+
+    fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("a vfs mode: `none`, `ephemeral`, `per_session` or `named`")
+    }
+
+    fn visit_str<E: de::Error>(self, mode: &str) -> Result<ModeTag, E> {
+        match mode {
+            "none" => Ok(ModeTag::None),
+            "ephemeral" => Ok(ModeTag::Ephemeral),
+            "per_session" => Ok(ModeTag::PerSession),
+            "named" => Ok(ModeTag::Named),
+            "persistent" => Err(E::custom(PERSISTENT_REMOVED)),
+            other => Err(E::unknown_variant(
+                other,
+                &["none", "ephemeral", "per_session", "named"],
+            )),
         }
     }
 }
@@ -296,27 +467,36 @@ struct Full {
     /// must not name a mode the author never typed.
     mode: Option<ModeTag>,
     volume: Option<String>,
+    access: Option<Access>,
+    mounts: Option<Mounts>,
+    sub_path: Option<String>,
+    cwd: Option<String>,
     grace_period: Option<String>,
     size_limit: Option<SizeRepr>,
     has_legacy_path_limit: bool,
 }
 
-const VFS_KEYS: &str = "`mode`, `volume`, `size_limit` (`grace_period` under `mode: \
-                        per_session` and `path_limit` are also accepted, but ignored)";
+const VFS_KEYS: &str = "`mode`, `volume`, `access`, `size_limit`, `mounts`, `subPath`, `cwd` (`grace_period` under \
+                        `mode: per_session` and `path_limit` are also accepted, but ignored)";
 
 /// What a `volume:` written without a `mode:` beside it is told. The block
 /// defaults to `ephemeral`, so the plain mode-conflict message would name a
 /// mode that appears nowhere in the document.
-const VOLUME_WITHOUT_MODE: &str = "`volume` is only valid under `mode: persistent`, and this vfs \
-                                   block has no `mode:` (it defaults to `ephemeral`); add `mode: \
-                                   persistent` to this vfs block";
+const VOLUME_WITHOUT_MODE: &str = "`volume` is only valid under `mode: named`, and this vfs block \
+                                   has no `mode:` (it defaults to `ephemeral`); add `mode: named` \
+                                   to this vfs block, or move the volume under `mounts:` to keep \
+                                   an ephemeral root";
 
 /// What a blueprint still carrying the retired `path:` key is told. The key is
 /// gone from every mode, so the message is the same wherever it appears.
 const RETIRED_PATH: &str = "the `path` key is retired: a blueprint can no longer name a host \
-                            directory. Use `volume: <name>` under `mode: persistent` — the \
-                            operator declares which host directory each volume name maps to in \
-                            the server config";
+                            directory. Use `volume: <name>` under `mode: named` — the operator \
+                            declares each volume by name in the server config";
+
+/// What `mounts:` under `mode: none` is told.
+const MOUNTS_WITHOUT_ROOT: &str = "`mounts` needs a filesystem root to mount volumes in, and \
+                                   `mode: none` has none; use `mode: ephemeral` (the default) or \
+                                   `mode: per_session` for the root";
 
 // Custom Deserialize accepts both the shorthand scalar (`vfs: per_session`) and
 // the full map. Human-readable durations ("5m") and sizes ("100MB") are parsed
@@ -343,12 +523,12 @@ impl<'de> de::Visitor<'de> for VfsVisitor {
 
     fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(
-            "a vfs mode name (`none`, `ephemeral`, `per_session`, `persistent`) or a vfs config map",
+            "a vfs mode name (`none`, `ephemeral`, `per_session`, `named`) or a vfs config map",
         )
     }
 
     fn visit_str<E: de::Error>(self, mode: &str) -> Result<Self::Value, E> {
-        let mode = ModeTag::deserialize(de::value::StrDeserializer::new(mode))?;
+        let mode = ModeTagVisitor.visit_str(mode)?;
         build_vfs(Full {
             mode: Some(mode),
             ..Full::default()
@@ -364,10 +544,7 @@ impl<'de> de::Visitor<'de> for VfsVisitor {
             // is what a bad merge produces: last-wins would silently deploy a
             // mode other than the one a reviewer reads at the top of the block.
             if !seen.insert(key.clone()) {
-                map.next_value_seed(Reject::<()>::new(format!(
-                    "duplicate key `{key}` under `vfs:`: it is already set earlier in this block; \
-                     delete one of the two `{key}:` lines"
-                )))?;
+                map.next_value_seed(Reject::<()>::new(duplicate_key(&key, "vfs:")))?;
                 continue;
             }
             // The mode as known *so far*: a field written above `mode:` can't
@@ -378,6 +555,28 @@ impl<'de> de::Visitor<'de> for VfsVisitor {
                 "volume" => {
                     full.volume =
                         Some(map.next_value_seed(Guarded::new("volume", mode, VolumeName))?);
+                }
+                "access" => {
+                    let seed = Guarded::new("access", mode, PhantomData::<Access>);
+                    full.access = Some(map.next_value_seed(seed)?);
+                }
+                "subPath" => {
+                    full.sub_path = Some(map.next_value_seed(Guarded::new(
+                        "subPath",
+                        mode,
+                        PhantomData::<String>,
+                    ))?);
+                }
+                "cwd" => {
+                    full.cwd = Some(map.next_value_seed(Guarded::new(
+                        "cwd",
+                        mode,
+                        PhantomData::<String>,
+                    ))?);
+                }
+                "mounts" => {
+                    full.mounts =
+                        Some(map.next_value_seed(Guarded::new("mounts", mode, MountsSeed))?);
                 }
                 "grace_period" => {
                     let seed = Guarded::new("grace_period", mode, PhantomData::<String>);
@@ -400,6 +599,13 @@ impl<'de> de::Visitor<'de> for VfsVisitor {
         }
         build_vfs(full).map_err(de::Error::custom)
     }
+}
+
+fn duplicate_key(key: &str, block: &str) -> String {
+    format!(
+        "duplicate key `{key}` under `{block}`: it is already set earlier in this block; \
+         delete one of the two `{key}:` lines"
+    )
 }
 
 /// Wraps a `vfs:` field's value seed with the mode check for that field, so a
@@ -556,6 +762,226 @@ impl<'de> de::Visitor<'de> for VolumeName {
     }
 }
 
+/// Reads `mounts:`, a map from guest path to mount entry. A path that is
+/// malformed, or that nests with or overlaps one written above it, is refused
+/// from inside its entry so the diagnostic anchors there.
+struct MountsSeed;
+
+impl<'de> de::DeserializeSeed<'de> for MountsSeed {
+    type Value = Mounts;
+
+    fn deserialize<D>(self, deserializer: D) -> Result<Self::Value, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        deserializer.deserialize_map(MountsSeed)
+    }
+}
+
+impl<'de> de::Visitor<'de> for MountsSeed {
+    type Value = Mounts;
+
+    fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(
+            "a map from mount path to mount, such as `/memory: {mode: named, volume: memory}`",
+        )
+    }
+
+    fn visit_map<A: de::MapAccess<'de>>(self, mut map: A) -> Result<Mounts, A::Error> {
+        let mut mounts = Mounts::new();
+        while let Some(path) = map.next_key::<String>()? {
+            if let Err(problem) = check_mount_path(&path, &mounts) {
+                map.next_value_seed(Reject::<()>::new(problem))?;
+                continue;
+            }
+            if mounts.len() >= MAX_MOUNTS {
+                map.next_value_seed(Reject::<()>::new(format!(
+                    "more than {MAX_MOUNTS} mounts; mount fewer volumes"
+                )))?;
+                continue;
+            }
+            let mount = map.next_value_seed(MountSeed)?;
+            mounts.insert(path, mount);
+        }
+        Ok(mounts)
+    }
+}
+
+/// Why `path` cannot be a mount path beside the `mounts` already read.
+fn check_mount_path(path: &str, mounts: &Mounts) -> Result<(), String> {
+    if mounts.contains_key(path) {
+        return Err(duplicate_key(path, "vfs.mounts"));
+    }
+    let Some(rest) = path.strip_prefix('/') else {
+        return Err(format!(
+            "mount path `{path}` must be absolute, such as `/memory`"
+        ));
+    };
+    if rest.is_empty() {
+        return Err(
+            "a volume cannot be mounted at `/`: that is the root, which the vfs `mode:` chooses; \
+             mount under a subdirectory such as `/memory`, or use `mode: named` for a named root"
+                .into(),
+        );
+    }
+    if path.len() > MAX_MOUNT_PATH_BYTES {
+        return Err(format!(
+            "mount path is longer than {MAX_MOUNT_PATH_BYTES} bytes"
+        ));
+    }
+    // ASCII only: the runtime guards mount points with ASCII case folding, which
+    // is only reliable for ASCII names on case-insensitive filesystems.
+    if !path
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '/' | '.' | '_' | '-'))
+    {
+        return Err(format!(
+            "mount path `{}` may contain only ASCII letters, digits, `.`, `_` and `-` \
+             between its `/` separators",
+            path.escape_debug()
+        ));
+    }
+    let parts: Vec<&str> = rest.split('/').collect();
+    if parts.len() > MAX_MOUNT_PATH_COMPONENTS {
+        return Err(format!(
+            "mount path `{path}` has more than {MAX_MOUNT_PATH_COMPONENTS} components"
+        ));
+    }
+    if parts
+        .iter()
+        .any(|part| part.is_empty() || *part == "." || *part == "..")
+    {
+        return Err(format!(
+            "mount path `{path}` is not normalized: write it without empty, `.` or `..` \
+             components and without a trailing `/`, such as `/data/memory`"
+        ));
+    }
+    // Windows drops a trailing dot, which would make `memory.` and `memory` one
+    // directory.
+    if parts.iter().any(|part| part.ends_with('.')) {
+        return Err(format!(
+            "mount path `{path}` has a component ending in `.`; drop the trailing dot"
+        ));
+    }
+    if parts.iter().any(|part| is_git_metadata(part)) {
+        return Err(format!(
+            "mount path `{path}` names Git metadata (`.git`); choose another directory"
+        ));
+    }
+    for existing in mounts.keys() {
+        let (outer, inner) = if path_contains(existing, path) {
+            (existing.as_str(), path)
+        } else if path_contains(path, existing) {
+            (path, existing.as_str())
+        } else {
+            continue;
+        };
+        if outer.eq_ignore_ascii_case(inner) {
+            return Err(format!(
+                "mount path `{path}` differs from `{existing}` only in letter case; on a \
+                 case-insensitive filesystem they are the same directory"
+            ));
+        }
+        return Err(format!(
+            "mount `{inner}` is inside mount `{outer}`; mounts may not nest — mount the volumes \
+             side by side, such as `/a` and `/b`"
+        ));
+    }
+    Ok(())
+}
+
+/// Whether the absolute path `outer` is `inner` or one of its ancestors,
+/// comparing whole components and ignoring ASCII case, as a case-insensitive
+/// filesystem would.
+fn path_contains(outer: &str, inner: &str) -> bool {
+    let mut inner_parts = inner.split('/');
+    outer.split('/').all(|part| {
+        inner_parts
+            .next()
+            .is_some_and(|other| other.eq_ignore_ascii_case(part))
+    })
+}
+
+fn is_git_metadata(part: &str) -> bool {
+    let lower = part.to_ascii_lowercase();
+    lower.trim_end_matches([' ', '.']) == ".git" || lower.starts_with(".git-submilli-")
+}
+
+/// Reads one mount entry: `mode: named` (required — the only mount mode so
+/// far), `volume`, and an optional `access`.
+struct MountSeed;
+
+impl<'de> de::DeserializeSeed<'de> for MountSeed {
+    type Value = MountConfig;
+
+    fn deserialize<D>(self, deserializer: D) -> Result<Self::Value, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        deserializer.deserialize_map(MountSeed)
+    }
+}
+
+const MOUNT_KEYS: &str = "`mode`, `volume`, `access`, `subPath`";
+
+impl<'de> de::Visitor<'de> for MountSeed {
+    type Value = MountConfig;
+
+    fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("a mount, such as `{mode: named, volume: memory, access: read_write}`")
+    }
+
+    fn visit_map<A: de::MapAccess<'de>>(self, mut map: A) -> Result<MountConfig, A::Error> {
+        let mut seen = BTreeSet::new();
+        let mut named = false;
+        let mut volume = None;
+        let mut access = None;
+        let mut sub_path = None;
+        while let Some(key) = map.next_key::<String>()? {
+            if !seen.insert(key.clone()) {
+                map.next_value_seed(Reject::<()>::new(duplicate_key(&key, "the mount")))?;
+                continue;
+            }
+            match key.as_str() {
+                "mode" => {
+                    let mode: ModeTag = map.next_value()?;
+                    if mode != ModeTag::Named {
+                        return Err(de::Error::custom(format!(
+                            "a mount's `mode` must be `named`, not `{}`: only named volumes \
+                             can be mounted; the root's mode is set by the vfs `mode:`",
+                            mode.as_str()
+                        )));
+                    }
+                    named = true;
+                }
+                "volume" => volume = Some(map.next_value_seed(VolumeName)?),
+                "access" => access = Some(map.next_value::<Access>()?),
+                "subPath" => sub_path = Some(map.next_value::<String>()?),
+                other => map.next_value_seed(Reject::<()>::new(format!(
+                    "unknown field `{other}` in a mount, expected one of {MOUNT_KEYS}"
+                )))?,
+            }
+        }
+        if !named {
+            return Err(de::Error::custom(
+                "a mount needs `mode: named`: mounts are named volumes the operator declares in \
+                 the server config",
+            ));
+        }
+        let volume = volume.ok_or_else(|| {
+            de::Error::custom(
+                "a mount needs a `volume`: the name of a volume the operator declared in the \
+                 server config",
+            )
+        })?;
+        Ok(MountConfig {
+            volume,
+            access,
+            sub_path,
+        })
+    }
+}
+
 // Hand-written so the output round-trips back through `parse`: the file store
 // re-reads `to_yaml` output on boot. Durations serialize as `<secs>s` strings
 // (which `parse_duration` reads back); sizes/counts as plain byte numbers.
@@ -564,43 +990,108 @@ impl Serialize for VfsConfig {
     where
         S: Serializer,
     {
-        let opt = |o: Option<u64>| usize::from(o.is_some());
+        let opt = |present: bool| usize::from(present);
         match self {
             VfsConfig::None => {
                 let mut map = serializer.serialize_map(Some(1))?;
                 map.serialize_entry("mode", "none")?;
                 map.end()
             }
-            VfsConfig::Ephemeral { size_limit } => {
-                let mut map = serializer.serialize_map(Some(1 + opt(*size_limit)))?;
-                map.serialize_entry("mode", "ephemeral")?;
-                serialize_size_limit(&mut map, *size_limit)?;
+            VfsConfig::Ephemeral {
+                size_limit,
+                mounts,
+                cwd,
+            }
+            | VfsConfig::PerSession {
+                size_limit,
+                mounts,
+                cwd,
+            } => {
+                let len =
+                    1 + opt(size_limit.is_some()) + opt(!mounts.is_empty()) + opt(cwd.is_some());
+                let mut map = serializer.serialize_map(Some(len))?;
+                map.serialize_entry("mode", self.mode_str())?;
+                if let Some(n) = size_limit {
+                    map.serialize_entry("size_limit", n)?;
+                }
+                if let Some(cwd) = cwd {
+                    map.serialize_entry("cwd", cwd)?;
+                }
+                serialize_mounts(&mut map, mounts)?;
                 map.end()
             }
-            VfsConfig::PerSession { size_limit } => {
-                let mut map = serializer.serialize_map(Some(1 + opt(*size_limit)))?;
-                map.serialize_entry("mode", "per_session")?;
-                serialize_size_limit(&mut map, *size_limit)?;
-                map.end()
-            }
-            VfsConfig::Persistent { volume } => {
-                let mut map = serializer.serialize_map(Some(2))?;
-                map.serialize_entry("mode", "persistent")?;
+            VfsConfig::Named {
+                volume,
+                access,
+                mounts,
+                sub_path,
+                cwd,
+            } => {
+                let len = 2
+                    + opt(access.is_some())
+                    + opt(!mounts.is_empty())
+                    + opt(sub_path.is_some())
+                    + opt(cwd.is_some());
+                let mut map = serializer.serialize_map(Some(len))?;
+                map.serialize_entry("mode", "named")?;
                 map.serialize_entry("volume", volume)?;
+                if let Some(sub_path) = sub_path {
+                    map.serialize_entry("subPath", sub_path)?;
+                }
+                if let Some(access) = access {
+                    map.serialize_entry("access", access)?;
+                }
+                if let Some(cwd) = cwd {
+                    map.serialize_entry("cwd", cwd)?;
+                }
+                serialize_mounts(&mut map, mounts)?;
                 map.end()
             }
         }
     }
 }
 
-fn serialize_size_limit<M: SerializeMap>(
-    map: &mut M,
-    size_limit: Option<u64>,
-) -> Result<(), M::Error> {
-    if let Some(n) = size_limit {
-        map.serialize_entry("size_limit", &n)?;
+fn serialize_mounts<M: SerializeMap>(map: &mut M, mounts: &Mounts) -> Result<(), M::Error> {
+    if mounts.is_empty() {
+        return Ok(());
     }
-    Ok(())
+    map.serialize_entry("mounts", &SerializedMounts(mounts))
+}
+
+struct SerializedMounts<'a>(&'a Mounts);
+
+impl Serialize for SerializedMounts<'_> {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        let mut map = serializer.serialize_map(Some(self.0.len()))?;
+        for (path, mount) in self.0 {
+            map.serialize_entry(path, &SerializedMount(mount))?;
+        }
+        map.end()
+    }
+}
+
+struct SerializedMount<'a>(&'a MountConfig);
+
+impl Serialize for SerializedMount<'_> {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        let MountConfig {
+            volume,
+            access,
+            sub_path,
+        } = self.0;
+        let mut map = serializer.serialize_map(Some(
+            2 + usize::from(access.is_some()) + usize::from(sub_path.is_some()),
+        ))?;
+        map.serialize_entry("mode", "named")?;
+        map.serialize_entry("volume", volume)?;
+        if let Some(sub_path) = sub_path {
+            map.serialize_entry("subPath", sub_path)?;
+        }
+        if let Some(access) = access {
+            map.serialize_entry("access", access)?;
+        }
+        map.end()
+    }
 }
 
 /// Convert the raw parsed fields into a well-formed variant, rejecting any field
@@ -629,6 +1120,10 @@ fn build_vfs(full: Full) -> Result<VfsConfig, BlueprintError> {
         });
     }
     for (field, present) in [
+        ("access", full.access.is_some()),
+        ("subPath", full.sub_path.is_some()),
+        ("cwd", full.cwd.is_some()),
+        ("mounts", full.mounts.is_some()),
         ("grace_period", grace.is_some()),
         ("size_limit", size_limit.is_some()),
         ("path_limit", full.has_legacy_path_limit),
@@ -637,27 +1132,57 @@ fn build_vfs(full: Full) -> Result<VfsConfig, BlueprintError> {
             return Err(mode_conflict(field, mode));
         }
     }
+    let mounts = full.mounts.unwrap_or_default();
+    let cwd = full.cwd;
 
     match mode {
         ModeTag::None => Ok(VfsConfig::None),
-        ModeTag::Ephemeral => Ok(VfsConfig::Ephemeral { size_limit }),
-        ModeTag::PerSession => Ok(VfsConfig::PerSession { size_limit }),
-        ModeTag::Persistent => {
+        ModeTag::Ephemeral => Ok(VfsConfig::Ephemeral {
+            size_limit,
+            mounts,
+            cwd,
+        }),
+        ModeTag::PerSession => Ok(VfsConfig::PerSession {
+            size_limit,
+            mounts,
+            cwd,
+        }),
+        ModeTag::Named => {
             let volume = full.volume.ok_or_else(|| {
                 BlueprintError::InvalidVfs(
-                    "vfs mode 'persistent' requires a 'volume': the name of a volume the operator \
+                    "vfs mode 'named' requires a 'volume': the name of a volume the operator \
                      declared in the server config"
                         .into(),
                 )
             })?;
-            Ok(VfsConfig::Persistent { volume })
+            Ok(VfsConfig::Named {
+                volume,
+                access: full.access,
+                sub_path: full.sub_path,
+                cwd,
+                mounts,
+            })
         }
     }
 }
 
 fn mode_conflict(field: &str, mode: ModeTag) -> BlueprintError {
+    let hint = match (field, mode) {
+        ("mounts", ModeTag::None) => return BlueprintError::InvalidVfs(MOUNTS_WITHOUT_ROOT.into()),
+        ("size_limit", ModeTag::Named) => {
+            "; a named volume's size limit is set by the operator where the server declares it"
+        }
+        ("volume" | "access", _) => {
+            "; `volume` and `access` belong to `mode: named`, or to an entry under `mounts:`"
+        }
+        _ => "",
+    };
     BlueprintError::InvalidVfs(
-        format!("'{field}' is not valid for vfs mode '{}'", mode.as_str()).into(),
+        format!(
+            "'{field}' is not valid for vfs mode '{}'{hint}",
+            mode.as_str()
+        )
+        .into(),
     )
 }
 
@@ -675,6 +1200,7 @@ pub fn parse(yaml: &str) -> Result<Blueprint, BlueprintError> {
     permissions::validate(&blueprint.permissions)?;
     variables::validate_variables(&blueprint)?;
     git::validate(&blueprint)?;
+    vfs_paths::validate(&blueprint)?;
     mcp::validate_mcp(&blueprint)?;
     llm::validate_llm(&blueprint)?;
     Ok(blueprint)
@@ -885,7 +1411,7 @@ fn parse_duration(raw: &str) -> Result<Duration, BlueprintError> {
 
 /// Parse a human byte size like `100MB`, `512KB`, `2GB`, or a bare `1048576`.
 /// K/M/G/T are 1024-based; the `iB` spellings are accepted as synonyms.
-fn parse_size(raw: &str) -> Result<u64, BlueprintError> {
+pub fn parse_size(raw: &str) -> Result<u64, BlueprintError> {
     let s = raw.trim();
     let (digits, unit) = split_numeric(s);
     let value: u64 = digits.parse().map_err(|_| {
@@ -1355,8 +1881,8 @@ permissions:
                 .unwrap();
         assert_eq!(b.vfs.size_limit(), Some(1024 * 1024));
         assert!(!to_yaml(&b).contains("path_limit"));
-        let err = parse("name: x\nvfs:\n  mode: persistent\n  volume: w\n  path_limit: 10\n")
-            .unwrap_err();
+        let err =
+            parse("name: x\nvfs:\n  mode: named\n  volume: w\n  path_limit: 10\n").unwrap_err();
         assert!(
             err.to_string().contains("'path_limit' is not valid"),
             "got {err}"
@@ -1373,22 +1899,26 @@ permissions:
     }
 
     #[test]
-    fn persistent_requires_volume() {
-        let err = parse("name: x\nvfs:\n  mode: persistent\n").unwrap_err();
+    fn named_requires_volume() {
+        let err = parse("name: x\nvfs:\n  mode: named\n").unwrap_err();
         assert!(matches!(err, BlueprintError::Parse(_)), "got {err:?}");
         assert!(err.to_string().contains("'volume'"), "got {err}");
-        let ok = parse("name: x\nvfs:\n  mode: persistent\n  volume: workspace\n").unwrap();
+        let ok = parse("name: x\nvfs:\n  mode: named\n  volume: workspace\n").unwrap();
         assert_eq!(
             ok.vfs,
-            VfsConfig::Persistent {
-                volume: "workspace".into()
+            VfsConfig::Named {
+                volume: "workspace".into(),
+                access: None,
+                mounts: Mounts::new(),
+                cwd: None,
+                sub_path: None,
             }
         );
     }
 
     #[test]
-    fn persistent_rejects_the_retired_path_key() {
-        let err = parse("name: x\nvfs:\n  mode: persistent\n  path: /data\n").unwrap_err();
+    fn named_rejects_the_retired_path_key() {
+        let err = parse("name: x\nvfs:\n  mode: named\n  path: /data\n").unwrap_err();
         let fault = err.fault().expect("fault");
         assert!(fault.message.contains("`volume: <name>`"), "got {fault:?}");
         assert!(fault.message.contains("operator"), "got {fault:?}");
@@ -1396,9 +1926,8 @@ permissions:
     }
 
     #[test]
-    fn persistent_rejects_volume_and_path_together() {
-        let err =
-            parse("name: x\nvfs:\n  mode: persistent\n  volume: w\n  path: /data\n").unwrap_err();
+    fn named_rejects_volume_and_path_together() {
+        let err = parse("name: x\nvfs:\n  mode: named\n  volume: w\n  path: /data\n").unwrap_err();
         let fault = err.fault().expect("fault");
         assert!(fault.message.contains("retired"), "got {fault:?}");
         assert_eq!(fault.path.as_deref(), Some(&yaml_path!["vfs", "path"][..]));
@@ -1423,7 +1952,7 @@ permissions:
     fn a_volume_that_is_not_a_bare_string_is_rejected() {
         for value in ["7", "true", "null", "[a]", "{ name: a, subpath: b }"] {
             let err = parse(&format!(
-                "name: x\nvfs:\n  mode: persistent\n  volume: {value}\n"
+                "name: x\nvfs:\n  mode: named\n  volume: {value}\n"
             ))
             .unwrap_err();
             let fault = err.fault().expect("fault");
@@ -1435,13 +1964,22 @@ permissions:
         }
         // Quoting makes a number-looking name usable, matching the config side,
         // where the same name is an ordinary map key.
-        let ok = parse("name: x\nvfs:\n  mode: persistent\n  volume: \"7\"\n").unwrap();
-        assert_eq!(ok.vfs, VfsConfig::Persistent { volume: "7".into() });
+        let ok = parse("name: x\nvfs:\n  mode: named\n  volume: \"7\"\n").unwrap();
+        assert_eq!(
+            ok.vfs,
+            VfsConfig::Named {
+                volume: "7".into(),
+                access: None,
+                mounts: Mounts::new(),
+                cwd: None,
+                sub_path: None,
+            }
+        );
     }
 
     #[test]
     fn empty_volume_is_rejected() {
-        let err = parse("name: x\nvfs:\n  mode: persistent\n  volume: ''\n").unwrap_err();
+        let err = parse("name: x\nvfs:\n  mode: named\n  volume: ''\n").unwrap_err();
         let fault = err.fault().expect("fault");
         assert!(fault.message.contains("empty"), "got {fault:?}");
         assert_eq!(
@@ -1451,7 +1989,7 @@ permissions:
     }
 
     #[test]
-    fn volume_is_rejected_outside_persistent_mode() {
+    fn volume_is_rejected_outside_named_mode() {
         for mode in ["none", "ephemeral", "per_session"] {
             let err = parse(&format!("name: x\nvfs:\n  mode: {mode}\n  volume: w\n")).unwrap_err();
             let fault = err.fault().expect("fault");
@@ -1472,26 +2010,26 @@ permissions:
     }
 
     #[test]
-    fn shorthand_persistent_still_needs_a_volume() {
-        let err = parse("name: x\nvfs: persistent\n").unwrap_err();
+    fn shorthand_named_still_needs_a_volume() {
+        let err = parse("name: x\nvfs: named\n").unwrap_err();
         assert!(err.to_string().contains("'volume'"), "got {err}");
     }
 
     #[test]
-    fn persistent_rejects_limits() {
+    fn named_rejects_limits() {
         for (key, line) in [
             ("size_limit", "size_limit: 1MB"),
             ("grace_period", "grace_period: 5m"),
         ] {
             let err = parse(&format!(
-                "name: x\nvfs:\n  mode: persistent\n  volume: w\n  {line}\n"
+                "name: x\nvfs:\n  mode: named\n  volume: w\n  {line}\n"
             ))
             .unwrap_err();
             let fault = err.fault().expect("fault");
             assert!(
                 fault
                     .message
-                    .contains(&format!("'{key}' is not valid for vfs mode 'persistent'")),
+                    .contains(&format!("'{key}' is not valid for vfs mode 'named'")),
                 "{key}: got {fault:?}"
             );
             // The fault anchors on the offending key, not on the block or on
@@ -1572,15 +2110,15 @@ permissions:
     }
 
     #[test]
-    fn round_trips_persistent() {
-        let original = parse("name: x\nvfs:\n  mode: persistent\n  volume: workspaces\n").unwrap();
+    fn round_trips_named() {
+        let original = parse("name: x\nvfs:\n  mode: named\n  volume: workspaces\n").unwrap();
         assert!(to_yaml(&original).contains("volume: workspaces"));
         let reparsed = parse(&to_yaml(&original)).unwrap();
         assert_eq!(original, reparsed);
     }
 
     #[test]
-    fn round_trips_every_non_persistent_mode() {
+    fn round_trips_every_unnamed_mode() {
         for src in [
             "name: x\nvfs: none\n",
             "name: x\nvfs: ephemeral\n",
@@ -1641,14 +2179,6 @@ permissions:
     }
 
     #[test]
-    fn parses_env_and_file_secrets() {
-        let b = parse("name: x\nsecrets:\n  A: { env: A_VAR }\n  B: { file: /run/secrets/b }\n")
-            .unwrap();
-        assert_eq!(b.secrets["A"], SecretSource::Env("A_VAR".into()));
-        assert_eq!(b.secrets["B"], SecretSource::File("/run/secrets/b".into()));
-    }
-
-    #[test]
     fn parses_store_secret() {
         let b = parse("name: x\nsecrets:\n  A: { store: prod/a }\n").unwrap();
         assert_eq!(b.secrets["A"], SecretSource::Store("prod/a".into()));
@@ -1671,14 +2201,38 @@ permissions:
 
     #[test]
     fn unknown_secret_source_is_parse_error() {
-        let err = parse("name: x\nsecrets:\n  A: { vault: x }\n").unwrap_err();
-        assert!(matches!(err, BlueprintError::Parse(_)), "got {err:?}");
+        for source in ["vault", "env", "file"] {
+            let yaml = format!("name: x\nsecrets:\n  A: {{ {source}: x }}\n");
+            let err = parse(&yaml).unwrap_err();
+            let fault = err.fault().unwrap();
+            assert!(fault.message.contains("unknown field"), "{err}");
+            assert_eq!(fault.path, Some(yaml_path!["secrets", "A", source]));
+            assert!(fault.location.is_some());
+        }
+    }
+
+    #[test]
+    fn secret_needs_exactly_one_source() {
+        for declaration in [
+            "{}",
+            "{ store: null }",
+            "{ harness: null }",
+            "{ store: key, harness: {} }",
+        ] {
+            let yaml = format!("name: x\nsecrets:\n  A: {declaration}\n");
+            let err = parse(&yaml).unwrap_err();
+            assert!(
+                err.to_string()
+                    .contains("exactly one source: store / harness"),
+                "{err}"
+            );
+        }
     }
 
     #[test]
     fn parses_auth_proxy_rule() {
         let b = parse(
-            "name: x\nsecrets:\n  K: { env: K }\nauth_proxy:\n  - host: api.example.com\n    headers:\n      Authorization: \"Bearer ${secrets.K}\"\n",
+            "name: x\nsecrets:\n  K: { store: K }\nauth_proxy:\n  - host: api.example.com\n    headers:\n      Authorization: \"Bearer ${secrets.K}\"\n",
         )
         .unwrap();
         assert_eq!(b.auth_proxy.len(), 1);
@@ -1709,7 +2263,7 @@ permissions:
     #[test]
     fn auth_proxy_round_trips_through_yaml() {
         let original = parse(
-            "name: x\nsecrets:\n  K: { env: K_VAR }\nauth_proxy:\n  - host: api.example.com\n    headers:\n      Authorization: \"Bearer ${secrets.K}\"\n    query:\n      appid: \"${secrets.K}\"\n",
+            "name: x\nsecrets:\n  K: { store: K_VAR }\nauth_proxy:\n  - host: api.example.com\n    headers:\n      Authorization: \"Bearer ${secrets.K}\"\n    query:\n      appid: \"${secrets.K}\"\n",
         )
         .unwrap();
         let reparsed = parse(&to_yaml(&original)).unwrap();
@@ -1864,8 +2418,8 @@ permissions:
 
     #[test]
     fn duplicate_vfs_key_is_rejected_at_the_repeat() {
-        let err = parse("name: x\nvfs:\n  mode: ephemeral\n  mode: persistent\n  volume: w\n")
-            .unwrap_err();
+        let err =
+            parse("name: x\nvfs:\n  mode: ephemeral\n  mode: named\n  volume: w\n").unwrap_err();
         let fault = err.fault().expect("fault");
         assert!(
             fault.message.contains("duplicate key `mode`"),
@@ -1881,7 +2435,7 @@ permissions:
         // is the repetition and not a mode conflict.
         for (key, mode, line) in [
             ("mode", "per_session", "mode: per_session"),
-            ("volume", "persistent", "volume: w"),
+            ("volume", "named", "volume: w"),
             ("size_limit", "per_session", "size_limit: 1MB"),
             ("grace_period", "per_session", "grace_period: 5m"),
         ] {
@@ -1916,13 +2470,247 @@ permissions:
         let err = parse("name: x\nvfs:\n  volume: w\n").unwrap_err();
         let fault = err.fault().expect("fault");
         assert!(
-            fault.message.contains("mode: persistent"),
+            fault.message.contains("mode: named"),
             "the message must name the edit: {fault:?}"
         );
         assert!(
             fault.message.contains("no `mode:`"),
             "the message must say the mode was never written: {fault:?}"
         );
+    }
+
+    #[test]
+    fn persistent_is_removed_with_a_migration_hint() {
+        for yaml in [
+            "name: x\nvfs:\n  mode: persistent\n  volume: notes\n",
+            "name: x\nvfs: persistent\n",
+        ] {
+            let err = parse(yaml).unwrap_err();
+            let fault = err.fault().expect("fault");
+            assert!(
+                fault.message.contains("`persistent` was removed")
+                    && fault.message.contains("mode: named"),
+                "{yaml}: got {fault:?}"
+            );
+        }
+        let err = parse("name: x\nvfs:\n  mode: persistent\n  volume: notes\n").unwrap_err();
+        let fault = err.fault().expect("fault");
+        assert_eq!(fault.path.as_deref(), Some(&yaml_path!["vfs", "mode"][..]));
+        assert_eq!(fault_line(fault), Some(3), "anchors at `mode:`");
+    }
+
+    #[test]
+    fn named_roots_take_an_optional_access() {
+        let b =
+            parse("name: x\nvfs:\n  mode: named\n  volume: notes\n  access: read_only\n").unwrap();
+        assert_eq!(
+            b.vfs,
+            VfsConfig::Named {
+                volume: "notes".into(),
+                access: Some(Access::ReadOnly),
+                mounts: Mounts::new(),
+                cwd: None,
+                sub_path: None,
+            }
+        );
+        assert_eq!(b.vfs.mode_str(), "named");
+        let err =
+            parse("name: x\nvfs:\n  mode: named\n  volume: notes\n  access: write\n").unwrap_err();
+        assert_eq!(
+            err.fault().expect("fault").path.as_deref(),
+            Some(&yaml_path!["vfs", "access"][..])
+        );
+        for mode in ["ephemeral", "per_session", "none"] {
+            let err = parse(&format!(
+                "name: x\nvfs:\n  mode: {mode}\n  access: read_only\n"
+            ))
+            .unwrap_err();
+            assert!(
+                err.to_string()
+                    .contains(&format!("'access' is not valid for vfs mode '{mode}'")),
+                "{mode}: got {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn mounts_parse_under_every_mode_with_a_root() {
+        let yaml = "name: x\nvfs:\n  mode: per_session\n  size_limit: 1MB\n  mounts:\n    /memory:\n      mode: named\n      volume: project-memory\n      access: read_write\n    /handbook:\n      mode: named\n      volume: company-handbook\n";
+        let b = parse(yaml).unwrap();
+        let VfsConfig::PerSession {
+            size_limit, mounts, ..
+        } = &b.vfs
+        else {
+            panic!("per_session: {:?}", b.vfs);
+        };
+        assert_eq!(*size_limit, Some(1024 * 1024));
+        assert_eq!(
+            mounts.get("/memory"),
+            Some(&MountConfig {
+                volume: "project-memory".into(),
+                access: Some(Access::ReadWrite),
+                sub_path: None,
+            })
+        );
+        assert_eq!(
+            mounts.get("/handbook"),
+            Some(&MountConfig {
+                volume: "company-handbook".into(),
+                access: None,
+                sub_path: None,
+            })
+        );
+        let references = b.vfs.named_references();
+        assert_eq!(references.len(), 2);
+        assert_eq!(references[0].mount, Some("/handbook"));
+        assert_eq!(
+            references[1].yaml_path("volume"),
+            yaml_path!["vfs", "mounts", "/memory", "volume"]
+        );
+        // The default root accepts mounts without writing `mode:`.
+        let b = parse("name: x\nvfs:\n  mounts:\n    /m: {mode: named, volume: m}\n").unwrap();
+        assert!(matches!(b.vfs, VfsConfig::Ephemeral { .. }));
+        assert_eq!(b.vfs.mounts().len(), 1);
+        // A named root takes mounts too, and lists itself first.
+        let b = parse(
+            "name: x\nvfs:\n  mode: named\n  volume: root\n  mounts:\n    /m: {mode: named, volume: m}\n",
+        )
+        .unwrap();
+        assert_eq!(b.vfs.named_references()[0].mount, None);
+        assert_eq!(b.vfs.named_references()[1].mount, Some("/m"));
+    }
+
+    #[test]
+    fn mounts_round_trip() {
+        for src in [
+            "name: x\nvfs:\n  mounts:\n    /m: {mode: named, volume: m, access: read_only}\n",
+            "name: x\nvfs:\n  mode: per_session\n  mounts:\n    /a/b: {mode: named, volume: m}\n",
+            "name: x\nvfs:\n  mode: named\n  volume: r\n  access: read_only\n  mounts:\n    /m: {mode: named, volume: m}\n",
+        ] {
+            let original = parse(src).unwrap();
+            let yaml = to_yaml(&original);
+            let reparsed = parse(&yaml).unwrap();
+            assert_eq!(original, reparsed, "{src}\n{yaml}");
+        }
+    }
+
+    #[test]
+    fn mounts_need_a_root() {
+        let err =
+            parse("name: x\nvfs:\n  mode: none\n  mounts:\n    /m: {mode: named, volume: m}\n")
+                .unwrap_err();
+        let fault = err.fault().expect("fault");
+        assert!(
+            fault.message.contains("needs a filesystem root"),
+            "got {fault:?}"
+        );
+        assert_eq!(
+            fault.path.as_deref(),
+            Some(&yaml_path!["vfs", "mounts"][..])
+        );
+    }
+
+    #[test]
+    fn mount_paths_must_be_normalized_absolute_and_disjoint() {
+        for (path, expected) in [
+            ("memory", "must be absolute"),
+            ("/", "cannot be mounted at `/`"),
+            ("/a/", "not normalized"),
+            ("/a//b", "not normalized"),
+            ("/a/./b", "not normalized"),
+            ("/a/../b", "not normalized"),
+            ("/a/.git", "Git metadata"),
+            ("/.GIT/x", "Git metadata"),
+            ("/a\\b", "only ASCII letters"),
+            ("/mémoire", "only ASCII letters"),
+            ("/memory.", "ending in `.`"),
+            ("/a b", "only ASCII letters"),
+        ] {
+            let yaml = format!(
+                "name: x\nvfs:\n  mounts:\n    \"{}\": {{mode: named, volume: m}}\n",
+                path.replace('\\', "\\\\")
+            );
+            let err = parse(&yaml).unwrap_err();
+            let fault = err.fault().expect("fault");
+            assert!(fault.message.contains(expected), "{path}: got {fault:?}");
+            assert_eq!(
+                fault.path.as_deref(),
+                Some(&yaml_path!["vfs", "mounts", path][..]),
+                "{path}"
+            );
+        }
+        for (first, second, expected) in [
+            ("/a", "/a/b", "inside mount `/a`"),
+            ("/a/b", "/a", "inside mount `/a`"),
+            ("/Memory", "/memory", "only in letter case"),
+        ] {
+            let yaml = format!(
+                "name: x\nvfs:\n  mounts:\n    {first}: {{mode: named, volume: one}}\n    {second}: {{mode: named, volume: two}}\n"
+            );
+            let err = parse(&yaml).unwrap_err();
+            let fault = err.fault().expect("fault");
+            assert!(
+                fault.message.contains(expected),
+                "{first} {second}: got {fault:?}"
+            );
+            assert_eq!(fault_line(fault), Some(5), "anchors at the later mount");
+        }
+        let ok = parse(
+            "name: x\nvfs:\n  mounts:\n    /a: {mode: named, volume: one}\n    /ab: {mode: named, volume: two}\n",
+        )
+        .unwrap();
+        assert_eq!(ok.vfs.mounts().len(), 2, "a shared prefix is not nesting");
+    }
+
+    #[test]
+    fn mount_entries_are_checked() {
+        for (entry, expected) in [
+            ("{mode: ephemeral, volume: m}", "must be `named`"),
+            ("{mode: persistent, volume: m}", "`persistent` was removed"),
+            ("{volume: m}", "needs `mode: named`"),
+            ("{mode: named}", "needs a `volume`"),
+            (
+                "{mode: named, volume: m, size_limit: 1MB}",
+                "unknown field `size_limit`",
+            ),
+            ("{mode: named, volume: m, access: all}", "unknown variant"),
+            ("{mode: named, volume: ''}", "empty"),
+            ("/data", "a mount"),
+        ] {
+            let yaml = format!("name: x\nvfs:\n  mounts:\n    /m: {entry}\n");
+            let err = parse(&yaml).unwrap_err();
+            assert!(err.to_string().contains(expected), "{entry}: got {err}");
+        }
+    }
+
+    #[test]
+    fn a_volume_can_be_used_more_than_once() {
+        for yaml in [
+            "name: x\nvfs:\n  mounts:\n    /a: {mode: named, volume: v}\n    /b: {mode: named, volume: v}\n",
+            "name: x\nvfs:\n  mode: named\n  volume: v\n  mounts:\n    /b: {mode: named, volume: v}\n",
+        ] {
+            let blueprint = parse(yaml).unwrap();
+            assert_eq!(parse(&to_yaml(&blueprint)).unwrap().vfs, blueprint.vfs);
+        }
+    }
+
+    #[test]
+    fn too_many_mounts_are_refused() {
+        let mut yaml = String::from("name: x\nvfs:\n  mounts:\n");
+        for index in 0..=MAX_MOUNTS {
+            yaml.push_str(&format!(
+                "    /m{index}: {{mode: named, volume: v{index}}}\n"
+            ));
+        }
+        let err = parse(&yaml).unwrap_err();
+        assert!(err.to_string().contains("more than"), "got {err}");
+    }
+
+    #[test]
+    fn a_size_limit_under_a_named_root_points_at_the_server() {
+        let err =
+            parse("name: x\nvfs:\n  mode: named\n  volume: v\n  size_limit: 1MB\n").unwrap_err();
+        assert!(err.to_string().contains("set by the operator"), "got {err}");
     }
 }
 

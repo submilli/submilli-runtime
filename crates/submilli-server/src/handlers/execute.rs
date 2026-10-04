@@ -38,6 +38,7 @@ pub struct ExecuteRequest {
 
 #[derive(Debug, Serialize)]
 pub struct ExecuteResponse {
+    pub execution_id: String,
     pub session_id: String,
     /// `main()`'s output, verbatim: a `string` return as-is, other returns as
     /// their JSON text. The caller parses it if a structured value is expected.
@@ -56,17 +57,34 @@ pub struct ExecuteResponse {
 /// reserved. Reporting that as "unknown blueprint" would send the operator looking
 /// for a blueprint that is sitting in the store with readable YAML, so every route
 /// that resolves a name renders the reason through here — REST and MCP alike.
-pub(crate) async fn blueprint_miss_message(state: &AppState, name: &str) -> String {
-    match state.blueprints().unusable_reason(name).await {
+pub(crate) async fn blueprint_miss_message(
+    state: &AppState,
+    name: &str,
+) -> Result<String, crate::blueprint::StoreError> {
+    Ok(match state.blueprints().unusable_reason(name).await? {
         Some(reason) => reason,
         None => format!("unknown blueprint: {name}"),
-    }
+    })
 }
 
 pub async fn handle(
     State(state): State<AppState>,
-    Json(req): Json<ExecuteRequest>,
-) -> impl IntoResponse {
+    request: Result<Json<ExecuteRequest>, axum::extract::rejection::JsonRejection>,
+) -> axum::response::Response {
+    let req = match request {
+        Ok(Json(req)) => req,
+        Err(error) => {
+            return (
+                error.status(),
+                Json(error_response(
+                    "",
+                    ErrorKind::InvalidRequest,
+                    error.body_text(),
+                )),
+            )
+                .into_response();
+        }
+    };
     // Stateless one-shot: every call gets a fresh transient session, torn down
     // once the run returns. A caller that wants state across executes (a
     // persistent `per_session` VFS, reused variable bindings) uses the session
@@ -74,19 +92,58 @@ pub async fn handle(
     // The generated id is returned so the run's output stays readable via
     // `GET /v1/sessions/{id}/last-run`.
     let session_id = Uuid::new_v4().to_string();
+    if let Some(audit) = crate::audit::execution() {
+        audit.annotate(
+            &req.code,
+            &req.blueprint,
+            None,
+            &req.variables.clone().unwrap_or_default(),
+        );
+    }
 
     // Blueprint and variables are supplied inline and validated here, before the
     // shared core runs them.
-    let Some(blueprint) = state.blueprints().get(&req.blueprint).await else {
-        let message = blueprint_miss_message(&state, &req.blueprint).await;
+    let found = match state.blueprints().get(&req.blueprint).await {
+        Ok(found) => found,
+        Err(error) => {
+            return with_session_header(
+                &session_id,
+                error_response(
+                    &session_id,
+                    ErrorKind::RuntimeError,
+                    crate::blueprint::store_failure_message(error).into(),
+                ),
+            )
+            .into_response();
+        }
+    };
+    let Some(blueprint) = found else {
+        let message = match blueprint_miss_message(&state, &req.blueprint).await {
+            Ok(message) => message,
+            Err(error) => {
+                return with_session_header(
+                    &session_id,
+                    error_response(
+                        &session_id,
+                        ErrorKind::RuntimeError,
+                        crate::blueprint::store_failure_message(error).into(),
+                    ),
+                )
+                .into_response();
+            }
+        };
         return with_session_header(
             &session_id,
             error_response(&session_id, ErrorKind::BlueprintNotFound, message),
-        );
+        )
+        .into_response();
     };
     let blueprint = Arc::new(blueprint);
 
     let supplied = req.variables.clone().unwrap_or_default();
+    if let Some(audit) = crate::audit::execution() {
+        audit.annotate(&req.code, &req.blueprint, Some(&blueprint), &supplied);
+    }
     let variables = match resolve_variables(&blueprint.variables, &supplied) {
         Ok(resolved) => Arc::new(resolved),
         Err(err) => {
@@ -97,14 +154,24 @@ pub async fn handle(
                     ErrorKind::InvalidRequest,
                     format!("invalid variables: {err}"),
                 ),
-            );
+            )
+            .into_response();
         }
     };
-    if let Err(error) = submilli_shared::resolve_git(&blueprint, &variables) {
+    if let Err(error) = blueprint
+        .vfs
+        .resolve(&variables)
+        .map(|_| ())
+        .and_then(|()| submilli_shared::resolve_git(&blueprint, &variables).map(|_| ()))
+    {
         return with_session_header(
             &session_id,
             error_response(&session_id, ErrorKind::InvalidRequest, error.to_string()),
-        );
+        )
+        .into_response();
+    }
+    if let Some(audit) = crate::audit::execution() {
+        audit.annotate(&req.code, &req.blueprint, Some(&blueprint), &variables);
     }
     let supplied_secrets = req.secrets.clone().unwrap_or_default();
     let harness_secrets = match resolve_harness_secrets(&blueprint.secrets, &supplied_secrets) {
@@ -117,9 +184,27 @@ pub async fn handle(
                     ErrorKind::InvalidRequest,
                     format!("invalid secrets: {err}"),
                 ),
-            );
+            )
+            .into_response();
         }
     };
+
+    if let Err(error) = state
+        .session_manager()
+        .bind(
+            &session_id,
+            &blueprint,
+            Arc::clone(&variables),
+            Arc::clone(&harness_secrets),
+        )
+        .await
+    {
+        return with_session_header(
+            &session_id,
+            error_response(&session_id, ErrorKind::InvalidRequest, error.to_string()),
+        )
+        .into_response();
+    }
 
     // The one-shot path mints a fresh session per call, so a key would have
     // nothing durable to bind to: `dispatched` is irrelevant here and any
@@ -142,7 +227,7 @@ pub async fn handle(
     // day by default. The last-run record lives in a separate store, so the
     // teardown does not take it.
     state.session_manager().wipe_now(&session_id).await;
-    with_session_header(&session_id, outcome.response)
+    with_session_header(&session_id, outcome.response).into_response()
 }
 
 /// Already-resolved inputs to one execution, shared by the one-shot
@@ -195,6 +280,9 @@ impl ExecuteOutcome {
 /// session id (idempotent), builds the per-session VFS + HTTP client + host
 /// services, resolves imports, runs, and touches the session's idle timer.
 pub(crate) async fn execute_core(state: &AppState, inputs: ExecuteInputs<'_>) -> ExecuteOutcome {
+    if let Some(audit) = crate::audit::execution() {
+        audit.begin();
+    }
     let ExecuteInputs {
         session_id,
         code,
@@ -242,7 +330,10 @@ pub(crate) async fn execute_core(state: &AppState, inputs: ExecuteInputs<'_>) ->
     // `idle_timeout` on its own is still collected mid-flight. The write is
     // debounced (`PERSIST_INTERVAL`), so this costs nothing per call.
     manager.touch(session_id).await;
-    let (vfs, vfs_info) = match manager.vfs_for_execute(session_id, &blueprint).await {
+    let (vfs, vfs_info) = match manager
+        .vfs_for_execute_with_variables(session_id, &blueprint, &variables)
+        .await
+    {
         Ok(pair) => pair,
         Err(err) => {
             return ExecuteOutcome::undispatched(error_response(
@@ -253,6 +344,11 @@ pub(crate) async fn execute_core(state: &AppState, inputs: ExecuteInputs<'_>) ->
         }
     };
 
+    let execution_audit = crate::audit::execution();
+    let network_policy = execution_audit.as_ref().map_or_else(
+        || state.network_policy().clone(),
+        |audit| audit.network_policy(state.network_policy()),
+    );
     let http_client = manager.http_client(session_id);
     let mcp_transport = Arc::new(
         submilli_shared::mcp::transport::StreamableHttpTransport::new(
@@ -260,11 +356,24 @@ pub(crate) async fn execute_core(state: &AppState, inputs: ExecuteInputs<'_>) ->
             Arc::clone(&blueprint),
             state.oauth_token_manager().cloned(),
             state.secret_store().cloned(),
-            Arc::clone(state.network_policy()),
+            Arc::clone(&network_policy),
         )
         .with_harness_secrets(Arc::clone(&harness_secrets)),
     );
+    let policy: Arc<dyn interpreter::runtime::SecurityCheck> = Arc::new(
+        PolicyCheck::with_variables(Arc::clone(&blueprint), Arc::clone(&variables)),
+    );
+    let security_check = execution_audit.as_ref().map_or_else(
+        || policy.clone(),
+        |execution| {
+            Arc::new(crate::audit::AuditedPolicy {
+                policy: policy.clone(),
+                execution: execution.clone(),
+            }) as Arc<dyn interpreter::runtime::SecurityCheck>
+        },
+    );
     let services = runner::HostServices {
+        audit: execution_audit,
         git: submilli_shared::resolve_git(&blueprint, &variables)
             .map_err(|error| error.to_string()),
         auth_proxy: Arc::new(BlueprintAuthProxy::with_harness(
@@ -277,14 +386,11 @@ pub(crate) async fn execute_core(state: &AppState, inputs: ExecuteInputs<'_>) ->
             state.secret_store().cloned(),
             Arc::clone(&harness_secrets),
         )),
-        security_check: Arc::new(PolicyCheck::with_variables(
-            Arc::clone(&blueprint),
-            Arc::clone(&variables),
-        )),
+        security_check,
         http_client,
         mcp_transport,
         session_kv: manager.session_kv_for_execute(session_id),
-        llm_provider: state.llm_provider_for(&blueprint, &harness_secrets),
+        llm_provider: state.llm_provider_for(&blueprint, &harness_secrets, &network_policy),
         llm_budget: Some(manager.llm_budget_for_execute()),
     };
     let mcp_catalog = state
@@ -293,6 +399,7 @@ pub(crate) async fn execute_core(state: &AppState, inputs: ExecuteInputs<'_>) ->
             &blueprint,
             &script_imports.mcp_servers,
             &harness_secrets,
+            &network_policy,
         )
         .await;
     let packages =
@@ -310,6 +417,8 @@ pub(crate) async fn execute_core(state: &AppState, inputs: ExecuteInputs<'_>) ->
         code,
         parsed,
         runner::RunnerRuntime {
+            blueprint: blueprint_name,
+            session: session_id,
             engine: state.engine(),
             base_linker: state.base_linker(),
             config: state.runtime(),
@@ -330,7 +439,7 @@ pub(crate) async fn execute_core(state: &AppState, inputs: ExecuteInputs<'_>) ->
 
     // The success response omits console output; the session keeps the full
     // capture so `/v1/last-run/{id}` can still return it.
-    state
+    if let Err(error) = state
         .sessions()
         .record(
             session_id,
@@ -340,7 +449,11 @@ pub(crate) async fn execute_core(state: &AppState, inputs: ExecuteInputs<'_>) ->
                 error: response.error.clone(),
             },
         )
-        .await;
+        .await
+    {
+        // Execution already finished; losing its output would invite a retry of effects.
+        tracing::warn!(operation = "record", session = session_id, %error, "last-run storage failed");
+    }
 
     ExecuteOutcome::dispatched(response)
 }
@@ -357,7 +470,11 @@ pub(crate) fn with_session_header(
 }
 
 fn error_response(session_id: &str, kind: ErrorKind, message: String) -> ExecuteResponse {
+    if let Some(audit) = crate::audit::execution() {
+        audit.error(kind);
+    }
     ExecuteResponse {
+        execution_id: crate::audit::execution_id(),
         session_id: session_id.to_string(),
         result: None,
         console: Vec::new(),
@@ -377,6 +494,7 @@ fn into_response(
 ) -> ExecuteResponse {
     let (result, console, error) = outcome_to_parts(outcome, console_lines);
     ExecuteResponse {
+        execution_id: crate::audit::execution_id(),
         session_id: session_id.to_string(),
         result,
         console,

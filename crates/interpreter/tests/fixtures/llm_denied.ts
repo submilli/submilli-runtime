@@ -33,8 +33,8 @@ function main(): void {
   // R13: a denial message must not become a disclosure channel for the prompt.
   assert(reason.indexOf("Summarize this.") < 0, "the denial never echoes the prompt");
 
-  // `batch` and `models()` are the same capability, so all three are withheld
-  // together — one capability, triple-gated, rather than three names.
+  // Dispatch and discovery use the same capability. Denied calls throw;
+  // discovery omits denied candidates and returns an empty listing.
   let batchDenied = false;
   try {
     llm.batch("claude-haiku-4-5", ["a"]);
@@ -43,13 +43,7 @@ function main(): void {
   }
   assert(batchDenied, "batch is gated on the same capability as call");
 
-  let modelsDenied = false;
-  try {
-    llm.models();
-  } catch (e: PermissionDeniedError) {
-    modelsDenied = true;
-  }
-  assert(modelsDenied, "models() is gated on the same capability as call");
+  assert(llm.models().length === 0, "no denied model is revealed by discovery");
 
   // The blanket-kill check: a capability the policy did not deny still works.
   // If denial were a process-level kill this would be unreachable.

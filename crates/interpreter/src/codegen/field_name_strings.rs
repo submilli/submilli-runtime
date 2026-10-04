@@ -74,6 +74,7 @@ fn build_init_expr(
         array_type_index: intrinsics.raw_string,
         array_size: wasm_u32(code_units.len())?,
     });
+    instrs.push(Instruction::I64Const(0));
     instrs.push(Instruction::StructNew(intrinsics.string));
     Ok(ConstExpr::extended(instrs))
 }

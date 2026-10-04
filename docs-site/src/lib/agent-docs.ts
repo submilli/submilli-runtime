@@ -42,7 +42,8 @@ export async function readChapters(directory = docsDirectory): Promise<Chapter[]
 			title: requiredText(data.title, file, 'title'),
 			description: requiredText(data.description, file, 'description'),
 			order: data.sidebar?.order ?? Number.POSITIVE_INFINITY,
-			body: content.trim(),
+			// The reference generator's region markers mean nothing to a reader.
+			body: content.replace(/^<!-- \/?generated:[a-z-]+ -->\n/gm, '').trim(),
 		});
 	}
 	return chapters.sort(compareChapters);

@@ -13,7 +13,7 @@ use std::collections::{BTreeSet, HashMap, HashSet};
 use std::sync::Arc;
 use std::time::Duration;
 
-use crate::host::EnvFileSecretResolver;
+use crate::host::BlueprintSecretResolver;
 use http::{HeaderName, HeaderValue};
 use interpreter::PackageDeclaration;
 use interpreter::packages::ModuleSummary;
@@ -214,6 +214,30 @@ async fn discover_matching(
     }
 }
 
+#[derive(Default)]
+struct DiscoveryConnection {
+    pending: Option<super::draining_transport::PendingTransport>,
+    budget: Option<Arc<super::bounded_client::ResponseBudget>>,
+    client: Option<rmcp::service::RunningService<rmcp::service::RoleClient, ClientInfo>>,
+}
+
+impl DiscoveryConnection {
+    async fn close(&mut self) {
+        use rmcp::transport::Transport;
+        if let Some(client) = self.client.take() {
+            let _ = client.cancel().await;
+        }
+        if let Some(pending) = self.pending.take()
+            && let Ok(mut transport) = pending.await
+        {
+            let _ = transport.close().await;
+        }
+        if let Some(budget) = self.budget.take() {
+            budget.wait_idle().await;
+        }
+    }
+}
+
 /// Discover one server's tools, preserving its failure reason for callers.
 async fn discover_server(
     auth: DiscoveryAuth<'_>,
@@ -222,8 +246,18 @@ async fn discover_server(
     server_name: &str,
     server: &McpServer,
 ) -> Result<McpPackage, String> {
-    let fetch = fetch_tools(auth, blueprint_name, blueprint, server_name, server);
-    match tokio::time::timeout(DISCOVERY_TIMEOUT, fetch).await {
+    let mut connection = DiscoveryConnection::default();
+    let fetch = fetch_tools(
+        auth,
+        blueprint_name,
+        blueprint,
+        server_name,
+        server,
+        &mut connection,
+    );
+    let result = tokio::time::timeout(DISCOVERY_TIMEOUT, fetch).await;
+    connection.close().await;
+    match result {
         Ok(Ok(tools)) => {
             // A built-in schema pack (matched by endpoint host) fills typed returns for
             // tools whose server publishes no representable `outputSchema`.
@@ -270,6 +304,7 @@ async fn fetch_tools(
     blueprint: &Blueprint,
     server_name: &str,
     server: &McpServer,
+    connection: &mut DiscoveryConnection,
 ) -> anyhow::Result<Vec<ToolCatalogEntry>> {
     let (auth_header, custom_headers) =
         resolve_auth(auth, blueprint_name, blueprint, server_name, server).await?;
@@ -296,14 +331,42 @@ async fn fetch_tools(
         .check_url(server.url.as_str())
         .await
         .map_err(anyhow::Error::msg)?;
-    let transport = StreamableHttpClientTransport::with_client(
-        crate::mcp::transport::policy_http_client(auth.network_policy),
-        config,
+    let http = super::bounded_client::BoundedClient::new(
+        crate::mcp::transport::policy_http_client(auth.network_policy)?,
+    )
+    .with_timeout(DISCOVERY_TIMEOUT);
+    let budget = http.budget.clone();
+    connection.budget = Some(budget.clone());
+    let (transport, pending) = super::draining_transport::DrainingTransport::new(
+        StreamableHttpClientTransport::with_client(http, config),
     );
-    let client = ClientInfo::default().serve(transport).await?;
-    let tools = client.list_all_tools().await;
-    // Best-effort shutdown regardless of the list outcome.
-    let _ = client.cancel().await;
+    connection.pending = Some(pending);
+    let client = tokio::select! {
+        result = ClientInfo::default().serve(transport) => {
+            if let Some(error) = budget.error() {
+                return Err(anyhow::anyhow!("MCP discovery response failed: {error:?}"));
+            }
+            result?
+        }
+        error = budget.wait() => {
+            return Err(anyhow::anyhow!("MCP discovery response failed: {error:?}"));
+        }
+    };
+    connection.pending = None;
+    connection.client = Some(client);
+    let client = connection
+        .client
+        .as_ref()
+        .ok_or_else(|| anyhow::anyhow!("MCP discovery client is missing"))?;
+    let tools = tokio::select! {
+        result = client.list_all_tools() => {
+            match budget.error() {
+                Some(error) => Err(anyhow::anyhow!("MCP discovery response failed: {error:?}")),
+                None => result.map_err(anyhow::Error::from),
+            }
+        }
+        error = budget.wait() => Err(anyhow::anyhow!("MCP discovery response failed: {error:?}")),
+    };
     let tools = tools?;
 
     Ok(tools
@@ -353,9 +416,9 @@ async fn resolve_auth(
 
     let resolver = match auth.harness_secrets {
         Some(secrets) => {
-            EnvFileSecretResolver::with_harness(auth.secret_store.cloned(), Arc::clone(secrets))
+            BlueprintSecretResolver::with_harness(auth.secret_store.cloned(), Arc::clone(secrets))
         }
-        None => EnvFileSecretResolver::new(auth.secret_store.cloned()),
+        None => BlueprintSecretResolver::new(auth.secret_store.cloned()),
     };
     let mut headers = HashMap::with_capacity(server.headers.len());
     for (name, value) in &server.headers {

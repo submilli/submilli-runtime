@@ -212,6 +212,9 @@ pub fn emit_method_bodies(
         .prelude_func_idx("string_eq")
         .ok_or_else(|| internal_failure("string_eq is not imported from the prelude"))?;
 
+    let object_vtable_global = symbols
+        .prelude_global_idx("object_vtable")
+        .ok_or_else(|| internal_failure("object_vtable is not imported from the prelude"))?;
     for subtype in subtypes {
         code.function(&emit_subtype_to_string_body(
             subtype,
@@ -248,10 +251,17 @@ pub fn emit_method_bodies(
         code.function(&emit_subtype_equals_body(
             subtype,
             intrinsics,
+            symbols,
             string_eq_func_idx,
+            object_vtable_global,
         )?);
 
-        code.function(&emit_subtype_hash_body(subtype, intrinsics)?);
+        code.function(&emit_subtype_hash_body(
+            subtype,
+            intrinsics,
+            symbols,
+            object_vtable_global,
+        )?);
     }
     Ok(())
 }
@@ -400,6 +410,7 @@ fn emit_subtype_to_json_body(
         intrinsics.object_shape,
     )));
     f.instruction(&Instruction::Call(stringify_func_idx));
+    f.instruction(&Instruction::I64Const(0));
     f.instruction(&Instruction::StructNew(intrinsics.string));
     f.instruction(&Instruction::End);
     Ok(f)
@@ -667,10 +678,70 @@ fn emit_subtype_to_json_override_body(
     Ok(f)
 }
 
+/// The index records whether insertion changed the shape. Such values use the
+/// same dynamic equality/hash hooks as objects created by JSON.parse.
+fn emit_indexed_object_dispatch(
+    body: &mut Function,
+    intrinsics: IntrinsicTypeIndices,
+    vtable_global: u32,
+    slot: u32,
+) {
+    let operands = if slot == 2 { 2 } else { 1 };
+    for operand in 0..operands {
+        body.instruction(&Instruction::LocalGet(operand));
+        body.instruction(&Instruction::RefCastNonNull(HeapType::Concrete(
+            intrinsics.object_shape,
+        )));
+        body.instruction(&Instruction::StructGet {
+            struct_type_index: intrinsics.object_shape,
+            field_index: 3,
+        });
+        body.instruction(&Instruction::RefIsNull);
+        body.instruction(&Instruction::If(BlockType::Result(ValType::I32)));
+        body.instruction(&Instruction::I32Const(0));
+        body.instruction(&Instruction::Else);
+        body.instruction(&Instruction::LocalGet(operand));
+        body.instruction(&Instruction::RefCastNonNull(HeapType::Concrete(
+            intrinsics.object_shape,
+        )));
+        body.instruction(&Instruction::StructGet {
+            struct_type_index: intrinsics.object_shape,
+            field_index: 3,
+        });
+        body.instruction(&Instruction::RefCastNonNull(HeapType::Concrete(
+            intrinsics.raw_index_array,
+        )));
+        body.instruction(&Instruction::I32Const(1));
+        body.instruction(&Instruction::ArrayGet(intrinsics.raw_index_array));
+        body.instruction(&Instruction::End);
+    }
+    if operands == 2 {
+        body.instruction(&Instruction::I32Or);
+    }
+    body.instruction(&Instruction::If(BlockType::Empty));
+    for operand in 0..operands {
+        body.instruction(&Instruction::LocalGet(operand));
+    }
+    body.instruction(&Instruction::GlobalGet(vtable_global));
+    body.instruction(&Instruction::StructGet {
+        struct_type_index: intrinsics.vtable,
+        field_index: slot,
+    });
+    body.instruction(&Instruction::CallRef(if slot == 2 {
+        intrinsics.equals_fn
+    } else {
+        intrinsics.hash_fn
+    }));
+    body.instruction(&Instruction::Return);
+    body.instruction(&Instruction::End);
+}
+
 fn emit_subtype_equals_body(
     subtype: &UserSubtype,
     intrinsics: IntrinsicTypeIndices,
+    symbols: &SymbolTable,
     string_eq_func_idx: u32,
+    object_vtable_global: u32,
 ) -> Result<Function, CompilerFailure> {
     let fields = subtype.fields()?;
     // Peel before the Union check: an aliased union field must trigger null-aware locals,
@@ -751,6 +822,8 @@ fn emit_subtype_equals_body(
     )));
     f.instruction(&Instruction::LocalSet(b_t));
 
+    emit_indexed_object_dispatch(&mut f, intrinsics, object_vtable_global, 2);
+
     emit_shape_guard(
         &mut f,
         wasm_u32(fields.len())?,
@@ -761,6 +834,21 @@ fn emit_subtype_equals_body(
 
     for (slot, field) in fields.values().enumerate() {
         let field_index = wasm_u32(slot)?;
+
+        for object in [a_t, b_t] {
+            emit_field_presence(
+                &mut f,
+                intrinsics,
+                symbols.optional_field_name_type()?,
+                object,
+                field_index,
+            );
+        }
+        f.instruction(&Instruction::I32Ne);
+        f.instruction(&Instruction::If(BlockType::Empty));
+        f.instruction(&Instruction::I32Const(0));
+        f.instruction(&Instruction::Return);
+        f.instruction(&Instruction::End);
 
         emit_field_compare(
             &mut f,
@@ -782,6 +870,52 @@ fn emit_subtype_equals_body(
     f.instruction(&Instruction::I32Const(1));
     f.instruction(&Instruction::End);
     Ok(f)
+}
+
+/// Presence belongs to the field-name marker, while a non-null payload also
+/// implies presence. The other operand may use an ordinary required name.
+fn emit_field_presence(
+    body: &mut Function,
+    intrinsics: IntrinsicTypeIndices,
+    optional_name_type: u32,
+    object: u32,
+    slot: u32,
+) {
+    let load_name = |body: &mut Function| {
+        body.instruction(&Instruction::LocalGet(object));
+        body.instruction(&Instruction::StructGet {
+            struct_type_index: intrinsics.object_shape,
+            field_index: 1,
+        });
+        body.instruction(&Instruction::I32Const(slot.cast_signed()));
+        body.instruction(&Instruction::ArrayGet(intrinsics.field_names));
+    };
+    load_name(body);
+    body.instruction(&Instruction::RefTestNonNull(HeapType::Concrete(
+        optional_name_type,
+    )));
+    body.instruction(&Instruction::If(BlockType::Result(ValType::I32)));
+    load_name(body);
+    body.instruction(&Instruction::RefCastNonNull(HeapType::Concrete(
+        optional_name_type,
+    )));
+    body.instruction(&Instruction::StructGet {
+        struct_type_index: optional_name_type,
+        field_index: 3,
+    });
+    body.instruction(&Instruction::Else);
+    body.instruction(&Instruction::I32Const(1));
+    body.instruction(&Instruction::End);
+    body.instruction(&Instruction::LocalGet(object));
+    body.instruction(&Instruction::StructGet {
+        struct_type_index: intrinsics.object_shape,
+        field_index: 2,
+    });
+    body.instruction(&Instruction::I32Const(slot.cast_signed()));
+    body.instruction(&Instruction::ArrayGet(intrinsics.object_fields));
+    body.instruction(&Instruction::RefIsNull);
+    body.instruction(&Instruction::I32Eqz);
+    body.instruction(&Instruction::I32Or);
 }
 
 fn emit_field_compare(
@@ -969,12 +1103,19 @@ fn emit_field_compare(
 fn emit_subtype_hash_body(
     subtype: &UserSubtype,
     intrinsics: IntrinsicTypeIndices,
+    symbols: &SymbolTable,
+    object_vtable_global: u32,
 ) -> Result<Function, CompilerFailure> {
     let fields = subtype.fields()?;
 
     // Peel before Union check — aliased unions must trigger null-aware dispatch prelude.
     let any_dispatch = fields.values().any(|f| {
-        is_ref_dispatch_field(&f.ty) || matches!(f.ty.peel(), Type::Union(_)) || f.optional
+        is_ref_dispatch_field(&f.ty)
+            || matches!(
+                f.ty.peel(),
+                Type::Number | Type::NumberLiteral(_) | Type::Union(_)
+            )
+            || f.optional
     });
     let any_union = fields
         .values()
@@ -991,7 +1132,6 @@ fn emit_subtype_hash_body(
     //   3: field_obj (ref $Object) — any dispatch
     //   4: hash_fn   (ref $hashFn) — any dispatch
     //   5: f_null    (ref null $Object) — any union/optional field
-    //   6: f_bits    (i64) — number-field unboxing
     let mut locals: Vec<(u32, ValType)> = vec![(1, object_shape_ref), (1, ValType::I32)];
     if any_dispatch {
         locals.push((1, object_ref));
@@ -1000,15 +1140,6 @@ fn emit_subtype_hash_body(
     if any_union {
         locals.push((1, object_null_ref));
     }
-    let any_number_field = fields.values().any(|f| {
-        // peel so `type N = number; { x: N }` still
-        // triggers the f_bits scratch allocation.
-        matches!(f.ty.peel(), Type::Number | Type::NumberLiteral(_))
-    });
-    if any_number_field {
-        locals.push((1, ValType::I64));
-    }
-
     let mut f = Function::new(locals);
     let self_param = 0u32;
     let self_t = 1u32;
@@ -1016,25 +1147,39 @@ fn emit_subtype_hash_body(
     let field_obj = 3u32;
     let hash_fn = 4u32;
     let f_null = if any_dispatch { 5u32 } else { 3u32 };
-    let f_bits = match (any_dispatch, any_union) {
-        (true, true) => 6u32,
-        (true, false) => 5u32,
-        (false, true) => 4u32,
-        (false, false) => 3u32,
-    };
-
     f.instruction(&Instruction::LocalGet(self_param));
     f.instruction(&Instruction::RefCastNonNull(HeapType::Concrete(
         intrinsics.object_shape,
     )));
     f.instruction(&Instruction::LocalSet(self_t));
 
+    emit_indexed_object_dispatch(&mut f, intrinsics, object_vtable_global, 3);
+
     // hash = FNV-1a offset basis
     f.instruction(&Instruction::I32Const(0x811c9dc5u32.cast_signed()));
     f.instruction(&Instruction::LocalSet(hash));
 
-    for (slot, field) in fields.values().enumerate() {
+    for (slot, (name, field)) in fields.iter().enumerate() {
         let field_index = wasm_u32(slot)?;
+        if field.optional {
+            f.instruction(&Instruction::LocalGet(self_t));
+            f.instruction(&Instruction::StructGet {
+                struct_type_index: intrinsics.object_shape,
+                field_index: 2,
+            });
+            f.instruction(&Instruction::I32Const(field_index.cast_signed()));
+            f.instruction(&Instruction::ArrayGet(intrinsics.object_fields));
+            f.instruction(&Instruction::LocalSet(f_null));
+            super::field_names::emit_optional_presence(
+                &mut f,
+                intrinsics,
+                symbols.optional_field_name_type()?,
+                self_t,
+                field_index,
+                f_null,
+            );
+            f.instruction(&Instruction::If(BlockType::Empty));
+        }
         emit_field_hash(
             &mut f,
             intrinsics.object_shape,
@@ -1042,14 +1187,20 @@ fn emit_subtype_hash_body(
             &field.ty,
             field.optional,
             intrinsics,
-            (self_t, field_obj, hash_fn, f_null, f_bits),
+            (self_t, field_obj, hash_fn, f_null),
         )?;
-        // hash = (hash XOR field_hash) * 0x01000193
-        f.instruction(&Instruction::LocalGet(hash));
+        // Match the dynamic hook's order-independent name/value combination.
+        let name_hash = crate::runtime::prelude::vtable::hash_utf16_units(name.encode_utf16());
+        f.instruction(&Instruction::I32Const(13));
+        f.instruction(&Instruction::I32Rotl);
+        f.instruction(&Instruction::I32Const(name_hash.cast_signed()));
         f.instruction(&Instruction::I32Xor);
-        f.instruction(&Instruction::I32Const(0x01000193));
-        f.instruction(&Instruction::I32Mul);
+        f.instruction(&Instruction::LocalGet(hash));
+        f.instruction(&Instruction::I32Add);
         f.instruction(&Instruction::LocalSet(hash));
+        if field.optional {
+            f.instruction(&Instruction::End);
+        }
     }
 
     f.instruction(&Instruction::LocalGet(hash));
@@ -1064,9 +1215,9 @@ fn emit_field_hash(
     field_ty: &Type,
     field_optional: bool,
     intrinsics: IntrinsicTypeIndices,
-    locals: (u32, u32, u32, u32, u32),
+    locals: (u32, u32, u32, u32),
 ) -> Result<(), CompilerFailure> {
-    let (self_t, field_obj, hash_fn, f_null, f_bits) = locals;
+    let (self_t, field_obj, hash_fn, f_null) = locals;
 
     let field_ty = field_ty.peel();
 
@@ -1093,26 +1244,6 @@ fn emit_field_hash(
     };
 
     match field_ty {
-        Type::Number | Type::NumberLiteral(_) => {
-            // Unbox f64, reinterpret bits, fold high/low halves.
-            load_slot_as_object(f);
-            f.instruction(&Instruction::RefCastNonNull(HeapType::Concrete(
-                intrinsics.boxed_number,
-            )));
-            f.instruction(&Instruction::StructGet {
-                struct_type_index: intrinsics.boxed_number,
-                field_index: 1,
-            });
-            f.instruction(&Instruction::I64ReinterpretF64);
-            f.instruction(&Instruction::LocalSet(f_bits));
-            f.instruction(&Instruction::LocalGet(f_bits));
-            f.instruction(&Instruction::I32WrapI64);
-            f.instruction(&Instruction::LocalGet(f_bits));
-            f.instruction(&Instruction::I64Const(32));
-            f.instruction(&Instruction::I64ShrU);
-            f.instruction(&Instruction::I32WrapI64);
-            f.instruction(&Instruction::I32Xor);
-        }
         Type::Boolean | Type::BooleanLiteral(_) => {
             load_slot_as_object(f);
             f.instruction(&Instruction::RefCastNonNull(HeapType::Concrete(
@@ -1123,7 +1254,9 @@ fn emit_field_hash(
                 field_index: 1,
             });
         }
-        Type::String
+        Type::Number
+        | Type::NumberLiteral(_)
+        | Type::String
         | Type::StringLiteral(_)
         | Type::BigInt
         | Type::Object { .. }
@@ -1377,6 +1510,7 @@ fn push_inline_string(
         array_type_index: raw_string_idx,
         array_size: wasm_u32(s.len())?,
     });
+    f.instruction(&Instruction::I64Const(0));
     f.instruction(&Instruction::StructNew(string_idx));
     Ok(())
 }

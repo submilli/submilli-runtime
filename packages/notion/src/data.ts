@@ -57,7 +57,16 @@ interface ApiObject {
     id: string;
 }
 
-/** Create a database container, initial data source, and initial table view under a resolved parent page. */
+/**
+ * Create a database container, initial data source, and initial table view under a resolved parent page.
+ *
+ * @param parentId Resolved ID of the parent page.
+ * @param title Plain-text database title.
+ * @param description Plain-text description; `null` omits it.
+ * @param isInline True creates the database inline in the parent page; `null` uses the Notion default.
+ * @param properties Property schema for the initial data source, keyed by property name; must not be empty.
+ * @returns The created database, including its initial data source reference.
+ */
 export function createDatabase(
     parentId: string,
     title: string,
@@ -76,7 +85,15 @@ export function createDatabase(
     return databaseFrom(notionPost("/databases", objectJson(fields)).json());
 }
 
-/** Update a data source title, schema, or parent database. */
+/**
+ * Update a data source title, schema, or parent database.
+ *
+ * @param dataSourceId Data source ID or Notion URL.
+ * @param title New plain-text title; `null` leaves it unchanged.
+ * @param properties Property schema changes keyed by property name; `null` leaves the schema unchanged.
+ * @param databaseId ID of the database to move the data source into; `null` keeps its current parent.
+ * @returns The updated data source.
+ */
 export function updateDataSource(
     dataSourceId: string,
     title: string | null,
@@ -93,7 +110,13 @@ export function updateDataSource(
     return dataSourceFrom(notionPatch("/data_sources/" + pathId(dataSourceId), objectJson(fields)).json());
 }
 
-/** Query pages and nested data sources using structured Notion filters and sorts. */
+/**
+ * Query pages and nested data sources using structured Notion filters and sorts.
+ *
+ * @param dataSourceId Data source ID or Notion URL.
+ * @param options Filter, sorts, and pagination; `null` returns the first 100 results unfiltered.
+ * @returns One page of pages and nested data sources; an empty `results` means nothing matched.
+ */
 export function queryDataSource(dataSourceId: string, options: QueryDataSourceOptions | null = null): PageResult<DataSourceQueryItem> {
     const fields: string[] = [];
     let path = "/data_sources/" + pathId(dataSourceId) + "/query";
@@ -120,7 +143,15 @@ export function queryDataSource(dataSourceId: string, options: QueryDataSourceOp
     };
 }
 
-/** List page templates available to a data source. */
+/**
+ * List page templates available to a data source.
+ *
+ * @param dataSourceId Data source ID or Notion URL.
+ * @param name Template name to match; `null` lists all templates.
+ * @param requestedSize Templates per page, 1 to 100; `null` uses 100.
+ * @param startCursor Cursor from a previous page's `nextCursor`; `null` starts at the first template.
+ * @returns One page of templates; an empty `results` means none are defined.
+ */
 export function listDataSourceTemplates(
     dataSourceId: string,
     name: string | null,
@@ -142,12 +173,22 @@ export function listDataSourceTemplates(
     };
 }
 
-/** Move a database container to trash. */
+/**
+ * Move a database container to trash.
+ *
+ * @param databaseId Database ID or Notion URL.
+ * @returns The database as returned after trashing, with `inTrash` true.
+ */
 export function trashDatabase(databaseId: string): NotionDatabase {
     return databaseFrom(notionPatch("/databases/" + pathId(databaseId), { in_trash: true }).json());
 }
 
-/** Restore a database container from trash. */
+/**
+ * Restore a database container from trash.
+ *
+ * @param databaseId Database ID or Notion URL.
+ * @returns The restored database with `inTrash` false.
+ */
 export function restoreDatabase(databaseId: string): NotionDatabase {
     return databaseFrom(notionPatch("/databases/" + pathId(databaseId), { in_trash: false }).json());
 }

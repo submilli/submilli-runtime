@@ -250,9 +250,9 @@ tests:
       - notMatchRegex:
           path: data["server.yaml"]
           pattern: blueprint_seed_dir
-      - notMatchRegex:
+      - matchRegex:
           path: data["server.yaml"]
-          pattern: secret_store
+          pattern: "(?m)^secret_store:"
 
   - it: keeps the memory limit and the execution cap in step when either moves
     set:
@@ -295,6 +295,34 @@ tests:
       - matchRegex:
           path: data["server.yaml"]
           pattern: "(?m)^secret_store:\\n +key_file: /etc/submilli/secret-store/store-key$"
+
+  - it: reads the GitHub token from a file
+    template: configmap-config.yaml
+    set:
+      githubToken:
+        existingSecret: submilli-github
+        key: pat
+    asserts:
+      - matchRegex:
+          path: data["server.yaml"]
+          pattern: "(?m)^github_token_file: /etc/submilli/github/pat$"
+
+  - it: names no GitHub token file by default
+    template: configmap-config.yaml
+    asserts:
+      - notMatchRegex:
+          path: data["server.yaml"]
+          pattern: "github_token_file"
+
+  - it: refuses the GitHub token file in config
+    template: statefulset.yaml
+    set:
+      config:
+        github_token_file: /somewhere/else
+    asserts:
+      # Nothing would mount a token at a path the chart did not choose.
+      - failedTemplate:
+          errorPattern: "config.github_token_file is owned by the chart"
 
   - it: passes config through for settings the chart has no value for
     template: configmap-config.yaml
@@ -507,15 +535,15 @@ tests:
       # `helm upgrade` that changes only a setting leaves the running server on
       # the old one.
       #
-      # A literal digest, as configmap_test.yaml pins checksum/blueprints: it
+      # A literal digest: it
       # is the annotation's value that rolls the pod, so a test that merely
       # found some digest would pass with the hash computed over nothing. It
-      # covers the config text alone, so unlike that one it needs no pinned
+      # covers the config text alone, so it needs no pinned
       # chart version. Changing what the default config renders moves it:
       # re-run and copy the reported `Actual:` value.
       - equal:
           path: spec.template.metadata.annotations["checksum/config"]
-          value: bdf38362cf16a95b806441b2b83a17e1fa2a04297a960f3f7e814a70b072a5f3
+          value: 80a79e9dcbec50d41e944f4d3a9203ca59e4da4f8910ce63bfb276c83166b2db
 
   - it: produces a different rollout trigger for different config
     template: statefulset.yaml
@@ -524,7 +552,7 @@ tests:
     asserts:
       - equal:
           path: spec.template.metadata.annotations["checksum/config"]
-          value: 988960ef97cea0ea32b42717146b6d25e7ff8cd6af4c7ff9a6e4faac87063fc7
+          value: 43100cf2c50f780db50a31fd199e73fe47f29c700f22f6e130d3912f1fb89d96
 
   - it: keeps the generated names inside the DNS label limit
     set:

@@ -7,7 +7,7 @@
     "check": "tsx check.ts"
   },
   "dependencies": {
-    "@ai-sdk/google": "^4.0.0",
+    "@ai-sdk/anthropic": "^3.0.127",
     "ai": "^7.0.0",
     "zod": "^4.1.8"
   },

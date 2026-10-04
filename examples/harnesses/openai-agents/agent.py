@@ -2,6 +2,7 @@
 
 import asyncio
 import os
+import pathlib
 
 from agents import Agent, Runner
 from agents.mcp import MCPServerStreamableHttp
@@ -12,13 +13,8 @@ SUBMILLI_SERVER_TOKEN = os.environ["SUBMILLI_SERVER_TOKEN"]
 BLUEPRINT = "research"
 
 
-def instructions(user_id: str) -> str:
-    return (
-        "You are a research assistant. Search the web and read pages by writing programs for Submilli. "
-        "Do the whole job in one program where you can, and return only what you need to answer. "
-        f"Keep a note of what you learn, with its sources, under /{user_id}/notes. "
-        "Read your earlier notes before you search again."
-    )
+# The agent's brief, kept beside the blueprint.
+INSTRUCTIONS = (pathlib.Path(__file__).parent.parent / "prompt.txt").read_text()
 
 
 async def answer(question: str, user_id: str, model=None) -> str:
@@ -32,10 +28,13 @@ async def answer(question: str, user_id: str, model=None) -> str:
                 "submilli-variables": f"userId={user_id}",
             },
         },
+        # The SDK gives up on a tool call after 5 seconds by default; a
+        # program that searches and reads pages takes longer.
+        client_session_timeout_seconds=120,
     ) as submilli:
         agent = Agent(
             name="researcher",
-            instructions=instructions(user_id),
+            instructions=INSTRUCTIONS,
             model=model,
             mcp_servers=[submilli],
         )

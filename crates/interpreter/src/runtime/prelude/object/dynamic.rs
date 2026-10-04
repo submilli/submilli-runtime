@@ -6,8 +6,9 @@ use super::{
 };
 use crate::runtime::StoreData;
 use crate::runtime::host::{register_host_fn, register_host_fn_async, write_submilli_array_struct};
-use crate::runtime::prelude::collection::string_units;
+use crate::runtime::prelude::collection::FIELD_NAME;
 use crate::runtime::prelude::keep::KeptValues;
+use crate::runtime::prelude::vtable::read_string_units;
 use crate::runtime::prelude::{MODULE_NAME, declare_method};
 use crate::{PackageDeclaration, Param, Type};
 
@@ -29,20 +30,15 @@ fn find(
             crate::runtime::host::type_error("property receiver must be an object"),
         ));
     };
-    for slot in 0..names.len(&mut *caller)? {
-        let name = names.get(&mut *caller, slot)?;
-        if is_accessor_slot(caller, &name)? == accessor
-            && !field_is_private(caller, &name)?
-            && string_units(caller, &name)? == key
-        {
-            return Ok(Some(Property {
-                slot,
-                name,
-                value: values.get(&mut *caller, slot)?,
-            }));
-        }
-    }
-    Ok(None)
+    let object = super::super::iterator::as_struct(caller, object, "property receiver")?;
+    let Some(slot) = super::index::lookup(caller, &object, key, accessor, true)? else {
+        return Ok(None);
+    };
+    Ok(Some(Property {
+        slot,
+        name: names.get(&mut *caller, slot)?,
+        value: values.get(&mut *caller, slot)?,
+    }))
 }
 
 fn accessor_key(prefix: &str, key: &[u16]) -> wasmtime::Result<Vec<u16>> {
@@ -64,7 +60,7 @@ async fn get(
     object: &Val,
     name: &Val,
 ) -> wasmtime::Result<Val> {
-    let key = string_units(caller, name)?;
+    let key = read_string_units(caller, name, FIELD_NAME)?;
     if let Some(property) = find(caller, object, &key, false)? {
         return checked_data_value(caller, object, property.slot, property.value).await;
     }
@@ -119,16 +115,16 @@ async fn set(
     name: &Val,
     value: &Val,
 ) -> wasmtime::Result<()> {
-    let key = string_units(caller, name)?;
+    let key = read_string_units(caller, name, FIELD_NAME)?;
     if let Some(property) = find(caller, object, &key, false)? {
         let object = super::super::iterator::as_struct(caller, object, "property receiver")?;
         let values = field_array(caller, &object, 2)?;
         values.set(&mut *caller, property.slot, *value)?;
         let marker = super::super::iterator::as_struct(caller, &property.name, "field name")?;
-        if marker.ty(&*caller)?.fields().count() > 2
-            && matches!(marker.field(&mut *caller, 2)?, Val::I32(0))
+        if marker.ty(&*caller)?.fields().count() > 3
+            && matches!(marker.field(&mut *caller, 3)?, Val::I32(0))
         {
-            marker.set_field(&mut *caller, 2, Val::I32(1))?;
+            marker.set_field(&mut *caller, 3, Val::I32(1))?;
         }
         return Ok(());
     }
@@ -148,7 +144,7 @@ async fn set(
 }
 
 fn has(caller: &mut Caller<'_, StoreData>, object: &Val, name: &Val) -> wasmtime::Result<bool> {
-    let key = string_units(caller, name)?;
+    let key = read_string_units(caller, name, FIELD_NAME)?;
     if let Some(property) = find(caller, object, &key, false)? {
         return field_is_present(caller, &property.name, &property.value);
     }
@@ -162,7 +158,7 @@ async fn values(caller: &mut Caller<'_, StoreData>, object: &Val) -> wasmtime::R
     let Some((names, fields)) = shape_arrays(caller, object)? else {
         return Ok(Val::AnyRef(None));
     };
-    let count = names.len(&mut *caller)?;
+    let count = super::field_count(caller, object)?;
     // A getter's result is held by nothing while the next getter runs.
     let mut result = KeptValues::with_capacity(caller, count as usize)?;
     for slot in 0..count {
@@ -172,7 +168,7 @@ async fn values(caller: &mut Caller<'_, StoreData>, object: &Val) -> wasmtime::R
             continue;
         }
         if is_accessor_slot(caller, &name)? {
-            if string_units(caller, &name)?.starts_with(&[103, 101, 116, 32]) {
+            if read_string_units(caller, &name, FIELD_NAME)?.starts_with(&[103, 101, 116, 32]) {
                 let got = super::super::closure::read(caller, &value, "record getter")?
                     .call_with_receiver(caller, *object, &[])
                     .await?;

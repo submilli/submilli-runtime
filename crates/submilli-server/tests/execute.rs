@@ -21,10 +21,13 @@ use uuid::Uuid;
 const BLUEPRINT_NAME: &str = "test";
 
 fn router() -> Router {
-    let blueprints = Arc::new(InMemoryBlueprintStore::seed([Blueprint {
-        name: BLUEPRINT_NAME.into(),
-        ..Default::default()
-    }]));
+    let blueprints = Arc::new(
+        InMemoryBlueprintStore::seed([Blueprint {
+            name: BLUEPRINT_NAME.into(),
+            ..Default::default()
+        }])
+        .expect("seed blueprints"),
+    );
     let config = ServerConfig {
         blueprints: Some(blueprints),
         ..ServerConfig::default()
@@ -45,11 +48,14 @@ fn router_with_packages_and_runtime(
     packages: &[&str],
     runtime: RuntimeConfig,
 ) -> Router {
-    let blueprints = Arc::new(InMemoryBlueprintStore::seed([Blueprint {
-        name: BLUEPRINT_NAME.into(),
-        packages: packages.iter().map(ToString::to_string).collect(),
-        ..Default::default()
-    }]));
+    let blueprints = Arc::new(
+        InMemoryBlueprintStore::seed([Blueprint {
+            name: BLUEPRINT_NAME.into(),
+            packages: packages.iter().map(ToString::to_string).collect(),
+            ..Default::default()
+        }])
+        .expect("seed blueprints"),
+    );
     let config = ServerConfig {
         blueprints: Some(blueprints),
         package_store_root: Some(package_store_root),
@@ -60,24 +66,27 @@ fn router_with_packages_and_runtime(
 }
 
 fn router_with_oauth_mcp() -> Router {
-    let blueprints = Arc::new(InMemoryBlueprintStore::seed([Blueprint {
-        name: BLUEPRINT_NAME.into(),
-        mcp: BTreeMap::from([(
-            "github".to_string(),
-            McpServer {
-                transport: "streamable_http".into(),
-                url: "https://api.githubcopilot.com/mcp/".into(),
-                headers: BTreeMap::new(),
-                auth: Some(McpAuth::Oauth2 {
-                    client_id: None,
-                    authorization_endpoint: None,
-                    token_endpoint: None,
-                    scopes: Vec::new(),
-                }),
-            },
-        )]),
-        ..Default::default()
-    }]));
+    let blueprints = Arc::new(
+        InMemoryBlueprintStore::seed([Blueprint {
+            name: BLUEPRINT_NAME.into(),
+            mcp: BTreeMap::from([(
+                "github".to_string(),
+                McpServer {
+                    transport: "streamable_http".into(),
+                    url: "https://api.githubcopilot.com/mcp/".into(),
+                    headers: BTreeMap::new(),
+                    auth: Some(McpAuth::Oauth2 {
+                        client_id: None,
+                        authorization_endpoint: None,
+                        token_endpoint: None,
+                        scopes: Vec::new(),
+                    }),
+                },
+            )]),
+            ..Default::default()
+        }])
+        .expect("seed blueprints"),
+    );
     let config = ServerConfig {
         blueprints: Some(blueprints),
         ..ServerConfig::default()
@@ -175,6 +184,7 @@ fn write_acme_util_package_compiled_as(store_root: &Path, module_name: &str, sou
         &declared_as_util.type_info,
         &submilli_build::derive_capability_schema(
             &declared_as_util.declaration,
+            &[],
             &declared_as_util.required_capabilities,
         ),
         &declared_as_util.declaration,
@@ -205,7 +215,11 @@ fn write_dependent_packages(store_root: &Path) {
         store_root.join("@z").join("util"),
         &util.wasm,
         &util.type_info,
-        &submilli_build::derive_capability_schema(&util.declaration, &util.required_capabilities),
+        &submilli_build::derive_capability_schema(
+            &util.declaration,
+            &[],
+            &util.required_capabilities,
+        ),
         &util.declaration,
         &ArtifactMetadata::new("@z/util", "1.0.0", Vec::new()),
     )
@@ -225,7 +239,11 @@ fn write_dependent_packages(store_root: &Path) {
         store_root.join("@a").join("app"),
         &app.wasm,
         &app.type_info,
-        &submilli_build::derive_capability_schema(&app.declaration, &app.required_capabilities),
+        &submilli_build::derive_capability_schema(
+            &app.declaration,
+            &[],
+            &app.required_capabilities,
+        ),
         &app.declaration,
         &ArtifactMetadata::new(
             "@a/app",
@@ -301,11 +319,14 @@ async fn blueprint_package_resolves_from_the_fallback_store() {
     let owned = tmp.path().join("server-packages");
     let fallback = tmp.path().join("cli-packages");
     write_acme_util_package(&fallback);
-    let blueprints = Arc::new(InMemoryBlueprintStore::seed([Blueprint {
-        name: BLUEPRINT_NAME.into(),
-        packages: ["@acme/util".to_string()].into_iter().collect(),
-        ..Default::default()
-    }]));
+    let blueprints = Arc::new(
+        InMemoryBlueprintStore::seed([Blueprint {
+            name: BLUEPRINT_NAME.into(),
+            packages: ["@acme/util".to_string()].into_iter().collect(),
+            ..Default::default()
+        }])
+        .expect("seed blueprints"),
+    );
     let router = app(AppState::new(ServerConfig {
         blueprints: Some(blueprints),
         package_store_root: Some(owned.clone()),
@@ -529,15 +550,20 @@ async fn prepared_package_cache_only_evicts_when_blueprint_packages_change() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let store_root = tmp.path().join("packages");
     write_acme_util_package(&store_root);
-    let artifact_wasm = store_root.join("@acme").join("util").join("pkg.wasm");
-    let router = router_with_package_store(store_root);
+    write_dependent_packages(&store_root);
+    let router = router_with_package_store(store_root.clone());
     let code = r#"
         import { answer, plusOne } from "@acme/util";
         function main(): number { return plusOne(answer()); }
     "#;
 
     let (_, first) = execute_on(&router, code).await;
-    std::fs::remove_file(artifact_wasm).expect("remove package wasm after prepare");
+    // Registration needs valid artifacts; change the on-disk result to distinguish
+    // reuse of the prepared module from reloading it after a package-list change.
+    write_acme_util_package_with_source(
+        &store_root,
+        "export function answer(): number { return 99; } export function plusOne(n: number): number { return n + 1; }",
+    );
 
     let (status, _) = apply_blueprint_on(
         &router,
@@ -558,7 +584,7 @@ vfs: none
 name: test
 packages:
   - "@acme/util"
-  - "@acme/other"
+  - "@a/app"
 vfs: none
 "#,
     )
@@ -573,8 +599,8 @@ vfs: none
         "got: {after_non_package_update:#}"
     );
     assert_eq!(
-        after_package_update["error"]["kind"],
-        json!("package_resolution"),
+        after_package_update["result"],
+        json!("100"),
         "got: {after_package_update:#}"
     );
 }
@@ -748,6 +774,34 @@ async fn uncaught_throw_returns_runtime_error() {
     );
 }
 
+/// A URL with a dot segment is refused as an ordinary `TypeError`, not as an
+/// internal failure, and the server goes on serving.
+#[tokio::test]
+async fn http_dot_segment_is_an_ordinary_runtime_error() {
+    let router = router();
+    let (status, body) = execute_on(
+        &router,
+        r#"import { get } from "submilli:http";
+        function main(): void { get("https://example.com/customers/%2E%2E/admin"); }"#,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        body["error"]["kind"],
+        json!("runtime_error"),
+        "got: {body:#}"
+    );
+    let message = body["error"]["message"].as_str().unwrap_or_default();
+    assert!(
+        message.contains("TypeError") && message.contains("dot segment \"%2E%2E\""),
+        "got: {body:#}"
+    );
+
+    let (status, body) = execute_on(&router, r#"function main(): string { return "ok"; }"#).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["result"], json!("ok"), "got: {body:#}");
+}
+
 #[tokio::test]
 async fn uncaught_throw_in_nonvoid_main_returns_runtime_error() {
     let (status, body) =
@@ -880,6 +934,7 @@ async fn git_transitive_imports_require_configuration_and_keep_package_attributi
         &package.type_info,
         &submilli_build::derive_capability_schema(
             &package.declaration,
+            &[],
             &package.required_capabilities,
         ),
         &package.declaration,
@@ -897,7 +952,7 @@ async fn git_transitive_imports_require_configuration_and_keep_package_attributi
             .contains("blueprint git block"),
         "{disabled}"
     );
-    let yaml = "name: test\npackages: ['@acme/util']\ngit:\n  identity: {name: Agent, email: agent@example.com}\npermissions:\n  main:\n    - {capability: git.init, action: allow}\n";
+    let yaml = "name: test\npackages: ['@acme/util']\ngit:\n  identity: {name: Agent, email: agent@example.com}\npermissions:\n  main:\n    - {capability: git.init, action: allow}\n  '@acme/util':\n    - {capability: git.init, action: deny}\n    - {capability: git.commit, action: deny}\n";
     let (status, applied) = apply_blueprint_on(&router, yaml).await;
     assert_eq!(status, StatusCode::OK, "{applied}");
     let (_, denied) = execute_on(&router, code).await;
@@ -906,8 +961,9 @@ async fn git_transitive_imports_require_configuration_and_keep_package_attributi
         message.contains("caller=@acme/util") && message.contains("git.init"),
         "{denied}"
     );
-    let yaml = "name: test\npackages: ['@acme/util']\ngit:\n  identity: {name: Agent, email: agent@example.com}\npermissions:\n  main:\n    - {capability: git.commit, action: allow}\n  '@acme/util':\n    - {capability: git.init, action: allow}\n";
-    apply_blueprint_on(&router, yaml).await;
+    let yaml = "name: test\npackages: ['@acme/util']\ngit:\n  identity: {name: Agent, email: agent@example.com}\npermissions:\n  main:\n    - {capability: git.commit, action: allow}\n  '@acme/util':\n    - {capability: git.init, action: allow}\n    - {capability: git.commit, action: deny}\n";
+    let (status, applied) = apply_blueprint_on(&router, yaml).await;
+    assert_eq!(status, StatusCode::OK, "{applied}");
     let (_, denied) = execute_on(&router, code).await;
     let message = denied["error"]["message"].as_str().unwrap();
     assert!(
@@ -919,10 +975,13 @@ async fn git_transitive_imports_require_configuration_and_keep_package_attributi
 #[tokio::test]
 async fn configured_execution_timeout_interrupts_loop_without_expiring_early() {
     use std::time::{Duration, Instant};
-    let blueprints = Arc::new(InMemoryBlueprintStore::seed([Blueprint {
-        name: BLUEPRINT_NAME.into(),
-        ..Default::default()
-    }]));
+    let blueprints = Arc::new(
+        InMemoryBlueprintStore::seed([Blueprint {
+            name: BLUEPRINT_NAME.into(),
+            ..Default::default()
+        }])
+        .expect("seed blueprints"),
+    );
     let router = app(AppState::new(ServerConfig {
         blueprints: Some(blueprints),
         runtime: RuntimeConfig {

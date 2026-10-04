@@ -93,7 +93,16 @@ pub fn execute_tool_description(blueprint: &Blueprint, surface: PromptSurface) -
     let visibility = LibraryVisibility::for_blueprint(blueprint);
     let http_visible = visibility.allows(HTTP_MODULE);
     let sandbox = if visibility.allows("submilli:fs") || visibility.allows("submilli:code") {
-        format!("Sandbox: File system {}.", vfs_mode_phrase(&blueprint.vfs))
+        format!(
+            "Sandbox: File system {}. Working directory: {}{}.",
+            vfs_mode_phrase(&blueprint.vfs),
+            blueprint.vfs.cwd(),
+            if blueprint.vfs.cwd().contains("${") {
+                " (resolved per session)"
+            } else {
+                ""
+            }
+        )
     } else {
         String::new()
     };
@@ -263,8 +272,8 @@ fn vfs_mode_phrase(vfs: &submilli_blueprint::VfsConfig) -> String {
         vfs.size_limit()
             .map_or(String::new(), |bytes| format!(" (limit: {bytes} bytes)"))
     };
-    match vfs {
-        VfsConfig::None => "none — `submilli:fs` is disabled".into(),
+    let root = match vfs {
+        VfsConfig::None => return "none — `submilli:fs` is disabled".into(),
         VfsConfig::Ephemeral { .. } => {
             format!(
                 "ephemeral — a fresh sandbox, wiped after each call{}",
@@ -275,9 +284,39 @@ fn vfs_mode_phrase(vfs: &submilli_blueprint::VfsConfig) -> String {
             "per_session — a sandbox that persists across calls in this session{}",
             size_limit_phrase()
         ),
-        VfsConfig::Persistent { .. } => {
-            "persistent — a fixed sandbox directory shared across sessions".into()
-        }
+        VfsConfig::Named { volume, access, .. } => format!(
+            "named — volume `{volume}` ({}), whose files persist across calls and sessions and \
+             are shared with other blueprints that use it",
+            access_phrase(*access)
+        ),
+    };
+    let mounts: Vec<String> = vfs
+        .mounts()
+        .iter()
+        .map(|(path, mount)| {
+            format!(
+                "`{path}` → volume `{}` ({})",
+                mount.volume,
+                access_phrase(mount.access)
+            )
+        })
+        .collect();
+    if mounts.is_empty() {
+        return root;
+    }
+    format!(
+        "{root}; named volumes mounted at {} keep their files across sessions (see `fs.info()`)",
+        mounts.join(", ")
+    )
+}
+
+/// A blueprint that leaves `access` out takes whatever the server declares,
+/// which the prompt cannot see.
+fn access_phrase(access: Option<submilli_blueprint::Access>) -> &'static str {
+    match access {
+        Some(submilli_blueprint::Access::ReadOnly) => "read-only",
+        Some(submilli_blueprint::Access::ReadWrite) => "read-write",
+        None => "access set by the server",
     }
 }
 
@@ -622,11 +661,30 @@ mod tests {
         let sess = Blueprint {
             vfs: VfsConfig::PerSession {
                 size_limit: Some(1024),
+                mounts: Default::default(),
+                cwd: None,
             },
             ..Blueprint::default()
         };
         assert!(vfs_mode_phrase(&Blueprint::default().vfs).contains("ephemeral"));
         assert!(vfs_mode_phrase(&sess.vfs).contains("per_session"));
+    }
+
+    #[test]
+    fn vfs_mode_names_named_roots_and_mounts() {
+        let bp = submilli_blueprint::parse(
+            "name: x\nvfs:\n  mode: named\n  volume: notes\n  access: read_only\n  mounts:\n    /memory: {mode: named, volume: memory}\n",
+        )
+        .unwrap();
+        let phrase = vfs_mode_phrase(&bp.vfs);
+        assert!(
+            phrase.starts_with("named — volume `notes` (read-only)"),
+            "{phrase}"
+        );
+        assert!(
+            phrase.contains("`/memory` → volume `memory` (access set by the server)"),
+            "{phrase}"
+        );
     }
 
     #[test]

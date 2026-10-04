@@ -12,12 +12,15 @@ hero:
       link: /docs/quickstart
       variant: primary
     - text: Read the introduction
-      link: /docs/introduction
+      link: /docs/why
       variant: secondary
+nextSteps:
+  - why
+  - quickstart
+  - blueprints
+  - tutorials/connect-a-harness
 ---
 
-Start with the [introduction](/docs/introduction) for the argument and a first
+Start with the [introduction](/docs/why) for the argument and a first
 look at a blueprint, then the quickstart to install the CLI and run your first
 agent-generated program.
-
-More chapters land here as they are written.

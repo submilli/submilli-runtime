@@ -1,21 +1,36 @@
 //! End-to-end integration tests for `submilli server run-code`.
 
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::PathBuf;
 use std::process::{Command, Output};
 use std::sync::Arc;
 
-use submilli_blueprint::Blueprint;
+use submilli_blueprint::{Action, Blueprint, PermissionRule};
 use submilli_server::blueprint::InMemoryBlueprintStore;
 use submilli_server::{AppState, ServerConfig, app};
 
 const BLUEPRINT_NAME: &str = "test";
 
 async fn spawn_server() -> String {
-    let blueprints = Arc::new(InMemoryBlueprintStore::seed([Blueprint {
-        name: BLUEPRINT_NAME.into(),
-        ..Default::default()
-    }]));
+    // Session state is granted so a program in an opened session can leave
+    // something for the next one.
+    let rules = ["session.read", "session.write"]
+        .into_iter()
+        .map(|capability| PermissionRule {
+            capability: capability.into(),
+            filter: None,
+            action: Action::Allow,
+        })
+        .collect();
+    let blueprints = Arc::new(
+        InMemoryBlueprintStore::seed([Blueprint {
+            name: BLUEPRINT_NAME.into(),
+            permissions: BTreeMap::from([("main".to_string(), rules)]),
+            ..Default::default()
+        }])
+        .expect("seed blueprints"),
+    );
     let config = ServerConfig {
         blueprints: Some(blueprints),
         ..ServerConfig::default()
@@ -56,6 +71,26 @@ fn run_code(server: &str, name: &str, source: &str) -> Output {
         ])
         .output()
         .expect("invoke submilli server run-code")
+}
+
+fn submilli(args: &[&str]) -> Output {
+    Command::new(submilli_bin())
+        .args(args)
+        .output()
+        .expect("invoke submilli")
+}
+
+fn run_in_session(server: &str, session: &str, name: &str, source: &str) -> Output {
+    let path = write_script(name, source);
+    submilli(&[
+        "server",
+        "run-code",
+        "--server",
+        server,
+        "--session",
+        session,
+        path.to_str().expect("path utf-8"),
+    ])
 }
 
 fn stdout(out: &Output) -> String {
@@ -209,4 +244,101 @@ async fn unreachable_server() {
     assert!(!out.status.success());
     let err = stderr(&out);
     assert!(err.contains("error:"), "stderr: {err}");
+}
+
+const REMEMBER: &str = r#"import * as session from "submilli:session";
+function main(): string { session.set("progress", "cus_initech"); return "saved"; }"#;
+const RECALL: &str = r#"import * as session from "submilli:session";
+function main(): string { const v = session.get<string | null>("progress"); return v ?? "nothing"; }"#;
+
+#[cfg_attr(skip_http_tests, ignore = "HTTP tests disabled")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn opened_session_keeps_state_between_runs_until_closed() {
+    let server = spawn_server().await;
+    tokio::task::spawn_blocking(move || {
+        let open = submilli(&[
+            "server",
+            "session",
+            "open",
+            "--server",
+            &server,
+            "--blueprint",
+            BLUEPRINT_NAME,
+        ]);
+        assert!(open.status.success(), "stderr: {}", stderr(&open));
+        let session = stdout(&open).trim().to_owned();
+        assert!(!session.is_empty());
+
+        let saved = run_in_session(&server, &session, "session_remember", REMEMBER);
+        assert!(saved.status.success(), "stderr: {}", stderr(&saved));
+        assert_eq!(stdout(&saved), "saved\n");
+
+        let recalled = run_in_session(&server, &session, "session_recall", RECALL);
+        assert!(recalled.status.success(), "stderr: {}", stderr(&recalled));
+        assert_eq!(stdout(&recalled), "cus_initech\n");
+
+        let close = submilli(&["server", "session", "close", "--server", &server, &session]);
+        assert!(close.status.success(), "stderr: {}", stderr(&close));
+
+        let after = run_in_session(&server, &session, "session_after_close", RECALL);
+        assert!(!after.status.success());
+        assert!(
+            stderr(&after).contains("unknown session"),
+            "stderr: {}",
+            stderr(&after)
+        );
+
+        let again = submilli(&["server", "session", "close", "--server", &server, &session]);
+        assert!(!again.status.success());
+        assert!(
+            stderr(&again).contains("no session"),
+            "stderr: {}",
+            stderr(&again)
+        );
+    })
+    .await
+    .unwrap();
+}
+
+#[cfg_attr(skip_http_tests, ignore = "HTTP tests disabled")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn opening_a_session_for_an_unknown_blueprint_fails() {
+    let server = spawn_server().await;
+    let out = tokio::task::spawn_blocking(move || {
+        submilli(&[
+            "server",
+            "session",
+            "open",
+            "--server",
+            &server,
+            "--blueprint",
+            "missing",
+        ])
+    })
+    .await
+    .unwrap();
+    assert!(!out.status.success());
+    assert_eq!(stdout(&out), "");
+    assert!(stderr(&out).contains("error:"), "stderr: {}", stderr(&out));
+}
+
+#[test]
+fn session_excludes_blueprint_and_vars() {
+    for extra in [["--blueprint", "x"], ["--var", "a=b"]] {
+        let out = submilli(&[
+            "server",
+            "run-code",
+            "--session",
+            "s",
+            extra[0],
+            extra[1],
+            "script.ts",
+        ]);
+        assert!(!out.status.success());
+        assert!(
+            stderr(&out).contains("cannot be used with"),
+            "stderr: {}",
+            stderr(&out)
+        );
+    }
 }

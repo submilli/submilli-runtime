@@ -28,13 +28,18 @@ function post(channelId: string, text: string): void {}
 
 /**
  * Approves the send.
+ * @param channelId Conversation to post in.
  * @capability test.com/send { channelId: string }
  */
 function guard(channelId: string): void {
   check("test.com/send", { channelId: channelId });
 }
 
-/** Sends the message. */
+/**
+ * Sends the message.
+ * @param channelId Conversation to post in.
+ * @param text Message text.
+ */
 export function send(channelId: string, text: string): void {
   guard(channelId);
   post(channelId, text);

@@ -41,7 +41,14 @@ export interface PreparedViewQuery {
     queryId: string;
 }
 
-/** Create a configured database view on a resolved database and data source. */
+/**
+ * Create a configured database view on a resolved database and data source.
+ *
+ * @param databaseId Resolved ID of the database the view belongs to.
+ * @param dataSourceId Resolved ID of the data source the view displays.
+ * @param input View name, type, and optional filter, sorts, configuration, and position.
+ * @returns The created view.
+ */
 export function createView(databaseId: string, dataSourceId: string, input: CreateViewInput): NotionView {
     const fields: string[] = [
         fieldJson("database_id", databaseId),
@@ -56,7 +63,13 @@ export function createView(databaseId: string, dataSourceId: string, input: Crea
     return viewFrom(notionPost("/views", objectJson(fields)).json());
 }
 
-/** Update a view's saved query or presentation. */
+/**
+ * Update a view's saved query or presentation.
+ *
+ * @param viewId View ID or Notion URL.
+ * @param input Fields to change; at least one must be set, and the clear flags remove the saved filter, sorts, or quick filters.
+ * @returns The updated view.
+ */
 export function updateView(viewId: string, input: UpdateViewInput): NotionView {
     const fields: string[] = [];
     if (input.name !== null) fields.push(fieldJson("name", input.name));
@@ -71,7 +84,14 @@ export function updateView(viewId: string, input: UpdateViewInput): NotionView {
     return viewFrom(notionPatch("/views/" + pathId(viewId), objectJson(fields)).json());
 }
 
-/** List views belonging to a database. */
+/**
+ * List views belonging to a database.
+ *
+ * @param databaseId Resolved ID of the database.
+ * @param requestedSize Views per page, 1 to 100; `null` uses 100.
+ * @param startCursor Cursor from a previous page's `nextCursor`; `null` starts at the first view.
+ * @returns One page of views; an empty `results` means the database has none.
+ */
 export function listViews(
     databaseId: string,
     requestedSize: number | null,
@@ -92,19 +112,39 @@ export function listViews(
     };
 }
 
-/** Execute a view's saved filters and sorts. */
+/**
+ * Execute a view's saved filters and sorts.
+ *
+ * @param viewId View ID or Notion URL.
+ * @param resultPageSize Results in the first page, 1 to 100; defaults to 100.
+ * @returns The cached query with its ID, first page of results, total count, and expiry time.
+ */
 export function queryView(viewId: string, resultPageSize: number = 100): ViewQuery {
     return viewQueryFrom(notionPost("/views/" + pathId(viewId) + "/queries", { page_size: pageSize(resultPageSize) }).json());
 }
 
-/** Resolve the view and the cached result set of a continued view query before any request is sent. */
+/**
+ * Resolve the view and the cached result set of a continued view query before any request is sent.
+ *
+ * @param viewRef View ID or Notion URL.
+ * @param queryRef ID of the cached view query returned by `queryView`.
+ * @returns The validated view and query IDs.
+ */
 export function prepareContinueViewQuery(viewRef: string, queryRef: string): PreparedViewQuery {
     const viewId = idFromRef(viewRef, "view");
     const queryId = idFromRef(queryRef);
     return { viewId: viewId, queryId: queryId };
 }
 
-/** Continue a cached view query. */
+/**
+ * Continue a cached view query.
+ *
+ * @param viewId Resolved view ID.
+ * @param queryId Resolved ID of the cached view query.
+ * @param startCursor Cursor from the previous page's `nextCursor`; empty starts at the beginning.
+ * @param resultPageSize Results per page, 1 to 100; defaults to 100.
+ * @returns One page of page and data source references; fetch them for full objects.
+ */
 export function continueViewQuery(
     viewId: string,
     queryId: string,

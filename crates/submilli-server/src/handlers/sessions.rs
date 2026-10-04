@@ -66,12 +66,19 @@ pub async fn create(
     State(state): State<AppState>,
     Json(req): Json<CreateRequest>,
 ) -> impl IntoResponse {
-    let Some(blueprint) = state.blueprints().get(&req.blueprint).await else {
+    let found = match state.blueprints().get(&req.blueprint).await {
+        Ok(found) => found,
+        Err(error) => return crate::blueprint::store_failure_response(error).into_response(),
+    };
+    let Some(blueprint) = found else {
         // One code for "this name is not runnable", whether it was never registered
         // or is registered in a form this binary can no longer parse: a client that
         // has to branch on the difference reads `message`, and one that only needs to
         // know the name is unusable keeps its existing predicate.
-        let message = blueprint_miss_message(&state, &req.blueprint).await;
+        let message = match blueprint_miss_message(&state, &req.blueprint).await {
+            Ok(message) => message,
+            Err(error) => return crate::blueprint::store_failure_response(error).into_response(),
+        };
         return (
             StatusCode::NOT_FOUND,
             Json(serde_json::json!({
@@ -97,7 +104,12 @@ pub async fn create(
         }
     };
 
-    if let Err(error) = submilli_shared::resolve_git(&blueprint, &variables) {
+    if let Err(error) = blueprint
+        .vfs
+        .resolve(&variables)
+        .map(|_| ())
+        .and_then(|()| submilli_shared::resolve_git(&blueprint, &variables).map(|_| ()))
+    {
         return (
             StatusCode::BAD_REQUEST,
             Json(serde_json::json!({"error": error.to_string()})),
@@ -147,39 +159,71 @@ pub async fn execute(
     State(state): State<AppState>,
     Path(session_id): Path<String>,
     headers: HeaderMap,
-    Json(req): Json<SessionExecuteRequest>,
+    request: Result<Json<SessionExecuteRequest>, axum::extract::rejection::JsonRejection>,
 ) -> impl IntoResponse {
+    let req = match request {
+        Ok(Json(req)) => req,
+        Err(error) => return (error.status(), Json(serde_json::json!({
+            "execution_id": crate::audit::execution_id(), "error": "invalid_request", "message": error.body_text()
+        }))).into_response(),
+    };
+    if let Some(audit) = crate::audit::execution() {
+        let name = state
+            .session_manager()
+            .blueprint_name(&session_id)
+            .unwrap_or_default();
+        audit.annotate(
+            &req.code,
+            &name,
+            None,
+            &state.session_manager().variables(&session_id),
+        );
+    }
     let Some(blueprint_name) = state.session_manager().blueprint_name(&session_id) else {
         return (
             StatusCode::NOT_FOUND,
-            Json(serde_json::json!({ "error": "unknown session", "session_id": session_id })),
+            Json(serde_json::json!({ "execution_id": crate::audit::execution_id(), "error": "unknown session", "session_id": session_id })),
         )
             .into_response();
     };
-    let Some(blueprint) = state.blueprints().get(&blueprint_name).await else {
+    let found = match state.blueprints().get(&blueprint_name).await {
+        Ok(found) => found,
+        Err(error) => return execution_store_failure(error),
+    };
+    let Some(blueprint) = found else {
         // A session outlives a restart, so its blueprint may have become unrunnable
         // (rather than removed) while the session slept: `message` says which.
-        let message = blueprint_miss_message(&state, &blueprint_name).await;
+        let message = match blueprint_miss_message(&state, &blueprint_name).await {
+            Ok(message) => message,
+            Err(error) => return execution_store_failure(error),
+        };
         return (
             StatusCode::NOT_FOUND,
-            Json(serde_json::json!({
-                "error": "blueprint no longer exists",
-                "message": message,
-                "name": blueprint_name,
-            })),
+            Json(
+                serde_json::json!({ "execution_id": crate::audit::execution_id(),
+                    "error": "blueprint no longer exists",
+                    "message": message,
+                    "name": blueprint_name,
+                }),
+            ),
         )
             .into_response();
     };
 
     let variables = state.session_manager().variables(&session_id);
+    if let Some(audit) = crate::audit::execution() {
+        audit.annotate(&req.code, &blueprint_name, Some(&blueprint), &variables);
+    }
     let Some(harness_secrets) = execution_secrets(&state, &session_id, &blueprint) else {
         return (
             StatusCode::CONFLICT,
-            Json(serde_json::json!({
-                "error": "session_requires_secrets",
-                "session_id": session_id,
-                "required": required_harness_secrets(&blueprint.secrets),
-            })),
+            Json(
+                serde_json::json!({ "execution_id": crate::audit::execution_id(),
+                    "error": "session_requires_secrets",
+                    "session_id": session_id,
+                    "required": required_harness_secrets(&blueprint.secrets),
+                }),
+            ),
         )
             .into_response();
     };
@@ -212,6 +256,9 @@ pub async fn execute(
     {
         Reservation::Refused(refusal) => return refusal_response(&session_id, &refusal),
         Reservation::Replay(outcome) => {
+            if let Some(audit) = crate::audit::execution() {
+                audit.replay();
+            }
             // A replay is session activity: a client retrying must not have its
             // session reaped underneath it. `execute_core` normally does this,
             // and the replay path never reaches it.
@@ -303,6 +350,7 @@ fn refusal_response(session_id: &str, refusal: &Refusal) -> axum::response::Resp
     (
         refusal.status(),
         Json(serde_json::json!({
+            "execution_id": crate::audit::execution_id(),
             "error": refusal.code(),
             "session_id": session_id,
             "detail": refusal.detail(),
@@ -347,10 +395,17 @@ pub async fn rebind(
         )
             .into_response();
     };
-    let Some(blueprint) = state.blueprints().get(&blueprint_name).await else {
+    let found = match state.blueprints().get(&blueprint_name).await {
+        Ok(found) => found,
+        Err(error) => return crate::blueprint::store_failure_response(error).into_response(),
+    };
+    let Some(blueprint) = found else {
         // A session outlives a restart, so its blueprint may have become unrunnable
         // (rather than removed) while the session slept: `message` says which.
-        let message = blueprint_miss_message(&state, &blueprint_name).await;
+        let message = match blueprint_miss_message(&state, &blueprint_name).await {
+            Ok(message) => message,
+            Err(error) => return crate::blueprint::store_failure_response(error).into_response(),
+        };
         return (
             StatusCode::NOT_FOUND,
             Json(serde_json::json!({
@@ -417,4 +472,18 @@ fn session_header(session_id: &str) -> HeaderMap {
         headers.insert(HeaderName::from_static(SESSION_HEADER), value);
     }
     headers
+}
+
+fn execution_store_failure(error: crate::blueprint::StoreError) -> axum::response::Response {
+    if let Some(audit) = crate::audit::execution() {
+        audit.error(crate::error::ErrorKind::RuntimeError);
+    }
+    let (status, Json(mut body)) = crate::blueprint::store_failure_response(error);
+    if let Some(fields) = body.as_object_mut() {
+        fields.insert(
+            "execution_id".into(),
+            serde_json::json!(crate::audit::execution_id()),
+        );
+    }
+    (status, Json(body)).into_response()
 }

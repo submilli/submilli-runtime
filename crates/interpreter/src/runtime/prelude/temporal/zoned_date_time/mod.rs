@@ -1,32 +1,88 @@
 //! `Temporal.ZonedDateTime` operations.
 
 mod install;
+mod zone_cache;
+mod zone_ids;
+
+pub(super) fn prepare_zones() -> wasmtime::Result<()> {
+    zone_cache::prepare()
+}
 
 pub(super) use install::{declare, install};
 
 use std::cmp::Ordering;
-use std::str::FromStr;
 
 use jiff::{
     RoundMode, Span, Timestamp, Unit, Zoned, ZonedRound, civil,
-    fmt::temporal::DateTimeParser,
-    tz::{Offset, TimeZone},
+    fmt::temporal::{DateTimeParser, Pieces, PiecesOffset, TimeZoneAnnotationKind},
+    tz::{Offset, OffsetConflict, TimeZone},
 };
+use wasmtime::Caller;
+
+use crate::runtime::StoreData;
+use crate::runtime::fuel;
 
 type Result<T> = std::result::Result<T, String>;
 
-pub(super) fn parse(input: &str) -> Result<(Zoned, String)> {
+pub(super) fn parse(input: &str) -> wasmtime::Result<(Zoned, String)> {
     let input = input.trim();
-    let zoned = Zoned::from_str(input).map_err(|_| {
-        format!(
+    let invalid = || {
+        crate::runtime::host::range_error(format!(
             "Temporal.ZonedDateTime.from: {input:?} is not a valid ISO 8601 zoned date-time (expected e.g. \"2024-03-09T15:30:45-05:00[America/New_York]\")"
-        )
-    })?;
+        ))
+    };
+    let pieces = Pieces::parse(input).map_err(|_| invalid())?;
+    let annotation = pieces.time_zone_annotation().ok_or_else(invalid)?;
+    let zone = match annotation.kind() {
+        TimeZoneAnnotationKind::Named(name) => {
+            zone_cache::named(name.as_str())?.ok_or_else(invalid)?
+        }
+        TimeZoneAnnotationKind::Offset(offset) => TimeZone::fixed(*offset),
+        _ => return Err(invalid()),
+    };
+    let datetime = civil::DateTime::from_parts(
+        pieces.date(),
+        pieces.time().unwrap_or(civil::Time::midnight()),
+    );
+    let ambiguous = match pieces.offset() {
+        None => zone.into_ambiguous_zoned(datetime),
+        Some(PiecesOffset::Zulu) => OffsetConflict::AlwaysOffset
+            .resolve(datetime, Offset::UTC, zone)
+            .map_err(|_| invalid())?,
+        Some(PiecesOffset::Numeric(offset)) => {
+            let exact = has_offset_seconds(input);
+            OffsetConflict::Reject
+                .resolve_with(datetime, offset.offset(), zone, |parsed, candidate| {
+                    parsed == candidate
+                        || (!exact
+                            && candidate.seconds() % 60 != 0
+                            && candidate
+                                .round(Unit::Minute)
+                                .is_ok_and(|rounded| parsed == rounded))
+                })
+                .map_err(|_| invalid())?
+        }
+        Some(_) => return Err(invalid()),
+    };
+    let zoned = ambiguous.compatible().map_err(|_| invalid())?;
     let tz_id = zoned
         .time_zone()
         .iana_name()
         .map_or_else(|| format_offset(zoned.offset().seconds()), str::to_string);
     Ok((zoned, tz_id))
+}
+
+fn has_offset_seconds(input: &str) -> bool {
+    let head = input.split('[').next().unwrap_or(input);
+    let time = head
+        .split_once(['T', 't', ' '])
+        .map_or(head, |(_, time)| time);
+    let offset = time
+        .rfind(['+', '-'])
+        .and_then(|index| time.get(index + 1..))
+        .unwrap_or("");
+    offset.bytes().filter(|byte| *byte == b':').count() >= 2
+        || (!offset.contains(':') && offset.len() >= 6)
 }
 
 pub(super) fn compare_timestamps(a: Timestamp, b: Timestamp) -> f64 {
@@ -80,39 +136,50 @@ pub(super) fn subtract(zoned: &Zoned, span: Span) -> Result<Zoned> {
     })
 }
 
-pub(super) fn resolve_time_zone(time_zone: &str, operation: &str) -> Result<(TimeZone, String)> {
+/// Looks a zone up in the finite pre-parsed database. Charged as one `TZ`.
+pub(super) fn resolve_time_zone(
+    caller: &mut Caller<'_, StoreData>,
+    time_zone: &str,
+    operation: &str,
+) -> wasmtime::Result<(TimeZone, String)> {
+    // A fuel trap passes through as it is; an unknown zone is the program's
+    // `RangeError`.
+    fuel::charge_host_fuel(&mut *caller, fuel::TZ)?;
+    let unknown = || crate::runtime::host::range_error(unknown_zone(operation, time_zone));
     if is_offset_identifier(time_zone) {
-        let offset =
-            parse_fixed_offset(time_zone).map_err(|_| unknown_zone(operation, time_zone))?;
+        let offset = parse_fixed_offset(time_zone).map_err(|_| unknown())?;
         return Ok((TimeZone::fixed(offset), format_offset(offset.seconds())));
     }
-    let tz = TimeZone::get(time_zone).map_err(|_| unknown_zone(operation, time_zone))?;
-    let id = tz
-        .iana_name()
-        .ok_or_else(|| unknown_zone(operation, time_zone))?
-        .to_string();
+    let tz = zone_cache::named(time_zone)?.ok_or_else(unknown)?;
+    let id = tz.iana_name().ok_or_else(unknown)?.to_string();
     Ok((tz, id))
 }
 
-pub(super) fn time_zone_ids_equal(a: &str, b: &str) -> bool {
+pub(super) fn system_zone(id: &str) -> wasmtime::Result<TimeZone> {
+    Ok(zone_cache::named(id)?.unwrap_or(TimeZone::UTC))
+}
+
+pub(super) fn time_zone_ids_equal(
+    caller: &mut Caller<'_, StoreData>,
+    a: &str,
+    b: &str,
+) -> wasmtime::Result<bool> {
     if a.eq_ignore_ascii_case(b) {
-        return true;
+        return Ok(true);
     }
     let a_is_offset = is_offset_identifier(a);
     let b_is_offset = is_offset_identifier(b);
     if a_is_offset || b_is_offset {
         if a_is_offset != b_is_offset {
-            return false;
+            return Ok(false);
         }
         let (Ok(a), Ok(b)) = (parse_fixed_offset(a), parse_fixed_offset(b)) else {
-            return false;
+            return Ok(false);
         };
-        return a == b;
+        return Ok(a == b);
     }
-    let (Ok(a), Ok(b)) = (TimeZone::get(a), TimeZone::get(b)) else {
-        return false;
-    };
-    time_zones_have_same_rules(&a, &b)
+    fuel::charge_host_fuel(&mut *caller, 2 * fuel::TZ)?;
+    Ok(zone_ids::primary(a).eq_ignore_ascii_case(zone_ids::primary(b)))
 }
 
 fn parse_fixed_offset(input: &str) -> std::result::Result<Offset, jiff::Error> {
@@ -121,40 +188,16 @@ fn parse_fixed_offset(input: &str) -> std::result::Result<Offset, jiff::Error> {
         .and_then(|time_zone| time_zone.to_fixed_offset())
 }
 
-fn time_zones_have_same_rules(a: &TimeZone, b: &TimeZone) -> bool {
-    if a == b {
-        return true;
-    }
-    let a_initial = a.to_offset_info(Timestamp::MIN);
-    let b_initial = b.to_offset_info(Timestamp::MIN);
-    if a_initial.offset() != b_initial.offset()
-        || a_initial.abbreviation() != b_initial.abbreviation()
-        || a_initial.dst() != b_initial.dst()
-    {
-        return false;
-    }
-
-    let mut a_transitions = a.following(Timestamp::MIN);
-    let mut b_transitions = b.following(Timestamp::MIN);
-    loop {
-        match (a_transitions.next(), b_transitions.next()) {
-            (None, None) => return true,
-            (Some(a), Some(b))
-                if a.timestamp() == b.timestamp()
-                    && a.offset() == b.offset()
-                    && a.abbreviation() == b.abbreviation()
-                    && a.dst() == b.dst() => {}
-            _ => return false,
-        }
-    }
-}
-
 fn is_offset_identifier(time_zone: &str) -> bool {
     matches!(time_zone.as_bytes().first(), Some(b'+' | b'-'))
 }
 
-pub(super) fn with_time_zone(zoned: &Zoned, time_zone: &str) -> Result<(Zoned, String)> {
-    let (tz, id) = resolve_time_zone(time_zone, "ZonedDateTime.withTimeZone")?;
+pub(super) fn with_time_zone(
+    caller: &mut Caller<'_, StoreData>,
+    zoned: &Zoned,
+    time_zone: &str,
+) -> wasmtime::Result<(Zoned, String)> {
+    let (tz, id) = resolve_time_zone(caller, time_zone, "ZonedDateTime.withTimeZone")?;
     Ok((zoned.timestamp().to_zoned(tz), id))
 }
 
@@ -249,4 +292,39 @@ pub(super) fn unknown_zone(operation: &str, time_zone: &str) -> String {
     format!(
         "Temporal.{operation}: time zone {time_zone:?} not found (expected an IANA name like \"America/New_York\", \"UTC\", or a fixed offset like \"-05:00\")"
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cached_zone_parser_preserves_annotation_and_offset_rules() {
+        for input in [
+            "2024-01-01T12:00Z[UTC]",
+            "2024-01-01T12:00+00:00[UTC]",
+            "2024-01-01T12:00[UTC]",
+            "2024-01-01[UTC]",
+            "2024-03-10T02:30[America/New_York]",
+            "2024-11-03T01:30[America/New_York]",
+            "2024-01-01T12:00+00:00[+00:00]",
+            "2024-01-01T12:00Z[UTC][u-ca=iso8601]",
+            "2024-01-01T12:00Z[UTC][u-ca=hebrew]",
+            "2024-01-01T12:00Z[UTC][!u-ca=hebrew]",
+            "2024-01-01T12:00Z[UTC][!unknown=value]",
+            "2024-01-01T12:00-05:00[UTC]",
+        ] {
+            let previous = input.parse::<Zoned>();
+            let current = parse(input);
+            assert_eq!(
+                previous.is_ok(),
+                current.is_ok(),
+                "{input}: {previous:?} / {current:?}"
+            );
+            if let (Ok(previous), Ok((current, _))) = (previous, current) {
+                assert_eq!(previous.timestamp(), current.timestamp(), "{input}");
+                assert_eq!(previous.offset(), current.offset(), "{input}");
+            }
+        }
+    }
 }

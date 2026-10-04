@@ -16,8 +16,11 @@
 //! `// rejected: <reason>` header.
 //!
 //! The full conformance body is opt-in for local runs. Set
-//! `SUBMILLI_FULL_TEST=1` in nightly/CI, or set `CONFORMANCE_FILTER` to run a
-//! targeted slice.
+//! `SUBMILLI_CONFORMANCE_TEST=1` in nightly/release checks. `CONFORMANCE_FILTER`
+//! narrows an opted-in run; it does not enable conformance on its own.
+
+#[path = "support/conformance_gate.rs"]
+mod conformance_gate;
 
 use std::fs;
 use std::io::Write;
@@ -38,16 +41,16 @@ const ROOT: &str = env!("CARGO_MANIFEST_DIR");
 
 #[test]
 fn conformance() {
+    if !conformance_gate::requested() {
+        eprintln!("conformance: skipped; set SUBMILLI_CONFORMANCE_TEST=1 to run");
+        return;
+    }
     let root = Path::new(ROOT);
     let shim = Arc::new(fs::read_to_string(root.join("harness.ts")).expect("read harness.ts"));
     let mut paths = Vec::new();
     collect(&root.join("cases"), &mut paths);
     paths.sort();
     let filter = std::env::var("CONFORMANCE_FILTER").ok();
-    if !full_test_requested() && filter.is_none() {
-        eprintln!("conformance: skipped; set SUBMILLI_FULL_TEST=1 to run");
-        return;
-    }
     if let Some(filter) = filter {
         paths.retain(|p| p.to_string_lossy().contains(&filter));
     }
@@ -206,10 +209,6 @@ fn is_false(value: &str) -> bool {
         value.to_ascii_lowercase().as_str(),
         "0" | "false" | "no" | "off"
     )
-}
-
-fn full_test_requested() -> bool {
-    std::env::var("SUBMILLI_FULL_TEST").is_ok_and(|value| !is_false(&value))
 }
 
 #[test]

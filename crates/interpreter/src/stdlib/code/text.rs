@@ -1,7 +1,7 @@
 //! Text transformations never perform I/O. A rejected edit cannot partially write.
 use serde_json::{Value, json};
-use similar::{Algorithm, ChangeTag, capture_diff_slices, group_diff_ops};
-use std::collections::HashMap;
+use similar::{ChangeTag, DiffOp};
+use std::{collections::HashMap, fmt::Write};
 use wasmtime::{Result, bail};
 
 pub(super) const MAX_DIAGNOSTICS: usize = 1000;
@@ -118,36 +118,86 @@ pub(super) fn insert(text: &str, line: usize, new: &str) -> Result<Edit> {
     )))
 }
 
-/// Slice on LF without decoding UTF-16, preserving lone surrogates and final newlines.
-pub(super) fn diff(a: &[u16], b: &[u16]) -> Result<Vec<u16>> {
-    let old: Vec<_> = a.split_inclusive(|&u| u == 10).collect();
-    let new: Vec<_> = b.split_inclusive(|&u| u == 10).collect();
-    // Myers worst-case work is quadratic. Refuse before native work can monopolize a store.
-    if old.len().saturating_mul(new.len()) > 4_000_000 {
-        bail!("code.diff: comparison exceeds line-work limit; compare smaller sections");
+/// The lines `diff` compares: LF-terminated, the last one unterminated when
+/// the text does not end in LF, and none at all for an empty text.
+fn lines_inclusive(text: &[u16]) -> impl Iterator<Item = &[u16]> {
+    text.split_inclusive(|&u| u == 10)
+}
+
+/// How many lines `diff` would compare for `text`.
+pub(super) fn line_count(text: &[u16]) -> usize {
+    lines_inclusive(text).count()
+}
+
+/// Bound retained line/frontier metadata independently of edit distance.
+pub(super) fn check_diff_size(old_lines: usize, new_lines: usize) -> Result<()> {
+    if old_lines.saturating_add(new_lines) > 1_000_000 {
+        bail!("code.diff: comparison exceeds line-count limit; compare smaller sections");
     }
-    let groups = group_diff_ops(diff_line_ops(&old, &new), 3);
+    Ok(())
+}
+
+#[cfg(test)]
+pub(super) fn diff(a: &[u16], b: &[u16]) -> Result<Vec<u16>> {
+    diff_charged(a, b, |_| Ok(()))
+}
+
+/// Slice on LF without decoding UTF-16, preserving lone surrogates and final newlines.
+pub(super) fn diff_charged(
+    a: &[u16],
+    b: &[u16],
+    mut charge: impl FnMut(u64) -> Result<()>,
+) -> Result<Vec<u16>> {
+    let na = line_count(a);
+    let nb = line_count(b);
+    check_diff_size(na, nb)?;
+    let mut old = Vec::new();
+    let mut new = Vec::new();
+    old.try_reserve_exact(na)
+        .map_err(crate::runtime::host::fatal_host_error)?;
+    new.try_reserve_exact(nb)
+        .map_err(crate::runtime::host::fatal_host_error)?;
+    old.extend(lines_inclusive(a));
+    new.extend(lines_inclusive(b));
+    let groups = diff_groups(diff_line_ops(&old, &new, &mut charge)?)?;
     let mut output = Vec::new();
     if groups.is_empty() {
         return Ok(output);
     }
+    // Lines occur at most once across disjoint groups. Each line adds a sign
+    // and at most one missing-newline marker; a hunk header fits 128 units.
+    let capacity = a
+        .len()
+        .saturating_add(b.len())
+        .saturating_add(29 * (na + nb))
+        .saturating_add(128 * groups.len())
+        .saturating_add(12);
+    output
+        .try_reserve_exact(capacity)
+        .map_err(crate::runtime::host::fatal_host_error)?;
     output.extend("--- a\n+++ b\n".encode_utf16());
     for group in groups {
-        let first = &group[0];
+        let first = group.first().ok_or_else(|| {
+            crate::runtime::host::fatal_host_error("code.diff: internal empty group")
+        })?;
         let a_start = first.old_range().start;
         let a_len: usize = group.iter().map(|op| op.old_range().len()).sum();
         let b_start = first.new_range().start;
         let b_len: usize = group.iter().map(|op| op.new_range().len()).sum();
-        output.extend(
-            format!(
-                "@@ -{},{} +{},{} @@\n",
-                a_start + usize::from(a_len != 0),
-                a_len,
-                b_start + usize::from(b_len != 0),
-                b_len
-            )
-            .encode_utf16(),
-        );
+        let mut header = String::new();
+        header
+            .try_reserve_exact(128)
+            .map_err(crate::runtime::host::fatal_host_error)?;
+        writeln!(
+            header,
+            "@@ -{},{} +{},{} @@",
+            a_start + usize::from(a_len != 0),
+            a_len,
+            b_start + usize::from(b_len != 0),
+            b_len
+        )
+        .map_err(crate::runtime::host::fatal_host_error)?;
+        output.extend(header.encode_utf16());
         for op in group {
             for change in op.iter_changes(&old, &new) {
                 output.push(match change.tag() {
@@ -164,6 +214,68 @@ pub(super) fn diff(a: &[u16], b: &[u16]) -> Result<Vec<u16>> {
         }
     }
     Ok(output)
+}
+
+/// Keep three lines of context, reserving every group before it grows.
+fn diff_groups(mut ops: Vec<DiffOp>) -> Result<Vec<Vec<DiffOp>>> {
+    if let Some(DiffOp::Equal {
+        old_index,
+        new_index,
+        len,
+    }) = ops.first_mut()
+    {
+        let offset = len.saturating_sub(3);
+        *old_index += offset;
+        *new_index += offset;
+        *len -= offset;
+    }
+    if let Some(DiffOp::Equal { len, .. }) = ops.last_mut() {
+        *len = (*len).min(3);
+    }
+    let mut groups = Vec::new();
+    let mut pending = Vec::new();
+    for op in ops {
+        if let DiffOp::Equal {
+            old_index,
+            new_index,
+            len,
+        } = op
+            && len > 6
+        {
+            push_diff_item(
+                &mut pending,
+                DiffOp::Equal {
+                    old_index,
+                    new_index,
+                    len: 3,
+                },
+            )?;
+            push_diff_item(&mut groups, std::mem::take(&mut pending))?;
+            let offset = len - 3;
+            push_diff_item(
+                &mut pending,
+                DiffOp::Equal {
+                    old_index: old_index + offset,
+                    new_index: new_index + offset,
+                    len: 3,
+                },
+            )?;
+            continue;
+        }
+        push_diff_item(&mut pending, op)?;
+    }
+    if !matches!(pending.as_slice(), [] | [DiffOp::Equal { .. }]) {
+        push_diff_item(&mut groups, pending)?;
+    }
+    Ok(groups)
+}
+
+fn push_diff_item<T>(items: &mut Vec<T>, item: T) -> Result<()> {
+    items
+        .try_reserve(1)
+        .map_err(crate::runtime::host::fatal_host_error)?;
+    items.push(item);
+    Ok(())
 }
 
 pub(super) fn occurrences(text: &str, anchor: &str) -> Vec<usize> {
@@ -358,18 +470,23 @@ fn reindent(actual: &[&str], anchor: &[&str], new: &str, maximum: usize) -> Opti
     Some(result)
 }
 
-fn diff_line_ops(old: &[&[u16]], new: &[&[u16]]) -> Vec<similar::DiffOp> {
-    // Intern full lines so Myers compares constant-size IDs, even for long shared
-    // prefixes. HashMap still checks equality, so hash collisions cannot alter a diff.
+fn diff_line_ops(
+    old: &[&[u16]],
+    new: &[&[u16]],
+    charge: &mut impl FnMut(u64) -> Result<()>,
+) -> Result<Vec<similar::DiffOp>> {
+    // Intern full lines so Myers compares constant-size IDs, including long shared prefixes.
     let mut lines = HashMap::new();
-    let ids: Vec<_> = old
-        .iter()
-        .chain(new)
-        .map(|line| {
-            let next = lines.len();
-            *lines.entry(*line).or_insert(next)
-        })
-        .collect();
+    lines
+        .try_reserve(old.len().saturating_add(new.len()))
+        .map_err(crate::runtime::host::fatal_host_error)?;
+    let mut ids = Vec::new();
+    ids.try_reserve_exact(old.len().saturating_add(new.len()))
+        .map_err(crate::runtime::host::fatal_host_error)?;
+    for line in old.iter().chain(new) {
+        let next = lines.len();
+        ids.push(*lines.entry(*line).or_insert(next));
+    }
     let (old_ids, new_ids) = ids.split_at(old.len());
-    capture_diff_slices(Algorithm::Myers, old_ids, new_ids)
+    super::myers::diff(old_ids, new_ids, charge)
 }

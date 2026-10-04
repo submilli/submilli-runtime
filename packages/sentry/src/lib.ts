@@ -617,6 +617,8 @@ interface ApiErrorEnvelope {
 }
 
 /** List organizations visible to the token.
+ * @param page Optional `limit` (1–100, default 50) and `cursor`; `null` requests the first page of 50.
+ * @returns One page of organizations visible to the token, with the cursor for the next page.
  * @capability sentry.io/organizations.list {}
  */
 export function listOrganizations(page: PageOptions | null = null): PageResult<Organization> {
@@ -630,6 +632,9 @@ export function listOrganizations(page: PageOptions | null = null): PageResult<O
 }
 
 /** List projects in an organization.
+ * @param organization Organization slug, as returned by `listOrganizations`.
+ * @param page Optional `limit` (1–100, default 50) and `cursor`; `null` requests the first page of 50.
+ * @returns One page of the organization's projects, with the cursor for the next page.
  * @capability sentry.io/projects.list { organization: string }
  */
 export function listProjects(organization: string, page: PageOptions | null = null): PageResult<Project> {
@@ -644,6 +649,9 @@ export function listProjects(organization: string, page: PageOptions | null = nu
 }
 
 /** List issues in an organization. Omitting query keeps Sentry's unresolved default; query "" lists all.
+ * @param organization Organization slug, as returned by `listOrganizations`.
+ * @param options Optional filters, sort order and pagination; `null` returns Sentry's default unresolved issues, first 50.
+ * @returns One page of issues, with the cursor for the next page; empty `items` when nothing matches.
  * @capability sentry.io/issues.list { organization: string, projects: string[] }
  */
 export function listIssues(organization: string, options: ListIssuesOptions | null = null): PageResult<Issue> {
@@ -685,6 +693,10 @@ export function listIssues(organization: string, options: ListIssuesOptions | nu
 }
 
 /** Retrieve an issue by numeric ID or short ID; null when absent.
+ * @param organization Organization slug, as returned by `listOrganizations`.
+ * @param project Project slug, as returned by `listProjects`.
+ * @param issueId Numeric group ID or short ID such as `PROJECT-7E`.
+ * @returns The issue, or `null` when it does not exist. Throws `project_mismatch` if it belongs to a different project.
  * @capability sentry.io/issues.get { organization: string, project: string, issue: string }
  */
 export function getIssue(organization: string, project: string, issueId: string): Issue | null {
@@ -696,6 +708,11 @@ export function getIssue(organization: string, project: string, issueId: string)
 }
 
 /** List events belonging to an issue identified by numeric ID or short ID.
+ * @param organization Organization slug, as returned by `listOrganizations`.
+ * @param project Project slug, as returned by `listProjects`.
+ * @param issueId Numeric group ID or short ID such as `PROJECT-7E`.
+ * @param options Optional event filters and pagination; `null` returns the first 50 events.
+ * @returns One page of event summaries for the issue, with the cursor for the next page.
  * @capability sentry.io/issueEvents.list { organization: string, project: string, issue: string }
  */
 export function listIssueEvents(
@@ -738,6 +755,11 @@ export function listIssueEvents(
 }
 
 /** Retrieve one issue event. eventId may be an event ID, latest, oldest, or recommended.
+ * @param organization Organization slug, as returned by `listOrganizations`.
+ * @param project Project slug, as returned by `listProjects`.
+ * @param issueId Numeric group ID or short ID such as `PROJECT-7E`.
+ * @param eventId Event ID, or `latest`, `oldest` or `recommended` (the default).
+ * @returns Detailed event data, or `null` when the issue or event does not exist.
  * @capability sentry.io/issueEvents.get { organization: string, project: string, issue: string }
  */
 export function getIssueEvent(
@@ -758,6 +780,11 @@ export function getIssueEvent(
 }
 
 /** Apply a core triage update to an issue.
+ * @param organization Organization slug, as returned by `listOrganizations`.
+ * @param project Project slug, as returned by `listProjects`.
+ * @param issueId Numeric group ID or short ID such as `PROJECT-7E`.
+ * @param input Changes to apply; at least one field is required, and `assignedTo` cannot be combined with `clearAssignee`.
+ * @returns The issue as updated by Sentry.
  * @capability sentry.io/issues.update { organization: string, project: string, issue: string }
  */
 export function updateIssue(organization: string, project: string, issueId: string, input: UpdateIssueInput): Issue {
@@ -780,7 +807,11 @@ export function updateIssue(organization: string, project: string, issueId: stri
     return updated;
 }
 
-/** Build Sentry's repeated-parameter issue query. Exported for deterministic diagnostics and tests. */
+/**
+ * Build Sentry's repeated-parameter issue query. Exported for deterministic diagnostics and tests.
+ * @param options Issue filters and pagination, or `null` for the default page size only.
+ * @returns Query string beginning with `?`, with each project and environment as a repeated parameter.
+ */
 export function buildIssueQuery(options: ListIssuesOptions | null): string {
     const parts: string[] = [];
     const limit = pageLimit(options === null ? null : options.limit);
@@ -802,7 +833,11 @@ export function buildIssueQuery(options: ListIssuesOptions | null): string {
     return "?" + parts.join("&");
 }
 
-/** Build the partial update JSON body. Exported for deterministic diagnostics and tests. */
+/**
+ * Build the partial update JSON body. Exported for deterministic diagnostics and tests.
+ * @param input Triage changes; validated before serializing.
+ * @returns JSON body containing only the supplied fields; `clearAssignee` becomes `"assignedTo":null`.
+ */
 export function buildUpdateIssueBody(input: UpdateIssueInput): string {
     validateUpdate(input);
     const fields: string[] = [];
@@ -814,7 +849,11 @@ export function buildUpdateIssueBody(input: UpdateIssueInput): string {
     return "{" + fields.join(",") + "}";
 }
 
-/** Parse Sentry's Link header and return the opaque next cursor, or "" on the last page. */
+/**
+ * Parse Sentry's Link header and return the opaque next cursor, or "" on the last page.
+ * @param link Value of Sentry's `Link` response header.
+ * @returns Cursor for the `rel="next"` link, or an empty string when there is no further page.
+ */
 export function parseNextCursor(link: string): string {
     for (const rawPart of link.split(",")) {
         const part = rawPart.trim();
@@ -838,6 +877,8 @@ export function parseNextCursor(link: string): string {
  * short IDs, so the suffix test is "uppercase alphanumeric", which still tells a
  * short ID apart from the all-digit group ID this resolver exists to pass
  * through, and from a lowercase slug like `not-an-id`.
+ * @param issueId Issue reference, already validated as non-empty text.
+ * @returns `true` for a short ID such as `PROJECT-7E`; `false` for a numeric group ID or any other text.
  */
 export function isShortIssueId(issueId: string): boolean {
     if (issueId.length === 0) return false;
@@ -855,12 +896,20 @@ export function isShortIssueId(issueId: string): boolean {
     return prefixLength > 0;
 }
 
-/** Normalize one JSON event response into the curated event model. */
+/**
+ * Normalize one JSON event response into the curated event model.
+ * @param body Raw JSON of one Sentry event.
+ * @returns Curated event details.
+ */
 export function normalizeEventJson(body: string): EventDetails {
     return eventDetailsFrom(JSON.parse(body) as ApiEvent);
 }
 
-/** Map an HTTP status to the stable SentryError code used by this package. */
+/**
+ * Map an HTTP status to the stable SentryError code used by this package.
+ * @param status HTTP status code of the failed response.
+ * @returns Stable code such as `bad_request`, `unauthorized`, `forbidden`, `not_found`, `conflict`, `rate_limited`, or `http_error` for any other status.
+ */
 export function sentryErrorCode(status: number): string {
     if (status === 400) return "bad_request";
     if (status === 401) return "unauthorized";
@@ -871,7 +920,13 @@ export function sentryErrorCode(status: number): string {
     return "http_error";
 }
 
-/** Lift a Sentry error detail when possible, falling back to the HTTP status line. */
+/**
+ * Lift a Sentry error detail when possible, falling back to the HTTP status line.
+ * @param status HTTP status code of the failed response.
+ * @param statusText HTTP status text, used in the fallback message.
+ * @param body Raw response body; its `detail`, `error` or `message` field is used when it is a JSON object.
+ * @returns Sentry's error detail when present, otherwise `Sentry request failed: HTTP <status> <statusText>`.
+ */
 export function sentryFailureMessage(status: number, statusText: string, body: string): string {
     const fallback = "Sentry request failed: HTTP " + status.toString() + " " + statusText;
     if (body.startsWith("{")) {

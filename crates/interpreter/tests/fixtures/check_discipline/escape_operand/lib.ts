@@ -31,6 +31,7 @@ function bill(total: number): void {}
 
 /**
  * Charges the amount.
+ * @param amount Amount to charge.
  * @capability test.com/charge { total: number }
  */
 export function charge(amount: unknown): void {

@@ -5,6 +5,7 @@
 //! steps live here rather than in the interpreter.
 
 pub mod artifact;
+pub mod blueprint_validation;
 pub mod capabilities;
 pub mod doc_examples;
 pub mod driver;
@@ -13,6 +14,7 @@ pub mod lockfile;
 pub mod package_store;
 pub mod resolve;
 pub mod scaffold;
+mod warning_policy;
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
@@ -32,23 +34,27 @@ pub use capabilities::{
     CapabilitySchema, ProvidedCapability, ProvidedField, RequiredCapability,
     derive_capability_schema,
 };
-pub use doc_examples::{DocExample, compile_check_doc_example, extract_doc_examples};
+pub use doc_examples::{
+    DocExample, compile_check_doc_example, compile_doc_example_warnings, extract_doc_examples,
+};
 pub use driver::{BuiltPackage, DriverError, build_packages, install_packages};
 pub use install::{
-    InstallConflict, InstallError, InstallReport, InstalledPackage, install_from_dir, install_plan,
+    InstallConflict, InstallError, InstallPreparation, InstallReport, InstalledPackage,
+    install_from_dir, install_plan,
 };
 pub use lockfile::{LOCKFILE_NAME, LockedPackage, Lockfile, LockfileError};
 pub use package_store::{
     LocatedPackage, PackageStore, PackageStoreError, default_data_root, default_package_store_dir,
 };
 pub use resolve::{
-    FetchError, FetchedRepo, GithubClosure, PlannedInstall, RepoFetcher, ResolveError,
-    resolve_github_closure,
+    FetchError, FetchErrorKind, FetchedRepo, GithubClosure, PlannedInstall, RepoFetcher,
+    ResolveError, resolve_github_closure,
 };
 pub use scaffold::{
     ScaffoldError, ScaffoldedPackage, add_package, init_project, is_valid_package_name,
     refresh_dependency_types, refresh_editor_files,
 };
+pub use warning_policy::{deny_warnings_from_env, warning_denial_message};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ProjectManifest {

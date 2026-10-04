@@ -10,8 +10,8 @@
 //! The engine matches tag imports by exact canonical type identity, so the
 //! payload `FuncType` is built from the canonical intrinsic `$Error` struct type.
 //!
-//! `$Error` is class-shaped (see `codegen/intrinsics.rs`): the three
-//! `$ObjectShape` header slots, with `message` at object-fields payload slot 0
+//! `$Error` is class-shaped (see `codegen/intrinsics.rs`): the four
+//! `$ObjectShape` header slots plus a mutable identity ID, with `message` at payload slot 0
 //! and `name` at slot 1. Construction is host-only — guests call the imported
 //! constructor; a user subclass's `super(...)` calls the self-first ctor-init.
 //!
@@ -24,6 +24,7 @@
 //! whose parent link is the `Error` vtable — the nominal-identity chain
 //! `instanceof` and typed catch walk.
 
+use crate::runtime::host::{abi_arg, abi_result};
 use wasmtime::{
     ArrayRef, ArrayRefPre, Caller, Engine, Finality, Func, FuncType, Global, GlobalType, HeapType,
     Linker, Mutability, RecGroupBuilder, RefType, Rooted, Store, StructRef, StructRefPre,
@@ -31,9 +32,12 @@ use wasmtime::{
 };
 
 use super::MODULE_NAME;
-use super::vtable::{as_struct, read_units_val};
+use super::vtable::{as_struct, read_string_units};
 use crate::runtime::StoreData;
-use crate::runtime::host::{register_host_fn, write_submilli_string_struct_units};
+use crate::runtime::fuel::host_func_async;
+use crate::runtime::host::{
+    fatal_host_error, register_host_fn, write_submilli_string, write_submilli_string_struct_units,
+};
 use crate::runtime::intrinsic_types::IntrinsicTypes;
 
 const MESSAGE_SLOT: u32 = 0;
@@ -48,14 +52,16 @@ const OWN_SLOT_BASE: u32 = 2;
 pub(crate) enum BuiltinErrorClass {
     Error,
     Range,
+    QuotaExceeded,
     Type,
     Syntax,
     PermissionDenied,
 }
 
 impl BuiltinErrorClass {
-    const SUBCLASSES: [Self; 4] = [
+    const SUBCLASSES: [Self; 5] = [
         Self::Range,
+        Self::QuotaExceeded,
         Self::Type,
         Self::Syntax,
         Self::PermissionDenied,
@@ -65,6 +71,7 @@ impl BuiltinErrorClass {
         match self {
             Self::Error => "Error",
             Self::Range => "RangeError",
+            Self::QuotaExceeded => "QuotaExceededError",
             Self::Type => "TypeError",
             Self::Syntax => "SyntaxError",
             Self::PermissionDenied => "PermissionDeniedError",
@@ -77,7 +84,7 @@ impl BuiltinErrorClass {
     /// trailing params follow the same order.
     fn own_fields(self) -> &'static [&'static str] {
         match self {
-            Self::Error | Self::Range | Self::Type | Self::Syntax => &[],
+            Self::Error | Self::Range | Self::QuotaExceeded | Self::Type | Self::Syntax => &[],
             Self::PermissionDenied => &["caller", "capability", "reason"],
         }
     }
@@ -86,6 +93,7 @@ impl BuiltinErrorClass {
         match self {
             Self::Error => handles.error_vtable,
             Self::Range => handles.range_error_vtable,
+            Self::QuotaExceeded => handles.quota_exceeded_vtable,
             Self::Type => handles.type_error_vtable,
             Self::Syntax => handles.syntax_error_vtable,
             Self::PermissionDenied => handles.permission_denied_vtable,
@@ -94,7 +102,9 @@ impl BuiltinErrorClass {
 
     fn field_names(self, handles: &crate::runtime::host::HostAbiHandles) -> Global {
         match self {
-            Self::Error | Self::Range | Self::Type | Self::Syntax => handles.error_field_names,
+            Self::Error | Self::Range | Self::QuotaExceeded | Self::Type | Self::Syntax => {
+                handles.error_field_names
+            }
             Self::PermissionDenied => handles.permission_denied_field_names,
         }
     }
@@ -102,9 +112,11 @@ impl BuiltinErrorClass {
     fn struct_type(self, handles: &crate::runtime::host::HostAbiHandles) -> StructType {
         match self {
             Self::Error => handles.error_type.clone(),
-            Self::Range | Self::Type | Self::Syntax | Self::PermissionDenied => {
-                handles.error_subclass_type.clone()
-            }
+            Self::Range
+            | Self::QuotaExceeded
+            | Self::Type
+            | Self::Syntax
+            | Self::PermissionDenied => handles.error_subclass_type.clone(),
         }
     }
 }
@@ -114,6 +126,7 @@ impl BuiltinErrorClass {
 pub(crate) struct ErrorHost {
     pub vtable: Global,
     pub range_vtable: Global,
+    pub quota_exceeded_vtable: Global,
     pub type_vtable: Global,
     pub syntax_vtable: Global,
     pub permission_denied_vtable: Global,
@@ -171,6 +184,10 @@ pub(crate) fn build_error_subclass_types(
             intr.class_vtable.clone().into(),
         ))),
     ));
+    def.field(wasmtime::FieldType::new(
+        imm,
+        wasmtime::StorageType::ValType(ValType::I32),
+    ));
     def.finish();
 
     let mut def = b.define_struct(struct_label);
@@ -194,15 +211,23 @@ pub(crate) fn build_error_subclass_types(
             intr.object_fields.clone().into(),
         ))),
     ));
+    def.field(wasmtime::FieldType::new(
+        wasmtime::Mutability::Var,
+        wasmtime::StorageType::ValType(ValType::Ref(RefType::ANYREF)),
+    ));
+    def.field(wasmtime::FieldType::new(
+        wasmtime::Mutability::Var,
+        wasmtime::StorageType::ValType(ValType::I64),
+    ));
     def.finish();
 
-    let g = b.build()?;
+    let g = b.build().map_err(fatal_host_error)?;
     let vtable = g
         .get_struct(vtable_label)
-        .expect("error subclass vtable should be a struct");
+        .ok_or_else(|| fatal_host_error("error subclass vtable should be a struct"))?;
     let struct_ty = g
         .get_struct(struct_label)
-        .expect("error subclass should be a struct");
+        .ok_or_else(|| fatal_host_error("error subclass should be a struct"))?;
     Ok((vtable, struct_ty))
 }
 
@@ -229,15 +254,16 @@ pub(crate) fn install_store_bound(
         |store: &mut Store<StoreData>, names: &[&str]| -> wasmtime::Result<Global> {
             let mut name_vals = Vec::with_capacity(names.len());
             for text in names {
-                let units: Vec<u16> = text.encode_utf16().collect();
-                let unit_vals: Vec<Val> = units.iter().map(|&u| Val::I32(i32::from(u))).collect();
-                let pre = ArrayRefPre::new(&mut *store, intr.raw_string.clone());
-                let raw = ArrayRef::new_fixed(&mut *store, &pre, &unit_vals)?;
+                let raw = write_submilli_string(&mut *store, text)?;
                 let pre = StructRefPre::new(&mut *store, intr.string.clone());
                 let st = StructRef::new(
                     &mut *store,
                     &pre,
-                    &[string_vtable_val, Val::AnyRef(Some(raw.to_anyref()))],
+                    &[
+                        string_vtable_val,
+                        Val::AnyRef(Some(raw.to_anyref())),
+                        Val::I64(0),
+                    ],
                 )?;
                 name_vals.push(Val::AnyRef(Some(st.to_anyref())));
             }
@@ -260,7 +286,7 @@ pub(crate) fn install_store_bound(
     pd_names.extend(BuiltinErrorClass::PermissionDenied.own_fields());
     let permission_denied_field_names = field_names_global(store, &pd_names)?;
 
-    let slots = build_error_vtable(store, intr, BuiltinErrorClass::Error)?;
+    let slots = build_error_vtable(store, intr)?;
     let pre = StructRefPre::new(&mut *store, intr.error_vtable.clone());
     let vtable_struct = StructRef::new(
         &mut *store,
@@ -272,6 +298,7 @@ pub(crate) fn install_store_bound(
             Val::FuncRef(Some(slots[3])),
             // Nominal-identity parent link: Error is the chain root.
             Val::AnyRef(None),
+            Val::I32(0),
         ],
     )?;
     let vtable = Global::new(
@@ -298,6 +325,7 @@ pub(crate) fn install_store_bound(
     let (subclass_vtable_ty, _) = build_error_subclass_types(store.engine(), intr)?;
     let [
         range_vtable,
+        quota_exceeded_vtable,
         type_vtable,
         syntax_vtable,
         permission_denied_vtable,
@@ -315,6 +343,7 @@ pub(crate) fn install_store_bound(
     Ok(ErrorHost {
         vtable,
         range_vtable: range_vtable?,
+        quota_exceeded_vtable: quota_exceeded_vtable?,
         type_vtable: type_vtable?,
         syntax_vtable: syntax_vtable?,
         permission_denied_vtable: permission_denied_vtable?,
@@ -335,7 +364,7 @@ fn install_subclass_vtable(
     parent: Rooted<StructRef>,
     class: BuiltinErrorClass,
 ) -> wasmtime::Result<Global> {
-    let slots = build_error_vtable(store, intr, class)?;
+    let slots = build_error_vtable(store, intr)?;
     let pre = StructRefPre::new(&mut *store, vtable_ty.clone());
     let vtable_struct = StructRef::new(
         &mut *store,
@@ -347,6 +376,7 @@ fn install_subclass_vtable(
             Val::FuncRef(Some(slots[3])),
             // Parent link: the subclass extends Error.
             Val::AnyRef(Some(parent.to_anyref())),
+            Val::I32(0),
         ],
     )?;
     let vtable = Global::new(
@@ -374,23 +404,29 @@ fn install_subclass_vtable(
 
 /// The four universal slots for `$Error`/subclass instances. `toString`
 /// follows JS `Error.prototype.toString` ("name: message", eliding the
-/// separator when either side is empty); `toJson` is `"{}"`; `equals` matches
-/// the per-class codegen bodies — exact-class nominal guard + structural
-/// message/name compare; `hash` is 0 — structurally-equal errors trivially
-/// share it.
+/// separator when either side is empty); `toJson` is `"{}"`. Equality and
+/// hashing use reference identity, as do generated Error subclass hooks.
 fn build_error_vtable(
     store: &mut Store<StoreData>,
     intr: &IntrinsicTypes,
-    class: BuiltinErrorClass,
 ) -> wasmtime::Result<[Func; 4]> {
-    let to_string = Func::new_async(
+    let to_string = host_func_async(
         &mut *store,
         intr.to_string_fn.clone(),
         |mut caller, params, results| {
             Box::new(async move {
-                let name = payload_units(&mut caller, &params[0], NAME_SLOT, "Error#toString")?;
-                let message =
-                    payload_units(&mut caller, &params[0], MESSAGE_SLOT, "Error#toString")?;
+                let name = payload_units(
+                    &mut caller,
+                    abi_arg(params, 0)?,
+                    NAME_SLOT,
+                    "Error#toString",
+                )?;
+                let message = payload_units(
+                    &mut caller,
+                    abi_arg(params, 0)?,
+                    MESSAGE_SLOT,
+                    "Error#toString",
+                )?;
                 let text = match (name.is_empty(), message.is_empty()) {
                     (true, _) => message,
                     (_, true) => name,
@@ -402,42 +438,45 @@ fn build_error_vtable(
                     }
                 };
                 let st = write_submilli_string_struct_units(&mut caller, &text)?;
-                results[0] = Val::AnyRef(Some(st.to_anyref()));
+                *abi_result(results, 0)? = Val::AnyRef(Some(st.to_anyref()));
                 Ok(())
             })
         },
     );
 
-    let to_json = Func::new_async(
+    let to_json = host_func_async(
         &mut *store,
         intr.to_json_fn.clone(),
         |mut caller, _params, results| {
             Box::new(async move {
                 let units: Vec<u16> = "{}".encode_utf16().collect();
                 let st = write_submilli_string_struct_units(&mut caller, &units)?;
-                results[0] = Val::AnyRef(Some(st.to_anyref()));
+                *abi_result(results, 0)? = Val::AnyRef(Some(st.to_anyref()));
                 Ok(())
             })
         },
     );
 
-    let equals = Func::new_async(
+    let equals = host_func_async(
         &mut *store,
         intr.equals_fn.clone(),
         move |mut caller, params, results| {
             Box::new(async move {
-                results[0] = Val::I32(error_equals(&mut caller, params, class)? as i32);
+                *abi_result(results, 0)? = Val::I32(error_equals(&mut caller, params)? as i32);
                 Ok(())
             })
         },
     );
 
-    let hash = Func::new_async(
+    let hash = host_func_async(
         &mut *store,
         intr.hash_fn.clone(),
-        |_caller, _params, results| {
+        |mut caller, params, results| {
             Box::new(async move {
-                results[0] = Val::I32(0);
+                *abi_result(results, 0)? = Val::I32(super::vtable::identity_hash(
+                    &mut caller,
+                    abi_arg(params, 0)?,
+                )? as i32);
                 Ok(())
             })
         },
@@ -478,7 +517,8 @@ pub(crate) fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         FuncType::new(&engine, [string_ref.clone()], [error_ref.clone()]),
         true,
         |caller, params, results| {
-            results[0] = construct(caller, BuiltinErrorClass::Error, &params[0], &[])?;
+            *abi_result(results, 0)? =
+                construct(caller, BuiltinErrorClass::Error, abi_arg(params, 0)?, &[])?;
             Ok(())
         },
     )?;
@@ -494,7 +534,8 @@ pub(crate) fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
             FuncType::new(&engine, ctor_params, [subclass_ref.clone()]),
             true,
             move |caller, params, results| {
-                results[0] = construct(caller, class, &params[0], &params[1..])?;
+                *abi_result(results, 0)? =
+                    construct(caller, class, abi_arg(params, 0)?, &params[1..])?;
                 Ok(())
             },
         )?;
@@ -506,6 +547,7 @@ pub(crate) fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
     for class in [
         BuiltinErrorClass::Error,
         BuiltinErrorClass::Range,
+        BuiltinErrorClass::QuotaExceeded,
         BuiltinErrorClass::Type,
         BuiltinErrorClass::Syntax,
         BuiltinErrorClass::PermissionDenied,
@@ -519,8 +561,8 @@ pub(crate) fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
             FuncType::new(&engine, init_params, []),
             true,
             move |caller, params, _results| {
-                let payload = payload_array(caller, &params[0], "Error#constructor_init")?;
-                payload.set(&mut *caller, MESSAGE_SLOT, params[1])?;
+                let payload = payload_array(caller, abi_arg(params, 0)?, "Error#constructor_init")?;
+                payload.set(&mut *caller, MESSAGE_SLOT, *abi_arg(params, 1)?)?;
                 let name = name_string(caller, class)?;
                 payload.set(&mut *caller, NAME_SLOT, name)?;
                 for (i, own) in params[2..].iter().enumerate() {
@@ -539,7 +581,8 @@ pub(crate) fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         FuncType::new(&engine, [nullable_object.clone()], [ValType::I32]),
         true,
         move |caller, params, results| {
-            results[0] = Val::I32(is_error(caller, &params[0], &class_vtable)? as i32);
+            *abi_result(results, 0)? =
+                Val::I32(is_error(caller, abi_arg(params, 0)?, &class_vtable)? as i32);
             Ok(())
         },
     )?;
@@ -547,48 +590,14 @@ pub(crate) fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
     Ok(())
 }
 
-/// Host-side twin of codegen's per-class equals bodies
-/// (`classes::emit_class_equals_body`): exact-class vtable-identity guard —
-/// no parent walk; subclass instances dispatch their own guest-emitted bodies
-/// — then structural message/name comparison in UTF-16 code-unit space.
-/// `self` is guaranteed exactly-`class`: only that class's host vtable
-/// references this fn.
-fn error_equals(
-    caller: &mut Caller<'_, StoreData>,
-    params: &[Val],
-    class: BuiltinErrorClass,
-) -> wasmtime::Result<bool> {
-    let (Val::AnyRef(Some(a)), Val::AnyRef(Some(b))) = (&params[0], &params[1]) else {
+/// Errors compare by identity regardless of mutable payload fields.
+/// Generated Error subclass hooks use the same reference comparison.
+fn error_equals(caller: &mut Caller<'_, StoreData>, params: &[Val]) -> wasmtime::Result<bool> {
+    let (Val::AnyRef(Some(a)), Val::AnyRef(Some(b))) = (abi_arg(params, 0)?, abi_arg(params, 1)?)
+    else {
         return Ok(false);
     };
-    if Rooted::ref_eq(&*caller, a, b)? {
-        return Ok(true);
-    }
-    let Some(b_st) = b.as_struct(&mut *caller)? else {
-        return Ok(false);
-    };
-    let target = match class.vtable(&abi(caller)?).get(&mut *caller) {
-        Val::AnyRef(Some(target)) => target,
-        other => {
-            return Err(wasmtime::Error::msg(format!(
-                "Error#equals: malformed error vtable global {other:?}"
-            )));
-        }
-    };
-    let Val::AnyRef(Some(b_vt)) = b_st.field(&mut *caller, 0)? else {
-        return Ok(false);
-    };
-    if !Rooted::ref_eq(&*caller, &b_vt, &target)? {
-        return Ok(false);
-    }
-    for slot in 0..(OWN_SLOT_BASE + class.own_fields().len() as u32) {
-        if payload_units(caller, &params[0], slot, "Error#equals")?
-            != payload_units(caller, &params[1], slot, "Error#equals")?
-        {
-            return Ok(false);
-        }
-    }
-    Ok(true)
+    Rooted::ref_eq(&*caller, a, b)
 }
 
 /// Host-side twin of codegen's nominal `instanceof` walk
@@ -649,14 +658,32 @@ pub(crate) fn construct_from_message(
     message: &str,
     own_fields: &[&str],
 ) -> wasmtime::Result<Val> {
-    debug_assert_eq!(own_fields.len(), class.own_fields().len());
-    let mut vals = Vec::with_capacity(1 + own_fields.len());
-    for text in std::iter::once(&message).chain(own_fields) {
+    validate_own_field_count(class, own_fields.len())?;
+    let message_units: Vec<u16> = message.encode_utf16().collect();
+    let message = write_submilli_string_struct_units(&mut *caller, &message_units)?;
+    let mut vals = Vec::with_capacity(own_fields.len());
+    for text in own_fields {
         let units: Vec<u16> = text.encode_utf16().collect();
         let st = write_submilli_string_struct_units(&mut *caller, &units)?;
         vals.push(Val::AnyRef(Some(st.to_anyref())));
     }
-    construct(caller, class, &vals[0].clone(), &vals[1..])
+    construct(
+        caller,
+        class,
+        &Val::AnyRef(Some(message.to_anyref())),
+        &vals,
+    )
+}
+
+fn validate_own_field_count(class: BuiltinErrorClass, actual: usize) -> wasmtime::Result<()> {
+    let expected = class.own_fields().len();
+    if actual != expected {
+        return Err(fatal_host_error(format!(
+            "{} construction expected {expected} own fields, got {actual}",
+            class.name_text()
+        )));
+    }
+    Ok(())
 }
 
 /// Allocate an instance of `class` with `message`, the class's `name`, and its
@@ -682,7 +709,13 @@ fn construct(
     let st = StructRef::new(
         &mut *caller,
         &pre,
-        &[vtable, field_names, Val::AnyRef(Some(payload.to_anyref()))],
+        &[
+            vtable,
+            field_names,
+            Val::AnyRef(Some(payload.to_anyref())),
+            Val::AnyRef(None),
+            Val::I64(0),
+        ],
     )?;
     Ok(Val::AnyRef(Some(st.to_anyref())))
 }
@@ -720,7 +753,7 @@ fn payload_units(
 ) -> wasmtime::Result<Vec<u16>> {
     let payload = payload_array(caller, receiver, name)?;
     let val = payload.get(&mut *caller, slot)?;
-    read_units_val(caller, &val, name)
+    read_string_units(caller, &val, name)
 }
 
 /// The type/interface surface this module implements — its slice of the
@@ -817,6 +850,33 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                 implements: Vec::new(),
                 doc: doc(
                     "/** The built-in range-error class (`extends Error`, `name` = `\"RangeError\"`). Thrown by the runtime for out-of-range values: array index out of range, bigint division by zero, `String.repeat` with a negative count, invalid Temporal values, and similar. Catch selectively with `catch (e: RangeError)`. */",
+                ),
+            },
+        },
+    );
+
+    defs.types.insert(
+        "QuotaExceededError".to_string(),
+        TypeSymbol {
+            name: "QuotaExceededError".to_string(),
+            mangled_name: crate::mangle::prelude("QuotaExceededError"),
+            declaration_span: Span::at(crate::FileId::PRELUDE),
+            kind: TypeKind::Class {
+                generics: Vec::new(),
+                // No own fields — `message`/`name` are inherited from `Error`.
+                fields: BTreeMap::new(),
+                narrowing_checks: BTreeMap::new(),
+                methods: BTreeMap::new(),
+                method_visibility: BTreeMap::new(),
+                accessors: Vec::new(),
+                constructor: vec![Param::new("message", Type::String)],
+                statics: BTreeMap::new(),
+                static_visibility: BTreeMap::new(),
+                static_fields: BTreeMap::new(),
+                extends: Some(crate::ClassExtends::plain(crate::mangle::prelude("Error"))),
+                implements: Vec::new(),
+                doc: doc(
+                    "/** A budget refusal (`extends Error`): filesystem space, model tokens, or session state. Free space, reduce the request, or ask the operator for a larger budget. */",
                 ),
             },
         },
@@ -944,4 +1004,23 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
             },
         },
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn invalid_error_field_count_returns_fatal_error() {
+        for (class, invalid) in [
+            (BuiltinErrorClass::Error, 1),
+            (BuiltinErrorClass::PermissionDenied, 0),
+            (BuiltinErrorClass::PermissionDenied, 4),
+        ] {
+            let error = validate_own_field_count(class, invalid).unwrap_err();
+            assert!(error.is::<crate::runtime::host::FatalHostError>());
+            assert!(error.to_string().contains(class.name_text()));
+            validate_own_field_count(class, class.own_fields().len()).unwrap();
+        }
+    }
 }

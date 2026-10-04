@@ -242,6 +242,7 @@ fn emit_default_adapter_call(
         array_type_index: intr.raw_array,
         array_size: u32::from(target.arity),
     });
+    body.instruction(&Instruction::I32Const(i32::from(target.arity)));
     body.instruction(&Instruction::StructNew(intr.array));
     body.instruction(&Instruction::Call(
         ctx.symbols
@@ -280,7 +281,8 @@ pub fn emit_coercion(
         return Ok(false);
     };
     if takes_fewer_arguments(source, target) {
-        let original = emitter.add_anonymous_local(ctx.symbols.value_type(&crate::Type::Unknown)?);
+        let original =
+            emitter.add_anonymous_local(ctx.symbols.value_type(&crate::Type::Unknown)?)?;
         emitter.instruction(Instruction::LocalSet(original));
         emit_wrap(emitter, ctx, target, original)?;
     } else {
@@ -319,7 +321,7 @@ pub fn emit_erased_cast(
         .symbols
         .closure_struct_type_idx(source)
         .ok_or_else(|| crate::codegen::internal_failure("source closure"))?;
-    let original = emitter.add_anonymous_local(ctx.symbols.value_type(&crate::Type::Unknown)?);
+    let original = emitter.add_anonymous_local(ctx.symbols.value_type(&crate::Type::Unknown)?)?;
     emitter.instruction(Instruction::LocalTee(original));
     emitter.instruction(Instruction::RefTestNonNull(HeapType::Concrete(
         source_struct,
@@ -366,6 +368,7 @@ fn emit_wrap(
     emitter.instruction(Instruction::LocalGet(original));
     emitter.instruction(Instruction::RefAsNonNull);
     super::this_binding::wrap(emitter, ctx)?;
+    emitter.instruction(Instruction::I64Const(0));
     emitter.instruction(Instruction::StructNew(
         ctx.symbols
             .closure_struct_type_idx(target)

@@ -31,7 +31,7 @@ pub(super) fn bind(
         nullable: false,
         heap_type: HeapType::ANY,
     });
-    let env = emitter.add_anonymous_local(any);
+    let env = emitter.add_anonymous_local(any)?;
     let wrapper = ctx
         .symbols
         .this_environment_type
@@ -82,7 +82,7 @@ pub(super) fn load_receiver(
             span: crate::Span::at(ctx.file),
         },
         ctx.symbols.value_type(&crate::Type::Unknown)?,
-    );
+    )?;
     emitter.instruction(Instruction::LocalGet(0));
     emitter.instruction(Instruction::RefCastNonNull(HeapType::Concrete(wrapper)));
     emitter.instruction(Instruction::StructGet {
@@ -90,7 +90,7 @@ pub(super) fn load_receiver(
         field_index: 1,
     });
     emitter.instruction(Instruction::LocalSet(receiver));
-    emitter.set_this_local(receiver);
+    emitter.set_this_local(receiver)?;
     emitter.dynamic_this = true;
 
     Ok(())

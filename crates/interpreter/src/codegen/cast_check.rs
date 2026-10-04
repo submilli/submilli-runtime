@@ -97,20 +97,20 @@ pub fn emit_cast(
     let mark = emitter.single_evaluation_mark();
     let key = capture_session_key(emitter, ctx, value)?;
     emit_expr(emitter, ctx, value)?;
-    emitter.end_single_evaluations(mark);
+    emitter.end_single_evaluations(mark)?;
     let enclosing = map_cast_span(emitter, cast_span);
     cast::emit_box(emitter, ctx, &source_ty)?;
 
     let object_idx = ctx
         .symbols
         .intrinsic_type_indices()
-        .expect("intrinsics declared")
+        .ok_or_else(|| crate::codegen::internal_failure("intrinsics declared"))?
         .object;
     let scratch_ty = ValType::Ref(RefType {
         nullable: true,
         heap_type: HeapType::Concrete(object_idx),
     });
-    let scratch = emitter.add_anonymous_local(scratch_ty);
+    let scratch = emitter.add_anonymous_local(scratch_ty)?;
     emitter.instruction(Instruction::LocalSet(scratch));
     let previous_diagnostic = diagnostic::begin(emitter, ctx);
     diagnostic::session_key(emitter, key);
@@ -172,9 +172,9 @@ fn capture_session_key(
                 .map_err(crate::codegen::arena_failure)?
                 .ty,
         )?,
-    );
+    )?;
     emitter.instruction(Instruction::LocalSet(slot));
-    emitter.record_single_evaluation(key, slot);
+    emitter.record_single_evaluation(key, slot)?;
     Ok(Some(slot))
 }
 
@@ -208,8 +208,8 @@ pub fn emit_non_null_assert_on_stack(
 ) -> Result<(), crate::compiler_error::CompilerFailure> {
     cast::emit_box(emitter, ctx, source_ty)?;
 
-    let object_idx = object_idx_of(ctx);
-    let scratch = emitter.add_anonymous_local(scratch_object_ty(object_idx));
+    let object_idx = object_idx_of(ctx)?;
+    let scratch = emitter.add_anonymous_local(scratch_object_ty(object_idx))?;
     emitter.instruction(Instruction::LocalSet(scratch));
 
     emitter.instruction(Instruction::LocalGet(scratch));
@@ -305,9 +305,9 @@ fn emit_structural_test_inner(
             emitter.instruction(Instruction::RefIsNull);
         }
         Type::Unknown => emitter.instruction(Instruction::I32Const(1)),
-        Type::Number => emit_ref_test(emitter, value_local, boxed_number_idx(ctx)),
-        Type::Boolean => emit_ref_test(emitter, value_local, boxed_boolean_idx(ctx)),
-        Type::String => emit_ref_test(emitter, value_local, string_idx(ctx)),
+        Type::Number => emit_ref_test(emitter, value_local, boxed_number_idx(ctx)?),
+        Type::Boolean => emit_ref_test(emitter, value_local, boxed_boolean_idx(ctx)?),
+        Type::String => emit_ref_test(emitter, value_local, string_idx(ctx)?),
         Type::NumberEnum { .. } | Type::StringEnum { .. } => {
             if let Some(crate::FieldNarrowingTest::Shape(members)) =
                 ctx.ta.runtime_type_tests.get(ty.peel())
@@ -330,14 +330,14 @@ fn emit_structural_test_inner(
             value_local,
             ctx.symbols
                 .bigint_type_idx()
-                .expect("$BigInt intrinsic registered"),
+                .ok_or_else(|| crate::codegen::internal_failure("$BigInt intrinsic registered"))?,
         ),
         Type::Uint8Array => emit_ref_test(
             emitter,
             value_local,
-            ctx.symbols
-                .uint8_array_type_idx()
-                .expect("$Uint8Array intrinsic registered"),
+            ctx.symbols.uint8_array_type_idx().ok_or_else(|| {
+                crate::codegen::internal_failure("$Uint8Array intrinsic registered")
+            })?,
         ),
         Type::Function { has_rest, .. } => {
             let signature = crate::codegen::closures::classify(ty)?;
@@ -372,7 +372,7 @@ fn emit_structural_test_inner(
             super::runtime_descriptors::test_parameter(emitter, ctx, name, value_local)?;
         }
         Type::NumberLiteral(n) => {
-            let boxed = boxed_number_idx(ctx);
+            let boxed = boxed_number_idx(ctx)?;
             emitter.instruction(Instruction::LocalGet(value_local));
             emitter.instruction(Instruction::RefTestNonNull(HeapType::Concrete(boxed)));
             emitter.emit_if(i32_block);
@@ -389,7 +389,7 @@ fn emit_structural_test_inner(
             emitter.emit_end();
         }
         Type::BooleanLiteral(value) => {
-            let boxed = boxed_boolean_idx(ctx);
+            let boxed = boxed_boolean_idx(ctx)?;
             emitter.instruction(Instruction::LocalGet(value_local));
             emitter.instruction(Instruction::RefTestNonNull(HeapType::Concrete(boxed)));
             emitter.emit_if(i32_block);
@@ -406,11 +406,11 @@ fn emit_structural_test_inner(
             emitter.emit_end();
         }
         Type::StringLiteral(s) => {
-            let str_idx = string_idx(ctx);
+            let str_idx = string_idx(ctx)?;
             let intr = ctx
                 .symbols
                 .intrinsic_type_indices()
-                .expect("intrinsics declared");
+                .ok_or_else(|| crate::codegen::internal_failure("intrinsics declared"))?;
             emitter.instruction(Instruction::LocalGet(value_local));
             emitter.instruction(Instruction::RefTestNonNull(HeapType::Concrete(str_idx)));
             emitter.emit_if(i32_block);
@@ -423,7 +423,7 @@ fn emit_structural_test_inner(
             let raw_local = emitter.add_anonymous_local(ValType::Ref(RefType {
                 nullable: false,
                 heap_type: HeapType::Concrete(intr.raw_string),
-            }));
+            }))?;
             emitter.instruction(Instruction::LocalSet(raw_local));
             crate::codegen::function_emitter::json::emit_raw_string_matches_literal(
                 emitter, intr, raw_local, s,
@@ -433,21 +433,21 @@ fn emit_structural_test_inner(
             emitter.emit_end();
         }
         Type::Object { fields, index } => {
-            let shape_idx = ctx
-                .symbols
-                .object_shape_type_idx()
-                .expect("$ObjectShape intrinsic registered");
+            let shape_idx = ctx.symbols.object_shape_type_idx().ok_or_else(|| {
+                crate::codegen::internal_failure("$ObjectShape intrinsic registered")
+            })?;
             emitter.instruction(Instruction::LocalGet(value_local));
             emitter.instruction(Instruction::RefTestNonNull(HeapType::Concrete(shape_idx)));
             emitter.emit_if(i32_block);
             let obj_local = emitter.add_anonymous_local(ValType::Ref(RefType {
                 nullable: false,
                 heap_type: HeapType::Concrete(shape_idx),
-            }));
+            }))?;
             emitter.instruction(Instruction::LocalGet(value_local));
             emitter.instruction(Instruction::RefCastNonNull(HeapType::Concrete(shape_idx)));
             emitter.instruction(Instruction::LocalSet(obj_local));
-            let field_local = emitter.add_anonymous_local(scratch_object_ty(object_idx_of(ctx)));
+            let field_local =
+                emitter.add_anonymous_local(scratch_object_ty(object_idx_of(ctx)?))?;
             emitter.instruction(Instruction::I32Const(1)); // accumulator
             for (fname, f) in fields {
                 emit_field_conformance(
@@ -483,18 +483,18 @@ fn emit_structural_test_inner(
             let intr = ctx
                 .symbols
                 .intrinsic_type_indices()
-                .expect("intrinsics declared");
+                .ok_or_else(|| crate::codegen::internal_failure("intrinsics declared"))?;
             let array_idx = ctx
                 .symbols
                 .array_type_idx()
-                .expect("$Array intrinsic registered");
+                .ok_or_else(|| crate::codegen::internal_failure("$Array intrinsic registered"))?;
             emitter.instruction(Instruction::LocalGet(value_local));
             emitter.instruction(Instruction::RefTestNonNull(HeapType::Concrete(array_idx)));
             emitter.emit_if(i32_block);
             let raw_local = emitter.add_anonymous_local(ValType::Ref(RefType {
                 nullable: false,
                 heap_type: HeapType::Concrete(intr.raw_array),
-            }));
+            }))?;
             emitter.instruction(Instruction::LocalGet(value_local));
             emitter.instruction(Instruction::RefCastNonNull(HeapType::Concrete(array_idx)));
             emitter.instruction(Instruction::StructGet {
@@ -502,16 +502,20 @@ fn emit_structural_test_inner(
                 field_index: 1,
             });
             emitter.instruction(Instruction::LocalSet(raw_local));
-            let acc = emitter.add_anonymous_local(ValType::I32);
-            let i = emitter.add_anonymous_local(ValType::I32);
-            let len = emitter.add_anonymous_local(ValType::I32);
-            let elem_local = emitter.add_anonymous_local(scratch_object_ty(object_idx_of(ctx)));
+            let acc = emitter.add_anonymous_local(ValType::I32)?;
+            let i = emitter.add_anonymous_local(ValType::I32)?;
+            let len = emitter.add_anonymous_local(ValType::I32)?;
+            let elem_local = emitter.add_anonymous_local(scratch_object_ty(object_idx_of(ctx)?))?;
             emitter.instruction(Instruction::I32Const(1));
             emitter.instruction(Instruction::LocalSet(acc));
             emitter.instruction(Instruction::I32Const(0));
             emitter.instruction(Instruction::LocalSet(i));
-            emitter.instruction(Instruction::LocalGet(raw_local));
-            emitter.instruction(Instruction::ArrayLen);
+            emitter.instruction(Instruction::LocalGet(value_local));
+            emitter.instruction(Instruction::RefCastNonNull(HeapType::Concrete(array_idx)));
+            emitter.instruction(Instruction::StructGet {
+                struct_type_index: array_idx,
+                field_index: 2,
+            });
             emitter.instruction(Instruction::LocalSet(len));
             emitter.emit_block(BlockType::Empty);
             emitter.emit_loop(BlockType::Empty);
@@ -552,18 +556,18 @@ fn emit_structural_test_inner(
             let intr = ctx
                 .symbols
                 .intrinsic_type_indices()
-                .expect("intrinsics declared");
+                .ok_or_else(|| crate::codegen::internal_failure("intrinsics declared"))?;
             let array_idx = ctx
                 .symbols
                 .array_type_idx()
-                .expect("$Array intrinsic registered");
+                .ok_or_else(|| crate::codegen::internal_failure("$Array intrinsic registered"))?;
             emitter.instruction(Instruction::LocalGet(value_local));
             emitter.instruction(Instruction::RefTestNonNull(HeapType::Concrete(array_idx)));
             emitter.emit_if(i32_block);
             let raw_local = emitter.add_anonymous_local(ValType::Ref(RefType {
                 nullable: false,
                 heap_type: HeapType::Concrete(intr.raw_array),
-            }));
+            }))?;
             emitter.instruction(Instruction::LocalGet(value_local));
             emitter.instruction(Instruction::RefCastNonNull(HeapType::Concrete(array_idx)));
             emitter.instruction(Instruction::StructGet {
@@ -572,15 +576,19 @@ fn emit_structural_test_inner(
             });
             emitter.instruction(Instruction::LocalSet(raw_local));
             // Length must match before indexing slots (else array.get would trap).
-            emitter.instruction(Instruction::LocalGet(raw_local));
-            emitter.instruction(Instruction::ArrayLen);
+            emitter.instruction(Instruction::LocalGet(value_local));
+            emitter.instruction(Instruction::RefCastNonNull(HeapType::Concrete(array_idx)));
+            emitter.instruction(Instruction::StructGet {
+                struct_type_index: array_idx,
+                field_index: 2,
+            });
             emitter.instruction(Instruction::I32Const(elems.len() as i32));
             emitter.instruction(Instruction::I32Eq);
             emitter.emit_if(i32_block);
-            let elem_local = emitter.add_anonymous_local(scratch_object_ty(object_idx_of(ctx)));
+            let elem_local = emitter.add_anonymous_local(scratch_object_ty(object_idx_of(ctx)?))?;
             emitter.instruction(Instruction::I32Const(1));
             for (idx, et) in elems.iter().enumerate() {
-                let index = emitter.add_anonymous_local(ValType::I32);
+                let index = emitter.add_anonymous_local(ValType::I32)?;
                 emitter.instruction(Instruction::I32Const(idx as i32));
                 emitter.instruction(Instruction::LocalSet(index));
                 let parent_path = diagnostic::index(emitter, ctx, index);
@@ -612,7 +620,11 @@ fn emit_structural_test_inner(
             let func_idx = ctx
                 .symbols
                 .runtime_validator_idx(ty.peel())
-                .expect("recursive runtime validator pre-allocated during discovery");
+                .ok_or_else(|| {
+                    crate::codegen::internal_failure(
+                        "recursive runtime validator pre-allocated during discovery",
+                    )
+                })?;
             emitter.instruction(Instruction::LocalGet(value_local));
             let visited = emit_validator_state(emitter, ctx, validator_state)?;
             super::runtime_descriptors::validator_environment(emitter, ctx, ty)?;
@@ -635,7 +647,7 @@ fn emit_structural_test_inner(
             let vtable_global = ctx
                 .symbols
                 .class_vtable_global_idx(mangled)
-                .expect("class vtable global recorded");
+                .ok_or_else(|| crate::codegen::internal_failure("class vtable global recorded"))?;
             emitter.instruction(Instruction::LocalGet(value_local));
             cast::emit_nominal_instance_test(emitter, ctx, vtable_global)?;
             if let Some(validator) = ctx.symbols.runtime_validator_idx(ty.peel()) {
@@ -726,7 +738,7 @@ pub(crate) fn emit_checked_cast_on_stack(
     target_ty: &Type,
 ) -> Result<(), crate::compiler_error::CompilerFailure> {
     cast::emit_box(emitter, ctx, source_ty)?;
-    let scratch = emitter.add_anonymous_local(scratch_object_ty(object_idx_of(ctx)));
+    let scratch = emitter.add_anonymous_local(scratch_object_ty(object_idx_of(ctx)?))?;
     emitter.instruction(Instruction::LocalSet(scratch));
     let previous_diagnostic = emitter.cast_diagnostic.take();
     if diagnostic::has_nested_paths(target_ty) {
@@ -768,7 +780,7 @@ pub(crate) fn emit_checked_parameter_cast_on_stack(
     }
 
     cast::emit_box(emitter, ctx, source_ty)?;
-    let scratch = emitter.add_anonymous_local(scratch_object_ty(object_idx_of(ctx)));
+    let scratch = emitter.add_anonymous_local(scratch_object_ty(object_idx_of(ctx)?))?;
     emitter.instruction(Instruction::LocalSet(scratch));
     emit_representation_test(emitter, ctx, scratch, target_ty)?;
     emitter.emit_if(BlockType::Result(ctx.symbols.value_type(target_ty)?));
@@ -805,7 +817,7 @@ pub(crate) fn emit_operation_cast_on_stack(
     target_ty: &Type,
 ) -> Result<(), crate::compiler_error::CompilerFailure> {
     cast::emit_box(emitter, ctx, source_ty)?;
-    let scratch = emitter.add_anonymous_local(scratch_object_ty(object_idx_of(ctx)));
+    let scratch = emitter.add_anonymous_local(scratch_object_ty(object_idx_of(ctx)?))?;
     emitter.instruction(Instruction::LocalSet(scratch));
     // Operation checks validate only the carrier, so they have no nested path.
     let previous_diagnostic = emitter.cast_diagnostic.take();
@@ -922,12 +934,16 @@ fn emit_field_conformance(
     let intrinsics = ctx
         .symbols
         .intrinsic_type_indices()
-        .expect("intrinsics declared");
+        .ok_or_else(|| crate::codegen::internal_failure("intrinsics declared"))?;
     let name_global = ctx
         .symbols
         .field_name_string_global_idx(fname)
-        .expect("per-name string global recorded for cast-target field");
-    let index_local = emitter.add_anonymous_local(ValType::I32);
+        .ok_or_else(|| {
+            crate::codegen::internal_failure(
+                "per-name string global recorded for cast-target field",
+            )
+        })?;
+    let index_local = emitter.add_anonymous_local(ValType::I32)?;
     crate::codegen::function_emitter::expr::emit_object_field_index_by_name(
         emitter,
         ctx,
@@ -998,7 +1014,7 @@ pub(crate) fn emit_narrowed_field_read_as(
     check_ty: &Type,
 ) -> Result<(), crate::compiler_error::CompilerFailure> {
     let result_val = ctx.symbols.value_type(result_ty)?;
-    let scratch = emitter.add_anonymous_local(scratch_object_ty(object_idx_of(ctx)));
+    let scratch = emitter.add_anonymous_local(scratch_object_ty(object_idx_of(ctx)?))?;
     emitter.instruction(Instruction::LocalSet(scratch));
     // Prefer the concrete read-time descriptor. It includes generic
     // substitutions and nested interface metadata that the declaration could
@@ -1131,18 +1147,18 @@ fn emit_interface_test_inner(
     let shape_idx = ctx
         .symbols
         .object_shape_type_idx()
-        .expect("$ObjectShape intrinsic registered");
+        .ok_or_else(|| crate::codegen::internal_failure("$ObjectShape intrinsic registered"))?;
     emitter.instruction(Instruction::LocalGet(value_local));
     emitter.instruction(Instruction::RefTestNonNull(HeapType::Concrete(shape_idx)));
     emitter.emit_if(BlockType::Result(ValType::I32));
     let object_local = emitter.add_anonymous_local(ValType::Ref(RefType {
         nullable: false,
         heap_type: HeapType::Concrete(shape_idx),
-    }));
+    }))?;
     emitter.instruction(Instruction::LocalGet(value_local));
     emitter.instruction(Instruction::RefCastNonNull(HeapType::Concrete(shape_idx)));
     emitter.instruction(Instruction::LocalSet(object_local));
-    let field_local = emitter.add_anonymous_local(scratch_object_ty(object_idx_of(ctx)));
+    let field_local = emitter.add_anonymous_local(scratch_object_ty(object_idx_of(ctx)?))?;
     emitter.instruction(Instruction::I32Const(1));
     for (name, field) in &test.members {
         if test.methods.contains(name) {
@@ -1150,7 +1166,9 @@ fn emit_interface_test_inner(
             let name_global = ctx
                 .symbols
                 .field_name_string_global_idx(name)
-                .expect("interface narrowing method name registered");
+                .ok_or_else(|| {
+                    crate::codegen::internal_failure("interface narrowing method name registered")
+                })?;
             crate::codegen::function_emitter::expr::emit_object_field_read_by_name(
                 emitter,
                 ctx,
@@ -1220,14 +1238,14 @@ fn emit_non_shape_interface_test(
 ) -> Result<(), crate::compiler_error::CompilerFailure> {
     use crate::InterfaceCarrier;
 
-    let matches_any = emitter.add_anonymous_local(ValType::I32);
+    let matches_any = emitter.add_anonymous_local(ValType::I32)?;
     emitter.instruction(Instruction::I32Const(0));
     emitter.instruction(Instruction::LocalSet(matches_any));
     for carrier in &test.non_shape_carriers {
         let intr = ctx
             .symbols
             .intrinsic_type_indices()
-            .expect("intrinsics declared");
+            .ok_or_else(|| crate::codegen::internal_failure("intrinsics declared"))?;
         match carrier {
             InterfaceCarrier::ArrayAny => emit_structural_test_inner(
                 emitter,
@@ -1247,11 +1265,11 @@ fn emit_non_shape_interface_test(
                     validator_state,
                 )?;
             }
-            InterfaceCarrier::Number => emit_ref_test(emitter, value_local, boxed_number_idx(ctx)),
+            InterfaceCarrier::Number => emit_ref_test(emitter, value_local, boxed_number_idx(ctx)?),
             InterfaceCarrier::Boolean => {
-                emit_ref_test(emitter, value_local, boxed_boolean_idx(ctx));
+                emit_ref_test(emitter, value_local, boxed_boolean_idx(ctx)?);
             }
-            InterfaceCarrier::String => emit_ref_test(emitter, value_local, string_idx(ctx)),
+            InterfaceCarrier::String => emit_ref_test(emitter, value_local, string_idx(ctx)?),
             InterfaceCarrier::BigInt => emit_ref_test(emitter, value_local, intr.bigint),
             InterfaceCarrier::Uint8Array => emit_ref_test(emitter, value_local, intr.uint8_array),
             InterfaceCarrier::MapAny => emit_ref_test(emitter, value_local, intr.map),
@@ -1298,6 +1316,9 @@ fn emit_non_shape_interface_test(
             InterfaceCarrier::FsPeek => emit_ref_test(emitter, value_local, intr.fs_peek),
             InterfaceCarrier::FsDirEntry => emit_ref_test(emitter, value_local, intr.fs_dir_entry),
             InterfaceCarrier::FsInfo => emit_ref_test(emitter, value_local, intr.fs_info),
+            InterfaceCarrier::FsMountInfo => {
+                emit_ref_test(emitter, value_local, intr.fs_mount_info);
+            }
             InterfaceCarrier::FsFileWriter => {
                 emit_ref_test(emitter, value_local, intr.fs_file_writer);
             }
@@ -1330,21 +1351,21 @@ fn emit_set_carrier_test(
     let intr = ctx
         .symbols
         .intrinsic_type_indices()
-        .expect("intrinsics declared");
+        .ok_or_else(|| crate::codegen::internal_failure("intrinsics declared"))?;
     emit_ref_test(emitter, value_local, intr.set);
     emitter.emit_if(BlockType::Result(ValType::I32));
     let backing = emitter.add_anonymous_local(ValType::Ref(RefType {
         nullable: false,
         heap_type: HeapType::Concrete(intr.set),
-    }));
+    }))?;
     let elements = emitter.add_anonymous_local(ValType::Ref(RefType {
         nullable: false,
         heap_type: HeapType::Concrete(intr.raw_array),
-    }));
+    }))?;
     let order = emitter.add_anonymous_local(ValType::Ref(RefType {
         nullable: false,
         heap_type: HeapType::Concrete(intr.raw_index_array),
-    }));
+    }))?;
     emitter.instruction(Instruction::LocalGet(value_local));
     emitter.instruction(Instruction::RefCastNonNull(HeapType::Concrete(intr.set)));
     emitter.instruction(Instruction::LocalTee(backing));
@@ -1388,25 +1409,25 @@ fn emit_map_carrier_test(
     let intr = ctx
         .symbols
         .intrinsic_type_indices()
-        .expect("intrinsics declared");
+        .ok_or_else(|| crate::codegen::internal_failure("intrinsics declared"))?;
     emit_ref_test(emitter, value_local, intr.map);
     emitter.emit_if(BlockType::Result(ValType::I32));
     let backing = emitter.add_anonymous_local(ValType::Ref(RefType {
         nullable: false,
         heap_type: HeapType::Concrete(intr.map),
-    }));
+    }))?;
     let keys = emitter.add_anonymous_local(ValType::Ref(RefType {
         nullable: false,
         heap_type: HeapType::Concrete(intr.raw_array),
-    }));
+    }))?;
     let values = emitter.add_anonymous_local(ValType::Ref(RefType {
         nullable: false,
         heap_type: HeapType::Concrete(intr.raw_array),
-    }));
+    }))?;
     let order = emitter.add_anonymous_local(ValType::Ref(RefType {
         nullable: false,
         heap_type: HeapType::Concrete(intr.raw_index_array),
-    }));
+    }))?;
     emitter.instruction(Instruction::LocalGet(value_local));
     emitter.instruction(Instruction::RefCastNonNull(HeapType::Concrete(intr.map)));
     emitter.instruction(Instruction::LocalTee(backing));
@@ -1455,11 +1476,11 @@ fn emit_ordered_collection_members_test(
     let intr = ctx
         .symbols
         .intrinsic_type_indices()
-        .expect("intrinsics declared");
-    let acc = emitter.add_anonymous_local(ValType::I32);
-    let cursor = emitter.add_anonymous_local(ValType::I32);
-    let slot = emitter.add_anonymous_local(ValType::I32);
-    let member = emitter.add_anonymous_local(scratch_object_ty(intr.object));
+        .ok_or_else(|| crate::codegen::internal_failure("intrinsics declared"))?;
+    let acc = emitter.add_anonymous_local(ValType::I32)?;
+    let cursor = emitter.add_anonymous_local(ValType::I32)?;
+    let slot = emitter.add_anonymous_local(ValType::I32)?;
+    let member = emitter.add_anonymous_local(scratch_object_ty(intr.object))?;
     emitter.instruction(Instruction::I32Const(1));
     emitter.instruction(Instruction::LocalSet(acc));
     emitter.instruction(Instruction::I32Const(0));
@@ -1537,7 +1558,7 @@ fn emit_validator_state(
         let local = emitter.add_anonymous_local(ValType::Ref(RefType {
             nullable: false,
             heap_type: HeapType::Concrete(intr.raw_array),
-        }));
+        }))?;
         emitter.instruction(Instruction::I32Const(RECURSIVE_VALIDATOR_CAPACITY * 2 + 2));
         emitter.instruction(Instruction::ArrayNewDefault(intr.raw_array));
         emitter.instruction(Instruction::LocalSet(local));
@@ -1574,7 +1595,7 @@ pub(crate) fn emit_runtime_validator_body(
     let intr = ctx
         .symbols
         .intrinsic_type_indices()
-        .expect("intrinsics declared");
+        .ok_or_else(|| crate::codegen::internal_failure("intrinsics declared"))?;
     let object_idx = intr.object;
     let object_ref_null = ValType::Ref(RefType {
         nullable: true,
@@ -1604,21 +1625,21 @@ pub(crate) fn emit_runtime_validator_body(
                 super::runtime_descriptors::environment_type(ctx.symbols)?,
             ),
         ],
-    );
+    )?;
     super::runtime_descriptors::bind(
         &mut emitter,
         &super::runtime_descriptors::parameters(key),
         4,
-    );
+    )?;
     if rejects_polymorphic_edge {
         emitter.instruction(Instruction::I32Const(0));
-        return Ok(emitter.build());
+        return emitter.build();
     }
     diagnostic::enter_recursive(&mut emitter, ctx);
     let checkpoint = diagnostic::checkpoint(&mut emitter, ctx);
     let parameters = super::runtime_descriptors::parameters(key);
-    let seen = emitter.add_anonymous_local(ValType::I32);
-    let index = emitter.add_anonymous_local(ValType::I32);
+    let seen = emitter.add_anonymous_local(ValType::I32)?;
+    let index = emitter.add_anonymous_local(ValType::I32)?;
     emitter.instruction(Instruction::I32Const(0));
     emitter.instruction(Instruction::LocalSet(seen));
     emitter.instruction(Instruction::I32Const(0));
@@ -1716,7 +1737,7 @@ pub(crate) fn emit_runtime_validator_body(
     diagnostic::finish(&mut emitter, ctx, checkpoint)?;
     diagnostic::save_recursive(&mut emitter, ctx, 1)?;
     ctx.check_function_limits(&mut emitter)?;
-    Ok(emitter.build())
+    emitter.build()
 }
 
 fn emit_is_non_null(emitter: &mut FunctionEmitter, value_local: u32) {
@@ -1730,29 +1751,30 @@ fn emit_ref_test(emitter: &mut FunctionEmitter, value_local: u32, type_idx: u32)
     emitter.instruction(Instruction::RefTestNonNull(HeapType::Concrete(type_idx)));
 }
 
-fn boxed_number_idx(ctx: &CodegenCtx) -> u32 {
+fn boxed_number_idx(ctx: &CodegenCtx) -> Result<u32, crate::compiler_error::CompilerFailure> {
     ctx.symbols
         .boxed_number_type_idx()
-        .expect("$BoxedNumber intrinsic registered")
+        .ok_or_else(|| crate::codegen::internal_failure("$BoxedNumber intrinsic registered"))
 }
 
-fn boxed_boolean_idx(ctx: &CodegenCtx) -> u32 {
+fn boxed_boolean_idx(ctx: &CodegenCtx) -> Result<u32, crate::compiler_error::CompilerFailure> {
     ctx.symbols
         .boxed_boolean_type_idx()
-        .expect("$BoxedBoolean intrinsic registered")
+        .ok_or_else(|| crate::codegen::internal_failure("$BoxedBoolean intrinsic registered"))
 }
 
-fn string_idx(ctx: &CodegenCtx) -> u32 {
+fn string_idx(ctx: &CodegenCtx) -> Result<u32, crate::compiler_error::CompilerFailure> {
     ctx.symbols
         .string_type_idx()
-        .expect("$string intrinsic registered")
+        .ok_or_else(|| crate::codegen::internal_failure("$string intrinsic registered"))
 }
 
-fn object_idx_of(ctx: &CodegenCtx) -> u32 {
-    ctx.symbols
+fn object_idx_of(ctx: &CodegenCtx) -> Result<u32, crate::compiler_error::CompilerFailure> {
+    Ok(ctx
+        .symbols
         .intrinsic_type_indices()
-        .expect("intrinsics declared")
-        .object
+        .ok_or_else(|| crate::codegen::internal_failure("intrinsics declared"))?
+        .object)
 }
 
 fn scratch_object_ty(object_idx: u32) -> ValType {
@@ -1768,6 +1790,15 @@ fn emit_cast_throw(
     scratch: u32,
     target_ty: &Type,
 ) {
+    ctx.latch(emit_cast_throw_checked(emitter, ctx, scratch, target_ty));
+}
+
+fn emit_cast_throw_checked(
+    emitter: &mut FunctionEmitter,
+    ctx: &CodegenCtx,
+    scratch: u32,
+    target_ty: &Type,
+) -> Result<(), crate::compiler_error::CompilerFailure> {
     let prefix = error_prefix(target_ty);
     emit_inline_string(emitter, ctx, &prefix);
 
@@ -1776,47 +1807,79 @@ fn emit_cast_throw(
     let concat_idx = ctx
         .symbols
         .prelude_func_idx("string_concat")
-        .expect("string_concat imported from prelude");
+        .ok_or_else(|| crate::codegen::internal_failure("string_concat imported from prelude"))?;
     emitter.instruction(Instruction::Call(concat_idx));
 
     diagnostic::append_failure(emitter, ctx);
 
     emit_type_error_from_message(emitter, ctx);
+
+    Ok(())
 }
 
 fn emit_type_error_from_message(emitter: &mut FunctionEmitter, ctx: &CodegenCtx) {
+    ctx.latch(emit_type_error_from_message_checked(emitter, ctx));
+}
+
+fn emit_type_error_from_message_checked(
+    emitter: &mut FunctionEmitter,
+    ctx: &CodegenCtx,
+) -> Result<(), crate::compiler_error::CompilerFailure> {
     let new_idx = ctx
         .symbols
         .prelude_func_idx("TypeError#constructor")
-        .expect("TypeError#constructor imported from prelude");
+        .ok_or_else(|| {
+            crate::codegen::internal_failure("TypeError#constructor imported from prelude")
+        })?;
     emitter.instruction(Instruction::Call(new_idx));
 
     // Constructor returns (ref null $Object); the throw helper narrows to
     // $Error so the throw carries the payload type the catch expects.
     crate::codegen::throw::emit_error_throw(emitter, ctx);
+
+    Ok(())
 }
 
 pub(super) fn emit_inline_string(emitter: &mut FunctionEmitter, ctx: &CodegenCtx, text: &str) {
+    ctx.latch(emit_inline_string_checked(emitter, ctx, text));
+}
+
+fn emit_inline_string_checked(
+    emitter: &mut FunctionEmitter,
+    ctx: &CodegenCtx,
+    text: &str,
+) -> Result<(), crate::compiler_error::CompilerFailure> {
     let intr = ctx
         .symbols
         .intrinsic_type_indices()
-        .expect("intrinsics declared");
+        .ok_or_else(|| crate::codegen::internal_failure("intrinsics declared"))?;
     let string_vtable_idx = ctx
         .symbols
         .prelude_global_idx("string_vtable")
-        .expect("string_vtable imported");
+        .ok_or_else(|| crate::codegen::internal_failure("string_vtable imported"))?;
     emitter.instruction(Instruction::GlobalGet(string_vtable_idx));
-    emit_inline_const_raw_string(emitter, ctx, text);
+    ctx.latch(emit_inline_const_raw_string(emitter, ctx, text));
+    emitter.instruction(Instruction::I64Const(0));
     emitter.instruction(Instruction::StructNew(intr.string));
+
+    Ok(())
 }
 
 /// Cascades ref.test on scratch to produce a JS-typeof-style tag string;
 /// closures first, then string/number/boolean, then null, then "object" fallthrough.
 fn emit_runtime_type_string(emitter: &mut FunctionEmitter, ctx: &CodegenCtx, scratch: u32) {
+    ctx.latch(emit_runtime_type_string_checked(emitter, ctx, scratch));
+}
+
+fn emit_runtime_type_string_checked(
+    emitter: &mut FunctionEmitter,
+    ctx: &CodegenCtx,
+    scratch: u32,
+) -> Result<(), crate::compiler_error::CompilerFailure> {
     let string_type_idx = ctx
         .symbols
         .string_type_idx()
-        .expect("$string intrinsic registered");
+        .ok_or_else(|| crate::codegen::internal_failure("$string intrinsic registered"))?;
     let string_ref = ValType::Ref(RefType {
         nullable: false,
         heap_type: HeapType::Concrete(string_type_idx),
@@ -1841,7 +1904,7 @@ fn emit_runtime_type_string(emitter: &mut FunctionEmitter, ctx: &CodegenCtx, scr
     let num_idx = ctx
         .symbols
         .boxed_number_type_idx()
-        .expect("$BoxedNumber intrinsic registered");
+        .ok_or_else(|| crate::codegen::internal_failure("$BoxedNumber intrinsic registered"))?;
     emitter.instruction(Instruction::LocalGet(scratch));
     emitter.instruction(Instruction::RefTestNonNull(HeapType::Concrete(num_idx)));
     emitter.emit_if(block);
@@ -1851,7 +1914,7 @@ fn emit_runtime_type_string(emitter: &mut FunctionEmitter, ctx: &CodegenCtx, scr
     let bool_idx = ctx
         .symbols
         .boxed_boolean_type_idx()
-        .expect("$BoxedBoolean intrinsic registered");
+        .ok_or_else(|| crate::codegen::internal_failure("$BoxedBoolean intrinsic registered"))?;
     emitter.instruction(Instruction::LocalGet(scratch));
     emitter.instruction(Instruction::RefTestNonNull(HeapType::Concrete(bool_idx)));
     emitter.emit_if(block);
@@ -1861,7 +1924,7 @@ fn emit_runtime_type_string(emitter: &mut FunctionEmitter, ctx: &CodegenCtx, scr
     let closure_idx = ctx
         .symbols
         .closure_type_idx()
-        .expect("$Closure intrinsic registered");
+        .ok_or_else(|| crate::codegen::internal_failure("$Closure intrinsic registered"))?;
     emitter.instruction(Instruction::LocalGet(scratch));
     emitter.instruction(Instruction::RefTestNonNull(HeapType::Concrete(closure_idx)));
     emitter.emit_if(block);
@@ -1873,6 +1936,8 @@ fn emit_runtime_type_string(emitter: &mut FunctionEmitter, ctx: &CodegenCtx, scr
     for _ in 0..5 {
         emitter.emit_end();
     }
+
+    Ok(())
 }
 
 /// Visited entries pair the value with its effective type arguments. Forwarded
@@ -1956,6 +2021,7 @@ fn emit_store_validator_environment(
             })?,
     ));
     emitter.instruction(Instruction::LocalGet(4));
+    emitter.instruction(Instruction::I64Const(0));
     emitter.instruction(Instruction::StructNew(closure));
     emitter.instruction(Instruction::ArraySet(intr.raw_array));
 
@@ -1979,7 +2045,7 @@ fn emit_index_conformance(
         return Ok(());
     };
     emitter.instruction(Instruction::Call(symbol));
-    let values = emitter.add_anonymous_local(scratch_object_ty(object_idx_of(ctx)));
+    let values = emitter.add_anonymous_local(scratch_object_ty(object_idx_of(ctx)?))?;
     emitter.instruction(Instruction::LocalSet(values));
     emit_structural_test_inner(
         emitter,
@@ -2003,7 +2069,7 @@ mod representation_invariant_tests {
             &crate::TypedAst::new(),
             &crate::codegen::SymbolTable::default(),
             |ctx| {
-                let mut emitter = FunctionEmitter::new(ctx, &[]);
+                let mut emitter = FunctionEmitter::new(ctx, &[]).unwrap();
                 assert_internal(
                     emit_representation_test(&mut emitter, ctx, 0, &Type::Number).unwrap_err(),
                 );

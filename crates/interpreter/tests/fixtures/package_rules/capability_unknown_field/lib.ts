@@ -7,6 +7,7 @@ export { Input } from "./types";
 
 /**
  * Runs the operation.
+ * @param input Message and where to send it.
  * @capability test.com/op { owner: $input.teamIdd }
  */
 export function run(input: Input): void {

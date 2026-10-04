@@ -3,6 +3,7 @@
 
 /**
  * Runs the operation.
+ * @param id Identifier of the target.
  * @capability test.com/op { id }
  */
 export function run(id: string): void {}

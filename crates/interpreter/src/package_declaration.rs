@@ -127,6 +127,21 @@ impl PackageDeclaration {
         defs
     }
 
+    /// The named type declared under `mangled`. `runtime_types` holds the
+    /// declarations of every module under the name a type refers to them by;
+    /// a type re-exported from the root module is also known by its public
+    /// name, which only `types` records.
+    pub fn type_symbol(&self, mangled: &crate::MangledName) -> Option<&TypeSymbol> {
+        self.runtime_types
+            .get(mangled.as_str())
+            .or_else(|| symbol_named(self.types.values(), mangled))
+            .or_else(|| {
+                self.namespaces
+                    .values()
+                    .find_map(|namespace| namespace_type_symbol(namespace, mangled))
+            })
+    }
+
     pub fn refresh_shapes(&mut self) {
         self.shapes = self.collect_shapes();
     }
@@ -217,6 +232,25 @@ impl PackageDeclaration {
             pending.extend(namespaces.values());
         }
     }
+}
+
+fn namespace_type_symbol<'a>(
+    namespace: &'a NamespaceSymbol,
+    mangled: &crate::MangledName,
+) -> Option<&'a TypeSymbol> {
+    symbol_named(namespace.types.values(), mangled).or_else(|| {
+        namespace
+            .namespaces
+            .values()
+            .find_map(|child| namespace_type_symbol(child, mangled))
+    })
+}
+
+fn symbol_named<'a>(
+    mut symbols: impl Iterator<Item = &'a TypeSymbol>,
+    mangled: &crate::MangledName,
+) -> Option<&'a TypeSymbol> {
+    symbols.find(|symbol| symbol.mangled_name == *mangled)
 }
 
 fn value_types(value: &ValueSymbol, visit: &mut dyn FnMut(&Type)) {
@@ -360,6 +394,7 @@ fn narrowing_check_types(check: &crate::FieldNarrowingCheck, visit: &mut dyn FnM
                     | crate::InterfaceCarrier::FsPeek
                     | crate::InterfaceCarrier::FsDirEntry
                     | crate::InterfaceCarrier::FsInfo
+                    | crate::InterfaceCarrier::FsMountInfo
                     | crate::InterfaceCarrier::FsFileWriter
                     | crate::InterfaceCarrier::HttpResponse
                     | crate::InterfaceCarrier::HttpDownloadResult

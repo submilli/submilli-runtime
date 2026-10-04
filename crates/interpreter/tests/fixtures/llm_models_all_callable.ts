@@ -4,7 +4,7 @@
 // a permission denial at dispatch, on a name the runtime itself had just
 // recommended, and would have no way to tell which entries were real.
 //
-// This is the positive half of the double gate; `llm_models_filtered` covers
+// This is the positive case of filtering; `llm_models_filtered` covers
 // the negative half. Asserting only that denied models are hidden would leave
 // the vacuous case passing — a `models()` that returned nothing at all also
 // hides every denied model. So this fixture walks the list and dispatches at

@@ -9,6 +9,7 @@ use wasmtime::{
     StructRefPre, StructType, Val, ValType,
 };
 
+use crate::runtime::fuel::{self, charge_host_fuel};
 use crate::runtime::intrinsic_types::build_intrinsic_types;
 pub(crate) use crate::runtime::intrinsic_types::{
     intrinsic_array_type, intrinsic_bigint_type, intrinsic_string_type, intrinsic_uint8_array_type,
@@ -101,6 +102,7 @@ fn install_prelude(
         error_subclass_type,
         error_vtable: error_host.vtable,
         range_error_vtable: error_host.range_vtable,
+        quota_exceeded_vtable: error_host.quota_exceeded_vtable,
         type_error_vtable: error_host.type_vtable,
         syntax_error_vtable: error_host.syntax_vtable,
         permission_denied_vtable: error_host.permission_denied_vtable,
@@ -163,9 +165,15 @@ fn install_internal_module(
         ty,
         /* deterministic = */ true,
         |caller, params, results| -> wasmtime::Result<()> {
-            let bytes = read_uint8_array_arg(&mut *caller, &params[0], "uint8array_to_base64")?;
-            let alphabet_flag = params[1].i32().unwrap_or(0);
-            let omit_padding = params[2].i32().unwrap_or(0) != 0;
+            let bytes =
+                read_uint8_array_arg(&mut *caller, abi_arg(params, 0)?, "uint8array_to_base64")?;
+            let alphabet_flag = (*abi_arg(params, 1)?)
+                .i32()
+                .ok_or_else(|| invariant_trap("host ABI: expected i32"))?;
+            let omit_padding = (*abi_arg(params, 2)?)
+                .i32()
+                .ok_or_else(|| invariant_trap("host ABI: expected i32"))?
+                != 0;
             let alphabet = if alphabet_flag == 1 {
                 &alphabet::URL_SAFE
             } else {
@@ -173,9 +181,10 @@ fn install_internal_module(
             };
             let config: GeneralPurposeConfig = if omit_padding { NO_PAD } else { PAD };
             let engine = GeneralPurpose::new(alphabet, config);
+            fuel::charge(&mut *caller, fuel::SCAN, bytes.len() as u64)?;
             let encoded = engine.encode(&bytes);
             let arr = write_submilli_string(&mut *caller, &encoded)?;
-            results[0] = Val::AnyRef(Some(arr.to_anyref()));
+            *abi_result(results, 0)? = Val::AnyRef(Some(arr.to_anyref()));
             Ok(())
         },
     )?;
@@ -193,25 +202,23 @@ fn install_internal_module(
         ty,
         /* deterministic = */ true,
         move |caller, params, results| -> wasmtime::Result<()> {
-            let s = read_string_arg(&mut *caller, &params[0], "uint8array_from_base64")?;
-            let alphabet_flag = params[1].i32().unwrap_or(0);
+            let s = read_string_arg(&mut *caller, abi_arg(params, 0)?, "uint8array_from_base64")?;
+            fuel::charge(&mut *caller, fuel::SCAN, s.len() as u64)?;
+            let alphabet_flag = (*abi_arg(params, 1)?)
+                .i32()
+                .ok_or_else(|| invariant_trap("host ABI: expected i32"))?;
             let alphabet = if alphabet_flag == 1 {
                 &alphabet::URL_SAFE
             } else {
                 &alphabet::STANDARD
             };
-            // Forgiving on padding: try `PAD` first, fall back to
-            // `NO_PAD`. Avoids requiring callers to know which form
-            // they have.
-            let decoded = {
-                let padded = GeneralPurpose::new(alphabet, PAD);
-                if let Ok(b) = padded.decode(s.as_bytes()) {
-                    Ok(b)
-                } else {
-                    let unpadded = GeneralPurpose::new(alphabet, NO_PAD);
-                    unpadded.decode(s.as_bytes())
-                }
+            // A terminal '=' selects canonical padding; otherwise require none.
+            let config = if s.as_bytes().last() == Some(&b'=') {
+                PAD
+            } else {
+                NO_PAD
             };
+            let decoded = GeneralPurpose::new(alphabet, config).decode(s.as_bytes());
             let bytes =
                 decoded.map_err(|e| wasmtime::Error::msg(format!("Uint8Array.fromBase64: {e}")))?;
             let arr = write_uint8_array(
@@ -219,7 +226,7 @@ fn install_internal_module(
                 raw_uint8_array_type_for_decode.clone(),
                 &bytes,
             )?;
-            results[0] = Val::AnyRef(Some(arr.to_anyref()));
+            *abi_result(results, 0)? = Val::AnyRef(Some(arr.to_anyref()));
             Ok(())
         },
     )?;
@@ -237,14 +244,14 @@ fn install_internal_module(
         ty,
         /* deterministic = */ true,
         move |caller, params, results| -> wasmtime::Result<()> {
-            let s = read_string_arg(&mut *caller, &params[0], "textencoder_encode")?;
+            let s = read_string_arg(&mut *caller, abi_arg(params, 0)?, "textencoder_encode")?;
             let bytes = s.into_bytes();
             let arr = write_uint8_array(
                 &mut *caller,
                 raw_uint8_array_type_for_encode.clone(),
                 &bytes,
             )?;
-            results[0] = Val::AnyRef(Some(arr.to_anyref()));
+            *abi_result(results, 0)? = Val::AnyRef(Some(arr.to_anyref()));
             Ok(())
         },
     )?;
@@ -261,7 +268,8 @@ fn install_internal_module(
         ty,
         /* deterministic = */ true,
         |caller, params, results| -> wasmtime::Result<()> {
-            let bytes = read_uint8_array_arg(&mut *caller, &params[0], "textdecoder_decode")?;
+            let bytes =
+                read_uint8_array_arg(&mut *caller, abi_arg(params, 0)?, "textdecoder_decode")?;
             let s = std::str::from_utf8(&bytes).map_err(|e| {
                 type_error(format!(
                     "TextDecoder.decode: invalid UTF-8 at byte {}: {e}",
@@ -269,7 +277,7 @@ fn install_internal_module(
                 ))
             })?;
             let arr = write_submilli_string(&mut *caller, s)?;
-            results[0] = Val::AnyRef(Some(arr.to_anyref()));
+            *abi_result(results, 0)? = Val::AnyRef(Some(arr.to_anyref()));
             Ok(())
         },
     )?;
@@ -277,11 +285,14 @@ fn install_internal_module(
     Ok(())
 }
 
+/// Every byte payload the host builds ends here, so this is where its copy is
+/// charged.
 pub(crate) fn write_uint8_array(
-    mut ctx: impl AsContextMut,
+    mut ctx: impl AsContextMut<Data = StoreData>,
     array_ty: ArrayType,
     bytes: &[u8],
 ) -> wasmtime::Result<Rooted<ArrayRef>> {
+    fuel::charge(&mut ctx, fuel::COPY, bytes.len() as u64)?;
     let pre = ArrayRefPre::new(&mut ctx, array_ty);
     ArrayRef::new_from_i8_slice(&mut ctx, &pre, bytes)
 }
@@ -295,6 +306,50 @@ pub(crate) fn read_uint8_array_arg(
     val: &Val,
     name: &str,
 ) -> wasmtime::Result<Vec<u8>> {
+    let arr = uint8_array_backing(caller, val, name)?;
+    let len = usize::try_from(arr.len(&mut *caller)?).map_err(fatal_host_error)?;
+    read_uint8_array_range(caller, arr, 0, len, name)
+}
+
+/// `len` bytes of a `$Uint8Array` from `offset`, copied in one pass and
+/// charged for what is copied. A failed read is a catchable error labelled
+/// `name`: a raw-ABI package can pass a payload that is not an `i8` array.
+pub(crate) fn read_uint8_array_range(
+    caller: &mut Caller<'_, StoreData>,
+    arr: Rooted<ArrayRef>,
+    offset: usize,
+    len: usize,
+    name: &str,
+) -> wasmtime::Result<Vec<u8>> {
+    fuel::charge(&mut *caller, fuel::COPY, len as u64)?;
+    let offset = u32::try_from(offset).map_err(fatal_host_error)?;
+    let mut out = Vec::new();
+    out.try_reserve_exact(len).map_err(fatal_host_error)?;
+    out.resize(len, 0);
+    arr.read_i8(&mut *caller, offset, &mut out)
+        .map_err(|error| type_error(format!("{name}: {error}")))?;
+    Ok(out)
+}
+
+/// One byte of a `$Uint8Array`. The index must be in bounds.
+pub(crate) fn read_uint8(
+    caller: &mut Caller<'_, StoreData>,
+    arr: Rooted<ArrayRef>,
+    index: usize,
+) -> wasmtime::Result<u8> {
+    let index = u32::try_from(index).map_err(fatal_host_error)?;
+    match arr.get(&mut *caller, index).map_err(fatal_host_error)? {
+        Val::I32(byte) => Ok(byte as u8),
+        other => Err(fatal_host_error(format!("byte {index} is {other:?}"))),
+    }
+}
+
+/// The byte array behind a `$Uint8Array` argument, left where it is.
+pub(crate) fn uint8_array_backing(
+    caller: &mut Caller<'_, StoreData>,
+    val: &Val,
+    name: &str,
+) -> wasmtime::Result<Rooted<ArrayRef>> {
     let any = match val {
         Val::AnyRef(Some(any)) => *any,
         Val::AnyRef(None) => {
@@ -320,25 +375,11 @@ pub(crate) fn read_uint8_array_arg(
     } else {
         any.unwrap_array(&mut *caller)?
     };
-    let len = arr.len(&mut *caller)?;
-    let mut out = Vec::with_capacity(len as usize);
-    for i in 0..len {
-        let elem = arr.get(&mut *caller, i)?;
-        let byte = match elem {
-            Val::I32(v) => (v & 0xff) as u8,
-            other => {
-                return Err(type_error(format!(
-                    "{name} element {i}: expected i32, got {other:?}"
-                )));
-            }
-        };
-        out.push(byte);
-    }
-    Ok(out)
+    Ok(arr)
 }
 
 fn install_number_module(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
-    type FormatOp = fn(f64, f64) -> Result<String, String>;
+    type FormatOp = fn(f64, f64) -> wasmtime::Result<String>;
     let engine = linker.engine().clone();
     let string_struct = intrinsic_string_type(&engine)?;
     let string_struct_result =
@@ -353,7 +394,7 @@ fn install_number_module(linker: &mut Linker<StoreData>) -> wasmtime::Result<()>
         to_string_ty,
         /* deterministic = */ true,
         |caller, params, results| -> wasmtime::Result<()> {
-            let n = match params[0] {
+            let n = match *abi_arg(params, 0)? {
                 Val::F64(bits) => f64::from_bits(bits),
                 ref other => {
                     return Err(type_error(format!(
@@ -363,7 +404,7 @@ fn install_number_module(linker: &mut Linker<StoreData>) -> wasmtime::Result<()>
             };
             let s = format_number(n);
             let st = write_submilli_string_struct(caller, &s)?;
-            results[0] = Val::AnyRef(Some(st.to_anyref()));
+            *abi_result(results, 0)? = Val::AnyRef(Some(st.to_anyref()));
             Ok(())
         },
     )?;
@@ -376,9 +417,9 @@ fn install_number_module(linker: &mut Linker<StoreData>) -> wasmtime::Result<()>
         to_number_ty,
         /* deterministic = */ true,
         |caller, params, results| -> wasmtime::Result<()> {
-            let s = read_string_arg(&mut *caller, &params[0], "number.toNumber")?;
+            let s = read_string_arg(&mut *caller, abi_arg(params, 0)?, "number.toNumber")?;
             let value = string_to_number_js(&s);
-            results[0] = Val::F64(value.to_bits());
+            *abi_result(results, 0)? = Val::F64(value.to_bits());
             Ok(())
         },
     )?;
@@ -395,8 +436,8 @@ fn install_number_module(linker: &mut Linker<StoreData>) -> wasmtime::Result<()>
         parse_int_ty,
         /* deterministic = */ true,
         |caller, params, results| -> wasmtime::Result<()> {
-            let s = read_string_arg(&mut *caller, &params[0], "number.parseInt")?;
-            let radix = match params[1] {
+            let s = read_string_arg(&mut *caller, abi_arg(params, 0)?, "number.parseInt")?;
+            let radix = match *abi_arg(params, 1)? {
                 Val::F64(bits) => f64::from_bits(bits),
                 ref other => {
                     return Err(type_error(format!(
@@ -417,7 +458,7 @@ fn install_number_module(linker: &mut Linker<StoreData>) -> wasmtime::Result<()>
                 }
             };
             let value = parse_int_js(&s, r);
-            results[0] = Val::F64(value.to_bits());
+            *abi_result(results, 0)? = Val::F64(value.to_bits());
             Ok(())
         },
     )?;
@@ -430,9 +471,9 @@ fn install_number_module(linker: &mut Linker<StoreData>) -> wasmtime::Result<()>
         parse_float_ty,
         /* deterministic = */ true,
         |caller, params, results| -> wasmtime::Result<()> {
-            let s = read_string_arg(&mut *caller, &params[0], "number.parseFloat")?;
+            let s = read_string_arg(&mut *caller, abi_arg(params, 0)?, "number.parseFloat")?;
             let value = parse_float_js(&s);
-            results[0] = Val::F64(value.to_bits());
+            *abi_result(results, 0)? = Val::F64(value.to_bits());
             Ok(())
         },
     )?;
@@ -445,31 +486,52 @@ fn install_number_module(linker: &mut Linker<StoreData>) -> wasmtime::Result<()>
         [string_struct_result],
     );
     for (name, op) in [
-        ("toFixed", crate::runtime::number::to_fixed_js as FormatOp),
-        ("toPrecision", crate::runtime::number::to_precision_js),
-        ("toExponential", crate::runtime::number::to_exponential_js),
-        ("toStringRadix", crate::runtime::number::to_string_radix_js),
+        (
+            "toFixed",
+            crate::runtime::number::to_fixed_js_checked as FormatOp,
+        ),
+        (
+            "toPrecision",
+            crate::runtime::number::to_precision_js_checked,
+        ),
+        (
+            "toExponential",
+            crate::runtime::number::to_exponential_js_checked,
+        ),
+        (
+            "toStringRadix",
+            crate::runtime::number::to_string_radix_js_checked,
+        ),
     ] {
-        register_host_fn(
-            linker,
-            NUMBER_MODULE_NAME,
-            crate::mangle::host(NUMBER_MODULE_NAME, name),
-            format_ty.clone(),
-            /* deterministic = */ true,
-            move |caller, params, results| -> wasmtime::Result<()> {
-                let (Val::F64(x_bits), Val::F64(arg_bits)) = (&params[0], &params[1]) else {
-                    wasmtime::bail!("number.{name} expects (f64, f64)");
-                };
-                let formatted = op(f64::from_bits(*x_bits), f64::from_bits(*arg_bits))
-                    .map_err(wasmtime::Error::msg)?;
-                let st = write_submilli_string_struct(caller, &formatted)?;
-                results[0] = Val::AnyRef(Some(st.to_anyref()));
-                Ok(())
-            },
-        )?;
+        register_number_formatter(linker, name, format_ty.clone(), op)?;
     }
 
     Ok(())
+}
+
+fn register_number_formatter(
+    linker: &mut Linker<StoreData>,
+    name: &'static str,
+    ty: FuncType,
+    op: fn(f64, f64) -> wasmtime::Result<String>,
+) -> wasmtime::Result<()> {
+    register_host_fn(
+        linker,
+        NUMBER_MODULE_NAME,
+        crate::mangle::host(NUMBER_MODULE_NAME, name),
+        ty,
+        /* deterministic = */ true,
+        move |caller, params, results| -> wasmtime::Result<()> {
+            let (Val::F64(x_bits), Val::F64(arg_bits)) = (abi_arg(params, 0)?, abi_arg(params, 1)?)
+            else {
+                wasmtime::bail!("number.{name} expects (f64, f64)");
+            };
+            let formatted = op(f64::from_bits(*x_bits), f64::from_bits(*arg_bits))?;
+            let st = write_submilli_string_struct(caller, &formatted)?;
+            *abi_result(results, 0)? = Val::AnyRef(Some(st.to_anyref()));
+            Ok(())
+        },
+    )
 }
 
 /// ECMAScript ToString for f64 — spells NaN/Infinity/-Infinity (Rust's default prints "inf").
@@ -542,21 +604,15 @@ pub fn read_string_array_arg(
             )));
         }
     };
-    // `$Array` struct → field 1 is the `$rawArray` backing of object refs.
-    let raw = match any
+    let object = any
         .as_struct(&mut *caller)?
-        .ok_or_else(|| type_error(format!("{name}: expected $Array struct")))?
-        .field(&mut *caller, 1)?
-    {
-        Val::AnyRef(Some(inner)) => inner.unwrap_array(&mut *caller)?,
-        other => {
-            return Err(wasmtime::Error::msg(format!(
-                "{name}: malformed $Array backing {other:?}"
-            )));
-        }
-    };
-    let len = raw.len(&mut *caller)?;
-    let mut out = Vec::with_capacity(len as usize);
+        .ok_or_else(|| type_error(format!("{name}: expected $Array struct")))?;
+    let storage = super::array_storage::ArrayStorage::from_struct(caller, object)?;
+    let raw = storage.backing;
+    let len = storage.len;
+    let mut out = Vec::new();
+    out.try_reserve_exact(len as usize)
+        .map_err(fatal_host_error)?;
     for i in 0..len {
         match raw.get(&mut *caller, i)? {
             Val::AnyRef(Some(elem)) => out.push(read_string_from_anyref(caller, elem, name)?),
@@ -574,13 +630,89 @@ pub fn read_string_array_arg(
 /// Encodes a Rust string as a Submilli packed-UTF-16 `(array (mut i16))` —
 /// the bare `$rawString` payload, without the `$string` object wrapper.
 pub fn write_submilli_string(
-    mut ctx: impl AsContextMut,
+    mut ctx: impl AsContextMut<Data = StoreData>,
     s: &str,
 ) -> wasmtime::Result<Rooted<ArrayRef>> {
+    let units = encode_utf16(&mut ctx, s)?;
+    write_code_units(ctx, &units)
+}
+
+/// UTF-8 to UTF-16, charged as a scan of the input.
+pub(crate) fn encode_utf16(
+    ctx: impl AsContextMut<Data = StoreData>,
+    s: &str,
+) -> wasmtime::Result<Vec<u16>> {
+    fuel::charge(ctx, fuel::SCAN, s.len() as u64)?;
+    Ok(s.encode_utf16().collect())
+}
+
+/// Builds a `$rawString` payload from UTF-16 code units in one pass. Every
+/// string result the host builds from units ends here, so this is where its
+/// copy is charged.
+pub(crate) fn write_code_units(
+    mut ctx: impl AsContextMut<Data = StoreData>,
+    units: &[u16],
+) -> wasmtime::Result<Rooted<ArrayRef>> {
+    fuel::charge(&mut ctx, fuel::COPY, units.len() as u64)?;
     let array_ty = string_array_type(ctx.as_context().engine());
     let pre = ArrayRefPre::new(&mut ctx, array_ty);
-    let units: Vec<Val> = s.encode_utf16().map(|u| Val::I32(u as i32)).collect();
-    ArrayRef::new_fixed(&mut ctx, &pre, &units)
+    ArrayRef::new_from_i16_slice(&mut ctx, &pre, units)
+}
+
+/// A `$rawString` payload's UTF-16 code units, copied in one pass rather than
+/// one `get` per unit: string host functions call this on every receiver, so
+/// this is where the copy of every string argument is charged.
+///
+/// A payload that is not an `i16` array is a catchable error labelled `name`:
+/// a program can reach this with a non-string, through a `toJson` inserted
+/// into a `Record`.
+pub(crate) fn read_code_units(
+    mut ctx: impl AsContextMut<Data = StoreData>,
+    raw: Rooted<ArrayRef>,
+    name: &str,
+) -> wasmtime::Result<Vec<u16>> {
+    let len = raw.len(&mut ctx)?;
+    fuel::charge(&mut ctx, fuel::COPY, u64::from(len))?;
+    let len = usize::try_from(len).map_err(fatal_host_error)?;
+    let mut units = Vec::new();
+    units.try_reserve_exact(len).map_err(fatal_host_error)?;
+    units.resize(len, 0);
+    raw.copy_to_i16_slice(&mut ctx, &mut units)
+        .map_err(|error| wasmtime::Error::msg(format!("{name}: {error}")))?;
+    Ok(units)
+}
+
+/// `len` code units of a `$rawString` payload from `offset`, copied in one
+/// pass and charged for what is copied, so an accessor that needs a few units
+/// of a long string does not pay for all of it. Only typed `$string` receivers
+/// reach this, so a failure is the host's own mistake, not the program's.
+pub(crate) fn read_code_units_range(
+    mut ctx: impl AsContextMut<Data = StoreData>,
+    raw: Rooted<ArrayRef>,
+    offset: usize,
+    len: usize,
+) -> wasmtime::Result<Vec<u16>> {
+    fuel::charge(&mut ctx, fuel::COPY, len as u64)?;
+    let offset = u32::try_from(offset).map_err(fatal_host_error)?;
+    let mut units = Vec::new();
+    units.try_reserve_exact(len).map_err(fatal_host_error)?;
+    units.resize(len, 0);
+    raw.read_i16(&mut ctx, offset, &mut units)
+        .map_err(fatal_host_error)?;
+    Ok(units)
+}
+
+/// One code unit of a `$rawString` payload; see [`read_code_units_range`].
+pub(crate) fn read_code_unit(
+    mut ctx: impl AsContextMut<Data = StoreData>,
+    raw: Rooted<ArrayRef>,
+    index: usize,
+) -> wasmtime::Result<u16> {
+    let index = u32::try_from(index).map_err(fatal_host_error)?;
+    match raw.get(&mut ctx, index).map_err(fatal_host_error)? {
+        Val::I32(unit) => Ok(unit as u16),
+        other => Err(fatal_host_error(format!("code unit {index} is {other:?}"))),
+    }
 }
 
 /// Runtime handles host functions use to build *real* `$Object`-subtype structs
@@ -634,6 +766,7 @@ pub struct HostAbi {
     pub(crate) error_subclass_type: StructType,
     pub(crate) error_vtable: Global,
     pub(crate) range_error_vtable: Global,
+    pub(crate) quota_exceeded_vtable: Global,
     pub(crate) type_error_vtable: Global,
     pub(crate) syntax_error_vtable: Global,
     pub(crate) permission_denied_vtable: Global,
@@ -649,6 +782,7 @@ pub(crate) struct HostAbiHandles {
     pub object_fields_type: ArrayType,
     pub error_vtable: Global,
     pub range_error_vtable: Global,
+    pub quota_exceeded_vtable: Global,
     pub type_error_vtable: Global,
     pub syntax_error_vtable: Global,
     pub permission_denied_vtable: Global,
@@ -668,6 +802,7 @@ pub(crate) fn error_abi(caller: &Caller<'_, StoreData>) -> wasmtime::Result<Host
         object_fields_type: abi.object_fields_type.clone(),
         error_vtable: abi.error_vtable,
         range_error_vtable: abi.range_error_vtable,
+        quota_exceeded_vtable: abi.quota_exceeded_vtable,
         type_error_vtable: abi.type_error_vtable,
         syntax_error_vtable: abi.syntax_error_vtable,
         permission_denied_vtable: abi.permission_denied_vtable,
@@ -778,7 +913,7 @@ pub fn write_submilli_string_struct(
     caller: &mut Caller<'_, StoreData>,
     s: &str,
 ) -> wasmtime::Result<Rooted<StructRef>> {
-    let units: Vec<u16> = s.encode_utf16().collect();
+    let units = encode_utf16(&mut *caller, s)?;
     write_submilli_string_struct_units(caller, &units)
 }
 
@@ -790,10 +925,8 @@ pub fn write_submilli_string_struct_units(
     caller: &mut Caller<'_, StoreData>,
     units: &[u16],
 ) -> wasmtime::Result<Rooted<StructRef>> {
-    let array_ty = string_array_type(caller.engine());
-    let pre = ArrayRefPre::new(&mut *caller, array_ty);
-    let vals: Vec<Val> = units.iter().map(|&u| Val::I32(u as i32)).collect();
-    let raw = ArrayRef::new_fixed(&mut *caller, &pre, &vals)?;
+    // `write_code_units` charges the copy.
+    let raw = write_code_units(&mut *caller, units)?;
     let string_type = {
         let abi = caller
             .data()
@@ -807,7 +940,7 @@ pub fn write_submilli_string_struct_units(
     StructRef::new(
         &mut *caller,
         &pre,
-        &[vtable, Val::AnyRef(Some(raw.to_anyref()))],
+        &[vtable, Val::AnyRef(Some(raw.to_anyref())), Val::I64(0)],
     )
 }
 
@@ -882,6 +1015,17 @@ pub fn write_submilli_array_struct(
     caller: &mut Caller<'_, StoreData>,
     elements: &[Val],
 ) -> wasmtime::Result<Rooted<StructRef>> {
+    let len = super::array_storage::checked_length(elements.len())?;
+    fuel::charge(&mut *caller, fuel::ELEM, u64::from(len))?;
+    write_submilli_array_struct_precharged(caller, elements)
+}
+
+/// The caller has admitted ELEM once for each element while producing it.
+pub(crate) fn write_submilli_array_struct_precharged(
+    caller: &mut Caller<'_, StoreData>,
+    elements: &[Val],
+) -> wasmtime::Result<Rooted<StructRef>> {
+    let len = super::array_storage::checked_length(elements.len())?;
     let (array_type, raw_array_type) = {
         let abi = caller
             .data()
@@ -897,7 +1041,11 @@ pub fn write_submilli_array_struct(
     StructRef::new(
         &mut *caller,
         &pre,
-        &[vtable, Val::AnyRef(Some(raw.to_anyref()))],
+        &[
+            vtable,
+            Val::AnyRef(Some(raw.to_anyref())),
+            Val::I32(len as i32),
+        ],
     )
 }
 
@@ -920,6 +1068,27 @@ impl std::error::Error for RangeError {}
 /// A host failure that throws the built-in `RangeError` at the guest boundary.
 pub fn range_error(message: impl Into<String>) -> wasmtime::Error {
     wasmtime::Error::new(RangeError(message.into()))
+}
+
+/// Marker for a host failure that should surface to the guest as the built-in
+/// `QuotaExceededError` subclass rather than a base `Error`. Return
+/// `Err(quota_exceeded_error(...))` from a host-fn body; the `register_host_fn` wrapper
+/// downcasts for it when converting the `Err` into a guest throw. The message
+/// is the guest-visible `e.message`.
+#[derive(Debug)]
+pub struct QuotaExceededError(pub String);
+
+impl std::fmt::Display for QuotaExceededError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for QuotaExceededError {}
+
+/// A host failure that throws the built-in `QuotaExceededError` at the guest boundary.
+pub fn quota_exceeded_error(message: impl Into<String>) -> wasmtime::Error {
+    wasmtime::Error::new(QuotaExceededError(message.into()))
 }
 
 /// Marker for a host failure that should surface to the guest as the built-in
@@ -984,6 +1153,9 @@ enum DenialSource {
     /// A runtime invariant refused ahead of the policy. No rule can grant it,
     /// so the message must not suggest asking for one.
     Invariant,
+    /// The path is in a volume mounted read-only. Unlike a policy decision,
+    /// writing somewhere else is a legitimate response.
+    ReadOnly,
 }
 
 impl PermissionDenied {
@@ -1025,6 +1197,10 @@ impl std::fmt::Display for PermissionDenied {
                  asking a package to fetch the value and hand it back, not through raw \
                  HTTP. Report it and stop."
             }
+            DenialSource::ReadOnly => {
+                " This volume cannot be written from this blueprint; write under a \
+                 writable path instead (fs.info() lists each mount and its access)."
+            }
         })
     }
 }
@@ -1051,6 +1227,15 @@ pub fn permission_denied_invariant(
     denied(caller, capability, reason, DenialSource::Invariant)
 }
 
+/// A write into a volume mounted read-only.
+pub fn permission_denied_read_only(
+    caller: impl Into<String>,
+    capability: impl Into<String>,
+    reason: impl Into<String>,
+) -> wasmtime::Error {
+    denied(caller, capability, reason, DenialSource::ReadOnly)
+}
+
 fn denied(
     caller: impl Into<String>,
     capability: impl Into<String>,
@@ -1068,6 +1253,8 @@ fn denied(
 fn builtin_class_of(err: &wasmtime::Error) -> super::prelude::error::BuiltinErrorClass {
     if err.downcast_ref::<RangeError>().is_some() {
         super::prelude::error::BuiltinErrorClass::Range
+    } else if err.downcast_ref::<QuotaExceededError>().is_some() {
+        super::prelude::error::BuiltinErrorClass::QuotaExceeded
     } else if err.downcast_ref::<TypeError>().is_some() {
         super::prelude::error::BuiltinErrorClass::Type
     } else if err.downcast_ref::<SyntaxError>().is_some() {
@@ -1125,6 +1312,79 @@ impl std::fmt::Display for FatalHostError {
 
 impl std::error::Error for FatalHostError {}
 
+/// Check the storage shape before a callback can perform effects. Concrete GC
+/// subtype validation remains the engine's responsibility; guest dynamic values
+/// are validated by the operation that consumes them.
+pub(crate) fn check_host_abi(
+    ty: &FuncType,
+    params: &[Val],
+    results: &[Val],
+) -> wasmtime::Result<()> {
+    if params.len() != ty.params().len() || results.len() != ty.results().len() {
+        return Err(invariant_trap("host ABI: incorrect buffer length"));
+    }
+    for (value, expected) in params.iter().zip(ty.params()) {
+        let valid = match (value, expected) {
+            (Val::I32(_), ValType::I32)
+            | (Val::I64(_), ValType::I64)
+            | (Val::F32(_), ValType::F32)
+            | (Val::F64(_), ValType::F64)
+            | (Val::V128(_), ValType::V128) => true,
+            (value, ValType::Ref(reference)) => {
+                let nullable = reference.is_nullable();
+                match (value, reference.heap_type()) {
+                    (
+                        Val::FuncRef(value),
+                        HeapType::Func | HeapType::NoFunc | HeapType::ConcreteFunc(_),
+                    ) => nullable || value.is_some(),
+                    (Val::ExternRef(value), HeapType::Extern | HeapType::NoExtern) => {
+                        nullable || value.is_some()
+                    }
+                    (Val::ExnRef(value), HeapType::Exn | HeapType::NoExn) => {
+                        nullable || value.is_some()
+                    }
+                    (
+                        Val::AnyRef(value),
+                        HeapType::Any
+                        | HeapType::Eq
+                        | HeapType::I31
+                        | HeapType::Struct
+                        | HeapType::ConcreteStruct(_)
+                        | HeapType::Array
+                        | HeapType::ConcreteArray(_)
+                        | HeapType::None,
+                    ) => nullable || value.is_some(),
+                    _ => false,
+                }
+            }
+            _ => false,
+        };
+        if !valid {
+            return Err(invariant_trap(
+                "host ABI: incorrect argument representation",
+            ));
+        }
+    }
+    Ok(())
+}
+
+pub(crate) fn abi_arg(params: &[Val], index: usize) -> wasmtime::Result<&Val> {
+    params
+        .get(index)
+        .ok_or_else(|| invariant_trap("host ABI: missing argument"))
+}
+
+pub(crate) fn abi_result(results: &mut [Val], index: usize) -> wasmtime::Result<&mut Val> {
+    results
+        .get_mut(index)
+        .ok_or_else(|| invariant_trap("host ABI: missing result slot"))
+}
+
+/// An invalid host invariant terminates execution without raising a guest exception.
+pub(crate) fn invariant_trap(message: &'static str) -> wasmtime::Error {
+    wasmtime::Error::new(wasmtime::Trap::UnreachableCodeReached).context(message)
+}
+
 pub fn fatal_host_error(message: impl std::fmt::Display) -> wasmtime::Error {
     wasmtime::Error::new(FatalHostError(message.to_string()))
 }
@@ -1152,7 +1412,7 @@ pub(crate) fn throw_host_error(
 /// array callback, a getter under `JSON.stringify`) returns the nested call's
 /// trap, and a program that could catch it there would outlive its fuel,
 /// deadline or stack limit.
-fn ends_the_run(err: &wasmtime::Error) -> bool {
+pub(crate) fn ends_the_run(err: &wasmtime::Error) -> bool {
     err.is::<FatalHostError>()
         || err.is::<wasmtime::Trap>()
         || super::limits::is_memory_exhausted(err)
@@ -1231,18 +1491,36 @@ pub fn register_host_fn(
     + Sync
     + 'static,
 ) -> wasmtime::Result<()> {
+    let call_fuel = call_fuel_of(module);
+    let abi = ty.clone();
     linker.func_new(
         module,
         mangled_name.as_str(),
         ty,
-        move |mut hc, params, results| match body(&mut hc, params, results) {
-            Ok(()) => Ok(()),
-            // Already a thrown exception (pending on the store) — propagate as-is.
-            Err(err) if err.is::<wasmtime::ThrownException>() => Err(err),
-            Err(err) => Err(throw_host_error(&mut hc, err)),
+        move |mut hc, params, results| {
+            check_host_abi(&abi, params, results)?;
+            let outcome =
+                charge_host_fuel(&mut hc, call_fuel).and_then(|()| body(&mut hc, params, results));
+            match outcome {
+                Ok(()) => Ok(()),
+                // Already a thrown exception (pending on the store) — propagate as-is.
+                Err(err) if err.is::<wasmtime::ThrownException>() => Err(err),
+                Err(err) => Err(throw_host_error(&mut hc, err)),
+            }
         },
     )?;
     Ok(())
+}
+
+/// The flat fuel of one call into `module`. `submilli:test` is free: it only
+/// exists under `submilli build test`, and a test's own labels and assertions
+/// are not the program's work.
+fn call_fuel_of(module: &str) -> u64 {
+    if module == crate::stdlib::test::MODULE_NAME {
+        0
+    } else {
+        super::fuel::CALL
+    }
 }
 
 /// Async sibling of [`register_host_fn`]: registers under `mangled_name`.
@@ -1269,14 +1547,22 @@ where
     // `Arc` so each invocation owns a cheap clone the returned future can hold —
     // a bare `&body` reference to the `Fn`'s captured state can't escape it.
     let body = std::sync::Arc::new(body);
+    let call_fuel = call_fuel_of(module);
+    let abi = ty.clone();
     linker.func_new_async(
         module,
         mangled_name.as_str(),
         ty,
         move |mut hc, params, results| {
             let body = std::sync::Arc::clone(&body);
+            let shape = check_host_abi(&abi, params, results);
             Box::new(async move {
-                match body(&mut hc, params, results).await {
+                shape?;
+                let outcome = match charge_host_fuel(&mut hc, call_fuel) {
+                    Ok(()) => body(&mut hc, params, results).await,
+                    Err(err) => Err(err),
+                };
+                match outcome {
                     Ok(()) => Ok(()),
                     Err(err) if err.is::<wasmtime::ThrownException>() => Err(err),
                     Err(err) => Err(throw_host_error(&mut hc, err)),
@@ -1372,18 +1658,70 @@ fn number_module_definitions() -> PackageDeclaration {
 mod tests {
     use super::*;
 
+    #[test]
+    fn host_abi_rejects_bad_shapes_without_numeric_defaults() {
+        let engine = Engine::default();
+        let ty = FuncType::new(&engine, [ValType::F64, ValType::I32], [ValType::I64]);
+        for (params, results) in [
+            (vec![], vec![Val::I64(0)]),
+            (vec![Val::F64(0), Val::I32(0)], vec![]),
+            (vec![Val::I32(0), Val::I32(0)], vec![Val::I64(0)]),
+            (vec![Val::F64(0), Val::F64(0)], vec![Val::I64(0)]),
+        ] {
+            let error = check_host_abi(&ty, &params, &results).unwrap_err();
+            assert!(error.is::<wasmtime::Trap>());
+        }
+        check_host_abi(
+            &ty,
+            &[Val::F64(f64::NAN.to_bits()), Val::I32(1)],
+            &[Val::I64(0)],
+        )
+        .unwrap();
+    }
+
+    #[tokio::test]
+    async fn legacy_number_formatter_preserves_injected_trap() {
+        let (engine, mut store, mut linker) = async_store();
+        register_number_formatter(
+            &mut linker,
+            "injected_formatter",
+            FuncType::new(&engine, [ValType::F64, ValType::F64], [ValType::I32]),
+            |_, _| Err(invariant_trap("injected formatter invariant")),
+        )
+        .unwrap();
+        let name = crate::mangle::host(NUMBER_MODULE_NAME, "injected_formatter");
+        let wasmtime::Extern::Func(function) = linker
+            .get(&mut store, NUMBER_MODULE_NAME, name.as_str())
+            .unwrap()
+        else {
+            panic!("expected formatter");
+        };
+        let error = function
+            .call_async(&mut store, &[Val::F64(0), Val::F64(0)], &mut [Val::I32(0)])
+            .await
+            .unwrap_err();
+        assert_eq!(
+            error.downcast_ref::<wasmtime::Trap>(),
+            Some(&wasmtime::Trap::UnreachableCodeReached)
+        );
+    }
+
     #[tokio::test]
     async fn run_ending_errors_bypass_guest_catch_in_both_wrappers() {
         #[derive(Clone, Copy, PartialEq, Debug)]
         enum Failure {
             Ordinary,
             Fatal,
+            MissingArgument,
+            MissingResult,
             // What a body that re-entered guest code returns when that call trapped.
             NestedTrap(wasmtime::Trap),
         }
         let failures = [
             Failure::Ordinary,
             Failure::Fatal,
+            Failure::MissingArgument,
+            Failure::MissingResult,
             Failure::NestedTrap(wasmtime::Trap::StackOverflow),
             Failure::NestedTrap(wasmtime::Trap::OutOfFuel),
             Failure::NestedTrap(wasmtime::Trap::Interrupt),
@@ -1405,6 +1743,8 @@ mod tests {
                     Failure::NestedTrap(trap) => {
                         wasmtime::Error::new(trap).context("outer host context")
                     }
+                    Failure::MissingArgument => abi_arg(&[], usize::MAX).unwrap_err(),
+                    Failure::MissingResult => abi_result(&mut [], usize::MAX).unwrap_err(),
                     Failure::Ordinary => wasmtime::Error::msg("ordinary operation failure"),
                 };
                 let ty = FuncType::new(&engine, [], []);
@@ -1457,6 +1797,13 @@ mod tests {
                             result.expect_err("fatal failure cannot enter the guest catch handler");
                         assert!(err.is::<FatalHostError>(), "typed cause lost: {err:#}");
                         assert!(format!("{err:#}").contains("invalid state"));
+                    }
+                    Failure::MissingArgument | Failure::MissingResult => {
+                        let err = result.expect_err("ABI invariants bypass guest catch");
+                        assert_eq!(
+                            err.downcast_ref::<wasmtime::Trap>(),
+                            Some(&wasmtime::Trap::UnreachableCodeReached)
+                        );
                     }
                     Failure::NestedTrap(trap) => {
                         let err = result.expect_err("a trap cannot enter the guest catch handler");

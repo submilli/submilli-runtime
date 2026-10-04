@@ -54,7 +54,7 @@ pub struct BasicAuth {
 }
 
 /// Resolves a declared secret to its value. Implemented by the embedder
-/// (env / file / store today). Async so a `store:` source can `await` the
+/// (store or harness). Async so a `store:` source can `await` the
 /// `SecretStore` without blocking the executor.
 #[async_trait::async_trait]
 pub trait SecretResolver: Sync {
@@ -217,9 +217,8 @@ pub async fn interpolate(
 /// that each currently produces a value on this server. Independent of
 /// `auth_proxy:` — the `secrets:` block is the operator's declaration of what
 /// exists in this sandbox, so all of it is checked (whether or not auth_proxy
-/// references it). Point-in-time only: a later disappearance (env var unset,
-/// file deleted) is the runtime's concern, not a reason to reject the
-/// registration. IO lives in the embedder's [`SecretResolver`].
+/// references it). Point-in-time only: a later deletion from the store is the
+/// runtime's concern, not a reason to reject the registration. IO lives in the embedder's [`SecretResolver`].
 pub async fn verify_secrets(
     blueprint: &Blueprint,
     resolver: &dyn SecretResolver,
@@ -339,12 +338,13 @@ mod tests {
         }
     }
 
-    const BP: &str = "name: x\nsecrets:\n  K: { env: K_ENV }\n  Q: { env: Q_ENV }\nauth_proxy:\n  - host: api.example.com\n    headers:\n      Authorization: \"Bearer ${secrets.K}\"\n    query:\n      appid: \"${secrets.Q}\"\n  - host: api.example.com\n    headers:\n      X-Second: \"${secrets.K}\"\n";
+    const BP: &str = "name: x\nsecrets:\n  K: { store: K_ENV }\n  Q: { store: Q_ENV }\nauth_proxy:\n  - host: api.example.com\n    headers:\n      Authorization: \"Bearer ${secrets.K}\"\n    query:\n      appid: \"${secrets.Q}\"\n  - host: api.example.com\n    headers:\n      X-Second: \"${secrets.K}\"\n";
 
     #[tokio::test]
     async fn verify_secrets_checks_all_declared_regardless_of_auth_proxy() {
         // Two declared secrets, no auth_proxy block referencing them.
-        let bp = parse("name: x\nsecrets:\n  A: { env: A_ENV }\n  B: { env: B_ENV }\n").unwrap();
+        let bp =
+            parse("name: x\nsecrets:\n  A: { store: A_ENV }\n  B: { store: B_ENV }\n").unwrap();
         assert!(
             verify_secrets(&bp, &StubResolver { missing: None })
                 .await
@@ -430,7 +430,7 @@ mod tests {
     #[tokio::test]
     async fn bearer_auth_lowers_to_authorization_header() {
         let bp = parse(
-            "name: x\nsecrets:\n  K: { env: K_ENV }\nauth_proxy:\n  - host: h\n    auth:\n      bearer: K\n",
+            "name: x\nsecrets:\n  K: { store: K_ENV }\nauth_proxy:\n  - host: h\n    auth:\n      bearer: K\n",
         )
         .unwrap();
         let inj = resolve_injections(&bp, "h", &StubResolver { missing: None })
@@ -446,7 +446,7 @@ mod tests {
     #[tokio::test]
     async fn basic_auth_base64_encodes_user_and_password() {
         let bp = parse(
-            "name: x\nsecrets:\n  P: { env: P_ENV }\nauth_proxy:\n  - host: h\n    auth:\n      basic:\n        username: alice\n        password: P\n",
+            "name: x\nsecrets:\n  P: { store: P_ENV }\nauth_proxy:\n  - host: h\n    auth:\n      basic:\n        username: alice\n        password: P\n",
         )
         .unwrap();
         let inj = resolve_injections(&bp, "h", &StubResolver { missing: None })
@@ -464,7 +464,7 @@ mod tests {
     fn auth_only_rule_is_valid() {
         assert!(
             parse(
-                "name: x\nsecrets:\n  K: { env: K_ENV }\nauth_proxy:\n  - host: h\n    auth:\n      bearer: K\n"
+                "name: x\nsecrets:\n  K: { store: K_ENV }\nauth_proxy:\n  - host: h\n    auth:\n      bearer: K\n"
             )
             .is_ok()
         );
@@ -473,7 +473,7 @@ mod tests {
     #[test]
     fn auth_with_explicit_authorization_header_is_rejected() {
         let err = parse(
-            "name: x\nsecrets:\n  K: { env: K_ENV }\nauth_proxy:\n  - host: h\n    auth:\n      bearer: K\n    headers:\n      authorization: \"Bearer ${secrets.K}\"\n",
+            "name: x\nsecrets:\n  K: { store: K_ENV }\nauth_proxy:\n  - host: h\n    auth:\n      bearer: K\n    headers:\n      authorization: \"Bearer ${secrets.K}\"\n",
         )
         .unwrap_err();
         assert!(

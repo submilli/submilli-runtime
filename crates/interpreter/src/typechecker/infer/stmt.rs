@@ -168,33 +168,7 @@ impl Inferer<'_> {
                 self.reachable = false;
                 Ok(TypedStmtKind::Continue)
             }
-            StmtKind::Return(value) => {
-                let typed_value = if let Some(v) = value {
-                    let hint = self.current_return.clone();
-                    let (id, value_ty) = self.infer_expr(v, hint.as_ref())?;
-                    if let Some(collected) = self.inferred_returns.as_mut() {
-                        collected.push((value_ty, span));
-                    }
-                    if self.reachable {
-                        self.validate_type_predicate_return(id, span)?;
-                    }
-                    Some(id)
-                } else {
-                    if let Some(ret) = &self.current_return
-                        && !matches!(ret.peel(), Type::Void | Type::Error)
-                    {
-                        self.error(span, format!("expected `return` value of type `{ret}`"));
-                    } else if let Some(collected) = self.inferred_returns.as_mut() {
-                        // A bare `return` is a `void` return: recording it lets
-                        // a value `return` beside it be reported as a conflict.
-                        // Under a declared value type it was reported just above.
-                        collected.push((Type::Void, span));
-                    }
-                    None
-                };
-                self.reachable = false;
-                Ok(TypedStmtKind::Return(typed_value))
-            }
+            StmtKind::Return(value) => self.infer_return(value, span),
             StmtKind::Expr(expr_id) => {
                 // `infer_super_call` takes the flag; cleared here too for a
                 // statement whose inference never reaches it.
@@ -356,6 +330,65 @@ impl Inferer<'_> {
                 })
                 .map_err(crate::typechecker::arena_failure)?,
         ))
+    }
+
+    fn infer_return(
+        &mut self,
+        value: Option<ExprId>,
+        span: Span,
+    ) -> Result<TypedStmtKind, CompilerFailure> {
+        let typed_value = match value {
+            Some(v) => {
+                let hint = self.current_return.clone();
+                let (id, value_ty) = self.infer_expr(v, hint.as_ref())?;
+                if let Some(collected) = self.inferred_returns.as_mut() {
+                    collected.push((value_ty, span));
+                }
+                if self.reachable {
+                    self.validate_type_predicate_return(id, span)?;
+                }
+                Some(id)
+            }
+            None if self
+                .current_return
+                .as_ref()
+                .is_some_and(|ret| matches!(ret.peel(), Type::Unknown)) =>
+            {
+                Some(self.null_return_value(span)?)
+            }
+            None => {
+                if let Some(ret) = &self.current_return
+                    && !matches!(ret.peel(), Type::Void | Type::Error)
+                {
+                    self.error(span, format!("expected `return` value of type `{ret}`"));
+                } else if let Some(collected) = self.inferred_returns.as_mut() {
+                    // A bare `return` is a `void` return: recording it lets
+                    // a value `return` beside it be reported as a conflict.
+                    // Under a declared value type it was reported just above.
+                    collected.push((Type::Void, span));
+                }
+                None
+            }
+        };
+        self.reachable = false;
+        Ok(TypedStmtKind::Return(typed_value))
+    }
+
+    /// The value of a bare `return` under `unknown`, which admits the
+    /// `undefined` it yields: `null` stands in for it.
+    fn null_return_value(&mut self, span: Span) -> Result<ExprId, CompilerFailure> {
+        let null = self
+            .typed_ast
+            .try_push_expr(TypedExpr {
+                kind: TypedExprKind::Null,
+                span,
+                ty: Type::Null,
+            })
+            .map_err(crate::typechecker::arena_failure)?;
+        if let Some(collected) = self.inferred_returns.as_mut() {
+            collected.push((Type::Null, span));
+        }
+        Ok(null)
     }
 
     fn infer_let_statement(

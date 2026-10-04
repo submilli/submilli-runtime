@@ -9,26 +9,26 @@
 //! [`Closure`](crate::runtime::prelude::closure::Closure) handles callbacks.
 //! This file is the iteration and the element math.
 //!
-//! In-place mutators (`push`/`splice`/`sort`/…) never mutate the `$rawArray`
-//! element-wise; they recompute the element list and swap the receiver struct's
-//! mutable field 1 via [`set_backing`]. Callers hold the `$Array` struct, not
-//! the backing, so the change is observed — and the snapshot read up front lets
-//! a callback mutate the source mid-iteration without disturbing us.
+//! Mutators retain the receiver's identity and spare backing capacity. Methods
+//! that call guest code snapshot and root their inputs before callbacks run.
 
 mod install;
+pub(super) mod sort;
 
 pub(crate) use install::declare_types;
 pub use install::{declare, install};
+pub(crate) use sort::merge_sort;
 
-use wasmtime::{ArrayRef, ArrayRefPre, Caller, Rooted, StructRef, StructRefPre, Val};
+use wasmtime::{Caller, StructRef, StructRefPre, Val};
 
 use crate::runtime::StoreData;
+use crate::runtime::array_storage::ArrayStorage;
 use crate::runtime::host::{host_boxed_number_vtable, write_submilli_array_struct};
-use crate::runtime::intrinsic_types::build_intrinsic_types;
+use crate::runtime::intrinsic_types::intrinsic_types;
 use crate::runtime::prelude::closure::Closure;
-use crate::runtime::prelude::iterator::{IterKind, as_struct, make_index_iterator};
+use crate::runtime::prelude::iterator::{IterKind, make_index_iterator};
 use crate::runtime::prelude::keep::{KeptValue, KeptValues, keep_all};
-use crate::runtime::prelude::vtable::dispatch_vtable_slot;
+use crate::runtime::prelude::vtable::{dispatch_vtable_slot, read_string_units};
 
 // ---------------------------------------------------------------------------
 // Marshalling helpers
@@ -39,30 +39,9 @@ use crate::runtime::prelude::vtable::dispatch_vtable_slot;
 pub(super) fn read_array(
     caller: &mut Caller<'_, StoreData>,
     val: &Val,
-    name: &str,
+    _name: &str,
 ) -> wasmtime::Result<Vec<Val>> {
-    let Val::AnyRef(Some(any)) = val else {
-        return Err(wasmtime::Error::msg(format!(
-            "{name} expects an array, got {val:?}"
-        )));
-    };
-    let st = any
-        .as_struct(&mut *caller)?
-        .ok_or_else(|| wasmtime::Error::msg(format!("{name}: expected an $Array struct")))?;
-    let backing = match st.field(&mut *caller, 1)? {
-        Val::AnyRef(Some(arr)) => arr.unwrap_array(&mut *caller)?,
-        other => {
-            return Err(wasmtime::Error::msg(format!(
-                "{name}: malformed $Array backing {other:?}"
-            )));
-        }
-    };
-    let len = backing.len(&mut *caller)?;
-    let mut elements = Vec::with_capacity(len as usize);
-    for i in 0..len {
-        elements.push(backing.get(&mut *caller, i)?);
-    }
-    Ok(elements)
+    crate::runtime::array_storage::ArrayStorage::read(caller, val)?.snapshot(caller)
 }
 
 /// [`read_array`] for a method that runs the program's code while it holds
@@ -86,24 +65,18 @@ fn build_array(caller: &mut Caller<'_, StoreData>, elements: &[Val]) -> wasmtime
     Ok(Val::AnyRef(Some(st.to_anyref())))
 }
 
-/// Replace the receiver `$Array`'s backing (field 1) with a fresh `$rawArray`
-/// built from `elements` — the in-place primitive for every mutator.
-fn set_backing(
+/// Replace the live elements, retaining capacity and clearing removed slots.
+fn replace_elements(
     caller: &mut Caller<'_, StoreData>,
     receiver: &Val,
     elements: &[Val],
 ) -> wasmtime::Result<()> {
-    let raw_ty = build_intrinsic_types(caller.engine())?.raw_array;
-    let pre = ArrayRefPre::new(&mut *caller, raw_ty);
-    let raw = ArrayRef::new_fixed(&mut *caller, &pre, elements)?;
-    let st = as_struct(caller, receiver, "array mutate receiver")?;
-    st.set_field(&mut *caller, 1, Val::AnyRef(Some(raw.to_anyref())))?;
-    Ok(())
+    crate::runtime::array_storage::ArrayStorage::read(caller, receiver)?.replace(caller, elements)
 }
 
 /// Box an `f64` into a `$boxed_number` object (for iterator indices).
 fn box_number(caller: &mut Caller<'_, StoreData>, n: f64) -> wasmtime::Result<Val> {
-    let boxed = build_intrinsic_types(caller.engine())?.boxed_number;
+    let boxed = intrinsic_types(&mut *caller)?.boxed_number.clone();
     let vtable = host_boxed_number_vtable(caller)?;
     let pre = StructRefPre::new(&mut *caller, boxed);
     let st = StructRef::new(&mut *caller, &pre, &[vtable, Val::F64(n.to_bits())])?;
@@ -118,39 +91,12 @@ pub(super) fn is_array(caller: &mut Caller<'_, StoreData>, val: &Val) -> wasmtim
     let Some(st) = any.as_struct(&mut *caller)? else {
         return Ok(false);
     };
-    let array_ty = build_intrinsic_types(caller.engine())?.array;
+    let array_ty = intrinsic_types(&mut *caller)?.array.clone();
     st.matches_ty(&*caller, &array_ty)
 }
 
 fn is_null(v: &Val) -> bool {
     matches!(v, Val::AnyRef(None))
-}
-
-/// Read a `$string` `Val`'s packed UTF-16 backing into code units.
-pub(super) fn read_string_units(
-    caller: &mut Caller<'_, StoreData>,
-    val: &Val,
-) -> wasmtime::Result<Vec<u16>> {
-    let st = as_struct(caller, val, "array element toString result")?;
-    let raw = match st.field(&mut *caller, 1)? {
-        Val::AnyRef(Some(arr)) => arr.unwrap_array(&mut *caller)?,
-        other => {
-            return Err(wasmtime::Error::msg(format!(
-                "array element toString: malformed $string backing {other:?}"
-            )));
-        }
-    };
-    let len = raw.len(&mut *caller)?;
-    let mut units = Vec::with_capacity(len as usize);
-    for i in 0..len {
-        let Val::I32(u) = raw.get(&mut *caller, i)? else {
-            return Err(wasmtime::Error::msg(
-                "array element toString: non-i32 code unit",
-            ));
-        };
-        units.push(u as u16);
-    }
-    Ok(units)
 }
 
 /// The element's `toString()` (vtable slot 0) as code units — `join` and the
@@ -164,7 +110,7 @@ async fn element_to_string(
         return Err(wasmtime::Error::msg("array element toString: null element"));
     }
     let s = dispatch_vtable_slot(caller, &elem, 0, &[]).await?;
-    read_string_units(caller, &s)
+    read_string_units(caller, &s, "array element toString result")
 }
 
 /// An element's text in `join`: `null` joins as the empty string, as in JavaScript
@@ -172,15 +118,6 @@ async fn element_to_string(
 async fn join_text(caller: &mut Caller<'_, StoreData>, elem: Val) -> wasmtime::Result<Vec<u16>> {
     if is_null(&elem) {
         return Ok(Vec::new());
-    }
-    element_to_string(caller, elem).await
-}
-
-/// An element's key in the default `sort` order: `null` sorts as the string
-/// `"null"`, as in JavaScript (`[null, "a"].sort()` is `["a", null]`).
-async fn sort_key(caller: &mut Caller<'_, StoreData>, elem: Val) -> wasmtime::Result<Vec<u16>> {
-    if is_null(&elem) {
-        return Ok("null".encode_utf16().collect());
     }
     element_to_string(caller, elem).await
 }
@@ -270,19 +207,27 @@ fn last_from(x: f64, len: i32) -> Option<i32> {
 // Accessors
 // ---------------------------------------------------------------------------
 
-fn at(elements: &[Val], index: f64) -> Val {
-    match at_index(index, elements.len() as i32) {
-        Some(i) => elements[i],
-        None => Val::null_any_ref(),
+/// `at(index)`: one element read in place, `null` out of range.
+fn at(caller: &mut Caller<'_, StoreData>, receiver: &Val, index: f64) -> wasmtime::Result<Val> {
+    let storage = ArrayStorage::read(caller, receiver)?;
+    match at_index(index, storage.len as i32) {
+        Some(i) => storage.get(caller, i as u32),
+        None => Ok(Val::null_any_ref()),
     }
 }
 
-fn slice(elements: &[Val], start: f64, end: f64) -> Vec<Val> {
-    let len = elements.len() as i32;
+/// `slice(start, end)`: only the kept range is read.
+fn slice(
+    caller: &mut Caller<'_, StoreData>,
+    receiver: &Val,
+    start: f64,
+    end: f64,
+) -> wasmtime::Result<Vec<Val>> {
+    let storage = ArrayStorage::read(caller, receiver)?;
+    let len = storage.len as i32;
     let si = norm_clamp(start, len);
-    let ei = norm_clamp(end, len);
-    let count = (ei - si).max(0) as usize;
-    elements[si as usize..si as usize + count].to_vec()
+    let count = (norm_clamp(end, len) - si).max(0);
+    storage.range(caller, si as u32, count as u32)
 }
 
 /// `concat(...others: T[][])`: this array's elements followed by every element
@@ -372,33 +317,17 @@ async fn join(
 }
 
 // ---------------------------------------------------------------------------
-// Mutators (recompute + swap the receiver backing)
+// Mutators (snapshot transforms preserve receiver identity)
 // ---------------------------------------------------------------------------
 
-fn push(
-    caller: &mut Caller<'_, StoreData>,
-    receiver: &Val,
-    mut elements: Vec<Val>,
-    elem: Val,
-) -> wasmtime::Result<f64> {
-    elements.push(elem);
-    let n = elements.len() as f64;
-    set_backing(caller, receiver, &elements)?;
-    Ok(n)
+fn push(caller: &mut Caller<'_, StoreData>, receiver: &Val, elem: Val) -> wasmtime::Result<f64> {
+    crate::runtime::array_storage::ArrayStorage::read(caller, receiver)?.push(caller, elem)
 }
 
-fn pop(
-    caller: &mut Caller<'_, StoreData>,
-    receiver: &Val,
-    mut elements: Vec<Val>,
-) -> wasmtime::Result<Val> {
-    match elements.pop() {
-        Some(last) => {
-            set_backing(caller, receiver, &elements)?;
-            Ok(last)
-        }
-        None => Ok(Val::null_any_ref()),
-    }
+/// `pop()`: the last element, removed in place; `null` when empty.
+fn pop(caller: &mut Caller<'_, StoreData>, receiver: &Val) -> wasmtime::Result<Val> {
+    let popped = ArrayStorage::read(caller, receiver)?.pop(caller)?;
+    Ok(popped.unwrap_or_else(Val::null_any_ref))
 }
 
 fn shift(
@@ -410,7 +339,7 @@ fn shift(
         return Ok(Val::null_any_ref());
     }
     let first = elements.remove(0);
-    set_backing(caller, receiver, &elements)?;
+    replace_elements(caller, receiver, &elements)?;
     Ok(first)
 }
 
@@ -422,7 +351,7 @@ fn unshift(
 ) -> wasmtime::Result<f64> {
     items.extend(elements);
     let n = items.len() as f64;
-    set_backing(caller, receiver, &items)?;
+    replace_elements(caller, receiver, &items)?;
     Ok(n)
 }
 
@@ -432,7 +361,7 @@ fn reverse(
     mut elements: Vec<Val>,
 ) -> wasmtime::Result<Val> {
     elements.reverse();
-    set_backing(caller, receiver, &elements)?;
+    replace_elements(caller, receiver, &elements)?;
     Ok(*receiver)
 }
 
@@ -450,7 +379,7 @@ fn fill(
     for slot in elements.iter_mut().take(ei as usize).skip(si as usize) {
         *slot = value;
     }
-    set_backing(caller, receiver, &elements)?;
+    replace_elements(caller, receiver, &elements)?;
     Ok(*receiver)
 }
 
@@ -476,7 +405,7 @@ fn copy_within(
     for (k, v) in src.into_iter().enumerate() {
         elements[ti as usize + k] = v;
     }
-    set_backing(caller, receiver, &elements)?;
+    replace_elements(caller, receiver, &elements)?;
     Ok(*receiver)
 }
 
@@ -516,41 +445,8 @@ fn splice(
     // Built while the receiver still holds the removed elements: once they are
     // swapped out nothing else does, and an allocation may collect.
     let removed = build_array(caller, &removed)?;
-    set_backing(caller, receiver, &result)?;
+    replace_elements(caller, receiver, &result)?;
     Ok(removed)
-}
-
-/// Insertion sort that re-enters the guest comparator (or compares element
-/// `toString()`s for the default order). Matches the Wasm body's adjacent-swap
-/// shape, so it is stable.
-async fn sort_elems(
-    caller: &mut Caller<'_, StoreData>,
-    elements: &mut [Val],
-    cmp: Option<&Closure>,
-) -> wasmtime::Result<()> {
-    let n = elements.len();
-    let mut i = 1;
-    while i < n {
-        let mut j = i;
-        while j > 0 {
-            let a = elements[j - 1];
-            let b = elements[j];
-            let greater = if let Some(c) = cmp {
-                c.compare(caller, a, b).await? > 0.0
-            } else {
-                let sa = sort_key(caller, a).await?;
-                let sb = sort_key(caller, b).await?;
-                sa > sb
-            };
-            if !greater {
-                break;
-            }
-            elements.swap(j - 1, j);
-            j -= 1;
-        }
-        i += 1;
-    }
-    Ok(())
 }
 
 async fn sort(
@@ -560,7 +456,7 @@ async fn sort(
     cmp: Option<Closure>,
 ) -> wasmtime::Result<Val> {
     sort_elems(caller, &mut elements, cmp.as_ref()).await?;
-    set_backing(caller, receiver, &elements)?;
+    replace_elements(caller, receiver, &elements)?;
     Ok(*receiver)
 }
 
@@ -580,6 +476,19 @@ async fn to_sorted(
 ) -> wasmtime::Result<Vec<Val>> {
     sort_elems(caller, &mut elements, cmp.as_ref()).await?;
     Ok(elements)
+}
+
+/// Stable sort by the program's comparator, or by element `toString()` for the
+/// default order.
+async fn sort_elems(
+    caller: &mut Caller<'_, StoreData>,
+    elements: &mut Vec<Val>,
+    cmp: Option<&Closure>,
+) -> wasmtime::Result<()> {
+    match cmp {
+        Some(cmp) => merge_sort(caller, elements, cmp, |_, elem| Ok(elem)).await,
+        None => sort::sort_by_string(caller, elements).await,
+    }
 }
 
 /// `null` when `index` is out of range — [`install`] raises the catchable
@@ -767,19 +676,36 @@ async fn every(
     Ok(true)
 }
 
-/// Flatten nested arrays up to `depth` levels into `out`. No callback, so this
-/// is plain (synchronous) recursion.
+/// Flatten without native recursion; each frame retains its unvisited siblings.
+/// Bound nesting independently of the requested flattening depth.
 fn flat_into(
     caller: &mut Caller<'_, StoreData>,
     elements: Vec<Val>,
     depth: i32,
     out: &mut Vec<Val>,
 ) -> wasmtime::Result<()> {
-    for elem in elements {
+    let mut frames = vec![(elements.into_iter(), depth)];
+    while let Some((elements, depth)) = frames.last_mut() {
+        let Some(elem) = elements.next() else {
+            frames.pop();
+            continue;
+        };
+        let depth = *depth;
         if depth > 0 && is_array(caller, &elem)? {
+            if frames.len() >= crate::runtime::MAX_VTABLE_WALK_DEPTH as usize {
+                return Err(crate::runtime::host::range_error(format!(
+                    "Array#flat exceeds {} levels of nesting; flatten fewer levels",
+                    crate::runtime::MAX_VTABLE_WALK_DEPTH,
+                )));
+            }
             let sub = read_array(caller, &elem, "Array#flat")?;
-            flat_into(caller, sub, depth - 1, out)?;
+            frames
+                .try_reserve(1)
+                .map_err(crate::runtime::host::fatal_host_error)?;
+            frames.push((sub.into_iter(), depth - 1));
         } else {
+            out.try_reserve(1)
+                .map_err(crate::runtime::host::fatal_host_error)?;
             out.push(elem);
         }
     }
@@ -819,8 +745,9 @@ fn array_step(
     payload: &Val,
     pos: i32,
 ) -> wasmtime::Result<Option<(Val, Val)>> {
-    let backing = array_backing(caller, payload)?;
-    if pos >= backing.len(&mut *caller)? as i32 {
+    let storage = crate::runtime::array_storage::ArrayStorage::read(caller, payload)?;
+    let backing = storage.backing;
+    if pos < 0 || pos as u32 >= storage.len {
         return Ok(None);
     }
     let elem = backing.get(&mut *caller, pos as u32)?;
@@ -838,20 +765,6 @@ fn keys(caller: &mut Caller<'_, StoreData>, array: &Val) -> wasmtime::Result<Val
 
 fn entries(caller: &mut Caller<'_, StoreData>, array: &Val) -> wasmtime::Result<Val> {
     make_index_iterator(caller, *array, IterKind::Entries, array_step)
-}
-
-/// The `$rawArray` backing of an `$Array` (field 1).
-fn array_backing(
-    caller: &mut Caller<'_, StoreData>,
-    array: &Val,
-) -> wasmtime::Result<Rooted<ArrayRef>> {
-    let st = as_struct(caller, array, "array iterator receiver")?;
-    match st.field(&mut *caller, 1)? {
-        Val::AnyRef(Some(arr)) => arr.unwrap_array(&mut *caller),
-        other => Err(wasmtime::Error::msg(format!(
-            "array iterator: malformed $Array backing {other:?}"
-        ))),
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -882,7 +795,7 @@ pub(super) async fn from(
         Some(c) => Some(ElementCallback::new(caller, c, None)?),
         None => None,
     };
-    let intr = build_intrinsic_types(caller.engine())?;
+    let intr = intrinsic_types(&mut *caller)?;
     let mut out = KeptValues::with_capacity(caller, 0)?;
 
     if is_a(caller, src, &intr.array)? {
@@ -891,8 +804,9 @@ pub(super) async fn from(
         // mid-iteration is observed — snapshotting would drop those elements.
         let mut pos: u32 = 0;
         loop {
-            let backing = array_backing(caller, src)?;
-            if pos >= backing.len(&mut *caller)? {
+            let storage = crate::runtime::array_storage::ArrayStorage::read(caller, src)?;
+            let backing = storage.backing;
+            if pos >= storage.len {
                 break;
             }
             out.reserve(caller, 1)?;

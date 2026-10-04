@@ -34,7 +34,10 @@ getrandom = "0.2"
 dialoguer = "0.11"
 tempfile = { workspace = true }
 
+rustls.workspace = true
+
 [dev-dependencies]
+rcgen.workspace = true
 submilli-server = { path = "../submilli-server" }
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "net"] }
 axum = { workspace = true }

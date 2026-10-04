@@ -38,10 +38,10 @@ when explicitly granted; package-only access is a policy design, not an
 unconditional claim about every blueprint. Generated code cannot read secret
 values through `submilli:secrets`; package code or an auth proxy handles them.
 
-Public links: [introduction](https://submilli.ai/docs/introduction),
+Public links: [why Submilli](https://submilli.ai/docs/why),
 [quickstart](https://submilli.ai/docs/quickstart),
-[how it works](https://submilli.ai/docs/how-submilli-works),
-[why Submilli](https://submilli.ai/blog/why-submilli/).
+[blueprints](https://submilli.ai/docs/blueprints),
+[the launch post](https://submilli.ai/blog/why-submilli/).
 Do not invent SDK packages, hosted services, or website routes. Some book
 chapters may still be placeholders; installed help and declarations are useful
 offline sources of truth.

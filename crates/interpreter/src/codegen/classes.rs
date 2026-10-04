@@ -38,9 +38,10 @@ use crate::{MangledName, TypedAst, TypedClassDecl, TypedTypeDecl};
 pub(crate) const UNIVERSAL_STUB_COUNT: usize = 4;
 /// `$ClassVTable` field index of the nominal-identity parent link.
 pub(crate) const VTABLE_PARENT_SLOT: u32 = UNIVERSAL_STUB_COUNT as u32;
-/// Class-vtable fields preceding method slots: the universal funcrefs plus the
-/// parent link.
-pub(crate) const VTABLE_METHOD_SLOT_BASE: u32 = VTABLE_PARENT_SLOT + 1;
+/// Whether JSON uses the runtime's default property serializer.
+pub(crate) const VTABLE_DEFAULT_JSON_SLOT: u32 = VTABLE_PARENT_SLOT + 1;
+/// Universal funcrefs, parent link and default-serializer marker precede methods.
+pub(crate) const VTABLE_METHOD_SLOT_BASE: u32 = VTABLE_DEFAULT_JSON_SLOT + 1;
 
 /// One method slot in a class vtable. `name` is the method name; `owner` is the
 /// most-derived class that supplies the body (the class itself for an override,
@@ -661,6 +662,10 @@ impl ClassPlan {
             fieldtype_ref(intrinsics.equals_fn),
             fieldtype_ref(intrinsics.hash_fn),
             fieldtype_ref_null(intrinsics.class_vtable),
+            FieldType {
+                element_type: StorageType::Val(ValType::I32),
+                mutable: false,
+            },
         ];
         for slot in &class.methods {
             fields.push(fieldtype_ref(slot.sig_idx));
@@ -687,6 +692,14 @@ impl ClassPlan {
             FieldType {
                 mutable: true,
                 ..fieldtype_ref(intrinsics.object_fields)
+            },
+            FieldType {
+                element_type: StorageType::Val(ValType::Ref(RefType::ANYREF)),
+                mutable: true,
+            },
+            FieldType {
+                element_type: StorageType::Val(ValType::I64),
+                mutable: true,
             },
         ];
         Ok(substruct(fields, Some(supertype)))
@@ -877,6 +890,9 @@ impl ClassPlan {
                 Instruction::RefFunc(class.equals_func_idx),
                 Instruction::RefFunc(class.hash_func_idx),
                 parent_link,
+                Instruction::I32Const(i32::from(
+                    !class.methods.iter().any(|slot| slot.name == "toJson"),
+                )),
             ];
             for slot in &class.methods {
                 let func = symbols
@@ -1030,13 +1046,41 @@ impl ClassPlan {
                 ctx.symbols,
             )?);
             let field_count = wasm_u32(class.fields.len())?;
-            code.function(&emit_class_equals_body(field_count, intrinsics));
+            let identity_error = ctx
+                .symbols
+                .class_struct_type_idx(&crate::mangle::prelude("Error"))
+                .is_some_and(|error_type| {
+                    ctx.symbols.ref_fits_slot(
+                        RefType {
+                            nullable: false,
+                            heap_type: HeapType::Concrete(class.struct_type_idx),
+                        },
+                        RefType {
+                            nullable: false,
+                            heap_type: HeapType::Concrete(error_type),
+                        },
+                    )
+                });
+            if identity_error {
+                let mut equals = Function::new([]);
+                equals.instruction(&Instruction::LocalGet(0));
+                equals.instruction(&Instruction::LocalGet(1));
+                equals.instruction(&Instruction::RefEq);
+                equals.instruction(&Instruction::End);
+                code.function(&equals);
+            } else {
+                code.function(&emit_class_equals_body(field_count, intrinsics));
+            }
             let to_json = match user_method_thunk("toJson")? {
                 Some(thunk) => thunk,
                 None => emit_class_to_json_body(ctx.symbols)?,
             };
             code.function(&to_json);
-            code.function(&emit_class_hash_body(field_count, intrinsics));
+            if identity_error {
+                code.function(&emit_error_hash_body(ctx.symbols, intrinsics)?);
+            } else {
+                code.function(&emit_class_hash_body(field_count, intrinsics));
+            }
         }
         Ok(())
     }
@@ -1090,7 +1134,7 @@ impl ClassPlan {
                 object_ref_null,
             ));
         }
-        let mut emitter = FunctionEmitter::new(ctx, &wasm_params);
+        let mut emitter = FunctionEmitter::new(ctx, &wasm_params)?;
         // The owner supplies the body — a local ancestor's, or an imported
         // one's, both recorded under the owner's mangled name.
         let method_func = ctx
@@ -1144,7 +1188,7 @@ impl ClassPlan {
             }
             _ => {}
         }
-        Ok(emitter.build())
+        emitter.build()
     }
 
     /// Method body: bind `this` (`local.get 0 ; ref.cast (ref $Foo)` — the vtable
@@ -1166,7 +1210,9 @@ impl ClassPlan {
         method: &OwnMethod,
         ctx: &crate::codegen::CodegenCtx<'_>,
     ) -> Result<(Function, Vec<(u64, crate::Span)>), crate::compiler_error::CompilerFailure> {
-        use crate::codegen::function_emitter::{FunctionEmitter, ReturnTarget, stmt};
+        use crate::codegen::function_emitter::{
+            FunctionEmitter, ReturnTarget, emit_body_end, stmt,
+        };
 
         let object_idx = ctx
             .symbols
@@ -1186,19 +1232,19 @@ impl ClassPlan {
             ref_to(object_idx),
         )];
         wasm_params.extend(slot_params(ctx, &method.params, &abi.params)?);
-        let mut emitter = FunctionEmitter::new(ctx, &wasm_params);
+        let mut emitter = FunctionEmitter::new(ctx, &wasm_params)?;
         let param_slots = rebind_erased_params(&mut emitter, ctx, &method.params, &abi.params)?;
         // Param prologue boxes captured-mutated method params.
         emitter.emit_boxed_param_prologue(&method.params, &param_slots)?;
 
         // `this` = ref.cast of the self param to the concrete class.
-        let this_slot = emitter.add_anonymous_local(ref_to(class.struct_type_idx));
+        let this_slot = emitter.add_anonymous_local(ref_to(class.struct_type_idx))?;
         emitter.instruction(Instruction::LocalGet(0));
         emitter.instruction(Instruction::RefCastNonNull(HeapType::Concrete(
             class.struct_type_idx,
         )));
         emitter.instruction(Instruction::LocalSet(this_slot));
-        emitter.set_this_local(this_slot);
+        emitter.set_this_local(this_slot)?;
         super::field_guards::bind_receiver(&mut emitter, ctx, this_slot, &class.mangled)?;
 
         if !method.return_type.is_void() {
@@ -1208,11 +1254,8 @@ impl ClassPlan {
             }));
         }
         stmt::emit_statement(&mut emitter, ctx, method.body)?;
-        if !method.return_type.is_void() {
-            // Keep the function statically total even when control flow can't be proven to terminate.
-            emitter.instruction(Instruction::Unreachable);
-        }
-        Ok(emitter.build_with_lines())
+        emit_body_end(&mut emitter, ctx, &method.return_type)?;
+        emitter.build_with_lines()
     }
 
     /// Entry constructor (`new Foo(...)`): `struct.new $Foo` (header globals +
@@ -1248,10 +1291,10 @@ impl ClassPlan {
                 ref_to(intr.object_fields),
             ));
         }
-        let mut emitter = FunctionEmitter::new(ctx, &wasm_params);
+        let mut emitter = FunctionEmitter::new(ctx, &wasm_params)?;
 
-        let this_slot = emitter.add_anonymous_local(ref_to(class.struct_type_idx));
-        emitter.set_this_local(this_slot);
+        let this_slot = emitter.add_anonymous_local(ref_to(class.struct_type_idx))?;
+        emitter.set_this_local(this_slot)?;
 
         // struct.new $Foo: vtable + field-names + object-fields payload. The
         // payload holds the data fields (slots `0..N_fields`, written by the init
@@ -1293,6 +1336,8 @@ impl ClassPlan {
             array_type_index: intrinsics.object_fields,
             array_size: payload_len,
         });
+        emitter.instruction(Instruction::RefNull(HeapType::ANY));
+        emitter.instruction(Instruction::I64Const(0));
         emitter.instruction(Instruction::StructNew(class.struct_type_idx));
         emitter.instruction(Instruction::LocalSet(this_slot));
 
@@ -1351,6 +1396,7 @@ impl ClassPlan {
                 if let Some(metadata) = &method.argument_metadata {
                     super::call_arguments::wrap(&mut emitter, ctx, metadata)?;
                 }
+                emitter.instruction(Instruction::I64Const(0));
                 emitter.instruction(Instruction::StructNew(closure_struct));
                 emitter.instruction(Instruction::ArraySet(intrinsics.object_fields));
             }
@@ -1368,7 +1414,7 @@ impl ClassPlan {
         // Implicit `return this`. (Explicit `return;` inside a constructor is not
         // supported in this slice — the fixtures don't use it.)
         emitter.instruction(Instruction::LocalGet(this_slot));
-        Ok(emitter.build())
+        emitter.build()
     }
 
     /// Constructor init fn: self-first ABI `((ref $Object), params...) -> ()` that
@@ -1397,19 +1443,19 @@ impl ClassPlan {
         )];
         let ctor_slots = ctor_slot_types(ctx, &class.mangled)?;
         wasm_params.extend(slot_params(ctx, &class.ctor_params, &ctor_slots)?);
-        let mut emitter = FunctionEmitter::new(ctx, &wasm_params);
+        let mut emitter = FunctionEmitter::new(ctx, &wasm_params)?;
         let param_slots = rebind_erased_params(&mut emitter, ctx, &class.ctor_params, &ctor_slots)?;
         // Box captured-mutated ctor params.
         emitter.emit_boxed_param_prologue(&class.ctor_params, &param_slots)?;
 
         // `this` = ref.cast of the self param to the concrete class.
-        let this_slot = emitter.add_anonymous_local(ref_to(class.struct_type_idx));
+        let this_slot = emitter.add_anonymous_local(ref_to(class.struct_type_idx))?;
         emitter.instruction(Instruction::LocalGet(0));
         emitter.instruction(Instruction::RefCastNonNull(HeapType::Concrete(
             class.struct_type_idx,
         )));
         emitter.instruction(Instruction::LocalSet(this_slot));
-        emitter.set_this_local(this_slot);
+        emitter.set_this_local(this_slot)?;
         super::field_guards::bind_receiver(&mut emitter, ctx, this_slot, &class.mangled)?;
         emitter.set_ctor_class(class.mangled.clone());
 
@@ -1460,7 +1506,7 @@ impl ClassPlan {
                 &class.mangled,
             )?;
         }
-        Ok(emitter.build_with_lines())
+        emitter.build_with_lines()
     }
 
     /// `(export name, func index)` pairs for every class function a cross-package
@@ -1613,7 +1659,10 @@ pub(crate) fn method_vtable_slot(slot: usize) -> Result<u32, CompilerFailure> {
 
 /// Guard payload slots: one guard per named slot plus its receiver marker, for
 /// each class level from this one to the root.
-fn guard_slot_count(inheritance_depth: u32, named_len: u32) -> Result<u32, CompilerFailure> {
+pub(super) fn guard_slot_count(
+    inheritance_depth: u32,
+    named_len: u32,
+) -> Result<u32, CompilerFailure> {
     inheritance_depth
         .checked_add(1)
         .zip(named_len.checked_add(1))
@@ -1937,7 +1986,7 @@ fn rebind_erased_params(
             param_slots.push(param_local);
             continue;
         }
-        let shadow = emitter.add_anonymous_local(own_vt);
+        let shadow = emitter.add_anonymous_local(own_vt)?;
         emitter.instruction(Instruction::LocalGet(param_local));
         crate::codegen::cast_check::emit_checked_parameter_cast_on_stack(
             emitter,
@@ -1946,7 +1995,7 @@ fn rebind_erased_params(
             &p.ty,
         )?;
         emitter.instruction(Instruction::LocalSet(shadow));
-        emitter.rebind_in_innermost_scope(&p.name.name, shadow, own_vt);
+        emitter.rebind_in_innermost_scope(&p.name.name, shadow, own_vt)?;
         param_slots.push(shadow);
     }
     Ok(param_slots)
@@ -1957,6 +2006,25 @@ fn stub_body() -> Function {
     f.instruction(&Instruction::Unreachable);
     f.instruction(&Instruction::End);
     f
+}
+
+fn emit_error_hash_body(
+    symbols: &SymbolTable,
+    intrinsics: IntrinsicTypeIndices,
+) -> Result<Function, CompilerFailure> {
+    let vtable = symbols
+        .class_vtable_global_idx(&crate::mangle::prelude("Error"))
+        .ok_or_else(|| internal_failure("Error vtable is not imported for its subclass"))?;
+    let mut body = Function::new([]);
+    body.instruction(&Instruction::LocalGet(0));
+    body.instruction(&Instruction::GlobalGet(vtable));
+    body.instruction(&Instruction::StructGet {
+        struct_type_index: intrinsics.vtable,
+        field_index: 3,
+    });
+    body.instruction(&Instruction::CallRef(intrinsics.hash_fn));
+    body.instruction(&Instruction::End);
+    Ok(body)
 }
 
 /// The class's `equals` vtable body: nominal exact-class guard + structural
@@ -2117,7 +2185,7 @@ fn emit_universal_slot_thunk(
             },
             ctx.symbols.value_type(&crate::Type::Unknown)?,
         )],
-    );
+    )?;
     emitter.instruction(Instruction::LocalGet(0));
     emitter.instruction(Instruction::Call(method_func_idx));
     super::cast_check::emit_operation_cast_on_stack(
@@ -2126,7 +2194,7 @@ fn emit_universal_slot_thunk(
         &crate::Type::Unknown,
         &crate::Type::String,
     )?;
-    Ok(emitter.build())
+    emitter.build()
 }
 
 fn emit_class_to_string_body(

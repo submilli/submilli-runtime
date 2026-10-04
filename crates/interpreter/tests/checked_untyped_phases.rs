@@ -277,9 +277,19 @@ fn inference_fits_production_worker_stack() {
                         "function main(): number {{ return {}; }}",
                         vec!["1"; 32].join(" + ")
                     );
+                    let logical_chain = format!(
+                        "function main(): boolean {{ return {}; }}",
+                        vec!["true"; 32].join(" && ")
+                    );
+                    let equality_chain = format!(
+                        "function main(): boolean {{ return {}; }}",
+                        vec!["true"; 32].join(" === ")
+                    );
                     for source in [
                         nested_finally,
                         &binary_chain,
+                        &logical_chain,
+                        &equality_chain,
                         "function main(): number { return 42; }",
                     ] {
                         let compiled = interpreter::compile::compile_script_checked(

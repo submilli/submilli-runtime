@@ -1,10 +1,10 @@
-//! Scoped accounting for native working buffers and bounded host work.
+//! Scoped accounting for native working buffers.
 use crate::runtime::StoreData;
 use std::sync::{
     Arc,
     atomic::{AtomicU64, Ordering},
 };
-use wasmtime::{Caller, Result, Trap, bail};
+use wasmtime::{Caller, Result, bail};
 
 pub(super) struct Budget {
     counter: Arc<AtomicU64>,
@@ -20,24 +20,14 @@ impl Budget {
         }
     }
     pub fn charge(&mut self, caller: &mut Caller<'_, StoreData>, bytes: usize) -> Result<()> {
-        // An estimate of working space taken before the work starts, so a
-        // refusal is an error the program can catch and act on (a smaller
-        // file), not the run reaching its memory cap.
+        // Admit native buffers before allocation; exhausting tenant memory
+        // terminates the run, while maxReadSize remains an ordinary error.
         caller
             .data()
             .tenant_limits
-            .charge_host_bytes(bytes as u64)
-            .map_err(|refused| wasmtime::Error::msg(format!("code: {refused}")))?;
+            .charge_host_bytes(bytes as u64)?;
         self.charged += bytes as u64;
         Ok(())
-    }
-    pub fn work(caller: &mut Caller<'_, StoreData>, units: usize) -> Result<()> {
-        let remaining = caller.get_fuel()?;
-        let Some(remaining) = remaining.checked_sub(units as u64) else {
-            caller.set_fuel(0)?;
-            return Err(Trap::OutOfFuel.into());
-        };
-        caller.set_fuel(remaining)
     }
     pub fn check_size(&self, bytes: usize) -> Result<()> {
         if bytes > self.max_bytes {

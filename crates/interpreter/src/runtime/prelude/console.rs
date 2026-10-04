@@ -10,9 +10,10 @@ use std::io::Write;
 use wasmtime::{Caller, FuncType, HeapType, Linker, RefType, Val, ValType};
 
 use crate::runtime::StoreData;
-use crate::runtime::host::{intrinsic_array_type, register_host_fn_async};
+use crate::runtime::fuel;
+use crate::runtime::host::{fatal_host_error, intrinsic_array_type, register_host_fn_async};
 use crate::runtime::intrinsic_types::build_intrinsic_types;
-use crate::runtime::prelude::vtable::{dispatch_vtable_slot, read_units_val};
+use crate::runtime::prelude::vtable::{dispatch_vtable_slot, read_string_units};
 use crate::runtime::prelude::{MODULE_NAME, declare_method};
 use crate::{MangledName, PackageDeclaration, Param, Type};
 
@@ -39,17 +40,57 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         false,
         |caller, params, _results| {
             Box::pin(async move {
-                let mut units = to_string_units(caller, &params[0]).await?;
-                for elem in super::array::read_array(caller, &params[1], "console.log")? {
+                let [first, rest] = params else {
+                    return Err(fatal_host_error("console.log: expected two ABI arguments"));
+                };
+                let mut units = to_string_units(caller, first).await?;
+                for elem in super::array::read_array(caller, rest, "console.log")? {
                     units.push(u16::from(b' '));
                     units.extend(to_string_units(caller, &elem).await?);
                 }
+                fuel::charge(&mut *caller, fuel::SCAN, units.len() as u64)?;
                 let line = String::from_utf16_lossy(&units);
-                writeln!(caller.data_mut().console, "{line}")?;
-                Ok(())
+                let mut output = CountedWriter {
+                    sink: &mut caller.data_mut().console,
+                    written: 0,
+                };
+                let result = writeln!(output, "{line}");
+                let written = output.written;
+                fuel::settle(&mut *caller, fuel::IO, written)?;
+                fuel::settle_result(caller, |caller| {
+                    result.map_err(|error| {
+                        let error = match error.kind() {
+                            std::io::ErrorKind::FileTooLarge => {
+                                crate::runtime::host::range_error(error.to_string())
+                            }
+                            std::io::ErrorKind::OutOfMemory => {
+                                crate::runtime::host::fatal_host_error(error)
+                            }
+                            _ => fatal_host_error(error),
+                        };
+                        crate::runtime::host::throw_host_error(caller, error)
+                    })
+                })
             })
         },
     )
+}
+
+struct CountedWriter<'a> {
+    sink: &'a mut Box<dyn Write + Send>,
+    written: u64,
+}
+
+impl Write for CountedWriter<'_> {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        let written = self.sink.write(bytes)?;
+        self.written = self.written.saturating_add(written as u64);
+        Ok(written)
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.sink.flush()
+    }
 }
 
 /// A logged value's display units: its vtable `toString` slot's result.
@@ -60,7 +101,7 @@ async fn to_string_units(
     match val {
         Val::AnyRef(Some(_)) => {
             let s = dispatch_vtable_slot(caller, val, 0, &[]).await?;
-            read_units_val(caller, &s, "console.log")
+            read_string_units(caller, &s, "console.log")
         }
         // `console.log` takes `unknown`, so a nullable value holding `null` reaches here.
         // It has no vtable to dispatch through; it prints as `null`, as in JavaScript.

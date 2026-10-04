@@ -127,7 +127,7 @@ fn add(args: &AddArgs) -> Result<String> {
         if !blueprint.secrets.contains_key(name) {
             bail!(
                 "references secret '{name}', not declared in {}.\n  \
-                 Declare it first, e.g.: submilli blueprint secret add {name} --env <ENV_VAR>",
+                 Declare it first, e.g.: submilli blueprint secret add {name} --store <KEY>",
                 path.display()
             );
         }
@@ -320,7 +320,7 @@ mod tests {
 
     #[test]
     fn bearer_writes_auth_bearer() {
-        let (_tmp, path) = temp_blueprint("name: t\nsecrets:\n  GH: { env: GH }\n");
+        let (_tmp, path) = temp_blueprint("name: t\nsecrets:\n  GH: { store: GH }\n");
         let mut a = add_args("api.github.com", &path);
         a.bearer = Some("GH".into());
         add(&a).unwrap();
@@ -331,7 +331,7 @@ mod tests {
 
     #[test]
     fn basic_writes_auth_basic() {
-        let (_tmp, path) = temp_blueprint("name: t\nsecrets:\n  P: { env: P }\n");
+        let (_tmp, path) = temp_blueprint("name: t\nsecrets:\n  P: { store: P }\n");
         let mut a = add_args("api.example.com", &path);
         a.basic_username = Some("alice".into());
         a.basic_password = Some("P".into());
@@ -348,7 +348,7 @@ mod tests {
 
     #[test]
     fn header_and_query_injection() {
-        let (_tmp, path) = temp_blueprint("name: t\nsecrets:\n  K: { env: K }\n");
+        let (_tmp, path) = temp_blueprint("name: t\nsecrets:\n  K: { store: K }\n");
         let mut a = add_args("api.example.com", &path);
         a.headers = vec!["X-Api-Key=${secrets.K}".into()];
         a.query = vec!["appid=${secrets.K}".into()];
@@ -369,7 +369,7 @@ mod tests {
 
     #[test]
     fn duplicate_host_is_rejected() {
-        let (_tmp, path) = temp_blueprint("name: t\nsecrets:\n  GH: { env: GH }\n");
+        let (_tmp, path) = temp_blueprint("name: t\nsecrets:\n  GH: { store: GH }\n");
         let mut a = add_args("api.github.com", &path);
         a.bearer = Some("GH".into());
         add(&a).unwrap();
@@ -381,7 +381,7 @@ mod tests {
 
     #[test]
     fn list_prints_rules() {
-        let (_tmp, path) = temp_blueprint("name: t\nsecrets:\n  GH: { env: GH }\n");
+        let (_tmp, path) = temp_blueprint("name: t\nsecrets:\n  GH: { store: GH }\n");
         let mut a = add_args("api.github.com", &path);
         a.bearer = Some("GH".into());
         add(&a).unwrap();
@@ -395,7 +395,7 @@ mod tests {
 
     #[test]
     fn remove_drops_the_rule() {
-        let (_tmp, path) = temp_blueprint("name: t\nsecrets:\n  GH: { env: GH }\n");
+        let (_tmp, path) = temp_blueprint("name: t\nsecrets:\n  GH: { store: GH }\n");
         let mut a = add_args("api.github.com", &path);
         a.bearer = Some("GH".into());
         add(&a).unwrap();

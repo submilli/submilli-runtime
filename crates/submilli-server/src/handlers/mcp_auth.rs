@@ -16,7 +16,7 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 use submilli_blueprint::{Blueprint, McpAuth, McpServer};
-use submilli_shared::EnvFileSecretResolver;
+use submilli_shared::BlueprintSecretResolver;
 
 use crate::app::AppState;
 use crate::handlers::execute::blueprint_miss_message;
@@ -50,8 +50,21 @@ fn store(state: &AppState) -> Result<&Arc<dyn SecretStore>, Failure> {
     })
 }
 
+fn blueprint_store_error(error: crate::blueprint::StoreError) -> Failure {
+    err(
+        StatusCode::INTERNAL_SERVER_ERROR,
+        "internal_error",
+        crate::blueprint::store_failure_message(error).into(),
+    )
+}
+
 async fn get_blueprint(state: &AppState, name: &str) -> Result<Blueprint, Failure> {
-    match state.blueprints().get(name).await {
+    match state
+        .blueprints()
+        .get(name)
+        .await
+        .map_err(blueprint_store_error)?
+    {
         Some(blueprint) => Ok(blueprint),
         // A name held out of the parsed set is still registered — reporting it as
         // unregistered here would send an operator looking for a blueprint sitting
@@ -59,13 +72,18 @@ async fn get_blueprint(state: &AppState, name: &str) -> Result<Blueprint, Failur
         None => Err(err(
             StatusCode::NOT_FOUND,
             "unknown_blueprint",
-            blueprint_miss_message(state, name).await,
+            blueprint_miss_message(state, name)
+                .await
+                .map_err(blueprint_store_error)?,
         )),
     }
 }
 
 /// Look up a declared OAuth server, rejecting unknown or non-OAuth ones.
-fn oauth_server<'a>(blueprint: &'a Blueprint, server: &str) -> Result<&'a McpServer, Failure> {
+fn oauth_server<'a>(
+    blueprint: &'a Blueprint,
+    server: &str,
+) -> Result<(&'a McpServer, &'a McpAuth), Failure> {
     let Some(entry) = blueprint.mcp.get(server) else {
         return Err(err(
             StatusCode::NOT_FOUND,
@@ -76,14 +94,14 @@ fn oauth_server<'a>(blueprint: &'a Blueprint, server: &str) -> Result<&'a McpSer
             ),
         ));
     };
-    if server_kind(entry) != ServerKind::OAuth {
+    let Some(auth @ McpAuth::Oauth2 { .. }) = entry.auth.as_ref() else {
         return Err(err(
             StatusCode::BAD_REQUEST,
             "not_oauth",
             format!("mcp server '{server}' does not use `auth: oauth2`"),
         ));
-    }
-    Ok(entry)
+    };
+    Ok((entry, auth))
 }
 
 /// The resolved OAuth client config the CLI needs to run the flow. `${secrets.X}`
@@ -109,7 +127,7 @@ pub struct AuthConfig {
 async fn resolve_value(
     value: &str,
     blueprint: &Blueprint,
-    resolver: &EnvFileSecretResolver,
+    resolver: &BlueprintSecretResolver,
     server: &str,
 ) -> Result<String, Failure> {
     submilli_blueprint::interpolate(value, blueprint, resolver)
@@ -142,18 +160,15 @@ pub async fn auth_config(
     axum::extract::Query(query): axum::extract::Query<AuthConfigQuery>,
 ) -> Result<Json<AuthConfig>, Failure> {
     let bp = get_blueprint(&state, &blueprint).await?;
-    let entry = oauth_server(&bp, &server)?;
+    let (entry, auth) = oauth_server(&bp, &server)?;
     let McpAuth::Oauth2 {
         client_id,
         authorization_endpoint,
         token_endpoint,
         scopes,
-    } = entry
-        .auth
-        .as_ref()
-        .expect("oauth_server checked the variant");
+    } = auth;
 
-    let resolver = EnvFileSecretResolver::new(state.secret_store().cloned());
+    let resolver = BlueprintSecretResolver::new(state.secret_store().cloned());
     let mut client_id = match client_id {
         Some(v) => Some(resolve_value(v, &bp, &resolver, &server).await?),
         None => None,
@@ -246,14 +261,15 @@ pub async fn oauth_exchange(
     Path((blueprint, server)): Path<(String, String)>,
     Json(req): Json<ExchangeRequest>,
 ) -> Result<Json<AuthStateResponse>, Failure> {
+    crate::audit::annotate(serde_json::json!({"blueprint": blueprint, "server": server}));
     let bp = get_blueprint(&state, &blueprint).await?;
-    let entry = oauth_server(&bp, &server)?;
+    let (entry, auth) = oauth_server(&bp, &server)?;
     let store = store(&state)?;
     let http = state.oauth_http();
 
     // Resolve the token endpoint: blueprint pin, else discover.
-    let resolver = EnvFileSecretResolver::new(state.secret_store().cloned());
-    let McpAuth::Oauth2 { token_endpoint, .. } = entry.auth.as_ref().expect("checked");
+    let resolver = BlueprintSecretResolver::new(state.secret_store().cloned());
+    let McpAuth::Oauth2 { token_endpoint, .. } = auth;
     let token_endpoint = match token_endpoint {
         Some(v) => resolve_value(v, &bp, &resolver, &server).await?,
         None => {
@@ -380,6 +396,7 @@ pub async fn put_refresh_token(
     Path((blueprint, server)): Path<(String, String)>,
     Json(req): Json<CredentialRequest>,
 ) -> Result<Json<AuthStateResponse>, Failure> {
+    crate::audit::annotate(serde_json::json!({"blueprint": blueprint, "server": server}));
     let bp = get_blueprint(&state, &blueprint).await?;
     oauth_server(&bp, &server)?;
     let store = store(&state)?;
@@ -426,6 +443,7 @@ pub async fn delete_refresh_token(
     State(state): State<AppState>,
     Path((blueprint, server)): Path<(String, String)>,
 ) -> Result<Json<AuthStateResponse>, Failure> {
+    crate::audit::annotate(serde_json::json!({"blueprint": blueprint, "server": server}));
     let bp = get_blueprint(&state, &blueprint).await?;
     oauth_server(&bp, &server)?;
     let store = store(&state)?;
@@ -515,4 +533,21 @@ pub async fn auth_status(
         blueprint,
         servers,
     }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn oauth_server_requires_an_oauth_declaration() {
+        for headers in ["{}", "{ Authorization: static-token }"] {
+            let blueprint = submilli_blueprint::parse(&format!(
+                "name: test\nmcp:\n  service:\n    transport: streamable_http\n    url: https://example.com/mcp\n    headers: {headers}\n"
+            )).unwrap();
+            let (status, body) = oauth_server(&blueprint, "service").unwrap_err();
+            assert_eq!(status, StatusCode::BAD_REQUEST);
+            assert_eq!(body.error, "not_oauth");
+        }
+    }
 }

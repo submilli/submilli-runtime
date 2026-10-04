@@ -2,9 +2,11 @@
 //! friends) — prelude top-level values, in scope like `isNaN`; the richer URL
 //! toolkit stays in the explicit-import `submilli:url` stdlib.
 
+use crate::runtime::host::{abi_arg, abi_result};
 use wasmtime::{FuncType, HeapType, Linker, RefType, Val, ValType};
 
 use crate::runtime::StoreData;
+use crate::runtime::fuel;
 use crate::runtime::host::{
     intrinsic_string_type, read_string_arg, register_host_fn, write_submilli_string_struct,
 };
@@ -48,55 +50,56 @@ pub fn encode_uri_js(input: &str) -> String {
     encode(input, |c| is_component_unreserved(c) || is_uri_reserved(c))
 }
 
-fn hex_byte(bytes: &[u8], at: usize) -> Result<u8, String> {
+fn hex_byte(bytes: &[u8]) -> Result<u8, String> {
     let malformed = || "URI malformed".to_string();
-    if at + 2 >= bytes.len() || bytes[at] != b'%' {
+    let [b'%', hi, lo, ..] = bytes else {
         return Err(malformed());
-    }
-    let hi = (bytes[at + 1] as char).to_digit(16).ok_or_else(malformed)?;
-    let lo = (bytes[at + 2] as char).to_digit(16).ok_or_else(malformed)?;
+    };
+    let hi = char::from(*hi).to_digit(16).ok_or_else(malformed)?;
+    let lo = char::from(*lo).to_digit(16).ok_or_else(malformed)?;
     Ok((hi * 16 + lo) as u8)
 }
 
-fn decode(input: &str, preserve_reserved: bool) -> Result<String, String> {
-    let bytes = input.as_bytes();
+fn decode(mut input: &str, preserve_reserved: bool) -> Result<String, String> {
+    let malformed = || "URI malformed".to_string();
     let mut out = String::with_capacity(input.len());
-    let mut i = 0;
-    while i < bytes.len() {
-        if bytes[i] != b'%' {
-            // Safe: walking char boundaries of valid UTF-8.
-            let c = input[i..].chars().next().expect("in-bounds char");
+    while let Some(c) = input.chars().next() {
+        if c != '%' {
             out.push(c);
-            i += c.len_utf8();
+            input = &input[c.len_utf8()..];
             continue;
         }
-        let first = hex_byte(bytes, i)?;
+        let first = hex_byte(input.as_bytes())?;
         let len = match first {
             0x00..=0x7F => 1,
             0xC0..=0xDF => 2,
             0xE0..=0xEF => 3,
             0xF0..=0xF7 => 4,
-            _ => return Err("URI malformed".to_string()),
+            _ => return Err(malformed()),
         };
-        let mut decoded = Vec::with_capacity(len);
-        decoded.push(first);
-        for k in 1..len {
-            let b = hex_byte(bytes, i + 3 * k)?;
-            if !(0x80..=0xBF).contains(&b) {
-                return Err("URI malformed".to_string());
+        let encoded = input.get(..3 * len).ok_or_else(malformed)?;
+        let mut decoded = [0u8; 4];
+        for (index, (chunk, slot)) in encoded
+            .as_bytes()
+            .as_chunks::<3>()
+            .0
+            .iter()
+            .zip(decoded.iter_mut())
+            .enumerate()
+        {
+            let byte = hex_byte(chunk)?;
+            if index != 0 && !(0x80..=0xBF).contains(&byte) {
+                return Err(malformed());
             }
-            decoded.push(b);
+            *slot = byte;
         }
-        let text = std::str::from_utf8(&decoded).map_err(|_| "URI malformed".to_string())?;
-        let c = text.chars().next().expect("non-empty decode");
-        if preserve_reserved && is_uri_reserved(c) {
-            // `decodeURI` leaves reserved characters percent-encoded so the
-            // result is still a parseable URI.
-            out.push_str(&input[i..i + 3 * len]);
+        let text = std::str::from_utf8(&decoded[..len]).map_err(|_| malformed())?;
+        if preserve_reserved && len == 1 && is_uri_reserved(char::from(first)) {
+            out.push_str(encoded);
         } else {
             out.push_str(text);
         }
-        i += 3 * len;
+        input = &input[encoded.len()..];
     }
     Ok(out)
 }
@@ -131,10 +134,11 @@ pub(crate) fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
             ty.clone(),
             /* deterministic = */ true,
             move |caller, params, results| -> wasmtime::Result<()> {
-                let s = read_string_arg(&mut *caller, &params[0], name)?;
+                let s = read_string_arg(&mut *caller, abi_arg(params, 0)?, name)?;
+                fuel::charge(&mut *caller, fuel::SCAN, s.len() as u64)?;
                 let mapped = op(&s).map_err(wasmtime::Error::msg)?;
                 let st = write_submilli_string_struct(caller, &mapped)?;
-                results[0] = Val::AnyRef(Some(st.to_anyref()));
+                *abi_result(results, 0)? = Val::AnyRef(Some(st.to_anyref()));
                 Ok(())
             },
         )?;

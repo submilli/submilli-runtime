@@ -66,7 +66,12 @@ pub(crate) fn uncaught_error(
     let Some(exn) = store.take_pending_exception() else {
         return err;
     };
-    let Some(text) = read_thrown_error_text(store, exn) else {
+    // An already-thrown error may follow a completed effect. Diagnostic
+    // decoding must preserve its message even after settlement takes fuel to zero.
+    let text = super::fuel::settle_result(store, |store| Ok(read_thrown_error_text(store, exn)))
+        .ok()
+        .flatten();
+    let Some(text) = text else {
         return err;
     };
     // The engine captures the throw-site backtrace into the exception and
@@ -242,7 +247,7 @@ fn read_string_value(store: &mut Store<StoreData>, value: Val) -> Option<String>
 /// Rust `String`, returned verbatim. Errors with a `main`-specific message if the
 /// ref slot isn't the expected non-null `$string`.
 fn read_main_string(store: &mut Store<StoreData>, out: &[Val]) -> wasmtime::Result<String> {
-    let s_struct = match &out[0] {
+    let s_struct = match super::host::abi_arg(out, 0)? {
         Val::AnyRef(Some(any)) => any.unwrap_struct(&mut *store)?,
         Val::AnyRef(None) => {
             return Err(wasmtime::Error::msg(

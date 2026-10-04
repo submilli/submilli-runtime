@@ -10,7 +10,10 @@ export interface Input {
 
 let actingAs: string | null = null;
 
-/** Choose whom later calls act as. */
+/**
+ * Choose whom later calls act as.
+ * @param user User to act as.
+ */
 export function actAs(user: string | null): void {
   actingAs = user;
 }
@@ -18,6 +21,8 @@ export function actAs(user: string | null): void {
 /**
  * Posts a message, as the chosen user when one is set. A getter of `input`
  * can call `actAs` between the check and the second read of `actingAs`.
+ * @param input Message and where to send it.
+ * @returns The delivery receipt.
  * @capability test.com/impersonate {}
  */
 export function post(input: Input): string {
@@ -28,6 +33,8 @@ export function post(input: Input): string {
 
 /**
  * Posts a message, reading the chosen user once.
+ * @param input Message and where to send it.
+ * @returns The delivery receipt.
  * @capability test.com/impersonate {}
  */
 export function postOnce(input: Input): string {

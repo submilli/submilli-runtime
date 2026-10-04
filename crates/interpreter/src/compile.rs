@@ -585,10 +585,11 @@ fn compile_package_sources(
     }
     let (required_capabilities, capability_warnings) =
         compile_capabilities::derive_package_requirements(
-            package_name,
+            &declaration,
             &ta,
             &stdlib_defs,
             dependencies,
+            transitive,
         )
         .map_err(|error| error.with_prior_diagnostics(&diagnostics))?;
     diagnostics.extend(capability_warnings);

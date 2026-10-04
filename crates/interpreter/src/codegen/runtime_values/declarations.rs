@@ -87,13 +87,15 @@ pub(crate) fn global_types(ast: &TypedAst) -> BTreeMap<MangledName, Type> {
     globals
 }
 
-pub(crate) fn lower_declaration(source: &PackageDeclaration) -> PackageDeclaration {
+pub(crate) fn lower_declaration(
+    source: &PackageDeclaration,
+) -> Result<PackageDeclaration, crate::compiler_error::CompilerFailure> {
     let mut lowered = source.clone();
     for value in lowered.values.values_mut() {
         match &mut value.kind {
             crate::ValueKind::Function { params, ret, .. } => {
                 if let Some(signature) = source.runtime_functions.get(&value.mangled_name) {
-                    set_params(params, &signature.params);
+                    set_params(params, &signature.params)?;
                     *ret = signature.ret.clone();
                 }
             }
@@ -124,7 +126,7 @@ pub(crate) fn lower_declaration(source: &PackageDeclaration) -> PackageDeclarati
                 .runtime_functions
                 .get(&crate::mangle::extend(&symbol.mangled_name, name))
             {
-                set_params(&mut method.params, &signature.params);
+                set_params(&mut method.params, &signature.params)?;
                 method.ret = signature.ret.clone();
             }
         }
@@ -133,7 +135,7 @@ pub(crate) fn lower_declaration(source: &PackageDeclaration) -> PackageDeclarati
                 .runtime_functions
                 .get(&crate::mangle::static_member(&symbol.mangled_name, name))
             {
-                set_params(&mut method.params, &signature.params);
+                set_params(&mut method.params, &signature.params)?;
                 method.ret = signature.ret.clone();
             }
         }
@@ -141,7 +143,7 @@ pub(crate) fn lower_declaration(source: &PackageDeclaration) -> PackageDeclarati
             .runtime_functions
             .get(&crate::mangle::extend(&symbol.mangled_name, "constructor"))
         {
-            set_params(constructor, &signature.params);
+            set_params(constructor, &signature.params)?;
         }
         for accessor in accessors {
             match accessor {
@@ -158,17 +160,37 @@ pub(crate) fn lower_declaration(source: &PackageDeclaration) -> PackageDeclarati
                         &symbol.mangled_name,
                         &format!("set {name}"),
                     )) {
-                        set_params(std::slice::from_mut(param), &signature.params);
+                        set_params(std::slice::from_mut(param), &signature.params)?;
                     }
                 }
             }
         }
     }
-    lowered
+    Ok(lowered)
 }
 
-fn set_params(params: &mut [crate::Param], types: &[Type]) {
+fn set_params(
+    params: &mut [crate::Param],
+    types: &[Type],
+) -> Result<(), crate::compiler_error::CompilerFailure> {
+    if params.len() != types.len() {
+        return Err(crate::codegen::internal_failure(
+            "runtime declaration parameter count mismatch",
+        ));
+    }
     for (param, ty) in params.iter_mut().zip(types) {
         param.ty = ty.clone();
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn runtime_parameter_count_mismatch_is_not_silently_truncated() {
+        crate::codegen::invariant_tests::assert_internal(
+            super::set_params(&mut [], &[crate::Type::Number]).unwrap_err(),
+        );
+        super::set_params(&mut [], &[]).unwrap();
     }
 }

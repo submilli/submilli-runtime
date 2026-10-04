@@ -51,14 +51,22 @@ export interface PreparedPageMove {
     parentId: string;
 }
 
-/** Validate a page creation input, its parent included, before any request is sent. */
+/**
+ * Validate a page creation input, its parent included, before any request is sent.
+ *
+ * @param input Page creation input to validate.
+ */
 export function validateCreatePageInput(input: CreatePageInput): void {
     // Called for its validation; `createPage` resolves the ID again when it creates the page.
     parentIdFrom(input.parent.type, input.parent.id);
     validatePageFields(input);
 }
 
-/** Validate the properties, content, icon, and cover of a page creation before any request is sent. */
+/**
+ * Validate the properties, content, icon, and cover of a page creation before any request is sent.
+ *
+ * @param input Page creation input whose properties, content, icon, and cover are validated.
+ */
 export function validatePageFields(input: CreatePageInput): void {
     if (input.properties !== null) propertyObject(input.properties);
     if (input.content !== null) contentJson(input.content);
@@ -66,7 +74,13 @@ export function validatePageFields(input: CreatePageInput): void {
     if (input.cover !== null) fileReferenceJson(input.cover);
 }
 
-/** Create a page from a validated input under its resolved parent. */
+/**
+ * Create a page from a validated input under its resolved parent.
+ *
+ * @param parentId Resolved parent ID from `parentIdFrom`; "workspace" for a workspace parent.
+ * @param input Validated page creation input.
+ * @returns The created page.
+ */
 export function createPage(parentId: string, input: CreatePageInput): NotionPage {
     const fields: string[] = [parentJson(input.parent.type, parentId)];
     if (input.properties !== null) fields.push(mapFieldJson("properties", propertyObject(input.properties)));
@@ -76,7 +90,13 @@ export function createPage(parentId: string, input: CreatePageInput): NotionPage
     return pageFrom(notionPost("/pages", objectJson(fields)).json());
 }
 
-/** Update page properties, icon, cover, or apply a template. */
+/**
+ * Update page properties, icon, cover, or apply a template.
+ *
+ * @param pageId Page ID or Notion URL.
+ * @param input Fields to change; at least one must be set.
+ * @returns The updated page.
+ */
 export function updatePage(pageId: string, input: UpdatePageInput): NotionPage {
     const fields: string[] = [];
     if (input.properties !== null) fields.push(mapFieldJson("properties", propertyObject(input.properties)));
@@ -93,14 +113,28 @@ export function updatePage(pageId: string, input: UpdatePageInput): NotionPage {
     return pageFrom(notionPatch("/pages/" + pathId(pageId), objectJson(fields)).json());
 }
 
-/** Retrieve a page as enhanced Markdown. */
+/**
+ * Retrieve a page as enhanced Markdown.
+ *
+ * @param pageId Page ID or Notion URL.
+ * @param includeTranscript Whether to include meeting transcripts in the Markdown; defaults to false.
+ * @returns The page content as enhanced Markdown with truncation state.
+ */
 export function readPageMarkdown(pageId: string, includeTranscript: boolean = false): PageMarkdown {
     const query = new Map<string, string>();
     if (includeTranscript) query.set("include_transcript", "true");
     return markdownFrom(notionGet("/pages/" + pathId(pageId) + "/markdown", query).json());
 }
 
-/** Replace matching enhanced Markdown content. */
+/**
+ * Replace matching enhanced Markdown content.
+ *
+ * @param pageId Page ID or Notion URL.
+ * @param oldText Existing Markdown text to find; must not be empty.
+ * @param newText Replacement Markdown text.
+ * @param replaceAll True replaces every match; `null` or false replaces one.
+ * @returns The updated page Markdown.
+ */
 export function updatePageMarkdown(
     pageId: string,
     oldText: string,
@@ -115,27 +149,52 @@ export function updatePageMarkdown(
     return markdownFrom(notionPatch("/pages/" + pathId(pageId) + "/markdown", body).json());
 }
 
-/** Replace all page content with enhanced Markdown. */
+/**
+ * Replace all page content with enhanced Markdown.
+ *
+ * @param pageId Page ID or Notion URL.
+ * @param markdown New enhanced Markdown content for the whole page.
+ * @param allowDeletingContent Whether child pages or databases may be deleted by the replacement; defaults to false.
+ * @returns The page Markdown after replacement.
+ */
 export function replacePageMarkdown(pageId: string, markdown: string, allowDeletingContent: boolean = false): PageMarkdown {
     const body = "{\"type\":\"replace_content\",\"replace_content\":{\"new_str\":" + JSON.stringify(markdown)
         + ",\"allow_deleting_content\":" + JSON.stringify(allowDeletingContent) + "}}";
     return markdownFrom(notionPatch("/pages/" + pathId(pageId) + "/markdown", body).json());
 }
 
-/** Append enhanced Markdown to the end of a page. */
+/**
+ * Append enhanced Markdown to the end of a page.
+ *
+ * @param pageId Page ID or Notion URL.
+ * @param markdown Enhanced Markdown to insert at the end of the page.
+ * @returns The page Markdown after the append.
+ */
 export function appendPageMarkdown(pageId: string, markdown: string): PageMarkdown {
     const body = "{\"type\":\"insert_content\",\"insert_content\":{\"content\":" + JSON.stringify(markdown)
         + ",\"position\":{\"type\":\"end\"}}}";
     return markdownFrom(notionPatch("/pages/" + pathId(pageId) + "/markdown", body).json());
 }
 
-/** Move a page under its resolved parent page, data source, or the workspace. */
+/**
+ * Move a page under its resolved parent page, data source, or the workspace.
+ *
+ * @param pageId Page ID or Notion URL of the page to move.
+ * @param parentType Destination parent type: "page_id", "data_source_id", or "workspace".
+ * @param parentId Resolved destination parent ID; unused for a workspace parent.
+ * @returns The moved page.
+ */
 export function movePage(pageId: string, parentType: string, parentId: string): NotionPage {
     const body = objectJson([parentJson(parentType, parentId)]);
     return pageFrom(notionPost("/pages/" + pathId(pageId) + "/move", body).json());
 }
 
-/** Move prepared pages sequentially, stopping on the first failure with completed IDs. */
+/**
+ * Move prepared pages sequentially, stopping on the first failure with completed IDs.
+ *
+ * @param moves Prepared moves, applied in order.
+ * @returns The moved pages in the same order.
+ */
 export function movePages(moves: PreparedPageMove[]): NotionPage[] {
     const pages: NotionPage[] = [];
     for (let index = 0; index < moves.length; index += 1) {
@@ -152,18 +211,34 @@ export function movePages(moves: PreparedPageMove[]): NotionPage[] {
     return pages;
 }
 
-/** Retrieve one page property item, including paginated property values. */
+/**
+ * Retrieve one page property item, including paginated property values.
+ *
+ * @param pageId Page ID or Notion URL.
+ * @param propertyId Notion property ID or name; must not be empty.
+ * @returns Raw Notion property item, or a paginated list of items for multi-value properties.
+ */
 export function getPageProperty(pageId: string, propertyId: string): unknown {
     if (propertyId.length === 0) throw validationError("invalid_property_id", "propertyId cannot be empty");
     return notionGet("/pages/" + pathId(pageId) + "/properties/" + encodeComponent(propertyId)).json();
 }
 
-/** Move a page to trash. */
+/**
+ * Move a page to trash.
+ *
+ * @param pageId Page ID or Notion URL.
+ * @returns The page as returned after trashing, with `inTrash` true.
+ */
 export function trashPage(pageId: string): NotionPage {
     return pageFrom(notionPatch("/pages/" + pathId(pageId), { in_trash: true }).json());
 }
 
-/** Restore a page from trash. */
+/**
+ * Restore a page from trash.
+ *
+ * @param pageId Page ID or Notion URL.
+ * @returns The restored page with `inTrash` false.
+ */
 export function restorePage(pageId: string): NotionPage {
     return pageFrom(notionPatch("/pages/" + pathId(pageId), { in_trash: false }).json());
 }
@@ -171,6 +246,10 @@ export function restorePage(pageId: string): NotionPage {
 /**
  * Resolve the ID of a page parent from its type and reference.
  * A workspace parent has no ID and resolves to "workspace"; any other parent requires a reference.
+ *
+ * @param parentType Parent type: "page_id", "data_source_id", or "workspace".
+ * @param parentRef Parent ID, URL, or reference; may be `null` only for a workspace parent.
+ * @returns The validated parent ID, or "workspace".
  */
 export function parentIdFrom(parentType: string, parentRef: string | null): string {
     if (parentType === "workspace") return "workspace";

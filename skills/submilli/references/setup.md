@@ -96,7 +96,7 @@ programs but not change blueprints. Compose reads the token from `.env`; the
 Helm chart generates both tokens into the Secret `<release>-auth`.
 
 Still run one server per application and make sure only that application can
-reach it. Read https://submilli.ai/docs/deploying/ before advising on
+reach it. Read https://submilli.ai/docs/server/deploy-on-linux before advising on
 production; the mechanics that matter most:
 
 | The application runs | Server setup | How only the application reaches it |
@@ -105,11 +105,12 @@ production; the mechanics that matter most:
 | In containers on one host | The published `compose.yaml` (`curl -fsSLO https://raw.githubusercontent.com/submilli/submilli-runtime/main/compose.yaml`) | Port published as `127.0.0.1:8128:8128`, never `8128:8128` (Docker bypasses host firewalls such as ufw); the app joins the `submilli-net` network and calls `http://submilli:8128` |
 | On Kubernetes | `helm install submilli oci://ghcr.io/submilli/charts/submilli -f values.yaml` | Default-deny NetworkPolicy; list the app's pods in `networkPolicy.allowFrom`, and the app calls `http://submilli.<namespace>.svc:8128` |
 
-In every setup, blueprints come from source control through the seed
-directory (`blueprint_seed_dir`; in the chart, the `blueprints:` values map),
-which the server reconciles on every start. Only seeded blueprints may use
-`env:` or `file:` secrets; over the API they are refused with
-`forbidden_secret_source`, so runtime-registered blueprints use `store:`.
+In every setup, apply blueprints from source control with
+`submilli server blueprint apply` using an admin token. Populate `store:`
+secrets first with `submilli server secret put`, or use `harness:` for
+session-scoped credentials. The chart enables the encrypted store by default
+and generates its encryption-key Secret; users supply application secret values
+through the CLI.
 
 Mistakes to avoid:
 
@@ -118,9 +119,8 @@ Mistakes to avoid:
 - In `allowFrom`, a `namespaceSelector` and `podSelector` in the same list
   item mean both must match; as separate items either one admits, which is
   far wider. Run `helm test submilli` after every install and upgrade: it
-  fails when the cluster doesn't enforce NetworkPolicy and when a blueprint's
-  `file:` secret path doesn't match what the chart's `secrets:` map mounts
-  (`/etc/submilli/secrets/<name>/<key>`).
+  verifies API access, executes a probe program, and fails when the cluster
+  does not enforce NetworkPolicy.
 - The Compose store key file must be mode `0444`: the server runs as uid
   65532, and on a Linux host a `0600` file makes it refuse to start with
   `Permission denied`. Docker Desktop hides this, so it works locally first.
@@ -150,8 +150,8 @@ variable beats file). A blueprint can't raise them.
 | `max_execution_time` (s) | off | Run ends `timeout exceeded`; counts from `main`, checked once a second, doesn't interrupt a pending HTTP/MCP/model/Git call |
 | `max_execution_fuel` | 10¹² | Run ends `fuel exhausted`; deterministic, a backstop |
 | `max_execution_stack` (KiB, ≤ 16384) | 512 | Run ends `call stack exhausted` |
-| `max_execution_llm_tokens` / `max_llm_tokens` | 1M / 20M | Catchable `RangeError` before the prompt is billed |
-| `max_session_state_memory` (MB) | 1024 | Catchable `RangeError` |
+| `max_execution_llm_tokens` / `max_llm_tokens` | 1M / 20M | Catchable `QuotaExceededError` before the prompt is billed |
+| `max_session_state_memory` (MB) | 1024 | Catchable `QuotaExceededError` |
 
 Without `max_execution_time` a runaway loop runs until its fuel is gone, far
 longer than any caller waits: set it a few seconds under the caller's own

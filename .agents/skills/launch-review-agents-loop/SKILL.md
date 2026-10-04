@@ -5,21 +5,26 @@ description: Run iterative clean-code, correctness, and edge-case reviews of the
 
 # Launch review agents loop
 
-Extracted from the review workflow in `fix-issue`. Review the proposed change
-until a complete round produces no new confirmed findings. Issue IDs are optional;
-use the user's requirements and intended behavior when there is no issue.
+Review the proposed change until a complete round reports no confirmed findings
+above low priority. Fix confirmed in-scope findings, but a round with only low
+priority findings does not require another round after those fixes. Issue IDs
+are optional; use the user's requirements and intended behavior when absent.
 
 ## Scope and prepare
 
 - Resolve the active checkout with `git rev-parse --show-toplevel` and read its
-  `AGENTS.md` and `CLAUDE.md`. Stay in that checkout, including linked worktrees.
+  `AGENTS.md`. Stay in that checkout, including linked worktrees.
 - Record branch, status, staged and unstaged changes. Preserve unrelated work
   and existing staging. Identify the intended PR base and review the whole
   proposed diff: committed changes since its merge base, plus intended staged,
   unstaged, and untracked files. Do not assume `git diff` alone covers a PR.
   If the base cannot be determined, resolve it before claiming complete coverage.
-- Run relevant focused checks before review. Reserve full required suites for
-  final verification; scale checks to the changed files as `CLAUDE.md` requires.
+- Reuse existing focused verification evidence; do not run tests merely to start
+  a review round. Review by reading code and existing results by default. A
+  narrowly scoped test or scratch reproduction is allowed to resolve a concrete
+  correctness question or edge case. Never run full workspace, fixture, package,
+  or conformance sweeps in this workflow; full verification belongs to `open-pr`
+  after rebasing onto main (or the selected PR base).
 - For TypeScript syntax, typing, or runtime changes, provide comparisons with
   the installed/project-pinned TypeScript compiler under strict options and its
   emitted JavaScript under Node. Record versions, options, commands, acceptance,
@@ -64,9 +69,13 @@ Give every reviewer a self-contained packet containing:
   source-triggered reproducers from injected internal-state failures.
 - Explicit read-only scope: no source edits, staging, stashing, checkout,
   restore, rebase, or Git-ref changes. Scratch reproductions belong outside
-  tracked source. Specify allowed focused checks; prohibit repeated full
-  workspace or full fixture sweeps. Check-generated build artifacts are allowed.
-- Request ranked findings with file:line, evidence, expected versus actual
+  tracked source. Instruct reviewers not to run tests by default. Allow only
+  narrow checks for a specific hypothesis or edge case, with the reason and
+  result reported. Prohibit all full-suite sweeps, including the first run.
+  Reuse supplied results instead of repeating checks. Check-generated build
+  artifacts are allowed.
+- Request ranked findings with priority (P0 critical, P1 high, P2 medium, P3 low),
+  file:line, evidence, expected versus actual
   behavior for bugs, and introduced versus pre-existing classification.
   Clean-code findings require a concrete rubric violation, not a reproduction.
   An empty findings list is valid.
@@ -74,7 +83,7 @@ Give every reviewer a self-contained packet containing:
 ### No-panic review
 
 For execution-path changes, apply the canonical
-[no-panic policy](../../../CLAUDE.md#no-panic-execution-paths) to new/changed code
+[no-panic policy](../../../AGENTS.md#no-panic-execution-paths) to new/changed code
 and directly affected callers and mechanisms. This includes compilation, setup,
 Rust host operations, diagnostics and cleanup, not only guest execution.
 
@@ -184,7 +193,9 @@ The parent agent owns fixes and triage; reviewers remain read-only.
    excluded. If a fix already exists on `main`, report the evidence and resolve
    integration within existing authorization rather than duplicating it.
 3. Fix confirmed findings within the requested scope, including sibling
-   instances of the same cause. Run focused regression checks. Resolve routine
+   instances of the same cause. Run only regression checks for the affected
+   areas, including directly affected callers; do not rerun unrelated tests or
+   full suites after fixes. Reuse still-valid results. Resolve routine
    implementation choices autonomously; ask about unresolved product semantics.
 4. Track confirmed unrelated defects or separate design work outside the patch.
    For existing no-panic violations, follow the mandatory SUB-633 workflow above.
@@ -200,10 +211,16 @@ The parent agent owns fixes and triage; reviewers remain read-only.
    external writes require separate authorization. It never authorizes closing
    issues. Without access or authorization, report the finding and filing
    limitation in the handoff.
-5. Carry every disposition and the latest delta into another complete round
-   after fixes. Stop successfully only when a complete round has no new
-   confirmed findings and no unresolved in-scope findings. Filing an issue is
-   not a substitute for fixing a defect within the PR's scope.
+5. Evaluate the complete round across all three roles after triage. If it had
+   any confirmed P0/P1/P2 findings in scope, fix them and run another complete
+   round, carrying forward dispositions and the latest delta. If it had no
+   confirmed findings or only P3 (low priority) findings, stop after fixing the
+   in-scope findings and checking those fixes directly; do not launch another
+   round merely to get an empty findings list. Run only affected checks as needed.
+   Earlier unresolved in-scope findings still block completion. Classify priority
+   by impact, not the desire to stop; required behavior and no-panic violations
+   must not be downgraded to cosmetic nits. Filing an issue is not a substitute
+   for fixing a defect within the PR's scope.
 
 After about ten rounds without convergence, or when a required decision or check
 is blocked, stop and report remaining findings and reasons. Do not claim a clean
@@ -212,19 +229,33 @@ explicitly tracked in the handoff without expanding the patch's scope.
 
 ## Verify and hand off
 
-After convergence, run the owning repository's required checks from `CLAUDE.md`
-once on the final proposed diff. For documentation-only changes, verify relevant
+After convergence, confirm that affected areas have focused verification for the
+final changes, running only missing or invalidated checks. Do not run a full suite
+as a review exit gate. Defer full verification to `open-pr` after its rebase; a
+clean review does not claim that the later PR verification has passed.
+For documentation-only changes, verify relevant
 links, paths, and instructions; run documentation-site checks only when that site
 is affected. Do not run Rust suites for documentation-only changes.
 
-If final checks expose a regression, fix it, repeat the full review round, and
-rerun affected checks. Subsequent changes to the proposed diff require a new
-review round and affected verification before creating or updating the PR.
+If final checks expose a regression, fix it, repeat the review round, and rerun
+affected checks. New implementation changes or conflict resolutions after review
+require renewed review. Fixes from the final low-priority-only round need only
+parent inspection and affected verification. Committing unchanged reviewed
+content and a rebase without conflicts do not require another review cycle.
+
+Preserve a review completion record in the handoff: reviewed scope and base,
+commit or working-tree diff identity, roles/rounds completed, findings and their
+priorities/dispositions, final low-priority fixes checked by the parent, and
+focused verification results. `open-pr` must reuse this completed review when
+it covers the proposed changes, including after a conflict-free rebase; changed
+commit SHAs alone do not invalidate it. Report whether completion followed an
+empty round or a low-priority-only round, rather than claiming zero findings.
 
 Report scope/base reviewed, rounds, independent reviews or fallback, findings
 fixed/rejected/filed/deferred with evidence and links where available, introduced
 versus pre-existing defects, checks and compatibility results, and outstanding
-work. A clean review requires completed checks and no unresolved in-scope findings.
+work. Report full verification as deferred to `open-pr`. A clean review requires
+completed applicable focused checks and no unresolved in-scope findings.
 
 This skill does not stage, commit, push, create a PR, close issues, or invoke a
 shipping skill. Leave changes unstaged and uncommitted, preserving existing user

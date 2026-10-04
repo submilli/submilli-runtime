@@ -3,6 +3,76 @@ use crate::runtime::{RuntimeConfig, Vfs, dispatch_main_async, install_runtime_as
 use serde_json::json;
 
 #[tokio::test]
+async fn repositories_use_selected_volume_subdirectories() {
+    use crate::runtime::vfs::{Access, MountSpec};
+    for named_root in [true, false] {
+        let volume = tempfile::tempdir().unwrap();
+        let vfs = if named_root {
+            Vfs::external(volume.path().to_path_buf())
+                .unwrap()
+                .with_volume_name("shared")
+                .with_subpath(Some("users/ada"))
+                .unwrap()
+        } else {
+            Vfs::tempdir()
+                .unwrap()
+                .with_mount_subpath(
+                    MountSpec {
+                        guest_path: "/workspace".into(),
+                        host: volume.path().to_path_buf(),
+                        volume: "shared".into(),
+                        access: Access::ReadWrite,
+                        quota: None,
+                    },
+                    Some("users/ada"),
+                )
+                .unwrap()
+                .with_cwd("/workspace")
+                .unwrap()
+        };
+        run_source(
+            r#"
+            import { Repository } from "submilli:git";
+            import * as fs from "submilli:fs";
+            function main(): void {
+                const repo = Repository.init("repo");
+                fs.writeText("repo/note.txt", "hello");
+                repo.add(["note.txt"]);
+                repo.commit("initial");
+                assert(Repository.open("repo").status().clean);
+            }
+            "#,
+            test_data(vfs),
+        )
+        .await;
+        assert!(volume.path().join("users/ada/repo/.git").is_dir());
+        assert!(!volume.path().join("repo").exists());
+    }
+}
+
+#[tokio::test]
+async fn relative_repository_paths_use_vfs_cwd() {
+    let vfs = Vfs::tempdir().unwrap().with_cwd("/work").unwrap();
+    run_source(
+        r#"
+        import { Repository } from "submilli:git";
+        import * as fs from "submilli:fs";
+        function main(): void {
+            const repo = Repository.init("repo");
+            fs.writeText("repo/note.txt", "hello");
+            repo.add(["note.txt"]);
+            repo.commit("initial");
+            assert(Repository.open("/work/repo").status().clean);
+            assert(Repository.open("repo").log().commits[0].message === "initial");
+            assert(!fs.exists("/repo"));
+        }
+        "#,
+        test_data(vfs),
+    )
+    .await;
+}
+
+#[tokio::test]
 async fn local_repository_round_trip() {
     let source = r#"
         import { Repository } from "submilli:git";
@@ -87,10 +157,15 @@ fn test_data(vfs: Vfs) -> StoreData {
     data
 }
 
-async fn run_source(source: &str, mut data: StoreData) {
+/// Runs `source` with `fuel` to spend, returning how it ended and the host
+/// fuel it was charged.
+async fn run_program(source: &str, mut data: StoreData, fuel: u64) -> (wasmtime::Result<()>, u64) {
     let compiled = crate::compile_script(source, "git.ts", crate::FileId(0), &[], &[])
         .unwrap_or_else(|error| panic!("{error:#?}"));
-    let cfg = RuntimeConfig::default();
+    let cfg = RuntimeConfig {
+        fuel,
+        ..RuntimeConfig::default()
+    };
     let engine = cfg.engine().unwrap();
     data.install_type_info(compiled.type_info.clone());
     let mut store = cfg.store(&engine, data).unwrap();
@@ -100,8 +175,36 @@ async fn run_source(source: &str, mut data: StoreData) {
         .await
         .unwrap();
     let instance = linker.instantiate_async(&mut store, &module).await.unwrap();
-    dispatch_main_async(&mut store, &instance).await.unwrap();
+    let outcome = dispatch_main_async(&mut store, &instance).await.map(drop);
+    if store.data().git_history.is_some() {
+        assert_eq!(
+            store.data().tenant_limits.host_attached_bytes(),
+            4 * 1024 * 1024
+        );
+        store.data_mut().git_history = None;
+    }
     assert_eq!(store.data().tenant_limits.host_attached_bytes(), 0);
+    (outcome, store.data().host_fuel)
+}
+
+/// Runs `source` to completion, returning the host fuel it was charged.
+async fn host_fuel_of(source: &str, data: StoreData) -> u64 {
+    let (outcome, host_fuel) = run_program(source, data, RuntimeConfig::default().fuel).await;
+    outcome.unwrap();
+    host_fuel
+}
+
+async fn run_source_fuel(source: &str, data: StoreData, fuel: Option<u64>) -> Result<()> {
+    run_program(source, data, fuel.unwrap_or(RuntimeConfig::default().fuel))
+        .await
+        .0
+}
+
+async fn run_source(source: &str, data: StoreData) {
+    run_program(source, data, RuntimeConfig::default().fuel)
+        .await
+        .0
+        .unwrap();
 }
 
 #[tokio::test]
@@ -238,10 +341,13 @@ fn patches_apply_file_lifecycle_and_mode_changes_with_native_git() {
     symlink("target", repo.join("type-change")).unwrap();
     native(repo, &["add", "."]);
     let expected_tree = native(repo, &["write-tree"]);
-    let dir =
-        Arc::new(cap_std::fs::Dir::open_ambient_dir(repo, cap_std::ambient_authority()).unwrap());
-    let snapshot =
-        storage::Snapshot::open(dir, Arc::new(AtomicBool::new(false)), storage::MAX_BYTES).unwrap();
+    let snapshot = storage::Snapshot::open_unmetered(
+        &location::Location::at(repo),
+        Arc::new(AtomicBool::new(false)),
+        storage::MAX_WORKING_BYTES,
+        false,
+    )
+    .unwrap();
     let diff = operations::read(&snapshot, "diff", &[json!({"mode":"staged"})]).unwrap();
     let patch = directory.path().join(".git/review.patch");
     std::fs::write(&patch, diff["patch"].as_str().unwrap()).unwrap();
@@ -268,6 +374,7 @@ fn checkout_rejects_case_folded_file_directory_aliases() {
 struct GitServer {
     repo: std::path::PathBuf,
     authentication: bool,
+    oversized_response: bool,
 }
 
 #[async_trait::async_trait]
@@ -281,9 +388,10 @@ impl HttpClient for GitServer {
     > {
         panic!("Git must not use a redirect-following transport")
     }
-    async fn send_without_redirects(
+    async fn send_without_redirects_to(
         &self,
         request: &crate::stdlib::http::transport::HttpRequest,
+        body_out: &mut (dyn std::io::Write + Send),
     ) -> std::result::Result<
         crate::stdlib::http::transport::HttpResponse,
         crate::stdlib::http::transport::HttpError,
@@ -312,6 +420,9 @@ impl HttpClient for GitServer {
                 &self.repo,
                 &["upload-pack", "--stateless-rpc", "--advertise-refs", "."],
             ));
+            if self.oversized_response {
+                body.resize(4 * 1024 * 1024, b'x');
+            }
             (body, "application/x-git-upload-pack-advertisement")
         } else {
             let mut child = std::process::Command::new("git")
@@ -332,11 +443,12 @@ impl HttpClient for GitServer {
             assert!(output.status.success());
             (output.stdout, "application/x-git-upload-pack-result")
         };
+        body_out.write_all(&body).unwrap();
         Ok(crate::stdlib::http::transport::HttpResponse {
             status: 200,
             status_text: "OK".into(),
             headers: vec![("content-type".into(), content_type.into())],
-            body,
+            body: Vec::new(),
             final_url: request.url.clone(),
         })
     }
@@ -367,6 +479,7 @@ async fn smart_http_clone_and_fast_forward_pull() {
     let http = Arc::new(GitServer {
         repo: upstream.path().to_owned(),
         authentication: false,
+        oversized_response: false,
     });
     let vfs = Vfs::tempdir().unwrap();
     let mut data = test_data(vfs.clone());
@@ -439,9 +552,10 @@ impl SecurityCheck for GitOnly {
     fn check(&self, caller: &str, capability: &str, context: &Value) -> CheckOutcome {
         assert_eq!(caller, "main");
         if capability == self.capability && context["path"] == "/repo" {
-            CheckOutcome::Allow
+            CheckOutcome::Allow { rule: None }
         } else {
             CheckOutcome::Deny {
+                rule: None,
                 reason: "not granted".into(),
             }
         }
@@ -463,6 +577,7 @@ async fn clone_grant_includes_authentication_without_other_grants() {
     let http = Arc::new(GitServer {
         repo: upstream.path().to_owned(),
         authentication: true,
+        oversized_response: false,
     });
     let secret = Arc::new(Token(std::sync::atomic::AtomicU64::new(0)));
     let mut data = test_data(Vfs::tempdir().unwrap());
@@ -682,7 +797,7 @@ async fn expired_deadline_does_not_start_ready_work() {
 async fn timeout_waits_for_worker_cleanup_and_resource_release() {
     let vfs = Vfs::tempdir().unwrap();
     let data = test_data(vfs.clone());
-    let budget = WorkingBudget::reserve(&data.tenant_limits).unwrap();
+    let budget = WorkingBudget::reserve(&data.tenant_limits, "status").unwrap();
     let cancelled = AtomicBool::new(false);
     let (started, ready) = tokio::sync::oneshot::channel();
     let (finish, cleanup) = std::sync::mpsc::channel();
@@ -700,6 +815,7 @@ async fn timeout_waits_for_worker_cleanup_and_resource_release() {
         result = ready => result.unwrap(),
     }
 
+    let worker = async { worker.await.map_err(blocking_worker_failure)? };
     let result = finish_worker(worker, &cancelled, tokio::time::Instant::now());
     tokio::pin!(result);
     assert!(
@@ -723,7 +839,7 @@ async fn cancellation_keeps_resources_until_worker_cleanup() {
     let vfs = Vfs::tempdir().unwrap();
     let root = vfs.root().to_owned();
     let data = test_data(vfs.clone());
-    let budget = WorkingBudget::reserve(&data.tenant_limits).unwrap();
+    let budget = WorkingBudget::reserve(&data.tenant_limits, "status").unwrap();
     let cancelled = Arc::new(AtomicBool::new(false));
     let guard = CancelOnDrop(cancelled.clone());
     let (started, ready) = tokio::sync::oneshot::channel();
@@ -756,7 +872,7 @@ async fn cancellation_keeps_resources_until_worker_cleanup() {
     assert!(root.exists());
     assert!(data.tenant_limits.host_attached_bytes() > 0);
     finish.send(()).unwrap();
-    cleanup.await;
+    cleanup.await.unwrap();
     assert_eq!(data.tenant_limits.host_attached_bytes(), 0);
     drop(data);
     assert!(!root.exists());
@@ -764,7 +880,7 @@ async fn cancellation_keeps_resources_until_worker_cleanup() {
 
 #[test]
 fn repository_docs_expose_class_factories_and_capabilities() {
-    let docs = crate::packages::docs_with_git(MODULE_NAME, true).unwrap();
+    let docs = crate::packages::docs(MODULE_NAME).unwrap();
     for declaration in [
         "class Repository",
         "constructor(path: string)",
@@ -783,5 +899,266 @@ fn repository_docs_expose_class_factories_and_capabilities() {
         );
     }
     assert!(!docs.declarations.contains("function init("));
-    assert!(crate::packages::docs(MODULE_NAME).is_none());
+}
+
+/// A Git operation that needs more fuel than the run has stops before it
+/// publishes, and the run ends in the runtime's own out-of-fuel trap, charged
+/// no more than it had.
+#[tokio::test]
+async fn git_runs_out_of_fuel_like_any_other_work() {
+    let source = r#"
+        import { Repository } from "submilli:git";
+        function main(): void {
+            Repository.open("/repo").add(["."]);
+        }
+    "#;
+    let repository = || {
+        let vfs = Vfs::tempdir().unwrap();
+        let repo = vfs.root().join("repo");
+        std::fs::create_dir(&repo).unwrap();
+        native(&repo, &["init", "-q", "-b", "main"]);
+        for number in 0..2_000 {
+            let path = repo.join(format!("d{:02}/f{number:05}", number % 50));
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, format!("file {number}\n")).unwrap();
+        }
+        vfs
+    };
+    let needed = host_fuel_of(source, test_data(repository())).await;
+    // With a quarter of what it needs, `add` stops before it publishes.
+    let vfs = repository();
+    let (outcome, host_fuel) = run_program(source, test_data(vfs.clone()), needed / 4).await;
+    let error = outcome.unwrap_err();
+    assert_eq!(
+        error.downcast_ref::<wasmtime::Trap>(),
+        Some(&wasmtime::Trap::OutOfFuel),
+        "{error:?}"
+    );
+    assert!(host_fuel <= needed / 4, "{host_fuel}");
+    assert!(
+        !vfs.root().join("repo/.git/index").exists(),
+        "nothing was staged into the repository"
+    );
+}
+
+/// A fetch pays for what it inflates, not for what it transfers: two packs
+/// of about the same size on the wire cost what their contents do.
+#[tokio::test]
+async fn fetch_fuel_follows_what_the_pack_inflates_to() {
+    let mut fuel = Vec::new();
+    // Repetitive, and random bytes of about the same compressed size.
+    let repetitive = vec![b'a'; 5_000_000];
+    let mut state = 0x9E37_79B9_7F4A_7C15u64;
+    let random: Vec<u8> = (0..8_000)
+        .map(|_| {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            state as u8
+        })
+        .collect();
+    for contents in [repetitive, random] {
+        let upstream = tempfile::tempdir().unwrap();
+        native(upstream.path(), &["init", "-q", "-b", "main"]);
+        native(upstream.path(), &["config", "user.name", "Upstream"]);
+        native(
+            upstream.path(),
+            &["config", "user.email", "upstream@example.com"],
+        );
+        std::fs::write(upstream.path().join("data"), &contents).unwrap();
+        native(upstream.path(), &["add", "."]);
+        native(upstream.path(), &["commit", "-q", "-m", "data"]);
+        let vfs = Vfs::tempdir().unwrap();
+        let mut data = test_data(vfs.clone());
+        data.http_client = Arc::new(GitServer {
+            repo: upstream.path().to_owned(),
+            authentication: false,
+            oversized_response: false,
+        });
+        fuel.push(
+            host_fuel_of(
+                r#"
+                import { Repository } from "submilli:git";
+                function main(): void {
+                    const repo = Repository.init("/repo");
+                    repo.addRemote("origin", "https://example.com/repo.git");
+                    repo.fetch("origin", "main");
+                }
+            "#,
+                data,
+            )
+            .await,
+        );
+    }
+    assert!(
+        fuel[0] > 10 * fuel[1],
+        "5 MB inflated cost {}, 8 KB cost {}",
+        fuel[0],
+        fuel[1]
+    );
+}
+
+#[tokio::test]
+async fn timeout_drains_worker_and_preserves_invariant_trap() {
+    let cancelled = AtomicBool::new(false);
+    let cleaned = AtomicBool::new(false);
+    let worker = async {
+        tokio::task::yield_now().await;
+        cleaned.store(true, Ordering::Relaxed);
+        Err::<(), _>(crate::runtime::host::invariant_trap(
+            "git: injected worker invariant",
+        ))
+    };
+    let error = finish_worker(worker, &cancelled, tokio::time::Instant::now())
+        .await
+        .unwrap_err();
+    assert!(error.is::<wasmtime::Trap>());
+    assert!(cancelled.load(Ordering::Relaxed));
+    assert!(cleaned.load(Ordering::Relaxed));
+    finish_worker(
+        async { Ok(()) },
+        &AtomicBool::new(false),
+        tokio::time::Instant::now() + std::time::Duration::from_secs(1),
+    )
+    .await
+    .unwrap();
+}
+
+#[tokio::test]
+async fn worker_panic_bypasses_guest_catch_and_allows_same_store_follow_up() {
+    use crate::runtime::security::{CheckOutcome, SecurityCheck};
+    struct PanicOnce(AtomicBool);
+    impl SecurityCheck for PanicOnce {
+        fn check(&self, _: &str, _: &str, _: &Value) -> CheckOutcome {
+            if self.0.swap(false, Ordering::SeqCst) {
+                panic!("injected worker failure");
+            }
+            CheckOutcome::Allow { rule: None }
+        }
+    }
+    let source = r#"
+        import { Repository } from "submilli:git";
+        import * as fs from "submilli:fs";
+        function main(): number {
+            try { Repository.init("/repo"); }
+            catch (error) { fs.writeText("/caught", "must not run"); }
+            return 42;
+        }
+    "#;
+    let compiled = crate::compile_script(source, "git.ts", crate::FileId(0), &[], &[]).unwrap();
+    let vfs = Vfs::tempdir().unwrap();
+    let mut data = test_data(vfs.clone());
+    data.security_check = Arc::new(PanicOnce(AtomicBool::new(true)));
+    data.install_type_info(compiled.type_info.clone());
+    let config = RuntimeConfig::default();
+    let engine = config.engine().unwrap();
+    let mut store = config.store_async(&engine, data).unwrap();
+    crate::runtime::install_tenant_limits(&mut store);
+    let module = wasmtime::Module::new(&engine, &compiled.wasm).unwrap();
+    let mut linker = Linker::new(&engine);
+    install_runtime_async(&mut linker, &mut store)
+        .await
+        .unwrap();
+    let instance = linker.instantiate_async(&mut store, &module).await.unwrap();
+    let error = dispatch_main_async(&mut store, &instance)
+        .await
+        .unwrap_err();
+    assert!(
+        error.is::<crate::runtime::host::FatalHostError>(),
+        "{error:#}"
+    );
+    assert!(
+        error.is::<crate::runtime::blocking::BlockingWorkError>(),
+        "{error:#}"
+    );
+    assert!(error.to_string().contains("blocking worker panicked"));
+    assert!(!vfs.root().join("caught").exists());
+    store.data_mut().blocking_work.finish().await.unwrap();
+    assert_eq!(store.data().tenant_limits.host_attached_bytes(), 0);
+    assert_eq!(
+        dispatch_main_async(&mut store, &instance).await.unwrap(),
+        Some("42".into())
+    );
+    assert!(!vfs.root().join("caught").exists());
+}
+
+#[tokio::test]
+async fn worker_panic_after_deadline_remains_fatal() {
+    let mut workers = crate::runtime::blocking::BlockingWork::default();
+    let (started, ready) = tokio::sync::oneshot::channel();
+    let (release, gate) = std::sync::mpsc::channel();
+    let mut worker = Box::pin(async {
+        workers
+            .spawn(move || -> Result<()> {
+                started.send(()).unwrap();
+                gate.recv_timeout(std::time::Duration::from_secs(5))
+                    .unwrap();
+                panic!("worker failed during timeout cleanup");
+            })
+            .await
+            .map_err(blocking_worker_failure)?
+    });
+    tokio::select! {
+        _ = &mut worker => panic!("worker ended early"),
+        result = ready => result.unwrap(),
+    }
+    let cancelled = AtomicBool::new(false);
+    let mut result = Box::pin(finish_worker(
+        worker,
+        &cancelled,
+        tokio::time::Instant::now(),
+    ));
+    assert!(
+        tokio::time::timeout(std::time::Duration::from_millis(20), &mut result)
+            .await
+            .is_err()
+    );
+    assert!(cancelled.load(Ordering::Relaxed));
+    release.send(()).unwrap();
+    let error = result.await.unwrap_err();
+    assert!(crate::runtime::host::ends_the_run(&error));
+    assert!(error.is::<crate::runtime::blocking::BlockingWorkError>());
+    assert_eq!(workers.spawn(|| 42).await.unwrap(), 42);
+}
+
+#[tokio::test]
+async fn failed_remote_preserves_its_error_after_settlement_exhausts_fuel() {
+    let vfs = Vfs::tempdir().unwrap();
+    let repo = vfs.root().join("repo");
+    std::fs::create_dir(&repo).unwrap();
+    native(&repo, &["init", "-b", "main"]);
+    native(
+        &repo,
+        &["remote", "add", "origin", "https://example.com/repo.git"],
+    );
+    let http = Arc::new(GitServer {
+        repo,
+        authentication: false,
+        oversized_response: true,
+    });
+    let source = r#"
+        import { Repository } from "submilli:git";
+        function main(): void { Repository.open("/repo").fetch(); }
+    "#;
+    let mut errors = Vec::new();
+    for fuel in [None, Some(50_000)] {
+        let mut data = test_data(vfs.clone());
+        data.http_client = http.clone();
+        errors.push(
+            run_source_fuel(source, data, fuel)
+                .await
+                .unwrap_err()
+                .to_string(),
+        );
+    }
+    assert!(errors[0].contains("IO error"), "{}", errors[0]);
+    assert_eq!(errors[0], errors[1]);
+    run_source(
+        r#"
+        import { Repository } from "submilli:git";
+        function main(): void { assert(Repository.open("/repo").status().clean); }
+    "#,
+        test_data(vfs),
+    )
+    .await;
 }
