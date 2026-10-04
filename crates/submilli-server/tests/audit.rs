@@ -261,10 +261,23 @@ function main(): void {
         match allows {
             Allows::All => assert_eq!(allows_rows.len(), 1000),
             Allows::Summary => {
-                assert_eq!(allows_rows.len(), 1);
-                assert_eq!(allows_rows[0]["count"], "1000");
-                assert!(allows_rows[0].contains_key("contexts.9.path"));
-                assert!(!allows_rows[0].contains_key("contexts.10.path"));
+                assert_eq!(allows_rows.len(), 991);
+                let summary = allows_rows
+                    .iter()
+                    .find(|row| row.contains_key("count"))
+                    .unwrap();
+                assert_eq!(summary["count"], "10");
+                assert!(summary.contains_key("contexts.9.payload_json"));
+                assert!(!summary.contains_key("contexts.10.payload_json"));
+                assert_eq!(
+                    allows_rows
+                        .iter()
+                        .filter(
+                            |row| row.get("summary_overflow").map(String::as_str) == Some("true")
+                        )
+                        .count(),
+                    990
+                );
             }
             Allows::None => assert!(allows_rows.is_empty()),
         }
