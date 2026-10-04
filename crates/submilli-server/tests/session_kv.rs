@@ -467,7 +467,7 @@ async fn a_restored_session_starts_with_an_empty_store() {
 
     // Restart: a fresh AppState over the same durable directories.
     let restarted = Harness::over(build());
-    restarted.state.boot().await;
+    restarted.state.boot().await.expect("boot");
 
     let read = restarted.rest(&session, GET).await;
     assert_eq!(

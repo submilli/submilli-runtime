@@ -181,6 +181,11 @@ file is well formed. The policy test doesn't:
 The second run was allowed, so `grep` found no denial, the script exits
 1, and the pull request's check turns red with that line in its log.
 
+A package in `packages.txt` can also be held to an agent's security review
+before its commit is pinned there; [Review a package's
+security](/docs/packages/review-package-security#make-deployment-wait-for-it)
+shows how.
+
 ## Register on every merge
 
 The second job runs only on a push to main, after the check, and talks

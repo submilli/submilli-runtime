@@ -2,13 +2,18 @@ use std::collections::{BTreeSet, HashMap};
 use std::fmt;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
 use anyhow::Result;
 use axum::{
-    Router, middleware,
+    Router,
+    extract::{Request, State},
+    http::StatusCode,
+    middleware,
+    middleware::Next,
+    response::{IntoResponse, Response},
     routing::{MethodRouter, delete, get, post},
 };
 use interpreter::runtime::{
@@ -20,7 +25,7 @@ use submilli_blueprint::Blueprint;
 use submilli_build::{ArtifactMetadata, PackageStore, PackageStoreError};
 use submilli_shared::llm::{BlueprintLlmProvider, HttpModelDispatch, ModelDispatch};
 use submilli_shared::secret_store::SecretStore;
-use tokio::sync::Notify;
+use tokio::sync::{Mutex as AsyncMutex, Notify};
 use wasmtime::{Engine, Linker, Module};
 
 use crate::ServerConfig;
@@ -57,6 +62,9 @@ pub struct AppState {
 }
 
 struct AppStateInner {
+    boot_lock: AsyncMutex<()>,
+    booted: AtomicBool,
+    router_ready: AtomicBool,
     audit: crate::audit::AuditLog,
     auth: Arc<AuthConfig>,
     engine: Engine,
@@ -211,10 +219,12 @@ impl AppState {
             )
             .with_audit(audit.clone()),
         );
-        session_manager.spawn_reaper(REAP_INTERVAL);
 
         Ok(Self {
             inner: Arc::new(AppStateInner {
+                boot_lock: AsyncMutex::new(()),
+                booted: AtomicBool::new(false),
+                router_ready: AtomicBool::new(false),
                 audit,
                 auth: Arc::new(config.auth),
                 network_policy: Arc::clone(&policy),
@@ -250,9 +260,35 @@ impl AppState {
 
     /// Rehydrate persisted sessions and sweep orphan directories. Await once
     /// before serving so reconnects resolve and stale directories are reclaimed.
-    pub async fn boot(&self) {
-        self.inner.session_manager.boot().await;
+    pub async fn boot(&self) -> Result<(), crate::session_manager::BootError> {
+        if self.inner.booted.load(Ordering::Acquire) {
+            return Ok(());
+        }
+        let _boot_guard = self.inner.boot_lock.lock().await;
+        if self.inner.booted.load(Ordering::Acquire) {
+            return Ok(());
+        }
+        self.inner.session_manager.boot().await?;
         self.inner.session_manager.volume_registry().prepare();
+        self.inner.session_manager.spawn_reaper(REAP_INTERVAL);
+        self.inner.booted.store(true, Ordering::Release);
+        Ok(())
+    }
+
+    async fn ready_for_router(&self) -> Result<(), crate::session_manager::BootError> {
+        if self.inner.router_ready.load(Ordering::Acquire) {
+            return Ok(());
+        }
+        let _boot_guard = self.inner.boot_lock.lock().await;
+        if self.inner.router_ready.load(Ordering::Acquire) {
+            return Ok(());
+        }
+        if !self.inner.booted.load(Ordering::Acquire) {
+            self.inner.session_manager.validate_stores().await?;
+            self.inner.session_manager.spawn_reaper(REAP_INTERVAL);
+        }
+        self.inner.router_ready.store(true, Ordering::Release);
+        Ok(())
     }
 
     /// Handle `serve` awaits for graceful shutdown; `POST /v1/shutdown` signals it.
@@ -763,9 +799,26 @@ fn layered_package_store(root: Option<PathBuf>, fallback: Option<PathBuf>) -> Pa
 }
 
 pub fn app(state: AppState) -> Router {
+    let boot_state = state.clone();
     routes(state.auth(), state.audit().clone())
         .router
         .with_state(state)
+        .layer(middleware::from_fn_with_state(
+            boot_state,
+            ensure_router_ready,
+        ))
+}
+
+async fn ensure_router_ready(
+    State(state): State<AppState>,
+    request: Request,
+    next: Next,
+) -> Response {
+    if let Err(error) = state.ready_for_router().await {
+        tracing::error!(%error, source = ?std::error::Error::source(&error), "server boot failed");
+        return (StatusCode::INTERNAL_SERVER_ERROR, "server startup failed").into_response();
+    }
+    next.run(request).await
 }
 
 /// Every route and the access it requires, in registration order.
@@ -1053,6 +1106,84 @@ mod tests {
     use interpreter::runtime::{
         Vfs, dispatch_main_async, install_runtime_async, install_tenant_limits,
     };
+
+    #[tokio::test]
+    async fn failed_boot_does_not_start_the_reaper() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let root = dir.path().join("sessions");
+        let store = Arc::new(FileDurableSessionStore::new(root.clone()).expect("session store"));
+        let state = AppState::new(ServerConfig {
+            session_store: Some(store),
+            ..ServerConfig::default()
+        })
+        .expect("app state");
+        std::fs::remove_dir(&root).expect("make store unavailable");
+
+        assert!(matches!(
+            state.boot().await,
+            Err(crate::session_manager::BootError::Sessions(_))
+        ));
+        assert_eq!(Arc::strong_count(&state.inner.session_manager), 1);
+
+        std::fs::create_dir(&root).expect("restore store");
+        state.boot().await.expect("healthy boot");
+        assert_eq!(Arc::strong_count(&state.inner.session_manager), 2);
+        state.boot().await.expect("repeat boot");
+        assert_eq!(Arc::strong_count(&state.inner.session_manager), 2);
+    }
+
+    #[tokio::test]
+    async fn direct_router_still_starts_the_reaper() {
+        use tower::ServiceExt;
+
+        let state = AppState::new(ServerConfig::default()).expect("app state");
+        assert_eq!(Arc::strong_count(&state.inner.session_manager), 1);
+
+        let router = app(state.clone());
+        assert_eq!(Arc::strong_count(&state.inner.session_manager), 1);
+        let response = router
+            .oneshot(
+                axum::http::Request::builder()
+                    .uri("/healthz")
+                    .body(axum::body::Body::empty())
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(Arc::strong_count(&state.inner.session_manager), 2);
+    }
+
+    #[tokio::test]
+    async fn direct_router_refuses_requests_until_boot_succeeds() {
+        use tower::ServiceExt;
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let root = dir.path().join("sessions");
+        let store = Arc::new(FileDurableSessionStore::new(root.clone()).expect("session store"));
+        let state = AppState::new(ServerConfig {
+            session_store: Some(store),
+            ..ServerConfig::default()
+        })
+        .expect("app state");
+        let router = app(state.clone());
+        std::fs::remove_dir(&root).expect("make store unavailable");
+
+        let request = || {
+            axum::http::Request::builder()
+                .uri("/healthz")
+                .body(axum::body::Body::empty())
+                .expect("request")
+        };
+        let response = router.clone().oneshot(request()).await.expect("response");
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(Arc::strong_count(&state.inner.session_manager), 1);
+
+        std::fs::create_dir(&root).expect("restore store");
+        let response = router.oneshot(request()).await.expect("response");
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(Arc::strong_count(&state.inner.session_manager), 2);
+    }
 
     /// Compile `src`, run it through the server engine, and return the dispatch
     /// result. A high fuel budget keeps the allocation-heavy guests off the fuel

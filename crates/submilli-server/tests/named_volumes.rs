@@ -302,7 +302,7 @@ vfs:
         // Declared no more: the blueprint can no longer mount it, and nothing
         // removes its files.
         let server = Server::new(data.path(), &[blueprint], VolumeTable::new());
-        server.state.boot().await;
+        server.state.boot().await.expect("boot");
         let (status, refused) = server
             .post("/v1/sessions", json!({"blueprint":"keeper"}))
             .await;
@@ -311,7 +311,7 @@ vfs:
         assert!(data.path().join("volumes/notes/n.txt").exists());
     }
     let server = Server::new(data.path(), &[blueprint], volumes());
-    server.state.boot().await;
+    server.state.boot().await.expect("boot");
     let read = server
         .run(
             "keeper",

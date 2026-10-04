@@ -886,7 +886,7 @@ async fn mcp_session_restores_after_server_restart() {
         session_root.path().to_path_buf(),
         session_store.path().to_path_buf(),
     );
-    restarted.state.boot().await;
+    restarted.state.boot().await.expect("boot");
 
     let (status, _, r) = restarted
         .post(SESS, tools_call(3, READ), Some(&session))

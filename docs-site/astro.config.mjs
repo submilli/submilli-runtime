@@ -1,6 +1,7 @@
 // @ts-check
 import { defineConfig } from "astro/config";
 import starlight from "@astrojs/starlight";
+import sitemap from "@astrojs/sitemap";
 import { satteri } from "@astrojs/markdown-satteri";
 import { submilliDark, submilliLight } from "./src/code-themes.mjs";
 import { securityAside } from "./src/plugins/satteri-security-aside.mjs";
@@ -9,6 +10,7 @@ import { agentDocs } from "./src/plugins/agent-docs.ts";
 export default defineConfig({
   site: "https://submilli.ai",
   base: "/docs",
+  redirects: { "/concepts/execution-model": "/docs/why/" },
   // Match the URL prefix on static hosts that publish dist/ at the domain root.
   outDir: "./dist/docs",
   markdown: {
@@ -18,6 +20,8 @@ export default defineConfig({
   },
   integrations: [
     agentDocs(),
+    // Standalone embeds are noindex duplicates of the canonical video pages.
+    sitemap({ filter: (page) => !new URL(page).pathname.startsWith("/docs/videos/embed/") }),
     starlight({
       title: "Submilli",
       description:
@@ -44,6 +48,7 @@ export default defineConfig({
         ThemeSelect: "./src/components/ThemeSelect.astro",
         MobileMenuFooter: "./src/components/MobileMenuFooter.astro",
         PageTitle: "./src/components/PageTitle.astro",
+        MarkdownContent: "./src/components/VideoContent.astro",
         Hero: "./src/components/Hero.astro",
         Footer: "./src/components/Footer.astro",
         Pagination: "./src/components/Pagination.astro",
@@ -99,14 +104,6 @@ export default defineConfig({
           },
         },
       },
-      // Pre-launch: the docs are reachable by direct link (design partners,
-      // previews) but kept out of search. Remove this block at launch.
-      head: [
-        {
-          tag: "meta",
-          attrs: { name: "robots", content: "noindex, nofollow" },
-        },
-      ],
       social: [
         {
           icon: "github",
@@ -136,6 +133,7 @@ export default defineConfig({
           ],
         },
         { label: "Reference", items: [{ autogenerate: { directory: "../docs/part-6-reference" } }] },
+        { label: "Video library", slug: "videos" },
       ],
 
     }),

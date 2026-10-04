@@ -1,9 +1,12 @@
 ---
 title: "Verify a package in CI"
-description: "Build a GitHub Actions job that fails a pull request when a package's tests fail, with the tests that call the service run from the repository's secrets and skipped where there are none."
+description: "Build a GitHub Actions job that fails a pull request when a package's tests fail, with the tests that call the service run from the repository's secrets and skipped where there are none, and an agent's security review beside them."
 slug: tutorials/verify-a-package-in-ci
 # The workflows have not run on GitHub: the installer is not public yet.
-# SUB-1309 runs them. Every command inside them was run locally.
+# SUB-1309 runs them. Every command inside them was run locally. The
+# security review needs a release with `build security-review`; the pins
+# assume it is v0.1.7. Its outputs are from Codex 0.160.0 with gpt-6.1-sol
+# on 2026-10-04, with the CLI built from main b5002307.
 sidebar:
   order: 9
 ---
@@ -17,8 +20,9 @@ In this tutorial we will build a GitHub Actions job that runs a
 package's tests on every pull request and every push to main, and fails
 when one breaks. The
 package is a small charge lookup over fixed data, written here from
-scratch so that it needs no service and no key; the last section adds
-the tests that do call a service.
+scratch so that it needs no service and no key. Later sections add the
+tests that do call a service, and an agent's review for the bugs tests
+miss.
 
 ## The package
 
@@ -124,7 +128,7 @@ jobs:
 
       - name: Install Submilli
         run: |
-          curl -fsSL https://submilli.ai/install.sh | sh -s -- --version v0.1.6
+          curl -fsSL https://submilli.ai/install.sh | sh -s -- --version v0.1.7
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
 
       - name: Test the package
@@ -217,7 +221,7 @@ jobs:
 
       - name: Install Submilli
         run: |
-          curl -fsSL https://submilli.ai/install.sh | sh -s -- --version v0.1.6
+          curl -fsSL https://submilli.ai/install.sh | sh -s -- --version v0.1.7
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
 
       - name: Test the package
@@ -259,7 +263,7 @@ jobs:
 
       - name: Install Submilli
         run: |
-          curl -fsSL https://submilli.ai/install.sh | sh -s -- --version v0.1.6
+          curl -fsSL https://submilli.ai/install.sh | sh -s -- --version v0.1.7
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
 
       - name: Test the package
@@ -290,7 +294,94 @@ would on a server. Keep live tests read-only unless they have a target
 that is safe to change, such as the service's test mode; [Write
 tests](/docs/packages/write-tests) has the details.
 
-You have a job that runs a package's tests on every pull request, and
-seen it catch a bug no rule would. Next: [Manage blueprints in
-Git](/docs/tutorials/manage-blueprints-in-git), the same idea for
-the blueprints that grant the package.
+## Have an agent review it
+
+Tests check the cases they try. Add a lookup for one charge that checks
+the customer but finds the charge by its ID alone:
+
+```typescript title="packages/billing/src/lib.ts (added at the end)"
+/**
+ * Look up one of a customer's charges.
+ * @param customerId Billing customer ID, such as `cus_northwind`.
+ * @param chargeId Charge identifier, such as `ch_a1`.
+ * @returns The charge, or `null` when there is none.
+ * @capability acme.com/charges.get { customerId: string }
+ */
+export function getCharge(customerId: string, chargeId: string): Charge | null {
+    check("acme.com/charges.get", { customerId });
+
+    for (const charge of LEDGER) {
+        if (charge.id === chargeId) {
+            return charge;
+        }
+    }
+    return null;
+}
+```
+
+A test that looks up Northwind's own charge passes, and so would any rule:
+`check` was asked about the right customer. An agent reading the source
+catches it. Install Codex, sign in, and review the project:
+
+```sh
+npm install -g @openai/codex@0.160.0
+codex login
+submilli build security-review -a codex -m gpt-6.1-sol -e high --output review.json
+```
+
+```text
+Security review: complete (2 finding(s))
+High packages/billing/src/lib.ts:51 — Charge lookup checks a customer unrelated to the returned charge
+  … A caller authorized for cus_northwind can call getCharge("cus_northwind", "ch_a3") and receive cus_initech's charge …
+Medium packages/billing/src/lib.ts:34 — Read operations expose mutable internal ledger records
+  …
+```
+
+The high finding fails the command, which exits 1; the medium one, that
+callers get the ledger's own objects rather than copies, is below the
+default `--fail-on high`. Wording and severity vary between runs, and a
+review can miss a bug, so it sits beside the tests, not in their place.
+Fix the lookup, and the review exits 0:
+
+```typescript title="packages/billing/src/lib.ts (fragment)"
+        if (charge.id === chargeId && charge.customerId === customerId) {
+```
+
+In CI the review needs an OpenAI API key, from [API
+keys](https://platform.openai.com/api-keys), as a secret
+(`gh secret set CODEX_API_KEY`), and a job of its own under `jobs:`:
+
+```yaml title=".github/workflows/test.yml (added under jobs:)"
+  review:
+    if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - run: npm install -g @openai/codex@0.160.0
+      - run: |
+          curl -fsSL https://submilli.ai/install.sh | sh -s -- --version v0.1.7
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+      - env:
+          CODEX_API_KEY: ${{ secrets.CODEX_API_KEY }}
+        run: submilli build security-review -a codex -m gpt-6.1-sol -e high --output "$RUNNER_TEMP/review.json"
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: security-review-${{ github.sha }}
+          path: ${{ runner.temp }}/review.json
+```
+
+The report is kept even when the review fails, with a hash of every file
+it read. A review that can't finish exits 2 and fails the job too; a
+pull request from a fork has no secrets, so it is reviewed after the
+merge.
+
+You have a job that tests a package on every pull request and an
+agent's review beside it, each catching a bug no rule would; [Review a
+package's security](/docs/packages/review-package-security) uses Claude
+Code instead. Next: [Manage blueprints in
+Git](/docs/tutorials/manage-blueprints-in-git), the same idea for the
+blueprints that grant the package.

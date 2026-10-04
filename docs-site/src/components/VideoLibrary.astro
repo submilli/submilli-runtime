@@ -1,0 +1,51 @@
+---
+import { films, introduction } from '../lib/videos';
+import IntroductionPlayer from './IntroductionPlayer.astro';
+import VideoDiagram from './VideoDiagram.astro';
+const reviewFilms = films.filter((film) => film.id !== introduction.id);
+const durationSeconds = Math.round(introduction.durationSeconds ?? 0);
+const durationLabel = `${Math.floor(durationSeconds / 60)}:${String(durationSeconds % 60).padStart(2, '0')}`;
+const languageLabel = new Intl.DisplayNames(['en'], { type: 'language' }).of(introduction.language ?? 'en');
+
+---
+<section class="video-library not-content" aria-label="Video series">
+  <article class="introduction" data-video-id={introduction.id}>
+    <div class="player"><IntroductionPlayer showTranscriptLink={false} /></div>
+    <div class="film-heading">
+      <h2><span class="number">01</span> {introduction.title}</h2>
+      <span class="metadata">{durationLabel} · {languageLabel} captions</span>
+    </div>
+    <p>{introduction.description}</p>
+  </article>
+  <h2 class="planned-heading">Next videos</h2>
+  <div class="planned-grid">
+    {reviewFilms.map((film) => (
+      <article class="planned-film" data-video-id={film.id}>
+        <VideoDiagram id={film.id} />
+        <div class="card-copy">
+          <span class="status">{film.reviewStatus === 'revision-pending' ? 'Revision pending' : 'In review'}</span>
+          <h3><span class="number">{String(films.indexOf(film) + 1).padStart(2, '0')}</span> {film.title}</h3>
+          <p>{film.description}</p>
+        </div>
+      </article>
+    ))}
+  </div>
+</section>
+<style>
+  .introduction { margin-top: 1.5rem; }
+  .player { overflow: hidden; border-radius: 10px; }
+  .film-heading { display: flex; justify-content: space-between; align-items: baseline; flex-wrap: wrap; gap: .5rem 1rem; margin-top: 1rem; }
+  .film-heading h2 { margin: 0; font-size: 1.35rem; }
+  .film-heading h2, .planned-heading, .card-copy h3 { color: var(--sl-color-white); font-weight: 600; line-height: 1.35; }
+  .number { color: var(--sl-color-gray-2); font: .75em monospace; margin-right: .3em; }
+  .metadata { color: var(--sl-color-gray-2); font-size: .8rem; }
+  .introduction > p { margin: .6rem 0 1rem; }
+  .planned-heading { margin: 2.25rem 0 1rem; font-size: 1.2rem; }
+  .planned-grid { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 1rem; }
+  .planned-film { border: 1px solid var(--sl-color-hairline); border-radius: 10px; overflow: hidden; background: var(--sl-color-bg-sidebar); }
+  .card-copy { padding: 1rem; }
+  .status { color: var(--sl-color-gray-2); font-size: .75rem; }
+  .card-copy h3 { margin: .5rem 0; font-size: 1.05rem; }
+  .card-copy p { margin: 0; font-size: .85rem; line-height: 1.5; }
+  @media(max-width: 600px) { .planned-grid { grid-template-columns: 1fr; } }
+</style>
