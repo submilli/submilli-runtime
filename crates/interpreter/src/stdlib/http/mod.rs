@@ -1133,10 +1133,11 @@ mod tests {
         ) -> CheckOutcome {
             if capability.starts_with("http.") {
                 CheckOutcome::Deny {
+                    rule: None,
                     reason: format!("denied {capability} in test"),
                 }
             } else {
-                CheckOutcome::Allow
+                CheckOutcome::Allow { rule: None }
             }
         }
     }
@@ -1599,7 +1600,7 @@ function main(): void {
                     "timeout_ms": super::DEFAULT_TIMEOUT_MS,
                 })
             );
-            CheckOutcome::Allow
+            CheckOutcome::Allow { rule: None }
         }
     }
 
@@ -1662,7 +1663,7 @@ function main(): void {
                 .lock()
                 .unwrap()
                 .push((caller.to_string(), capability.to_string()));
-            CheckOutcome::Allow
+            CheckOutcome::Allow { rule: None }
         }
     }
 
@@ -2358,6 +2359,7 @@ function main(): void {
     impl SecurityCheck for CwdPolicy {
         fn check(&self, _: &str, _: &str, _: &serde_json::Value) -> CheckOutcome {
             CheckOutcome::Deny {
+                rule: None,
                 reason: "missing cwd".into(),
             }
         }
@@ -2380,9 +2382,10 @@ function main(): void {
             if crate::runtime::fs::guest_normalize(cwd, path)
                 .is_ok_and(|path| path == "/notes/out.bin")
             {
-                CheckOutcome::Allow
+                CheckOutcome::Allow { rule: None }
             } else {
                 CheckOutcome::Deny {
+                    rule: None,
                     reason: "outside notes".into(),
                 }
             }
@@ -2585,10 +2588,11 @@ function main(): void {
             ) -> CheckOutcome {
                 if capability == "http.download" {
                     CheckOutcome::Deny {
+                        rule: None,
                         reason: "denied http.download in test".into(),
                     }
                 } else {
-                    CheckOutcome::Allow
+                    CheckOutcome::Allow { rule: None }
                 }
             }
         }
@@ -2628,10 +2632,11 @@ function main(): void {
             ) -> CheckOutcome {
                 if capability == "fs.write" {
                     CheckOutcome::Deny {
+                        rule: None,
                         reason: "denied fs.write in test".into(),
                     }
                 } else {
-                    CheckOutcome::Allow
+                    CheckOutcome::Allow { rule: None }
                 }
             }
         }
@@ -2780,10 +2785,11 @@ function main(): void {
             ) -> CheckOutcome {
                 if capability == "fs.write" {
                     CheckOutcome::Deny {
+                        rule: None,
                         reason: "denied fs.write in test".into(),
                     }
                 } else {
-                    CheckOutcome::Allow
+                    CheckOutcome::Allow { rule: None }
                 }
             }
         }
@@ -3280,10 +3286,11 @@ function main(): void {
             ));
             if context["host"] == "evil.test" {
                 CheckOutcome::Deny {
+                    rule: None,
                     reason: "evil.test is not allowed".into(),
                 }
             } else {
-                CheckOutcome::Allow
+                CheckOutcome::Allow { rule: None }
             }
         }
     }

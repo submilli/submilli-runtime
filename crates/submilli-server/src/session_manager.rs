@@ -150,6 +150,7 @@ struct State {
 }
 
 pub struct SessionManager {
+    audit: Option<crate::audit::AuditLog>,
     inner: Mutex<State>,
     bind_lock: tokio::sync::Mutex<()>,
     /// Durable root for `per_session` directories (keyed by session id).
@@ -273,6 +274,7 @@ impl SessionManager {
     ) -> Self {
         let CapabilitySettings { session_kv, llm } = capabilities;
         Self {
+            audit: None,
             bind_lock: tokio::sync::Mutex::new(()),
             inner: Mutex::new(State {
                 sessions: HashMap::new(),
@@ -286,6 +288,25 @@ impl SessionManager {
             session_kv,
             llm,
         }
+    }
+
+    pub(crate) fn with_audit(mut self, audit: crate::audit::AuditLog) -> Self {
+        self.audit = Some(audit);
+        self
+    }
+
+    fn audit_session(&self, session: &str, event: &str, details: serde_json::Value) {
+        let Some(audit) = &self.audit else {
+            return;
+        };
+        let mut fields = details.as_object().cloned().unwrap_or_default();
+        fields.insert("session_id".into(), serde_json::json!(session));
+        fields.insert("event".into(), serde_json::json!(event));
+        fields.insert(
+            "principal".into(),
+            serde_json::json!(crate::audit::principal()),
+        );
+        audit.emit("session", fields);
     }
 
     /// The HTTP client for `session_id`, built once and cached on the session so
@@ -364,6 +385,9 @@ impl SessionManager {
         harness_secrets: Arc<HarnessSecretBindings>,
     ) -> Result<(), SessionError> {
         let _binding = self.bind_lock.lock().await;
+        let existed = self.contains(session_id);
+        let old_variables = self.variables(session_id);
+        let audit_variables = crate::audit::bindings(&variables);
         if self
             .blueprint_name(session_id)
             .is_some_and(|name| name != blueprint.name)
@@ -392,7 +416,7 @@ impl SessionManager {
             }
             return Err(error);
         }
-        self.ensure(session_id, blueprint).await?;
+        self.ensure_inner(session_id, blueprint, false).await?;
         let record = {
             let mut state = self.lock();
             let Some(entry) = state.sessions.get_mut(session_id) else {
@@ -403,6 +427,9 @@ impl SessionManager {
             entry.to_record(session_id)
         };
         self.persist(record).await;
+        self.audit_session(session_id, if existed { "rebound" } else { "created" },
+            serde_json::json!({ "blueprint": blueprint.name, "vars": audit_variables,
+                "old_vars": crate::audit::bindings(&old_variables), "file_area_mode": blueprint.vfs.mode_str() }));
         Ok(())
     }
 
@@ -448,6 +475,13 @@ impl SessionManager {
             .get_mut(session_id)
             .ok_or(SessionError::UnknownSession)?;
         entry.harness_secrets = Some(harness_secrets);
+        let vars = crate::audit::bindings(&entry.variables);
+        drop(state);
+        self.audit_session(
+            session_id,
+            "rebound",
+            serde_json::json!({"old_vars": vars, "vars": vars}),
+        );
         Ok(())
     }
 
@@ -499,6 +533,15 @@ impl SessionManager {
         session_id: &str,
         blueprint: &Blueprint,
     ) -> Result<(), SessionError> {
+        self.ensure_inner(session_id, blueprint, true).await
+    }
+
+    async fn ensure_inner(
+        &self,
+        session_id: &str,
+        blueprint: &Blueprint,
+        emit_created: bool,
+    ) -> Result<(), SessionError> {
         if self.contains(session_id) {
             return Ok(());
         }
@@ -540,6 +583,10 @@ impl SessionManager {
         };
 
         if inserted {
+            if emit_created {
+                self.audit_session(session_id, "created", serde_json::json!({
+                "blueprint": blueprint.name, "vars": {}, "file_area_mode": blueprint.vfs.mode_str() }));
+            }
             crate::metrics::session_init(blueprint.vfs.mode_str());
             self.persist(SessionRecord {
                 session_id: session_id.to_string(),
@@ -661,6 +708,11 @@ impl SessionManager {
             remove_entry(&mut state, session_id)
         };
         if existed {
+            self.audit_session(
+                session_id,
+                "deleted",
+                serde_json::json!({"reason": "disconnect"}),
+            );
             self.forget(session_id).await;
         }
         existed
@@ -685,6 +737,11 @@ impl SessionManager {
             ids
         };
         for id in &ids {
+            self.audit_session(
+                id,
+                "evicted",
+                serde_json::json!({"reason": "blueprint_deleted", "blueprint": blueprint_name}),
+            );
             self.forget(id).await;
         }
     }
@@ -706,6 +763,7 @@ impl SessionManager {
             ids
         };
         for id in &expired {
+            self.audit_session(id, "expired", serde_json::json!({"reason": "idle_timeout"}));
             self.forget(id).await;
         }
         expired.len()
@@ -721,6 +779,11 @@ impl SessionManager {
     /// owns are swept.
     pub async fn boot(&self) {
         for record in self.store.load_all().await {
+            self.audit_session(
+                &record.session_id,
+                "found",
+                serde_json::json!({"blueprint": record.blueprint_name}),
+            );
             let vfs_root = record
                 .owns_vfs_dir
                 .then(|| self.session_root.join(&record.session_id));
@@ -791,6 +854,11 @@ impl SessionManager {
                 .collect()
         };
         for id in &stale {
+            self.audit_session(
+                id,
+                "lost",
+                serde_json::json!({"reason": "workspace_missing"}),
+            );
             self.lock().sessions.remove(id);
             self.forget(id).await;
         }

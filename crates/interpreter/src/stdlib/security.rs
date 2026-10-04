@@ -94,15 +94,49 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
                         wasmtime::Error::msg(format!("security.check: malformed context JSON: {e}"))
                     })?;
                 fuel::charge_host_fuel(&mut *caller, fuel::GATE)?;
-                let who = consumer_of_running_package(&*caller, &capability)?;
-                match caller.data().security_check.clone().check_with_cwd(
-                    &who,
-                    &capability,
-                    &context,
-                    caller.data().vfs.cwd(),
-                ) {
-                    CheckOutcome::Allow => Ok(()),
-                    CheckOutcome::Deny { reason } => {
+                let who =
+                    consumer_of_running_package(&*caller, &capability).inspect_err(|_error| {
+                        crate::stdlib::shared::audit_denial(
+                            caller.data().security_check.as_ref(),
+                            "<unknown caller>",
+                            &capability,
+                            &context,
+                            "invariant",
+                            "caller cannot be attributed",
+                        );
+                    })?;
+                let policy = caller.data().security_check.clone();
+                let outcome =
+                    policy.check_with_cwd(&who, &capability, &context, caller.data().vfs.cwd());
+                let audit_context =
+                    policy.audit_context(&capability, &context, caller.data().vfs.cwd());
+                match outcome {
+                    CheckOutcome::Allow { rule } => {
+                        caller.data().security_check.audit(
+                            crate::runtime::security::AuditDecision {
+                                caller: &who,
+                                capability: &capability,
+                                context: audit_context.as_ref(),
+                                allowed: true,
+                                source: "policy",
+                                rule,
+                                reason: None,
+                            },
+                        );
+                        Ok(())
+                    }
+                    CheckOutcome::Deny { reason, rule } => {
+                        caller.data().security_check.audit(
+                            crate::runtime::security::AuditDecision {
+                                caller: &who,
+                                capability: &capability,
+                                context: audit_context.as_ref(),
+                                allowed: false,
+                                source: "policy",
+                                rule,
+                                reason: Some(&reason),
+                            },
+                        );
                         Err(permission_denied(who, capability, reason))
                     }
                 }
@@ -619,6 +653,7 @@ mod tests {
             _context: &serde_json::Value,
         ) -> CheckOutcome {
             CheckOutcome::Deny {
+                rule: None,
                 reason: "blocked by policy".to_string(),
             }
         }

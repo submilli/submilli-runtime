@@ -62,6 +62,7 @@ pub async fn put(
     State(state): State<AppState>,
     Json(req): Json<PutRequest>,
 ) -> Result<(StatusCode, Json<PutResponse>), Failure> {
+    crate::audit::annotate(serde_json::json!({"key": req.key}));
     store(&state)?
         .put(&req.key, &req.value)
         .await
@@ -79,6 +80,7 @@ pub async fn remove(
     State(state): State<AppState>,
     Path(key): Path<String>,
 ) -> Result<Json<DeleteResponse>, Failure> {
+    crate::audit::annotate(serde_json::json!({"key": key}));
     store(&state)?.delete(&key).await.map_err(internal)?;
     Ok(Json(DeleteResponse { key }))
 }

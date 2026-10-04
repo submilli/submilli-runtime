@@ -261,6 +261,7 @@ pub async fn oauth_exchange(
     Path((blueprint, server)): Path<(String, String)>,
     Json(req): Json<ExchangeRequest>,
 ) -> Result<Json<AuthStateResponse>, Failure> {
+    crate::audit::annotate(serde_json::json!({"blueprint": blueprint, "server": server}));
     let bp = get_blueprint(&state, &blueprint).await?;
     let (entry, auth) = oauth_server(&bp, &server)?;
     let store = store(&state)?;
@@ -395,6 +396,7 @@ pub async fn put_refresh_token(
     Path((blueprint, server)): Path<(String, String)>,
     Json(req): Json<CredentialRequest>,
 ) -> Result<Json<AuthStateResponse>, Failure> {
+    crate::audit::annotate(serde_json::json!({"blueprint": blueprint, "server": server}));
     let bp = get_blueprint(&state, &blueprint).await?;
     oauth_server(&bp, &server)?;
     let store = store(&state)?;
@@ -441,6 +443,7 @@ pub async fn delete_refresh_token(
     State(state): State<AppState>,
     Path((blueprint, server)): Path<(String, String)>,
 ) -> Result<Json<AuthStateResponse>, Failure> {
+    crate::audit::annotate(serde_json::json!({"blueprint": blueprint, "server": server}));
     let bp = get_blueprint(&state, &blueprint).await?;
     oauth_server(&bp, &server)?;
     let store = store(&state)?;

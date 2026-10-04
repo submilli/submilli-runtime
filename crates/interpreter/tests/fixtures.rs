@@ -1133,10 +1133,11 @@ impl interpreter::runtime::SecurityCheck for FixtureDenyLlmModel {
         let model = context.get("model").and_then(serde_json::Value::as_str);
         if capability == "llm.call" && model.is_some_and(|m| self.0.iter().any(|d| d == m)) {
             return interpreter::runtime::CheckOutcome::Deny {
+                rule: None,
                 reason: "denied by fixture model filter".to_string(),
             };
         }
-        interpreter::runtime::CheckOutcome::Allow
+        interpreter::runtime::CheckOutcome::Allow { rule: None }
     }
 }
 
@@ -1153,10 +1154,11 @@ impl interpreter::runtime::SecurityCheck for FixtureDeny {
     ) -> interpreter::runtime::CheckOutcome {
         if self.0.iter().any(|needle| capability.contains(needle)) {
             interpreter::runtime::CheckOutcome::Deny {
+                rule: None,
                 reason: "denied by fixture policy".to_string(),
             }
         } else {
-            interpreter::runtime::CheckOutcome::Allow
+            interpreter::runtime::CheckOutcome::Allow { rule: None }
         }
     }
 }

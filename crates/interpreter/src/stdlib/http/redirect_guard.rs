@@ -117,6 +117,18 @@ impl CapabilityGuard {
 }
 
 impl RedirectGuard for CapabilityGuard {
+    fn audit_egress_denial(&self, hop: &RedirectHop<'_>) {
+        let (capability, context) = self.hop_check(hop);
+        crate::stdlib::shared::audit_denial(
+            self.security_check.as_ref(),
+            &self.caller,
+            &capability,
+            &context,
+            "egress_guard",
+            "outbound destination refused",
+        );
+    }
+
     fn authorize(&self, hop: &RedirectHop<'_>) -> Result<(), RedirectDenied> {
         let (capability, context) = self.hop_check(hop);
         authorize_capability(

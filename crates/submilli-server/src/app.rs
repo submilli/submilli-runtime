@@ -57,6 +57,7 @@ pub struct AppState {
 }
 
 struct AppStateInner {
+    audit: crate::audit::AuditLog,
     auth: Arc<AuthConfig>,
     engine: Engine,
     base_linker: Linker<StoreData>,
@@ -109,6 +110,9 @@ struct AppStateInner {
 
 impl AppState {
     pub fn new(config: ServerConfig) -> Result<Self> {
+        let audit = config
+            .audit_log
+            .unwrap_or_else(|| crate::audit::AuditLog::new(config.audit, None));
         let runtime = config.runtime;
         let engine = server_engine(&runtime)?;
         if runtime.timeout.is_some_and(|timeout| !timeout.is_zero()) {
@@ -174,40 +178,44 @@ impl AppState {
                 }
                 (None, None) => Arc::new(InMemoryIdempotencyStore::default()),
             };
-        let session_manager = Arc::new(SessionManager::new(
-            session_root,
-            config.ephemeral_storage_root,
-            Arc::new(crate::volumes::VolumeRegistry::new(
-                config.volumes,
-                config
-                    .managed_volume_root
-                    .unwrap_or_else(crate::config::default_managed_volume_root),
-            )),
-            http_client_factory,
-            Arc::clone(&session_store),
-            Arc::clone(&idempotency_store),
-            CapabilitySettings {
-                session_kv: SessionKvSettings::new(
-                    config.session_kv_limits,
+        let session_manager = Arc::new(
+            SessionManager::new(
+                session_root,
+                config.ephemeral_storage_root,
+                Arc::new(crate::volumes::VolumeRegistry::new(
+                    config.volumes,
                     config
-                        .max_session_state_memory
-                        .unwrap_or(DEFAULT_TOTAL_SESSION_KV_BYTES),
-                ),
-                llm: LlmSettings::new(
-                    config.llm_limits,
-                    config
-                        .max_llm_tokens
-                        .unwrap_or(DEFAULT_MAX_ALL_EXECUTIONS_TOKENS),
-                    config
-                        .max_llm_concurrency
-                        .unwrap_or(DEFAULT_MAX_CONCURRENCY),
-                ),
-            },
-        ));
+                        .managed_volume_root
+                        .unwrap_or_else(crate::config::default_managed_volume_root),
+                )),
+                http_client_factory,
+                Arc::clone(&session_store),
+                Arc::clone(&idempotency_store),
+                CapabilitySettings {
+                    session_kv: SessionKvSettings::new(
+                        config.session_kv_limits,
+                        config
+                            .max_session_state_memory
+                            .unwrap_or(DEFAULT_TOTAL_SESSION_KV_BYTES),
+                    ),
+                    llm: LlmSettings::new(
+                        config.llm_limits,
+                        config
+                            .max_llm_tokens
+                            .unwrap_or(DEFAULT_MAX_ALL_EXECUTIONS_TOKENS),
+                        config
+                            .max_llm_concurrency
+                            .unwrap_or(DEFAULT_MAX_CONCURRENCY),
+                    ),
+                },
+            )
+            .with_audit(audit.clone()),
+        );
         session_manager.spawn_reaper(REAP_INTERVAL);
 
         Ok(Self {
             inner: Arc::new(AppStateInner {
+                audit,
                 auth: Arc::new(config.auth),
                 network_policy: Arc::clone(&policy),
                 engine,
@@ -259,6 +267,10 @@ impl AppState {
 
     pub(crate) fn bind_addr(&self) -> Option<SocketAddr> {
         self.inner.bind_addr.get().copied()
+    }
+
+    pub fn audit(&self) -> &crate::audit::AuditLog {
+        &self.inner.audit
     }
 
     pub(crate) fn auth(&self) -> Arc<AuthConfig> {
@@ -333,6 +345,7 @@ impl AppState {
         &self,
         blueprint: &Arc<Blueprint>,
         harness_secrets: &Arc<submilli_blueprint::HarnessSecretBindings>,
+        network_policy: &Arc<interpreter::runtime::NetworkPolicy>,
     ) -> Option<Arc<dyn LlmProvider>> {
         let dispatch = match self.inner.llm_dispatch.as_ref() {
             Some(installed) => Arc::clone(installed),
@@ -340,7 +353,7 @@ impl AppState {
                 HttpModelDispatch::new(
                     Arc::clone(blueprint),
                     self.secret_store().cloned(),
-                    Arc::clone(self.network_policy()),
+                    Arc::clone(network_policy),
                 )
                 .with_harness_secrets(Arc::clone(harness_secrets)),
             ) as Arc<dyn ModelDispatch>,
@@ -439,6 +452,7 @@ impl AppState {
         blueprint: &Blueprint,
         servers: &BTreeSet<String>,
         harness_secrets: &Arc<submilli_blueprint::HarnessSecretBindings>,
+        network_policy: &Arc<interpreter::runtime::NetworkPolicy>,
     ) -> Arc<McpCatalog> {
         if servers.is_empty() || blueprint.mcp.is_empty() {
             return Arc::new(McpCatalog::empty());
@@ -459,7 +473,10 @@ impl AppState {
         }
         let discovered = Arc::new(
             discover_selected(
-                self.discovery_auth(Some(harness_secrets)),
+                DiscoveryAuth {
+                    network_policy,
+                    ..self.discovery_auth(Some(harness_secrets))
+                },
                 blueprint_name,
                 blueprint,
                 &declared,
@@ -746,21 +763,33 @@ fn layered_package_store(root: Option<PathBuf>, fallback: Option<PathBuf>) -> Pa
 }
 
 pub fn app(state: AppState) -> Router {
-    routes(state.auth()).router.with_state(state)
+    routes(state.auth(), state.audit().clone())
+        .router
+        .with_state(state)
 }
 
 /// Every route and the access it requires, in registration order.
 pub fn route_table() -> Vec<(&'static str, Access)> {
-    routes(Arc::new(AuthConfig::Disabled)).table
+    routes(
+        Arc::new(AuthConfig::Disabled),
+        crate::audit::AuditLog::new(
+            crate::audit::AuditConfig {
+                enabled: false,
+                ..Default::default()
+            },
+            None,
+        ),
+    )
+    .table
 }
 
-fn routes(auth: Arc<AuthConfig>) -> Routes {
+fn routes(auth: Arc<AuthConfig>, audit: crate::audit::AuditLog) -> Routes {
     use crate::handlers::{
         admin, blueprint, capabilities, execute, last_run, mcp_auth, packages, secret, sessions,
         volumes,
     };
 
-    Routes::new(auth)
+    Routes::new(auth, audit)
         .route("/healthz", Access::Public, get(admin::healthz))
         .route("/v1/status", Access::Admin, get(admin::status))
         .route("/v1/shutdown", Access::Admin, post(admin::shutdown))
@@ -884,14 +913,16 @@ fn routes(auth: Arc<AuthConfig>) -> Routes {
 struct Routes {
     router: Router<AppState>,
     auth: Arc<AuthConfig>,
+    audit: crate::audit::AuditLog,
     table: Vec<(&'static str, Access)>,
 }
 
 impl Routes {
-    fn new(auth: Arc<AuthConfig>) -> Self {
+    fn new(auth: Arc<AuthConfig>, audit: crate::audit::AuditLog) -> Self {
         Self {
             router: Router::new(),
             auth,
+            audit,
             table: Vec::new(),
         }
     }
@@ -908,7 +939,7 @@ impl Routes {
             // request with a method the path does not serve is refused for its
             // missing token before it learns which methods exist.
             Access::User | Access::Admin => handlers.layer(middleware::from_fn_with_state(
-                Guard::new(Arc::clone(&self.auth), access),
+                Guard::new(self.auth.clone(), access, self.audit.clone()),
                 crate::auth::require,
             )),
         };

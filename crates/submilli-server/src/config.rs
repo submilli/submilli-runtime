@@ -16,6 +16,8 @@ use crate::session_store::DurableSessionStore;
 
 #[derive(Clone, Default)]
 pub struct ServerConfig {
+    pub audit: crate::audit::AuditConfig,
+    pub audit_log: Option<crate::audit::AuditLog>,
     pub runtime: RuntimeConfig,
     /// TLS configuration for the listener. None keeps plain HTTP.
     pub tls: Option<Arc<rustls::ServerConfig>>,

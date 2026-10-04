@@ -35,12 +35,35 @@ pub async fn serve(addr: SocketAddr, config: ServerConfig, shutdown_grace: Durat
 
     crate::auth::log_auth_posture(addr.ip(), &config.auth);
     let tls = config.tls.clone();
+    let settings_hash = crate::audit::settings_hash(&config, addr, shutdown_grace);
+    let allow_unauthenticated = matches!(config.auth, crate::auth::AuthConfig::Disabled);
     let state = AppState::new(config)?;
+    let audit = state.audit().clone();
     // Rehydrate persisted sessions and sweep orphan directories before serving,
     // so an immediate reconnect resolves instead of 404-ing.
     state.boot().await;
     let listener = tokio::net::TcpListener::bind(addr).await?;
     let bound = listener.local_addr()?;
+    audit.emit(
+        "server",
+        serde_json::Map::from_iter([
+            ("event".into(), serde_json::json!("started")),
+            (
+                "version".into(),
+                serde_json::json!(env!("CARGO_PKG_VERSION")),
+            ),
+            ("settings_hash".into(), serde_json::json!(settings_hash)),
+            (
+                "allow_unauthenticated".into(),
+                serde_json::json!(allow_unauthenticated),
+            ),
+            (
+                "egress_grants".into(),
+                serde_json::json!(egress_environment_grants()),
+            ),
+        ]),
+    );
+    let _lifecycle = ServerAuditStop(audit);
     state.set_bind_addr(bound);
     let shutdown = state.shutdown_signal();
     let router = app(state);
@@ -60,23 +83,30 @@ pub async fn serve(addr: SocketAddr, config: ServerConfig, shutdown_grace: Durat
     serve_listener(listener, router, signals, shutdown, shutdown_grace).await
 }
 
-async fn serve_listener<L: axum::serve::Listener<Addr = SocketAddr>>(
+async fn serve_listener<L>(
     listener: L,
     router: axum::Router,
     signals: ShutdownSignals,
     shutdown: Arc<Notify>,
     shutdown_grace: Duration,
-) -> Result<()> {
+) -> Result<()>
+where
+    L: axum::serve::Listener<Addr = SocketAddr>,
+    for<'a> PeerAddr: axum::extract::connect_info::Connected<axum::serve::IncomingStream<'a, L>>,
+{
     // The handoff doubles as the "drain has begun" signal and as the transfer of
     // the signal streams, which the deadline needs to notice a second signal.
     let (draining, drain_started) = oneshot::channel();
-    let server = axum::serve(listener, router)
-        .with_graceful_shutdown(async move {
-            let mut signals = signals;
-            signals.recv(shutdown).await;
-            let _ = draining.send(signals);
-        })
-        .into_future();
+    let server = axum::serve(
+        listener,
+        router.into_make_service_with_connect_info::<PeerAddr>(),
+    )
+    .with_graceful_shutdown(async move {
+        let mut signals = signals;
+        signals.recv(shutdown).await;
+        let _ = draining.send(signals);
+    })
+    .into_future();
 
     tokio::select! {
         // Biased so a drain that finishes as the deadline expires is reported as
@@ -92,6 +122,58 @@ async fn serve_listener<L: axum::serve::Listener<Addr = SocketAddr>>(
         }
     }
     Ok(())
+}
+
+#[derive(Clone)]
+pub(crate) struct PeerAddr(pub(crate) SocketAddr);
+
+impl
+    axum::extract::connect_info::Connected<axum::serve::IncomingStream<'_, tokio::net::TcpListener>>
+    for PeerAddr
+{
+    fn connect_info(stream: axum::serve::IncomingStream<'_, tokio::net::TcpListener>) -> Self {
+        Self(*stream.remote_addr())
+    }
+}
+
+impl axum::extract::connect_info::Connected<axum::serve::IncomingStream<'_, crate::tls::Listener>>
+    for PeerAddr
+{
+    fn connect_info(stream: axum::serve::IncomingStream<'_, crate::tls::Listener>) -> Self {
+        Self(*stream.remote_addr())
+    }
+}
+
+struct ServerAuditStop(crate::audit::AuditLog);
+
+impl Drop for ServerAuditStop {
+    fn drop(&mut self) {
+        self.0.emit(
+            "server",
+            serde_json::Map::from_iter([("event".into(), serde_json::json!("stopped"))]),
+        );
+    }
+}
+
+fn egress_environment_grants() -> Vec<&'static str> {
+    [
+        "SUBMILLI_ALLOW_LOCALHOST",
+        "SUBMILLI_ALLOW_PRIVATE",
+        "SUBMILLI_ALLOW_IP",
+    ]
+    .into_iter()
+    .filter(|key| {
+        let value = std::env::var(key).unwrap_or_default();
+        if *key == "SUBMILLI_ALLOW_IP" {
+            value.split(',').any(|part| !part.trim().is_empty())
+        } else {
+            matches!(
+                value.trim().to_ascii_lowercase().as_str(),
+                "1" | "true" | "yes" | "on"
+            )
+        }
+    })
+    .collect()
 }
 
 /// Why the drain stopped early.

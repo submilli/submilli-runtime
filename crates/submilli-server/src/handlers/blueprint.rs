@@ -241,6 +241,8 @@ pub async fn add(
     verify_secrets(&state, &blueprint).await?;
     verify_packages(&state, &blueprint)?;
     let name = blueprint.name.clone();
+    crate::audit::annotate(serde_json::json!({"name": name,
+        "new_hash": crate::audit::blueprint_hash(&blueprint)}));
     state
         .blueprints()
         .add_yaml(StoredBlueprint::new(
@@ -278,15 +280,16 @@ pub async fn apply(
     Json(req): Json<AddRequest>,
 ) -> Result<(StatusCode, Json<ApplyResponse>), (StatusCode, Json<ErrorResponse>)> {
     let blueprint = parse_blueprint(&req.yaml)?;
+    crate::audit::annotate(
+        serde_json::json!({"new_hash": crate::audit::blueprint_hash(&blueprint)}),
+    );
     reject_unusable_volume_reference(&blueprint, state.session_manager().volumes())?;
     verify_secrets(&state, &blueprint).await?;
     verify_packages(&state, &blueprint)?;
-    let packages_changed = state
-        .blueprints()
-        .get(&name)
-        .await
-        .map_err(store_error)?
-        .is_some_and(|existing| existing.packages != blueprint.packages);
+    let previous = state.blueprints().get(&name).await.map_err(store_error)?;
+    crate::audit::annotate(serde_json::json!({"name": name,
+        "old_hash": previous.as_ref().map(crate::audit::blueprint_hash)}));
+    let packages_changed = previous.is_some_and(|existing| existing.packages != blueprint.packages);
     if blueprint.name != name {
         let message = format!(
             "blueprint name '{}' in the file does not match '{name}' in the request path",
@@ -315,6 +318,9 @@ pub async fn apply(
     if packages_changed {
         state.evict_prepared_packages(&name);
     }
+    crate::audit::annotate(
+        serde_json::json!({"event": if created { "blueprint_created" } else { "blueprint_replaced" }}),
+    );
     crate::metrics::blueprint_apply(created);
     Ok((StatusCode::OK, Json(ApplyResponse { name, created })))
 }
@@ -399,6 +405,15 @@ pub async fn remove(
     State(state): State<AppState>,
     Path(name): Path<String>,
 ) -> Result<(StatusCode, Json<AddResponse>), (StatusCode, Json<ErrorResponse>)> {
+    let previous = match state.blueprints().get(&name).await {
+        Ok(previous) => previous,
+        Err(error) => {
+            crate::blueprint::store_failure_message(error);
+            None
+        }
+    };
+    crate::audit::annotate(serde_json::json!({"name": name,
+        "old_hash": previous.as_ref().map(crate::audit::blueprint_hash)}));
     let removed = state
         .blueprints()
         .remove(&name)

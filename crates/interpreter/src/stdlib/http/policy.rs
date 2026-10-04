@@ -19,6 +19,7 @@ use reqwest::dns::{Addrs, Name, Resolve, Resolving};
 /// `submilli-server` binary opts into [`NetworkPolicy::deny_private`].
 #[derive(Clone, Debug, Default)]
 pub struct NetworkPolicy {
+    observer: Option<EgressObserver>,
     /// Master switch. `false` (default) permits everything — no filtering. When
     /// `true`, private/loopback/special IP space is blocked except where an
     /// opt-out below applies.
@@ -30,7 +31,28 @@ pub struct NetworkPolicy {
     allow: Vec<IpNet>,
 }
 
+#[derive(Clone)]
+struct EgressObserver(Arc<dyn Fn(&str) + Send + Sync>);
+
+impl std::fmt::Debug for EgressObserver {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("EgressObserver")
+    }
+}
+
 impl NetworkPolicy {
+    /// Observe refused destinations without changing the network policy.
+    pub fn with_denial_observer(mut self, observer: Arc<dyn Fn(&str) + Send + Sync>) -> Self {
+        self.observer = Some(EgressObserver(observer));
+        self
+    }
+
+    fn observe_denial(&self, host: &str) {
+        if let Some(observer) = &self.observer {
+            observer.0(host);
+        }
+    }
+
     /// Permit every address. The library/CLI default.
     pub fn allow_all() -> Self {
         Self::default()
@@ -60,6 +82,7 @@ impl NetworkPolicy {
         if self.permits(ip) {
             Ok(())
         } else {
+            self.observe_denial(&ip.to_string());
             Err(format!(
                 "blocked by network policy: {ip} is private/loopback IP space; \
                  allow-list it on the server with --allow-ip / --allow-localhost / --allow-private"
@@ -134,6 +157,16 @@ impl PolicyResolver {
     }
 }
 
+#[derive(Debug)]
+pub(super) struct EgressDenied(pub String);
+
+impl std::fmt::Display for EgressDenied {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+impl std::error::Error for EgressDenied {}
+
 impl Resolve for PolicyResolver {
     fn resolve(&self, name: Name) -> Resolving {
         let policy = self.policy.clone();
@@ -141,9 +174,7 @@ impl Resolve for PolicyResolver {
             let permitted = policy.resolve_permitted(name.as_str()).await.map_err(
                 |e| -> Box<dyn std::error::Error + Send + Sync> {
                     match e {
-                        ResolveFailure::Blocked(message) => {
-                            Box::new(std::io::Error::other(message))
-                        }
+                        ResolveFailure::Blocked(message) => Box::new(EgressDenied(message)),
                         ResolveFailure::Lookup(error) => Box::new(error),
                     }
                 },
@@ -175,6 +206,7 @@ impl NetworkPolicy {
             .map_err(ResolveFailure::Lookup)?;
         let permitted: Vec<SocketAddr> = resolved.filter(|addr| self.permits(addr.ip())).collect();
         if permitted.is_empty() {
+            self.observe_denial(host);
             return Err(ResolveFailure::Blocked(blocked_message(host)));
         }
         Ok(permitted)

@@ -102,6 +102,7 @@ pub async fn uninstall(
     State(state): State<AppState>,
     Path(name): Path<String>,
 ) -> Result<Json<UninstallResponse>, (StatusCode, Json<serde_json::Value>)> {
+    crate::audit::annotate(crate::audit::package_fields(&state, &name));
     let store = state.package_store();
     let error = |status: StatusCode, error: &str, message: String| {
         (
@@ -347,6 +348,7 @@ pub async fn install(
     let store = state.package_store().clone();
     let token_file = state.github_token_file().map(std::path::Path::to_path_buf);
     let installer_state = state.clone();
+    let audit = crate::audit::mutation_owner();
     tokio::task::spawn_blocking(move || {
         let install = || install_with_server_token(&store, req, token_file);
         let outcome = match compiler_thread::run(install) {
@@ -360,6 +362,23 @@ pub async fn install(
         // and a client that hangs up does not stop this task, so the eviction
         // rides with the install rather than with the request.
         installer_state.evict_all_prepared_packages();
+        if let Some(audit) = audit {
+            let status = match &outcome {
+                Ok(response) => {
+                    let packages = response
+                        .installed
+                        .iter()
+                        .map(|name| crate::audit::package_fields(&installer_state, name))
+                        .collect::<Vec<_>>();
+                    audit.annotate(
+                        serde_json::json!({"packages": packages, "commit": response.sha}),
+                    );
+                    StatusCode::OK
+                }
+                Err(failure) => failure.0,
+            };
+            audit.finish(status);
+        }
         outcome
     })
     .await

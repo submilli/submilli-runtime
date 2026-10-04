@@ -309,6 +309,7 @@ async fn failed_execution_lookup_creates_no_session_and_keeps_runtime_envelope()
     assert_eq!(body["error"]["kind"], "runtime_error");
     assert_eq!(body["error"]["message"], "blueprint store unavailable");
     assert!(body["result"].is_null());
+    assert!(uuid::Uuid::parse_str(body["execution_id"].as_str().unwrap()).is_ok());
     let (status, _, body) = harness
         .request("POST", "/v1/sessions", json!({"blueprint":"tenant"}), None)
         .await;
@@ -389,6 +390,9 @@ async fn mcp_methods_propagate_store_failures_instead_of_using_fallbacks() {
         assert_eq!(status, StatusCode::OK, "{body}");
         assert_eq!(body["error"]["code"], -32603, "{body}");
         assert_eq!(body["error"]["message"], "blueprint store unavailable", "{body}");
+        if index == 4 {
+            assert!(uuid::Uuid::parse_str(body["error"]["data"]["execution_id"].as_str().unwrap()).is_ok());
+        }
     }
     harness.store.reads_left.store(usize::MAX, Ordering::SeqCst);
     let (_, _, body) = harness
@@ -426,6 +430,9 @@ async fn session_lookup_failure_does_not_reserve_the_idempotency_key() {
             "{path}: {response}"
         );
         assert_internal(&response);
+        if suffix == "execute" {
+            assert!(uuid::Uuid::parse_str(response["execution_id"].as_str().unwrap()).is_ok());
+        }
     }
     harness.store.reads_left.store(usize::MAX, Ordering::SeqCst);
     // A different program under the same key must run, proving no reservation/fingerprint was stored.
@@ -438,4 +445,16 @@ async fn session_lookup_failure_does_not_reserve_the_idempotency_key() {
         )
         .await;
     assert_eq!(response["result"], "42", "{response}");
+}
+
+#[tokio::test]
+async fn audit_metadata_read_failure_does_not_block_blueprint_deletion() {
+    let harness = Harness::new();
+    harness.store.reads_left.store(0, Ordering::SeqCst);
+    let (status, _, body) = harness
+        .request("DELETE", "/v1/blueprints/tenant", Value::Null, None)
+        .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["name"], "tenant");
+    assert!(harness.store.inner.list().await.unwrap().is_empty());
 }

@@ -272,7 +272,7 @@ export function main(): string {
 }"#;
     let router = router(RuntimeConfig::default());
     let response = execute(&router, CAUGHT_RECURSION_IN_CALLBACK).await;
-    assert_failed_with(&response, "runtime_error", "call stack exhausted");
+    assert_failed_with(&response, "stack_exhausted", "call stack exhausted");
     assert_still_serves(&router).await;
 }
 

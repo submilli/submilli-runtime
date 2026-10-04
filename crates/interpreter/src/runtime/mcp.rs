@@ -290,6 +290,7 @@ mod tests {
     impl SecurityCheck for DenyAll {
         fn check(&self, _: &str, capability: &str, _: &serde_json::Value) -> CheckOutcome {
             CheckOutcome::Deny {
+                rule: None,
                 reason: format!("denied {capability}"),
             }
         }

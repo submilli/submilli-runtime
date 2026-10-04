@@ -291,11 +291,45 @@ impl SubmilliMcp {
         Parameters(args): Parameters<ExecuteArgs>,
         Extension(parts): Extension<axum::http::request::Parts>,
     ) -> Result<CallToolResult, ErrorData> {
-        let blueprint = Arc::new(self.require_blueprint().await?);
+        let audit = parts
+            .extensions
+            .get::<Arc<crate::audit::ExecutionAudit>>()
+            .cloned()
+            .ok_or_else(|| ErrorData::internal_error("missing execution audit context", None))?;
+        self.execute_inner(args, parts, audit).await
+    }
+
+    async fn execute_inner(
+        &self,
+        args: ExecuteArgs,
+        parts: axum::http::request::Parts,
+        audit: Arc<crate::audit::ExecutionAudit>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let blueprint = Arc::new(self.require_blueprint().await.inspect_err(|error| {
+            audit.error(if error.code == ErrorCode::INTERNAL_ERROR {
+                crate::error::ErrorKind::RuntimeError
+            } else {
+                crate::error::ErrorKind::BlueprintNotFound
+            });
+        })?);
 
         // Stateful transport: every connection has a session id (rmcp rejects a
         // non-initialize request without one before we get here).
         let session_id = session_header(&parts);
+        // Variables were bound and validated at `initialize`; read this session's
+        // resolved bindings (empty if none) for the policy filter.
+        let variables = self
+            .state
+            .session_manager()
+            .variables(session_id.as_deref().unwrap_or(""));
+
+        audit.annotate(
+            &args.code,
+            &self.blueprint_name,
+            Some(&blueprint),
+            &variables,
+        );
+        audit.begin();
         let harness_secrets = match self
             .state
             .session_manager()
@@ -306,6 +340,7 @@ impl SubmilliMcp {
                 Arc::new(HarnessSecretBindings::new())
             }
             None => {
+                audit.error(crate::error::ErrorKind::InvalidRequest);
                 return Err(ErrorData::invalid_request(
                     "session_requires_secrets",
                     Some(serde_json::json!({
@@ -315,18 +350,14 @@ impl SubmilliMcp {
             }
         };
 
-        // Variables were bound and validated at `initialize`; read this session's
-        // resolved bindings (empty if none) for the policy filter.
-        let variables = self
-            .state
-            .session_manager()
-            .variables(session_id.as_deref().unwrap_or(""));
-
-        let parsed = runner::parse(&args.code)
-            .map_err(|error| ErrorData::internal_error(error.to_string(), None))?;
-        let script_imports = parsed
-            .imports()
-            .map_err(|message| ErrorData::internal_error(message, None))?;
+        let parsed = runner::parse(&args.code).map_err(|error| {
+            audit.error(crate::error::ErrorKind::CompileError);
+            ErrorData::internal_error(error.to_string(), None)
+        })?;
+        let script_imports = parsed.imports().map_err(|message| {
+            audit.error(crate::error::ErrorKind::CompileError);
+            ErrorData::internal_error(message, None)
+        })?;
         let (vfs, vfs_info) = self
             .acquire_vfs(
                 &blueprint,
@@ -334,21 +365,26 @@ impl SubmilliMcp {
                 VfsUse::RunProgram,
                 &variables,
             )
-            .await?;
+            .await
+            .inspect_err(|_| {
+                audit.error(crate::error::ErrorKind::RuntimeError);
+            })?;
 
         let manager = self.state.session_manager();
         let http_client = manager.http_client(session_id.as_deref().unwrap_or(""));
+        let network_policy = audit.network_policy(self.state.network_policy());
         let mcp_transport = Arc::new(
             submilli_shared::mcp::transport::StreamableHttpTransport::new(
                 self.blueprint_name.clone(),
                 Arc::clone(&blueprint),
                 self.state.oauth_token_manager().cloned(),
                 self.state.secret_store().cloned(),
-                Arc::clone(self.state.network_policy()),
+                Arc::clone(&network_policy),
             )
             .with_harness_secrets(Arc::clone(&harness_secrets)),
         );
         let services = runner::HostServices {
+            audit: Some(audit.clone()),
             git: submilli_shared::resolve_git(&blueprint, &variables)
                 .map_err(|error| error.to_string()),
             auth_proxy: Arc::new(BlueprintAuthProxy::with_harness(
@@ -361,14 +397,21 @@ impl SubmilliMcp {
                 self.state.secret_store().cloned(),
                 Arc::clone(&harness_secrets),
             )),
-            security_check: Arc::new(PolicyCheck::with_variables(
-                Arc::clone(&blueprint),
-                variables,
-            )),
+            security_check: Arc::new(crate::audit::AuditedPolicy {
+                policy: Arc::new(PolicyCheck::with_variables(
+                    Arc::clone(&blueprint),
+                    variables,
+                )),
+                execution: audit.clone(),
+            }),
             http_client,
             mcp_transport,
             session_kv: manager.session_kv_for_execute(session_id.as_deref().unwrap_or("")),
-            llm_provider: self.state.llm_provider_for(&blueprint, &harness_secrets),
+            llm_provider: self.state.llm_provider_for(
+                &blueprint,
+                &harness_secrets,
+                &network_policy,
+            ),
             llm_budget: Some(manager.llm_budget_for_execute()),
         };
         let mcp_catalog = self
@@ -378,12 +421,16 @@ impl SubmilliMcp {
                 &blueprint,
                 &script_imports.mcp_servers,
                 &harness_secrets,
+                &network_policy,
             )
             .await;
         let packages = self
             .state
             .prepared_packages_for_imports(&self.blueprint_name, &blueprint, &script_imports)
-            .map_err(|err| ErrorData::internal_error(err.to_string(), None))?;
+            .map_err(|err| {
+                audit.error(crate::error::ErrorKind::PackageResolution);
+                ErrorData::internal_error(err.to_string(), None)
+            })?;
         let outcome = runner::run(
             &args.code,
             parsed,
@@ -595,6 +642,7 @@ impl SubmilliMcp {
             .session_manager()
             .variables(session_id.as_deref().unwrap_or(""));
         if let Err(refused) = self.authorize_file_call(
+            &parts,
             Arc::clone(&blueprint),
             Arc::clone(&variables),
             "fs.read",
@@ -653,6 +701,7 @@ impl SubmilliMcp {
         let dir = args.path.as_deref().unwrap_or(".");
         let recursive = args.recursive.unwrap_or(false);
         if let Err(refused) = self.authorize_file_call(
+            &parts,
             Arc::clone(&blueprint),
             Arc::clone(&variables),
             "fs.list",
@@ -701,6 +750,7 @@ impl SubmilliMcp {
     /// that the path is wrong.
     fn authorize_file_call(
         &self,
+        parts: &axum::http::request::Parts,
         blueprint: Arc<Blueprint>,
         variables: Arc<submilli_blueprint::VarBindings>,
         capability: &str,
@@ -719,10 +769,19 @@ impl SubmilliMcp {
             .map_err(|error| FileToolError::denied(capability, &error.to_string()))?;
         guest_normalize(config.cwd(), path)
             .map_err(|error| FileToolError::file(path, error.into()))?;
-        let policy = PolicyCheck::with_variables(blueprint, variables);
-        let reason = match policy.check_with_cwd("main", capability, &context, config.cwd()) {
-            CheckOutcome::Allow => return Ok(()),
-            CheckOutcome::Deny { reason } => reason,
+        let policy = PolicyCheck::with_variables(blueprint.clone(), variables);
+        let outcome = policy.check_with_cwd("main", capability, &context, config.cwd());
+        let audit_context = policy.audit_context(capability, &context, config.cwd());
+        self.state.audit().file_decision(
+            parts,
+            &blueprint,
+            capability,
+            audit_context.as_ref(),
+            &outcome,
+        );
+        let reason = match outcome {
+            CheckOutcome::Allow { .. } => return Ok(()),
+            CheckOutcome::Deny { reason, .. } => reason,
             _ => "unrecognized policy outcome".to_string(),
         };
         Err(FileToolError::denied(capability, &reason))
@@ -945,8 +1004,42 @@ impl ServerHandler for SubmilliMcp {
     async fn call_tool(
         &self,
         mut request: CallToolRequestParams,
-        context: RequestContext<RoleServer>,
+        mut context: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, ErrorData> {
+        let audit = if request.name.as_ref() == TOOL_NAME {
+            let parts = context.extensions.get::<axum::http::request::Parts>();
+            let principal = parts
+                .and_then(|p| p.extensions.get::<crate::audit::Principal>())
+                .map_or("unauthenticated", |p| p.0.as_str());
+            let session = parts.and_then(session_header);
+            let audit = crate::audit::ExecutionAudit::new(
+                self.state.audit().clone(),
+                principal,
+                "mcp",
+                session.as_deref(),
+            );
+            let code = request
+                .arguments
+                .as_ref()
+                .and_then(|a| a.get("code"))
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or_default();
+            audit.annotate(
+                code,
+                &self.blueprint_name,
+                None,
+                &self
+                    .state
+                    .session_manager()
+                    .variables(session.as_deref().unwrap_or("")),
+            );
+            if let Some(parts) = context.extensions.get_mut::<axum::http::request::Parts>() {
+                parts.extensions.insert(audit.clone());
+            }
+            Some(audit)
+        } else {
+            None
+        };
         let tool = self
             .tool_router
             .get(&request.name)
@@ -955,7 +1048,19 @@ impl ServerHandler for SubmilliMcp {
             normalize_tool_arguments(arguments, &tool.input_schema);
         }
         let tcc = ToolCallContext::new(self, request, context);
-        self.tool_router.call(tcc).await.or_else(tool_call_failure)
+        let result = self.tool_router.call(tcc).await;
+        if let (Some(audit), Err(error)) = (&audit, &result)
+            && error.code == rmcp::model::ErrorCode::INVALID_PARAMS
+        {
+            audit.error(crate::error::ErrorKind::InvalidRequest);
+        }
+        let result = result.or_else(tool_call_failure);
+        let Some(audit) = audit else {
+            return result;
+        };
+        let success = result.as_ref().is_ok_and(|r| !r.is_error.unwrap_or(false));
+        audit.finish(success);
+        with_execution_id(result, &audit.id)
     }
 
     async fn list_tools(
@@ -1012,6 +1117,37 @@ impl ServerHandler for SubmilliMcp {
 
 fn blueprint_store_error(error: crate::blueprint::StoreError) -> ErrorData {
     ErrorData::internal_error(crate::blueprint::store_failure_message(error), None)
+}
+
+fn with_execution_id(
+    result: Result<CallToolResult, ErrorData>,
+    id: &str,
+) -> Result<CallToolResult, ErrorData> {
+    match result {
+        Ok(mut result) => {
+            if let Some(mut value) = result.structured_content.take() {
+                if let Some(fields) = value.as_object_mut() {
+                    fields.insert("execution_id".into(), serde_json::json!(id));
+                }
+                return Ok(if result.is_error.unwrap_or(false) {
+                    CallToolResult::structured_error(value)
+                } else {
+                    CallToolResult::structured(value)
+                });
+            }
+            Ok(result)
+        }
+        Err(mut error) => {
+            let mut data = error
+                .data
+                .take()
+                .and_then(|v| v.as_object().cloned())
+                .unwrap_or_default();
+            data.insert("execution_id".into(), serde_json::json!(id));
+            error.data = Some(serde_json::Value::Object(data));
+            Err(error)
+        }
+    }
 }
 
 fn tool_call_failure(error: ErrorData) -> Result<CallToolResult, ErrorData> {

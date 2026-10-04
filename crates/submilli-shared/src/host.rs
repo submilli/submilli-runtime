@@ -65,6 +65,15 @@ impl PolicyCheck {
 }
 
 impl SecurityCheck for PolicyCheck {
+    fn audit_context<'a>(
+        &self,
+        capability: &str,
+        context: &'a serde_json::Value,
+        cwd: &str,
+    ) -> Cow<'a, serde_json::Value> {
+        filesystem_policy_context(capability, context, cwd).unwrap_or(Cow::Borrowed(context))
+    }
+
     fn check(&self, caller: &str, capability: &str, context: &serde_json::Value) -> CheckOutcome {
         self.check_with_cwd(caller, capability, context, "/")
     }
@@ -78,20 +87,25 @@ impl SecurityCheck for PolicyCheck {
     ) -> CheckOutcome {
         let context = match filesystem_policy_context(capability, context, cwd) {
             Ok(context) => context,
-            Err(reason) => return CheckOutcome::Deny { reason },
+            Err(reason) => return CheckOutcome::Deny { reason, rule: None },
         };
-        match self
-            .blueprint
-            .resolve_permission(caller, capability, &context, &self.variables)
-        {
-            Action::Allow => CheckOutcome::Allow,
+        let (action, rule) = self.blueprint.resolve_permission_with_rule(
+            caller,
+            capability,
+            &context,
+            &self.variables,
+        );
+        match action {
+            Action::Allow => CheckOutcome::Allow { rule },
             Action::Deny => CheckOutcome::Deny {
+                rule,
                 reason: format!(
                     "policy denied {capability}{} for {caller}",
                     filesystem_target(capability, &context)
                 ),
             },
             Action::AskHuman => CheckOutcome::Deny {
+                rule,
                 reason: format!(
                     "policy requires human approval for {capability}{} (caller {caller}); \
                      ask-human is deferred and treated as deny",
@@ -424,7 +438,7 @@ mod tests {
         ] {
             assert!(matches!(
                 policy.check_with_cwd("main", capability, &context, "/notes"),
-                CheckOutcome::Allow
+                CheckOutcome::Allow { .. }
             ));
             assert!(matches!(
                 policy.check_with_cwd("main", capability, &context, "/elsewhere"),
@@ -524,7 +538,7 @@ permissions:
                 assert!(
                     matches!(
                         policy.check("main", capability, &serde_json::json!({"path": path})),
-                        CheckOutcome::Allow
+                        CheckOutcome::Allow { .. }
                     ),
                     "{capability}: {path}"
                 );
@@ -552,7 +566,7 @@ permissions:
                     capability,
                     &serde_json::json!({"from": "ada/./file", "to": "ada/new"})
                 ),
-                CheckOutcome::Allow
+                CheckOutcome::Allow { .. }
             ));
             for (from, to) in [
                 ("/ada/../grace/file", "/ada/new"),
@@ -576,7 +590,7 @@ permissions:
                         "http.download",
                         &serde_json::json!({"vfs_path": path, "url_path": "/../remote"})
                     ),
-                    CheckOutcome::Allow
+                    CheckOutcome::Allow { .. }
                 ),
                 allowed
             );
@@ -600,7 +614,7 @@ permissions:
         let reason = |capability: &str, context: serde_json::Value| match policy
             .check("main", capability, &context)
         {
-            CheckOutcome::Deny { reason } => reason,
+            CheckOutcome::Deny { reason, .. } => reason,
             _ => panic!("{capability} not denied"),
         };
         assert_eq!(
@@ -655,7 +669,7 @@ permissions:
         ));
         assert!(matches!(
             policy.check("main", "fs.read", &serde_json::json!({"path": "/ada/file"})),
-            CheckOutcome::Allow
+            CheckOutcome::Allow { .. }
         ));
         for context in [
             serde_json::json!({}),
@@ -673,7 +687,7 @@ permissions:
                 "custom.read",
                 &serde_json::json!({"path": "/../remote"})
             ),
-            CheckOutcome::Allow
+            CheckOutcome::Allow { .. }
         ));
     }
 

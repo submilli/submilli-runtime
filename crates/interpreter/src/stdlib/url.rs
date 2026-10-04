@@ -707,7 +707,7 @@ mod tests {
                 .lock()
                 .unwrap()
                 .push((caller.to_string(), capability.to_string()));
-            CheckOutcome::Allow
+            CheckOutcome::Allow { rule: None }
         }
     }
 

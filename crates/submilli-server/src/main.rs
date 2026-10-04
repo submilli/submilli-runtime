@@ -274,7 +274,7 @@ fn main() -> Result<()> {
         return health_check(&cli);
     }
 
-    let resolved = file_config::resolve(cli)?;
+    let mut resolved = file_config::resolve(cli)?;
 
     // Init before the async runtime starts so the guard binds the Sentry hub for
     // every worker thread the runtime spawns. Skipped when telemetry is disabled
@@ -322,6 +322,20 @@ fn main() -> Result<()> {
     }
 
     let runtime = submilli_server::runtime(&resolved.config)?;
+    let audit = submilli_server::audit::AuditLog::new(
+        resolved.config.audit.clone(),
+        Some(log_output.clone()),
+    );
+    resolved.config.audit_log = Some(audit.clone());
+    let audit_reopen = submilli_server::logging::ReopenTask::start(audit.output())
+        .map_err(|_| {
+            use std::io::Write;
+            let _ = writeln!(
+                std::io::stderr().lock(),
+                "cannot start audit log rotation monitor"
+            );
+        })
+        .ok();
     let reopen = submilli_server::logging::ReopenTask::start(log_output)?;
     let result = runtime.block_on(serve(
         resolved.addr,
@@ -329,6 +343,15 @@ fn main() -> Result<()> {
         resolved.shutdown_grace,
     ));
     let reopen_result = reopen.stop();
+    if let Some(audit_reopen) = audit_reopen
+        && audit_reopen.stop().is_err()
+    {
+        use std::io::Write;
+        let _ = writeln!(
+            std::io::stderr().lock(),
+            "cannot stop audit log rotation monitor"
+        );
+    }
     // Consumes the runtime, so this replaces the implicit drop rather than
     // preceding it — the drop is what would otherwise wait indefinitely.
     runtime.shutdown_timeout(RUNTIME_TEARDOWN_BUDGET);
