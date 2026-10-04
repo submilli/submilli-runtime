@@ -37,7 +37,7 @@ Upstream: 4463 single-file TypeScript tests. Suite: 448 TypeScript cases, 657 te
 | `boolean` | §1.1 | done | 482 | 107 | 375 | 0 | 1707 | 1 of 1 | — | — |  |
 | `null` | §1.1 | done | 386 | 73 | 313 | 0 | 1370 | 1 of 1 | — | — |  |
 | `void` | §1.1 | done | 500 | 41 | 459 | 0 | 584 | 1 of 1 | — | — |  |
-| `never` | §1.1 | done | 72 | 8 | 64 | 0 | 67 | 1 of 1 | — | — |  |
+| `never` | §1.1 | done | 72 | 8 | 64 | 0 | 68 | 1 of 1 | — | — |  |
 | `bigint` | §1.1 | done | 16 | 3 | 13 | 0 | 14 | 1 of 1 | 16 | 68 |  |
 | Radix literals (`0x`/`0b`/`0o`) | §1.1 | done | 22 | 2 | 20 | 0 | 10 | 4 of 4 | — | — |  |
 | `unknown` | §2.11 | done | 74 | 10 | 64 | 0 | 734 | 1 of 1 | — | — |  |
@@ -126,7 +126,7 @@ Upstream: 4463 single-file TypeScript tests. Suite: 448 TypeScript cases, 657 te
 |:--|:--|:--|--:|--:|--:|--:|--:|--:|--:|--:|:--|
 | Class declarations | §2.2 | done | 1807 | 109 | 1698 | 0 | 361 | 1 of 1 | — | — |  |
 | `constructor` | §2.2 | done | 373 | 27 | 346 | 0 | 17 | 1 of 1 | — | — |  |
-| Instance methods | §2.2 | done | 699 | 30 | 669 | 0 | 29 | 1 of 1 | — | — |  |
+| Instance methods | §2.2 | done | 699 | 30 | 669 | 0 | 30 | 1 of 1 | — | — |  |
 | Instance properties | §2.2 | done | 838 | 70 | 768 | 0 | 90 | 1 of 1 | — | — |  |
 | Field initializers | §2.2 | done | 260 | 20 | 240 | 0 | 4 | 1 of 1 | — | — |  |
 | Parameter properties | §2.2 | done | 118 | 14 | 104 | 0 | 15 | 1 of 1 | — | — |  |
