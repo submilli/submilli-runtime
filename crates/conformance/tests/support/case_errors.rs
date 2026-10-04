@@ -21,6 +21,8 @@ const SHARED_SYNTAX_CHECKS: &[&str] = &[
     "cannot have a default value",
     "requires parentheses",
     "cannot be the left operand of",
+    "legacy octal literal",
+    "cannot have a leading zero",
     "requires at least one of",
     "only applies to array and tuple types",
     "can't be the body of a statement without braces",

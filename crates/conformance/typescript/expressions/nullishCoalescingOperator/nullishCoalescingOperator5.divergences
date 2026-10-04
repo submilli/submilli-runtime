@@ -1,5 +1,1 @@
-types: 58 of 78 tsc entries compared, 0 differ
-
-errors:
-line 9: tsc TS5076: '??' and '||' operations cannot be mixed without parentheses. (we accept)
-line 15: tsc TS5076: '??' and '&&' operations cannot be mixed without parentheses. (we accept)
+types: 49 of 78 tsc entries compared, 0 differ

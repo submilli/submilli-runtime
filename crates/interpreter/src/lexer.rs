@@ -359,6 +359,54 @@ impl<'a> Lexer<'a> {
             return self.lex_radix_number(start, radix);
         }
 
+        let token = self.lex_decimal_number(start);
+        if matches!(
+            token.kind,
+            TokenKind::NumberLiteral(_) | TokenKind::BigIntLiteral(_)
+        ) {
+            self.reject_leading_zero(token.span);
+        }
+        token
+    }
+
+    /// Strict-mode JavaScript and TypeScript reject an integer part that starts with
+    /// `0` and has more digits: legacy octal (`010`, which sloppy JavaScript reads as
+    /// 8) and decimals with a leading zero (`09`, `08.5`).
+    fn reject_leading_zero(&mut self, span: Span) {
+        // An invalid span is reported as a fatal error by `next_token`.
+        let Ok(literal) = span.text(self.source, self.file) else {
+            return;
+        };
+        let int_len = literal.bytes().take_while(u8::is_ascii_digit).count();
+        let (int_part, rest) = literal.split_at(int_len);
+        if int_part.len() < 2 || !int_part.starts_with('0') {
+            return;
+        }
+        let significant = int_part.trim_start_matches('0');
+        let is_legacy_octal = matches!(rest, "" | "n")
+            && int_part.bytes().all(|digit| matches!(digit, b'0'..=b'7'));
+        if is_legacy_octal {
+            let help = if significant.is_empty() {
+                format!("write `0{rest}`")
+            } else {
+                format!("write `0o{significant}{rest}` for octal, or `{significant}{rest}` for decimal")
+            };
+            self.error_with_help(
+                span,
+                format!("legacy octal literal `{literal}` is not allowed"),
+                vec![help],
+            );
+            return;
+        }
+        let int_part = if significant.is_empty() { "0" } else { significant };
+        self.error_with_help(
+            span,
+            format!("decimal literal `{literal}` cannot have a leading zero"),
+            vec![format!("write `{int_part}{rest}`")],
+        );
+    }
+
+    fn lex_decimal_number(&mut self, start: u32) -> Token {
         let mut has_fraction_or_exponent = false;
 
         while matches!(self.peek(), Some(b'0'..=b'9')) {
@@ -1622,6 +1670,75 @@ mod tests {
                 diags[0].message
             );
         }
+    }
+
+    fn expect_single_leading_zero_error(source: &str, message: &str, help: &str) {
+        let (_, eof, diags) = tokenize_one(source);
+        assert_eq!(eof.kind, TokenKind::Eof, "{source:?} should lex as one token");
+        assert_eq!(diags.len(), 1, "diags for {source:?}: {diags:?}");
+        assert_eq!(diags[0].message, message, "message for {source:?}");
+        assert_eq!(diags[0].help, vec![help.to_string()], "help for {source:?}");
+        let source_len = u32::try_from(source.len()).unwrap();
+        assert_eq!(diags[0].span, Span::new(F, 0, source_len).unwrap());
+    }
+
+    #[test]
+    fn lex_legacy_octal_rejected() {
+        expect_single_leading_zero_error(
+            "010",
+            "legacy octal literal `010` is not allowed",
+            "write `0o10` for octal, or `10` for decimal",
+        );
+        expect_single_leading_zero_error(
+            "010n",
+            "legacy octal literal `010n` is not allowed",
+            "write `0o10n` for octal, or `10n` for decimal",
+        );
+        expect_single_leading_zero_error(
+            "000",
+            "legacy octal literal `000` is not allowed",
+            "write `0`",
+        );
+    }
+
+    #[test]
+    fn lex_leading_zero_decimal_rejected() {
+        expect_single_leading_zero_error(
+            "09",
+            "decimal literal `09` cannot have a leading zero",
+            "write `9`",
+        );
+        expect_single_leading_zero_error(
+            "08.5",
+            "decimal literal `08.5` cannot have a leading zero",
+            "write `8.5`",
+        );
+        expect_single_leading_zero_error(
+            "00.5",
+            "decimal literal `00.5` cannot have a leading zero",
+            "write `0.5`",
+        );
+        expect_single_leading_zero_error(
+            "07e1",
+            "decimal literal `07e1` cannot have a leading zero",
+            "write `7e1`",
+        );
+        expect_single_leading_zero_error(
+            "08n",
+            "decimal literal `08n` cannot have a leading zero",
+            "write `8n`",
+        );
+    }
+
+    #[test]
+    fn lex_single_leading_zero_accepted() {
+        expect_number("0", 0.0, Span::new(F, 0, 1).unwrap());
+        expect_number("0.5", 0.5, Span::new(F, 0, 3).unwrap());
+        expect_number("0e1", 0.0, Span::new(F, 0, 3).unwrap());
+        expect_number("0.010", 0.01, Span::new(F, 0, 5).unwrap());
+        expect_number("1e010", 1e10, Span::new(F, 0, 5).unwrap());
+        expect_number("0x010", 16.0, Span::new(F, 0, 5).unwrap());
+        expect_bigint("0n", "0", Span::new(F, 0, 2).unwrap());
     }
 
     #[test]

@@ -4294,7 +4294,9 @@ impl<'a> Parser<'a> {
 
     fn parse_binary_inner(&mut self, min_prec: u8) -> Option<ExprId> {
         let mut lhs = self.parse_cast()?;
-        // Track the previous op to reject `a || b ?? c` / `a ?? b || c` mixes.
+        // Track the previous op to reject `a || b ?? c` / `a ?? b || c` mixes. Both
+        // reach this loop: `??` parses its right operand above `&&` (see
+        // `right_operand_min_prec`), so `||` / `&&` after it is left for this check.
         let mut last_op: Option<BinOp> = None;
         while let Some((op, prec)) = peek_binop(&self.peek().kind) {
             if prec < min_prec {
@@ -4307,7 +4309,7 @@ impl<'a> Parser<'a> {
                 self.error_at_with_help(
                     op_span,
                     "mixing `??` with `||` / `&&` requires parentheses",
-                    vec!["wrap the side you mean: `(a || b) ?? c` or `a || (b ?? c)`".to_string()],
+                    vec![mixed_logical_help(last, op)],
                 );
                 return None;
             }
@@ -4326,12 +4328,7 @@ impl<'a> Parser<'a> {
                 return None;
             }
             self.advance();
-            let next_min = if is_right_associative(op) {
-                prec
-            } else {
-                prec + 1
-            };
-            let rhs = self.parse_binary(next_min)?;
+            let rhs = self.parse_binary(right_operand_min_prec(op, prec))?;
             let lhs_span = parse_arena_result(self.ast.try_expr(lhs), &mut self.fatal)?.span;
             let rhs_span = parse_arena_result(self.ast.try_expr(rhs), &mut self.fatal)?.span;
             lhs = parse_arena_result(
@@ -5445,11 +5442,32 @@ fn mixed_logical(prev: BinOp, next: BinOp) -> bool {
     (prev_logical && next_nullish) || (prev_nullish && next_logical)
 }
 
+/// Spells out both groupings in the order the operators were written. Called
+/// only for pairs `mixed_logical` accepts, so the non-`??` operator is `||` or `&&`.
+fn mixed_logical_help(prev: BinOp, next: BinOp) -> String {
+    let logical = if prev == BinOp::NullishCoalesce {
+        next
+    } else {
+        prev
+    };
+    let logical = if logical == BinOp::And { "&&" } else { "||" };
+    let (first, second) = if prev == BinOp::NullishCoalesce {
+        ("??", logical)
+    } else {
+        (logical, "??")
+    };
+    format!(
+        "add parentheses to choose the grouping: `(a {first} b) {second} c` or `a {first} (b {second} c)`"
+    )
+}
+
+const LOGICAL_AND_PREC: u8 = 2;
+
 fn peek_binop(kind: &TokenKind) -> Option<(BinOp, u8)> {
     Some(match kind {
         TokenKind::QuestionQuestion => (BinOp::NullishCoalesce, 0),
         TokenKind::PipePipe => (BinOp::Or, 1),
-        TokenKind::AmpAmp => (BinOp::And, 2),
+        TokenKind::AmpAmp => (BinOp::And, LOGICAL_AND_PREC),
         TokenKind::EqEqEq | TokenKind::EqEq => (BinOp::Eq, 3),
         TokenKind::BangEqEq | TokenKind::BangEq => (BinOp::NotEq, 3),
         TokenKind::LessThan => (BinOp::Lt, 4),
@@ -5486,8 +5504,15 @@ fn cannot_start_type(kind: &TokenKind) -> bool {
     )
 }
 
-fn is_right_associative(op: BinOp) -> bool {
-    matches!(op, BinOp::Pow)
+/// The lowest precedence the right operand of `op` may contain. `**` is
+/// right-associative, so it recurses at its own level. An operand of `??` may
+/// not be an unparenthesized `||` / `&&` expression, so it stops below them too.
+fn right_operand_min_prec(op: BinOp, prec: u8) -> u8 {
+    match op {
+        BinOp::Pow => prec,
+        BinOp::NullishCoalesce => LOGICAL_AND_PREC + 1,
+        _ => prec + 1,
+    }
 }
 
 fn compound_op_for_token(kind: &TokenKind) -> Option<BinOp> {
@@ -7199,6 +7224,57 @@ mod tests {
                 .any(|d| d.message.contains("mixing `??` with `||` / `&&`")),
             "expected mixing diagnostic, got: {diags:?}",
         );
+    }
+
+    #[test]
+    fn parse_nullish_followed_by_logical_rejected() {
+        for (source, help) in [
+            (
+                "const x: number = a ?? b || c;",
+                "`(a ?? b) || c` or `a ?? (b || c)`",
+            ),
+            (
+                "const x: number = a ?? b && c;",
+                "`(a ?? b) && c` or `a ?? (b && c)`",
+            ),
+            (
+                "const x: number = a ?? b ?? c || d;",
+                "`(a ?? b) || c` or `a ?? (b || c)`",
+            ),
+        ] {
+            let (_, diags) = parse_str(source);
+            assert_eq!(diags.len(), 1, "diags for {source:?}: {diags:?}");
+            assert!(
+                diags[0].message.contains("mixing `??` with `||` / `&&`"),
+                "message for {source:?}: {diags:?}",
+            );
+            assert!(
+                diags[0].help.iter().any(|h| h.contains(help)),
+                "help for {source:?}: {diags:?}",
+            );
+        }
+    }
+
+    #[test]
+    fn parse_nullish_operand_keeps_tighter_operators() {
+        // `a ?? (b == c)`: only `||` and `&&` are excluded from a `??` operand.
+        let (ast, diags) = parse_str("const x: boolean = a ?? b == c;");
+        assert!(diags.is_empty(), "unexpected: {diags:?}");
+        let stmt = single_stmt(&ast);
+        let crate::StmtKind::Const { value, .. } = stmt.kind else {
+            panic!("expected Const");
+        };
+        let crate::ExprKind::Binary { op, rhs, .. } = ast.try_expr(value).unwrap().kind else {
+            panic!("expected outer Binary");
+        };
+        assert_eq!(op, crate::BinOp::NullishCoalesce);
+        assert!(matches!(
+            ast.try_expr(rhs).unwrap().kind,
+            crate::ExprKind::Binary {
+                op: crate::BinOp::Eq,
+                ..
+            }
+        ));
     }
 
     #[test]
