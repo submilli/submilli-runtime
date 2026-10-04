@@ -30,7 +30,7 @@ async fn imports_history_and_active_index_then_archives_source() {
     std::fs::write(source.join("demo.000007.yaml"), "invalid: [").unwrap();
     let path = directory.path().join("db/server.db");
     let (database, store) = open(&path, Some(source.clone())).await;
-    store.initialize().await.unwrap();
+    store.migrate().await.unwrap();
     assert_eq!(store.list().await.unwrap(), vec!["demo"]);
     assert_eq!(
         store.get_yaml("demo").await.unwrap().unwrap(),
@@ -38,7 +38,7 @@ async fn imports_history_and_active_index_then_archives_source() {
     );
     let archive = directory.path().join("archive/blueprints");
     assert!(archive.join("index.json").exists());
-    assert!(!source.join("index.json").exists());
+    assert!(!source.exists());
     assert!(!source.join("demo.000001.yaml").exists());
     assert!(!store.upsert_yaml(stored(original)).await.unwrap());
     let revision: i64 = database
@@ -60,7 +60,7 @@ async fn imports_history_and_active_index_then_archives_source() {
     // Archived files are never used as an import source, even when damaged.
     std::fs::write(archive.join("index.json"), "{").unwrap();
     let (database, store) = open(&path, Some(source)).await;
-    store.initialize().await.unwrap();
+    store.migrate().await.unwrap();
     assert_eq!(store.get_yaml("demo").await.unwrap().unwrap(), original);
     let rows: Vec<(i64, String)> = database.read(|connection| Box::pin(async move {
         Ok(sqlx::query_as("SELECT revision, yaml FROM blueprint_revisions WHERE name='demo' ORDER BY revision").fetch_all(connection).await?)
@@ -81,7 +81,7 @@ async fn malformed_current_yaml_reserves_name_but_remains_readable_and_replaceab
     std::fs::write(source.join("index.json"), r#"{"demo":1}"#).unwrap();
     std::fs::write(source.join("demo.000001.yaml"), "broken: [").unwrap();
     let (database, store) = open(&directory.path().join("db"), Some(source)).await;
-    store.initialize().await.unwrap();
+    store.migrate().await.unwrap();
     assert!(store.list().await.unwrap().is_empty());
     assert!(store.get("demo").await.unwrap().is_none());
     assert!(store.unusable_reason("demo").await.unwrap().is_some());
@@ -103,7 +103,7 @@ async fn failed_import_rolls_back_and_can_retry() {
     std::fs::write(source.join("index.json"), r#"{"demo":2}"#).unwrap();
     std::fs::write(source.join("demo.000001.yaml"), "name: demo").unwrap();
     let (database, store) = open(&directory.path().join("db"), Some(source.clone())).await;
-    assert!(store.initialize().await.is_err());
+    assert!(store.migrate().await.is_err());
     let count: i64 = database.read(|connection| Box::pin(async move {
         Ok(sqlx::query_scalar("SELECT (SELECT COUNT(*) FROM blueprint_revisions) + (SELECT COUNT(*) FROM blueprints)").fetch_one(connection).await?)
     })).await.unwrap();
@@ -111,7 +111,7 @@ async fn failed_import_rolls_back_and_can_retry() {
     assert!(source.join("demo.000001.yaml").exists());
     assert!(!directory.path().join("archive").exists());
     std::fs::write(source.join("demo.000002.yaml"), "name: demo").unwrap();
-    store.initialize().await.unwrap();
+    store.migrate().await.unwrap();
     assert_eq!(store.list().await.unwrap(), vec!["demo"]);
     database.close().await.unwrap();
 }
@@ -120,7 +120,7 @@ async fn failed_import_rolls_back_and_can_retry() {
 async fn independent_instances_serialize_revisions_and_keep_history_after_delete() {
     let directory = tempfile::tempdir().unwrap();
     let (database, store) = open(&directory.path().join("db"), None).await;
-    store.initialize().await.unwrap();
+    store.migrate().await.unwrap();
     let mut tasks = Vec::new();
     for _ in 0..8 {
         let other = SqliteBlueprintStore::new(database.clone(), None);
@@ -161,7 +161,7 @@ async fn import_rejects_duplicate_and_out_of_range_revisions_without_completion(
         std::fs::write(source.join("demo.000001.yaml"), "name: demo").unwrap();
         std::fs::write(source.join(filename), "name: demo").unwrap();
         let (database, store) = open(&directory.path().join("db"), Some(source)).await;
-        assert!(store.initialize().await.is_err());
+        assert!(store.migrate().await.is_err());
         database.close().await.unwrap();
     }
 }
@@ -173,7 +173,7 @@ async fn no_index_preserves_orphans_without_activating_them() {
     std::fs::create_dir(&source).unwrap();
     std::fs::write(source.join("demo.000004.yaml"), "name: demo").unwrap();
     let (database, store) = open(&directory.path().join("db"), Some(source)).await;
-    store.initialize().await.unwrap();
+    store.migrate().await.unwrap();
     assert!(store.list().await.unwrap().is_empty());
     store.add_yaml(stored("name: demo")).await.unwrap();
     let revision: i64 = database
@@ -200,13 +200,13 @@ async fn absent_source_is_allowed_but_conflicting_new_source_is_rejected() {
         Some(directory.path().join("absent")),
     )
     .await;
-    store.initialize().await.unwrap();
+    store.migrate().await.unwrap();
     store.add_yaml(stored("name: demo")).await.unwrap();
     let source = directory.path().join("new");
     std::fs::create_dir(&source).unwrap();
     std::fs::write(source.join("other.000001.yaml"), "name: other").unwrap();
     SqliteBlueprintStore::new(database.clone(), Some(source.clone()))
-        .initialize()
+        .migrate()
         .await
         .unwrap_err();
     assert!(source.join("other.000001.yaml").exists());
@@ -224,16 +224,16 @@ async fn archive_failure_after_commit_retries_without_resurrecting_deleted_bluep
     std::fs::write(directory.path().join("archive"), "occupied").unwrap();
     let path = directory.path().join("db");
     let (database, store) = open(&path, Some(source.clone())).await;
-    assert!(store.initialize().await.is_err());
+    assert!(store.migrate().await.is_err());
     assert_eq!(store.list().await.unwrap(), ["demo"]);
     assert!(source.join("index.json").exists());
     store.remove("demo").await.unwrap();
     database.close().await.unwrap();
     std::fs::remove_file(directory.path().join("archive")).unwrap();
     let (database, store) = open(&path, Some(source.clone())).await;
-    store.initialize().await.unwrap();
+    store.migrate().await.unwrap();
     assert!(store.list().await.unwrap().is_empty());
-    assert!(!source.join("index.json").exists());
+    assert!(!source.exists());
     assert!(
         directory
             .path()
@@ -258,7 +258,7 @@ async fn archive_failure_after_commit_retries_without_resurrecting_deleted_bluep
 }
 
 #[tokio::test]
-async fn interrupted_archiving_resumes_with_missing_source_revisions() {
+async fn restart_after_commit_archives_the_whole_directory() {
     let directory = tempfile::tempdir().unwrap();
     let source = directory.path().join("blueprints");
     let files = FileBlueprintStore::new(source.clone()).unwrap();
@@ -267,29 +267,33 @@ async fn interrupted_archiving_resumes_with_missing_source_revisions() {
         .upsert_yaml(stored("name: demo\n# new"))
         .await
         .unwrap();
+    std::fs::create_dir(source.join("notes")).unwrap();
+    std::fs::write(source.join("notes/readme.txt"), "keep this too").unwrap();
     let path = directory.path().join("db");
     let (database, _) = open(&path, Some(source.clone())).await;
     let import_source = source.clone();
-    let mut pending = database
+    database
         .transaction(move |connection| {
             Box::pin(async move { import_files(connection, Some(import_source)).await })
         })
         .await
         .unwrap();
-    let first = pending.remove(0);
-    database
-        .read(move |_| Box::pin(async move { archive_files(vec![first]) }))
-        .await
-        .unwrap();
+    assert!(source.join("index.json").exists());
+    assert!(!directory.path().join("archive").exists());
     database.close().await.unwrap();
     let (database, store) = open(&path, Some(source.clone())).await;
-    store.initialize().await.unwrap();
+    store.migrate().await.unwrap();
     assert_eq!(
         store.get_yaml("demo").await.unwrap().unwrap(),
         "name: demo\n# new"
     );
-    assert!(std::fs::read_dir(&source).unwrap().next().is_none());
-    for file in ["demo.000001.yaml", "demo.000002.yaml", "index.json"] {
+    assert!(!source.exists());
+    for file in [
+        "demo.000001.yaml",
+        "demo.000002.yaml",
+        "index.json",
+        "notes/readme.txt",
+    ] {
         assert!(
             directory
                 .path()
@@ -308,14 +312,14 @@ async fn empty_import_archives_index_and_restart_does_not_read_archive() {
     std::fs::create_dir(&source).unwrap();
     std::fs::write(source.join("index.json"), "{}").unwrap();
     let (database, store) = open(&directory.path().join("db"), Some(source.clone())).await;
-    store.initialize().await.unwrap();
-    assert!(!source.join("index.json").exists());
+    store.migrate().await.unwrap();
+    assert!(!source.exists());
     std::fs::write(
         directory.path().join("archive/blueprints/index.json"),
         "broken",
     )
     .unwrap();
-    store.initialize().await.unwrap();
+    store.migrate().await.unwrap();
     assert!(store.list().await.unwrap().is_empty());
     database.close().await.unwrap();
 }
@@ -330,7 +334,7 @@ async fn archive_collision_preserves_both_source_and_existing_archive() {
     std::fs::create_dir_all(&archive).unwrap();
     std::fs::write(archive.join("demo.000001.yaml"), "keep").unwrap();
     let (database, store) = open(&directory.path().join("db"), Some(source.clone())).await;
-    assert!(store.initialize().await.is_err());
+    assert!(store.migrate().await.is_err());
     assert_eq!(
         std::fs::read_to_string(archive.join("demo.000001.yaml")).unwrap(),
         "keep"
@@ -341,16 +345,47 @@ async fn archive_collision_preserves_both_source_and_existing_archive() {
 }
 
 #[test]
-fn archive_move_atomically_refuses_an_existing_destination() {
+fn archive_move_atomically_refuses_an_existing_directory() {
     let directory = tempfile::tempdir().unwrap();
     let source = directory.path().join("source");
     let destination = directory.path().join("destination");
-    std::fs::write(&source, "imported").unwrap();
-    std::fs::write(&destination, "previous archive").unwrap();
-    assert!(archive::move_file(&source, &destination).is_err());
-    assert_eq!(std::fs::read_to_string(&source).unwrap(), "imported");
+    std::fs::create_dir(&source).unwrap();
+    std::fs::create_dir(&destination).unwrap();
+    std::fs::write(source.join("keep"), "imported").unwrap();
+    assert!(archive::move_directory(&source, &destination).is_err());
     assert_eq!(
-        std::fs::read_to_string(&destination).unwrap(),
-        "previous archive"
+        std::fs::read_to_string(source.join("keep")).unwrap(),
+        "imported"
     );
+    assert!(std::fs::read_dir(&destination).unwrap().next().is_none());
+}
+
+#[tokio::test]
+async fn source_containing_the_database_is_not_moved() {
+    let directory = tempfile::tempdir().unwrap();
+    let source = directory.path().join("blueprints");
+    let path = source.join("db/server.db");
+    let (database, store) = open(&path, Some(source.clone())).await;
+    assert!(store.migrate().await.is_err());
+    assert!(path.exists());
+    assert!(!directory.path().join("archive").exists());
+    database.close().await.unwrap();
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn symbolic_link_source_is_rejected_without_moving_its_target() {
+    let directory = tempfile::tempdir().unwrap();
+    let target = directory.path().join("actual");
+    let source = directory.path().join("blueprints");
+    let files = FileBlueprintStore::new(target.clone()).unwrap();
+    files.add_yaml(stored("name: demo")).await.unwrap();
+    std::os::unix::fs::symlink("actual", &source).unwrap();
+    let (database, store) = open(&directory.path().join("db"), Some(source.clone())).await;
+    assert!(store.migrate().await.is_err());
+    assert!(store.list().await.unwrap().is_empty());
+    assert!(source.join("index.json").exists());
+    assert!(target.join("index.json").exists());
+    assert!(!directory.path().join("archive").exists());
+    database.close().await.unwrap();
 }

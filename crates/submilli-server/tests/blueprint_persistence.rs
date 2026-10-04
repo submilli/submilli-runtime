@@ -458,7 +458,13 @@ async fn sqlx_import_and_http_changes_survive_restart_without_reimport() {
     files.add(bp("tenant")).await.unwrap();
     let path = directory.path().join("db/server.db");
     let database = Arc::new(ServerDatabase::open(&path).await.unwrap());
+    let store = submilli_server::blueprint::SqliteBlueprintStore::new(
+        database.clone(),
+        Some(source.clone()),
+    );
+    store.migrate().await.unwrap();
     let state = AppState::new(ServerConfig {
+        blueprints: Some(Arc::new(store)),
         database: Some(database.clone()),
         blueprint_dir: Some(source.clone()),
         ..Default::default()
@@ -511,13 +517,19 @@ async fn sqlx_import_and_http_changes_survive_restart_without_reimport() {
     database.close().await.unwrap();
 
     let database = Arc::new(ServerDatabase::open(&path).await.unwrap());
+    let store = submilli_server::blueprint::SqliteBlueprintStore::new(
+        database.clone(),
+        Some(source.clone()),
+    );
+    store.migrate().await.unwrap();
     let state = AppState::new(ServerConfig {
+        blueprints: Some(Arc::new(store)),
         database: Some(database.clone()),
         blueprint_dir: Some(source.clone()),
         ..Default::default()
     })
     .unwrap();
-    // Router initialization also imports before handling requests, without explicit boot().
+    // The concrete store is migrated before the router can handle requests.
     let router = app(state);
     let (status, body) = get_json(&router, "/v1/blueprints/tenant").await;
     assert_eq!(status, StatusCode::OK);

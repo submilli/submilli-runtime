@@ -55,7 +55,6 @@ pub type HttpClientFactory = Arc<dyn Fn() -> Arc<dyn HttpClient> + Send + Sync>;
 
 #[derive(Debug)]
 pub enum BootError {
-    Blueprints(crate::blueprint::StoreError),
     Sessions(StoreError),
     Idempotency(StoreError),
 }
@@ -63,7 +62,6 @@ pub enum BootError {
 impl std::fmt::Display for BootError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Blueprints(_) => f.write_str("cannot initialize blueprint store"),
             Self::Sessions(_) => f.write_str("cannot enumerate persisted sessions"),
             Self::Idempotency(_) => f.write_str("cannot enumerate idempotency sessions"),
         }
@@ -73,7 +71,6 @@ impl std::fmt::Display for BootError {
 impl std::error::Error for BootError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
-            Self::Blueprints(error) => Some(error),
             Self::Sessions(error) | Self::Idempotency(error) => Some(error),
         }
     }

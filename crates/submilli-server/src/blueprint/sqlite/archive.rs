@@ -1,10 +1,10 @@
-//! Atomic archive moves must not replace files written by another importer.
+//! Atomic archive moves must not replace directories written by another importer.
 
 use std::io;
 use std::path::Path;
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
-pub(super) fn move_file(source: &Path, destination: &Path) -> io::Result<()> {
+pub(super) fn move_directory(source: &Path, destination: &Path) -> io::Result<()> {
     use std::ffi::CString;
     use std::os::unix::ffi::OsStrExt;
 
@@ -34,7 +34,7 @@ pub(super) fn move_file(source: &Path, destination: &Path) -> io::Result<()> {
 }
 
 #[cfg(windows)]
-pub(super) fn move_file(source: &Path, destination: &Path) -> io::Result<()> {
+pub(super) fn move_directory(source: &Path, destination: &Path) -> io::Result<()> {
     use std::os::windows::ffi::OsStrExt;
     use windows_sys::Win32::Storage::FileSystem::MoveFileExW;
 
@@ -61,7 +61,7 @@ pub(super) fn move_file(source: &Path, destination: &Path) -> io::Result<()> {
 }
 
 #[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
-pub(super) fn move_file(_source: &Path, _destination: &Path) -> io::Result<()> {
+pub(super) fn move_directory(_source: &Path, _destination: &Path) -> io::Result<()> {
     Err(io::Error::new(
         io::ErrorKind::Unsupported,
         "exclusive archive moves are unsupported on this platform",

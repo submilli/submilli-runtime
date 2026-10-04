@@ -108,7 +108,7 @@ async fn wait_until(deadline: Option<tokio::time::Instant>) {
 
 async fn serve_opened(
     addr: SocketAddr,
-    config: ServerConfig,
+    mut config: ServerConfig,
     shutdown_grace: Duration,
     signals: ShutdownSignals,
 ) -> Result<DrainStatus> {
@@ -116,6 +116,16 @@ async fn serve_opened(
     let tls = config.tls.clone();
     let settings_hash = crate::audit::settings_hash(&config, addr, shutdown_grace);
     let allow_unauthenticated = matches!(config.auth, crate::auth::AuthConfig::Disabled);
+    if config.blueprints.is_none()
+        && let Some(database) = &config.database
+    {
+        let store = crate::blueprint::SqliteBlueprintStore::new(
+            Arc::clone(database),
+            config.blueprint_dir.clone(),
+        );
+        store.migrate().await?;
+        config.blueprints = Some(Arc::new(store));
+    }
     let state = AppState::new(config)?;
     let audit = state.audit().clone();
     // Rehydrate persisted sessions and sweep orphan directories before serving,

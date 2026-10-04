@@ -416,6 +416,6 @@ SQLite journal and lock files. Use local or block-backed storage for SQLite.
 
 On upgrade, stop the old server before the new server imports blueprint revision
 files. The revisions and active selections commit in one SQLite transaction,
-then the files move to `server/archive/blueprints/` inside the state volume.
+then the whole blueprint directory moves to `server/archive/blueprints/` inside the state volume.
 Subsequent blueprint changes live only in SQLite. Back up the state
 volume while the server is stopped.

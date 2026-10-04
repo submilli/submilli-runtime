@@ -207,13 +207,15 @@ files from `blueprint_dir` and their active selections from `index.json` in one
 transaction. Stop the old server before upgrading. A failed import rolls back
 and leaves the files in place.
 
-After commit, the server moves the imported files into `archive/blueprints/`
+After commit, the server renames the entire source directory to `archive/blueprints/`
 beside the source directory: by default, `~/.submilli/server/archive/blueprints/`.
-The index moves last. Archiving uses filesystem renames, so the source and archive
-must share a filesystem. Existing archive files are never overwritten.
+The move is atomic and includes every file and subdirectory. The source and archive
+must share a filesystem. An existing archive directory is never replaced.
+The source must be a real directory, not a symbolic link, and must not contain
+the open database.
 
 An archive failure stops startup after the database commit. On retry, the server
-checks the remaining files against immutable database revisions and finishes
+checks the source revisions against immutable database history and retries
 archiving without restoring old active selections. Conflicting source files stop
 startup. An absent or empty source needs no import. Without an index, revision
 files become inactive history.
@@ -439,7 +441,7 @@ Options:
       --tls-key-file <PATH>
           Private key PEM file matching the certificate. Read at startup; restart to rotate. Env: `$SUBMILLI_TLS_KEY_FILE`
       --blueprint-dir <BLUEPRINT_DIR>
-          Source directory for the one-time blueprint import into SQLite. Imported files move to archive/blueprints/ beside the source directory. [default: ~/.submilli/server/blueprints (override the base with $SUBMILLI_HOME)] Env: `$SUBMILLI_BLUEPRINT_DIR`
+          Source directory for the one-time blueprint import into SQLite. The directory moves to archive/blueprints/ beside its original location. [default: ~/.submilli/server/blueprints (override the base with $SUBMILLI_HOME)] Env: `$SUBMILLI_BLUEPRINT_DIR`
       --session-store-dir <SESSION_STORE_DIR>
           Directory the session lifecycle store persists to and loads from on startup — the bookkeeping that makes resume and idle reaping survive a restart. Mount on durable storage. [default: ~/.submilli/server/sessions] Env: `$SUBMILLI_SESSION_STORE_DIR`
       --database-path <PATH>

@@ -10,9 +10,6 @@ struct GatedStore {
 
 #[async_trait::async_trait]
 impl BlueprintStore for GatedStore {
-    async fn initialize(&self) -> Result<(), StoreError> {
-        self.inner.initialize().await
-    }
     async fn add_yaml(&self, value: StoredBlueprint) -> Result<(), StoreError> {
         self.admitted.notify_one();
         self.release.notified().await;
@@ -58,7 +55,7 @@ async fn cancelled_blueprint_mutations_complete_audit_and_postcommit_work() {
             admitted: admitted.clone(),
             release: release.clone(),
         });
-        store.initialize().await.unwrap();
+        store.inner.migrate().await.unwrap();
         if !creating {
             store
                 .inner

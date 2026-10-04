@@ -35,7 +35,7 @@ fn legacy_state_is_left_untouched_when_server_directory_is_missing() {
 
 #[cfg_attr(skip_http_tests, ignore = "HTTP tests disabled")]
 #[test]
-fn an_explicitly_configured_directory_is_not_moved() {
+fn an_explicitly_configured_directory_is_imported_then_archived() {
     let home = tempfile::tempdir().expect("temp home");
     let explicit = home.path().join("blueprints");
     seed_blueprint(&explicit, "pinned");
@@ -52,7 +52,8 @@ fn an_explicitly_configured_directory_is_not_moved() {
     stop(&mut server);
 
     assert_eq!(names, vec!["pinned".to_string()]);
-    assert!(explicit.is_dir(), "explicit dir stays where it was");
+    assert!(!explicit.exists(), "the whole source directory is archived");
+    assert!(home.path().join("archive/blueprints/index.json").is_file());
     assert!(!home.path().join("server/blueprints").exists());
 }
 

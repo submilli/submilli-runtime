@@ -20,6 +20,24 @@ impl SqliteBlueprintStore {
         Self { database, source }
     }
 
+    /// Import file-backed blueprints and archive the source before exposing this store.
+    pub async fn migrate(&self) -> Result<(), StoreError> {
+        let source = self.source.clone();
+        let source = self
+            .database
+            .transaction(move |connection| {
+                Box::pin(async move { import_files(connection, source).await })
+            })
+            .await?;
+        // This runs only after commit, on the database supervisor rather than a
+        // request Tokio thread. A cancelled caller can retry archiving at startup.
+        let database_path = self.database.path().to_path_buf();
+        self.database
+            .read(move |_| Box::pin(async move { archive_directory(source, &database_path) }))
+            .await
+            .map_err(Into::into)
+    }
+
     async fn write(&self, stored: StoredBlueprint, replace: bool) -> Result<bool, StoreError> {
         self.database.transaction(move |connection| Box::pin(async move {
             let name = stored.blueprint.name;
@@ -66,22 +84,6 @@ impl SqliteBlueprintStore {
 
 #[async_trait::async_trait]
 impl BlueprintStore for SqliteBlueprintStore {
-    async fn initialize(&self) -> Result<(), StoreError> {
-        let source = self.source.clone();
-        let files = self
-            .database
-            .transaction(move |connection| {
-                Box::pin(async move { import_files(connection, source).await })
-            })
-            .await?;
-        // This runs only after commit, on the database supervisor rather than a
-        // request Tokio thread. A cancelled caller can retry archiving at startup.
-        self.database
-            .read(move |_| Box::pin(async move { archive_files(files) }))
-            .await
-            .map_err(Into::into)
-    }
-
     async fn add_yaml(&self, stored: StoredBlueprint) -> Result<(), StoreError> {
         self.write(stored, false).await.map(|_| ())
     }
@@ -154,24 +156,22 @@ fn parse_current(name: &str, yaml: &str) -> Result<Blueprint, String> {
 async fn import_files(
     connection: &mut SqliteConnection,
     source: Option<PathBuf>,
-) -> Result<Vec<PathBuf>, DatabaseError> {
+) -> Result<Option<PathBuf>, DatabaseError> {
     let Some(source) = source else {
-        return Ok(Vec::new());
+        return Ok(None);
     };
-    let SourceRecords {
-        revisions,
-        active,
-        files,
-    } = read_source(&source)?;
+    let Some(SourceRecords { revisions, active }) = read_source(&source)? else {
+        return Ok(None);
+    };
     let populated: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM blueprint_revisions)")
         .fetch_one(&mut *connection)
         .await?;
     if populated {
-        // A committed import may have been interrupted before all files moved.
-        // Immutable history proves the remaining files are already in SQLite;
+        // A committed import may have been interrupted before the directory moved.
+        // Immutable history proves the source revisions are already in SQLite;
         // active selections may since have changed or been deleted.
         verify_imported(connection, &revisions, &active).await?;
-        return Ok(files);
+        return Ok(Some(source));
     }
     for (name, revision, yaml) in &revisions {
         sqlx::query("INSERT INTO blueprint_revisions VALUES (?1, ?2, ?3)")
@@ -206,7 +206,7 @@ async fn import_files(
         active = active.len(),
         "blueprint file import prepared"
     );
-    Ok(files)
+    Ok(Some(source))
 }
 
 async fn verify_imported(
@@ -248,25 +248,29 @@ async fn verify_imported(
 struct SourceRecords {
     revisions: Vec<(String, i64, String)>,
     active: std::collections::BTreeMap<String, u64>,
-    files: Vec<PathBuf>,
 }
 
-fn read_source(source: &std::path::Path) -> Result<SourceRecords, DatabaseError> {
+fn read_source(source: &std::path::Path) -> Result<Option<SourceRecords>, DatabaseError> {
+    match std::fs::symlink_metadata(source) {
+        Ok(metadata) if metadata.file_type().is_symlink() => {
+            return Err(DatabaseError::Import(format!(
+                "blueprint source {} is a symbolic link; configure its real directory before migration",
+                source.display()
+            )));
+        }
+        Ok(_) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(import_io(source, error)),
+    }
     let entries = match std::fs::read_dir(source) {
         Ok(entries) => entries,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            return Ok(SourceRecords {
-                revisions: Vec::new(),
-                active: Default::default(),
-                files: Vec::new(),
-            });
+            return Ok(None);
         }
         Err(error) => return Err(import_io(source, error)),
     };
     let active = super::read_index(source).map_err(|error| import_io(source, error))?;
-    let index = active.as_ref().map(|_| source.join("index.json"));
     let mut revisions = Vec::new();
-    let mut files = Vec::new();
     let mut seen = std::collections::HashSet::new();
     for entry in entries {
         let entry = entry.map_err(|error| import_io(source, error))?;
@@ -282,50 +286,41 @@ fn read_source(source: &std::path::Path) -> Result<SourceRecords, DatabaseError>
         let revision = checked_revision(&name, revision)?;
         let yaml = std::fs::read_to_string(&path).map_err(|error| import_io(&path, error))?;
         revisions.push((name, revision, yaml));
-        files.push(path);
     }
-    files.sort();
-    // Archive the index last so an interruption retains its active selections
-    // until all revision files have moved.
-    files.extend(index);
-    Ok(SourceRecords {
+    Ok(Some(SourceRecords {
         revisions,
         active: active.unwrap_or_default(),
-        files,
-    })
+    }))
 }
 
-fn archive_files(files: Vec<PathBuf>) -> Result<(), DatabaseError> {
-    for source in files {
-        let parent = source
-            .parent()
-            .and_then(std::path::Path::parent)
-            .ok_or_else(|| {
-                DatabaseError::Import(format!(
-                    "cannot locate archive directory for {}",
-                    source.display()
-                ))
-            })?;
-        let archive = parent.join("archive/blueprints");
-        let name = source
-            .file_name()
-            .ok_or_else(|| DatabaseError::InvalidPath(source.clone()))?;
-        let destination = archive.join(name);
-        // Another initialization may already have archived this batch.
-        if !source
-            .try_exists()
-            .map_err(|error| import_io(&source, error))?
-            && destination
-                .try_exists()
-                .map_err(|error| import_io(&destination, error))?
-        {
-            continue;
-        }
-        std::fs::create_dir_all(&archive).map_err(|error| import_io(&archive, error))?;
-        archive::move_file(&source, &destination)
-            .map_err(|error| import_io(&destination, error))?;
+fn archive_directory(
+    source: Option<PathBuf>,
+    database_path: &std::path::Path,
+) -> Result<(), DatabaseError> {
+    let Some(source) = source else {
+        return Ok(());
+    };
+    // Repeated initialization may already have moved this directory.
+    if !source
+        .try_exists()
+        .map_err(|error| import_io(&source, error))?
+    {
+        return Ok(());
     }
-    Ok(())
+    let canonical_source =
+        std::fs::canonicalize(&source).map_err(|error| import_io(&source, error))?;
+    if database_path.starts_with(&canonical_source) {
+        return Err(DatabaseError::Import(
+            "blueprint source directory contains the open database and cannot be archived".into(),
+        ));
+    }
+    let parent = source
+        .parent()
+        .ok_or_else(|| DatabaseError::InvalidPath(source.clone()))?;
+    let archive = parent.join("archive");
+    let destination = archive.join("blueprints");
+    std::fs::create_dir_all(&archive).map_err(|error| import_io(&archive, error))?;
+    archive::move_directory(&source, &destination).map_err(|error| import_io(&destination, error))
 }
 
 fn checked_revision(name: &str, revision: u64) -> Result<i64, DatabaseError> {

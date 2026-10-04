@@ -32,9 +32,7 @@ use wasmtime::{Engine, Linker, Module};
 
 use crate::ServerConfig;
 use crate::auth::{Access, AuthConfig, Guard};
-use crate::blueprint::{
-    BlueprintStore, FileBlueprintStore, InMemoryBlueprintStore, SqliteBlueprintStore,
-};
+use crate::blueprint::{BlueprintStore, FileBlueprintStore, InMemoryBlueprintStore};
 use crate::config::{OAuthProvider, VolumeTable};
 use crate::idempotency::Coordinator;
 use crate::idempotency_store::{FileIdempotencyStore, IdempotencyStore, InMemoryIdempotencyStore};
@@ -171,9 +169,9 @@ impl AppState {
             config.blueprint_dir,
         ) {
             (Some(store), _, _) => store,
-            (None, Some(database), source) => {
-                Arc::new(SqliteBlueprintStore::new(Arc::clone(database), source))
-            }
+            (None, Some(_), _) => anyhow::bail!(
+                "supply a migrated SQLite blueprint store in ServerConfig.blueprints before constructing AppState"
+            ),
             (None, None, Some(dir)) => Arc::new(FileBlueprintStore::new(dir)?),
             (None, None, None) => Arc::new(InMemoryBlueprintStore::default()),
         };
@@ -304,11 +302,6 @@ impl AppState {
         if self.inner.booted.load(Ordering::Acquire) {
             return Ok(());
         }
-        self.inner
-            .blueprints
-            .initialize()
-            .await
-            .map_err(crate::session_manager::BootError::Blueprints)?;
         self.inner.session_manager.boot().await?;
         self.inner.session_manager.volume_registry().prepare();
         self.inner.session_manager.spawn_reaper(REAP_INTERVAL);
@@ -325,11 +318,6 @@ impl AppState {
             return Ok(());
         }
         if !self.inner.booted.load(Ordering::Acquire) {
-            self.inner
-                .blueprints
-                .initialize()
-                .await
-                .map_err(crate::session_manager::BootError::Blueprints)?;
             self.inner.session_manager.validate_stores().await?;
             self.inner.session_manager.spawn_reaper(REAP_INTERVAL);
         }

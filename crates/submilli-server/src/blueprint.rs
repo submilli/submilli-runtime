@@ -76,11 +76,6 @@ fn serialize_blueprint(value: &impl serde::Serialize) -> Result<String, StoreErr
 
 #[async_trait::async_trait]
 pub trait BlueprintStore: Send + Sync + 'static {
-    /// Complete any startup import before exposing the store to requests.
-    async fn initialize(&self) -> Result<(), StoreError> {
-        Ok(())
-    }
-
     async fn add(&self, blueprint: Blueprint) -> Result<(), StoreError> {
         let yaml = serialize_blueprint(&blueprint)?;
         self.add_yaml(StoredBlueprint::new(blueprint, yaml)).await

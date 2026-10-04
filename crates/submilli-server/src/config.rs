@@ -32,7 +32,7 @@ pub struct ServerConfig {
     /// Explicit blueprint store. Takes precedence over `blueprint_dir`; mainly
     /// for tests and embedded callers that inject their own store.
     pub blueprints: Option<Arc<dyn BlueprintStore>>,
-    /// Source directory for the one-time import when a database is supplied.
+    /// Source directory for the SQLite migration performed by `serve`.
     /// Explicit blueprint stores take precedence. Embedded callers without a
     /// database retain the file store when this is set, otherwise an in-memory store.
     pub blueprint_dir: Option<PathBuf>,
@@ -49,7 +49,8 @@ pub struct ServerConfig {
     /// callers leave this unset and may inject their own stores.
     pub database_path: Option<PathBuf>,
     /// Open database supplied by the serving boundary. Takes precedence over
-    /// `database_path` when both are set; embedded callers can leave both unset.
+    /// `database_path` when both are set. Direct `AppState` callers must also
+    /// supply a migrated blueprint store; `serve` constructs and migrates it.
     pub database: Option<Arc<crate::database::ServerDatabase>>,
     /// Explicit idempotency ledger, backing `Idempotency-Key` on the session
     /// execute endpoint. When `None` and `session_store_dir` is set,
