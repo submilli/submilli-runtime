@@ -181,27 +181,10 @@ file is well formed. The policy test doesn't:
 The second run was allowed, so `grep` found no denial, the script exits
 1, and the pull request's check turns red with that line in its log.
 
-## Require a package security review
-
-Review package source before promoting its pinned commit to `packages.txt`.
-Choose the tutorial matching your team's account:
-[Codex](/docs/tutorials/security-review-codex),
-[Claude Code](/docs/tutorials/security-review-claude), or
-[GitHub Copilot](/docs/tutorials/security-review-copilot).
-Each produces a required check and a report containing hashes of the reviewed
-source. Keep ordinary package tests and this tutorial's policy tests as gates.
-
-When packages live in another repository, run the review there and require the
-check on the exact package revision being promoted. Reviewing only the blueprint
-repository does not inspect the installed package's implementation. For a merge
-commit that differs from the reviewed revision, run the review on that commit
-before deployment. Keep the report with the deployment record and ensure its
-source hashes match the package being installed.
-
-If the review and deployment jobs live in one workflow, make deployment depend
-on both the existing `check` job and the successful security `review` job using
-`needs: [check, review]`. Preserve the push-to-main condition. An incomplete
-review must stop promotion; do not treat missing credentials as a skipped check.
+A package in `packages.txt` can also be held to an agent's security review
+before its commit is pinned there; [Review a package's
+security](/docs/packages/review-package-security#make-deployment-wait-for-it)
+shows how.
 
 ## Register on every merge
 
