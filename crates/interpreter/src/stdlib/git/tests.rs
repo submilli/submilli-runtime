@@ -973,6 +973,7 @@ async fn fetch_fuel_follows_what_the_pack_inflates_to() {
         data.http_client = Arc::new(GitServer {
             repo: upstream.path().to_owned(),
             authentication: false,
+            oversized_response: false,
         });
         fuel.push(
             host_fuel_of(

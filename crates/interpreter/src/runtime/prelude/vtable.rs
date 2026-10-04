@@ -17,7 +17,7 @@
 //! a host-built value hashes and serializes identically to a guest-built one.
 
 use crate::runtime::host::{abi_arg, abi_result};
-mod serialization;
+pub(crate) mod serialization;
 
 use wasmtime::{
     ArrayRef, ArrayRefPre, ArrayType, Caller, Func, Global, GlobalType, HeapType, Linker,

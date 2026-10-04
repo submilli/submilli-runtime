@@ -190,7 +190,17 @@ pub(super) fn tree(
     root: &str,
     depth: usize,
 ) -> Result<Value> {
-    let entries = walk(caller, budget, root, depth, "tree")?;
+    let entries = walk(
+        caller,
+        budget,
+        WalkStart {
+            path: root,
+            depth: 0,
+            origin: root,
+        },
+        depth,
+        "tree",
+    )?;
     listing(caller, budget, &entries)
 }
 pub(super) fn glob(
@@ -211,7 +221,21 @@ pub(super) fn glob(
         .literal_separator(true)
         .build()?
         .compile_matcher();
-    let mut entries = walk(caller, budget, &root, usize::MAX, "glob")?;
+    let root_depth = prefix_root
+        .split('/')
+        .filter(|part| !part.is_empty())
+        .count();
+    let mut entries = walk(
+        caller,
+        budget,
+        WalkStart {
+            path: &root,
+            depth: root_depth,
+            origin: &cwd,
+        },
+        usize::MAX,
+        "glob",
+    )?;
     let path_bytes = entries
         .iter()
         .filter(|entry| entry.kind == "file")
@@ -261,7 +285,17 @@ pub(super) fn search(
         .size_limit(1024 * 1024)
         .dfa_size_limit(1024 * 1024)
         .build()?;
-    let entries = walk(caller, budget, &options.path, usize::MAX, "search")?;
+    let entries = walk(
+        caller,
+        budget,
+        WalkStart {
+            path: &options.path,
+            depth: 0,
+            origin: &options.path,
+        },
+        usize::MAX,
+        "search",
+    )?;
     let mut results = SearchResults::new(&options);
     for entry in entries {
         if entry.kind != "file" || !options.includes_path(&entry.path) {
@@ -405,20 +439,28 @@ impl<'a> SearchResults<'a> {
     }
 }
 
+struct WalkStart<'a> {
+    path: &'a str,
+    depth: usize,
+    origin: &'a str,
+}
+
 fn walk(
     caller: &mut Caller<'_, StoreData>,
     budget: &mut Budget,
-    root: &str,
+    start: WalkStart<'_>,
     depth: usize,
     op: &str,
 ) -> Result<Vec<Entry>> {
-    if !validate_root(caller, root, op)? {
+    let root = start.path;
+    if !validate_root(caller, root, op, start.origin)? {
         return Ok(Vec::new());
     }
     let tree = op == "tree";
     let mut entries = WalkEntries::default();
     let mut rules = IgnoreRules::default();
-    let Some(inherited) = ancestor_ignores(caller, budget, root, op, &mut rules)? else {
+    let Some(inherited) = ancestor_ignores(caller, budget, root, op, start.origin, &mut rules)?
+    else {
         return Ok(Vec::new());
     };
     let mut pending = PendingDirectories::default();
@@ -426,11 +468,7 @@ fn walk(
         caller,
         Directory {
             path: root.into(),
-            depth: if op == "glob" {
-                root.split('/').filter(|part| !part.is_empty()).count()
-            } else {
-                0
-            },
+            depth: start.depth,
             ignores: inherited,
         },
         tree,
@@ -485,7 +523,12 @@ fn walk(
     entries.sort_unstable_by(|a, b| a.path.cmp(&b.path));
     Ok(entries)
 }
-fn validate_root(caller: &mut Caller<'_, StoreData>, root: &str, op: &str) -> Result<bool> {
+fn validate_root(
+    caller: &mut Caller<'_, StoreData>,
+    root: &str,
+    op: &str,
+    origin: &str,
+) -> Result<bool> {
     // `/` has no components to stat; the walk's fs.list gate covers it.
     if root != "/" {
         gate(caller, "fs.stat", root)?;
@@ -497,7 +540,11 @@ fn validate_root(caller: &mut Caller<'_, StoreData>, root: &str, op: &str) -> Re
     for component in root.split('/').filter(|component| !component.is_empty()) {
         path.push('/');
         path.push_str(component);
-        if op == "glob" && component.starts_with('.') {
+        if op == "glob"
+            && path != origin
+            && Path::new(&path).starts_with(origin)
+            && component.starts_with('.')
+        {
             return Ok(false);
         }
         let metadata = match resolve_link(&caller.data().vfs, caller.data().vfs.cwd(), &path)
@@ -525,6 +572,7 @@ fn ancestor_ignores(
     budget: &mut Budget,
     root: &str,
     op: &str,
+    origin: &str,
     rules: &mut IgnoreRules,
 ) -> Result<Option<IgnoreHeads>> {
     let mut parents = Vec::new();
@@ -535,7 +583,11 @@ fn ancestor_ignores(
     }
     let mut inherited = IgnoreHeads::default();
     for parent in parents.into_iter().rev() {
-        if op == "glob" && parent != "/" && rules.ignored(caller, inherited, &parent, true)? {
+        if op == "glob"
+            && parent != origin
+            && Path::new(&parent).starts_with(origin)
+            && rules.ignored(caller, inherited, &parent, true)?
+        {
             return Ok(None);
         }
         load_ignores(
@@ -548,7 +600,10 @@ fn ancestor_ignores(
             rules,
         )?;
     }
-    if op == "glob" && root != "/" && rules.ignored(caller, inherited, root, true)? {
+    if op == "glob"
+        && Path::new(root) != Path::new(origin)
+        && rules.ignored(caller, inherited, root, true)?
+    {
         return Ok(None);
     }
     Ok(Some(inherited))

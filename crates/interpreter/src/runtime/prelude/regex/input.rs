@@ -18,7 +18,54 @@ pub(crate) struct InputCache {
 
 pub(super) struct DecodedInput {
     text: String,
+    offsets: Option<Offsets>,
     _charge: InputBytes,
+}
+
+struct Offsets {
+    byte_to_unit: Vec<u32>,
+    unit_to_byte: Vec<u32>,
+}
+
+impl DecodedInput {
+    pub(super) fn byte_to_unit(&self, byte: usize) -> wasmtime::Result<usize> {
+        match &self.offsets {
+            None if byte <= self.text.len() => Ok(byte),
+            Some(offsets) => offsets
+                .byte_to_unit
+                .get(byte)
+                .map(|unit| *unit as usize)
+                .ok_or_else(|| fatal_host_error("RegExp: invalid byte offset")),
+            _ => Err(fatal_host_error("RegExp: invalid byte offset")),
+        }
+    }
+
+    pub(super) fn unit_to_byte(&self, unit: usize, unicode: bool) -> Option<usize> {
+        let Some(offsets) = &self.offsets else {
+            return (unit <= self.text.len()).then_some(unit);
+        };
+        let byte = *offsets.unit_to_byte.get(unit)? as usize;
+        if !unicode && *offsets.byte_to_unit.get(byte)? as usize != unit {
+            return offsets
+                .unit_to_byte
+                .get(unit + 1)
+                .map(|byte| *byte as usize);
+        }
+        Some(byte)
+    }
+
+    pub(super) fn advance(&self, unit: usize, unicode: bool) -> wasmtime::Result<usize> {
+        let step = if unicode {
+            self.unit_to_byte(unit, true)
+                .and_then(|byte| self.text.get(byte..))
+                .and_then(|tail| tail.chars().next())
+                .map_or(1, char::len_utf16)
+        } else {
+            1
+        };
+        unit.checked_add(step)
+            .ok_or_else(|| fatal_host_error("RegExp: match position overflow"))
+    }
 }
 
 impl std::ops::Deref for DecodedInput {
@@ -80,18 +127,59 @@ fn decode(caller: &mut Caller<'_, StoreData>, value: &Val) -> wasmtime::Result<D
     let capacity = len
         .checked_mul(3)
         .ok_or_else(|| fatal_host_error("RegExp input too large"))?;
-    let charge = InputBytes::new(&caller.data().tenant_limits, capacity as u64)?;
+    let mut charge = InputBytes::new(&caller.data().tenant_limits, capacity as u64)?;
     let _temporary = InputBytes::new(&caller.data().tenant_limits, (len as u64) * 2)?;
     let units = read_code_units(&mut *caller, raw, "RegExp input")?;
     fuel::charge(&mut *caller, fuel::SCAN, len as u64)?;
     let mut text = String::new();
     text.try_reserve_exact(capacity).map_err(fatal_host_error)?;
-    // Match the previous from_utf16_lossy conversion, including lone surrogates.
+    let mut ascii = true;
     for scalar in char::decode_utf16(units) {
-        text.push(scalar.unwrap_or(char::REPLACEMENT_CHARACTER));
+        let scalar = scalar.unwrap_or(char::REPLACEMENT_CHARACTER);
+        ascii &= scalar.is_ascii();
+        text.push(scalar);
     }
+    let offsets = if ascii {
+        None
+    } else {
+        let entries = text
+            .len()
+            .checked_add(len)
+            .and_then(|n| n.checked_add(2))
+            .ok_or_else(|| fatal_host_error("RegExp offset table too large"))?;
+        let extra = InputBytes::new(&caller.data().tenant_limits, (entries as u64) * 4)?;
+        fuel::charge(&mut *caller, fuel::ELEM, entries as u64)?;
+        let mut byte_to_unit = Vec::new();
+        byte_to_unit
+            .try_reserve_exact(text.len() + 1)
+            .map_err(fatal_host_error)?;
+        let mut unit_to_byte = Vec::new();
+        unit_to_byte
+            .try_reserve_exact(len + 1)
+            .map_err(fatal_host_error)?;
+        let mut unit = 0u32;
+        for (byte, scalar) in text.char_indices() {
+            byte_to_unit.extend(std::iter::repeat_n(unit, scalar.len_utf8()));
+            unit_to_byte.extend(std::iter::repeat_n(
+                u32::try_from(byte).map_err(fatal_host_error)?,
+                scalar.len_utf16(),
+            ));
+            unit = unit
+                .checked_add(scalar.len_utf16() as u32)
+                .ok_or_else(|| fatal_host_error("RegExp unit offset overflow"))?;
+        }
+        byte_to_unit.push(unit);
+        unit_to_byte.push(u32::try_from(text.len()).map_err(fatal_host_error)?);
+        // Transfer the reservation to the cached view alongside its string.
+        charge.absorb(extra)?;
+        Some(Offsets {
+            byte_to_unit,
+            unit_to_byte,
+        })
+    };
     Ok(DecodedInput {
         text,
+        offsets,
         _charge: charge,
     })
 }
@@ -102,6 +190,15 @@ struct InputBytes {
 }
 
 impl InputBytes {
+    fn absorb(&mut self, mut other: Self) -> wasmtime::Result<()> {
+        self.bytes = self
+            .bytes
+            .checked_add(other.bytes)
+            .ok_or_else(|| fatal_host_error("RegExp cache charge overflow"))?;
+        other.bytes = 0;
+        Ok(())
+    }
+
     fn new(limits: &TenantLimits, bytes: u64) -> wasmtime::Result<Self> {
         limits.charge_host_bytes(bytes)?;
         Ok(Self {
@@ -151,7 +248,7 @@ mod tests {
                         )?;
                         let text = read(&mut caller, &Val::AnyRef(Some(input.to_anyref())))?;
                         assert_eq!(&**text, "a\u{fffd}😀");
-                        assert_eq!(caller.data().tenant_limits.host_attached_bytes(), 12);
+                        assert_eq!(caller.data().tenant_limits.host_attached_bytes(), 68);
                     }
                     1 => {
                         let root = caller.data().regex_input.as_ref().unwrap().root;

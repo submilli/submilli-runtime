@@ -756,16 +756,21 @@ async fn code_tools_resolve_relative_paths_and_patterns_from_cwd() {
         .unwrap();
     run(
         r#"
-        import { writeText } from "submilli:fs";
+        import { writeText, mkdir } from "submilli:fs";
         import { read, glob, search, tree, edit } from "submilli:code";
         function main(): void {
             writeText("a.ts", "hello");
             assert(read("a.ts").path === "/notes/a.ts", "read path");
             assert(glob("*.ts").entries.length === 1, "cwd glob");
+            assert(glob("*.ts").entries[0].depth === 1, "cwd glob depth");
             assert(glob("/notes/*.ts").entries.length === 1, "absolute glob");
+            assert(glob("/notes/*.ts").entries[0].depth === 2, "absolute glob depth");
             assert(search("hello").matches.length === 1, "default search root");
             assert(tree(".").entries.length === 1, "relative tree");
             assert(edit("a.ts", "hello", "updated").changed, "relative edit");
+            mkdir("src", true);
+            writeText("src/b.ts", "nested");
+            assert(glob("src/*.ts").entries[0].depth === 2, "prefix from cwd depth");
         }
     "#,
         crate::runtime::StoreData::with_vfs(vfs),
@@ -862,5 +867,32 @@ fn large_minimal_diffs_roundtrip_as_patches() {
         let result = patch::apply(&old, &String::from_utf16(&diff).unwrap()).unwrap();
         assert!(result.diagnostics.is_empty());
         assert_eq!(result.text, new);
+    }
+}
+
+#[tokio::test]
+async fn relative_glob_starts_inside_hidden_or_ignored_cwd() {
+    for cwd in ["/.private", "/ignored/nested"] {
+        let vfs = crate::runtime::Vfs::tempdir()
+            .unwrap()
+            .with_cwd(cwd)
+            .unwrap();
+        let directory = vfs.root().join(cwd.trim_start_matches('/'));
+        std::fs::create_dir_all(directory.join("src")).unwrap();
+        std::fs::write(vfs.root().join(".gitignore"), ".private/\nignored/\n").unwrap();
+        std::fs::write(directory.join("a.ts"), "root").unwrap();
+        std::fs::write(directory.join("src/b.ts"), "nested").unwrap();
+        run(
+            r#"
+            import { glob } from "submilli:code";
+            function main(): void {
+                assert(glob("*.ts").entries[0].depth === 1);
+                assert(glob("src/*.ts").entries[0].depth === 2);
+            }
+        "#,
+            crate::runtime::StoreData::with_vfs(vfs),
+        )
+        .await
+        .unwrap();
     }
 }

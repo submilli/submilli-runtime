@@ -73,7 +73,7 @@ pub(crate) fn object_field(
     obj: &Val,
     name: &str,
 ) -> wasmtime::Result<Option<Val>> {
-    object_field_kind(caller, obj, name, false)
+    object_field_kind(caller, obj, name, false, false)
 }
 
 pub(crate) fn object_accessor(
@@ -81,7 +81,16 @@ pub(crate) fn object_accessor(
     obj: &Val,
     name: &str,
 ) -> wasmtime::Result<Option<Val>> {
-    object_field_kind(caller, obj, name, true)
+    object_field_kind(caller, obj, name, true, false)
+}
+
+/// Serialization omits unwritten optional slots but preserves a written null.
+pub(crate) fn object_field_present(
+    caller: &mut Caller<'_, StoreData>,
+    obj: &Val,
+    name: &str,
+) -> wasmtime::Result<Option<Val>> {
+    object_field_kind(caller, obj, name, false, true)
 }
 
 fn object_field_kind(
@@ -89,6 +98,7 @@ fn object_field_kind(
     obj: &Val,
     name: &str,
     accessor: bool,
+    require_present: bool,
 ) -> wasmtime::Result<Option<Val>> {
     let Val::AnyRef(Some(any)) = obj else {
         return Ok(None);
@@ -115,7 +125,24 @@ fn object_field_kind(
         .map_err(crate::runtime::host::fatal_host_error)?;
     target.extend(name.encode_utf16());
     match super::object::find_field_slot(caller, &st, &target, accessor)? {
-        Some(slot) => fields.get(&mut *caller, slot).map(Some),
+        Some(slot) => {
+            let value = fields.get(&mut *caller, slot)?;
+            if require_present {
+                let names = match st.field(&mut *caller, 1)? {
+                    Val::AnyRef(Some(names)) => names.unwrap_array(&mut *caller)?,
+                    _ => {
+                        return Err(crate::runtime::host::fatal_host_error(
+                            "Object has invalid field names",
+                        ));
+                    }
+                };
+                let name = names.get(&mut *caller, slot)?;
+                if !super::object::field_is_present(caller, &name, &value)? {
+                    return Ok(None);
+                }
+            }
+            Ok(Some(value))
+        }
         None => Ok(None),
     }
 }

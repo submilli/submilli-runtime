@@ -1005,6 +1005,77 @@ fn operations_charge_for_the_input_they_process() {
         assert!(added >= floor, "{name}: {added} < {floor}");
     }
 
+    // Measured on commit 12, before the UTF-16 shared serializer and token
+    // formatter: these assertions reject the old charges as well as regressions.
+    for (name, operation, old) in [
+        ("json-bare", "JSON.stringify(s);", [53267_u64, 106515]),
+        ("json-typed", "JSON.stringify({text:s});", [36963, 73827]),
+        (
+            "json-pretty",
+            "JSON.stringify({text:s},null,2);",
+            [172244, 344276],
+        ),
+        (
+            "json-indent",
+            "JSON.stringify({text:\"x\"},null,s);",
+            [18665, 37097],
+        ),
+    ] {
+        let mut measured = Vec::new();
+        for (index, count) in [16384_u64, 32768].into_iter().enumerate() {
+            let input = format!("const s=\"x\".repeat({count});");
+            let baseline = host_fuel(
+                name,
+                &format!("function main(): number {{ {input} return 0; }}"),
+            );
+            let actual = host_fuel(
+                name,
+                &format!("function main(): number {{ {input} {operation} return 0; }}"),
+            ) - baseline;
+            eprintln!("{name} {count}: {actual}");
+            assert!(
+                actual * 10 < old[index] * 9,
+                "{name}: {actual} versus old {}",
+                old[index]
+            );
+            measured.push(actual);
+        }
+        assert!(measured[1] <= measured[0] * 22 / 10, "{name}: {measured:?}");
+        if name == "json-indent" {
+            assert_eq!(measured[0], measured[1]);
+        }
+    }
+
+    let mut unicode_exec = Vec::new();
+    for count in [128_u64, 256] {
+        let input = format!("const s=\"éx\".repeat({count}); const r=/x/g;");
+        let baseline = host_fuel(
+            "unicode-exec-base",
+            &format!("function main(): number {{ {input} return 0; }}"),
+        );
+        let actual = host_fuel(
+            "unicode-exec",
+            &format!(
+                "function main(): number {{ {input} for(let i=0;i<{count};i++) {{ r.exec(s); }} return 0; }}"
+            ),
+        ) - baseline;
+        // UTF-16/UTF-8 offsets are built and charged once, then looked up in
+        // constant time. Old decoding ran on every call, giving this exact cost.
+        let per_call = CALL + REGEX.cost(3) + SCAN.cost(1) + COPY.cost(1);
+        let old = count * (COPY.cost(2 * count) + SCAN.cost(2 * count) + per_call);
+        let expected = COPY.cost(2 * count)
+            + SCAN.cost(2 * count)
+            + ELEM.cost(5 * count + 2)
+            + count * per_call;
+        assert_eq!(actual, expected);
+        assert!(actual < old / 2, "unicode exec: {actual} versus old {old}");
+        unicode_exec.push(actual);
+    }
+    assert!(
+        unicode_exec[1] <= unicode_exec[0] * 21 / 10,
+        "unicode exec: {unicode_exec:?}"
+    );
+
     for (name, operation) in [
         (
             "replace-literal",
@@ -1572,13 +1643,15 @@ fn operations_charge_for_the_input_they_process() {
             empty_json_cost = actual;
             continue;
         }
-        // Preflight and serialization both visit each element. Previously only
-        // output marshalling grew: this exact delta catches that undercharge.
-        let output_len = 2 * n + 11;
-        assert_eq!(
-            actual - empty_json_cost,
-            ELEM.cost(2 * n) + SCAN.cost(output_len - 12) + COPY.cost(output_len) - COPY.cost(12),
-        );
+        // Both passes still charge each value. Streaming adds individually
+        // rounded leaf/append/growth charges rather than a whole-output SCAN.
+        // These measured deltas pin those terms as well as the visit charge.
+        let string_work = match n {
+            128 => 470,
+            256 => 942,
+            _ => unreachable!(),
+        };
+        assert_eq!(actual - empty_json_cost, ELEM.cost(2 * n) + string_work);
     }
 
     for (name, operation, expected_delta) in [

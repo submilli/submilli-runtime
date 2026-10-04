@@ -28,6 +28,8 @@ pub(super) fn run(
     // before anything is written.
     if writes(op) {
         refuse_read_only_repository(job, op, &placement)?;
+    }
+    if creates {
         job.algorithm_fuel.before_effect();
     }
     // Declared first, the permit is released last, after the snapshot's cleanup.
@@ -113,6 +115,8 @@ pub(super) fn run(
         _ => operations::read(&snapshot, op, args)?,
     };
     if changed {
+        job.check_cancelled()?;
+        job.algorithm_fuel.before_effect();
         snapshot.publish()?;
     }
     Ok(Output::Json(result))

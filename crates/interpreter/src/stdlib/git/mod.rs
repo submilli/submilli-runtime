@@ -487,11 +487,7 @@ async fn invoke(
         max_bytes,
         transferred: Arc::new(AtomicU64::new(0)),
         meter: Arc::clone(&meter),
-        algorithm_fuel: Arc::new(work::AlgorithmWork::new(
-            caller
-                .get_fuel()?
-                .saturating_sub(caller.data().host_fuel_pending),
-        )),
+        algorithm_fuel: Arc::new(work::AlgorithmWork::with_meter(Arc::clone(&meter))),
         denial: Arc::new(Mutex::new(None)),
         history_cache: caller.data().git_history.clone(),
     };
@@ -501,7 +497,6 @@ async fn invoke(
     let returns_string = op == "commit";
     let denial = job.denial.clone();
     let principal = job.caller.clone();
-    let algorithm_fuel = Arc::clone(&job.algorithm_fuel);
     let worker = async {
         caller
             .data_mut()
@@ -517,7 +512,6 @@ async fn invoke(
     // The work is done, and may be published, whether or not it succeeded:
     // it is settled, not refused.
     meter.settle(&mut *caller)?;
-    fuel::settle_host_fuel(&mut *caller, algorithm_fuel.spent())?;
     if let Err(error) = &outcome
         && meter.is_exhausted()
         && !crate::runtime::host::ends_the_run(error)
@@ -538,15 +532,18 @@ async fn invoke(
         }
         other => other,
     };
-    if let Some((capability, reason)) = denial
+    let denial = denial
         .lock()
         .map_err(|_| crate::runtime::host::fatal_host_error("git: denial lock poisoned"))?
-        .take()
-    {
-        return Err(permission_denied(&principal, &capability, reason));
-    }
+        .take();
     drop(cancel_guard);
     fuel::settle_result(caller, |caller| {
+        if let Some((capability, reason)) = denial {
+            return Err(crate::runtime::host::throw_host_error(
+                caller,
+                permission_denied(&principal, &capability, reason),
+            ));
+        }
         let (result, _budget) =
             outcome.map_err(|error| crate::runtime::host::throw_host_error(caller, error))?;
         encode_result(

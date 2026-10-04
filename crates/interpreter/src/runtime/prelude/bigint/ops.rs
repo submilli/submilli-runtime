@@ -15,6 +15,24 @@ use crate::runtime::{NUMBER_MODULE_NAME, StoreData, fuel};
 
 pub const BIGINT_MODULE_NAME: &str = "submilli:bigint";
 
+/// A finite integer double has at most 1024 magnitude bits. Convert its exact
+/// represented value rather than saturating it through a fixed-width integer.
+pub(super) fn integer_number(n: f64, name: &str) -> wasmtime::Result<num_bigint::BigInt> {
+    if !n.is_finite() {
+        return Err(range_error(format!(
+            "{name}: cannot convert non-finite number to bigint ({n})"
+        )));
+    }
+    if n.fract() != 0.0 {
+        return Err(range_error(format!(
+            "{name}: cannot convert non-integer number to bigint ({n})"
+        )));
+    }
+    <num_bigint::BigInt as num_traits::FromPrimitive>::from_f64(n).ok_or_else(|| {
+        crate::runtime::host::fatal_host_error("BigInt conversion refused a finite integer double")
+    })
+}
+
 /// Standalone so cross-module canonicalization aligns with the consumer's `$rawBigInt`.
 pub(crate) fn limbs_array_type(engine: &Engine) -> ArrayType {
     ArrayType::new(
@@ -78,20 +96,7 @@ pub(crate) fn install(
                     )));
                 }
             };
-            if !n.is_finite() {
-                return Err(range_error(format!(
-                    "bigint.fromNumber: cannot convert non-finite number to bigint ({n})",
-                )));
-            }
-            if n.fract() != 0.0 {
-                return Err(range_error(format!(
-                    "bigint.fromNumber: cannot convert non-integer number to bigint ({n})",
-                )));
-            }
-            // For integer doubles up to 2^53 the cast is exact; beyond,
-            // the f64 itself already lost precision (matches JS
-            // `BigInt(N)` for unsafe-range N).
-            let parsed = num_bigint::BigInt::from(n as i128);
+            let parsed = integer_number(n, "bigint.fromNumber")?;
             let (sign, magnitude) = parsed.into_parts();
             let limbs = magnitude.to_u64_digits();
             let arr = write_limbs(&mut *caller, &limbs)?;

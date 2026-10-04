@@ -170,6 +170,7 @@ fn structural_symbols(with_walk_guard: bool) -> SymbolTable {
         symbols.record_func(crate::mangle::prelude("vtable_walk_leave"), 4);
     }
     symbols.record_global(crate::mangle::prelude("string_vtable"), 0);
+    symbols.record_global(crate::mangle::prelude("object_vtable"), 1);
     symbols.record_func(crate::mangle::prelude("string_concat"), 0);
     symbols.record_func(crate::mangle::prelude("string_eq"), 1);
     symbols.record_func(crate::mangle::prelude("ObjectConstructor##toJson"), 2);

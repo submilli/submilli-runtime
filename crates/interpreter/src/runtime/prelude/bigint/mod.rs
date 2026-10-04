@@ -126,22 +126,8 @@ fn bigint_ctor_call(caller: &mut Caller<'_, StoreData>, value: &Val) -> wasmtime
             Val::F64(bits) => f64::from_bits(bits),
             other => wasmtime::bail!("BigInt(number): field 1 is {other:?}, not f64"),
         };
-        if !n.is_finite() {
-            return Err(crate::runtime::host::range_error(format!(
-                "BigInt(number): cannot convert non-finite number to bigint ({n})"
-            )));
-        }
-        if n.fract() != 0.0 {
-            return Err(crate::runtime::host::range_error(format!(
-                "BigInt(number): cannot convert non-integer number to bigint ({n})"
-            )));
-        }
-        // For integer doubles up to 2^53 the cast is exact; beyond, the f64
-        // itself already lost precision (matches JS `BigInt(N)`).
-        return crate::runtime::prelude::bigint::ops::make_bigint_struct(
-            caller,
-            num_bigint::BigInt::from(n as i128),
-        );
+        let parsed = ops::integer_number(n, "BigInt(number)")?;
+        return ops::make_bigint_struct(caller, parsed);
     }
     Err(wasmtime::Error::msg(
         "BigInt(value): expected a string or number",
@@ -284,4 +270,64 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
             },
         },
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::runtime::{RuntimeConfig, Vfs, install_runtime_async};
+    use wasmtime::Func;
+
+    #[tokio::test]
+    async fn boxed_and_raw_numbers_convert_exactly_at_full_double_range() {
+        let config = RuntimeConfig::default();
+        let engine = config.engine().unwrap();
+        let mut store = config
+            .store_async(&engine, StoreData::with_vfs(Vfs::none()))
+            .unwrap();
+        let mut linker = Linker::new(&engine);
+        install_runtime_async(&mut linker, &mut store)
+            .await
+            .unwrap();
+        let callback = Func::new(
+            &mut store,
+            FuncType::new(&engine, [], []),
+            |mut caller, _, _| {
+                for (number, expected) in [
+                    (0.0, num_bigint::BigInt::from(0)),
+                    (-0.0, num_bigint::BigInt::from(0)),
+                    (
+                        9007199254740992.0,
+                        num_bigint::BigInt::from(1u64) << 53usize,
+                    ),
+                    (2f64.powi(127), num_bigint::BigInt::from(1u64) << 127usize),
+                    (
+                        -2f64.powi(128),
+                        -(num_bigint::BigInt::from(1u64) << 128usize),
+                    ),
+                    (
+                        f64::MAX,
+                        (num_bigint::BigInt::from(1u64) << 1024usize)
+                            - (num_bigint::BigInt::from(1u64) << 971usize),
+                    ),
+                ] {
+                    assert_eq!(ops::integer_number(number, "test")?, expected);
+                    let boxed =
+                        crate::runtime::host::write_boxed_number_struct(&mut caller, number)?;
+                    let converted =
+                        bigint_ctor_call(&mut caller, &Val::AnyRef(Some(boxed.to_anyref())))?;
+                    let (sign, limbs) = read_bigint_struct(&mut caller, &converted, "test")?;
+                    assert_eq!(limbs_to_bigint(sign, &limbs)?, expected);
+                    assert!(limbs.len() <= 16);
+                }
+                for number in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY, 1.5, -1.5] {
+                    let error = ops::integer_number(number, "test").unwrap_err();
+                    assert!(format!("{error}").contains("cannot convert"));
+                }
+                Ok(())
+            },
+        );
+        store.set_fuel(100000).unwrap();
+        callback.call_async(&mut store, &[], &mut []).await.unwrap();
+    }
 }

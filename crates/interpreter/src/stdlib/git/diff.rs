@@ -1,5 +1,5 @@
 //! Compare Git object identities before inflating changed file contents.
-use super::storage::{Files, MAX_PATHS, Snapshot, validate_path};
+use super::storage::{MAX_PATHS, Snapshot, validate_path};
 use crate::runtime::fuel;
 use gix::bstr::ByteSlice;
 use serde_json::{Value, json};
@@ -12,7 +12,7 @@ type Objects = BTreeMap<String, (u32, gix::ObjectId)>;
 
 struct Source {
     objects: Objects,
-    worktree: Option<Files>,
+    worktree: bool,
     bytes: usize,
     loaded_bytes: Cell<usize>,
 }
@@ -111,7 +111,7 @@ impl Source {
     fn empty() -> Self {
         Self {
             objects: Objects::new(),
-            worktree: None,
+            worktree: false,
             bytes: 0,
             loaded_bytes: Cell::new(0),
         }
@@ -143,13 +143,10 @@ impl Source {
         let Some((_, id)) = self.objects.get(path) else {
             return Ok(Cow::Borrowed(&[]));
         };
-        if let Some(work) = &self.worktree {
-            return work
-                .get(path)
-                .map(|value| Cow::Borrowed(value.1.as_slice()))
-                .ok_or_else(|| {
-                    crate::runtime::host::fatal_host_error("git.diff: missing worktree data")
-                });
+        if self.worktree {
+            return Ok(Cow::Owned(
+                snapshot.worktree_contents(path, snapshot.max_bytes)?,
+            ));
         }
         let remaining = snapshot
             .max_bytes
@@ -221,7 +218,7 @@ fn tree(snapshot: &Snapshot, revision: &str) -> Result<Source> {
 }
 
 fn index(snapshot: &Snapshot) -> Result<Source> {
-    let index = snapshot.repo.index_or_empty()?;
+    let index = snapshot.index()?;
     let mut source = Source::empty();
     for entry in index.entries() {
         snapshot.check_cancelled()?;
@@ -245,23 +242,12 @@ fn index(snapshot: &Snapshot) -> Result<Source> {
 fn working(snapshot: &Snapshot) -> Result<Source> {
     let worktree = snapshot.worktree()?;
     let mut source = Source::empty();
-    for (path, (mode, data)) in &worktree {
+    for (path, (mode, id)) in worktree {
         snapshot.check_cancelled()?;
-        snapshot.record_algorithm_fuel(fuel::HASH.cost(data.len() as u64))?;
-        let id = gix::objs::compute_hash(gix::hash::Kind::Sha1, gix::objs::Kind::Blob, data)?;
         source.admit(snapshot, path.len().saturating_add(128))?;
-        let mut owned = String::new();
-        owned
-            .try_reserve_exact(path.len())
-            .map_err(crate::runtime::host::fatal_host_error)?;
-        owned.push_str(path);
-        source.insert(owned, *mode, id)?;
-        source.admit(
-            snapshot,
-            data.len().saturating_add(path.len()).saturating_add(128),
-        )?;
+        source.insert(path, mode, id)?;
     }
-    source.worktree = Some(worktree);
+    source.worktree = true;
     Ok(source)
 }
 

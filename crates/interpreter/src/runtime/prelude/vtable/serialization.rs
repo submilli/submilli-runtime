@@ -36,7 +36,7 @@ pub(super) async fn object(
     Ok(output)
 }
 
-pub(super) fn quoted(
+pub(crate) fn quoted(
     caller: &mut Caller<'_, StoreData>,
     units: &[u16],
 ) -> wasmtime::Result<Output> {
@@ -184,14 +184,14 @@ async fn append_object(
     output.append(caller, &[125])
 }
 
-pub(super) struct Output {
+pub(crate) struct Output {
     units: Vec<u16>,
     reserved_bytes: u64,
     counter: Arc<AtomicU64>,
 }
 
 impl Output {
-    fn new(caller: &Caller<'_, StoreData>) -> Self {
+    pub(crate) fn new(caller: &Caller<'_, StoreData>) -> Self {
         Self {
             units: Vec::new(),
             reserved_bytes: 0,
@@ -199,7 +199,7 @@ impl Output {
         }
     }
 
-    fn append(
+    pub(crate) fn append(
         &mut self,
         caller: &mut Caller<'_, StoreData>,
         units: &[u16],
@@ -219,6 +219,12 @@ impl Output {
             let charge = bytes
                 .checked_sub(self.reserved_bytes)
                 .ok_or_else(|| fatal_host_error("serializer capacity decreased"))?;
+            // Vec growth can briefly retain the old allocation alongside its
+            // replacement. Admit that overlap before requesting the allocation.
+            let _old_allocation = crate::runtime::limits::HostBytes::new(
+                &caller.data().tenant_limits,
+                self.reserved_bytes,
+            )?;
             caller.data().tenant_limits.charge_host_bytes(charge)?;
             self.reserved_bytes = bytes;
             fuel::charge(&mut *caller, fuel::COPY, self.units.len() as u64)?;
@@ -238,7 +244,7 @@ impl Output {
         Ok(())
     }
 
-    fn append_escaped(
+    pub(crate) fn append_escaped(
         &mut self,
         caller: &mut Caller<'_, StoreData>,
         units: &[u16],
@@ -268,7 +274,7 @@ impl Output {
         self.append(caller, &[34])
     }
 
-    pub(super) fn units(&self) -> &[u16] {
+    pub(crate) fn units(&self) -> &[u16] {
         &self.units
     }
 }
@@ -280,5 +286,53 @@ impl Drop for Output {
             .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
                 Some(current.saturating_sub(self.reserved_bytes))
             });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::runtime::{RuntimeConfig, Vfs};
+    use wasmtime::{Func, FuncType};
+
+    #[tokio::test]
+    async fn serializer_growth_admits_overlap_and_recovers_without_leaking() {
+        let config = RuntimeConfig::default();
+        let engine = config.engine().unwrap();
+        let mut store = config
+            .store_async(&engine, StoreData::with_vfs(Vfs::none()))
+            .unwrap();
+        let callback = Func::new(
+            &mut store,
+            FuncType::new(&engine, [], []),
+            |mut caller, _, _| {
+                let mut output = Output::new(&caller);
+                output.append(&mut caller, &[97; 8])?;
+                let retained = caller.data().tenant_limits.host_attached_bytes();
+                let old_cap = caller.data().tenant_limits.max_total_bytes;
+                // The replacement alone fits, while old plus replacement does not.
+                let available = 40;
+                let replacement = 17 * 2;
+                assert!(replacement <= available && retained + replacement > available);
+                caller.data_mut().tenant_limits.max_total_bytes =
+                    caller.data().tenant_limits.observed_bytes() + available;
+                let error = output.append(&mut caller, &[98; 9]).unwrap_err();
+                assert!(
+                    error
+                        .downcast_ref::<crate::runtime::limits::MemoryCapExceeded>()
+                        .is_some()
+                );
+                assert_eq!(output.units(), &[97; 8]);
+                assert_eq!(caller.data().tenant_limits.host_attached_bytes(), retained);
+                caller.data_mut().tenant_limits.max_total_bytes = old_cap;
+                output.append(&mut caller, &[98; 9])?;
+                assert_eq!(output.units().len(), 17);
+                drop(output);
+                assert_eq!(caller.data().tenant_limits.host_attached_bytes(), 0);
+                Ok(())
+            },
+        );
+        store.set_fuel(100000).unwrap();
+        callback.call_async(&mut store, &[], &mut []).await.unwrap();
     }
 }

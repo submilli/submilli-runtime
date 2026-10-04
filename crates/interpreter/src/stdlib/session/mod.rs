@@ -464,7 +464,11 @@ fn trap(caller: &wasmtime::Caller<'_, StoreData>, error: &SessionKvError) -> was
         } => crate::runtime::host::range_error(error.to_string()),
         SessionKvError::LimitExceeded { .. } => {
             let who = crate::stdlib::shared::running_package(caller)
-                .unwrap_or_else(|p| p.label.to_string());
+                .or_else(crate::stdlib::shared::PrincipalError::label_or_error);
+            let who = match who {
+                Ok(who) => who,
+                Err(error) => return error,
+            };
             crate::stdlib::shared::audit_denial(
                 caller.data().security_check.as_ref(),
                 &who,

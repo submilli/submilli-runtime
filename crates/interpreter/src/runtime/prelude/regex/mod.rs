@@ -94,7 +94,7 @@ fn uses_last_index(bits: i32) -> bool {
 fn exec_at(
     caller: &mut Caller<'_, StoreData>,
     st: &Rooted<StructRef>,
-    input: &str,
+    input: &input::DecodedInput,
     start: usize,
 ) -> wasmtime::Result<Option<ExecSnapshot>> {
     let extern_ref = match st.field(&mut *caller, 1)? {
@@ -106,6 +106,11 @@ fn exec_at(
         .ok_or_else(|| wasmtime::Error::msg("RegExp: compiled regex was reclaimed"))?
         .downcast_ref::<ChargedRegex>()
         .ok_or_else(|| wasmtime::Error::msg("RegExp: externref had unexpected payload type"))?;
+    let requested = start;
+    let unicode = charged.flags.has(FlagSet::U);
+    let Some(start) = input.unit_to_byte(start, unicode) else {
+        return Ok(None);
+    };
     let raw = exec_snapshot(&charged.regex, input, start);
     let sticky = charged.flags.has(FlagSet::Y);
     // The bytes the engine scanned: up to the match on a hit, to the end on a
@@ -117,19 +122,27 @@ fn exec_at(
         fuel::REGEX,
         scanned.saturating_sub(start) as u64,
     )?;
-    Ok(if sticky {
-        raw.filter(|s| s.match_start == start)
-    } else {
-        raw
-    })
+    if let Some(hit) = &raw
+        && sticky
+        && (hit.match_start != start
+            || (!unicode && input.byte_to_unit(hit.match_start)? != requested))
+    {
+        return Ok(None);
+    }
+    Ok(raw)
 }
 
 fn find_at(
     caller: &mut Caller<'_, StoreData>,
     regex: &Rooted<StructRef>,
-    input: &str,
+    input: &input::DecodedInput,
     start: usize,
 ) -> wasmtime::Result<Option<(usize, usize)>> {
+    let requested = start;
+    let unicode = with_regex(caller, regex, |compiled| compiled.flags.has(FlagSet::U))?;
+    let Some(start) = input.unit_to_byte(start, unicode) else {
+        return Ok(None);
+    };
     let (found, sticky) = with_regex(caller, regex, |compiled| {
         (
             engine::find(&compiled.regex, input, start),
@@ -142,7 +155,14 @@ fn find_at(
         fuel::REGEX,
         scanned.saturating_sub(start) as u64,
     )?;
-    Ok(found.filter(|(index, _)| !sticky || *index == start))
+    let Some((index, end)) = found else {
+        return Ok(None);
+    };
+    let unit = input.byte_to_unit(index)?;
+    if sticky && (index != start || (!unicode && unit != requested)) {
+        return Ok(None);
+    }
+    Ok(Some((unit, input.byte_to_unit(end)?)))
 }
 
 /// Write `lastIndex` back after a match attempt: `g`/`y` set → post-match offset
@@ -154,7 +174,13 @@ fn write_last_index(
     next: Option<usize>,
 ) -> wasmtime::Result<()> {
     if uses_last_index(bits) {
-        st.set_field(&mut *caller, 2, Val::I32(next.unwrap_or(0) as i32))?;
+        st.set_field(
+            &mut *caller,
+            2,
+            Val::I32(
+                i32::try_from(next.unwrap_or(0)).map_err(crate::runtime::host::fatal_host_error)?,
+            ),
+        )?;
     }
     Ok(())
 }
@@ -236,7 +262,7 @@ pub(super) fn construct(
 /// Build a fresh match box, retaining the immutable input value without copying it.
 fn build_match_box(
     caller: &mut Caller<'_, StoreData>,
-    input: &str,
+    input: &input::DecodedInput,
     input_value: &Val,
     snapshot: &ExecSnapshot,
 ) -> wasmtime::Result<Val> {
@@ -280,7 +306,7 @@ fn build_match_box(
             vtable,
             Val::AnyRef(Some(match_str.to_anyref())),
             Val::I32(
-                i32::try_from(snapshot.match_start)
+                i32::try_from(input.byte_to_unit(snapshot.match_start)?)
                     .map_err(|_| wasmtime::Error::msg("RegExp: match index exceeds i32"))?,
             ),
             *input_value,
@@ -394,7 +420,10 @@ pub(super) fn exec(caller: &mut Caller<'_, StoreData>, params: &[Val]) -> wasmti
         caller,
         &st,
         bits,
-        snapshot.as_ref().map(|s| s.next_last_index),
+        snapshot
+            .as_ref()
+            .map(|s| input.byte_to_unit(s.next_last_index))
+            .transpose()?,
     )?;
     match snapshot {
         Some(s) => build_match_box(caller, &input, abi_arg(params, 1)?, &s),
@@ -519,7 +548,7 @@ pub(super) fn string_match(
     let params: &[Val; 2] = params
         .try_into()
         .map_err(|_| wasmtime::Error::msg("string_match: invalid argument count"))?;
-    let input = read_string_arg(&mut *caller, abi_arg(params, 0)?, "String#match(input)")?;
+    let input = input::read(caller, abi_arg(params, 0)?)?;
     let st = as_struct(caller, abi_arg(params, 1)?, "String#match(regex)")?;
     match exec_at(caller, &st, &input, 0)? {
         Some(s) => build_match_box(caller, &input, abi_arg(params, 0)?, &s),
@@ -541,7 +570,7 @@ pub(super) fn string_search(
 }
 
 /// `String#matchAll(re)` — every match as a `RegExpMatch[]`. A zero-length match
-/// advances the scan by one (ECMA-262).
+/// advances by a UTF-16 unit, or a surrogate pair under `u` (ECMA-262).
 pub(super) fn string_match_all(
     caller: &mut Caller<'_, StoreData>,
     params: &[Val],
@@ -549,21 +578,23 @@ pub(super) fn string_match_all(
     let params: &[Val; 2] = params
         .try_into()
         .map_err(|_| wasmtime::Error::msg("string_match_all: invalid argument count"))?;
-    let input = read_string_arg(&mut *caller, abi_arg(params, 0)?, "String#matchAll(input)")?;
+    let input = input::read(caller, abi_arg(params, 0)?)?;
     let st = as_struct(caller, abi_arg(params, 1)?, "String#matchAll(regex)")?;
-    let mut boxes: Vec<Val> = Vec::new();
+    let unicode = flag_bits(caller, &st)? & FlagSet::U.bits() as i32 != 0;
+    let mut boxes = output::Buffer::<Val>::new();
     let mut pos = 0usize;
     while let Some(s) = exec_at(caller, &st, &input, pos)? {
-        let next = if s.next_last_index == pos {
-            pos.checked_add(1)
-                .ok_or_else(|| wasmtime::Error::msg("RegExp: match position overflow"))?
+        let end = input.byte_to_unit(s.next_last_index)?;
+        let next = if s.match_start == s.match_end {
+            input.advance(end, unicode)?
         } else {
-            s.next_last_index
+            end
         };
-        boxes.push(build_match_box(caller, &input, abi_arg(params, 0)?, &s)?);
+        let value = build_match_box(caller, &input, abi_arg(params, 0)?, &s)?;
+        boxes.push(caller, value)?;
         pos = next;
     }
-    let arr = write_submilli_array_struct(caller, &boxes)?;
+    let arr = crate::runtime::host::write_submilli_array_struct_precharged(caller, boxes.values())?;
     Ok(Val::AnyRef(Some(arr.to_anyref())))
 }
 

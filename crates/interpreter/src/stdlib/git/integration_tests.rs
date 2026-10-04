@@ -1412,6 +1412,7 @@ fn selective_diff_preserves_staged_working_and_binary_changes() {
     let staged = super::operations::read(&state, "diff", &[json!({"mode":"staged"})]).unwrap();
     assert!(staged["patch"].as_str().unwrap().contains("+staged"));
     assert_eq!(staged["binaryPaths"], json!(["binary"]));
+    drop(state);
     std::fs::write(root.path().join("base"), "working\n").unwrap();
     std::fs::write(root.path().join("untracked"), "not in diff\n").unwrap();
     let state = snapshot(root.path());
@@ -1419,4 +1420,35 @@ fn selective_diff_preserves_staged_working_and_binary_changes() {
     let patch = working["patch"].as_str().unwrap();
     assert!(patch.contains("-staged") && patch.contains("+working"));
     assert!(!patch.contains("untracked"));
+}
+
+#[test]
+fn diff_uses_bounded_sanitized_native_index_and_recovers() {
+    let root = repository();
+    let mut state = snapshot(root.path());
+    let path = root.path().join(".git/index");
+    let healthy = std::fs::read(&path).unwrap();
+    let payload = [b"a\0-1 1\n".repeat(1000), b"a\0-1 0\n".to_vec()].concat();
+    let mut bytes = [b"DIRC".as_slice(), &2u32.to_be_bytes(), &0u32.to_be_bytes()].concat();
+    bytes.extend_from_slice(b"TREE");
+    bytes.extend_from_slice(&u32::try_from(payload.len()).unwrap().to_be_bytes());
+    bytes.extend_from_slice(&payload);
+    let mut hasher = gix::hash::hasher(gix::hash::Kind::Sha1);
+    hasher.update(&bytes);
+    bytes.extend_from_slice(hasher.try_finalize().unwrap().as_slice());
+    std::fs::write(&path, &bytes).unwrap();
+    for mode in ["working", "staged"] {
+        super::operations::read(&state, "diff", &[json!({"mode":mode})]).unwrap();
+    }
+    let original_limit = state.max_bytes;
+    state.max_bytes = 128;
+    for mode in ["working", "staged"] {
+        assert!(super::operations::read(&state, "diff", &[json!({"mode":mode})]).is_err());
+    }
+    state.max_bytes = original_limit;
+    std::fs::write(&path, healthy).unwrap();
+    for mode in ["working", "staged"] {
+        let result = super::operations::read(&state, "diff", &[json!({"mode":mode})]).unwrap();
+        assert_eq!(result["patch"], "");
+    }
 }

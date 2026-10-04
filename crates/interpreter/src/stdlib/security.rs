@@ -96,14 +96,11 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
                     })?;
                 fuel::charge_host_fuel(&mut *caller, fuel::GATE)?;
                 let who = consumer_of_running_package(&mut *caller, &capability).inspect_err(
-                    |_error| {
-                        crate::stdlib::shared::audit_denial(
+                    |error| {
+                        audit_consumer_failure(
                             caller.data().security_check.as_ref(),
-                            "<unknown caller>",
-                            &capability,
                             &context,
-                            "invariant",
-                            "caller cannot be attributed",
+                            error,
                         );
                     },
                 )?;
@@ -256,9 +253,78 @@ fn consumer_of_running_package(
     }
 }
 
+fn audit_consumer_failure(
+    policy: &dyn crate::runtime::security::SecurityCheck,
+    context: &serde_json::Value,
+    error: &wasmtime::Error,
+) {
+    if let Some(denial) = error.downcast_ref::<crate::runtime::host::PermissionDenied>() {
+        crate::stdlib::shared::audit_denial(
+            policy,
+            &denial.caller,
+            &denial.capability,
+            context,
+            "invariant",
+            &denial.reason,
+        );
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn consumer_audit_distinguishes_attribution_denials_from_execution_failures() {
+        use crate::runtime::security::{AuditDecision, SecurityCheck};
+        use std::sync::Mutex;
+        #[derive(Default)]
+        struct AuditSink(Mutex<Vec<(String, String)>>);
+        impl SecurityCheck for AuditSink {
+            fn check(&self, _: &str, _: &str, _: &serde_json::Value) -> CheckOutcome {
+                CheckOutcome::Allow { rule: None }
+            }
+            fn audit(&self, decision: AuditDecision<'_>) {
+                self.0.lock().unwrap().push((
+                    decision.caller.to_owned(),
+                    decision.reason.unwrap().to_owned(),
+                ));
+            }
+        }
+        let sink = AuditSink::default();
+        let context = serde_json::Value::Null;
+        audit_consumer_failure(
+            &sink,
+            &context,
+            &wasmtime::Error::new(wasmtime::Trap::OutOfFuel),
+        );
+        audit_consumer_failure(
+            &sink,
+            &context,
+            &crate::runtime::host::fatal_host_error("engine failure"),
+        );
+        assert!(sink.0.lock().unwrap().is_empty());
+        for label in ["<no wasm frame>", "<unnamed module>"] {
+            audit_consumer_failure(
+                &sink,
+                &context,
+                &permission_denied_invariant(label, "test.op", "unattributed caller"),
+            );
+        }
+        assert_eq!(
+            *sink.0.lock().unwrap(),
+            vec![
+                (
+                    "<no wasm frame>".to_owned(),
+                    "unattributed caller".to_owned()
+                ),
+                (
+                    "<unnamed module>".to_owned(),
+                    "unattributed caller".to_owned()
+                ),
+            ]
+        );
+    }
 
     #[tokio::test]
     async fn necessary_caller_walk_is_metered_and_stops_before_short_fuel_work() {
