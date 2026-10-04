@@ -1,0 +1,1 @@
+Claude Code and Codex SVG marks from [Lobe Icons](https://github.com/lobehub/lobe-icons/tree/master/packages/static-svg/icons), retrieved 2026-10-04 (`claudecode.svg` and `codex.svg`). MIT license included. Brand marks belong to their respective owners. Used to identify app launch destinations.

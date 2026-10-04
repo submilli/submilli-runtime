@@ -33,3 +33,6 @@ graphify-out/
 
 # Approved media for local video review only; never a deployment asset.
 /docs-site/public/_video-preview/
+
+# Local review evidence is shared outside Git.
+/docs-site/review/
