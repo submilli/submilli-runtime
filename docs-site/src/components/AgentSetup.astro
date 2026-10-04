@@ -1,0 +1,69 @@
+---
+import ClaudeLogo from "../assets/agent-logos/claude-code.svg";
+import CodexLogo from "../assets/agent-logos/codex.svg";
+const setupPrompt = `Help me set up Submilli in my project. Read the official setup instructions at https://github.com/submilli/submilli-runtime/blob/main/skills/submilli/references/setup.md and the quickstart at https://submilli.ai/docs/quickstart/ first. Confirm the project directory, check whether submilli and submilli-server are already installed, and use the documented installer for my OS only if needed. Preserve existing pinned versions and local edits. Install the skill for this assistant in the project: use submilli skill install --agent claude --project . for Claude Code, or submilli skill install --agent codex --project . for Codex. Verify the installation and run a small local example without paid model calls or external side effects. Tell me if I need to restart the assistant to discover the skill, and report what you actually verified.`;
+const encodedPrompt = encodeURIComponent(setupPrompt);
+---
+<aside class="agent-setup" aria-labelledby="agent-setup-title">
+  <p id="agent-setup-title" class="setup-label">Set up with your coding agent</p>
+  <div class="setup-actions">
+    <a href={`claude://code/new?q=${encodedPrompt}`} aria-label="Claude Code" title="Open a setup prompt in Claude Code. Review it, then send."><ClaudeLogo aria-hidden="true" width="18" height="18" /><span>Claude<span class="code-label"> Code</span></span></a>
+    <a href={`codex://threads/new?prompt=${encodedPrompt}`} title="Open a setup prompt in Codex. Review it, then send."><CodexLogo aria-hidden="true" width="18" height="18" /><span>Codex</span></a>
+    <button type="button" data-copy-setup disabled>
+      <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><rect x="8" y="8" width="12" height="13" rx="2"/><path d="M16 8V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h3"/></svg>
+      <span data-copy-label>Copy prompt</span>
+    </button>
+  </div>
+  <div class="prompt-fallback" hidden>
+    <label for="agent-setup-prompt">Select and copy the setup prompt</label>
+    <textarea id="agent-setup-prompt" readonly rows="5">{setupPrompt}</textarea>
+  </div>
+  <noscript><details><summary>View setup prompt</summary><textarea readonly rows="5" aria-label="Setup prompt">{setupPrompt}</textarea></details></noscript>
+  <span class="sr-only" data-copy-status role="status"></span>
+</aside>
+<script>
+  const button = document.querySelector<HTMLButtonElement>('[data-copy-setup]');
+  const prompt = document.querySelector<HTMLTextAreaElement>('#agent-setup-prompt');
+  const fallback = document.querySelector<HTMLElement>('.prompt-fallback');
+  const status = document.querySelector<HTMLElement>('[data-copy-status]');
+  const label = document.querySelector<HTMLElement>('[data-copy-label]');
+  if (button && prompt && fallback && status && label) {
+    button.disabled = false;
+    button.addEventListener('click', async () => {
+      try {
+        await navigator.clipboard.writeText(prompt.value);
+        fallback.hidden = true;
+        label.textContent = 'Copied';
+        status.textContent = 'Setup prompt copied.';
+      } catch {
+        fallback.hidden = false;
+        prompt.focus();
+        prompt.select();
+        status.textContent = 'Select and copy the prompt below the buttons.';
+      }
+    });
+  }
+</script>
+<style>
+  .agent-setup{margin:0 0 2rem;padding:12px 16px;border:1px solid var(--sl-color-hairline);border-radius:12px;background:var(--sl-color-bg-sidebar)}
+  .setup-label{margin:0 0 8px;font-size:15px;font-weight:600;color:var(--sl-color-white)}
+  .setup-actions{display:flex;flex-wrap:wrap;gap:8px;margin:0}
+  .setup-actions :is(a,button){display:inline-flex;align-items:center;justify-content:center;gap:8px;min-height:44px;margin:0;padding:8px 12px;border:1px solid var(--sl-color-hairline);border-radius:8px;text-decoration:none;font:700 14px/1.4 var(--sl-font);color:var(--sl-color-text-accent);background:transparent;cursor:pointer;white-space:nowrap}
+  .setup-actions :is(a,button):hover{border-color:var(--sl-color-text-accent)}
+  .setup-actions svg{flex:none;width:18px;height:18px}
+  .setup-actions span{margin:0}
+  .setup-actions button{min-width:128px}
+  .setup-actions button:disabled{opacity:.6;cursor:default}
+  .prompt-fallback{margin-top:12px}
+  label{display:block;margin-bottom:8px;font-size:14px;color:var(--sl-color-white)}
+  textarea{display:block;box-sizing:border-box;width:100%;resize:vertical;font:13px/1.6 var(--sl-font-mono);color:var(--sl-color-white);background:var(--sl-color-bg-inline-code);border:1px solid var(--sl-color-hairline);border-radius:4px;padding:12px}
+  .sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}
+  :is(a,button,textarea):focus-visible{outline:2px solid var(--sl-color-text-accent);outline-offset:4px}
+  @media(max-width:440px){
+    .agent-setup{padding:12px}
+    .setup-actions :is(a,button){gap:6px;padding:8px;font-size:13px}
+    .setup-actions button{min-width:111px}
+    .setup-actions svg{width:16px;height:16px}
+    .code-label{display:none}
+  }
+</style>

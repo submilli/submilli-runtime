@@ -1,10 +1,12 @@
 ---
 import DefaultContent from '@astrojs/starlight/components/MarkdownContent.astro';
+import AgentSetup from './AgentSetup.astro';
 import { films } from '../lib/videos';
 import VideoFigure from './VideoFigure.astro';
 import VideoLibrary from './VideoLibrary.astro';
 const path = Astro.url.pathname.replace(/\/$/, '');
 const isLibraryPage = path === '/docs/videos';
+const isQuickstartPage = path === '/docs/quickstart';
 const destinations = (film: (typeof films)[number]) => [film.canonicalPath, ...(film.contextualPaths ?? [])];
 const pageFilms = films.filter(film => destinations(film).some(destination => destination?.split('#')[0].replace(/\/$/, '') === path));
 const topFilms = pageFilms.filter(film => destinations(film).some(destination => destination?.replace(/\/$/, '') === path));
@@ -14,6 +16,7 @@ const sections = rendered.split(/<!-- video:([a-z][a-z0-9-]*) -->/);
 <DefaultContent>
   {isLibraryPage ? <><slot /><VideoLibrary /></> : pageFilms.length ? <>
     {topFilms.map(film => <VideoFigure film={film} />)}
+    {isQuickstartPage && <AgentSetup />}
     {sections.map((section, index) => {
       if (index % 2 === 0) return <Fragment set:html={section} />;
       const film = pageFilms.find(film => film.id === section);
