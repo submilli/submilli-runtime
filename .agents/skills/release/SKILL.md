@@ -1,6 +1,6 @@
 ---
 name: release
-description: Prepare and publish a Submilli runtime release, including versions, docs, notes, verification, a direct push to main with its tag, and GitHub release delivery checks. Use when asked to cut a runtime release.
+description: Prepare and publish a Submilli runtime release with its independently versioned Helm chart, including verification, a direct push to main with its tag, and delivery checks. Use when asked to cut a runtime release; use chart-release for chart-only releases.
 ---
 
 # Release
@@ -12,9 +12,15 @@ release without publishing does not authorize publication.
 
 Read `AGENTS.md` and `.github/workflows/release.yml` first. The current workflow
 starts when a GitHub release is **published**, not when a tag is pushed. It builds
-binaries, validates and publishes the container, then attaches release assets.
+binaries, validates and publishes the container and Helm chart, then attaches
+release assets. Read `.github/workflows/chart-release.yml` and
+`charts/submilli/PUBLISHING.md` for the chart publication and public-access gates.
 Treat the workflow as the authority if its behavior changes. Do not invoke
 `open-pr` or `ship`: this skill owns the release sequence.
+
+For a chart-only release, use [chart-release](../chart-release/SKILL.md).
+Runtime releases already call that shared workflow; do not dispatch a second
+chart publication separately.
 
 ## 1. Establish the candidate
 
@@ -37,7 +43,7 @@ Treat the workflow as the authority if its behavior changes. Do not invoke
 Default to stable releases. Prereleases and older maintenance lines require
 checking container aliases and GitHub prerelease/latest flags; do not move stable
 aliases back to an older release. This workflow does not publish crates,
-TypeScript packages, Helm charts to a registry, or `skill-v*` releases unless
+TypeScript packages or `skill-v*` releases unless
 separately requested.
 
 ## 2. Prepare versions and documentation
@@ -51,9 +57,17 @@ separately requested.
   avoid unrelated dependency upgrades and blanket `cargo update`. Repeat the
   build with `--locked` to verify the committed dependency resolution.
 - Set `charts/submilli/Chart.yaml` `appVersion` to the runtime version and bump
-  its independent chart `version` according to chart policy. Review compatibility
-  comments and `charts/submilli/README.md`. Keep publication claims accurate:
-  the runtime workflow does not publish a chart.
+  its independent chart `version` beyond the latest published chart version,
+  including any intervening chart-only releases. Default to the next patch for
+  an image-only update; use a larger bump when chart compatibility requires it.
+  Do not derive the chart version from the runtime version. Review compatibility
+  comments and `charts/submilli/README.md`. Every runtime release needs a new
+  chart version, even without template changes. Chart-only releases may bump
+  `version` independently while keeping `appVersion` unchanged; see
+  `charts/submilli/PUBLISHING.md`.
+  Update chart install pins and runtime mappings in `charts/submilli/README.md`,
+  `charts/submilli/PUBLISHING.md`, and the Kubernetes deployment guide. The
+  workflow rejects an `appVersion` that differs from the runtime release tag.
 - Update relevant behavior, configuration, installation, and migration docs.
   Search for old version pins and assess each use; preserve historical references
   and unrelated versions.
@@ -79,6 +93,9 @@ Use the previous-release-to-candidate diff, commits, and merged PRs as evidence.
 Explain user-visible features, fixes, breaking changes, migration steps, and
 known limitations. Include a comparison link and relevant issue/PR links. Do not
 use a raw commit dump or claim unshipped behavior.
+
+Include both the chart version and runtime version, with the pinned OCI install
+command and chart upgrade notes when applicable.
 
 Follow an existing changelog/release-note convention if present. Otherwise write
 a UTF-8 Markdown file outside the checkout, retain it through publication, and
@@ -186,6 +203,11 @@ does not trigger another workflow through a release event.
   linux/amd64 and linux/arm64 manifests and source revision matching the release
   commit. The workflow runs container smoke/conformance checks before publishing.
 - Verify the release body, stable/latest designation, and tag-pinned Compose URL.
+  Verify the chart version from the release commit is anonymously downloadable
+  from `oci://ghcr.io/submilli/charts/submilli` and the workflow's clean-cluster
+  OCI install and `helm test` jobs passed. Both chart and image must be public;
+  first publication may need package administrator setup as documented in
+  `charts/submilli/PUBLISHING.md`. Never overwrite an existing chart version.
   Report the release URL, commit, tag, checks, and skipped/blocked coverage.
   Completion requires successful delivery checks.
 

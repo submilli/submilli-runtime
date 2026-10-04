@@ -2,6 +2,7 @@
 title: "Deploy on Kubernetes"
 description: "How to install the server in your cluster with the Helm chart: generated tokens, a network policy that admits only your application, HTTPS, the encrypted secret store and its key, blueprints registered through the API, memory sizing, storage, and upgrades."
 slug: server/deploy-on-kubernetes
+# The OCI install awaits the first public chart publication (SUB-959).
 # Enable HTTPS was checked against the chart templates (tls values,
 # probes, the config.tls refusal), not installed on a cluster: no cluster
 # was available when it was written.
@@ -19,19 +20,17 @@ is the reference for every value.
 
 ## Install it
 
-The chart is included in the source repository and is not published to an
-OCI registry. Check out the runtime release to pin both the chart and its
-default image:
+Install a published chart version from GHCR. Neither the chart nor its
+default image needs a registry login:
 
 ```sh
-git clone --branch v0.2.0 --depth 1 https://github.com/submilli/submilli-runtime.git
-cd submilli-runtime
-helm install submilli ./charts/submilli -f values.yaml
+helm install submilli oci://ghcr.io/submilli/charts/submilli --version 0.3.4 -f values.yaml --wait
+helm test submilli --logs
 ```
 
 `values.yaml` holds your settings. The sections below build it up, and an
-empty file is a valid start. Create it in the checkout before installing.
-Chart 0.3.3 deploys runtime 0.2.0. This gives you one server pod, a
+empty file is a valid start. Create it before installing.
+Chart 0.3.4 deploys runtime 0.2.0. This gives you one server pod, a
 Service called `submilli`, a persistent volume for its state, an
 encrypted secret store with its key in a Secret, and a network policy
 that lets nothing reach it yet.
@@ -142,7 +141,7 @@ tls:
 Apply the values:
 
 ```sh
-helm upgrade submilli ./charts/submilli -f values.yaml
+helm upgrade submilli oci://ghcr.io/submilli/charts/submilli --version 0.3.4 -f values.yaml
 ```
 
 Clients now use `https://submilli.<namespace>.svc:8128`. The probes and
@@ -310,11 +309,11 @@ Leave it at 1 unless your application does that.
 
 ## Upgrade and back up
 
-Check out the source at the next published release tag, review its migration
-instructions, and apply the chart from that checkout:
+Review the next chart version's migration instructions, then replace `0.3.4`
+with that published chart version:
 
 ```sh
-helm upgrade submilli ./charts/submilli -f values.yaml
+helm upgrade submilli oci://ghcr.io/submilli/charts/submilli --version 0.3.4 -f values.yaml
 ```
 
 Each chart version deploys a matching server version unless you set

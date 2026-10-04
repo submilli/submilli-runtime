@@ -8,28 +8,23 @@ This chart wraps the multi-arch container image with the standard resource set a
 carries the same hardening the repo's `compose.yaml` applies on a single host,
 translated into a pod spec.
 
-## Status
+## Install
 
-**Not published to a registry yet.** Install from a checkout. Chart 0.3.3
-deploys runtime 0.2.0, the first published runtime with the API tokens and
-health endpoint it requires. The runtime release does not publish the chart.
-
-This chart has never been published, so there is no earlier revision of it in the
-wild and no upgrade path from one is provided. Its shape changed during
-development — an earlier revision used a Deployment with a single shared
-PersistentVolumeClaim — and `helm upgrade` across that change does not carry the
-data: the new pod comes up on a fresh, empty volume while the old claim survives,
-mounted by nothing. If you installed from a checkout while that was the shape,
-uninstall and delete the old claim rather than upgrading.
-
-Install from a checkout. If the image requires authentication, supply a pull secret:
+Install a published chart version from GHCR. The chart and its default runtime
+image can be pulled without a registry login or an image pull secret:
 
 ```bash
-kubectl create secret docker-registry ghcr-creds \
-  --docker-server=ghcr.io --docker-username=YOUR_USER --docker-password="$GITHUB_TOKEN"
-
-helm install submilli ./charts/submilli --set 'imagePullSecrets[0].name=ghcr-creds'
+helm install submilli oci://ghcr.io/submilli/charts/submilli --version 0.3.4 --wait
+helm test submilli --logs
 ```
+
+Chart 0.3.4 deploys runtime 0.2.0. Pin the chart version to control upgrades.
+See [Publishing](PUBLISHING.md) for the workflow and first-publication steps.
+
+If you installed an early development checkout that used a Deployment and one
+shared PersistentVolumeClaim, back up its state before switching to this chart.
+The StatefulSet creates a separate claim for each pod, so that old volume is not
+moved automatically.
 
 Then, from inside the cluster or through a port-forward:
 

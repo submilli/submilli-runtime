@@ -232,9 +232,20 @@ jobs:
             VERSION=${{ steps.meta.outputs.version }}
             REVISION=${{ needs.prepare.outputs.commit }}
 
+  chart:
+    name: Release chart
+    needs: [prepare, docker]
+    uses: ./.github/workflows/chart-release.yml
+    with:
+      ref: ${{ needs.prepare.outputs.commit }}
+      runtime-tag: ${{ inputs.tag || github.event.release.tag_name }}
+    permissions:
+      contents: read
+      packages: write
+
   publish:
     name: Attach release executables and installers
-    needs: [prepare, build, docker]
+    needs: [prepare, build, docker, chart]
     runs-on: ubuntu-latest
     permissions:
       contents: write

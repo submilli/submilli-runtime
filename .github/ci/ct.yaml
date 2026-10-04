@@ -4,12 +4,10 @@ chart-dirs:
   - charts
 target-branch: main
 # Pinned rather than the random per-install namespace ct defaults to: the chart
-# needs an image pull secret and a referenced Secret to already exist, and a
-# namespace whose name is generated at run time cannot have them pre-created.
+# uses a stable namespace for the install and upgrade probes.
 # ct uninstalls the release between files, so installs still do not overlap.
 namespace: chart-ci
 # The chart carries its own `helm test` hooks; `ct install` runs them after each
-# install. Upgrade testing is off: it would install the previous chart version
-# from a repository that does not publish this chart yet.
+# install. The workflow checks upgrade behavior across a version bump separately.
 upgrade: false
 helm-extra-args: --timeout 5m

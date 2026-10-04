@@ -1,19 +1,3 @@
-# Validates the Helm chart without a cluster.
-#
-# Separate from ci.yml on purpose. This needs no Rust toolchain and no container
-# image, runs in seconds, and its failure modes are entirely inside charts/ — so
-# it stays green or red on its own merits rather than inheriting an unrelated
-# build's state.
-#
-# The `install` job installs onto a throwaway kind cluster and runs the chart's
-# own `helm test` hooks, once per file in charts/submilli/ci/. It pulls the
-# published server image rather than side-loading one, so the image reference the
-# chart derives from `appVersion` is under test too.
-#
-# That job needs a GHCR pull secret while the image package is private. It is
-# skipped rather than failed on a fork PR, where secrets are not available —
-# a fork contributor still gets lint, render, unit tests, and packaging.
-
 name: Chart CI
 
 on:
@@ -22,10 +6,28 @@ on:
     paths:
       - 'charts/**'
       - '.github/workflows/chart-ci.yml'
+      - '.github/workflows/chart-release.yml'
+      - '.github/workflows/release.yml'
+      - '.github/ci/ct.yaml'
+      - 'scripts/publish_chart.py'
+      - 'scripts/tests/test_publish_chart.py'
   pull_request:
     paths:
       - 'charts/**'
       - '.github/workflows/chart-ci.yml'
+      - '.github/workflows/chart-release.yml'
+      - '.github/workflows/release.yml'
+      - '.github/ci/ct.yaml'
+      - 'scripts/publish_chart.py'
+      - 'scripts/tests/test_publish_chart.py'
+
+  workflow_dispatch:
+  workflow_call:
+    inputs:
+      ref:
+        description: Exact chart release commit to validate and install
+        required: true
+        type: string
 
 permissions:
   contents: read
@@ -44,6 +46,12 @@ jobs:
     name: helm ${{ matrix.helm }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || github.sha }}
+          persist-credentials: false
+
+      - name: Publisher regression tests
+        run: python3 -m unittest discover -s scripts/tests -p 'test_publish_chart.py'
 
       - uses: azure/setup-helm@v4
         with:
@@ -75,8 +83,7 @@ jobs:
         # render.
         shell: bash
         run: |
-          # `ct install` would cover this on a cluster; until that job exists,
-          # kubeconform is what catches a manifest the API server would reject.
+          # Catch schema errors before the release's cluster installation.
           # -strict rejects unknown fields, which is the class of typo that
           # otherwise installs fine and silently does nothing.
           for f in charts/submilli/ci/*-values.yaml; do
@@ -121,25 +128,19 @@ jobs:
           fi
           echo "packaged chart contents are correct"
 
-  # Enable once this repository has access to the configured GHCR image.
   install:
-    name: install on kind
+    name: install on kind without registry credentials
+    needs: validate
+    # A new appVersion image does not exist at the pre-release main/PR gate.
+    # The runtime release calls this workflow after publishing that image.
+    if: inputs.ref != '' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
-    # Job-scoped, and it must restate `contents` — specifying `permissions`
-    # replaces the token's scopes wholesale rather than adding to them. Without
-    # `packages: read` the GITHUB_TOKEN behind the pull secret cannot read the
-    # private image, and the only symptom is ImagePullBackOff with a bare
-    # "unexpected status from HEAD request" from the kubelet.
-    permissions:
-      contents: read
-      packages: read
-    # Secrets are not exposed to workflows triggered from a fork, and the server
-    # image is private. Skipping keeps a fork PR green on everything it can
-    # actually run instead of failing it for a credential it cannot have.
-    if: vars.SUBMILLI_CHART_INSTALL_ENABLED == 'true' && (github.event.pull_request.head.repo.full_name == github.repository || github.event_name == 'push')
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
         with:
+          ref: ${{ inputs.ref || github.sha }}
+          persist-credentials: false
           fetch-depth: 0
 
       - uses: azure/setup-helm@v4
@@ -168,17 +169,11 @@ jobs:
           # with nothing naming the access mode as the cause.
           version: v0.31.0
 
-      - name: Create the image pull secret and the fixtures ci/ expects
-        env:
-          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          # Must match `namespace:` in .github/ci/ct.yaml. ct would otherwise
-          # generate a namespace name at run time, which nothing can pre-populate.
-          kubectl create namespace chart-ci
-          kubectl create secret docker-registry ghcr-creds --namespace chart-ci \
-            --docker-server=ghcr.io \
-            --docker-username='${{ github.actor }}' \
-            --docker-password="$GHCR_TOKEN"
+      - name: Require the public runtime image
+        run: python3 scripts/publish_chart.py --check-image
+
+      - name: Create the chart test namespace
+        run: kubectl create namespace chart-ci
 
       # The class of failure nothing else here can see. lint, template,
       # kubeconform, unittest and a fresh `ct install` are all structurally blind
@@ -192,8 +187,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          helm install upgrade-probe charts/submilli --namespace chart-ci --wait --timeout 6m \
-            --set 'imagePullSecrets[0].name=ghcr-creds'
+          helm install upgrade-probe charts/submilli --namespace chart-ci --wait --timeout 6m
 
           # Provision through the same CLI users use. Reapplying after upgrade
           # decrypts the persisted value during blueprint registration.
@@ -215,8 +209,7 @@ jobs:
           cp -r charts/submilli /tmp/bumped
           sed -i 's/^version: .*/version: 9.9.9/' /tmp/bumped/Chart.yaml
 
-          if ! helm upgrade upgrade-probe /tmp/bumped --namespace chart-ci --wait --timeout 6m \
-                 --set 'imagePullSecrets[0].name=ghcr-creds' 2>/tmp/upgrade.err; then
+          if ! helm upgrade upgrade-probe /tmp/bumped --namespace chart-ci --wait --timeout 6m 2>/tmp/upgrade.err; then
             echo "::error::helm upgrade failed across a chart version bump"
             cat /tmp/upgrade.err
             if grep -q 'updates to statefulset spec for fields other than' /tmp/upgrade.err; then
@@ -237,8 +230,5 @@ jobs:
 
       - name: Run chart-testing (install)
         run: |
-          # --all rather than list-changed: this workflow only runs when charts/
-          # changed, so the filter would just re-derive what the path filter
-          # already decided.
-          ct install --config .github/ci/ct.yaml --all \
-            --helm-extra-set-args "--set=imagePullSecrets[0].name=ghcr-creds"
+          # Validate the selected release chart even on a retry with no diff.
+          ct install --config .github/ci/ct.yaml --all
