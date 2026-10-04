@@ -31,6 +31,8 @@ it two programs. This chapter is what happened in between.
 
 ## What happens to a program
 
+<!-- video:works -->
+
 Your application, or your agent framework, sends the server three things:
 the program's source, the name of a blueprint, and values for the
 blueprint's variables. The server then does four things.

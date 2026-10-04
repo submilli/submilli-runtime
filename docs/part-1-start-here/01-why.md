@@ -94,6 +94,8 @@ out token by token.
 
 ## This code is a stranger
 
+<!-- video:challenges -->
+
 Look at what we just agreed to run. That program was written by a model,
 seconds before it executed. No human reviewed it. No CI ran on it. And its
 author is suggestible. To do its job, the agent must *read* things. In our
@@ -175,6 +177,8 @@ matter that the model was persuaded, because the policy was written before
 the attacker arrived.
 
 ## What Submilli is
+
+<!-- video:helps -->
 
 So what is Submilli, concretely? A runtime for a strict subset of
 TypeScript, compiled to WebAssembly and run in-process. Running in-process

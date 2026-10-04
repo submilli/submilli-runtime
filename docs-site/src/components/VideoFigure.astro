@@ -1,0 +1,17 @@
+---
+import type { Film } from '../lib/videos';
+import VideoPlayer from './VideoPlayer.astro';
+interface Props { film: Film; }
+const { film } = Astro.props;
+---
+<figure class="video-introduction" data-video-id={film.id} aria-label={film.title}>
+  <div class="video-heading"><strong>{film.title}</strong></div>
+  <div class="video-frame"><VideoPlayer film={film} /></div>
+  <figcaption>{film.description}</figcaption>
+</figure>
+<style>
+  figure { margin: 0 0 2rem; padding: 1.25rem; border: 1px solid var(--sl-color-hairline); border-radius: 12px; background: var(--sl-color-bg-sidebar); }
+  .video-heading { display: flex; flex-wrap: wrap; gap: .5rem 1rem; justify-content: space-between; }
+  .video-frame { margin-top: 1rem; border-radius: 8px; overflow: hidden; }
+  figcaption { font-size: .9375rem; margin-top: 1rem; }
+</style>

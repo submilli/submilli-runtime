@@ -4,60 +4,52 @@
       "id": "code-execution-introduction",
       "title": "Why agents execute code",
       "description": "Follow a failed-payment investigation from sequential tool calls to a program that returns a focused report.",
-      "durationSeconds": 90.688,
       "language": "en",
-      "status": "awaiting-publication",
-      "src": null,
+      "status": "published",
       "canonicalPath": "/docs/why/",
       "contextualPaths": [],
       "transcriptPath": "/docs/videos/code-execution-introduction/",
-      "captionsPath": "/docs/videos/code-execution-introduction.en.vtt",
-      "sha256": "d6d505ba502b08ff13274c704df27f0fe1006571f1cf489598a9a5e370a682e1",
-      "exportFile": "editor-export-1790685929055.mp4",
-      "snapshotFile": "export-51c09794-8edf-4fe8-bb28-fa7613f54e18.json",
-      "posterPath": "/docs/videos/code-execution-introduction.svg",
-      "embedPath": "/docs/videos/embed/code-execution-introduction/",
-      "publishedVersion": null
+      "embedUrl": "https://submilli-videos.onrender.com/embed/why-code/"
     },
     {
       "id": "challenges",
       "title": "Agent execution challenges",
-      "status": "in-review",
-      "destination": "Start here \u2192 Why Submilli",
+      "status": "published",
+      "destination": "Start here → Why Submilli",
       "description": "Latency, context, permissions, and recovery in agent execution.",
-      "publishedVersion": null,
-      "src": null,
-      "reviewStatus": "revision-pending"
+      "canonicalPath": "/docs/why/#this-code-is-a-stranger",
+      "embedUrl": "https://submilli-videos.onrender.com/embed/challenges/",
+      "language": "en"
     },
     {
       "id": "helps",
       "title": "What Submilli is and how it helps",
-      "status": "in-review",
-      "destination": "Start here \u2192 Why Submilli",
+      "status": "published",
+      "destination": "Start here → Why Submilli",
       "description": "What Submilli provides and where it fits in an agent workflow.",
-      "publishedVersion": null,
-      "src": null,
-      "reviewStatus": "revision-pending"
+      "canonicalPath": "/docs/why/#what-submilli-is",
+      "embedUrl": "https://submilli-videos.onrender.com/embed/submilli/",
+      "language": "en"
     },
     {
       "id": "using",
       "title": "Using Submilli",
-      "status": "in-review",
-      "destination": "Tutorials \u2192 Build a package and Connect a harness",
+      "status": "published",
+      "destination": "Start here → Quickstart",
       "description": "Building and running a Submilli integration.",
-      "publishedVersion": null,
-      "src": null,
-      "reviewStatus": "listening-pending"
+      "canonicalPath": "/docs/quickstart/",
+      "embedUrl": "https://submilli-videos.onrender.com/embed/using/",
+      "language": "en"
     },
     {
       "id": "works",
       "title": "Understanding Submilli",
-      "status": "in-review",
-      "destination": "Start here \u2192 Blueprints, Packages, and The server",
+      "status": "published",
+      "destination": "Start here → The server",
       "description": "How programs, packages, blueprints, and the runtime work together.",
-      "publishedVersion": null,
-      "src": null,
-      "reviewStatus": "listening-pending"
+      "canonicalPath": "/docs/server/#what-happens-to-a-program",
+      "embedUrl": "https://submilli-videos.onrender.com/embed/works/",
+      "language": "en"
     }
   ]
 }
