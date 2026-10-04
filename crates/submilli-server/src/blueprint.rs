@@ -16,7 +16,6 @@ use submilli_blueprint::Blueprint;
 pub enum StoreError {
     AlreadyExists,
     Io(String),
-    Poisoned,
     Serialization(String),
     RevisionExhausted { name: String },
 }
@@ -26,7 +25,6 @@ impl std::fmt::Display for StoreError {
         match self {
             Self::AlreadyExists => f.write_str("blueprint already exists"),
             Self::Io(message) => write!(f, "store I/O failed: {message}"),
-            Self::Poisoned => f.write_str("store lock poisoned"),
             Self::Serialization(message) => write!(f, "blueprint serialization failed: {message}"),
             Self::RevisionExhausted { name } => {
                 write!(f, "blueprint '{name}' revision counter exhausted")
@@ -105,6 +103,7 @@ impl StoredBlueprint {
 
 #[derive(Default)]
 pub struct InMemoryBlueprintStore {
+    // Poisoned state is unsupported; see AGENTS.md accepted poisoned-lock panics.
     inner: RwLock<HashMap<String, StoredBlueprint>>,
 }
 
@@ -125,7 +124,7 @@ impl InMemoryBlueprintStore {
 #[async_trait::async_trait]
 impl BlueprintStore for InMemoryBlueprintStore {
     async fn add_yaml(&self, stored: StoredBlueprint) -> Result<(), StoreError> {
-        let mut guard = self.inner.write().map_err(|_| StoreError::Poisoned)?;
+        let mut guard = self.inner.write().expect("blueprint store lock poisoned");
         if guard.contains_key(&stored.blueprint.name) {
             return Err(StoreError::AlreadyExists);
         }
@@ -134,21 +133,21 @@ impl BlueprintStore for InMemoryBlueprintStore {
     }
 
     async fn upsert_yaml(&self, stored: StoredBlueprint) -> Result<bool, StoreError> {
-        let mut guard = self.inner.write().map_err(|_| StoreError::Poisoned)?;
+        let mut guard = self.inner.write().expect("blueprint store lock poisoned");
         Ok(guard
             .insert(stored.blueprint.name.clone(), stored)
             .is_none())
     }
 
     async fn list(&self) -> Result<Vec<String>, StoreError> {
-        let guard = self.inner.read().map_err(|_| StoreError::Poisoned)?;
+        let guard = self.inner.read().expect("blueprint store lock poisoned");
         let mut names: Vec<String> = guard.keys().cloned().collect();
         names.sort();
         Ok(names)
     }
 
     async fn list_blueprints(&self) -> Result<Vec<Blueprint>, StoreError> {
-        let guard = self.inner.read().map_err(|_| StoreError::Poisoned)?;
+        let guard = self.inner.read().expect("blueprint store lock poisoned");
         let mut blueprints: Vec<Blueprint> = guard
             .values()
             .map(|stored| stored.blueprint.clone())
@@ -161,7 +160,7 @@ impl BlueprintStore for InMemoryBlueprintStore {
         Ok(self
             .inner
             .read()
-            .map_err(|_| StoreError::Poisoned)?
+            .expect("blueprint store lock poisoned")
             .get(name)
             .map(|stored| stored.blueprint.clone()))
     }
@@ -170,13 +169,12 @@ impl BlueprintStore for InMemoryBlueprintStore {
         Ok(self
             .inner
             .read()
-            .map_err(|_| StoreError::Poisoned)?
+            .expect("blueprint store lock poisoned")
             .get(name)
             .map(|stored| stored.yaml.clone()))
     }
 
     async fn unusable_reason(&self, _name: &str) -> Result<Option<String>, StoreError> {
-        let _guard = self.inner.read().map_err(|_| StoreError::Poisoned)?;
         Ok(None)
     }
 
@@ -184,7 +182,7 @@ impl BlueprintStore for InMemoryBlueprintStore {
         Ok(self
             .inner
             .write()
-            .map_err(|_| StoreError::Poisoned)?
+            .expect("blueprint store lock poisoned")
             .remove(name)
             .is_some())
     }
@@ -247,6 +245,7 @@ impl State {
 /// either fully the old map or fully the new one.
 pub struct FileBlueprintStore {
     dir: PathBuf,
+    // Poisoned state is unsupported; see AGENTS.md accepted poisoned-lock panics.
     state: RwLock<State>,
 }
 
@@ -356,7 +355,7 @@ impl FileBlueprintStore {
 #[async_trait::async_trait]
 impl BlueprintStore for FileBlueprintStore {
     async fn add_yaml(&self, stored: StoredBlueprint) -> Result<(), StoreError> {
-        let mut state = self.state.write().map_err(|_| StoreError::Poisoned)?;
+        let mut state = self.state.write().expect("blueprint store lock poisoned");
         if state.is_registered(&stored.blueprint.name) {
             return Err(StoreError::AlreadyExists);
         }
@@ -364,19 +363,19 @@ impl BlueprintStore for FileBlueprintStore {
     }
 
     async fn upsert_yaml(&self, stored: StoredBlueprint) -> Result<bool, StoreError> {
-        let mut state = self.state.write().map_err(|_| StoreError::Poisoned)?;
+        let mut state = self.state.write().expect("blueprint store lock poisoned");
         self.commit(&mut state, stored)
     }
 
     async fn list(&self) -> Result<Vec<String>, StoreError> {
-        let state = self.state.read().map_err(|_| StoreError::Poisoned)?;
+        let state = self.state.read().expect("blueprint store lock poisoned");
         let mut names: Vec<String> = state.current.keys().cloned().collect();
         names.sort();
         Ok(names)
     }
 
     async fn list_blueprints(&self) -> Result<Vec<Blueprint>, StoreError> {
-        let state = self.state.read().map_err(|_| StoreError::Poisoned)?;
+        let state = self.state.read().expect("blueprint store lock poisoned");
         let mut blueprints: Vec<Blueprint> = state
             .current
             .values()
@@ -390,7 +389,7 @@ impl BlueprintStore for FileBlueprintStore {
         Ok(self
             .state
             .read()
-            .map_err(|_| StoreError::Poisoned)?
+            .expect("blueprint store lock poisoned")
             .current
             .get(name)
             .map(|e| e.stored.blueprint.clone()))
@@ -399,7 +398,7 @@ impl BlueprintStore for FileBlueprintStore {
     /// The stored YAML, including a reserved name's — an operator has to be
     /// able to read what is stored to fix it.
     async fn get_yaml(&self, name: &str) -> Result<Option<String>, StoreError> {
-        let state = self.state.read().map_err(|_| StoreError::Poisoned)?;
+        let state = self.state.read().expect("blueprint store lock poisoned");
         Ok(match state.current.get(name) {
             Some(entry) => Some(entry.stored.yaml.clone()),
             None => state.reserved.get(name).and_then(|r| r.yaml.clone()),
@@ -410,7 +409,7 @@ impl BlueprintStore for FileBlueprintStore {
         Ok(self
             .state
             .read()
-            .map_err(|_| StoreError::Poisoned)?
+            .expect("blueprint store lock poisoned")
             .reserved
             .get(name)
             .map(|r| r.reason.clone()))
@@ -421,7 +420,7 @@ impl BlueprintStore for FileBlueprintStore {
     /// removed the same way: deleting is how an operator releases a name whose
     /// stored form this server can no longer run.
     async fn remove(&self, name: &str) -> Result<bool, StoreError> {
-        let mut state = self.state.write().map_err(|_| StoreError::Poisoned)?;
+        let mut state = self.state.write().expect("blueprint store lock poisoned");
         if !state.is_registered(name) {
             return Ok(false);
         }
@@ -538,76 +537,6 @@ mod tests {
             name: "tenant".into(),
             ..Blueprint::default()
         }
-    }
-
-    fn poison<T>(lock: &RwLock<T>) {
-        let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            let _guard = lock.write().unwrap();
-            panic!("inject store lock poison");
-        }));
-        assert!(panic.is_err());
-    }
-
-    async fn assert_poisoned(store: &dyn BlueprintStore) {
-        assert!(matches!(store.list().await, Err(StoreError::Poisoned)));
-        assert!(matches!(
-            store.list_blueprints().await,
-            Err(StoreError::Poisoned)
-        ));
-        assert!(matches!(
-            store.get("tenant").await,
-            Err(StoreError::Poisoned)
-        ));
-        assert!(matches!(
-            store.get_yaml("tenant").await,
-            Err(StoreError::Poisoned)
-        ));
-        assert!(matches!(
-            store.unusable_reason("tenant").await,
-            Err(StoreError::Poisoned)
-        ));
-        assert!(matches!(
-            store.add(blueprint()).await,
-            Err(StoreError::Poisoned)
-        ));
-        assert!(matches!(
-            store.upsert(blueprint()).await,
-            Err(StoreError::Poisoned)
-        ));
-        assert!(matches!(
-            store.remove("tenant").await,
-            Err(StoreError::Poisoned)
-        ));
-    }
-
-    #[tokio::test]
-    async fn poisoned_memory_store_refuses_all_operations() {
-        let store = InMemoryBlueprintStore::seed([blueprint()]).unwrap();
-        poison(&store.inner);
-        assert_poisoned(&store).await;
-        assert!(store.inner.is_poisoned());
-        let healthy = InMemoryBlueprintStore::seed([blueprint()]).unwrap();
-        assert_eq!(healthy.get("tenant").await.unwrap(), Some(blueprint()));
-    }
-
-    #[tokio::test]
-    async fn poisoned_file_store_refuses_operations_without_writing() {
-        let dir = tempfile::tempdir().unwrap();
-        let store = FileBlueprintStore::new(dir.path().into()).unwrap();
-        store.add(blueprint()).await.unwrap();
-        let index = fs::read(dir.path().join(INDEX_FILE)).unwrap();
-        let revision = fs::read(revision_path(dir.path(), "tenant", 1)).unwrap();
-        poison(&store.state);
-        assert_poisoned(&store).await;
-        assert!(store.state.is_poisoned());
-        assert_eq!(fs::read(dir.path().join(INDEX_FILE)).unwrap(), index);
-        assert_eq!(
-            fs::read(revision_path(dir.path(), "tenant", 1)).unwrap(),
-            revision
-        );
-        assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 2);
-        let reloaded = FileBlueprintStore::new(dir.path().into()).unwrap();
-        assert_eq!(reloaded.get("tenant").await.unwrap(), Some(blueprint()));
     }
 
     #[test]

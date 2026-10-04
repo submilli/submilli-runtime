@@ -156,7 +156,7 @@ pub struct InMemoryIdempotencyStore {
 #[async_trait::async_trait]
 impl IdempotencyStore for InMemoryIdempotencyStore {
     async fn put(&self, entry: LedgerEntry) -> Result<(), StoreError> {
-        self.lock()?
+        self.lock()
             .entry(entry.session_id.clone())
             .or_default()
             .insert(entry.key.clone(), entry);
@@ -165,32 +165,33 @@ impl IdempotencyStore for InMemoryIdempotencyStore {
 
     async fn load(&self, session_id: &str, key: &str) -> Result<Option<LedgerEntry>, StoreError> {
         Ok(self
-            .lock()?
+            .lock()
             .get(session_id)
             .and_then(|entries| entries.get(key))
             .cloned())
     }
 
     async fn remove(&self, session_id: &str, key: &str) -> Result<(), StoreError> {
-        if let Some(entries) = self.lock()?.get_mut(session_id) {
+        if let Some(entries) = self.lock().get_mut(session_id) {
             entries.remove(key);
         }
         Ok(())
     }
 
     async fn purge_session(&self, session_id: &str) -> Result<(), StoreError> {
-        self.lock()?.remove(session_id);
+        self.lock().remove(session_id);
         Ok(())
     }
 
     async fn session_ids(&self) -> Result<Vec<String>, StoreError> {
-        Ok(self.lock()?.keys().cloned().collect())
+        Ok(self.lock().keys().cloned().collect())
     }
 }
 
 impl InMemoryIdempotencyStore {
-    fn lock(&self) -> Result<std::sync::MutexGuard<'_, LedgerMap>, StoreError> {
-        self.inner.lock().map_err(|_| StoreError::Poisoned)
+    fn lock(&self) -> std::sync::MutexGuard<'_, LedgerMap> {
+        // Poisoned state is unsupported; see AGENTS.md accepted poisoned-lock panics.
+        self.inner.lock().expect("store lock poisoned")
     }
 }
 
@@ -710,27 +711,6 @@ mod tests {
         let mut ids = store.session_ids().await.expect("list ledger sessions");
         ids.sort();
         assert_eq!(ids, vec!["a".to_string(), "b".to_string()]);
-    }
-
-    #[tokio::test]
-    async fn enumeration_rejects_poisoned_memory_ledger() {
-        let store = Arc::new(InMemoryIdempotencyStore::default());
-        store.put(completed("sid", "key", "result")).await.unwrap();
-        let poisoned = Arc::clone(&store);
-        let _ = std::thread::spawn(move || {
-            let _guard = poisoned.inner.lock().unwrap();
-            panic!("poison idempotency store");
-        })
-        .join();
-
-        assert!(matches!(
-            store.session_ids().await,
-            Err(StoreError::Poisoned)
-        ));
-        assert!(matches!(
-            store.load("sid", "key").await,
-            Err(StoreError::Poisoned)
-        ));
     }
 
     #[tokio::test]

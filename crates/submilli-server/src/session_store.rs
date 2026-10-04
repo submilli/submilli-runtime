@@ -82,29 +82,28 @@ pub struct InMemoryDurableSessionStore {
 #[async_trait::async_trait]
 impl DurableSessionStore for InMemoryDurableSessionStore {
     async fn put(&self, record: SessionRecord) -> Result<(), StoreError> {
-        self.lock()?.insert(record.session_id.clone(), record);
+        self.lock().insert(record.session_id.clone(), record);
         Ok(())
     }
 
     async fn load(&self, session_id: &str) -> Result<Option<SessionRecord>, StoreError> {
-        Ok(self.lock()?.get(session_id).cloned())
+        Ok(self.lock().get(session_id).cloned())
     }
 
     async fn remove(&self, session_id: &str) -> Result<(), StoreError> {
-        self.lock()?.remove(session_id);
+        self.lock().remove(session_id);
         Ok(())
     }
 
     async fn load_all(&self) -> Result<Vec<SessionRecord>, StoreError> {
-        Ok(self.lock()?.values().cloned().collect())
+        Ok(self.lock().values().cloned().collect())
     }
 }
 
 impl InMemoryDurableSessionStore {
-    fn lock(
-        &self,
-    ) -> Result<std::sync::MutexGuard<'_, HashMap<String, SessionRecord>>, StoreError> {
-        self.inner.lock().map_err(|_| StoreError::Poisoned)
+    fn lock(&self) -> std::sync::MutexGuard<'_, HashMap<String, SessionRecord>> {
+        // Poisoned state is unsupported; see AGENTS.md accepted poisoned-lock panics.
+        self.inner.lock().expect("store lock poisoned")
     }
 }
 
@@ -335,21 +334,6 @@ mod tests {
         let loaded = store.load_all().await.expect("list sessions");
         assert_eq!(loaded.len(), 1);
         assert_eq!(loaded[0].session_id, "../../escape");
-    }
-
-    #[tokio::test]
-    async fn enumeration_rejects_poisoned_memory_store() {
-        let store = std::sync::Arc::new(InMemoryDurableSessionStore::default());
-        store.put(record("sid")).await.unwrap();
-        let poisoned = std::sync::Arc::clone(&store);
-        let _ = std::thread::spawn(move || {
-            let _guard = poisoned.inner.lock().unwrap();
-            panic!("poison session store");
-        })
-        .join();
-
-        assert!(matches!(store.load_all().await, Err(StoreError::Poisoned)));
-        assert!(matches!(store.load("sid").await, Err(StoreError::Poisoned)));
     }
 
     #[tokio::test]
