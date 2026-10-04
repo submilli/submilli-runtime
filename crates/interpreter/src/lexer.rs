@@ -369,73 +369,24 @@ impl<'a> Lexer<'a> {
         token
     }
 
-    /// Strict-mode JavaScript and TypeScript reject an integer part that starts with
-    /// `0` and has more digits: legacy octal (`010`, which sloppy JavaScript reads as
-    /// 8), decimals with a leading zero (`09`, `08.5`), and a separator after the
-    /// zero (`0_1`).
-    fn reject_leading_zero(&mut self, span: Span) {
-        // An invalid span is reported as a fatal error by `next_token`.
-        let Ok(literal) = span.text(self.source, self.file) else {
-            return;
-        };
-        let int_len = literal
-            .bytes()
-            .take_while(|b| b.is_ascii_digit() || *b == b'_')
-            .count();
-        let (int_part, rest) = literal.split_at(int_len);
-        if without_separators(int_part).len() < 2 || !int_part.starts_with('0') {
-            return;
-        }
-        let significant = int_part.trim_start_matches(['0', '_']);
-        let without_leading_zeros = if significant.is_empty() {
-            format!("0{rest}")
-        } else {
-            format!("{significant}{rest}")
-        };
-        if int_part.as_bytes().get(1) == Some(&b'_') {
-            self.error_with_help(
-                span,
-                format!("a numeric separator cannot follow a leading `0` in `{literal}`"),
-                vec![format!("write `{without_leading_zeros}`")],
-            );
-            return;
-        }
-        if matches!(rest, "" | "n") && is_legacy_octal_digits(&without_separators(int_part)) {
-            let help = if significant.is_empty() {
-                format!("write `{without_leading_zeros}`")
-            } else {
-                format!(
-                    "write `0o{significant}{rest}` for octal, or `{without_leading_zeros}` for decimal"
-                )
-            };
-            self.error_with_help(
-                span,
-                format!("legacy octal literal `{literal}` is not allowed"),
-                vec![help],
-            );
-            return;
-        }
-        self.error_with_help(
-            span,
-            format!("decimal literal `{literal}` cannot have a leading zero"),
-            vec![format!("write `{without_leading_zeros}`")],
-        );
-    }
-
     fn lex_decimal_number(&mut self, start: u32) -> Token {
         let mut has_fraction_or_exponent = false;
 
         self.scan_digits(|b| b.is_ascii_digit());
 
-        let int_end = self.pos;
-
-        let Some(int_part) = self.source.get(start as usize..int_end as usize) else {
+        let Some(int_part) = self.source.get(start as usize..self.pos as usize) else {
             return self.fail("invalid numeric literal span");
         };
-        if self.peek() == Some(b'.') && self.takes_decimal_point(start, int_part) {
-            has_fraction_or_exponent = true;
-            self.pos += 1;
-            self.scan_digits(|b| b.is_ascii_digit());
+        if self.peek() == Some(b'.') {
+            match self.decimal_point_role(int_part) {
+                DecimalPoint::Literal => {
+                    has_fraction_or_exponent = true;
+                    self.pos += 1;
+                    self.scan_digits(|b| b.is_ascii_digit());
+                }
+                DecimalPoint::MemberAccess => {}
+                DecimalPoint::NameAfter => self.report_name_after_decimal_point(start, int_part),
+            }
         }
 
         if matches!(self.peek(), Some(b'e' | b'E')) {
@@ -466,11 +417,7 @@ impl<'a> Lexer<'a> {
                      remove the `.` / exponent or drop the `n` suffix",
                 );
                 // Recovery: keep the integer prefix as the bigint payload.
-                let Some(digits) = self.source.get(start as usize..int_end as usize) else {
-                    return self.fail("invalid numeric literal span");
-                };
-                let digits = without_separators(digits);
-                return Token::new(TokenKind::BigIntLiteral(digits), span);
+                return Token::new(TokenKind::BigIntLiteral(without_separators(int_part)), span);
             }
             let Some(digits) = self.source.get(start as usize..(self.pos - 1) as usize) else {
                 return self.fail("invalid numeric literal span");
@@ -492,6 +439,109 @@ impl<'a> Lexer<'a> {
         };
 
         Token::new(TokenKind::NumberLiteral(value), span)
+    }
+
+    /// What the `.` at the current position, after the integer part `int_part`, is.
+    fn decimal_point_role(&self, int_part: &str) -> DecimalPoint {
+        if self.peek_at(1).is_some_and(|b| b.is_ascii_digit()) {
+            return DecimalPoint::Literal;
+        }
+        if is_legacy_octal_digits(int_part) {
+            return DecimalPoint::MemberAccess;
+        }
+        if !self.identifier_starts_at(1) || self.literal_continues_after_point() {
+            return DecimalPoint::Literal;
+        }
+        DecimalPoint::NameAfter
+    }
+
+    /// After `1.`, an exponent (`1.e5`), a bigint suffix (`1.n`) and a separator
+    /// (`1._5`) belong to the literal and are checked as part of it. An `n` or `_`
+    /// that starts a longer name (`1.name`, `1._x`) does not.
+    fn literal_continues_after_point(&self) -> bool {
+        match self.peek_at(1) {
+            Some(b'e' | b'E') => true,
+            Some(b'n') => !self.identifier_continues_at(2),
+            Some(b'_') => {
+                let mut offset = 1;
+                while self.peek_at(offset) == Some(b'_') {
+                    offset += 1;
+                }
+                self.peek_at(offset).is_some_and(|b| b.is_ascii_digit())
+                    || !self.identifier_continues_at(offset)
+            }
+            _ => false,
+        }
+    }
+
+    /// Reports `1.toString()`. The `.` is then left as a member access, so the rest
+    /// parses as written instead of cascading into further errors.
+    fn report_name_after_decimal_point(&mut self, start: u32, int_part: &str) {
+        let help = match self.identifier_text_at(1) {
+            Some(name) if is_plain_decimal_integer(int_part) => format!(
+                "wrap the number in parentheses, `({int_part}).{name}`, or write `{int_part}..{name}`"
+            ),
+            _ => "wrap the number in parentheses, or write a second `.`".to_string(),
+        };
+        self.error_with_help(
+            self.span(start, self.pos + 1),
+            format!("`{int_part}.` is a complete number, so a name cannot follow it directly"),
+            vec![help],
+        );
+    }
+
+    /// Strict-mode JavaScript and TypeScript reject an integer part that starts with
+    /// `0` and has more digits: legacy octal (`010`, which sloppy JavaScript reads as
+    /// 8), decimals with a leading zero (`09`, `08.5`), and a separator after the
+    /// zero (`0_1`).
+    fn reject_leading_zero(&mut self, span: Span) {
+        // An invalid span is reported as a fatal error by `next_token`.
+        let Ok(literal) = span.text(self.source, self.file) else {
+            return;
+        };
+        let int_len = literal
+            .bytes()
+            .take_while(|b| b.is_ascii_digit() || *b == b'_')
+            .count();
+        let (int_part, rest) = literal.split_at(int_len);
+        let digits = without_separators(int_part);
+        if digits.len() < 2 || !digits.starts_with('0') {
+            return;
+        }
+        let significant = int_part.trim_start_matches(['0', '_']);
+        let suggested_literal = if significant.is_empty() {
+            format!("0{rest}")
+        } else {
+            format!("{significant}{rest}")
+        };
+        if int_part.as_bytes().get(1) == Some(&b'_') {
+            self.error_with_help(
+                span,
+                format!("a numeric separator cannot follow a leading `0` in `{literal}`"),
+                vec![format!("write `{suggested_literal}`")],
+            );
+            return;
+        }
+        if matches!(rest, "" | "n") && is_legacy_octal_digits(&digits) {
+            let help = if significant.is_empty() {
+                format!("write `{suggested_literal}`")
+            } else {
+                format!(
+                    "write `0o{significant}{rest}` for octal, or `{suggested_literal}` for decimal"
+                )
+            };
+            self.error_with_help(
+                span,
+                format!("legacy octal literal `{literal}` is not allowed"),
+                vec![help],
+            );
+            return;
+        }
+        self.error_with_help(
+            span,
+            format!("decimal literal `{literal}` cannot have a leading zero"),
+            vec![format!("write `{suggested_literal}`")],
+        );
     }
 
     /// Lex a radix-prefixed integer literal (`0x`/`0b`/`0o`). `start` points at the
@@ -571,59 +621,37 @@ impl<'a> Lexer<'a> {
         }
     }
 
-    /// Whether the `.` after `int_part`, which starts at `start`, belongs to the literal,
-    /// as in `1.`, `1.5`, `1.e5` and `1..toString()`. Two cases leave it as a member
-    /// access: a legacy octal integer (`010.toString()`), which has no fraction in
-    /// JavaScript, and an identifier right after the `.` (`1.toString()`), which is
-    /// an error reported here; the member access then parses as written.
-    fn takes_decimal_point(&mut self, start: u32, int_part: &str) -> bool {
-        let next = self.peek_at(1);
-        if next.is_some_and(|b| b.is_ascii_digit()) {
-            return true;
-        }
-        if is_legacy_octal_digits(int_part) {
-            return false;
-        }
-        // An exponent, a bigint suffix, and a separator each belong to the literal and
-        // are checked as such: `1.e5` is valid, `1.n` and `1._5` are errors.
-        if matches!(next, Some(b'e' | b'E' | b'n' | b'_')) || !self.identifier_starts_at(1) {
-            return true;
-        }
-        let name = self.ascii_name_at(self.pos + 1);
-        self.error_with_help(
-            self.span(start, self.pos + 1),
-            format!("`{int_part}.` is a complete number, so a name cannot follow it directly"),
-            vec![format!(
-                "wrap the number in parentheses, `({int_part}).{name}`, or write `{int_part}..{name}`"
-            )],
-        );
-        false
-    }
-
-    /// The ASCII identifier starting at byte `pos`, for a help message. A name that
-    /// starts with another character falls back to a placeholder.
-    fn ascii_name_at(&self, pos: u32) -> &'a str {
-        let rest = self.source.get(pos as usize..).unwrap_or("");
-        let len = rest
-            .bytes()
-            .take_while(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'$'))
-            .count();
-        match rest.get(..len) {
-            Some(name) if !name.is_empty() => name,
-            _ => "name",
-        }
-    }
-
     fn identifier_starts_at(&self, offset: usize) -> bool {
         match self.peek_at(offset) {
             Some(b) if b.is_ascii_alphabetic() || b == b'$' || b == b'_' => true,
-            Some(0x80..) => self
-                .source
-                .get((self.pos as usize).saturating_add(offset)..)
-                .and_then(|rest| rest.chars().next())
-                .is_some_and(is_xid_start),
+            Some(0x80..) => self.char_at(offset).is_some_and(is_xid_start),
             _ => false,
         }
+    }
+
+    fn identifier_continues_at(&self, offset: usize) -> bool {
+        self.char_at(offset).is_some_and(|c| {
+            c == '$' || c == '_' || c.is_ascii_alphanumeric() || is_xid_continue(c)
+        })
+    }
+
+    /// The identifier starting `offset` bytes ahead, for a help message.
+    fn identifier_text_at(&self, offset: usize) -> Option<&'a str> {
+        let start = (self.pos as usize).checked_add(offset)?;
+        let rest = self.source.get(start..)?;
+        let len: usize = rest
+            .chars()
+            .take_while(|&c| {
+                c == '$' || c == '_' || c.is_ascii_alphanumeric() || is_xid_continue(c)
+            })
+            .map(char::len_utf8)
+            .sum();
+        rest.get(..len).filter(|name| !name.is_empty())
+    }
+
+    fn char_at(&self, offset: usize) -> Option<char> {
+        let start = (self.pos as usize).checked_add(offset)?;
+        self.source.get(start..)?.chars().next()
     }
 
     fn lex_string(&mut self, quote: u8) -> Token {
@@ -1243,6 +1271,23 @@ impl<'a> Lexer<'a> {
             None => self.pos += 1,
         }
     }
+}
+
+/// What the `.` right after a decimal integer part is.
+enum DecimalPoint {
+    /// Part of the literal: `1.`, `1.5`, `1.e5`, and the first `.` of `1..toString()`.
+    Literal,
+    /// A member access after a legacy octal integer (`010.toString()`), which has no
+    /// fraction in JavaScript.
+    MemberAccess,
+    /// A name directly after the `.` (`1.toString()`), which is an error.
+    NameAfter,
+}
+
+/// Whether `int_part` is a well-formed decimal integer, so a help message can repeat it.
+fn is_plain_decimal_integer(int_part: &str) -> bool {
+    let has_leading_zero = int_part.len() > 1 && int_part.starts_with('0');
+    !has_leading_zero && !int_part.ends_with('_') && !int_part.contains("__")
 }
 
 /// An integer part sloppy JavaScript reads as octal: a `0` followed by octal digits.
@@ -1868,6 +1913,12 @@ mod tests {
         expect_number("0o1_7", 15.0, Span::new(F, 0, 5).unwrap());
         expect_bigint("1_000n", "1000", Span::new(F, 0, 6).unwrap());
         expect_bigint("0xF_Fn", "255", Span::new(F, 0, 6).unwrap());
+        expect_number("0XF_F", 255.0, Span::new(F, 0, 5).unwrap());
+        expect_number("0B1_0", 2.0, Span::new(F, 0, 5).unwrap());
+        expect_number("0O1_7", 15.0, Span::new(F, 0, 5).unwrap());
+        expect_number("1E1_0", 1e10, Span::new(F, 0, 5).unwrap());
+        expect_number("1e+1_0", 1e10, Span::new(F, 0, 6).unwrap());
+        expect_number("1e-1_0", 1e-10, Span::new(F, 0, 6).unwrap());
     }
 
     #[test]
@@ -1915,7 +1966,15 @@ mod tests {
 
     #[test]
     fn lex_name_after_decimal_point_rejected() {
-        for (source, literal_end) in [("1.toString", 2), ("1_0.x", 4), ("1.$", 2)] {
+        // A name starting with `n` or `_` is a name, not a bigint suffix or separator.
+        for (source, literal_end) in [
+            ("1.toString", 2),
+            ("1_0.x", 4),
+            ("1.$", 2),
+            ("1.name", 2),
+            ("1._x", 2),
+            ("1.\u{e4}", 2),
+        ] {
             let (tokens, diags) = tokenize_all(source);
             assert_eq!(diags.len(), 1, "diags for {source:?}: {diags:?}");
             assert!(
@@ -1930,6 +1989,18 @@ mod tests {
         assert_eq!(
             diags[0].help,
             vec!["wrap the number in parentheses, `(1).toString`, or write `1..toString`"]
+        );
+        let (_, diags) = tokenize_all("1.\u{e4}");
+        assert_eq!(
+            diags[0].help,
+            vec!["wrap the number in parentheses, `(1).\u{e4}`, or write `1..\u{e4}`"]
+        );
+        // Repeating a literal that is itself an error would suggest broken code.
+        let (_, diags) = tokenize_all("1_.x");
+        assert_eq!(diags.len(), 2, "diags: {diags:?}");
+        assert_eq!(
+            diags[1].help,
+            vec!["wrap the number in parentheses, or write a second `.`"]
         );
     }
 

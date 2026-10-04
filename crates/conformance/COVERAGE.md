@@ -33,9 +33,9 @@ Upstream: 4463 single-file TypeScript tests. Suite: 450 TypeScript cases, 657 te
 | Feature | Spec | Status | Upstream tests | In the suite | Excluded | Not yet dealt with | Lines checked | Forms checked | test262 cases | test262 checks | Note |
 |:--|:--|:--|--:|--:|--:|--:|--:|--:|--:|--:|:--|
 | `number` | §1.1 | done | 1407 | 225 | 1182 | 0 | 2316 | 1 of 1 | — | — |  |
-| `string` | §1.1 | done | 1498 | 242 | 1256 | 0 | 2293 | 1 of 1 | — | — |  |
+| `string` | §1.1 | done | 1498 | 242 | 1256 | 0 | 2297 | 1 of 1 | — | — |  |
 | `boolean` | §1.1 | done | 482 | 107 | 375 | 0 | 1707 | 1 of 1 | — | — |  |
-| `null` | §1.1 | done | 386 | 73 | 313 | 0 | 1368 | 1 of 1 | — | — |  |
+| `null` | §1.1 | done | 386 | 73 | 313 | 0 | 1372 | 1 of 1 | — | — |  |
 | `void` | §1.1 | done | 500 | 41 | 459 | 0 | 584 | 1 of 1 | — | — |  |
 | `never` | §1.1 | done | 72 | 8 | 64 | 0 | 68 | 1 of 1 | — | — |  |
 | `bigint` | §1.1 | done | 16 | 3 | 13 | 0 | 15 | 1 of 1 | 16 | 68 |  |
@@ -48,7 +48,7 @@ Upstream: 4463 single-file TypeScript tests. Suite: 450 TypeScript cases, 657 te
 | Arrays (`T[]`) | §1.2 | done | 781 | 125 | 656 | 0 | 478 | 1 of 1 | 72 | 294 |  |
 | Tuples (`[T, U]`) | §1.2 | done | 153 | 30 | 123 | 0 | 173 | 1 of 1 | — | — |  |
 | `readonly` arrays and tuples | §1.2 | done | 24 | 5 | 19 | 0 | 43 | 1 of 1 | — | — |  |
-| Union types (`A | B`) | §1.2 | done | 458 | 159 | 299 | 0 | 1581 | 1 of 1 | — | — |  |
+| Union types (`A | B`) | §1.2 | done | 458 | 159 | 299 | 0 | 1585 | 1 of 1 | — | — |  |
 | Type aliases (`type X = …`) | §1.2 | done | 267 | 48 | 219 | 0 | 328 | 1 of 1 | — | — |  |
 | Literal types (`"foo"`, `42`, `true`) | §1.2 | done | 258 | 66 | 192 | 0 | 843 | 2 of 2 | — | — |  |
 

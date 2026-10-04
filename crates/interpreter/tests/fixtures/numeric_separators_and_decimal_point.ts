@@ -10,4 +10,6 @@ function main(): void {
   assert(1. === 1 && 1.e3 === 1000, "trailing decimal point");
   assert(1..toString() === "1" && 0..toFixed(1) === "0.0", "member after `1.`");
   assert((1).toString() === "1" && 1.5.toString() === "1.5", "parenthesized and fractional");
+  const endsInPoint = 1.
+  assert(endsInPoint === 1, "a line ending in `1.` ends the statement");
 }

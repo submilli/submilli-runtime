@@ -4306,12 +4306,13 @@ impl<'a> Parser<'a> {
                 && mixed_logical(last, op)
             {
                 let op_span = self.peek().span;
+                // Parsing continues as if the left side were grouped, so one error
+                // inside an `if (...)` header doesn't cascade through the statement.
                 self.error_at_with_help(
                     op_span,
                     "mixing `??` with `||` / `&&` requires parentheses",
                     vec![mixed_logical_help(last, op)],
                 );
-                return None;
             }
             if op == BinOp::Pow
                 && matches!(
@@ -5445,16 +5446,11 @@ fn mixed_logical(prev: BinOp, next: BinOp) -> bool {
 /// Spells out both groupings in the order the operators were written. Called
 /// only for pairs `mixed_logical` accepts, so the non-`??` operator is `||` or `&&`.
 fn mixed_logical_help(prev: BinOp, next: BinOp) -> String {
-    let logical = if prev == BinOp::NullishCoalesce {
-        next
-    } else {
-        prev
-    };
-    let logical = if logical == BinOp::And { "&&" } else { "||" };
+    let symbol = |op: BinOp| if op == BinOp::And { "&&" } else { "||" };
     let (first, second) = if prev == BinOp::NullishCoalesce {
-        ("??", logical)
+        ("??", symbol(next))
     } else {
-        (logical, "??")
+        (symbol(prev), "??")
     };
     format!(
         "add parentheses to choose the grouping: `(a {first} b) {second} c` or `a {first} (b {second} c)`"

@@ -23,7 +23,8 @@ Temporal.<Type>(...)` constructors → `from(ISO string)` /
 `fromEpochNanoseconds()` / `new Temporal.Duration({...})` (the field-bag
 form), `TemporalHelpers.assert*` → field-by-field `assertSameValue` helpers,
 heterogeneous tuple tables → typed helper functions, numeric separators
-dropped from bigint literals.
+dropped from bigint literals (the existing ports predate separator support;
+new ports can keep them).
 
 ## Rejected (design decisions)
 
