@@ -48,8 +48,12 @@ pub(super) fn emit_stringify(
 /// returns it routes here — primitives take the `toString` path instead).
 pub(crate) fn emit_stringify_value(emitter: &mut FunctionEmitter, ctx: &CodegenCtx, arg_ty: &Type) {
     // Peel first: the scalar arms below lower unboxed, so an alias reaching the
-    // `_` vtable arm would push an f64/i32 where a ref is expected.
-    let peeled = arg_ty.peel();
+    // `_` vtable arm would push an f64/i32 where a ref is expected. A union of
+    // number literals (`1 | 2`) lowers to an unboxed f64 too.
+    let peeled = match arg_ty.peel() {
+        Type::Union(members) if is_unboxed_number_union(members) => &Type::Number,
+        peeled => peeled,
+    };
     match peeled {
         Type::Null => {
             // The value is a null ref; discard it and emit the literal `null`.
@@ -73,6 +77,15 @@ pub(crate) fn emit_stringify_value(emitter: &mut FunctionEmitter, ctx: &CodegenC
             emit_vtable_dispatch_on_object_stack(emitter, ctx, 1);
         }
     }
+}
+
+/// Whether a union holds only numbers and number literals, which lower to an
+/// unboxed f64 like `number` itself.
+fn is_unboxed_number_union(members: &[Type]) -> bool {
+    !members.is_empty()
+        && members
+            .iter()
+            .all(|member| matches!(member.peel(), Type::Number | Type::NumberLiteral(_)))
 }
 
 fn emit_stringify_nullable(emitter: &mut FunctionEmitter, ctx: &CodegenCtx) {

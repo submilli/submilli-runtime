@@ -8,11 +8,19 @@ use crate::{
 use super::classes::{FieldRw, StaticResolution};
 use super::{Inferer, assignable, narrowing};
 
-/// The literal type of a bare literal initializer, for an unannotated `const`.
+/// The literal type of a literal initializer, for an unannotated `const`.
 ///
-/// Only a literal token qualifies, through any number of parentheses. A computed
+/// A literal token qualifies, through any number of parentheses, and so does a
+/// `?:` whose branches all qualify with literals of one primitive type:
+/// `const c = cond ? "a" : "b"` is `"a" | "b"`, as in TypeScript. A computed
 /// initializer widens even under `const` (`const a = 1 + 1` is `number`), matching
 /// TypeScript, and so do arrays, object literals, and call results.
+///
+/// Branches of different primitives, or with `null`, don't qualify:
+/// `cond ? "a" : null` is `string | null`, where TypeScript keeps `"a" | null`.
+/// A `let` copying such a `const` would widen to a union, and a union-typed `let`
+/// starts out narrowed to its initializer's literals; TypeScript widens instead
+/// because those literals are fresh, which Submilli doesn't track.
 pub(super) fn literal_type_of(
     ast: &crate::Ast,
     value: crate::ExprId,
@@ -25,6 +33,16 @@ pub(super) fn literal_type_of(
             // `const a = (1)` is `1`, as in TypeScript: parentheses group, they do not
             // compute.
             ExprKind::Paren(inner) => literal_type_of(ast, *inner)?,
+            ExprKind::Ternary { then_, else_, .. } => {
+                match (literal_type_of(ast, *then_)?, literal_type_of(ast, *else_)?) {
+                    (Some(then_ty), Some(else_ty))
+                        if then_ty.widen_literal() == else_ty.widen_literal() =>
+                    {
+                        Some(Type::union(vec![then_ty, else_ty]))
+                    }
+                    _ => None,
+                }
+            }
             _ => None,
         },
     )
@@ -434,10 +452,11 @@ impl Inferer<'_> {
         doc: Option<crate::DocComment>,
         span: Span,
     ) -> Result<TypedStmtKind, CompilerFailure> {
-        // An unannotated `const` bound to a bare literal keeps the literal type,
-        // as in TypeScript: the binding cannot be reassigned, so nothing can
-        // invalidate it. `let` widens (it is reassignable), and so does any
-        // initializer that is not itself a literal.
+        // An unannotated `const` bound to a literal, or to a `?:` of literals of
+        // one primitive type, keeps the literal type, as in TypeScript: the
+        // binding cannot be reassigned, so nothing can invalidate it. `let` widens
+        // (it is reassignable), and so does any other initializer; see
+        // `literal_type_of`.
         let hint = ty
             .as_ref()
             .map(|a| self.resolve_type(a))
@@ -3122,8 +3141,9 @@ impl Inferer<'_> {
             // Tuples are `$Array` at runtime, so the array desugar reads them
             // directly; the positions' union is what each element can be.
             Type::Tuple(elements) => Some((Type::union(elements.clone()), crate::ForOfKind::Array)),
-            // Strings iterate by code point through `String#iterator`.
-            Type::String => Some((Type::String, crate::ForOfKind::Iterable)),
+            // Strings, literal ones included, iterate by code point through
+            // `String#iterator`.
+            ty if ty.is_string_shaped() => Some((Type::String, crate::ForOfKind::Iterable)),
             // Exact-name match keeps Iterator<U> on its own desugar path
             // (it declares `next()`, not `iterator()`, so it fails the structural check below).
             Type::InterfaceRef { name, args, .. } if name == "Iterator" && args.len() == 1 => {
