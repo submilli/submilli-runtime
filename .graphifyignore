@@ -1,0 +1,12 @@
+# Paths graphify leaves out of the knowledge graph (gitignore syntax; .gitignore
+# is applied too). Ported test262/TypeScript suites are test data, not source, and
+# would otherwise dominate the graph with thousands of disconnected fixture nodes.
+# Everything else under crates/conformance/ stays in. The interpreter's own
+# tests/fixtures/ also stay: they are the required demonstration of each language
+# feature, and agents look up which fixture covers a behavior.
+crates/conformance/cases/
+crates/conformance/rejected/
+# Exclude the suite's contents rather than the directory so its README stays in;
+# a negation cannot re-include a file whose parent directory is excluded.
+crates/conformance/typescript/*
+!crates/conformance/typescript/README.md

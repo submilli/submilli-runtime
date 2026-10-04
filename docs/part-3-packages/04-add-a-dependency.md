@@ -17,11 +17,17 @@ This guide shows you how to make a package import another, and what the
 dependency adds to the blueprint. The example is `@acme/support`, which
 imports `@acme/billing`. Substitute your packages.
 
+Start with the billing package from
+[Export a function](/docs/packages/export-a-function), including its Stripe
+implementation. The final run needs a Stripe test-mode key and a customer
+in the same test account.
+
 ## Import it
 
 `@acme/support` is the second package of the project, added with
-`submilli build new`. Its one operation credits the customer through the
-billing package:
+`submilli build new @acme/support packages/support`, as shown in
+[Start a project](/docs/packages/start-a-project#add-a-second-package).
+Its one operation credits the customer through the billing package:
 
 ```typescript title="packages/support/src/lib.ts"
 import { applyCredit } from "@acme/billing";
@@ -67,6 +73,7 @@ block declares it:
 [[package]]
 name = "@acme/support"
 version = "0.1.0"
+description = "Goodwill credits through Acme's billing package."
 path = "packages/support"
 dependencies = ["@acme/billing"]
 ```
@@ -84,6 +91,11 @@ checked @acme/support v0.1.0
 package from the local store or from GitHub is declared at the top of
 `submilli.toml` as well, and named in the package's list the same way:
 
+The following fragment illustrates those other sources. Keep the sibling-only
+declaration for this guide. To use the fragment in your own project, install
+`@submilli/jina` v0.1.0 in the local store and replace the CRM repository and
+commit with your own.
+
 ```toml title="submilli.toml (fragment)"
 [dependencies]
 "@submilli/jina" = "0.1.0"
@@ -92,6 +104,7 @@ package from the local store or from GitHub is declared at the top of
 [[package]]
 name = "@acme/support"
 version = "0.1.0"
+description = "Goodwill credits through Acme's billing package."
 path = "packages/support"
 dependencies = ["@acme/billing", "@submilli/jina", "@acme/crm"]
 ```
@@ -122,7 +135,19 @@ requires:
 A blueprint grants that to `@acme/support` as it would to a program. The
 billing package makes its own calls, as the caller `@acme/billing`,
 so it needs rules too, and so does the secret it reads. `add-package`
-adds rules for the chain:
+adds rules for the chain. First publish the support package and its sibling
+dependency to the local store. `build check` installs neither:
+
+```sh
+submilli build publish-local -p @acme/support
+```
+
+```text
+installed @acme/billing v0.1.0 -> …/packages/@acme/billing
+installed @acme/support v0.1.0 -> …/packages/@acme/support
+```
+
+Then create the blueprint and add the package:
 
 ```sh
 submilli blueprint init support
@@ -146,7 +171,8 @@ Each package in the chain gets its own caller list from what it
 requires, but only the package you named is listed under `packages:`,
 the packages a program may import. A program can credit a customer only
 through `apologize`, which fixes the amount. Declare the secret the
-warning names, and put its value in the store if it isn't there yet:
+warning names, and put your Stripe test-mode key in the store if it isn't
+there yet:
 
 ```sh
 submilli blueprint secret add BILLING_API_KEY --store billing_api_key
@@ -159,7 +185,8 @@ Value for 'billing_api_key': [hidden]
 Stored secret 'billing_api_key'
 ```
 
-Create `apology.ts` and run it:
+Create `apology.ts`. Replace the customer id with a customer from the
+Stripe test account that owns your key. Each run applies a $15 test credit:
 
 ```typescript title="apology.ts"
 import { apologize } from "@acme/support";

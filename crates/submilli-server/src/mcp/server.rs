@@ -237,7 +237,7 @@ impl SubmilliMcp {
             manager
                 .ensure(sid, blueprint)
                 .await
-                .map_err(|e| ErrorData::internal_error(e.to_string(), None))?;
+                .map_err(vfs_session_error)?;
             let pair = if purpose == VfsUse::RunProgram {
                 manager
                     .vfs_for_execute_with_variables(sid, blueprint, variables)
@@ -245,8 +245,8 @@ impl SubmilliMcp {
             } else {
                 manager.session_vfs_with_variables(sid, blueprint, variables)
             }
-            .map_err(|e| ErrorData::internal_error(e.to_string(), None))?;
-            manager.touch(sid).await;
+            .map_err(vfs_session_error)?;
+            manager.touch(sid).await.map_err(session_state_error)?;
             Ok(pair)
         } else {
             let vfs = build_vfs(
@@ -321,7 +321,11 @@ impl SubmilliMcp {
         let variables = self
             .state
             .session_manager()
-            .variables(session_id.as_deref().unwrap_or(""));
+            .variables(session_id.as_deref().unwrap_or(""))
+            .map_err(|error| {
+                audit.error(crate::error::ErrorKind::RuntimeError);
+                session_state_error(error)
+            })?;
 
         audit.annotate(
             &args.code,
@@ -335,11 +339,11 @@ impl SubmilliMcp {
             .session_manager()
             .harness_secrets(session_id.as_deref().unwrap_or(""))
         {
-            Some(secrets) => secrets,
-            None if required_harness_secrets(&blueprint.secrets).is_empty() => {
+            Ok(Some(secrets)) => secrets,
+            Ok(None) if required_harness_secrets(&blueprint.secrets).is_empty() => {
                 Arc::new(HarnessSecretBindings::new())
             }
-            None => {
+            Ok(None) => {
                 audit.error(crate::error::ErrorKind::InvalidRequest);
                 return Err(ErrorData::invalid_request(
                     "session_requires_secrets",
@@ -347,6 +351,10 @@ impl SubmilliMcp {
                         "required": required_harness_secrets(&blueprint.secrets),
                     })),
                 ));
+            }
+            Err(error) => {
+                audit.error(crate::error::ErrorKind::RuntimeError);
+                return Err(session_state_error(error));
             }
         };
 
@@ -371,7 +379,18 @@ impl SubmilliMcp {
             })?;
 
         let manager = self.state.session_manager();
-        let http_client = manager.http_client(session_id.as_deref().unwrap_or(""));
+        let http_client = manager
+            .http_client(session_id.as_deref().unwrap_or(""))
+            .map_err(|error| {
+                audit.error(crate::error::ErrorKind::RuntimeError);
+                session_state_error(error)
+            })?;
+        let session_kv = manager
+            .session_kv_for_execute(session_id.as_deref().unwrap_or(""))
+            .map_err(|error| {
+                audit.error(crate::error::ErrorKind::RuntimeError);
+                session_state_error(error)
+            })?;
         let network_policy = audit.network_policy(self.state.network_policy());
         let mcp_transport = Arc::new(
             submilli_shared::mcp::transport::StreamableHttpTransport::new(
@@ -406,7 +425,7 @@ impl SubmilliMcp {
             }),
             http_client,
             mcp_transport,
-            session_kv: manager.session_kv_for_execute(session_id.as_deref().unwrap_or("")),
+            session_kv,
             llm_provider: self.state.llm_provider_for(
                 &blueprint,
                 &harness_secrets,
@@ -650,7 +669,8 @@ impl SubmilliMcp {
         let variables = self
             .state
             .session_manager()
-            .variables(session_id.as_deref().unwrap_or(""));
+            .variables(session_id.as_deref().unwrap_or(""))
+            .map_err(session_state_error)?;
         if let Err(refused) = self.authorize_file_call(
             &parts,
             Arc::clone(&blueprint),
@@ -707,7 +727,8 @@ impl SubmilliMcp {
         let variables = self
             .state
             .session_manager()
-            .variables(session_id.as_deref().unwrap_or(""));
+            .variables(session_id.as_deref().unwrap_or(""))
+            .map_err(session_state_error)?;
         let dir = args.path.as_deref().unwrap_or(".");
         let recursive = args.recursive.unwrap_or(false);
         if let Err(refused) = self.authorize_file_call(
@@ -1034,15 +1055,19 @@ impl ServerHandler for SubmilliMcp {
                 .and_then(|a| a.get("code"))
                 .and_then(serde_json::Value::as_str)
                 .unwrap_or_default();
-            audit.annotate(
-                code,
-                &self.blueprint_name,
-                None,
-                &self
-                    .state
-                    .session_manager()
-                    .variables(session.as_deref().unwrap_or("")),
-            );
+            let variables = match self
+                .state
+                .session_manager()
+                .variables(session.as_deref().unwrap_or(""))
+            {
+                Ok(variables) => variables,
+                Err(error) => {
+                    audit.error(crate::error::ErrorKind::RuntimeError);
+                    audit.finish(false);
+                    return Err(session_state_error(error));
+                }
+            };
+            audit.annotate(code, &self.blueprint_name, None, &variables);
             if let Some(parts) = context.extensions.get_mut::<axum::http::request::Parts>() {
                 parts.extensions.insert(audit.clone());
             }
@@ -1088,7 +1113,8 @@ impl ServerHandler for SubmilliMcp {
         let variables = self
             .state
             .session_manager()
-            .variables(session_id.as_deref().unwrap_or(""));
+            .variables(session_id.as_deref().unwrap_or(""))
+            .map_err(session_state_error)?;
         blueprint.vfs = blueprint
             .vfs
             .resolve(&variables)
@@ -1127,6 +1153,19 @@ impl ServerHandler for SubmilliMcp {
 
 fn blueprint_store_error(error: crate::blueprint::StoreError) -> ErrorData {
     ErrorData::internal_error(crate::blueprint::store_failure_message(error), None)
+}
+
+fn session_state_error(error: crate::session_manager::SessionError) -> ErrorData {
+    tracing::error!(%error, "session state unavailable");
+    ErrorData::internal_error("session state unavailable", None)
+}
+
+fn vfs_session_error(error: crate::session_manager::SessionError) -> ErrorData {
+    if matches!(error, crate::session_manager::SessionError::PoisonedState) {
+        session_state_error(error)
+    } else {
+        ErrorData::internal_error(error.to_string(), None)
+    }
 }
 
 fn with_execution_id(

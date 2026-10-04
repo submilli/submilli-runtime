@@ -1,0 +1,96 @@
+name: Chart Release
+
+on:
+  workflow_dispatch:
+  workflow_call:
+    inputs:
+      ref:
+        description: Exact runtime release commit
+        required: true
+        type: string
+      runtime-tag:
+        description: Runtime release tag whose version the chart must select
+        required: false
+        default: ''
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  source:
+    if: github.repository == 'submilli/submilli-runtime'
+    runs-on: ubuntu-latest
+    outputs:
+      commit: ${{ steps.source.outputs.commit }}
+    steps:
+      # Standalone releases always use main; runtime releases pass their SHA.
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || 'main' }}
+          persist-credentials: false
+      - id: source
+        run: echo "commit=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+  chart-checks:
+    name: Validate the release chart
+    needs: source
+    uses: ./.github/workflows/chart-ci.yml
+    with:
+      ref: ${{ needs.source.outputs.commit }}
+    permissions:
+      contents: read
+
+  chart:
+    needs: [source, chart-checks]
+    if: github.repository == 'submilli/submilli-runtime'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      packages: write
+    # Serialize checks and pushes across runtime and standalone chart releases.
+    concurrency:
+      group: submilli-chart-publication
+      cancel-in-progress: false
+    outputs:
+      version: ${{ steps.publish.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.source.outputs.commit }}
+          persist-credentials: false
+      - uses: azure/setup-helm@v4
+        with:
+          version: v3.21.3
+      - name: Publish immutable chart and verify anonymous download
+        id: publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUNTIME_TAG: ${{ inputs.runtime-tag }}
+        run: python3 scripts/publish_chart.py --runtime-tag "$RUNTIME_TAG"
+
+  chart-install:
+    name: install published chart without registry credentials
+    needs: chart
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    # This runner has neither a registry login nor a Kubernetes image pull secret.
+    permissions:
+      contents: read
+    steps:
+      - uses: azure/setup-helm@v4
+        with:
+          version: v3.21.3
+      - uses: helm/kind-action@v1.12.0
+        with:
+          cluster_name: chart-public
+          version: v0.31.0
+      - name: Install the exact published chart and run its hooks
+        env:
+          CHART_VERSION: ${{ needs.chart.outputs.version }}
+        run: |
+          helm install submilli oci://ghcr.io/submilli/charts/submilli \
+            --version "$CHART_VERSION" --wait --timeout 6m
+          # Successful API hooks are deleted before Helm can collect their logs.
+          helm test submilli --timeout 5m

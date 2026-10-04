@@ -27,8 +27,7 @@ tls:
 replicaCount: 1
 
 image:
-  # -- Image repository. The published image is private until launch; see
-  # `imagePullSecrets` below.
+  # -- Image repository. Official chart releases require anonymous image pulls.
   repository: ghcr.io/submilli/submilli-runtime
   # -- Image tag. Empty means "use the chart's appVersion", which keeps the
   # chart version and the server version locked together. Avoid `latest`:
@@ -37,7 +36,7 @@ image:
   pullPolicy: IfNotPresent
 
 # -- Names of existing `kubernetes.io/dockerconfigjson` Secrets used to pull the
-# image. Required while the GHCR package is private.
+# image. Use this only when overriding image.repository with a private image.
 imagePullSecrets: []
 
 # -- Override the generated resource name. Defaults to the release name.
