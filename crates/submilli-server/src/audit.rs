@@ -182,6 +182,7 @@ pub(crate) fn settings_hash(
         "audit_enabled": config.audit.enabled, "audit_allows": format!("{:?}", config.audit.allows),
         "audit_file": config.audit.file.as_deref().map(path_hash),
         "blueprint_dir": config.blueprint_dir.as_deref().map(path_hash), "session_store_dir": config.session_store_dir.as_deref().map(path_hash),
+        "database_path": config.database_path.as_deref().map(path_hash),
         "session_storage_root": path_hash(&config.session_storage_root.clone().unwrap_or_else(default_session_storage_root)),
         "ephemeral_storage_root": path_hash(&config.ephemeral_storage_root.clone().unwrap_or_else(std::env::temp_dir)),
         "package_store_root": path_hash(&config.package_store_root.clone().unwrap_or_else(default_package_store_dir)),
@@ -1030,6 +1031,9 @@ mod tests {
         assert_ne!(settings_hash(&config, addr, grace).unwrap(), volume_hash);
         config = base.clone();
         config.session_kv_limits.max_entries += 1;
+        assert_ne!(settings_hash(&config, addr, grace).unwrap(), hash);
+        config = base.clone();
+        config.database_path = Some("/data/server.db".into());
         assert_ne!(settings_hash(&config, addr, grace).unwrap(), hash);
         config = base;
         config.mcp_allowed_hosts = Some(vec!["example.com".into()]);

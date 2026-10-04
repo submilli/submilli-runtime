@@ -113,3 +113,30 @@ async fn write_methods_are_rejected() {
         );
     }
 }
+
+#[tokio::test]
+async fn injected_database_path_is_guarded_even_with_a_different_configured_path() {
+    use std::sync::Arc;
+    use submilli_server::config::{ServerDirectories, validate_volumes};
+    use submilli_server::database::ServerDatabase;
+
+    let directory = tempfile::tempdir().unwrap();
+    let database = Arc::new(
+        ServerDatabase::open(&directory.path().join("server.db"))
+            .await
+            .unwrap(),
+    );
+    for configured_path in [None, Some(directory.path().join("elsewhere/server.db"))] {
+        let config = ServerConfig {
+            database: Some(Arc::clone(&database)),
+            database_path: configured_path,
+            ..ServerConfig::default()
+        };
+        let volumes =
+            VolumeTable::from([("exposed".into(), VolumeSpec::local_path(directory.path()))]);
+        let error =
+            validate_volumes(&volumes, &ServerDirectories::from_config(&config)).unwrap_err();
+        assert!(error.to_string().contains("server database"), "{error}");
+    }
+    database.close().await.unwrap();
+}

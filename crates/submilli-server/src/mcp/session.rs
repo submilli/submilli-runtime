@@ -348,10 +348,8 @@ impl SessionManager for VfsSessionManager {
         let result = self.inner.close_session(id).await;
         // Explicit termination: wipe the `per_session` VFS now rather than
         // waiting for the idle reaper.
-        match self.state.session_manager().wipe_now(id.as_ref()).await {
-            Ok(_) => result,
-            Err(error) => Err(to_local_error(error)),
-        }
+        self.state.session_manager().wipe_now(id.as_ref()).await;
+        result
     }
 
     async fn create_stream(

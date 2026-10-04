@@ -24,14 +24,12 @@ pub trait SessionStore: Send + Sync + 'static {
 /// Failure to retain or retrieve an execution's last-run record.
 #[derive(Debug)]
 pub enum LastRunStoreError {
-    Poisoned,
     Backend(Box<dyn std::error::Error + Send + Sync>),
 }
 
 impl std::fmt::Display for LastRunStoreError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Poisoned => f.write_str("last-run storage mutex poisoned"),
             Self::Backend(error) => write!(f, "last-run storage backend failed: {error}"),
         }
     }
@@ -40,7 +38,6 @@ impl std::fmt::Display for LastRunStoreError {
 impl std::error::Error for LastRunStoreError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
-            Self::Poisoned => None,
             Self::Backend(error) => Some(error.as_ref()),
         }
     }
@@ -48,6 +45,7 @@ impl std::error::Error for LastRunStoreError {
 
 #[derive(Default)]
 pub struct InMemorySessionStore {
+    // Poisoned state is unsupported; see AGENTS.md accepted poisoned-lock panics.
     inner: Mutex<HashMap<String, LastRun>>,
 }
 
@@ -56,7 +54,7 @@ impl SessionStore for InMemorySessionStore {
     async fn record(&self, session_id: &str, run: LastRun) -> Result<(), LastRunStoreError> {
         self.inner
             .lock()
-            .map_err(|_| LastRunStoreError::Poisoned)?
+            .expect("last-run storage mutex poisoned")
             .insert(session_id.to_string(), run);
         Ok(())
     }
@@ -65,7 +63,7 @@ impl SessionStore for InMemorySessionStore {
         Ok(self
             .inner
             .lock()
-            .map_err(|_| LastRunStoreError::Poisoned)?
+            .expect("last-run storage mutex poisoned")
             .get(session_id)
             .cloned())
     }
@@ -74,7 +72,6 @@ impl SessionStore for InMemorySessionStore {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Arc;
 
     fn run(value: &str) -> LastRun {
         LastRun {
@@ -98,40 +95,6 @@ mod tests {
         assert_eq!(stored.result.as_deref(), Some("second"));
         assert_eq!(stored.console, ["captured output"]);
         assert_eq!(stored.error.unwrap().message, "original failure");
-    }
-
-    #[tokio::test]
-    async fn poisoned_storage_rejects_reads_and_writes_repeatedly() {
-        let store = Arc::new(InMemorySessionStore::default());
-        store.record("session", run("original")).await.unwrap();
-        let poisoned = Arc::clone(&store);
-        assert!(
-            std::thread::spawn(move || {
-                let _guard = poisoned.inner.lock().unwrap();
-                panic!("injected last-run poison");
-            })
-            .join()
-            .is_err()
-        );
-        for _ in 0..2 {
-            assert!(matches!(
-                store.get("session").await,
-                Err(LastRunStoreError::Poisoned)
-            ));
-            assert!(matches!(
-                store.get("missing").await,
-                Err(LastRunStoreError::Poisoned)
-            ));
-            assert!(matches!(
-                store.record("session", run("replacement")).await,
-                Err(LastRunStoreError::Poisoned)
-            ));
-        }
-        let guard = store.inner.lock().unwrap_err().into_inner();
-        assert_eq!(
-            guard.get("session").unwrap().result.as_deref(),
-            Some("original")
-        );
     }
 
     #[test]

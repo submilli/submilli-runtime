@@ -71,6 +71,24 @@ and cleanup. It applies through CLI, HTTP, MCP, and direct library entry points.
   must distinguish a confirmed policy violation from a demonstrated input-triggered
   failure; an exploit reproducer is not required to remove an explicit panic.
 
+### Accepted poisoned-lock panics
+
+Panicking `unwrap`/`expect` on a poisoned `std::sync::Mutex` or
+`std::sync::RwLock` is an accepted exception to the no-panic requirement.
+Poisoning indicates that another panic occurred while protected state could be
+partly updated. Panic on poisoned access is accepted without introducing recovery
+or treating it as an ordinary operation failure. Do not add error variants or
+fallible APIs solely to handle poisoning. Keep fallible APIs where they also
+report real I/O, backend, setup, or other operation failures.
+
+This exception permits only the panic on poisoned lock access, including during
+cleanup. It does not permit the panic that caused poisoning or any other panic
+source. Poisoned access during unwinding can cause a second panic and abort the
+process. Document this exception at the lock access, shared lock helper, or
+protected field when changing poison handling; do not claim that poisoning is
+impossible. Record these sites as accepted exceptions in SUB-633 rather than as
+removed panics.
+
 ## Code style
 
 - Rust 2024; typed errors in library APIs. `anyhow` is appropriate at the CLI
