@@ -23,6 +23,9 @@ pub enum BacktraceMode {
 pub struct ThrownError {
     pub message: String,
     pub backtrace: Option<WasmBacktrace>,
+    /// Set when the escaped error is a denial the runtime itself threw, as
+    /// opposed to a `PermissionDeniedError` the program constructed.
+    pub denial: Option<crate::runtime::host::Denial>,
 }
 
 impl std::fmt::Display for ThrownError {

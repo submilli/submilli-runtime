@@ -183,6 +183,8 @@ pub struct StoreData {
     pub(crate) vtable_walk_nodes: u32,
     /// Host-only result marshalling after an effect must not refuse for fuel.
     pub(crate) settling_host_result: bool,
+    /// Denials the runtime threw, by thrown object; see [`host::ThrownDenials`].
+    pub(crate) thrown_denials: host::ThrownDenials,
 }
 
 /// The nesting the universal-vtable walk allows before it reports a runaway.
@@ -262,6 +264,7 @@ impl StoreData {
             vtable_walk_depth: 0,
             vtable_walk_nodes: 0,
             settling_host_result: false,
+            thrown_denials: host::ThrownDenials::default(),
         }
     }
 
@@ -350,6 +353,7 @@ fn name_the_failing_initializer(
             thrown.message
         ),
         backtrace: thrown.backtrace.clone(),
+        denial: thrown.denial.clone(),
     }))
 }
 

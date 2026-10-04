@@ -511,6 +511,7 @@ fn error_response(session_id: &str, kind: ErrorKind, message: String) -> Execute
             kind,
             message,
             diagnostics: Vec::new(),
+            denial: None,
         }),
         discovery_warnings: Vec::new(),
     }

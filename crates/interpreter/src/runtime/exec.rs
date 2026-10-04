@@ -66,6 +66,7 @@ pub(crate) fn uncaught_error(
     let Some(exn) = store.take_pending_exception() else {
         return err;
     };
+    let denial = thrown_denial(store, exn);
     // An already-thrown error may follow a completed effect. Diagnostic
     // decoding must preserve its message even after settlement takes fuel to zero.
     let text = super::fuel::settle_result(store, |store| Ok(read_thrown_error_text(store, exn)))
@@ -81,7 +82,19 @@ pub(crate) fn uncaught_error(
     wasmtime::Error::new(crate::backtrace::ThrownError {
         message: text,
         backtrace,
+        denial,
     })
+}
+
+/// The denial the runtime threw, when `exn` carries that very object.
+fn thrown_denial(store: &mut Store<StoreData>, exn: Rooted<ExnRef>) -> Option<super::host::Denial> {
+    let Val::AnyRef(Some(thrown)) = exn.field(&mut *store, 0).ok()? else {
+        return None;
+    };
+    let mut denials = std::mem::take(&mut store.data_mut().thrown_denials);
+    let found = denials.find(&*store, &thrown);
+    store.data_mut().thrown_denials = denials;
+    found
 }
 
 /// Reads `"name: message"` from a thrown exception's `$Error` payload, plus a

@@ -66,8 +66,12 @@ export async function openSession(options: SessionOptions): Promise<Session> {
         inputSchema: z.object({ code: z.string() }),
         execute: async ({ code }) => {
           const run = await json(await call(`${session}/execute`, "POST", { code }));
-          // A denial or a compile error arrives here as `error`, for the model to read.
-          return { result: run.result, console: run.console, error: run.error };
+          // A compile error arrives here as `error`, for the model to read. So does a
+          // denial that escaped the program, as `kind: "permission_denied"` with
+          // `caller`, `capability` and `source`; it is the operator's final answer, so
+          // it is marked for the model to report rather than route around.
+          const denied = run.error?.kind === "permission_denied";
+          return { result: run.result, console: run.console, error: run.error, ...(denied && { denied: true }) };
         },
       }),
       submilli__typescript__last_run: tool({

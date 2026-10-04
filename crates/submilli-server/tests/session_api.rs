@@ -244,12 +244,12 @@ async fn bound_variable_scopes_the_filter() {
     let session = created["session_id"].as_str().unwrap().to_string();
 
     // Writing outside the bound user's subtree misses the filter and falls
-    // through to `default: deny` — the check traps. This proves the variable
+    // through to `default: deny` — the check is denied. This proves the variable
     // threaded from create into the policy, not an allow-all.
     let (status, r) = session_execute(&router, &session, &write_to("/bob-a.txt")).await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(r["result"], Value::Null);
-    assert_eq!(r["error"]["kind"], json!("runtime_error"), "got: {r}");
+    assert_eq!(r["error"]["kind"], json!("permission_denied"), "got: {r}");
 }
 
 #[tokio::test]

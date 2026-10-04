@@ -186,6 +186,18 @@ impl Args {
     }
 }
 
+/// Exit status for a program that stopped without a value: 3 for a denial the
+/// runtime threw and the program let escape, so a script can tell a refused
+/// capability from a bug; 1 for anything else.
+const EXIT_PERMISSION_DENIED: u8 = 3;
+
+fn exit_status_of(err: &wasmtime::Error) -> u8 {
+    let denied = err
+        .downcast_ref::<interpreter::backtrace::ThrownError>()
+        .is_some_and(|thrown| thrown.denial.is_some());
+    if denied { EXIT_PERMISSION_DENIED } else { 1 }
+}
+
 pub fn execute(args: Args) -> anyhow::Result<ExitCode> {
     // `None` means "build the real HTTP dispatch below, once the blueprint and
     // the secret store it needs are in hand". A test passes `Some(fake)` to
@@ -499,7 +511,7 @@ fn execute_on_this_thread(
             } else {
                 eprintln!("error: {}", failure_message(&err));
             }
-            Ok(ExitCode::from(1))
+            Ok(ExitCode::from(exit_status_of(&err)))
         }
     };
     if let Some(error) = secondary_cleanup {

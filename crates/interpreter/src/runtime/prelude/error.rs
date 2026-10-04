@@ -694,7 +694,7 @@ pub(crate) fn construct_from_message(
     class: BuiltinErrorClass,
     message: &str,
     own_fields: &[&str],
-) -> wasmtime::Result<Val> {
+) -> wasmtime::Result<Rooted<StructRef>> {
     validate_own_field_count(class, own_fields.len())?;
     let message_units: Vec<u16> = message.encode_utf16().collect();
     let message = write_submilli_string_struct_units(&mut *caller, &message_units)?;
@@ -704,7 +704,7 @@ pub(crate) fn construct_from_message(
         let st = write_submilli_string_struct_units(&mut *caller, &units)?;
         vals.push(Val::AnyRef(Some(st.to_anyref())));
     }
-    construct(
+    construct_struct(
         caller,
         class,
         &Val::AnyRef(Some(message.to_anyref())),
@@ -734,6 +734,17 @@ fn construct(
     message: &Val,
     own_fields: &[Val],
 ) -> wasmtime::Result<Val> {
+    let error = construct_struct(caller, class, message, own_fields)?;
+    Ok(Val::AnyRef(Some(error.to_anyref())))
+}
+
+/// [`construct`], keeping the generation-stamped handle that `to_anyref` drops.
+fn construct_struct(
+    caller: &mut Caller<'_, StoreData>,
+    class: BuiltinErrorClass,
+    message: &Val,
+    own_fields: &[Val],
+) -> wasmtime::Result<Rooted<StructRef>> {
     let handles = abi(caller)?;
     let name = name_string(caller, class)?;
     let mut payload_vals = vec![*message, name];
@@ -754,7 +765,7 @@ fn construct(
             Val::I64(0),
         ],
     )?;
-    Ok(Val::AnyRef(Some(st.to_anyref())))
+    Ok(st)
 }
 
 fn name_string(
