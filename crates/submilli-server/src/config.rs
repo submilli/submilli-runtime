@@ -196,9 +196,9 @@ pub fn default_session_store_dir() -> PathBuf {
     default_server_root().join("sessions")
 }
 
-/// Default server-owned SQLite database file.
+/// Default server-owned SQLite database file, under a separately mountable directory.
 pub fn default_database_path() -> PathBuf {
-    default_server_root().join("submilli.db")
+    default_server_root().join("db/submilli.db")
 }
 
 /// Default directory backing the encrypted secret store.

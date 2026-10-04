@@ -89,7 +89,7 @@ pub struct Cli {
     session_store_dir: Option<PathBuf>,
 
     /// Server SQLite database file. The parent directory is created at boot.
-    /// [default: ~/.submilli/server/submilli.db]
+    /// [default: ~/.submilli/server/db/submilli.db]
     /// Env: `$SUBMILLI_DATABASE_PATH`.
     #[arg(long, value_name = "PATH")]
     database_path: Option<PathBuf>,

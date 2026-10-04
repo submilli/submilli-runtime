@@ -1606,7 +1606,7 @@ network:
             tls_cert_file: Some(root.join("tls/cert.pem")),
             session_storage_root: Some(root.join("vfs/sessions")),
             session_store_dir: Some(root.join("sessions")),
-            database_path: Some(root.join("submilli.db")),
+            database_path: Some(root.join("db/submilli.db")),
             ephemeral_storage_root: Some(root.join("scratch")),
             managed_volume_root: Some(root.join("volumes")),
             config_file: Some(root.join("etc/submilli.yaml")),
