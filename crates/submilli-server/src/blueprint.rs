@@ -26,7 +26,7 @@ impl std::fmt::Display for StoreError {
         match self {
             Self::AlreadyExists => f.write_str("blueprint already exists"),
             Self::Io(message) => write!(f, "store I/O failed: {message}"),
-            Self::Poisoned => f.write_str("blueprint store lock poisoned"),
+            Self::Poisoned => f.write_str("store lock poisoned"),
             Self::Serialization(message) => write!(f, "blueprint serialization failed: {message}"),
             Self::RevisionExhausted { name } => {
                 write!(f, "blueprint '{name}' revision counter exhausted")

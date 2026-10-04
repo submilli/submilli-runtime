@@ -620,8 +620,8 @@ mod tests {
         async fn purge_session(&self, _: &str) -> Result<(), StoreError> {
             Ok(())
         }
-        async fn session_ids(&self) -> Vec<String> {
-            Vec::new()
+        async fn session_ids(&self) -> Result<Vec<String>, StoreError> {
+            Ok(Vec::new())
         }
     }
 
@@ -1032,8 +1032,8 @@ mod tests {
         async fn purge_session(&self, _: &str) -> Result<(), StoreError> {
             Ok(())
         }
-        async fn session_ids(&self) -> Vec<String> {
-            Vec::new()
+        async fn session_ids(&self) -> Result<Vec<String>, StoreError> {
+            Ok(Vec::new())
         }
     }
 
@@ -1109,8 +1109,8 @@ mod tests {
             async fn purge_session(&self, _: &str) -> Result<(), StoreError> {
                 Ok(())
             }
-            async fn session_ids(&self) -> Vec<String> {
-                Vec::new()
+            async fn session_ids(&self) -> Result<Vec<String>, StoreError> {
+                Ok(Vec::new())
             }
         }
 
@@ -1161,7 +1161,13 @@ mod tests {
         let refusal = expect_refusal(coordinator.reserve("sid", "", "main").await);
         assert!(matches!(refusal, Refusal::InvalidKey(_)), "got {refusal:?}");
         assert_eq!(refusal.status(), StatusCode::BAD_REQUEST);
-        assert!(store.session_ids().await.is_empty());
+        assert!(
+            store
+                .session_ids()
+                .await
+                .expect("list ledger sessions")
+                .is_empty()
+        );
     }
 
     #[tokio::test]

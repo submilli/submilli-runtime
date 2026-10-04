@@ -70,7 +70,7 @@ pub trait DurableSessionStore: Send + Sync + 'static {
     async fn remove(&self, session_id: &str) -> Result<(), StoreError>;
     /// Every persisted record. Malformed entries are skipped, not fatal — one
     /// bad file must not stop the server from booting.
-    async fn load_all(&self) -> Vec<SessionRecord>;
+    async fn load_all(&self) -> Result<Vec<SessionRecord>, StoreError>;
 }
 
 /// Ephemeral store for tests and the no-persistence fallback.
@@ -82,27 +82,29 @@ pub struct InMemoryDurableSessionStore {
 #[async_trait::async_trait]
 impl DurableSessionStore for InMemoryDurableSessionStore {
     async fn put(&self, record: SessionRecord) -> Result<(), StoreError> {
-        self.lock().insert(record.session_id.clone(), record);
+        self.lock()?.insert(record.session_id.clone(), record);
         Ok(())
     }
 
     async fn load(&self, session_id: &str) -> Result<Option<SessionRecord>, StoreError> {
-        Ok(self.lock().get(session_id).cloned())
+        Ok(self.lock()?.get(session_id).cloned())
     }
 
     async fn remove(&self, session_id: &str) -> Result<(), StoreError> {
-        self.lock().remove(session_id);
+        self.lock()?.remove(session_id);
         Ok(())
     }
 
-    async fn load_all(&self) -> Vec<SessionRecord> {
-        self.lock().values().cloned().collect()
+    async fn load_all(&self) -> Result<Vec<SessionRecord>, StoreError> {
+        Ok(self.lock()?.values().cloned().collect())
     }
 }
 
 impl InMemoryDurableSessionStore {
-    fn lock(&self) -> std::sync::MutexGuard<'_, HashMap<String, SessionRecord>> {
-        self.inner.lock().expect("session store mutex poisoned")
+    fn lock(
+        &self,
+    ) -> Result<std::sync::MutexGuard<'_, HashMap<String, SessionRecord>>, StoreError> {
+        self.inner.lock().map_err(|_| StoreError::Poisoned)
     }
 }
 
@@ -161,34 +163,23 @@ impl DurableSessionStore for FileDurableSessionStore {
         }
     }
 
-    async fn load_all(&self) -> Vec<SessionRecord> {
-        let entries = match fs::read_dir(&self.dir) {
-            Ok(entries) => entries,
-            Err(e) if e.kind() == io::ErrorKind::NotFound => return Vec::new(),
-            Err(e) => {
-                tracing::warn!(dir = %self.dir.display(), %e, "cannot read session store dir");
-                return Vec::new();
-            }
-        };
+    async fn load_all(&self) -> Result<Vec<SessionRecord>, StoreError> {
+        let entries = fs::read_dir(&self.dir).map_err(|e| StoreError::Io(e.to_string()))?;
         let mut records = Vec::new();
-        for entry in entries.flatten() {
-            let path = entry.path();
+        for entry in entries {
+            let path = entry.map_err(|e| StoreError::Io(e.to_string()))?.path();
             if !is_record_file(&path) {
                 continue;
             }
-            match fs::read(&path) {
-                Ok(bytes) => match serde_json::from_slice::<StoredRecord>(&bytes) {
-                    Ok(stored) => records.push(stored.into_record()),
-                    Err(e) => {
-                        tracing::warn!(path = %path.display(), %e, "skipping malformed session record");
-                    }
-                },
+            let bytes = fs::read(&path).map_err(|e| StoreError::Io(e.to_string()))?;
+            match serde_json::from_slice::<StoredRecord>(&bytes) {
+                Ok(stored) => records.push(stored.into_record()),
                 Err(e) => {
-                    tracing::warn!(path = %path.display(), %e, "skipping unreadable session record");
+                    tracing::warn!(path = %path.display(), %e, "skipping malformed session record");
                 }
             }
         }
-        records
+        Ok(records)
     }
 }
 
@@ -284,7 +275,7 @@ mod tests {
         let rec = record("sid-1");
         store.put(rec.clone()).await.unwrap();
 
-        let loaded = store.load_all().await;
+        let loaded = store.load_all().await.expect("list sessions");
         assert_eq!(loaded, vec![rec]);
     }
 
@@ -295,7 +286,7 @@ mod tests {
         let mut rec = record("sid-vars");
         rec.variables = BTreeMap::from([("tenant".to_string(), "u_42".to_string())]);
         store.put(rec.clone()).await.unwrap();
-        assert_eq!(store.load_all().await, vec![rec]);
+        assert_eq!(store.load_all().await.expect("list sessions"), vec![rec]);
     }
 
     #[tokio::test]
@@ -307,7 +298,7 @@ mod tests {
         updated.blueprint_name = "other".into();
         store.put(updated.clone()).await.unwrap();
 
-        let loaded = store.load_all().await;
+        let loaded = store.load_all().await.expect("list sessions");
         assert_eq!(loaded, vec![updated]);
     }
 
@@ -317,7 +308,7 @@ mod tests {
         let store = FileDurableSessionStore::new(dir.path().to_path_buf()).unwrap();
         store.put(record("sid")).await.unwrap();
         store.remove("sid").await.unwrap();
-        assert!(store.load_all().await.is_empty());
+        assert!(store.load_all().await.expect("list sessions").is_empty());
         // Removing an absent record is a no-op, not an error.
         store.remove("sid").await.unwrap();
     }
@@ -329,7 +320,7 @@ mod tests {
         store.put(record("good")).await.unwrap();
         fs::write(dir.path().join("deadbeef.json"), b"{ not json").unwrap();
 
-        let loaded = store.load_all().await;
+        let loaded = store.load_all().await.expect("list sessions");
         assert_eq!(loaded.len(), 1);
         assert_eq!(loaded[0].session_id, "good");
     }
@@ -341,8 +332,33 @@ mod tests {
         store.put(record("../../escape")).await.unwrap();
 
         // The file landed flat under `dir`, and the id round-trips intact.
-        let loaded = store.load_all().await;
+        let loaded = store.load_all().await.expect("list sessions");
         assert_eq!(loaded.len(), 1);
         assert_eq!(loaded[0].session_id, "../../escape");
+    }
+
+    #[tokio::test]
+    async fn enumeration_rejects_poisoned_memory_store() {
+        let store = std::sync::Arc::new(InMemoryDurableSessionStore::default());
+        store.put(record("sid")).await.unwrap();
+        let poisoned = std::sync::Arc::clone(&store);
+        let _ = std::thread::spawn(move || {
+            let _guard = poisoned.inner.lock().unwrap();
+            panic!("poison session store");
+        })
+        .join();
+
+        assert!(matches!(store.load_all().await, Err(StoreError::Poisoned)));
+        assert!(matches!(store.load("sid").await, Err(StoreError::Poisoned)));
+    }
+
+    #[tokio::test]
+    async fn enumeration_reports_unavailable_file_store() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("sessions");
+        let store = FileDurableSessionStore::new(root.clone()).unwrap();
+        fs::remove_dir(&root).unwrap();
+
+        assert!(matches!(store.load_all().await, Err(StoreError::Io(_))));
     }
 }

@@ -142,19 +142,21 @@ pub trait IdempotencyStore: Send + Sync + 'static {
     async fn purge_session(&self, session_id: &str) -> Result<(), StoreError>;
     /// Every session id holding at least one entry. Boot reconciliation reads
     /// this to purge ledgers whose session did not come back.
-    async fn session_ids(&self) -> Vec<String>;
+    async fn session_ids(&self) -> Result<Vec<String>, StoreError>;
 }
+
+type LedgerMap = HashMap<String, HashMap<String, LedgerEntry>>;
 
 /// Ephemeral store for tests and the no-persistence fallback.
 #[derive(Default)]
 pub struct InMemoryIdempotencyStore {
-    inner: Mutex<HashMap<String, HashMap<String, LedgerEntry>>>,
+    inner: Mutex<LedgerMap>,
 }
 
 #[async_trait::async_trait]
 impl IdempotencyStore for InMemoryIdempotencyStore {
     async fn put(&self, entry: LedgerEntry) -> Result<(), StoreError> {
-        self.lock()
+        self.lock()?
             .entry(entry.session_id.clone())
             .or_default()
             .insert(entry.key.clone(), entry);
@@ -163,32 +165,32 @@ impl IdempotencyStore for InMemoryIdempotencyStore {
 
     async fn load(&self, session_id: &str, key: &str) -> Result<Option<LedgerEntry>, StoreError> {
         Ok(self
-            .lock()
+            .lock()?
             .get(session_id)
             .and_then(|entries| entries.get(key))
             .cloned())
     }
 
     async fn remove(&self, session_id: &str, key: &str) -> Result<(), StoreError> {
-        if let Some(entries) = self.lock().get_mut(session_id) {
+        if let Some(entries) = self.lock()?.get_mut(session_id) {
             entries.remove(key);
         }
         Ok(())
     }
 
     async fn purge_session(&self, session_id: &str) -> Result<(), StoreError> {
-        self.lock().remove(session_id);
+        self.lock()?.remove(session_id);
         Ok(())
     }
 
-    async fn session_ids(&self) -> Vec<String> {
-        self.lock().keys().cloned().collect()
+    async fn session_ids(&self) -> Result<Vec<String>, StoreError> {
+        Ok(self.lock()?.keys().cloned().collect())
     }
 }
 
 impl InMemoryIdempotencyStore {
-    fn lock(&self) -> std::sync::MutexGuard<'_, HashMap<String, HashMap<String, LedgerEntry>>> {
-        self.inner.lock().expect("idempotency store mutex poisoned")
+    fn lock(&self) -> Result<std::sync::MutexGuard<'_, LedgerMap>, StoreError> {
+        self.inner.lock().map_err(|_| StoreError::Poisoned)
     }
 }
 
@@ -330,33 +332,23 @@ impl IdempotencyStore for FileIdempotencyStore {
         .await
     }
 
-    async fn session_ids(&self) -> Vec<String> {
+    async fn session_ids(&self) -> Result<Vec<String>, StoreError> {
         let root = self.root.clone();
-        let names = blocking(move || {
-            let mut names = Vec::new();
-            match fs::read_dir(&root) {
-                Ok(entries) => {
-                    for entry in entries.flatten() {
-                        if entry.path().is_dir()
-                            && let Some(name) = entry.file_name().to_str()
-                        {
-                            names.push(name.to_string());
-                        }
-                    }
+        blocking(move || {
+            let mut session_ids = Vec::new();
+            for entry in fs::read_dir(&root)? {
+                let entry = entry?;
+                let name = entry.file_name();
+                let Some(session_id) = name.to_str().and_then(hex_decode) else {
+                    continue;
+                };
+                if fs::metadata(entry.path())?.is_dir() {
+                    session_ids.push(session_id);
                 }
-                Err(e) if e.kind() == io::ErrorKind::NotFound => {}
-                Err(e) => return Err(e),
             }
-            Ok(names)
+            Ok(session_ids)
         })
-        .await;
-        match names {
-            Ok(names) => names.iter().filter_map(|name| hex_decode(name)).collect(),
-            Err(err) => {
-                tracing::warn!(?err, "cannot read idempotency store dir");
-                Vec::new()
-            }
-        }
+        .await
     }
 }
 
@@ -715,9 +707,57 @@ mod tests {
         store.put(completed("a", "k", "x")).await.unwrap();
         store.put(completed("b", "k", "y")).await.unwrap();
 
-        let mut ids = store.session_ids().await;
+        let mut ids = store.session_ids().await.expect("list ledger sessions");
         ids.sort();
         assert_eq!(ids, vec!["a".to_string(), "b".to_string()]);
+    }
+
+    #[tokio::test]
+    async fn enumeration_rejects_poisoned_memory_ledger() {
+        let store = Arc::new(InMemoryIdempotencyStore::default());
+        store.put(completed("sid", "key", "result")).await.unwrap();
+        let poisoned = Arc::clone(&store);
+        let _ = std::thread::spawn(move || {
+            let _guard = poisoned.inner.lock().unwrap();
+            panic!("poison idempotency store");
+        })
+        .join();
+
+        assert!(matches!(
+            store.session_ids().await,
+            Err(StoreError::Poisoned)
+        ));
+        assert!(matches!(
+            store.load("sid", "key").await,
+            Err(StoreError::Poisoned)
+        ));
+    }
+
+    #[tokio::test]
+    async fn enumeration_reports_unavailable_file_ledger() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("ledger");
+        let store = FileIdempotencyStore::new(root.clone()).unwrap();
+        fs::remove_dir(&root).unwrap();
+
+        assert!(matches!(store.session_ids().await, Err(StoreError::Io(_))));
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn enumeration_skips_unrelated_broken_link() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = FileIdempotencyStore::new(dir.path().join("ledger")).unwrap();
+        std::os::unix::fs::symlink("missing", store.root.join("not-ledger"))
+            .expect("unrelated link");
+
+        assert!(
+            store
+                .session_ids()
+                .await
+                .expect("list ledger sessions")
+                .is_empty()
+        );
     }
 
     #[tokio::test]
@@ -733,7 +773,10 @@ mod tests {
         assert!(!tmp.path().join("escape").exists());
         let loaded = store.load("../../escape", "k").await.unwrap().unwrap();
         assert_eq!(loaded.session_id, "../../escape");
-        assert_eq!(store.session_ids().await, vec!["../../escape".to_string()]);
+        assert_eq!(
+            store.session_ids().await.expect("list ledger sessions"),
+            vec!["../../escape".to_string()]
+        );
     }
 
     #[tokio::test]
