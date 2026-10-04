@@ -35,10 +35,10 @@ the package out to install every package the repository declares. `install`
 fetches the repository, builds the package, and puts it in the local store,
 pinned to the commit it resolved. To pin a branch, tag, or commit yourself,
 append `@<ref>` to the repository name. This installs the curated Jina
-package at the runtime's `v0.1.6` tag:
+package at the runtime's `v0.2.0` tag:
 
 ```sh
-submilli install submilli/submilli-runtime@v0.1.6 @submilli/jina
+submilli install submilli/submilli-runtime@v0.2.0 @submilli/jina
 ```
 
 Add `--upgrade` to replace a package already installed at another commit.

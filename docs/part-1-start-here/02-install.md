@@ -38,7 +38,7 @@ submilli --version
 ```
 
 ```text
-submilli 0.1.6
+submilli 0.2.0
 ```
 
 ```

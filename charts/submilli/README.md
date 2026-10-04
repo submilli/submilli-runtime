@@ -10,11 +10,9 @@ translated into a pod spec.
 
 ## Status
 
-**Not published to a registry yet.** The chart needs the first server release
-with API tokens, which is newer than the pinned `appVersion` of `0.1.6`; set
-`image.tag` to a build that has them until the release bump lands. The chart
-itself is complete — but it is not pushed to an OCI registry, and the
-GHCR image package is private until launch.
+**Not published to a registry yet.** Install from a checkout. Chart 0.3.3
+deploys runtime 0.2.0, the first published runtime with the API tokens and
+health endpoint it requires. The runtime release does not publish the chart.
 
 This chart has never been published, so there is no earlier revision of it in the
 wild and no upgrade path from one is provided. Its shape changed during
@@ -24,7 +22,7 @@ data: the new pod comes up on a fresh, empty volume while the old claim survives
 mounted by nothing. If you installed from a checkout while that was the shape,
 uninstall and delete the old claim rather than upgrading.
 
-Until both change, install from a checkout and supply a pull secret:
+Install from a checkout. If the image requires authentication, supply a pull secret:
 
 ```bash
 kubectl create secret docker-registry ghcr-creds \

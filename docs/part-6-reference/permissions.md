@@ -180,7 +180,7 @@ missing field is false.
 
 | Capability | Fields | Operation | Example filter |
 | --- | --- | --- | --- |
-| `llm.call` | `model: string`, `prompt_count: number` | Call a model (call, batch) and enumerate the models it may call (models). Narrowing `model` also narrows what `models()` reveals: every candidate is filtered through this same rule, so a listing never offers a model the caller would be denied at call time | `model glob "claude-*"` |
+| `llm.call` | `model: string`, `prompt_count: number` | Call a model (call, batch) and enumerate the models it may call (models). Narrowing `model` also narrows what `models()` reveals: every candidate is filtered through this same rule, so a listing never offers a model the caller would be denied at call time. A policy allowing no candidates returns an empty listing | `model glob "claude-*"` |
 
 ### `submilli:secrets`
 

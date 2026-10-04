@@ -22,13 +22,19 @@ is the reference for every value.
 
 ## Install it
 
+The chart is included in the source repository and is not published to an
+OCI registry. Check out the runtime release to pin both the chart and its
+default image:
+
 ```sh
-helm install submilli oci://ghcr.io/submilli/charts/submilli -f values.yaml
+git clone --branch v0.2.0 --depth 1 https://github.com/submilli/submilli-runtime.git
+cd submilli-runtime
+helm install submilli ./charts/submilli -f values.yaml
 ```
 
 `values.yaml` holds your settings; the sections below build it up, and an
-empty file is a valid start. Add `--version` to pin a chart version, so
-upgrades happen when you choose them. This gives you one server pod, a
+empty file is a valid start. Create it in the checkout before installing.
+Chart 0.3.3 deploys runtime 0.2.0. This gives you one server pod, a
 Service called `submilli`, a persistent volume for its state, an
 encrypted secret store with its key in a Secret, and a network policy
 that lets nothing reach it yet.
@@ -139,7 +145,7 @@ tls:
 Apply the values:
 
 ```sh
-helm upgrade submilli oci://ghcr.io/submilli/charts/submilli -f values.yaml
+helm upgrade submilli ./charts/submilli -f values.yaml
 ```
 
 Clients now use `https://submilli.<namespace>.svc:8128`. The probes and
@@ -307,8 +313,11 @@ Leave it at 1 unless your application does that.
 
 ## Upgrade and back up
 
+Check out the source at the next published release tag, review its migration
+instructions, and apply the chart from that checkout:
+
 ```sh
-helm upgrade submilli oci://ghcr.io/submilli/charts/submilli -f values.yaml --version <new version>
+helm upgrade submilli ./charts/submilli -f values.yaml
 ```
 
 Each chart version deploys a matching server version unless you set

@@ -151,7 +151,7 @@ jobs:
 
       - name: Install Submilli
         run: |
-          curl -fsSL https://submilli.ai/install.sh | sh -s -- --version v0.1.6
+          curl -fsSL https://submilli.ai/install.sh | sh -s -- --version v0.2.0
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
 
       - name: Install the packages the blueprints list
@@ -216,7 +216,7 @@ commands look for them:
 
       - name: Install Submilli
         run: |
-          curl -fsSL https://submilli.ai/install.sh | sh -s -- --version v0.1.6
+          curl -fsSL https://submilli.ai/install.sh | sh -s -- --version v0.2.0
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
 
       - name: Install the packages on the server

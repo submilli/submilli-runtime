@@ -514,10 +514,17 @@ async fn redirects_to_forbidden_addresses_or_schemes_stop_before_the_guard() {
             ))
             .await
             .unwrap_err();
-        assert!(
-            matches!(error, HttpError::Network(_)),
-            "{location}: {error}"
-        );
+        if location.starts_with("file:") {
+            assert!(
+                matches!(error, HttpError::Network(_)),
+                "{location}: {error}"
+            );
+        } else {
+            assert!(
+                matches!(error, HttpError::EgressDenied(_)),
+                "{location}: {error}"
+            );
+        }
         assert!(guard.seen().is_empty(), "{location}");
         redirect.assert_hits_async(1).await;
     }

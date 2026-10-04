@@ -382,7 +382,7 @@ Gated model calls: call/batch, and models() to discover them.
 | --- | --- | --- |
 | `batch<T>(model: string, prompts: string[], schema?: string \| null): T` | `llm.call { model, prompt_count: $prompts.length }` | Send every prompt to `model` and return one completion each, positionally: `result[i]` is the outcome of `prompts[i]`, including when that element failed. |
 | `call<T>(model: string, prompt: string, schema?: string \| null): T` | `llm.call { model, prompt_count: 1 }` | Send one prompt to `model` and return its completion. |
-| `models(): Model[]` | `` llm.call { model: "", prompt_count: 0 } - for the call, then per candidate with that candidate's `model` `` | The models this runtime serves and this caller may call. |
+| `models(): Model[]` | `llm.call { prompt_count: 0 }` | The models this runtime serves and this caller may call. |
 
 ### `Completion`
 

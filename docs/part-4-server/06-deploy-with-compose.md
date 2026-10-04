@@ -2,6 +2,9 @@
 title: "Deploy with Compose"
 description: "How to run the server as a container beside your application with the published compose file: a port only the host's loopback and your application's container can reach, state on a volume, the store key as a file, HTTPS, and upgrades by release."
 slug: server/deploy-with-compose
+# The Compose ps output is from the earlier documented run; its image pin
+# was updated for 0.2.0. It could not be recaptured during release preparation
+# because the local Docker engine did not respond.
 # Turn on HTTPS was not run under Docker (no engine was available); the
 # SUBMILLI_TLS_* variables and --health-check over HTTPS were run with the
 # release binaries on main 51ce450b.
@@ -29,15 +32,15 @@ release, so download the file at the release's tag and pin the image to
 the same version in `.env`, beside the token. Into a new directory:
 
 ```sh
-curl -fsSLO https://raw.githubusercontent.com/submilli/submilli-runtime/v0.1.6/compose.yaml
-printf 'SUBMILLI_IMAGE=ghcr.io/submilli/submilli-runtime:0.1.6\nSUBMILLI_SERVER_TOKEN=%s\n' "$(openssl rand -hex 32)" > .env
+curl -fsSLO https://raw.githubusercontent.com/submilli/submilli-runtime/v0.2.0/compose.yaml
+printf 'SUBMILLI_IMAGE=ghcr.io/submilli/submilli-runtime:0.2.0\nSUBMILLI_SERVER_TOKEN=%s\n' "$(openssl rand -hex 32)" > .env
 docker compose up -d
 docker compose ps
 ```
 
 ```text
 NAME                   IMAGE                                     COMMAND                  SERVICE    CREATED          STATUS                    PORTS
-myproject-submilli-1   ghcr.io/submilli/submilli-runtime:0.1.6   "/usr/local/bin/subm…"   submilli   12 seconds ago   Up 12 seconds (healthy)   127.0.0.1:8128->8128/tcp
+myproject-submilli-1   ghcr.io/submilli/submilli-runtime:0.2.0   "/usr/local/bin/subm…"   submilli   12 seconds ago   Up 12 seconds (healthy)   127.0.0.1:8128->8128/tcp
 ```
 
 Compose reads the token from `.env` and refuses to start without it. The
@@ -241,18 +244,18 @@ ts=2026-10-03T17:04:41.940Z level=warn stream=log target=submilli_server msg="th
 
 ## Upgrade and back up
 
-An upgrade happens when you choose it, since both the file and the image
-are pinned to a release. To upgrade, download the file at the new
-release's tag, change the version in `.env` to match, and recreate the
-container:
+Both the file and the image are pinned to a release. Version 0.2.0 is the
+first published release compatible with this guide's token authentication
+and health check. An older installation needs its configuration and
+blueprints migrated before starting the new server; read the
+[0.2.0 release notes](https://github.com/submilli/submilli-runtime/releases/tag/v0.2.0)
+and back up its state first.
 
-```sh
-curl -fsSLO https://raw.githubusercontent.com/submilli/submilli-runtime/v0.1.7/compose.yaml
-sed -i 's/submilli-runtime:0.1.6/submilli-runtime:0.1.7/' .env
-docker compose up -d
-```
-
-The volume carries the state across.
+For a later upgrade, download `compose.yaml` from that published release's
+tag, set `SUBMILLI_IMAGE` in `.env` to the same version, and run
+`docker compose up -d`. Keep the API token and the store key. The volume
+carries the state across; check the release's migration instructions before
+reusing it.
 
 To back up, copy the volume while the server is stopped. Compose prefixes
 the volume name with the project name, usually the directory name;

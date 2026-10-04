@@ -4,8 +4,8 @@ description: "Build a GitHub Actions job that fails a pull request when a packag
 slug: tutorials/verify-a-package-in-ci
 # The workflows have not run on GitHub: the installer is not public yet.
 # SUB-1309 runs them. Every command inside them was run locally. The
-# security review needs a release with `build security-review`; the pins
-# assume it is v0.1.7. Its outputs are from Codex 0.160.0 with gpt-6.1-sol
+# security review needs `build security-review`, included in v0.2.0.
+# Its outputs are from Codex 0.160.0 with gpt-6.1-sol
 # on 2026-10-04, with the CLI built from main b5002307.
 sidebar:
   order: 9
@@ -128,7 +128,7 @@ jobs:
 
       - name: Install Submilli
         run: |
-          curl -fsSL https://submilli.ai/install.sh | sh -s -- --version v0.1.7
+          curl -fsSL https://submilli.ai/install.sh | sh -s -- --version v0.2.0
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
 
       - name: Test the package
@@ -221,7 +221,7 @@ jobs:
 
       - name: Install Submilli
         run: |
-          curl -fsSL https://submilli.ai/install.sh | sh -s -- --version v0.1.7
+          curl -fsSL https://submilli.ai/install.sh | sh -s -- --version v0.2.0
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
 
       - name: Test the package
@@ -263,7 +263,7 @@ jobs:
 
       - name: Install Submilli
         run: |
-          curl -fsSL https://submilli.ai/install.sh | sh -s -- --version v0.1.7
+          curl -fsSL https://submilli.ai/install.sh | sh -s -- --version v0.2.0
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
 
       - name: Test the package
@@ -362,7 +362,7 @@ keys](https://platform.openai.com/api-keys), as a secret
           node-version: "22"
       - run: npm install -g @openai/codex@0.160.0
       - run: |
-          curl -fsSL https://submilli.ai/install.sh | sh -s -- --version v0.1.7
+          curl -fsSL https://submilli.ai/install.sh | sh -s -- --version v0.2.0
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
       - env:
           CODEX_API_KEY: ${{ secrets.CODEX_API_KEY }}
