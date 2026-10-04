@@ -95,6 +95,7 @@ impl<'a> Lexer<'a> {
                 // Returns early to bypass finalize so pending_docs survive intervening newlines.
                 b'\n' | b'\r' => return self.lex_newline(),
                 b'0'..=b'9' => self.lex_number(),
+                b'.' if self.peek_at(1).is_some_and(|b| b.is_ascii_digit()) => self.lex_number(),
                 b'"' | b'\'' => self.lex_string(b),
                 b'`' => {
                     let start = self.pos;
@@ -416,14 +417,10 @@ impl<'a> Lexer<'a> {
                     "bigint literal cannot have a fractional or exponent part; \
                      remove the `.` / exponent or drop the `n` suffix",
                 );
-                // Recovery: keep the integer prefix as the bigint payload.
-                return Token::new(TokenKind::BigIntLiteral(without_separators(int_part)), span);
             }
-            let Some(digits) = self.source.get(start as usize..(self.pos - 1) as usize) else {
-                return self.fail("invalid numeric literal span");
-            };
-            let digits = without_separators(digits);
-            return Token::new(TokenKind::BigIntLiteral(digits), span);
+            // Without a fraction or exponent the digits are `int_part`; with one,
+            // keeping the integer prefix is the recovery.
+            return Token::new(TokenKind::BigIntLiteral(without_separators(int_part)), span);
         }
 
         let span = self.span(start, self.pos);
@@ -630,9 +627,7 @@ impl<'a> Lexer<'a> {
     }
 
     fn identifier_continues_at(&self, offset: usize) -> bool {
-        self.char_at(offset).is_some_and(|c| {
-            c == '$' || c == '_' || c.is_ascii_alphanumeric() || is_xid_continue(c)
-        })
+        self.char_at(offset).is_some_and(is_identifier_continue)
     }
 
     /// The identifier starting `offset` bytes ahead, for a help message.
@@ -641,9 +636,7 @@ impl<'a> Lexer<'a> {
         let rest = self.source.get(start..)?;
         let len: usize = rest
             .chars()
-            .take_while(|&c| {
-                c == '$' || c == '_' || c.is_ascii_alphanumeric() || is_xid_continue(c)
-            })
+            .take_while(|&c| is_identifier_continue(c))
             .map(char::len_utf8)
             .sum();
         rest.get(..len).filter(|name| !name.is_empty())
@@ -950,7 +943,7 @@ impl<'a> Lexer<'a> {
         };
         self.pos += first.len_utf8() as u32;
         while let Some(c) = self.peek_char() {
-            if c == '_' || c == '$' || is_xid_continue(c) {
+            if is_identifier_continue(c) {
                 self.pos += c.len_utf8() as u32;
             } else {
                 break;
@@ -1186,7 +1179,8 @@ impl<'a> Lexer<'a> {
             b':' => TokenKind::Colon,
             b';' => TokenKind::Semicolon,
             b'?' => match self.peek() {
-                Some(b'.') => {
+                // `?.5` is a ternary on `.5`, as in JavaScript, not optional chaining.
+                Some(b'.') if !self.peek_at(1).is_some_and(|b| b.is_ascii_digit()) => {
                     self.pos += 1;
                     TokenKind::QuestionDot
                 }
@@ -1271,6 +1265,10 @@ impl<'a> Lexer<'a> {
             None => self.pos += 1,
         }
     }
+}
+
+fn is_identifier_continue(c: char) -> bool {
+    c == '_' || c == '$' || is_xid_continue(c)
 }
 
 /// What the `.` right after a decimal integer part is.
@@ -1962,6 +1960,20 @@ mod tests {
         assert!(matches!(tokens[0].kind, TokenKind::NumberLiteral(v) if v == 1.0));
         assert_eq!(tokens[0].span, Span::new(F, 0, 2).unwrap());
         assert_eq!(tokens[1].kind, TokenKind::Dot);
+    }
+
+    #[test]
+    fn lex_number_starting_with_decimal_point() {
+        expect_number(".5", 0.5, Span::new(F, 0, 2).unwrap());
+        expect_number(".5e1", 5.0, Span::new(F, 0, 4).unwrap());
+        expect_number(".5_5", 0.55, Span::new(F, 0, 4).unwrap());
+        // `?.` before a digit is a ternary `?` and a number, as in JavaScript.
+        let (tokens, diags) = tokenize_all("c?.5:1");
+        assert!(diags.is_empty(), "unexpected diagnostics: {diags:?}");
+        assert_eq!(tokens[1].kind, TokenKind::Question);
+        assert!(matches!(tokens[2].kind, TokenKind::NumberLiteral(v) if v == 0.5));
+        let (tokens, _) = tokenize_all("c?.x");
+        assert_eq!(tokens[1].kind, TokenKind::QuestionDot);
     }
 
     #[test]

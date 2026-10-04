@@ -4298,16 +4298,20 @@ impl<'a> Parser<'a> {
         // reach this loop: `??` parses its right operand above `&&` (see
         // `right_operand_min_prec`), so `||` / `&&` after it is left for this check.
         let mut last_op: Option<BinOp> = None;
+        let mut reported_mixing = false;
         while let Some((op, prec)) = peek_binop(&self.peek().kind) {
             if prec < min_prec {
                 break;
             }
             if let Some(last) = last_op
                 && mixed_logical(last, op)
+                && !reported_mixing
             {
+                reported_mixing = true;
                 let op_span = self.peek().span;
                 // Parsing continues as if the left side were grouped, so one error
                 // inside an `if (...)` header doesn't cascade through the statement.
+                // Later mixes in the same chain add nothing, so only the first is reported.
                 self.error_at_with_help(
                     op_span,
                     "mixing `??` with `||` / `&&` requires parentheses",
@@ -7236,6 +7240,11 @@ mod tests {
             (
                 "const x: number = a ?? b ?? c || d;",
                 "`(a ?? b) || c` or `a ?? (b || c)`",
+            ),
+            // One error per chain, however many mixes it has.
+            (
+                "const x: number = a || b ?? c || d;",
+                "`(a || b) ?? c` or `a || (b ?? c)`",
             ),
         ] {
             let (_, diags) = parse_str(source);

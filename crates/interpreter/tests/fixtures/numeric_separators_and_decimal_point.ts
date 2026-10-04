@@ -10,6 +10,10 @@ function main(): void {
   assert(1. === 1 && 1.e3 === 1000, "trailing decimal point");
   assert(1..toString() === "1" && 0..toFixed(1) === "0.0", "member after `1.`");
   assert((1).toString() === "1" && 1.5.toString() === "1.5", "parenthesized and fractional");
+  // A literal may also start with `.`, and `?.` before a digit is a ternary.
+  assert(.5 === 0.5 && .5e1 === 5 && .2_5 === 0.25, "leading decimal point");
+  const yes: boolean = true;
+  assert((yes?.5:1) === 0.5, "`?.5` is a ternary");
   const endsInPoint = 1.
   assert(endsInPoint === 1, "a line ending in `1.` ends the statement");
 }
