@@ -41,7 +41,6 @@ line 50: { value: 10 }
   ours: { error?: null; value: number }
 
 errors:
-line 30: tsc TS2353: Object literal may only specify known properties, and 'c' does not exist in type '{ a: null; b: string; }'. (we accept)
 line 6: ours: field `a` does not exist on all members of `{ a: string; kind: false } | { b: string; kind: true } | { c: string; kind: string }` (missing on `{ b: string; kind: true }`) (tsc accepts)
 line 9: ours: field `b` does not exist on all members of `{ a: string; kind: false } | { b: string; kind: true } | { c: string; kind: string }` (missing on `{ a: string; kind: false }`) (tsc accepts)
 line 12: ours: field `c` does not exist on all members of `{ a: string; kind: false } | { b: string; kind: true } | { c: string; kind: string }` (missing on `{ a: string; kind: false }`) (tsc accepts)
