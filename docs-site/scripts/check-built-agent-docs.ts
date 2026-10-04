@@ -28,11 +28,20 @@ for (const file of files.filter((file) => file.endsWith('.html'))) {
 	assert.ok(!html.includes('>View Markdown</a>'), file);
 }
 const whyPage = await readFile(new URL('docs/why/index.html', directory), 'utf8');
-for (const film of [introduction, challenges]) {
+const whyFilms = films.filter(film => film.canonicalPath?.split('#')[0] === '/docs/why/');
+for (const film of whyFilms) {
   assert.equal(whyPage.includes(`data-video-id="${film.id}"`), Boolean(videoSource(film)), `Chapter player follows ${film.id} publication state`);
 }
 assert.ok(!whyPage.includes('/docs/docs/'), 'Sidebar links must not duplicate the docs base');
-assert.equal(whyPage.includes('<video'), [introduction, challenges].some(film => videoSource(film)), 'Chapter includes only available players');
+assert.equal(whyPage.includes('<video'), whyFilms.some(film => videoSource(film)), 'Chapter includes only available players');
+for (const [id, slug, heading] of [['helps', 'why', 'what-submilli-is'], ['works', 'server', 'what-happens-to-a-program'], ['using', 'quickstart', '']]) {
+  const film = films.find(film => film.id === id)!;
+  const page = await readFile(new URL(`docs/${slug}/index.html`, directory), 'utf8');
+  assert.equal(page.includes(`data-video-id="${id}"`), Boolean(videoSource(film)), `${id} contextual placement follows publication state`);
+  if (videoSource(film) && heading) {
+    assert.ok(page.indexOf(`id="${heading}"`) < page.indexOf(`data-video-id="${id}"`), `${id} follows its explanation heading`);
+  }
+}
 const oldExecutionPage = await readFile(new URL('docs/concepts/execution-model/index.html', directory), 'utf8');
 assert.ok(oldExecutionPage.includes('/docs/why/'), 'Former Concepts route redirects into the current book');
 const embedPage = await readFile(new URL('docs/videos/embed/code-execution-introduction/index.html', directory), 'utf8');

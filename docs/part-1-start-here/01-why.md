@@ -178,6 +178,8 @@ written before the attacker arrived.
 
 ## What Submilli is
 
+<!-- video:helps -->
+
 So what is Submilli, concretely? A runtime for a strict subset of
 TypeScript, compiled to WebAssembly and run in-process — that is where "no
 microVM, no cold start" comes from. It works with whatever harness you

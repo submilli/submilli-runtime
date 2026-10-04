@@ -1,0 +1,94 @@
+WEBVTT
+
+00:00:00.500 --> 00:00:04.020
+In about ninety seconds, we’ll build a
+local billing package
+
+00:00:04.140 --> 00:00:05.860
+under a blueprint you approve.
+
+00:00:06.340 --> 00:00:09.860
+Watch the package explicitly check access,
+the blueprint
+
+00:00:09.980 --> 00:00:13.540
+set the rule, and your application supply
+the trusted customer
+
+00:00:13.700 --> 00:00:14.180
+ID.
+
+00:00:14.660 --> 00:00:16.340
+Northwind’s lookup succeeds.
+
+00:00:16.820 --> 00:00:19.178
+Change the customer, and it’s denied.
+
+00:00:20.582 --> 00:00:24.102
+Create the billing package and add its
+charge lookup. Before
+
+00:00:24.262 --> 00:00:27.622
+reading the local ledger, the package
+checks the named operation
+
+00:00:27.702 --> 00:00:31.622
+and the requested customer ID. Check the
+package, then publish
+
+00:00:31.702 --> 00:00:32.742
+it to the local store.
+
+00:00:34.562 --> 00:00:37.762
+Define, review and approve the blueprint
+yourself, with an
+
+00:00:37.882 --> 00:00:41.842
+agent's help if useful. Require customer
+ID from the application,
+
+00:00:42.362 --> 00:00:45.282
+deny by default, and allow this lookup
+only when its
+
+00:00:45.362 --> 00:00:48.882
+argument matches that context. Then lint
+the blueprint.
+
+00:00:50.626 --> 00:00:54.306
+Start the server with a fresh local token.
+The application
+
+00:00:54.386 --> 00:00:57.746
+selects the configured blueprint, binds
+the customer ID for this
+
+00:00:58.186 --> 00:01:01.666
+request, and sends the program with that
+token. The response
+
+00:01:01.946 --> 00:01:03.746
+reports two charges and their total.
+
+00:01:05.753 --> 00:01:09.353
+Now run the second program. It keeps the
+useful total,
+
+00:01:09.673 --> 00:01:13.433
+then tries the same lookup for another
+customer. That customer
+
+00:01:13.593 --> 00:01:16.953
+ID fails the blueprint rule, so the
+runtime denies the
+
+00:01:17.033 --> 00:01:20.393
+lookup and returns an error instead of a
+result. The
+
+00:01:20.713 --> 00:01:24.513
+application supplies request context; the
+runtime enforces the
+
+00:01:24.553 --> 00:01:25.513
+configured check.

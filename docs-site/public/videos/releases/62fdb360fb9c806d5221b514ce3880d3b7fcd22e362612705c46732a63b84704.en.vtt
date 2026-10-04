@@ -1,0 +1,103 @@
+WEBVTT
+
+00:00:00.500 --> 00:00:03.420
+Consider an agent used by a small
+business.
+
+00:00:03.700 --> 00:00:07.658
+The agent is asked to summarize
+yesterday's failed payments.
+
+00:00:08.967 --> 00:00:14.007
+The agent uses external tools such as APIs
+or MCPs to fetch
+
+00:00:14.087 --> 00:00:17.927
+failed payments, identify the affected
+accounts, and retrieve
+
+00:00:18.007 --> 00:00:19.687
+relevant support tickets.
+
+00:00:20.007 --> 00:00:23.007
+Each result returns to the model before it
+can choose the
+
+00:00:23.047 --> 00:00:24.247
+next request.
+
+00:00:24.567 --> 00:00:28.193
+That adds inference work and makes the
+next request wait.
+
+00:00:29.500 --> 00:00:33.340
+In this sequence, three requests and a
+final interpretation
+
+00:00:33.500 --> 00:00:35.299
+take four model rounds.
+
+00:00:36.600 --> 00:00:38.618
+Instead of sequential tool calling,
+
+00:00:38.618 --> 00:00:42.422
+the model may write a program that calls
+the three tools.
+
+00:00:42.422 --> 00:00:45.586
+Inside the program, it totals the failed
+payments,
+
+00:00:45.586 --> 00:00:47.774
+identifies the impacted accounts,
+
+00:00:47.774 --> 00:00:50.294
+and links them to three support tickets -
+
+00:00:50.294 --> 00:00:52.012
+without another model round.
+
+00:00:53.333 --> 00:00:55.893
+The program returns the final report.
+
+00:00:56.213 --> 00:00:59.893
+The model provides the requested summary,
+financial impact,
+
+00:00:59.933 --> 00:01:03.253
+and customer list while keeping raw
+records separate from
+
+00:01:03.333 --> 00:01:04.723
+the primary output.
+
+00:01:06.033 --> 00:01:09.713
+The process is reduced from four model
+rounds to two.
+
+00:01:10.033 --> 00:01:14.193
+Routine work runs as code, maintaining a
+smaller, more focused
+
+00:01:14.273 --> 00:01:15.829
+conversation context.
+
+00:01:17.297 --> 00:01:19.977
+Anthropic demonstrated lower context use.
+
+00:01:20.657 --> 00:01:23.017
+CodeAct improved task success.
+
+00:01:23.297 --> 00:01:26.897
+Cloudflare built a compact interface to
+thousands of API
+
+00:01:26.977 --> 00:01:28.177
+endpoints.
+
+00:01:28.257 --> 00:01:31.617
+These results help explain why code
+execution is becoming
+
+00:01:31.697 --> 00:01:33.251
+part of the agent stack.

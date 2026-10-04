@@ -35,7 +35,7 @@ test('completed film has valid canonical, transcript and caption destinations', 
     assert.equal(introduction.sha256, 'd6d505ba502b08ff13274c704df27f0fe1006571f1cf489598a9a5e370a682e1');
   }
   assert.equal(new Set(films.map((film) => film.id)).size, films.length);
-  const captions = await readFile(new URL('../public/videos/code-execution-introduction.en.vtt', import.meta.url), 'utf8');
+  const captions = await readFile(new URL(`../public/${introduction.captionsPath!.slice('/docs/'.length)}`, import.meta.url), 'utf8');
   assert.ok(captions.startsWith('WEBVTT\n'));
   assert.ok(captions.replace(/\s+/g, ' ').includes("Consider an agent used by a small business."));
   assert.ok(captions.includes('agent stack.'));
@@ -71,7 +71,9 @@ test('local preview overrides stay bound to their film identities', () => {
 
 test('published films include their matching release metadata and caption assets', async () => {
   assert.deepEqual(films.map(film => film.id), ['code-execution-introduction', 'challenges', 'helps', 'using', 'works']);
+  const chapters = await readChapters();
   for (const film of films) {
+    assert.ok(chapters.some(chapter => `/docs/${chapter.slug}/` === film.canonicalPath?.split('#')[0]), `${film.id} canonical chapter`);
     const poster = await readFile(new URL(`../public/videos/${film.id}.svg`, import.meta.url), 'utf8');
     assert.ok(poster.includes('<svg'));
     if (!videoSource(film)) continue;

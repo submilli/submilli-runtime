@@ -1,0 +1,106 @@
+WEBVTT
+
+00:00:00.500 --> 00:00:03.380
+We want the agent to total Northwind’s
+charges.
+
+00:00:03.940 --> 00:00:07.460
+A human defines this blueprint: make the
+billing package
+
+00:00:07.740 --> 00:00:11.620
+available, deny by default, and allow a
+charge lookup only
+
+00:00:11.700 --> 00:00:14.020
+for the customer supplied by the
+application.
+
+00:00:14.420 --> 00:00:16.226
+Here, that is Northwind.
+
+00:00:17.533 --> 00:00:21.133
+The agent writes this program in
+Submilli’s curated subset
+
+00:00:21.213 --> 00:00:22.093
+of TypeScript.
+
+00:00:22.573 --> 00:00:26.093
+It imports the billing package, reads
+Northwind’s charges,
+
+00:00:26.173 --> 00:00:27.373
+and totals the amounts.
+
+00:00:27.933 --> 00:00:29.853
+The runtime runs the code;
+
+00:00:29.933 --> 00:00:31.979
+the package exposes the lookup.
+
+00:00:33.300 --> 00:00:36.980
+Submilli first checks the code against its
+supported language,
+
+00:00:37.220 --> 00:00:41.020
+standard APIs, and the packages selected
+by the blueprint.
+
+00:00:41.300 --> 00:00:46.820
+Unknown APIs and unavailable imports fail
+here, before execution.
+
+00:00:46.900 --> 00:00:50.462
+Valid code still needs permission for
+protected operations.
+
+00:00:51.767 --> 00:00:55.847
+Before reading charges, the package
+explicitly asks Submilli
+
+00:00:55.927 --> 00:00:58.407
+to check the operation and customer ID.
+
+00:00:59.047 --> 00:01:00.887
+The runtime applies the blueprint.
+
+00:01:01.447 --> 00:01:04.247
+Northwind matches, so the lookup proceeds.
+
+00:01:04.567 --> 00:01:07.414
+This example uses a local billing ledger.
+
+00:01:08.733 --> 00:01:11.293
+Change only the customer to Initech.
+
+00:01:11.853 --> 00:01:14.213
+The code still passes language checking.
+
+00:01:14.493 --> 00:01:18.093
+The permission check now denies the
+lookup: Initech does
+
+00:01:18.173 --> 00:01:21.168
+not match the application’s Northwind
+context.
+
+00:01:22.500 --> 00:01:26.340
+Northwind’s program returns two charges,
+totaling six thousand
+
+00:01:26.580 --> 00:01:28.100
+one hundred and fifty cents.
+
+00:01:28.660 --> 00:01:30.420
+The language limits the code.
+
+00:01:30.900 --> 00:01:34.180
+The blueprint limits permitted operations
+and arguments.
+
+00:01:34.660 --> 00:01:36.420
+People define the rules;
+
+00:01:36.500 --> 00:01:38.853
+Submilli enforces the checks.

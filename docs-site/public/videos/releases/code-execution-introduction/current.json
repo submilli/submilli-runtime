@@ -1,0 +1,13 @@
+{
+  "schemaVersion": 1,
+  "filmId": "code-execution-introduction",
+  "releaseId": "62fdb360fb9c806d5221b514ce3880d3b7fcd22e362612705c46732a63b84704",
+  "videoId": "why-code-cleared-20261004",
+  "renderSha256": "62fdb360fb9c806d5221b514ce3880d3b7fcd22e362612705c46732a63b84704",
+  "durationSeconds": 95.488,
+  "mediaPath": "/docs/videos/releases/62fdb360fb9c806d5221b514ce3880d3b7fcd22e362612705c46732a63b84704.mp4",
+  "watchPath": "/docs/videos/embed/code-execution-introduction/",
+  "sourceFingerprint": "3b6adcd1963f3139cd57cf53e872360e576b93afa31796b0e16eb198f3e7b136",
+  "captionsPath": "/docs/videos/releases/62fdb360fb9c806d5221b514ce3880d3b7fcd22e362612705c46732a63b84704.en.vtt",
+  "transcriptPath": "/docs/videos/releases/62fdb360fb9c806d5221b514ce3880d3b7fcd22e362612705c46732a63b84704.txt"
+}

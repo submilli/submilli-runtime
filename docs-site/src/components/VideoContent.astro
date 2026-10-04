@@ -1,18 +1,23 @@
 ---
 import DefaultContent from '@astrojs/starlight/components/MarkdownContent.astro';
-import { introduction, challenges } from '../lib/videos';
+import { films } from '../lib/videos';
 import VideoFigure from './VideoFigure.astro';
 import VideoLibrary from './VideoLibrary.astro';
 const path = Astro.url.pathname.replace(/\/$/, '');
 const isLibraryPage = path === '/docs/videos';
-const isVideoPage = [introduction.canonicalPath, ...(introduction.contextualPaths ?? [])].some(videoPath => videoPath?.replace(/\/$/, '') === path);
-const rendered = isVideoPage ? await Astro.slots.render('default') : '';
-const [beforeChallenges, ...afterChallenges] = rendered.split('<!-- video:challenges -->');
+const destinations = (film: (typeof films)[number]) => [film.canonicalPath, ...(film.contextualPaths ?? [])];
+const pageFilms = films.filter(film => destinations(film).some(destination => destination?.split('#')[0].replace(/\/$/, '') === path));
+const topFilms = pageFilms.filter(film => destinations(film).some(destination => destination?.replace(/\/$/, '') === path));
+const rendered = pageFilms.length ? await Astro.slots.render('default') : '';
+const sections = rendered.split(/<!-- video:([a-z][a-z0-9-]*) -->/);
 ---
 <DefaultContent>
-  {isLibraryPage ? <><slot /><VideoLibrary /></> : isVideoPage ? <>
-    <VideoFigure film={introduction} />
-    <Fragment set:html={beforeChallenges} />
-    {afterChallenges.length > 0 && <><VideoFigure film={challenges} /><Fragment set:html={afterChallenges.join('<!-- video:challenges -->')} /></>}
+  {isLibraryPage ? <><slot /><VideoLibrary /></> : pageFilms.length ? <>
+    {topFilms.map(film => <VideoFigure film={film} />)}
+    {sections.map((section, index) => {
+      if (index % 2 === 0) return <Fragment set:html={section} />;
+      const film = pageFilms.find(film => film.id === section);
+      return film ? <VideoFigure film={film} /> : null;
+    })}
   </> : <slot />}
 </DefaultContent>
