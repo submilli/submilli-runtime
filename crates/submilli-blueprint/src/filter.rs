@@ -253,19 +253,10 @@ impl Comparison {
             return false;
         };
         match self.op {
-            CompareOp::Lt | CompareOp::Le | CompareOp::Ge | CompareOp::Gt => {
-                let (Some(n), Some(x)) = (operand_as_f64(&self.operand, vars), value.as_f64())
-                else {
-                    return false;
-                };
-                match self.op {
-                    CompareOp::Lt => x < n,
-                    CompareOp::Le => x <= n,
-                    CompareOp::Ge => x >= n,
-                    CompareOp::Gt => x > n,
-                    _ => unreachable!(),
-                }
-            }
+            CompareOp::Lt => self.eval_numeric(value, vars, |x, n| x < n),
+            CompareOp::Le => self.eval_numeric(value, vars, |x, n| x <= n),
+            CompareOp::Ge => self.eval_numeric(value, vars, |x, n| x >= n),
+            CompareOp::Gt => self.eval_numeric(value, vars, |x, n| x > n),
             CompareOp::Eq => scalar_eq(value, &self.operand, vars).unwrap_or(false),
             CompareOp::Ne => match scalar_eq(value, &self.operand, vars) {
                 Some(equal) => !equal,
@@ -301,6 +292,18 @@ impl Comparison {
                     .any(|el| scalar_eq(el, &self.operand, vars).unwrap_or(false))
             }
         }
+    }
+
+    fn eval_numeric(
+        &self,
+        value: &serde_json::Value,
+        vars: &VarBindings,
+        compare: impl FnOnce(f64, f64) -> bool,
+    ) -> bool {
+        let (Some(n), Some(x)) = (operand_as_f64(&self.operand, vars), value.as_f64()) else {
+            return false;
+        };
+        compare(x, n)
     }
 }
 
