@@ -182,7 +182,8 @@ async fn recording_failure_preserves_execution_and_recovers_on_followup() {
         .with_max_level(tracing::Level::WARN)
         .with_writer(move || writer.clone())
         .finish();
-    let _subscriber_guard = tracing::subscriber::set_default(subscriber);
+    // Requests can poll on worker tasks; capture their warnings across threads.
+    tracing::subscriber::set_global_default(subscriber).expect("install test log capture");
     let (_, success) = execute(
         &router,
         r#"function main(): number { console.log("captured"); return 7; }"#,
