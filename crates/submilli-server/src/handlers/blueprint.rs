@@ -420,10 +420,14 @@ pub async fn remove(
         .await
         .map_err(store_error)?;
     if removed {
-        state.wipe_blueprint_sessions(&name).await;
+        let sessions = state.wipe_blueprint_sessions(&name).await;
         state.evict_mcp_service(&name);
         state.evict_mcp_catalog(&name);
         state.evict_prepared_packages(&name);
+        sessions.map_err(|error| {
+            tracing::error!(%error, blueprint = %name, "blueprint removed but session eviction failed");
+            internal_error("blueprint removed; session cleanup unavailable".into())
+        })?;
         Ok((StatusCode::OK, Json(AddResponse { name })))
     } else {
         Err(not_found(name))

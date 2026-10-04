@@ -167,19 +167,11 @@ pub async fn execute(
             "execution_id": crate::audit::execution_id(), "error": "invalid_request", "message": error.body_text()
         }))).into_response(),
     };
-    if let Some(audit) = crate::audit::execution() {
-        let name = state
-            .session_manager()
-            .blueprint_name(&session_id)
-            .unwrap_or_default();
-        audit.annotate(
-            &req.code,
-            &name,
-            None,
-            &state.session_manager().variables(&session_id),
-        );
-    }
-    let Some(blueprint_name) = state.session_manager().blueprint_name(&session_id) else {
+    let blueprint_name = match state.session_manager().blueprint_name(&session_id) {
+        Ok(name) => name,
+        Err(error) => return session_state_response(error),
+    };
+    let Some(blueprint_name) = blueprint_name else {
         return (
             StatusCode::NOT_FOUND,
             Json(serde_json::json!({ "execution_id": crate::audit::execution_id(), "error": "unknown session", "session_id": session_id })),
@@ -210,11 +202,18 @@ pub async fn execute(
             .into_response();
     };
 
-    let variables = state.session_manager().variables(&session_id);
+    let variables = match state.session_manager().variables(&session_id) {
+        Ok(variables) => variables,
+        Err(error) => return session_state_response(error),
+    };
     if let Some(audit) = crate::audit::execution() {
         audit.annotate(&req.code, &blueprint_name, Some(&blueprint), &variables);
     }
-    let Some(harness_secrets) = execution_secrets(&state, &session_id, &blueprint) else {
+    let harness_secrets = match execution_secrets(&state, &session_id, &blueprint) {
+        Ok(secrets) => secrets,
+        Err(error) => return session_state_response(error),
+    };
+    let Some(harness_secrets) = harness_secrets else {
         return (
             StatusCode::CONFLICT,
             Json(
@@ -262,7 +261,9 @@ pub async fn execute(
             // A replay is session activity: a client retrying must not have its
             // session reaped underneath it. `execute_core` normally does this,
             // and the replay path never reaches it.
-            state.session_manager().touch(&session_id).await;
+            if let Err(error) = state.session_manager().touch(&session_id).await {
+                tracing::error!(%error, session = %session_id, "replay activity update failed");
+            }
             return recorded_response(&session_id, &outcome);
         }
         Reservation::Proceed(guard) => guard,
@@ -388,7 +389,11 @@ pub async fn rebind(
     Path(session_id): Path<String>,
     Json(req): Json<RebindRequest>,
 ) -> impl IntoResponse {
-    let Some(blueprint_name) = state.session_manager().blueprint_name(&session_id) else {
+    let blueprint_name = match state.session_manager().blueprint_name(&session_id) {
+        Ok(name) => name,
+        Err(error) => return session_state_response(error),
+    };
+    let Some(blueprint_name) = blueprint_name else {
         return (
             StatusCode::NOT_FOUND,
             Json(serde_json::json!({ "error": "unknown session", "session_id": session_id })),
@@ -431,11 +436,12 @@ pub async fn rebind(
         .rebind_harness_secrets(&session_id, resolved)
     {
         Ok(()) => StatusCode::NO_CONTENT.into_response(),
-        Err(_) => (
+        Err(crate::session_manager::SessionError::UnknownSession) => (
             StatusCode::NOT_FOUND,
             Json(serde_json::json!({ "error": "unknown session", "session_id": session_id })),
         )
             .into_response(),
+        Err(error) => session_state_response(error),
     }
 }
 
@@ -443,13 +449,14 @@ fn execution_secrets(
     state: &AppState,
     session_id: &str,
     blueprint: &submilli_blueprint::Blueprint,
-) -> Option<Arc<HarnessSecretBindings>> {
+) -> Result<Option<Arc<HarnessSecretBindings>>, crate::session_manager::SessionError> {
     match state.session_manager().harness_secrets(session_id) {
-        Some(secrets) => Some(secrets),
-        None if required_harness_secrets(&blueprint.secrets).is_empty() => {
-            Some(Arc::new(HarnessSecretBindings::new()))
+        Ok(Some(secrets)) => Ok(Some(secrets)),
+        Ok(None) if required_harness_secrets(&blueprint.secrets).is_empty() => {
+            Ok(Some(Arc::new(HarnessSecretBindings::new())))
         }
-        None => None,
+        Ok(None) => Ok(None),
+        Err(error) => Err(error),
     }
 }
 
@@ -458,12 +465,28 @@ fn execution_secrets(
 pub async fn disconnect(
     State(state): State<AppState>,
     Path(session_id): Path<String>,
-) -> StatusCode {
-    if state.session_manager().wipe_now(&session_id).await {
-        StatusCode::NO_CONTENT
-    } else {
-        StatusCode::NOT_FOUND
+) -> axum::response::Response {
+    match state.session_manager().wipe_now(&session_id).await {
+        Ok(true) => StatusCode::NO_CONTENT.into_response(),
+        Ok(false) => StatusCode::NOT_FOUND.into_response(),
+        Err(error) => session_state_response(error),
     }
+}
+
+fn session_state_response(error: crate::session_manager::SessionError) -> axum::response::Response {
+    tracing::error!(%error, "session state unavailable");
+    if let Some(audit) = crate::audit::execution() {
+        audit.error(crate::error::ErrorKind::RuntimeError);
+    }
+    (
+        StatusCode::INTERNAL_SERVER_ERROR,
+        Json(serde_json::json!({
+            "execution_id": crate::audit::execution_id(),
+            "error": "internal_error",
+            "message": "session state unavailable"
+        })),
+    )
+        .into_response()
 }
 
 fn session_header(session_id: &str) -> HeaderMap {
