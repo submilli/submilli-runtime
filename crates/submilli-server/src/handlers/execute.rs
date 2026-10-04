@@ -16,6 +16,7 @@ use crate::app::AppState;
 use crate::error::{ErrorKind, ExecuteError};
 use crate::runner::{self, RunOutcome};
 use crate::session::LastRun;
+use crate::session_manager::SessionError;
 
 /// Response header echoing the session id a run was recorded under, so a caller
 /// can read it back via the session API. Named to match the MCP transport's
@@ -199,11 +200,22 @@ pub async fn handle(
         )
         .await
     {
-        return with_session_header(
-            &session_id,
-            error_response(&session_id, ErrorKind::InvalidRequest, error.to_string()),
-        )
-        .into_response();
+        let (kind, message) = match error {
+            SessionError::InvalidVfs(_) => (ErrorKind::InvalidRequest, error.to_string()),
+            SessionError::PoisonedState => {
+                tracing::error!(%error, session = %session_id, "one-shot session bind failed");
+                (
+                    ErrorKind::RuntimeError,
+                    "internal: session state unavailable".into(),
+                )
+            }
+            _ => {
+                tracing::error!(%error, session = %session_id, "one-shot session bind failed");
+                (ErrorKind::RuntimeError, error.to_string())
+            }
+        };
+        return with_session_header(&session_id, error_response(&session_id, kind, message))
+            .into_response();
     }
 
     // The one-shot path mints a fresh session per call, so a key would have
@@ -226,7 +238,9 @@ pub async fn handle(
     // its share of the server-wide session-state budget until `idle_timeout`, a
     // day by default. The last-run record lives in a separate store, so the
     // teardown does not take it.
-    state.session_manager().wipe_now(&session_id).await;
+    if let Err(error) = state.session_manager().wipe_now(&session_id).await {
+        tracing::error!(%error, session = %session_id, "one-shot session cleanup failed");
+    }
     with_session_header(&session_id, outcome.response).into_response()
 }
 
@@ -329,7 +343,9 @@ pub(crate) async fn execute_core(state: &AppState, inputs: ExecuteInputs<'_>) ->
     // it does not make the run un-reapable, and an execution that outlasts
     // `idle_timeout` on its own is still collected mid-flight. The write is
     // debounced (`PERSIST_INTERVAL`), so this costs nothing per call.
-    manager.touch(session_id).await;
+    if let Err(error) = manager.touch(session_id).await {
+        return session_state_failure(session_id, error);
+    }
     let (vfs, vfs_info) = match manager
         .vfs_for_execute_with_variables(session_id, &blueprint, &variables)
         .await
@@ -349,7 +365,14 @@ pub(crate) async fn execute_core(state: &AppState, inputs: ExecuteInputs<'_>) ->
         || state.network_policy().clone(),
         |audit| audit.network_policy(state.network_policy()),
     );
-    let http_client = manager.http_client(session_id);
+    let http_client = match manager.http_client(session_id) {
+        Ok(client) => client,
+        Err(error) => return session_state_failure(session_id, error),
+    };
+    let session_kv = match manager.session_kv_for_execute(session_id) {
+        Ok(store) => store,
+        Err(error) => return session_state_failure(session_id, error),
+    };
     let mcp_transport = Arc::new(
         submilli_shared::mcp::transport::StreamableHttpTransport::new(
             blueprint_name.to_string(),
@@ -389,7 +412,7 @@ pub(crate) async fn execute_core(state: &AppState, inputs: ExecuteInputs<'_>) ->
         security_check,
         http_client,
         mcp_transport,
-        session_kv: manager.session_kv_for_execute(session_id),
+        session_kv,
         llm_provider: state.llm_provider_for(&blueprint, &harness_secrets, &network_policy),
         llm_budget: Some(manager.llm_budget_for_execute()),
     };
@@ -432,7 +455,9 @@ pub(crate) async fn execute_core(state: &AppState, inputs: ExecuteInputs<'_>) ->
         },
     )
     .await;
-    manager.touch(session_id).await;
+    if let Err(error) = manager.touch(session_id).await {
+        tracing::error!(%error, session = session_id, "recording session activity after execution failed");
+    }
 
     let console_lines = split_console(&outcome.console_raw);
     let response = into_response(session_id, &outcome, &console_lines);
@@ -456,6 +481,18 @@ pub(crate) async fn execute_core(state: &AppState, inputs: ExecuteInputs<'_>) ->
     }
 
     ExecuteOutcome::dispatched(response)
+}
+
+fn session_state_failure(
+    session_id: &str,
+    error: crate::session_manager::SessionError,
+) -> ExecuteOutcome {
+    tracing::error!(%error, session = session_id, "session state unavailable before execution");
+    ExecuteOutcome::undispatched(error_response(
+        session_id,
+        ErrorKind::RuntimeError,
+        "internal: session state unavailable".into(),
+    ))
 }
 
 pub(crate) fn with_session_header(
