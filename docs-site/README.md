@@ -87,7 +87,40 @@ To keep the public URL on the marketing domain, its static service can rewrite
 The `Documentation` workflow checks and builds the site and uploads a
 `documentation-site` artifact. It does not deploy. Connect the docs output to
 hosting before deploying the marketing site without its former book pages.
-The existing pre-launch `noindex, nofollow` setting is preserved.
+
+### Crawling and search
+
+The public book is indexable. Starlight generates
+`https://submilli.ai/docs/sitemap-index.xml` and its child sitemap using the
+`site` and `base` settings. The book cutover is complete: published chapters
+use their final slugs and participate in Pagefind search.
+
+Crawler rules belong at `https://submilli.ai/robots.txt`, which the marketing
+website owns (`website/public/robots.txt` in its repository). That file must
+allow `/docs/` and advertise
+`Sitemap: https://submilli.ai/docs/sitemap-index.xml`. A file in this app's
+`public/` directory would be served at `/docs/robots.txt` and would not control
+crawling. Deploy the marketing robots change together with the docs launch.
+
+After deployment, check the public responses (including any `X-Robots-Tag`
+headers) and confirm the chapter HTML has no `noindex` or `nofollow` directive:
+
+```sh
+curl --fail --include https://submilli.ai/robots.txt
+curl --fail --include https://submilli.ai/docs/why/
+curl --fail https://submilli.ai/docs/sitemap-index.xml
+curl --fail https://submilli.ai/docs/sitemap-0.xml
+```
+
+Submit the docs sitemap in Google Search Console if the domain is verified
+there. Crawl permission does not guarantee immediate search-engine indexing.
+Standalone video embeds retain their own `noindex, nofollow` directive and
+are excluded from the sitemap.
+
+For the site's search, use a production build and preview: Pagefind's index
+is generated at build time. Open `/docs/`, search for `blueprint` and `fuel`,
+and follow a result for each. Results and search assets must stay under
+`/docs/`, with no retired `/next/` paths or doubled `/docs/docs/` prefix.
 
 ## Documentation for agents
 

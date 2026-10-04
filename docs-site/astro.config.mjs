@@ -1,6 +1,7 @@
 // @ts-check
 import { defineConfig } from "astro/config";
 import starlight from "@astrojs/starlight";
+import sitemap from "@astrojs/sitemap";
 import { satteri } from "@astrojs/markdown-satteri";
 import { submilliDark, submilliLight } from "./src/code-themes.mjs";
 import { securityAside } from "./src/plugins/satteri-security-aside.mjs";
@@ -19,6 +20,8 @@ export default defineConfig({
   },
   integrations: [
     agentDocs(),
+    // Standalone embeds are noindex duplicates of the canonical video pages.
+    sitemap({ filter: (page) => !new URL(page).pathname.startsWith("/docs/videos/embed/") }),
     starlight({
       title: "Submilli",
       description:
@@ -101,14 +104,6 @@ export default defineConfig({
           },
         },
       },
-      // Pre-launch: the docs are reachable by direct link (design partners,
-      // previews) but kept out of search. Remove this block at launch.
-      head: [
-        {
-          tag: "meta",
-          attrs: { name: "robots", content: "noindex, nofollow" },
-        },
-      ],
       social: [
         {
           icon: "github",
