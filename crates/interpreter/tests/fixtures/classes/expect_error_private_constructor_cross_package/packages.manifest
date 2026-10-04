@@ -1,0 +1,5 @@
+# A private constructor stays private across a package boundary: the consumer
+# can neither call it nor extend the class. Compile-error fixture.
+# name           dir       deps            root
+@test/shapes     shapes    -
+main             app       @test/shapes    root

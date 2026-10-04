@@ -359,13 +359,20 @@ fn write_instance_fields(
 /// `chain[0]`; the walk is the fallback for a symbol that never went through it.
 fn write_constructor(out: &mut String, chain: &[ClassLink], limits: &TypeLimits) {
     for (i, link) in chain.iter().enumerate() {
-        let TypeKind::Class { constructor, .. } = &link.sym.kind else {
+        let TypeKind::Class {
+            constructor,
+            constructor_visibility,
+            ..
+        } = &link.sym.kind
+        else {
             continue;
         };
         if constructor.is_empty() {
             continue;
         }
-        out.push_str("  constructor(");
+        out.push_str("  ");
+        out.push_str(visibility_prefix(*constructor_visibility));
+        out.push_str("constructor(");
         for (n, p) in constructor.iter().enumerate() {
             if n > 0 {
                 out.push_str(", ");
@@ -993,6 +1000,7 @@ mod tests {
                 method_visibility: BTreeMap::new(),
                 accessors: Vec::new(),
                 constructor: Vec::new(),
+                constructor_visibility: crate::Visibility::Public,
                 statics: BTreeMap::new(),
                 static_visibility: BTreeMap::new(),
                 static_fields,

@@ -1,0 +1,5 @@
+# A class with a private constructor is built in its own module, through a
+# static method or a subclass declared there; a consumer uses those.
+# name           dir       deps            root
+@test/shapes2    shapes    -
+main             app       @test/shapes2   root

@@ -36,6 +36,13 @@ pub(super) struct StaticCallTarget<'a> {
     mangled: crate::MangledName,
 }
 
+/// What a use of a class's constructor does, for the help a private one gets.
+#[derive(Clone, Copy)]
+pub(super) enum ConstructorUse {
+    New,
+    Extend,
+}
+
 /// How [`Inferer::bind_param_call_args`] names the callee in its arity
 /// diagnostic and which signature shape it lifts into the `help:` block.
 #[derive(Clone, Copy)]
@@ -2713,6 +2720,17 @@ impl Inferer<'_> {
                     _ => None,
                 })
         {
+            if self.reject_private_constructor(&class_mangled, ConstructorUse::New, span) {
+                // The parameters are private too: type the arguments on their
+                // own rather than report how they miss a hidden signature.
+                for annotation in type_args.iter().flatten() {
+                    self.resolve_type(annotation)?;
+                }
+                for arg in args {
+                    self.infer_expr(arg, None)?;
+                }
+                return Ok((TypedExprKind::Null, Type::Error));
+            }
             let package = self.type_package(&ident.name);
             let ctor_mangled = crate::mangle::extend(&class_mangled, "constructor");
             // Generic class: the constructor is a receiver-less generic call —
@@ -3529,6 +3547,52 @@ impl Inferer<'_> {
                 (TypedExprKind::Null, Type::Error)
             }
         }
+    }
+
+    /// A `private` constructor is callable, and its class extendable, only in the
+    /// module that declares the class (spec §2.2's module-scoped privacy). Reports
+    /// a use from another module, and says whether it did.
+    pub(super) fn reject_private_constructor(
+        &mut self,
+        class: &crate::MangledName,
+        usage: ConstructorUse,
+        span: Span,
+    ) -> bool {
+        let Some(sym) = self.types.lookup_by_mangled(class) else {
+            return false;
+        };
+        let crate::TypeKind::Class {
+            constructor_visibility: crate::Visibility::Private,
+            ..
+        } = sym.kind
+        else {
+            return false;
+        };
+        if self.local_class_mangles.contains(class) {
+            return false;
+        }
+        // The declared name: the symbol table keys a class by its local names,
+        // import aliases included.
+        let name = class
+            .as_str()
+            .rsplit_once(crate::mangle::SEP)
+            .map_or(class.as_str(), |(_, name)| name)
+            .to_string();
+        let help = match usage {
+            ConstructorUse::New => format!(
+                "only `{name}`'s own module can call it; use what that module exports to \
+                 create one, such as a static method"
+            ),
+            ConstructorUse::Extend => {
+                format!("only a class in `{name}`'s own module can extend it")
+            }
+        };
+        self.error_with_help(
+            span,
+            format!("the constructor of class `{name}` is private"),
+            vec![help],
+        );
+        true
     }
 
     pub(super) fn check_static_privacy(

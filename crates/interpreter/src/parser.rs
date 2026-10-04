@@ -809,7 +809,15 @@ impl<'a> Parser<'a> {
                 );
                 return None;
             }
-            return self.parse_constructor(member_start, doc);
+            if let Some(span) = modifiers.readonly {
+                self.error_at_with_help(
+                    span,
+                    "a constructor cannot be `readonly`",
+                    vec!["remove `readonly`; it applies to fields".to_string()],
+                );
+                return None;
+            }
+            return self.parse_constructor(member_start, modifiers.visibility, doc);
         }
 
         let name = self.expect_property_ident("expected class member name")?;
@@ -912,6 +920,7 @@ impl<'a> Parser<'a> {
     fn parse_constructor(
         &mut self,
         member_start: u32,
+        visibility: crate::Visibility,
         doc: Option<crate::DocComment>,
     ) -> Option<crate::ClassMember> {
         self.advance(); // `constructor`
@@ -934,6 +943,7 @@ impl<'a> Parser<'a> {
             .span
             .end;
         Some(crate::ClassMember::Constructor {
+            visibility,
             params,
             body,
             span: self.span(member_start, body_end),
