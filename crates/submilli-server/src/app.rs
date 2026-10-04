@@ -76,8 +76,6 @@ type LlmDispatchFactory = Arc<
 struct AppStateInner {
     boot_lock: AsyncMutex<()>,
     booted: AtomicBool,
-    blueprint_mutations: tokio_util::task::TaskTracker,
-    blueprint_mutation_slots: Arc<tokio::sync::Semaphore>,
     router_ready: AtomicBool,
     database: Option<Arc<crate::database::ServerDatabase>>,
     audit: crate::audit::AuditLog,
@@ -254,8 +252,6 @@ impl AppState {
             inner: Arc::new(AppStateInner {
                 boot_lock: AsyncMutex::new(()),
                 booted: AtomicBool::new(false),
-                blueprint_mutations: tokio_util::task::TaskTracker::new(),
-                blueprint_mutation_slots: Arc::new(tokio::sync::Semaphore::new(64)),
                 router_ready: AtomicBool::new(false),
                 database: config.database,
                 audit,
@@ -323,43 +319,6 @@ impl AppState {
         }
         self.inner.router_ready.store(true, Ordering::Release);
         Ok(())
-    }
-
-    /// Own the write and its postcommit work even if the HTTP caller disconnects.
-    pub(crate) async fn blueprint_mutation<T, F>(
-        &self,
-        work: F,
-    ) -> Result<T, crate::blueprint::StoreError>
-    where
-        T: Send + 'static,
-        F: std::future::Future<Output = T> + Send + 'static,
-    {
-        use crate::blueprint::StoreError;
-        let runtime = tokio::runtime::Handle::try_current()
-            .map_err(|error| StoreError::Io(error.to_string()))?;
-        let slot = self
-            .inner
-            .blueprint_mutation_slots
-            .clone()
-            .try_acquire_owned()
-            .map_err(|_| StoreError::Database(crate::database::DatabaseError::Busy))?;
-        let token = self.inner.blueprint_mutations.token();
-        if self.inner.blueprint_mutations.is_closed() {
-            return Err(StoreError::Database(crate::database::DatabaseError::Closed));
-        }
-        let work = crate::audit::inherit_request(work);
-        runtime
-            .spawn(async move {
-                let _token = token;
-                let _slot = slot;
-                work.await
-            })
-            .await
-            .map_err(|error| StoreError::Io(error.to_string()))
-    }
-
-    pub(crate) fn blueprint_mutations(&self) -> tokio_util::task::TaskTracker {
-        self.inner.blueprint_mutations.clone()
     }
 
     /// Handle `serve` awaits for graceful shutdown; `POST /v1/shutdown` signals it.

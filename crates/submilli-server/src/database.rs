@@ -1,4 +1,4 @@
-//! Server-owned SQLx connection, migration, and cancellation-independent lifecycle.
+//! Server-owned SQLx connection, migrations, and native connection cleanup.
 
 use std::fs::{File, OpenOptions};
 use std::path::{Path, PathBuf};
@@ -91,7 +91,8 @@ impl ServerDatabase {
         &self.path
     }
 
-    /// Run an admitted write to completion, independently of caller cancellation.
+    /// Run a transaction while its caller is waiting. Cancellation drops the
+    /// transaction, allowing SQLx to roll it back unless commit has already begun.
     /// The callback must not submit another operation to this database.
     pub async fn transaction<T, F>(&self, operation: F) -> Result<T, DatabaseError>
     where
@@ -122,10 +123,14 @@ impl ServerDatabase {
             + Send
             + 'static,
     {
-        let (reply, result) = oneshot::channel();
+        let (mut reply, result) = oneshot::channel();
         let job: Job = Box::new(move |connection| {
             Box::pin(async move {
-                let outcome = contain_panic(async move { operation(connection).await }).await;
+                let outcome = tokio::select! {
+                    biased;
+                    () = reply.closed() => return,
+                    outcome = contain_panic(async move { operation(connection).await }) => outcome,
+                };
                 let _ = reply.send(outcome);
             })
         });
@@ -143,7 +148,8 @@ impl ServerDatabase {
         result.await.map_err(|_| DatabaseError::WorkerStopped)?
     }
 
-    /// Stop admission immediately; the owner drains accepted work, checkpoints,
+    /// Stop admission immediately; the owner finishes work whose callers still
+    /// wait, skips cancelled work, checkpoints,
     /// and closes SQLite before releasing its process lock. Dropping the final
     /// handle also disconnects the queue and starts the same cleanup.
     pub(crate) fn begin_close(&self) -> Result<(), DatabaseError> {

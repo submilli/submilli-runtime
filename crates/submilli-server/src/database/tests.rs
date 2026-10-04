@@ -174,22 +174,24 @@ async fn concurrent_claims_serialize_before_reading() {
 }
 
 #[tokio::test]
-async fn cancellation_does_not_abandon_admitted_transaction_or_close() {
+async fn cancellation_rolls_back_an_active_transaction() {
     let directory = tempfile::tempdir().unwrap();
-    let path = directory.path().join("server.db");
-    let database = Arc::new(ServerDatabase::open(&path).await.unwrap());
+    let database = Arc::new(
+        ServerDatabase::open(&directory.path().join("server.db"))
+            .await
+            .unwrap(),
+    );
     let (started_tx, started_rx) = oneshot::channel();
-    let (finish_tx, finish_rx) = mpsc::channel();
     let request_db = Arc::clone(&database);
     let request = tokio::spawn(async move {
         request_db
             .transaction(move |connection| {
                 Box::pin(async move {
-                    started_tx.send(()).unwrap();
-                    finish_rx.recv_timeout(Duration::from_secs(10)).unwrap();
-                    sqlx::raw_sql("CREATE TABLE committed_after_cancel (value INTEGER)")
+                    sqlx::raw_sql("CREATE TABLE cancelled_write (value INTEGER)")
                         .execute(&mut *connection)
                         .await?;
+                    started_tx.send(()).unwrap();
+                    std::future::pending::<()>().await;
                     Ok(())
                 })
             })
@@ -198,36 +200,57 @@ async fn cancellation_does_not_abandon_admitted_transaction_or_close() {
     started_rx.await.unwrap();
     request.abort();
     assert!(request.await.unwrap_err().is_cancelled());
-    let mut close = Box::pin(database.close());
-    assert!(poll!(&mut close).is_pending());
-    drop(close);
-    assert!(matches!(
-        ServerDatabase::open(&path).await,
-        Err(DatabaseError::AlreadyOpen(_))
-    ));
-    assert!(matches!(
-        database
-            .transaction(|_| Box::pin(async move { Ok(()) }))
-            .await,
-        Err(DatabaseError::Closed)
-    ));
-    finish_tx.send(()).unwrap();
-    database.close().await.unwrap();
-    let reopened = ServerDatabase::open(&path).await.unwrap();
-    let count: i64 = reopened
-        .transaction(|connection| {
+    let count: i64 = tokio::time::timeout(
+        Duration::from_secs(5),
+        database.read(|connection| {
             Box::pin(async move {
                 Ok(sqlx::query_scalar(
-                    "SELECT COUNT(*) FROM sqlite_master WHERE name='committed_after_cancel'",
+                    "SELECT COUNT(*) FROM sqlite_master WHERE name='cancelled_write'",
                 )
-                .fetch_one(&mut *connection)
+                .fetch_one(connection)
                 .await?)
             })
-        })
+        }),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    assert_eq!(count, 0);
+    // Closing drains SQLx's queued rollback before releasing native ownership.
+    database.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn cancellation_skips_a_queued_transaction() {
+    let directory = tempfile::tempdir().unwrap();
+    let database = ServerDatabase::open(&directory.path().join("server.db"))
         .await
         .unwrap();
-    assert_eq!(count, 1);
-    reopened.close().await.unwrap();
+    let (started_tx, started_rx) = oneshot::channel();
+    let (finish_tx, finish_rx) = oneshot::channel();
+    let mut active = Box::pin(database.transaction(move |_| {
+        Box::pin(async move {
+            started_tx.send(()).unwrap();
+            finish_rx.await.unwrap();
+            Ok(())
+        })
+    }));
+    assert!(poll!(&mut active).is_pending());
+    started_rx.await.unwrap();
+    let called = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let observed = Arc::clone(&called);
+    let mut queued = Box::pin(database.transaction(move |_| {
+        Box::pin(async move {
+            observed.store(true, std::sync::atomic::Ordering::SeqCst);
+            Ok(())
+        })
+    }));
+    assert!(poll!(&mut queued).is_pending());
+    drop(queued);
+    finish_tx.send(()).unwrap();
+    active.await.unwrap();
+    database.close().await.unwrap();
+    assert!(!called.load(std::sync::atomic::Ordering::SeqCst));
 }
 
 #[test]
@@ -281,7 +304,7 @@ fn destroying_tokio_runtime_does_not_release_worker_lock() {
             })
             .await
             .unwrap();
-        assert_eq!(count, 1);
+        assert_eq!(count, 0);
         reopened.close().await.unwrap();
     });
 }
@@ -507,7 +530,7 @@ fn abrupt_exit_child() {
 }
 
 #[tokio::test]
-async fn cancelled_result_destructor_cannot_terminate_worker() {
+async fn cancelled_callback_destructor_cannot_terminate_worker() {
     struct PanickingResult;
     impl Drop for PanickingResult {
         fn drop(&mut self) {
@@ -519,21 +542,20 @@ async fn cancelled_result_destructor_cannot_terminate_worker() {
         .await
         .unwrap();
     let (started_tx, started_rx) = oneshot::channel();
-    let (finish_tx, finish_rx) = mpsc::channel();
     let mut request = Box::pin(database.transaction(move |connection| {
         Box::pin(async move {
             sqlx::raw_sql("CREATE TABLE result_committed (value INTEGER)")
                 .execute(&mut *connection)
                 .await?;
+            let _guard = PanickingResult;
             started_tx.send(()).unwrap();
-            finish_rx.recv_timeout(Duration::from_secs(10)).unwrap();
-            Ok(PanickingResult)
+            std::future::pending::<()>().await;
+            Ok(())
         })
     }));
     assert!(poll!(&mut request).is_pending());
     started_rx.await.unwrap();
     drop(request);
-    finish_tx.send(()).unwrap();
     let count: i64 = database
         .transaction(|connection| {
             Box::pin(async move {
@@ -546,7 +568,7 @@ async fn cancelled_result_destructor_cannot_terminate_worker() {
         })
         .await
         .unwrap();
-    assert_eq!(count, 1);
+    assert_eq!(count, 0);
     database.close().await.unwrap();
 }
 

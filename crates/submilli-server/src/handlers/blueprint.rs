@@ -243,27 +243,22 @@ pub async fn add(
     let name = blueprint.name.clone();
     crate::audit::annotate(serde_json::json!({"name": name,
         "new_hash": crate::audit::blueprint_hash(&blueprint)}));
-    let owner = state.clone();
-    let created_name = name.clone();
     let stored = StoredBlueprint::new(blueprint, permissions_last_preserving_comments(&req.yaml));
-    owned_mutation(&state, async move {
-        owner
-            .blueprints()
-            .add_yaml(stored)
-            .await
-            .map_err(|error| match error {
-                StoreError::AlreadyExists => (
-                    StatusCode::CONFLICT,
-                    Json(ErrorResponse::named(
-                        "already_exists",
-                        format!("blueprint '{created_name}' is already registered"),
-                        created_name,
-                    )),
-                ),
-                error => store_error(error),
-            })
-    })
-    .await?;
+    state
+        .blueprints()
+        .add_yaml(stored)
+        .await
+        .map_err(|error| match error {
+            StoreError::AlreadyExists => (
+                StatusCode::CONFLICT,
+                Json(ErrorResponse::named(
+                    "already_exists",
+                    format!("blueprint '{name}' is already registered"),
+                    name.clone(),
+                )),
+            ),
+            error => store_error(error),
+        })?;
     Ok((StatusCode::OK, Json(AddResponse { name })))
 }
 
@@ -306,19 +301,18 @@ pub async fn apply(
         ));
     }
     let stored = StoredBlueprint::new(blueprint, permissions_last_preserving_comments(&req.yaml));
-    let owner = state.clone();
-    let changed_name = name.clone();
-    let created = owned_mutation(&state, async move {
-        let created = owner.blueprints().upsert_yaml(stored).await.map_err(store_error)?;
-        owner.evict_mcp_catalog(&changed_name);
-        // Another apply may have committed since the audit read above.
-        owner.evict_prepared_packages(&changed_name);
-        crate::audit::annotate(
-            serde_json::json!({"event": if created { "blueprint_created" } else { "blueprint_replaced" }}),
-        );
-        crate::metrics::blueprint_apply(created);
-        Ok(created)
-    }).await?;
+    let created = state
+        .blueprints()
+        .upsert_yaml(stored)
+        .await
+        .map_err(store_error)?;
+    state.evict_mcp_catalog(&name);
+    // Another apply may have committed since the audit read above.
+    state.evict_prepared_packages(&name);
+    crate::audit::annotate(
+        serde_json::json!({"event": if created { "blueprint_created" } else { "blueprint_replaced" }}),
+    );
+    crate::metrics::blueprint_apply(created);
     Ok((StatusCode::OK, Json(ApplyResponse { name, created })))
 }
 
@@ -411,47 +405,19 @@ pub async fn remove(
     };
     crate::audit::annotate(serde_json::json!({"name": name,
         "old_hash": previous.as_ref().map(crate::audit::blueprint_hash)}));
-    let owner = state.clone();
-    let changed_name = name.clone();
-    owned_mutation(&state, async move {
-        let removed = owner
-            .blueprints()
-            .remove(&changed_name)
-            .await
-            .map_err(store_error)?;
-        if !removed {
-            return Err(not_found(changed_name));
-        }
-        owner.wipe_blueprint_sessions(&changed_name).await;
-        owner.evict_mcp_service(&changed_name);
-        owner.evict_mcp_catalog(&changed_name);
-        owner.evict_prepared_packages(&changed_name);
-        Ok(())
-    })
-    .await?;
-    Ok((StatusCode::OK, Json(AddResponse { name })))
-}
-
-async fn owned_mutation<T: Send + 'static>(
-    state: &AppState,
-    work: impl std::future::Future<Output = Result<T, (StatusCode, Json<ErrorResponse>)>>
-    + Send
-    + 'static,
-) -> Result<T, (StatusCode, Json<ErrorResponse>)> {
-    state
-        .blueprint_mutation(async move {
-            let audit = crate::audit::mutation_owner();
-            let result = work.await;
-            if let Some(audit) = audit {
-                audit.finish(match &result {
-                    Ok(_) => StatusCode::OK,
-                    Err(error) => error.0,
-                });
-            }
-            result
-        })
+    let removed = state
+        .blueprints()
+        .remove(&name)
         .await
-        .map_err(store_error)?
+        .map_err(store_error)?;
+    if !removed {
+        return Err(not_found(name));
+    }
+    state.wipe_blueprint_sessions(&name).await;
+    state.evict_mcp_service(&name);
+    state.evict_mcp_catalog(&name);
+    state.evict_prepared_packages(&name);
+    Ok((StatusCode::OK, Json(AddResponse { name })))
 }
 
 fn store_error(error: StoreError) -> (StatusCode, Json<ErrorResponse>) {

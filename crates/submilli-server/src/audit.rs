@@ -745,7 +745,6 @@ impl SecurityCheck for AuditedPolicy {
 #[derive(Clone)]
 pub(crate) struct Principal(pub String);
 
-#[derive(Clone)]
 pub(crate) struct RequestAudit {
     principal: String,
     mutation: Option<Arc<MutationAudit>>,
@@ -753,19 +752,6 @@ pub(crate) struct RequestAudit {
 }
 
 tokio::task_local! { static REQUEST: RequestAudit; }
-
-/// Capture before spawning: Tokio task-local values do not follow owned work.
-pub(crate) fn inherit_request<T>(
-    work: impl std::future::Future<Output = T>,
-) -> impl std::future::Future<Output = T> {
-    let context = REQUEST.try_with(Clone::clone).ok();
-    async move {
-        match context {
-            Some(context) => REQUEST.scope(context, work).await,
-            None => work.await,
-        }
-    }
-}
 
 pub(crate) fn execution() -> Option<Arc<ExecutionAudit>> {
     REQUEST.try_with(|r| r.execution.clone()).ok().flatten()

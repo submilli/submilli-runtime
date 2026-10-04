@@ -40,7 +40,13 @@ impl BlueprintStore for GatedStore {
 }
 
 #[tokio::test]
-async fn cancelled_blueprint_mutations_complete_audit_and_postcommit_work() {
+async fn blueprint_mutations_run_in_the_request() {
+    for cancel in [false, true] {
+        check_mutations(cancel).await;
+    }
+}
+
+async fn check_mutations(cancel: bool) {
     for (creating, deleting) in [(true, false), (false, false), (false, true)] {
         let directory = tempfile::tempdir().unwrap();
         let database = Arc::new(
@@ -121,14 +127,25 @@ async fn cancelled_blueprint_mutations_complete_audit_and_postcommit_work() {
         tokio::time::timeout(Duration::from_secs(5), admitted.notified())
             .await
             .unwrap();
-        request.abort();
-        assert!(request.await.unwrap_err().is_cancelled());
+        if cancel {
+            request.abort();
+            assert!(request.await.unwrap_err().is_cancelled());
+            release.notify_one();
+            assert_eq!(
+                state.blueprints().get_yaml("demo").await.unwrap().is_some(),
+                !creating
+            );
+            assert_eq!(
+                state.inner.mcp_catalog_generation.load(Ordering::Acquire),
+                generation
+            );
+            assert!(state.session_manager().contains("session"));
+            database.close().await.unwrap();
+            continue;
+        }
         release.notify_one();
-        let mutations = state.blueprint_mutations();
-        mutations.close();
-        tokio::time::timeout(Duration::from_secs(5), mutations.wait())
-            .await
-            .unwrap();
+        let response = request.await.unwrap().unwrap();
+        assert_eq!(response.status(), axum::http::StatusCode::OK);
         if !creating {
             assert!(state.inner.mcp_catalog_generation.load(Ordering::Acquire) > generation);
         }

@@ -47,7 +47,6 @@ futures = { workspace = true }
 ureq = { workspace = true }
 sqlx = { version = "0.9", default-features = false, features = ["sqlite", "runtime-tokio", "macros", "migrate"] }
 thiserror = "2"
-tokio-util = { version = "0.7", features = ["rt"] }
 
 rustls.workspace = true
 tokio-rustls.workspace = true

@@ -155,12 +155,11 @@ async fn serve_opened(
     let _lifecycle = ServerAuditStop(audit);
     state.set_bind_addr(bound);
     let shutdown = state.shutdown_signal();
-    let mutations = state.blueprint_mutations();
     let router = app(state);
     crate::metrics::server_start();
     tracing::info!(addr = %bound, protocol = if tls.is_some() { "https" } else { "http" }, "submilli-server listening");
 
-    let result = if let Some(tls) = tls {
+    if let Some(tls) = tls {
         serve_listener(
             crate::tls::Listener::new(listener, tls),
             router,
@@ -171,36 +170,7 @@ async fn serve_opened(
         .await
     } else {
         serve_listener(listener, router, signals, shutdown, shutdown_grace).await
-    };
-    drain_blueprint_mutations(mutations, result, shutdown_grace).await
-}
-
-async fn drain_blueprint_mutations(
-    mutations: tokio_util::task::TaskTracker,
-    result: Result<DrainStatus>,
-    grace: Duration,
-) -> Result<DrainStatus> {
-    mutations.close();
-    match &result {
-        Ok(DrainStatus::Completed {
-            started_at,
-            signals,
-        }) => {
-            let deadline = started_at.checked_add(grace);
-            tokio::select! {
-                biased;
-                () = mutations.wait() => {},
-                () = wait_until(deadline) => {
-                    tracing::warn!("stopped waiting for blueprint mutation cleanup");
-                    return Ok(DrainStatus::Forced);
-                },
-                () = async { signals.lock().await.recv_signal().await; } => return Ok(DrainStatus::Forced),
-            }
-        }
-        Ok(DrainStatus::Forced) => {}
-        _ => mutations.wait().await,
     }
-    result
 }
 
 async fn serve_listener<L>(
@@ -387,48 +357,6 @@ impl ShutdownSignals {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[cfg(unix)]
-    #[tokio::test]
-    async fn second_signal_during_mutation_drain_is_forced() {
-        const CHILD: &str = "SUBMILLI_MUTATION_SIGNAL_TEST";
-        if std::env::var_os(CHILD).is_none() {
-            let status = std::process::Command::new(std::env::current_exe().unwrap())
-                .args([
-                    "--exact",
-                    "serve::tests::second_signal_during_mutation_drain_is_forced",
-                ])
-                .env(CHILD, "1")
-                .status()
-                .unwrap();
-            assert!(status.success());
-            return;
-        }
-        let signals = Arc::new(Mutex::new(ShutdownSignals::install().unwrap()));
-        let mutations = tokio_util::task::TaskTracker::new();
-        let _pending = mutations.token();
-        let drain = drain_blueprint_mutations(
-            mutations,
-            Ok(DrainStatus::Completed {
-                started_at: tokio::time::Instant::now(),
-                signals,
-            }),
-            Duration::from_secs(60),
-        );
-        let send = async {
-            tokio::time::sleep(Duration::from_millis(10)).await;
-            // Isolated child: this signal cannot affect other tests' handlers.
-            assert_eq!(
-                unsafe { libc::kill(std::process::id() as i32, libc::SIGTERM) },
-                0
-            );
-        };
-        let (result, ()) =
-            tokio::time::timeout(Duration::from_secs(2), async { tokio::join!(drain, send) })
-                .await
-                .unwrap();
-        assert!(matches!(result.unwrap(), DrainStatus::Forced));
-    }
 
     #[tokio::test]
     async fn forced_database_drain_releases_lock_after_work_finishes() {
