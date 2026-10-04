@@ -1,0 +1,42 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 900" role="img" aria-labelledby="title desc">
+  <title id="title">From tool calls to a program</title>
+  <desc id="desc">A model writes one program that connects payments, accounts, and support, returning a report.</desc>
+  <defs>
+    <pattern id="grid" width="48" height="48" patternUnits="userSpaceOnUse"><path d="M48 0H0V48" fill="none" stroke="#c4e4f9" stroke-opacity=".045"/></pattern>
+    <linearGradient id="wash" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#202c3a"/><stop offset="1" stop-color="#131313"/></linearGradient>
+    <marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="m1 1 7 4-7 4" fill="none" stroke="#88e5ff" stroke-width="1.5"/></marker>
+  </defs>
+  <rect width="1600" height="900" fill="#131313"/>
+  <rect x="680" width="920" height="900" fill="url(#wash)"/>
+  <rect width="1600" height="900" fill="url(#grid)"/>
+  <g font-family="'SF Pro Rounded',Nunito,Arial,sans-serif">
+    <text x="94" y="124" fill="#abd8f7" font-family="monospace" font-size="21" letter-spacing="4">01 / EXECUTION MODEL</text>
+    <text x="88" y="287" fill="#fff" font-size="82" font-weight="700" letter-spacing="-3">From tool calls</text>
+    <text x="88" y="384" fill="#c4e4f9" font-size="82" font-weight="700" letter-spacing="-3">to a program.</text>
+    <text x="94" y="464" fill="#b6b6b6" font-size="27">Let code coordinate the work.</text>
+    <path d="M96 553h64" stroke="#88e5ff" stroke-width="3"/>
+    <text x="94" y="627" fill="#fff" font-size="25">One task. Three tools.</text>
+    <text x="94" y="667" fill="#b6b6b6" font-size="25">A focused result for the model.</text>
+    <g transform="translate(850 150)">
+      <rect width="590" height="94" rx="18" fill="#161718" stroke="#4d6183"/>
+      <circle cx="43" cy="47" r="8" fill="#88e5ff"/>
+      <text x="70" y="55" fill="#c4e4f9" font-size="24" font-family="monospace">agent-task.ts</text>
+      <text x="525" y="56" fill="#737373" font-size="26" font-family="monospace">{ }</text>
+      <path d="M295 95v54" stroke="#88e5ff" stroke-width="2" marker-end="url(#arrow)"/>
+      <rect y="159" width="590" height="302" rx="20" fill="#c4e4f9"/>
+      <text x="32" y="205" fill="#31415c" font-size="18" font-family="monospace" letter-spacing="3">PROGRAM</text>
+      <g fill="#131313" font-size="27" font-family="monospace">
+        <text x="36" y="266">01</text><text x="98" y="266">payments.fetch()</text>
+        <text x="36" y="332">02</text><text x="98" y="332">accounts.match()</text>
+        <text x="36" y="398">03</text><text x="98" y="398">support.link()</text>
+      </g>
+      <path d="M33 283h525M33 349h525" stroke="#6badda" stroke-opacity=".5"/>
+      <path d="M295 462v54" stroke="#88e5ff" stroke-width="2" marker-end="url(#arrow)"/>
+      <rect y="528" width="590" height="106" rx="18" fill="#161718" stroke="#4d6183"/>
+      <path d="m33 578 12 12 24-27" stroke="#88e5ff" stroke-width="3" fill="none"/>
+      <text x="91" y="573" fill="#fff" font-size="25">A focused report</text>
+      <text x="91" y="607" fill="#929292" font-family="monospace" font-size="17">raw records stay in the program</text>
+    </g>
+    <text x="94" y="823" fill="#929292" font-size="20" font-family="monospace">SUBMILLI / SHORT EXPLANATIONS</text>
+  </g>
+</svg>

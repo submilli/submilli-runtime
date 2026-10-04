@@ -1,0 +1,20 @@
+---
+interface Props { id: string; }
+const { id } = Astro.props;
+---
+<div class={`diagram diagram-${id}`} aria-hidden="true">
+  <svg viewBox="0 0 520 292">
+              {id === "helps" && <><rect x="42" y="50" width="190" height="178" rx="14" /><rect x="288" y="82" width="190" height="114" rx="14" /><path d="M232 139h56m-20-20 20 20-20 20" /><path d="M80 91h114M80 118h83M80 145h102" /><text x="80" y="186">intent</text><text x="326" y="145">result</text></>}
+              {id === "works" && <><circle cx="260" cy="146" r="48" /><circle cx="106" cy="74" r="28" /><circle cx="414" cy="74" r="28" /><circle cx="106" cy="218" r="28" /><circle cx="414" cy="218" r="28" /><path d="M139 88 219 127M381 88 301 127M139 202l80-29M381 202l-80-29" /><text x="226" y="151">policy</text></>}
+              {id === "using" && <><rect x="46" y="54" width="428" height="184" rx="16" /><path d="M74 96h372M74 130h226M74 164h290M74 198h164" /><circle cx="423" cy="78" r="7" /><text x="90" y="82">integration.ts</text></>}
+              {id === "challenges" && <><path d="M60 220 150 158 238 184 330 82 460 52" /><path d="M420 52h40v40" /><circle cx="150" cy="158" r="8" /><circle cx="238" cy="184" r="8" /><circle cx="330" cy="82" r="8" /><path d="M60 240h400" /><text x="72" y="268">context / latency</text></>}
+
+  </svg>
+</div>
+<style>
+  .diagram { aspect-ratio: 16 / 9; overflow: hidden; background: linear-gradient(135deg,#22344e,#131313); }
+  .diagram-helps { background: linear-gradient(135deg,#2b3c54,#252525); }
+  .diagram-using { background: linear-gradient(135deg,#1d2b3f,#3b516c); }
+  svg { display: block; width: 100%; height: 100%; fill: none; stroke: #c4e4f9; stroke-linecap: round; stroke-linejoin: round; stroke-width: 2; }
+  text { fill: #c4e4f9; stroke: none; font: 500 15px monospace; }
+</style>

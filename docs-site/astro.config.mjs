@@ -9,6 +9,7 @@ import { agentDocs } from "./src/plugins/agent-docs.ts";
 export default defineConfig({
   site: "https://submilli.ai",
   base: "/docs",
+  redirects: { "/concepts/execution-model": "/docs/why/" },
   // Match the URL prefix on static hosts that publish dist/ at the domain root.
   outDir: "./dist/docs",
   markdown: {
@@ -44,6 +45,7 @@ export default defineConfig({
         ThemeSelect: "./src/components/ThemeSelect.astro",
         MobileMenuFooter: "./src/components/MobileMenuFooter.astro",
         PageTitle: "./src/components/PageTitle.astro",
+        MarkdownContent: "./src/components/VideoContent.astro",
         Hero: "./src/components/Hero.astro",
         Footer: "./src/components/Footer.astro",
         Pagination: "./src/components/Pagination.astro",
@@ -136,6 +138,7 @@ export default defineConfig({
           ],
         },
         { label: "Reference", items: [{ autogenerate: { directory: "../docs/part-6-reference" } }] },
+        { label: "Video library", slug: "videos" },
       ],
 
     }),
