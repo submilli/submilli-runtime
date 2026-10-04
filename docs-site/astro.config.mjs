@@ -120,7 +120,6 @@ export default defineConfig({
         baseUrl: "https://github.com/submilli/submilli-runtime/edit/main/docs-site/",
       },
       sidebar: [
-        { label: "Videos", slug: "videos" },
         { label: "Start here", items: [{ autogenerate: { directory: "../docs/part-1-start-here" } }] },
         { label: "Blueprints", items: [{ autogenerate: { directory: "../docs/part-2-blueprints" } }] },
         { label: "Packages", items: [{ autogenerate: { directory: "../docs/part-3-packages" } }] },
@@ -139,6 +138,7 @@ export default defineConfig({
           ],
         },
         { label: "Reference", items: [{ autogenerate: { directory: "../docs/part-6-reference" } }] },
+        { label: "Video library", slug: "videos" },
       ],
 
     }),
