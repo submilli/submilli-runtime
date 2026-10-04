@@ -1,0 +1,21 @@
+---
+import VideoPlayer from '../../../components/VideoPlayer.astro';
+import { films } from '../../../lib/videos';
+const film = films.find(film => film.id === 'helps');
+if (!film) throw new Error('The helps film must be in the registry');
+---
+<!doctype html>
+<html lang={film.language}>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="robots" content="noindex, nofollow" />
+    <title>{film.title} — Submilli</title>
+    <link rel="canonical" href={`https://submilli.ai${film.canonicalPath}`} />
+  </head>
+  <body><VideoPlayer film={film} /></body>
+</html>
+<style is:global>
+  html, body { margin: 0; padding: 0; background: #131313; }
+  * { box-sizing: border-box; }
+</style>

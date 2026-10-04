@@ -24,7 +24,7 @@ export function videoSource(
     const host = url.hostname;
     const localHost = host === 'localhost' || host.endsWith('.localhost') || host.endsWith('.local') || host === '[::1]'
       || host === '[::]' || host.startsWith('[::ffff:') || /^\[(?:f[cd][0-9a-f]{2}:|fe[89ab][0-9a-f]:)/i.test(host)
-      || /^(127\.|10\.|192\.168\.|169\.254\.|172\.(1[6-9]|2\d|3[01])\.)/.test(host);
+      || /^(0\.|127\.|10\.|255\.255\.255\.255$|192\.168\.|169\.254\.|172\.(1[6-9]|2\d|3[01])\.)/.test(host);
     if (url.protocol !== 'https:' || url.username || url.password || localHost) return undefined;
     return film.src;
   } catch {
