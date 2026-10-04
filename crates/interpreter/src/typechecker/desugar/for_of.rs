@@ -341,7 +341,9 @@ fn lower_iterator_like(
                 Type::InterfaceRef { mangled, .. } | Type::ClassRef { mangled, .. } => {
                     mangled.clone()
                 }
-                Type::String => crate::mangle::prelude("String"),
+                // Matches `classify_for_of_source`: literal strings iterate as
+                // strings too.
+                ty if ty.is_string_shaped() => crate::mangle::prelude("String"),
                 _ => crate::mangle::prelude("Iterable"),
             };
             ctx.ta

@@ -1,12 +1,4 @@
-types: 107 of 202 tsc entries compared, 28 differ
-
-line 49: c1
-  tsc:  1 | 2
-  ours: number
-
-line 49: cond ? 1 : 2
-  tsc:  1 | 2
-  ours: number
+types: 107 of 202 tsc entries compared, 25 differ
 
 line 50: c2
   tsc:  1 | "two"
@@ -63,10 +55,6 @@ line 56: cond ? c6 : cond ? c7 : "hello"
 line 56: cond ? c7 : "hello"
   tsc:  [1 | 2, "foo" | "bar"] | "hello"
   ours: string | [1 | 2, "bar" | "foo"]
-
-line 57: c1
-  tsc:  1 | 2
-  ours: number
 
 line 58: c2
   tsc:  1 | "two"
