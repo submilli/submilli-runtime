@@ -1577,12 +1577,15 @@ mod alias_tests {
                 let original = snapshot.repo.refs.git_dir().join(&paths[0]);
                 std::fs::create_dir_all(original.parent().unwrap()).unwrap();
                 std::fs::write(&original, "original").unwrap();
+                // Direct fixture writes bypass the invalidation in ref mutations.
+                snapshot.invalidate_reference_cache().unwrap();
                 assert_eq!(
                     snapshot.validate_reference_spelling(&paths[1]).is_err(),
                     aliases
                 );
                 assert_eq!(std::fs::read(&original).unwrap(), b"original");
                 std::fs::remove_file(original).unwrap();
+                snapshot.invalidate_reference_cache().unwrap();
             }
         }
         assert!(

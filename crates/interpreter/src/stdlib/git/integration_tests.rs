@@ -9,6 +9,9 @@ fn native(repo: &Path, args: &[&str]) -> Vec<u8> {
     let output = std::process::Command::new("git")
         .arg("-C")
         .arg(repo)
+        // Fixtures must stay unchanged after Git exits: background maintenance
+        // can remove loose objects or leave temporary files during a scan.
+        .args(["-c", "maintenance.auto=false", "-c", "gc.auto=0"])
         .env("GIT_CONFIG_NOSYSTEM", "1")
         .env("GIT_CONFIG_GLOBAL", "/dev/null")
         .args(args)
