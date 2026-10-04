@@ -3,7 +3,7 @@ title: "MCP servers"
 description: "The blueprint's mcp block, discovery, how tools become functions, output schemas, results, failure messages, OAuth, limits, and the local and server commands."
 slug: reference/mcp-servers
 sidebar:
-  order: 12
+  order: 13
 ---
 
 An entry in a blueprint's `mcp` block declares an outbound MCP server, which

@@ -326,7 +326,7 @@ async fn per_session_resumes_after_restart() {
         0,
         "a fresh process knows nothing until boot"
     );
-    restarted.boot().await;
+    restarted.boot().await.expect("boot");
     assert_eq!(
         active_sessions(&restarted).await,
         1,
@@ -346,7 +346,7 @@ async fn restart_sweeps_orphan_session_dir() {
     std::fs::create_dir_all(&orphan).unwrap();
 
     let state = restartable_state(vfs_root.path(), store_dir.path());
-    state.boot().await;
+    state.boot().await.expect("boot");
     assert!(
         !orphan.exists(),
         "boot must reclaim a per_session dir with no live session"

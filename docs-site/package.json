@@ -7,15 +7,16 @@
   },
   "scripts": {
     "dev": "astro dev",
-    "prebuild": "node ./scripts/ensure-root-tsconfig.mjs",
+    "prebuild": "node ./scripts/ensure-root-tsconfig.mjs && node ./scripts/check-video-preview.mjs",
     "build": "astro build && node --experimental-strip-types ./scripts/check-built-agent-docs.ts",
     "preview": "astro preview",
     "reference": "node --experimental-strip-types ./scripts/generate-reference.ts",
-    "check": "astro check && node --experimental-strip-types --test ./scripts/agent-docs.test.ts ./scripts/theme.test.mjs",
+    "check": "astro check && node --experimental-strip-types --test ./scripts/agent-docs.test.ts ./scripts/theme.test.mjs ./scripts/videos.test.ts",
     "precheck": "node ./scripts/ensure-root-tsconfig.mjs"
   },
   "dependencies": {
     "@astrojs/markdown-satteri": "^0.3.5",
+    "@astrojs/sitemap": "^3.7.3",
     "@astrojs/starlight": "^0.41.7",
     "@fontsource-variable/nunito": "^5.3.0",
     "@fontsource/ibm-plex-mono": "^5.3.0",

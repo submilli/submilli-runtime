@@ -354,7 +354,11 @@ async fn a_key_on_an_unknown_session_reports_the_unknown_session() {
     assert_eq!(status, StatusCode::NOT_FOUND);
     assert_eq!(as_json(&body)["error"], json!("unknown session"));
     assert!(
-        ledger.session_ids().await.is_empty(),
+        ledger
+            .session_ids()
+            .await
+            .expect("list ledger sessions")
+            .is_empty(),
         "an unknown session must leave no ledger entry"
     );
 }
@@ -402,7 +406,7 @@ async fn an_unbound_harness_secret_is_reported_before_the_key_is_considered() {
 
     // Restart: the durable record comes back, the memory-only binding does not.
     let restarted_state = build();
-    restarted_state.boot().await;
+    restarted_state.boot().await.expect("boot");
     let restarted = app(restarted_state);
 
     let (status, body) =
@@ -415,7 +419,11 @@ async fn an_unbound_harness_secret_is_reported_before_the_key_is_considered() {
     );
     assert_eq!(as_json(&body)["error"], json!("session_requires_secrets"));
     assert!(
-        ledger.session_ids().await.is_empty(),
+        ledger
+            .session_ids()
+            .await
+            .expect("list ledger sessions")
+            .is_empty(),
         "a session-level refusal must not touch the ledger"
     );
 }
@@ -434,7 +442,13 @@ async fn an_empty_key_is_rejected_and_creates_no_entry() {
     assert_eq!(status, StatusCode::BAD_REQUEST);
     assert_eq!(as_json(&body)["error"], json!("idempotency_key_invalid"));
     assert_eq!(mock.hits(), 0, "an invalid key must not execute");
-    assert!(ledger.session_ids().await.is_empty());
+    assert!(
+        ledger
+            .session_ids()
+            .await
+            .expect("list ledger sessions")
+            .is_empty()
+    );
 }
 
 #[cfg_attr(skip_http_tests, ignore = "HTTP tests disabled")]

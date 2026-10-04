@@ -1,0 +1,47 @@
+---
+import DefaultContent from '@astrojs/starlight/components/MarkdownContent.astro';
+import { introduction } from '../lib/videos';
+import IntroductionPlayer from './IntroductionPlayer.astro';
+import VideoLibrary from './VideoLibrary.astro';
+
+const path = Astro.url.pathname.replace(/\/$/, '');
+const isLibraryPage = path === '/docs/videos';
+const videoPaths = [introduction.canonicalPath, ...(introduction.contextualPaths ?? [])];
+const isVideoPage = videoPaths.some((videoPath) => videoPath?.replace(/\/$/, '') === path);
+const durationSeconds = Math.round(introduction.durationSeconds ?? 0);
+const durationLabel = `${Math.floor(durationSeconds / 60)} min ${durationSeconds % 60} sec`;
+const languageLabel = new Intl.DisplayNames(['en'], { type: 'language' }).of(introduction.language ?? 'en');
+---
+
+<DefaultContent>
+  {isLibraryPage && <><slot /><VideoLibrary /></>}
+  {isVideoPage && (
+    <figure class="video-introduction" aria-label={introduction.title}>
+      <div class="video-heading">
+        <strong>{introduction.title}</strong>
+        <span>{durationLabel} · {languageLabel}</span>
+      </div>
+      <div class="video-frame"><IntroductionPlayer /></div>
+      <figcaption>
+        {introduction.description}
+        <a href={introduction.transcriptPath}>Read the complete transcript</a>
+      </figcaption>
+    </figure>
+  )}
+  {!isLibraryPage && <slot />}
+</DefaultContent>
+
+<style>
+  .video-introduction {
+    margin: 0 0 2rem;
+    padding: 1.25rem;
+    border: 1px solid var(--sl-color-hairline);
+    border-radius: 12px;
+    background: var(--sl-color-bg-sidebar);
+  }
+  .video-heading { display: flex; flex-wrap: wrap; gap: 0.5rem 1rem; justify-content: space-between; }
+  .video-heading span { font-size: 0.875rem; color: var(--sl-color-gray-2); }
+  .video-frame { margin-top: 1rem; border-radius: 8px; overflow: hidden; }
+  figcaption { font-size: 0.9375rem; margin-top: 1rem; }
+  figcaption a { display: block; margin-top: 0.5rem; }
+</style>
