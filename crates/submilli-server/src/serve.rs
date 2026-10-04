@@ -1,10 +1,10 @@
 use std::future::IntoFuture;
 use std::net::SocketAddr;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
 use anyhow::Result;
-use tokio::sync::{Notify, oneshot};
+use tokio::sync::{Mutex, Notify, oneshot};
 
 use crate::{AppState, ServerConfig, app};
 
@@ -23,16 +23,95 @@ pub fn runtime(config: &ServerConfig) -> std::io::Result<tokio::runtime::Runtime
 /// SIGINT — then let in-flight requests finish for at most `shutdown_grace`
 /// before dropping what remains. A second signal skips the remaining wait.
 ///
-/// `shutdown_grace` bounds *this* function. It is not the whole story: axum
-/// spawns a task per connection, so dropping the server future stops the wait
-/// without stopping the work. The caller is responsible for bounding runtime
-/// teardown afterwards — see `main`'s shutdown budget.
-pub async fn serve(addr: SocketAddr, config: ServerConfig, shutdown_grace: Duration) -> Result<()> {
+/// `shutdown_grace` bounds the wait after draining starts, including database
+/// cleanup. Database cleanup can continue on its own thread after this function
+/// returns. Startup failures close the database without a drain deadline.
+pub async fn serve(
+    addr: SocketAddr,
+    mut config: ServerConfig,
+    shutdown_grace: Duration,
+) -> Result<()> {
     // Registered first: once the handlers are in place a signal is queued rather
     // than killing the process, so a `docker stop` arriving mid-boot drains once
     // boot finishes instead of terminating the process outright.
     let signals = ShutdownSignals::install()?;
 
+    let database = match (config.database.take(), config.database_path.as_deref()) {
+        (Some(database), _) => Some(database),
+        (None, Some(path)) => Some(Arc::new(crate::database::ServerDatabase::open(path).await?)),
+        (None, None) => None,
+    };
+    config.database = database.clone();
+
+    let result = serve_opened(addr, config, shutdown_grace, signals).await;
+    let Some(database) = database else {
+        return result.map(|_| ());
+    };
+    close_database(database, result, shutdown_grace).await
+}
+
+enum DrainStatus {
+    NoDrain,
+    Completed {
+        started_at: tokio::time::Instant,
+        signals: Arc<Mutex<ShutdownSignals>>,
+    },
+    Forced,
+}
+
+async fn close_database(
+    database: Arc<crate::database::ServerDatabase>,
+    result: Result<DrainStatus>,
+    shutdown_grace: Duration,
+) -> Result<()> {
+    let drain = match result {
+        Ok(drain) => drain,
+        Err(error) => {
+            database.close().await?;
+            return Err(error);
+        }
+    };
+    let (started_at, signals) = match drain {
+        DrainStatus::NoDrain => {
+            database.close().await?;
+            return Ok(());
+        }
+        DrainStatus::Completed {
+            started_at,
+            signals,
+        } => (started_at, signals),
+        DrainStatus::Forced => {
+            database.begin_close()?;
+            return Ok(());
+        }
+    };
+    let deadline = started_at.checked_add(shutdown_grace);
+    database.begin_close()?;
+    tokio::select! {
+        biased;
+        result = database.close() => result?,
+        () = wait_until(deadline) => tracing::warn!("stopped waiting for database work during shutdown"),
+        () = async {
+            let mut signals = signals.lock().await;
+            signals.recv_signal().await;
+        } => tracing::warn!("second signal stopped database drain wait"),
+    }
+    Ok(())
+}
+
+async fn wait_until(deadline: Option<tokio::time::Instant>) {
+    match deadline {
+        Some(deadline) => tokio::time::sleep_until(deadline).await,
+        None => std::future::pending().await,
+    }
+}
+
+async fn serve_opened(
+    addr: SocketAddr,
+    config: ServerConfig,
+    shutdown_grace: Duration,
+    signals: ShutdownSignals,
+) -> Result<DrainStatus> {
     crate::auth::log_auth_posture(addr.ip(), &config.auth);
     let tls = config.tls.clone();
     let settings_hash = crate::audit::settings_hash(&config, addr, shutdown_grace);
@@ -71,16 +150,17 @@ pub async fn serve(addr: SocketAddr, config: ServerConfig, shutdown_grace: Durat
     tracing::info!(addr = %bound, protocol = if tls.is_some() { "https" } else { "http" }, "submilli-server listening");
 
     if let Some(tls) = tls {
-        return serve_listener(
+        serve_listener(
             crate::tls::Listener::new(listener, tls),
             router,
             signals,
             shutdown,
             shutdown_grace,
         )
-        .await;
+        .await
+    } else {
+        serve_listener(listener, router, signals, shutdown, shutdown_grace).await
     }
-    serve_listener(listener, router, signals, shutdown, shutdown_grace).await
 }
 
 async fn serve_listener<L>(
@@ -89,39 +169,57 @@ async fn serve_listener<L>(
     signals: ShutdownSignals,
     shutdown: Arc<Notify>,
     shutdown_grace: Duration,
-) -> Result<()>
+) -> Result<DrainStatus>
 where
     L: axum::serve::Listener<Addr = SocketAddr>,
     for<'a> PeerAddr: axum::extract::connect_info::Connected<axum::serve::IncomingStream<'a, L>>,
 {
-    // The handoff doubles as the "drain has begun" signal and as the transfer of
-    // the signal streams, which the deadline needs to notice a second signal.
+    // The handoff announces that draining has begun. The signal streams stay
+    // available for a second signal while database work drains after HTTP.
     let (draining, drain_started) = oneshot::channel();
+    let signals = Arc::new(Mutex::new(signals));
+    let shutdown_signals = Arc::clone(&signals);
+    let force_signals = Arc::clone(&signals);
+    let started_at = Arc::new(OnceLock::new());
+    let shutdown_started_at = Arc::clone(&started_at);
     let server = axum::serve(
         listener,
         router.into_make_service_with_connect_info::<PeerAddr>(),
     )
     .with_graceful_shutdown(async move {
-        let mut signals = signals;
+        let mut signals = shutdown_signals.lock().await;
         signals.recv(shutdown).await;
-        let _ = draining.send(signals);
+        drop(signals);
+        let started_at = tokio::time::Instant::now();
+        let _ = shutdown_started_at.set(started_at);
+        let _ = draining.send(started_at);
     })
     .into_future();
 
-    tokio::select! {
+    let forced = tokio::select! {
         // Biased so a drain that finishes as the deadline expires is reported as
         // the clean shutdown it was.
         biased;
-        result = server => result?,
-        cause = forced_stop(drain_started, shutdown_grace) => {
+        result = server => { result?; false },
+        cause = forced_stop(drain_started, force_signals, shutdown_grace) => {
             tracing::warn!(
                 %cause,
                 grace_secs = shutdown_grace.as_secs_f64(),
                 "stopped waiting with requests still in flight; their connections are being dropped"
             );
+            true
         }
+    };
+    if forced {
+        return Ok(DrainStatus::Forced);
     }
-    Ok(())
+    Ok(match started_at.get().copied() {
+        Some(started_at) => DrainStatus::Completed {
+            started_at,
+            signals,
+        },
+        None => DrainStatus::NoDrain,
+    })
 }
 
 #[derive(Clone)]
@@ -195,12 +293,17 @@ impl std::fmt::Display for Forced {
 /// drain never begins: the sender is dropped when the server ends for any other
 /// reason, and a deadline that fired on that would race the server's own clean
 /// return.
-async fn forced_stop(drain_started: oneshot::Receiver<ShutdownSignals>, grace: Duration) -> Forced {
-    let Ok(mut signals) = drain_started.await else {
+async fn forced_stop(
+    drain_started: oneshot::Receiver<tokio::time::Instant>,
+    signals: Arc<Mutex<ShutdownSignals>>,
+    grace: Duration,
+) -> Forced {
+    let Ok(started_at) = drain_started.await else {
         return std::future::pending().await;
     };
+    let mut signals = signals.lock().await;
     tokio::select! {
-        () = tokio::time::sleep(grace) => Forced::GraceElapsed,
+        () = wait_until(started_at.checked_add(grace)) => Forced::GraceElapsed,
         // An operator signalling twice has stopped waiting; honor that rather
         // than making them reach for SIGKILL.
         () = signals.recv_signal() => Forced::SecondSignal,
@@ -238,6 +341,35 @@ impl ShutdownSignals {
             _ = self.terminate.recv() => {},
             _ = self.interrupt.recv() => {},
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn forced_database_drain_releases_lock_after_work_finishes() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("server.db");
+        let database = Arc::new(crate::database::ServerDatabase::open(&path).await.unwrap());
+        close_database(database, Ok(DrainStatus::Forced), Duration::ZERO)
+            .await
+            .unwrap();
+        let reopened = tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                match crate::database::ServerDatabase::open(&path).await {
+                    Ok(database) => break database,
+                    Err(crate::database::DatabaseError::AlreadyOpen(_)) => {
+                        tokio::time::sleep(Duration::from_millis(10)).await;
+                    }
+                    Err(error) => panic!("unexpected database error: {error}"),
+                }
+            }
+        })
+        .await
+        .unwrap();
+        reopened.close().await.unwrap();
     }
 }
 

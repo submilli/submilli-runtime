@@ -45,6 +45,12 @@ pub struct ServerConfig {
     /// an in-memory store. Mount this on **durable** storage alongside
     /// `session_storage_root`.
     pub session_store_dir: Option<PathBuf>,
+    /// SQLite database opened by `serve` before accepting requests. Embedded
+    /// callers leave this unset and may inject their own stores.
+    pub database_path: Option<PathBuf>,
+    /// Open database supplied by the serving boundary. Takes precedence over
+    /// `database_path` when both are set; embedded callers can leave both unset.
+    pub database: Option<Arc<crate::database::ServerDatabase>>,
     /// Explicit idempotency ledger, backing `Idempotency-Key` on the session
     /// execute endpoint. When `None` and `session_store_dir` is set,
     /// `AppState::new` derives a file-backed ledger in a subdirectory of it;
@@ -188,6 +194,11 @@ pub fn default_session_storage_root() -> PathBuf {
 /// to — sibling to the VFS directories under the server root.
 pub fn default_session_store_dir() -> PathBuf {
     default_server_root().join("sessions")
+}
+
+/// Default server-owned SQLite database file.
+pub fn default_database_path() -> PathBuf {
+    default_server_root().join("submilli.db")
 }
 
 /// Default directory backing the encrypted secret store.
@@ -463,6 +474,7 @@ pub struct ServerDirectories {
     /// ledger in a subdirectory of it. A different directory from
     /// [`Self::session_storage_root`], with a different default.
     pub session_store_dir: Option<PathBuf>,
+    pub database_path: Option<PathBuf>,
     /// `None` means the OS temp directory, which is where ephemeral scratch
     /// lands when the operator configures no root.
     pub ephemeral_storage_root: Option<PathBuf>,
@@ -519,6 +531,11 @@ impl ServerDirectories {
                     .clone()
                     .unwrap_or_else(default_session_store_dir),
             ),
+            database_path: config
+                .database
+                .as_ref()
+                .map(|database| database.path().to_path_buf())
+                .or_else(|| config.database_path.clone()),
             ephemeral_storage_root: config.ephemeral_storage_root.clone(),
             managed_volume_root: Some(
                 config
@@ -973,7 +990,7 @@ fn guarded_dirs(dirs: &ServerDirectories) -> Vec<GuardedDir> {
         .ephemeral_storage_root
         .clone()
         .unwrap_or_else(std::env::temp_dir);
-    let rows: [(&'static str, Option<PathBuf>, Direction, &'static str); 18] = [
+    let rows: [(&'static str, Option<PathBuf>, Direction, &'static str); 19] = [
         (
             "secret store",
             dirs.secret_store_dir.clone(),
@@ -1046,6 +1063,12 @@ fn guarded_dirs(dirs: &ServerDirectories) -> Vec<GuardedDir> {
             "a guest read would reach every session's stored variables and the recorded response \
              body of every idempotent execute, and a guest write could repoint a session at \
              another blueprint — running it under that blueprint's permissions",
+        ),
+        (
+            "server database",
+            dirs.database_path.clone(),
+            Direction::VolumeContains,
+            "a guest could read or replace persistent server metadata",
         ),
         (
             "durable session store",

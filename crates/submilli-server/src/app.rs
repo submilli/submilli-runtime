@@ -65,6 +65,7 @@ struct AppStateInner {
     boot_lock: AsyncMutex<()>,
     booted: AtomicBool,
     router_ready: AtomicBool,
+    database: Option<Arc<crate::database::ServerDatabase>>,
     audit: crate::audit::AuditLog,
     auth: Arc<AuthConfig>,
     engine: Engine,
@@ -225,6 +226,7 @@ impl AppState {
                 boot_lock: AsyncMutex::new(()),
                 booted: AtomicBool::new(false),
                 router_ready: AtomicBool::new(false),
+                database: config.database,
                 audit,
                 auth: Arc::new(config.auth),
                 network_policy: Arc::clone(&policy),
@@ -315,6 +317,10 @@ impl AppState {
 
     pub fn audit(&self) -> &crate::audit::AuditLog {
         &self.inner.audit
+    }
+
+    pub fn database(&self) -> Option<Arc<crate::database::ServerDatabase>> {
+        self.inner.database.clone()
     }
 
     pub(crate) fn auth(&self) -> Arc<AuthConfig> {

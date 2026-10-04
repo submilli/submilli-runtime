@@ -7,6 +7,7 @@ pub mod auth;
 pub mod blueprint;
 mod compiler_thread;
 pub mod config;
+pub mod database;
 pub mod error;
 mod execution_timeout;
 pub mod handlers;
