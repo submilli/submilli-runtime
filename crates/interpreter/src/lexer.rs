@@ -95,6 +95,7 @@ impl<'a> Lexer<'a> {
                 // Returns early to bypass finalize so pending_docs survive intervening newlines.
                 b'\n' | b'\r' => return self.lex_newline(),
                 b'0'..=b'9' => self.lex_number(),
+                b'.' if self.digit_at(1) => self.lex_number(),
                 b'"' | b'\'' => self.lex_string(b),
                 b'`' => {
                     let start = self.pos;
@@ -186,6 +187,10 @@ impl<'a> Lexer<'a> {
             return None;
         }
         self.bytes.get(self.pos as usize).copied()
+    }
+
+    fn digit_at(&self, offset: usize) -> bool {
+        self.peek_at(offset).is_some_and(|b| b.is_ascii_digit())
     }
 
     fn peek_at(&self, offset: usize) -> Option<u8> {
@@ -350,6 +355,8 @@ impl<'a> Lexer<'a> {
         Token::new(TokenKind::Newline, self.span(start, self.pos))
     }
 
+    /// Entered at a digit, or at a `.` followed by a digit (`.5`), whose integer
+    /// part is then empty.
     fn lex_number(&mut self) -> Token {
         let start = self.pos;
 
@@ -359,19 +366,33 @@ impl<'a> Lexer<'a> {
             return self.lex_radix_number(start, radix);
         }
 
+        let token = self.lex_decimal_number(start);
+        if matches!(
+            token.kind,
+            TokenKind::NumberLiteral(_) | TokenKind::BigIntLiteral(_)
+        ) {
+            self.reject_leading_zero(token.span);
+        }
+        token
+    }
+
+    fn lex_decimal_number(&mut self, start: u32) -> Token {
         let mut has_fraction_or_exponent = false;
 
-        while matches!(self.peek(), Some(b'0'..=b'9')) {
-            self.pos += 1;
-        }
+        self.scan_digits(|b| b.is_ascii_digit());
 
-        let int_end = self.pos;
-
-        if self.peek() == Some(b'.') && matches!(self.peek_at(1), Some(b'0'..=b'9')) {
-            has_fraction_or_exponent = true;
-            self.pos += 1;
-            while matches!(self.peek(), Some(b'0'..=b'9')) {
-                self.pos += 1;
+        let Some(int_part) = self.source.get(start as usize..self.pos as usize) else {
+            return self.fail("invalid numeric literal span");
+        };
+        if self.peek() == Some(b'.') {
+            match self.decimal_point_role(int_part) {
+                DecimalPoint::Literal => {
+                    has_fraction_or_exponent = true;
+                    self.pos += 1;
+                    self.scan_digits(|b| b.is_ascii_digit());
+                }
+                DecimalPoint::MemberAccess => {}
+                DecimalPoint::NameAfter => self.report_name_after_decimal_point(start, int_part),
             }
         }
 
@@ -383,9 +404,7 @@ impl<'a> Lexer<'a> {
                 self.pos += 1;
             }
             let digits_start = self.pos;
-            while matches!(self.peek(), Some(b'0'..=b'9')) {
-                self.pos += 1;
-            }
+            self.scan_digits(|b| b.is_ascii_digit());
             if digits_start == self.pos {
                 self.error(self.span(exp_start, self.pos), "missing digits in exponent");
                 return Token::new(
@@ -404,24 +423,17 @@ impl<'a> Lexer<'a> {
                     "bigint literal cannot have a fractional or exponent part; \
                      remove the `.` / exponent or drop the `n` suffix",
                 );
-                // Recovery: keep the integer prefix as the bigint payload.
-                let Some(digits) = self.source.get(start as usize..int_end as usize) else {
-                    return self.fail("invalid numeric literal span");
-                };
-                let digits = digits.to_string();
-                return Token::new(TokenKind::BigIntLiteral(digits), span);
             }
-            let Some(digits) = self.source.get(start as usize..(self.pos - 1) as usize) else {
-                return self.fail("invalid numeric literal span");
-            };
-            let digits = digits.to_string();
-            return Token::new(TokenKind::BigIntLiteral(digits), span);
+            // Without a fraction or exponent the digits are `int_part`; with one,
+            // keeping the integer prefix is the recovery.
+            return Token::new(TokenKind::BigIntLiteral(without_separators(int_part)), span);
         }
 
         let span = self.span(start, self.pos);
         let Some(lexeme) = self.source.get(start as usize..self.pos as usize) else {
             return self.fail("invalid token source span");
         };
+        let lexeme = without_separators(lexeme);
         let value = if let Ok(v) = lexeme.parse::<f64>() {
             v
         } else {
@@ -432,24 +444,124 @@ impl<'a> Lexer<'a> {
         Token::new(TokenKind::NumberLiteral(value), span)
     }
 
+    /// What the `.` at the current position, after the integer part `int_part`, is.
+    fn decimal_point_role(&self, int_part: &str) -> DecimalPoint {
+        if self.digit_at(1) {
+            return DecimalPoint::Literal;
+        }
+        if is_legacy_octal_digits(int_part) {
+            return DecimalPoint::MemberAccess;
+        }
+        if !self.identifier_starts_at(1) || self.literal_continues_after_point() {
+            return DecimalPoint::Literal;
+        }
+        DecimalPoint::NameAfter
+    }
+
+    /// After `1.`, an exponent (`1.e5`), a bigint suffix (`1.n`) and a separator
+    /// (`1._5`) belong to the literal and are checked as part of it. An `n` or `_`
+    /// that starts a longer name (`1.name`, `1._x`) does not.
+    fn literal_continues_after_point(&self) -> bool {
+        match self.peek_at(1) {
+            Some(b'e' | b'E') => true,
+            Some(b'n') => !self.identifier_continues_at(2),
+            Some(b'_') => {
+                let mut offset = 1;
+                while self.peek_at(offset) == Some(b'_') {
+                    offset += 1;
+                }
+                self.digit_at(offset) || !self.identifier_continues_at(offset)
+            }
+            _ => false,
+        }
+    }
+
+    /// Reports `1.toString()`. The `.` is then left as a member access, so the rest
+    /// parses as written instead of cascading into further errors.
+    fn report_name_after_decimal_point(&mut self, start: u32, int_part: &str) {
+        let help = match self.identifier_text_at(1) {
+            Some(name) if is_plain_decimal_integer(int_part) => format!(
+                "wrap the number in parentheses, `({int_part}).{name}`, or write `{int_part}..{name}`"
+            ),
+            _ => "wrap the number in parentheses, or write a second `.`".to_string(),
+        };
+        self.error_with_help(
+            self.span(start, self.pos + 1),
+            format!("`{int_part}.` is a complete number, so a name cannot follow it directly"),
+            vec![help],
+        );
+    }
+
+    /// Strict-mode JavaScript and TypeScript reject an integer part that starts with
+    /// `0` and has more digits: legacy octal (`010`, which sloppy JavaScript reads as
+    /// 8), decimals with a leading zero (`09`, `08.5`), and a separator after the
+    /// zero (`0_1`).
+    fn reject_leading_zero(&mut self, span: Span) {
+        // An invalid span is reported as a fatal error by `next_token`.
+        let Ok(literal) = span.text(self.source, self.file) else {
+            return;
+        };
+        let int_len = literal
+            .bytes()
+            .take_while(|b| b.is_ascii_digit() || *b == b'_')
+            .count();
+        let (int_part, rest) = literal.split_at(int_len);
+        let digits = without_separators(int_part);
+        if digits.len() < 2 || !digits.starts_with('0') {
+            return;
+        }
+        let significant = int_part.trim_start_matches(['0', '_']);
+        let suggested_literal = if significant.is_empty() {
+            format!("0{rest}")
+        } else {
+            format!("{significant}{rest}")
+        };
+        if int_part.as_bytes().get(1) == Some(&b'_') {
+            self.error_with_help(
+                span,
+                format!("a numeric separator cannot follow a leading `0` in `{literal}`"),
+                vec![format!("write `{suggested_literal}`")],
+            );
+            return;
+        }
+        if matches!(rest, "" | "n") && is_legacy_octal_digits(&digits) {
+            let help = if significant.is_empty() {
+                format!("write `{suggested_literal}`")
+            } else {
+                format!(
+                    "write `0o{significant}{rest}` for octal, or `{suggested_literal}` for decimal"
+                )
+            };
+            self.error_with_help(
+                span,
+                format!("legacy octal literal `{literal}` is not allowed"),
+                vec![help],
+            );
+            return;
+        }
+        self.error_with_help(
+            span,
+            format!("decimal literal `{literal}` cannot have a leading zero"),
+            vec![format!("write `{suggested_literal}`")],
+        );
+    }
+
     /// Lex a radix-prefixed integer literal (`0x`/`0b`/`0o`). `start` points at the
     /// leading `0`; the prefix letter has not been consumed yet. Trailing junk (e.g.
     /// `0xfg`) is left for the next token, matching how `123abc` lexes as `123` + `abc`.
     fn lex_radix_number(&mut self, start: u32, radix: Radix) -> Token {
         self.pos += 2; // `0` + prefix letter
         let digits_start = self.pos;
-        while self.peek().is_some_and(|b| radix.accepts(b)) {
-            self.pos += 1;
-        }
-        if self.pos == digits_start {
+        self.scan_digits(|b| radix.accepts(b));
+        let Some(digits) = self.source.get(digits_start as usize..self.pos as usize) else {
+            return self.fail("invalid numeric literal span");
+        };
+        let digits = without_separators(digits);
+        if digits.is_empty() {
             let span = self.span(start, self.pos);
             self.error(span, format!("missing digits after `{}`", radix.prefix()));
             return Token::new(TokenKind::NumberLiteral(f64::NAN), span);
         }
-        let Some(digits) = self.source.get(digits_start as usize..self.pos as usize) else {
-            return self.fail("invalid numeric literal span");
-        };
-        let digits = digits.to_string();
 
         if self.peek() == Some(b'n') {
             self.pos += 1;
@@ -463,6 +575,81 @@ impl<'a> Lexer<'a> {
             TokenKind::NumberLiteral(radix.to_f64(&digits)),
             self.span(start, self.pos),
         )
+    }
+
+    /// Consumes a run of digits that may contain numeric separators (`1_000`). A
+    /// separator is valid only as a single `_` between two digits of the run; a
+    /// misplaced one is reported and consumed, and a run that doesn't continue with
+    /// a digit after it ends there.
+    fn scan_digits(&mut self, is_digit: impl Fn(u8) -> bool) {
+        let mut follows_digit = false;
+        loop {
+            match self.peek() {
+                Some(b) if is_digit(b) => {
+                    self.pos += 1;
+                    follows_digit = true;
+                }
+                Some(b'_') => {
+                    let separator_start = self.pos;
+                    while self.peek() == Some(b'_') {
+                        self.pos += 1;
+                    }
+                    let precedes_digit = self.peek().is_some_and(&is_digit);
+                    self.check_separator(separator_start, follows_digit && precedes_digit);
+                    if !precedes_digit {
+                        return;
+                    }
+                    follows_digit = false;
+                }
+                _ => return,
+            }
+        }
+    }
+
+    fn check_separator(&mut self, start: u32, is_between_digits: bool) {
+        let span = self.span(start, self.pos);
+        if !is_between_digits {
+            self.error_with_help(
+                span,
+                "numeric separators are only allowed between digits",
+                vec!["remove the `_`".to_string()],
+            );
+        } else if self.pos - start > 1 {
+            self.error_with_help(
+                span,
+                "only one numeric separator is allowed between digits",
+                vec!["remove the extra `_`".to_string()],
+            );
+        }
+    }
+
+    fn identifier_starts_at(&self, offset: usize) -> bool {
+        match self.peek_at(offset) {
+            Some(b) if b.is_ascii_alphabetic() || b == b'$' || b == b'_' => true,
+            Some(0x80..) => self.char_at(offset).is_some_and(is_xid_start),
+            _ => false,
+        }
+    }
+
+    fn identifier_continues_at(&self, offset: usize) -> bool {
+        self.char_at(offset).is_some_and(is_identifier_continue)
+    }
+
+    /// The identifier starting `offset` bytes ahead, for a help message.
+    fn identifier_text_at(&self, offset: usize) -> Option<&'a str> {
+        let start = (self.pos as usize).checked_add(offset)?;
+        let rest = self.source.get(start..)?;
+        let len: usize = rest
+            .chars()
+            .take_while(|&c| is_identifier_continue(c))
+            .map(char::len_utf8)
+            .sum();
+        rest.get(..len).filter(|name| !name.is_empty())
+    }
+
+    fn char_at(&self, offset: usize) -> Option<char> {
+        let start = (self.pos as usize).checked_add(offset)?;
+        self.source.get(start..)?.chars().next()
     }
 
     fn lex_string(&mut self, quote: u8) -> Token {
@@ -761,7 +948,7 @@ impl<'a> Lexer<'a> {
         };
         self.pos += first.len_utf8() as u32;
         while let Some(c) = self.peek_char() {
-            if c == '_' || c == '$' || is_xid_continue(c) {
+            if is_identifier_continue(c) {
                 self.pos += c.len_utf8() as u32;
             } else {
                 break;
@@ -997,7 +1184,8 @@ impl<'a> Lexer<'a> {
             b':' => TokenKind::Colon,
             b';' => TokenKind::Semicolon,
             b'?' => match self.peek() {
-                Some(b'.') => {
+                // `?.5` is a ternary on `.5`, as in JavaScript, not optional chaining.
+                Some(b'.') if !self.digit_at(1) => {
                     self.pos += 1;
                     TokenKind::QuestionDot
                 }
@@ -1082,6 +1270,38 @@ impl<'a> Lexer<'a> {
             None => self.pos += 1,
         }
     }
+}
+
+fn is_identifier_continue(c: char) -> bool {
+    c == '_' || c == '$' || is_xid_continue(c)
+}
+
+/// What the `.` right after a decimal integer part is.
+enum DecimalPoint {
+    /// Part of the literal: `1.`, `1.5`, `1.e5`, and the first `.` of `1..toString()`.
+    Literal,
+    /// A member access after a legacy octal integer (`010.toString()`), which has no
+    /// fraction in JavaScript.
+    MemberAccess,
+    /// A name directly after the `.` (`1.toString()`), which is an error.
+    NameAfter,
+}
+
+/// Whether `int_part` is a well-formed decimal integer, so a help message can repeat it.
+fn is_plain_decimal_integer(int_part: &str) -> bool {
+    let has_leading_zero = int_part.len() > 1 && int_part.starts_with('0');
+    !has_leading_zero && !int_part.ends_with('_') && !int_part.contains("__")
+}
+
+/// An integer part sloppy JavaScript reads as octal: a `0` followed by octal digits.
+fn is_legacy_octal_digits(int_part: &str) -> bool {
+    int_part.len() >= 2
+        && int_part.starts_with('0')
+        && int_part.bytes().all(|digit| matches!(digit, b'0'..=b'7'))
+}
+
+fn without_separators(digits: &str) -> String {
+    digits.replace('_', "")
 }
 
 /// A radix-prefixed integer literal base (`0x`, `0b`, `0o`).
@@ -1438,18 +1658,6 @@ mod tests {
     }
 
     #[test]
-    fn trailing_dot_is_now_dot() {
-        let (tokens, diags) = tokenize_all("1.");
-        assert!(diags.is_empty());
-        let kinds: Vec<_> = tokens.iter().map(|t| &t.kind).collect();
-        assert!(matches!(kinds[0], TokenKind::NumberLiteral(v) if *v == 1.0));
-        assert_eq!(tokens[0].span, Span::new(F, 0, 1).unwrap());
-        assert_eq!(tokens[1].kind, TokenKind::Dot);
-        assert_eq!(tokens[1].span, Span::new(F, 1, 2).unwrap());
-        assert_eq!(tokens[2].kind, TokenKind::Eof);
-    }
-
-    #[test]
     fn bare_exponent_is_nan_with_diagnostic() {
         let mut lx = Lexer::new("1e", crate::FileId(0));
         let tok = lx.next_token();
@@ -1622,6 +1830,217 @@ mod tests {
                 diags[0].message
             );
         }
+    }
+
+    fn expect_single_leading_zero_error(source: &str, message: &str, help: &str) {
+        let (_, eof, diags) = tokenize_one(source);
+        assert_eq!(
+            eof.kind,
+            TokenKind::Eof,
+            "{source:?} should lex as one token"
+        );
+        assert_eq!(diags.len(), 1, "diags for {source:?}: {diags:?}");
+        assert_eq!(diags[0].message, message, "message for {source:?}");
+        assert_eq!(diags[0].help, vec![help.to_string()], "help for {source:?}");
+        let source_len = u32::try_from(source.len()).unwrap();
+        assert_eq!(diags[0].span, Span::new(F, 0, source_len).unwrap());
+    }
+
+    #[test]
+    fn lex_legacy_octal_rejected() {
+        expect_single_leading_zero_error(
+            "010",
+            "legacy octal literal `010` is not allowed",
+            "write `0o10` for octal, or `10` for decimal",
+        );
+        expect_single_leading_zero_error(
+            "010n",
+            "legacy octal literal `010n` is not allowed",
+            "write `0o10n` for octal, or `10n` for decimal",
+        );
+        expect_single_leading_zero_error(
+            "000",
+            "legacy octal literal `000` is not allowed",
+            "write `0`",
+        );
+    }
+
+    #[test]
+    fn lex_leading_zero_decimal_rejected() {
+        expect_single_leading_zero_error(
+            "09",
+            "decimal literal `09` cannot have a leading zero",
+            "write `9`",
+        );
+        expect_single_leading_zero_error(
+            "08.5",
+            "decimal literal `08.5` cannot have a leading zero",
+            "write `8.5`",
+        );
+        expect_single_leading_zero_error(
+            "00.5",
+            "decimal literal `00.5` cannot have a leading zero",
+            "write `0.5`",
+        );
+        expect_single_leading_zero_error(
+            "07e1",
+            "decimal literal `07e1` cannot have a leading zero",
+            "write `7e1`",
+        );
+        expect_single_leading_zero_error(
+            "08n",
+            "decimal literal `08n` cannot have a leading zero",
+            "write `8n`",
+        );
+    }
+
+    #[test]
+    fn lex_single_leading_zero_accepted() {
+        expect_number("0", 0.0, Span::new(F, 0, 1).unwrap());
+        expect_number("0.5", 0.5, Span::new(F, 0, 3).unwrap());
+        expect_number("0e1", 0.0, Span::new(F, 0, 3).unwrap());
+        expect_number("0.010", 0.01, Span::new(F, 0, 5).unwrap());
+        expect_number("1e010", 1e10, Span::new(F, 0, 5).unwrap());
+        expect_number("0x010", 16.0, Span::new(F, 0, 5).unwrap());
+        expect_bigint("0n", "0", Span::new(F, 0, 2).unwrap());
+    }
+
+    #[test]
+    fn lex_numeric_separators() {
+        expect_number("1_000", 1000.0, Span::new(F, 0, 5).unwrap());
+        expect_number("1_000.5_5", 1000.55, Span::new(F, 0, 9).unwrap());
+        expect_number("1e1_0", 1e10, Span::new(F, 0, 5).unwrap());
+        expect_number("0.0_1", 0.01, Span::new(F, 0, 5).unwrap());
+        expect_number("0xF_F", 255.0, Span::new(F, 0, 5).unwrap());
+        expect_number("0b1_0", 2.0, Span::new(F, 0, 5).unwrap());
+        expect_number("0o1_7", 15.0, Span::new(F, 0, 5).unwrap());
+        expect_bigint("1_000n", "1000", Span::new(F, 0, 6).unwrap());
+        expect_bigint("0xF_Fn", "255", Span::new(F, 0, 6).unwrap());
+        expect_number("0XF_F", 255.0, Span::new(F, 0, 5).unwrap());
+        expect_number("0B1_0", 2.0, Span::new(F, 0, 5).unwrap());
+        expect_number("0O1_7", 15.0, Span::new(F, 0, 5).unwrap());
+        expect_number("1E1_0", 1e10, Span::new(F, 0, 5).unwrap());
+        expect_number("1e+1_0", 1e10, Span::new(F, 0, 6).unwrap());
+        expect_number("1e-1_0", 1e-10, Span::new(F, 0, 6).unwrap());
+    }
+
+    #[test]
+    fn lex_misplaced_numeric_separator_rejected() {
+        for source in [
+            "1_", "1_.5", "1._5", "1_e5", "1e_5", "1e+_5", "1_n", "0x_1", "0x1_",
+        ] {
+            let (_, eof, diags) = tokenize_one(source);
+            assert_eq!(
+                eof.kind,
+                TokenKind::Eof,
+                "{source:?} should lex as one token"
+            );
+            assert_eq!(diags.len(), 1, "diags for {source:?}: {diags:?}");
+            assert_eq!(
+                diags[0].message, "numeric separators are only allowed between digits",
+                "message for {source:?}"
+            );
+        }
+        let (_, _, diags) = tokenize_one("1__0");
+        assert_eq!(diags.len(), 1, "diags: {diags:?}");
+        assert_eq!(
+            diags[0].message,
+            "only one numeric separator is allowed between digits"
+        );
+        assert_eq!(diags[0].span, Span::new(F, 1, 3).unwrap());
+        expect_single_leading_zero_error(
+            "0_1",
+            "a numeric separator cannot follow a leading `0` in `0_1`",
+            "write `1`",
+        );
+    }
+
+    #[test]
+    fn lex_number_ending_in_decimal_point() {
+        expect_number("1.", 1.0, Span::new(F, 0, 2).unwrap());
+        expect_number("1.e5", 1e5, Span::new(F, 0, 4).unwrap());
+        expect_number("0.", 0.0, Span::new(F, 0, 2).unwrap());
+        let (tokens, diags) = tokenize_all("1..toString");
+        assert!(diags.is_empty(), "unexpected diagnostics: {diags:?}");
+        assert!(matches!(tokens[0].kind, TokenKind::NumberLiteral(v) if v == 1.0));
+        assert_eq!(tokens[0].span, Span::new(F, 0, 2).unwrap());
+        assert_eq!(tokens[1].kind, TokenKind::Dot);
+    }
+
+    #[test]
+    fn lex_number_starting_with_decimal_point() {
+        expect_number(".5", 0.5, Span::new(F, 0, 2).unwrap());
+        expect_number(".5e1", 5.0, Span::new(F, 0, 4).unwrap());
+        expect_number(".5_5", 0.55, Span::new(F, 0, 4).unwrap());
+        // `?.` before a digit is a ternary `?` and a number, as in JavaScript.
+        let (tokens, diags) = tokenize_all("c?.5:1");
+        assert!(diags.is_empty(), "unexpected diagnostics: {diags:?}");
+        assert_eq!(tokens[1].kind, TokenKind::Question);
+        assert!(matches!(tokens[2].kind, TokenKind::NumberLiteral(v) if v == 0.5));
+        let (tokens, _) = tokenize_all("c?.x");
+        assert_eq!(tokens[1].kind, TokenKind::QuestionDot);
+        // Errors in a leading-dot literal are checked as in any other.
+        let (_, _, diags) = tokenize_one(".5n");
+        assert_eq!(diags.len(), 1, "diags: {diags:?}");
+        assert!(
+            diags[0]
+                .message
+                .contains("bigint literal cannot have a fractional")
+        );
+        let (_, _, diags) = tokenize_one(".5_");
+        assert_eq!(diags.len(), 1, "diags: {diags:?}");
+        assert_eq!(
+            diags[0].message,
+            "numeric separators are only allowed between digits"
+        );
+    }
+
+    #[test]
+    fn lex_name_after_decimal_point_rejected() {
+        // A name starting with `n` or `_` is a name, not a bigint suffix or separator.
+        for (source, literal_end) in [
+            ("1.toString", 2),
+            ("1_0.x", 4),
+            ("1.$", 2),
+            ("1.name", 2),
+            ("1._x", 2),
+            ("1.\u{e4}", 2),
+        ] {
+            let (tokens, diags) = tokenize_all(source);
+            assert_eq!(diags.len(), 1, "diags for {source:?}: {diags:?}");
+            assert!(
+                diags[0].message.contains("is a complete number"),
+                "message for {source:?}: {diags:?}"
+            );
+            assert_eq!(diags[0].span, Span::new(F, 0, literal_end).unwrap());
+            // The `.` is left as a member access, so the rest parses as written.
+            assert_eq!(tokens[1].kind, TokenKind::Dot, "tokens for {source:?}");
+        }
+        let (_, diags) = tokenize_all("1.toString");
+        assert_eq!(
+            diags[0].help,
+            vec!["wrap the number in parentheses, `(1).toString`, or write `1..toString`"]
+        );
+        let (_, diags) = tokenize_all("1.\u{e4}");
+        assert_eq!(
+            diags[0].help,
+            vec!["wrap the number in parentheses, `(1).\u{e4}`, or write `1..\u{e4}`"]
+        );
+        // Repeating a literal that is itself an error would suggest broken code.
+        let (_, diags) = tokenize_all("1_.x");
+        assert_eq!(diags.len(), 2, "diags: {diags:?}");
+        assert_eq!(
+            diags[1].help,
+            vec!["wrap the number in parentheses, or write a second `.`"]
+        );
+    }
+
+    #[test]
+    fn lex_legacy_octal_leaves_decimal_point() {
+        let (tokens, diags) = tokenize_all("010.toString");
+        assert_eq!(diags.len(), 1, "diags: {diags:?}");
+        assert!(diags[0].message.contains("legacy octal literal `010`"));
+        assert_eq!(tokens[1].kind, TokenKind::Dot);
     }
 
     #[test]

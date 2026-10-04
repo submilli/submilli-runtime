@@ -5,7 +5,7 @@ in `/`) is left out whole, with its subdirectories, except for any case in the s
 Written by `../typescript-baselines/port-suite.cjs`: change its lists or the porter,
 not this file. Declaration files (`.d.ts`) aren't cases, and `.tsx` files aren't read.
 
-3898 entries: 1701 not supported, 1019 multi-file or JavaScript, 717 the port changes what it checks, 99 duplicate, 293 checks too little, 69 porter failure.
+3897 entries: 1696 not supported, 1019 multi-file or JavaScript, 717 the port changes what it checks, 99 duplicate, 297 checks too little, 69 porter failure.
 
 | Case | Reason | Detail |
 |:-----|:-------|:-------|
@@ -958,7 +958,6 @@ not this file. Declaration files (`.d.ts`) aren't cases, and `.tsx` files aren't
 | `es6/newTarget/newTarget.es5.ts` | not supported | expected expression, on ` const a = new.target; ` |
 | `es6/newTarget/newTarget.es6.ts` | not supported | expected expression, on ` const a = new.target; ` |
 | `es6/newTarget/newTargetNarrowing.ts` | not supported | expected expression, on ` if (new.target.marked === true) { ` |
-| `es6/propertyAccess/propertyAccessNumericLiterals.es6.ts` | not supported | expected field name after `.`, on ` 1234..toString(); ` |
 | `es6/restParameters/emitRestParametersFunction.ts` | the port changes what it checks | `tsc` then reports TS7019 |
 | `es6/restParameters/emitRestParametersFunctionES6.ts` | the port changes what it checks | `tsc` then reports TS7019 |
 | `es6/restParameters/emitRestParametersFunctionExpression.ts` | the port changes what it checks | `tsc` then reports TS7019 |
@@ -2376,13 +2375,13 @@ not this file. Declaration files (`.d.ts`) aren't cases, and `.tsx` files aren't
 | `override/overrideWithoutNoImplicitOverride1.ts` | not supported | expected a declaration after `export`, on ` export declare class AmbientClass { ` |
 | `parser/ecmascript2018/asyncGenerators/` | not supported | async/await and generators |
 | `parser/ecmascript2018/forAwait/` | not supported | async/await |
-| `parser/ecmascript2021/numericSeparators/parser.numericSeparators.binary.ts` | not supported | expected `;` after expression, on ` 0b00_11; ` |
+| `parser/ecmascript2021/numericSeparators/parser.numericSeparators.binary.ts` | checks too little | 0 after the port |
 | `parser/ecmascript2021/numericSeparators/parser.numericSeparators.binaryNegative.ts` | multi-file or JavaScript |  |
-| `parser/ecmascript2021/numericSeparators/parser.numericSeparators.decimal.ts` | not supported | expected `;` after expression, on ` 1_000_000_000 ` |
+| `parser/ecmascript2021/numericSeparators/parser.numericSeparators.decimal.ts` | checks too little | 0 after the port |
 | `parser/ecmascript2021/numericSeparators/parser.numericSeparators.decmialNegative.ts` | multi-file or JavaScript |  |
-| `parser/ecmascript2021/numericSeparators/parser.numericSeparators.hex.ts` | not supported | expected `;` after expression, on ` 0x00_11; ` |
+| `parser/ecmascript2021/numericSeparators/parser.numericSeparators.hex.ts` | checks too little | 0 after the port |
 | `parser/ecmascript2021/numericSeparators/parser.numericSeparators.hexNegative.ts` | multi-file or JavaScript |  |
-| `parser/ecmascript2021/numericSeparators/parser.numericSeparators.octal.ts` | not supported | expected `;` after expression, on ` 0o00_11; ` |
+| `parser/ecmascript2021/numericSeparators/parser.numericSeparators.octal.ts` | checks too little | 0 after the port |
 | `parser/ecmascript2021/numericSeparators/parser.numericSeparators.octalNegative.ts` | multi-file or JavaScript |  |
 | `parser/ecmascript2021/numericSeparators/parser.numericSeparators.unicodeEscape.ts` | multi-file or JavaScript |  |
 | `parser/ecmascript3/Accessors/parserES3Accessors1.ts` | checks too little | 1 after the port |

@@ -122,6 +122,7 @@ const FEATURES = [
       { name: "`0o`", node: numeral(/^0o/i) },
       { name: "`n` suffix", node: (n) => n.kind === K.BigIntLiteral && /^0[xbo]/i.test(n.getText()) },
     ] },
+    { name: "Numeric separators (`1_000`)", spec: "1.1", node: numeral(/_/) },
     { name: "`unknown`", spec: "2.11", type: typeWord("unknown"), node: is(K.UnknownKeyword) },
     { name: "Object types (`{ x: T }`)", spec: "1.2", type: /^\{ /, node: is(K.TypeLiteral, K.ObjectLiteralExpression) },
     { name: "Optional properties (`a?: T`)", spec: "1.2", node: (n) => ts.isPropertySignature(n) && !!n.questionToken },
