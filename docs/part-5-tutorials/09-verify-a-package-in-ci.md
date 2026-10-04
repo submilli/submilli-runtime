@@ -108,6 +108,14 @@ will print when the pull request is good.
 
 ## The workflow
 
+An agent can also inspect whether the package uses the values it authorizes.
+Add a separate required security review using
+[Codex](/docs/tutorials/security-review-codex),
+[Claude Code](/docs/tutorials/security-review-claude), or
+[GitHub Copilot](/docs/tutorials/security-review-copilot).
+These reviews supplement tests; a model can miss a defect even when its review
+completes successfully.
+
 ```yaml title=".github/workflows/test.yml"
 name: Test
 

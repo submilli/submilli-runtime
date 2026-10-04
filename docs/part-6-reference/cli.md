@@ -438,12 +438,13 @@ Scaffold, check, and publish a package project (submilli.toml)
 Usage: submilli build <COMMAND>
 
 Commands:
-  init           Create a submilli.toml with a first package and scaffold its folders
-  new            Add a new package to submilli.toml and scaffold its folders
-  check          Compile the project's packages in dependency order without installing
-  publish-local  Compile the project's packages and install them into the local store
-  test           Compile and run the project's `tests/**/*.test.{ts,subm}` files
-  help           Print this message or the help of the given subcommand(s)
+  init             Create a submilli.toml with a first package and scaffold its folders
+  new              Add a new package to submilli.toml and scaffold its folders
+  check            Compile the project's packages in dependency order without installing
+  publish-local    Compile the project's packages and install them into the local store
+  test             Compile and run the project's `tests/**/*.test.{ts,subm}` files
+  security-review  Review package authorization with Codex, Claude Code, or Copilot CLI
+  help             Print this message or the help of the given subcommand(s)
 
 Options:
   -h, --help  Print help
@@ -522,6 +523,24 @@ Options:
   -h, --help               Print help
 
 Tests receive no credentials by default. Credential precedence (highest first): --env-var > --env-file > --all-env, regardless of argument order.
+```
+
+### `submilli build security-review`
+
+```text
+Review package authorization with Codex, Claude Code, or Copilot CLI
+
+Usage: submilli build security-review [OPTIONS] --agent <AGENT> --model <MODEL>
+
+Options:
+  -a, --agent <AGENT>      Installed coding agent to invoke; uses its existing authentication [possible values: codex, claude, copilot]
+  -m, --model <MODEL>      Provider model ID; "astra" resolves to gpt-6-astra for Codex/Copilot
+  -e, --effort <EFFORT>    Reasoning effort; the selected CLI/model must support it [possible values: low, medium, high]
+  -p, --package <PACKAGE>  Review this package and its local dependency closure; default: all packages
+      --fail-on <FAIL_ON>  Fail on findings at this severity or higher. Incomplete reviews always fail [default: high] [possible values: low, medium, high, critical]
+      --output <FILE>      Write a JSON report, including failures. Refuses to replace an existing file
+      --timeout <TIMEOUT>  Maximum time for the agent, in seconds (1–3600) [default: 600]
+  -h, --help               Print help
 ```
 
 ## `submilli install`
