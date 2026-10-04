@@ -18,9 +18,6 @@ This chapter makes the case in three steps: the industry is converging on
 agents that write code; those programs need rules about what they may do;
 Submilli enforces those rules. One example of each.
 
-For a short walkthrough, see [Execution model](/docs/concepts/execution-model/)
-and the [introduction transcript](/docs/videos/code-execution-introduction/).
-
 ## The industry already agrees
 
 Tool calling has a structural cost: every step is a model turn, and every
