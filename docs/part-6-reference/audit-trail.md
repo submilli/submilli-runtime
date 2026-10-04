@@ -3,8 +3,8 @@ title: "Audit trail"
 description: "Every record submilli-server writes to its audit trail: the fields all records share, and the decision, execution, session, admin, auth, and server records with their events and fields."
 slug: reference/audit-trail
 # Records captured from a build of the audit branch (SUB-1317); every
-# record type's fields re-checked against main 08a944c8. Package and MCP
-# login records are described from the code; no example was captured.
+# record type's fields re-checked against main 08a944c8. MCP login records
+# are described from the code; no example was captured.
 sidebar:
   order: 10
 ---
@@ -35,9 +35,10 @@ ts=2026-10-03T20:02:39.647Z level=info stream=audit target=submilli_server::audi
 
 After the first five keys the fields are in alphabetical order. A
 nested value is flattened into dotted keys, and a list by position:
-`vars.0.name=customerId vars.0.value=cus_northwind`. A text value is cut
-at 512 characters, and a URL loses its user, password, query string, and
-fragment.
+`vars.0.name=customerId vars.0.value=cus_northwind`. The selected
+quick-search `context.*` text fields are cut at 512 characters, and a
+URL loses its user, password, query string, and fragment. The full
+JSON in `context.payload_json` has neither transformation.
 
 ## `decision`
 
@@ -45,7 +46,7 @@ One for each operation a program was refused, and for operations it was
 allowed as the `allows` setting says.
 
 ```text
-ts=2026-10-03T20:02:39.695Z level=info stream=audit target=submilli_server::audit msg=decision blueprint=support blueprint_hash=5a2a1e61c440e6b36c43c60b2eff7ecad0ed7989bf5dee30d486678206a480d0 caller=main capability=fs.write context.length=1 context.path=/etc/passwd decision=deny event_id=4760971b-3dee-412c-9dea-b1d77bcb1420 execution_id=0dfa846a-4483-4b8a-b271-45339daecbaf principal=SUBMILLI_SERVER_TOKEN reason="policy denied the capability" rule=default schema=submilli.audit/1 source=policy type=decision
+ts=2026-10-04T05:44:32.121Z level=info stream=audit target=submilli_server::audit msg=decision blueprint=test blueprint_hash=35d4367e3fb94fcad8d47c0af8c7f2a054a229a69f069928dfcca5f53d835ac5 caller=main capability=fs.write context.length=11 context.path=/denied context.payload_json="{\"length\":11,\"path\":\"/denied\"}" decision=deny event_id=b2a431fb-87ba-4602-8859-013f5f2a8e83 execution_id=375d5dae-685c-4920-a471-c350f1b33271 principal=unauthenticated reason="policy denied the capability" rule=default schema=submilli.audit/1 source=policy type=decision
 ```
 
 | Field | Value |
@@ -56,32 +57,49 @@ ts=2026-10-03T20:02:39.695Z level=info stream=audit target=submilli_server::audi
 | `principal` | The name of the API token the request carried |
 | `caller` | `main`, or the package that made the call |
 | `capability` | The operation, such as `fs.write` or `acme.com/credits.apply` |
-| `context.*` | The operation's fields, as below |
+| `context.*` | The operation's fields, as below, including `payload_json` |
 | `decision` | `allow` or `deny` |
 | `source` | What decided: `policy`, the blueprint's rules; `invariant`, a refusal no rule can change, such as `secrets.get` from `main`; `read_only`, a write into a read-only volume; `egress_guard`, the block on private addresses; `quota`, a model-token or session-state budget |
 | `rule` | The rule that decided, by its position in the caller's list from `0`, or `default` |
 | `reason` | Why it was refused; refusals only |
 
-`context` keeps only these fields of the operation, and only when their
-value is text, a number, or a boolean: `host`, `path`, `url_path`,
+`context.payload_json` is the complete JSON context passed to the policy
+check, serialized as one logfmt text value. Parse that value as JSON to
+recover objects, arrays, numbers, booleans, and nulls. It is written for
+package `check()` calls and built-in operations alike, including refusals.
+It is not redacted or shortened: package authors and operators should treat
+the audit destination as a store of the data passed to permission checks.
+An encoded audit record over 1 MiB is rejected in full, reported to
+standard error, and does not stop the program.
+
+For quick searches, `context` also keeps these fields of the operation,
+and only when their value is text, a number, or a boolean: `host`, `path`, `url_path`,
 `vfs_path`, `from`, `to`, `method`, `tool`, `tool_name`, `name`,
 `secret`, `model`, `key`, `prefix`, `body_size`, `timeout_ms`,
 `max_bytes`, `overwrite`, `decompress`, `prompt_count`, `op`, `length`,
 `recursive`, `remote`, `remoteName`, `branch`, and `transport`.
 
-Under `allows: summary`, a run's allowed operations are written when the
-run finishes, one record for each caller, capability, and rule, with the
-number of operations and the first of their contexts:
+This refused `acme.com/credits.apply` call came from a package run with
+`check("acme.com/credits.apply", { customerId: "cus_northwind", amount: 42,
+customerClass: "business" })`:
 
 ```text
-ts=2026-10-03T20:02:39.695Z level=info stream=audit target=submilli_server::audit msg=decision blueprint=support blueprint_hash=5a2a1e61c440e6b36c43c60b2eff7ecad0ed7989bf5dee30d486678206a480d0 caller=main capability=fs.write contexts.0.length=11 contexts.0.path=/notes/today.md count=1 decision=allow event_id=8dbb5484-20ed-4f22-aea6-901fd3b0783d execution_id=0dfa846a-4483-4b8a-b271-45339daecbaf principal=SUBMILLI_SERVER_TOKEN rule=1 schema=submilli.audit/1 source=policy type=decision
+ts=2026-10-04T05:37:48.530Z level=info stream=audit target=submilli_server::audit msg=decision blueprint=test blueprint_hash=35d4367e3fb94fcad8d47c0af8c7f2a054a229a69f069928dfcca5f53d835ac5 caller=main capability=acme.com/credits.apply context.payload_json="{\"amount\":42,\"customerClass\":\"business\",\"customerId\":\"cus_northwind\"}" decision=deny event_id=0991217e-e863-4f0d-b4f5-cd85e61aea85 execution_id=3506cc41-9d9d-4c2e-b76a-2f11d6fb433e principal=unauthenticated reason="policy denied the capability" rule=default schema=submilli.audit/1 source=policy type=decision
+```
+
+Under `allows: summary`, a run's allowed operations are written when the
+run finishes, one record for each caller, capability, and rule, with the
+number of operations and up to ten distinct contexts:
+
+```text
+ts=2026-10-04T05:44:32.155Z level=info stream=audit target=submilli_server::audit msg=decision blueprint=test blueprint_hash=587d2f32ff8c32f8808d17e4ff4a41b3250b70628c067500c527b726a193e6a9 caller=main capability=acme.com/credits.apply contexts.0.payload_json="{\"amount\":42,\"customerClass\":\"business\",\"customerId\":\"cus_northwind\"}" count=1 decision=allow event_id=555cbab7-33e1-4c34-9d9b-bcbe23b5b5a6 execution_id=7adecd7f-273e-41a7-ad4d-8e606315b102 principal=unauthenticated rule=0 schema=submilli.audit/1 source=policy type=decision
 ```
 
 | Field | Value |
 | --- | --- |
 | `count` | How many operations the record stands for |
-| `contexts.*` | The first contexts, each numbered from `0` |
-| `summary_overflow` | `true` when the run used more summaries than the server keeps; the operations past that point are written one by one |
+| `contexts.*` | Distinct contexts, each numbered from `0`; each includes `payload_json` |
+| `summary_overflow` | `true` when the summary count, context count, or encoded size limit is reached; further distinct operations are written one by one |
 
 ## `execution`
 
@@ -198,8 +216,10 @@ ts=2026-10-03T20:02:26.100Z level=info stream=audit target=submilli_server::audi
 | `started` | The server began serving | `version`; `settings_hash`, a SHA-256 of its effective settings, without credentials, so a changed setting changes it; `allow_unauthenticated`; `egress_grants`, the outbound grants added by environment variables, when there are any |
 | `stopped` | The server stopped | |
 
-## What no record holds
+## Sensitive data
 
-No record holds a secret's value, an API token, a request or response
-body, a prompt, a model's output, an MCP tool's arguments or result, a
-file's contents, or the program's source.
+Secret-management and authentication records omit secret values and API
+tokens. Execution records omit program source and model output. Decision
+records store the complete context supplied to the permission check in
+`payload_json`. If a caller puts a body, prompt, token, or file contents
+in that context, the audit destination holds it.

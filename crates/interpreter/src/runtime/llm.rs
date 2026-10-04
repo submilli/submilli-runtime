@@ -625,6 +625,9 @@ pub trait LlmProvider: Send + Sync {
         schema_json: Option<&'a str>,
     ) -> Pin<Box<dyn Future<Output = Result<Vec<LlmOutcome>, LlmCallError>> + Send + 'a>>;
 
+    /// Returns the locally declared model catalog without network I/O or other
+    /// side effects. The caller must inspect these names before it can check
+    /// policy for each model, so this runs before per-model authorization.
     fn models<'a>(
         &'a self,
     ) -> Pin<Box<dyn Future<Output = Result<Vec<LlmModel>, LlmCallError>> + Send + 'a>>;
@@ -632,9 +635,8 @@ pub trait LlmProvider: Send + Sync {
     /// The output cap declared for one model, consulted *before* dispatch.
     ///
     /// Separate from [`Self::models`] because the reservation needs one model's
-    /// reserve on the hot path of every `call`, and `models` is an async listing
-    /// of the whole catalog — using it here would add a round trip to each
-    /// dispatch. Synchronous for the same reason: an implementor that already
+    /// reserve on the hot path of every `call`; using the whole catalog here
+    /// would add unnecessary work to each dispatch. An implementor that already
     /// holds its declarations (the blueprint case) answers from memory, and one
     /// that does not should return `None` rather than block.
     ///

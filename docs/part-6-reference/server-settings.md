@@ -367,7 +367,9 @@ logging:
 `allows` decides how operations a program was allowed are recorded:
 `summary` writes one record per run for each caller, capability, and
 rule, with a count; `all` writes one per operation; `none` writes none.
-Refusals are always recorded one by one.
+Refusals are always recorded one by one. The complete JSON context passed
+to a package or built-in permission check is recorded; secure the audit
+destination accordingly.
 
 Writing a record never stops a run: if the output can't be written, the
 server reports it to standard error and keeps serving. [Audit
