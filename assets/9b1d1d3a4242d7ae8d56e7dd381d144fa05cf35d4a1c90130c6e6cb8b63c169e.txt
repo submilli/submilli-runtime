@@ -1,0 +1,11 @@
+Our agent has written useful code to summarize failed payments. We need to run it, but we can’t actually trust it: no human has reviewed it, and instructions hidden in its input can manipulate its behavior.
+
+The first thing we need in order to run the code securely is time and memory limits, so faulty programs can’t run indefinitely or exhaust the application’s resources.
+
+In terms of access to tools, the code needs billing access in order to run. That being said, control must be granular: permission to read payments does not mean permission to issue refunds, and permission to refund one customer does not authorize refunds for another.
+
+These checks and controls have to be enforced outside the model and the generated code. Each request must be checked against its permitted operations and scope before it reaches the service.
+
+We also need to see what ran, which actions were allowed or denied, and why. Those decisions need to be traceable to rules that people can review and control.
+
+The summary is complete. The unauthorized refund is blocked. That’s the goal: useful code, running inside a tightly controlled execution environment.

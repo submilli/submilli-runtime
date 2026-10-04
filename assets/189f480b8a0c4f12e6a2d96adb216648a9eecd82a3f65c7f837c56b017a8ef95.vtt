@@ -1,0 +1,81 @@
+WEBVTT
+
+1
+00:00:00.582 --> 00:00:03.862
+The agent has written a useful program. To run it,
+
+2
+00:00:03.942 --> 00:00:07.222
+the application selects a human-approved blueprint and binds the
+
+3
+00:00:07.462 --> 00:00:11.062
+customer ID from trusted context. An agent can help draft
+
+4
+00:00:11.142 --> 00:00:13.542
+the blueprint; a human owns its rules.
+
+5
+00:00:16.418 --> 00:00:19.707
+The application sends code to the authenticated server. It
+
+6
+00:00:19.787 --> 00:00:23.307
+parses and type-checks supported TypeScript, then compiles it to
+
+7
+00:00:23.427 --> 00:00:27.387
+WebAssembly. A type error stops the program before it runs.
+
+8
+00:00:30.182 --> 00:00:33.542
+Inside the server process, the runtime creates an execution
+
+9
+00:00:33.622 --> 00:00:37.382
+instance and runs main. The program calls its billing package,
+
+10
+00:00:37.622 --> 00:00:40.422
+which reads a local fixture standing in for a service.
+
+11
+00:00:43.382 --> 00:00:46.582
+Before returning charges, the package calls a permission check
+
+12
+00:00:46.662 --> 00:00:50.102
+with the operation and customer ID. Its author placed this
+
+13
+00:00:50.182 --> 00:00:52.822
+checkpoint; it is not inferred for every function.
+
+14
+00:00:55.615 --> 00:00:58.975
+The runtime compares the requested ID with the blueprint rule
+
+15
+00:00:59.055 --> 00:01:02.575
+and the ID the application supplied. A match allows this
+
+16
+00:01:02.775 --> 00:01:04.815
+lookup; another customer is denied.
+
+17
+00:01:07.781 --> 00:01:10.981
+The program totals permitted fixture records and returns its
+
+18
+00:01:11.221 --> 00:01:15.141
+result: two charges, six thousand one hundred and fifty cents.
+
+19
+00:01:15.781 --> 00:01:19.781
+Compilation checks the program. Runtime permission checks decide
+
+20
+00:01:19.901 --> 00:01:23.221
+whether the requested operation and customer ID are allowed.
