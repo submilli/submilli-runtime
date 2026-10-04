@@ -65,7 +65,7 @@ impl VfsSessionManager {
         if self
             .state
             .session_manager()
-            .is_bound_to(id, &self.blueprint_name)?
+            .is_bound_to(id, &self.blueprint_name)
             && self.inner.sessions.read().await.contains_key(id)
         {
             return Ok(true);
@@ -550,8 +550,7 @@ mod tests {
             state
                 .session_manager()
                 .reap(std::time::SystemTime::now() + std::time::Duration::from_secs(3600))
-                .await
-                .expect("reap"),
+                .await,
             1
         );
         assert!(manager.inner.has_session(&id).await.expect("worker"));

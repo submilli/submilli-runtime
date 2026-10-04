@@ -68,10 +68,7 @@ pub(crate) async fn mcp_handler(
     // An unauthenticated/unavailable MCP server no longer blocks the blueprint: it
     // is simply omitted from discovery (with a warning) so the rest of the
     // blueprint stays usable. See `discover_all`.
-    let service = match get_or_build(&state, &blueprint, &bp) {
-        Ok(service) => service,
-        Err(error) => return crate::blueprint::store_failure_response(error).into_response(),
-    };
+    let service = get_or_build(&state, &blueprint, &bp);
     let terminates_session = req.method() == Method::DELETE;
     // Serialize DELETE requests so concurrent retries observe the first
     // deletion before checking whether the session still exists.
@@ -137,17 +134,14 @@ async fn reject_invalid_variables(
     Ok(Request::from_parts(parts, Body::from(bytes)))
 }
 
-fn get_or_build(
-    state: &AppState,
-    name: &str,
-    blueprint: &Blueprint,
-) -> Result<Arc<McpService>, crate::blueprint::StoreError> {
+fn get_or_build(state: &AppState, name: &str, blueprint: &Blueprint) -> Arc<McpService> {
+    // Poisoned state is unsupported; see AGENTS.md accepted poisoned-lock panics.
     let mut cache = state
         .mcp_services()
         .lock()
-        .map_err(|_| crate::blueprint::StoreError::Poisoned)?;
+        .expect("mcp service cache poisoned");
     if let Some(service) = cache.get(name) {
-        return Ok(service.clone());
+        return service.clone();
     }
 
     // Every blueprint runs stateful so each connection has an `MCP-Session-Id`
@@ -184,5 +178,5 @@ fn get_or_build(
         deletion: tokio::sync::Mutex::new(()),
     });
     cache.insert(name.to_string(), service.clone());
-    Ok(service)
+    service
 }
