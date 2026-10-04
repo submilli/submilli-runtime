@@ -18,7 +18,7 @@ repository = "https://github.com/submilli/submilli-runtime"
 publish = false
 
 [workspace.dependencies]
-wasmtime = { package = "submilli-wasm", version = "0.1.4", features = ["async"] }
+wasmtime = { package = "submilli-wasm", version = "0.1.9", features = ["async"] }
 wasm-encoder = "0.248"
 wasmparser = "0.248"
 wast = "248"
@@ -44,6 +44,11 @@ http-body-util = "0.1"
 http = "1"
 rmcp = { version = "1.7", default-features = false, features = ["server", "client", "macros", "transport-streamable-http-server", "transport-streamable-http-client-reqwest", "reqwest", "schemars"] }
 futures = { version = "0.3", default-features = false }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12"] }
+rcgen = { version = "0.14", default-features = false, features = ["crypto", "ring", "pem"] }
+webpki-roots = "1"
+x509-parser = "0.18"
 ureq = { version = "3", default-features = false, features = ["rustls", "json"] }
 reqwest = { version = "0.13", default-features = false, features = ["rustls", "stream"] }
 uuid = { version = "1", features = ["v4", "v7"] }
@@ -70,6 +75,7 @@ flate2 = "1"
 tar = "0.4"
 zstd = "0.13"
 regex = "1"
+regex-syntax = "0.8"
 jiff = "0.2"
 # default-features off to drop the `transport` feature's native-tls (→ openssl,
 # which breaks static-musl cross-builds); same default set re-enabled with rustls.
@@ -103,7 +109,7 @@ manual_let_else = "deny"
 items_after_statements = "deny"
 semicolon_if_nothing_returned = "deny"
 
-# Ratchet (tracked, NOT gated — see the CI step and CLAUDE.md). Both are
+# Ratchet (tracked, NOT gated — see the CI step and AGENTS.md). Both are
 # structural; they shrink via hotspot Linear issues, not lint-grinding. Promote to a
 # deny above if one ever reaches zero:
 #   too_many_lines  cognitive_complexity
@@ -111,7 +117,7 @@ semicolon_if_nothing_returned = "deny"
 # Evaluated and intentionally NOT tracked — both fire mostly on deliberate patterns
 # here, not real debt:
 #   match_same_arms — ~75% are exhaustive AST-visitor dispatch arms (walk_expr/
-#     walk_stmt/…), the "big match dispatcher" carve-out in CLAUDE.md.
+#     walk_stmt/…), the "big match dispatcher" carve-out in AGENTS.md.
 #   needless_pass_by_value — 38/56 are owned args threaded through the &mut self
 #     inference chain (cloned once at the head regardless); the rest are fn-pointer
 #     map_err mappers and idiomatic by-value CLI handlers.

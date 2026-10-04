@@ -12,6 +12,7 @@ pub(crate) mod abi;
 pub mod capabilities;
 pub mod code;
 pub mod crypto;
+pub(crate) mod dot_segments;
 pub mod fs;
 pub mod git;
 pub mod http;

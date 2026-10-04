@@ -12,7 +12,7 @@ the operations and their capability fields first using
 submilli build init @acme/billing packages/billing   # first package: writes submilli.toml
 submilli build new  @acme/billing packages/billing   # add to an existing submilli.toml
 submilli build check                                 # compile, derive capabilities.yaml
-submilli build test [-p @acme/billing]               # run tests/**/*.test.ts + docs examples
+submilli build test [-p @acme/billing] [--skip-network] # run tests + compile docs examples
 submilli build publish-local [-p @acme/billing]      # install into the local store
 ```
 
@@ -36,6 +36,8 @@ import { check } from "submilli:security";
 
 /**
  * Return a customer's fixture balance in cents.
+ * @param customerId The customer's id.
+ * @returns The balance, in cents.
  * @capability acme.com/balance.read { customerId: string }
  */
 export function readBalance(customerId: string): number {
@@ -132,6 +134,7 @@ export interface MessageInput {
 
 /**
  * Post one message. Flat input: destructure once, pass the consts on.
+ * @param input The channel and the text to post.
  * @capability acme.com/messages.post { channelId: $input.channelId }
  */
 export function postMessage(input: MessageInput): void {
@@ -143,6 +146,8 @@ export function postMessage(input: MessageInput): void {
 /**
  * Post one message to several channels. Array of strings: one `for...of` into
  * the package's own array.
+ * @param channelIds The channels to post to.
+ * @param text The message body.
  * @capability acme.com/messages.broadcast { channelIds }
  */
 export function broadcast(channelIds: string[], text: string): void {
@@ -159,6 +164,8 @@ export function broadcast(channelIds: string[], text: string): void {
 /**
  * Post a message with custom fields. `fields` never reaches the check, so it
  * needs no copy.
+ * @param channelId The destination channel.
+ * @param fields Name and value pairs, posted one per line.
  * @capability acme.com/messages.post { channelId }
  */
 export function postFields(channelId: string, fields: Map<string, string>): void {
@@ -374,6 +381,9 @@ Runtime rules that shape package code:
 - Use `submilli:url` for `encodeComponent`, `encodeQuery`, and `parse`. Take a
   capability's `host` field from `parse(url).host`: it is lower-case with no
   trailing dot, the spelling `http.*` rules see.
+- `encodeComponent` does not validate. `submilli:http` and `build` throw
+  `TypeError` for a path with a `.` or `..` segment, so validate an id you put
+  in a path for a clearer error, not for safety.
 - No npm imports, `async`/`await`, `any`, `process.env`, `fetch`, or `Date`
   (use `Temporal`). Explicit return types on every function.
 - Pagination: return a page type with items and a cursor or token, accept a
@@ -391,7 +401,7 @@ Three routes, in order of preference:
 
 1. **Package reads the secret** with `secrets.get("NAME")` using a literal
    name, so the derived `secrets.get` filter is static. The blueprint declares
-   `NAME` under `secrets:` with an `env`, `file`, `store`, or `harness` source.
+   `NAME` under `secrets:` with a `store` or `harness` source.
    Generated code can never call `secrets.get`; no policy can grant it.
 2. **Secret name as an argument** when one package serves several accounts:
    `sendMail(secretName, input)`. The package still resolves the value and
@@ -442,11 +452,22 @@ function main(): void {
 
 - Unit-test pure builders (query strings, filter variables, error rendering)
   without network or secrets. Export them for that purpose.
-- Gate live tests on the secret: `if (secrets.get("NAME") === null) return;`.
-  `build test` bridges `NAME` from the environment or a `.env` in the manifest
-  directory to `secrets.get`; an unset name reads as `null`. Live tests should
-  be read-only unless a disposable target is configured by an explicit
-  variable.
+- Tests receive no credentials by default. Use `--env-var NAME` (repeatable or
+  comma-separated), `--env-file PATH` (relative to the current directory), or
+  `--all-env`. Precedence is `--env-var` > `--env-file` > `--all-env`, regardless
+  of flag order. Missing selected process variables and unreadable files fail
+  the run. `.env` is read only when explicitly named.
+- Package tests, including their `main` function, run with the package's
+  identity and may read supplied secrets. Ordinary script callers remain
+  restricted. A missing-credential early return is reported `ok`; use
+  `--skip-network` when you want files explicitly reported as skipped.
+  Live tests should be read-only unless a disposable target is configured.
+- Use `--skip-network` to skip `network.test.{ts,subm}` and
+  `network_*.test.{ts,subm}` anywhere under `tests/`. Selection uses filenames,
+  not detection of network calls. Other tests and readme examples still run.
+  `SUBMILLI_SKIP_HTTP_TESTS` has no effect on package-test selection.
+- In a CI job with an injected secret, run
+  `submilli build test --deny-warnings -p @acme/billing --env-var BILLING_API_KEY`.
 - Test that a write operation sends only the fields set, that a missing
   resource yields `null`, and that a service error surfaces its detail.
 

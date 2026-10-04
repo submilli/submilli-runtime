@@ -46,12 +46,31 @@ pub trait RepoFetcher {
 #[derive(Debug)]
 pub struct FetchError {
     pub message: String,
+    pub kind: FetchErrorKind,
+}
+
+/// Why a fetch failed, so a caller can tell a credential problem from a
+/// failed transfer without parsing the message.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum FetchErrorKind {
+    /// The transfer itself failed, or the repository's contents were bad.
+    #[default]
+    Failed,
+    /// The repository is not readable with the credentials used, or not found.
+    Access,
+    /// The host's rate limit is used up.
+    RateLimited,
 }
 
 impl FetchError {
     pub fn new(message: impl Into<String>) -> Self {
+        Self::with_kind(FetchErrorKind::Failed, message)
+    }
+
+    pub fn with_kind(kind: FetchErrorKind, message: impl Into<String>) -> Self {
         Self {
             message: message.into(),
+            kind,
         }
     }
 }

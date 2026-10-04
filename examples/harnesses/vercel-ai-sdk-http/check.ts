@@ -39,11 +39,11 @@ function scripted(code: string): MockLanguageModelV4 {
   });
 }
 
-assert.match(await answer("total", "u_ada", scripted(program)), /notes: .*check\.md/);
-assert.match(
-  await answer("total", "u_ada", scripted(program.replaceAll("u_ada", "u_grace"))),
-  /permission denied/,
-);
+// Two users write the same note; each sees only their own.
+const [ada, grace] = [`ada_${Date.now()}`, `grace_${Date.now()}`];
+assert.match(await answer("total", ada, scripted(program)), /notes before: none/);
+assert.match(await answer("total", grace, scripted(program)), /notes before: none/);
+assert.match(await answer("total", ada, scripted(program)), /notes before: check\.md/);
 await assert.rejects(
   openSession({ server, token, blueprint: "research" }),
   /required variable 'userId'/,

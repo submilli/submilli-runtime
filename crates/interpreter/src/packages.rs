@@ -7,7 +7,7 @@
 //! `packages.*` / `builtins.docs` tools, the server's REST surface, and the
 //! `submilli docs` / `search` / `builtins` CLI commands.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write;
 
 use crate::runtime::prelude::declaration::prelude_package_declaration;
@@ -37,16 +37,12 @@ pub struct ModuleSummary {
 }
 
 /// Documentation for a stdlib module, or `None` if `name` isn't one (callers
-/// handle `@mcp/*` and unknown names).
+/// handle `@mcp/*` and unknown names). Every module resolves, opt-in ones such
+/// as `submilli:git` included; what a caller's scope shows is its own decision.
 pub fn docs(name: &str) -> Option<ModuleDoc> {
-    docs_with_git(name, false)
-}
-
-/// Blueprint-scoped variant; Git is visible only when configured.
-pub fn docs_with_git(name: &str, git_enabled: bool) -> Option<ModuleDoc> {
     user_modules()
         .into_iter()
-        .find(|d| d.package_name == name && (git_enabled || name != "submilli:git"))
+        .find(|d| d.package_name == name)
         .map(|defs| ModuleDoc {
             name: defs.package_name.clone(),
             description: module_description(&defs.package_name).to_string(),
@@ -57,17 +53,10 @@ pub fn docs_with_git(name: &str, git_enabled: bool) -> Option<ModuleDoc> {
 /// Modules whose name, description, or an exported symbol contains `query`
 /// (case-insensitive). An empty query lists every module.
 pub fn search(query: &str) -> Vec<ModuleSummary> {
-    search_with_git(query, false)
-}
-
-/// Blueprint-scoped variant; Git is visible only when configured.
-pub fn search_with_git(query: &str, git_enabled: bool) -> Vec<ModuleSummary> {
     let q = query.trim().to_lowercase();
     user_modules()
         .iter()
-        .filter(|defs| {
-            (git_enabled || defs.package_name != "submilli:git") && matches_query(defs, &q)
-        })
+        .filter(|defs| matches_query(defs, &q))
         .map(|defs| ModuleSummary {
             name: defs.package_name.clone(),
             description: module_description(&defs.package_name).to_string(),
@@ -168,7 +157,7 @@ pub fn builtin_lookup(name: &str) -> BuiltinLookup {
         return BuiltinLookup::Unknown;
     }
     // A trailing or doubled dot is a typo the path walk can absorb rather than
-    // reject (see the forgiveness principle in CLAUDE.md).
+    // reject (see the forgiveness principle in AGENTS.md).
     let segments: Vec<&str> = name.split('.').filter(|s| !s.is_empty()).collect();
     let Some((head, rest)) = segments.split_first() else {
         return BuiltinLookup::Unknown;
@@ -347,7 +336,7 @@ fn render_type_member(owner: &str, kind: &TypeKind, member: &str) -> Option<Stri
             body,
             "  {name}{}({}): {};",
             generics_str(&m.generics),
-            params_str(&m.params),
+            params_str(&m.params, m.doc.as_ref()),
             m.ret
         );
     }
@@ -391,7 +380,7 @@ fn render_class_member(owner: &str, kind: &TypeKind, member: &str) -> Option<Str
             body,
             "  static {name}{}({}): {};",
             generics_str(&m.generics),
-            params_str(&m.params),
+            params_str(&m.params, m.doc.as_ref()),
             m.ret
         );
     } else if let Some(name) = resolve_ignore_case(fields.keys(), member)
@@ -411,7 +400,7 @@ fn render_class_member(owner: &str, kind: &TypeKind, member: &str) -> Option<Str
             body,
             "  {name}{}({}): {};",
             generics_str(&m.generics),
-            params_str(&m.params),
+            params_str(&m.params, m.doc.as_ref()),
             m.ret
         );
     }
@@ -585,14 +574,7 @@ pub fn resolve(name: &str) -> Resolution {
 const OMITTED_GLOBALS: &[(&str, &str)] = &[("Date", "Temporal")];
 
 pub fn suggest(name: &str, extra: &[String]) -> Option<String> {
-    suggest_with_git(name, extra, false)
-}
-
-/// Blueprint-scoped variant; Git is visible only when configured.
-pub fn suggest_with_git(name: &str, extra: &[String], git_enabled: bool) -> Option<String> {
-    suggest_filtered(name, extra, |module| {
-        git_enabled || module != "submilli:git"
-    })
+    suggest_filtered(name, extra, |_| true)
 }
 
 /// Suggest only names visible to the caller, retaining built-in corrections.
@@ -601,10 +583,7 @@ pub fn suggest_filtered(
     extra: &[String],
     visible: impl Fn(&str) -> bool,
 ) -> Option<String> {
-    let mut candidates: Vec<String> = search_with_git("", true)
-        .into_iter()
-        .map(|m| m.name)
-        .collect();
+    let mut candidates: Vec<String> = search("").into_iter().map(|m| m.name).collect();
     let builtins = builtins();
     candidates.extend(builtins.types);
     candidates.extend(builtins.namespaces);
@@ -716,17 +695,12 @@ pub const SOURCE_STDLIB: &str = "stdlib";
 
 /// The stdlib catalog plus whatever `extra` sources the caller can see, capped.
 pub fn catalog(extra: Vec<CatalogEntry>) -> Catalog {
-    catalog_with_git(extra, false)
-}
-
-/// Blueprint-scoped variant; Git is visible only when configured.
-pub fn catalog_with_git(extra: Vec<CatalogEntry>, git_enabled: bool) -> Catalog {
-    catalog_filtered(extra, |module| git_enabled || module != "submilli:git")
+    catalog_filtered(extra, |_| true)
 }
 
 /// Filter before applying the catalog limit so omitted counts reflect visibility.
 pub fn catalog_filtered(extra: Vec<CatalogEntry>, visible: impl Fn(&str) -> bool) -> Catalog {
-    let mut entries: Vec<CatalogEntry> = search_with_git("", true)
+    let mut entries: Vec<CatalogEntry> = search("")
         .into_iter()
         .map(|m| CatalogEntry {
             name: m.name,
@@ -1371,12 +1345,17 @@ fn render_ts_value(
             type_predicate,
             ..
         } => {
-            let ret = ts_return_type(params, ret, type_predicate.as_ref());
+            let ret = ts_return_type(
+                params,
+                ret,
+                type_predicate.as_ref(),
+                value_doc(kind).as_ref(),
+            );
             let _ = writeln!(
                 out,
                 "{indent}{decl_export_prefix}function {declared_name}{}({}): {ret};",
                 generics_str(generics),
-                ts_params_str(params)
+                ts_params_str(params, value_doc(kind).as_ref())
             );
         }
         ValueKind::Let { ty, .. } => {
@@ -1435,14 +1414,14 @@ fn render_ts_type(
             }
             for (mname, m) in methods {
                 push_doc(out, &m.doc, &inner);
-                let ret = ts_return_type(&m.params, &m.ret, m.predicate.as_ref());
+                let ret = ts_return_type(&m.params, &m.ret, m.predicate.as_ref(), m.doc.as_ref());
                 match mname.as_str() {
                     "@call" => {
                         let _ = writeln!(
                             out,
                             "{inner}{}({}): {ret};",
                             generics_str(&m.generics),
-                            ts_params_str(&m.params)
+                            ts_params_str(&m.params, m.doc.as_ref())
                         );
                     }
                     "new" => {
@@ -1450,7 +1429,7 @@ fn render_ts_type(
                             out,
                             "{inner}new {}({}): {ret};",
                             generics_str(&m.generics),
-                            ts_params_str(&m.params)
+                            ts_params_str(&m.params, m.doc.as_ref())
                         );
                     }
                     _ => {
@@ -1458,7 +1437,7 @@ fn render_ts_type(
                             out,
                             "{inner}{mname}{}({}): {ret};",
                             generics_str(&m.generics),
-                            ts_params_str(&m.params)
+                            ts_params_str(&m.params, m.doc.as_ref())
                         );
                     }
                 }
@@ -1524,12 +1503,12 @@ fn render_ts_type(
                     continue;
                 }
                 push_doc(out, &m.doc, &inner);
-                let ret = ts_return_type(&m.params, &m.ret, m.predicate.as_ref());
+                let ret = ts_return_type(&m.params, &m.ret, m.predicate.as_ref(), m.doc.as_ref());
                 let _ = writeln!(
                     out,
                     "{inner}static {mname}{}({}): {ret};",
                     generics_str(&m.generics),
-                    ts_params_str(&m.params)
+                    ts_params_str(&m.params, m.doc.as_ref())
                 );
             }
             for (fname, field) in fields {
@@ -1552,19 +1531,23 @@ fn render_ts_type(
             if *constructor_visibility == crate::Visibility::Private {
                 let _ = writeln!(out, "{inner}protected constructor();");
             } else {
-                let _ = writeln!(out, "{inner}constructor({});", ts_params_str(constructor));
+                let _ = writeln!(
+                    out,
+                    "{inner}constructor({});",
+                    ts_params_str(constructor, None)
+                );
             }
             for (mname, m) in methods {
                 if method_visibility.get(mname) == Some(&crate::Visibility::Private) {
                     continue;
                 }
                 push_doc(out, &m.doc, &inner);
-                let ret = ts_return_type(&m.params, &m.ret, m.predicate.as_ref());
+                let ret = ts_return_type(&m.params, &m.ret, m.predicate.as_ref(), m.doc.as_ref());
                 let _ = writeln!(
                     out,
                     "{inner}{mname}{}({}): {ret};",
                     generics_str(&m.generics),
-                    ts_params_str(&m.params)
+                    ts_params_str(&m.params, m.doc.as_ref())
                 );
             }
             let _ = writeln!(out, "{indent}}}\n");
@@ -1662,35 +1645,25 @@ fn render_ts_namespace(
     let _ = writeln!(out, "{indent}}}\n");
 }
 
-fn ts_params_str(params: &[Param]) -> String {
-    params
-        .iter()
-        .enumerate()
-        .map(|(i, p)| {
-            let prefix = if p.rest { "..." } else { "" };
-            let opt = if p.default.is_some() { "?" } else { "" };
-            let name = if p.name.is_empty() {
-                format!("arg{i}")
-            } else {
-                p.name.clone()
-            };
-            format!("{prefix}{name}{opt}: {}", ts_type(&p.ty))
-        })
-        .collect::<Vec<_>>()
-        .join(", ")
+fn ts_params_str(params: &[Param], doc: Option<&DocComment>) -> String {
+    rendered_params(params, doc, ts_type)
 }
 
-fn ts_return_type(params: &[Param], ret: &Type, predicate: Option<&TypePredicate>) -> String {
+fn ts_return_type(
+    params: &[Param],
+    ret: &Type,
+    predicate: Option<&TypePredicate>,
+    doc: Option<&DocComment>,
+) -> String {
     let Some(predicate) = predicate else {
         return ts_type(ret);
     };
     let Some(param) = params.get(predicate.parameter_index as usize) else {
         return ts_type(ret);
     };
-    let name = if param.name.is_empty() {
-        format!("arg{}", predicate.parameter_index)
-    } else {
-        param.name.clone()
+    let names = parameter_display_names(params, doc);
+    let Some(name) = names.get(predicate.parameter_index as usize) else {
+        return ts_type(ret);
     };
     let asserted = ts_type(&predicate.asserted_type);
     match param.ty {
@@ -1931,7 +1904,7 @@ fn render_value(out: &mut String, name: &str, kind: &ValueKind, indent: &str) {
                 out,
                 "{indent}function {name}{}({}): {ret};\n",
                 generics_str(generics),
-                params_str(params)
+                params_str(params, value_doc(kind).as_ref())
             );
         }
         ValueKind::Let { ty, .. } => {
@@ -1965,7 +1938,7 @@ fn render_type(out: &mut String, name: &str, kind: &TypeKind, indent: &str) {
                     out,
                     "{inner}{mname}{}({}): {};",
                     generics_str(&m.generics),
-                    params_str(&m.params),
+                    params_str(&m.params, m.doc.as_ref()),
                     m.ret
                 );
             }
@@ -2027,7 +2000,7 @@ fn render_type(out: &mut String, name: &str, kind: &TypeKind, indent: &str) {
                     out,
                     "{inner}static {mname}{}({}): {};",
                     generics_str(&m.generics),
-                    params_str(&m.params),
+                    params_str(&m.params, m.doc.as_ref()),
                     m.ret
                 );
             }
@@ -2044,7 +2017,11 @@ fn render_type(out: &mut String, name: &str, kind: &TypeKind, indent: &str) {
             }
             render_class_accessors(out, fields, accessors, &inner, ToString::to_string);
             if *constructor_visibility != crate::Visibility::Private {
-                let _ = writeln!(out, "{inner}constructor({});", params_str(constructor));
+                let _ = writeln!(
+                    out,
+                    "{inner}constructor({});",
+                    params_str(constructor, None)
+                );
             }
             for (mname, m) in methods {
                 if method_visibility.get(mname) == Some(&crate::Visibility::Private) {
@@ -2055,7 +2032,7 @@ fn render_type(out: &mut String, name: &str, kind: &TypeKind, indent: &str) {
                     out,
                     "{inner}{mname}{}({}): {};",
                     generics_str(&m.generics),
-                    params_str(&m.params),
+                    params_str(&m.params, m.doc.as_ref()),
                     m.ret
                 );
             }
@@ -2126,16 +2103,81 @@ fn ts_interface_generics(name: &str, generics: &[String], export_prefix: &str) -
     generics_str(generics)
 }
 
-fn params_str(params: &[Param]) -> String {
+fn params_str(params: &[Param], doc: Option<&DocComment>) -> String {
+    rendered_params(params, doc, ToString::to_string)
+}
+
+fn rendered_params(
+    params: &[Param],
+    doc: Option<&DocComment>,
+    format_type: impl Fn(&Type) -> String,
+) -> String {
+    let names = parameter_display_names(params, doc);
     params
         .iter()
-        .map(|p| {
+        .zip(names)
+        .map(|(p, name)| {
             let prefix = if p.rest { "..." } else { "" };
             let opt = if p.default.is_some() { "?" } else { "" };
-            format!("{prefix}{}{opt}: {}", p.name, p.ty)
+            format!("{prefix}{name}{opt}: {}", format_type(&p.ty))
         })
         .collect::<Vec<_>>()
         .join(", ")
+}
+
+/// Binding patterns are lowered to compiler-only names. Documentation uses a
+/// positional JSDoc name when valid, or a unique positional placeholder.
+fn parameter_display_names(params: &[Param], doc: Option<&DocComment>) -> Vec<String> {
+    let tags: Vec<_> = doc
+        .into_iter()
+        .flat_map(|doc| &doc.params)
+        .filter(|tag| !tag.name.contains('.'))
+        .collect();
+    let mut used: BTreeSet<String> = params
+        .iter()
+        .filter(|p| !crate::lower_patterns::is_pattern_param(&p.name))
+        .map(|p| p.name.clone())
+        .collect();
+    params
+        .iter()
+        .enumerate()
+        .map(|(index, param)| {
+            if !crate::lower_patterns::is_pattern_param(&param.name) {
+                return param.name.clone();
+            }
+            if let Some(tag) = tags.get(index)
+                && valid_parameter_name(&tag.name)
+                && used.insert(tag.name.clone())
+            {
+                return tag.name.clone();
+            }
+            let mut name = format!("arg{index}");
+            while !used.insert(name.clone()) {
+                name.push('_');
+            }
+            name
+        })
+        .collect()
+}
+
+fn valid_parameter_name(name: &str) -> bool {
+    let mut chars = name.chars();
+    chars
+        .next()
+        .is_some_and(|c| c.is_ascii_alphabetic() || matches!(c, '_' | '$'))
+        && chars.all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '$'))
+        && !is_ts_reserved_word(name)
+        && !matches!(
+            name,
+            "arguments"
+                | "eval"
+                | "implements"
+                | "interface"
+                | "package"
+                | "private"
+                | "protected"
+                | "public"
+        )
 }
 
 fn push_doc(out: &mut String, doc: &Option<DocComment>, indent: &str) {
@@ -2226,6 +2268,32 @@ fn type_doc(kind: &TypeKind) -> &Option<DocComment> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn destructured_display_names_are_valid_and_distinct() {
+        let params = [
+            Param::new("#pattern_p_0", Type::Number),
+            Param::new("arg0", Type::Number),
+            Param::new("", Type::Number),
+            Param::new("#pattern_p_3", Type::Number),
+        ];
+        let doc = crate::doc(
+            FileId(0),
+            "/** Names.\n * @param class Reserved.\n * @param arg0 Existing.\n * @param arg0.x Property.\n * @param pair Pair.\n * @param pair Duplicate.\n */",
+        );
+        assert_eq!(
+            parameter_display_names(&params, doc.as_ref()),
+            ["arg0_", "arg0", "pair", "arg3"]
+        );
+        assert_eq!(
+            params_str(&params, doc.as_ref()),
+            "arg0_: number, arg0: number, pair: number, arg3: number"
+        );
+        assert_eq!(
+            ts_params_str(&params, doc.as_ref()),
+            "arg0_: number, arg0: number, pair: number, arg3: number"
+        );
+    }
 
     #[test]
     fn catalog_filters_before_counting_omitted_entries() {
@@ -3129,6 +3197,7 @@ mod tests {
     fn builtin_errors_extend_error_in_the_editor_declarations() {
         let lib = render_lib_submilli_d_ts();
         for class in [
+            "QuotaExceededError",
             "RangeError",
             "TypeError",
             "SyntaxError",

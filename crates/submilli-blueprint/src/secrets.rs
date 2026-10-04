@@ -26,7 +26,7 @@ pub struct HarnessSecret {
 pub enum HarnessSecretError {
     /// The harness supplied a name absent from the blueprint.
     Undeclared(String),
-    /// The harness attempted to override an env, file, or store secret.
+    /// The harness attempted to override a store secret.
     WrongSource(String),
     /// A required harness declaration had no non-empty supplied value.
     MissingRequired(String),
@@ -49,13 +49,9 @@ impl std::fmt::Display for HarnessSecretError {
 impl std::error::Error for HarnessSecretError {}
 
 /// Where a declared secret's value is read from. The YAML is a one-key map,
-/// e.g. `{ env: STRIPE_API_KEY }` or `{ file: /run/secrets/x }`.
+/// e.g. `{ store: stripe-api-key }` or `{ harness: { required: true } }`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SecretSource {
-    /// Read from the server process environment variable of this name.
-    Env(String),
-    /// Read from the file at this path (e.g. a k8s secret mount), trimmed.
-    File(String),
     /// Read from the configured `SecretStore` backend by this key, resolved per
     /// call so rotated values are picked up without a restart.
     Store(String),
@@ -63,8 +59,8 @@ pub enum SecretSource {
     Harness(HarnessSecret),
 }
 
-// Hand-written so the YAML is the `{ env: X }` one-key map the spec uses —
-// `serde_yml` would otherwise render the enum with `!env` tag syntax.
+// Hand-written so the YAML is the `{ store: X }` one-key map the spec uses —
+// `serde_yml` would otherwise render the enum with `!store` tag syntax.
 impl<'de> Deserialize<'de> for SecretSource {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
@@ -74,38 +70,18 @@ impl<'de> Deserialize<'de> for SecretSource {
         #[serde(deny_unknown_fields)]
         struct Raw {
             #[serde(default)]
-            env: Option<String>,
-            #[serde(default)]
-            file: Option<String>,
-            #[serde(default)]
             store: Option<String>,
             #[serde(default)]
             harness: Option<HarnessSecret>,
         }
         let raw = Raw::deserialize(deserializer)?;
-        let set = [
-            raw.env.is_some(),
-            raw.file.is_some(),
-            raw.store.is_some(),
-            raw.harness.is_some(),
-        ]
-        .into_iter()
-        .filter(|b| *b)
-        .count();
-        if set != 1 {
-            return Err(de::Error::custom(
-                "a secret needs exactly one source: env / file / store / harness",
-            ));
+        match (raw.store, raw.harness) {
+            (Some(key), None) => Ok(SecretSource::Store(key)),
+            (None, Some(config)) => Ok(SecretSource::Harness(config)),
+            _ => Err(de::Error::custom(
+                "a secret needs exactly one source: store / harness",
+            )),
         }
-        Ok(if let Some(v) = raw.env {
-            SecretSource::Env(v)
-        } else if let Some(v) = raw.file {
-            SecretSource::File(v)
-        } else if let Some(v) = raw.store {
-            SecretSource::Store(v)
-        } else {
-            SecretSource::Harness(raw.harness.expect("exactly one set"))
-        })
     }
 }
 
@@ -116,8 +92,6 @@ impl Serialize for SecretSource {
     {
         let mut map = serializer.serialize_map(Some(1))?;
         match self {
-            SecretSource::Env(v) => map.serialize_entry("env", v)?,
-            SecretSource::File(v) => map.serialize_entry("file", v)?,
             SecretSource::Store(v) => map.serialize_entry("store", v)?,
             SecretSource::Harness(v) => map.serialize_entry("harness", v)?,
         }
@@ -129,8 +103,6 @@ impl SecretSource {
     /// The source tag as it appears in YAML.
     pub fn kind(&self) -> &'static str {
         match self {
-            SecretSource::Env(_) => "env",
-            SecretSource::File(_) => "file",
             SecretSource::Store(_) => "store",
             SecretSource::Harness(_) => "harness",
         }
@@ -192,7 +164,7 @@ mod tests {
                 "OPTIONAL".into(),
                 SecretSource::Harness(HarnessSecret::default()),
             ),
-            ("SERVER".into(), SecretSource::Env("SERVER_ENV".into())),
+            ("SERVER".into(), SecretSource::Store("server-key".into())),
         ])
     }
 

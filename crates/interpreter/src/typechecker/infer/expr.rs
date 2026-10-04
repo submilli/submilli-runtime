@@ -7029,10 +7029,19 @@ impl Inferer<'_> {
                     super::inference_failure("arrow block body is a Block, never a type-only decl")
                 })?;
                 let id = self.wrap_narrow_regions(id, &narrow_seed, span)?;
+                let collected = self.inferred_returns.take().unwrap_or_default();
+                let returns_into_unknown = ret_hint
+                    .as_ref()
+                    .is_some_and(|hint| matches!(hint.peel(), Type::Unknown));
                 let t = if let Some(t) = &annotated_ret {
                     t.clone()
+                } else if returns_into_unknown && !collected.is_empty() {
+                    // Any return fits an `unknown` context, so the returns need
+                    // not agree and the body may fall off the end, as an
+                    // annotated `unknown` body may. A body with no `return`
+                    // stays `void`.
+                    Type::Unknown
                 } else {
-                    let collected = self.inferred_returns.take().unwrap_or_default();
                     self.unify_returns(&collected)
                 };
                 (ClosureBody::Block(id), t)
@@ -9381,7 +9390,7 @@ impl Inferer<'_> {
     /// underlying `RegexBuilder::new` call at compile time so
     /// unsupported features (lookarounds, backreferences) and
     /// malformed patterns surface as `Diagnostic`s with source
-    /// caret, not runtime traps — matches CLAUDE.md "LLM-native
+    /// caret, not runtime traps — matches AGENTS.md "LLM-native
     /// errors" §1 + §3 (always show source context; name the fix).
     ///
     /// On success the type currently resolves to `Type::Error` as a
@@ -9393,7 +9402,7 @@ impl Inferer<'_> {
         // at compile time, so lookarounds / backreferences /
         // malformed patterns surface as `Diagnostic`s with source
         // caret + a self-contained `help:` block explaining the
-        // Submilli subset and the rewrite path. Per CLAUDE.md
+        // Submilli subset and the rewrite path. Per AGENTS.md
         // "LLM-native errors" §1 + §3: the help is enough for an
         // LLM to fix the regex in one shot without any external
         // reference.
@@ -9417,7 +9426,7 @@ impl Inferer<'_> {
 /// unions — every member must be supported.
 /// per-variant help for regex-translation errors. Built so
 /// an LLM (the primary consumer of compile diagnostics — see
-/// CLAUDE.md "LLM-native errors") can fix the regex in one shot
+/// AGENTS.md "LLM-native errors") can fix the regex in one shot
 /// without any external documentation reference.
 ///
 /// Each variant returns a multi-line `help:` block that:

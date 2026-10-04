@@ -57,6 +57,15 @@ const TAG_LEN: usize = 16;
 /// than an adversary searching for a collision.
 const DIGEST_LEN: usize = 8;
 
+/// Longest base64url cursor this store can mint, including its sealed key.
+pub(super) fn max_cursor_units(max_key_units: u64) -> u64 {
+    let overhead = (1 + NONCE_LEN + DIGEST_LEN + TAG_LEN) as u64;
+    overhead
+        .saturating_add(max_key_units.saturating_mul(2))
+        .saturating_mul(4)
+        .div_ceil(3)
+}
+
 /// Process-wide cursor secret, or `None` where `getrandom` has no entropy to
 /// give. Cursors are then refused rather than minted under a fixed key, which
 /// would silently restore the disclosure this module exists to close.
@@ -76,17 +85,41 @@ pub(super) fn encode(prefix: &[u16], resume_after: &[u16]) -> Result<String, Cur
     let mut nonce = [0u8; NONCE_LEN];
     getrandom::getrandom(&mut nonce).map_err(|_| CursorError::NoEntropy)?;
 
-    let mut ciphertext = Vec::with_capacity(DIGEST_LEN + resume_after.len() * 2);
-    ciphertext.extend_from_slice(&prefix_digest(secret, prefix));
-    ciphertext.extend_from_slice(&units_to_bytes(resume_after));
-    xor_keystream(secret, &nonce, &mut ciphertext);
+    encode_with(prefix, resume_after, &nonce, || CursorCrypto::new(secret))
+}
 
-    let mut payload = Vec::with_capacity(1 + NONCE_LEN + ciphertext.len() + TAG_LEN);
+fn encode_with(
+    prefix: &[u16],
+    resume_after: &[u16],
+    nonce: &[u8; NONCE_LEN],
+    initialize: impl FnOnce() -> Result<CursorCrypto, CursorError>,
+) -> Result<String, CursorError> {
+    let crypto = initialize()?;
+    let length = ciphertext_len(resume_after.len())?;
+    let mut ciphertext = reserved_vec(length)?;
+    ciphertext.extend_from_slice(&crypto.prefix_digest(prefix)?);
+    for unit in resume_after {
+        ciphertext.extend_from_slice(&unit.to_be_bytes());
+    }
+    crypto.xor_keystream(nonce, &mut ciphertext)?;
+
+    let length = length
+        .checked_add(1 + NONCE_LEN + TAG_LEN)
+        .ok_or(CursorError::Internal("cursor payload size overflow"))?;
+    let mut payload = reserved_vec(length)?;
     payload.push(VERSION);
-    payload.extend_from_slice(&nonce);
+    payload.extend_from_slice(nonce);
     payload.extend_from_slice(&ciphertext);
-    payload.extend_from_slice(&tag(secret, &nonce, &ciphertext));
-    Ok(URL_SAFE_NO_PAD.encode(payload))
+    payload.extend_from_slice(&crypto.tag(nonce, &ciphertext)?);
+    let length = base64::encoded_len(payload.len(), false)
+        .ok_or(CursorError::Internal("cursor encoding size overflow"))?;
+    let mut encoded = reserved_vec(length)?;
+    encoded.resize(length, 0);
+    let written = URL_SAFE_NO_PAD
+        .encode_slice(&payload, &mut encoded)
+        .map_err(|_| CursorError::Internal("cursor encoding buffer mismatch"))?;
+    encoded.truncate(written);
+    String::from_utf8(encoded).map_err(|_| CursorError::Internal("non-ASCII cursor encoding"))
 }
 
 /// Why a cursor could not be used or minted. None of these names a key the
@@ -96,11 +129,13 @@ pub(super) enum CursorError {
     Malformed,
     PrefixMismatch,
     NoEntropy,
+    Internal(&'static str),
 }
 
 impl std::fmt::Display for CursorError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::Internal(message) => write!(f, "session.list: {message}"),
             Self::Malformed => f.write_str(
                 "session.list: the cursor is not one this runtime issued — pass the \
                  `nextCursor` from the previous page unchanged, or `null` to start over. \
@@ -122,16 +157,31 @@ impl std::fmt::Display for CursorError {
 }
 
 pub(super) fn decode(prefix: &[u16], cursor: &[u16]) -> Result<Vec<u16>, CursorError> {
-    // A cursor this module minted is base64url, hence ASCII by construction.
-    let Some(text) = ascii(cursor) else {
-        return Err(CursorError::Malformed);
-    };
-    // Nothing could have been minted without a secret, so there is no cursor
-    // this could legitimately be.
-    let secret = secret().ok_or(CursorError::NoEntropy)?;
-    let payload = URL_SAFE_NO_PAD
-        .decode(text)
-        .map_err(|_| CursorError::Malformed)?;
+    decode_with(prefix, cursor, || {
+        CursorCrypto::new(secret().ok_or(CursorError::NoEntropy)?)
+    })
+}
+
+fn decode_with(
+    prefix: &[u16],
+    cursor: &[u16],
+    initialize: impl FnOnce() -> Result<CursorCrypto, CursorError>,
+) -> Result<Vec<u16>, CursorError> {
+    let text = ascii(cursor)?;
+    let crypto = initialize()?;
+    // Decoded base64 cannot be longer than its ASCII input.
+    let mut payload = reserved_vec(text.len())?;
+    payload.resize(text.len(), 0);
+    let written =
+        URL_SAFE_NO_PAD
+            .decode_slice(&text, &mut payload)
+            .map_err(|error| match error {
+                base64::DecodeSliceError::DecodeError(_) => CursorError::Malformed,
+                base64::DecodeSliceError::OutputSliceTooSmall => {
+                    CursorError::Internal("cursor decoding buffer mismatch")
+                }
+            })?;
+    payload.truncate(written);
 
     let body = payload
         .strip_prefix(&[VERSION])
@@ -144,68 +194,100 @@ pub(super) fn decode(prefix: &[u16], cursor: &[u16]) -> Result<Vec<u16>, CursorE
         .checked_sub(TAG_LEN)
         .ok_or(CursorError::Malformed)?;
     let (ciphertext, found) = rest.split_at(split);
-    if !constant_time_eq(found, &tag(secret, nonce, ciphertext)) {
+    if !constant_time_eq(found, &crypto.tag(nonce, ciphertext)?) {
         return Err(CursorError::Malformed);
     }
 
     // Past the tag, the bytes are ours: only now is it safe to unseal them.
-    let mut plaintext = ciphertext.to_vec();
-    xor_keystream(secret, nonce, &mut plaintext);
+    let mut plaintext = reserved_vec(ciphertext.len())?;
+    plaintext.extend_from_slice(ciphertext);
+    crypto.xor_keystream(nonce, &mut plaintext)?;
     let (digest, key_bytes) = plaintext
         .split_at_checked(DIGEST_LEN)
         .ok_or(CursorError::Malformed)?;
     if key_bytes.len() % 2 != 0 {
         return Err(CursorError::Malformed);
     }
-    if digest != prefix_digest(secret, prefix) {
+    if digest != crypto.prefix_digest(prefix)? {
         return Err(CursorError::PrefixMismatch);
     }
-    Ok(bytes_to_units(key_bytes))
+    bytes_to_units(key_bytes)
 }
 
-/// HMAC-SHA256 keystream, XORed over the sealed bytes. The nonce makes every
-/// cursor's stream distinct, so the keystream is never reused across two keys.
-fn xor_keystream(secret: &[u8; 32], nonce: &[u8], data: &mut [u8]) {
-    for (block, chunk) in data.chunks_mut(32).enumerate() {
-        let mut mac = mac(secret);
-        mac.update(b"submilli:session/cursor/stream");
-        mac.update(nonce);
-        mac.update(&(block as u64).to_be_bytes());
-        let stream = mac.finalize().into_bytes();
-        for (byte, pad) in chunk.iter_mut().zip(stream.iter()) {
-            *byte ^= pad;
+struct CursorCrypto {
+    initial: HmacSha256,
+}
+
+impl CursorCrypto {
+    fn new(secret: &[u8; 32]) -> Result<Self, CursorError> {
+        Self::from_initial(HmacSha256::new_from_slice(secret))
+    }
+
+    fn from_initial(
+        initial: Result<HmacSha256, hmac::digest::InvalidLength>,
+    ) -> Result<Self, CursorError> {
+        Ok(Self {
+            initial: initial
+                .map_err(|_| CursorError::Internal("cursor HMAC initialization failed"))?,
+        })
+    }
+
+    /// Each domain starts from the same keyed state, before any message bytes.
+    fn xor_keystream(&self, nonce: &[u8], data: &mut [u8]) -> Result<(), CursorError> {
+        for (block, chunk) in data.chunks_mut(32).enumerate() {
+            let block = u64::try_from(block)
+                .map_err(|_| CursorError::Internal("cursor block index overflow"))?;
+            let mut mac = self.initial.clone();
+            mac.update(b"submilli:session/cursor/stream");
+            mac.update(nonce);
+            mac.update(&block.to_be_bytes());
+            let stream = mac.finalize().into_bytes();
+            for (byte, pad) in chunk.iter_mut().zip(stream.iter()) {
+                *byte ^= pad;
+            }
         }
+        Ok(())
+    }
+
+    fn tag(&self, nonce: &[u8], ciphertext: &[u8]) -> Result<[u8; TAG_LEN], CursorError> {
+        let mut mac = self.initial.clone();
+        mac.update(b"submilli:session/cursor/tag");
+        mac.update(nonce);
+        mac.update(ciphertext);
+        truncate(&mac.finalize().into_bytes())
+    }
+
+    fn prefix_digest(&self, prefix: &[u16]) -> Result<[u8; DIGEST_LEN], CursorError> {
+        let length = u64::try_from(prefix.len())
+            .map_err(|_| CursorError::Internal("cursor prefix size overflow"))?;
+        let mut mac = self.initial.clone();
+        mac.update(b"submilli:session/cursor/prefix");
+        mac.update(&length.to_be_bytes());
+        for unit in prefix {
+            mac.update(&unit.to_be_bytes());
+        }
+        truncate(&mac.finalize().into_bytes())
     }
 }
 
-/// Authenticates the sealed payload as one this runtime issued. The nonce is
-/// fixed-width, so nothing else need be length-prefixed here.
-fn tag(secret: &[u8; 32], nonce: &[u8], ciphertext: &[u8]) -> [u8; TAG_LEN] {
-    let mut mac = mac(secret);
-    mac.update(b"submilli:session/cursor/tag");
-    mac.update(nonce);
-    mac.update(ciphertext);
-    truncate(&mac.finalize().into_bytes())
+fn truncate<const N: usize>(full: &[u8]) -> Result<[u8; N], CursorError> {
+    full.get(..N)
+        .and_then(|bytes| bytes.try_into().ok())
+        .ok_or(CursorError::Internal("cursor digest length mismatch"))
 }
 
-/// Identifies the listing a cursor belongs to. The length is mixed in so a
-/// prefix and one that merely extends it cannot digest alike.
-fn prefix_digest(secret: &[u8; 32], prefix: &[u16]) -> [u8; DIGEST_LEN] {
-    let mut mac = mac(secret);
-    mac.update(b"submilli:session/cursor/prefix");
-    mac.update(&(prefix.len() as u64).to_be_bytes());
-    mac.update(&units_to_bytes(prefix));
-    truncate(&mac.finalize().into_bytes())
+fn ciphertext_len(units: usize) -> Result<usize, CursorError> {
+    units
+        .checked_mul(2)
+        .and_then(|bytes| bytes.checked_add(DIGEST_LEN))
+        .ok_or(CursorError::Internal("cursor ciphertext size overflow"))
 }
 
-fn truncate<const N: usize>(full: &[u8]) -> [u8; N] {
-    let mut out = [0u8; N];
-    out.copy_from_slice(&full[..N]);
-    out
-}
-
-fn mac(secret: &[u8; 32]) -> HmacSha256 {
-    HmacSha256::new_from_slice(secret).expect("HMAC-SHA256 accepts any key length")
+fn reserved_vec<T>(length: usize) -> Result<Vec<T>, CursorError> {
+    let mut out = Vec::new();
+    out.try_reserve_exact(length)
+        .map_err(|_| CursorError::Internal("cursor allocation failed"))?;
+    Ok(out)
 }
 
 /// Comparing a tag against a candidate must not leak where they diverge: a
@@ -221,33 +303,29 @@ fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
     diff == 0
 }
 
-fn units_to_bytes(units: &[u16]) -> Vec<u8> {
-    let mut out = Vec::with_capacity(units.len() * 2);
-    for unit in units {
-        out.extend_from_slice(&unit.to_be_bytes());
+fn bytes_to_units(bytes: &[u8]) -> Result<Vec<u16>, CursorError> {
+    let (pairs, _) = bytes.as_chunks::<2>();
+    let mut out = reserved_vec(pairs.len())?;
+    out.extend(pairs.iter().map(|pair| u16::from_be_bytes(*pair)));
+    Ok(out)
+}
+
+fn ascii(units: &[u16]) -> Result<Vec<u8>, CursorError> {
+    if units.iter().any(|&unit| unit > 0x7f) {
+        return Err(CursorError::Malformed);
     }
-    out
-}
-
-fn bytes_to_units(bytes: &[u8]) -> Vec<u16> {
-    bytes
-        .as_chunks::<2>()
-        .0
-        .iter()
-        .map(|pair| u16::from_be_bytes(*pair))
-        .collect()
-}
-
-fn ascii(units: &[u16]) -> Option<String> {
-    units
-        .iter()
-        .map(|&u| u8::try_from(u).ok().filter(u8::is_ascii).map(char::from))
-        .collect()
+    let mut out = reserved_vec(units.len())?;
+    out.extend(units.iter().map(|&unit| unit as u8));
+    Ok(out)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn units_to_bytes(units: &[u16]) -> Vec<u8> {
+        units.iter().flat_map(|unit| unit.to_be_bytes()).collect()
+    }
 
     fn u(s: &str) -> Vec<u16> {
         s.encode_utf16().collect()
@@ -255,6 +333,150 @@ mod tests {
 
     fn mint(prefix: &[u16], key: &[u16]) -> String {
         encode(prefix, key).expect("this host has entropy")
+    }
+
+    fn broken_crypto() -> Result<CursorCrypto, CursorError> {
+        CursorCrypto::from_initial(Err(hmac::digest::InvalidLength))
+    }
+
+    #[test]
+    fn signing_initialization_failure_propagates_from_both_paths() {
+        let expected = CursorError::Internal("cursor HMAC initialization failed");
+        assert_eq!(
+            encode_with(&[], &[], &[9; NONCE_LEN], broken_crypto),
+            Err(expected)
+        );
+        assert_eq!(decode_with(&[], &u("AA"), broken_crypto), Err(expected));
+    }
+
+    #[test]
+    fn internal_size_and_digest_failures_are_checked() {
+        assert_eq!(truncate::<2>(&[1, 2, 3]), Ok([1, 2]));
+        assert!(matches!(
+            truncate::<4>(&[1, 2, 3]),
+            Err(CursorError::Internal(_))
+        ));
+        assert_eq!(ciphertext_len(0), Ok(DIGEST_LEN));
+        let largest = (usize::MAX - DIGEST_LEN) / 2;
+        assert!(ciphertext_len(largest).is_ok());
+        assert!(matches!(
+            ciphertext_len(largest + 1),
+            Err(CursorError::Internal(_))
+        ));
+        assert!(matches!(
+            ciphertext_len(usize::MAX),
+            Err(CursorError::Internal(_))
+        ));
+        assert!(matches!(
+            reserved_vec::<u8>(usize::MAX),
+            Err(CursorError::Internal(_))
+        ));
+    }
+
+    #[test]
+    fn version_two_encoding_matches_pre_change_vectors() {
+        // Captured from the original Rust signing helpers at 1b71c3f2, with
+        // fixed test-only entropy. The prefix includes a lone surrogate too.
+        let vectors = [
+            (
+                vec![],
+                "AgkJCQkJCQkJCQkJCQkJCQl48t14NbpgXmTlukNSywGRYHXfL4fUgOA",
+            ),
+            (
+                vec![0x61, 0xd800, 0x62],
+                "AgkJCQkJCQkJCQkJCQkJCQl48t14NbpgXkTvhMzZ2e_vpBm9uJOWUpBDLI2wgdU",
+            ),
+            (
+                (0u16..40).collect(),
+                "AgkJCQkJCQkJCQkJCQkJCQl48t14NbpgXkSOXM3Zueb_r1fc1-hILWHbdUqLdq2UrN1APkbo2onT9VFLapUanTnQXMCjfICQsMYKZk9k1POWkxmYBBeX6Sl4EdtbfkaakIXrx1ZiPISW4wiXsl54Mq_9KbaWTH-uTw",
+            ),
+        ];
+        let prefix = [0x70, 0xd800];
+        for (key, expected) in vectors {
+            let encoded = encode_with(&prefix, &key, &[9; NONCE_LEN], || {
+                CursorCrypto::new(&[7; 32])
+            })
+            .unwrap();
+            assert_eq!(encoded, expected);
+            assert_eq!(
+                decode_with(&prefix, &u(expected), || CursorCrypto::new(&[7; 32])).unwrap(),
+                key
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn internal_cursor_failures_trap_past_guest_catch() {
+        use crate::runtime::host::register_host_fn;
+        use crate::runtime::{RuntimeConfig, StoreData, Vfs, install_runtime_async};
+        use wasmtime::{FuncType, Linker};
+
+        let cfg = RuntimeConfig::default();
+        let engine = cfg.engine().unwrap();
+        let mut store = cfg
+            .store_async(&engine, StoreData::with_vfs(Vfs::tempdir().unwrap()))
+            .unwrap();
+        let mut linker = Linker::new(&engine);
+        install_runtime_async(&mut linker, &mut store)
+            .await
+            .unwrap();
+        let name = crate::mangle::host("test:cursor", "failure");
+        register_host_fn(
+            &mut linker,
+            "test:cursor",
+            name.clone(),
+            FuncType::new(&engine, [wasmtime::ValType::I32], []),
+            true,
+            |_, params, _| {
+                let failure = match params[0].i32().unwrap() {
+                    0 => encode_with(&[], &[], &[9; NONCE_LEN], broken_crypto).map(|_| ()),
+                    1 => decode_with(&[], &u("AA"), broken_crypto).map(|_| ()),
+                    2 => Err(CursorError::Malformed),
+                    3 => Err(CursorError::PrefixMismatch),
+                    _ => Err(CursorError::NoEntropy),
+                };
+                failure.map_err(super::super::cursor_trap)
+            },
+        )
+        .unwrap();
+        let source = format!(
+            r#"(module
+            (import "test:cursor" "{name}" (func $failure (param i32)))
+            (func (export "attempt") (param i32) (result i32)
+                (block $caught
+                    (try_table (catch_all $caught) (call $failure (local.get 0)))
+                    (return (i32.const 0)))
+                (i32.const 1))
+            (func (export "healthy") (result i32) (i32.const 42)))"#
+        );
+        let buffer = wast::parser::ParseBuffer::new(&source).unwrap();
+        let mut wat = wast::parser::parse::<wast::Wat>(&buffer).unwrap();
+        let module = wasmtime::Module::new(&engine, wat.encode().unwrap()).unwrap();
+        let instance = linker.instantiate_async(&mut store, &module).await.unwrap();
+        let attempt = instance
+            .get_typed_func::<i32, i32>(&mut store, "attempt")
+            .unwrap();
+        let healthy = instance
+            .get_typed_func::<(), i32>(&mut store, "healthy")
+            .unwrap();
+        for case in 0..5 {
+            let result = attempt.call_async(&mut store, case).await;
+            if case < 2 {
+                let error = result.expect_err("internal failure must bypass guest catch");
+                assert_eq!(
+                    error.downcast_ref::<wasmtime::Trap>(),
+                    Some(&wasmtime::Trap::UnreachableCodeReached)
+                );
+                assert!(format!("{error:#}").contains("cursor HMAC initialization failed"));
+            } else {
+                assert_eq!(
+                    result.unwrap(),
+                    1,
+                    "ordinary cursor failures stay catchable"
+                );
+            }
+            assert_eq!(healthy.call_async(&mut store, ()).await.unwrap(), 42);
+        }
     }
 
     #[test]
@@ -289,7 +511,7 @@ mod tests {
         // Nor may any suffix of the payload decode to it.
         for start in 0..raw.len() {
             assert_ne!(
-                bytes_to_units(&raw[start..]),
+                bytes_to_units(&raw[start..]).unwrap(),
                 denied,
                 "the key is recoverable from byte {start} of the cursor"
             );

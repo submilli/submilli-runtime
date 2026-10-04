@@ -4,6 +4,7 @@
 //! the linker resolves the user import (`submilli:secrets#get`) with no Wasm
 //! module.
 
+use crate::runtime::host::{abi_arg, abi_result};
 use wasmtime::{FuncType, HeapType, Linker, RefType, Val, ValType};
 
 use crate::runtime::StoreData;
@@ -52,8 +53,13 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         /* deterministic = */ false,
         |caller, params, results| {
             Box::pin(async move {
-                let name = read_string_arg(&mut *caller, &params[0], "secrets.get (secret)")?;
-                check_security(&*caller, "secrets.get", serde_json::json!({ "name": name }))?;
+                let name =
+                    read_string_arg(&mut *caller, abi_arg(params, 0)?, "secrets.get (secret)")?;
+                check_security(
+                    &mut *caller,
+                    "secrets.get",
+                    serde_json::json!({ "name": name }),
+                )?;
 
                 let provider = caller.data().secret_provider.clone();
                 let Some(value) = provider
@@ -61,12 +67,12 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
                     .await
                     .map_err(|msg| wasmtime::Error::msg(format!("secrets.get {name}: {msg}")))?
                 else {
-                    results[0] = Val::AnyRef(None);
+                    *abi_result(results, 0)? = Val::AnyRef(None);
                     return Ok(());
                 };
 
                 let st = write_submilli_string_struct(caller, &value)?;
-                results[0] = Val::AnyRef(Some(st.to_anyref()));
+                *abi_result(results, 0)? = Val::AnyRef(Some(st.to_anyref()));
                 Ok(())
             })
         },
@@ -141,10 +147,11 @@ mod tests {
             ));
             if self.deny {
                 CheckOutcome::Deny {
+                    rule: None,
                     reason: "denied in test".to_string(),
                 }
             } else {
-                CheckOutcome::Allow
+                CheckOutcome::Allow { rule: None }
             }
         }
     }

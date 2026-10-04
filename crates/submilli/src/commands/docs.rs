@@ -1,40 +1,49 @@
 //! `submilli docs <name>` — print a stdlib or installed package's
-//! TypeScript-style declarations and description. Runs offline; no server
-//! needed.
+//! TypeScript-style declarations and description. Runs offline (except for an
+//! `@mcp/<server>` package, which is discovered from its server); no Submilli
+//! server needed. See [`discovery::Scope`] for what `--blueprint` changes.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::sync::Arc;
 
 use anyhow::Context;
-
 use interpreter::packages::{self, Resolution};
 use submilli_build::PackageStore;
 
-use super::discovery;
+use super::discovery::{self, Scope};
 
 #[derive(clap::Args)]
 pub struct Args {
     /// Package name, e.g. `submilli:http` or an installed `@org/name`. A
     /// language built-in (`Temporal`, `Temporal.Instant`) resolves here too.
     name: String,
-    /// Local blueprint for an `@mcp/<server>` package (default: blueprint.yaml).
+    /// Show only what programs under this blueprint could import. Without it,
+    /// the whole library is shown. An `@mcp/<server>` package is always read
+    /// from a blueprint, by default blueprint.yaml.
     #[arg(long)]
     blueprint: Option<PathBuf>,
 }
 
+const DEFAULT_BLUEPRINT: &str = "blueprint.yaml";
+
 pub fn execute(args: Args) -> anyhow::Result<ExitCode> {
     if let Some(server) = args.name.strip_prefix("@mcp/") {
-        return mcp_docs(
-            server,
-            args.blueprint.unwrap_or_else(|| "blueprint.yaml".into()),
-        );
+        // An `@mcp/<server>` package exists only in a blueprint, so defaulting
+        // the file here hides nothing, unlike scoping the library below.
+        let path = args.blueprint.unwrap_or_else(|| DEFAULT_BLUEPRINT.into());
+        return mcp_docs(server, &path);
     }
+    let scope = Scope::load(args.blueprint)?;
     match packages::resolve(&args.name) {
-        Resolution::Module(doc) => {
+        Resolution::Module(doc) if scope.allows(&doc.name) => {
             println!("{} — {}\n", doc.name, doc.description);
             println!("{}", doc.declarations);
             Ok(ExitCode::SUCCESS)
+        }
+        Resolution::Module(doc) => {
+            eprintln!("{}", scope.hidden_message(&doc.name));
+            Ok(ExitCode::FAILURE)
         }
         // A built-in needs no `import`, so serving it here costs the caller
         // nothing — the same redirect `packages.docs` makes over MCP and REST.
@@ -46,27 +55,31 @@ pub fn execute(args: Args) -> anyhow::Result<ExitCode> {
         other => {
             // Installed packages come after the stdlib and the built-ins: a
             // `submilli:*` or built-in name can never be shadowed by a store entry.
-            if let Ok(artifact) = PackageStore::default().load(&args.name) {
-                println!("{}\n", discovery::installed_summary(&artifact));
-                println!(
-                    "{}",
-                    packages::render_declarations(&artifact.package_declaration)
-                );
-                return Ok(ExitCode::SUCCESS);
+            let Ok(artifact) = PackageStore::default().load(&args.name) else {
+                discovery::report_miss(&args.name, other, &scope);
+                return Ok(ExitCode::FAILURE);
+            };
+            if !scope.allows(&args.name) {
+                eprintln!("{}", scope.hidden_message(&args.name));
+                return Ok(ExitCode::FAILURE);
             }
-            discovery::report_miss(&args.name, other);
-            Ok(ExitCode::FAILURE)
+            println!("{}\n", discovery::installed_summary(&artifact));
+            println!(
+                "{}",
+                packages::render_declarations(&artifact.package_declaration)
+            );
+            Ok(ExitCode::SUCCESS)
         }
     }
 }
 
-fn mcp_docs(server: &str, path: PathBuf) -> anyhow::Result<ExitCode> {
+fn mcp_docs(server: &str, path: &Path) -> anyhow::Result<ExitCode> {
     use interpreter::runtime::{NetworkPolicy, ReqwestHttpClient};
     use submilli_shared::mcp::discovery::{DiscoveryAuth, discover_selected};
     use submilli_shared::mcp_token::OAuthTokenManager;
 
     let yaml =
-        std::fs::read_to_string(&path).with_context(|| format!("reading {}", path.display()))?;
+        std::fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
     let blueprint = submilli_blueprint::parse(&yaml)?;
     anyhow::ensure!(
         blueprint.mcp.contains_key(server),

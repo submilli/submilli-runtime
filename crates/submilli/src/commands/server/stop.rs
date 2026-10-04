@@ -18,11 +18,22 @@ const POLL_INTERVAL: Duration = Duration::from_millis(100);
 
 pub fn execute(args: Args) -> anyhow::Result<ExitCode> {
     let base = args.target.base();
-    let agent = args.target.agent()?;
+    let agent = match args.target.agent() {
+        Ok(agent) => agent,
+        Err(error) if crate::commands::http::connection_refused(&error) => {
+            println!("already stopped (no server at {base})");
+            return Ok(ExitCode::SUCCESS);
+        }
+        Err(error) => return Err(error),
+    };
 
-    let Ok(resp) = agent.post(&format!("{base}/v1/shutdown")).send_empty() else {
-        println!("already stopped (no server at {base})");
-        return Ok(ExitCode::SUCCESS);
+    let resp = match agent.post(&format!("{base}/v1/shutdown")).send_empty() {
+        Ok(response) => response,
+        Err(ureq::Error::Io(error)) if error.kind() == std::io::ErrorKind::ConnectionRefused => {
+            println!("already stopped (no server at {base})");
+            return Ok(ExitCode::SUCCESS);
+        }
+        Err(error) => return Err(error.into()),
     };
     if ok_or_report(resp).is_none() {
         return Ok(ExitCode::from(1));
@@ -32,9 +43,15 @@ pub fn execute(args: Args) -> anyhow::Result<ExitCode> {
     // rather than `/v1/status`: any answer at all means "still up", and this
     // one needs no token.
     for _ in 0..POLL_ATTEMPTS {
-        if agent.get(&format!("{base}/healthz")).call().is_err() {
-            println!("stopped");
-            return Ok(ExitCode::SUCCESS);
+        match agent.get(&format!("{base}/healthz")).call() {
+            Ok(_) => {}
+            Err(ureq::Error::Io(error))
+                if error.kind() == std::io::ErrorKind::ConnectionRefused =>
+            {
+                println!("stopped");
+                return Ok(ExitCode::SUCCESS);
+            }
+            Err(error) => return Err(error.into()),
         }
         std::thread::sleep(POLL_INTERVAL);
     }

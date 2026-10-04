@@ -3,6 +3,7 @@
 //! and declares the value symbols codegen routes through. The operations
 //! themselves live in the parent module.
 
+use crate::runtime::host::{abi_arg, abi_result};
 use wasmtime::{FuncType, HeapType, Linker, RefType, StructType, Val, ValType};
 
 use crate::runtime::StoreData;
@@ -11,6 +12,7 @@ use crate::runtime::host::{
     write_submilli_string_struct_units,
 };
 use crate::runtime::intrinsic_types::{IntrinsicTypes, build_intrinsic_types};
+use crate::runtime::prelude::vtable::read_string_units;
 use crate::runtime::prelude::{MODULE_NAME, closure, declare_method};
 use crate::{MangledName, PackageDeclaration, Param, Type};
 
@@ -78,8 +80,8 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         ft(vec![array.clone(), num.clone()], vec![elem.clone()]),
         true,
         |caller, params, results| {
-            let elements = super::read_array(caller, &params[0], "Array#at")?;
-            results[0] = super::at(&elements, f64v(&params[1]));
+            *abi_result(results, 0)? =
+                super::at(caller, abi_arg(params, 0)?, f64v(abi_arg(params, 1)?))?;
             Ok(())
         },
     )?;
@@ -93,9 +95,13 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         ),
         true,
         |caller, params, results| {
-            let elements = super::read_array(caller, &params[0], "Array#slice")?;
-            let out = super::slice(&elements, f64v(&params[1]), f64v(&params[2]));
-            results[0] = super::build_array(caller, &out)?;
+            let out = super::slice(
+                caller,
+                abi_arg(params, 0)?,
+                f64v(abi_arg(params, 1)?),
+                f64v(abi_arg(params, 2)?),
+            )?;
+            *abi_result(results, 0)? = super::build_array(caller, &out)?;
             Ok(())
         },
     )?;
@@ -106,9 +112,9 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         ft(vec![array.clone(), array.clone()], vec![array.clone()]),
         true,
         |caller, params, results| {
-            let self_elems = super::read_array(caller, &params[0], "Array#concat")?;
-            let out = super::concat(caller, self_elems, &params[1])?;
-            results[0] = super::build_array(caller, &out)?;
+            let self_elems = super::read_array(caller, abi_arg(params, 0)?, "Array#concat")?;
+            let out = super::concat(caller, self_elems, abi_arg(params, 1)?)?;
+            *abi_result(results, 0)? = super::build_array(caller, &out)?;
             Ok(())
         },
     )?;
@@ -120,11 +126,11 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         true,
         |caller, params, results| {
             Box::pin(async move {
-                let elements = super::read_kept_array(caller, &params[0], "Array#join")?;
-                let sep = super::read_string_units(caller, &params[1])?;
+                let elements = super::read_kept_array(caller, abi_arg(params, 0)?, "Array#join")?;
+                let sep = read_string_units(caller, abi_arg(params, 1)?, "Array#join separator")?;
                 let out = super::join(caller, elements, sep).await?;
                 let st = write_submilli_string_struct_units(caller, &out)?;
-                results[0] = Val::AnyRef(Some(st.to_anyref()));
+                *abi_result(results, 0)? = Val::AnyRef(Some(st.to_anyref()));
                 Ok(())
             })
         },
@@ -140,9 +146,15 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         true,
         |caller, params, results| {
             Box::pin(async move {
-                let elements = super::read_array(caller, &params[0], "Array#indexOf")?;
-                let r = super::index_of(caller, elements, params[1], f64v(&params[2])).await?;
-                results[0] = Val::F64(r.to_bits());
+                let elements = super::read_array(caller, abi_arg(params, 0)?, "Array#indexOf")?;
+                let r = super::index_of(
+                    caller,
+                    elements,
+                    *abi_arg(params, 1)?,
+                    f64v(abi_arg(params, 2)?),
+                )
+                .await?;
+                *abi_result(results, 0)? = Val::F64(r.to_bits());
                 Ok(())
             })
         },
@@ -158,9 +170,15 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         true,
         |caller, params, results| {
             Box::pin(async move {
-                let elements = super::read_array(caller, &params[0], "Array#lastIndexOf")?;
-                let r = super::last_index_of(caller, elements, params[1], f64v(&params[2])).await?;
-                results[0] = Val::F64(r.to_bits());
+                let elements = super::read_array(caller, abi_arg(params, 0)?, "Array#lastIndexOf")?;
+                let r = super::last_index_of(
+                    caller,
+                    elements,
+                    *abi_arg(params, 1)?,
+                    f64v(abi_arg(params, 2)?),
+                )
+                .await?;
+                *abi_result(results, 0)? = Val::F64(r.to_bits());
                 Ok(())
             })
         },
@@ -176,9 +194,15 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         true,
         |caller, params, results| {
             Box::pin(async move {
-                let elements = super::read_array(caller, &params[0], "Array#includes")?;
-                let r = super::includes(caller, elements, params[1], f64v(&params[2])).await?;
-                results[0] = Val::I32(i32::from(r));
+                let elements = super::read_array(caller, abi_arg(params, 0)?, "Array#includes")?;
+                let r = super::includes(
+                    caller,
+                    elements,
+                    *abi_arg(params, 1)?,
+                    f64v(abi_arg(params, 2)?),
+                )
+                .await?;
+                *abi_result(results, 0)? = Val::I32(i32::from(r));
                 Ok(())
             })
         },
@@ -192,9 +216,18 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         ft(vec![array.clone(), elem.clone()], vec![num.clone()]),
         true,
         |caller, params, results| {
-            let elements = super::read_array(caller, &params[0], "Array#push")?;
-            let n = super::push(caller, &params[0], elements, params[1])?;
-            results[0] = Val::F64(n.to_bits());
+            let [receiver, element] = params else {
+                return Err(crate::runtime::host::fatal_host_error(
+                    "invalid Array#push arguments",
+                ));
+            };
+            let [result] = results else {
+                return Err(crate::runtime::host::fatal_host_error(
+                    "invalid Array#push result slot",
+                ));
+            };
+            let n = super::push(caller, receiver, *element)?;
+            *result = Val::F64(n.to_bits());
             Ok(())
         },
     )?;
@@ -205,8 +238,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         ft(vec![array.clone()], vec![elem.clone()]),
         true,
         |caller, params, results| {
-            let elements = super::read_array(caller, &params[0], "Array#pop")?;
-            results[0] = super::pop(caller, &params[0], elements)?;
+            *abi_result(results, 0)? = super::pop(caller, abi_arg(params, 0)?)?;
             Ok(())
         },
     )?;
@@ -217,8 +249,8 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         ft(vec![array.clone()], vec![elem.clone()]),
         true,
         |caller, params, results| {
-            let elements = super::read_array(caller, &params[0], "Array#shift")?;
-            results[0] = super::shift(caller, &params[0], elements)?;
+            let elements = super::read_array(caller, abi_arg(params, 0)?, "Array#shift")?;
+            *abi_result(results, 0)? = super::shift(caller, abi_arg(params, 0)?, elements)?;
             Ok(())
         },
     )?;
@@ -229,10 +261,10 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         ft(vec![array.clone(), array.clone()], vec![num.clone()]),
         true,
         |caller, params, results| {
-            let elements = super::read_array(caller, &params[0], "Array#unshift")?;
-            let items = super::read_array(caller, &params[1], "Array#unshift")?;
-            let n = super::unshift(caller, &params[0], elements, items)?;
-            results[0] = Val::F64(n.to_bits());
+            let elements = super::read_array(caller, abi_arg(params, 0)?, "Array#unshift")?;
+            let items = super::read_array(caller, abi_arg(params, 1)?, "Array#unshift")?;
+            let n = super::unshift(caller, abi_arg(params, 0)?, elements, items)?;
+            *abi_result(results, 0)? = Val::F64(n.to_bits());
             Ok(())
         },
     )?;
@@ -243,8 +275,8 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         ft(vec![array.clone()], vec![array.clone()]),
         true,
         |caller, params, results| {
-            let elements = super::read_array(caller, &params[0], "Array#reverse")?;
-            results[0] = super::reverse(caller, &params[0], elements)?;
+            let elements = super::read_array(caller, abi_arg(params, 0)?, "Array#reverse")?;
+            *abi_result(results, 0)? = super::reverse(caller, abi_arg(params, 0)?, elements)?;
             Ok(())
         },
     )?;
@@ -258,14 +290,14 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         ),
         true,
         |caller, params, results| {
-            let elements = super::read_array(caller, &params[0], "Array#fill")?;
-            results[0] = super::fill(
+            let elements = super::read_array(caller, abi_arg(params, 0)?, "Array#fill")?;
+            *abi_result(results, 0)? = super::fill(
                 caller,
-                &params[0],
+                abi_arg(params, 0)?,
                 elements,
-                params[1],
-                f64v(&params[2]),
-                f64v(&params[3]),
+                *abi_arg(params, 1)?,
+                f64v(abi_arg(params, 2)?),
+                f64v(abi_arg(params, 3)?),
             )?;
             Ok(())
         },
@@ -280,14 +312,14 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         ),
         true,
         |caller, params, results| {
-            let elements = super::read_array(caller, &params[0], "Array#copyWithin")?;
-            results[0] = super::copy_within(
+            let elements = super::read_array(caller, abi_arg(params, 0)?, "Array#copyWithin")?;
+            *abi_result(results, 0)? = super::copy_within(
                 caller,
-                &params[0],
+                abi_arg(params, 0)?,
                 elements,
-                f64v(&params[1]),
-                f64v(&params[2]),
-                f64v(&params[3]),
+                f64v(abi_arg(params, 1)?),
+                f64v(abi_arg(params, 2)?),
+                f64v(abi_arg(params, 3)?),
             )?;
             Ok(())
         },
@@ -302,14 +334,14 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         ),
         true,
         |caller, params, results| {
-            let elements = super::read_array(caller, &params[0], "Array#splice")?;
-            let items = super::read_array(caller, &params[3], "Array#splice")?;
-            results[0] = super::splice(
+            let elements = super::read_array(caller, abi_arg(params, 0)?, "Array#splice")?;
+            let items = super::read_array(caller, abi_arg(params, 3)?, "Array#splice")?;
+            *abi_result(results, 0)? = super::splice(
                 caller,
-                &params[0],
+                abi_arg(params, 0)?,
                 elements,
-                f64v(&params[1]),
-                f64v(&params[2]),
+                f64v(abi_arg(params, 1)?),
+                f64v(abi_arg(params, 2)?),
                 items,
             )?;
             Ok(())
@@ -323,17 +355,18 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         true,
         |caller, params, results| {
             Box::pin(async move {
-                let elements = super::read_kept_array(caller, &params[0], "Array#sort")?;
-                let cmp = if matches!(params[1], Val::AnyRef(None)) {
+                let elements = super::read_kept_array(caller, abi_arg(params, 0)?, "Array#sort")?;
+                let cmp = if matches!(*abi_arg(params, 1)?, Val::AnyRef(None)) {
                     None
                 } else {
                     Some(closure::read_callback(
                         caller,
-                        &params[1],
+                        abi_arg(params, 1)?,
                         "Array#sort comparator",
                     )?)
                 };
-                results[0] = super::sort(caller, &params[0], elements, cmp).await?;
+                *abi_result(results, 0)? =
+                    super::sort(caller, abi_arg(params, 0)?, elements, cmp).await?;
                 Ok(())
             })
         },
@@ -349,9 +382,10 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         |caller, params, _results| {
             Box::pin(async move {
                 let elements =
-                    super::read_kept_array(caller, &params[0], "Array#forEach receiver")?;
-                let f = closure::read_callback(caller, &params[1], "Array#forEach callback")?;
-                super::for_each(caller, params[0], elements, &f).await
+                    super::read_kept_array(caller, abi_arg(params, 0)?, "Array#forEach receiver")?;
+                let f =
+                    closure::read_callback(caller, abi_arg(params, 1)?, "Array#forEach callback")?;
+                super::for_each(caller, *abi_arg(params, 0)?, elements, &f).await
             })
         },
     )?;
@@ -363,10 +397,10 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         true,
         |caller, params, results| {
             Box::pin(async move {
-                let elements = super::read_kept_array(caller, &params[0], "Array#map")?;
-                let f = closure::read_callback(caller, &params[1], "Array#map callback")?;
-                let out = super::map(caller, params[0], elements, &f).await?;
-                results[0] = super::build_array(caller, &out)?;
+                let elements = super::read_kept_array(caller, abi_arg(params, 0)?, "Array#map")?;
+                let f = closure::read_callback(caller, abi_arg(params, 1)?, "Array#map callback")?;
+                let out = super::map(caller, *abi_arg(params, 0)?, elements, &f).await?;
+                *abi_result(results, 0)? = super::build_array(caller, &out)?;
                 Ok(())
             })
         },
@@ -379,10 +413,11 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         true,
         |caller, params, results| {
             Box::pin(async move {
-                let elements = super::read_kept_array(caller, &params[0], "Array#filter")?;
-                let f = closure::read_callback(caller, &params[1], "Array#filter predicate")?;
-                let out = super::filter(caller, params[0], elements, &f).await?;
-                results[0] = super::build_array(caller, &out)?;
+                let elements = super::read_kept_array(caller, abi_arg(params, 0)?, "Array#filter")?;
+                let f =
+                    closure::read_callback(caller, abi_arg(params, 1)?, "Array#filter predicate")?;
+                let out = super::filter(caller, *abi_arg(params, 0)?, elements, &f).await?;
+                *abi_result(results, 0)? = super::build_array(caller, &out)?;
                 Ok(())
             })
         },
@@ -398,10 +433,18 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         true,
         |caller, params, results| {
             Box::pin(async move {
-                let elements = super::read_kept_array(caller, &params[0], "Array#reduce")?;
-                let f = closure::read_callback(caller, &params[1], "Array#reduce callback")?;
-                results[0] =
-                    super::reduce(caller, params[0], elements, &f, params[2], false).await?;
+                let elements = super::read_kept_array(caller, abi_arg(params, 0)?, "Array#reduce")?;
+                let f =
+                    closure::read_callback(caller, abi_arg(params, 1)?, "Array#reduce callback")?;
+                *abi_result(results, 0)? = super::reduce(
+                    caller,
+                    *abi_arg(params, 0)?,
+                    elements,
+                    &f,
+                    *abi_arg(params, 2)?,
+                    false,
+                )
+                .await?;
                 Ok(())
             })
         },
@@ -417,10 +460,22 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         true,
         |caller, params, results| {
             Box::pin(async move {
-                let elements = super::read_kept_array(caller, &params[0], "Array#reduceRight")?;
-                let f = closure::read_callback(caller, &params[1], "Array#reduceRight callback")?;
-                results[0] =
-                    super::reduce(caller, params[0], elements, &f, params[2], true).await?;
+                let elements =
+                    super::read_kept_array(caller, abi_arg(params, 0)?, "Array#reduceRight")?;
+                let f = closure::read_callback(
+                    caller,
+                    abi_arg(params, 1)?,
+                    "Array#reduceRight callback",
+                )?;
+                *abi_result(results, 0)? = super::reduce(
+                    caller,
+                    *abi_arg(params, 0)?,
+                    elements,
+                    &f,
+                    *abi_arg(params, 2)?,
+                    true,
+                )
+                .await?;
                 Ok(())
             })
         },
@@ -434,15 +489,25 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
             true,
             move |caller, params, results| {
                 Box::pin(async move {
-                    let elements = super::read_kept_array(caller, &params[0], "Array#find")?;
-                    let pred = closure::read_callback(caller, &params[1], "Array#find predicate")?;
-                    results[0] =
-                        match super::find_match(caller, params[0], &elements, &pred, reverse)
-                            .await?
-                        {
-                            Some(i) => elements[i],
-                            None => Val::null_any_ref(),
-                        };
+                    let elements =
+                        super::read_kept_array(caller, abi_arg(params, 0)?, "Array#find")?;
+                    let pred = closure::read_callback(
+                        caller,
+                        abi_arg(params, 1)?,
+                        "Array#find predicate",
+                    )?;
+                    *abi_result(results, 0)? = match super::find_match(
+                        caller,
+                        *abi_arg(params, 0)?,
+                        &elements,
+                        &pred,
+                        reverse,
+                    )
+                    .await?
+                    {
+                        Some(i) => elements[i],
+                        None => Val::null_any_ref(),
+                    };
                     Ok(())
                 })
             },
@@ -457,13 +522,18 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
             true,
             move |caller, params, results| {
                 Box::pin(async move {
-                    let elements = super::read_kept_array(caller, &params[0], "Array#findIndex")?;
-                    let pred =
-                        closure::read_callback(caller, &params[1], "Array#findIndex predicate")?;
+                    let elements =
+                        super::read_kept_array(caller, abi_arg(params, 0)?, "Array#findIndex")?;
+                    let pred = closure::read_callback(
+                        caller,
+                        abi_arg(params, 1)?,
+                        "Array#findIndex predicate",
+                    )?;
                     let idx =
-                        super::find_match(caller, params[0], &elements, &pred, reverse).await?;
+                        super::find_match(caller, *abi_arg(params, 0)?, &elements, &pred, reverse)
+                            .await?;
                     let r = idx.map_or(-1.0, |i| i as f64);
-                    results[0] = Val::F64(r.to_bits());
+                    *abi_result(results, 0)? = Val::F64(r.to_bits());
                     Ok(())
                 })
             },
@@ -477,10 +547,11 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         true,
         |caller, params, results| {
             Box::pin(async move {
-                let elements = super::read_kept_array(caller, &params[0], "Array#some")?;
-                let pred = closure::read_callback(caller, &params[1], "Array#some predicate")?;
-                let r = super::some(caller, params[0], elements, &pred).await?;
-                results[0] = Val::I32(i32::from(r));
+                let elements = super::read_kept_array(caller, abi_arg(params, 0)?, "Array#some")?;
+                let pred =
+                    closure::read_callback(caller, abi_arg(params, 1)?, "Array#some predicate")?;
+                let r = super::some(caller, *abi_arg(params, 0)?, elements, &pred).await?;
+                *abi_result(results, 0)? = Val::I32(i32::from(r));
                 Ok(())
             })
         },
@@ -493,10 +564,11 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         true,
         |caller, params, results| {
             Box::pin(async move {
-                let elements = super::read_kept_array(caller, &params[0], "Array#every")?;
-                let pred = closure::read_callback(caller, &params[1], "Array#every predicate")?;
-                let r = super::every(caller, params[0], elements, &pred).await?;
-                results[0] = Val::I32(i32::from(r));
+                let elements = super::read_kept_array(caller, abi_arg(params, 0)?, "Array#every")?;
+                let pred =
+                    closure::read_callback(caller, abi_arg(params, 1)?, "Array#every predicate")?;
+                let r = super::every(caller, *abi_arg(params, 0)?, elements, &pred).await?;
+                *abi_result(results, 0)? = Val::I32(i32::from(r));
                 Ok(())
             })
         },
@@ -508,11 +580,11 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         ft(vec![array.clone(), num.clone()], vec![array.clone()]),
         true,
         |caller, params, results| {
-            let elements = super::read_array(caller, &params[0], "Array#flat")?;
-            let depth = f64v(&params[1]) as i32;
+            let elements = super::read_array(caller, abi_arg(params, 0)?, "Array#flat")?;
+            let depth = f64v(abi_arg(params, 1)?) as i32;
             let mut out = Vec::new();
             super::flat_into(caller, elements, depth, &mut out)?;
-            results[0] = super::build_array(caller, &out)?;
+            *abi_result(results, 0)? = super::build_array(caller, &out)?;
             Ok(())
         },
     )?;
@@ -524,10 +596,12 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         true,
         |caller, params, results| {
             Box::pin(async move {
-                let elements = super::read_kept_array(caller, &params[0], "Array#flatMap")?;
-                let f = closure::read_callback(caller, &params[1], "Array#flatMap callback")?;
-                let out = super::flat_map(caller, params[0], elements, &f).await?;
-                results[0] = super::build_array(caller, &out)?;
+                let elements =
+                    super::read_kept_array(caller, abi_arg(params, 0)?, "Array#flatMap")?;
+                let f =
+                    closure::read_callback(caller, abi_arg(params, 1)?, "Array#flatMap callback")?;
+                let out = super::flat_map(caller, *abi_arg(params, 0)?, elements, &f).await?;
+                *abi_result(results, 0)? = super::build_array(caller, &out)?;
                 Ok(())
             })
         },
@@ -541,9 +615,9 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         ft(vec![array.clone()], vec![array.clone()]),
         true,
         |caller, params, results| {
-            let elements = super::read_array(caller, &params[0], "Array#toReversed")?;
+            let elements = super::read_array(caller, abi_arg(params, 0)?, "Array#toReversed")?;
             let out = super::to_reversed(elements);
-            results[0] = super::build_array(caller, &out)?;
+            *abi_result(results, 0)? = super::build_array(caller, &out)?;
             Ok(())
         },
     )?;
@@ -555,18 +629,19 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         true,
         |caller, params, results| {
             Box::pin(async move {
-                let elements = super::read_kept_array(caller, &params[0], "Array#toSorted")?;
-                let cmp = if matches!(params[1], Val::AnyRef(None)) {
+                let elements =
+                    super::read_kept_array(caller, abi_arg(params, 0)?, "Array#toSorted")?;
+                let cmp = if matches!(*abi_arg(params, 1)?, Val::AnyRef(None)) {
                     None
                 } else {
                     Some(closure::read_callback(
                         caller,
-                        &params[1],
+                        abi_arg(params, 1)?,
                         "Array#toSorted comparator",
                     )?)
                 };
                 let out = super::to_sorted(caller, elements, cmp).await?;
-                results[0] = super::build_array(caller, &out)?;
+                *abi_result(results, 0)? = super::build_array(caller, &out)?;
                 Ok(())
             })
         },
@@ -581,11 +656,15 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         ),
         true,
         |caller, params, results| {
-            let elements = super::read_array(caller, &params[0], "Array#toSpliced")?;
-            let items = super::read_array(caller, &params[3], "Array#toSpliced")?;
-            let (_, result) =
-                super::splice_parts(&elements, f64v(&params[1]), f64v(&params[2]), items);
-            results[0] = super::build_array(caller, &result)?;
+            let elements = super::read_array(caller, abi_arg(params, 0)?, "Array#toSpliced")?;
+            let items = super::read_array(caller, abi_arg(params, 3)?, "Array#toSpliced")?;
+            let (_, result) = super::splice_parts(
+                &elements,
+                f64v(abi_arg(params, 1)?),
+                f64v(abi_arg(params, 2)?),
+                items,
+            );
+            *abi_result(results, 0)? = super::build_array(caller, &result)?;
             Ok(())
         },
     )?;
@@ -599,10 +678,10 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         ),
         true,
         |caller, params, results| {
-            let elements = super::read_array(caller, &params[0], "Array#with")?;
-            match super::with(&elements, f64v(&params[1]), params[2]) {
+            let elements = super::read_array(caller, abi_arg(params, 0)?, "Array#with")?;
+            match super::with(&elements, f64v(abi_arg(params, 1)?), *abi_arg(params, 2)?) {
                 Some(out) => {
-                    results[0] = super::build_array(caller, &out)?;
+                    *abi_result(results, 0)? = super::build_array(caller, &out)?;
                     Ok(())
                 }
                 None => Err(crate::runtime::host::range_error("index out of range")),
@@ -619,7 +698,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         ft(vec![array.clone()], vec![iterator_ret.clone()]),
         true,
         |caller, params, results| {
-            results[0] = super::keys(caller, &params[0])?;
+            *abi_result(results, 0)? = super::keys(caller, abi_arg(params, 0)?)?;
             Ok(())
         },
     )?;
@@ -630,7 +709,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         ft(vec![array.clone()], vec![iterator_ret.clone()]),
         true,
         |caller, params, results| {
-            results[0] = super::values(caller, &params[0])?;
+            *abi_result(results, 0)? = super::values(caller, abi_arg(params, 0)?)?;
             Ok(())
         },
     )?;
@@ -641,7 +720,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         ft(vec![array.clone()], vec![iterator_ret.clone()]),
         true,
         |caller, params, results| {
-            results[0] = super::entries(caller, &params[0])?;
+            *abi_result(results, 0)? = super::entries(caller, abi_arg(params, 0)?)?;
             Ok(())
         },
     )?;
@@ -657,13 +736,14 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
             true,
             move |caller, params, results| {
                 Box::pin(async move {
-                    results[0] = crate::runtime::prelude::vtable::dispatch_vtable_slot(
-                        caller,
-                        &params[0],
-                        slot,
-                        &[],
-                    )
-                    .await?;
+                    *abi_result(results, 0)? =
+                        crate::runtime::prelude::vtable::dispatch_vtable_slot(
+                            caller,
+                            abi_arg(params, 0)?,
+                            slot,
+                            &[],
+                        )
+                        .await?;
                     Ok(())
                 })
             },
@@ -679,7 +759,8 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         ft(vec![elem.clone()], vec![boolean]),
         true,
         |caller, params, results| {
-            results[0] = wasmtime::Val::I32(super::is_array(caller, &params[0])? as i32);
+            *abi_result(results, 0)? =
+                wasmtime::Val::I32(super::is_array(caller, abi_arg(params, 0)?)? as i32);
             Ok(())
         },
     )?;
@@ -692,8 +773,8 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         ft(vec![array.clone()], vec![array.clone()]),
         true,
         |caller, params, results| {
-            let items = super::read_array(caller, &params[0], "Array.of")?;
-            results[0] = super::build_array(caller, &items)?;
+            let items = super::read_array(caller, abi_arg(params, 0)?, "Array.of")?;
+            *abi_result(results, 0)? = super::build_array(caller, &items)?;
             Ok(())
         },
     )?;
@@ -710,7 +791,8 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         true,
         |caller, params, results| {
             Box::pin(async move {
-                results[0] = super::from(caller, &params[0], &params[1]).await?;
+                *abi_result(results, 0)? =
+                    super::from(caller, abi_arg(params, 0)?, abi_arg(params, 1)?).await?;
                 Ok(())
             })
         },

@@ -80,13 +80,18 @@ fn check_in_a_function_the_package_does_not_export() {
         "
 /**
  * Approves the send.
+ * @param channelId Conversation to post in.
  * @capability test.com/send { channelId: string }
  */
 function guard(channelId: string): void {
   check(\"test.com/send\", { channelId: channelId });
 }
 
-/** Sends the message. */
+/**
+ * Sends the message.
+ * @param channelId Conversation to post in.
+ * @param text Message text.
+ */
 export function send(channelId: string, text: string): void {
   guard(channelId);
   post(channelId, text);
@@ -101,6 +106,7 @@ fn property_read_again_after_the_check() {
         "
 /**
  * Sends the message.
+ * @param input Message and where to send it.
  * @capability test.com/send { channelId: string }
  */
 export function send(input: Input): void {
@@ -119,6 +125,7 @@ function deliver(input: Input): void {}
 
 /**
  * Sends the message.
+ * @param input Message and where to send it.
  * @capability test.com/send { channelId: string }
  */
 export function send(input: Input): void {

@@ -1,0 +1,15 @@
+// expect-error: payload key `extra` missing from `@capability` binding
+import { check } from "submilli:security";
+
+/**
+ * Checks a named operation.
+ * @param name Operation name.
+ * @capability x/op { name }
+ */
+function checkNamed(name: string): void {
+  check("x/op", { name, extra: true });
+}
+
+function main(): void {
+  checkNamed("TOKEN");
+}

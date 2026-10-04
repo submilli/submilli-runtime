@@ -505,6 +505,10 @@ where
                 })),
                 mutable: false,
             },
+            FieldType {
+                element_type: StorageType::Val(ValType::I64),
+                mutable: true,
+            },
         ];
         types.ty().subtype(&SubType {
             is_final: false,
@@ -551,6 +555,10 @@ pub fn emit_env_types(
                 heap_type: HeapType::Concrete(string),
             })),
             mutable: false,
+        },
+        FieldType {
+            element_type: StorageType::Val(ValType::I64),
+            mutable: true,
         },
     ]);
     symbols.call_metadata_type = Some(*next_type_idx);
@@ -783,7 +791,16 @@ pub fn emit_method_bodies(
     code.function(&super::closure_coercions::emit_equals(symbols)?);
 
     let mut hash = wasm_encoder::Function::new(std::iter::empty());
-    hash.instruction(&wasm_encoder::Instruction::I32Const(0));
+    let host_vtable = symbols
+        .prelude_global_idx("closure_vtable")
+        .ok_or_else(|| crate::codegen::internal_failure("closure_vtable imported from prelude"))?;
+    hash.instruction(&wasm_encoder::Instruction::LocalGet(0));
+    hash.instruction(&wasm_encoder::Instruction::GlobalGet(host_vtable));
+    hash.instruction(&wasm_encoder::Instruction::StructGet {
+        struct_type_index: intrinsics.vtable,
+        field_index: 3,
+    });
+    hash.instruction(&wasm_encoder::Instruction::CallRef(intrinsics.hash_fn));
     hash.instruction(&wasm_encoder::Instruction::End);
     code.function(&hash);
 

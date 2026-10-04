@@ -33,13 +33,15 @@ use ipnet::IpNet;
 use serde::Deserialize;
 use submilli_server::config::{
     OAuthProvider, ServerDirectories, VolumeTable, default_blueprint_dir,
-    default_cli_package_store_dir, default_package_store_dir, default_secret_store_dir,
-    default_session_storage_root, default_session_store_dir, validate_volumes,
+    default_cli_package_store_dir, default_managed_volume_root, default_package_store_dir,
+    default_secret_store_dir, default_session_storage_root, default_session_store_dir,
+    validate_volumes,
 };
 use submilli_server::{
     ApiToken, AuthConfig, DEFAULT_MAX_EXECUTION_TOKENS, DEFAULT_MAX_STORE_BYTES, FileSecretStore,
     KeySource, LlmLimits, NetworkPolicy, Role, RuntimeConfig, ServerConfig,
 };
+use submilli_shared::github::GithubToken;
 use submilli_shared::secret_store::SecretStore;
 use submilli_shared::secret_store::check_key;
 
@@ -64,11 +66,16 @@ const MCP_LOOPBACK_HOSTS: [&str; 3] = ["localhost", "127.0.0.1", "::1"];
 pub struct FileConfig {
     pub bind: Option<IpAddr>,
     pub port: Option<u16>,
+    #[serde(default)]
+    pub logging: LoggingFileConfig,
+    #[serde(default)]
+    pub tls: TlsFileConfig,
     pub blueprint_dir: Option<PathBuf>,
-    pub blueprint_seed_dir: Option<PathBuf>,
     pub session_store_dir: Option<PathBuf>,
     pub vfs_session_dir: Option<PathBuf>,
     pub vfs_ephemeral_dir: Option<PathBuf>,
+    /// Root for `managed-local` volumes; see `--volume-dir`.
+    pub volume_dir: Option<PathBuf>,
     pub package_store_dir: Option<PathBuf>,
     /// Seconds. `deny_unknown_fields` means omitting this would turn a
     /// `shutdown_grace:` key into a boot failure, contradicting `--config`'s
@@ -79,6 +86,7 @@ pub struct FileConfig {
     /// Whole seconds; zero or omission disables execution timeout.
     pub max_execution_time: Option<u64>,
     /// Fuel one execution may burn, roughly one unit per Wasm instruction.
+    #[serde(default, deserialize_with = "crate::count::deserialize_optional_count")]
     pub max_execution_fuel: Option<u64>,
     /// Kibibytes of Wasm stack one execution may use.
     pub max_execution_stack: Option<u64>,
@@ -89,8 +97,10 @@ pub struct FileConfig {
     /// Tokens every live execution's `submilli:llm` calls may spend in total.
     /// Bounds the process against the operator's provider credential, where
     /// `max_execution_llm_tokens` bounds a single run.
+    #[serde(default, deserialize_with = "crate::count::deserialize_optional_count")]
     pub max_llm_tokens: Option<u64>,
     /// Tokens a single execution's `submilli:llm` calls may spend.
+    #[serde(default, deserialize_with = "crate::count::deserialize_optional_count")]
     pub max_execution_llm_tokens: Option<u64>,
     /// Prompts one `llm.batch` dispatches at once.
     pub max_llm_concurrency: Option<usize>,
@@ -105,12 +115,16 @@ pub struct FileConfig {
     /// OAuth client apps for MCP servers (`mcp_oauth.providers`).
     #[serde(default)]
     pub mcp_oauth: McpOAuthFileConfig,
-    /// Volumes a blueprint's `vfs: { mode: persistent, volume: <name> }` may
-    /// name, as `name: /absolute/host/dir`. File-only, like `mcp_oauth`: the
-    /// mapping from a name a blueprint can write to a directory on the host is
-    /// the whole security boundary, so it stays in one reviewable place rather
-    /// than spreading across flags and environment variables.
-    #[serde(default)]
+    /// Named volumes a blueprint's `vfs: { mode: named, volume: <name> }` or a
+    /// `vfs.mounts` entry may name, as `name: {kind, path?, access?,
+    /// size_limit}`. File-only, like `mcp_oauth`: the mapping from a name a
+    /// blueprint can write to storage on the host is the whole security
+    /// boundary, so it stays in one reviewable place rather than spreading
+    /// across flags and environment variables.
+    #[serde(
+        default,
+        deserialize_with = "submilli_server::config::deserialize_volume_table"
+    )]
     pub volumes: VolumeTable,
     /// The tokens callers authenticate with, beside the admin token
     /// `$SUBMILLI_SERVER_TOKEN` supplies. File-only, like `volumes`: who else
@@ -119,6 +133,11 @@ pub struct FileConfig {
     /// `allow_unauthenticated` is set.
     #[serde(default)]
     pub api_tokens: Vec<ApiTokenFileConfig>,
+    /// A file holding the GitHub token package installs send, which lets them
+    /// reach private repositories. Read again on every install, so replacing
+    /// the file rotates the token. File-only, like `api_tokens`: the server's
+    /// own credential stays in one reviewable place.
+    pub github_token_file: Option<PathBuf>,
     /// Serve without authentication. Additive with `--allow-unauthenticated`
     /// and `$SUBMILLI_ALLOW_UNAUTHENTICATED`, and refused alongside
     /// `api_tokens`, so no source can switch off tokens another configured.
@@ -137,9 +156,25 @@ pub struct FileConfig {
 
 #[derive(Debug, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct TlsFileConfig {
+    pub cert_file: Option<PathBuf>,
+    pub key_file: Option<PathBuf>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct McpOAuthFileConfig {
     #[serde(default)]
     pub providers: Vec<OAuthProviderFileConfig>,
+}
+
+/// Server log and audit output settings.
+#[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LoggingFileConfig {
+    pub file: Option<PathBuf>,
+    #[serde(default)]
+    pub audit: submilli_server::audit::AuditConfig,
 }
 
 /// One `mcp_oauth.providers` entry. `match` is the authorization-server host.
@@ -205,6 +240,7 @@ pub struct NetworkFileConfig {
 #[derive(Debug, Default)]
 pub(crate) struct EnvConfig {
     config: Option<PathBuf>,
+    log_file: Option<PathBuf>,
     bind: Option<String>,
     port: Option<String>,
     shutdown_grace: Option<String>,
@@ -217,14 +253,16 @@ pub(crate) struct EnvConfig {
     max_execution_llm_tokens: Option<String>,
     max_llm_concurrency: Option<String>,
     blueprint_dir: Option<PathBuf>,
-    blueprint_seed_dir: Option<PathBuf>,
     session_store_dir: Option<PathBuf>,
     vfs_session_dir: Option<PathBuf>,
     vfs_ephemeral_dir: Option<PathBuf>,
+    volume_dir: Option<PathBuf>,
     secret_store_dir: Option<PathBuf>,
     package_store_dir: Option<PathBuf>,
     secret_store_key_env: Option<String>,
     secret_store_key_file: Option<PathBuf>,
+    tls_cert_file: Option<PathBuf>,
+    tls_key_file: Option<PathBuf>,
     allow_localhost: bool,
     allow_private: bool,
     allow_ip: Vec<String>,
@@ -287,6 +325,9 @@ impl EnvConfig {
 
         Self {
             config: path("SUBMILLI_CONFIG"),
+            log_file: path("SUBMILLI_LOG_FILE"),
+            tls_cert_file: path("SUBMILLI_TLS_CERT_FILE"),
+            tls_key_file: path("SUBMILLI_TLS_KEY_FILE"),
             bind: var("SUBMILLI_BIND"),
             port: var("SUBMILLI_PORT"),
             shutdown_grace: var("SUBMILLI_SHUTDOWN_GRACE"),
@@ -299,10 +340,10 @@ impl EnvConfig {
             max_execution_llm_tokens: var("SUBMILLI_MAX_EXECUTION_LLM_TOKENS"),
             max_llm_concurrency: var("SUBMILLI_MAX_LLM_CONCURRENCY"),
             blueprint_dir: path("SUBMILLI_BLUEPRINT_DIR"),
-            blueprint_seed_dir: path("SUBMILLI_BLUEPRINT_SEED_DIR"),
             session_store_dir: path("SUBMILLI_SESSION_STORE_DIR"),
             vfs_session_dir: path("SUBMILLI_VFS_SESSION_DIR"),
             vfs_ephemeral_dir: path("SUBMILLI_VFS_EPHEMERAL_DIR"),
+            volume_dir: path("SUBMILLI_VOLUME_DIR"),
             secret_store_dir: path("SUBMILLI_SECRET_STORE_DIR"),
             package_store_dir: path("SUBMILLI_PACKAGE_STORE_DIR"),
             secret_store_key_env: var("SUBMILLI_SECRET_STORE_KEY_ENV"),
@@ -361,6 +402,14 @@ fn parse_env<T: std::str::FromStr>(
     .transpose()
 }
 
+fn parse_env_count(name: &str, raw: Option<&String>) -> Result<Option<u64>> {
+    raw.map(|value| {
+        crate::count::parse_count(value)
+            .map_err(|error| anyhow::anyhow!("${name}: {error}, got `{value}`"))
+    })
+    .transpose()
+}
+
 /// Accept either a bare IP (`1.2.3.4` → host route) or a CIDR (`10.0.0.0/24`).
 pub(crate) fn parse_ip_or_cidr(s: &str) -> Result<IpNet, String> {
     if let Ok(net) = s.parse::<IpNet>() {
@@ -385,6 +434,7 @@ fn load(path: &Path) -> Result<FileConfig> {
 pub(crate) fn resolve(cli: Cli) -> Result<Resolved> {
     let env = EnvConfig::from_env();
     let file = load_config_file(&cli, &env)?;
+    let log_file = logging_file(&cli, &file, &env);
     // The migration is one-way, so every setting that can be refused without
     // touching the disk is checked first: a boot that is going to fail on a
     // bad port, limit, key, or volume must not reshape the volume on its way
@@ -421,12 +471,16 @@ pub(crate) fn resolve(cli: Cli) -> Result<Resolved> {
         telemetry_include_source,
         shutdown_grace,
         migration,
+        log_file,
     })
 }
 
 /// The settings this boot can refuse without touching any state directory.
 fn preflight(cli: &Cli, file: &FileConfig, env: &EnvConfig) -> Result<()> {
     bind_addr(cli, file, env)?;
+    if let Some((cert, key)) = tls_files(cli, file, env)? {
+        submilli_server::tls::load(&cert, &key)?;
+    }
     shutdown_grace(cli, file, env)?;
     resolve_network_policy(cli, file, env)?;
     max_execution_memory(cli, file, env)?;
@@ -438,6 +492,9 @@ fn preflight(cli: &Cli, file: &FileConfig, env: &EnvConfig) -> Result<()> {
     max_execution_llm_tokens(cli, file, env)?;
     max_llm_concurrency(cli, file, env)?;
     resolve_auth(cli, file, env)?;
+    if let Some(path) = &file.github_token_file {
+        GithubToken::read_file(path).map_err(|e| anyhow::anyhow!("`github_token_file`: {e}"))?;
+    }
     if let Some(key) = secret_key_source(cli, file, env) {
         check_key(&key).map_err(|e| anyhow::anyhow!("checking the secret-store key: {e}"))?;
     }
@@ -465,11 +522,6 @@ fn guarded_directories(cli: &Cli, file: &FileConfig, env: &EnvConfig) -> ServerD
             )
             .unwrap_or_else(default_blueprint_dir),
         ),
-        blueprint_seed_dir: explicit(
-            cli.blueprint_seed_dir.clone(),
-            env.blueprint_seed_dir.clone(),
-            file.blueprint_seed_dir.clone(),
-        ),
         package_store_root: Some(
             explicit(
                 cli.package_store_dir.clone(),
@@ -486,6 +538,17 @@ fn guarded_directories(cli: &Cli, file: &FileConfig, env: &EnvConfig) -> ServerD
             .iter()
             .map(|token| token.token_file.clone())
             .collect(),
+        github_token_file: file.github_token_file.clone(),
+        tls_cert_file: explicit(
+            cli.tls_cert_file.clone(),
+            env.tls_cert_file.clone(),
+            file.tls.cert_file.clone(),
+        ),
+        tls_key_file: explicit(
+            cli.tls_key_file.clone(),
+            env.tls_key_file.clone(),
+            file.tls.key_file.clone(),
+        ),
         session_storage_root: Some(
             explicit(
                 cli.vfs_session_dir.clone(),
@@ -506,6 +569,14 @@ fn guarded_directories(cli: &Cli, file: &FileConfig, env: &EnvConfig) -> ServerD
             cli.vfs_ephemeral_dir.clone(),
             env.vfs_ephemeral_dir.clone(),
             file.vfs_ephemeral_dir.clone(),
+        ),
+        managed_volume_root: Some(
+            explicit(
+                cli.volume_dir.clone(),
+                env.volume_dir.clone(),
+                file.volume_dir.clone(),
+            )
+            .unwrap_or_else(default_managed_volume_root),
         ),
         // The path the config was read from, so a volume cannot be declared
         // over the file that declares volumes. Resolution consumes the file and
@@ -592,6 +663,7 @@ fn legacy_layout(cli: &Cli, file: &FileConfig, env: &EnvConfig) -> crate::migrat
 
 /// Everything the binary needs from the three configuration sources.
 pub(crate) struct Resolved {
+    pub log_file: Option<PathBuf>,
     pub addr: SocketAddr,
     pub config: ServerConfig,
     pub telemetry: bool,
@@ -601,6 +673,13 @@ pub(crate) struct Resolved {
     pub shutdown_grace: Duration,
     /// What the boot migration did, if it ran. Logged once a subscriber exists.
     pub migration: Option<crate::migrate::MigrationReport>,
+}
+
+fn logging_file(cli: &Cli, file: &FileConfig, env: &EnvConfig) -> Option<PathBuf> {
+    cli.log_file
+        .clone()
+        .or_else(|| env.log_file.clone())
+        .or_else(|| file.logging.file.clone())
 }
 
 /// The `SUBMILLI_ALLOW_*` variables that widened the outbound egress guard.
@@ -629,6 +708,32 @@ pub(crate) fn resolve_bind_addr(cli: &Cli) -> Result<SocketAddr> {
     let env = EnvConfig::from_env();
     let file = load_config_file(cli, &env)?;
     bind_addr(cli, &file, &env)
+}
+
+pub(crate) fn resolve_tls_files(cli: &Cli) -> Result<Option<(PathBuf, PathBuf)>> {
+    let env = EnvConfig::from_env();
+    let file = load_config_file(cli, &env)?;
+    tls_files(cli, &file, &env)
+}
+
+fn tls_files(cli: &Cli, file: &FileConfig, env: &EnvConfig) -> Result<Option<(PathBuf, PathBuf)>> {
+    let cert = explicit(
+        cli.tls_cert_file.clone(),
+        env.tls_cert_file.clone(),
+        file.tls.cert_file.clone(),
+    );
+    let key = explicit(
+        cli.tls_key_file.clone(),
+        env.tls_key_file.clone(),
+        file.tls.key_file.clone(),
+    );
+    match (cert, key) {
+        (None, None) => Ok(None),
+        (Some(cert), Some(key)) => Ok(Some((cert, key))),
+        _ => anyhow::bail!(
+            "HTTPS requires both tls.cert_file and tls.key_file (or --tls-cert-file and --tls-key-file)"
+        ),
+    }
 }
 
 /// The listen address, resolved down the full five-tier ladder.
@@ -696,9 +801,8 @@ fn max_execution_memory(cli: &Cli, file: &FileConfig, env: &EnvConfig) -> Result
 /// How much fuel one execution may burn before it stops with `fuel exhausted`.
 /// `0` is rejected: it would stop every program before its first instruction.
 fn max_execution_fuel(cli: &Cli, file: &FileConfig, env: &EnvConfig) -> Result<u64> {
-    let env_fuel = parse_env(
+    let env_fuel = parse_env_count(
         "SUBMILLI_MAX_EXECUTION_FUEL",
-        "a whole number of fuel units",
         env.max_execution_fuel.as_ref(),
     )?;
     let Some(fuel) = explicit(cli.max_execution_fuel, env_fuel, file.max_execution_fuel) else {
@@ -766,11 +870,7 @@ fn max_session_state_memory(cli: &Cli, file: &FileConfig, env: &EnvConfig) -> Re
 /// Tokens, not megabytes: the unit the provider bills in and the refusal message
 /// names, so there is no boundary conversion to get wrong.
 fn max_llm_tokens(cli: &Cli, file: &FileConfig, env: &EnvConfig) -> Result<Option<u64>> {
-    let env_tokens = parse_env(
-        "SUBMILLI_MAX_LLM_TOKENS",
-        "a whole number of tokens",
-        env.max_llm_tokens.as_ref(),
-    )?;
+    let env_tokens = parse_env_count("SUBMILLI_MAX_LLM_TOKENS", env.max_llm_tokens.as_ref())?;
     let Some(tokens) = explicit(cli.max_llm_tokens, env_tokens, file.max_llm_tokens) else {
         return Ok(None);
     };
@@ -785,9 +885,8 @@ fn max_llm_tokens(cli: &Cli, file: &FileConfig, env: &EnvConfig) -> Result<Optio
 /// embedder-only — so an unset value resolves to the runtime's own default here
 /// rather than at the construction site.
 fn max_execution_llm_tokens(cli: &Cli, file: &FileConfig, env: &EnvConfig) -> Result<u64> {
-    let env_tokens = parse_env(
+    let env_tokens = parse_env_count(
         "SUBMILLI_MAX_EXECUTION_LLM_TOKENS",
-        "a whole number of tokens",
         env.max_execution_llm_tokens.as_ref(),
     )?;
     let Some(tokens) = explicit(
@@ -849,6 +948,9 @@ fn merge(cli: Cli, file: FileConfig, env: EnvConfig) -> Result<(SocketAddr, Serv
     validate_volumes(&file.volumes, &guarded_directories(&cli, &file, &env))?;
     let network_policy = resolve_network_policy(&cli, &file, &env)?;
     let auth = resolve_auth(&cli, &file, &env)?;
+    let tls = tls_files(&cli, &file, &env)?
+        .map(|(cert, key)| submilli_server::tls::load(&cert, &key))
+        .transpose()?;
     let secret_store = resolve_secret_store(&cli, &file, &env)?;
     let mcp_allowed_hosts = resolve_mcp_allowed_hosts(&cli, &file, &env);
     let runtime = RuntimeConfig {
@@ -871,13 +973,6 @@ fn merge(cli: Cli, file: FileConfig, env: EnvConfig) -> Result<(SocketAddr, Serv
 
     let blueprint_dir = explicit(cli.blueprint_dir, env.blueprint_dir, file.blueprint_dir)
         .unwrap_or_else(default_blueprint_dir);
-    // No default: seeding is opt-in, and a default path would silently revert
-    // API-managed blueprints the moment someone created that directory.
-    let blueprint_seed_dir = explicit(
-        cli.blueprint_seed_dir,
-        env.blueprint_seed_dir,
-        file.blueprint_seed_dir,
-    );
     let session_storage_root = explicit(
         cli.vfs_session_dir,
         env.vfs_session_dir,
@@ -900,6 +995,8 @@ fn merge(cli: Cli, file: FileConfig, env: EnvConfig) -> Result<(SocketAddr, Serv
         env.package_store_dir,
         file.package_store_dir,
     );
+    let managed_volume_root = explicit(cli.volume_dir, env.volume_dir, file.volume_dir)
+        .unwrap_or_else(default_managed_volume_root);
 
     let mcp_oauth_providers = file
         .mcp_oauth
@@ -914,13 +1011,14 @@ fn merge(cli: Cli, file: FileConfig, env: EnvConfig) -> Result<(SocketAddr, Serv
         .collect();
 
     let config = ServerConfig {
+        audit: file.logging.audit,
         runtime,
+        tls,
         // Named rather than left to `..ServerConfig::default()`, whose `auth`
         // is "no authentication": a field that went missing here would fail
         // open.
         auth,
         blueprint_dir: Some(blueprint_dir),
-        blueprint_seed_dir,
         session_store_dir: Some(session_store_dir),
         session_storage_root: Some(session_storage_root),
         ephemeral_storage_root,
@@ -938,6 +1036,8 @@ fn merge(cli: Cli, file: FileConfig, env: EnvConfig) -> Result<(SocketAddr, Serv
         max_llm_tokens,
         max_llm_concurrency,
         volumes: file.volumes,
+        managed_volume_root: Some(managed_volume_root),
+        github_token_file: file.github_token_file,
         ..ServerConfig::default()
     };
     Ok((addr, config))
@@ -1147,17 +1247,183 @@ fn resolve_network_policy(cli: &Cli, file: &FileConfig, env: &EnvConfig) -> Resu
 #[cfg(test)]
 mod tests {
     use super::*;
+    use clap::Parser;
+    use submilli_server::config::{Access, SizeLimit, VolumeSpec};
+
+    #[test]
+    fn count_budgets_accept_the_same_values_from_every_source() {
+        for (raw, expected) in [
+            ("1K", 1_000),
+            ("2k", 2_000),
+            ("20M", 20_000_000),
+            ("3m", 3_000_000),
+            ("10B", 10_000_000_000),
+            ("1b", 1_000_000_000),
+            ("1T", 1_000_000_000_000),
+            ("2t", 2_000_000_000_000),
+            ("10_000_000_000", 10_000_000_000),
+            ("1_000K", 1_000_000),
+            ("123", 123),
+            ("18446744073709551615", u64::MAX),
+        ] {
+            let yaml = format!(
+                "max_execution_fuel: {raw}\nmax_llm_tokens: {raw}\nmax_execution_llm_tokens: {raw}"
+            );
+            let file: FileConfig = serde_yml::from_str(&yaml).unwrap();
+            let cli = Cli::try_parse_from([
+                "submilli-server",
+                "--max-execution-fuel",
+                raw,
+                "--max-llm-tokens",
+                raw,
+                "--max-execution-llm-tokens",
+                raw,
+            ])
+            .unwrap();
+            let env = env_from(&[
+                ("SUBMILLI_MAX_EXECUTION_FUEL", raw),
+                ("SUBMILLI_MAX_LLM_TOKENS", raw),
+                ("SUBMILLI_MAX_EXECUTION_LLM_TOKENS", raw),
+            ]);
+            for (cli, file, env) in [
+                (cli, FileConfig::default(), EnvConfig::default()),
+                (empty_cli(), file, EnvConfig::default()),
+                (empty_cli(), FileConfig::default(), env),
+            ] {
+                assert_eq!(max_execution_fuel(&cli, &file, &env).unwrap(), expected);
+                assert_eq!(max_llm_tokens(&cli, &file, &env).unwrap(), Some(expected));
+                assert_eq!(
+                    max_execution_llm_tokens(&cli, &file, &env).unwrap(),
+                    expected
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn count_budgets_reject_malformed_and_overflowing_values() {
+        for (field, flag, variable) in [
+            (
+                "max_execution_fuel",
+                "--max-execution-fuel",
+                "SUBMILLI_MAX_EXECUTION_FUEL",
+            ),
+            (
+                "max_llm_tokens",
+                "--max-llm-tokens",
+                "SUBMILLI_MAX_LLM_TOKENS",
+            ),
+            (
+                "max_execution_llm_tokens",
+                "--max-execution-llm-tokens",
+                "SUBMILLI_MAX_EXECUTION_LLM_TOKENS",
+            ),
+        ] {
+            for raw in [
+                "1.5M",
+                "1 M",
+                "1e10",
+                "1MB",
+                "-1",
+                "K",
+                "_1",
+                "1_",
+                "1__0",
+                "1_K",
+                "１K",
+                "18446744073709551616",
+                "18446744073709552K",
+                "18446745T",
+            ] {
+                for value in [raw.to_owned(), format!("'{raw}'")] {
+                    let yaml = format!("{field}: {value}");
+                    assert!(serde_yml::from_str::<FileConfig>(&yaml).is_err(), "{yaml}");
+                }
+                assert!(
+                    Cli::try_parse_from(["submilli-server", flag, raw]).is_err(),
+                    "{flag} {raw}"
+                );
+                let env = env_from(&[(variable, raw)]);
+                // Invalid environment values must fail even when a CLI value wins precedence.
+                let cli = Cli::try_parse_from(["submilli-server", flag, "1K"]).unwrap();
+                let error = preflight(&cli, &FileConfig::default(), &env).unwrap_err();
+                assert!(error.to_string().contains(variable), "{error}");
+            }
+        }
+    }
+
+    #[test]
+    fn count_budgets_preserve_precedence_defaults_and_zero_validation() {
+        let file: FileConfig = serde_yml::from_str(
+            "max_execution_fuel: '1K'\nmax_llm_tokens: 2K\nmax_execution_llm_tokens: 3K",
+        )
+        .unwrap();
+        let env = env_from(&[
+            ("SUBMILLI_MAX_EXECUTION_FUEL", "4K"),
+            ("SUBMILLI_MAX_LLM_TOKENS", "5K"),
+            ("SUBMILLI_MAX_EXECUTION_LLM_TOKENS", "6K"),
+        ]);
+        let cli = Cli::try_parse_from([
+            "submilli-server",
+            "--max-execution-fuel",
+            "7K",
+            "--max-llm-tokens",
+            "8K",
+            "--max-execution-llm-tokens",
+            "9K",
+        ])
+        .unwrap();
+        assert_eq!(max_execution_fuel(&cli, &file, &env).unwrap(), 7_000);
+        assert_eq!(max_llm_tokens(&cli, &file, &env).unwrap(), Some(8_000));
+        assert_eq!(max_execution_llm_tokens(&cli, &file, &env).unwrap(), 9_000);
+        assert_eq!(
+            max_execution_fuel(&empty_cli(), &file, &env).unwrap(),
+            4_000
+        );
+        assert_eq!(
+            max_llm_tokens(&empty_cli(), &file, &env).unwrap(),
+            Some(5_000)
+        );
+        assert_eq!(
+            max_execution_llm_tokens(&empty_cli(), &file, &env).unwrap(),
+            6_000
+        );
+
+        let nulls: FileConfig = serde_yml::from_str(
+            "max_execution_fuel: null\nmax_llm_tokens: null\nmax_execution_llm_tokens: null",
+        )
+        .unwrap();
+        assert!(nulls.max_execution_fuel.is_none());
+        assert!(nulls.max_llm_tokens.is_none());
+        assert!(nulls.max_execution_llm_tokens.is_none());
+        for field in [
+            "max_execution_fuel",
+            "max_llm_tokens",
+            "max_execution_llm_tokens",
+        ] {
+            let file = serde_yml::from_str(&format!("{field}: 0K")).unwrap();
+            assert!(preflight(&empty_cli(), &file, &EnvConfig::default()).is_err());
+        }
+        for field in [
+            "max_execution_memory",
+            "max_execution_stack",
+            "max_session_state_memory",
+        ] {
+            assert!(serde_yml::from_str::<FileConfig>(&format!("{field}: 1K")).is_err());
+        }
+    }
 
     fn empty_cli() -> Cli {
         Cli {
             config: None,
+            log_file: None,
             bind: None,
             port: None,
             blueprint_dir: None,
-            blueprint_seed_dir: None,
             session_store_dir: None,
             vfs_session_dir: None,
             vfs_ephemeral_dir: None,
+            volume_dir: None,
             secret_store_dir: None,
             package_store_dir: None,
             secret_store_key_env: None,
@@ -1179,7 +1445,53 @@ mod tests {
             // without declaring tokens; the auth tests turn it back off.
             allow_unauthenticated: true,
             health_check: false,
+            tls_cert_file: None,
+            tls_key_file: None,
         }
+    }
+
+    #[test]
+    fn logging_file_walks_the_precedence_ladder() {
+        let file: FileConfig = serde_yml::from_str("logging:\n  file: config.log\n").unwrap();
+        let mut env = env_from(&[("SUBMILLI_LOG_FILE", "env.log")]);
+        let mut cli = empty_cli();
+        cli.log_file = Some("flag.log".into());
+        assert_eq!(logging_file(&cli, &file, &env), Some("flag.log".into()));
+        cli.log_file = None;
+        assert_eq!(logging_file(&cli, &file, &env), Some("env.log".into()));
+        env.log_file = None;
+        assert_eq!(logging_file(&cli, &file, &env), Some("config.log".into()));
+        assert_eq!(logging_file(&cli, &FileConfig::default(), &env), None);
+        assert!(
+            serde_yml::from_str::<FileConfig>("logging:\n  audit:\n    enabled: true\n").is_ok()
+        );
+        let parsed = Cli::try_parse_from(["submilli-server", "--log-file", "parsed.log"]).unwrap();
+        assert_eq!(parsed.log_file, Some("parsed.log".into()));
+    }
+
+    #[test]
+    fn tls_requires_both_files_and_walks_the_ladder() {
+        let mut cli = empty_cli();
+        let mut file = FileConfig::default();
+        let mut env = EnvConfig::default();
+        assert!(tls_files(&cli, &file, &env).unwrap().is_none());
+        file.tls.cert_file = Some("file.crt".into());
+        assert!(tls_files(&cli, &file, &env).is_err());
+        file.tls.key_file = Some("file.key".into());
+        assert_eq!(
+            tls_files(&cli, &file, &env).unwrap(),
+            Some(("file.crt".into(), "file.key".into()))
+        );
+        env.tls_cert_file = Some("env.crt".into());
+        env.tls_key_file = Some("env.key".into());
+        cli.tls_cert_file = Some("cli.crt".into());
+        assert_eq!(
+            tls_files(&cli, &file, &env).unwrap(),
+            Some(("cli.crt".into(), "env.key".into()))
+        );
+        let parsed: FileConfig =
+            serde_yml::from_str("tls:\n  cert_file: server.crt\n  key_file: server.key\n").unwrap();
+        assert_eq!(parsed.tls.cert_file, Some("server.crt".into()));
     }
 
     #[test]
@@ -1269,17 +1581,29 @@ network:
     fn dirs_under(root: &std::path::Path) -> ServerDirectories {
         ServerDirectories {
             blueprint_dir: Some(root.join("blueprints")),
-            blueprint_seed_dir: Some(root.join("seed")),
             package_store_root: Some(root.join("packages")),
             package_fallback_root: Some(root.join("cli-packages")),
             secret_store_dir: Some(root.join("secrets")),
             secret_store_key_file: Some(root.join("keys/secret.b64")),
             api_token_files: vec![root.join("tokens/admin"), root.join("tokens/user")],
+            github_token_file: Some(root.join("github/token")),
+            tls_key_file: Some(root.join("tls/key.pem")),
+            tls_cert_file: Some(root.join("tls/cert.pem")),
             session_storage_root: Some(root.join("vfs/sessions")),
             session_store_dir: Some(root.join("sessions")),
             ephemeral_storage_root: Some(root.join("scratch")),
+            managed_volume_root: Some(root.join("volumes")),
             config_file: Some(root.join("etc/submilli.yaml")),
         }
+    }
+
+    /// A table of read-write, unlimited `local-path` volumes, the shape every
+    /// overlap test needs.
+    fn local_table<const N: usize>(entries: [(String, PathBuf); N]) -> VolumeTable {
+        entries
+            .into_iter()
+            .map(|(name, path)| (name, VolumeSpec::local_path(path)))
+            .collect()
     }
 
     /// The directories [`dirs_under`] filled in, each paired with the words its
@@ -1289,27 +1613,33 @@ network:
     fn guarded_paths(dirs: &ServerDirectories) -> Vec<(PathBuf, &'static str)> {
         let ServerDirectories {
             blueprint_dir,
-            blueprint_seed_dir,
             package_store_root,
             package_fallback_root,
             secret_store_dir,
             secret_store_key_file,
             api_token_files,
+            github_token_file,
             session_storage_root,
             session_store_dir,
             ephemeral_storage_root,
+            managed_volume_root,
             config_file,
+            tls_key_file,
+            tls_cert_file,
         } = dirs.clone();
         [
             (blueprint_dir, "blueprint store"),
-            (blueprint_seed_dir, "blueprint seed directory"),
             (package_store_root, "package store"),
             (package_fallback_root, "fallback package store"),
             (secret_store_dir, "secret store"),
             (secret_store_key_file, "secret-store key file"),
+            (github_token_file, "GitHub token file"),
+            (tls_key_file, "TLS private key"),
+            (tls_cert_file, "TLS certificate file"),
             (session_storage_root, "per-session VFS root"),
             (session_store_dir, "durable session store"),
             (ephemeral_storage_root, "ephemeral storage root"),
+            (managed_volume_root, "managed volume root"),
             (config_file, "server config file"),
         ]
         .into_iter()
@@ -1323,7 +1653,7 @@ network:
     }
 
     fn refusal(volume: &str, target: PathBuf, dirs: &ServerDirectories) -> String {
-        validate_volumes(&VolumeTable::from([(volume.to_string(), target)]), dirs)
+        validate_volumes(&local_table([(volume.to_string(), target)]), dirs)
             .expect_err("volume should be refused")
             .to_string()
     }
@@ -1331,7 +1661,7 @@ network:
     #[test]
     fn volumes_resolve_from_the_config_file() {
         let config = merge_file(FileConfig {
-            volumes: VolumeTable::from([
+            volumes: local_table([
                 ("work".to_string(), PathBuf::from("/srv/work")),
                 ("data".to_string(), PathBuf::from("/srv/data")),
             ]),
@@ -1339,8 +1669,8 @@ network:
         })
         .expect("merge");
         assert_eq!(config.volumes.len(), 2);
-        assert_eq!(config.volumes["work"], PathBuf::from("/srv/work"));
-        assert_eq!(config.volumes["data"], PathBuf::from("/srv/data"));
+        assert_eq!(config.volumes["work"], VolumeSpec::local_path("/srv/work"));
+        assert_eq!(config.volumes["data"], VolumeSpec::local_path("/srv/data"));
     }
 
     #[test]
@@ -1354,7 +1684,7 @@ network:
     #[test]
     fn a_relative_volume_target_is_refused() {
         let err = merge_err(FileConfig {
-            volumes: VolumeTable::from([("work".to_string(), PathBuf::from("relative/dir"))]),
+            volumes: local_table([("work".to_string(), PathBuf::from("relative/dir"))]),
             ..FileConfig::default()
         });
         assert!(err.contains("absolute"), "got: {err}");
@@ -1364,7 +1694,7 @@ network:
     #[test]
     fn an_empty_volume_name_is_refused() {
         let err = merge_err(FileConfig {
-            volumes: VolumeTable::from([(String::new(), PathBuf::from("/srv/work"))]),
+            volumes: local_table([(String::new(), PathBuf::from("/srv/work"))]),
             ..FileConfig::default()
         });
         assert!(err.contains("empty"), "got: {err}");
@@ -1373,7 +1703,7 @@ network:
     #[test]
     fn a_volume_name_containing_a_newline_is_refused() {
         let err = merge_err(FileConfig {
-            volumes: VolumeTable::from([("work\nfake".to_string(), PathBuf::from("/srv/work"))]),
+            volumes: local_table([("work\nfake".to_string(), PathBuf::from("/srv/work"))]),
             ..FileConfig::default()
         });
         assert!(err.contains("control character"), "got: {err}");
@@ -1418,7 +1748,7 @@ network:
             ..dirs_under(&std::env::temp_dir().join("submilli-volume-test-owned"))
         };
         validate_volumes(
-            &VolumeTable::from([("work".to_string(), inside.path().to_path_buf())]),
+            &local_table([("work".to_string(), inside.path().to_path_buf())]),
             &dirs,
         )
         .expect("a volume under the OS temp dir is fine");
@@ -1451,7 +1781,7 @@ network:
             "the link must resolve outside the outer volume for this to test anything"
         );
         let err = validate_volumes(
-            &VolumeTable::from([("outer".to_string(), outer), ("inner".to_string(), alias)]),
+            &local_table([("outer".to_string(), outer), ("inner".to_string(), alias)]),
             &ServerDirectories::default(),
         )
         .expect_err("a volume at a link inside another volume must be refused");
@@ -1471,7 +1801,7 @@ network:
             blueprint_dir: Some(root.path().join("state/blueprints")),
             ..ServerDirectories::default()
         };
-        let volumes = VolumeTable::from([("work".to_string(), root.path().join("STATE"))]);
+        let volumes = local_table([("work".to_string(), root.path().join("STATE"))]);
         let result = validate_volumes(&volumes, &dirs);
 
         if cfg!(any(target_os = "macos", windows)) {
@@ -1513,7 +1843,7 @@ network:
             session_storage_root: Some(root.path().join("vfs/sessions")),
             package_store_root: Some(root.path().join("packages")),
             ephemeral_storage_root: Some(root.path().join("scratch")),
-            volumes: VolumeTable::from([("work".to_string(), root.path().to_path_buf())]),
+            volumes: local_table([("work".to_string(), root.path().to_path_buf())]),
             ..ServerConfig::default()
         };
         let err = validate_volumes(&config.volumes, &ServerDirectories::from_config(&config))
@@ -1526,7 +1856,7 @@ network:
         let root = tempfile::tempdir().unwrap();
         let err = merge_err(FileConfig {
             session_store_dir: Some(root.path().join("sessions")),
-            volumes: VolumeTable::from([("work".to_string(), root.path().join("sessions"))]),
+            volumes: local_table([("work".to_string(), root.path().join("sessions"))]),
             ..FileConfig::default()
         });
         assert!(err.contains("durable session store"), "got: {err}");
@@ -1538,10 +1868,7 @@ network:
         let root = tempfile::tempdir().unwrap();
         let err = merge_err(FileConfig {
             session_store_dir: Some(root.path().join("sessions")),
-            volumes: VolumeTable::from([(
-                "work".to_string(),
-                root.path().join("sessions/idempotency"),
-            )]),
+            volumes: local_table([("work".to_string(), root.path().join("sessions/idempotency"))]),
             ..FileConfig::default()
         });
         assert!(err.contains("durable session store"), "got: {err}");
@@ -1553,7 +1880,7 @@ network:
         let root = tempfile::tempdir().unwrap();
         let err = merge_err(FileConfig {
             package_store_dir: Some(root.path().join("packages")),
-            volumes: VolumeTable::from([("work".to_string(), root.path().join("packages/@acme"))]),
+            volumes: local_table([("work".to_string(), root.path().join("packages/@acme"))]),
             ..FileConfig::default()
         });
         assert!(err.contains("package store"), "got: {err}");
@@ -1563,7 +1890,7 @@ network:
     #[test]
     fn two_volumes_that_overlap_are_refused() {
         let err = merge_err(FileConfig {
-            volumes: VolumeTable::from([
+            volumes: local_table([
                 ("data".to_string(), PathBuf::from("/srv/data")),
                 ("inner".to_string(), PathBuf::from("/srv/data/sub")),
             ]),
@@ -1577,7 +1904,7 @@ network:
     #[test]
     fn two_volumes_pointing_at_one_directory_are_refused() {
         let err = merge_err(FileConfig {
-            volumes: VolumeTable::from([
+            volumes: local_table([
                 ("data".to_string(), PathBuf::from("/srv/data")),
                 ("alias".to_string(), PathBuf::from("/srv/data")),
             ]),
@@ -1586,6 +1913,196 @@ network:
         assert!(err.contains("alias"), "got: {err}");
         assert!(err.contains("data"), "got: {err}");
         assert!(err.contains("both point at"), "got: {err}");
+    }
+
+    fn parse_volumes(yaml: &str) -> std::result::Result<VolumeTable, String> {
+        serde_yml::from_str::<FileConfig>(yaml)
+            .map(|file| file.volumes)
+            .map_err(|err| err.to_string())
+    }
+
+    #[test]
+    fn volumes_parse_both_kinds_with_explicit_limits() {
+        let volumes = parse_volumes(
+            "volumes:\n  memory:\n    kind: managed-local\n    size_limit: 1GiB\n  handbook:\n    kind: local-path\n    path: /srv/handbook\n    access: read_only\n    size_limit: unlimited\n  raw:\n    kind: managed-local\n    size_limit: 2048\n",
+        )
+        .expect("parses");
+        assert_eq!(
+            volumes["memory"],
+            VolumeSpec::managed(SizeLimit::Bytes(1 << 30))
+        );
+        assert_eq!(
+            volumes["handbook"],
+            VolumeSpec::local_path("/srv/handbook").with_access(Access::ReadOnly)
+        );
+        assert_eq!(volumes["raw"].size_limit, SizeLimit::Bytes(2048));
+        assert_eq!(
+            volumes["raw"].access,
+            Access::ReadWrite,
+            "read_write by default"
+        );
+    }
+
+    #[test]
+    fn volume_declarations_are_refused_with_the_edit_that_fixes_them() {
+        for (yaml, expected) in [
+            (
+                "volumes:\n  work: /srv/work\n",
+                "`work: {kind: local-path, path: /srv/work, size_limit: unlimited}`",
+            ),
+            ("volumes:\n  work: {size_limit: 1GB}\n", "needs a `kind`"),
+            (
+                "volumes:\n  work: {kind: managed-local}\n",
+                "needs an explicit `size_limit`",
+            ),
+            (
+                "volumes:\n  work: {kind: managed-local, path: /srv, size_limit: 1GB}\n",
+                "`path` is only valid for `kind: local-path`",
+            ),
+            (
+                "volumes:\n  work: {kind: local-path, size_limit: 1GB}\n",
+                "needs a `path`",
+            ),
+            (
+                "volumes:\n  work: {kind: s3, size_limit: 1GB}\n",
+                "unknown kind `s3`",
+            ),
+            (
+                "volumes:\n  work: {kind: managed-local, size_limit: lots}\n",
+                "`size_limit`",
+            ),
+            (
+                "volumes:\n  work: {kind: managed-local, size_limit: 1GB, quota: 1}\n",
+                "unknown field `quota`",
+            ),
+        ] {
+            let err = parse_volumes(yaml).expect_err(yaml);
+            assert!(err.contains(expected), "{yaml}: got {err}");
+        }
+    }
+
+    #[test]
+    fn the_managed_volume_root_comes_from_flag_env_or_file() {
+        let file = FileConfig {
+            volume_dir: Some("/file/volumes".into()),
+            ..FileConfig::default()
+        };
+        let env = EnvConfig {
+            volume_dir: Some("/env/volumes".into()),
+            ..EnvConfig::default()
+        };
+        let cli = Cli {
+            volume_dir: Some("/cli/volumes".into()),
+            ..empty_cli()
+        };
+        let root = |cli: &Cli, env: &EnvConfig, file: &FileConfig| {
+            guarded_directories(cli, file, env).managed_volume_root
+        };
+        assert_eq!(root(&cli, &env, &file), Some(PathBuf::from("/cli/volumes")));
+        assert_eq!(
+            root(&empty_cli(), &env, &file),
+            Some(PathBuf::from("/env/volumes"))
+        );
+        assert_eq!(
+            root(&empty_cli(), &EnvConfig::default(), &file),
+            Some(PathBuf::from("/file/volumes"))
+        );
+        assert_eq!(
+            root(&empty_cli(), &EnvConfig::default(), &FileConfig::default()),
+            Some(default_managed_volume_root())
+        );
+        let parsed: FileConfig = serde_yml::from_str("volume_dir: /data/volumes\n").unwrap();
+        assert_eq!(parsed.volume_dir, Some("/data/volumes".into()));
+    }
+
+    #[test]
+    fn managed_volume_names_must_be_directory_names() {
+        let root = tempfile::tempdir().unwrap();
+        for name in ["../escape", "a/b", ".hidden", "with space", &"x".repeat(65)] {
+            let err = validate_volumes(
+                &VolumeTable::from([(name.to_string(), VolumeSpec::managed(SizeLimit::Unlimited))]),
+                &dirs_under(root.path()),
+            )
+            .expect_err(name);
+            assert!(
+                err.to_string().contains("managed-local volume name"),
+                "{name}: {err}"
+            );
+        }
+        validate_volumes(
+            &VolumeTable::from([(
+                "project-memory_2.v1".to_string(),
+                VolumeSpec::managed(SizeLimit::Unlimited),
+            )]),
+            &dirs_under(root.path()),
+        )
+        .expect("a plain name is fine");
+    }
+
+    #[test]
+    fn the_managed_volume_root_must_clear_every_server_owned_directory() {
+        let root = tempfile::tempdir().unwrap();
+        let managed = VolumeTable::from([(
+            "memory".to_string(),
+            VolumeSpec::managed(SizeLimit::Unlimited),
+        )]);
+        for (inside, expected) in [
+            ("vfs/sessions/volumes", "per-session VFS root"),
+            ("blueprints/volumes", "blueprint store"),
+            ("secrets", "secret store"),
+        ] {
+            let dirs = ServerDirectories {
+                managed_volume_root: Some(root.path().join(inside)),
+                ..dirs_under(root.path())
+            };
+            let err = validate_volumes(&managed, &dirs).expect_err(inside);
+            let msg = err.to_string();
+            assert!(msg.contains("managed volume root"), "{inside}: {msg}");
+            assert!(msg.contains(expected), "{inside}: {msg}");
+        }
+        // Unused, the root is not checked: no managed volume lives there.
+        let dirs = ServerDirectories {
+            managed_volume_root: Some(root.path().join("secrets")),
+            ..dirs_under(root.path())
+        };
+        validate_volumes(&VolumeTable::new(), &dirs).expect("no managed volume declared");
+    }
+
+    #[test]
+    fn a_local_path_volume_may_not_overlap_the_managed_root() {
+        let root = tempfile::tempdir().unwrap();
+        let dirs = dirs_under(root.path());
+        let msg = refusal("work", root.path().join("volumes/memory"), &dirs);
+        assert!(msg.contains("managed volume root"), "{msg}");
+        assert!(msg.contains("is inside"), "{msg}");
+    }
+
+    #[test]
+    fn a_managed_volume_and_a_local_path_at_its_directory_are_refused() {
+        let root = tempfile::tempdir().unwrap();
+        let dirs = ServerDirectories {
+            managed_volume_root: Some(root.path().join("managed")),
+            ..ServerDirectories::default()
+        };
+        let err = validate_volumes(
+            &VolumeTable::from([
+                (
+                    "memory".to_string(),
+                    VolumeSpec::managed(SizeLimit::Unlimited),
+                ),
+                (
+                    "alias".to_string(),
+                    VolumeSpec::local_path(root.path().join("elsewhere/memory")),
+                ),
+                (
+                    "inner".to_string(),
+                    VolumeSpec::local_path(root.path().join("managed/memory/sub")),
+                ),
+            ]),
+            &dirs,
+        )
+        .expect_err("a local path inside a managed volume must be refused");
+        assert!(err.to_string().contains("'inner'"), "{err}");
     }
 
     #[test]
@@ -1895,47 +2412,6 @@ network:
             config.package_store_root.unwrap(),
             PathBuf::from("/env/packages")
         );
-    }
-
-    #[test]
-    fn blueprint_seed_dir_walks_the_ladder() {
-        let file = FileConfig {
-            blueprint_seed_dir: Some("/file/seed".into()),
-            ..FileConfig::default()
-        };
-        let (_, config) = merge(empty_cli(), file, EnvConfig::default()).unwrap();
-        assert_eq!(
-            config.blueprint_seed_dir.unwrap(),
-            PathBuf::from("/file/seed")
-        );
-
-        let file = FileConfig {
-            blueprint_seed_dir: Some("/file/seed".into()),
-            ..FileConfig::default()
-        };
-        let env = env_from(&[("SUBMILLI_BLUEPRINT_SEED_DIR", "/env/seed")]);
-        let (_, config) = merge(empty_cli(), file, env).unwrap();
-        assert_eq!(
-            config.blueprint_seed_dir.unwrap(),
-            PathBuf::from("/env/seed")
-        );
-
-        let cli = Cli {
-            blueprint_seed_dir: Some("/cli/seed".into()),
-            ..empty_cli()
-        };
-        let env = env_from(&[("SUBMILLI_BLUEPRINT_SEED_DIR", "/env/seed")]);
-        let (_, config) = merge(cli, FileConfig::default(), env).unwrap();
-        assert_eq!(
-            config.blueprint_seed_dir.unwrap(),
-            PathBuf::from("/cli/seed")
-        );
-    }
-
-    #[test]
-    fn blueprint_seed_dir_has_no_default() {
-        let (_, config) = merge(empty_cli(), FileConfig::default(), EnvConfig::default()).unwrap();
-        assert!(config.blueprint_seed_dir.is_none());
     }
 
     #[test]
@@ -2823,6 +3299,21 @@ api_tokens:
     }
 
     #[test]
+    fn github_token_file_parses_and_reaches_the_server_config() {
+        let cfg: FileConfig =
+            serde_yml::from_str("github_token_file: /run/secrets/github\n").unwrap();
+        assert_eq!(
+            cfg.github_token_file,
+            Some(PathBuf::from("/run/secrets/github"))
+        );
+        assert_eq!(
+            guarded_directories(&empty_cli(), &cfg, &EnvConfig::default()).github_token_file,
+            Some(PathBuf::from("/run/secrets/github"))
+        );
+        assert!(FileConfig::default().github_token_file.is_none());
+    }
+
+    #[test]
     fn an_unknown_role_or_token_key_is_rejected() {
         for entry in [
             "{ name: a, role: root, token_file: /t }",
@@ -3082,7 +3573,7 @@ api_tokens:
         .expect("merge");
         assert!(matches!(config.auth, AuthConfig::Tokens(ref tokens) if tokens.len() == 1));
 
-        let over_tokens = VolumeTable::from([("work".to_string(), tokens_dir.clone())]);
+        let over_tokens = local_table([("work".to_string(), tokens_dir.clone())]);
         let err = match merge(auth_required_cli(), file(over_tokens), EnvConfig::default()) {
             Ok(_) => panic!("a volume over a token file should be refused"),
             Err(err) => err.to_string(),

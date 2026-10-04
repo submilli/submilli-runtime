@@ -7,7 +7,10 @@ import { Point3 } from "./lib";
 /** A `Point3` with nothing added. */
 export class Grand extends Point3 {}
 
-/** Constructs a `Grand` with the wrong argument type. */
+/**
+ * Constructs a `Grand` with the wrong argument type.
+ * @returns Its `z`.
+ */
 export function wrong(): number {
   return new Grand("z").z;
 }

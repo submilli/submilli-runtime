@@ -31,6 +31,7 @@ function deliver(request: { channelId: string; tags: string[] }): void {}
 
 /**
  * Sends the message.
+ * @param input Message and where to send it.
  * @capability test.com/send { channelId: string, count: number }
  */
 export function send(input: Input): void {

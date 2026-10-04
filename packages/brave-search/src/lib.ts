@@ -104,6 +104,9 @@ export class BraveSearchError extends Error {
 }
 
 /** Search one page of web results. Credentials are supplied internally.
+ * @param query Search text, 1–600 characters and at most 75 words.
+ * @param options Optional search settings; `null` uses the provider defaults.
+ * @returns One page of web results with query metadata and the next offset, if any.
  * @capability brave.com/search {}
  */
 export function search(query: string, options: SearchOptions | null = null): SearchPage {
@@ -131,6 +134,9 @@ export function search(query: string, options: SearchOptions | null = null): Sea
 }
 
 /** Retrieve extracted web passages with their source URLs.
+ * @param query Search text, 1–600 characters and at most 75 words.
+ * @param options Optional context settings; `null` uses the provider defaults.
+ * @returns Extracted passages grouped by source page, in provider order.
  * @capability brave.com/context {}
  */
 export function context(query: string, options: ContextOptions | null = null): ContextResult {
@@ -155,7 +161,12 @@ export function context(query: string, options: ContextOptions | null = null): C
     return normalizeContextJson(request("llm/context", buildContextQuery(query, contextOptions)));
 }
 
-/** Build encoded web parameters without credentials or network access. */
+/**
+ * Build encoded web parameters without credentials or network access.
+ * @param query Search text, 1–600 characters and at most 75 words.
+ * @param options Optional search settings; `null` uses the defaults.
+ * @returns Query string beginning with `?`, with every value percent-encoded.
+ */
 export function buildSearchQuery(query: string, options: SearchOptions | null = null): string {
     const opts: SearchOptions = options === null ? {} : options;
     const parts = commonQuery(query, opts.country, opts.searchLanguage, opts.freshness, opts.safeSearch);
@@ -168,7 +179,12 @@ export function buildSearchQuery(query: string, options: SearchOptions | null = 
     return "?" + parts.join("&");
 }
 
-/** Build encoded context parameters without credentials or network access. */
+/**
+ * Build encoded context parameters without credentials or network access.
+ * @param query Search text, 1–600 characters and at most 75 words.
+ * @param options Optional context settings; `null` uses the defaults.
+ * @returns Query string beginning with `?`, with every value percent-encoded.
+ */
 export function buildContextQuery(query: string, options: ContextOptions | null = null): string {
     const opts: ContextOptions = options === null ? {} : options;
     const parts = commonQuery(query, opts.country, opts.searchLanguage, opts.freshness, opts.safeSearch);
@@ -218,7 +234,13 @@ interface ApiContext {
     grounding: ApiGrounding;
 }
 
-/** Normalize a Brave response; unknown provider fields are ignored. */
+/**
+ * Normalize a Brave response; unknown provider fields are ignored.
+ * @param body Raw JSON response body from the web search endpoint.
+ * @param query Query used as the fallback for `originalQuery`.
+ * @param offset Page offset of this request; `nextOffset` is derived from it.
+ * @returns Parsed page; throws `BraveSearchError` with code `invalid_response` if the body is malformed.
+ */
 export function normalizeSearchJson(body: string, query: string, offset: number): SearchPage {
     try {
         const data = JSON.parse(body) as ApiSearch;
@@ -243,7 +265,11 @@ export function normalizeSearchJson(body: string, query: string, offset: number)
     }
 }
 
-/** Normalize extracted passages while keeping each passage tied to its source. */
+/**
+ * Normalize extracted passages while keeping each passage tied to its source.
+ * @param body Raw JSON response body from the context endpoint.
+ * @returns Sources with their extracted passages; throws `BraveSearchError` with code `invalid_response` if the body is malformed.
+ */
 export function normalizeContextJson(body: string): ContextResult {
     try {
         const data = JSON.parse(body) as ApiContext;
@@ -261,8 +287,19 @@ export function normalizeContextJson(body: string): ContextResult {
     }
 }
 
-/** Map HTTP failures without including provider bodies or credentials. */
-export function braveHttpError(status: number, retryAfter: string | null = null): BraveSearchError {
+interface ApiError {
+    type?: string;
+    error?: { detail?: string };
+}
+
+/**
+ * Map HTTP failures, preserving the provider's error type and detail when available.
+ * @param status HTTP status code of the failed response.
+ * @param retryAfter Value of the `Retry-After` header, or `null` when absent.
+ * @param body Raw response body, used to append the provider's error type and detail; empty or non-JSON adds nothing.
+ * @returns Error with a code such as `unauthorized`, `forbidden`, `rate_limited` or `http_error`.
+ */
+export function braveHttpError(status: number, retryAfter: string | null = null, body: string = ""): BraveSearchError {
     let code = "http_error";
     let message = "Brave Search request failed: HTTP " + status.toString();
     if (status === 401) {
@@ -275,7 +312,23 @@ export function braveHttpError(status: number, retryAfter: string | null = null)
         code = "rate_limited";
         message = "Brave Search rate limit exceeded; retry later";
     }
+    const detail = braveErrorDetail(body);
+    if (detail.length > 0) message += ": " + detail;
     return new BraveSearchError(code, message, status, retryAfter);
+}
+
+function braveErrorDetail(body: string): string {
+    try {
+        const data = JSON.parse(body) as ApiError;
+        const parts: string[] = [];
+        if (data.type !== null && data.type.length > 0) parts.push(data.type);
+        if (data.error !== null && data.error.detail !== null && data.error.detail.length > 0) {
+            parts.push(data.error.detail);
+        }
+        return parts.join(": ");
+    } catch (cause) {
+        return "";
+    }
 }
 
 function request(path: string, params: string): string {
@@ -288,7 +341,7 @@ function request(path: string, params: string): string {
     headers.set("Accept", "application/json");
     // Keep the authority and its trailing slash static for capability derivation.
     const response = get("https://api.search.brave.com/res/v1/" + path + params, headers);
-    if (!response.ok) throw braveHttpError(response.status, response.headers.get("retry-after"));
+    if (!response.ok) throw braveHttpError(response.status, response.headers.get("retry-after"), response.body);
     return response.body;
 }
 

@@ -6,7 +6,9 @@
 //! a catchable `Error`, matching the Wasm bodies in
 //! `codegen/prelude/object_shape.rs`.
 
+use crate::runtime::host::{abi_arg, abi_result};
 mod dynamic;
+mod index;
 
 use wasmtime::{
     ArrayRef, ArrayRefPre, Caller, FuncType, HeapType, Linker, RefType, Rooted, StructRef,
@@ -19,10 +21,10 @@ use crate::runtime::host::{
     host_object_vtable, intrinsic_array_type, intrinsic_string_type, register_host_fn,
     register_host_fn_async, write_submilli_array_struct,
 };
-use crate::runtime::intrinsic_types::build_intrinsic_types;
-use crate::runtime::prelude::collection::{is_a, string_units};
+use crate::runtime::intrinsic_types::{build_intrinsic_types, intrinsic_types};
+use crate::runtime::prelude::collection::{FIELD_NAME, is_a};
 use crate::runtime::prelude::iterator::as_struct;
-use crate::runtime::prelude::vtable::dispatch_vtable_slot;
+use crate::runtime::prelude::vtable::{dispatch_vtable_slot, read_string_units};
 use crate::runtime::prelude::{MODULE_NAME, declare_method};
 use crate::{PackageDeclaration, Param, Type};
 
@@ -47,6 +49,51 @@ impl Enumerate {
     }
 }
 
+pub(super) fn find_data_slot(
+    caller: &mut Caller<'_, StoreData>,
+    object: &Val,
+    key: &[u16],
+) -> wasmtime::Result<Option<u32>> {
+    let object = as_struct(caller, object, "object equality receiver")?;
+    index::lookup(caller, &object, key, false, false)
+}
+
+pub(super) fn find_field_slot(
+    caller: &mut Caller<'_, StoreData>,
+    object: &Rooted<StructRef>,
+    key: &[u16],
+    accessor: bool,
+) -> wasmtime::Result<Option<u32>> {
+    index::lookup(caller, object, key, accessor, false)
+}
+
+pub(super) fn data_field_count(
+    caller: &mut Caller<'_, StoreData>,
+    object: &Val,
+) -> wasmtime::Result<usize> {
+    let Some((names, values)) = shape_arrays(caller, object)? else {
+        return Ok(0);
+    };
+    let count = field_count(caller, object)?;
+    let mut present = 0;
+    for slot in 0..count {
+        let name = names.get(&mut *caller, slot)?;
+        let value = values.get(&mut *caller, slot)?;
+        if field_is_present(caller, &name, &value)? && !is_accessor_slot(caller, &name)? {
+            present += 1;
+        }
+    }
+    Ok(present)
+}
+
+pub(crate) fn field_count(
+    caller: &mut Caller<'_, StoreData>,
+    object: &Val,
+) -> wasmtime::Result<u32> {
+    let object = as_struct(caller, object, "object field count")?;
+    index::len(caller, &object)
+}
+
 /// The `$ObjectShape` field arrays `(field_names, object_fields)` of `obj`, or
 /// `None` when `obj` is any other (non-null) value — the "no fields" path.
 fn shape_arrays(
@@ -59,7 +106,7 @@ fn shape_arrays(
     let Some(st) = any.as_struct(&mut *caller)? else {
         return Ok(None);
     };
-    let shape = build_intrinsic_types(caller.engine())?.object_shape;
+    let shape = intrinsic_types(&mut *caller)?.object_shape.clone();
     if !st.matches_ty(&*caller, &shape)? {
         return Ok(None);
     }
@@ -91,11 +138,11 @@ pub(crate) fn field_is_present(
         return Ok(true);
     }
     let name = as_struct(caller, name, "field name")?;
-    let string = build_intrinsic_types(caller.engine())?.string;
+    let string = intrinsic_types(&mut *caller)?.string.clone();
     if StructType::eq(&name.ty(&*caller)?, &string) {
         return Ok(true);
     }
-    Ok(matches!(name.field(&mut *caller, 2)?, Val::I32(value) if value != 0))
+    Ok(matches!(name.field(&mut *caller, 3)?, Val::I32(value) if value != 0))
 }
 
 fn enumerate(
@@ -111,7 +158,7 @@ fn enumerate(
     }
     let mut elems = Vec::new();
     if let Some((names, values)) = shape_arrays(caller, obj)? {
-        let len = names.len(&mut *caller)?;
+        let len = field_count(caller, obj)?;
         elems.reserve(len as usize);
         for i in 0..len {
             let name = names.get(&mut *caller, i)?;
@@ -143,11 +190,11 @@ pub(crate) fn is_accessor_slot(
     name: &Val,
 ) -> wasmtime::Result<bool> {
     let name = as_struct(caller, name, "field name")?;
-    let string = build_intrinsic_types(caller.engine())?.string;
+    let string = intrinsic_types(&mut *caller)?.string.clone();
     if StructType::eq(&name.ty(&*caller)?, &string) {
         return Ok(false);
     }
-    Ok(matches!(name.field(&mut *caller, 2)?, Val::I32(-1)))
+    Ok(matches!(name.field(&mut *caller, 3)?, Val::I32(-1)))
 }
 
 /// Visibility is carried only by compiler-created marked names. Host-created
@@ -157,10 +204,10 @@ pub(crate) fn field_is_private(
     name: &Val,
 ) -> wasmtime::Result<bool> {
     let name = as_struct(caller, name, "field name")?;
-    if name.ty(&*caller)?.fields().count() < 4 {
+    if name.ty(&*caller)?.fields().count() < 5 {
         return Ok(false);
     }
-    Ok(matches!(name.field(&mut *caller, 3)?, Val::I32(1)))
+    Ok(matches!(name.field(&mut *caller, 4)?, Val::I32(1)))
 }
 
 /// Copy present own fields while preserving UTF-16 names and boxed values.
@@ -172,20 +219,20 @@ fn spread(
     shape: &Val,
     mask: &Val,
 ) -> wasmtime::Result<Val> {
-    let intr = build_intrinsic_types(caller.engine())?;
+    let intr = intrinsic_types(&mut *caller)?;
     let mut entries = std::collections::BTreeMap::new();
     let omitted = spread_omitted_fields(caller, mask)?;
     for (source_index, object) in [target, source].into_iter().enumerate() {
         let Some((names, values)) = shape_arrays(caller, object)? else {
             continue;
         };
-        for index in 0..names.len(&mut *caller)? {
+        for index in 0..field_count(caller, object)? {
             let name = names.get(&mut *caller, index)?;
             let value = values.get(&mut *caller, index)?;
             if !field_is_present(caller, &name, &value)? || is_accessor_slot(caller, &name)? {
                 continue;
             }
-            let units = string_units(caller, &name)?;
+            let units = read_string_units(caller, &name, FIELD_NAME)?;
             if source_index == 1 && omitted.contains(&units) {
                 continue;
             }
@@ -193,18 +240,18 @@ fn spread(
         }
     }
     if let Some((names, _)) = shape_arrays(caller, shape)? {
-        for index in 0..names.len(&mut *caller)? {
+        for index in 0..field_count(caller, shape)? {
             let name = names.get(&mut *caller, index)?;
-            let units = string_units(caller, &name)?;
+            let units = read_string_units(caller, &name, FIELD_NAME)?;
             if let std::collections::btree_map::Entry::Vacant(entry) = entries.entry(units) {
                 entry.insert((copy_field_name(caller, name, false)?, Val::AnyRef(None)));
             }
         }
     }
     let (names, values): (Vec<_>, Vec<_>) = entries.into_values().unzip();
-    let names_pre = ArrayRefPre::new(&mut *caller, intr.field_names);
-    let values_pre = ArrayRefPre::new(&mut *caller, intr.object_fields);
-    let shape_pre = StructRefPre::new(&mut *caller, intr.object_shape);
+    let names_pre = ArrayRefPre::new(&mut *caller, intr.field_names.clone());
+    let values_pre = ArrayRefPre::new(&mut *caller, intr.object_fields.clone());
+    let shape_pre = StructRefPre::new(&mut *caller, intr.object_shape.clone());
     let names = ArrayRef::new_fixed(&mut *caller, &names_pre, &names)?;
     let values = ArrayRef::new_fixed(&mut *caller, &values_pre, &values)?;
     let vtable = host_object_vtable(caller)?;
@@ -215,6 +262,7 @@ fn spread(
             vtable,
             Val::AnyRef(Some(names.to_anyref())),
             Val::AnyRef(Some(values.to_anyref())),
+            Val::AnyRef(None),
         ],
     )?;
     Ok(Val::AnyRef(Some(object.to_anyref())))
@@ -226,23 +274,24 @@ fn copy_field_name(
     present: bool,
 ) -> wasmtime::Result<Val> {
     let object = as_struct(caller, &name, "field name")?;
-    let string = build_intrinsic_types(caller.engine())?.string;
+    let string = intrinsic_types(&mut *caller)?.string.clone();
     if StructType::eq(&object.ty(&*caller)?, &string) {
         return Ok(name);
     }
     let ty = if present {
-        build_intrinsic_types(caller.engine())?.string
+        string
     } else {
         object.ty(&*caller)?
     };
     let mut fields = vec![
         object.field(&mut *caller, 0)?,
         object.field(&mut *caller, 1)?,
+        object.field(&mut *caller, 2)?,
     ];
     if !present {
         fields.push(Val::I32(0));
-        if ty.fields().count() > 3 {
-            fields.push(object.field(&mut *caller, 3)?);
+        if ty.fields().count() > 4 {
+            fields.push(object.field(&mut *caller, 4)?);
         }
     }
     let pre = StructRefPre::new(&mut *caller, ty);
@@ -260,64 +309,110 @@ fn insert_field(
     value: &Val,
 ) -> wasmtime::Result<()> {
     let object = as_struct(caller, obj, "field insertion receiver")?;
-    let names = field_array(caller, &object, 1)?;
-    let values = field_array(caller, &object, 2)?;
-    let named_len = names.len(&mut *caller)?;
-    let value_len = values.len(&mut *caller)?;
-    let row_width = named_len
+    let old_names = field_array(caller, &object, 1)?;
+    let old_values = field_array(caller, &object, 2)?;
+    let count = index::len(caller, &object)?;
+    let capacity = old_names.len(&mut *caller)?;
+    let new_count = count
         .checked_add(1)
-        .ok_or_else(|| crate::runtime::host::fatal_host_error("object field row width overflow"))?;
-    let hidden = value_len.checked_sub(named_len).ok_or_else(|| {
-        crate::runtime::host::fatal_host_error("object payload is shorter than its names")
-    })?;
-    if hidden % row_width != 0 {
-        return Err(crate::runtime::host::fatal_host_error(
-            "malformed object field guard rows",
-        ));
-    }
-    let new_value_len = value_len
-        .checked_add(1)
-        .and_then(|len| len.checked_add(hidden / row_width))
-        .ok_or_else(|| crate::runtime::host::fatal_host_error("object field count overflow"))?;
-    let mut new_names = Vec::new();
-    let mut new_values = Vec::new();
-    new_names
-        .try_reserve_exact(row_width as usize)
-        .map_err(crate::runtime::host::fatal_host_error)?;
-    new_values
-        .try_reserve_exact(new_value_len as usize)
-        .map_err(crate::runtime::host::fatal_host_error)?;
-    for index in 0..named_len {
-        new_names.push(names.get(&mut *caller, index)?);
-        new_values.push(values.get(&mut *caller, index)?);
-    }
-    new_names.push(inserted_field_name(caller, name)?);
-    new_values.push(*value);
-    // Each hidden guard row has one slot per named field followed by its
-    // generic context. Grow every row along with the named payload so the
-    // compiler's depth/field indexing continues to address the same guards.
-    for row_start in (named_len..value_len).step_by(row_width as usize) {
-        for index in row_start..row_start + named_len {
-            new_values.push(values.get(&mut *caller, index)?);
-        }
-        new_values.push(Val::AnyRef(None));
-        new_values.push(values.get(&mut *caller, row_start + named_len)?);
-    }
-    let intr = build_intrinsic_types(caller.engine())?;
-    let names_pre = ArrayRefPre::new(&mut *caller, intr.field_names);
-    let values_pre = ArrayRefPre::new(&mut *caller, intr.object_fields);
-    let names = ArrayRef::new_fixed(&mut *caller, &names_pre, &new_names)?;
-    let values = ArrayRef::new_fixed(&mut *caller, &values_pre, &new_values)?;
+        .filter(|n| *n <= i32::MAX as u32)
+        .ok_or_else(|| crate::runtime::host::range_error("object field count limit exceeded"))?;
+    let name = inserted_field_name(caller, name)?;
+    let (names, values, table) = if count == capacity {
+        let (names, values) = grow_fields(caller, &old_names, &old_values, &name)?;
+        let new_capacity = names.len(&mut *caller)?;
+        let table = index::build(caller, &names, count, new_capacity)?;
+        (names, values, table)
+    } else {
+        let table = match index::cached(caller, &object)? {
+            Some(table) => table,
+            None => index::build(caller, &old_names, count, capacity)?,
+        };
+        (old_names, old_values, table)
+    };
+    let bucket = index::empty_bucket(caller, &table, &name)?;
+    // All fuel and allocation checks precede publication. Guard rows use the
+    // backing capacity as their stride, so spare named slots need no reshuffle.
+    names.set(&mut *caller, count, name)?;
+    values.set(&mut *caller, count, *value)?;
+    table.set(&mut *caller, bucket, Val::I32(new_count as i32))?;
+    table.set(&mut *caller, 0, Val::I32(new_count as i32))?;
+    table.set(&mut *caller, 1, Val::I32(1))?;
     object.set_field(&mut *caller, 1, Val::AnyRef(Some(names.to_anyref())))?;
     object.set_field(&mut *caller, 2, Val::AnyRef(Some(values.to_anyref())))?;
+    object.set_field(
+        &mut *caller,
+        index::INDEX_FIELD,
+        Val::AnyRef(Some(table.to_anyref())),
+    )?;
     Ok(())
+}
+
+fn grow_fields(
+    caller: &mut Caller<'_, StoreData>,
+    names: &Rooted<ArrayRef>,
+    values: &Rooted<ArrayRef>,
+    filler: &Val,
+) -> wasmtime::Result<(Rooted<ArrayRef>, Rooted<ArrayRef>)> {
+    let capacity = names.len(&mut *caller)?;
+    let value_len = values.len(&mut *caller)?;
+    let width = capacity
+        .checked_add(1)
+        .ok_or_else(|| crate::runtime::host::fatal_host_error("object guard row width overflow"))?;
+    let hidden = value_len
+        .checked_sub(capacity)
+        .filter(|n| n % width == 0)
+        .ok_or_else(|| crate::runtime::host::fatal_host_error("malformed object guard rows"))?;
+    let rows = hidden / width;
+    let new_capacity = capacity
+        .checked_mul(2)
+        .map(|n| n.max(8))
+        .filter(|n| *n < i32::MAX as u32)
+        .ok_or_else(|| crate::runtime::host::range_error("object field capacity limit exceeded"))?;
+    let new_width = new_capacity + 1;
+    let new_value_len = rows
+        .checked_mul(new_width)
+        .and_then(|n| n.checked_add(new_capacity))
+        .ok_or_else(|| {
+            crate::runtime::host::range_error("object payload capacity limit exceeded")
+        })?;
+    crate::runtime::fuel::charge(
+        &mut *caller,
+        crate::runtime::fuel::ELEM,
+        u64::from(new_capacity)
+            + u64::from(new_value_len)
+            + u64::from(capacity)
+            + u64::from(value_len),
+    )?;
+    let intr = intrinsic_types(&mut *caller)?;
+    let names_pre = ArrayRefPre::new(&mut *caller, intr.field_names.clone());
+    let values_pre = ArrayRefPre::new(&mut *caller, intr.object_fields.clone());
+    let new_names = ArrayRef::new(&mut *caller, &names_pre, filler, new_capacity)?;
+    let new_values = ArrayRef::new(&mut *caller, &values_pre, &Val::AnyRef(None), new_value_len)?;
+    for slot in 0..capacity {
+        let name = names.get(&mut *caller, slot)?;
+        let value = values.get(&mut *caller, slot)?;
+        new_names.set(&mut *caller, slot, name)?;
+        new_values.set(&mut *caller, slot, value)?;
+    }
+    for row in 0..rows {
+        let old_start = capacity + row * width;
+        let new_start = new_capacity + row * new_width;
+        for slot in 0..capacity {
+            let guard = values.get(&mut *caller, old_start + slot)?;
+            new_values.set(&mut *caller, new_start + slot, guard)?;
+        }
+        let context = values.get(&mut *caller, old_start + capacity)?;
+        new_values.set(&mut *caller, new_start + new_capacity, context)?;
+    }
+    Ok((new_names, new_values))
 }
 
 /// A present inserted name also tells typed serializers that the original
 /// static shape no longer describes all of this object's fields.
 fn inserted_field_name(caller: &mut Caller<'_, StoreData>, name: &Val) -> wasmtime::Result<Val> {
     use wasmtime::{FieldType, Finality, Mutability, StorageType};
-    let intr = build_intrinsic_types(caller.engine())?;
+    let intr = intrinsic_types(&mut *caller)?;
     let mut fields: Vec<_> = intr.string.fields().collect();
     fields.push(FieldType::new(
         Mutability::Var,
@@ -326,13 +421,14 @@ fn inserted_field_name(caller: &mut Caller<'_, StoreData>, name: &Val) -> wasmti
     let ty = crate::runtime::gc_singleton::singleton_struct(
         caller.engine(),
         Finality::Final,
-        Some(intr.string),
+        Some(intr.string.clone()),
         fields,
     )?;
     let name = as_struct(caller, name, "inserted field name")?;
     let values = [
         name.field(&mut *caller, 0)?,
         name.field(&mut *caller, 1)?,
+        name.field(&mut *caller, 2)?,
         Val::I32(2),
     ];
     let pre = StructRefPre::new(&mut *caller, ty);
@@ -346,11 +442,11 @@ pub(crate) fn field_was_inserted(
     name: &Val,
 ) -> wasmtime::Result<bool> {
     let name = as_struct(caller, name, "field name")?;
-    let string = build_intrinsic_types(caller.engine())?.string;
+    let string = intrinsic_types(&mut *caller)?.string.clone();
     if StructType::eq(&name.ty(&*caller)?, &string) {
         return Ok(false);
     }
-    Ok(matches!(name.field(&mut *caller, 2)?, Val::I32(2)))
+    Ok(matches!(name.field(&mut *caller, 3)?, Val::I32(2)))
 }
 
 /// The compiler marks rejected known fields with non-null mask slots.
@@ -360,10 +456,10 @@ fn spread_omitted_fields(
 ) -> wasmtime::Result<std::collections::BTreeSet<Vec<u16>>> {
     let mut omitted = std::collections::BTreeSet::new();
     if let Some((names, values)) = shape_arrays(caller, mask)? {
-        for index in 0..names.len(&mut *caller)? {
+        for index in 0..field_count(caller, mask)? {
             if !matches!(values.get(&mut *caller, index)?, Val::AnyRef(None)) {
                 let name = names.get(&mut *caller, index)?;
-                omitted.insert(string_units(caller, &name)?);
+                omitted.insert(read_string_units(caller, &name, FIELD_NAME)?);
             }
         }
     }
@@ -377,17 +473,13 @@ fn has_own(caller: &mut Caller<'_, StoreData>, obj: &Val, key: &Val) -> wasmtime
     let Some((names, values)) = shape_arrays(caller, obj)? else {
         return Ok(false);
     };
-    let target = string_units(caller, key)?;
-    for i in 0..names.len(&mut *caller)? {
-        let name = names.get(&mut *caller, i)?;
-        if string_units(caller, &name)? == target {
-            let value = values.get(&mut *caller, i)?;
-            return Ok(
-                field_is_present(caller, &name, &value)? && !is_accessor_slot(caller, &name)?
-            );
-        }
-    }
-    Ok(false)
+    let target = read_string_units(caller, key, FIELD_NAME)?;
+    let Some(slot) = find_data_slot(caller, obj, &target)? else {
+        return Ok(false);
+    };
+    let name = names.get(&mut *caller, slot)?;
+    let value = values.get(&mut *caller, slot)?;
+    field_is_present(caller, &name, &value)
 }
 
 /// SameValue on two `f64` bit patterns: any NaN equals any NaN (Wasm arithmetic
@@ -420,7 +512,7 @@ async fn same_value(
     // The number arm must run before vtable dispatch: the boxed-number `equals`
     // slot is `===` (`0 === -0`, `NaN !== NaN`), while SameValue distinguishes
     // both.
-    let boxed_number = build_intrinsic_types(caller.engine())?.boxed_number;
+    let boxed_number = intrinsic_types(&mut *caller)?.boxed_number.clone();
     if is_a(caller, a, &boxed_number)? && is_a(caller, b, &boxed_number)? {
         let (a_bits, b_bits) = (boxed_number_bits(caller, a)?, boxed_number_bits(caller, b)?);
         return Ok(same_value_bits(a_bits, b_bits));
@@ -460,7 +552,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
             ft(vec![obj.clone()], vec![array.clone()]),
             true,
             move |caller, params, results| {
-                results[0] = enumerate(caller, &params[0], kind)?;
+                *abi_result(results, 0)? = enumerate(caller, abi_arg(params, 0)?, kind)?;
                 Ok(())
             },
         )?;
@@ -473,7 +565,11 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         ft(vec![obj.clone(), string.clone()], vec![boolean.clone()]),
         true,
         |caller, params, results| {
-            results[0] = Val::I32(i32::from(has_own(caller, &params[0], &params[1])?));
+            *abi_result(results, 0)? = Val::I32(i32::from(has_own(
+                caller,
+                abi_arg(params, 0)?,
+                abi_arg(params, 1)?,
+            )?));
             Ok(())
         },
     )?;
@@ -484,7 +580,14 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         ctor_key("#insertField"),
         ft(vec![obj.clone(), string, obj.clone()], vec![]),
         true,
-        |caller, params, _| insert_field(caller, &params[0], &params[1], &params[2]),
+        |caller, params, _| {
+            insert_field(
+                caller,
+                abi_arg(params, 0)?,
+                abi_arg(params, 1)?,
+                abi_arg(params, 2)?,
+            )
+        },
     )?;
 
     let shape = ValType::Ref(RefType::new(
@@ -501,7 +604,13 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         ),
         true,
         |caller, params, results| {
-            results[0] = spread(caller, &params[0], &params[1], &params[2], &params[3])?;
+            *abi_result(results, 0)? = spread(
+                caller,
+                abi_arg(params, 0)?,
+                abi_arg(params, 1)?,
+                abi_arg(params, 2)?,
+                abi_arg(params, 3)?,
+            )?;
             Ok(())
         },
     )?;
@@ -519,10 +628,10 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         true,
         |caller, params, results| {
             Box::pin(async move {
-                let intr = build_intrinsic_types(caller.engine())?;
-                results[0] = super::vtable::object_to_json(
+                let intr = intrinsic_types(&mut *caller)?;
+                *abi_result(results, 0)? = super::vtable::object_to_json(
                     caller,
-                    &params[0],
+                    abi_arg(params, 0)?,
                     &intr.raw_string,
                     &intr.string,
                 )
@@ -539,7 +648,9 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         true,
         |caller, params, results| {
             Box::pin(async move {
-                results[0] = Val::I32(i32::from(same_value(caller, &params[0], &params[1]).await?));
+                *abi_result(results, 0)? = Val::I32(i32::from(
+                    same_value(caller, abi_arg(params, 0)?, abi_arg(params, 1)?).await?,
+                ));
                 Ok(())
             })
         },

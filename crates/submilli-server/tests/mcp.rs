@@ -19,9 +19,12 @@ use submilli_build::{
     ArtifactMetadata, CapabilitySchema, PackageStore, write_package_artifact_with_docs,
 };
 use submilli_server::blueprint::InMemoryBlueprintStore;
-use submilli_server::config::VolumeTable;
+use submilli_server::config::{VolumeSpec, VolumeTable};
 use submilli_server::{AppState, ServerConfig, app};
 use tower::ServiceExt;
+
+#[path = "common/last_run_store.rs"]
+mod last_run_store;
 
 const EPH: &str = "eph";
 const SESS: &str = "sess";
@@ -53,11 +56,19 @@ impl Harness {
     /// Build a harness over an arbitrary blueprint set (used by tests that point
     /// an `mcp:` server at a mock upstream on a dynamic port).
     fn from_blueprints(bps: Vec<Blueprint>) -> Self {
+        Self::from_blueprints_with_sessions(bps, None)
+    }
+
+    fn from_blueprints_with_sessions(
+        bps: Vec<Blueprint>,
+        sessions: Option<Arc<dyn submilli_server::session::SessionStore>>,
+    ) -> Self {
         let session_root = tempfile::tempdir().expect("session root");
         let session_root_path = session_root.path().to_path_buf();
-        let blueprints = Arc::new(InMemoryBlueprintStore::seed(bps));
+        let blueprints = Arc::new(InMemoryBlueprintStore::seed(bps).expect("seed blueprints"));
         let config = ServerConfig {
             blueprints: Some(blueprints),
+            sessions,
             session_storage_root: Some(session_root_path.clone()),
             ..ServerConfig::default()
         };
@@ -74,7 +85,7 @@ impl Harness {
     fn from_blueprints_with_volumes(bps: Vec<Blueprint>, volumes: VolumeTable) -> Self {
         let session_root = tempfile::tempdir().expect("session root");
         let session_root_path = session_root.path().to_path_buf();
-        let blueprints = Arc::new(InMemoryBlueprintStore::seed(bps));
+        let blueprints = Arc::new(InMemoryBlueprintStore::seed(bps).expect("seed blueprints"));
         let config = ServerConfig {
             blueprints: Some(blueprints),
             session_storage_root: Some(session_root_path.clone()),
@@ -94,7 +105,7 @@ impl Harness {
         session_root: std::path::PathBuf,
         session_store_dir: std::path::PathBuf,
     ) -> Self {
-        let blueprints = Arc::new(InMemoryBlueprintStore::seed(bps));
+        let blueprints = Arc::new(InMemoryBlueprintStore::seed(bps).expect("seed blueprints"));
         let config = ServerConfig {
             blueprints: Some(blueprints),
             session_storage_root: Some(session_root.clone()),
@@ -115,7 +126,7 @@ impl Harness {
     ) -> Self {
         let session_root = tempfile::tempdir().expect("session root");
         let session_root_path = session_root.path().to_path_buf();
-        let blueprints = Arc::new(InMemoryBlueprintStore::seed(bps));
+        let blueprints = Arc::new(InMemoryBlueprintStore::seed(bps).expect("seed blueprints"));
         let config = ServerConfig {
             blueprints: Some(blueprints),
             session_storage_root: Some(session_root_path.clone()),
@@ -133,39 +144,50 @@ impl Harness {
     fn new() -> Self {
         let session_root = tempfile::tempdir().expect("session root");
         let session_root_path = session_root.path().to_path_buf();
-        let blueprints = Arc::new(InMemoryBlueprintStore::seed([
-            Blueprint {
-                name: EPH.into(),
-                vfs: VfsConfig::Ephemeral { size_limit: None },
-                permissions: allow_fs(),
-                ..Default::default()
-            },
-            Blueprint {
-                name: SESS.into(),
-                vfs: VfsConfig::PerSession { size_limit: None },
-                permissions: allow_fs(),
-                ..Default::default()
-            },
-            Blueprint {
-                name: NO_VFS.into(),
-                vfs: VfsConfig::None,
-                permissions: allow_fs(),
-                ..Default::default()
-            },
-            Blueprint {
-                name: MCP.into(),
-                mcp: BTreeMap::from([(
-                    "linear".to_string(),
-                    McpServer {
-                        transport: "streamable_http".into(),
-                        url: "https://mcp.linear.app/mcp".into(),
-                        headers: BTreeMap::new(),
-                        auth: None,
+        let blueprints = Arc::new(
+            InMemoryBlueprintStore::seed([
+                Blueprint {
+                    name: EPH.into(),
+                    vfs: VfsConfig::Ephemeral {
+                        size_limit: None,
+                        mounts: Default::default(),
+                        cwd: None,
                     },
-                )]),
-                ..Default::default()
-            },
-        ]));
+                    permissions: allow_fs(),
+                    ..Default::default()
+                },
+                Blueprint {
+                    name: SESS.into(),
+                    vfs: VfsConfig::PerSession {
+                        size_limit: None,
+                        mounts: Default::default(),
+                        cwd: None,
+                    },
+                    permissions: allow_fs(),
+                    ..Default::default()
+                },
+                Blueprint {
+                    name: NO_VFS.into(),
+                    vfs: VfsConfig::None,
+                    permissions: allow_fs(),
+                    ..Default::default()
+                },
+                Blueprint {
+                    name: MCP.into(),
+                    mcp: BTreeMap::from([(
+                        "linear".to_string(),
+                        McpServer {
+                            transport: "streamable_http".into(),
+                            url: "https://mcp.linear.app/mcp".into(),
+                            headers: BTreeMap::new(),
+                            auth: None,
+                        },
+                    )]),
+                    ..Default::default()
+                },
+            ])
+            .expect("seed blueprints"),
+        );
         let config = ServerConfig {
             blueprints: Some(blueprints),
             session_storage_root: Some(session_root_path.clone()),
@@ -436,6 +458,32 @@ async fn execute_reports_memory_exhaustion_as_its_own_kind() {
     assert_eq!(
         out["error"]["kind"],
         json!("memory_exhausted"),
+        "got: {rpc}"
+    );
+
+    let (_, _, rpc) = h.post(EPH, tools_call(2, SUM), Some(&session)).await;
+    assert!(output(&rpc)["error"].is_null(), "got: {rpc}");
+    assert_eq!(output(&rpc)["result"], json!("2"), "got: {rpc}");
+}
+
+/// A URL with a dot segment is refused as an ordinary `TypeError`, not as an
+/// internal failure, and leaves the session usable.
+#[tokio::test]
+async fn execute_reports_http_dot_segment_as_a_runtime_error() {
+    const DOT_SEGMENT: &str = r#"import { get } from "submilli:http";
+        function main(): void { get("https://example.com/customers/../admin"); }"#;
+    let h = Harness::new();
+    let session = h.handshake(EPH).await;
+
+    let (status, _, rpc) = h
+        .post(EPH, tools_call(1, DOT_SEGMENT), Some(&session))
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    let out = output(&rpc);
+    assert_eq!(out["error"]["kind"], json!("runtime_error"), "got: {rpc}");
+    let message = out["error"]["message"].as_str().unwrap_or_default();
+    assert!(
+        message.contains("TypeError") && message.contains("dot segment \"..\""),
         "got: {rpc}"
     );
 
@@ -813,7 +861,11 @@ async fn mcp_session_restores_after_server_restart() {
     let blueprints = || {
         vec![Blueprint {
             name: SESS.into(),
-            vfs: VfsConfig::PerSession { size_limit: None },
+            vfs: VfsConfig::PerSession {
+                size_limit: None,
+                mounts: Default::default(),
+                cwd: None,
+            },
             permissions: allow_fs(),
             ..Default::default()
         }]
@@ -983,7 +1035,7 @@ async fn files_read_rejects_path_escape() {
     );
     let (_, _, rpc) = h.post(SESS, call, Some(&session)).await;
     assert!(
-        !rpc["error"].is_null() || rpc["result"]["isError"] == json!(true),
+        refuses_with(&rpc, ESCAPE_DIAGNOSTIC),
         "path escape must be rejected: {rpc}"
     );
 }
@@ -1040,20 +1092,205 @@ async fn files_list_enumerates_the_workspace() {
     assert_eq!(out["count"], json!(1));
 }
 
-/// A tool call fails either as a JSON-RPC error or as an `isError` result; the
-/// file tools use the former, but callers must not depend on which.
-fn is_tool_error(rpc: &Value) -> bool {
-    !rpc["error"].is_null() || rpc["result"]["isError"] == json!(true)
+#[tokio::test]
+async fn tool_arguments_accept_string_scalars_and_report_invalid_arguments() {
+    let h = Harness::new();
+    let session = h.handshake(SESS).await;
+    let (_, _, written) = h
+        .post(SESS, tools_call(2, WRITE_TREE), Some(&session))
+        .await;
+    assert!(output(&written)["error"].is_null(), "{written}");
+
+    for (value, count) in [
+        (json!("true"), 3),
+        (json!("false"), 2),
+        (json!(true), 3),
+        (json!(null), 2),
+    ] {
+        let (_, _, rpc) = h
+            .post(
+                SESS,
+                rpc_call(3, "submilli__files__list", json!({"recursive": value})),
+                Some(&session),
+            )
+            .await;
+        assert_eq!(output(&rpc)["count"], count, "{rpc}");
+    }
+
+    let (_, _, written) = h
+        .post(SESS, tools_call(4, WRITE_LINES), Some(&session))
+        .await;
+    assert!(output(&written)["error"].is_null(), "{written}");
+    let (_, _, rpc) = h
+        .post(
+            SESS,
+            rpc_call(
+                5,
+                "submilli__files__read",
+                json!({"path": "/lines.txt", "offset": "2", "limit": "2"}),
+            ),
+            Some(&session),
+        )
+        .await;
+    assert_eq!(output(&rpc)["content"], "l2\nl3", "{rpc}");
+
+    for (tool, args, message) in [
+        (
+            "submilli__files__list",
+            json!({"recursive": "yes"}),
+            "boolean",
+        ),
+        ("submilli__files__list", json!({"recursive": 1}), "boolean"),
+        ("submilli__files__read", json!({}), "missing field"),
+        ("submilli__files__read", json!({"path": 1}), "string"),
+        (
+            "submilli__files__read",
+            json!({"path": "/", "limit": "-1"}),
+            "u32",
+        ),
+        (
+            "submilli__files__read",
+            json!({"path": "/", "limit": "4294967296"}),
+            "u32",
+        ),
+        (
+            "submilli__files__read",
+            json!({"path": "/", "limit": "1.5"}),
+            "u32",
+        ),
+        ("submilli__typescript__execute", json!({}), "missing field"),
+        (
+            "submilli__typescript__execute",
+            json!({"code": "", "extra": true}),
+            "unknown field",
+        ),
+        (
+            "submilli__typescript__packages__docs",
+            json!({}),
+            "missing field",
+        ),
+        (
+            "submilli__typescript__builtins__docs",
+            json!({"names": "Array"}),
+            "sequence",
+        ),
+    ] {
+        let (_, _, rpc) = h.post(SESS, rpc_call(6, tool, args), Some(&session)).await;
+        assert!(refuses_with(&rpc, message), "{tool}: {rpc}");
+        assert_eq!(output(&rpc)["error"]["kind"], "invalid_arguments", "{rpc}");
+        assert!(text_output(&rpc).contains(message), "{rpc}");
+    }
+
+    let (_, _, rpc) = h
+        .post(SESS, rpc_call(7, "missing_tool", json!({})), Some(&session))
+        .await;
+    assert_eq!(rpc["error"]["code"], -32602, "{rpc}");
+    let (_, _, rpc) = h
+        .post(
+            SESS,
+            rpc_call(8, "submilli__files__list", json!({})),
+            Some(&session),
+        )
+        .await;
+    assert_eq!(output(&rpc)["count"], 3, "session remains usable: {rpc}");
+}
+
+/// A file tool's per-call failure: an `isError` result whose `error.message` the
+/// model reads, never a JSON-RPC error. Clients such as `langchain-mcp-adapters`
+/// raise on a JSON-RPC error, which crashes the agent instead of telling the model.
+fn tool_error_message(rpc: &Value) -> Option<&str> {
+    if !rpc["error"].is_null() || rpc["result"]["isError"] != json!(true) {
+        return None;
+    }
+    output(rpc)["error"]["message"].as_str()
 }
 
 /// A refusal that names `reason`, not merely any error.
 ///
-/// `is_tool_error` alone is satisfied by a transport-level error such as "tool not
-/// found", so a containment test resting on it keeps passing when the call never
-/// reaches the tool — which is how a renamed tool once left the escape assertions
-/// green while proving nothing.
+/// A transport-level error such as "tool not found" is a JSON-RPC error, not a
+/// tool result, so a containment test resting on this cannot pass when the call
+/// never reaches the tool — which is how a renamed tool once left the escape
+/// assertions green while proving nothing.
 fn refuses_with(rpc: &Value, reason: &str) -> bool {
-    is_tool_error(rpc) && rpc.to_string().contains(reason)
+    tool_error_message(rpc).is_some_and(|message| message.contains(reason))
+}
+
+/// A per-call failure reaches the model as a tool result carrying a
+/// `{ kind, message }` error like execute's: a policy denial as
+/// `permission_denied`; a path that is missing, a directory, or outside the VFS
+/// as `file_error`. A JSON-RPC error stays for protocol problems.
+#[tokio::test]
+async fn files_tools_answer_failures_as_tool_results() {
+    let h = Harness::from_blueprints(vec![
+        submilli_blueprint::parse(
+            "name: eph\npermissions:\n  main:\n    - capability: fs.read\n      filter: 'path == \"/missing.txt\" or path == \"/\"'\n      action: allow\n    - capability: fs.list\n      filter: 'path == \"/missing\"'\n      action: allow\n",
+        )
+        .unwrap(),
+    ]);
+    let session = h.handshake(EPH).await;
+    for (id, tool, args, kind, message) in [
+        (
+            2,
+            "submilli__files__list",
+            json!({ "path": "/" }),
+            "permission_denied",
+            "permission denied: caller=main capability=fs.list",
+        ),
+        (
+            3,
+            "submilli__files__read",
+            json!({ "path": "/a.txt" }),
+            "permission_denied",
+            "permission denied: caller=main capability=fs.read",
+        ),
+        (
+            4,
+            "submilli__files__read",
+            json!({ "path": "/missing.txt" }),
+            "file_error",
+            "/missing.txt: ",
+        ),
+        (
+            5,
+            "submilli__files__list",
+            json!({ "path": "/missing" }),
+            "file_error",
+            "/missing: ",
+        ),
+        (
+            6,
+            "submilli__files__read",
+            json!({ "path": "/" }),
+            "file_error",
+            "/: ",
+        ),
+        (
+            7,
+            "submilli__files__read",
+            json!({ "path": "/../etc/passwd" }),
+            "file_error",
+            ESCAPE_DIAGNOSTIC,
+        ),
+        (
+            8,
+            "submilli__files__list",
+            json!({ "path": ".." }),
+            "file_error",
+            ESCAPE_DIAGNOSTIC,
+        ),
+    ] {
+        let (status, _, rpc) = h.post(EPH, rpc_call(id, tool, args), Some(&session)).await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(refuses_with(&rpc, message), "{tool}: {rpc}");
+        assert_eq!(output(&rpc)["error"]["kind"], json!(kind), "{rpc}");
+        let text = text_output(&rpc);
+        assert!(text.contains(message), "unstructured clients see: {text}");
+    }
+
+    // Invalid tool arguments reach the model as a correctable tool failure.
+    let call = rpc_call(9, "submilli__files__read", json!({ "path": 1 }));
+    let (_, _, rpc) = h.post(EPH, call, Some(&session)).await;
+    assert!(refuses_with(&rpc, "expected a string"), "{rpc}");
 }
 
 const ESCAPE_DIAGNOSTIC: &str = "path escapes the VFS root";
@@ -2072,8 +2309,12 @@ const VOL: &str = "vol";
 fn volume_blueprint(volume: &str) -> Blueprint {
     Blueprint {
         name: VOL.into(),
-        vfs: VfsConfig::Persistent {
+        vfs: VfsConfig::Named {
             volume: volume.into(),
+            access: None,
+            mounts: Default::default(),
+            cwd: None,
+            sub_path: None,
         },
         permissions: allow_fs(),
         ..Default::default()
@@ -2083,11 +2324,14 @@ fn volume_blueprint(volume: &str) -> Blueprint {
 /// The MCP route builds its own VFS for every non-`per_session` blueprint, so
 /// volume resolution has to hold there too — not only on the session path.
 #[tokio::test]
-async fn mcp_persistent_mounts_the_declared_volume() {
+async fn mcp_named_root_mounts_the_declared_volume() {
     let dir = tempfile::tempdir().expect("volume dir");
     let h = Harness::from_blueprints_with_volumes(
         vec![volume_blueprint("work")],
-        VolumeTable::from([("work".to_string(), dir.path().to_path_buf())]),
+        VolumeTable::from([(
+            "work".to_string(),
+            VolumeSpec::local_path(dir.path().to_path_buf()),
+        )]),
     );
     let session = h.handshake(VOL).await;
     let (_, _, rpc) = h.post(VOL, tools_call(2, WRITE), Some(&session)).await;
@@ -2096,14 +2340,17 @@ async fn mcp_persistent_mounts_the_declared_volume() {
 }
 
 /// The file tools describe themselves as a way to read what an `execute` run wrote,
-/// and name the modes where that survives. `persistent` is one of them — an agent
+/// and name the modes where that survives. A named volume is one of them — an agent
 /// told otherwise would page a large payload back through a single result instead.
 #[tokio::test]
-async fn files_tools_see_what_execute_wrote_to_a_persistent_volume() {
+async fn files_tools_see_what_execute_wrote_to_a_named_volume() {
     let dir = tempfile::tempdir().expect("volume dir");
     let h = Harness::from_blueprints_with_volumes(
         vec![volume_blueprint("work")],
-        VolumeTable::from([("work".to_string(), dir.path().to_path_buf())]),
+        VolumeTable::from([(
+            "work".to_string(),
+            VolumeSpec::local_path(dir.path().to_path_buf()),
+        )]),
     );
     let session = h.handshake(VOL).await;
     let (_, _, w) = h.post(VOL, tools_call(2, WRITE), Some(&session)).await;
@@ -2124,14 +2371,57 @@ async fn files_tools_see_what_execute_wrote_to_a_persistent_volume() {
     assert!(paths.contains(&"/a.txt"), "got: {list}");
 }
 
+/// A recursive listing reaches a mounted volume's files through the volume, not
+/// the empty directory the root holds at its mount point.
+#[tokio::test]
+async fn files_list_descends_into_a_mounted_volume() {
+    let dir = tempfile::tempdir().expect("volume dir");
+    std::fs::create_dir(dir.path().join("notes")).unwrap();
+    std::fs::write(dir.path().join("notes/a.md"), "a").unwrap();
+    let mut blueprint = submilli_blueprint::parse(
+        "name: vol\nvfs:\n  mounts:\n    /data/memory: {mode: named, volume: work}\n",
+    )
+    .unwrap();
+    blueprint.permissions = allow_fs();
+    let h = Harness::from_blueprints_with_volumes(
+        vec![blueprint],
+        VolumeTable::from([(
+            "work".to_string(),
+            VolumeSpec::local_path(dir.path().to_path_buf()),
+        )]),
+    );
+    let session = h.handshake(VOL).await;
+    let call = rpc_call(
+        2,
+        "submilli__files__list",
+        json!({ "path": "/data", "recursive": true }),
+    );
+    let (_, _, list) = h.post(VOL, call, Some(&session)).await;
+    let paths: Vec<&str> = output(&list)["entries"]
+        .as_array()
+        .expect("entries array")
+        .iter()
+        .filter_map(|e| e["path"].as_str())
+        .collect();
+    assert_eq!(
+        paths,
+        [
+            "/data/memory",
+            "/data/memory/notes",
+            "/data/memory/notes/a.md"
+        ],
+        "got: {list}"
+    );
+}
+
 #[tokio::test]
 async fn mcp_undeclared_volume_fails_by_name_without_a_host_path() {
     let dir = tempfile::tempdir().expect("volume dir");
     let h =
         Harness::from_blueprints_with_volumes(vec![volume_blueprint("gone")], VolumeTable::new());
-    let session = h.handshake(VOL).await;
-    let (_, _, rpc) = h.post(VOL, tools_call(2, SUM), Some(&session)).await;
-    let body = rpc.to_string();
+    let (status, headers, body) = init_with_header(&h, VOL, "").await;
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+    assert!(headers.get("mcp-session-id").is_none());
     assert!(
         body.contains("gone"),
         "the volume name must reach the client: {body}"
@@ -2300,7 +2590,7 @@ async fn llm_discovery_requires_models_and_permission() {
 }
 
 #[tokio::test]
-async fn files_tools_enforce_session_policy_on_persistent_volume() {
+async fn files_tools_enforce_session_policy_on_a_named_volume() {
     let dir = tempfile::tempdir().expect("volume");
     for user in ["ada", "grace"] {
         std::fs::create_dir(dir.path().join(user)).unwrap();
@@ -2309,7 +2599,7 @@ async fn files_tools_enforce_session_policy_on_persistent_volume() {
     let blueprint = submilli_blueprint::parse(
         r#"
 name: vol
-vfs: { mode: persistent, volume: work }
+vfs: { mode: named, volume: work }
 variables:
   user: { required: true }
 permissions:
@@ -2325,7 +2615,10 @@ permissions:
     .unwrap();
     let h = Harness::from_blueprints_with_volumes(
         vec![blueprint],
-        VolumeTable::from([("work".into(), dir.path().to_path_buf())]),
+        VolumeTable::from([(
+            "work".to_string(),
+            VolumeSpec::local_path(dir.path().to_path_buf()),
+        )]),
     );
     for user in ["ada", "grace"] {
         let session = handshake_with_vars(&h, VOL, json!({"user": user})).await;
@@ -2395,8 +2688,16 @@ permissions:
 #[tokio::test]
 async fn files_tools_default_deny_in_every_vfs_mode() {
     for vfs in [
-        VfsConfig::Ephemeral { size_limit: None },
-        VfsConfig::PerSession { size_limit: None },
+        VfsConfig::Ephemeral {
+            size_limit: None,
+            mounts: Default::default(),
+            cwd: None,
+        },
+        VfsConfig::PerSession {
+            size_limit: None,
+            mounts: Default::default(),
+            cwd: None,
+        },
         VfsConfig::None,
     ] {
         let h = Harness::from_blueprints(vec![Blueprint {
@@ -2437,7 +2738,7 @@ async fn filesystem_policy_uses_normalized_paths_for_programs_and_file_tools() {
     let blueprint = submilli_blueprint::parse(
         r#"
 name: vol
-vfs: { mode: persistent, volume: work }
+vfs: { mode: named, volume: work }
 variables:
   user: { required: true }
 permissions:
@@ -2471,7 +2772,10 @@ permissions:
     .unwrap();
     let h = Harness::from_blueprints_with_volumes(
         vec![blueprint],
-        VolumeTable::from([("work".into(), dir.path().to_path_buf())]),
+        VolumeTable::from([(
+            "work".to_string(),
+            VolumeSpec::local_path(dir.path().to_path_buf()),
+        )]),
     );
     let session = handshake_with_vars(&h, VOL, json!({"user": "ada"})).await;
     for expression in [
@@ -2642,4 +2946,175 @@ fn mcp_closure_arity_returns_diagnostics() {
         assert!(output(&rpc)["error"].is_null(), "{rpc}");
         assert_eq!(output(&rpc)["result"], "2", "{rpc}");
     });
+}
+
+#[tokio::test]
+async fn subpath_cwd_is_shared_by_execute_file_tools_and_prompt() {
+    let volume = tempfile::tempdir().unwrap();
+    let blueprint = submilli_blueprint::parse(
+        r#"name: cwd
+variables:
+  user: {required: true}
+vfs:
+  mode: named
+  volume: notes
+  subPath: users/${vars.user}
+  cwd: /drafts/${vars.user}
+permissions:
+  main:
+    - {capability: fs.read, action: allow, filter: 'path glob "/drafts/${vars.user}/*"'}
+    - {capability: fs.write, action: allow, filter: 'path glob "/drafts/${vars.user}/*"'}
+    - {capability: fs.list, action: allow, filter: 'path == "/drafts/${vars.user}"'}
+"#,
+    )
+    .unwrap();
+    let h = Harness::from_blueprints_with_volumes(
+        vec![blueprint],
+        VolumeTable::from([("notes".into(), VolumeSpec::local_path(volume.path()))]),
+    );
+    let session = handshake_with_vars(&h, "cwd", json!({"user":"ada"})).await;
+    let (_, _, tools) = h.post("cwd", tools_list(2), Some(&session)).await;
+    assert!(
+        tool_desc(&tools, EXECUTE).contains("Working directory: /drafts/ada."),
+        "{tools}"
+    );
+    let (_, _, written) = h.post("cwd", tools_call(3, r#"import { writeText, cwd } from "submilli:fs"; function main(): string { writeText("a.txt", "hello"); return cwd(); }"#), Some(&session)).await;
+    assert!(output(&written)["error"].is_null(), "{written}");
+    assert_eq!(output(&written)["result"], "/drafts/ada");
+    let (_, _, read) = h
+        .post(
+            "cwd",
+            rpc_call(4, "submilli__files__read", json!({"path":"a.txt"})),
+            Some(&session),
+        )
+        .await;
+    assert_eq!(output(&read)["content"], "hello", "{read}");
+    let (_, _, listed) = h
+        .post(
+            "cwd",
+            rpc_call(5, "submilli__files__list", json!({})),
+            Some(&session),
+        )
+        .await;
+    assert_eq!(output(&listed)["count"], 1, "{listed}");
+    assert_eq!(
+        std::fs::read_to_string(volume.path().join("users/ada/drafts/ada/a.txt")).unwrap(),
+        "hello"
+    );
+}
+
+#[tokio::test]
+async fn execute_ids_cover_argument_validation_and_compile_errors() {
+    let h = Harness::new();
+    let session = h.handshake(EPH).await;
+    for arguments in [json!({}), json!({"code": "function main(): missing {}"})] {
+        let (_, _, rpc) = h
+            .post(EPH, rpc_call(1, EXECUTE, arguments), Some(&session))
+            .await;
+        let id = rpc["result"]["structuredContent"]["execution_id"]
+            .as_str()
+            .or_else(|| rpc["error"]["data"]["execution_id"].as_str())
+            .expect("execution ID on refusal");
+        uuid::Uuid::parse_str(id).unwrap();
+    }
+}
+
+#[tokio::test]
+async fn last_run_recording_failure_preserves_execution_and_recovers() {
+    use std::sync::atomic::Ordering;
+    let store = Arc::new(last_run_store::FaultStore::default());
+    store.fail_writes.store(true, Ordering::SeqCst);
+    let h = Harness::from_blueprints_with_sessions(
+        vec![Blueprint {
+            name: EPH.into(),
+            ..Default::default()
+        }],
+        Some(store.clone()),
+    );
+    let session = h.handshake(EPH).await;
+    let (_, _, success) = h
+        .post(
+            EPH,
+            tools_call(
+                2,
+                r#"function main(): number { console.log("captured"); return 7; }"#,
+            ),
+            Some(&session),
+        )
+        .await;
+    assert_eq!(output(&success)["result"], "7");
+    assert_eq!(output(&success)["console"], json!([]));
+    assert!(output(&success)["error"].is_null());
+    let (_, _, failed) = h.post(EPH, tools_call(3, r#"function main(): void { console.log("before throw"); throw new Error("original failure"); }"#), Some(&session)).await;
+    assert_eq!(output(&failed)["console"], json!(["before throw"]));
+    assert!(
+        output(&failed)["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("original failure")
+    );
+    assert!(!failed.to_string().contains("private backend detail"));
+    assert_eq!(store.writes.load(Ordering::SeqCst), 2);
+    store.fail_writes.store(false, Ordering::SeqCst);
+    let (_, _, healthy) = h
+        .post(
+            EPH,
+            tools_call(4, "function main(): number { return 42; }"),
+            Some(&session),
+        )
+        .await;
+    assert_eq!(output(&healthy)["result"], "42");
+    let (_, _, stored) = h
+        .post(
+            EPH,
+            rpc_call(5, "submilli__typescript__last_run", json!({})),
+            Some(&session),
+        )
+        .await;
+    assert_eq!(output(&stored)["result"], "42");
+}
+
+#[tokio::test]
+async fn last_run_read_failure_is_internal_and_hides_backend_details() {
+    use std::sync::atomic::Ordering;
+    let store = Arc::new(last_run_store::FaultStore::default());
+    let h = Harness::from_blueprints_with_sessions(
+        vec![Blueprint {
+            name: EPH.into(),
+            ..Default::default()
+        }],
+        Some(store.clone()),
+    );
+    let session = h.handshake(EPH).await;
+    store.fail_reads.store(true, Ordering::SeqCst);
+    for id in [2, 4] {
+        if id == 4 {
+            h.post(
+                EPH,
+                tools_call(3, "function main(): number { return 7; }"),
+                Some(&session),
+            )
+            .await;
+        }
+        let (status, _, response) = h
+            .post(
+                EPH,
+                rpc_call(id, "submilli__typescript__last_run", json!({})),
+                Some(&session),
+            )
+            .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(response["error"]["code"], -32603, "{response}");
+        assert_eq!(response["error"]["message"], "last-run storage unavailable");
+        assert!(!response.to_string().contains("private backend detail"));
+    }
+    store.fail_reads.store(false, Ordering::SeqCst);
+    let (_, _, stored) = h
+        .post(
+            EPH,
+            rpc_call(5, "submilli__typescript__last_run", json!({})),
+            Some(&session),
+        )
+        .await;
+    assert_eq!(output(&stored)["result"], "7");
 }

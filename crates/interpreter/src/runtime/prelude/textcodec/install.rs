@@ -2,20 +2,22 @@
 //! registers each method under its dispatch key and declares the value symbols
 //! codegen routes through. Instances are stateless — `new` builds an empty
 //! `$ObjectShape` carrying the host `object` vtable; the methods ignore the
-//! receiver (`params[0]`).
+//! receiver (`*abi_arg(params, 0)?`).
 
+use crate::runtime::host::{abi_arg, abi_result};
 use wasmtime::{
     ArrayRef, ArrayRefPre, Caller, FuncType, HeapType, Linker, RefType, StructRef, StructRefPre,
     Val, ValType,
 };
 
 use crate::runtime::StoreData;
+use crate::runtime::fuel;
 use crate::runtime::host::{
     host_object_vtable, intrinsic_string_type, intrinsic_uint8_array_type, read_string_arg,
     read_uint8_array_arg, register_host_fn, write_submilli_string_struct,
     write_submilli_uint8array_struct,
 };
-use crate::runtime::intrinsic_types::build_intrinsic_types;
+use crate::runtime::intrinsic_types::{build_intrinsic_types, intrinsic_types};
 use crate::runtime::prelude::{MODULE_NAME, declare_method};
 use crate::{MangledName, PackageDeclaration, Param, Type};
 
@@ -41,7 +43,7 @@ fn ref_to(struct_ty: wasmtime::StructType) -> ValType {
 
 /// Build a fresh stateless instance: an empty `$ObjectShape { object_vtable, [], [] }`.
 fn new_instance(caller: &mut Caller<'_, StoreData>) -> wasmtime::Result<Val> {
-    let intr = build_intrinsic_types(caller.engine())?;
+    let intr = intrinsic_types(&mut *caller)?;
     let vtable = host_object_vtable(caller)?;
     let names = {
         let pre = ArrayRefPre::new(&mut *caller, intr.field_names.clone());
@@ -54,7 +56,11 @@ fn new_instance(caller: &mut Caller<'_, StoreData>) -> wasmtime::Result<Val> {
         Val::AnyRef(Some(arr.to_anyref()))
     };
     let pre = StructRefPre::new(&mut *caller, intr.object_shape.clone());
-    let st = StructRef::new(&mut *caller, &pre, &[vtable, names, fields])?;
+    let st = StructRef::new(
+        &mut *caller,
+        &pre,
+        &[vtable, names, fields, Val::AnyRef(None)],
+    )?;
     Ok(Val::AnyRef(Some(st.to_anyref())))
 }
 
@@ -77,9 +83,9 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         ft(vec![obj_null.clone(), string.clone()], vec![uint8.clone()]),
         true,
         |caller, params, results| {
-            let s = read_string_arg(caller, &params[1], "TextEncoder#encode")?;
+            let s = read_string_arg(caller, abi_arg(params, 1)?, "TextEncoder#encode")?;
             let st = write_submilli_uint8array_struct(caller, s.as_bytes())?;
-            results[0] = Val::AnyRef(Some(st.to_anyref()));
+            *abi_result(results, 0)? = Val::AnyRef(Some(st.to_anyref()));
             Ok(())
         },
     )?;
@@ -90,7 +96,8 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         ft(vec![obj_null.clone(), uint8.clone()], vec![string.clone()]),
         true,
         |caller, params, results| {
-            let bytes = read_uint8_array_arg(caller, &params[1], "TextDecoder#decode")?;
+            let bytes = read_uint8_array_arg(caller, abi_arg(params, 1)?, "TextDecoder#decode")?;
+            fuel::charge(&mut *caller, fuel::SCAN, bytes.len() as u64)?;
             let s = std::str::from_utf8(&bytes).map_err(|e| {
                 crate::runtime::host::type_error(format!(
                     "TextDecoder.decode: invalid UTF-8 at byte {}: {e}",
@@ -98,7 +105,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
                 ))
             })?;
             let st = write_submilli_string_struct(caller, s)?;
-            results[0] = Val::AnyRef(Some(st.to_anyref()));
+            *abi_result(results, 0)? = Val::AnyRef(Some(st.to_anyref()));
             Ok(())
         },
     )?;
@@ -110,7 +117,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
             ft(Vec::new(), vec![obj_null.clone()]),
             true,
             |caller, _params, results| {
-                results[0] = new_instance(caller)?;
+                *abi_result(results, 0)? = new_instance(caller)?;
                 Ok(())
             },
         )?;

@@ -28,7 +28,11 @@ function post(channelId: string, text: string): void {}
 
 check("test.com/load", {});
 
-/** Sends the message. */
+/**
+ * Sends the message.
+ * @param channelId Conversation to post in.
+ * @param text Message text.
+ */
 export function send(channelId: string, text: string): void {
   post(channelId, text);
 }

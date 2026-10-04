@@ -12,13 +12,14 @@ use std::process::ExitCode;
 use anyhow::Context;
 use interpreter::{Severity, Sources, Span, diagnostics};
 use submilli_build::{
-    BuildDiagnostic, BuildSeverity, BuiltPackage, DependencyKind, DriverError, Lockfile,
-    PackageName, PackageStore, ProjectManifest, ResolveError, ScaffoldError, add_package,
-    build_packages, find_manifest_upwards, init_project, install_packages, install_plan,
-    is_valid_package_name, parse_manifest, refresh_dependency_types, refresh_editor_files,
-    resolve_github_closure, write_capabilities_file,
+    BuildDiagnostic, BuildSeverity, BuiltPackage, DependencyKind, DriverError, InstallPreparation,
+    Lockfile, PackageName, PackageStore, ProjectManifest, ResolveError, ScaffoldError, add_package,
+    build_packages, find_manifest_upwards, init_project, install_packages, is_valid_package_name,
+    parse_manifest, refresh_dependency_types, refresh_editor_files, resolve_github_closure,
+    write_capabilities_file,
 };
-use submilli_shared::github::GithubRepoFetcher;
+
+use crate::commands::github::retry;
 
 #[derive(clap::Args)]
 pub struct Args {
@@ -37,8 +38,7 @@ enum BuildCmd {
     /// Compile the project's packages and install them into the local store.
     PublishLocal(CompileArgs),
     /// Compile and run the project's `tests/**/*.test.{ts,subm}` files.
-    /// Set SUBMILLI_SKIP_HTTP_TESTS=1 to skip network.test.* and network_*.test.* files.
-    Test(CompileArgs),
+    Test(TestArgs),
 }
 
 #[derive(clap::Args)]
@@ -46,6 +46,35 @@ struct CompileArgs {
     /// Compile only this package and its sibling dependencies.
     #[arg(short = 'p', long = "package")]
     package: Option<String>,
+
+    /// Fail on code warnings; also enabled by SUBMILLI_DENY_WARNINGS=1.
+    #[arg(long)]
+    deny_warnings: bool,
+}
+
+#[derive(clap::Args)]
+#[command(
+    after_help = "Tests receive no credentials by default. Credential precedence (highest first): --env-var > --env-file > --all-env, regardless of argument order."
+)]
+struct TestArgs {
+    #[command(flatten)]
+    compile: CompileArgs,
+
+    /// Supply all Unicode process environment variables as test credentials.
+    #[arg(long)]
+    all_env: bool,
+
+    /// Supply a process variable (repeatable or comma-separated); fail if unset or non-Unicode.
+    #[arg(long, value_name = "NAME", value_delimiter = ',')]
+    env_var: Vec<String>,
+
+    /// Read credentials from a file; relative paths use the current directory. Fail if unreadable.
+    #[arg(long, value_name = "PATH")]
+    env_file: Option<PathBuf>,
+
+    /// Skip network.test.{ts,subm} and network_*.test.{ts,subm} anywhere under tests/.
+    #[arg(long)]
+    skip_network: bool,
 }
 
 #[derive(clap::Args)]
@@ -79,11 +108,10 @@ impl Args {
 
     pub(crate) fn metric_flags(&self) -> Vec<(&'static str, bool)> {
         match &self.cmd {
-            BuildCmd::Check(compile)
-            | BuildCmd::PublishLocal(compile)
-            | BuildCmd::Test(compile) => {
+            BuildCmd::Check(compile) | BuildCmd::PublishLocal(compile) => {
                 vec![("has_package", compile.package.is_some())]
             }
+            BuildCmd::Test(test) => vec![("has_package", test.compile.package.is_some())],
             BuildCmd::Init(_) | BuildCmd::New(_) => Vec::new(),
         }
     }
@@ -112,6 +140,8 @@ fn execute_init(args: InitArgs) -> anyhow::Result<ExitCode> {
     };
     eprintln!("created {}", scaffolded.manifest_path.display());
     eprintln!("created {}", scaffolded.entrypoint.display());
+    eprintln!("created {}", scaffolded.docs_readme.display());
+    eprintln!("created {}", scaffolded.readme.display());
     eprintln!("created {}", scaffolded.test_file.display());
     eprintln!(
         "add packages with `submilli build new <@scope/name> <path>`; compile and install with `submilli build publish-local`; run tests with `submilli build test`"
@@ -135,6 +165,8 @@ fn execute_new(args: NewArgs) -> anyhow::Result<ExitCode> {
         scaffolded.manifest_path.display()
     );
     eprintln!("created {}", scaffolded.entrypoint.display());
+    eprintln!("created {}", scaffolded.docs_readme.display());
+    eprintln!("created {}", scaffolded.readme.display());
     eprintln!("created {}", scaffolded.test_file.display());
     Ok(ExitCode::SUCCESS)
 }
@@ -229,11 +261,49 @@ fn report_package_warnings(packages: &[BuiltPackage]) {
     }
 }
 
+fn publish_dependencies(
+    preparation: InstallPreparation,
+    built: &[BuiltPackage],
+    deny_warnings: bool,
+) -> Result<(), ExitCode> {
+    check_package_warnings(&preparation, built, deny_warnings)?;
+    publish_prepared_dependencies(preparation)
+}
+
+fn check_package_warnings(
+    preparation: &InstallPreparation,
+    built: &[BuiltPackage],
+    deny_warnings: bool,
+) -> Result<(), ExitCode> {
+    for warning in &preparation.warnings {
+        eprint!("{warning}");
+    }
+    let count = preparation.warnings.len()
+        + built
+            .iter()
+            .map(|package| package.warnings.len())
+            .sum::<usize>();
+    if deny_warnings && count > 0 {
+        report_package_warnings(built);
+        eprintln!("error: {}", submilli_build::warning_denial_message(count));
+        return Err(ExitCode::from(1));
+    }
+    Ok(())
+}
+
+fn publish_prepared_dependencies(preparation: InstallPreparation) -> Result<(), ExitCode> {
+    preparation.publish(false).map_err(|error| {
+        crate::commands::install::render_install_error(&error);
+        ExitCode::from(1)
+    })
+}
+
 // External dependencies resolve from the same local store publish-local
 // installs into, so `check` needs the store too.
 type CompiledProject = (PackageStore, Vec<BuiltPackage>);
 
 fn compile_project(args: CompileArgs) -> anyhow::Result<Result<CompiledProject, ExitCode>> {
+    let deny_warnings = args.deny_warnings || submilli_build::deny_warnings_from_env();
     let cwd = std::env::current_dir().context("resolving current directory")?;
     let Some(manifest_path) = find_manifest_upwards(&cwd) else {
         eprintln!(
@@ -263,15 +333,21 @@ fn compile_project(args: CompileArgs) -> anyhow::Result<Result<CompiledProject, 
     }
 
     let store = PackageStore::default();
-    if let Err(code) = resolve_github_dependencies(&manifest, &manifest_dir, &store) {
-        return Ok(Err(code));
-    }
-    if let Err(code) = refresh_dependency_editor_types(&manifest, &manifest_dir, &store) {
+    let preparation = match resolve_github_dependencies(&manifest, &manifest_dir, &store) {
+        Ok(preparation) => preparation,
+        Err(code) => return Ok(Err(code)),
+    };
+    if let Err(code) =
+        refresh_dependency_editor_types(&manifest, &manifest_dir, preparation.store())
+    {
         return Ok(Err(code));
     }
     let only = args.package.map(PackageName::new);
-    match build_packages(&manifest, &manifest_dir, &store, only.as_ref()) {
+    match build_packages(&manifest, &manifest_dir, preparation.store(), only.as_ref()) {
         Ok(built) => {
+            if let Err(code) = publish_dependencies(preparation, &built, deny_warnings) {
+                return Ok(Err(code));
+            }
             write_local_capabilities(&manifest, &manifest_dir, &built);
             Ok(Ok((store, built)))
         }
@@ -294,7 +370,7 @@ fn resolve_github_dependencies(
     manifest: &ProjectManifest,
     manifest_dir: &Path,
     store: &PackageStore,
-) -> Result<(), ExitCode> {
+) -> Result<InstallPreparation, ExitCode> {
     let existing_lock = match Lockfile::read(manifest_dir) {
         Ok(lock) => lock,
         Err(err) => {
@@ -303,15 +379,18 @@ fn resolve_github_dependencies(
         }
     };
 
-    let closure =
-        match resolve_github_closure(store, manifest, &GithubRepoFetcher, existing_lock.as_ref()) {
-            Ok(closure) => closure,
-            Err(err) => {
-                render_resolve_error(&err);
-                return Err(ExitCode::from(1));
-            }
-        };
-    if let Err(err) = install_plan(store, &closure.plan, true) {
+    let resolved = retry::with_authentication_retry(|auth| {
+        resolve_github_closure(store, manifest, &auth.fetcher(), existing_lock.as_ref())
+            .inspect_err(render_resolve_error)
+    });
+    let Ok(closure) = resolved else {
+        return Err(ExitCode::from(1));
+    };
+    let mut preparation = InstallPreparation::new(store).map_err(|error| {
+        crate::commands::install::render_install_error(&error);
+        ExitCode::from(1)
+    })?;
+    if let Err(err) = preparation.prepare_plan(&closure.plan, true) {
         crate::commands::install::render_install_error(&err);
         return Err(ExitCode::from(1));
     }
@@ -325,7 +404,7 @@ fn resolve_github_dependencies(
         eprintln!("error: {err}");
         return Err(ExitCode::from(1));
     }
-    Ok(())
+    Ok(preparation)
 }
 
 /// Give the editor declarations for the dependencies that come from the store.
@@ -489,9 +568,10 @@ mod test_runner {
     };
     use wasmtime::{Engine, Linker, Module};
 
-    use super::{CompileArgs, render_manifest_diagnostics, resolve_github_dependencies};
+    use super::{TestArgs, render_manifest_diagnostics, resolve_github_dependencies};
 
-    pub(super) fn execute_test(args: CompileArgs) -> anyhow::Result<ExitCode> {
+    pub(super) fn execute_test(args: TestArgs) -> anyhow::Result<ExitCode> {
+        let secret_provider = std::sync::Arc::new(EnvSecretProvider::load(&args)?);
         let cwd = std::env::current_dir().context("resolving current directory")?;
         let Some(manifest_path) = find_manifest_upwards(&cwd) else {
             eprintln!(
@@ -516,21 +596,27 @@ mod test_runner {
         };
 
         let store = PackageStore::default();
-        if let Err(code) = resolve_github_dependencies(&manifest, &manifest_dir, &store) {
+        let deny_warnings = args.compile.deny_warnings || submilli_build::deny_warnings_from_env();
+        let preparation = match resolve_github_dependencies(&manifest, &manifest_dir, &store) {
+            Ok(preparation) => preparation,
+            Err(code) => return Ok(code),
+        };
+        let only = args.compile.package.map(PackageName::new);
+        let built =
+            match build_packages(&manifest, &manifest_dir, preparation.store(), only.as_ref()) {
+                Ok(built) => built,
+                Err(DriverError::Compile { rendered, .. }) => {
+                    eprint!("{rendered}");
+                    return Ok(ExitCode::from(1));
+                }
+                Err(err) => {
+                    eprintln!("error: {err}");
+                    return Ok(ExitCode::from(1));
+                }
+            };
+        if let Err(code) = super::check_package_warnings(&preparation, &built, deny_warnings) {
             return Ok(code);
         }
-        let only = args.package.map(PackageName::new);
-        let built = match build_packages(&manifest, &manifest_dir, &store, only.as_ref()) {
-            Ok(built) => built,
-            Err(DriverError::Compile { rendered, .. }) => {
-                eprint!("{rendered}");
-                return Ok(ExitCode::from(1));
-            }
-            Err(err) => {
-                eprintln!("error: {err}");
-                return Ok(ExitCode::from(1));
-            }
-        };
         super::report_package_warnings(&built);
         super::write_local_capabilities(&manifest, &manifest_dir, &built);
 
@@ -547,7 +633,10 @@ mod test_runner {
                 }
             }
         }
-        let externals = match store.load_closure(external_names.iter().map(String::as_str)) {
+        let externals = match preparation
+            .store()
+            .load_closure(external_names.iter().map(String::as_str))
+        {
             Ok(artifacts) => artifacts,
             Err(err) => {
                 eprintln!("error: loading dependencies: {err}");
@@ -596,14 +685,14 @@ mod test_runner {
             linked: &linked,
             package_sources: &package_sources,
             manifest_dir: &manifest_dir,
+            secret_provider: &secret_provider,
         };
 
+        let mut warning_count = 0usize;
         let mut passed = 0usize;
         let mut failed = 0usize;
         let mut files = 0usize;
         let mut skipped = 0usize;
-        let skip_http_tests =
-            std::env::var_os("SUBMILLI_SKIP_HTTP_TESTS").is_some_and(|value| value == "1");
         for pkg in &targets {
             let Some(pkg_path) = path_by_name.get(pkg.name.as_str()) else {
                 continue;
@@ -612,17 +701,29 @@ mod test_runner {
             let test_files = discover_test_files(&tests_dir)
                 .with_context(|| format!("scanning {}", tests_dir.display()))?;
             for test_file in test_files {
-                if skip_http_tests && is_http_test_file(&test_file) {
-                    println!("skip {} (SUBMILLI_SKIP_HTTP_TESTS=1)", test_file.display());
+                if args.skip_network && is_network_test_file(&test_file) {
+                    println!("skip {} (--skip-network)", test_file.display());
                     skipped += 1;
                     continue;
                 }
                 files += 1;
-                let (p, f) = run_test_file(&ctx, pkg.name.as_str(), &test_file)?;
+                let (p, f) = run_test_file(
+                    &ctx,
+                    pkg.name.as_str(),
+                    &test_file,
+                    deny_warnings,
+                    &mut warning_count,
+                )?;
                 passed += p;
                 failed += f;
             }
-            let (p, f) = check_doc_examples(pkg, pkg_path, &declarations);
+            let (p, f) = check_doc_examples(
+                pkg,
+                pkg_path,
+                &declarations,
+                deny_warnings,
+                &mut warning_count,
+            );
             if p + f > 0 {
                 files += 1;
             }
@@ -632,17 +733,28 @@ mod test_runner {
 
         if files == 0 && skipped == 0 {
             eprintln!("no test files found (looked for tests/**/*.test.{{ts,subm}})");
+            if let Err(code) = super::publish_prepared_dependencies(preparation) {
+                return Ok(code);
+            }
             return Ok(ExitCode::SUCCESS);
         }
         println!("\n{passed} passed, {failed} failed across {files} files");
         if skipped > 0 {
-            println!("{skipped} HTTP test files skipped (SUBMILLI_SKIP_HTTP_TESTS=1)");
+            println!("{skipped} HTTP test files skipped (--skip-network)");
         }
-        if failed == 0 {
-            Ok(ExitCode::SUCCESS)
-        } else {
-            Ok(ExitCode::from(1))
+        if deny_warnings && warning_count > 0 {
+            eprintln!(
+                "error: {}",
+                submilli_build::warning_denial_message(warning_count)
+            );
         }
+        if failed > 0 {
+            return Ok(ExitCode::from(1));
+        }
+        if let Err(code) = super::publish_prepared_dependencies(preparation) {
+            return Ok(code);
+        }
+        Ok(ExitCode::SUCCESS)
     }
 
     /// Compile-check the `docs/readme.md` fenced `ts` examples of one package.
@@ -651,6 +763,8 @@ mod test_runner {
         pkg: &BuiltPackage,
         pkg_path: &Path,
         declarations: &[&PackageDeclaration],
+        deny_warnings: bool,
+        warning_count: &mut usize,
     ) -> (usize, usize) {
         let display_path = format!("{}/docs/readme.md", pkg_path.display());
         let mut passed = 0usize;
@@ -660,10 +774,20 @@ mod test_runner {
             .enumerate()
         {
             let label = format!("{display_path} :: example {} (compile)", index + 1);
-            match submilli_build::compile_check_doc_example(example, &display_path, declarations) {
-                Ok(()) => {
-                    println!("ok   {label}");
-                    passed += 1;
+            match submilli_build::compile_doc_example_warnings(example, &display_path, declarations)
+            {
+                Ok(warnings) => {
+                    for warning in &warnings {
+                        eprint!("{warning}");
+                    }
+                    *warning_count += warnings.len();
+                    if deny_warnings && !warnings.is_empty() {
+                        println!("FAIL {label} (warnings denied)");
+                        failed += 1;
+                    } else {
+                        println!("ok   {label}");
+                        passed += 1;
+                    }
                 }
                 Err(rendered) => {
                     eprint!("{rendered}");
@@ -752,27 +876,37 @@ mod test_runner {
         linked
     }
 
-    // Test-time secret bridge: `secrets.get("NAME")` resolves `NAME` from the
-    // environment, with a `.env` file in the manifest dir loaded first (real
-    // environment variables win). So `JINA_API_KEY=… submilli build test` — or a
-    // `.env` holding it — makes a token available to tests; an unset name reads
-    // as a missing secret (`None`). Loading `.env` is test-only.
+    /// An immutable snapshot of only the credentials explicitly selected for this run.
     struct EnvSecretProvider {
         vars: std::collections::HashMap<String, String>,
     }
 
     impl EnvSecretProvider {
-        fn load(manifest_dir: &Path) -> Self {
+        fn load(args: &TestArgs) -> anyhow::Result<Self> {
             let mut vars = std::collections::HashMap::new();
-            if let Ok(text) = std::fs::read_to_string(manifest_dir.join(".env")) {
-                for line in text.lines() {
-                    if let Some((k, v)) = parse_dotenv_line(line) {
-                        vars.insert(k, v);
-                    }
-                }
+            if args.all_env {
+                vars.extend(std::env::vars_os().filter_map(|(name, value)| {
+                    Some((name.into_string().ok()?, value.into_string().ok()?))
+                }));
             }
-            vars.extend(std::env::vars());
-            Self { vars }
+            if let Some(path) = &args.env_file {
+                let text = std::fs::read_to_string(path)
+                    .with_context(|| format!("reading credential file {}", path.display()))?;
+                vars.extend(text.lines().filter_map(parse_dotenv_line));
+            }
+            for name in &args.env_var {
+                let value = match std::env::var(name) {
+                    Ok(value) => value,
+                    Err(std::env::VarError::NotPresent) => {
+                        anyhow::bail!("--env-var {name}: process variable is not set");
+                    }
+                    Err(std::env::VarError::NotUnicode(_)) => {
+                        anyhow::bail!("--env-var {name}: process variable is not valid Unicode");
+                    }
+                };
+                vars.insert(name.clone(), value);
+            }
+            Ok(Self { vars })
         }
     }
 
@@ -821,12 +955,15 @@ mod test_runner {
         linked: &'a [LinkedPackageModule<'a>],
         package_sources: &'a [(&'a str, &'a [ArtifactSource])],
         manifest_dir: &'a Path,
+        secret_provider: &'a std::sync::Arc<EnvSecretProvider>,
     }
 
     fn run_test_file(
         ctx: &TestContext<'_>,
         package_name: &str,
         test_file: &Path,
+        deny_warnings: bool,
+        warning_count: &mut usize,
     ) -> anyhow::Result<(usize, usize)> {
         let TestContext {
             cfg,
@@ -836,6 +973,7 @@ mod test_runner {
             linked,
             package_sources,
             manifest_dir,
+            secret_provider,
         } = *ctx;
         let source = std::fs::read_to_string(test_file)
             .with_context(|| format!("reading {}", test_file.display()))?;
@@ -857,6 +995,11 @@ mod test_runner {
             Ok(compiled) => {
                 for w in &compiled.warnings {
                     eprint!("{}", diagnostics::render(w, &sources));
+                }
+                *warning_count += compiled.warnings.len();
+                if deny_warnings && !compiled.warnings.is_empty() {
+                    println!("FAIL {filename} (warnings denied)");
+                    return Ok((0, 1));
                 }
                 (compiled.wasm, compiled.type_info)
             }
@@ -881,7 +1024,7 @@ mod test_runner {
 
         let outcome = rt.block_on(async {
             let mut data = StoreData::with_vfs_and_cap(Vfs::tempdir()?, cfg.max_store_bytes);
-            data.secret_provider = std::sync::Arc::new(EnvSecretProvider::load(manifest_dir));
+            data.secret_provider = secret_provider.clone();
             let mut store = cfg.store_async(engine, data)?;
             install_tenant_limits(&mut store);
             let mut linker = Linker::<StoreData>::new(engine);
@@ -973,7 +1116,7 @@ mod test_runner {
         name.ends_with(".test.ts") || name.ends_with(".test.subm")
     }
 
-    fn is_http_test_file(path: &Path) -> bool {
+    fn is_network_test_file(path: &Path) -> bool {
         path.file_name()
             .and_then(|name| name.to_str())
             .and_then(|name| {

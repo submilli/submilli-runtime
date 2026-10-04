@@ -2,15 +2,17 @@
 //! compare. Pure Rust host functions registered directly under the package
 //! name; the `string | Uint8Array` union params are discriminated host-side.
 
+use crate::runtime::host::{abi_arg, abi_result};
 use hmac::{Hmac, Mac};
 use sha2::{Digest, Sha256, Sha512};
 use wasmtime::{Caller, FuncType, HeapType, Linker, RefType, Val, ValType};
 
 use crate::runtime::StoreData;
+use crate::runtime::fuel;
 use crate::runtime::host::{
     read_string_arg, read_uint8_array_arg, register_host_fn, write_submilli_uint8array_struct,
 };
-use crate::runtime::intrinsic_types::build_intrinsic_types;
+use crate::runtime::intrinsic_types::{build_intrinsic_types, intrinsic_types};
 use crate::runtime::prelude::collection::is_a;
 use crate::{PackageDeclaration, Param, Span, Type, ValueKind, ValueSymbol};
 
@@ -93,7 +95,7 @@ fn read_string_or_bytes(
     val: &Val,
     context: &str,
 ) -> wasmtime::Result<Vec<u8>> {
-    let string_ty = build_intrinsic_types(caller.engine())?.string;
+    let string_ty = intrinsic_types(&mut *caller)?.string.clone();
     if is_a(caller, val, &string_ty)? {
         Ok(read_string_arg(caller, val, context)?.into_bytes())
     } else {
@@ -122,9 +124,10 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
             FuncType::new(&engine, [object.clone()], [uint8.clone()]),
             /* deterministic = */ true,
             move |caller, params, results| {
-                let input = read_string_or_bytes(caller, &params[0], &context)?;
+                let input = read_string_or_bytes(caller, abi_arg(params, 0)?, &context)?;
+                fuel::charge(&mut *caller, fuel::HASH, input.len() as u64)?;
                 let arr = write_submilli_uint8array_struct(caller, &digest(&input))?;
-                results[0] = Val::AnyRef(Some(arr.to_anyref()));
+                *abi_result(results, 0)? = Val::AnyRef(Some(arr.to_anyref()));
                 Ok(())
             },
         )?;
@@ -137,13 +140,16 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         FuncType::new(&engine, [uint8.clone(), object], [uint8.clone()]),
         /* deterministic = */ true,
         |caller, params, results| {
-            let key = read_uint8_array_arg(&mut *caller, &params[0], "crypto.hmacSha256 (key)")?;
-            let msg = read_string_or_bytes(caller, &params[1], "crypto.hmacSha256 (message)")?;
+            let key =
+                read_uint8_array_arg(&mut *caller, abi_arg(params, 0)?, "crypto.hmacSha256 (key)")?;
+            let msg =
+                read_string_or_bytes(caller, abi_arg(params, 1)?, "crypto.hmacSha256 (message)")?;
+            fuel::charge(&mut *caller, fuel::HASH, (key.len() + msg.len()) as u64)?;
             let mut mac = <Hmac<Sha256> as Mac>::new_from_slice(&key)
                 .map_err(|e| crate::runtime::host::type_error(format!("crypto.hmacSha256: {e}")))?;
             mac.update(&msg);
             let arr = write_submilli_uint8array_struct(caller, &mac.finalize().into_bytes())?;
-            results[0] = Val::AnyRef(Some(arr.to_anyref()));
+            *abi_result(results, 0)? = Val::AnyRef(Some(arr.to_anyref()));
             Ok(())
         },
     )?;
@@ -155,7 +161,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         FuncType::new(&engine, [ValType::F64], [uint8.clone()]),
         /* deterministic = */ false,
         |caller, params, results| {
-            let Val::F64(bits) = params[0] else {
+            let Val::F64(bits) = *abi_arg(params, 0)? else {
                 return Err(crate::runtime::host::type_error(
                     "crypto.randomBytes: expected f64 length",
                 ));
@@ -171,11 +177,12 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
                     "crypto.randomBytes: length {len} exceeds maximum {MAX_RANDOM_BYTES}"
                 )));
             }
+            fuel::charge(&mut *caller, fuel::SCAN, len as u64)?;
             let mut buf = vec![0u8; len as usize];
             getrandom::getrandom(&mut buf)
                 .map_err(|e| wasmtime::Error::msg(format!("crypto.randomBytes: {e}")))?;
             let arr = write_submilli_uint8array_struct(caller, &buf)?;
-            results[0] = Val::AnyRef(Some(arr.to_anyref()));
+            *abi_result(results, 0)? = Val::AnyRef(Some(arr.to_anyref()));
             Ok(())
         },
     )?;
@@ -188,8 +195,17 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         FuncType::new(&engine, [uint8.clone(), uint8], [ValType::I32]),
         /* deterministic = */ true,
         |caller, params, results| {
-            let a = read_uint8_array_arg(&mut *caller, &params[0], "crypto.timingSafeEqual (a)")?;
-            let b = read_uint8_array_arg(&mut *caller, &params[1], "crypto.timingSafeEqual (b)")?;
+            let a = read_uint8_array_arg(
+                &mut *caller,
+                abi_arg(params, 0)?,
+                "crypto.timingSafeEqual (a)",
+            )?;
+            let b = read_uint8_array_arg(
+                &mut *caller,
+                abi_arg(params, 1)?,
+                "crypto.timingSafeEqual (b)",
+            )?;
+            fuel::charge(&mut *caller, fuel::SCAN, a.len().max(b.len()) as u64)?;
             let equal = a.len() == b.len() && {
                 let mut diff: u8 = 0;
                 for (x, y) in a.iter().zip(b.iter()) {
@@ -197,7 +213,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
                 }
                 diff == 0
             };
-            results[0] = Val::I32(i32::from(equal));
+            *abi_result(results, 0)? = Val::I32(i32::from(equal));
             Ok(())
         },
     )?;

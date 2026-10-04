@@ -33,9 +33,9 @@ pub fn emit_nominal_instance_test(
             heap_type: HeapType::Concrete(idx),
         })
     };
-    let obj_local = emitter.add_anonymous_local(ref_null_to(intr.object));
-    let raw_vt_local = emitter.add_anonymous_local(ref_null_to(intr.vtable));
-    let vt_local = emitter.add_anonymous_local(ref_null_to(intr.class_vtable));
+    let obj_local = emitter.add_anonymous_local(ref_null_to(intr.object))?;
+    let raw_vt_local = emitter.add_anonymous_local(ref_null_to(intr.vtable))?;
+    let vt_local = emitter.add_anonymous_local(ref_null_to(intr.class_vtable))?;
 
     emitter.instruction(Instruction::LocalSet(obj_local));
     emitter.emit_block(BlockType::Result(ValType::I32)); // $out
@@ -101,7 +101,7 @@ pub fn emit_box(
                 .ok_or_else(|| crate::codegen::internal_failure("boxed_number_vtable imported"))?;
             // Stack: [n_f64]. Need [vtable_ref, n_f64] for struct.new.
             // Stash via scratch local.
-            let scratch = emitter.add_anonymous_local(wasm_encoder::ValType::F64);
+            let scratch = emitter.add_anonymous_local(wasm_encoder::ValType::F64)?;
             emitter.instruction(Instruction::LocalSet(scratch));
             emitter.instruction(Instruction::GlobalGet(vtable_global));
             emitter.instruction(Instruction::LocalGet(scratch));
@@ -116,7 +116,7 @@ pub fn emit_box(
                 .symbols
                 .prelude_global_idx("boxed_boolean_vtable")
                 .ok_or_else(|| crate::codegen::internal_failure("boxed_boolean_vtable imported"))?;
-            let scratch = emitter.add_anonymous_local(wasm_encoder::ValType::I32);
+            let scratch = emitter.add_anonymous_local(wasm_encoder::ValType::I32)?;
             emitter.instruction(Instruction::LocalSet(scratch));
             emitter.instruction(Instruction::GlobalGet(vtable_global));
             emitter.instruction(Instruction::LocalGet(scratch));
@@ -384,7 +384,7 @@ fn emit_ref_truthiness(
     let test_bigint = needs(BigIntLike, |_| false);
 
     let slot = ctx.symbols.value_type(cond_ty)?;
-    let tmp = emitter.add_anonymous_local(slot);
+    let tmp = emitter.add_anonymous_local(slot)?;
     emitter.instruction(Instruction::LocalSet(tmp));
 
     // Nested if/else chain, innermost default = truthy. Each falsy-capable

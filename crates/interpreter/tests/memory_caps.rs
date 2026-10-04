@@ -202,7 +202,7 @@ function main(): void {
 }
 "#;
 
-    // 64 KB: well under a single array-push's doubled backing allocation.
+    // 64 KB: retained elements and geometric backing growth exceed this cap.
     let err = cap_run(src, 64 * 1024).expect_err("cap should reject growth");
     let msg = format!("{err:#}");
     assert!(
@@ -504,7 +504,7 @@ function main(): void {
   try {
     download("https://example.test/big.bin", "/big.bin", { maxBytes: 8388608 });
   } catch (e) {
-    refused = e instanceof RangeError;
+    refused = e instanceof QuotaExceededError && e instanceof Error && !((e as unknown) instanceof RangeError);
   }
   assert(refused, "a 4 MB download under a 1 MB limit is refused");
   assert(!exists("/big.bin"), "nothing is left behind");

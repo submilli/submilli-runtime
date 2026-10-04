@@ -1,6 +1,7 @@
 //! The Rust port of the prelude's `Boolean` surface — `toString` / `toJson`,
 //! both `"true"` / `"false"`. The receiver is the unboxed `i32` (0 = false).
 
+use crate::runtime::host::{abi_arg, abi_result};
 use wasmtime::{FuncType, HeapType, Linker, RefType, Val, ValType};
 
 use crate::runtime::StoreData;
@@ -27,7 +28,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
             FuncType::new(&engine, [ValType::I32], [s]),
             true,
             |caller, params, results| {
-                let truthy = match params[0] {
+                let truthy = match *abi_arg(params, 0)? {
                     Val::I32(v) => v != 0,
                     ref other => {
                         return Err(wasmtime::Error::msg(format!(
@@ -37,7 +38,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
                 };
                 let st =
                     write_submilli_string_struct(caller, if truthy { "true" } else { "false" })?;
-                results[0] = Val::AnyRef(Some(st.to_anyref()));
+                *abi_result(results, 0)? = Val::AnyRef(Some(st.to_anyref()));
                 Ok(())
             },
         )?;

@@ -1,5 +1,6 @@
 // A Mastra agent that runs its programs on submilli-server, over MCP.
 
+import { readFileSync } from "node:fs";
 import { Agent } from "@mastra/core/agent";
 import { MCPClient } from "@mastra/mcp";
 
@@ -8,24 +9,18 @@ const BLUEPRINT = "research";
 
 type Model = ConstructorParameters<typeof Agent>[0]["model"];
 
-function instructions(userId: string): string {
-  return [
-    "You are a research assistant. Search the web and read pages by writing programs for Submilli.",
-    "Do the whole job in one program where you can, and return only what you need to answer.",
-    `Keep a note of what you learn, with its sources, under /${userId}/notes.`,
-    "Read your earlier notes before you search again.",
-  ].join(" ");
-}
+// The agent's brief, kept beside the blueprint.
+const INSTRUCTIONS = readFileSync(new URL("../prompt.txt", import.meta.url), "utf8");
 
 export async function answer(
   question: string,
   userId: string,
-  model: Model = "google/gemini-3.8-flash",
+  model: Model = "anthropic/claude-sonnet-5",
 ): Promise<string> {
   const agent = new Agent({
     id: "researcher",
     name: "Researcher",
-    instructions: instructions(userId),
+    instructions: INSTRUCTIONS,
     model,
   });
 

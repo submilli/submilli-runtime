@@ -11,8 +11,11 @@ Bind a GitHub personal access token, OAuth token, or GitHub App installation tok
 
 ```yaml
 secrets:
-  GITHUB_TOKEN: env:GITHUB_TOKEN
+  GITHUB_TOKEN: { store: GITHUB_TOKEN }
 ```
+
+Populate the key with `submilli secret put GITHUB_TOKEN` for local runs or
+`submilli server secret put GITHUB_TOKEN` for a server.
 
 Grant only the package capabilities and HTTP requirements needed by the program. Fine-
 grained token permissions still apply independently; read-only operations generally need
@@ -62,8 +65,8 @@ restricted blueprints. Each script has a blueprint of the same name:
 - `ref-filters.ts` shows that file reads are held to a rule on `ref`, and pull
   request creation and retargeting to rules on `head` and `base`.
 - `request-values.ts` shows that the request the package builds names the
-  repository the policy approved. The package holds a placeholder token from
-  `fake-token.txt`, and the blueprint refuses the request with a reason that
+  repository the policy approved. The package reads a placeholder token from
+  the local secret store, and the blueprint refuses the request with a reason that
   tells the approved repository from any other.
 
 These tests need no real token or network. Run from the repository root in an
@@ -73,6 +76,7 @@ isolated local package store:
 github_test_home=$(mktemp -d)
 SUBMILLI_HOME="$github_test_home" cargo run -p submilli -- build publish-local -p @submilli/github
 SUBMILLI_HOME="$github_test_home" cargo run -p submilli -- run packages/github/tests/policy/owner-filter.ts --blueprint packages/github/tests/policy/owner-filter.yaml
+printf %s policy-placeholder | SUBMILLI_HOME="$github_test_home" cargo run -p submilli -- secret put policy-token
 SUBMILLI_HOME="$github_test_home" cargo run -p submilli -- run packages/github/tests/policy/request-values.ts --blueprint packages/github/tests/policy/request-values.yaml
 ```
 

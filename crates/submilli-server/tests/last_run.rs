@@ -16,14 +16,24 @@ use tower::ServiceExt;
 
 const BLUEPRINT_NAME: &str = "test";
 
+#[path = "common/last_run_store.rs"]
+mod last_run_store;
+
 fn router() -> Router {
-    let blueprints = Arc::new(InMemoryBlueprintStore::seed([Blueprint {
-        name: BLUEPRINT_NAME.into(),
-        ..Default::default()
-    }]));
+    router_with_config(ServerConfig::default())
+}
+
+fn router_with_config(config: ServerConfig) -> Router {
+    let blueprints = Arc::new(
+        InMemoryBlueprintStore::seed([Blueprint {
+            name: BLUEPRINT_NAME.into(),
+            ..Default::default()
+        }])
+        .expect("seed blueprints"),
+    );
     let config = ServerConfig {
         blueprints: Some(blueprints),
-        ..ServerConfig::default()
+        ..config
     };
     app(AppState::new(config).expect("build AppState"))
 }
@@ -153,4 +163,183 @@ async fn generated_session_id_is_retrievable() {
     let (status, body) = last_run(&router, &session_of(&exec)).await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body["console"], json!(["anon"]));
+}
+
+#[tokio::test]
+async fn recording_failure_preserves_execution_and_recovers_on_followup() {
+    use std::sync::atomic::Ordering;
+    let store = Arc::new(last_run_store::FaultStore::default());
+    store.fail_writes.store(true, Ordering::SeqCst);
+    let router = router_with_config(ServerConfig {
+        sessions: Some(store.clone()),
+        ..Default::default()
+    });
+    let logs = CapturedLogs::default();
+    let writer = logs.clone();
+    let subscriber = tracing_subscriber::fmt()
+        .with_ansi(false)
+        .without_time()
+        .with_max_level(tracing::Level::WARN)
+        .with_writer(move || writer.clone())
+        .finish();
+    // Requests can poll on worker tasks; capture their warnings across threads.
+    tracing::subscriber::set_global_default(subscriber).expect("install test log capture");
+    let (_, success) = execute(
+        &router,
+        r#"function main(): number { console.log("captured"); return 7; }"#,
+    )
+    .await;
+    let captured = String::from_utf8(logs.0.lock().unwrap().clone()).unwrap();
+    assert!(captured.contains("last-run storage failed"), "{captured}");
+    assert!(captured.contains("operation=\"record\""), "{captured}");
+    assert!(captured.contains(&session_of(&success)), "{captured}");
+    assert!(captured.contains("private backend detail"), "{captured}");
+    assert!(
+        !captured.contains("captured"),
+        "guest console must not be logged: {captured}"
+    );
+    assert_eq!(success["result"], "7");
+    assert_eq!(success["console"], json!([]));
+    assert!(success["error"].is_null(), "{success}");
+    let (_, failed) = execute(&router, r#"function main(): void { console.log("before throw"); throw new Error("original failure"); }"#).await;
+    assert_eq!(failed["error"]["kind"], "runtime_error");
+    assert!(
+        failed["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("original failure")
+    );
+    assert_eq!(failed["console"], json!(["before throw"]));
+    assert!(!failed.to_string().contains("private backend detail"));
+    assert_eq!(store.writes.load(Ordering::SeqCst), 2);
+    assert_eq!(
+        last_run(&router, &session_of(&success)).await.0,
+        StatusCode::NOT_FOUND
+    );
+
+    store.fail_writes.store(false, Ordering::SeqCst);
+    let (_, healthy) = execute(&router, r#"function main(): string { return "healthy"; }"#).await;
+    let (status, stored) = last_run(&router, &session_of(&healthy)).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(stored["result"], "healthy");
+}
+
+#[tokio::test]
+async fn read_failure_is_internal_even_for_a_missing_record() {
+    use std::sync::atomic::Ordering;
+    let store = Arc::new(last_run_store::FaultStore::default());
+    let router = router_with_config(ServerConfig {
+        sessions: Some(store.clone()),
+        ..Default::default()
+    });
+    let (_, response) = execute(&router, "function main(): number { return 7; }").await;
+    store.fail_reads.store(true, Ordering::SeqCst);
+    for session in [session_of(&response), "missing".into()] {
+        let (status, body) = last_run(&router, &session).await;
+        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(body, Value::Null);
+    }
+    store.fail_reads.store(false, Ordering::SeqCst);
+    assert_eq!(
+        last_run(&router, &session_of(&response)).await.1["result"],
+        "7"
+    );
+}
+
+#[tokio::test]
+async fn recording_failure_still_tears_down_one_shot_session() {
+    use std::sync::atomic::Ordering;
+    let store = Arc::new(last_run_store::FaultStore::default());
+    store.fail_writes.store(true, Ordering::SeqCst);
+    let root = tempfile::tempdir().unwrap();
+    let blueprint = submilli_blueprint::parse("name: test\nvfs: per_session\n").unwrap();
+    let router = app(AppState::new(ServerConfig {
+        sessions: Some(store),
+        blueprints: Some(Arc::new(InMemoryBlueprintStore::seed([blueprint]).unwrap())),
+        session_storage_root: Some(root.path().into()),
+        ..Default::default()
+    })
+    .unwrap());
+    let (_, response) = execute(&router, "function main(): number { return 7; }").await;
+    assert_eq!(response["result"], "7");
+    assert!(!root.path().join(session_of(&response)).exists());
+}
+
+#[tokio::test]
+async fn recording_failure_settles_idempotency_without_reexecuting() {
+    use std::sync::atomic::Ordering;
+    use submilli_server::idempotency_store::{IdempotencyStore, InMemoryIdempotencyStore};
+    let store = Arc::new(last_run_store::FaultStore::default());
+    store.fail_writes.store(true, Ordering::SeqCst);
+    let ledger = Arc::new(InMemoryIdempotencyStore::default());
+    let blueprint = submilli_blueprint::parse("name: test\ndefault: allow\n").unwrap();
+    let router = app(AppState::new(ServerConfig {
+        sessions: Some(store.clone()),
+        idempotency_store: Some(ledger.clone()),
+        blueprints: Some(Arc::new(InMemoryBlueprintStore::seed([blueprint]).unwrap())),
+        ..Default::default()
+    })
+    .unwrap());
+    let (_, created) = send(
+        &router,
+        Request::builder()
+            .method("POST")
+            .uri("/v1/sessions")
+            .header("content-type", "application/json")
+            .body(Body::from(json!({"blueprint": "test"}).to_string()))
+            .unwrap(),
+    )
+    .await;
+    let session = session_of(&created);
+    let code = r#"import session from "submilli:session";
+        function main(): number {
+            const old = session.get("count");
+            const next = old === null ? 1 : (old as number) + 1;
+            session.set("count", next);
+            return next;
+        }"#;
+    let request = |key: &str| {
+        Request::builder()
+            .method("POST")
+            .uri(format!("/v1/sessions/{session}/execute"))
+            .header("content-type", "application/json")
+            .header("idempotency-key", key)
+            .body(Body::from(json!({"code": code}).to_string()))
+            .unwrap()
+    };
+    let (status, first) = send(&router, request("first")).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(first["result"], "1", "{first}");
+    assert!(
+        ledger
+            .load(&session, "first")
+            .await
+            .unwrap()
+            .unwrap()
+            .outcome()
+            .is_some()
+    );
+    let (status, replay) = send(&router, request("first")).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(replay, first);
+    assert_eq!(store.writes.load(Ordering::SeqCst), 1);
+    let (_, next) = send(&router, request("next")).await;
+    assert_eq!(
+        next["result"], "2",
+        "replay must not increment guest state: {next}"
+    );
+}
+
+#[derive(Clone, Default)]
+struct CapturedLogs(Arc<std::sync::Mutex<Vec<u8>>>);
+
+impl std::io::Write for CapturedLogs {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        self.0.lock().unwrap().extend_from_slice(bytes);
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
 }

@@ -3,6 +3,7 @@
 //! bounded download/decompression plumbing. No Wasm ABI here; the package's
 //! host fns live in [`super`].
 
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, OnceLock};
 
 use super::{HttpTransportPolicy, TransportPolicyError};
@@ -35,6 +36,7 @@ pub struct HttpRequest {
 /// Authorizes one redirect hop before any byte of it is sent.
 pub trait RedirectGuard: Send + Sync + std::fmt::Debug {
     fn authorize(&self, hop: &RedirectHop<'_>) -> Result<(), RedirectDenied>;
+    fn audit_egress_denial(&self, _hop: &RedirectHop<'_>) {}
 }
 
 /// The request a redirect is about to send.
@@ -107,6 +109,7 @@ pub struct DownloadMeta {
 #[derive(Debug)]
 pub enum HttpError {
     Network(String),
+    EgressDenied(String),
     /// Host setup failure: must terminate execution, not enter a guest catch.
     Internal(String),
     Policy(TransportPolicyError),
@@ -128,7 +131,9 @@ impl std::fmt::Display for HttpError {
             HttpError::Internal(msg) => write!(f, "internal HTTP transport error: {msg}"),
             HttpError::Policy(error) => error.fmt(f),
             HttpError::PermissionDenied(denied) => denied.fmt(f),
-            HttpError::Network(msg) => write!(f, "network error: {msg}"),
+            HttpError::Network(msg) | HttpError::EgressDenied(msg) => {
+                write!(f, "network error: {msg}")
+            }
             HttpError::Timeout => write!(f, "request timed out"),
             HttpError::TooLarge { limit } => write!(
                 f,
@@ -144,6 +149,57 @@ impl std::fmt::Display for HttpError {
 
 impl std::error::Error for HttpError {}
 
+/// Progress remains observable when a download fails or is cancelled.
+#[derive(Default)]
+pub struct DownloadProgress {
+    received: AtomicU64,
+    written: AtomicU64,
+}
+
+impl DownloadProgress {
+    /// Record wire bytes as they arrive, before decoding or limit checks.
+    pub fn received(&self, bytes: u64) {
+        let _ = self
+            .received
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |total| {
+                Some(total.saturating_add(bytes))
+            });
+    }
+
+    pub fn bytes_received(&self) -> u64 {
+        self.received.load(Ordering::Relaxed)
+    }
+
+    pub(crate) fn written(&self, bytes: u64) {
+        let _ = self
+            .written
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |total| {
+                Some(total.saturating_add(bytes))
+            });
+    }
+
+    pub(crate) fn bytes_written(&self) -> u64 {
+        self.written.load(Ordering::Relaxed)
+    }
+}
+
+struct ReceivedWriter<'a> {
+    writer: &'a mut (dyn std::io::Write + Send),
+    progress: &'a DownloadProgress,
+}
+
+impl std::io::Write for ReceivedWriter<'_> {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        let n = self.writer.write(bytes)?;
+        self.progress.received(n as u64);
+        Ok(n)
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.writer.flush()
+    }
+}
+
 /// Embedder-supplied HTTP transport. 4xx/5xx are not errors; only transport
 /// failures return `Err(HttpError)`. `Send + Sync` for sharing across stores.
 /// Implementations must enforce `HttpRequest::transport_policy`, including
@@ -156,9 +212,20 @@ impl std::error::Error for HttpError {}
 pub trait HttpClient: Send + Sync {
     async fn send(&self, req: &HttpRequest) -> Result<HttpResponse, HttpError>;
 
-    /// Git requires an exact destination: never follow redirects, even on the same host.
-    /// Embedders must opt in to this contract before Git can use their transport.
-    async fn send_without_redirects(&self, _req: &HttpRequest) -> Result<HttpResponse, HttpError> {
+    /// Sends `req` to exactly its URL, never following a redirect, even on
+    /// the same host, and writes the body to `body` as it arrives; the
+    /// returned response's `body` is empty. Git fetches through it, streaming
+    /// packs to disk, so an implementation holds one chunk in memory however
+    /// large `max_response_size` is.
+    ///
+    /// Embedders must opt in to this contract before Git can use their
+    /// transport: there is no buffering fallback, for the reason `download`
+    /// has none.
+    async fn send_without_redirects_to(
+        &self,
+        _req: &HttpRequest,
+        _body: &mut (dyn std::io::Write + Send),
+    ) -> Result<HttpResponse, HttpError> {
         Err(HttpError::Other(
             "transport does not support requests without redirects".into(),
         ))
@@ -166,11 +233,26 @@ pub trait HttpClient: Send + Sync {
 
     /// No default impl: the obvious "buffer via `send` then `write_all`" fallback
     /// would silently break the bounded-memory guarantee `http.download` advertises.
+    /// Implementations must enforce the request's timeout across the entire
+    /// transfer and its byte limit on both wire and decoded output.
     async fn download(
         &self,
         req: &HttpRequest,
         writer: &mut (dyn std::io::Write + Send),
     ) -> Result<DownloadMeta, HttpError>;
+
+    /// Existing embedders report the bytes accepted by the destination.
+    /// Override to count actual wire bytes, including bytes rejected before a
+    /// write and compressed bytes. The default cannot observe those bytes.
+    async fn download_with_progress(
+        &self,
+        req: &HttpRequest,
+        writer: &mut (dyn std::io::Write + Send),
+        progress: &DownloadProgress,
+    ) -> Result<DownloadMeta, HttpError> {
+        self.download(req, &mut ReceivedWriter { writer, progress })
+            .await
+    }
 }
 
 /// Default `HttpClient` — async `reqwest`, built with the SSRF policy resolver.
@@ -261,19 +343,23 @@ impl ReqwestHttpClient {
     fn check_literal_ip(&self, url: &str) -> Result<(), HttpError> {
         self.policy
             .check_literal_host(url)
-            .map_err(HttpError::Network)
+            .map_err(HttpError::EgressDenied)
     }
 
     /// Send `req` and every redirect it earns. Each hop passes the transport
     /// policy, the network policy and the request's guard before it is sent, so
     /// a denied destination never receives a request or its body.
     async fn follow_redirects(&self, req: &HttpRequest) -> Result<reqwest::Response, HttpError> {
-        let mut hop = self.initial_hop(req)?;
+        let mut hop = self.initial_hop(req).inspect_err(|error| {
+            audit_egress(req, &req.url, &req.method, error);
+        })?;
         let initial = hop.url.clone();
         let deadline = Deadline::new(req.timeout_ms);
         let mut redirects = 0;
         loop {
-            let resp = self.send_hop(&hop, &deadline).await?;
+            let resp = self.send_hop(&hop, &deadline).await.inspect_err(|error| {
+                audit_egress(req, hop.url.as_str(), hop.method.as_str(), error);
+            })?;
             let Some(next) = redirect_location(&resp, &hop.url) else {
                 return Ok(resp);
             };
@@ -325,7 +411,10 @@ impl ReqwestHttpClient {
                 "redirect to a URL that is not http or https".into(),
             ));
         }
-        self.check_literal_ip(hop.url.as_str())?;
+        self.check_literal_ip(hop.url.as_str())
+            .inspect_err(|error| {
+                audit_egress(req, hop.url.as_str(), hop.method.as_str(), error);
+            })?;
         let Some(guard) = &req.redirect_guard else {
             return Ok(());
         };
@@ -476,16 +565,59 @@ impl HttpClient for ReqwestHttpClient {
         read_response(resp, req.max_response_size).await
     }
 
-    async fn send_without_redirects(&self, req: &HttpRequest) -> Result<HttpResponse, HttpError> {
-        let hop = self.initial_hop(req)?;
-        let resp = self.send_hop(&hop, &Deadline::new(req.timeout_ms)).await?;
-        read_response(resp, req.max_response_size).await
+    async fn send_without_redirects_to(
+        &self,
+        req: &HttpRequest,
+        body: &mut (dyn std::io::Write + Send),
+    ) -> Result<HttpResponse, HttpError> {
+        let hop = self.initial_hop(req).inspect_err(|error| {
+            audit_egress(req, &req.url, &req.method, error);
+        })?;
+        let resp = self
+            .send_hop(&hop, &Deadline::new(req.timeout_ms))
+            .await
+            .inspect_err(|error| {
+                audit_egress(req, hop.url.as_str(), hop.method.as_str(), error);
+            })?;
+        let status = resp.status().as_u16();
+        let status_text = resp.status().canonical_reason().unwrap_or("").to_string();
+        let final_url = resp.url().to_string();
+        let headers = collect_headers(resp.headers());
+        let limit = req.max_response_size;
+        let mut received: u64 = 0;
+        let mut stream = resp.bytes_stream();
+        while let Some(chunk) = stream.next().await {
+            let chunk = chunk.map_err(map_reqwest_error)?;
+            received = received.saturating_add(chunk.len() as u64);
+            if received > limit {
+                return Err(HttpError::TooLarge { limit });
+            }
+            body.write_all(&chunk)
+                .map_err(|error| HttpError::Other(error.to_string()))?;
+        }
+        Ok(HttpResponse {
+            status,
+            status_text,
+            headers,
+            body: Vec::new(),
+            final_url,
+        })
     }
 
     async fn download(
         &self,
         req: &HttpRequest,
         writer: &mut (dyn std::io::Write + Send),
+    ) -> Result<DownloadMeta, HttpError> {
+        self.download_with_progress(req, writer, &DownloadProgress::default())
+            .await
+    }
+
+    async fn download_with_progress(
+        &self,
+        req: &HttpRequest,
+        writer: &mut (dyn std::io::Write + Send),
+        progress: &DownloadProgress,
     ) -> Result<DownloadMeta, HttpError> {
         // GET-only in v1; trap here so a future "download via POST" doesn't
         // silently break the bounded-memory guarantee.
@@ -513,6 +645,7 @@ impl HttpClient for ReqwestHttpClient {
         let mut stream = resp.bytes_stream();
         while let Some(chunk) = stream.next().await {
             let chunk = chunk.map_err(map_reqwest_error)?;
+            progress.received(chunk.len() as u64);
             wire = wire.saturating_add(chunk.len() as u64);
             if wire > limit {
                 return Err(HttpError::TooLarge { limit });
@@ -735,12 +868,27 @@ impl<W: std::io::Write> DecodeSink<W> {
     }
 }
 
+fn audit_egress(req: &HttpRequest, url: &str, method: &str, error: &HttpError) {
+    if !matches!(error, HttpError::EgressDenied(_)) {
+        return;
+    }
+    if let (Some(guard), Ok(url)) = (&req.redirect_guard, url::Url::parse(url)) {
+        guard.audit_egress_denial(&RedirectHop {
+            method,
+            url: &url,
+            method_rewritten: method != req.method,
+            body_len: 0,
+        });
+    }
+}
+
 /// Bounded outcome class for an [`crate::runtime::metrics::HttpMetric`]: the transport failure mode.
 pub(super) fn http_failure_outcome(err: &HttpError) -> &'static str {
     match err {
         HttpError::Timeout => "timeout",
         HttpError::TooLarge { .. } => "too_large",
         HttpError::Network(_)
+        | HttpError::EgressDenied(_)
         | HttpError::Internal(_)
         | HttpError::Policy(_)
         | HttpError::PermissionDenied(_)
@@ -758,6 +906,16 @@ pub(super) fn http_failure_outcome(err: &HttpError) -> &'static str {
 fn map_reqwest_error(err: reqwest::Error) -> HttpError {
     if err.is_timeout() {
         return HttpError::Timeout;
+    }
+    let mut source: Option<&(dyn std::error::Error + 'static)> = Some(&err);
+    while let Some(error) = source {
+        if error
+            .downcast_ref::<super::policy::EgressDenied>()
+            .is_some()
+        {
+            return HttpError::EgressDenied(describe_error_chain(&err.without_url()));
+        }
+        source = error.source();
     }
     HttpError::Network(describe_error_chain(&err.without_url()))
 }
@@ -971,5 +1129,24 @@ mod decode_sink_tests {
             matches!(truncated, Err(HttpError::Network(_))),
             "{truncated:?}"
         );
+    }
+}
+
+#[cfg(test)]
+mod client_setup_tests {
+    use super::*;
+
+    #[test]
+    fn invalid_client_configuration_is_retained_as_an_internal_failure() {
+        let client = ReqwestHttpClient::with_client(
+            Arc::new(crate::stdlib::http::policy::NetworkPolicy::allow_all()),
+            |builder| builder.user_agent("\n"),
+        );
+        for _ in 0..2 {
+            assert!(matches!(client.client(), Err(HttpError::Internal(_))));
+        }
+        let healthy = ReqwestHttpClient::default();
+        assert!(healthy.client().is_ok());
+        assert!(healthy.client().is_ok());
     }
 }

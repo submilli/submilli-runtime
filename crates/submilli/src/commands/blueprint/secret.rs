@@ -43,16 +43,10 @@ pub fn execute(cmd: SecretCmd) -> Result<ExitCode> {
 
 /// Exactly one source must be given.
 #[derive(clap::Args)]
-#[command(group = ArgGroup::new("source").required(true).args(["env", "file", "store", "harness"]))]
+#[command(group = ArgGroup::new("source").required(true).args(["store", "harness"]))]
 pub struct AddArgs {
     /// Secret name — what `${secrets.<NAME>}` references.
     name: String,
-    /// Read the value from this server-process environment variable.
-    #[arg(long, value_name = "ENV_VAR")]
-    env: Option<String>,
-    /// Read the value from this file path (e.g. a k8s secret mount), trimmed.
-    #[arg(long, value_name = "PATH")]
-    file: Option<String>,
     /// Read the value from the server's SecretStore under this key.
     #[arg(long, value_name = "KEY")]
     store: Option<String>,
@@ -141,21 +135,17 @@ fn remove(args: &RemoveArgs) -> Result<String> {
 /// The chosen source. The `source` arg group guarantees exactly one is set; the
 /// fallback arm is defensive.
 fn source(args: &AddArgs) -> Result<SecretSource> {
-    match (&args.env, &args.file, &args.store, args.harness) {
-        (Some(v), _, _, _) => Ok(SecretSource::Env(v.clone())),
-        (_, Some(v), _, _) => Ok(SecretSource::File(v.clone())),
-        (_, _, Some(v), _) => Ok(SecretSource::Store(v.clone())),
-        (_, _, _, true) => Ok(SecretSource::Harness(HarnessSecret {
+    match (&args.store, args.harness) {
+        (Some(key), false) => Ok(SecretSource::Store(key.clone())),
+        (None, true) => Ok(SecretSource::Harness(HarnessSecret {
             required: args.required,
         })),
-        _ => bail!("exactly one of --env / --file / --store / --harness is required"),
+        _ => bail!("exactly one of --store / --harness is required"),
     }
 }
 
 fn source_summary(source: &SecretSource) -> String {
     match source {
-        SecretSource::Env(v) => format!("env: {v}"),
-        SecretSource::File(v) => format!("file: {v}"),
         SecretSource::Store(v) => format!("store: {v}"),
         SecretSource::Harness(config) => {
             format!("harness, required: {}", config.required)
@@ -173,8 +163,6 @@ mod tests {
     fn add_args(name: &str, path: &Path) -> AddArgs {
         AddArgs {
             name: name.into(),
-            env: None,
-            file: None,
             store: None,
             harness: false,
             required: false,
@@ -190,30 +178,13 @@ mod tests {
     }
 
     #[test]
-    fn adds_env_secret() {
+    fn adds_store_secret() {
         let (_tmp, path) = temp_blueprint();
-        let mut a = add_args("LINEAR_API_KEY", &path);
-        a.env = Some("LINEAR_API_KEY".into());
-        add(&a).unwrap();
+        let mut args = add_args("K", &path);
+        args.store = Some("prod/key".into());
+        add(&args).unwrap();
         let bp = submilli_blueprint::parse(&fs::read_to_string(&path).unwrap()).unwrap();
-        assert_eq!(
-            bp.secrets["LINEAR_API_KEY"],
-            SecretSource::Env("LINEAR_API_KEY".into())
-        );
-    }
-
-    #[test]
-    fn adds_file_and_store_secrets() {
-        let (_tmp, path) = temp_blueprint();
-        let mut f = add_args("A", &path);
-        f.file = Some("/run/secrets/a".into());
-        add(&f).unwrap();
-        let mut s = add_args("B", &path);
-        s.store = Some("prod/b".into());
-        add(&s).unwrap();
-        let bp = submilli_blueprint::parse(&fs::read_to_string(&path).unwrap()).unwrap();
-        assert_eq!(bp.secrets["A"], SecretSource::File("/run/secrets/a".into()));
-        assert_eq!(bp.secrets["B"], SecretSource::Store("prod/b".into()));
+        assert_eq!(bp.secrets["K"], SecretSource::Store("prod/key".into()));
     }
 
     #[test]
@@ -234,10 +205,10 @@ mod tests {
     fn rejects_duplicate_secret() {
         let (_tmp, path) = temp_blueprint();
         let mut a = add_args("K", &path);
-        a.env = Some("K_VAR".into());
+        a.store = Some("K_VAR".into());
         add(&a).unwrap();
         let mut dup = add_args("K", &path);
-        dup.env = Some("OTHER".into());
+        dup.store = Some("OTHER".into());
         let err = add(&dup).unwrap_err();
         assert!(err.to_string().contains("already declares"), "{err}");
     }
@@ -246,7 +217,7 @@ mod tests {
     fn missing_blueprint_is_an_error() {
         let tmp = tempfile::tempdir().unwrap();
         let mut a = add_args("K", &tmp.path().join("nope.yaml"));
-        a.env = Some("K".into());
+        a.store = Some("K".into());
         assert!(add(&a).is_err());
     }
 
@@ -267,7 +238,7 @@ mod tests {
     fn remove_drops_an_unreferenced_secret() {
         let (_tmp, path) = temp_blueprint();
         let mut a = add_args("GH", &path);
-        a.env = Some("GH".into());
+        a.store = Some("GH".into());
         add(&a).unwrap();
         remove(&RemoveArgs {
             name: "GH".into(),
@@ -282,7 +253,7 @@ mod tests {
     fn remove_refuses_a_referenced_secret() {
         let tmp = tempfile::tempdir().unwrap();
         let path = tmp.path().join("blueprint.yaml");
-        let body = "name: t\nsecrets:\n  GH: { env: GH }\nauth_proxy:\n  - host: api.github.com\n    auth: { bearer: GH }\n";
+        let body = "name: t\nsecrets:\n  GH: { store: GH }\nauth_proxy:\n  - host: api.github.com\n    auth: { bearer: GH }\n";
         fs::write(&path, body).unwrap();
         let err = remove(&RemoveArgs {
             name: "GH".into(),

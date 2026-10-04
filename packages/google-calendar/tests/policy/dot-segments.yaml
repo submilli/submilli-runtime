@@ -1,0 +1,19 @@
+kind: blueprint
+name: google-calendar-dot-segments-test
+packages:
+  - '@submilli/google-calendar'
+secrets:
+  # A placeholder: a refused request never sends it, and an accepted one stops at http.delete.
+  GOOGLE_ACCESS_TOKEN: { store: policy-token }
+default: deny
+permissions:
+  main:
+    - capability: submilli/google-calendar.deleteEvent
+      filter: calendarId == "team@group.calendar.google.com" and sendUpdates == "none"
+      action: allow
+  # Deliberate sentinel: the package may read its token, but every http.* call is denied,
+  # so a request that reaches the policy shows up as a denial at http.delete.
+  '@submilli/google-calendar':
+    - capability: secrets.get
+      filter: name == "GOOGLE_ACCESS_TOKEN"
+      action: allow

@@ -4,7 +4,7 @@
 // calls — need not help at all here. Telling a program author to shrink work
 // that was never what filled the budget sends them to optimize the wrong thing,
 // which is why the two messages are deliberately distinct and why this fixture
-// asserts on the difference rather than merely on "a RangeError was thrown".
+// asserts on the difference rather than merely on "a QuotaExceededError was thrown".
 //
 // The fix here belongs to the operator, and the message names the flag.
 import llm from "submilli:llm";
@@ -18,7 +18,9 @@ function main(): void {
     try {
       llm.call("claude-haiku-4-5", "CONFIDENTIAL-PROMPT-TEXT");
       completed = completed + 1;
-    } catch (e: RangeError) {
+    } catch (e: QuotaExceededError) {
+      assert(e instanceof Error, "quota is an Error");
+      assert(!((e as unknown) instanceof RangeError), "quota is not an argument error");
       caught = e.message;
       break;
     }

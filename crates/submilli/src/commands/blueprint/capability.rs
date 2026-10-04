@@ -1,6 +1,7 @@
 //! `submilli blueprint capability {list,add,remove}` — browse every capability
-//! a blueprint can gate (stdlib, declared packages, declared MCP servers) and
-//! edit the `permissions:` block without hand-writing YAML.
+//! a blueprint can gate (stdlib, declared packages and the packages they
+//! depend on, declared MCP servers) and edit the `permissions:` block without
+//! hand-writing YAML.
 //!
 //! `add`/`remove` rewrite the file from the parsed form, so YAML comments are
 //! not preserved.
@@ -8,13 +9,20 @@
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-use anyhow::{Result, bail};
+use anyhow::{Context, Result, bail};
 use clap::Subcommand;
 use interpreter::stdlib::capabilities;
 use submilli_blueprint::{Action, Blueprint, DefaultAction, FilterExpr, PermissionRule};
 use submilli_build::PackageStore;
 
-use super::file::{blueprint_path, load, write};
+use super::capability_names::{
+    UnlistedName, did_you_mean, http_method_scope, http_misspelling, unlisted_name,
+};
+use super::declared_packages;
+use super::file::{blueprint_path, has_capability_rule, load, write};
+use submilli_build::blueprint_validation::{
+    reported_fields, unreported_field_problem, unreported_fields,
+};
 
 #[derive(Subcommand)]
 pub enum CapabilityCmd {
@@ -50,12 +58,17 @@ pub fn execute(cmd: CapabilityCmd) -> Result<ExitCode> {
 #[derive(clap::Args)]
 pub struct ListArgs {
     /// Show one library only: a stdlib module (`submilli:fs`), a declared
-    /// package, or a declared MCP server name.
+    /// package or a package one depends on, or a declared MCP server name.
     library: Option<String>,
     /// Blueprint file to read (default: ./blueprint.yaml). Without a readable
     /// blueprint the stdlib catalog is still listed.
     #[arg(long)]
     blueprint: Option<PathBuf>,
+    /// Show only the capabilities declared packages provide that have no rule
+    /// under `main` (a filtered rule or a `deny` counts as a rule), and the
+    /// default they fall through to. Requires a readable blueprint.
+    #[arg(long)]
+    unconfigured: bool,
 }
 
 #[derive(clap::Args)]
@@ -133,6 +146,20 @@ struct Entry {
     main_denial: Option<&'static str>,
 }
 
+impl Entry {
+    /// Whether a rule for `capability` belongs under this entry: its own name,
+    /// or for the `http.<method>` template, a name that fills it. A rule for
+    /// the template's literal name matches no call, so it is not listed. A
+    /// package that provides a filling name lists the rule under its own
+    /// entry too, as for a standard-library name a package checks itself.
+    fn holds(&self, capability: &str) -> bool {
+        if self.name == capabilities::HTTP_OTHER_METHOD.name {
+            return capabilities::uncataloged_http_method(capability).is_some();
+        }
+        capability == self.name
+    }
+}
+
 /// One library worth of entries: a stdlib module, a declared package, or a
 /// declared MCP server.
 struct Source {
@@ -141,6 +168,9 @@ struct Source {
 }
 
 fn list(args: &ListArgs) -> Result<String> {
+    if args.unconfigured {
+        return list_unconfigured(args);
+    }
     let path = blueprint_path(&args.blueprint);
     let blueprint = match load(&path) {
         Ok(bp) => Some(bp),
@@ -170,15 +200,113 @@ fn list(args: &ListArgs) -> Result<String> {
     Ok(render(&sources, blueprint.as_ref()).trim_end().to_string())
 }
 
+/// Omitting a provided capability from `main` is how a blueprint withholds
+/// it, so this view lists rule presence, not what the script calls. An
+/// explicit `deny` is a rule and is not listed.
+fn list_unconfigured(args: &ListArgs) -> Result<String> {
+    let path = blueprint_path(&args.blueprint);
+    let blueprint = load(&path)?;
+    let packages: Vec<&String> = match &args.library {
+        None => blueprint.packages.iter().collect(),
+        Some(library) if blueprint.packages.contains(library) => vec![library],
+        Some(library) => bail!(
+            "'{library}' is not a package {} declares; --unconfigured lists declared packages: {}",
+            path.display(),
+            declared_packages(&blueprint)
+        ),
+    };
+    let sources = unconfigured_sources(&blueprint, &packages)?;
+
+    let mut out = format!(
+        "Provided capabilities with no rule under `main`; {}.\n\n",
+        unruled_call_outcome(blueprint.default_action)
+    );
+    if blueprint.packages.is_empty() {
+        out.push_str(&format!("none: {} declares no packages", path.display()));
+    } else if sources.is_empty() {
+        let none = match &args.library {
+            Some(library) => {
+                format!("none: `{library}` provides no capability without a rule under `main`")
+            }
+            None => "none: no declared package provides a capability without a rule under `main`"
+                .to_string(),
+        };
+        out.push_str(&none);
+    } else {
+        // Rules other callers hold for these names are not `main`'s; showing
+        // them under this heading would read as configuration.
+        out.push_str(&render(&sources, None));
+    }
+    Ok(out.trim_end().to_string())
+}
+
+/// Unlike the full listing, a package that fails to load is an error:
+/// skipping it would under-report what the blueprint leaves out.
+fn unconfigured_sources(blueprint: &Blueprint, packages: &[&String]) -> Result<Vec<Source>> {
+    let store = PackageStore::default();
+    let mut sources = Vec::new();
+    for package in packages {
+        let artifact = store
+            .load(package)
+            .with_context(|| format!("loading declared package '{package}'"))?;
+        let entries: Vec<Entry> = artifact
+            .capabilities
+            .provides
+            .iter()
+            .filter(|provided| {
+                !has_capability_rule(blueprint, interpreter::mangle::USER_PACKAGE, &provided.name)
+            })
+            .map(provided_entry)
+            .collect();
+        if !entries.is_empty() {
+            sources.push(Source {
+                name: (*package).clone(),
+                entries,
+            });
+        }
+    }
+    Ok(sources)
+}
+
+fn declared_packages(blueprint: &Blueprint) -> String {
+    if blueprint.packages.is_empty() {
+        return "none".to_string();
+    }
+    blueprint
+        .packages
+        .iter()
+        .map(String::as_str)
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+/// What a call with no matching rule resolves to. Enforcement falls through
+/// to `deny` when `default:` is unset, even with no `permissions:` block.
+pub(super) fn unruled_call_outcome(default: Option<DefaultAction>) -> &'static str {
+    match default {
+        None => "`default:` is unset, so calls to them are denied",
+        Some(DefaultAction::Deny) => "`default: deny` denies calls to them",
+        Some(DefaultAction::Allow) => "`default: allow` allows calls to them",
+        Some(DefaultAction::AskHuman) => {
+            "`default: ask-human` applies to them, which currently denies calls"
+        }
+    }
+}
+
 fn collect_sources(blueprint: Option<&Blueprint>) -> Vec<Source> {
     let mut sources = Vec::new();
     for group in capabilities::catalog() {
-        let entries: Vec<Entry> = group
+        let mut entries: Vec<Entry> = group
             .capabilities
             .iter()
             .filter(|c| !c.is_template())
             .map(stdlib_entry)
             .collect();
+        // Outside the catalog, whose other readers take a template for
+        // `mcp.<server>`; see `HTTP_OTHER_METHOD`.
+        if group.module == "submilli:http" {
+            entries.push(stdlib_entry(&capabilities::HTTP_OTHER_METHOD));
+        }
         if !entries.is_empty() {
             sources.push(Source {
                 name: group.module.to_string(),
@@ -214,21 +342,19 @@ fn collect_sources(blueprint: Option<&Blueprint>) -> Vec<Source> {
         }
     }
 
+    // A dependency's provided capabilities are what its dependents require,
+    // so their caller lists name them too.
     if let Some(bp) = blueprint {
-        let store = PackageStore::default();
-        for package in &bp.packages {
-            match store.load(package) {
-                Ok(artifact) => sources.push(Source {
-                    name: package.clone(),
-                    entries: artifact
-                        .capabilities
-                        .provides
-                        .iter()
-                        .map(provided_entry)
-                        .collect(),
-                }),
-                Err(e) => eprintln!("warning: skipping declared package '{package}': {e}"),
-            }
+        for (package, artifact) in load_packages(bp).artifacts {
+            sources.push(Source {
+                name: package,
+                entries: artifact
+                    .capabilities
+                    .provides
+                    .iter()
+                    .map(provided_entry)
+                    .collect(),
+            });
         }
     }
 
@@ -273,7 +399,11 @@ fn render(sources: &[Source], blueprint: Option<&Blueprint>) -> String {
         }
         out.push_str(&format!("{}\n", source.name));
         for entry in &source.entries {
-            out.push_str(&format!("  {} — {}\n", entry.name, entry.summary));
+            if entry.summary.is_empty() {
+                out.push_str(&format!("  {}\n", entry.name));
+            } else {
+                out.push_str(&format!("  {} — {}\n", entry.name, entry.summary));
+            }
             if !entry.fields.is_empty() {
                 out.push_str(&format!("      fields: {}\n", entry.fields));
             }
@@ -285,14 +415,20 @@ fn render(sources: &[Source], blueprint: Option<&Blueprint>) -> String {
             }
             let Some(bp) = blueprint else { continue };
             for (caller, rules) in &bp.permissions {
-                for rule in rules.iter().filter(|r| r.capability == entry.name) {
+                for rule in rules.iter().filter(|r| entry.holds(&r.capability)) {
                     let filter = rule
                         .filter
                         .as_ref()
                         .map(|f| format!(" (filter: {f})"))
                         .unwrap_or_default();
+                    // A template's rules each name the capability they fill it with.
+                    let filled = if rule.capability == entry.name {
+                        String::new()
+                    } else {
+                        format!(" {}", rule.capability)
+                    };
                     out.push_str(&format!(
-                        "      rule[{caller}]: {}{filter}\n",
+                        "      rule[{caller}]:{filled} {}{filter}\n",
                         action_label(rule.action)
                     ));
                 }
@@ -316,9 +452,14 @@ fn add(args: &AddArgs) -> Result<String> {
         .transpose()?;
 
     refuse_if_never_grantable_to_main(&args.capability, &args.caller)?;
-    if !args.force {
-        validate_name(&blueprint, &args.capability)?;
-    }
+    let packages = load_packages(&blueprint);
+    let name_warning = validate_name(
+        &blueprint,
+        &packages,
+        &args.caller,
+        &args.capability,
+        args.force,
+    )?;
 
     let action = Action::from(args.action);
     let rule = PermissionRule {
@@ -352,6 +493,8 @@ fn add(args: &AddArgs) -> Result<String> {
     let shadowed = rules[..position]
         .iter()
         .any(|r| r.capability == args.capability);
+    let unreachable =
+        unreachable_after_insert(rules, position, &rule, &args.caller, &remove_command(args));
     rules.insert(position, rule.clone());
     if !had_policy {
         blueprint.default_action = Some(DefaultAction::Deny);
@@ -370,7 +513,7 @@ fn add(args: &AddArgs) -> Result<String> {
         args.caller,
         path.display()
     );
-    if let Some(cap) = capabilities::find(&args.capability) {
+    if let Some(cap) = capabilities::find_gating(&args.capability) {
         message.push_str(&format!("\n  {}", cap.summary));
         if !cap.filter_fields.is_empty() {
             message.push_str(&format!(
@@ -383,13 +526,119 @@ fn add(args: &AddArgs) -> Result<String> {
             ));
         }
     }
-    if shadowed {
-        message.push_str(&format!(
+    if let Some(warning) = name_warning {
+        message.push_str(&format!("\n  warning: {warning}"));
+    }
+    let filter_warnings = filter_field_warnings(
+        &blueprint,
+        &packages,
+        &args.capability,
+        rule.filter.as_ref(),
+    );
+    for warning in filter_warnings {
+        message.push_str(&format!("\n  warning: {warning}"));
+    }
+    match unreachable {
+        Some(warning) => message.push_str(&format!("\n  warning: {warning}")),
+        None if shadowed => message.push_str(&format!(
             "\n  note: earlier rules for '{}' exist under '{}' — the first matching rule wins",
             args.capability, args.caller
-        ));
+        )),
+        None => {}
     }
     Ok(message)
+}
+
+/// One warning per field `filter` tests that `capability`'s check doesn't
+/// report, which lint reports as an error; or, when a package failed to load,
+/// one warning that the fields were not checked.
+fn filter_field_warnings(
+    blueprint: &Blueprint,
+    packages: &declared_packages::DeclaredPackages,
+    capability: &str,
+    filter: Option<&FilterExpr>,
+) -> Vec<String> {
+    let Some(filter) = filter else {
+        return Vec::new();
+    };
+    // As in lint: a package that failed to load may report more fields.
+    if !packages.errors.is_empty() {
+        return vec![
+            "the filter's fields were not checked, because a package failed to load".to_string(),
+        ];
+    }
+    let Some(reported) = reported_fields(blueprint, &packages.artifacts, capability) else {
+        return Vec::new();
+    };
+    unreported_fields(filter, &reported)
+        .into_iter()
+        .map(|field| format!("the filter {}", unreported_field_problem(field, &reported)))
+        .collect()
+}
+
+/// What inserting `rule` at index `position` leaves unable to match, if
+/// anything: the first matching rule decides, so a rule after an unfiltered
+/// rule for the same capability never matches. Rule numbers in the warning are
+/// 1-based positions after the insert, as lint reports them.
+fn unreachable_after_insert(
+    rules: &[PermissionRule],
+    position: usize,
+    rule: &PermissionRule,
+    caller: &str,
+    remove_command: &str,
+) -> Option<String> {
+    let same_capability = |other: &PermissionRule| other.capability == rule.capability;
+    let (before, after) = rules.split_at(position.min(rules.len()));
+    let fix = format!(
+        "delete or narrow it in the file, or run `{remove_command}` and add the rules again in \
+         order"
+    );
+    if let Some((number, deciding)) = (1..)
+        .zip(before)
+        .find(|(_, other)| same_capability(other) && other.filter.is_none())
+    {
+        return Some(format!(
+            "`permissions.{caller}` rule {number} for `{}` (`{}`, no filter) decides every call \
+             first, so this rule never matches; {fix}",
+            rule.capability,
+            action_label(deciding.action)
+        ));
+    }
+    if rule.filter.is_some() {
+        return None;
+    }
+    // After the insert, the rules that followed `position` sit one further on.
+    let later: Vec<String> = (before.len() + 2..)
+        .zip(after)
+        .filter(|(_, other)| same_capability(other))
+        .map(|(number, _)| number.to_string())
+        .collect();
+    let (noun, verb) = if later.len() == 1 {
+        ("rule", "matches")
+    } else {
+        ("rules", "match")
+    };
+    (!later.is_empty()).then(|| {
+        format!(
+            "this rule has no filter, so `permissions.{caller}` {noun} {} for `{}` after it never \
+             {verb}; {fix}",
+            later.join(", "),
+            rule.capability
+        )
+    })
+}
+
+/// The `capability remove` invocation that edits the same file and caller as
+/// this `capability add`.
+fn remove_command(args: &AddArgs) -> String {
+    let mut command = format!("submilli blueprint capability remove {}", args.capability);
+    if args.caller != interpreter::mangle::USER_PACKAGE {
+        command.push_str(&format!(" --caller {}", args.caller));
+    }
+    if let Some(path) = &args.blueprint {
+        command.push_str(&format!(" --blueprint {}", path.display()));
+    }
+    command
 }
 
 /// Refuses a rule the runtime would never consult. Checked ahead of, and
@@ -410,63 +659,67 @@ fn refuse_if_never_grantable_to_main(capability: &str, caller: &str) -> Result<(
     );
 }
 
-/// A capability name is accepted when the stdlib catalog, a declared package,
-/// or a declared MCP server provides it. `--force` bypasses this — the policy
-/// engine itself matches names verbatim and doesn't care.
-fn validate_name(blueprint: &Blueprint, name: &str) -> Result<()> {
-    let known = known_capabilities(blueprint);
-    if known.iter().any(|k| k == name) {
-        return Ok(());
-    }
-    let near: Vec<String> = suggestions(&known, name);
-    let hint = if near.is_empty() {
-        String::new()
-    } else {
-        format!("; did you mean: {}?", near.join(", "))
-    };
-    bail!(
-        "unknown capability '{name}'{hint}\n  \
-         `submilli blueprint capability list` shows every known capability; \
-         pass --force to add the rule anyway"
-    );
-}
-
-fn known_capabilities(blueprint: &Blueprint) -> Vec<String> {
-    let mut names: Vec<String> = capabilities::catalog()
-        .iter()
-        .flat_map(|g| g.capabilities)
-        .filter(|c| !c.is_template())
-        .map(|c| c.name.to_string())
-        .collect();
-    names.extend(blueprint.mcp.keys().map(|server| format!("mcp.{server}")));
-    let store = PackageStore::default();
-    for package in &blueprint.packages {
-        match store.load(package) {
-            Ok(artifact) => names.extend(
-                artifact
-                    .capabilities
-                    .provides
-                    .iter()
-                    .map(|p| p.name.clone()),
-            ),
-            Err(_) => eprintln!(
-                "warning: could not load declared package '{package}' — its capabilities were not checked"
-            ),
+/// Refuses a name `caller` cannot reach, and returns a warning for a name the
+/// runtime gates but the catalog doesn't list. `force` bypasses the refusals —
+/// the policy engine itself matches names verbatim and doesn't care — but
+/// keeps what an `http.<method>` rule matches as a warning.
+fn validate_name(
+    blueprint: &Blueprint,
+    packages: &declared_packages::DeclaredPackages,
+    caller: &str,
+    name: &str,
+    force: bool,
+) -> Result<Option<String>> {
+    match unlisted_name(blueprint, packages, caller, name) {
+        None => Ok(None),
+        Some(UnlistedName::DependencyOnly { .. } | UnlistedName::Unknown { .. }) if force => {
+            Ok(None)
+        }
+        Some(UnlistedName::DependencyOnly {
+            dependency,
+            dependents,
+        }) => {
+            let callers = dependents
+                .into_iter()
+                .map(|dependent| format!("`--caller {dependent}`"))
+                .collect::<Vec<_>>()
+                .join(" or ");
+            bail!(
+                "'{name}' is provided by `{dependency}`, which only the packages that depend on it \
+                 can call; `{caller}` cannot import it\n  \
+                 grant it to one of them with {callers}, or declare `{dependency}` \
+                 with `submilli blueprint add-package {dependency}`"
+            );
+        }
+        Some(UnlistedName::UncatalogedHttpMethod { method }) => {
+            Ok(Some(format!("this rule {}", http_method_scope(&method))))
+        }
+        Some(UnlistedName::MisspelledHttpOperation { intended, method }) => {
+            let misspelling = http_misspelling(intended, &method);
+            if force {
+                return Ok(Some(format!("this rule {misspelling}")));
+            }
+            bail!("'{name}' {misspelling}\n  pass --force to add the rule anyway");
+        }
+        Some(UnlistedName::Unknown { near }) => {
+            bail!(
+                "unknown capability '{name}'{}\n  \
+                 `submilli blueprint capability list` shows every known capability; \
+                 pass --force to add the rule anyway",
+                did_you_mean(&near)
+            );
         }
     }
-    names
 }
 
-/// Names sharing the input's `module.` prefix, or containing it as a
-/// substring — enough to catch `fs.raed` and `http.download` typos.
-fn suggestions(known: &[String], input: &str) -> Vec<String> {
-    let prefix = input.split('.').next().unwrap_or(input);
-    known
-        .iter()
-        .filter(|k| k.starts_with(&format!("{prefix}.")) || k.contains(input))
-        .take(5)
-        .cloned()
-        .collect()
+/// The checks this command makes are best-effort, so a package that fails to
+/// load is a warning.
+fn load_packages(blueprint: &Blueprint) -> declared_packages::DeclaredPackages {
+    let packages = declared_packages::load(blueprint, &PackageStore::default());
+    for error in &packages.errors {
+        eprintln!("warning: {error}; listing and checking only what loaded");
+    }
+    packages
 }
 
 fn remove(args: &RemoveArgs) -> Result<String> {
@@ -551,6 +804,7 @@ mod tests {
         let out = list(&ListArgs {
             library: None,
             blueprint: Some(path.clone()),
+            unconfigured: false,
         })
         .unwrap();
         assert!(out.starts_with("submilli:fs\n"), "{out}");
@@ -566,6 +820,7 @@ mod tests {
         let out = list(&ListArgs {
             library: Some("submilli:fs".into()),
             blueprint: Some(path.clone()),
+            unconfigured: false,
         })
         .unwrap();
         assert!(out.contains("fs.read"), "{out}");
@@ -574,9 +829,49 @@ mod tests {
         let err = list(&ListArgs {
             library: Some("nope".into()),
             blueprint: Some(path),
+            unconfigured: false,
         })
         .unwrap_err();
         assert!(err.to_string().contains("available:"), "{err}");
+    }
+
+    /// `http.request` gates any method, so the listing names the template
+    /// and shows the rules that fill it under it.
+    #[test]
+    fn list_shows_the_http_method_template_and_its_rules() {
+        let (_tmp, path) = temp_blueprint(
+            "name: t\npermissions:\n  main:\n    - capability: http.trace\n      action: deny\n",
+        );
+        let out = list(&ListArgs {
+            library: Some("submilli:http".into()),
+            blueprint: Some(path),
+            unconfigured: false,
+        })
+        .unwrap();
+        assert!(
+            out.contains(
+                "  http.<method> — Any other HTTP method, through `http.request`: `http.trace` gates TRACE\n"
+            ),
+            "{out}"
+        );
+        assert!(out.contains("      rule[main]: http.trace deny"), "{out}");
+    }
+
+    /// The runtime never checks the template's literal name, so a rule for it
+    /// is not shown as if it covered every other method.
+    #[test]
+    fn list_does_not_hold_a_rule_for_the_literal_template_name() {
+        let (_tmp, path) = temp_blueprint(
+            "name: t\npermissions:\n  main:\n    - capability: http.<method>\n      action: deny\n",
+        );
+        let out = list(&ListArgs {
+            library: Some("submilli:http".into()),
+            blueprint: Some(path),
+            unconfigured: false,
+        })
+        .unwrap();
+        assert!(out.contains("  http.<method> — "), "{out}");
+        assert!(!out.contains("rule[main]"), "{out}");
     }
 
     #[test]
@@ -585,6 +880,7 @@ mod tests {
         let out = list(&ListArgs {
             library: Some("linear".into()),
             blueprint: Some(path),
+            unconfigured: false,
         })
         .unwrap();
         assert!(out.contains("mcp.linear"), "{out}");
@@ -603,6 +899,46 @@ mod tests {
         assert_eq!(
             reload(&path).permissions["main"][0].capability,
             "acme.com/charge"
+        );
+    }
+
+    /// `http.request` gates any method, so a rule for one is added, with a
+    /// warning that names the method it matches. A near miss of a cataloged
+    /// operation is refused: a misspelled `deny` would let the operation through.
+    #[test]
+    fn add_accepts_an_uncataloged_http_method_with_a_warning() {
+        let (_tmp, path) = temp_blueprint("name: t\n");
+        let message = add(&add_args("http.trace", &path)).unwrap();
+        assert!(
+            message.contains(
+                "warning: this rule matches only `http.request` calls with method `TRACE`, through `http.<method>`"
+            ),
+            "{message}"
+        );
+        assert!(message.contains("filter fields: host: string"), "{message}");
+        assert_eq!(
+            reload(&path).permissions["main"][0].capability,
+            "http.trace"
+        );
+
+        let err = add(&add_args("http.TRACE", &path)).unwrap_err();
+        assert!(err.to_string().contains("unknown capability"), "{err}");
+
+        let err = add(&add_args("http.dlete", &path)).unwrap_err();
+        assert!(
+            err.to_string().contains(
+                "'http.dlete' looks like a misspelling of `http.delete`; as written it matches only `http.request` calls with method `DLETE`"
+            ),
+            "{err}"
+        );
+        assert_eq!(reload(&path).permissions["main"].len(), 1);
+
+        let mut forced = add_args("http.dlete", &path);
+        forced.force = true;
+        let message = add(&forced).unwrap();
+        assert!(
+            message.contains("warning: this rule looks like a misspelling of `http.delete`"),
+            "{message}"
         );
     }
 
@@ -693,8 +1029,10 @@ mod tests {
     #[test]
     fn duplicate_rule_is_rejected_and_shadowing_is_noted() {
         let (_tmp, path) = temp_blueprint("name: t\n");
-        add(&add_args("fs.read", &path)).unwrap();
-        let err = add(&add_args("fs.read", &path)).unwrap_err();
+        let mut filtered = add_args("fs.read", &path);
+        filtered.filter = Some("path == \"/x\"".into());
+        add(&filtered).unwrap();
+        let err = add(&filtered).unwrap_err();
         assert!(err.to_string().contains("identical rule"), "{err}");
 
         let mut deny = add_args("fs.read", &path);
@@ -702,6 +1040,106 @@ mod tests {
         let message = add(&deny).unwrap();
         assert!(message.contains("first matching rule wins"), "{message}");
         assert_eq!(reload(&path).permissions["main"].len(), 2);
+    }
+
+    /// SUB-1258: the rule is still written, but the output says it can never
+    /// match, as `blueprint lint` will.
+    #[test]
+    fn a_rule_behind_an_unfiltered_rule_is_warned_about() {
+        let (_tmp, path) = temp_blueprint("name: t\n");
+        add(&add_args("fs.read", &path)).unwrap();
+
+        let mut narrowed = add_args("fs.read", &path);
+        narrowed.filter = Some("path == \"/x\"".into());
+        narrowed.action = ActionArg::Deny;
+        let message = add(&narrowed).unwrap();
+
+        assert!(
+            message.contains(
+                "warning: `permissions.main` rule 1 for `fs.read` (`allow`, no filter) decides every call first, so this rule never matches"
+            ),
+            "{message}"
+        );
+        assert_eq!(reload(&path).permissions["main"].len(), 2);
+    }
+
+    /// SUB-1283: the rule is added, as lint would still report it.
+    #[test]
+    fn a_filter_on_an_unreported_field_is_warned_about() {
+        let (_tmp, path) = temp_blueprint("name: t\n");
+        let mut args = add_args("fs.read", &path);
+        args.filter = Some("path glob \"/x/*\" and not (owner == \"ops\")".into());
+
+        let message = add(&args).unwrap();
+
+        assert!(
+            message.contains(
+                "warning: the filter tests `owner`, which the operation doesn't report, so a condition on it is false for every call, and true under `not`; its fields are: chunkSize, length, path, recursive"
+            ),
+            "{message}"
+        );
+        assert!(!message.contains("tests `path`"), "{message}");
+        assert_eq!(reload(&path).permissions["main"].len(), 1);
+    }
+
+    #[test]
+    fn filter_fields_are_not_judged_when_a_package_fails_to_load() {
+        let (_tmp, path) = temp_blueprint("name: t\npackages:\n  - '@sub1283/never-installed'\n");
+        let mut args = add_args("fs.read", &path);
+        args.filter = Some("owner == \"ops\"".into());
+
+        let message = add(&args).unwrap();
+
+        assert!(
+            message.contains(
+                "warning: the filter's fields were not checked, because a package failed to load"
+            ),
+            "{message}"
+        );
+        assert!(!message.contains("doesn't report"), "{message}");
+    }
+
+    /// The suggested `remove` edits the same caller and file as the `add`.
+    #[test]
+    fn the_unreachable_warning_names_the_callers_remove_command() {
+        let (_tmp, path) = temp_blueprint("name: t\n");
+        let mut whole = add_args("fs.read", &path);
+        whole.caller = "@acme/x".into();
+        add(&whole).unwrap();
+
+        let mut narrowed = add_args("fs.read", &path);
+        narrowed.caller = "@acme/x".into();
+        narrowed.filter = Some("path == \"/x\"".into());
+        let message = add(&narrowed).unwrap();
+
+        assert!(
+            message.contains(&format!(
+                "`permissions.@acme/x` rule 1 for `fs.read` (`allow`, no filter) decides every call first, so this rule never matches; delete or narrow it in the file, or run `submilli blueprint capability remove fs.read --caller @acme/x --blueprint {}`",
+                path.display()
+            )),
+            "{message}"
+        );
+    }
+
+    /// The MCP grant goes ahead of the scaffolded `deny`, which it then shadows.
+    #[test]
+    fn an_unfiltered_mcp_grant_warns_about_the_rules_it_shadows() {
+        let (_tmp, path) = temp_blueprint(
+            "name: t\nmcp:\n  srv:\n    transport: streamable_http\n    url: https://example.invalid/mcp\npermissions:\n  main:\n    - capability: mcp.srv\n      action: deny\n",
+        );
+
+        let message = add(&add_args("mcp.srv", &path)).unwrap();
+
+        assert!(
+            message.contains(
+                "warning: this rule has no filter, so `permissions.main` rule 2 for `mcp.srv` after it never matches"
+            ),
+            "{message}"
+        );
+        assert_eq!(
+            reload(&path).permissions["main"][0].action,
+            submilli_blueprint::Action::Allow
+        );
     }
 
     #[test]

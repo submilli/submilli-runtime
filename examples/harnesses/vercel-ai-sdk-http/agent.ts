@@ -1,24 +1,19 @@
 // A Vercel AI SDK agent that runs its programs on submilli-server, over HTTP.
 
-import { google } from "@ai-sdk/google";
+import { readFileSync } from "node:fs";
+import { anthropic } from "@ai-sdk/anthropic";
 import { generateText, stepCountIs, type LanguageModel } from "ai";
 import { openSession } from "./submilli.ts";
 
 const SUBMILLI_SERVER = process.env.SUBMILLI_SERVER ?? "http://127.0.0.1:8128";
 
-function instructions(userId: string): string {
-  return [
-    "You are a research assistant. Search the web and read pages by writing programs for Submilli.",
-    "Do the whole job in one program where you can, and return only what you need to answer.",
-    `Keep a note of what you learn, with its sources, under /${userId}/notes.`,
-    "Read your earlier notes before you search again.",
-  ].join(" ");
-}
+// The agent's brief, kept beside the blueprint.
+const INSTRUCTIONS = readFileSync(new URL("../prompt.txt", import.meta.url), "utf8");
 
 export async function answer(
   question: string,
   userId: string,
-  model: LanguageModel = google("gemini-3.8-flash"),
+  model: LanguageModel = anthropic("claude-sonnet-5"),
 ): Promise<string> {
   const submilli = await openSession({
     server: SUBMILLI_SERVER,
@@ -30,7 +25,7 @@ export async function answer(
   try {
     const { text } = await generateText({
       model,
-      system: instructions(userId),
+      system: INSTRUCTIONS,
       tools: submilli.tools,
       prompt: question,
       stopWhen: stepCountIs(20),

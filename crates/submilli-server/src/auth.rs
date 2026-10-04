@@ -180,7 +180,7 @@ pub fn log_auth_posture(addr: IpAddr, auth: &AuthConfig) {
             "inbound authentication is disabled and the server is bound outside loopback: \
              anything that can reach this port can run code, manage blueprints, and stop the \
              server. Set `SUBMILLI_SERVER_TOKEN` to require a token \
-             (https://submilli.ai/docs/deploying/)"
+             (https://submilli.ai/docs/server/run-the-server)"
         ),
     }
 }
@@ -189,12 +189,21 @@ pub fn log_auth_posture(addr: IpAddr, auth: &AuthConfig) {
 #[derive(Clone)]
 pub(crate) struct Guard {
     auth: Arc<AuthConfig>,
+    audit: crate::audit::AuditLog,
     access: Access,
 }
 
 impl Guard {
-    pub(crate) fn new(auth: Arc<AuthConfig>, access: Access) -> Self {
-        Self { auth, access }
+    pub(crate) fn new(
+        auth: Arc<AuthConfig>,
+        access: Access,
+        audit: crate::audit::AuditLog,
+    ) -> Self {
+        Self {
+            auth,
+            audit,
+            access,
+        }
     }
 }
 
@@ -203,28 +212,75 @@ pub(crate) async fn require(
     mut request: Request,
     next: Next,
 ) -> Response {
-    let AuthConfig::Tokens(tokens) = guard.auth.as_ref() else {
-        return next.run(request).await;
+    let auth = &guard.auth;
+    let principal = match auth.as_ref() {
+        AuthConfig::Disabled => "unauthenticated".to_owned(),
+        AuthConfig::Tokens(tokens) => {
+            let presented = bearer_token(request.headers());
+            let Some(token) = presented.and_then(|value| token_of(tokens, value)) else {
+                auth_refusal(
+                    &guard.audit,
+                    &request,
+                    if presented.is_some() {
+                        "unknown_token"
+                    } else {
+                        "missing_token"
+                    },
+                );
+                return unauthorized();
+            };
+            if !token.role.satisfies(guard.access) {
+                auth_refusal(&guard.audit, &request, "admin_required");
+                return forbidden(token.role);
+            }
+            token.name.clone()
+        }
     };
-    let Some(role) =
-        bearer_token(request.headers()).and_then(|presented| role_of(tokens, presented))
-    else {
-        return unauthorized();
-    };
-    if !role.satisfies(guard.access) {
-        return forbidden(role);
-    }
-    // The MCP transport copies the whole request head into each MCP request's
-    // extensions, which would carry the token into the session layer and
-    // anything that later records it.
     request.headers_mut().remove(AUTHORIZATION);
-    next.run(request).await
+    request
+        .extensions_mut()
+        .insert(crate::audit::Principal(principal.clone()));
+    crate::audit::request(&guard.audit, principal, request, next).await
+}
+
+fn auth_refusal(audit: &crate::audit::AuditLog, request: &Request, reason: &str) {
+    let mut fields = serde_json::Map::from_iter([
+        ("event".into(), serde_json::json!("refused")),
+        ("route".into(), serde_json::json!(request.uri().path())),
+        ("reason".into(), serde_json::json!(reason)),
+    ]);
+    let peer = request
+        .extensions()
+        .get::<axum::extract::ConnectInfo<crate::serve::PeerAddr>>()
+        .map(|peer| peer.0.0)
+        .or_else(|| {
+            request
+                .extensions()
+                .get::<axum::extract::ConnectInfo<std::net::SocketAddr>>()
+                .map(|peer| peer.0)
+        });
+    if let Some(peer) = peer {
+        fields.insert("remote_address".into(), serde_json::json!(peer.to_string()));
+    }
+    audit.emit("auth", fields);
+}
+
+fn token_of<'a>(tokens: &'a [ApiToken], presented: &str) -> Option<&'a ApiToken> {
+    let presented = digest(presented);
+    let mut found = None;
+    for token in tokens {
+        if bool::from(token.digest.ct_eq(&presented)) {
+            found = Some(token);
+        }
+    }
+    found
 }
 
 /// The role of the token a request presents, if it presents a known one.
 ///
 /// Every entry is compared, with no early exit, so the time taken says nothing
 /// about which entry matched or whether any did.
+#[cfg(test)]
 fn role_of(tokens: &[ApiToken], presented: &str) -> Option<Role> {
     let presented = digest(presented);
     let mut role = None;
@@ -401,7 +457,17 @@ mod tests {
         use axum::routing::get;
         use tower::ServiceExt;
 
-        let guard = Guard::new(Arc::new(AuthConfig::Tokens(tokens())), Access::User);
+        let guard = Guard::new(
+            Arc::new(AuthConfig::Tokens(tokens())),
+            Access::User,
+            crate::audit::AuditLog::new(
+                crate::audit::AuditConfig {
+                    enabled: false,
+                    ..Default::default()
+                },
+                None,
+            ),
+        );
         let router: axum::Router = axum::Router::new().route(
             "/",
             get(

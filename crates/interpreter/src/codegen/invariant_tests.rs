@@ -43,7 +43,7 @@ pub(super) fn assert_internal(error: CompilerFailure) {
 #[test]
 fn invalid_parameter_slots_and_representation_coercions_return_errors() {
     with_context(&TypedAst::new(), &SymbolTable::default(), |ctx| {
-        let mut emitter = FunctionEmitter::new(ctx, &[]);
+        let mut emitter = FunctionEmitter::new(ctx, &[]).unwrap();
         assert_internal(emitter.emit_boxed_param_prologue(&[], &[0]).unwrap_err());
         emitter.emit_boxed_param_prologue(&[], &[]).unwrap();
         for target in [ValType::I32, ValType::I64] {
@@ -62,7 +62,7 @@ fn descriptor_closure_requires_every_companion_registration() {
     let mut symbols = super::tests::mock_symbols_with_intrinsics();
     for step in 0..3 {
         with_context(&ta, &symbols, |ctx| {
-            let mut emitter = FunctionEmitter::new(ctx, &[]);
+            let mut emitter = FunctionEmitter::new(ctx, &[]).unwrap();
             assert_internal(
                 super::runtime_descriptors::environment(&mut emitter, ctx, &[Type::Number])
                     .unwrap_err(),
@@ -78,7 +78,7 @@ fn descriptor_closure_requires_every_companion_registration() {
         }
     }
     with_context(&ta, &symbols, |ctx| {
-        let mut emitter = FunctionEmitter::new(ctx, &[]);
+        let mut emitter = FunctionEmitter::new(ctx, &[]).unwrap();
         super::runtime_descriptors::environment(&mut emitter, ctx, &[Type::Number]).unwrap();
     });
 }
@@ -89,7 +89,7 @@ fn receiver_binding_requires_an_environment_registration() {
         &TypedAst::new(),
         &super::tests::mock_symbols_with_intrinsics(),
         |ctx| {
-            let mut emitter = FunctionEmitter::new(ctx, &[]);
+            let mut emitter = FunctionEmitter::new(ctx, &[]).unwrap();
             assert_internal(super::this_binding::load_receiver(&mut emitter, ctx).unwrap_err());
             assert_internal(super::this_binding::wrap(&mut emitter, ctx).unwrap_err());
             assert_internal(super::this_binding::bind(&mut emitter, ctx, 0).unwrap_err());
@@ -170,6 +170,7 @@ fn structural_symbols(with_walk_guard: bool) -> SymbolTable {
         symbols.record_func(crate::mangle::prelude("vtable_walk_leave"), 4);
     }
     symbols.record_global(crate::mangle::prelude("string_vtable"), 0);
+    symbols.record_global(crate::mangle::prelude("object_vtable"), 1);
     symbols.record_func(crate::mangle::prelude("string_concat"), 0);
     symbols.record_func(crate::mangle::prelude("string_eq"), 1);
     symbols.record_func(crate::mangle::prelude("ObjectConstructor##toJson"), 2);
@@ -213,7 +214,7 @@ fn structural_subtypes_reject_unrepresentable_layouts() {
 fn literal_pools_and_call_metadata_require_their_registrations() {
     let ta = TypedAst::new();
     with_context(&ta, &super::tests::mock_symbols_with_intrinsics(), |ctx| {
-        let mut emitter = FunctionEmitter::new(ctx, &[]);
+        let mut emitter = FunctionEmitter::new(ctx, &[]).unwrap();
         assert_internal(super::call_arguments::wrap(&mut emitter, ctx, "[]").unwrap_err());
         assert_internal(super::call_arguments::unwrap(&mut emitter, ctx).unwrap_err());
         // Text the analysis pass never interned has no pool entry to reference.
@@ -229,9 +230,69 @@ fn literal_pools_and_call_metadata_require_their_registrations() {
     // Emitters that cannot return errors yet latch the failure, so the module
     // is discarded at the codegen boundary instead of carrying partial code.
     with_context(&ta, &super::tests::mock_symbols_with_intrinsics(), |ctx| {
-        let mut emitter = FunctionEmitter::new(ctx, &[]);
+        let mut emitter = FunctionEmitter::new(ctx, &[]).unwrap();
         super::throw::emit_type_error_throw(&mut emitter, ctx, "absent");
         assert_internal(ctx.check_failure().unwrap_err());
         ctx.check_failure().unwrap();
     });
+}
+
+#[test]
+fn absent_cast_and_lookup_metadata_discards_function_output() {
+    with_context(&TypedAst::new(), &SymbolTable::default(), |ctx| {
+        let mut emitter = FunctionEmitter::new(ctx, &[]).unwrap();
+        super::cast_check::emit_inline_string(&mut emitter, ctx, "\u{1f642}");
+        assert_internal(emitter.build().unwrap_err());
+    });
+    let mut types = wasm_encoder::TypeSection::new();
+    let mut symbols = SymbolTable::default();
+    let mut next_type = 0;
+    let mut next_function = 0;
+    assert_internal(
+        super::field_lookup::allocate(&mut types, &mut symbols, &mut next_type, &mut next_function)
+            .unwrap_err(),
+    );
+    with_context(&TypedAst::new(), &SymbolTable::default(), |ctx| {
+        assert_internal(super::field_lookup::body(ctx).unwrap_err());
+    });
+}
+
+#[test]
+fn interrupted_statement_scope_cannot_finish() {
+    let mut ta = TypedAst::new();
+    let missing = ta
+        .try_push_expr(crate::TypedExpr {
+            kind: crate::TypedExprKind::String("missing".into()),
+            ty: Type::String,
+            span: crate::Span::at(FileId(0)),
+        })
+        .unwrap();
+    let child = ta
+        .try_push_stmt(crate::TypedStmt {
+            kind: crate::TypedStmtKind::Expr(missing),
+            span: crate::Span::at(FileId(0)),
+        })
+        .unwrap();
+    let block = ta
+        .try_push_stmt(crate::TypedStmt {
+            kind: crate::TypedStmtKind::Block(vec![child]),
+            span: crate::Span::at(FileId(0)),
+        })
+        .unwrap();
+    with_context(&ta, &SymbolTable::default(), |ctx| {
+        let mut emitter = FunctionEmitter::new(ctx, &[]).unwrap();
+        assert_internal(
+            super::function_emitter::stmt::emit_statement(&mut emitter, ctx, block).unwrap_err(),
+        );
+        assert_internal(emitter.build().unwrap_err());
+    });
+}
+
+#[test]
+fn default_constants_reject_unsupported_storage() {
+    for ty in [ValType::I64, ValType::F32, ValType::V128] {
+        assert_internal(super::default_const_expr(ty).unwrap_err());
+    }
+    assert!(super::default_const_expr(ValType::F64).is_ok());
+    assert!(super::default_const_expr(ValType::I32).is_ok());
 }

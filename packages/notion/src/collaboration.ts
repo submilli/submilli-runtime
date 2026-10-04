@@ -57,7 +57,12 @@ export interface CommentRequest {
     attachments: FileReference[] | null;
 }
 
-/** Validate a comment and build its request body. */
+/**
+ * Validate a comment and build its request body.
+ *
+ * @param request Comment target, Markdown text, and optional attachments.
+ * @returns JSON request body for the create-comment call.
+ */
 export function createCommentBody(request: CommentRequest): string {
     const targetType = request.targetType;
     const markdown = request.markdown;
@@ -81,6 +86,11 @@ export function createCommentBody(request: CommentRequest): string {
 /**
  * Resolve the page that contains a comment target.
  * Block and discussion targets are resolved over the network, and a discussion must belong to its stated parent.
+ *
+ * @param targetType Kind of object the comment is attached to.
+ * @param targetRef ID or Notion URL of the page, block, or discussion.
+ * @param discussionParentRef Page or block that contains the discussion; required when `targetType` is "discussion", otherwise unused.
+ * @returns ID of the page that contains the target, used for the page capability check.
  */
 export function commentPageId(
     targetType: "page" | "block" | "discussion",
@@ -101,12 +111,24 @@ export function commentPageId(
     return context.pageId;
 }
 
-/** Send a create-comment request built by `createCommentBody`. */
+/**
+ * Send a create-comment request built by `createCommentBody`.
+ *
+ * @param body JSON request body from `createCommentBody`.
+ * @returns The created comment.
+ */
 export function createComment(body: string): NotionComment {
     return commentFrom(notionPost("/comments", body).json());
 }
 
-/** List open comments for the page or block a context was resolved from. */
+/**
+ * List open comments for the page or block a context was resolved from.
+ *
+ * @param context Page context of the page or block to list comments for.
+ * @param requestedSize Comments per page, 1 to 100; `null` uses 100.
+ * @param startCursor Cursor from a previous page's `nextCursor`; `null` starts at the first comment.
+ * @returns One page of open comments; an empty `results` means there are none.
+ */
 export function getComments(
     context: PageContext,
     requestedSize: number | null,
@@ -127,7 +149,12 @@ export function getComments(
     };
 }
 
-/** Query AI meeting-note blocks visible to the integration user. */
+/**
+ * Query AI meeting-note blocks visible to the integration user.
+ *
+ * @param options Filter, sorts, and limit (1 to 50, default 50); `null` sends no filter or sort and uses the API defaults.
+ * @returns Matching meeting-note blocks and whether more exist.
+ */
 export function queryMeetingNotes(options: MeetingNotesOptions | null = null): MeetingNotesResult {
     const fields: string[] = [];
     if (options !== null) {

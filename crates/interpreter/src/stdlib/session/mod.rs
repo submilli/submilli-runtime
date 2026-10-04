@@ -3,7 +3,7 @@
 //! Rust host functions registered directly under the package name. Each op runs
 //! `check_security` before touching the store; the gated capabilities are
 //! cataloged in [`crate::stdlib::capabilities`] — keep it in sync when adding
-//! or removing a gate (see CLAUDE.md).
+//! or removing a gate (see AGENTS.md).
 //!
 //! Storage is the embedder's: [`StoreData::session_kv`] holds the provider. A
 //! runtime with none configured refuses every op rather than inventing state,
@@ -12,6 +12,7 @@
 //! Keys and payloads stay UTF-16 code units from the guest `$string` to the
 //! trait and back — see [`value`] for why.
 
+use crate::runtime::host::{abi_arg, abi_result};
 mod cursor;
 pub mod declaration;
 pub(crate) mod value;
@@ -21,6 +22,7 @@ use std::sync::Arc;
 use wasmtime::{FuncType, HeapType, Linker, RefType, StructType, Val, ValType};
 
 use crate::runtime::StoreData;
+use crate::runtime::fuel;
 use crate::runtime::host::{register_host_fn, register_host_fn_async};
 use crate::runtime::intrinsic_types::{IntrinsicTypes, build_intrinsic_types};
 use crate::runtime::session_kv::{SessionKvEntry, SessionKvError, SessionKvPage, SessionKvStore};
@@ -72,14 +74,18 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         /* deterministic = */ false,
         |caller, params, results| {
             Box::pin(async move {
-                let key = read_key(caller, &params[0], "get")?;
+                let key = read_key(caller, abi_arg(params, 0)?, "get")?;
                 gate(caller, "session.read", &key)?;
                 let store = provider(caller, "get")?;
-                let Some(payload) = store.get(&key).map_err(|e| trap(&e))? else {
-                    results[0] = Val::AnyRef(None);
+                let Some(payload) = store.get(&key).map_err(|e| trap(caller, &e))? else {
+                    *abi_result(results, 0)? = Val::AnyRef(None);
                     return Ok(());
                 };
-                results[0] = value::deserialize(caller, &payload)?;
+                // Read from the store (code units, two bytes each), then
+                // parsed back into values.
+                fuel::charge(&mut *caller, fuel::IO, 2 * payload.len() as u64)?;
+                fuel::charge(&mut *caller, fuel::PARSE, payload.len() as u64)?;
+                *abi_result(results, 0)? = value::deserialize(caller, &payload)?;
                 Ok(())
             })
         },
@@ -93,10 +99,11 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         /* deterministic = */ false,
         |caller, params, results| {
             Box::pin(async move {
-                let key = read_key(caller, &params[0], "has")?;
+                let key = read_key(caller, abi_arg(params, 0)?, "has")?;
                 gate(caller, "session.read", &key)?;
                 let store = provider(caller, "has")?;
-                results[0] = Val::I32(i32::from(store.has(&key).map_err(|e| trap(&e))?));
+                *abi_result(results, 0)? =
+                    Val::I32(i32::from(store.has(&key).map_err(|e| trap(caller, &e))?));
                 Ok(())
             })
         },
@@ -110,13 +117,15 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         /* deterministic = */ false,
         |caller, params, _results| {
             Box::pin(async move {
-                let key = read_key(caller, &params[0], "set")?;
+                let key = read_key(caller, abi_arg(params, 0)?, "set")?;
                 gate(caller, "session.write", &key)?;
                 // Serialization runs before the provider is consulted: a value
                 // with no JSON form must leave the previous entry intact.
-                let payload = value::serialize(caller, &params[1]).await?;
+                let payload = value::serialize(caller, abi_arg(params, 1)?).await?;
+                // Written to the store: code units, two bytes each.
+                fuel::charge(&mut *caller, fuel::IO, 2 * payload.len() as u64)?;
                 let store = provider(caller, "set")?;
-                store.set(&key, &payload).map_err(|e| trap(&e))
+                store.set(&key, &payload).map_err(|e| trap(caller, &e))
             })
         },
     )?;
@@ -129,10 +138,11 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         /* deterministic = */ false,
         |caller, params, results| {
             Box::pin(async move {
-                let key = read_key(caller, &params[0], "remove")?;
+                let key = read_key(caller, abi_arg(params, 0)?, "remove")?;
                 gate(caller, "session.remove", &key)?;
                 let store = provider(caller, "remove")?;
-                results[0] = Val::I32(i32::from(store.remove(&key).map_err(|e| trap(&e))?));
+                *abi_result(results, 0)? =
+                    Val::I32(i32::from(store.remove(&key).map_err(|e| trap(caller, &e))?));
                 Ok(())
             })
         },
@@ -150,7 +160,12 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         ),
         /* deterministic = */ false,
         |caller, params, results| {
-            results[0] = list(caller, &params[0], &params[1], &params[2])?;
+            *abi_result(results, 0)? = list(
+                caller,
+                abi_arg(params, 0)?,
+                abi_arg(params, 1)?,
+                abi_arg(params, 2)?,
+            )?;
             Ok(())
         },
     )?;
@@ -242,7 +257,7 @@ fn list(
     let prefix = value::read_units(caller, prefix_val, "session.list (prefix)")?;
     let limit = read_limit(limit_val)?;
     check_security(
-        &*caller,
+        &mut *caller,
         "session.list",
         serde_json::json!({ "prefix": String::from_utf16_lossy(&prefix) }),
     )?;
@@ -251,7 +266,7 @@ fn list(
 
     let mut scanned = store
         .scan(resume_after.as_deref(), &prefix, MAX_SCAN_PER_PAGE)
-        .map_err(|e| trap(&e))?;
+        .map_err(|e| trap(caller, &e))?;
 
     // The `limit` applies to candidates, not to survivors of the filter: taking
     // `limit` candidates and only then filtering keeps the cursor independent of
@@ -264,6 +279,7 @@ fn list(
 
     let mut visible = Vec::new();
     for entry in considered {
+        fuel::charge(&mut *caller, fuel::ELEM, 1)?;
         if may_read(caller, &entry.key)? {
             visible.push(entry);
         }
@@ -328,7 +344,8 @@ fn read_cursor(
     if matches!(val, Val::AnyRef(None)) {
         return Ok(None);
     }
-    let units = value::read_units(caller, val, "session.list (cursor)")?;
+    let max_units = cursor::max_cursor_units(provider(caller, "list")?.limits().max_key_units);
+    let units = value::read_units_bounded(caller, val, "session.list (cursor)", max_units)?;
     cursor::decode(prefix, &units)
         .map(Some)
         .map_err(cursor_trap)
@@ -337,7 +354,7 @@ fn read_cursor(
 /// The per-key half of the double gate. A denial omits the key rather than
 /// failing the call: a listing that threw on the first forbidden key would
 /// itself disclose that the key exists.
-fn may_read(caller: &wasmtime::Caller<'_, StoreData>, key: &[u16]) -> wasmtime::Result<bool> {
+fn may_read(caller: &mut wasmtime::Caller<'_, StoreData>, key: &[u16]) -> wasmtime::Result<bool> {
     let Err(err) = gate(caller, "session.read", key) else {
         return Ok(true);
     };
@@ -393,7 +410,7 @@ fn read_key(
 /// JSON string, so the context renders it lossily — matching on such a key is
 /// not something a rule can express, and the store keeps the exact units.
 fn gate(
-    caller: &wasmtime::Caller<'_, StoreData>,
+    caller: &mut wasmtime::Caller<'_, StoreData>,
     capability: &str,
     key: &[u16],
 ) -> wasmtime::Result<()> {
@@ -423,17 +440,44 @@ fn provider(
 /// a caller cannot tell the two apart by the shape of the failure. No variant
 /// names a key, so the message passes through whole.
 fn cursor_trap(error: cursor::CursorError) -> wasmtime::Error {
-    crate::runtime::host::type_error(error.to_string())
+    match error {
+        cursor::CursorError::Internal(_) => {
+            wasmtime::Error::new(wasmtime::Trap::UnreachableCodeReached).context(error.to_string())
+        }
+        cursor::CursorError::Malformed
+        | cursor::CursorError::PrefixMismatch
+        | cursor::CursorError::NoEntropy => crate::runtime::host::type_error(error.to_string()),
+    }
 }
 
 /// Every store failure reaches the guest as a catchable error. The `Display`
 /// impl already excludes the stored value, so the message can be passed
 /// through whole.
-fn trap(error: &SessionKvError) -> wasmtime::Error {
+fn trap(caller: &wasmtime::Caller<'_, StoreData>, error: &SessionKvError) -> wasmtime::Error {
     match error {
         SessionKvError::InvalidKey { .. } => crate::runtime::host::type_error(error.to_string()),
+        SessionKvError::LimitExceeded {
+            limit:
+                crate::runtime::session_kv::SessionKvLimitKind::KeyUnits { .. }
+                | crate::runtime::session_kv::SessionKvLimitKind::ValueBytes { .. },
+            ..
+        } => crate::runtime::host::range_error(error.to_string()),
         SessionKvError::LimitExceeded { .. } => {
-            crate::runtime::host::range_error(error.to_string())
+            let who = crate::stdlib::shared::running_package(caller)
+                .or_else(crate::stdlib::shared::PrincipalError::label_or_error);
+            let who = match who {
+                Ok(who) => who,
+                Err(error) => return error,
+            };
+            crate::stdlib::shared::audit_denial(
+                caller.data().security_check.as_ref(),
+                &who,
+                "session.write",
+                &serde_json::json!({}),
+                "quota",
+                "session-state budget exceeded",
+            );
+            crate::runtime::host::quota_exceeded_error(error.to_string())
         }
         SessionKvError::Backend { .. } => wasmtime::Error::msg(error.to_string()),
     }
@@ -575,6 +619,72 @@ function main(): void {
         run(source, None).await.expect("program completes");
     }
 
+    #[tokio::test]
+    async fn session_budgets_throw_quota_exceeded_error() {
+        use crate::runtime::session_kv::SharedKvBudget;
+
+        let defaults = SessionKvLimits::default();
+        let stores = [
+            InMemorySessionKv::new(SessionKvLimits {
+                max_entries: 0,
+                ..defaults
+            }),
+            InMemorySessionKv::new(SessionKvLimits {
+                max_session_bytes: 1,
+                ..defaults
+            }),
+            InMemorySessionKv::with_shared_budget(defaults, SharedKvBudget::new(1)),
+        ];
+        for kv in stores {
+            let source = r#"
+                import session from "submilli:session";
+                function main(): void {
+                    let caught = false;
+                    try { session.set("k", "value"); }
+                    catch (e: QuotaExceededError) {
+                        caught = e instanceof Error && !((e as unknown) instanceof RangeError);
+                        assert(e.name === "QuotaExceededError", "quota name");
+                    }
+                    assert(caught, "session budget refusal is a quota error");
+                    assert(!session.has("k"), "refused write leaves no value");
+                }
+            "#;
+            run(source, Some(Arc::new(kv)))
+                .await
+                .expect("catch quota refusal");
+        }
+    }
+
+    #[tokio::test]
+    async fn session_argument_bounds_remain_range_errors() {
+        let defaults = SessionKvLimits::default();
+        for limits in [
+            SessionKvLimits {
+                max_key_units: 1,
+                ..defaults
+            },
+            SessionKvLimits {
+                max_value_bytes: 1,
+                ..defaults
+            },
+        ] {
+            let source = r#"
+                import session from "submilli:session";
+                function main(): void {
+                    let caught = false;
+                    try { session.set("key", "value"); }
+                    catch (e: RangeError) {
+                        caught = !((e as unknown) instanceof QuotaExceededError);
+                    }
+                    assert(caught, "individual key/value caps remain argument errors");
+                }
+            "#;
+            run(source, Some(Arc::new(InMemorySessionKv::new(limits))))
+                .await
+                .expect("catch argument bounds");
+        }
+    }
+
     /// A quota refusal names the limit and the key, and never the value — the
     /// property `SessionKvError` maintains must survive the mapping to a trap.
     #[tokio::test]
@@ -617,13 +727,14 @@ function main(): void {
             context: &serde_json::Value,
         ) -> CheckOutcome {
             if capability != "session.read" {
-                return CheckOutcome::Allow;
+                return CheckOutcome::Allow { rule: None };
             }
             let key = context.get("key").and_then(|k| k.as_str()).unwrap_or("");
             if key.starts_with(self.0) {
-                CheckOutcome::Allow
+                CheckOutcome::Allow { rule: None }
             } else {
                 CheckOutcome::Deny {
+                    rule: None,
                     reason: format!("only {} is readable", self.0),
                 }
             }

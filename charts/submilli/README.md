@@ -82,84 +82,61 @@ Three things the NetworkPolicy does **not** do, worth knowing before you rely on
   server, so anyone with `pods/portforward` permission reaches the server whatever
   the policy says.
 
-## Blueprints
+## Blueprints and secrets
 
-Supply them declaratively through `values.yaml`; they are rendered into a ConfigMap,
-mounted read-only, and reconciled into the server's store on every pod start.
+The encrypted secret store is enabled by default. The chart generates its
+32-byte encryption key in a Kubernetes Secret, reuses it across upgrades, and
+retains it on uninstall alongside the persistent data. Back up both the key
+Secret and the volume: restoring one without the other cannot recover secrets.
 
-```yaml
-blueprints:
-  demo: |
-    name: demo
-    default: deny
-    vfs:
-      mode: ephemeral
-    permissions:
-      main:
-        - capability: http.get
-          action: allow
-          filter: host == "api.example.com"
+Populate application secrets with the CLI, then apply blueprints from your
+checkout or deployment job. Connect the CLI to the server with an admin token:
+
+```sh
+printf '%s' "$STRIPE_KEY" | submilli server secret put stripe-key
+submilli server blueprint apply ./blueprints/billing.yaml
 ```
 
-Two behaviours that surprise people:
-
-- **The files win.** Editing or deleting one of these blueprints through the API is
-  undone on the next pod restart. To change one, change `values.yaml` and run
-  `helm upgrade`. The overwritten version is kept on disk as a revision, so the
-  revert is auditable rather than silent.
-- **The chart never deletes.** Blueprints you registered through the API and did not
-  list here are left alone — nothing can tell "removed from source control" apart
-  from "created deliberately at runtime".
-
-Reconciling on *every* start, rather than once at install, is what makes this
-survive a pod restart on ephemeral storage. It is why the chart does not use a Helm
-install hook: hooks fire on release events, and the failure that has to be survived
-is a pod-start event.
-
-## Secrets
-
-Reference existing Kubernetes Secrets. Never put secret values in `values.yaml` —
-they land in plaintext in the Helm release object and in every `helm get values`
-output.
-
-```yaml
+```yaml title="blueprints/billing.yaml"
+name: billing
+default: deny
 secrets:
-  stripe:
-    secretName: stripe-credentials
-    key: api-key
+  STRIPE_KEY: { store: stripe-key }
 ```
 
-Each entry mounts at `/etc/submilli/secrets/<name>/<key>`, which is the path a
-blueprint reads with a `file:` source:
+Application-supplied, session-scoped credentials use `harness:` declarations.
+Secret values do not belong in blueprint files or chart values.
+
+To supply your own encryption key, set `secretStore.existingSecret` and
+`secretStore.key` (default `key`). The referenced Kubernetes Secret entry must
+contain base64 text encoding exactly 32 random bytes. For GitOps and offline
+rendering, supply this Secret explicitly: those renderers cannot look up the
+existing generated key and would otherwise generate a different one each time.
+Set `secretStore.enabled: false` only when the server does not need stored secrets.
+
+### Private packages
+
+Package installs fetch from GitHub with the server's own token, never the
+caller's. Without one they reach public repositories only. Give the server a
+fine-grained personal access token with **Repository permissions → Contents:
+Read-only** on the package repositories (GitHub adds Metadata: Read-only), in
+a Secret:
+
+```sh
+kubectl create secret generic submilli-github --from-file=token=./github-token
+```
 
 ```yaml
-blueprints:
-  billing: |
-    name: billing
-    secrets:
-      STRIPE_KEY: { file: /etc/submilli/secrets/stripe/api-key }
+githubToken:
+  existingSecret: submilli-github
+  key: token
 ```
 
-That path is a contract between the two maps, not an implementation detail — the
-chart chooses where the Secret lands and the blueprint has to name the same place.
-`helm test` cross-checks the two and fails if they drift, because nothing else
-does: the server seeds a blueprint whose secret cannot resolve rather than
-refusing it, so the mistake surfaces on the first real request instead of at
-deploy time.
-
-**`file:` sources work only for blueprints supplied here.** A blueprint you
-register at runtime through `POST`/`PUT /v1/blueprints` is rejected with
-`forbidden_secret_source` if it declares an `env:` or `file:` secret. That is
-deliberate: over the wire those sources would let an API caller read the
-server's own environment and files — including the secret-store key. Blueprints in `blueprints:` are supplied locally by the
-operator, so they are not subject to it. For runtime-registered blueprints, use
-a `store:` secret.
-
-The server's own encrypted-at-rest store (`secretStore.enabled`) is **off by
-default**. It protects the volume against offline disclosure and only earns that if
-its key comes from a different trust domain than the data it protects; a key kept in
-a Kubernetes Secret beside the volume buys very little. Turn it on when you have a
-KMS or CSI-driver key source.
+The chart mounts it at `/etc/submilli/github/<key>` and sets
+`github_token_file`. The server reads the file on every install, so updating
+the Secret rotates the token without a restart, once the kubelet refreshes the
+mount. A fine-grained token covers one owner's repositories; a classic token
+with the `repo` scope also works but can write to every repository you can.
 
 ## Memory
 
@@ -195,10 +172,16 @@ default — and measure steady-state RSS under sustained load, not RSS at startu
 ## Storage
 
 `persistence.enabled` defaults to **true**. Blueprints registered through the API,
-sessions, installed packages, and secrets all live on the volume, under its
-`server/` subdirectory, and the failure mode of `false` is silent data loss on
-reschedule while the failure mode of `true` is a loud unbound-PVC error at
-install. Prefer the loud one.
+sessions, installed packages, secrets, and `managed-local` named volumes all live
+on the volume, under its `server/` subdirectory, and the failure mode of `false`
+is silent data loss on reschedule while the failure mode of `true` is a loud
+unbound-PVC error at install. Prefer the loud one.
+
+Named volumes are declared under `config.volumes` (see `values.yaml`). A
+`managed-local` volume is stored under `server/volumes/` on this claim, so it
+needs nothing else; a custom `config.volume_dir` must also sit on durable storage.
+A `local-path` volume names a directory inside the container, which you mount
+yourself, for example from a Secret or ConfigMap through `secrets:`.
 
 A volume written by a server that kept those directories at the top level of the
 volume is moved under `server/` on the first boot of a server that does not,
@@ -224,7 +207,6 @@ before raising the number:
 
 | | Consistent across servers? |
 |---|---|
-| Blueprints from `blueprints:` | **Yes** — one ConfigMap, seeded into every pod at boot |
 | Blueprints registered through the API | **No** — only on the pod that served the request |
 | Sessions, secrets, installed packages | **No** — same |
 
@@ -359,12 +341,27 @@ config:
 ```
 
 Keys the chart sets from its own values (`bind`, `port`, `max_execution_memory`,
-`shutdown_grace`, `vfs_ephemeral_dir`, `blueprint_seed_dir`,
-`secret_store.key_file`, `allow_unauthenticated`) are refused there, with a
-message naming the value to use. Entries under `config.api_tokens` are added
-after the chart's two, each with a `token_file` that a `secrets:` mount
-provides. `extraEnv` still overrides the file, because the server ranks a
-`SUBMILLI_*` variable above it.
+`shutdown_grace`, `vfs_ephemeral_dir`,
+`secret_store.key_file`, `allow_unauthenticated`, `github_token_file`) are
+refused there, with a message naming the value to use. Entries under
+`config.api_tokens` are added after the chart's two, each with a `token_file`
+that a `secrets:` mount provides. `extraEnv` still overrides the file,
+because the server ranks a `SUBMILLI_*` variable above it.
+
+The chart automatically allows MCP requests addressed to its Service's short
+name, namespace-qualified name, `.svc` name, and `.svc.cluster.local` name,
+using `service.port`. It also allows each pod's headless DNS names using
+`server.port`, and hosts from `ingress.hosts` when the Ingress is enabled.
+Loopback access remains available for port-forwarding.
+
+Add other names under `config.mcp_allowed_hosts`; these extend the generated
+list. For example, use `["submilli.agents.svc.corp.example:8128"]` for a custom
+cluster DNS domain. Wildcard Ingress rules need concrete hostnames in this
+list: the MCP host check does not expand wildcards. Ingress host entries omit
+the port, so the server accepts those names on any port. When `service.port`
+or `server.port` is 80, the corresponding DNS names also get bare-host entries
+because HTTP clients omit the default port; those entries likewise accept any
+port for those specific names.
 
 ## Values
 
@@ -384,3 +381,35 @@ The floor stays at 1.25 even though the default access mode needs 1.29, because
 raising `kubeVersion` would block those clusters from installing at all rather
 than letting them opt down. See [Storage](#the-access-mode-defaults-to-readwriteoncepod-and-that-needs-kubernetes-129)
 for what that trade costs.
+
+## Native HTTPS
+
+The server uses plain HTTP by default. Supply an existing TLS Secret to enable
+HTTPS on the same port:
+
+```yaml
+tls:
+  enabled: true
+  existingSecret: submilli-tls
+  certKey: tls.crt
+  privateKeyKey: tls.key
+```
+
+Create it with `kubectl create secret tls submilli-tls --cert=server.crt --key=server.key`.
+The certificate must include the Service names clients use and the pod-0
+headless name used by `helm test`, `<fullname>-0.<headless-service>`.
+The test pods mount only the public certificate and verify it with curl's
+`--cacert`; for a private issuer, include its verification chain in the PEM.
+HTTPS health probes do not verify certificates; the API test does.
+
+Certificate files are loaded at startup. Restart the StatefulSet after rotating
+the Secret. `config.tls` is reserved; use the TLS values so mounts, configuration,
+probes, and tests remain consistent. TLS Secret key names must differ.
+
+`ingress.tls` controls the Ingress frontend separately. With native TLS enabled,
+configure your controller's HTTPS backend protocol and certificate trust; for
+ingress-nginx, the backend protocol annotation is
+`nginx.ingress.kubernetes.io/backend-protocol: HTTPS`.
+See the [Kubernetes guide](https://submilli.ai/docs/server/deploy-on-kubernetes)
+and [CLI trust guide](https://submilli.ai/docs/server/connect-the-cli#trust-a-self-signed-server)
+for certificate creation and self-signed trust approval.

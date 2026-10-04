@@ -3,18 +3,18 @@
 //! Rust host functions registered directly under the package name. Each op runs
 //! `check_security` before anything leaves the process; the one gated
 //! capability is `llm.call`, cataloged in [`crate::stdlib::capabilities`] —
-//! keep it in sync when adding or removing a gate (see CLAUDE.md).
+//! keep it in sync when adding or removing a gate (see AGENTS.md).
 //!
 //! Dispatch is the embedder's: [`StoreData::llm_provider`] holds the provider.
 //! A runtime with none configured refuses every op rather than inventing a
 //! completion, so a program never silently reasons over text no model produced
 //! — the rule `submilli:session` follows for its store.
 //!
-//! **One capability, double-gated.** `call`, `batch`, and `models()` are the
+//! **One capability, per-model filtering.** `call`, `batch`, and `models()` are the
 //! same grant, with `prompt_count` in the filter context rather than separate
 //! names: enumerating the operator's models is not a
-//! distinct risk class from calling one. `models()` gates the operation and
-//! then filters each candidate through the same `model` filter that gates
+//! distinct risk class from calling one. `models()` filters each candidate
+//! through the same `model` filter that gates
 //! calling, so a listing never offers a model the caller would be denied at
 //! call time — the `session.list` / `session.read` shape.
 //!
@@ -22,6 +22,7 @@
 //! the filter context, not in an error, not in a log. The context carries
 //! `model` and `prompt_count` — the numbers, never the payload.
 
+use crate::runtime::host::{abi_arg, abi_result};
 pub mod declaration;
 
 use std::sync::Arc;
@@ -29,9 +30,10 @@ use std::sync::Arc;
 use wasmtime::{FuncType, HeapType, Linker, RefType, StructType, Val, ValType};
 
 use crate::runtime::StoreData;
+use crate::runtime::fuel;
 use crate::runtime::host::{
-    range_error, read_string_arg, register_host_fn_async, type_error, write_boxed_number_struct,
-    write_submilli_string_struct,
+    quota_exceeded_error, range_error, read_string_arg, register_host_fn_async, type_error,
+    write_boxed_number_struct, write_submilli_string_struct,
 };
 use crate::runtime::intrinsic_types::{IntrinsicTypes, build_intrinsic_types};
 use crate::runtime::llm::{
@@ -110,13 +112,15 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         /* deterministic = */ false,
         |caller, params, results| {
             Box::pin(async move {
-                let model = read_string_arg(&mut *caller, &params[0], "llm.call (model)")?;
-                let prompt = read_string_arg(&mut *caller, &params[1], "llm.call (prompt)")?;
-                let schema = read_optional_string(caller, &params[2], "llm.call (schema)")?;
+                let model = read_string_arg(&mut *caller, abi_arg(params, 0)?, "llm.call (model)")?;
+                let prompt =
+                    read_string_arg(&mut *caller, abi_arg(params, 1)?, "llm.call (prompt)")?;
+                let schema =
+                    read_optional_string(caller, abi_arg(params, 2)?, "llm.call (schema)")?;
                 let typed = schema.is_some();
                 let outcomes = dispatch(caller, "call", &model, vec![prompt], schema).await?;
                 let outcome = first_outcome(&model, outcomes)?;
-                results[0] = if typed {
+                *abi_result(results, 0)? = if typed {
                     structured_value(caller, "llm.call", outcome)?
                 } else {
                     build_completion(caller, outcome)?
@@ -143,9 +147,11 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         /* deterministic = */ false,
         |caller, params, results| {
             Box::pin(async move {
-                let model = read_string_arg(&mut *caller, &params[0], "llm.batch (model)")?;
-                let prompts = read_prompts(caller, &params[1])?;
-                let schema = read_optional_string(caller, &params[2], "llm.batch (schema)")?;
+                let model =
+                    read_string_arg(&mut *caller, abi_arg(params, 0)?, "llm.batch (model)")?;
+                let prompts = read_prompts(caller, abi_arg(params, 1)?)?;
+                let schema =
+                    read_optional_string(caller, abi_arg(params, 2)?, "llm.batch (schema)")?;
                 let typed = schema.is_some();
                 let outcomes = dispatch(caller, "batch", &model, prompts, schema).await?;
                 let mut built = Vec::with_capacity(outcomes.len());
@@ -156,7 +162,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
                         build_completion(caller, outcome)?
                     });
                 }
-                results[0] = build_array(caller, built)?;
+                *abi_result(results, 0)? = build_array(caller, built)?;
                 Ok(())
             })
         },
@@ -170,7 +176,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         /* deterministic = */ false,
         |caller, _params, results| {
             Box::pin(async move {
-                results[0] = models(caller).await?;
+                *abi_result(results, 0)? = models(caller).await?;
                 Ok(())
             })
         },
@@ -264,15 +270,53 @@ async fn dispatch(
     // Clone the provider out of the store before any `await`: the borrow on
     // `caller.data()` cannot be held across one.
     let provider = provider(caller, op, model)?;
+    let sent: usize =
+        prompts.iter().map(String::len).sum::<usize>() + schema.as_ref().map_or(0, String::len);
+    fuel::charge(&mut *caller, fuel::IO, sent as u64)?;
 
     // The model's own cap, not the default: KTD3b makes the reservation an upper
     // bound by reserving the same cap the request is sent with.
     let output_reserve = provider.output_reserve(model);
-    let reservation = reserve(budget.as_deref(), op, model, &prompts, output_reserve)?;
+    let reservation =
+        reserve(budget.as_deref(), op, model, &prompts, output_reserve).map_err(|error| {
+            let who = crate::stdlib::shared::running_package(caller)
+                .or_else(crate::stdlib::shared::PrincipalError::label_or_error);
+            let who = match who {
+                Ok(who) => who,
+                Err(error) => return error,
+            };
+            crate::stdlib::shared::audit_denial(
+                caller.data().security_check.as_ref(),
+                &who,
+                "llm.call",
+                &serde_json::json!({ "model": model }),
+                "quota",
+                "model-token budget exceeded",
+            );
+            error
+        })?;
     let dispatched = provider
         .call(model, &prompts, schema.as_deref())
         .await
-        .map_err(|e| throw(op, e));
+        .map_err(|e| {
+            if e.is_budget_exceeded() {
+                let who = crate::stdlib::shared::running_package(caller)
+                    .or_else(crate::stdlib::shared::PrincipalError::label_or_error);
+                let who = match who {
+                    Ok(who) => who,
+                    Err(error) => return error,
+                };
+                crate::stdlib::shared::audit_denial(
+                    caller.data().security_check.as_ref(),
+                    &who,
+                    "llm.call",
+                    &serde_json::json!({"model": model}),
+                    "quota",
+                    "model-token budget exceeded",
+                );
+            }
+            throw(op, e)
+        });
 
     match dispatched {
         Ok(outcomes) => {
@@ -280,6 +324,12 @@ async fn dispatch(
                 let (reported, indeterminate) = usage(&outcomes, reservation, prompts.len());
                 budget.reconcile(reservation, reported, indeterminate);
             }
+            // The completions are here and billed: settled, not refused.
+            let received: usize = outcomes
+                .iter()
+                .map(|outcome| outcome.text.as_ref().map_or(0, String::len))
+                .sum();
+            fuel::settle(&mut *caller, fuel::IO, received as u64)?;
             Ok(outcomes)
         }
         Err(error) => {
@@ -300,7 +350,7 @@ async fn dispatch(
 /// request; it cannot see what is being asked, because prompt text is what this
 /// boundary exists to keep in.
 fn gate(
-    caller: &wasmtime::Caller<'_, StoreData>,
+    caller: &mut wasmtime::Caller<'_, StoreData>,
     model: &str,
     prompt_count: usize,
 ) -> wasmtime::Result<()> {
@@ -311,10 +361,10 @@ fn gate(
     )
 }
 
-/// `models()`: gate the operation, then gate each candidate with the same
+/// `models()`: check runtime invariants, then gate each candidate with the same
 /// `model` filter that gates calling.
 ///
-/// The per-candidate half acts **only** on a policy denial. An invariant denial
+/// Filtering acts **only** on a policy denial. An invariant denial
 /// means the check itself could not be made, and swallowing it would turn a
 /// runtime refusal into a silently short listing — the `session.list` rule.
 ///
@@ -322,7 +372,7 @@ fn gate(
 /// count, not an index, not a gap. The visible list is byte-identical to what a
 /// runtime configured with only those models would return.
 async fn models(caller: &mut wasmtime::Caller<'_, StoreData>) -> wasmtime::Result<Val> {
-    gate(caller, "", 0)?;
+    preflight_models(caller)?;
     let provider = provider(caller, "models", "")?;
     let candidates = provider.models().await.map_err(|e| throw("models", e))?;
 
@@ -340,10 +390,31 @@ async fn models(caller: &mut wasmtime::Caller<'_, StoreData>) -> wasmtime::Resul
     build_array(caller, built)
 }
 
-/// The per-candidate half of the double gate. A denial omits the model rather
+/// Charge for the check and establish caller attribution even for an empty
+/// catalog, without asking policy about a model that does not exist.
+fn preflight_models(caller: &mut wasmtime::Caller<'_, StoreData>) -> wasmtime::Result<()> {
+    fuel::charge_host_fuel(&mut *caller, fuel::GATE)?;
+    crate::stdlib::shared::running_package(caller)
+        .map(|_| ())
+        .map_err(|error| {
+            if let crate::stdlib::shared::PrincipalError::Unknown(ref unknown) = error {
+                crate::stdlib::shared::audit_denial(
+                    caller.data().security_check.as_ref(),
+                    unknown.label,
+                    CAPABILITY,
+                    &serde_json::json!({ "model": "", "prompt_count": 0 }),
+                    "invariant",
+                    unknown.reason,
+                );
+            }
+            error.into_denial(CAPABILITY)
+        })
+}
+
+/// The per-candidate gate. A denial omits the model rather
 /// than failing the call: a listing that threw on the first forbidden model
 /// would itself disclose that the operator configured it.
-fn may_call(caller: &wasmtime::Caller<'_, StoreData>, model: &str) -> wasmtime::Result<bool> {
+fn may_call(caller: &mut wasmtime::Caller<'_, StoreData>, model: &str) -> wasmtime::Result<bool> {
     filters_candidate(gate(caller, model, 0))
 }
 
@@ -530,13 +601,13 @@ fn budget(caller: &wasmtime::Caller<'_, StoreData>) -> Option<Arc<ExecutionToken
 /// impls already exclude prompt and completion text, so the message passes
 /// through whole.
 ///
-/// A ceiling is something a program can catch and adapt to — retry with a
-/// smaller batch, split the work across executions — so it arrives as a
-/// `RangeError` a `catch` can branch on rather than an opaque trap. Everything
-/// else is a plain error, because retrying smaller cannot fix it.
+/// Token budgets are quota errors; prompt size/count bounds are argument range
+/// errors. Other failures retain their base error type.
 fn throw(op: &str, error: LlmCallError) -> wasmtime::Error {
     let message = format!("llm.{op}: {error}");
     if error.is_budget_exceeded() {
+        quota_exceeded_error(message)
+    } else if matches!(error, LlmCallError::PromptBoundsExceeded { .. }) {
         range_error(message)
     } else {
         wasmtime::Error::msg(message)
@@ -981,7 +1052,7 @@ mod tests {
     async fn the_filter_context_carries_the_numbers_and_never_the_prompt() {
         const SECRET: &str = "the patient's diagnosis is confidential";
         let (provider, _) = MockProvider::new(Vec::new(), Vec::new());
-        let (policy, contexts) = RecordingPolicy::new(|_| CheckOutcome::Allow);
+        let (policy, contexts) = RecordingPolicy::new(|_| CheckOutcome::Allow { rule: None });
 
         Harness::new()
             .provider(provider)
@@ -1022,7 +1093,7 @@ mod tests {
     #[tokio::test]
     async fn prompt_count_is_one_for_call_n_for_batch_and_zero_for_models() {
         let (provider, _) = MockProvider::new(Vec::new(), two_models());
-        let (policy, contexts) = RecordingPolicy::new(|_| CheckOutcome::Allow);
+        let (policy, contexts) = RecordingPolicy::new(|_| CheckOutcome::Allow { rule: None });
 
         Harness::new()
             .provider(provider)
@@ -1046,13 +1117,8 @@ mod tests {
 
         assert_eq!(counts[0], 1, "call: {counts:?}");
         assert_eq!(counts[1], 3, "batch: {counts:?}");
-        // The listing's own check, then one per candidate — every one of them a
-        // zero-prompt discovery, never a dispatch.
-        assert_eq!(
-            counts.len(),
-            5,
-            "listing check plus one per candidate: {counts:?}"
-        );
+        // Only real candidates reach policy. Each is a zero-prompt discovery.
+        assert_eq!(counts.len(), 4, "one check per candidate: {counts:?}");
         for count in &counts[2..] {
             assert_eq!(*count, 0, "discovery dispatches no prompts: {counts:?}");
         }
@@ -1161,11 +1227,11 @@ mod tests {
     }
 
     /// A ceiling is something a program can catch and adapt to — retry with a
-    /// smaller batch, split across executions — so it arrives as a `RangeError`
+    /// smaller batch, split across executions — so it arrives as a `QuotaExceededError`
     /// a `catch` can branch on rather than an opaque trap. This is the mapping
     /// U2 deliberately left to this boundary.
     #[tokio::test]
-    async fn a_budget_refusal_is_a_catchable_range_error() {
+    async fn a_budget_refusal_is_a_catchable_quota_exceeded_error() {
         let (provider, _) = MockProvider::new(Vec::new(), Vec::new());
         let out = Harness::new()
             .provider(provider)
@@ -1182,22 +1248,22 @@ mod tests {
                      try {
                        llm.call("m", "p");
                        return "no refusal";
-                     } catch (e: RangeError) {
-                       return "range: " + e.message;
+                     } catch (e: QuotaExceededError) {
+                       return "quota: " + e.message;
                      }
                    }"#,
             )
             .await
             .expect("program completes");
 
-        assert!(out.starts_with("range: "), "{out}");
+        assert!(out.starts_with("quota: "), "{out}");
         assert!(
             out.contains("this execution may spend"),
             "the refusal names which ceiling: {out}"
         );
     }
 
-    /// A prompt-bound refusal is a quota too, so it takes the same catchable
+    /// A prompt-bound refusal rejects an oversized argument, so it keeps the catchable
     /// `RangeError` arm. If it threw a plain error, a program handling one
     /// class of refusal would miss the other.
     #[tokio::test]
@@ -1245,6 +1311,7 @@ mod tests {
             // guessing names.
             let (provider, recorder) = MockProvider::new(Vec::new(), two_models());
             let (policy, _) = RecordingPolicy::new(|_| CheckOutcome::Deny {
+                rule: None,
                 reason: "the policy forbids model calls".to_string(),
             });
 
@@ -1274,20 +1341,19 @@ mod tests {
         assert!(messages[0].contains("permission denied"), "{}", messages[0]);
     }
 
-    /// `models()` is double-gated — the op, then each candidate through
+    /// `models()` filters each candidate through
     /// the same `model` filter that gates calling. A listing that ignored the
     /// policy would hand the program a menu it cannot order from.
     #[tokio::test]
     async fn models_hides_candidates_the_model_filter_denies() {
         let (provider, _) = MockProvider::new(Vec::new(), two_models());
-        let (policy, _) = RecordingPolicy::new(|ctx| {
+        let (policy, contexts) = RecordingPolicy::new(|ctx| {
             let model = ctx["model"].as_str().unwrap_or_default();
-            // The op-level check presents no model; each candidate presents its
-            // own name, and only the cheap one is granted.
-            if model.is_empty() || model.starts_with("claude-") {
-                CheckOutcome::Allow
+            if model.starts_with("claude-") {
+                CheckOutcome::Allow { rule: None }
             } else {
                 CheckOutcome::Deny {
+                    rule: None,
                     reason: "not in the operator's allowed models".to_string(),
                 }
             }
@@ -1312,6 +1378,34 @@ mod tests {
             out, "1|claude-haiku-4-5;",
             "only the permitted candidate is visible"
         );
+        let contexts = contexts.lock().expect("contexts");
+        assert_eq!(contexts.len(), 2);
+        assert!(contexts.iter().all(|context| context["model"] != ""));
+    }
+
+    #[tokio::test]
+    async fn models_returns_empty_when_policy_denies_all_candidates() {
+        for candidates in [two_models(), Vec::new()] {
+            let (provider, recorder) = MockProvider::new(Vec::new(), candidates);
+            let (policy, _) = RecordingPolicy::new(|_| CheckOutcome::Deny {
+                rule: None,
+                reason: "no models allowed".to_string(),
+            });
+            let out = Harness::new()
+                .provider(provider)
+                .policy(policy)
+                .run(
+                    r#"import llm from "submilli:llm";
+                       function main(): string { return JSON.stringify(llm.models()); }"#,
+                )
+                .await
+                .expect("a policy denial hides candidates without failing discovery");
+            assert_eq!(out, "[]");
+            assert!(
+                recorder.dispatches().is_empty(),
+                "discovery never dispatches"
+            );
+        }
     }
 
     /// KTD6/KTD7: the visible list must be byte-identical to what a runtime
@@ -1325,10 +1419,11 @@ mod tests {
         let (wide, _) = MockProvider::new(Vec::new(), two_models());
         let (policy, _) = RecordingPolicy::new(|ctx| {
             let model = ctx["model"].as_str().unwrap_or_default();
-            if model.is_empty() || model.starts_with("claude-") {
-                CheckOutcome::Allow
+            if model.starts_with("claude-") {
+                CheckOutcome::Allow { rule: None }
             } else {
                 CheckOutcome::Deny {
+                    rule: None,
                     reason: "hidden".to_string(),
                 }
             }

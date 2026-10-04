@@ -370,7 +370,9 @@ async fn documented_package_and_blueprint_enforce_the_bound_customer() {
     ok(cli(&["blueprint", "lint", "blueprint.yaml"]));
     let blueprint = submilli_blueprint::parse(yaml).unwrap();
     let router = app(AppState::new(ServerConfig {
-        blueprints: Some(Arc::new(InMemoryBlueprintStore::seed([blueprint]))),
+        blueprints: Some(Arc::new(
+            InMemoryBlueprintStore::seed([blueprint]).expect("seed blueprints"),
+        )),
         package_store_root: Some(store.join("packages")),
         session_storage_root: Some(root.path().join("sessions")),
         ..ServerConfig::default()

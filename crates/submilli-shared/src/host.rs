@@ -65,23 +65,47 @@ impl PolicyCheck {
 }
 
 impl SecurityCheck for PolicyCheck {
+    fn audit_context<'a>(
+        &self,
+        capability: &str,
+        context: &'a serde_json::Value,
+        cwd: &str,
+    ) -> Cow<'a, serde_json::Value> {
+        filesystem_policy_context(capability, context, cwd).unwrap_or(Cow::Borrowed(context))
+    }
+
     fn check(&self, caller: &str, capability: &str, context: &serde_json::Value) -> CheckOutcome {
-        let context = match filesystem_policy_context(capability, context) {
+        self.check_with_cwd(caller, capability, context, "/")
+    }
+
+    fn check_with_cwd(
+        &self,
+        caller: &str,
+        capability: &str,
+        context: &serde_json::Value,
+        cwd: &str,
+    ) -> CheckOutcome {
+        let context = match filesystem_policy_context(capability, context, cwd) {
             Ok(context) => context,
-            Err(reason) => return CheckOutcome::Deny { reason },
+            Err(reason) => return CheckOutcome::Deny { reason, rule: None },
         };
-        match self
-            .blueprint
-            .resolve_permission(caller, capability, &context, &self.variables)
-        {
-            Action::Allow => CheckOutcome::Allow,
+        let (action, rule) = self.blueprint.resolve_permission_with_rule(
+            caller,
+            capability,
+            &context,
+            &self.variables,
+        );
+        match action {
+            Action::Allow => CheckOutcome::Allow { rule },
             Action::Deny => CheckOutcome::Deny {
+                rule,
                 reason: format!(
                     "policy denied {capability}{} for {caller}",
                     filesystem_target(capability, &context)
                 ),
             },
             Action::AskHuman => CheckOutcome::Deny {
+                rule,
                 reason: format!(
                     "policy requires human approval for {capability}{} (caller {caller}); \
                      ask-human is deferred and treated as deny",
@@ -113,6 +137,7 @@ fn filesystem_path_fields(capability: &str) -> &'static [&'static str] {
     match capability {
         "fs.read" | "fs.write" | "fs.stat" | "fs.list" | "fs.mkdir" | "fs.remove" => &["path"],
         "fs.copy" | "fs.move" => &["from", "to"],
+        "git.init" | "git.clone" | "git.fetch" | "git.commit" => &["path"],
         "http.download" => &["vfs_path"],
         _ => &[],
     }
@@ -124,6 +149,7 @@ fn filesystem_path_fields(capability: &str) -> &'static [&'static str] {
 fn filesystem_policy_context<'a>(
     capability: &str,
     context: &'a serde_json::Value,
+    cwd: &str,
 ) -> Result<Cow<'a, serde_json::Value>, String> {
     let fields = filesystem_path_fields(capability);
     let mut normalized_context = Cow::Borrowed(context);
@@ -134,7 +160,7 @@ fn filesystem_policy_context<'a>(
             .ok_or_else(|| {
                 format!("invalid {capability} context: {field} must be a VFS path string")
             })?;
-        let normalized = interpreter::runtime::fs::guest_normalize("/", path)
+        let normalized = interpreter::runtime::fs::guest_normalize(cwd, path)
             .map_err(|error| format!("invalid {capability} {field}: {error}"))?;
         if normalized != path {
             normalized_context.to_mut()[field] = serde_json::Value::String(normalized);
@@ -168,7 +194,7 @@ impl std::error::Error for SecretStoreError {}
 
 /// Backend for credential-shaped state behind the blueprint `store:` secret
 /// source. The concrete implementation (encrypted file store, KMS, …) is the
-/// embedder's; this trait is the contract [`EnvFileSecretResolver`] resolves
+/// embedder's; this trait is the contract [`BlueprintSecretResolver`] resolves
 /// `store:` lookups through.
 #[async_trait]
 pub trait SecretStore: Send + Sync + 'static {
@@ -178,15 +204,15 @@ pub trait SecretStore: Send + Sync + 'static {
     async fn list(&self, prefix: Option<&str>) -> Result<Vec<String>, SecretStoreError>;
 }
 
-/// Resolves declared secrets from the environment, mounted files, the
-/// configured [`SecretStore`], or a session's trusted harness bindings.
+/// Resolves declared secrets from the configured [`SecretStore`] or a session's
+/// trusted harness bindings.
 /// [`Self::new`] installs an empty harness binding set for local/operator flows.
-pub struct EnvFileSecretResolver {
+pub struct BlueprintSecretResolver {
     store: Option<Arc<dyn SecretStore>>,
     harness: Arc<HarnessSecretBindings>,
 }
 
-impl EnvFileSecretResolver {
+impl BlueprintSecretResolver {
     pub fn new(store: Option<Arc<dyn SecretStore>>) -> Self {
         Self::with_harness(store, Arc::new(HarnessSecretBindings::new()))
     }
@@ -200,15 +226,9 @@ impl EnvFileSecretResolver {
 }
 
 #[async_trait]
-impl SecretResolver for EnvFileSecretResolver {
+impl SecretResolver for BlueprintSecretResolver {
     async fn resolve(&self, name: &str, source: &SecretSource) -> Result<String, AuthError> {
         match source {
-            SecretSource::Env(var) => {
-                std::env::var(var).map_err(|_| AuthError::MissingSecret(name.to_string()))
-            }
-            SecretSource::File(path) => std::fs::read_to_string(path)
-                .map(|s| s.trim().to_string())
-                .map_err(|_| AuthError::MissingSecret(name.to_string())),
             // On-demand decrypt: reads + opens the one sealed file, awaited so the
             // executor isn't blocked.
             SecretSource::Store(key) => match &self.store {
@@ -235,7 +255,7 @@ impl SecretResolver for EnvFileSecretResolver {
 /// Blueprint-backed provider for script-visible `submilli:secrets.get`.
 pub struct BlueprintSecretProvider {
     blueprint: Arc<Blueprint>,
-    resolver: EnvFileSecretResolver,
+    resolver: BlueprintSecretResolver,
 }
 
 impl BlueprintSecretProvider {
@@ -250,7 +270,7 @@ impl BlueprintSecretProvider {
     ) -> Self {
         Self {
             blueprint,
-            resolver: EnvFileSecretResolver::with_harness(store, harness),
+            resolver: BlueprintSecretResolver::with_harness(store, harness),
         }
     }
 }
@@ -284,7 +304,7 @@ pub struct BlueprintAuthProxy {
     transport_policy: Arc<HttpTransportPolicy>,
     authenticated_policy: Arc<HttpTransportPolicy>,
     blueprint: Arc<Blueprint>,
-    resolver: EnvFileSecretResolver,
+    resolver: BlueprintSecretResolver,
 }
 
 impl BlueprintAuthProxy {
@@ -314,7 +334,7 @@ impl BlueprintAuthProxy {
             transport_policy: Arc::new(transport_policy),
             authenticated_policy,
             blueprint,
-            resolver: EnvFileSecretResolver::with_harness(store, harness),
+            resolver: BlueprintSecretResolver::with_harness(store, harness),
         }
     }
 }
@@ -405,6 +425,57 @@ mod tests {
     use super::*;
     use submilli_blueprint::parse;
 
+    /// Call-site derivation normalizes the same fields from the catalog, so a
+    /// derived `requires` filter names the path this check sees.
+    #[test]
+    fn working_directory_is_used_for_all_filesystem_policy_fields() {
+        let blueprint = parse("name: cwd\ndefault: deny\npermissions:\n  main:\n    - {capability: fs.read, action: allow, filter: 'path glob \"/notes/*\"'}\n    - {capability: fs.move, action: allow, filter: 'from glob \"/notes/*\" and to glob \"/notes/*\"'}\n    - {capability: http.download, action: allow, filter: 'vfs_path glob \"/notes/*\"'}\n").unwrap();
+        let policy = PolicyCheck::new(Arc::new(blueprint));
+        for (capability, context) in [
+            ("fs.read", serde_json::json!({"path":"a"})),
+            ("fs.move", serde_json::json!({"from":"a", "to":"b"})),
+            ("http.download", serde_json::json!({"vfs_path":"a"})),
+        ] {
+            assert!(matches!(
+                policy.check_with_cwd("main", capability, &context, "/notes"),
+                CheckOutcome::Allow { .. }
+            ));
+            assert!(matches!(
+                policy.check_with_cwd("main", capability, &context, "/elsewhere"),
+                CheckOutcome::Deny { .. }
+            ));
+        }
+        assert!(matches!(
+            policy.check_with_cwd(
+                "main",
+                "fs.read",
+                &serde_json::json!({"path":"../private/a"}),
+                "/notes"
+            ),
+            CheckOutcome::Deny { .. }
+        ));
+    }
+
+    #[test]
+    fn normalized_policy_paths_are_vfs_path_fields_in_the_catalog() {
+        use interpreter::stdlib::capabilities::{FieldNormalization, catalog};
+        for capability in catalog().iter().flat_map(|group| group.capabilities) {
+            for field in filesystem_path_fields(capability.name) {
+                let normalization = capability
+                    .filter_fields
+                    .iter()
+                    .find(|candidate| candidate.name == *field)
+                    .map(|candidate| candidate.normalization);
+                assert_eq!(
+                    normalization,
+                    Some(FieldNormalization::VfsPath),
+                    "{}.{field}",
+                    capability.name
+                );
+            }
+        }
+    }
+
     #[test]
     fn filesystem_policy_matches_normalized_guest_paths() {
         let blueprint = parse(
@@ -467,7 +538,7 @@ permissions:
                 assert!(
                     matches!(
                         policy.check("main", capability, &serde_json::json!({"path": path})),
-                        CheckOutcome::Allow
+                        CheckOutcome::Allow { .. }
                     ),
                     "{capability}: {path}"
                 );
@@ -495,7 +566,7 @@ permissions:
                     capability,
                     &serde_json::json!({"from": "ada/./file", "to": "ada/new"})
                 ),
-                CheckOutcome::Allow
+                CheckOutcome::Allow { .. }
             ));
             for (from, to) in [
                 ("/ada/../grace/file", "/ada/new"),
@@ -519,7 +590,7 @@ permissions:
                         "http.download",
                         &serde_json::json!({"vfs_path": path, "url_path": "/../remote"})
                     ),
-                    CheckOutcome::Allow
+                    CheckOutcome::Allow { .. }
                 ),
                 allowed
             );
@@ -543,7 +614,7 @@ permissions:
         let reason = |capability: &str, context: serde_json::Value| match policy
             .check("main", capability, &context)
         {
-            CheckOutcome::Deny { reason } => reason,
+            CheckOutcome::Deny { reason, .. } => reason,
             _ => panic!("{capability} not denied"),
         };
         assert_eq!(
@@ -598,7 +669,7 @@ permissions:
         ));
         assert!(matches!(
             policy.check("main", "fs.read", &serde_json::json!({"path": "/ada/file"})),
-            CheckOutcome::Allow
+            CheckOutcome::Allow { .. }
         ));
         for context in [
             serde_json::json!({}),
@@ -616,7 +687,7 @@ permissions:
                 "custom.read",
                 &serde_json::json!({"path": "/../remote"})
             ),
-            CheckOutcome::Allow
+            CheckOutcome::Allow { .. }
         ));
     }
 
@@ -637,11 +708,13 @@ permissions:
         }
     }
 
-    fn header_proxy(env_var: &str) -> BlueprintAuthProxy {
-        let yaml = format!(
-            "name: x\nsecrets:\n  K: {{ env: {env_var} }}\nauth_proxy:\n  - host: api.example.com\n    headers:\n      Authorization: \"Bearer ${{secrets.K}}\"\n"
-        );
-        BlueprintAuthProxy::new(Arc::new(parse(&yaml).unwrap()), None)
+    fn header_proxy(value: Option<&str>) -> BlueprintAuthProxy {
+        let yaml = "name: x\nsecrets:\n  K: { harness: {} }\nauth_proxy:\n  - host: api.example.com\n    headers:\n      Authorization: \"Bearer ${secrets.K}\"\n";
+        let bindings = value
+            .map(|value| ("K".into(), value.into()))
+            .into_iter()
+            .collect();
+        BlueprintAuthProxy::with_harness(Arc::new(parse(yaml).unwrap()), None, Arc::new(bindings))
     }
 
     fn header_value<'a>(req: &'a HttpRequest, name: &str) -> Option<&'a str> {
@@ -653,11 +726,11 @@ permissions:
 
     #[tokio::test]
     async fn insecure_http_requires_both_flags_before_resolving_secrets() {
-        // An unreadable file proves denial occurs before secret resolution.
+        // An unbound harness secret proves denial occurs before secret resolution.
         for blueprint in [false, true] {
             for rule in [false, true] {
                 let yaml = format!(
-                    "name: gates\nallow_insecure_http: {blueprint}\nsecrets:\n  K: {{ file: /nonexistent/sub1105-secret }}\nauth_proxy:\n- host: example.com\n  allow_insecure_http: {rule}\n  auth: {{ bearer: K }}\n"
+                    "name: gates\nallow_insecure_http: {blueprint}\nsecrets:\n  K: {{ harness: {{}} }}\nauth_proxy:\n- host: example.com\n  allow_insecure_http: {rule}\n  auth: {{ bearer: K }}\n"
                 );
                 let proxy = BlueprintAuthProxy::new(Arc::new(parse(&yaml).unwrap()), None);
                 for caller in ["main", "@test/package"] {
@@ -732,9 +805,7 @@ permissions:
 
     #[tokio::test]
     async fn injects_resolved_header_for_main() {
-        // SAFETY: unique var name per test; reads happen on this thread only.
-        unsafe { std::env::set_var("SUB_AP_TEST_INJECT", "sekret") };
-        let proxy = header_proxy("SUB_AP_TEST_INJECT");
+        let proxy = header_proxy(Some("sekret"));
         let out = proxy
             .transform(req("https://api.example.com/x", vec![]), "main")
             .await
@@ -744,8 +815,7 @@ permissions:
 
     #[tokio::test]
     async fn skips_non_main_caller() {
-        unsafe { std::env::set_var("SUB_AP_TEST_LIB", "sekret") };
-        let proxy = header_proxy("SUB_AP_TEST_LIB");
+        let proxy = header_proxy(Some("sekret"));
         let out = proxy
             .transform(req("https://api.example.com/x", vec![]), "submilli:http")
             .await
@@ -755,8 +825,7 @@ permissions:
 
     #[tokio::test]
     async fn no_rule_for_host_passes_through() {
-        unsafe { std::env::set_var("SUB_AP_TEST_NOHOST", "sekret") };
-        let proxy = header_proxy("SUB_AP_TEST_NOHOST");
+        let proxy = header_proxy(Some("sekret"));
         let out = proxy
             .transform(req("https://other.host/x", vec![]), "main")
             .await
@@ -766,8 +835,7 @@ permissions:
 
     #[tokio::test]
     async fn injected_header_overrides_script_header() {
-        unsafe { std::env::set_var("SUB_AP_TEST_OVERRIDE", "sekret") };
-        let proxy = header_proxy("SUB_AP_TEST_OVERRIDE");
+        let proxy = header_proxy(Some("sekret"));
         let out = proxy
             .transform(
                 req(
@@ -788,9 +856,8 @@ permissions:
     }
 
     #[tokio::test]
-    async fn missing_env_secret_errors() {
-        unsafe { std::env::remove_var("SUB_AP_TEST_ABSENT") };
-        let proxy = header_proxy("SUB_AP_TEST_ABSENT");
+    async fn missing_harness_secret_errors() {
+        let proxy = header_proxy(None);
         let err = proxy
             .transform(req("https://api.example.com/x", vec![]), "main")
             .await
@@ -819,9 +886,12 @@ permissions:
 
     #[tokio::test]
     async fn injects_query_param_overriding_script() {
-        unsafe { std::env::set_var("SUB_AP_TEST_QUERY", "qval") };
-        let yaml = "name: x\nsecrets:\n  K: { env: SUB_AP_TEST_QUERY }\nauth_proxy:\n  - host: api.example.com\n    query:\n      appid: \"${secrets.K}\"\n";
-        let proxy = BlueprintAuthProxy::new(Arc::new(parse(yaml).unwrap()), None);
+        let yaml = "name: x\nsecrets:\n  K: { harness: {} }\nauth_proxy:\n  - host: api.example.com\n    query:\n      appid: \"${secrets.K}\"\n";
+        let proxy = BlueprintAuthProxy::with_harness(
+            Arc::new(parse(yaml).unwrap()),
+            None,
+            Arc::new(BTreeMap::from([("K".into(), "qval".into())])),
+        );
         let out = proxy
             .transform(
                 req("https://api.example.com/x?appid=script&keep=1", vec![]),

@@ -1,6 +1,7 @@
 //! Shared Temporal ABI and object construction; the per-type method surfaces
 //! live in the sibling type modules.
 
+use crate::runtime::host::{abi_arg, abi_result};
 use std::collections::BTreeMap;
 
 use jiff::{
@@ -13,6 +14,7 @@ use wasmtime::{
 };
 
 use crate::runtime::StoreData;
+use crate::runtime::fuel::host_func_async;
 use crate::runtime::host::{read_string_arg, register_host_fn, write_submilli_string_struct};
 use crate::runtime::intrinsic_types::IntrinsicTypes;
 use crate::runtime::prelude::collection::object_field;
@@ -307,29 +309,39 @@ fn plain_vtable_slots(
     let hash_ty = intr.hash_fn.clone();
 
     let st_ty = ty.clone();
-    let to_string = Func::new_async(
+    let to_string = host_func_async(
         &mut *store,
         to_string_ty,
         move |mut caller, params, results| {
             let st_ty = st_ty.clone();
             Box::new(async move {
-                let st = cast_struct(&mut caller, &params[0], &st_ty, "Temporal.Plain.toString")?;
+                let st = cast_struct(
+                    &mut caller,
+                    abi_arg(params, 0)?,
+                    &st_ty,
+                    "Temporal.Plain.toString",
+                )?;
                 let out = stringer(&mut caller, st)?;
                 let s = write_submilli_string_struct(&mut caller, &out)?;
-                results[0] = Val::AnyRef(Some(s.to_anyref()));
+                *abi_result(results, 0)? = Val::AnyRef(Some(s.to_anyref()));
                 Ok(())
             })
         },
     );
 
     let st_ty = ty.clone();
-    let to_json = Func::new_async(
+    let to_json = host_func_async(
         &mut *store,
         to_json_ty,
         move |mut caller, params, results| {
             let st_ty = st_ty.clone();
             Box::new(async move {
-                let st = cast_struct(&mut caller, &params[0], &st_ty, "Temporal.Plain.toJSON")?;
+                let st = cast_struct(
+                    &mut caller,
+                    abi_arg(params, 0)?,
+                    &st_ty,
+                    "Temporal.Plain.toJSON",
+                )?;
                 let out = stringer(&mut caller, st)?;
                 let json = serde_json::to_string(&out).map_err(|_| {
                     wasmtime::Error::msg(
@@ -337,33 +349,76 @@ fn plain_vtable_slots(
                     )
                 })?;
                 let s = write_submilli_string_struct(&mut caller, &json)?;
-                results[0] = Val::AnyRef(Some(s.to_anyref()));
+                *abi_result(results, 0)? = Val::AnyRef(Some(s.to_anyref()));
                 Ok(())
             })
         },
     );
 
     let st_ty = ty.clone();
-    let equals = Func::new_async(
+    let equals = host_func_async(
         &mut *store,
         equals_ty,
         move |mut caller, params, results| {
             let st_ty = st_ty.clone();
             Box::new(async move {
-                let a = cast_struct(&mut caller, &params[0], &st_ty, "Temporal.Plain.equals")?;
-                let Some(b) = try_cast_struct(&mut caller, &params[1], &st_ty)? else {
-                    results[0] = Val::I32(0);
+                let a = cast_struct(
+                    &mut caller,
+                    abi_arg(params, 0)?,
+                    &st_ty,
+                    "Temporal.Plain.equals",
+                )?;
+                let Some(b) = try_cast_struct(&mut caller, abi_arg(params, 1)?, &st_ty)? else {
+                    *abi_result(results, 0)? = Val::I32(0);
                     return Ok(());
                 };
-                results[0] = Val::I32(equals_op(&mut caller, a, b)? as i32);
+                // WasmGC types are structural. The vtable distinguishes nominal
+                // Temporal kinds even when their backing layouts coincide.
+                let (Val::AnyRef(Some(a_vtable)), Val::AnyRef(Some(b_vtable))) =
+                    (a.field(&mut caller, 0)?, b.field(&mut caller, 0)?)
+                else {
+                    return Err(crate::runtime::host::fatal_host_error(
+                        "Temporal.equals: invalid vtable",
+                    ));
+                };
+                *abi_result(results, 0)? = Val::I32(
+                    (Rooted::ref_eq(&caller, &a_vtable, &b_vtable)?
+                        && equals_op(&mut caller, a, b)?) as i32,
+                );
                 Ok(())
             })
         },
     );
 
-    let hash = Func::new_async(&mut *store, hash_ty, move |_caller, _params, results| {
+    let hash = host_func_async(&mut *store, hash_ty, move |mut caller, params, results| {
+        let ty = ty.clone();
         Box::new(async move {
-            results[0] = Val::I32(0);
+            let value = cast_struct(&mut caller, abi_arg(params, 0)?, &ty, "Temporal.hash")?;
+            let fields = ty.fields().count();
+            crate::runtime::fuel::charge(
+                &mut caller,
+                crate::runtime::fuel::ELEM,
+                fields.saturating_sub(1) as u64,
+            )?;
+            let mut hash = 0_u32;
+            for field in 1..fields {
+                let bits = match value.field(&mut caller, field)? {
+                    Val::I32(n) => n as u64,
+                    Val::I64(n) => n as u64,
+                    // Zone aliases may compare equal. The instant alone is a
+                    // valid hash for zoned values, independent of zone spelling.
+                    Val::AnyRef(_) => continue,
+                    // The resolved ZonedDateTime attachment is not semantic data.
+                    Val::ExternRef(_) if fields == 5 && field == 4 => continue,
+                    _ => {
+                        return Err(crate::runtime::host::fatal_host_error(
+                            "Temporal: invalid hash field",
+                        ));
+                    }
+                };
+                hash = hash.rotate_left(5) ^ super::super::vtable::mix_hash_bits(bits);
+            }
+            *abi_result(results, 0)? = Val::I32(hash as i32);
             Ok(())
         })
     });
@@ -398,12 +453,15 @@ fn cast_struct(
 fn try_cast_struct(
     caller: &mut Caller<'_, StoreData>,
     val: &Val,
-    _ty: &StructType,
+    ty: &StructType,
 ) -> wasmtime::Result<Option<Rooted<StructRef>>> {
-    match val {
-        Val::AnyRef(Some(any)) => any.as_struct(&mut *caller),
-        _ => Ok(None),
-    }
+    let Val::AnyRef(Some(any)) = val else {
+        return Ok(None);
+    };
+    let Some(value) = any.as_struct(&mut *caller)? else {
+        return Ok(None);
+    };
+    Ok(value.matches_ty(&*caller, ty)?.then_some(value))
 }
 
 pub(super) fn st_i32(
@@ -638,7 +696,9 @@ fn zoned_date_time_equals_host(
     let b_secs = st_i64(caller, b, 1, "ZonedDateTime.equals")?;
     let b_nanos = st_i32(caller, b, 2, "ZonedDateTime.equals")?;
     let b_tz = st_string(caller, b, 3, "ZonedDateTime.equals")?;
-    Ok(a_secs == b_secs && a_nanos == b_nanos && a_tz == b_tz)
+    Ok(a_secs == b_secs
+        && a_nanos == b_nanos
+        && super::zoned_date_time::time_zone_ids_equal(caller, &a_tz, &b_tz)?)
 }
 
 pub(super) fn reg_plain_date_to_year_month(
@@ -653,10 +713,10 @@ pub(super) fn reg_plain_date_to_year_month(
         ty,
         true,
         move |caller, params, results| {
-            let st = as_struct_val(caller, &params[0], "toPlainYearMonth")?;
+            let st = as_struct_val(caller, abi_arg(params, 0)?, "toPlainYearMonth")?;
             let y = st_i32(caller, st, 1, "toPlainYearMonth")?;
             let m = st_i32(caller, st, 2, "toPlainYearMonth")?;
-            results[0] = make_plain_year_month(caller, y, m)?;
+            *abi_result(results, 0)? = make_plain_year_month(caller, y, m)?;
             Ok(())
         },
     )
@@ -674,10 +734,10 @@ pub(super) fn reg_plain_date_to_month_day(
         ty,
         true,
         move |caller, params, results| {
-            let st = as_struct_val(caller, &params[0], "toPlainMonthDay")?;
+            let st = as_struct_val(caller, abi_arg(params, 0)?, "toPlainMonthDay")?;
             let m = st_i32(caller, st, 2, "toPlainMonthDay")?;
             let d = st_i32(caller, st, 3, "toPlainMonthDay")?;
-            results[0] = make_plain_month_day(caller, m, d)?;
+            *abi_result(results, 0)? = make_plain_month_day(caller, m, d)?;
             Ok(())
         },
     )
@@ -706,8 +766,8 @@ pub(super) fn reg_plain_from(
         FuncType::new(engine, [string.clone()], [obj.clone()]),
         true,
         move |caller, params, results| {
-            let s = read_string_arg(caller, &params[0], label)?;
-            results[0] = op(&s, caller)?;
+            let s = read_string_arg(caller, abi_arg(params, 0)?, label)?;
+            *abi_result(results, 0)? = op(&s, caller)?;
             Ok(())
         },
     )
@@ -730,10 +790,10 @@ pub(super) fn reg_plain_string(
         FuncType::new(engine, [obj.clone()], [string.clone()]),
         true,
         move |caller, params, results| {
-            let st = as_struct_val(caller, &params[0], &label)?;
+            let st = as_struct_val(caller, abi_arg(params, 0)?, &label)?;
             let out = op(caller, st)?;
             let s = write_submilli_string_struct(caller, &out)?;
-            results[0] = Val::AnyRef(Some(s.to_anyref()));
+            *abi_result(results, 0)? = Val::AnyRef(Some(s.to_anyref()));
             Ok(())
         },
     )
@@ -754,9 +814,9 @@ pub(super) fn reg_plain_equals(
         FuncType::new(engine, [obj.clone(), obj.clone()], [ValType::I32]),
         true,
         move |caller, params, results| {
-            let a = as_struct_val(caller, &params[0], &label)?;
-            let b = as_struct_val(caller, &params[1], &label)?;
-            results[0] = Val::I32(op(caller, a, b)? as i32);
+            let a = as_struct_val(caller, abi_arg(params, 0)?, &label)?;
+            let b = as_struct_val(caller, abi_arg(params, 1)?, &label)?;
+            *abi_result(results, 0)? = Val::I32(op(caller, a, b)? as i32);
             Ok(())
         },
     )
@@ -777,8 +837,8 @@ pub(super) fn reg_plain_compare(
         FuncType::new(engine, [obj.clone(), obj.clone()], [ValType::F64]),
         true,
         move |caller, params, results| {
-            let a = as_struct_val(caller, &params[0], &label)?;
-            let b = as_struct_val(caller, &params[1], &label)?;
+            let a = as_struct_val(caller, abi_arg(params, 0)?, &label)?;
+            let b = as_struct_val(caller, abi_arg(params, 1)?, &label)?;
             let mut ord = 0;
             for &field in fields {
                 let av = st_i32(caller, a, field, &label)?;
@@ -788,7 +848,7 @@ pub(super) fn reg_plain_compare(
                     break;
                 }
             }
-            results[0] = Val::F64((ord as f64).to_bits());
+            *abi_result(results, 0)? = Val::F64((ord as f64).to_bits());
             Ok(())
         },
     )
@@ -810,8 +870,9 @@ pub(super) fn reg_plain_i32_getter(
         FuncType::new(engine, [obj.clone()], [ValType::F64]),
         true,
         move |caller, params, results| {
-            let st = as_struct_val(caller, &params[0], &label)?;
-            results[0] = Val::F64((st_i32(caller, st, field, &label)? as f64).to_bits());
+            let st = as_struct_val(caller, abi_arg(params, 0)?, &label)?;
+            *abi_result(results, 0)? =
+                Val::F64((st_i32(caller, st, field, &label)? as f64).to_bits());
             Ok(())
         },
     )
@@ -837,10 +898,10 @@ pub(super) fn reg_plain_time_getters(
             FuncType::new(engine, [obj.clone()], [ValType::F64]),
             true,
             move |caller, params, results| {
-                let st = as_struct_val(caller, &params[0], &label)?;
+                let st = as_struct_val(caller, abi_arg(params, 0)?, &label)?;
                 let ns = st_i32(caller, st, ns_field, &label)?;
                 let out = if div == 1 { ns } else { (ns / div) % 1000 };
-                results[0] = Val::F64((out as f64).to_bits());
+                *abi_result(results, 0)? = Val::F64((out as f64).to_bits());
                 Ok(())
             },
         )?;
@@ -892,7 +953,7 @@ pub(super) fn reg_plain_date_derived_getters(
             FuncType::new(engine, [obj.clone()], [ret]),
             true,
             move |caller, params, results| {
-                let st = as_struct_val(caller, &params[0], &label)?;
+                let st = as_struct_val(caller, abi_arg(params, 0)?, &label)?;
                 let y = i64::from(st_i32(caller, st, 1, &label)?);
                 let m = i64::from(st_i32(caller, st, 2, &label)?);
                 let d = if year_month_only == 1 {
@@ -903,9 +964,9 @@ pub(super) fn reg_plain_date_derived_getters(
                 let date = y_m_d_date(y, m, d, "Temporal.Plain.derivedField")?;
                 let val = date_derived_field(date, selector);
                 if selector == 8 {
-                    results[0] = Val::I32(val);
+                    *abi_result(results, 0)? = Val::I32(val);
                 } else {
-                    results[0] = Val::F64((val as f64).to_bits());
+                    *abi_result(results, 0)? = Val::F64((val as f64).to_bits());
                 }
                 Ok(())
             },
@@ -942,10 +1003,10 @@ pub(super) fn reg_plain_month_code_getter(
         FuncType::new(engine, [obj.clone()], [string.clone()]),
         true,
         move |caller, params, results| {
-            let st = as_struct_val(caller, &params[0], &label)?;
+            let st = as_struct_val(caller, abi_arg(params, 0)?, &label)?;
             let month = st_i32(caller, st, month_field, &label)?;
             let s = write_submilli_string_struct(caller, &format!("M{month:02}"))?;
-            results[0] = Val::AnyRef(Some(s.to_anyref()));
+            *abi_result(results, 0)? = Val::AnyRef(Some(s.to_anyref()));
             Ok(())
         },
     )
@@ -997,7 +1058,7 @@ pub(super) fn make_duration(
         (abi.duration.clone(), abi.duration_vtable)
     };
     let mut fields = vec![Val::I32(0); 10];
-    write_span(&mut fields, span);
+    write_span(&mut fields, span)?;
     make_temporal_struct(caller, ty, vtable, &fields)
 }
 
@@ -1048,6 +1109,14 @@ pub(super) fn make_zoned_date_time(
         let abi = temporal_abi(caller)?;
         (abi.zoned_date_time.clone(), abi.zoned_date_time_vtable)
     };
+    let bytes = (std::mem::size_of::<CachedZoned>() + 128) as u64;
+    caller.data().tenant_limits.charge_host_bytes(bytes)?;
+    let payload = CachedZoned {
+        value: zoned.clone(),
+        bytes,
+        counter: caller.data().tenant_limits.host_attached_counter(),
+    };
+    let cached = wasmtime::ExternRef::new(&mut *caller, payload)?;
     let ts = zoned.timestamp();
     let tz = write_submilli_string_struct(caller, tz_id)?;
     make_temporal_struct(
@@ -1058,6 +1127,7 @@ pub(super) fn make_zoned_date_time(
             Val::I64(ts.as_second()),
             Val::I32(ts.subsec_nanosecond()),
             Val::AnyRef(Some(tz.to_anyref())),
+            Val::ExternRef(Some(cached)),
         ],
     )
 }
@@ -1210,15 +1280,35 @@ pub(super) fn span_from_duration_struct(
     super::duration::from_fields(fields, label).map_err(crate::runtime::host::range_error)
 }
 
+struct CachedZoned {
+    value: Zoned,
+    counter: std::sync::Arc<std::sync::atomic::AtomicU64>,
+    bytes: u64,
+}
+impl Drop for CachedZoned {
+    fn drop(&mut self) {
+        self.counter
+            .fetch_sub(self.bytes, std::sync::atomic::Ordering::Relaxed);
+    }
+}
+
 pub(super) fn zoned_date_time_from_struct(
     caller: &mut Caller<'_, StoreData>,
     st: Rooted<StructRef>,
-    label: &'static str,
+    _label: &'static str,
 ) -> wasmtime::Result<Zoned> {
-    let secs = st_i64(caller, st, 1, label)?;
-    let nanos = st_i32(caller, st, 2, label)?;
-    let tz_id = st_string(caller, st, 3, label)?;
-    make_zoned(secs, nanos, &tz_id, label)
+    let Val::ExternRef(Some(cached)) = st.field(&mut *caller, 4)? else {
+        return Err(crate::runtime::host::fatal_host_error(
+            "Temporal.ZonedDateTime: missing resolved value",
+        ));
+    };
+    let payload = cached
+        .data(&*caller)?
+        .and_then(|data| data.downcast_ref::<CachedZoned>())
+        .ok_or_else(|| {
+            crate::runtime::host::fatal_host_error("Temporal.ZonedDateTime: invalid resolved value")
+        })?;
+    Ok(payload.value.clone())
 }
 
 pub(super) fn zoned_date_time_from_val(
@@ -1273,7 +1363,7 @@ pub(super) fn zoned_date_time_parts_from_val(
     let secs = st_i64(caller, st, 1, label)?;
     let nanos = st_i32(caller, st, 2, label)?;
     let tz_id = st_string(caller, st, 3, label)?;
-    let zoned = make_zoned(secs, nanos, &tz_id, label)?;
+    let zoned = make_zoned(caller, secs, nanos, &tz_id, label)?;
     Ok((zoned, tz_id))
 }
 
@@ -1895,17 +1985,18 @@ fn read_span_fields(slice: &[Val]) -> wasmtime::Result<[i64; 10]> {
 // always lossless; suppress `clippy::useless_conversion` so future jiff
 // versions that widen a getter don't silently lose information.
 #[allow(clippy::useless_conversion)]
-fn write_span(results: &mut [Val], span: &Span) {
-    results[0] = Val::I32(i32::from(span.get_years()));
-    results[1] = Val::I32(i32::from(span.get_months()));
-    results[2] = Val::I32(span.get_weeks());
-    results[3] = Val::I32(span.get_days());
-    results[4] = Val::I64(i64::from(span.get_hours()));
-    results[5] = Val::I64(span.get_minutes());
-    results[6] = Val::I64(span.get_seconds());
-    results[7] = Val::I64(span.get_milliseconds());
-    results[8] = Val::I64(span.get_microseconds());
-    results[9] = Val::I64(span.get_nanoseconds());
+fn write_span(results: &mut [Val], span: &Span) -> wasmtime::Result<()> {
+    *abi_result(results, 0)? = Val::I32(i32::from(span.get_years()));
+    *abi_result(results, 1)? = Val::I32(i32::from(span.get_months()));
+    *abi_result(results, 2)? = Val::I32(span.get_weeks());
+    *abi_result(results, 3)? = Val::I32(span.get_days());
+    *abi_result(results, 4)? = Val::I64(i64::from(span.get_hours()));
+    *abi_result(results, 5)? = Val::I64(span.get_minutes());
+    *abi_result(results, 6)? = Val::I64(span.get_seconds());
+    *abi_result(results, 7)? = Val::I64(span.get_milliseconds());
+    *abi_result(results, 8)? = Val::I64(span.get_microseconds());
+    *abi_result(results, 9)? = Val::I64(span.get_nanoseconds());
+    Ok(())
 }
 
 fn read_i32(v: &Val, name: &str) -> wasmtime::Result<i32> {
@@ -1922,9 +2013,14 @@ fn read_i64(v: &Val, name: &str) -> wasmtime::Result<i64> {
     }
 }
 
-fn make_zoned(secs: i64, nanos: i32, tz_id: &str, label: &'static str) -> wasmtime::Result<Zoned> {
-    let (tz, _) = super::zoned_date_time::resolve_time_zone(tz_id, label)
-        .map_err(crate::runtime::host::range_error)?;
+fn make_zoned(
+    caller: &mut Caller<'_, StoreData>,
+    secs: i64,
+    nanos: i32,
+    tz_id: &str,
+    label: &'static str,
+) -> wasmtime::Result<Zoned> {
+    let (tz, _) = super::zoned_date_time::resolve_time_zone(caller, tz_id, label)?;
     let ts = Timestamp::new(secs, nanos).map_err(|_| {
         crate::runtime::host::range_error(format!(
             "Temporal.{label}: the instant is outside the representable range"
@@ -2082,7 +2178,7 @@ pub(super) fn duration_to_string_with_options(
 ) -> wasmtime::Result<String> {
     let rounded = round_span_for_to_string(span, smallest, mode, fractional_digits)?;
     if let Some(digits) = fractional_digits {
-        return Ok(format_duration_with_fractional_digits(&rounded, digits));
+        return format_duration_with_fractional_digits(&rounded, digits);
     }
     Ok(rounded.to_string())
 }
@@ -2101,7 +2197,9 @@ fn round_span_for_to_string(
     let smallest_unit = smallest
         .map(|unit| unit_from_str(unit, "Duration.toString"))
         .transpose()?;
-    let fractional_rounding = fractional_digits.map(rounding_for_fractional_second_digits);
+    let fractional_rounding = fractional_digits
+        .map(rounding_for_fractional_second_digits)
+        .transpose()?;
     let fractional_unit = fractional_rounding.map(|rounding| rounding.0);
     let effective_unit = match (smallest_unit, fractional_unit) {
         (Some(unit), Some(fractional)) => Some(more_specific_unit(unit, fractional)),
@@ -2116,7 +2214,7 @@ fn round_span_for_to_string(
         round = round.mode(round_mode_from_str(mode, "Duration.toString")?);
     }
     if let Some(digits) = fractional_digits {
-        let (unit, increment) = rounding_for_fractional_second_digits(digits);
+        let (unit, increment) = rounding_for_fractional_second_digits(digits)?;
         if increment > 1 && Some(unit) == effective_unit {
             round = round.increment(increment);
         }
@@ -2124,8 +2222,8 @@ fn round_span_for_to_string(
     span.round(round).map_err(temporal_err("Duration.toString"))
 }
 
-fn rounding_for_fractional_second_digits(digits: u8) -> (Unit, i64) {
-    match digits {
+fn rounding_for_fractional_second_digits(digits: u8) -> wasmtime::Result<(Unit, i64)> {
+    Ok(match digits {
         0 => (Unit::Second, 1),
         1 => (Unit::Millisecond, 100),
         2 => (Unit::Millisecond, 10),
@@ -2136,12 +2234,19 @@ fn rounding_for_fractional_second_digits(digits: u8) -> (Unit, i64) {
         7 => (Unit::Nanosecond, 100),
         8 => (Unit::Nanosecond, 10),
         9 => (Unit::Nanosecond, 1),
-        _ => unreachable!("fractionalSecondDigits was already range-checked"),
-    }
+        _ => {
+            return Err(crate::runtime::host::invariant_trap(
+                "Temporal: fractionalSecondDigits outside 0..=9",
+            ));
+        }
+    })
 }
 
-fn fractional_second_increment(digits: u8) -> i64 {
-    10_i64.pow(u32::from(9 - digits))
+fn fractional_second_increment(digits: u8) -> wasmtime::Result<i64> {
+    let exponent = 9u8.checked_sub(digits).ok_or_else(|| {
+        crate::runtime::host::invariant_trap("Temporal: invalid fractional digits")
+    })?;
+    Ok(10_i64.pow(u32::from(exponent)))
 }
 
 fn more_specific_unit(a: Unit, b: Unit) -> Unit {
@@ -2167,18 +2272,20 @@ fn unit_specificity(unit: Unit) -> u8 {
     }
 }
 
-fn format_duration_with_fractional_digits(span: &Span, digits: u8) -> String {
+fn format_duration_with_fractional_digits(span: &Span, digits: u8) -> wasmtime::Result<String> {
+    let divisor = u128::try_from(fractional_second_increment(digits)?)
+        .map_err(|_| crate::runtime::host::invariant_trap("Temporal: invalid fraction divisor"))?;
     let negative = span_fields(span).into_iter().any(|value| value < 0);
-    let years = span.get_years().abs();
-    let months = span.get_months().abs();
-    let weeks = span.get_weeks().abs();
-    let days = span.get_days().abs();
-    let hours = span.get_hours().abs();
-    let minutes = span.get_minutes().abs();
-    let seconds = span.get_seconds().abs();
-    let milliseconds = span.get_milliseconds().abs();
-    let microseconds = span.get_microseconds().abs();
-    let nanoseconds = span.get_nanoseconds().abs();
+    let years = span.get_years().unsigned_abs();
+    let months = span.get_months().unsigned_abs();
+    let weeks = span.get_weeks().unsigned_abs();
+    let days = span.get_days().unsigned_abs();
+    let hours = span.get_hours().unsigned_abs();
+    let minutes = span.get_minutes().unsigned_abs();
+    let seconds = span.get_seconds().unsigned_abs();
+    let milliseconds = span.get_milliseconds().unsigned_abs();
+    let microseconds = span.get_microseconds().unsigned_abs();
+    let nanoseconds = span.get_nanoseconds().unsigned_abs();
     let has_date = years != 0 || months != 0 || weeks != 0 || days != 0;
     let has_time = hours != 0
         || minutes != 0
@@ -2212,12 +2319,13 @@ fn format_duration_with_fractional_digits(span: &Span, digits: u8) -> String {
         if minutes != 0 {
             out.push_str(&format!("{minutes}M"));
         }
-        let subsecond_nanos = milliseconds * 1_000_000 + microseconds * 1_000 + nanoseconds;
+        let subsecond_nanos = u128::from(milliseconds) * 1_000_000
+            + u128::from(microseconds) * 1_000
+            + u128::from(nanoseconds);
         let include_seconds = seconds != 0 || subsecond_nanos != 0 || digits > 0 || !has_time;
         if include_seconds {
             out.push_str(&seconds.to_string());
             if digits > 0 {
-                let divisor = fractional_second_increment(digits);
                 let fraction = subsecond_nanos / divisor;
                 out.push('.');
                 out.push_str(&format!("{fraction:0width$}", width = usize::from(digits)));
@@ -2225,7 +2333,7 @@ fn format_duration_with_fractional_digits(span: &Span, digits: u8) -> String {
             out.push('S');
         }
     }
-    out
+    Ok(out)
 }
 
 pub(super) fn span_fields(span: &Span) -> [i64; 10] {
@@ -4013,4 +4121,29 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
     }
 
     defs.namespaces.insert("Temporal".to_string(), temporal);
+}
+
+#[cfg(test)]
+mod invariant_tests {
+    use super::*;
+    #[test]
+    fn fractional_digits_are_checked_even_for_date_only_durations() {
+        for digits in [10, u8::MAX] {
+            assert!(
+                rounding_for_fractional_second_digits(digits)
+                    .unwrap_err()
+                    .is::<wasmtime::Trap>()
+            );
+            assert!(
+                format_duration_with_fractional_digits(&Span::new().days(1), digits)
+                    .unwrap_err()
+                    .is::<wasmtime::Trap>()
+            );
+        }
+        assert_eq!(
+            format_duration_with_fractional_digits(&Span::new().seconds(1).milliseconds(25), 3)
+                .unwrap(),
+            "PT1.025S"
+        );
+    }
 }

@@ -1191,7 +1191,7 @@ mod tests {
             parse_module(
                 &mut sources,
                 "util",
-                "/** Shared utility. */\nexport function shared(): number { return 1; }",
+                "/** Shared utility.\n * @returns One. */\nexport function shared(): number { return 1; }",
             ),
         ];
         let module_refs: Vec<_> = modules
@@ -1236,7 +1236,7 @@ mod tests {
             parse_module(
                 &mut sources,
                 "internal",
-                "/** Shared utility. */\nexport function shared(): number { return 1; }",
+                "/** Shared utility.\n * @returns One. */\nexport function shared(): number { return 1; }",
             ),
             parse_module(&mut sources, "lib", r#"export { shared } from "./util";"#),
             parse_module(
@@ -1279,7 +1279,10 @@ mod tests {
                 &mut sources,
                 "lib",
                 r#"
-                /** Public API. */
+                /**
+                 * Public API.
+                 * @returns The public shape.
+                 */
                 export function api(): { public: number } {
                     return { public: 1 };
                 }

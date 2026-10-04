@@ -60,13 +60,14 @@ impl ServerTarget {
     /// `timeout` bounds the whole call; `None` waits as long as the server does.
     pub fn agent_with_timeout(&self, timeout: Option<Duration>) -> Result<ureq::Agent> {
         let token_file = self.token_file.clone().or_else(token_file_from_env);
-        server_agent(token_file.as_deref(), timeout)
+        server_agent(self.base(), token_file.as_deref(), timeout)
     }
 }
 
 /// The agent for a command with no `--token-file` flag of its own.
 pub fn server_agent_from_env() -> Result<ureq::Agent> {
-    server_agent(token_file_from_env().as_deref(), None)
+    let base = std::env::var("SUBMILLI_SERVER_URL").context("SUBMILLI_SERVER_URL is not set")?;
+    server_agent(base.trim(), token_file_from_env().as_deref(), None)
 }
 
 /// Read here rather than through clap's `env`, which rejects a variable that
@@ -78,10 +79,12 @@ fn token_file_from_env() -> Option<PathBuf> {
         .map(PathBuf::from)
 }
 
-/// The server's `{ error, message }` body; we surface only `message`.
+/// The server's `{ error, message }` body. Some rejections carry only
+/// `error`, which is then the message.
 #[derive(Debug, Deserialize)]
 struct ServerError {
-    message: String,
+    error: Option<String>,
+    message: Option<String>,
 }
 
 /// Read a 200 body as JSON, or turn a non-200 into the server's error message.
@@ -119,10 +122,11 @@ pub fn error_message(resp: ureq::http::Response<ureq::Body>) -> String {
              one"
         );
     }
-    resp.into_body().read_json::<ServerError>().map_or_else(
-        |_| format!("server returned HTTP {}", status.as_u16()),
-        |e| e.message,
-    )
+    resp.into_body()
+        .read_json::<ServerError>()
+        .ok()
+        .and_then(|e| e.message.or(e.error))
+        .unwrap_or_else(|| format!("server returned HTTP {}", status.as_u16()))
 }
 
 /// A client for a submilli-server that sends the API token, when there is one,
@@ -131,8 +135,14 @@ pub fn error_message(resp: ureq::http::Response<ureq::Body>) -> String {
 ///
 /// Only for requests to a submilli-server: the token must not reach the
 /// release mirrors and third-party hosts other commands talk to.
-fn server_agent(token_file: Option<&Path>, timeout: Option<Duration>) -> Result<ureq::Agent> {
+fn server_agent(
+    base: &str,
+    token_file: Option<&Path>,
+    timeout: Option<Duration>,
+) -> Result<ureq::Agent> {
+    let tls = super::server::trust::prepare(base)?;
     let mut config = ureq::Agent::config_builder()
+        .max_redirects(0)
         .http_status_as_error(false)
         .timeout_global(timeout);
     if let Some(authorization) = authorization_header(token_file)? {
@@ -146,7 +156,11 @@ fn server_agent(token_file: Option<&Path>, timeout: Option<Duration>) -> Result<
             },
         );
     }
-    Ok(config.build().into())
+    let config = config.build();
+    Ok(match tls {
+        Some(tls) => submilli_shared::tls::agent(config, tls, base)?,
+        None => config.into(),
+    })
 }
 
 /// The `Authorization` header for the configured token, or `None` when no
@@ -227,4 +241,14 @@ pub fn read_limited(response: ureq::http::Response<ureq::Body>, limit: u64) -> R
         bail!("response exceeds {limit} bytes");
     }
     Ok(bytes)
+}
+
+/// ureq keeps its I/O error in an enum rather than exposing it as an Error
+/// source. Recognize only refusal; certificate and protocol failures mean the
+/// endpoint could be running and must remain errors.
+pub fn connection_refused(error: &anyhow::Error) -> bool {
+    error.chain().any(|cause| {
+        cause.downcast_ref::<std::io::Error>().is_some_and(|error| error.kind() == std::io::ErrorKind::ConnectionRefused)
+            || matches!(cause.downcast_ref::<ureq::Error>(), Some(ureq::Error::Io(error)) if error.kind() == std::io::ErrorKind::ConnectionRefused)
+    })
 }

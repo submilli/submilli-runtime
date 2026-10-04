@@ -1,3 +1,4 @@
+use crate::runtime::host::{abi_arg, abi_result};
 use jiff::{RoundMode, TimestampRound};
 use wasmtime::{Caller, FuncType, HeapType, Linker, RefType, Val, ValType};
 
@@ -43,9 +44,9 @@ fn install_direct(
         FuncType::new(engine, [string.clone()], obj_result.clone()),
         true,
         |caller, params, results| {
-            let s = read_string_arg(caller, &params[0], "Temporal.Instant.from")?;
+            let s = read_string_arg(caller, abi_arg(params, 0)?, "Temporal.Instant.from")?;
             let ts = super::parse(&s).map_err(crate::runtime::host::range_error)?;
-            results[0] = make_instant(caller, ts)?;
+            *abi_result(results, 0)? = make_instant(caller, ts)?;
             Ok(())
         },
     )?;
@@ -57,10 +58,10 @@ fn install_direct(
         FuncType::new(engine, [ValType::F64], obj_result.clone()),
         true,
         |caller, params, results| {
-            let ms = read_f64(&params[0], "Instant.fromEpochMilliseconds")?;
+            let ms = read_f64(abi_arg(params, 0)?, "Instant.fromEpochMilliseconds")?;
             let ts =
                 super::from_epoch_milliseconds(ms).map_err(crate::runtime::host::range_error)?;
-            results[0] = make_instant(caller, ts)?;
+            *abi_result(results, 0)? = make_instant(caller, ts)?;
             Ok(())
         },
     )?;
@@ -74,13 +75,13 @@ fn install_direct(
         |caller, params, results| {
             let (sign, limbs) = crate::runtime::prelude::bigint::ops::read_bigint_struct(
                 caller,
-                &params[0],
+                abi_arg(params, 0)?,
                 "Temporal.Instant.fromEpochNanoseconds",
             )?;
-            let big = crate::runtime::prelude::bigint::ops::limbs_to_bigint(sign, &limbs);
+            let big = crate::runtime::prelude::bigint::ops::limbs_to_bigint(sign, &limbs)?;
             let ts =
                 super::from_epoch_nanoseconds(&big).map_err(crate::runtime::host::range_error)?;
-            results[0] = make_instant(caller, ts)?;
+            *abi_result(results, 0)? = make_instant(caller, ts)?;
             Ok(())
         },
     )?;
@@ -92,9 +93,9 @@ fn install_direct(
         FuncType::new(engine, [obj.clone(), obj.clone()], [ValType::F64]),
         true,
         |caller, params, results| {
-            let a = instant_from_val(caller, &params[0], "Instant.compare")?;
-            let b = instant_from_val(caller, &params[1], "Instant.compare")?;
-            results[0] = Val::F64(super::compare(a, b).to_bits());
+            let a = instant_from_val(caller, abi_arg(params, 0)?, "Instant.compare")?;
+            let b = instant_from_val(caller, abi_arg(params, 1)?, "Instant.compare")?;
+            *abi_result(results, 0)? = Val::F64(super::compare(a, b).to_bits());
             Ok(())
         },
     )?;
@@ -107,10 +108,10 @@ fn install_direct(
             FuncType::new(engine, [obj.clone()], [string.clone()]),
             true,
             move |caller, params, results| {
-                let ts = instant_from_val(caller, &params[0], "Instant.toString")?;
+                let ts = instant_from_val(caller, abi_arg(params, 0)?, "Instant.toString")?;
                 let text = super::to_string(ts);
                 let value = write_submilli_string_struct(caller, &text)?;
-                results[0] = Val::AnyRef(Some(value.to_anyref()));
+                *abi_result(results, 0)? = Val::AnyRef(Some(value.to_anyref()));
                 Ok(())
             },
         )?;
@@ -123,9 +124,9 @@ fn install_direct(
         FuncType::new(engine, [obj.clone(), obj.clone()], [ValType::I32]),
         true,
         |caller, params, results| {
-            let a = instant_from_val(caller, &params[0], "Instant.equals")?;
-            let b = instant_from_val(caller, &params[1], "Instant.equals")?;
-            results[0] = Val::I32(super::equals(a, b) as i32);
+            let a = instant_from_val(caller, abi_arg(params, 0)?, "Instant.equals")?;
+            let b = instant_from_val(caller, abi_arg(params, 1)?, "Instant.equals")?;
+            *abi_result(results, 0)? = Val::I32(super::equals(a, b) as i32);
             Ok(())
         },
     )?;
@@ -137,8 +138,8 @@ fn install_direct(
         FuncType::new(engine, [obj.clone()], [ValType::F64]),
         true,
         |caller, params, results| {
-            let ts = instant_from_val(caller, &params[0], "Instant.epochMilliseconds")?;
-            results[0] = Val::F64(super::epoch_milliseconds(ts).to_bits());
+            let ts = instant_from_val(caller, abi_arg(params, 0)?, "Instant.epochMilliseconds")?;
+            *abi_result(results, 0)? = Val::F64(super::epoch_milliseconds(ts).to_bits());
             Ok(())
         },
     )?;
@@ -150,8 +151,8 @@ fn install_direct(
         FuncType::new(engine, [obj.clone()], [bigint]),
         true,
         |caller, params, results| {
-            let ts = instant_from_val(caller, &params[0], "Instant.epochNanoseconds")?;
-            results[0] = crate::runtime::prelude::bigint::ops::make_bigint_struct(
+            let ts = instant_from_val(caller, abi_arg(params, 0)?, "Instant.epochNanoseconds")?;
+            *abi_result(results, 0)? = crate::runtime::prelude::bigint::ops::make_bigint_struct(
                 caller,
                 super::epoch_nanoseconds(ts),
             )?;
@@ -169,15 +170,16 @@ fn install_direct(
             FuncType::new(engine, [obj.clone(), obj.clone()], obj_result.clone()),
             true,
             move |caller, params, results| {
-                let ts = instant_from_val(caller, &params[0], "Instant arithmetic")?;
-                let span = read_duration_like(caller, &params[1], &intr, "Instant arithmetic")?;
+                let ts = instant_from_val(caller, abi_arg(params, 0)?, "Instant arithmetic")?;
+                let span =
+                    read_duration_like(caller, abi_arg(params, 1)?, &intr, "Instant arithmetic")?;
                 let out = if add {
                     super::add(ts, span)
                 } else {
                     super::subtract(ts, span)
                 }
                 .map_err(crate::runtime::host::range_error)?;
-                results[0] = make_instant(caller, out)?;
+                *abi_result(results, 0)? = make_instant(caller, out)?;
                 Ok(())
             },
         )?;
@@ -199,14 +201,14 @@ fn install_direct(
             ),
             true,
             move |caller, params, results| {
-                let a = instant_from_val(caller, &params[0], "Instant difference")?;
-                let b = instant_from_val(caller, &params[1], "Instant difference")?;
+                let a = instant_from_val(caller, abi_arg(params, 0)?, "Instant difference")?;
+                let b = instant_from_val(caller, abi_arg(params, 1)?, "Instant difference")?;
                 let label = if until {
                     "Instant.until"
                 } else {
                     "Instant.since"
                 };
-                let opts = object_diff_options(caller, &params[2], label)?;
+                let opts = object_diff_options(caller, abi_arg(params, 2)?, label)?;
                 let description = opts.description();
                 let span = if until {
                     super::until(a, opts.timestamp(b), &description)
@@ -214,7 +216,7 @@ fn install_direct(
                     super::since(a, opts.timestamp(b), &description)
                 }
                 .map_err(crate::runtime::host::range_error)?;
-                results[0] = make_duration(caller, &span)?;
+                *abi_result(results, 0)? = make_duration(caller, &span)?;
                 Ok(())
             },
         )?;
@@ -236,11 +238,14 @@ fn install_direct(
         FuncType::new(engine, [obj.clone(), string.clone()], obj_result.clone()),
         true,
         |caller, params, results| {
-            let ts = instant_from_val(caller, &params[0], "Instant.toZonedDateTimeISO")?;
-            let tz_id = read_string_arg(caller, &params[1], "Temporal.Instant.toZonedDateTimeISO")?;
-            let (zoned, canonical_id) = super::to_zoned_date_time_iso(ts, &tz_id)
-                .map_err(crate::runtime::host::range_error)?;
-            results[0] = make_zoned_date_time(caller, &zoned, &canonical_id)?;
+            let ts = instant_from_val(caller, abi_arg(params, 0)?, "Instant.toZonedDateTimeISO")?;
+            let tz_id = read_string_arg(
+                caller,
+                abi_arg(params, 1)?,
+                "Temporal.Instant.toZonedDateTimeISO",
+            )?;
+            let (zoned, canonical_id) = super::to_zoned_date_time_iso(caller, ts, &tz_id)?;
+            *abi_result(results, 0)? = make_zoned_date_time(caller, &zoned, &canonical_id)?;
             Ok(())
         },
     )?;
@@ -253,7 +258,7 @@ fn instant_round_direct(
     params: &[Val],
     results: &mut [Val],
 ) -> wasmtime::Result<()> {
-    let ts = instant_from_val(caller, &params[0], "Instant.round")?;
+    let ts = instant_from_val(caller, abi_arg(params, 0)?, "Instant.round")?;
     let string_type = caller
         .data()
         .host_abi
@@ -261,20 +266,26 @@ fn instant_round_direct(
         .map(|abi| abi.string_type.clone())
         .ok_or_else(|| wasmtime::Error::msg("host_abi unset (prelude not instantiated)"))?;
     let (unit, mode, increment) =
-        if crate::runtime::prelude::collection::is_a(caller, &params[1], &string_type)? {
+        if crate::runtime::prelude::collection::is_a(caller, abi_arg(params, 1)?, &string_type)? {
             (
-                read_string_arg(caller, &params[1], "Temporal.Instant.round")?,
+                read_string_arg(caller, abi_arg(params, 1)?, "Temporal.Instant.round")?,
                 None,
                 None,
             )
         } else {
-            let unit = object_string_field(caller, &params[1], "smallestUnit", "Instant.round")?
-                .ok_or_else(|| {
-                    wasmtime::Error::msg("Temporal.Instant.round: smallestUnit is required")
-                })?;
-            let mode = object_string_field(caller, &params[1], "roundingMode", "Instant.round")?;
-            let increment =
-                object_i64_field(caller, &params[1], "roundingIncrement", "Instant.round")?;
+            let unit =
+                object_string_field(caller, abi_arg(params, 1)?, "smallestUnit", "Instant.round")?
+                    .ok_or_else(|| {
+                        wasmtime::Error::msg("Temporal.Instant.round: smallestUnit is required")
+                    })?;
+            let mode =
+                object_string_field(caller, abi_arg(params, 1)?, "roundingMode", "Instant.round")?;
+            let increment = object_i64_field(
+                caller,
+                abi_arg(params, 1)?,
+                "roundingIncrement",
+                "Instant.round",
+            )?;
             (unit, mode, increment)
         };
     let description = format!(
@@ -293,7 +304,7 @@ fn instant_round_direct(
         round = round.increment(increment);
     }
     let out = super::round(ts, round, &description).map_err(crate::runtime::host::range_error)?;
-    results[0] = make_instant(caller, out)?;
+    *abi_result(results, 0)? = make_instant(caller, out)?;
     Ok(())
 }
 

@@ -24,14 +24,20 @@ pub struct StatusResponse {
     pub blueprints: Vec<String>,
 }
 
-pub async fn status(State(state): State<AppState>) -> Json<StatusResponse> {
-    Json(StatusResponse {
+pub async fn status(
+    State(state): State<AppState>,
+) -> Result<Json<StatusResponse>, (StatusCode, Json<serde_json::Value>)> {
+    Ok(Json(StatusResponse {
         status: "running",
         bind_addr: state.bind_addr().map(|a| a.to_string()),
         pid: std::process::id(),
         active_sessions: state.session_manager().active_count(),
-        blueprints: state.blueprints().list().await,
-    })
+        blueprints: state
+            .blueprints()
+            .list()
+            .await
+            .map_err(crate::blueprint::store_failure_response)?,
+    }))
 }
 
 #[derive(Debug, Serialize)]

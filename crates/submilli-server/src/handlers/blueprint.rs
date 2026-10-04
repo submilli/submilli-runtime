@@ -4,14 +4,13 @@ use axum::{
     http::StatusCode,
 };
 use serde::{Deserialize, Serialize};
-use submilli_blueprint::{
-    self, Blueprint, BlueprintError, SecretSource, VfsConfig, YamlPath, yaml_path,
-};
-use submilli_shared::EnvFileSecretResolver;
+use submilli_blueprint::{self, Blueprint, BlueprintError, SecretSource, YamlPath, yaml_path};
+use submilli_shared::BlueprintSecretResolver;
 
 use crate::app::AppState;
 use crate::blueprint::{StoreError, StoredBlueprint};
 use crate::config::VolumeTable;
+use crate::volumes::ReferenceError;
 
 #[derive(Debug, Deserialize)]
 pub struct AddRequest {
@@ -114,13 +113,13 @@ fn parse_blueprint(yaml: &str) -> Result<Blueprint, (StatusCode, Json<ErrorRespo
 }
 
 /// Verify, at apply/add time, that every declared secret currently resolves on
-/// this server (env var set / file present / present in the secret store).
+/// this server (present in the secret store).
 /// Point-in-time only — see `submilli_blueprint::verify_secrets`.
 async fn verify_secrets(
     state: &AppState,
     blueprint: &Blueprint,
 ) -> Result<(), (StatusCode, Json<ErrorResponse>)> {
-    let resolver = EnvFileSecretResolver::new(state.secret_store().cloned());
+    let resolver = BlueprintSecretResolver::new(state.secret_store().cloned());
     submilli_blueprint::verify_secrets(blueprint, &resolver)
         .await
         .map_err(|err| {
@@ -146,83 +145,90 @@ async fn verify_secrets(
         })
 }
 
-/// Reject a blueprint registered over the API that reads the server's own
-/// environment or filesystem for a secret. `env:`/`file:` sources are honored
-/// only for blueprints loaded locally by an operator; over the wire — where the
-/// server has no inbound auth of its own — they would let a caller read the
-/// server's env and files (including the secret-store key), so require a
-/// `store:` or `harness:` source instead.
-fn reject_local_secret_sources(
+/// A blueprint's reference to a named volume that no session could mount, with
+/// where in the blueprint it sits.
+#[derive(Debug)]
+pub(crate) struct VolumeReferenceProblem {
+    pub code: &'static str,
+    pub message: String,
+    pub path: submilli_blueprint::YamlPath,
+}
+
+/// Reject a blueprint naming a volume the operator has not declared, or asking
+/// for more access than the declaration allows, so the store never holds one no
+/// session could mount as written. Checks the `named` root and every mount.
+pub(crate) fn check_volume_references(
     blueprint: &Blueprint,
-) -> Result<(), (StatusCode, Json<ErrorResponse>)> {
-    for (name, source) in &blueprint.secrets {
-        if matches!(source, SecretSource::Env(_) | SecretSource::File(_)) {
-            let message = format!(
-                "secret '{name}' uses an `{}` source, which is not allowed for a blueprint \
-                 registered over the API; use a `store:` secret or a `harness:` source",
-                source.kind()
-            );
-            return Err((
-                StatusCode::BAD_REQUEST,
-                Json(
-                    ErrorResponse::named(
-                        "forbidden_secret_source",
-                        message.clone(),
-                        blueprint.name.clone(),
-                    )
-                    .diagnostic(Some(yaml_path!["secrets", name]), message),
-                ),
-            ));
-        }
+    volumes: &VolumeTable,
+) -> Result<(), VolumeReferenceProblem> {
+    for reference in blueprint.vfs.named_references() {
+        let Err(err) = crate::volumes::check_reference(volumes, reference.volume, reference.access)
+        else {
+            continue;
+        };
+        let (code, field) = match err {
+            ReferenceError::Undeclared { .. } => ("undeclared_volume", "volume"),
+            ReferenceError::AccessExceeds { .. } => ("volume_access_exceeded", "access"),
+        };
+        return Err(VolumeReferenceProblem {
+            code,
+            message: err.to_string(),
+            path: reference.yaml_path(field),
+        });
     }
     Ok(())
 }
 
-/// Reject a `persistent` blueprint naming a volume the operator has not
-/// declared, so the store never holds one no session could mount.
-///
-/// Unlike [`reject_local_secret_sources`] this is not an HTTP-only rule: the
-/// message is built here but every registration channel calls it, the seed
-/// directory included. A channel that skipped it would accept a form its twin
-/// rejects, which is the gap this exists to close.
-pub(crate) fn check_declared_volume(
+fn reject_unusable_volume_reference(
     blueprint: &Blueprint,
     volumes: &VolumeTable,
-) -> Result<(), String> {
-    let VfsConfig::Persistent { volume } = &blueprint.vfs else {
-        return Ok(());
-    };
-    if volumes.contains_key(volume) {
-        return Ok(());
-    }
-    Err(if volumes.is_empty() {
-        format!(
-            "volume '{volume}' is not declared on this server, which declares no volumes at \
-             all; the operator declares one by mapping a name to a directory under `volumes:` \
-             in the server config file"
-        )
-    } else {
-        let declared = volumes.keys().cloned().collect::<Vec<_>>().join(", ");
-        format!(
-            "volume '{volume}' is not declared on this server; declared volumes are: \
-             {declared}. Use one of those, or ask the operator to declare '{volume}' under \
-             `volumes:` in the server config file"
+) -> Result<(), (StatusCode, Json<ErrorResponse>)> {
+    check_volume_references(blueprint, volumes).map_err(|problem| {
+        (
+            StatusCode::BAD_REQUEST,
+            Json(
+                ErrorResponse::named(
+                    problem.code,
+                    problem.message.clone(),
+                    blueprint.name.clone(),
+                )
+                .diagnostic(Some(problem.path), problem.message),
+            ),
         )
     })
 }
 
-fn reject_undeclared_volume(
+fn verify_packages(
+    state: &AppState,
     blueprint: &Blueprint,
-    volumes: &VolumeTable,
 ) -> Result<(), (StatusCode, Json<ErrorResponse>)> {
-    check_declared_volume(blueprint, volumes).map_err(|message| {
-        (
-            StatusCode::BAD_REQUEST,
-            Json(
-                ErrorResponse::named("undeclared_volume", message.clone(), blueprint.name.clone())
-                    .diagnostic(Some(yaml_path!["vfs", "volume"]), message),
+    use submilli_build::{
+        PackageStoreError,
+        blueprint_validation::{self, PackageValidationError},
+    };
+
+    blueprint_validation::validate_packages(blueprint, state.package_store()).map_err(|error| {
+        if let PackageValidationError::InvalidFilter(problem) = &error {
+            return (StatusCode::BAD_REQUEST, Json(
+                ErrorResponse::named("invalid_filter", problem.message.clone(), blueprint.name.clone())
+                    .diagnostic(problem.path.clone(), problem.message.clone()),
+            ));
+        }
+        let (code, detail) = match &error {
+            PackageValidationError::Store(
+                PackageStoreError::MissingPackage { name, .. }
+                | PackageStoreError::MissingDependency { name, .. },
+            ) => (
+                "package_missing",
+                format!("package `{name}` is not installed; install it with `submilli server packages install <org/repo> {name}`"),
             ),
-        )
+            _ => ("invalid_packages", error.to_string()),
+        };
+        let message = format!("package check failed: {detail}");
+        (StatusCode::BAD_REQUEST, Json(
+            ErrorResponse::named(code, message.clone(), blueprint.name.clone())
+                .diagnostic(Some(yaml_path!["packages"]), message),
+        ))
     })
 }
 
@@ -231,10 +237,12 @@ pub async fn add(
     Json(req): Json<AddRequest>,
 ) -> Result<(StatusCode, Json<AddResponse>), (StatusCode, Json<ErrorResponse>)> {
     let blueprint = parse_blueprint(&req.yaml)?;
-    reject_local_secret_sources(&blueprint)?;
-    reject_undeclared_volume(&blueprint, state.session_manager().volumes())?;
+    reject_unusable_volume_reference(&blueprint, state.session_manager().volumes())?;
     verify_secrets(&state, &blueprint).await?;
+    verify_packages(&state, &blueprint)?;
     let name = blueprint.name.clone();
+    crate::audit::annotate(serde_json::json!({"name": name,
+        "new_hash": crate::audit::blueprint_hash(&blueprint)}));
     state
         .blueprints()
         .add_yaml(StoredBlueprint::new(
@@ -251,7 +259,7 @@ pub async fn add(
                     name.clone(),
                 )),
             ),
-            StoreError::Io(message) => internal_error(message),
+            error => store_error(error),
         })?;
     Ok((StatusCode::OK, Json(AddResponse { name })))
 }
@@ -272,14 +280,16 @@ pub async fn apply(
     Json(req): Json<AddRequest>,
 ) -> Result<(StatusCode, Json<ApplyResponse>), (StatusCode, Json<ErrorResponse>)> {
     let blueprint = parse_blueprint(&req.yaml)?;
-    reject_local_secret_sources(&blueprint)?;
-    reject_undeclared_volume(&blueprint, state.session_manager().volumes())?;
+    crate::audit::annotate(
+        serde_json::json!({"new_hash": crate::audit::blueprint_hash(&blueprint)}),
+    );
+    reject_unusable_volume_reference(&blueprint, state.session_manager().volumes())?;
     verify_secrets(&state, &blueprint).await?;
-    let packages_changed = state
-        .blueprints()
-        .get(&name)
-        .await
-        .is_some_and(|existing| existing.packages != blueprint.packages);
+    verify_packages(&state, &blueprint)?;
+    let previous = state.blueprints().get(&name).await.map_err(store_error)?;
+    crate::audit::annotate(serde_json::json!({"name": name,
+        "old_hash": previous.as_ref().map(crate::audit::blueprint_hash)}));
+    let packages_changed = previous.is_some_and(|existing| existing.packages != blueprint.packages);
     if blueprint.name != name {
         let message = format!(
             "blueprint name '{}' in the file does not match '{name}' in the request path",
@@ -300,10 +310,7 @@ pub async fn apply(
             permissions_last_preserving_comments(&req.yaml),
         ))
         .await
-        .map_err(|err| match err {
-            StoreError::Io(message) => internal_error(message),
-            StoreError::AlreadyExists => internal_error("unexpected conflict on upsert".into()),
-        })?;
+        .map_err(store_error)?;
     // Keep the live MCP service (and its sessions) — the execute path re-fetches
     // the blueprint per call, so open sessions run under the new config. Only the
     // discovered `@mcp/<server>` catalog and changed packages need rebuilding.
@@ -311,6 +318,9 @@ pub async fn apply(
     if packages_changed {
         state.evict_prepared_packages(&name);
     }
+    crate::audit::annotate(
+        serde_json::json!({"event": if created { "blueprint_created" } else { "blueprint_replaced" }}),
+    );
     crate::metrics::blueprint_apply(created);
     Ok((StatusCode::OK, Json(ApplyResponse { name, created })))
 }
@@ -326,7 +336,12 @@ pub async fn show(
     State(state): State<AppState>,
     Path(name): Path<String>,
 ) -> Result<(StatusCode, Json<ShowResponse>), (StatusCode, Json<ErrorResponse>)> {
-    match state.blueprints().get_yaml(&name).await {
+    match state
+        .blueprints()
+        .get_yaml(&name)
+        .await
+        .map_err(store_error)?
+    {
         Some(yaml) => Ok((StatusCode::OK, Json(ShowResponse { yaml, name }))),
         None => Err(not_found(name)),
     }
@@ -362,7 +377,7 @@ pub async fn prompt(
     State(state): State<AppState>,
     Path(name): Path<String>,
 ) -> Result<(StatusCode, Json<PromptResponse>), (StatusCode, Json<ErrorResponse>)> {
-    match state.blueprints().get(&name).await {
+    match state.blueprints().get(&name).await.map_err(store_error)? {
         Some(blueprint) => Ok((
             StatusCode::OK,
             Json(PromptResponse {
@@ -390,14 +405,20 @@ pub async fn remove(
     State(state): State<AppState>,
     Path(name): Path<String>,
 ) -> Result<(StatusCode, Json<AddResponse>), (StatusCode, Json<ErrorResponse>)> {
+    let previous = match state.blueprints().get(&name).await {
+        Ok(previous) => previous,
+        Err(error) => {
+            crate::blueprint::store_failure_message(error);
+            None
+        }
+    };
+    crate::audit::annotate(serde_json::json!({"name": name,
+        "old_hash": previous.as_ref().map(crate::audit::blueprint_hash)}));
     let removed = state
         .blueprints()
         .remove(&name)
         .await
-        .map_err(|err| match err {
-            StoreError::Io(message) => internal_error(message),
-            StoreError::AlreadyExists => internal_error("unexpected conflict on remove".into()),
-        })?;
+        .map_err(store_error)?;
     if removed {
         state.wipe_blueprint_sessions(&name).await;
         state.evict_mcp_service(&name);
@@ -407,6 +428,10 @@ pub async fn remove(
     } else {
         Err(not_found(name))
     }
+}
+
+fn store_error(error: StoreError) -> (StatusCode, Json<ErrorResponse>) {
+    internal_error(crate::blueprint::store_failure_message(error).into())
 }
 
 fn internal_error(message: String) -> (StatusCode, Json<ErrorResponse>) {
@@ -500,15 +525,18 @@ pub struct ListResponse {
     pub blueprints: Vec<BlueprintSummary>,
 }
 
-pub async fn list(State(state): State<AppState>) -> Json<ListResponse> {
+pub async fn list(
+    State(state): State<AppState>,
+) -> Result<Json<ListResponse>, (StatusCode, Json<ErrorResponse>)> {
     let blueprints = state
         .blueprints()
         .list_blueprints()
         .await
+        .map_err(store_error)?
         .iter()
         .map(BlueprintSummary::from)
         .collect();
-    Json(ListResponse { blueprints })
+    Ok(Json(ListResponse { blueprints }))
 }
 
 pub(crate) fn permissions_last_preserving_comments(yaml: &str) -> String {

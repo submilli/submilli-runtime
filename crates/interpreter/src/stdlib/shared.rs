@@ -4,11 +4,14 @@ use std::io::Write;
 use std::sync::Arc;
 
 use crate::runtime::fs::{ContainError, ContentPath, LinkPath, resolve_content, resolve_link};
-use crate::runtime::host::{permission_denied, permission_denied_invariant, range_error};
-use crate::runtime::security::{CheckOutcome, SecurityCheck};
+use crate::runtime::fuel;
+use crate::runtime::host::{
+    permission_denied, permission_denied_invariant, permission_denied_read_only,
+    quota_exceeded_error,
+};
+use crate::runtime::security::{AuditDecision, CheckOutcome, SecurityCheck};
+use crate::runtime::vfs::{Access, Placement};
 use crate::runtime::{DiskQuota, QuotaCharge, QuotaExceeded, StoreData};
-
-pub const DEFAULT_CWD: &str = "/";
 
 /// The package whose code is executing, read off the innermost wasm frame's owning module.
 ///
@@ -25,28 +28,62 @@ pub const DEFAULT_CWD: &str = "/";
 /// - **Frames, but the innermost module has no name.** A module this compiler produced always
 ///   carries one. One that does not is not a principal we can name.
 ///
-/// [`WasmBacktrace::force_capture`] rather than `capture`, because `capture` returns an empty
-/// trace when `Config::wasm_backtrace` is off — which would turn a performance knob into a
-/// security control.
+/// Attribution visits the innermost module directly, independently of the
+/// diagnostic backtrace setting, without capturing or symbolizing outer frames.
 pub(crate) fn running_package(
     store: &impl wasmtime::AsContext<Data = StoreData>,
-) -> Result<String, UnknownPrincipal> {
-    let backtrace = wasmtime::WasmBacktrace::force_capture(store);
-    let Some(frame) = backtrace.frames().first() else {
-        return Err(UnknownPrincipal {
+) -> Result<String, PrincipalError> {
+    let mut principal = None;
+    wasmtime::WasmBacktrace::visit_modules(store, |module| {
+        principal = Some(match module.name() {
+            Some(name) => owned_principal(name).map_err(PrincipalError::Internal),
+            None => Err(PrincipalError::Unknown(UnknownPrincipal {
+                label: "<unnamed module>",
+                reason: "the running module declares no package name, so its caller cannot be identified",
+            })),
+        });
+        std::ops::ControlFlow::Break(())
+    }).map_err(|error| PrincipalError::Internal(crate::runtime::host::fatal_host_error(error)))?;
+    principal.unwrap_or_else(|| {
+        Err(PrincipalError::Unknown(UnknownPrincipal {
             label: "<no wasm frame>",
             reason: "no wasm frame is executing, so the call has no caller to attribute it to",
-        });
-    };
-    frame.module().name().map(str::to_string).ok_or(UnknownPrincipal {
-        label: "<unnamed module>",
-        reason: "the running module declares no package name, so its caller cannot be identified",
+        }))
     })
 }
 
-/// Why the running code could not be named. Carries a `label` rather than reusing a package
-/// name, so it can never collide with a real principal — in particular never with `main`,
-/// whose identity grants auth-proxy credential injection.
+pub(crate) fn owned_principal(name: &str) -> wasmtime::Result<String> {
+    let mut result = String::new();
+    result
+        .try_reserve_exact(name.len())
+        .map_err(crate::runtime::host::fatal_host_error)?;
+    result.push_str(name);
+    Ok(result)
+}
+
+pub(crate) enum PrincipalError {
+    Unknown(UnknownPrincipal),
+    Internal(wasmtime::Error),
+}
+impl PrincipalError {
+    pub fn into_denial(self, capability: &str) -> wasmtime::Error {
+        match self {
+            Self::Unknown(unknown) => {
+                permission_denied_invariant(unknown.label, capability, unknown.reason)
+            }
+            Self::Internal(error) => error,
+        }
+    }
+
+    pub fn label_or_error(self) -> wasmtime::Result<String> {
+        match self {
+            Self::Unknown(unknown) => owned_principal(unknown.label),
+            Self::Internal(error) => Err(error),
+        }
+    }
+}
+
+/// An unknown principal label cannot collide with an actual package name.
 pub(crate) struct UnknownPrincipal {
     pub label: &'static str,
     pub reason: &'static str,
@@ -62,18 +99,31 @@ pub(crate) struct UnknownPrincipal {
 /// function, so the invariant does not extend to it; that path attributes to
 /// the caller and would deny anyway.
 pub fn check_security(
-    store: impl wasmtime::AsContext<Data = StoreData>,
+    mut store: impl wasmtime::AsContextMut<Data = StoreData>,
     capability: &str,
     context: serde_json::Value,
 ) -> wasmtime::Result<()> {
-    let caller = running_package(&store).map_err(|unknown| {
-        permission_denied_invariant(unknown.label, capability, unknown.reason)
+    // Direct caller attribution and the policy check have one flat gate charge.
+    fuel::charge_host_fuel(&mut store, fuel::GATE)?;
+    let caller = running_package(&store).map_err(|error| {
+        if let PrincipalError::Unknown(ref unknown) = error {
+            audit_denial(
+                store.as_context().data().security_check.as_ref(),
+                unknown.label,
+                capability,
+                &context,
+                "invariant",
+                unknown.reason,
+            );
+        }
+        error.into_denial(capability)
     })?;
     authorize_capability(
         &caller,
         store.as_context().data().security_check.as_ref(),
         capability,
         &context,
+        store.as_context().data().vfs.cwd(),
     )
 }
 
@@ -84,6 +134,7 @@ pub(crate) fn authorize_capability(
     security_check: &dyn SecurityCheck,
     capability: &str,
     context: &serde_json::Value,
+    cwd: &str,
 ) -> wasmtime::Result<()> {
     // The ordering is the invariant. This must precede both the delegation
     // below and any work the host fn does after we return — a reorder that
@@ -93,12 +144,64 @@ pub(crate) fn authorize_capability(
         && let Some(reason) =
             crate::stdlib::capabilities::find(capability).and_then(|entry| entry.main_denial)
     {
+        audit_denial(
+            security_check,
+            caller,
+            capability,
+            context,
+            "invariant",
+            reason,
+        );
         return Err(permission_denied_invariant(caller, capability, reason));
     }
-    match security_check.check(caller, capability, context) {
-        CheckOutcome::Allow => Ok(()),
-        CheckOutcome::Deny { reason } => Err(permission_denied(caller, capability, reason)),
+    let outcome = security_check.check_with_cwd(caller, capability, context, cwd);
+    let audit_context = security_check.audit_context(capability, context, cwd);
+    let context = audit_context.as_ref();
+    match outcome {
+        CheckOutcome::Allow { rule } => {
+            security_check.audit(AuditDecision {
+                caller,
+                capability,
+                context,
+                allowed: true,
+                source: "policy",
+                rule,
+                reason: None,
+            });
+            Ok(())
+        }
+        CheckOutcome::Deny { reason, rule } => {
+            security_check.audit(AuditDecision {
+                caller,
+                capability,
+                context,
+                allowed: false,
+                source: "policy",
+                rule,
+                reason: Some(&reason),
+            });
+            Err(permission_denied(caller, capability, reason))
+        }
     }
+}
+
+pub(crate) fn audit_denial(
+    security: &dyn SecurityCheck,
+    caller: &str,
+    capability: &str,
+    context: &serde_json::Value,
+    source: &str,
+    reason: &str,
+) {
+    security.audit(AuditDecision {
+        caller,
+        capability,
+        context,
+        allowed: false,
+        source,
+        rule: None,
+        reason: Some(reason),
+    });
 }
 
 /// Resolve a guest path for an operation that reaches its contents — every component,
@@ -108,7 +211,7 @@ pub fn resolve_content_or_trap(
     guest_path: &str,
     op: &str,
 ) -> wasmtime::Result<ContentPath> {
-    resolve_content(&data.vfs, DEFAULT_CWD, guest_path)
+    resolve_content(&data.vfs, data.vfs.cwd(), guest_path)
         .map_err(|err| contain_trap(op, guest_path, &err))
 }
 
@@ -119,14 +222,89 @@ pub fn resolve_link_or_trap(
     guest_path: &str,
     op: &str,
 ) -> wasmtime::Result<LinkPath> {
-    resolve_link(&data.vfs, DEFAULT_CWD, guest_path)
+    resolve_link(&data.vfs, data.vfs.cwd(), guest_path)
         .map_err(|err| contain_trap(op, guest_path, &err))
+}
+
+/// Refuse a write into a volume mounted read-only, attributed to the running
+/// package. Call after the capability check and resolution, before any other work,
+/// so the policy sees every attempt and a refused call changes nothing.
+pub(crate) fn require_writable(
+    store: impl wasmtime::AsContext<Data = StoreData>,
+    placement: &Placement,
+    capability: &str,
+    guest_path: &str,
+) -> wasmtime::Result<()> {
+    if placement.access() == Access::ReadWrite {
+        return Ok(());
+    }
+    let caller = running_package(&store).map_err(|error| {
+        if let PrincipalError::Unknown(ref unknown) = error {
+            audit_denial(
+                store.as_context().data().security_check.as_ref(),
+                unknown.label,
+                capability,
+                &serde_json::json!({ "path": guest_path }),
+                "invariant",
+                unknown.reason,
+            );
+        }
+        error.into_denial(capability)
+    })?;
+    audit_denial(
+        store.as_context().data().security_check.as_ref(),
+        &caller,
+        capability,
+        &serde_json::json!({ "path": guest_path }),
+        "read_only",
+        "the destination volume is read-only",
+    );
+    Err(read_only_denial(
+        &caller,
+        capability,
+        guest_path,
+        placement.mount_point(),
+    ))
+}
+
+/// Refuse a write aimed at the VFS root or a mount point: each is a directory,
+/// and replacing one would take a volume with it.
+pub(crate) fn refuse_volume_root(
+    resolved: &ContentPath,
+    op: &str,
+    guest_path: &str,
+) -> wasmtime::Result<()> {
+    if resolved.is_root() {
+        wasmtime::bail!(
+            "{op} {guest_path}: the VFS root or a mount point is a directory, not a file"
+        );
+    }
+    Ok(())
+}
+
+fn read_only_denial(
+    caller: &str,
+    capability: &str,
+    guest_path: &str,
+    mount: &str,
+) -> wasmtime::Error {
+    permission_denied_read_only(
+        caller,
+        capability,
+        format!("{guest_path} is in the volume mounted read-only at {mount}"),
+    )
 }
 
 /// The single translation from a containment failure to a guest-visible trap. Every
 /// escape reaches the guest as the same diagnostic regardless of which operation hit it,
 /// so an LLM reading one recognises the rest.
+///
+/// A read-only refusal that got past [`require_writable`] still surfaces as a
+/// `PermissionDeniedError`, attributed to `<vfs>` since the caller is not at hand.
 pub fn contain_trap(op: &str, guest_path: &str, err: &ContainError) -> wasmtime::Error {
+    if let ContainError::ReadOnly(mount) = err {
+        return read_only_denial("<vfs>", op, guest_path, mount);
+    }
     wasmtime::Error::msg(format!("{op} {guest_path}: {err}"))
 }
 
@@ -149,14 +327,14 @@ pub fn write_target_trap(op: &str, guest_path: &str, err: &ContainError) -> wasm
     }
 }
 
-/// A write refused because it would pass the VFS's size limit, as a `RangeError`
+/// A write refused because it would pass the VFS's size limit, as a `QuotaExceededError`
 /// the program can catch.
 pub(crate) fn quota_refusal(
     op: &str,
     guest_path: &str,
     exceeded: QuotaExceeded,
 ) -> wasmtime::Error {
-    range_error(format!("{op} {guest_path}: {exceeded}"))
+    quota_exceeded_error(format!("{op} {guest_path}: {exceeded}"))
 }
 
 /// No program code runs before the rename, so the write draws on the size of the file it

@@ -23,6 +23,7 @@ pub struct ScaffoldedPackage {
     pub package_dir: PathBuf,
     pub entrypoint: PathBuf,
     pub docs_readme: PathBuf,
+    pub readme: PathBuf,
     pub test_file: PathBuf,
 }
 
@@ -268,6 +269,11 @@ fn create_package_skeleton(
         write_text(&docs_readme, &docs_readme_stub(name))?;
     }
 
+    let readme = package_dir.join("README.md");
+    if !readme.exists() {
+        write_text(&readme, &readme_stub(name))?;
+    }
+
     let tests_dir = package_dir.join("tests");
     fs::create_dir_all(&tests_dir).map_err(|source| ScaffoldError::Io {
         path: tests_dir.clone(),
@@ -283,6 +289,7 @@ fn create_package_skeleton(
         package_dir,
         entrypoint,
         docs_readme,
+        readme,
         test_file,
     })
 }
@@ -294,6 +301,14 @@ fn entrypoint_stub(name: &str) -> String {
 fn docs_readme_stub(name: &str) -> String {
     format!(
         "# {name}\n\nDescribe what this package does, when to use it, and any important behavior an agent should know before importing it.\n"
+    )
+}
+
+/// The readme for the person who installs and grants the package, next to
+/// `docs/readme.md`, which the model reads.
+fn readme_stub(name: &str) -> String {
+    format!(
+        "# {name}\n\nDescribe what this package is for, the credential to bind and how the service issues it, and which operations to grant with their filter fields.\n"
     )
 }
 

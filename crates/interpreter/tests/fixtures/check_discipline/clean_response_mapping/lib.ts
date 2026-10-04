@@ -43,6 +43,8 @@ export interface Sent {
 
 /**
  * Sends the message.
+ * @param channelId Conversation to post in.
+ * @returns The sent message details.
  * @capability test.com/send { channelId: string }
  */
 export function send(channelId: string): Sent {

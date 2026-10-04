@@ -29,6 +29,8 @@ function forward(input: Input): void {}
 
 /**
  * Sends the payload to the conversation the caller names.
+ * @param channelId Conversation to post in.
+ * @param payload Payload to send.
  * @capability test.com/send { channelId: string }
  */
 export function send(channelId: string, payload: Input): void {

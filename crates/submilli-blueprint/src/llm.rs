@@ -779,7 +779,7 @@ permissions:
         let yaml = "\
 name: x
 secrets:
-  K: { env: K }
+  K: { store: K }
 llm:
   providers:
     p:

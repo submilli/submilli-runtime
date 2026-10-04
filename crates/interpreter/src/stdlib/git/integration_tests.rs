@@ -33,11 +33,13 @@ fn repository() -> tempfile::TempDir {
     root
 }
 
+/// The repository at `root`, opened to write.
 fn snapshot(root: &Path) -> storage::Snapshot {
-    storage::Snapshot::open(
-        Arc::new(Dir::open_ambient_dir(root, cap_std::ambient_authority()).unwrap()),
+    storage::Snapshot::open_unmetered(
+        &super::location::Location::at(root),
         Arc::new(AtomicBool::new(false)),
-        storage::MAX_BYTES,
+        storage::MAX_WORKING_BYTES,
+        true,
     )
     .unwrap()
 }
@@ -71,8 +73,10 @@ fn failed_metadata_staging_does_not_leave_a_recovery_blocker() {
     let root = repository();
     let head = native(root.path(), &["rev-parse", "HEAD"]);
     let state = snapshot(root.path());
-    // A metadata path rejected by publication fails before the backup exists.
-    std::fs::write(state.repo.git_dir().join("hooks/invalid\\name"), "invalid").unwrap();
+    // A reference staged where the repository has a directory: publication
+    // refuses it before moving anything.
+    std::fs::write(state.repo.refs.git_dir().join("refs/heads/blocked"), "x").unwrap();
+    std::fs::create_dir(root.path().join(".git/refs/heads/blocked")).unwrap();
     assert!(state.publish().is_err());
     assert_eq!(native(root.path(), &["rev-parse", "HEAD"]), head);
     assert!(std::fs::read_dir(root.path()).unwrap().all(|entry| {
@@ -100,10 +104,15 @@ fn job(vfs: &Vfs, op: &str) -> Job {
         secrets: data.secret_provider.clone(),
         http: data.http_client.clone(),
         runtime: tokio::runtime::Handle::current(),
+        deadline: tokio::time::Instant::now() + std::time::Duration::from_secs(60),
         cancelled: Arc::new(AtomicBool::new(false)),
-        max_bytes: storage::MAX_BYTES,
+        max_bytes: storage::MAX_WORKING_BYTES,
         transferred: Arc::new(AtomicU64::new(0)),
+        meter: Default::default(),
+        algorithm_fuel: Arc::new(super::work::AlgorithmWork::new(u64::MAX)),
         denial: Arc::new(Mutex::new(None)),
+        history_cache: (op == "log")
+            .then(|| Arc::new(super::log_cache::Cache::new(&data.tenant_limits).unwrap())),
     }
 }
 
@@ -120,7 +129,7 @@ async fn native_merge_in_progress_refuses_mutations_without_changing_history() {
         &Dir::open_ambient_dir(root.path(), cap_std::ambient_authority()).unwrap(),
         false,
         &AtomicBool::new(false),
-        storage::MAX_BYTES,
+        storage::MAX_WORKING_BYTES,
     )
     .unwrap();
     let vfs = Vfs::external(root.path().to_owned()).unwrap();
@@ -141,7 +150,7 @@ async fn native_merge_in_progress_refuses_mutations_without_changing_history() {
         &Dir::open_ambient_dir(root.path(), cap_std::ambient_authority()).unwrap(),
         false,
         &AtomicBool::new(false),
-        storage::MAX_BYTES,
+        storage::MAX_WORKING_BYTES,
     )
     .unwrap();
     assert_eq!(before, after);
@@ -187,10 +196,11 @@ impl crate::runtime::SecurityCheck for RemotePrefix {
                 .is_some_and(|url| url.starts_with("https://example.com/allowed/"))
         {
             return CheckOutcome::Deny {
+                rule: None,
                 reason: "remote outside allowed prefix".into(),
             };
         }
-        CheckOutcome::Allow
+        CheckOutcome::Allow { rule: None }
     }
 }
 
@@ -295,10 +305,11 @@ impl crate::runtime::SecurityCheck for OnlyAliasBranch {
         use crate::runtime::security::CheckOutcome;
         if capability == "git.commit" && context["branch"] != "MAIN" {
             return CheckOutcome::Deny {
+                rule: None,
                 reason: "only MAIN is authorized".into(),
             };
         }
-        CheckOutcome::Allow
+        CheckOutcome::Allow { rule: None }
     }
 }
 
@@ -324,7 +335,7 @@ async fn filesystem_ref_aliases_cannot_bypass_branch_grants() {
             &metadata,
             false,
             &AtomicBool::new(false),
-            storage::MAX_BYTES,
+            storage::MAX_WORKING_BYTES,
         )
         .unwrap();
         let mut request = job(&vfs, operation);
@@ -342,7 +353,7 @@ async fn filesystem_ref_aliases_cannot_bypass_branch_grants() {
             &metadata,
             false,
             &AtomicBool::new(false),
-            storage::MAX_BYTES,
+            storage::MAX_WORKING_BYTES,
         )
         .unwrap();
         assert_eq!(before, after);
@@ -366,6 +377,8 @@ fn branch_listing_follows_native_symbolic_aliases_without_panicking() {
             .to_string()
             .contains("symbolic local branch")
     );
+    // One operation holds a repository at a time.
+    drop(state);
     native(
         root.path(),
         &["symbolic-ref", "refs/heads/alias", "refs/heads/alias"],
@@ -478,7 +491,7 @@ async fn git_refuses_to_write_in_an_unmeasured_vfs() {
     };
     assert!(
         error
-            .downcast_ref::<crate::runtime::host::RangeError>()
+            .downcast_ref::<crate::runtime::host::QuotaExceededError>()
             .is_some(),
         "{error}"
     );
@@ -570,46 +583,13 @@ async fn a_switch_over_a_held_file_needs_room_for_both_copies() {
     };
     assert!(
         error
-            .downcast_ref::<crate::runtime::host::RangeError>()
+            .downcast_ref::<crate::runtime::host::QuotaExceededError>()
             .is_some(),
         "{error}"
     );
     drop(guard);
     run(&tight, "switchBranch", &[json!("main")]).unwrap();
     assert_eq!(tight_quota.used(), tight.measure_usage().unwrap());
-}
-
-/// A tree nested too deep to measure, anywhere in the VFS, leaves a git change
-/// uncountable: refused as a write past the limit is, with a `RangeError`.
-#[tokio::test]
-async fn git_refuses_a_change_it_cannot_measure() {
-    let vfs = Vfs::tempdir().unwrap().with_size_limit(1 << 20);
-    worker::run(
-        &vfs,
-        &job(&vfs, "init"),
-        "init",
-        &[json!({ "branch": "main" })],
-    )
-    .unwrap();
-    let mut deep = vfs.root().join("elsewhere");
-    for _ in 0..65 {
-        deep = deep.join("d");
-    }
-    std::fs::create_dir_all(&deep).unwrap();
-    let Err(error) = worker::run(
-        &vfs,
-        &job(&vfs, "addRemote"),
-        "addRemote",
-        &[json!("origin"), json!("https://example.com/r.git")],
-    ) else {
-        panic!("a git change went through in a VFS too deep to measure");
-    };
-    assert!(
-        error
-            .downcast_ref::<crate::runtime::host::RangeError>()
-            .is_some(),
-        "{error}"
-    );
 }
 
 /// A git change that doesn't grow the files is still refused in a VFS that
@@ -648,8 +628,827 @@ async fn git_refuses_a_change_that_does_not_grow_an_unmeasured_vfs() {
     };
     assert!(
         error
-            .downcast_ref::<crate::runtime::host::RangeError>()
+            .downcast_ref::<crate::runtime::host::QuotaExceededError>()
             .is_some(),
         "{error}"
     );
+}
+
+fn mounted(vfs: Vfs, volume: &Path, access: crate::runtime::vfs::Access) -> Vfs {
+    vfs.with_mount(crate::runtime::vfs::MountSpec {
+        guest_path: "/memory".into(),
+        host: volume.to_path_buf(),
+        volume: "memory".into(),
+        access,
+        quota: Some(Arc::new(crate::runtime::DiskQuota::new(1 << 20, 0))),
+    })
+    .unwrap()
+}
+
+fn job_at(vfs: &Vfs, op: &str, path: &str) -> Job {
+    let mut job = job(vfs, op);
+    job.path = path.into();
+    job
+}
+
+#[tokio::test]
+async fn mount_repository_lives_in_the_volume_and_charges_it() {
+    let volume = tempfile::tempdir().unwrap();
+    let vfs = mounted(
+        Vfs::tempdir().unwrap().with_size_limit(1 << 20),
+        volume.path(),
+        crate::runtime::vfs::Access::ReadWrite,
+    );
+    let mount_quota = vfs.mounts()[0].quota().unwrap().clone();
+    let root_quota = vfs.quota().unwrap().clone();
+    worker::run(
+        &vfs,
+        &job_at(&vfs, "init", "/memory/repo"),
+        "init",
+        &[json!({ "branch": "main" })],
+    )
+    .unwrap();
+    assert!(volume.path().join("repo/.git/HEAD").is_file());
+    assert!(mount_quota.used() > 0, "the volume is charged");
+    assert_eq!(root_quota.used(), 0, "the root is not");
+}
+
+#[tokio::test]
+async fn mount_point_inside_a_repository_is_refused() {
+    let volume = tempfile::tempdir().unwrap();
+    let vfs = mounted(
+        Vfs::tempdir().unwrap(),
+        volume.path(),
+        crate::runtime::vfs::Access::ReadWrite,
+    );
+    let error = worker::run(
+        &vfs,
+        &job_at(&vfs, "init", "/"),
+        "init",
+        &[json!({ "branch": "main" })],
+    )
+    .err()
+    .unwrap()
+    .to_string();
+    assert!(
+        error.contains("overlaps the mount point /memory"),
+        "{error}"
+    );
+    assert!(!vfs.root().join(".git").exists());
+}
+
+#[tokio::test]
+async fn root_volume_alias_preserves_guest_mount_placeholders() {
+    use crate::runtime::vfs::{Access, MountSpec};
+    let root = tempfile::tempdir().unwrap();
+    let child = tempfile::tempdir().unwrap();
+    let vfs = Vfs::external(root.path().to_path_buf())
+        .unwrap()
+        .with_volume_name("root")
+        .with_mount(MountSpec {
+            guest_path: "/alias".into(),
+            host: root.path().to_path_buf(),
+            volume: "root".into(),
+            access: Access::ReadWrite,
+            quota: None,
+        })
+        .unwrap()
+        .with_mount(MountSpec {
+            guest_path: "/child".into(),
+            host: child.path().to_path_buf(),
+            volume: "child".into(),
+            access: Access::ReadWrite,
+            quota: None,
+        })
+        .unwrap();
+    for path in ["/", "/alias", "/alias/child", "/alias/alias"] {
+        let error = worker::run(
+            &vfs,
+            &job_at(&vfs, "init", path),
+            "init",
+            &[json!({ "branch": "main" })],
+        )
+        .err()
+        .unwrap()
+        .to_string();
+        assert!(error.contains("mount point"), "{path}: {error}");
+    }
+    assert!(!root.path().join(".git").exists());
+    assert!(root.path().join("child").is_dir());
+    worker::run(
+        &vfs,
+        &job_at(&vfs, "init", "/child"),
+        "init",
+        &[json!({ "branch": "main" })],
+    )
+    .unwrap();
+}
+
+#[tokio::test]
+async fn mount_read_only_refuses_repository_changes_but_not_reads() {
+    let volume = tempfile::tempdir().unwrap();
+    let writable = mounted(
+        Vfs::tempdir().unwrap(),
+        volume.path(),
+        crate::runtime::vfs::Access::ReadWrite,
+    );
+    worker::run(
+        &writable,
+        &job_at(&writable, "init", "/memory"),
+        "init",
+        &[json!({ "branch": "main" })],
+    )
+    .unwrap();
+    std::fs::write(volume.path().join("note.txt"), "note").unwrap();
+    worker::run(
+        &writable,
+        &job_at(&writable, "add", "/memory"),
+        "add",
+        &[json!(["note.txt"])],
+    )
+    .unwrap();
+    std::fs::write(volume.path().join("other.txt"), "other").unwrap();
+    let before = storage::read_files(
+        &Dir::open_ambient_dir(volume.path(), cap_std::ambient_authority()).unwrap(),
+        true,
+        &AtomicBool::new(false),
+        storage::MAX_WORKING_BYTES,
+    )
+    .unwrap();
+    let vfs = mounted(
+        Vfs::tempdir().unwrap(),
+        volume.path(),
+        crate::runtime::vfs::Access::ReadOnly,
+    );
+    for (op, args) in [
+        ("add", vec![json!(["other.txt"])]),
+        ("commit", vec![json!("message")]),
+    ] {
+        let error = worker::run(&vfs, &job_at(&vfs, op, "/memory"), op, &args)
+            .err()
+            .unwrap();
+        let denied = error
+            .downcast_ref::<crate::runtime::host::PermissionDenied>()
+            .unwrap_or_else(|| panic!("{op}: {error}"));
+        assert_eq!(denied.capability, format!("git.{op}"));
+    }
+    let error = worker::run(
+        &vfs,
+        &job_at(&vfs, "init", "/memory/nested"),
+        "init",
+        &[json!({ "branch": "main" })],
+    )
+    .err()
+    .unwrap();
+    assert!(
+        error
+            .downcast_ref::<crate::runtime::host::PermissionDenied>()
+            .is_some()
+    );
+    assert!(!volume.path().join("nested").exists());
+    worker::run(&vfs, &job_at(&vfs, "status", "/memory"), "status", &[]).unwrap();
+    let after = storage::read_files(
+        &Dir::open_ambient_dir(volume.path(), cap_std::ambient_authority()).unwrap(),
+        true,
+        &AtomicBool::new(false),
+        storage::MAX_WORKING_BYTES,
+    )
+    .unwrap();
+    assert_eq!(before, after, "nothing in the volume changed");
+}
+
+#[cfg(target_os = "macos")]
+#[tokio::test]
+async fn mount_non_ascii_alias_cannot_host_a_repository() {
+    let volume = tempfile::tempdir().unwrap();
+    let vfs = Vfs::tempdir()
+        .unwrap()
+        .with_mount(crate::runtime::vfs::MountSpec {
+            guest_path: "/skills".into(),
+            host: volume.path().to_path_buf(),
+            volume: "skills".into(),
+            access: crate::runtime::vfs::Access::ReadWrite,
+            quota: None,
+        })
+        .unwrap();
+    // U+017F (long s) folds to `s` on a case-insensitive APFS volume.
+    let error = worker::run(
+        &vfs,
+        &job_at(&vfs, "init", "/\u{17F}kills"),
+        "init",
+        &[json!({ "branch": "main" })],
+    )
+    .err()
+    .unwrap()
+    .to_string();
+    assert!(error.contains("mount point /skills"), "{error}");
+    assert_eq!(
+        std::fs::read_dir(vfs.root().join("skills"))
+            .unwrap()
+            .count(),
+        0
+    );
+}
+
+/// A repository whose single file is `bytes` long, packed by native Git.
+fn packed_repository(bytes: usize) -> tempfile::TempDir {
+    let root = tempfile::tempdir().unwrap();
+    native(root.path(), &["init", "-b", "main"]);
+    native(root.path(), &["config", "user.name", "Native"]);
+    native(root.path(), &["config", "user.email", "native@example.com"]);
+    // Varied bytes, so the pack is as large as the file.
+    let contents: Vec<u8> = (0..bytes).map(|i| (i * 7919 % 251) as u8).collect();
+    std::fs::write(root.path().join("data"), contents).unwrap();
+    native(root.path(), &["add", "."]);
+    native(root.path(), &["commit", "-m", "data"]);
+    native(root.path(), &["gc", "--quiet"]);
+    root
+}
+
+/// The fuel `op` costs on the repository at `root`, its packs already checked.
+fn fuel_of(root: &Path, op: &str, args: &[serde_json::Value]) -> u64 {
+    let vfs = Vfs::external(root.to_path_buf()).unwrap();
+    worker::run(&vfs, &job(&vfs, "branches"), "branches", &[]).unwrap();
+    let job = job(&vfs, op);
+    worker::run(&vfs, &job, op, args).unwrap();
+    job.meter.fuel()
+}
+
+/// Reading and changing a repository costs what the operation touches, not
+/// the size of its packs: nothing is copied or re-indexed per call.
+#[tokio::test]
+async fn fuel_does_not_grow_with_pack_size() {
+    let small = packed_repository(1_000);
+    let large = packed_repository(4_000_000);
+    for (op, args) in [
+        ("branches", vec![]),
+        ("remotes", vec![]),
+        (
+            "addRemote",
+            vec![json!("origin"), json!("https://example.com/repo.git")],
+        ),
+    ] {
+        let small_fuel = fuel_of(small.path(), op, &args);
+        let large_fuel = fuel_of(large.path(), op, &args);
+        assert!(
+            large_fuel < small_fuel + small_fuel / 2,
+            "{op}: {small_fuel} fuel on a small pack, {large_fuel} on a 4 MB one"
+        );
+    }
+}
+
+/// Every file under `root`, `.git` included, with its mode and contents.
+fn digest(root: &Path) -> storage::Files {
+    let dir = Dir::open_ambient_dir(root, cap_std::ambient_authority()).unwrap();
+    storage::read_files(&dir, false, &AtomicBool::new(false), 64 << 20).unwrap()
+}
+
+/// A publication that fails after any number of its steps is undone, leaving
+/// the repository, worktree and `.git` alike, exactly as it was.
+#[test]
+fn a_publication_failing_at_any_step_leaves_the_repository_as_it_was() {
+    let root = repository();
+    for (path, contents) in [("kept", "kept"), ("changed", "before"), ("removed", "gone")] {
+        std::fs::write(root.path().join(path), contents).unwrap();
+    }
+    std::fs::write(root.path().join("swap"), "a file").unwrap();
+    native(root.path(), &["add", "."]);
+    native(root.path(), &["commit", "-m", "main"]);
+    native(root.path(), &["switch", "-c", "topic"]);
+    std::fs::write(root.path().join("changed"), "after").unwrap();
+    std::fs::remove_file(root.path().join("removed")).unwrap();
+    std::fs::remove_file(root.path().join("swap")).unwrap();
+    std::fs::create_dir_all(root.path().join("swap/deeper")).unwrap();
+    std::fs::write(root.path().join("swap/deeper/inner"), "now a directory").unwrap();
+    std::fs::write(root.path().join("added"), "new").unwrap();
+    native(root.path(), &["add", "-A"]);
+    native(root.path(), &["commit", "-m", "topic"]);
+    native(root.path(), &["switch", "main"]);
+    let before = digest(root.path());
+    let mut published = false;
+    for steps in 1..200 {
+        let state = snapshot(root.path());
+        super::operations::checkout(&state, "topic").unwrap();
+        super::stage::FAIL_AFTER.with(|after| after.set(Some(steps)));
+        let result = state.publish();
+        super::stage::FAIL_AFTER.with(|after| after.set(None));
+        if result.is_ok() {
+            published = true;
+            break;
+        }
+        assert_eq!(digest(root.path()), before, "after failing at step {steps}");
+    }
+    assert!(published, "publication finished within 200 steps");
+    assert!(native(root.path(), &["status", "--porcelain"]).is_empty());
+    assert_eq!(
+        native(root.path(), &["symbolic-ref", "HEAD"]),
+        b"refs/heads/topic\n"
+    );
+    assert_eq!(
+        std::fs::read(root.path().join("swap/deeper/inner")).unwrap(),
+        b"now a directory"
+    );
+    native(root.path(), &["fsck", "--full"]);
+
+    // And back: the directory gives way to the file again.
+    let state = snapshot(root.path());
+    super::operations::checkout(&state, "main").unwrap();
+    state.publish().unwrap();
+    assert_eq!(digest(root.path()).get("swap"), before.get("swap"));
+    assert!(native(root.path(), &["status", "--porcelain"]).is_empty());
+}
+
+/// Branches whose files differ only in case switch either way, on a
+/// filesystem that folds case as on one that doesn't.
+#[test]
+fn a_switch_renames_a_file_that_differs_only_in_case() {
+    let root = repository();
+    std::fs::create_dir(root.path().join("Docs")).unwrap();
+    std::fs::write(root.path().join("Docs/README"), "upper").unwrap();
+    native(root.path(), &["add", "."]);
+    native(root.path(), &["commit", "-m", "upper"]);
+    native(root.path(), &["switch", "-c", "lower"]);
+    native(root.path(), &["mv", "Docs/README", "Docs/readme.tmp"]);
+    native(root.path(), &["mv", "Docs/readme.tmp", "Docs/readme"]);
+    native(root.path(), &["mv", "Docs", "docs.tmp"]);
+    native(root.path(), &["mv", "docs.tmp", "docs"]);
+    native(root.path(), &["commit", "-m", "lower"]);
+    native(root.path(), &["switch", "main"]);
+    for (branch, path) in [("lower", "docs/readme"), ("main", "Docs/README")] {
+        let state = snapshot(root.path());
+        super::operations::checkout(&state, branch).unwrap();
+        state.publish().unwrap();
+        assert!(native(root.path(), &["status", "--porcelain"]).is_empty());
+        let directory = path.split('/').next().unwrap();
+        let names: Vec<_> = std::fs::read_dir(root.path())
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().into_string().unwrap())
+            .collect();
+        assert!(
+            names.iter().any(|name| name == directory),
+            "{branch}: {names:?}"
+        );
+    }
+}
+
+/// gix rewrites `shallow` during a fetch; with a stage it writes the stage's
+/// copy, which publication puts in place, or nothing reaches `.git`.
+#[test]
+fn shallow_is_staged_and_published() {
+    let root = repository();
+    let state = snapshot(root.path());
+    let shallow = state.repo.shallow_file();
+    assert!(
+        !shallow.starts_with(root.path().join(".git")),
+        "{shallow:?} is in .git"
+    );
+    let head = native(root.path(), &["rev-parse", "HEAD"]);
+    std::fs::write(&shallow, &head).unwrap();
+    drop(state);
+    assert!(!root.path().join(".git/shallow").exists());
+    let state = snapshot(root.path());
+    std::fs::write(state.repo.shallow_file(), &head).unwrap();
+    state.publish().unwrap();
+    assert_eq!(
+        std::fs::read(root.path().join(".git/shallow")).unwrap(),
+        head
+    );
+    let state = snapshot(root.path());
+    std::fs::remove_file(state.repo.shallow_file()).unwrap();
+    state.publish().unwrap();
+    assert!(!root.path().join(".git/shallow").exists());
+}
+
+/// A stage left before publication began is cleared by the next change, and
+/// left alone by a read; one left part way through publication blocks the
+/// repository. A file that only looks like a stage is neither.
+#[test]
+fn a_leftover_stage_is_cleared_unless_publication_began() {
+    let root = repository();
+    let left = root.path().join(format!(
+        "{}{}",
+        super::stage::STAGE_PREFIX,
+        uuid::Uuid::new_v4()
+    ));
+    std::fs::create_dir_all(left.join("objects")).unwrap();
+    let lookalike = root
+        .path()
+        .join(format!("{}notes", super::stage::STAGE_PREFIX));
+    std::fs::write(&lookalike, "not a stage").unwrap();
+    let open = |writes: bool| {
+        storage::Snapshot::open_unmetered(
+            &super::location::Location::at(root.path()),
+            Arc::new(AtomicBool::new(false)),
+            storage::MAX_WORKING_BYTES,
+            writes,
+        )
+    };
+    drop(open(false).unwrap());
+    assert!(left.exists(), "a read leaves a stage alone");
+    drop(open(true).unwrap());
+    assert!(!left.exists(), "a change clears it");
+    assert!(lookalike.exists());
+
+    std::fs::create_dir(&left).unwrap();
+    std::fs::write(left.join("publishing"), "").unwrap();
+    for writes in [false, true] {
+        let error = open(writes).err().unwrap();
+        assert!(error.to_string().contains("host recovery"), "{error}");
+    }
+}
+
+/// A publication that fails and can't be undone keeps what it replaced in its
+/// stage, keeps a `.git` it created, and leaves the repository refused until
+/// the host recovers it.
+#[test]
+fn a_publication_that_cannot_be_undone_needs_host_recovery() {
+    let root = tempfile::tempdir().unwrap();
+    let location = super::location::Location::at(root.path());
+    let open = |writes| {
+        storage::Snapshot::open_unmetered(
+            &location,
+            Arc::new(AtomicBool::new(false)),
+            storage::MAX_WORKING_BYTES,
+            writes,
+        )
+    };
+    let created = storage::Snapshot::init_unmetered(
+        &location,
+        "main",
+        Arc::new(AtomicBool::new(false)),
+        storage::MAX_WORKING_BYTES,
+    )
+    .unwrap();
+    created
+        .stage_worktree_file("notes.txt", 0o100644, b"notes")
+        .unwrap();
+    *created.pending_worktree.borrow_mut() = Some(super::stage::WorktreeChange {
+        remove: Vec::new(),
+        place: vec!["notes.txt".into()],
+    });
+    super::stage::FAIL_AFTER.with(|after| after.set(Some(1)));
+    super::stage::FAIL_UNDO.with(|undo| undo.set(true));
+    let result = created.publish();
+    super::stage::FAIL_AFTER.with(|after| after.set(None));
+    super::stage::FAIL_UNDO.with(|undo| undo.set(false));
+    let error = result.unwrap_err();
+    assert!(format!("{error:#}").contains("host recovery"), "{error:#}");
+    assert!(root.path().join(".git").exists(), "the created .git stays");
+    for writes in [false, true] {
+        let error = open(writes).err().unwrap();
+        assert!(error.to_string().contains("host recovery"), "{error}");
+    }
+}
+
+/// A repository of `files` small files under `d*/`, committed.
+fn wide_repository(files: usize) -> tempfile::TempDir {
+    let root = repository();
+    for number in 0..files {
+        let path = root
+            .path()
+            .join(format!("d{:02}/f{number:05}", number % 50));
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, format!("file {number}\n")).unwrap();
+    }
+    native(root.path(), &["add", "."]);
+    native(root.path(), &["commit", "-m", "wide"]);
+    root
+}
+
+/// `job` for `op` at the VFS root, its meter stopping the work past `ceiling` fuel.
+fn job_with_ceiling(vfs: &Vfs, op: &str, ceiling: u64) -> Job {
+    let mut job = job(vfs, op);
+    job.meter = Arc::new(super::meter::Meter::new(
+        ceiling,
+        Some(Arc::clone(&job.cancelled)),
+    ));
+    job
+}
+
+/// With less fuel than an operation needs, the worker stops itself near the
+/// ceiling instead of finishing and being charged after.
+#[tokio::test]
+async fn the_worker_stops_at_its_fuel_ceiling() {
+    let root = wide_repository(2_000);
+    let vfs = Vfs::external(root.path().to_path_buf()).unwrap();
+    let full = job(&vfs, "status");
+    worker::run(&vfs, &full, "status", &[]).unwrap();
+    let needed = full.meter.fuel();
+    let short = job_with_ceiling(&vfs, "status", needed / 10);
+    assert!(worker::run(&vfs, &short, "status", &[]).is_err());
+    assert!(short.meter.is_exhausted());
+    assert!(
+        short.meter.fuel() < needed / 2,
+        "stopped at {} of {needed}",
+        short.meter.fuel()
+    );
+}
+
+/// A change stopped for fuel is stopped before it publishes: the repository
+/// is as it was.
+#[tokio::test]
+async fn a_change_stopped_for_fuel_leaves_the_repository_as_it_was() {
+    let root = wide_repository(500);
+    for number in 0..500 {
+        let path = root
+            .path()
+            .join(format!("d{:02}/f{number:05}", number % 50));
+        std::fs::write(path, format!("changed {number}\n")).unwrap();
+    }
+    let before = digest(root.path());
+    // What `add` needs, measured on a copy so the repository stays untouched.
+    let probe = tempfile::tempdir().unwrap();
+    native(
+        probe.path(),
+        &[
+            "clone",
+            "-q",
+            "--no-hardlinks",
+            root.path().to_str().unwrap(),
+            ".",
+        ],
+    );
+    // A local path is no HTTPS remote Git accepts.
+    native(probe.path(), &["remote", "remove", "origin"]);
+    for number in 0..500 {
+        let path = probe
+            .path()
+            .join(format!("d{:02}/f{number:05}", number % 50));
+        std::fs::write(path, format!("changed {number}\n")).unwrap();
+    }
+    let probe_vfs = Vfs::external(probe.path().to_path_buf()).unwrap();
+    let measured = job(&probe_vfs, "add");
+    worker::run(&probe_vfs, &measured, "add", &[json!(["."])]).unwrap();
+    let vfs = Vfs::external(root.path().to_path_buf()).unwrap();
+    let short = job_with_ceiling(&vfs, "add", measured.meter.fuel() / 4);
+    assert!(worker::run(&vfs, &short, "add", &[json!(["."])]).is_err());
+    assert!(short.meter.is_exhausted());
+    assert_eq!(digest(root.path()), before);
+}
+
+#[tokio::test]
+async fn missing_add_worker_arguments_fail_without_stranding_repository_lock() {
+    let vfs = Vfs::tempdir().unwrap();
+    super::worker::run(&vfs, &job(&vfs, "init"), "init", &[]).unwrap();
+    let error = super::worker::run(&vfs, &job(&vfs, "add"), "add", &[])
+        .err()
+        .unwrap();
+    assert!(error.is::<crate::runtime::host::FatalHostError>());
+    assert!(error.to_string().contains("missing decoded paths"));
+    assert!(super::worker::run(&vfs, &job(&vfs, "status"), "status", &[]).is_ok());
+}
+
+#[tokio::test]
+async fn poisoned_worker_denial_record_is_fatal() {
+    use crate::runtime::security::{CheckOutcome, SecurityCheck};
+    struct Deny;
+    impl SecurityCheck for Deny {
+        fn check(&self, _: &str, _: &str, _: &serde_json::Value) -> CheckOutcome {
+            CheckOutcome::Deny {
+                rule: None,
+                reason: "test denial".into(),
+            }
+        }
+    }
+    let vfs = Vfs::tempdir().unwrap();
+    let mut job = job(&vfs, "init");
+    job.security = Arc::new(Deny);
+    let denial = job.denial.clone();
+    assert!(
+        std::thread::spawn(move || {
+            let _guard = denial.lock().unwrap();
+            panic!("injected denial poison");
+        })
+        .join()
+        .is_err()
+    );
+    let error = job.check("git.init", json!({"path":"/"})).unwrap_err();
+    assert!(error.is::<crate::runtime::host::FatalHostError>());
+    assert!(error.to_string().contains("denial lock poisoned"));
+}
+
+#[test]
+fn reference_spelling_lists_each_directory_once() {
+    let mut measurements = Vec::new();
+    for count in [128, 256] {
+        let root = repository();
+        let head = String::from_utf8(native(root.path(), &["rev-parse", "HEAD"])).unwrap();
+        for index in 0..count {
+            std::fs::write(
+                root.path()
+                    .join(format!(".git/refs/heads/branch{index:04}")),
+                &head,
+            )
+            .unwrap();
+        }
+        let state = snapshot(root.path());
+        for index in 0..count {
+            state
+                .validate_reference_spelling(&format!("refs/heads/branch{index:04}"))
+                .unwrap();
+        }
+        let actual = state.algorithm_fuel.spent();
+        eprintln!("reference spelling {count}: {actual}");
+        // The old heads-directory scan alone visited every prefix once.
+        let old = crate::runtime::fuel::SYSCALL.cost((count * (count + 1) / 2) as u64);
+        measurements.push((actual, old));
+    }
+    for (actual, old) in measurements {
+        assert!(actual < old / 2, "{actual} versus old lower bound {old}");
+    }
+}
+
+#[test]
+fn tree_file_validation_runs_once_per_loaded_set() {
+    let mut measurements = Vec::new();
+    for count in [128, 256] {
+        let root = repository();
+        for index in 0..count {
+            let directory = root.path().join(format!("dir{index:04}"));
+            std::fs::create_dir(&directory).unwrap();
+            std::fs::write(directory.join("file"), "x").unwrap();
+        }
+        native(root.path(), &["add", "."]);
+        native(root.path(), &["commit", "-m", "files"]);
+        let state = snapshot(root.path());
+        let tree = state
+            .repo
+            .head_commit()
+            .unwrap()
+            .tree_id()
+            .unwrap()
+            .detach();
+        let files = super::operations::tree_entries(&state, tree).unwrap();
+        assert_eq!(files.len(), count + 1);
+        measurements.push(state.algorithm_fuel.spent());
+    }
+    eprintln!("tree validation128/256: {measurements:?}");
+    assert!(measurements[1] < measurements[0] * 5 / 2);
+}
+
+#[test]
+fn show_inflates_only_the_requested_blob() {
+    let mut measurements = Vec::new();
+    for count in [128, 256] {
+        let root = repository();
+        for index in 0..count {
+            std::fs::write(
+                root.path().join(format!("other{index:04}")),
+                "x".repeat(count * 128),
+            )
+            .unwrap();
+        }
+        native(root.path(), &["add", "."]);
+        native(root.path(), &["commit", "-m", "large siblings"]);
+        let state = snapshot(root.path());
+        assert_eq!(
+            super::operations::show(&state, "HEAD", "base").unwrap(),
+            b"base"
+        );
+        measurements.push(state.algorithm_fuel.spent());
+    }
+    eprintln!("show unrelated128/256: {measurements:?}");
+    assert!(measurements[1] < measurements[0] * 5 / 2);
+}
+
+#[test]
+fn add_selects_requested_ranges_without_scanning_every_path() {
+    let mut measurements = Vec::new();
+    for count in [128, 256] {
+        let root = repository();
+        let mut paths = Vec::new();
+        for index in 0..count {
+            let name = format!("file{index:04}");
+            std::fs::write(root.path().join(&name), "x").unwrap();
+            paths.push(name);
+        }
+        native(root.path(), &["add", "."]);
+        native(root.path(), &["commit", "-m", "files"]);
+        let state = snapshot(root.path());
+        super::operations::add(&state, &paths).unwrap();
+        measurements.push(state.algorithm_fuel.spent());
+        assert_eq!(
+            super::operations::index_entries(&state).unwrap().len(),
+            count + 1
+        );
+    }
+    eprintln!("add individual128/256: {measurements:?}");
+    assert!(measurements[1] < measurements[0] * 5 / 2);
+}
+
+#[test]
+fn add_ranges_preserve_overlap_missing_children_and_deletions() {
+    let root = repository();
+    std::fs::create_dir(root.path().join("a")).unwrap();
+    std::fs::create_dir(root.path().join("a-")).unwrap();
+    std::fs::write(root.path().join("a/removed"), "old").unwrap();
+    native(root.path(), &["add", "."]);
+    native(root.path(), &["commit", "-m", "tracked child"]);
+    std::fs::remove_file(root.path().join("a/removed")).unwrap();
+    std::fs::write(root.path().join("a/new"), "new").unwrap();
+    std::fs::write(root.path().join("a-/sibling"), "sibling").unwrap();
+    let state = snapshot(root.path());
+    let before = super::operations::index_entries(&state).unwrap();
+    assert!(super::operations::add(&state, &["a".into(), "a/missing".into()]).is_err());
+    assert_eq!(super::operations::index_entries(&state).unwrap(), before);
+    super::operations::add(
+        &state,
+        &[
+            "a".into(),
+            "a-/sibling".into(),
+            "a/new".into(),
+            "a/removed".into(),
+        ],
+    )
+    .unwrap();
+    let files = super::operations::index_entries(&state).unwrap();
+    assert_eq!(files.len(), 3);
+    assert!(files.contains_key("a/new") && files.contains_key("a-/sibling"));
+    assert!(!files.contains_key("a/removed"));
+}
+
+#[test]
+fn diff_inflates_only_changed_blobs() {
+    let mut measurements = Vec::new();
+    for count in [128, 256] {
+        let root = repository();
+        for index in 0..count {
+            std::fs::write(
+                root.path().join(format!("other{index:04}")),
+                "x".repeat(count * 128),
+            )
+            .unwrap();
+        }
+        native(root.path(), &["add", "."]);
+        native(root.path(), &["commit", "-m", "large siblings"]);
+        let from = String::from_utf8(native(root.path(), &["rev-parse", "HEAD"])).unwrap();
+        std::fs::write(root.path().join("base"), "changed\n").unwrap();
+        native(root.path(), &["add", "."]);
+        native(root.path(), &["commit", "-m", "small change"]);
+        let state = snapshot(root.path());
+        let result = super::operations::read(
+            &state,
+            "diff",
+            &[json!({"mode":"refs","from":from.trim(),"to":"HEAD"})],
+        )
+        .unwrap();
+        assert!(result["patch"].as_str().unwrap().contains("+changed"));
+        measurements.push(state.algorithm_fuel.spent());
+    }
+    eprintln!("diff unrelated128/256: {measurements:?}");
+    assert!(measurements[1] < measurements[0] * 5 / 2);
+    for (actual, old) in measurements.iter().zip([25_790_448, 102_963_724]) {
+        assert!(*actual < old / 2);
+    }
+}
+
+#[test]
+fn selective_diff_preserves_staged_working_and_binary_changes() {
+    let root = repository();
+    std::fs::write(root.path().join("base"), "staged\n").unwrap();
+    std::fs::write(root.path().join("binary"), [0, 1, 2]).unwrap();
+    native(root.path(), &["add", "."]);
+    let state = snapshot(root.path());
+    let staged = super::operations::read(&state, "diff", &[json!({"mode":"staged"})]).unwrap();
+    assert!(staged["patch"].as_str().unwrap().contains("+staged"));
+    assert_eq!(staged["binaryPaths"], json!(["binary"]));
+    drop(state);
+    std::fs::write(root.path().join("base"), "working\n").unwrap();
+    std::fs::write(root.path().join("untracked"), "not in diff\n").unwrap();
+    let state = snapshot(root.path());
+    let working = super::operations::read(&state, "diff", &[json!({"mode":"working"})]).unwrap();
+    let patch = working["patch"].as_str().unwrap();
+    assert!(patch.contains("-staged") && patch.contains("+working"));
+    assert!(!patch.contains("untracked"));
+}
+
+#[test]
+fn diff_uses_bounded_sanitized_native_index_and_recovers() {
+    let root = repository();
+    let mut state = snapshot(root.path());
+    let path = root.path().join(".git/index");
+    let healthy = std::fs::read(&path).unwrap();
+    let payload = [b"a\0-1 1\n".repeat(1000), b"a\0-1 0\n".to_vec()].concat();
+    let mut bytes = [b"DIRC".as_slice(), &2u32.to_be_bytes(), &0u32.to_be_bytes()].concat();
+    bytes.extend_from_slice(b"TREE");
+    bytes.extend_from_slice(&u32::try_from(payload.len()).unwrap().to_be_bytes());
+    bytes.extend_from_slice(&payload);
+    let mut hasher = gix::hash::hasher(gix::hash::Kind::Sha1);
+    hasher.update(&bytes);
+    bytes.extend_from_slice(hasher.try_finalize().unwrap().as_slice());
+    std::fs::write(&path, &bytes).unwrap();
+    for mode in ["working", "staged"] {
+        super::operations::read(&state, "diff", &[json!({"mode":mode})]).unwrap();
+    }
+    let original_limit = state.max_bytes;
+    state.max_bytes = 128;
+    for mode in ["working", "staged"] {
+        assert!(super::operations::read(&state, "diff", &[json!({"mode":mode})]).is_err());
+    }
+    state.max_bytes = original_limit;
+    std::fs::write(&path, healthy).unwrap();
+    for mode in ["working", "staged"] {
+        let result = super::operations::read(&state, "diff", &[json!({"mode":mode})]).unwrap();
+        assert_eq!(result["patch"], "");
+    }
 }

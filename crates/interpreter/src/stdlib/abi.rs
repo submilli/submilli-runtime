@@ -3,9 +3,10 @@
 //! registrar. A package describes its backing layout as a field list and its
 //! getter surface as a data table; the mechanism lives here once.
 
+use crate::runtime::host::{abi_arg, abi_result};
 use wasmtime::{
-    ArrayRef, ArrayRefPre, Caller, FieldType, Finality, FuncType, HeapType, Linker, Mutability,
-    RefType, Rooted, StorageType, StructRef, StructRefPre, StructType, Val, ValType,
+    Caller, FieldType, Finality, FuncType, HeapType, Linker, Mutability, RefType, Rooted,
+    StorageType, StructRef, StructRefPre, StructType, Val, ValType,
 };
 
 use crate::runtime::StoreData;
@@ -91,23 +92,7 @@ pub(crate) fn new_array(
     caller: &mut Caller<'_, StoreData>,
     elements: &[Val],
 ) -> wasmtime::Result<Val> {
-    let (array_ty, raw_ty) = {
-        let abi = caller
-            .data()
-            .host_abi
-            .as_ref()
-            .ok_or_else(|| wasmtime::Error::msg("host_abi unset (prelude not instantiated)"))?;
-        (abi.array_type.clone(), abi.raw_array_type.clone())
-    };
-    let vtable = crate::runtime::host::host_array_vtable(caller)?;
-    let raw_pre = ArrayRefPre::new(&mut *caller, raw_ty);
-    let raw = ArrayRef::new_fixed(&mut *caller, &raw_pre, elements)?;
-    let pre = StructRefPre::new(&mut *caller, array_ty);
-    let st = StructRef::new(
-        &mut *caller,
-        &pre,
-        &[vtable, Val::AnyRef(Some(raw.to_anyref()))],
-    )?;
+    let st = crate::runtime::host::write_submilli_array_struct(caller, elements)?;
     Ok(Val::AnyRef(Some(st.to_anyref())))
 }
 
@@ -134,8 +119,8 @@ pub(crate) fn install_field_getters(
             FuncType::new(engine, [receiver.clone()], [result.clone()]),
             /* deterministic = */ true,
             move |caller, params, results| {
-                let st = backing_receiver(caller, &params[0])?;
-                results[0] = st.field(&mut *caller, field)?;
+                let st = backing_receiver(caller, abi_arg(params, 0)?)?;
+                *abi_result(results, 0)? = st.field(&mut *caller, field)?;
                 Ok(())
             },
         )?;

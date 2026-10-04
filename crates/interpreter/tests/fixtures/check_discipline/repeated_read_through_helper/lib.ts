@@ -32,6 +32,7 @@ function conversation(channelId: string): string {
 
 /**
  * Sends the message.
+ * @param input Message and where to send it.
  * @capability test.com/send { channelId: string }
  */
 export function send(input: Input): void {

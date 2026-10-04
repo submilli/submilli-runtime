@@ -6,7 +6,7 @@
 //!
 //! **Keep in sync with the host functions.** When a host fn in `stdlib::fs` /
 //! `stdlib::http` (or a new gated module) starts or stops gating a capability,
-//! update the matching entry here — see CLAUDE.md. The `capabilities` test in
+//! update the matching entry here — see AGENTS.md. The `capabilities` test in
 //! the `submilli` CLI asserts every `example_filter` below parses.
 
 /// One context field a capability's `filter:` expression can match on.
@@ -17,10 +17,63 @@ pub struct FilterField {
     pub ty: &'static str,
     /// One line on what the field carries.
     pub doc: &'static str,
+    /// How the runtime rewrites the value before the policy sees it.
+    pub normalization: FieldNormalization,
+}
+
+/// A rewrite the runtime applies to a field's value before checking it. Call-site
+/// derivation applies the same rewrite to a literal argument, so the filter it
+/// writes into `requires` names the value the policy is asked about.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FieldNormalization {
+    /// Checked exactly as the caller passed it.
+    Verbatim,
+    /// Absolute guest path with `.` and `..` collapsed, as VFS I/O resolves it.
+    VfsPath,
+    /// The serialized form of the parsed HTTPS repository URL: lowercase host,
+    /// no default port, `/` for an empty path, percent-encoded.
+    RepositoryUrl,
+}
+
+impl FieldNormalization {
+    /// The value the runtime checks for `value`, or why the runtime refuses it.
+    pub(crate) fn apply(self, value: &str) -> Result<String, String> {
+        match self {
+            Self::Verbatim => Ok(value.to_string()),
+            Self::VfsPath => {
+                crate::runtime::fs::guest_normalize("/", value).map_err(|error| error.to_string())
+            }
+            Self::RepositoryUrl => {
+                crate::stdlib::git::canonical_url(value).map_err(|error| error.to_string())
+            }
+        }
+    }
 }
 
 const fn field(name: &'static str, ty: &'static str, doc: &'static str) -> FilterField {
-    FilterField { name, ty, doc }
+    FilterField {
+        name,
+        ty,
+        doc,
+        normalization: FieldNormalization::Verbatim,
+    }
+}
+
+const fn vfs_path_field(name: &'static str, doc: &'static str) -> FilterField {
+    normalized_string_field(name, doc, FieldNormalization::VfsPath)
+}
+
+const fn normalized_string_field(
+    name: &'static str,
+    doc: &'static str,
+    normalization: FieldNormalization,
+) -> FilterField {
+    FilterField {
+        name,
+        ty: "string",
+        doc,
+        normalization,
+    }
 }
 
 /// One gated capability and the policy `filter:` surface it exposes.
@@ -68,18 +121,20 @@ pub struct CapabilityGroup {
     pub capabilities: &'static [Capability],
 }
 
-const PATH: FilterField = field(
-    "path",
-    "string",
-    "Normalized absolute VFS path the call targets",
-);
+const PATH: FilterField = vfs_path_field("path", "Normalized absolute VFS path the call targets");
 const RECURSIVE: FilterField = field(
     "recursive",
     "boolean",
     "Whether the operation applies recursively",
 );
-const FROM: FilterField = field("from", "string", "Normalized absolute source VFS path");
-const TO: FilterField = field("to", "string", "Normalized absolute destination VFS path");
+const FROM: FilterField = vfs_path_field("from", "Normalized absolute source VFS path");
+const TO: FilterField = vfs_path_field("to", "Normalized absolute destination VFS path");
+/// The code module checks workspace access as recursive.
+const CODE_RECURSIVE: FilterField = field(
+    "recursive",
+    "boolean",
+    "Always true; supplied by the code module only",
+);
 const KEY: FilterField = field("key", "string", "Session key the call targets");
 const PREFIX: FilterField = field("prefix", "string", "Session key prefix being listed");
 
@@ -88,21 +143,52 @@ const FS: &[Capability] = &[
         name: "fs.read",
         main_denial: None,
         summary: "Read files and code workspace content (including search and ignore rules)",
-        filter_fields: &[PATH],
+        filter_fields: &[
+            PATH,
+            field(
+                "length",
+                "number",
+                "Bytes requested; supplied by `readBytes` only",
+            ),
+            field(
+                "chunkSize",
+                "number",
+                "Chunk size in bytes; supplied by `bytes` only",
+            ),
+            CODE_RECURSIVE,
+        ],
         example_filter: "path glob \"*.csv\"",
     },
     Capability {
         name: "fs.write",
         main_denial: None,
         summary: "Create, write, append, or apply code edits to files",
-        filter_fields: &[PATH],
+        filter_fields: &[
+            PATH,
+            field(
+                "length",
+                "number",
+                "Content size in bytes; supplied by `write`, `writeText`, `append`, \
+                 `appendText`, and code edits",
+            ),
+            field(
+                "max_bytes",
+                "number",
+                "Requested download size cap in bytes; supplied by `http.download` and packages that stream downloads",
+            ),
+            field(
+                "diff",
+                "string",
+                "Unified diff of the edit; supplied by code edits only",
+            ),
+        ],
         example_filter: "path glob \"/out/*\"",
     },
     Capability {
         name: "fs.stat",
         main_denial: None,
         summary: "Inspect metadata (including code workspace discovery)",
-        filter_fields: &[PATH],
+        filter_fields: &[PATH, CODE_RECURSIVE],
         example_filter: "path glob \"/data/*\"",
     },
     Capability {
@@ -143,7 +229,11 @@ const FS: &[Capability] = &[
 ];
 
 const BRANCH: FilterField = field("branch", "string", "Local or requested remote branch name");
-const REMOTE: FilterField = field("remote", "string", "Exact HTTPS repository URL");
+const REMOTE: FilterField = normalized_string_field(
+    "remote",
+    "Canonical HTTPS repository URL",
+    FieldNormalization::RepositoryUrl,
+);
 const REMOTE_NAME: FilterField = field("remoteName", "string", "Named remote, for example origin");
 const GIT: &[Capability] = &[
     Capability {
@@ -240,9 +330,8 @@ const HTTP: &[Capability] = &[
         filter_fields: &[
             field("host", "string", "Download host, without port"),
             field("url_path", "string", "URL path component"),
-            field(
+            vfs_path_field(
                 "vfs_path",
-                "string",
                 "Normalized absolute destination path in the VFS",
             ),
             field(
@@ -264,6 +353,19 @@ const HTTP: &[Capability] = &[
         example_filter: "host == \"cdn.example.com\" and overwrite == false",
     },
 ];
+
+/// Every other method `http.request` takes, gated as `http.<method>` with the
+/// method lowercased: `http.request("TRACE", …)` checks `http.trace`. Kept
+/// out of [`CATALOG`], whose consumers read a templated name as
+/// `mcp.<server>` and concretize it per declared server; see
+/// [`uncataloged_http_method`].
+pub const HTTP_OTHER_METHOD: Capability = Capability {
+    name: "http.<method>",
+    main_denial: None,
+    summary: "Any other HTTP method, through `http.request`: `http.trace` gates TRACE",
+    filter_fields: HTTP_VERB_FIELDS,
+    example_filter: "host == \"api.example.com\"",
+};
 
 /// Outbound MCP calls — one capability per declared server, `mcp.<server>` (the
 /// `<server>` placeholder is filled in per blueprint, whose `mcp:` block names its
@@ -293,13 +395,14 @@ const LLM: &[Capability] = &[Capability {
     summary: "Call a model (call, batch) and enumerate the models it may call (models). \
               Narrowing `model` also narrows what `models()` reveals: every candidate is \
               filtered through this same rule, so a listing never offers a model the \
-              caller would be denied at call time",
+              caller would be denied at call time. A policy allowing no candidates \
+              returns an empty listing",
     filter_fields: &[
         field(
             "model",
             "string",
-            "Model name the call targets; \"\" on the `models` op itself, then each \
-             candidate's own name as the listing is filtered",
+            "Model name the call targets or the candidate being listed. \
+             The runtime preflight does not ask policy about an empty name",
         ),
         field(
             "prompt_count",
@@ -397,6 +500,28 @@ pub fn find(name: &str) -> Option<&'static Capability> {
         .iter()
         .flat_map(|group| group.capabilities)
         .find(|cap| cap.name == name)
+}
+
+/// The method of a name that fills [`HTTP_OTHER_METHOD`]: `http.` and a method
+/// token in the lowercase form the runtime checks, which the catalog has no
+/// entry for.
+pub fn uncataloged_http_method(name: &str) -> Option<&str> {
+    let method = name.strip_prefix("http.")?;
+    (is_lowercase_http_token(method) && find(name).is_none()).then_some(method)
+}
+
+/// The entry describing `name`: its catalog entry, or [`HTTP_OTHER_METHOD`]
+/// for a name that fills it.
+pub fn find_gating(name: &str) -> Option<&'static Capability> {
+    find(name).or_else(|| uncataloged_http_method(name).map(|_| &HTTP_OTHER_METHOD))
+}
+
+/// An RFC 9110 method token, the set `http.request` accepts, in lowercase.
+fn is_lowercase_http_token(method: &str) -> bool {
+    !method.is_empty()
+        && method.bytes().all(|byte| {
+            byte.is_ascii_lowercase() || byte.is_ascii_digit() || b"!#$%&'*+-.^_`|~".contains(&byte)
+        })
 }
 
 #[cfg(test)]
@@ -501,6 +626,30 @@ mod tests {
             summary.contains("models()"),
             "the summary must say narrowing `model` narrows discovery: {summary}"
         );
+    }
+
+    #[test]
+    fn uncataloged_http_methods_fill_the_template() {
+        assert_eq!(uncataloged_http_method("http.trace"), Some("trace"));
+        assert_eq!(uncataloged_http_method("http.propfind"), Some("propfind"));
+        // Cataloged, the template itself, uppercase (the runtime lowercases),
+        // empty, or not a token.
+        for name in [
+            "http.get",
+            "http.<method>",
+            "http.TRACE",
+            "http.",
+            "http.a b",
+            "fs.trace",
+        ] {
+            assert!(uncataloged_http_method(name).is_none(), "{name}");
+        }
+        assert!(HTTP_OTHER_METHOD.is_template());
+        assert_eq!(
+            find_gating("http.trace").map(|c| c.name),
+            Some("http.<method>")
+        );
+        assert_eq!(find_gating("http.get").map(|c| c.name), Some("http.get"));
     }
 
     #[test]

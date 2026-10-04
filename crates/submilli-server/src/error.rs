@@ -7,6 +7,8 @@ pub enum ErrorKind {
     Timeout,
     FuelExhausted,
     MemoryExhausted,
+    StackExhausted,
+    Cancelled,
     RuntimeError,
     BlueprintNotFound,
     PackageResolution,

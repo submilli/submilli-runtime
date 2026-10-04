@@ -12,6 +12,7 @@ export type Aliased = {
 
 /**
  * Binds through an interface.
+ * @param input Message and where to send it.
  * @capability test.com/interface { owner: $input.teamId }
  */
 export function throughInterface(input: Input): void {
@@ -21,6 +22,7 @@ export function throughInterface(input: Input): void {
 
 /**
  * Binds through an alias.
+ * @param input Message and where to send it.
  * @capability test.com/alias { owner: $input.teamId }
  */
 export function throughAlias(input: Aliased): void {
@@ -30,6 +32,7 @@ export function throughAlias(input: Aliased): void {
 
 /**
  * Binds through a nullable parameter.
+ * @param input Message and where to send it.
  * @capability test.com/nullable { owner: $input.teamId }
  */
 export function throughNullable(input: Input | null): void {
@@ -39,6 +42,7 @@ export function throughNullable(input: Input | null): void {
 
 /**
  * Binds the components of a URL.
+ * @param url URL to request.
  * @capability test.com/url { host: $url.host, path: $url.path }
  */
 export function throughUrl(url: string): void {

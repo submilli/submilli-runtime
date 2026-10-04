@@ -181,6 +181,26 @@ impl FilterExpr {
         out
     }
 
+    /// The context field each comparison tests, in source order (duplicates
+    /// included): the first segment of its path, so `order.total` yields
+    /// `order`. Boolean structure is ignored, as in [`Self::field_matches`].
+    pub fn top_level_fields(&self) -> Vec<&str> {
+        let mut out = Vec::new();
+        self.collect_top_level_fields(&mut out);
+        out
+    }
+
+    fn collect_top_level_fields<'a>(&'a self, out: &mut Vec<&'a str>) {
+        match self {
+            FilterExpr::Compare(c) => out.extend(c.path.first().map(String::as_str)),
+            FilterExpr::Not(inner) => inner.collect_top_level_fields(out),
+            FilterExpr::And(left, right) | FilterExpr::Or(left, right) => {
+                left.collect_top_level_fields(out);
+                right.collect_top_level_fields(out);
+            }
+        }
+    }
+
     fn collect_var_refs<'a>(&'a self, out: &mut Vec<&'a str>) {
         match self {
             FilterExpr::Compare(c) => match &c.operand {
@@ -233,19 +253,10 @@ impl Comparison {
             return false;
         };
         match self.op {
-            CompareOp::Lt | CompareOp::Le | CompareOp::Ge | CompareOp::Gt => {
-                let (Some(n), Some(x)) = (operand_as_f64(&self.operand, vars), value.as_f64())
-                else {
-                    return false;
-                };
-                match self.op {
-                    CompareOp::Lt => x < n,
-                    CompareOp::Le => x <= n,
-                    CompareOp::Ge => x >= n,
-                    CompareOp::Gt => x > n,
-                    _ => unreachable!(),
-                }
-            }
+            CompareOp::Lt => self.eval_numeric(value, vars, |x, n| x < n),
+            CompareOp::Le => self.eval_numeric(value, vars, |x, n| x <= n),
+            CompareOp::Ge => self.eval_numeric(value, vars, |x, n| x >= n),
+            CompareOp::Gt => self.eval_numeric(value, vars, |x, n| x > n),
             CompareOp::Eq => scalar_eq(value, &self.operand, vars).unwrap_or(false),
             CompareOp::Ne => match scalar_eq(value, &self.operand, vars) {
                 Some(equal) => !equal,
@@ -281,6 +292,18 @@ impl Comparison {
                     .any(|el| scalar_eq(el, &self.operand, vars).unwrap_or(false))
             }
         }
+    }
+
+    fn eval_numeric(
+        &self,
+        value: &serde_json::Value,
+        vars: &VarBindings,
+        compare: impl FnOnce(f64, f64) -> bool,
+    ) -> bool {
+        let (Some(n), Some(x)) = (operand_as_f64(&self.operand, vars), value.as_f64()) else {
+            return false;
+        };
+        compare(x, n)
     }
 }
 
@@ -1395,6 +1418,14 @@ mod tests {
         assert!(parse_filter("amount < 5)").is_err());
         assert!(parse_filter("host matches \"(\"").is_err()); // unbalanced regex group
         assert!(parse_filter("host == \"unterminated").is_err());
+    }
+
+    #[test]
+    fn top_level_fields_name_each_comparison_through_not_and_or() {
+        assert_eq!(
+            filter("a == 1 and not (b.c == \"x\" or a < 2)").top_level_fields(),
+            ["a", "b", "a"]
+        );
     }
 
     #[test]

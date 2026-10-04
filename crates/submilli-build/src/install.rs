@@ -15,8 +15,8 @@ use std::path::{Path, PathBuf};
 
 use crate::resolve::PlannedInstall;
 use crate::{
-    BuildDiagnostic, DriverError, PackageName, PackageSource, PackageStore, PackageStoreError,
-    PackageVersion, build_packages, install_packages, load_manifest,
+    BuildDiagnostic, BuiltPackage, DriverError, PackageName, PackageSource, PackageStore,
+    PackageStoreError, PackageVersion, build_packages, install_packages, load_manifest,
 };
 
 /// What an install wrote and skipped.
@@ -24,6 +24,7 @@ use crate::{
 pub struct InstallReport {
     pub installed: Vec<InstalledPackage>,
     pub up_to_date: Vec<PackageName>,
+    pub warnings: Vec<String>,
 }
 
 #[derive(Debug)]
@@ -43,8 +44,14 @@ pub struct InstallConflict {
 
 #[derive(Debug)]
 pub enum InstallError {
+    WarningsDenied {
+        warnings: Vec<String>,
+    },
+    Preparation(std::io::Error),
     /// No `submilli.toml` at the repo root.
-    NoManifest { repo_dir: PathBuf },
+    NoManifest {
+        repo_dir: PathBuf,
+    },
     /// The manifest failed to parse. Carries the text so the caller can render
     /// source-anchored diagnostics.
     Manifest {
@@ -80,6 +87,119 @@ pub fn install_from_dir(
     source: &PackageSource,
     upgrade: bool,
 ) -> Result<InstallReport, InstallError> {
+    let mut preparation = InstallPreparation::new(store)?;
+    let report = preparation.prepare_repo(repo_dir, only, source, upgrade)?;
+    preparation.publish(false)?;
+    Ok(report)
+}
+
+/// Prepare a dependency closure without changing the destination store.
+/// Temporary artifacts supply declarations to subsequent compilations.
+pub struct InstallPreparation {
+    destination: PackageStore,
+    staging: PackageStore,
+    _directory: tempfile::TempDir,
+    packages: Vec<BuiltPackage>,
+    pub warnings: Vec<String>,
+}
+
+impl InstallPreparation {
+    pub fn new(destination: &PackageStore) -> Result<Self, InstallError> {
+        let directory = tempfile::tempdir().map_err(InstallError::Preparation)?;
+        let mut staging = PackageStore::new(directory.path());
+        for root in destination.roots() {
+            staging = staging.with_fallback(root);
+        }
+        Ok(Self {
+            destination: destination.clone(),
+            staging,
+            _directory: directory,
+            packages: Vec::new(),
+            warnings: Vec::new(),
+        })
+    }
+
+    pub fn store(&self) -> &PackageStore {
+        &self.staging
+    }
+
+    pub fn prepare_plan(
+        &mut self,
+        plan: &[PlannedInstall],
+        upgrade: bool,
+    ) -> Result<(), InstallError> {
+        for node in plan {
+            self.prepare_repo(node.repo_dir(), Some(&node.name), &node.source, upgrade)?;
+        }
+        Ok(())
+    }
+
+    pub fn prepare_repo(
+        &mut self,
+        repo_dir: &Path,
+        only: Option<&PackageName>,
+        source: &PackageSource,
+        upgrade: bool,
+    ) -> Result<InstallReport, InstallError> {
+        let mut built = compile_repo(&self.staging, repo_dir, only, source)?;
+        let warnings: Vec<String> = built
+            .iter()
+            .flat_map(|package| package.warnings.clone())
+            .collect();
+        self.warnings.extend(warnings.iter().cloned());
+        let (to_install, up_to_date) =
+            select_install(&self.destination, &self.staging, &built, source, upgrade)?;
+        // Even same-commit packages supply the freshly compiled declarations.
+        install_packages(&self.staging, &built).map_err(InstallError::Driver)?;
+        let mut installed = Vec::new();
+        for package in &built {
+            if to_install.contains(&package.name) {
+                installed.push(InstalledPackage {
+                    name: package.name.clone(),
+                    version: package.version.clone(),
+                    dir: self
+                        .destination
+                        .package_dir(package.name.as_str())
+                        .map_err(InstallError::Store)?,
+                });
+            }
+        }
+        built.retain(|package| to_install.contains(&package.name));
+        for package in built {
+            if let Some(existing) = self
+                .packages
+                .iter_mut()
+                .find(|existing| existing.name == package.name)
+            {
+                *existing = package;
+            } else {
+                self.packages.push(package);
+            }
+        }
+        Ok(InstallReport {
+            installed,
+            up_to_date,
+            warnings,
+        })
+    }
+
+    pub fn publish(self, deny_warnings: bool) -> Result<(), InstallError> {
+        if deny_warnings && !self.warnings.is_empty() {
+            return Err(InstallError::WarningsDenied {
+                warnings: self.warnings,
+            });
+        }
+        install_packages(&self.destination, &self.packages).map_err(InstallError::Driver)?;
+        Ok(())
+    }
+}
+
+fn compile_repo(
+    store: &PackageStore,
+    repo_dir: &Path,
+    only: Option<&PackageName>,
+    source: &PackageSource,
+) -> Result<Vec<BuiltPackage>, InstallError> {
     let manifest_path = repo_dir.join("submilli.toml");
     if !manifest_path.is_file() {
         return Err(InstallError::NoManifest {
@@ -91,16 +211,14 @@ pub fn install_from_dir(
         manifest_text: std::fs::read_to_string(&manifest_path).unwrap_or_default(),
         diagnostics,
     })?;
-
     let mut built =
         build_packages(&manifest, repo_dir, store, only).map_err(InstallError::Driver)?;
-
     let PackageSource::Github(github) = source;
-    let mismatched: Vec<PackageName> = built
+    let mismatched = built
         .iter()
         .filter(|package| scope_of(package.name.as_str()) != github.org)
         .map(|package| package.name.clone())
-        .collect();
+        .collect::<Vec<_>>();
     if !mismatched.is_empty() {
         return Err(InstallError::ScopeMismatch {
             org: github.org.clone(),
@@ -108,30 +226,39 @@ pub fn install_from_dir(
             packages: mismatched,
         });
     }
-
     for package in &mut built {
         package.source = Some(source.clone());
     }
+    Ok(built)
+}
 
+fn select_install(
+    store: &PackageStore,
+    staging: &PackageStore,
+    built: &[BuiltPackage],
+    source: &PackageSource,
+    upgrade: bool,
+) -> Result<(Vec<PackageName>, Vec<PackageName>), InstallError> {
+    let PackageSource::Github(github) = source;
     let mut conflicts = Vec::new();
     let mut up_to_date = Vec::new();
     let mut to_install = Vec::new();
     for package in built {
-        // Only the owned root counts: a copy in a read-only fallback store is
-        // not this store's install, so it neither conflicts nor satisfies.
-        match store.load_owned(package.name.as_str()) {
-            Err(PackageStoreError::MissingPackage { .. }) => to_install.push(package),
-            // An interrupted earlier install: the incoming write replaces it.
-            Err(err) if err.is_incomplete_artifact() => to_install.push(package),
+        let existing = match staging.load_owned(package.name.as_str()) {
+            Err(PackageStoreError::MissingPackage { .. }) => {
+                store.load_owned(package.name.as_str())
+            }
+            result => result,
+        };
+        match existing {
+            Err(PackageStoreError::MissingPackage { .. }) => to_install.push(package.name.clone()),
+            Err(err) if err.is_incomplete_artifact() => to_install.push(package.name.clone()),
             Err(err) => return Err(InstallError::Store(err)),
             Ok(artifact) => match artifact.metadata.source {
                 Some(PackageSource::Github(existing)) if existing.sha == github.sha => {
                     up_to_date.push(package.name.clone());
                 }
-                existing if upgrade => {
-                    let _ = existing;
-                    to_install.push(package);
-                }
+                _ if upgrade => to_install.push(package.name.clone()),
                 existing => conflicts.push(InstallConflict {
                     name: package.name.clone(),
                     current: describe_source(existing.as_ref()),
@@ -139,51 +266,24 @@ pub fn install_from_dir(
             },
         }
     }
-
     if !conflicts.is_empty() {
         return Err(InstallError::Conflict {
             incoming: short_sha(&github.sha).to_string(),
             conflicts,
         });
     }
-
-    let dirs = install_packages(store, &to_install).map_err(InstallError::Driver)?;
-    let installed = to_install
-        .into_iter()
-        .zip(dirs)
-        .map(|(package, dir)| InstalledPackage {
-            name: package.name,
-            version: package.version,
-            dir,
-        })
-        .collect();
-
-    Ok(InstallReport {
-        installed,
-        up_to_date,
-    })
+    Ok((to_install, up_to_date))
 }
 
-/// Install each fetched dependency in a resolved GitHub closure `plan` into the
-/// store, in dependency order (deps before dependents). Network-free — the
-/// fetching already happened in
-/// [`resolve_github_closure`](crate::resolve::resolve_github_closure). Each
-/// node's own re-install / `--upgrade` policy is applied by [`install_from_dir`].
+/// Compile and publish a resolved dependency closure.
 pub fn install_plan(
     store: &PackageStore,
     plan: &[PlannedInstall],
     upgrade: bool,
 ) -> Result<(), InstallError> {
-    for node in plan {
-        install_from_dir(
-            store,
-            node.repo_dir(),
-            Some(&node.name),
-            &node.source,
-            upgrade,
-        )?;
-    }
-    Ok(())
+    let mut preparation = InstallPreparation::new(store)?;
+    preparation.prepare_plan(plan, upgrade)?;
+    preparation.publish(false)
 }
 
 fn scope_of(name: &str) -> &str {
@@ -202,5 +302,5 @@ fn describe_source(source: Option<&PackageSource>) -> String {
 }
 
 fn short_sha(sha: &str) -> &str {
-    &sha[..sha.len().min(12)]
+    sha.get(..12).unwrap_or(sha)
 }

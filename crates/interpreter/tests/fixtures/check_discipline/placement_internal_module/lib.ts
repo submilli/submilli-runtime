@@ -26,7 +26,11 @@ export interface Options {
 
 function post(channelId: string, text: string): void {}
 
-/** Sends the message. */
+/**
+ * Sends the message.
+ * @param channelId Conversation to post in.
+ * @param text Message text.
+ */
 export function send(channelId: string, text: string): void {
   guard(channelId);
   post(channelId, text);

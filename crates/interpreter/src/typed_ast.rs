@@ -1118,6 +1118,7 @@ pub enum InterfaceCarrier {
     FsPeek,
     FsDirEntry,
     FsInfo,
+    FsMountInfo,
     FsFileWriter,
     HttpResponse,
     HttpDownloadResult,
@@ -1188,6 +1189,8 @@ impl TypedClassDecl {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct TypedClassConstructor {
+    pub doc: Option<Box<crate::DocComment>>,
+    pub span: Span,
     pub params: Vec<TypedParam>,
     pub body: StmtId,
 }
@@ -1205,6 +1208,8 @@ pub struct TypedClassMethod {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct TypedInterfaceDecl {
+    /// Complete property names, including inherited properties, for payload validation.
+    pub property_names: std::collections::BTreeSet<String>,
     pub index: Option<crate::IndexSignature>,
     pub name: Ident,
     pub generics: Vec<String>,

@@ -245,6 +245,9 @@ export function notionPatch(path: string, body: string | Uint8Array | {} | unkno
 /**
  * Resolve a page or nested block to the containing page used by policy.
  * The first block response is retained so getBlock does not fetch it twice.
+ *
+ * @param ref Page or block ID, or a Notion URL.
+ * @returns Context holding the target block ID, the ID of its containing page, and the fetched block response.
  */
 export function resolvePageContext(ref: string): PageContext {
     const blockId = idFromRef(ref);
@@ -317,6 +320,10 @@ export function validationError(code: string, message: string): NotionError {
 /**
  * Extract and validate a Notion ID from an ID, a Notion URL, or a collection:// reference.
  * A collection:// reference is rejected when a kind other than "data_source" is expected.
+ *
+ * @param ref Notion ID (dashed or undashed), Notion URL, or `collection://` data source reference; surrounding whitespace is ignored.
+ * @param expected Resource kind the caller expects; `null` skips the kind check, and only `"data_source"` accepts a `collection://` reference.
+ * @returns The validated Notion ID extracted from the reference.
  */
 export function idFromRef(ref: string, expected: string | null = null): string {
     const trimmed = ref.trim();

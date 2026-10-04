@@ -1,3 +1,4 @@
+use crate::runtime::host::{abi_arg, abi_result};
 use wasmtime::{FuncType, HeapType, Linker, RefType, ValType};
 
 use super::super::shared::*;
@@ -92,10 +93,10 @@ fn reg_plain_year_month_duration_op(
         ty,
         true,
         move |caller, params, results| {
-            let st = as_struct_val(caller, &params[0], &label)?;
+            let st = as_struct_val(caller, abi_arg(params, 0)?, &label)?;
             let y = st_i32(caller, st, 1, &label)?;
             let m = st_i32(caller, st, 2, &label)?;
-            let span = read_duration_like(caller, &params[1], &intr, &label)?;
+            let span = read_duration_like(caller, abi_arg(params, 1)?, &intr, &label)?;
             let reference = year_month_reference(
                 y,
                 m,
@@ -120,7 +121,7 @@ fn reg_plain_year_month_duration_op(
             } else {
                 "PlainYearMonth.subtract"
             }))?;
-            results[0] =
+            *abi_result(results, 0)? =
                 make_plain_year_month(caller, i32::from(out.year()), i32::from(out.month()))?;
             Ok(())
         },
@@ -139,15 +140,15 @@ fn reg_plain_year_month_with(
         ty,
         true,
         |caller, params, results| {
-            let st = as_struct_val(caller, &params[0], "PlainYearMonth.with")?;
-            let y = object_i64_field(caller, &params[1], "year", "PlainYearMonth.with")?
+            let st = as_struct_val(caller, abi_arg(params, 0)?, "PlainYearMonth.with")?;
+            let y = object_i64_field(caller, abi_arg(params, 1)?, "year", "PlainYearMonth.with")?
                 .unwrap_or_else(|| i64::from(st_i32_or(caller, st, 1)));
             let m = clamp_month(
-                object_i64_field(caller, &params[1], "month", "PlainYearMonth.with")?
+                object_i64_field(caller, abi_arg(params, 1)?, "month", "PlainYearMonth.with")?
                     .unwrap_or_else(|| i64::from(st_i32_or(caller, st, 2))),
             );
             let date = y_m_d_date(y, m, 1, "PlainYearMonth.with")?;
-            results[0] =
+            *abi_result(results, 0)? =
                 make_plain_year_month(caller, i32::from(date.year()), i32::from(date.month()))?;
             Ok(())
         },
@@ -168,15 +169,15 @@ fn reg_plain_year_month_pair_op(
         ty,
         true,
         move |caller, params, results| {
-            let a = as_struct_val(caller, &params[0], &label)?;
-            let b = as_struct_val(caller, &params[1], &label)?;
+            let a = as_struct_val(caller, abi_arg(params, 0)?, &label)?;
+            let b = as_struct_val(caller, abi_arg(params, 1)?, &label)?;
             let ay = st_i32(caller, a, 1, &label)?;
             let am = st_i32(caller, a, 2, &label)?;
             let by = st_i32(caller, b, 1, &label)?;
             let bm = st_i32(caller, b, 2, &label)?;
             let o = object_diff_options(
                 caller,
-                &params[2],
+                abi_arg(params, 2)?,
                 if until {
                     "PlainYearMonth.until"
                 } else {
@@ -188,7 +189,7 @@ fn reg_plain_year_month_pair_op(
             } else {
                 year_month_span(by, bm, ay, am, &o, "PlainYearMonth.since")?
             };
-            results[0] = make_duration(caller, &span)?;
+            *abi_result(results, 0)? = make_duration(caller, &span)?;
             Ok(())
         },
     )
@@ -205,7 +206,7 @@ fn reg_plain_year_month_to_plain_date(
         ty,
         true,
         |caller, params, results| {
-            let st = as_struct_val(caller, &params[0], "PlainYearMonth.toPlainDate")?;
+            let st = as_struct_val(caller, abi_arg(params, 0)?, "PlainYearMonth.toPlainDate")?;
             let year = i64::from(st_i32(caller, st, 1, "PlainYearMonth.toPlainDate")?);
             let month = clamp_month(i64::from(st_i32(
                 caller,
@@ -214,11 +215,16 @@ fn reg_plain_year_month_to_plain_date(
                 "PlainYearMonth.toPlainDate",
             )?));
             let dim = days_in_month(year, month, "PlainYearMonth.toPlainDate")?;
-            let day = object_i64_field(caller, &params[1], "day", "PlainYearMonth.toPlainDate")?
-                .unwrap_or(1)
-                .clamp(1, dim);
+            let day = object_i64_field(
+                caller,
+                abi_arg(params, 1)?,
+                "day",
+                "PlainYearMonth.toPlainDate",
+            )?
+            .unwrap_or(1)
+            .clamp(1, dim);
             let d = y_m_d_date(year, month, day, "PlainYearMonth.toPlainDate")?;
-            results[0] = make_plain_date(
+            *abi_result(results, 0)? = make_plain_date(
                 caller,
                 i32::from(d.year()),
                 i32::from(d.month()),

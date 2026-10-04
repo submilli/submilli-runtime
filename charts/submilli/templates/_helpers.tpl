@@ -90,25 +90,6 @@ partway through, which is the outcome `shutdownGrace` exists to avoid.
 {{- add .Values.server.shutdownGrace 3 -}}
 {{- end -}}
 
-{{/*
-Mount path for a referenced Kubernetes Secret. A blueprint's `secrets:` block
-names this exact path in a `file:` source, so it is a contract between two
-separate values maps rather than an implementation detail — changing it breaks
-every blueprint that reads a secret.
-*/}}
-{{- define "submilli.secretMountPath" -}}
-/etc/submilli/secrets
-{{- end -}}
-
-{{/*
-Read-only directory the server reconciles blueprints from at boot. Distinct from
-the writable store on the volume; pointing both at one path would make the store
-read-only forever.
-*/}}
-{{- define "submilli.seedPath" -}}
-/etc/submilli/blueprints
-{{- end -}}
-
 {{- define "submilli.homePath" -}}
 /var/lib/submilli
 {{- end -}}
@@ -186,13 +167,14 @@ source for it would let the two drift apart, or is outranked by the environment
 and would do nothing.
 */ -}}
 {{- $owned := dict
+      "tls" "set tls.enabled and tls.existingSecret instead, which also mount the certificate and key"
       "bind" "set server.bind instead"
       "port" "set server.port instead; it also drives the container port, the Services, and the NetworkPolicy"
       "vfs_ephemeral_dir" "the chart fixes it at /tmp, the only writable path outside the state volume"
       "max_execution_memory" "set execution.maxMemoryMB instead; the pod's memory limit is derived from it"
       "shutdown_grace" "set server.shutdownGrace instead; terminationGracePeriodSeconds is derived from it"
-      "blueprint_seed_dir" "the chart sets it when blueprints is non-empty"
       "allow_unauthenticated" "set auth.enabled=false instead"
+      "github_token_file" "set githubToken.existingSecret and githubToken.key instead, which also mount the token"
     -}}
 {{- range $key, $instead := $owned -}}
 {{-   if hasKey $extra $key -}}
@@ -211,6 +193,15 @@ and would do nothing.
 {{-   fail "auth.adminTokenKey and auth.userTokenKey must differ: one key would give both roles the same token, which the server refuses" -}}
 {{- end -}}
 {{- $config := dict "bind" .Values.server.bind "max_execution_memory" .Values.execution.maxMemoryMB "shutdown_grace" .Values.server.shutdownGrace -}}
+{{- if .Values.tls.enabled -}}
+{{-   if not .Values.tls.existingSecret -}}
+{{-     fail "tls.existingSecret is required when tls.enabled=true" -}}
+{{-   end -}}
+{{-   if eq .Values.tls.certKey .Values.tls.privateKeyKey -}}
+{{-     fail "tls.certKey and tls.privateKeyKey must differ" -}}
+{{-   end -}}
+{{-   $_ := set $config "tls" (dict "cert_file" "/etc/submilli/tls/server.crt" "key_file" "/etc/submilli/tls/server.key") -}}
+{{- end -}}
 {{- /*
 SUBMILLI_HOME relocates five of the server's six state directories (kept under
 its server/ subdirectory; an older volume is moved into that shape on the first
@@ -220,20 +211,15 @@ Omitting this breaks /v1/execute — the product — while /healthz stays green,
 which is why the chart's own test exercises execute rather than health alone.
 */ -}}
 {{- $_ := set $config "vfs_ephemeral_dir" "/tmp" -}}
-{{- if .Values.blueprints -}}
-{{- /*
-The read-only source the server reconciles from at boot. A different directory
-from the writable store on the state volume — pointing both at one path would
-make the store read-only forever.
-*/ -}}
-{{-   $_ := set $config "blueprint_seed_dir" (include "submilli.seedPath" .) -}}
-{{- end -}}
-{{- if and .Values.secretStore.enabled .Values.secretStore.existingSecret -}}
+{{- if .Values.secretStore.enabled -}}
 {{- /*
 A file, never an env var holding the key itself: environment is readable
 through /proc/self/environ.
 */ -}}
 {{-   $_ := set $config "secret_store" (dict "key_file" (printf "/etc/submilli/secret-store/%s" .Values.secretStore.key)) -}}
+{{- end -}}
+{{- if .Values.githubToken.existingSecret -}}
+{{-   $_ := set $config "github_token_file" (printf "/etc/submilli/github/%s" .Values.githubToken.key) -}}
 {{- end -}}
 {{- if .Values.auth.enabled -}}
 {{- /*
@@ -283,9 +269,47 @@ can add a caller but cannot shadow or replace the tokens NOTES.txt and
 {{-     $_ := set $config $key $value -}}
 {{-   end -}}
 {{- end -}}
+{{- $_ := set $config "mcp_allowed_hosts" (include "submilli.mcpAllowedHosts" . | fromYamlArray) -}}
 {{- $box := dict "v" $config -}}
 {{- include "submilli.normalizeNumbers" $box -}}
 {{- toYaml $box.v -}}
+{{- end -}}
+
+{{/*
+MCP validates the request's Host header. Service names use the Service port;
+headless pod DNS resolves directly to the pod and uses the container port.
+Operator entries extend the generated list, including for custom cluster DNS.
+HTTP clients omit port 80, so those names also need a bare-host entry (which
+the server's matcher accepts on any port).
+*/}}
+{{- define "submilli.mcpAllowedHosts" -}}
+{{- $fullname := include "submilli.fullname" . -}}
+{{- $headless := include "submilli.headlessName" . -}}
+{{- $suffixes := list "" (printf ".%s" .Release.Namespace) (printf ".%s.svc" .Release.Namespace) (printf ".%s.svc.cluster.local" .Release.Namespace) -}}
+{{- $hosts := list -}}
+{{- range $suffix := $suffixes -}}
+{{-   $hosts = append $hosts (printf "%s%s:%d" $fullname $suffix (int $.Values.service.port)) -}}
+{{-   if eq (int $.Values.service.port) 80 -}}
+{{-     $hosts = append $hosts (printf "%s%s" $fullname $suffix) -}}
+{{-   end -}}
+{{- end -}}
+{{- range $ordinal := until (int .Values.replicaCount) -}}
+{{-   range $suffix := $suffixes -}}
+{{-     $hosts = append $hosts (printf "%s-%d.%s%s:%d" $fullname $ordinal $headless $suffix (int $.Values.server.port)) -}}
+{{-     if eq (int $.Values.server.port) 80 -}}
+{{-       $hosts = append $hosts (printf "%s-%d.%s%s" $fullname $ordinal $headless $suffix) -}}
+{{-     end -}}
+{{-   end -}}
+{{- end -}}
+{{- if .Values.ingress.enabled -}}
+{{-   range .Values.ingress.hosts -}}
+{{-     if .host -}}
+{{-       $hosts = append $hosts .host -}}
+{{-     end -}}
+{{-   end -}}
+{{- end -}}
+{{- $extra := .Values.config.mcp_allowed_hosts | default list -}}
+{{- toYaml (concat $hosts $extra | uniq) -}}
 {{- end -}}
 
 {{/*
@@ -321,5 +345,14 @@ rather than edited because a template cannot assign to a list element.
 {{-   if and (eq (floor $value) $value) (lt $value 9e18) (gt $value -9e18) -}}
 {{-     $_ := set . "v" (int64 $value) -}}
 {{-   end -}}
+{{- end -}}
+{{- end -}}
+
+{{/* The generated encryption-key Secret and the pod must use the same name. */}}
+{{- define "submilli.secretStoreSecretName" -}}
+{{- if .Values.secretStore.existingSecret -}}
+{{- .Values.secretStore.existingSecret -}}
+{{- else -}}
+{{- printf "%s-secret-store" (include "submilli.fullname" . | trunc 50 | trimSuffix "-") -}}
 {{- end -}}
 {{- end -}}

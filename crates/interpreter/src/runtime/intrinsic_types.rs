@@ -18,11 +18,14 @@
 //! codegen types. Map, Set, and host backing mirrors are rebuilt by their owning
 //! runtime modules from the same canonical layouts.
 
+use std::sync::Arc;
+
 use wasmtime::{
-    ArrayType, Engine, FieldType, Finality, FuncType, Mutability, RecGroupBuilder, RefType,
-    StorageType, StructType, ValType,
+    ArrayType, AsContextMut, Engine, FieldType, Finality, FuncType, Mutability, RecGroupBuilder,
+    RefType, StorageType, StructType, ValType,
 };
 
+use crate::runtime::StoreData;
 use crate::runtime::gc_singleton::{singleton_array, singleton_struct};
 
 /// Canonical handles for the intrinsic types, in `IntrinsicTypeIndices` order.
@@ -63,6 +66,21 @@ pub(crate) struct IntrinsicTypes {
     pub temporal_instant: StructType,
     pub temporal_duration: StructType,
     pub temporal_zdt: StructType,
+}
+
+/// The intrinsic types for `store`'s engine. Building them interns every rec
+/// group with the engine, which costs far more than the host call that needs
+/// them, so a store builds them once and its host functions share the result.
+pub(crate) fn intrinsic_types(
+    mut store: impl AsContextMut<Data = StoreData>,
+) -> wasmtime::Result<Arc<IntrinsicTypes>> {
+    let mut ctx = store.as_context_mut();
+    if let Some(types) = &ctx.data().intrinsic_types {
+        return Ok(Arc::clone(types));
+    }
+    let types = Arc::new(build_intrinsic_types(ctx.engine())?);
+    ctx.data_mut().intrinsic_types = Some(Arc::clone(&types));
+    Ok(types)
 }
 
 /// Build the full intrinsic type set against `engine`, mirroring
@@ -135,6 +153,11 @@ pub(crate) fn build_intrinsic_types(engine: &Engine) -> wasmtime::Result<Intrins
         imm,
         StorageType::ValType(ValType::Ref(RefType::new(false, raw_string.clone().into()))),
     ));
+    // Zero means not hashed; nonzero stores the unsigned 32-bit hash plus one.
+    def.field(FieldType::new(
+        Mutability::Var,
+        StorageType::ValType(ValType::I64),
+    ));
     def.finish();
 
     let mut def = b.define_struct(boxed_number);
@@ -160,7 +183,7 @@ pub(crate) fn build_intrinsic_types(engine: &Engine) -> wasmtime::Result<Intrins
     let mut def = b.define_array(field_names);
     def.finality(NonFinal);
     def.forward_ref_element(string)
-        .mutability(imm)
+        .mutability(mutv)
         .nullable(false)
         .finish();
     def.finish();
@@ -188,6 +211,10 @@ pub(crate) fn build_intrinsic_types(engine: &Engine) -> wasmtime::Result<Intrins
         .mutability(mutv)
         .nullable(false)
         .finish();
+    def.field(FieldType::new(
+        mutv,
+        StorageType::ValType(ValType::Ref(RefType::ANYREF)),
+    ));
     def.finish();
 
     let mut def = b.define_func(to_string_fn);
@@ -229,37 +256,49 @@ pub(crate) fn build_intrinsic_types(engine: &Engine) -> wasmtime::Result<Intrins
     def.forward_ref_param(object).nullable(true).finish();
     def.finish();
 
-    let g = b.build()?;
-    let vtable = g.get_struct(vtable).expect("vtable should be a struct");
-    let object = g.get_struct(object).expect("object should be a struct");
-    let string = g.get_struct(string).expect("string should be a struct");
+    let g = b.build().map_err(crate::runtime::host::fatal_host_error)?;
+    let vtable = g
+        .get_struct(vtable)
+        .ok_or_else(|| crate::runtime::host::fatal_host_error("vtable should be a struct"))?;
+    let object = g
+        .get_struct(object)
+        .ok_or_else(|| crate::runtime::host::fatal_host_error("object should be a struct"))?;
+    let string = g
+        .get_struct(string)
+        .ok_or_else(|| crate::runtime::host::fatal_host_error("string should be a struct"))?;
     let boxed_number = g
         .get_struct(boxed_number)
-        .expect("boxed_number should be a struct");
-    let boxed_boolean = g
-        .get_struct(boxed_boolean)
-        .expect("boxed_boolean should be a struct");
+        .ok_or_else(|| crate::runtime::host::fatal_host_error("boxed_number should be a struct"))?;
+    let boxed_boolean = g.get_struct(boxed_boolean).ok_or_else(|| {
+        crate::runtime::host::fatal_host_error("boxed_boolean should be a struct")
+    })?;
     let field_names = g
         .get_array(field_names)
-        .expect("field_names should be an array");
-    let object_fields = g
-        .get_array(object_fields)
-        .expect("object_fields should be an array");
+        .ok_or_else(|| crate::runtime::host::fatal_host_error("field_names should be an array"))?;
+    let object_fields = g.get_array(object_fields).ok_or_else(|| {
+        crate::runtime::host::fatal_host_error("object_fields should be an array")
+    })?;
     let object_shape = g
         .get_struct(object_shape)
-        .expect("object_shape should be a struct");
+        .ok_or_else(|| crate::runtime::host::fatal_host_error("object_shape should be a struct"))?;
     let to_string_fn = g
         .get_func(to_string_fn)
-        .expect("to_string_fn should be a func");
-    let to_json_fn = g.get_func(to_json_fn).expect("to_json_fn should be a func");
-    let equals_fn = g.get_func(equals_fn).expect("equals_fn should be a func");
-    let hash_fn = g.get_func(hash_fn).expect("hash_fn should be a func");
+        .ok_or_else(|| crate::runtime::host::fatal_host_error("to_string_fn should be a func"))?;
+    let to_json_fn = g
+        .get_func(to_json_fn)
+        .ok_or_else(|| crate::runtime::host::fatal_host_error("to_json_fn should be a func"))?;
+    let equals_fn = g
+        .get_func(equals_fn)
+        .ok_or_else(|| crate::runtime::host::fatal_host_error("equals_fn should be a func"))?;
+    let hash_fn = g
+        .get_func(hash_fn)
+        .ok_or_else(|| crate::runtime::host::fatal_host_error("hash_fn should be a func"))?;
     let field_getter = g
         .get_func(field_getter)
-        .expect("field_getter should be a func");
+        .ok_or_else(|| crate::runtime::host::fatal_host_error("field_getter should be a func"))?;
     let field_setter = g
         .get_func(field_setter)
-        .expect("field_setter should be a func");
+        .ok_or_else(|| crate::runtime::host::fatal_host_error("field_setter should be a func"))?;
 
     // Standalone types, each its own rec group. Built after the main group so they
     // can reference `$Object`/`$VTable`/`$string`/`$rawString` as concrete handles.
@@ -284,6 +323,7 @@ pub(crate) fn build_intrinsic_types(engine: &Engine) -> wasmtime::Result<Intrins
                 mutv,
                 StorageType::ValType(ValType::Ref(RefType::new(false, raw_array.clone().into()))),
             ),
+            FieldType::new(mutv, StorageType::ValType(ValType::I32)),
         ],
     )?;
     let raw_uint8_array = singleton_array(engine, Final, FieldType::new(mutv, StorageType::I8))?;
@@ -316,7 +356,7 @@ pub(crate) fn build_intrinsic_types(engine: &Engine) -> wasmtime::Result<Intrins
     )?;
 
     // `(rec $ClassVTable)` — the class-only vtable base: the 4 universal slots
-    // plus the self-referential nominal-identity parent link, its own singleton
+    // plus the nominal-identity parent link and default-JSON marker, its own singleton
     // rec group (mirrors `declare_intrinsic_types`).
     let mut b = RecGroupBuilder::new(engine);
     let class_vtable_label = b.declare_struct();
@@ -333,17 +373,18 @@ pub(crate) fn build_intrinsic_types(engine: &Engine) -> wasmtime::Result<Intrins
         .mutability(imm)
         .nullable(true)
         .finish();
+    def.field(FieldType::new(imm, StorageType::ValType(ValType::I32)));
     def.finish();
-    let g = b.build()?;
+    let g = b.build().map_err(crate::runtime::host::fatal_host_error)?;
     let class_vtable = g
         .get_struct(class_vtable_label)
-        .expect("class_vtable should be a struct");
+        .ok_or_else(|| crate::runtime::host::fatal_host_error("class_vtable should be a struct"))?;
 
     // `(rec $Error_vtable $Error)` — the class-shaped pair, one 2-member rec
     // group mirroring the user-class emitter's output (`classes.rs`): the vtable
-    // is the `$ClassVTable` prefix (universal slots + parent link, no methods);
-    // the struct is the 3 `$ObjectShape` header slots with fields in the
-    // object-fields payload.
+    // is the `$ClassVTable` prefix (universal slots + parent link + default-JSON marker, no methods);
+    // the struct has the 4 `$ObjectShape` header slots and an identity ID;
+    // named fields remain in the object-fields payload.
     let mut b = RecGroupBuilder::new(engine);
     let error_vtable_label = b.declare_struct();
     let error_label = b.declare_struct();
@@ -364,6 +405,7 @@ pub(crate) fn build_intrinsic_types(engine: &Engine) -> wasmtime::Result<Intrins
             class_vtable.clone().into(),
         ))),
     ));
+    def.field(FieldType::new(imm, StorageType::ValType(ValType::I32)));
     def.finish();
 
     let mut def = b.define_struct(error_label);
@@ -387,13 +429,20 @@ pub(crate) fn build_intrinsic_types(engine: &Engine) -> wasmtime::Result<Intrins
             object_fields.clone().into(),
         ))),
     ));
+    def.field(FieldType::new(
+        mutv,
+        StorageType::ValType(ValType::Ref(RefType::ANYREF)),
+    ));
+    def.field(FieldType::new(mutv, StorageType::ValType(ValType::I64)));
     def.finish();
 
-    let g = b.build()?;
+    let g = b.build().map_err(crate::runtime::host::fatal_host_error)?;
     let error_vtable = g
         .get_struct(error_vtable_label)
-        .expect("error_vtable should be a struct");
-    let error = g.get_struct(error_label).expect("error should be a struct");
+        .ok_or_else(|| crate::runtime::host::fatal_host_error("error_vtable should be a struct"))?;
+    let error = g
+        .get_struct(error_label)
+        .ok_or_else(|| crate::runtime::host::fatal_host_error("error should be a struct"))?;
 
     let raw_bigint = singleton_array(
         engine,
@@ -476,6 +525,7 @@ pub(crate) fn build_intrinsic_types(engine: &Engine) -> wasmtime::Result<Intrins
                 StorageType::ValType(ValType::Ref(RefType::new(false, string.clone().into()))),
             ),
             FieldType::new(imm, StorageType::ValType(ValType::I32)),
+            FieldType::new(mutv, StorageType::ValType(ValType::I64)),
         ],
     )?;
     let regex_match_box = singleton_struct(
@@ -510,6 +560,7 @@ pub(crate) fn build_intrinsic_types(engine: &Engine) -> wasmtime::Result<Intrins
                     regex_capture_array.clone().into(),
                 ))),
             ),
+            FieldType::new(mutv, StorageType::ValType(ValType::I64)),
         ],
     )?;
 
@@ -561,6 +612,13 @@ pub(crate) fn build_intrinsic_types(engine: &Engine) -> wasmtime::Result<Intrins
             FieldType::new(
                 imm,
                 StorageType::ValType(ValType::Ref(RefType::new(false, string.clone().into()))),
+            ),
+            FieldType::new(
+                imm,
+                StorageType::ValType(ValType::Ref(RefType::new(
+                    false,
+                    wasmtime::HeapType::Extern,
+                ))),
             ),
         ],
     )?;

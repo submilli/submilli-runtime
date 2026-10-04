@@ -18,9 +18,7 @@ spec:
   # independent servers rather than copies of one. They share nothing: no
   # clustering, no leader, no replication.
   #
-  # That makes the addressing contract part of the deployment. Blueprints from
-  # `blueprints:` are seeded into every pod from the same ConfigMap and agree
-  # across them, but anything registered through the API — blueprints, sessions,
+  # Anything registered through the API — blueprints, sessions,
   # secrets, packages — lives on the single pod that served the request. Reach a
   # specific server through the headless Service, never the load-balanced one:
   #
@@ -65,13 +63,6 @@ spec:
         # from here, so rotating a token is followed by an explicit
         # `kubectl rollout restart` instead.
         checksum/config: {{ include "submilli.serverConfig" . | sha256sum }}
-        {{- if .Values.blueprints }}
-        # Without this, a `helm upgrade` that changes only ConfigMap contents
-        # leaves the StatefulSet spec identical, so no rollout happens and the
-        # running pod keeps the old blueprints. Users reasonably conclude the
-        # chart is broken. This is Helm's own documented recipe.
-        checksum/blueprints: {{ include (print $.Template.BasePath "/configmap-blueprints.yaml") . | sha256sum }}
-        {{- end }}
         {{- with .Values.podAnnotations }}
         {{- toYaml . | nindent 8 }}
         {{- end }}
@@ -151,23 +142,23 @@ spec:
             {{- toYaml . | nindent 12 }}
             {{- end }}
           volumeMounts:
+            {{- if .Values.tls.enabled }}
+            - name: tls
+              mountPath: /etc/submilli/tls
+              readOnly: true
+            {{- end }}
             - name: state
               mountPath: {{ include "submilli.homePath" . }}
             - name: tmp
               mountPath: /tmp
-            {{- if .Values.blueprints }}
-            - name: blueprints
-              mountPath: {{ include "submilli.seedPath" . }}
-              readOnly: true
-            {{- end }}
-            {{- range $name, $ref := .Values.secrets }}
-            - name: secret-{{ $name }}
-              mountPath: {{ include "submilli.secretMountPath" $ }}/{{ $name }}
-              readOnly: true
-            {{- end }}
-            {{- if and .Values.secretStore.enabled .Values.secretStore.existingSecret }}
+            {{- if .Values.secretStore.enabled }}
             - name: secret-store-key
               mountPath: /etc/submilli/secret-store
+              readOnly: true
+            {{- end }}
+            {{- if .Values.githubToken.existingSecret }}
+            - name: github-token
+              mountPath: /etc/submilli/github
               readOnly: true
             {{- end }}
             - name: config
@@ -191,6 +182,9 @@ spec:
             httpGet:
               path: /healthz
               port: http
+              {{- if .Values.tls.enabled }}
+              scheme: HTTPS
+              {{- end }}
             periodSeconds: 2
             # 30 x 2s. Generous on purpose: while this is failing, liveness and
             # readiness are suppressed, so a slow start cannot be mistaken for a
@@ -201,6 +195,9 @@ spec:
             httpGet:
               path: /healthz
               port: http
+              {{- if .Values.tls.enabled }}
+              scheme: HTTPS
+              {{- end }}
             periodSeconds: 10
             # The default is 1s, which a loaded server can exceed while perfectly
             # healthy — and a readiness flap pulls the pod out of the Service.
@@ -222,6 +219,16 @@ spec:
               cpu: {{ . | quote }}
               {{- end }}
       volumes:
+        {{- if .Values.tls.enabled }}
+        - name: tls
+          secret:
+            secretName: {{ .Values.tls.existingSecret | quote }}
+            items:
+              - key: {{ .Values.tls.certKey | quote }}
+                path: server.crt
+              - key: {{ .Values.tls.privateKeyKey | quote }}
+                path: server.key
+        {{- end }}
         {{- if not .Values.persistence.enabled }}
         # Persistent state comes from volumeClaimTemplates instead; this branch
         # exists so `persistence.enabled: false` still renders a valid pod.
@@ -230,28 +237,23 @@ spec:
         {{- end }}
         - name: tmp
           emptyDir: {}
-        {{- if .Values.blueprints }}
-        - name: blueprints
-          configMap:
-            name: {{ include "submilli.fullname" . }}-blueprints
-        {{- end }}
-        {{- range $name, $ref := .Values.secrets }}
-        # One volume per referenced Secret, projecting only the named key, so
-        # the mount path is exactly the `file:` path a blueprint declares.
-        - name: secret-{{ $name }}
-          secret:
-            secretName: {{ $ref.secretName }}
-            items:
-              - key: {{ $ref.key }}
-                path: {{ $ref.key }}
-        {{- end }}
-        {{- if and .Values.secretStore.enabled .Values.secretStore.existingSecret }}
+        {{- if .Values.secretStore.enabled }}
         - name: secret-store-key
           secret:
-            secretName: {{ .Values.secretStore.existingSecret }}
+            secretName: {{ include "submilli.secretStoreSecretName" . }}
             items:
               - key: {{ .Values.secretStore.key }}
                 path: {{ .Values.secretStore.key }}
+        {{- end }}
+        {{- if .Values.githubToken.existingSecret }}
+        # A Secret volume, so replacing the Secret rotates the token: the server
+        # reads it again on every package install.
+        - name: github-token
+          secret:
+            secretName: {{ .Values.githubToken.existingSecret }}
+            items:
+              - key: {{ .Values.githubToken.key }}
+                path: {{ .Values.githubToken.key }}
         {{- end }}
         - name: config
           configMap:

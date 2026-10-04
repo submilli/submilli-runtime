@@ -16,18 +16,21 @@
 //! that reads the key/value at a position, plus a `payload` carrying its state
 //! (a live ref it re-reads each step, or a snapshot captured up front).
 
+use crate::runtime::host::{abi_arg, abi_result};
 use wasmtime::{
-    ArrayRef, ArrayRefPre, Caller, FieldType, Finality, Func, FuncType, HeapType, Mutability,
-    RefType, Rooted, StorageType, StructRef, StructRefPre, StructType, Val, ValType,
+    ArrayRef, ArrayRefPre, Caller, FieldType, Finality, Func, FuncType, Global, GlobalType,
+    HeapType, Mutability, RefType, Rooted, StorageType, StructRef, StructRefPre, StructType, Val,
+    ValType,
 };
 
 use crate::runtime::StoreData;
+use crate::runtime::fuel::host_func;
 use crate::runtime::gc_singleton::{singleton_func, singleton_struct};
 use crate::runtime::host::{
     host_boxed_boolean_vtable, host_closure_vtable, host_object_vtable,
     write_submilli_array_struct, write_submilli_string_struct,
 };
-use crate::runtime::intrinsic_types::{IntrinsicTypes, build_intrinsic_types};
+use crate::runtime::intrinsic_types::{IntrinsicTypes, intrinsic_types};
 
 /// The `$closure_0_value` func + struct types: `next: () => IteratorResult<T>`
 /// under the closure ABI — funcref `(ref any) -> (ref null $object)`, struct a
@@ -65,6 +68,7 @@ pub(crate) fn next_closure_type(
                 imm,
                 StorageType::ValType(ValType::Ref(RefType::new(false, HeapType::Any))),
             ),
+            FieldType::new(Mutability::Var, StorageType::ValType(ValType::I64)),
         ],
     )?;
     Ok((func, st))
@@ -105,6 +109,7 @@ pub(crate) fn void_closure_type(
                 imm,
                 StorageType::ValType(ValType::Ref(RefType::new(false, HeapType::Any))),
             ),
+            FieldType::new(Mutability::Var, StorageType::ValType(ValType::I64)),
         ],
     )?;
     Ok((func, st))
@@ -148,13 +153,17 @@ pub(crate) fn iterator_result_struct(
                     intr.object_fields.clone().into(),
                 ))),
             ),
+            FieldType::new(
+                Mutability::Var,
+                StorageType::ValType(ValType::Ref(RefType::ANYREF)),
+            ),
         ],
     )
 }
 
 /// Build `{ done: false, value }` (an `IteratorYieldResult`).
 pub(crate) fn iter_yield(caller: &mut Caller<'_, StoreData>, value: Val) -> wasmtime::Result<Val> {
-    let intr = build_intrinsic_types(caller.engine())?;
+    let intr = intrinsic_types(&mut *caller)?;
     let vtable = host_object_vtable(caller)?;
     let done = box_boolean(caller, false)?;
     let names = field_names_array(caller, &intr, &["done", "value"])?;
@@ -164,7 +173,7 @@ pub(crate) fn iter_yield(caller: &mut Caller<'_, StoreData>, value: Val) -> wasm
 
 /// Build `{ done: true }` (an `IteratorReturnResult`).
 pub(crate) fn iter_done(caller: &mut Caller<'_, StoreData>) -> wasmtime::Result<Val> {
-    let intr = build_intrinsic_types(caller.engine())?;
+    let intr = intrinsic_types(&mut *caller)?;
     let vtable = host_object_vtable(caller)?;
     let done = box_boolean(caller, true)?;
     let names = field_names_array(caller, &intr, &["done"])?;
@@ -174,11 +183,21 @@ pub(crate) fn iter_done(caller: &mut Caller<'_, StoreData>) -> wasmtime::Result<
 
 /// Box a `bool` into a `$boxed_boolean` object (the `done` field's value).
 fn box_boolean(caller: &mut Caller<'_, StoreData>, b: bool) -> wasmtime::Result<Val> {
-    let boxed = build_intrinsic_types(caller.engine())?.boxed_boolean;
+    let index = if b { 5 } else { 4 };
+    if let Some(root) = caller
+        .data()
+        .iterator_constants
+        .get(index)
+        .copied()
+        .flatten()
+    {
+        return Ok(root.get(&mut *caller));
+    }
+    let boxed = intrinsic_types(&mut *caller)?.boxed_boolean.clone();
     let vtable = host_boxed_boolean_vtable(caller)?;
     let pre = StructRefPre::new(&mut *caller, boxed);
     let st = StructRef::new(&mut *caller, &pre, &[vtable, Val::I32(b as i32)])?;
-    Ok(Val::AnyRef(Some(st.to_anyref())))
+    retain_constant(caller, index, Val::AnyRef(Some(st.to_anyref())))
 }
 
 fn field_names_array(
@@ -186,13 +205,15 @@ fn field_names_array(
     intr: &IntrinsicTypes,
     names: &[&str],
 ) -> wasmtime::Result<Val> {
-    let mut vals = Vec::with_capacity(names.len());
-    for name in names {
-        let s = write_submilli_string_struct(caller, name)?;
-        vals.push(Val::AnyRef(Some(s.to_anyref())));
+    let mut values = [Val::null_any_ref(); 2];
+    let vals = values
+        .get_mut(..names.len())
+        .ok_or_else(|| crate::runtime::host::fatal_host_error("too many iterator field names"))?;
+    for (slot, name) in vals.iter_mut().zip(names) {
+        *slot = iterator_name(caller, name)?;
     }
     let pre = ArrayRefPre::new(&mut *caller, intr.field_names.clone());
-    let arr = ArrayRef::new_fixed(&mut *caller, &pre, &vals)?;
+    let arr = ArrayRef::new_fixed(&mut *caller, &pre, vals)?;
     Ok(Val::AnyRef(Some(arr.to_anyref())))
 }
 
@@ -215,7 +236,11 @@ fn build_result(
 ) -> wasmtime::Result<Val> {
     let ty = iterator_result_struct(caller.engine(), intr)?;
     let pre = StructRefPre::new(&mut *caller, ty);
-    let st = StructRef::new(&mut *caller, &pre, &[vtable, names, fields])?;
+    let st = StructRef::new(
+        &mut *caller,
+        &pre,
+        &[vtable, names, fields, Val::AnyRef(None)],
+    )?;
     Ok(Val::AnyRef(Some(st.to_anyref())))
 }
 
@@ -231,7 +256,7 @@ pub(crate) fn build_iterator(
     next_fn: Func,
     env: Val,
 ) -> wasmtime::Result<Val> {
-    let intr = build_intrinsic_types(caller.engine())?;
+    let intr = intrinsic_types(&mut *caller)?;
     let closure_vtable = host_closure_vtable(caller)?;
     let object_vtable = host_object_vtable(caller)?;
 
@@ -239,16 +264,17 @@ pub(crate) fn build_iterator(
     let closure = StructRef::new(
         &mut *caller,
         &closure_pre,
-        &[closure_vtable, Val::FuncRef(Some(next_fn)), env],
+        &[
+            closure_vtable,
+            Val::FuncRef(Some(next_fn)),
+            env,
+            Val::I64(0),
+        ],
     )?;
 
-    let next_name = write_submilli_string_struct(caller, "next")?;
+    let next_name = iterator_name(caller, "next")?;
     let names_pre = ArrayRefPre::new(&mut *caller, intr.field_names.clone());
-    let names = ArrayRef::new_fixed(
-        &mut *caller,
-        &names_pre,
-        &[Val::AnyRef(Some(next_name.to_anyref()))],
-    )?;
+    let names = ArrayRef::new_fixed(&mut *caller, &names_pre, &[next_name])?;
 
     let fields_pre = ArrayRefPre::new(&mut *caller, intr.object_fields.clone());
     let fields = ArrayRef::new_fixed(
@@ -269,6 +295,7 @@ pub(crate) fn build_iterator(
             object_vtable,
             Val::AnyRef(Some(names.to_anyref())),
             Val::AnyRef(Some(fields.to_anyref())),
+            Val::AnyRef(None),
         ],
     )?;
     Ok(Val::AnyRef(Some(obj.to_anyref())))
@@ -286,7 +313,7 @@ pub(crate) fn build_closable_iterator(
     close_fn: Func,
     env: Val,
 ) -> wasmtime::Result<Val> {
-    let intr = build_intrinsic_types(caller.engine())?;
+    let intr = intrinsic_types(&mut *caller)?;
     let closure_vtable = host_closure_vtable(caller)?;
     let object_vtable = host_object_vtable(caller)?;
 
@@ -295,7 +322,12 @@ pub(crate) fn build_closable_iterator(
     let next_closure = StructRef::new(
         &mut *caller,
         &next_pre,
-        &[closure_vtable, Val::FuncRef(Some(next_fn)), env],
+        &[
+            closure_vtable,
+            Val::FuncRef(Some(next_fn)),
+            env,
+            Val::I64(0),
+        ],
     )?;
 
     let (_, close_struct_ty) = void_closure_type(caller.engine(), &intr)?;
@@ -303,20 +335,18 @@ pub(crate) fn build_closable_iterator(
     let close_closure = StructRef::new(
         &mut *caller,
         &close_pre,
-        &[closure_vtable, Val::FuncRef(Some(close_fn)), env],
-    )?;
-
-    let close_name = write_submilli_string_struct(caller, "close")?;
-    let next_name = write_submilli_string_struct(caller, "next")?;
-    let names_pre = ArrayRefPre::new(&mut *caller, intr.field_names.clone());
-    let names = ArrayRef::new_fixed(
-        &mut *caller,
-        &names_pre,
         &[
-            Val::AnyRef(Some(close_name.to_anyref())),
-            Val::AnyRef(Some(next_name.to_anyref())),
+            closure_vtable,
+            Val::FuncRef(Some(close_fn)),
+            env,
+            Val::I64(0),
         ],
     )?;
+
+    let close_name = iterator_name(caller, "close")?;
+    let next_name = iterator_name(caller, "next")?;
+    let names_pre = ArrayRefPre::new(&mut *caller, intr.field_names.clone());
+    let names = ArrayRef::new_fixed(&mut *caller, &names_pre, &[close_name, next_name])?;
 
     let fields_pre = ArrayRefPre::new(&mut *caller, intr.object_fields.clone());
     let fields = ArrayRef::new_fixed(
@@ -337,9 +367,102 @@ pub(crate) fn build_closable_iterator(
             object_vtable,
             Val::AnyRef(Some(names.to_anyref())),
             Val::AnyRef(Some(fields.to_anyref())),
+            Val::AnyRef(None),
         ],
     )?;
     Ok(Val::AnyRef(Some(obj.to_anyref())))
+}
+
+fn iterator_name(caller: &mut Caller<'_, StoreData>, name: &str) -> wasmtime::Result<Val> {
+    let index = match name {
+        "done" => 0,
+        "value" => 1,
+        "next" => 2,
+        "close" => 3,
+        _ => {
+            return Err(crate::runtime::host::fatal_host_error(
+                "unknown iterator field name",
+            ));
+        }
+    };
+    if let Some(root) = caller
+        .data()
+        .iterator_constants
+        .get(index)
+        .copied()
+        .flatten()
+    {
+        return Ok(root.get(&mut *caller));
+    }
+    let name = write_submilli_string_struct(caller, name)?;
+    retain_constant(caller, index, Val::AnyRef(Some(name.to_anyref())))
+}
+
+fn retain_constant(
+    caller: &mut Caller<'_, StoreData>,
+    index: usize,
+    value: Val,
+) -> wasmtime::Result<Val> {
+    let ty = GlobalType::new(
+        ValType::Ref(RefType::new(true, HeapType::Any)),
+        Mutability::Const,
+    );
+    let root = Global::new(&mut *caller, ty, value)?;
+    let slot = caller
+        .data_mut()
+        .iterator_constants
+        .get_mut(index)
+        .ok_or_else(|| crate::runtime::host::fatal_host_error("invalid iterator constant index"))?;
+    *slot = Some(root);
+    Ok(value)
+}
+
+pub(crate) enum IteratorSource {
+    Array,
+    Map,
+    Set,
+    String,
+}
+
+pub(crate) fn shared_next(
+    caller: &mut Caller<'_, StoreData>,
+    source: IteratorSource,
+    kind: IterKind,
+    ty: FuncType,
+    implementation: impl Fn(&mut Caller<'_, StoreData>, &[Val], &mut [Val]) -> wasmtime::Result<()>
+    + Send
+    + Sync
+    + 'static,
+) -> wasmtime::Result<Func> {
+    let offset = match source {
+        IteratorSource::Array => 0,
+        IteratorSource::Map => 3,
+        IteratorSource::Set => 6,
+        IteratorSource::String => 9,
+    };
+    let kind = match kind {
+        IterKind::Keys => 0,
+        IterKind::Values => 1,
+        IterKind::Entries => 2,
+    };
+    let index = if offset == 9 { 9 } else { offset + kind };
+    if let Some(function) = caller
+        .data()
+        .iterator_functions
+        .get(index)
+        .copied()
+        .flatten()
+    {
+        return Ok(function);
+    }
+    let function = host_func(&mut *caller, ty, implementation);
+    let slot = caller
+        .data_mut()
+        .iterator_functions
+        .get_mut(index)
+        .ok_or_else(|| crate::runtime::host::fatal_host_error("invalid iterator function index"))?;
+    *slot = Some(function);
+    Ok(function)
 }
 
 // ---------------------------------------------------------------------------
@@ -371,12 +494,16 @@ pub(crate) fn make_index_iterator(
     kind: IterKind,
     step: IndexStep,
 ) -> wasmtime::Result<Val> {
-    let intr = build_intrinsic_types(caller.engine())?;
+    let intr = intrinsic_types(&mut *caller)?;
     let cursor = make_cursor(caller, payload)?;
     let (next_ty, next_struct) = next_closure_type(caller.engine(), &intr)?;
-    let next = Func::new(&mut *caller, next_ty, move |mut caller, params, results| {
-        index_step(&mut caller, params, results, kind, step)
-    });
+    let next = shared_next(
+        caller,
+        IteratorSource::Array,
+        kind,
+        next_ty,
+        move |caller, params, results| index_step(caller, params, results, kind, step),
+    )?;
     build_iterator(caller, next_struct, next, cursor)
 }
 
@@ -387,10 +514,16 @@ pub(crate) fn make_string_iterator(
     caller: &mut Caller<'_, StoreData>,
     string: Val,
 ) -> wasmtime::Result<Val> {
-    let intr = build_intrinsic_types(caller.engine())?;
+    let intr = intrinsic_types(&mut *caller)?;
     let cursor = make_cursor(caller, string)?;
     let (next_ty, next_struct) = next_closure_type(caller.engine(), &intr)?;
-    let next = Func::new(&mut *caller, next_ty, string_step);
+    let next = shared_next(
+        caller,
+        IteratorSource::String,
+        IterKind::Values,
+        next_ty,
+        string_step,
+    )?;
     build_iterator(caller, next_struct, next, cursor)
 }
 
@@ -398,12 +531,11 @@ pub(crate) fn make_string_iterator(
 /// the payload `$string`'s backing, yield it as a fresh 1–2 unit `$string`, and
 /// advance by however many units it spanned.
 fn string_step(
-    mut caller: Caller<'_, StoreData>,
+    caller: &mut Caller<'_, StoreData>,
     params: &[Val],
     results: &mut [Val],
 ) -> wasmtime::Result<()> {
-    let caller = &mut caller;
-    let cursor = as_struct(caller, &params[0], "string iterator env")?;
+    let cursor = as_struct(caller, abi_arg(params, 0)?, "string iterator env")?;
     let Val::I32(pos) = cursor.field(&mut *caller, 0)? else {
         return Err(wasmtime::Error::msg(
             "string iterator: position is not an i32",
@@ -417,7 +549,7 @@ fn string_step(
     };
     let len = backing.len(&mut *caller)? as i32;
     if pos >= len {
-        results[0] = iter_done(caller)?;
+        *abi_result(results, 0)? = iter_done(caller)?;
         return Ok(());
     }
     let unit_at = |caller: &mut Caller<'_, StoreData>, i: i32| -> wasmtime::Result<u16> {
@@ -437,7 +569,7 @@ fn string_step(
     let advance = units.len() as i32;
     let st = crate::runtime::host::write_submilli_string_struct_units(caller, &units)?;
     cursor.set_field(&mut *caller, 0, Val::I32(pos + advance))?;
-    results[0] = iter_yield(caller, Val::AnyRef(Some(st.to_anyref())))?;
+    *abi_result(results, 0)? = iter_yield(caller, Val::AnyRef(Some(st.to_anyref())))?;
     Ok(())
 }
 
@@ -463,7 +595,7 @@ fn make_cursor(caller: &mut Caller<'_, StoreData>, payload: Val) -> wasmtime::Re
     Ok(Val::AnyRef(Some(st.to_anyref())))
 }
 
-/// The `next` step under the closure ABI: `params[0]` is the cursor. Reads the
+/// The `next` step under the closure ABI: `*abi_arg(params, 0)?` is the cursor. Reads the
 /// pair at the current position via `step`, projects it for `kind`, advances,
 /// and yields — or returns `{done:true}` at the end.
 fn index_step(
@@ -473,7 +605,7 @@ fn index_step(
     kind: IterKind,
     step: IndexStep,
 ) -> wasmtime::Result<()> {
-    let cursor = as_struct(caller, &params[0], "index iterator env")?;
+    let cursor = as_struct(caller, abi_arg(params, 0)?, "index iterator env")?;
     let Val::I32(pos) = cursor.field(&mut *caller, 0)? else {
         return Err(wasmtime::Error::msg(
             "index iterator: position is not an i32",
@@ -481,7 +613,7 @@ fn index_step(
     };
     let payload = cursor.field(&mut *caller, 1)?;
     let Some((key, value)) = step(caller, &payload, pos)? else {
-        results[0] = iter_done(caller)?;
+        *abi_result(results, 0)? = iter_done(caller)?;
         return Ok(());
     };
     let yielded = match kind {
@@ -493,7 +625,7 @@ fn index_step(
         }
     };
     cursor.set_field(&mut *caller, 0, Val::I32(pos + 1))?;
-    results[0] = iter_yield(caller, yielded)?;
+    *abi_result(results, 0)? = iter_yield(caller, yielded)?;
     Ok(())
 }
 
@@ -694,6 +826,7 @@ mod tests {
     use super::*;
     use crate::codegen::closures::{ClosureSig, emit_arity_closures};
     use crate::codegen::intrinsics::declare_intrinsic_types;
+    use crate::runtime::intrinsic_types::build_intrinsic_types;
     use wasm_encoder::{
         CompositeInnerType, CompositeType, ConstExpr, ExportKind, ExportSection,
         FieldType as EncFieldType, GlobalSection, GlobalType, HeapType as EncHeapType, Module,
@@ -731,6 +864,10 @@ mod tests {
                         EncFieldType {
                             mutable: true,
                             ..mk(object_fields_type_idx)
+                        },
+                        EncFieldType {
+                            mutable: true,
+                            element_type: EncStorageType::Val(EncValType::Ref(EncRefType::ANYREF)),
                         },
                     ]
                     .into_boxed_slice(),

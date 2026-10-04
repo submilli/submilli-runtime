@@ -16,7 +16,7 @@ pub(super) fn sanitize(bytes: &[u8], max_bytes: u64, cancelled: &AtomicBool) -> 
     }
     let count = u32::from_be_bytes(bytes[8..12].try_into()?) as usize;
     if count > MAX_PATHS || count as u64 * 256 > max_bytes {
-        bail!("git: native index entry limit exceeded");
+        return Err(super::storage::memory_limit("native index entry"));
     }
     let (data, checksum) = bytes.split_at(bytes.len() - 20);
     let actual = hash(data)?;
@@ -87,7 +87,7 @@ fn entry_end(
     }
     *path_bytes = path_bytes.saturating_add(length as u64);
     if *path_bytes > max_bytes {
-        bail!("git: native index path memory limit exceeded");
+        return Err(super::storage::memory_limit("native index path memory"));
     }
     let path = std::str::from_utf8(&tail[..length])?;
     if path.bytes().filter(|byte| *byte == b'/').count() > 64 {

@@ -173,43 +173,6 @@
         }
       }
     },
-    "blueprints": {
-      "type": "object",
-      "description": "Map of blueprint name to YAML content. Keys become <name>.yaml in the mounted ConfigMap; the suffix is added by the template, so do not include it.",
-      "additionalProperties": {
-        "type": "string",
-        "minLength": 1
-      },
-      "propertyNames": {
-        "pattern": "^[A-Za-z0-9_-]+$",
-        "description": "Blueprint names are validated to [A-Za-z0-9_-] by the server, and the same set keeps the ConfigMap key legal."
-      }
-    },
-    "secrets": {
-      "type": "object",
-      "description": "Map of local name to an existing Kubernetes Secret reference. Never secret values.",
-      "additionalProperties": {
-        "type": "object",
-        "additionalProperties": false,
-        "required": [
-          "secretName",
-          "key"
-        ],
-        "properties": {
-          "secretName": {
-            "type": "string",
-            "minLength": 1
-          },
-          "key": {
-            "type": "string",
-            "minLength": 1
-          }
-        }
-      },
-      "propertyNames": {
-        "pattern": "^[A-Za-z0-9_-]+$"
-      }
-    },
     "secretStore": {
       "type": "object",
       "additionalProperties": false,
@@ -222,7 +185,25 @@
         },
         "key": {
           "type": "string",
-          "minLength": 1
+          "minLength": 1,
+          "pattern": "^[-._a-zA-Z0-9]+$",
+          "maxLength": 253
+        }
+      }
+    },
+    "githubToken": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "existingSecret": {
+          "type": "string",
+          "maxLength": 253,
+          "description": "Existing Secret holding a GitHub token for installing packages from private repositories: a fine-grained token with Contents: Read-only on them. Empty means installs reach public repositories only."
+        },
+        "key": {
+          "type": "string",
+          "pattern": "^[-._a-zA-Z0-9]+$",
+          "maxLength": 253
         }
       }
     },
@@ -254,6 +235,16 @@
     },
     "config": {
       "type": "object",
+      "properties": {
+        "mcp_allowed_hosts": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "description": "Additional MCP hosts, merged with the chart's Service, pod, and enabled Ingress names."
+        }
+      },
       "description": "Extra keys merged into the server's config file. Free-form here because the server owns the key set and rejects unknown keys at boot; the chart's template refuses the keys it sets itself."
     },
     "networkPolicy": {
@@ -365,6 +356,48 @@
     },
     "affinity": {
       "type": "object"
+    },
+    "tls": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "enabled",
+        "existingSecret",
+        "certKey",
+        "privateKeyKey"
+      ],
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "existingSecret": {
+          "type": "string"
+        },
+        "certKey": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9._-]+$"
+        },
+        "privateKeyKey": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9._-]+$"
+        }
+      },
+      "if": {
+        "properties": {
+          "enabled": {
+            "const": true
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "existingSecret": {
+            "minLength": 1
+          }
+        }
+      }
     }
   }
 }

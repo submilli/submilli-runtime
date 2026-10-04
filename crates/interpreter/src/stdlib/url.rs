@@ -6,11 +6,13 @@
 //! `Query` maps are real prelude `Map<string, string>`s, built and consumed
 //! host-side.
 
+use crate::runtime::host::{abi_arg, abi_result};
 use std::collections::BTreeMap;
 
 use wasmtime::{Caller, FuncType, HeapType, Linker, RefType, StructType, Val, ValType};
 
 use crate::runtime::StoreData;
+use crate::runtime::fuel;
 use crate::runtime::host::{
     read_boxed_number, read_string_arg, register_host_fn, register_host_fn_async, type_error,
     write_boxed_number_struct, write_submilli_string_struct,
@@ -21,6 +23,7 @@ use crate::stdlib::abi::{
     self, backing_struct, install_field_getters, nullable_boxed_number_field,
     nullable_object_field, nullable_string_field, string_field,
 };
+use crate::stdlib::dot_segments::refuse_dot_segments_in_path;
 use crate::{
     Dispatch, PackageDeclaration, Param, PropertySig, Span, Type, TypeKind, TypeSymbol, ValueKind,
     ValueSymbol,
@@ -35,11 +38,6 @@ const COMPONENT: &percent_encoding::AsciiSet = &percent_encoding::NON_ALPHANUMER
     .remove(b'.')
     .remove(b'_')
     .remove(b'~');
-
-/// The two components a path reads as a dot segment rather than as a name.
-/// `encodeComponent` escapes their dots as well; a query holds no segments, so
-/// `encodeQuery` does not.
-const DOT_SEGMENTS: [&str; 2] = [".", ".."];
 
 pub fn package_declaration() -> PackageDeclaration {
     let mut defs = PackageDeclaration::with_package(MODULE_NAME);
@@ -68,7 +66,7 @@ pub fn package_declaration() -> PackageDeclaration {
     insert_string_to_string_fn(
         &mut defs,
         "encodeComponent",
-        "/**\n * Percent-encode `s` per RFC 3986 (UTF-8 then `%HH` for every byte that isn't an ASCII alphanumeric or one of `-`, `.`, `_`, `~`). An `s` that is exactly `.` or `..` has its dots encoded. That does not stop it from acting as a path segment: a URL parser treats `%2E%2E` as `..`, so refuse `.` and `..` before building a path from a value you did not choose.\n * @param s The component to encode.\n */",
+        "/**\n * Percent-encode `s` per RFC 3986 (UTF-8 then `%HH` for every byte that isn't an ASCII alphanumeric or one of `-`, `.`, `_`, `~`). It encodes and does not validate: `encodeComponent(\"..\")` is `..`. `submilli:http` and `build` refuse a path with a `.` or `..` segment, so check a value you put in a path when you want a clearer error than that refusal.\n * @param s The component to encode.\n */",
     );
     insert_string_to_string_fn(
         &mut defs,
@@ -130,7 +128,7 @@ pub fn package_declaration() -> PackageDeclaration {
         &mut properties,
         "host",
         Type::String,
-        "/** Host name, e.g. `\"api.acme.com\"`. Lower-case, without the port or a trailing dot: `\"https://api.acme.com./\"` gives `\"api.acme.com\"`. */",
+        "/** Host name, e.g. `\"api.acme.com\"`. Lower-case, without the port or a trailing dot: `\"https://api.acme.com./\"` gives `\"api.acme.com\"`. A host that would be empty or invalid without its trailing dots, such as `\".\"`, keeps them. */",
     );
     insert_url_property(
         &mut properties,
@@ -212,7 +210,7 @@ pub fn package_declaration() -> PackageDeclaration {
                 ret: Type::String,
                 type_predicate: None,
                 doc: url_doc(
-                    "/**\n * Serialise URL parts to an absolute URL string. Inverse of `parse`.\n * @param protocol Scheme (e.g. `\"https\"`).\n * @param host Host name (e.g. `\"api.acme.com\"`).\n * @param port Port number, or `null` to omit the `:port` segment.\n * @param path Path component (typically starts with `/`).\n * @param query Query parameters as a `Query` (`Map<string, string>`). Empty map omits the `?` segment.\n * @param fragment Fragment string (without `#`), or `null` to omit.\n */",
+                    "/**\n * Serialise URL parts to an absolute URL string. Inverse of `parse`.\n * @param protocol Scheme (e.g. `\"https\"`), without `:`.\n * @param host Host name (e.g. `\"api.acme.com\"`), optionally with userinfo or a port. A `/`, `\\`, `?` or `#` in it throws `TypeError`; pass those parts as their own arguments.\n * @param port Port number, or `null` to omit the `:port` segment.\n * @param path Path component (typically starts with `/`). A `.` or `..` segment, in any spelling such as `%2E%2E`, throws `TypeError`.\n * @param query Query parameters as a `Query` (`Map<string, string>`). Empty map omits the `?` segment.\n * @param fragment Fragment string (without `#`), or `null` to omit.\n */",
                 ),
             },
         },
@@ -288,8 +286,23 @@ const F_FRAGMENT: usize = 6;
 /// names the same host as `evil.test`, so trailing dots are dropped: `parse`
 /// and every capability context report one spelling, and a
 /// `host == "evil.test"` rule sees both.
+///
+/// The dots stay when the host without them is not the same host, so that
+/// `build` can rebuild what `parse` reports: `.` would become empty, and
+/// `.1..` would become `.1`, which is not a valid host.
 pub(crate) fn host_without_trailing_dots(url: &url::Url) -> &str {
-    url.host_str().unwrap_or("").trim_end_matches('.')
+    let host = url.host_str().unwrap_or("");
+    let stripped = host.trim_end_matches('.');
+    if stripped.len() == host.len() || names_host(url.scheme(), stripped) {
+        stripped
+    } else {
+        host
+    }
+}
+
+/// Whether `host` parses, under `scheme`, as exactly that host.
+fn names_host(scheme: &str, host: &str) -> bool {
+    url::Url::parse(&format!("{scheme}://{host}/")).is_ok_and(|url| url.host_str() == Some(host))
 }
 
 /// The parsed pieces of a URL, in host form; `write` turns them into the
@@ -377,10 +390,11 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         string_to_string.clone(),
         /* deterministic = */ true,
         |caller, params, results| {
-            let s = read_string_arg(&mut *caller, &params[0], "url.encodeComponent")?;
+            let s = read_string_arg(&mut *caller, abi_arg(params, 0)?, "url.encodeComponent")?;
+            fuel::charge(&mut *caller, fuel::SCAN, s.len() as u64)?;
             let encoded = encode_component(&s);
             let st = write_submilli_string_struct(caller, &encoded)?;
-            results[0] = Val::AnyRef(Some(st.to_anyref()));
+            *abi_result(results, 0)? = Val::AnyRef(Some(st.to_anyref()));
             Ok(())
         },
     )?;
@@ -392,7 +406,8 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         string_to_string,
         /* deterministic = */ true,
         |caller, params, results| {
-            let s = read_string_arg(&mut *caller, &params[0], "url.decodeComponent")?;
+            let s = read_string_arg(&mut *caller, abi_arg(params, 0)?, "url.decodeComponent")?;
+            fuel::charge(&mut *caller, fuel::SCAN, s.len() as u64)?;
             let decoded = percent_encoding::percent_decode_str(&s)
                 .decode_utf8()
                 .map_err(|e| {
@@ -402,7 +417,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
                 })?
                 .into_owned();
             let st = write_submilli_string_struct(caller, &decoded)?;
-            results[0] = Val::AnyRef(Some(st.to_anyref()));
+            *abi_result(results, 0)? = Val::AnyRef(Some(st.to_anyref()));
             Ok(())
         },
     )?;
@@ -414,9 +429,10 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         FuncType::new(&engine, [nullable_object.clone()], [string.clone()]),
         /* deterministic = */ true,
         |caller, params, results| {
-            let pairs = map::string_entries(caller, &params[0])?;
+            let pairs = map::string_entries(caller, abi_arg(params, 0)?)?;
+            fuel::charge(&mut *caller, fuel::SCAN, pairs_len(&pairs))?;
             let st = write_submilli_string_struct(caller, &encode_query(&pairs))?;
-            results[0] = Val::AnyRef(Some(st.to_anyref()));
+            *abi_result(results, 0)? = Val::AnyRef(Some(st.to_anyref()));
             Ok(())
         },
     )?;
@@ -429,10 +445,11 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         /* deterministic = */ true,
         |caller, params, results| {
             Box::pin(async move {
-                let s = read_string_arg(&mut *caller, &params[0], "url.decodeQuery")?;
+                let s = read_string_arg(&mut *caller, abi_arg(params, 0)?, "url.decodeQuery")?;
+                fuel::charge(&mut *caller, fuel::SCAN, s.len() as u64)?;
                 let pairs =
                     decode_query(&s).map_err(|e| type_error(format!("url.decodeQuery: {e}")))?;
-                results[0] = map::string_map_from_pairs(caller, &pairs).await?;
+                *abi_result(results, 0)? = map::string_map_from_pairs(caller, &pairs).await?;
                 Ok(())
             })
         },
@@ -446,7 +463,8 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         /* deterministic = */ true,
         |caller, params, results| {
             Box::pin(async move {
-                let s = read_string_arg(&mut *caller, &params[0], "url.parse")?;
+                let s = read_string_arg(&mut *caller, abi_arg(params, 0)?, "url.parse")?;
+                fuel::charge(&mut *caller, fuel::PARSE, s.len() as u64)?;
                 let parsed =
                     url::Url::parse(&s).map_err(|e| type_error(format!("url.parse: {e}")))?;
                 let query = match parsed.query() {
@@ -462,7 +480,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
                     query,
                     fragment: parsed.fragment().map(str::to_string),
                 };
-                results[0] = parts.write(caller).await?;
+                *abi_result(results, 0)? = parts.write(caller).await?;
                 Ok(())
             })
         },
@@ -486,19 +504,28 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         ),
         /* deterministic = */ true,
         |caller, params, results| {
-            let protocol = read_string_arg(&mut *caller, &params[0], "url.build (protocol)")?;
-            let host = read_string_arg(&mut *caller, &params[1], "url.build (host)")?;
-            let port = read_nullable_number(caller, &params[2], "url.build (port)")?;
-            let path = read_string_arg(&mut *caller, &params[3], "url.build (path)")?;
-            let query = map::string_entries(caller, &params[4])?;
-            let fragment = match &params[5] {
+            let protocol =
+                read_string_arg(&mut *caller, abi_arg(params, 0)?, "url.build (protocol)")?;
+            let host = read_string_arg(&mut *caller, abi_arg(params, 1)?, "url.build (host)")?;
+            let port = read_nullable_number(caller, abi_arg(params, 2)?, "url.build (port)")?;
+            let path = read_string_arg(&mut *caller, abi_arg(params, 3)?, "url.build (path)")?;
+            let query = map::string_entries(caller, abi_arg(params, 4)?)?;
+            let fragment = match abi_arg(params, 5)? {
                 Val::AnyRef(None) => None,
                 v => Some(read_string_arg(&mut *caller, v, "url.build (fragment)")?),
             };
+            // `set_path` would remove the segment, so a caller's `..` would reach the parent.
+            refuse_dot_segments_in_path(&path)
+                .map_err(|refusal| refusal.into_error("url.build"))?;
+            fuel::charge(
+                &mut *caller,
+                fuel::PARSE,
+                (protocol.len() + host.len() + path.len()) as u64 + pairs_len(&query),
+            )?;
             let serialised = build_url(&protocol, &host, port, &path, &query, fragment.as_deref())
                 .map_err(|e| type_error(format!("url.build: {e}")))?;
             let st = write_submilli_string_struct(caller, &serialised)?;
-            results[0] = Val::AnyRef(Some(st.to_anyref()));
+            *abi_result(results, 0)? = Val::AnyRef(Some(st.to_anyref()));
             Ok(())
         },
     )?;
@@ -564,6 +591,18 @@ fn build_url(
     query_kv: &[(String, String)],
     fragment: Option<&str>,
 ) -> Result<String, String> {
+    // Each part has its own argument. A path inside `host` would otherwise be
+    // parsed, normalized, and then replaced by `path`.
+    if !is_scheme(protocol) {
+        return Err(format!(
+            "protocol {protocol:?} is not a scheme such as \"https\""
+        ));
+    }
+    if let Some(delimiter) = host.chars().find(|c| matches!(c, '/' | '\\' | '?' | '#')) {
+        return Err(format!(
+            "host {host:?} has {delimiter:?}; pass the path, query and fragment as their own arguments"
+        ));
+    }
     let base = format!("{protocol}://{host}");
     let mut url = url::Url::parse(&base).map_err(|e| e.to_string())?;
     if port.is_some() {
@@ -584,6 +623,21 @@ fn build_url(
     }
     url.set_fragment(fragment);
     Ok(url.to_string())
+}
+
+/// An ASCII letter followed by letters, digits, `+`, `-` or `.`.
+pub(crate) fn is_scheme(scheme: &str) -> bool {
+    let mut chars = scheme.chars();
+    chars.next().is_some_and(|c| c.is_ascii_alphabetic())
+        && chars.all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.'))
+}
+
+/// The bytes of a query's keys and values, the size of encoding it.
+fn pairs_len(pairs: &[(String, String)]) -> u64 {
+    pairs
+        .iter()
+        .map(|(key, value)| (key.len() + value.len()) as u64)
+        .sum()
 }
 
 fn decode_query(s: &str) -> Result<Vec<(String, String)>, String> {
@@ -609,15 +663,10 @@ fn decode_query(s: &str) -> Result<Vec<(String, String)>, String> {
     Ok(out)
 }
 
-/// In a name a dot is left alone, as in `repo.js`, so the path reads as the
-/// caller and a blueprint filter would write it. A component that is a dot
-/// segment has its dots escaped so the text does not read as one. That is not
-/// a guard: a URL parser treats `%2E%2E` as `..` too, so a caller that must
-/// not step out of a path refuses `.` and `..` itself.
+/// A dot is left alone, `..` included: escaping it would not stop a URL parser
+/// from reading `%2E%2E` as `..`. `submilli:http` and `build` refuse dot
+/// segments instead.
 fn encode_component(component: &str) -> String {
-    if DOT_SEGMENTS.contains(&component) {
-        return component.replace('.', "%2E");
-    }
     percent_encoding::utf8_percent_encode(component, COMPONENT).to_string()
 }
 
@@ -658,7 +707,7 @@ mod tests {
                 .lock()
                 .unwrap()
                 .push((caller.to_string(), capability.to_string()));
-            CheckOutcome::Allow
+            CheckOutcome::Allow { rule: None }
         }
     }
 

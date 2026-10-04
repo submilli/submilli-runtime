@@ -1,7 +1,8 @@
-// expect-error-count: 4
+// expect-error-count: 5
 // expect-error: this constructor can finish without calling `super(...)`
 // expect-error: this `return` can run before `super(...)`
 // expect-error: `super(...)` must be a statement of its own
+// expect-error: unreachable code
 // A `super(...)` some path skips would leave the parent's fields unset
 // (SUB-1159).
 class Base {

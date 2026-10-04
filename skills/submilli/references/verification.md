@@ -13,9 +13,9 @@ limits). If the policy was never stated, that is the first finding.
 ## Checks
 
 Run the mechanical checks first and stop if they fail:
-`submilli build check`, `submilli build test`, and
-`submilli blueprint lint <file>`. Warnings do not fail `build check`; keep
-its output for check 10. Then the allowed / cross-identity-denied /
+`submilli build check --deny-warnings`, `submilli build test --deny-warnings`,
+and `submilli blueprint lint --deny-warnings <file>`. Keep diagnostics for
+check 10; code warnings fail these commands. Then the allowed / cross-identity-denied /
 missing-variable matrix: locally with `submilli run --blueprint <file>
 --var NAME=VALUE`, and through the server as in [harnesses](harnesses.md)
 when the agent will run there.

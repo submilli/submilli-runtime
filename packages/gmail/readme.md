@@ -109,8 +109,8 @@ restricted blueprints. Each script has a blueprint of the same name:
   `from`, that a value holding a second address is rejected, and that `from`
   is read once.
 - `request-values.ts` shows that the message the package builds goes to the
-  recipients the policy approved. The package holds a placeholder token from
-  `fake-token.txt`, and the blueprint tells the message to the allowed list
+  recipients the policy approved. The package reads a placeholder token from
+  the local secret store, and the blueprint tells the message to the allowed list
   from a longer one by the size of the request body.
 
 These tests need no real token or network. Run from the repository root in an
@@ -120,6 +120,7 @@ isolated local package store:
 gmail_test_home=$(mktemp -d)
 SUBMILLI_HOME="$gmail_test_home" cargo run -p submilli -- build publish-local -p @submilli/gmail
 SUBMILLI_HOME="$gmail_test_home" cargo run -p submilli -- run packages/gmail/tests/policy/recipients.ts --blueprint packages/gmail/tests/policy/recipients.yaml
+printf %s policy-placeholder | SUBMILLI_HOME="$gmail_test_home" cargo run -p submilli -- secret put policy-token
 SUBMILLI_HOME="$gmail_test_home" cargo run -p submilli -- run packages/gmail/tests/policy/request-values.ts --blueprint packages/gmail/tests/policy/request-values.yaml
 ```
 

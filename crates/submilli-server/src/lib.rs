@@ -1,9 +1,10 @@
 //! Submilli HTTP execution server.
 
+pub mod audit;
+
 pub mod app;
 pub mod auth;
 pub mod blueprint;
-pub mod blueprint_seed;
 mod compiler_thread;
 pub mod config;
 pub mod error;
@@ -11,6 +12,7 @@ mod execution_timeout;
 pub mod handlers;
 pub mod idempotency;
 pub mod idempotency_store;
+pub mod logging;
 mod mcp;
 pub mod metrics;
 pub mod packages;
@@ -19,6 +21,8 @@ pub mod serve;
 pub mod session;
 pub mod session_manager;
 pub mod session_store;
+pub mod tls;
+pub mod volumes;
 
 pub use app::{AppState, app, route_table};
 pub use auth::{Access, ApiToken, AuthConfig, Role};

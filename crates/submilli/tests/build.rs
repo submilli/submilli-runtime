@@ -1143,7 +1143,12 @@ fn build_test_package_frames_show_their_own_packages_source() {
 fn build_test_http_skip_preserves_local_tests_and_docs() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let project = http_skip_project(tmp.path());
-    for name in ["network.test.ts", "nested/network_read.test.subm"] {
+    for name in [
+        "network.test.ts",
+        "nested/network_read.test.subm",
+        "nested/network.test.subm",
+        "network_write.test.ts",
+    ] {
         write_file(&project.join("tests").join(name), "not valid TypeScript");
     }
     write_file(
@@ -1154,10 +1159,10 @@ fn build_test_http_skip_preserves_local_tests_and_docs() {
         &project.join("docs/readme.md"),
         "# Util\n```ts\nfunction main(): number { return 42; }\n```\n",
     );
-    let out = run_http_skip_test(&project, tmp.path(), Some("1"));
+    let out = run_network_test(&project, tmp.path(), true, Some("1"));
     assert!(out.status.success(), "{}", stderr(&out));
     assert!(stdout(&out).contains("2 passed, 0 failed across 2 files"));
-    assert!(stdout(&out).contains("2 HTTP test files skipped"));
+    assert!(stdout(&out).contains("4 HTTP test files skipped (--skip-network)"));
     assert!(stdout(&out).contains("networking.test.ts"));
     assert!(stdout(&out).contains("docs/readme.md :: example 1 (compile)"));
 
@@ -1165,21 +1170,21 @@ fn build_test_http_skip_preserves_local_tests_and_docs() {
         &project.join("docs/readme.md"),
         "# Util\n```ts\nfunction main(): number { return missing(); }\n```\n",
     );
-    let out = run_http_skip_test(&project, tmp.path(), Some("1"));
+    let out = run_network_test(&project, tmp.path(), true, Some("1"));
     assert!(!out.status.success(), "{}", stdout(&out));
     assert!(stdout(&out).contains("1 passed, 1 failed across 2 files"));
 }
 
 #[test]
-fn build_test_http_skip_requires_an_explicit_one() {
+fn build_test_network_skip_requires_the_flag() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let project = http_skip_project(tmp.path());
     write_file(
         &project.join("tests/network_probe.test.ts"),
         "function main(): void { assert(false, \"network test ran\"); }",
     );
-    for setting in [None, Some("0"), Some("true")] {
-        let out = run_http_skip_test(&project, tmp.path(), setting);
+    for setting in [None, Some("0"), Some("true"), Some("1")] {
+        let out = run_network_test(&project, tmp.path(), false, setting);
         assert!(!out.status.success(), "{setting:?}: {}", stdout(&out));
         assert!(
             stderr(&out).contains("network test ran"),
@@ -1188,7 +1193,7 @@ fn build_test_http_skip_requires_an_explicit_one() {
         );
         assert!(!stdout(&out).contains("HTTP test files skipped"));
     }
-    let out = run_http_skip_test(&project, tmp.path(), Some("1"));
+    let out = run_network_test(&project, tmp.path(), true, Some("1"));
     assert!(out.status.success(), "{}", stderr(&out));
     assert!(stdout(&out).contains("0 passed, 0 failed across 0 files"));
     assert!(stdout(&out).contains("1 HTTP test files skipped"));
@@ -1208,13 +1213,16 @@ fn http_skip_project(home: &Path) -> PathBuf {
     project
 }
 
-fn run_http_skip_test(project: &Path, home: &Path, setting: Option<&str>) -> Output {
+fn run_network_test(project: &Path, home: &Path, skip: bool, setting: Option<&str>) -> Output {
     let mut command = Command::new(submilli_bin());
     command
         .args(["build", "test"])
         .current_dir(project)
         .env("SUBMILLI_HOME", home)
         .env_remove("SUBMILLI_SKIP_HTTP_TESTS");
+    if skip {
+        command.arg("--skip-network");
+    }
     if let Some(setting) = setting {
         command.env("SUBMILLI_SKIP_HTTP_TESTS", setting);
     }
@@ -1582,4 +1590,593 @@ fn init_scaffolds_a_sample_test_that_passes() {
         "stdout: {}",
         stdout(&out)
     );
+}
+
+// Credentials are checked inside the package so secret values never escape to main.
+fn credential_project(home: &Path, assertions: &str) -> PathBuf {
+    let project = http_skip_project(home);
+    write_file(
+        &project.join("src/lib.ts"),
+        &format!(
+            "import secrets from \"submilli:secrets\";\nexport function verify(): void {{ {assertions} }}"
+        ),
+    );
+    for name in ["credentials.test.ts", "nested/credentials.test.ts"] {
+        write_file(
+            &project.join("tests").join(name),
+            "import { verify } from \"@acme/util\"; function main(): void { verify(); }",
+        );
+    }
+    project
+}
+
+fn credential_command(project: &Path, home: &Path) -> Command {
+    let mut command = Command::new(submilli_bin());
+    command
+        .args(["build", "test"])
+        .current_dir(project)
+        .env("SUBMILLI_HOME", home)
+        .env("SUBMILLI_TELEMETRY", "0")
+        .env("SUBMILLI_TEST_KEY", "shell")
+        .env("SUBMILLI_TEST_OTHER", "other")
+        .env("SUBMILLI_TEST_EMPTY", "")
+        .env_remove("SUBMILLI_TEST_MISSING");
+    command
+}
+
+#[test]
+fn build_test_credentials_are_empty_by_default() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let project = credential_project(
+        tmp.path(),
+        r#"
+        assert(secrets.get("SUBMILLI_TEST_KEY") === null);
+        assert(secrets.get("SUBMILLI_TEST_OTHER") === null);
+        assert(secrets.get("FILE_ONLY") === null);
+        if (secrets.get("SUBMILLI_TEST_KEY") === null) return;
+        assert(false, "credential unexpectedly supplied");
+    "#,
+    );
+    write_file(
+        &project.join(".env"),
+        "SUBMILLI_TEST_KEY=file\nFILE_ONLY=file\n",
+    );
+    let out = credential_command(&project, tmp.path())
+        .output()
+        .expect("run");
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert!(stdout(&out).contains("2 passed, 0 failed across 2 files"));
+    assert!(stderr(&out).contains("capability=secrets.get"));
+}
+
+#[test]
+fn build_test_credential_sources_and_precedence() {
+    let cases: &[(&[&str], &str, &str, &str)] = &[
+        (&["--env-var", "SUBMILLI_TEST_KEY"], "shell", "null", "null"),
+        (&["--env-file", "selected.env"], "file", "null", "\"file\""),
+        (&["--all-env"], "shell", "\"other\"", "null"),
+        (
+            &["--all-env", "--env-file", "selected.env"],
+            "file",
+            "\"other\"",
+            "\"file\"",
+        ),
+        (
+            &["--env-file", "selected.env", "--all-env"],
+            "file",
+            "\"other\"",
+            "\"file\"",
+        ),
+        (
+            &[
+                "--env-var",
+                "SUBMILLI_TEST_KEY",
+                "--env-file",
+                "selected.env",
+                "--all-env",
+            ],
+            "shell",
+            "\"other\"",
+            "\"file\"",
+        ),
+        (
+            &[
+                "--all-env",
+                "--env-file",
+                "selected.env",
+                "--env-var",
+                "SUBMILLI_TEST_KEY",
+            ],
+            "shell",
+            "\"other\"",
+            "\"file\"",
+        ),
+    ];
+    for &(args, key, other, file) in cases {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let project = credential_project(
+            tmp.path(),
+            &format!(
+                r#"
+            assert(secrets.get("SUBMILLI_TEST_KEY") === "{key}");
+            assert(secrets.get("SUBMILLI_TEST_OTHER") === {other});
+            assert(secrets.get("FILE_ONLY") === {file});
+            assert(secrets.get("IMPLICIT_FILE") === null);
+        "#
+            ),
+        );
+        write_file(
+            &project.join("selected.env"),
+            "SUBMILLI_TEST_KEY=file\nFILE_ONLY=file\n",
+        );
+        write_file(&project.join(".env"), "IMPLICIT_FILE=hidden\n");
+        let out = credential_command(&project, tmp.path())
+            .args(args)
+            .output()
+            .expect("run");
+        assert!(out.status.success(), "{args:?}: {}", stderr(&out));
+        assert!(stdout(&out).contains("2 passed, 0 failed across 2 files"));
+    }
+}
+
+#[test]
+fn build_test_named_credentials_accept_lists_repeats_and_empty_values() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let project = credential_project(
+        tmp.path(),
+        r#"
+        assert(secrets.get("SUBMILLI_TEST_KEY") === "shell");
+        assert(secrets.get("SUBMILLI_TEST_OTHER") === "other");
+        assert(secrets.get("SUBMILLI_TEST_EMPTY") === "");
+    "#,
+    );
+    let out = credential_command(&project, tmp.path())
+        .args([
+            "--env-var",
+            "SUBMILLI_TEST_KEY,SUBMILLI_TEST_OTHER",
+            "--env-var",
+            "SUBMILLI_TEST_EMPTY,SUBMILLI_TEST_KEY",
+        ])
+        .output()
+        .expect("run");
+    assert!(out.status.success(), "{}", stderr(&out));
+}
+
+#[test]
+fn build_test_env_file_uses_cwd_and_preserves_dotenv_syntax() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let project = credential_project(
+        tmp.path(),
+        r#"
+        assert(secrets.get("DUP") === "last");
+        assert(secrets.get("EMPTY") === "");
+        assert(secrets.get("QUOTED") === "two words");
+        assert(secrets.get("DOUBLE") === "a=b");
+        assert(secrets.get("SUBMILLI_TEST_KEY") === null);
+    "#,
+    );
+    write_file(
+        &project.join("nested/.env"),
+        "# comment\n\nDUP=first\n export DUP = last\nEMPTY=\nQUOTED='two words'\nDOUBLE=\"a=b\"\nignored line\n=value\n",
+    );
+    write_file(&project.join(".env"), "DUP=wrong\n");
+    let out = credential_command(&project.join("nested"), tmp.path())
+        .args(["--env-file", ".env"])
+        .output()
+        .expect("run");
+    assert!(out.status.success(), "{}", stderr(&out));
+}
+
+#[test]
+fn build_test_invalid_credentials_fail_before_compilation_even_when_skipping() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let project = http_skip_project(tmp.path());
+    write_file(&project.join("src/lib.ts"), "invalid source");
+    write_file(&project.join("tests/network.test.ts"), "invalid source");
+    write_file(
+        &project.join("selected.env"),
+        "SUBMILLI_TEST_MISSING=do-not-print-this\n",
+    );
+    for (args, expected) in [
+        (
+            vec![
+                "--env-var",
+                "SUBMILLI_TEST_MISSING",
+                "--env-file",
+                "selected.env",
+            ],
+            "SUBMILLI_TEST_MISSING",
+        ),
+        (vec!["--env-file", "missing.env"], "missing.env"),
+        (vec!["--env-file", "tests"], "tests"),
+    ] {
+        let out = credential_command(&project, tmp.path())
+            .args(args)
+            .arg("--skip-network")
+            .output()
+            .expect("run");
+        assert!(!out.status.success());
+        assert!(stderr(&out).contains(expected), "{}", stderr(&out));
+        assert!(!stderr(&out).contains("do-not-print-this"));
+        assert!(!stdout(&out).contains("passed"));
+        assert!(!stdout(&out).contains("skip "));
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn build_test_non_unicode_environment_is_handled_without_panicking() {
+    use std::os::unix::ffi::OsStringExt;
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let project = credential_project(
+        tmp.path(),
+        r#"
+        assert(secrets.get("SUBMILLI_TEST_INVALID") === null);
+        assert(secrets.get("SUBMILLI_TEST_KEY") === "shell");
+    "#,
+    );
+    let invalid = std::ffi::OsString::from_vec(vec![0xff]);
+    for named in [false, true] {
+        let mut command = credential_command(&project, tmp.path());
+        command
+            .env("SUBMILLI_TEST_INVALID", &invalid)
+            .env(&invalid, "ignored")
+            .arg("--all-env");
+        if named {
+            command.args(["--env-var", "SUBMILLI_TEST_INVALID"]);
+        }
+        let out = command.output().expect("run");
+        assert_eq!(out.status.success(), !named, "{}", stderr(&out));
+        assert!(!stderr(&out).contains("panicked"));
+        if named {
+            assert!(stderr(&out).contains("SUBMILLI_TEST_INVALID"));
+            assert!(stderr(&out).contains("not valid Unicode"));
+        }
+    }
+}
+
+#[test]
+fn build_test_skip_network_is_independent_of_credentials_and_legacy_variable() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let project = credential_project(
+        tmp.path(),
+        r#"
+        assert(secrets.get("SUBMILLI_TEST_KEY") === "shell");
+        assert(secrets.get("SUBMILLI_SKIP_HTTP_TESTS") === "1");
+    "#,
+    );
+    write_file(
+        &project.join("tests/network.test.ts"),
+        "function main(): void { assert(false, \"network ran\"); }",
+    );
+    for skip in [false, true] {
+        let mut command = credential_command(&project, tmp.path());
+        command
+            .env("SUBMILLI_SKIP_HTTP_TESTS", "1")
+            .arg("--all-env");
+        if skip {
+            command.arg("--skip-network");
+        }
+        let out = command.output().expect("run");
+        assert_eq!(out.status.success(), skip, "{}", stderr(&out));
+        assert!(!stderr(&out).contains("deprecated"));
+        assert_eq!(
+            stdout(&out).contains("1 HTTP test files skipped (--skip-network)"),
+            skip
+        );
+    }
+    for setting in [None, Some("0"), Some("true"), Some("1")] {
+        let out = run_network_test(&project, tmp.path(), true, setting);
+        // The credential assertions fail, but the network file must still be skipped.
+        assert!(stdout(&out).contains("1 HTTP test files skipped (--skip-network)"));
+    }
+}
+
+#[test]
+fn build_test_help_describes_explicit_controls() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let out = build_test(tmp.path(), tmp.path(), &["--help"]);
+    assert!(out.status.success());
+    let help = stdout(&out);
+    for expected in [
+        "--all-env",
+        "--env-var",
+        "--env-file",
+        "--skip-network",
+        "network.test.{ts,subm}",
+        "network_*.test.{ts,subm}",
+        "no credentials by default",
+        "--env-var > --env-file > --all-env",
+    ] {
+        assert!(help.contains(expected), "missing {expected}: {help}");
+    }
+    assert!(!help.contains("SUBMILLI_SKIP_HTTP_TESTS"));
+}
+
+#[test]
+fn build_test_credentials_preserve_package_identity_for_test_main() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let project = http_skip_project(tmp.path());
+    write_file(
+        &project.join("tests/main.test.ts"),
+        "import secrets from \"submilli:secrets\"; function main(): void { assert(secrets.get(\"SUBMILLI_TEST_KEY\") === \"shell\"); }",
+    );
+    let out = credential_command(&project, tmp.path())
+        .args(["--env-var", "SUBMILLI_TEST_KEY"])
+        .output()
+        .expect("run");
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert!(
+        stderr(&out).contains("caller=@acme/util capability=secrets.get"),
+        "{}",
+        stderr(&out)
+    );
+}
+
+#[test]
+fn build_test_empty_project_reports_no_test_files() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let project = http_skip_project(tmp.path());
+    for args in [&[][..], &["--skip-network"][..]] {
+        let out = build_test(&project, tmp.path(), args);
+        assert!(out.status.success(), "{}", stderr(&out));
+        assert!(stderr(&out).contains("no test files found"));
+        assert!(!stdout(&out).contains("HTTP test files skipped"));
+    }
+}
+
+#[test]
+fn docs_render_destructured_parameter_names() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let project = tmp.path().join("project");
+    let home = tmp.path().join("home");
+    write_file(
+        &project.join("submilli.toml"),
+        "[[package]]\nname = \"@acme/patterns\"\nversion = \"0.1.0\"\ndescription = \"Pattern documentation.\"\n",
+    );
+    write_file(
+        &project.join("src/lib.ts"),
+        r#"
+/** Adds.
+ * @param pair Numbers.
+ * @returns Sum.
+ */
+export function add({a, b}: {a: number; b: number}): number { return a + b; }
+/** Service. */
+export interface Svc {
+    /** Runs.
+     * @param opts Options.
+     * @returns Number.
+     */
+    run({a}: {a: number}): number;
+}
+"#,
+    );
+    let built = build(&project, &home, &[]);
+    assert!(built.status.success(), "{}", stderr(&built));
+    let docs = run_with_home(&[OsStr::new("docs"), OsStr::new("@acme/patterns")], &home);
+    assert!(docs.status.success(), "{}", stderr(&docs));
+    let text = stdout(&docs);
+    assert!(text.contains("function add(pair:"), "{text}");
+    assert!(text.contains("run(opts:"), "{text}");
+    assert!(!text.contains("#pattern_p_"), "{text}");
+}
+
+#[test]
+fn deny_warnings_build_commands_reject_code_warnings_without_installing() {
+    let cases = [
+        (
+            "binding key `customer`",
+            r#"import { check } from "submilli:security";
+/** Check a request.
+ * @param customer Customer ID.
+ * @capability acme.com/op { customer }
+ */
+export function op(customer: string): void { check("acme.com/op", {}); }
+"#,
+        ),
+        (
+            "inside a nested function",
+            r#"import { check } from "submilli:security";
+/** Check a request.
+ * @param customer Customer ID.
+ * @capability acme.com/op { customer }
+ */
+export function op(customer: string): void {
+ const approve = (): void => { check("acme.com/op", { customer }); };
+ approve();
+}
+"#,
+        ),
+        (
+            "non-literal argument",
+            r#"import { readText } from "submilli:fs";
+/** Read a file.
+ * @param path File path.
+ */
+export function op(path: string): string | null { return readText(path); }
+"#,
+        ),
+        (
+            "cannot statically resolve the host",
+            r#"import { get } from "submilli:http";
+/** Fetch a URL.
+ * @param path URL path.
+ */
+export function op(path: string): string { return get("https://api.example.com" + path).body; }
+"#,
+        ),
+    ];
+    for (warning, source) in cases {
+        let tmp = tempfile::tempdir().unwrap();
+        let project = tmp.path().join("project");
+        write_file(
+            &project.join("submilli.toml"),
+            "[[package]]\nname = \"@acme/strict\"\nversion = \"0.1.0\"\ndescription = \"Strict fixture.\"\n",
+        );
+        write_file(&project.join("src/lib.ts"), source);
+        for command in ["check", "test", "publish-local"] {
+            let home = tmp.path().join(command);
+            let out = build_subcommand(command, &project, &home, &["--deny-warnings"]);
+            assert_eq!(out.status.code(), Some(1), "{command}: {}", stderr(&out));
+            assert!(stderr(&out).contains(warning), "{}", stderr(&out));
+            assert!(
+                stderr(&out).contains("warning(s) treated as errors (--deny-warnings)"),
+                "{}",
+                stderr(&out)
+            );
+            let count = stderr(&out)
+                .lines()
+                .filter(|line| line.starts_with("warning:"))
+                .count();
+            assert!(stderr(&out).contains(&format!(
+                "error: {count} warning(s) treated as errors (--deny-warnings)"
+            )));
+            assert!(!home.join("packages/@acme/strict").exists());
+            let permissive = build_subcommand(command, &project, &home, &[]);
+            assert!(
+                permissive.status.success(),
+                "{command}: {}",
+                stderr(&permissive)
+            );
+            assert!(stderr(&permissive).contains(warning));
+        }
+    }
+}
+
+#[test]
+fn deny_warnings_environment_matches_flag_and_clean_package_passes() {
+    let tmp = tempfile::tempdir().unwrap();
+    let project = tmp.path().join("project");
+    write_file(
+        &project.join("submilli.toml"),
+        "[[package]]\nname = \"@acme/strict\"\nversion = \"0.1.0\"\ndescription = \"Strict fixture.\"\n",
+    );
+    write_file(
+        &project.join("src/lib.ts"),
+        "/** Describe the answer.\n * @returns The answer.\n */\nexport function answer(): number { return 42; }\n",
+    );
+    assert!(
+        build_subcommand("check", &project, tmp.path(), &["--deny-warnings"])
+            .status
+            .success()
+    );
+    write_file(
+        &project.join("src/lib.ts"),
+        "export function answer(): number { return 42; }\n",
+    );
+    let out = Command::new(submilli_bin())
+        .args(["build", "check"])
+        .current_dir(&project)
+        .env("SUBMILLI_HOME", tmp.path())
+        .env("SUBMILLI_DENY_WARNINGS", "1")
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(1));
+    assert!(
+        stderr(&out).contains("treated as errors"),
+        "{}",
+        stderr(&out)
+    );
+}
+
+#[test]
+fn deny_warnings_checks_test_sources_and_documentation_examples() {
+    let tmp = tempfile::tempdir().unwrap();
+    let project = tmp.path().join("project");
+    write_file(
+        &project.join("submilli.toml"),
+        "[[package]]\nname = \"@acme/strict\"\nversion = \"0.1.0\"\ndescription = \"Strict fixture.\"\n",
+    );
+    write_file(
+        &project.join("src/lib.ts"),
+        "/** Describe the answer.\n * @returns The answer.\n */\nexport function answer(): number { return 42; }\n",
+    );
+    let example = "import { check } from \"submilli:security\";\n/** Run the example.\n * @capability acme.com/extra\n */\nfunction main(): void { }\n";
+    write_file(&project.join("tests/lib.test.ts"), example);
+    let out = build_test(&project, tmp.path(), &["--deny-warnings"]);
+    assert_eq!(out.status.code(), Some(1));
+    assert!(
+        stderr(&out).contains("treated as errors"),
+        "{}",
+        stderr(&out)
+    );
+    fs::remove_file(project.join("tests/lib.test.ts")).unwrap();
+    write_file(
+        &project.join("docs/readme.md"),
+        &format!("# Example\n```ts\n{example}```\n"),
+    );
+    let out = build_test(&project, tmp.path(), &["--deny-warnings"]);
+    assert_eq!(out.status.code(), Some(1));
+    assert!(stderr(&out).contains("docs/readme.md"), "{}", stderr(&out));
+    assert!(stderr(&out).contains("treated as errors"));
+}
+
+#[test]
+fn deny_warnings_preserves_existing_capability_payload_error() {
+    let tmp = tempfile::tempdir().unwrap();
+    let project = tmp.path().join("project");
+    write_file(
+        &project.join("submilli.toml"),
+        "[[package]]\nname = \"@acme/strict\"\nversion = \"0.1.0\"\ndescription = \"Strict fixture.\"\n",
+    );
+    write_file(
+        &project.join("src/lib.ts"),
+        "import { check } from \"submilli:security\";\n/** Check an operation.\n * @param customer Customer ID.\n * @capability acme.com/op {}\n */\nexport function op(customer: string): void { check(\"acme.com/op\", { customer }); }\n",
+    );
+    for flags in [&[][..], &["--deny-warnings"][..]] {
+        let out = build_subcommand("check", &project, tmp.path(), flags);
+        assert_eq!(out.status.code(), Some(1));
+        assert!(
+            stderr(&out).contains("payload key `customer` missing"),
+            "{}",
+            stderr(&out)
+        );
+    }
+}
+
+#[test]
+fn deny_warnings_respects_package_selection_and_skipped_network_files() {
+    let tmp = tempfile::tempdir().unwrap();
+    let project = tmp.path().join("project");
+    write_file(
+        &project.join("submilli.toml"),
+        "[[package]]\nname = \"@acme/clean\"\nversion = \"0.1.0\"\ndescription = \"Clean package.\"\npath = \"clean\"\n\n[[package]]\nname = \"@acme/warned\"\nversion = \"0.1.0\"\ndescription = \"Warned package.\"\npath = \"warned\"\n",
+    );
+    write_file(
+        &project.join("clean/src/lib.ts"),
+        "/** Answer.\n * @returns The answer.\n */\nexport function answer(): number { return 42; }\n",
+    );
+    write_file(
+        &project.join("warned/src/lib.ts"),
+        "export function answer(): number { return 42; }\n",
+    );
+    write_file(
+        &project.join("clean/tests/nested/network_warning.test.ts"),
+        "/** Run.\n * @capability acme.com/extra\n */\nfunction main(): void { assert(false, \"must not execute\"); }\n",
+    );
+    let out = build_test(
+        &project,
+        tmp.path(),
+        &["-p", "@acme/clean", "--skip-network", "--deny-warnings"],
+    );
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert!(stdout(&out).contains("HTTP test files skipped"));
+    let out = build_test(
+        &project,
+        tmp.path(),
+        &["-p", "@acme/clean", "--deny-warnings"],
+    );
+    assert_eq!(out.status.code(), Some(1));
+    assert!(
+        stderr(&out).contains("1 warning(s) treated as errors"),
+        "{}",
+        stderr(&out)
+    );
+    assert!(
+        !stderr(&out).contains("must not execute"),
+        "{}",
+        stderr(&out)
+    );
+    assert!(!stdout(&out).contains("warned/src"));
 }

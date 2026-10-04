@@ -38,10 +38,12 @@ num-traits = { workspace = true }
 flate2 = { workspace = true }
 zstd = { workspace = true }
 regex = { workspace = true }
+regex-syntax = { workspace = true }
 ignore = "0.4"
 globset = "0.4"
 similar = "2.7"
 jiff = { workspace = true }
+jiff-tzdb = "=0.1.6"
 # SUB-279: `Math.random()` entropy source. Already a transitive dep
 # through uuid; calling it directly avoids pulling in `rand`.
 getrandom = "0.2"
@@ -52,6 +54,8 @@ getrandom = "0.2"
 sha2 = "0.10"
 hmac = "0.12"
 gix = { version = "0.87.1", default-features = false, features = ["sha1", "basic", "revision", "index", "blocking-network-client", "blocking-http-transport-reqwest-rust-tls"] }
+# The timestamp gix-index decodes an index with; already in the tree through gix.
+filetime = "0.2"
 
 [target.'cfg(windows)'.dependencies]
 cap-primitives = { workspace = true }

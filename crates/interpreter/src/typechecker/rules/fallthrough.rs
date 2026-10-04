@@ -1,116 +1,61 @@
 //! Rule: every `switch` case body must terminate with `break` or
 //! `return` — no fallthrough.
 
+use super::body_walk::{self, Visitor};
+use super::control_flow::case_terminates;
 use super::declarations::TypeDeclarations;
-use crate::{Diagnostic, Severity, StmtId, TypedAst, TypedStmtKind};
+use crate::compiler_error::CompilerFailure;
+use crate::{Diagnostic, Severity, TypedAst, TypedStmtKind};
 
 pub(super) fn run(
     ta: &TypedAst,
     declarations: &TypeDeclarations<'_>,
     diags: &mut Vec<Diagnostic>,
-) -> Result<(), crate::compiler_error::CompilerFailure> {
-    for f in &ta.functions {
-        walk(ta, declarations, f.body, diags)?;
-    }
-    for &id in &ta.top_level_statements {
-        walk(ta, declarations, id, diags)?;
-    }
-    Ok(())
+) -> Result<(), CompilerFailure> {
+    body_walk::walk_program(
+        ta,
+        &mut Fallthrough {
+            ta,
+            declarations,
+            diags,
+        },
+    )
 }
 
-fn walk(
-    ta: &TypedAst,
-    declarations: &TypeDeclarations<'_>,
-    id: StmtId,
-    diags: &mut Vec<Diagnostic>,
-) -> Result<(), crate::compiler_error::CompilerFailure> {
-    let _: () = match &ta
-        .try_stmt(id)
-        .map_err(crate::typechecker::arena_failure)?
-        .kind
-    {
-        TypedStmtKind::Switch { cases, default, .. } => {
-            for case in cases {
-                if !body_terminates(ta, declarations, case.body)? {
-                    diags.push(Diagnostic {
-                    severity: Severity::Error,
-                    span: case.span,
-                    message:
-                        "`switch` case body must end with `break` or `return` — no fallthrough"
-                            .to_string(),
-                    help: vec![
-                        "add `break;` at the end of the case body, or `return …;` if the body returns from the enclosing function"
-                            .to_string(),
-                    ],
-                    notes: vec![],
-                });
-                }
-                walk(ta, declarations, case.body, diags)?;
-            }
-            if let Some(d) = default {
-                walk(ta, declarations, *d, diags)?;
-            }
-        }
-        TypedStmtKind::Block(stmts) => {
-            for &s in stmts {
-                walk(ta, declarations, s, diags)?;
-            }
-        }
-        TypedStmtKind::If {
-            then_block,
-            else_block,
-            ..
-        } => {
-            walk(ta, declarations, *then_block, diags)?;
-            if let Some(eb) = else_block {
-                walk(ta, declarations, *eb, diags)?;
-            }
-        }
-        TypedStmtKind::While { body, .. }
-        | TypedStmtKind::For { body, .. }
-        | TypedStmtKind::ForOf { body, .. }
-        | TypedStmtKind::DoWhile { body, .. } => walk(ta, declarations, *body, diags)?,
-        TypedStmtKind::NarrowRegion { body, .. } => walk(ta, declarations, *body, diags)?,
-        TypedStmtKind::Try {
-            body,
-            catches,
-            finally,
-        } => {
-            walk(ta, declarations, *body, diags)?;
-            for c in catches {
-                walk(ta, declarations, c.body, diags)?;
-            }
-            if let Some(f) = finally {
-                walk(ta, declarations, *f, diags)?;
-            }
-        }
-        TypedStmtKind::Let { .. }
-        | TypedStmtKind::Const { .. }
-        | TypedStmtKind::Return(_)
-        | TypedStmtKind::Throw { .. }
-        | TypedStmtKind::Expr(_)
-        | TypedStmtKind::Break
-        | TypedStmtKind::Continue
-        | TypedStmtKind::ReboxLocal { .. }
-        | TypedStmtKind::AssignLocal { .. }
-        | TypedStmtKind::AssignGlobal { .. }
-        | TypedStmtKind::AssignField { .. }
-        | TypedStmtKind::AssignIndex { .. } => {}
-    };
-    Ok(())
+struct Fallthrough<'a, 'd> {
+    ta: &'a TypedAst,
+    declarations: &'a TypeDeclarations<'d>,
+    diags: &'a mut Vec<Diagnostic>,
 }
 
-fn body_terminates(
-    ta: &TypedAst,
-    declarations: &TypeDeclarations<'_>,
-    id: StmtId,
-) -> Result<bool, crate::compiler_error::CompilerFailure> {
-    super::control_flow::case_terminates(ta, declarations, id)
+impl Visitor for Fallthrough<'_, '_> {
+    fn visit_stmt(&mut self, kind: &TypedStmtKind) -> Result<(), CompilerFailure> {
+        let TypedStmtKind::Switch { cases, .. } = kind else {
+            return Ok(());
+        };
+        for case in cases {
+            if case_terminates(self.ta, self.declarations, case.body)? {
+                continue;
+            }
+            self.diags.push(Diagnostic {
+                severity: Severity::Error,
+                span: case.span,
+                message: "`switch` case body must end with `break` or `return` — no fallthrough"
+                    .to_string(),
+                help: vec![
+                    "add `break;` at the end of the case body, or `return …;` if the body returns from the enclosing function"
+                        .to_string(),
+                ],
+                notes: vec![],
+            });
+        }
+        Ok(())
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::super::test_util::run;
+    use super::super::test_util::{run, run_lines};
 
     #[test]
     fn fallthrough_diagnoses() {
@@ -152,5 +97,66 @@ mod tests {
             "function f(x: number, b: boolean): number { switch (x) { case 1: if (b) { return 1; } else { return 2; } default: return 0; } }",
         );
         assert!(diags.is_empty(), "{diags:?}");
+    }
+
+    #[test]
+    fn class_members_and_closures_are_checked() {
+        let source = "function main(): void { }
+class C {
+  n: number = 0;
+  readonly f: (x: number) => void = (x: number): void => {
+    switch (x) {
+      case 1:
+        this.n = 1;
+      default:
+        break;
+    }
+  };
+  constructor() {
+    switch (this.n) {
+      case 0:
+        this.n = 1;
+      default:
+        break;
+    }
+  }
+  route(x: number): void {
+    const handle = (): void => {
+      switch (x) {
+        case 1:
+          this.n = 2;
+        default:
+          break;
+      }
+    };
+    handle();
+  }
+  get label(): string {
+    switch (this.n) {
+      case 0:
+        this.n = 1;
+      default:
+        return \"x\";
+    }
+    return \"y\";
+  }
+  set value(v: number) {
+    switch (v) {
+      case 0:
+        this.n = 0;
+      default:
+        this.n = v;
+    }
+  }
+}
+";
+        let lines: Vec<usize> = run_lines(source)
+            .into_iter()
+            .map(|(message, line)| {
+                assert!(message.contains("no fallthrough"), "{message}");
+                line
+            })
+            .collect();
+        assert_eq!(lines, [14, 23, 33, 42, 6]);
     }
 }

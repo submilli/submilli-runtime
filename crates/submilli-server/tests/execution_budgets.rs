@@ -35,10 +35,13 @@ export function main(): number {
 }"#;
 
 fn router(runtime: RuntimeConfig) -> Router {
-    let blueprints = Arc::new(InMemoryBlueprintStore::seed([Blueprint {
-        name: BLUEPRINT_NAME.into(),
-        ..Default::default()
-    }]));
+    let blueprints = Arc::new(
+        InMemoryBlueprintStore::seed([Blueprint {
+            name: BLUEPRINT_NAME.into(),
+            ..Default::default()
+        }])
+        .expect("seed blueprints"),
+    );
     let config = ServerConfig {
         blueprints: Some(blueprints),
         runtime,
@@ -218,6 +221,32 @@ export function main(): number { return 1; }"#;
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn host_work_spends_fuel() {
+    // A hundred iterations of Wasm cost next to nothing; the host copies the
+    // 100,000-unit string in and out each time (about 25,000 fuel per
+    // iteration at the COPY rate), and that is what runs out: the limit below
+    // is more than one copy per iteration would cost, less than two.
+    const HOST_HEAVY_LOOP: &str = r#"export function main(): number {
+    let s = "x".repeat(100000);
+    for (let i = 0; i < 100; i++) { s = s.toUpperCase(); }
+    return s.length;
+}"#;
+    let generous = router(RuntimeConfig {
+        fuel: 100_000_000,
+        ..RuntimeConfig::default()
+    });
+    let response = execute(&generous, HOST_HEAVY_LOOP).await;
+    assert_eq!(response["result"], "100000", "{response}");
+    let limited = router(RuntimeConfig {
+        fuel: 2_000_000,
+        ..RuntimeConfig::default()
+    });
+    let response = execute(&limited, HOST_HEAVY_LOOP).await;
+    assert_failed_with(&response, "fuel_exhausted", "fuel exhausted");
+    assert_still_serves(&limited).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn fuel_spent_under_a_callback_is_not_catchable() {
     let limited = router(RuntimeConfig {
         fuel: 1_000_000,
@@ -243,7 +272,7 @@ export function main(): string {
 }"#;
     let router = router(RuntimeConfig::default());
     let response = execute(&router, CAUGHT_RECURSION_IN_CALLBACK).await;
-    assert_failed_with(&response, "runtime_error", "call stack exhausted");
+    assert_failed_with(&response, "stack_exhausted", "call stack exhausted");
     assert_still_serves(&router).await;
 }
 

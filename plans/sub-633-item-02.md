@@ -306,7 +306,7 @@ limit, not a claim that TypeScript rejects the same program.
 
 Run focused checks while iterating, then the required independent clean-code,
 correctness and edge-case review loop on the final implementation, fixing all
-in-scope findings. Follow `CLAUDE.md` for final verification:
+in-scope findings. Follow `AGENTS.md` for final verification:
 
 ```sh
 cargo fmt --all --check

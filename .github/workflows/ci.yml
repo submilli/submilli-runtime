@@ -10,6 +10,7 @@ permissions:
 
 env:
   SUBMILLI_TELEMETRY: "0"
+  SUBMILLI_CONFORMANCE_TEST: "0"
   CARGO_TERM_COLOR: always
   # Keep test binaries small enough for hosted runners' disks.
   CARGO_PROFILE_DEV_DEBUG: "0"
@@ -50,7 +51,7 @@ jobs:
       # compile time, so a regression there surfaces only by running the packages
       # — as a `secrets.get` denial in every package that reads a token.
       - name: Package tests
-        run: cargo run -p submilli -- build test
+        run: cargo run -p submilli -- build test --skip-network
 
       # Ratchet: the not-yet-zero lints are off the gate (so `-D warnings` is clean).
       # Enable them explicitly here, as warnings, only to print the trend to the job
@@ -91,6 +92,14 @@ jobs:
       # them. `files_` is every test over those two tools, escapes included.
       - name: MCP file-tool containment
         run: cargo test -p submilli-server --test mcp files_
+
+      # Mounts route guest paths into other volumes and guard their mount points by
+      # name and by file identity, both of which differ by platform: case folding,
+      # Unicode aliases, and identity read through a handle on Windows.
+      - name: VFS mounts
+        run: >-
+          cargo test -p interpreter --lib --
+          stdlib::fs::tests::mount stdlib::git::integration_tests::mount
 
       # The size limit keys files by device and inode, which Windows reports only
       # for metadata read through an open handle, and counts a file whose name goes

@@ -11,6 +11,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use interpreter::diagnostics::{self, Severity};
+use interpreter::runtime::limits::ExecutionUsage;
 use interpreter::runtime::{
     AuthProxy, ExecutionTokenBudget, HttpClient, LinkedPackageModule, LlmProvider, McpTransport,
     RuntimeConfig, SecretProvider, SecurityCheck, SessionKvStore, StoreData, Vfs, VfsInfo,
@@ -31,6 +32,7 @@ use crate::error::{DiagnosticNote, DiagnosticPayload, ErrorKind, ExecuteError};
 use crate::mcp::McpCatalog;
 
 pub struct RunOutcome {
+    pub usage: ExecutionUsage,
     /// Already-JSON-encoded `main` return.
     pub value: Option<String>,
     pub console_raw: String,
@@ -75,6 +77,7 @@ pub(crate) fn parse(code: &str) -> Result<ParsedExecute, interpreter::source::So
 /// injection, the semantic-security policy, and the HTTP client. Grouped so the
 /// run signature stays readable as the set grows.
 pub struct HostServices {
+    pub(crate) audit: Option<Arc<crate::audit::ExecutionAudit>>,
     pub git: Result<Option<interpreter::stdlib::git::GitConfig>, String>,
     pub auth_proxy: Arc<dyn AuthProxy>,
     pub secret_provider: Arc<dyn SecretProvider>,
@@ -101,6 +104,8 @@ pub(crate) struct RunnerImports<'a> {
 }
 
 pub(crate) struct RunnerRuntime<'a> {
+    pub blueprint: &'a str,
+    pub session: &'a str,
     pub engine: &'a Engine,
     pub base_linker: &'a Linker<StoreData>,
     pub config: &'a RuntimeConfig,
@@ -108,8 +113,8 @@ pub(crate) struct RunnerRuntime<'a> {
 
 /// Run `code` against a caller-provided VFS. Ownership of `vfs` lives outside:
 /// `ephemeral` callers pass an owning `Vfs::tempdir()` (wiped when it drops here
-/// at return); `per_session` / `persistent` callers pass a non-owning VFS so the
-/// directory survives this call.
+/// at return); `per_session` / `named` callers pass a non-owning VFS so the
+/// directory survives this call. Mounted volumes are never owned.
 pub(crate) async fn run(
     code: &str,
     parsed: ParsedExecute,
@@ -119,6 +124,9 @@ pub(crate) async fn run(
     services: HostServices,
     imports: RunnerImports<'_>,
 ) -> RunOutcome {
+    let started = Instant::now();
+    let blueprint = runtime.blueprint.to_owned();
+    let session = runtime.session.to_owned();
     let owned_code = code.to_owned();
     let engine = runtime.engine.clone();
     let linker = runtime.base_linker.clone();
@@ -129,10 +137,14 @@ pub(crate) async fn run(
     // This task owns the store independently of the request. Dropping the
     // request signals cancellation; the owner drains workers before exiting.
     let owner = tokio::spawn(async move {
-        run_inner(
+        let audit = services.audit.clone();
+        let budget = services.llm_budget.clone();
+        let outcome = run_inner(
             &owned_code,
             parsed,
             RunnerRuntime {
+                blueprint: &blueprint,
+                session: &session,
                 engine: &engine,
                 base_linker: &linker,
                 config: &config,
@@ -145,7 +157,13 @@ pub(crate) async fn run(
             },
             cancelled,
         )
-        .await
+        .await;
+        if let Some(audit) = audit {
+            audit.result(&outcome, budget.as_ref().map_or(0, |b| b.used()));
+            audit.finish(outcome.error.is_none());
+        }
+        log_execution(&blueprint, &session, started, &outcome);
+        outcome
     });
     let outcome = match owner.await {
         Ok(outcome) => outcome,
@@ -306,16 +324,29 @@ async fn run_inner(
         };
         crate::metrics::runtime_phases(&rt);
         log_phase_breakdown(&compiled.timings, &rt);
-        let console_raw = String::from_utf8_lossy(&buf.lock().unwrap()).into_owned();
+        let console_raw = match captured_console(&buf) {
+            Ok(console) => console,
+            Err(console) => {
+                let mut outcome = internal_failure("console buffer lock poisoned");
+                if let Err(error) = &dispatch {
+                    outcome = internal_failure(&format!("{error:#}; console buffer lock poisoned"));
+                }
+                outcome.console_raw = console;
+                outcome.discovery_warnings = discovery_warnings;
+                return outcome;
+            }
+        };
 
         match dispatch {
             Ok(value) => RunOutcome {
+                usage: ExecutionUsage::default(),
                 value,
                 console_raw,
                 error: None,
                 discovery_warnings,
             },
             Err(err) => RunOutcome {
+                usage: ExecutionUsage::default(),
                 value: None,
                 error: Some(classify_runtime_error(&err, &parsed.sources, parsed.file)),
                 console_raw,
@@ -323,13 +354,58 @@ async fn run_inner(
             },
         }
     };
-    let outcome = tokio::select! {
+    let mut outcome = tokio::select! {
         biased;
-        _ = &mut cancelled => internal_failure("execution cancelled"),
+        _ = &mut cancelled => {
+            let mut outcome = internal_failure("execution cancelled");
+            if let Some(error) = &mut outcome.error { error.kind = ErrorKind::Cancelled; }
+            outcome
+        },
         outcome = execution => outcome,
     };
-    store.data_mut().blocking_work.finish().await;
+    if let Err(error) = store.data_mut().blocking_work.finish().await {
+        record_worker_cleanup_failure(&mut outcome, &error);
+    }
+    match ExecutionUsage::capture(&store, runtime.config.fuel) {
+        Ok(usage) => outcome.usage = usage,
+        Err(error) => return internal_failure(&format!("usage capture failed: {error}")),
+    }
     outcome
+}
+
+fn record_worker_cleanup_failure(
+    outcome: &mut RunOutcome,
+    error: &interpreter::runtime::blocking::BlockingWorkDrainError,
+) {
+    let secondary = format!("worker cleanup failure: {error}");
+    if let Some(primary) = outcome.error.as_mut() {
+        primary.message.push('\n');
+        primary.message.push_str(&secondary);
+        return;
+    }
+    outcome.value = None;
+    outcome.error = internal_failure(&secondary).error;
+}
+
+fn log_execution(blueprint: &str, session: &str, started: Instant, outcome: &RunOutcome) {
+    let status = match outcome.error.as_ref().map(|error| error.kind) {
+        None => "ok",
+        Some(ErrorKind::FuelExhausted) => "fuel_exhausted",
+        Some(ErrorKind::MemoryExhausted) => "memory_exhausted",
+        Some(ErrorKind::Timeout) => "timeout",
+        Some(_) => "error",
+    };
+    tracing::info!(
+        target: "submilli_server::execute",
+        blueprint, session,
+        fuel = outcome.usage.fuel,
+        wasm_fuel = outcome.usage.wasm_fuel,
+        host_fuel = outcome.usage.host_fuel,
+        memory_peak = outcome.usage.memory_peak,
+        wall_ms = started.elapsed().as_millis(),
+        outcome = status,
+        "execution finished",
+    );
 }
 
 fn compile_failure(
@@ -380,6 +456,7 @@ fn compile_failure(
         }
     };
     RunOutcome {
+        usage: ExecutionUsage::default(),
         value: None,
         console_raw: String::new(),
         error: Some(ExecuteError {
@@ -410,6 +487,7 @@ fn classify_runtime_error(err: &wasmtime::Error, sources: &Sources, file: FileId
     let kind = match err.downcast_ref::<Trap>() {
         Some(Trap::Interrupt) => ErrorKind::Timeout,
         Some(Trap::OutOfFuel) => ErrorKind::FuelExhausted,
+        Some(Trap::StackOverflow) => ErrorKind::StackExhausted,
         _ if is_memory_exhausted(err) => ErrorKind::MemoryExhausted,
         _ => ErrorKind::RuntimeError,
     };
@@ -525,6 +603,8 @@ fn error_kind_tag(kind: ErrorKind) -> &'static str {
         ErrorKind::Timeout => "timeout",
         ErrorKind::FuelExhausted => "fuel_exhausted",
         ErrorKind::MemoryExhausted => "memory_exhausted",
+        ErrorKind::StackExhausted => "stack_exhausted",
+        ErrorKind::Cancelled => "cancelled",
         ErrorKind::RuntimeError => "runtime_error",
         ErrorKind::BlueprintNotFound => "blueprint_not_found",
         ErrorKind::PackageResolution => "package_resolution",
@@ -574,6 +654,7 @@ fn sentry_extras(
 
 fn internal_failure(msg: &str) -> RunOutcome {
     RunOutcome {
+        usage: ExecutionUsage::default(),
         value: None,
         console_raw: String::new(),
         error: Some(ExecuteError {
@@ -585,11 +666,43 @@ fn internal_failure(msg: &str) -> RunOutcome {
     }
 }
 
+// The buffer contains only output bytes, not execution or authorization state.
+// Poisoned bytes can still be reported, but the run must remain a failure.
+fn captured_console(buf: &Mutex<Vec<u8>>) -> Result<String, String> {
+    match buf.lock() {
+        Ok(buffer) => Ok(String::from_utf8_lossy(&buffer).into_owned()),
+        Err(poisoned) => Err(String::from_utf8_lossy(&poisoned.into_inner()).into_owned()),
+    }
+}
+
 struct Sink(Arc<Mutex<Vec<u8>>>);
+
+const MAX_CONSOLE_BYTES: usize = 1024 * 1024;
 
 impl Write for Sink {
     fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-        self.0.lock().unwrap().write(buf)
+        let mut output = self
+            .0
+            .lock()
+            .map_err(|_| std::io::Error::other("console buffer lock poisoned"))?;
+        if buf.len() > MAX_CONSOLE_BYTES.saturating_sub(output.len()) {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::FileTooLarge,
+                "console output exceeds 1 MiB; print less output",
+            ));
+        }
+        let needed = output.len() + buf.len();
+        if needed > output.capacity() {
+            let capacity = needed
+                .max(output.capacity().saturating_mul(2))
+                .min(MAX_CONSOLE_BYTES);
+            let additional = capacity - output.len();
+            output
+                .try_reserve_exact(additional)
+                .map_err(|error| std::io::Error::new(std::io::ErrorKind::OutOfMemory, error))?;
+        }
+        output.extend_from_slice(buf);
+        Ok(buf.len())
     }
     fn flush(&mut self) -> std::io::Result<()> {
         Ok(())
@@ -602,6 +715,36 @@ mod tests {
     use interpreter::runtime::security::CheckOutcome;
     use interpreter::runtime::{InMemorySessionKv, install_runtime_host_functions};
     use std::time::Duration;
+
+    #[test]
+    fn poisoned_console_capture_preserves_output_and_reports_failure() {
+        let buffer = Arc::new(Mutex::new(b"before\n".to_vec()));
+        let poisoned = Arc::clone(&buffer);
+        let _ = std::thread::spawn(move || {
+            let _guard = poisoned.lock().unwrap();
+            panic!("injected console poison");
+        })
+        .join();
+        assert!(Sink(Arc::clone(&buffer)).write_all(b"after\n").is_err());
+        assert_eq!(captured_console(&buffer), Err("before\n".to_owned()));
+        let healthy = Mutex::new(b"healthy\n".to_vec());
+        assert_eq!(captured_console(&healthy), Ok("healthy\n".to_owned()));
+    }
+
+    #[test]
+    fn console_sink_caps_retained_output_without_losing_prior_bytes() {
+        let buffer = Arc::new(Mutex::new(Vec::new()));
+        let mut sink = Sink(buffer.clone());
+        let chunk = vec![b'x'; MAX_CONSOLE_BYTES / 2];
+        sink.write_all(&chunk).unwrap();
+        sink.write_all(&chunk).unwrap();
+        let error = sink.write_all(b"extra").unwrap_err();
+        assert_eq!(error.kind(), std::io::ErrorKind::FileTooLarge);
+        let output = buffer.lock().unwrap();
+        assert_eq!(output.len(), MAX_CONSOLE_BYTES);
+        assert!(output.capacity() <= MAX_CONSOLE_BYTES);
+        assert!(output.iter().all(|byte| *byte == b'x'));
+    }
 
     #[test]
     fn compile_metadata_failure_preserves_error_and_discovery_warnings() {
@@ -683,6 +826,7 @@ mod tests {
     }
 
     struct PausedGit {
+        panic_after_resume: bool,
         started: tokio::sync::Notify,
         resumed: std::sync::atomic::AtomicBool,
         finish: Mutex<std::sync::mpsc::Receiver<()>>,
@@ -701,8 +845,11 @@ mod tests {
                     .unwrap()
                     .recv_timeout(Duration::from_secs(5))
                     .unwrap();
+                if self.panic_after_resume {
+                    panic!("injected cancelled worker failure");
+                }
             }
-            CheckOutcome::Allow
+            CheckOutcome::Allow { rule: None }
         }
     }
 
@@ -715,12 +862,7 @@ mod tests {
             _: &'a str,
             _: &'a str,
         ) -> std::pin::Pin<
-            Box<
-                dyn std::future::Future<
-                        Output = Result<serde_json::Value, interpreter::runtime::mcp::McpCallError>,
-                    > + Send
-                    + 'a,
-            >,
+            Box<dyn std::future::Future<Output = interpreter::runtime::McpOutcome> + Send + 'a>,
         > {
             Box::pin(async { panic!("test must not call MCP") })
         }
@@ -728,11 +870,21 @@ mod tests {
 
     #[tokio::test]
     async fn cancelled_request_waits_for_git_before_releasing_store_and_vfs() {
+        cancelled_git_owner_retains_resources(false).await;
+    }
+
+    #[tokio::test]
+    async fn cancelled_request_drains_panicking_git_worker() {
+        cancelled_git_owner_retains_resources(true).await;
+    }
+
+    async fn cancelled_git_owner_retains_resources(panic_after_resume: bool) {
         let vfs = Vfs::tempdir().unwrap();
         let root = vfs.root().to_owned();
         let defaults = StoreData::with_vfs(Vfs::none());
         let (finish, cleanup) = std::sync::mpsc::channel();
         let security = Arc::new(PausedGit {
+            panic_after_resume,
             started: tokio::sync::Notify::new(),
             resumed: std::sync::atomic::AtomicBool::new(false),
             finish: Mutex::new(cleanup),
@@ -745,6 +897,7 @@ mod tests {
             })),
             auth_proxy: defaults.auth_proxy,
             secret_provider: defaults.secret_provider,
+            audit: None,
             security_check: security.clone(),
             http_client: defaults.http_client,
             mcp_transport: Arc::new(UnusedMcp),
@@ -773,6 +926,8 @@ mod tests {
             code,
             parse(code).unwrap(),
             RunnerRuntime {
+                blueprint: "test",
+                session: "test-session",
                 engine: &engine,
                 base_linker: &linker,
                 config: &config,
@@ -811,5 +966,69 @@ mod tests {
         // The owner's store and worker both release their policy references.
         assert_eq!(Arc::strong_count(&security), 1);
         assert!(!security.resumed.load(std::sync::atomic::Ordering::Relaxed));
+    }
+}
+
+#[cfg(test)]
+mod worker_cleanup_tests {
+    use super::*;
+
+    async fn injected_drain_failure() -> interpreter::runtime::blocking::BlockingWorkDrainError {
+        let mut workers = interpreter::runtime::blocking::BlockingWork::default();
+        let (started, ready) = tokio::sync::oneshot::channel();
+        let (release, gate) = std::sync::mpsc::channel();
+        let mut waiter = Box::pin(workers.spawn(move || {
+            started.send(()).unwrap();
+            gate.recv_timeout(std::time::Duration::from_secs(5))
+                .unwrap();
+            panic!("injected abandoned worker failure");
+        }));
+        tokio::select! {
+            _ = &mut waiter => panic!("worker ended early"),
+            result = ready => result.unwrap(),
+        }
+        drop(waiter);
+        release.send(()).unwrap();
+        workers.finish().await.unwrap_err()
+    }
+
+    #[tokio::test]
+    async fn cleanup_failure_preserves_primary_error_and_captured_output() {
+        let cleanup = injected_drain_failure().await;
+        for message in ["execution failed", "execution cancelled"] {
+            let mut outcome = internal_failure(message);
+            outcome.error.as_mut().unwrap().kind = ErrorKind::Timeout;
+            outcome.console_raw = "before\n".into();
+            outcome.discovery_warnings = vec!["discovery warning".into()];
+            let primary = outcome.error.as_ref().unwrap().message.clone();
+            record_worker_cleanup_failure(&mut outcome, &cleanup);
+            let error = outcome.error.unwrap();
+            assert!(matches!(error.kind, ErrorKind::Timeout));
+            assert_eq!(
+                error.message,
+                format!("{primary}\nworker cleanup failure: {cleanup}")
+            );
+            assert_eq!(outcome.console_raw, "before\n");
+            assert_eq!(outcome.discovery_warnings, ["discovery warning"]);
+        }
+    }
+
+    #[tokio::test]
+    async fn cleanup_failure_suppresses_success_and_preserves_reporting_context() {
+        let cleanup = injected_drain_failure().await;
+        let mut outcome = RunOutcome {
+            usage: ExecutionUsage::default(),
+            value: Some("42".into()),
+            console_raw: "before\n".into(),
+            error: None,
+            discovery_warnings: vec!["discovery warning".into()],
+        };
+        record_worker_cleanup_failure(&mut outcome, &cleanup);
+        assert!(outcome.value.is_none());
+        let error = outcome.error.unwrap();
+        assert!(matches!(error.kind, ErrorKind::RuntimeError));
+        assert!(error.message.contains("blocking worker panicked"));
+        assert_eq!(outcome.console_raw, "before\n");
+        assert_eq!(outcome.discovery_warnings, ["discovery warning"]);
     }
 }

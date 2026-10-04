@@ -203,7 +203,7 @@ mod tests {
     const STATIC_BP: &str = "\
 name: bp
 secrets:
-  K: { env: K }
+  K: { store: K }
 mcp:
   linear:
     url: https://mcp.linear.app/mcp
@@ -214,7 +214,7 @@ mcp:
     const OAUTH_BP: &str = "\
 name: bp
 secrets:
-  CID: { env: CID }
+  CID: { store: CID }
 mcp:
   salesforce:
     url: https://sf.example.com/mcp

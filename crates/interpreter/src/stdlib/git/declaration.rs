@@ -35,7 +35,7 @@ pub fn package_declaration() -> PackageDeclaration {
             options(&[("branch", Type::String)]),
         ],
         repository_type(),
-        "/** Clone HTTPS into an empty VFS directory, following remote HEAD unless branch is specified. Requires only git.clone; authentication uses host-only GIT_TOKEN when needed.\n * @capability git.clone { path, remote: url, remoteName: \"origin\", branch: string }\n */",
+        "/** Clone HTTPS into an empty VFS directory, following remote HEAD unless branch is specified. Requires only git.clone; authentication uses host-only GIT_TOKEN when needed.\n * @capability git.clone { path, remote: $url, remoteName: \"origin\", branch: string }\n */",
     );
     insert_repository_class(&mut defs, statics);
     defs
@@ -261,7 +261,7 @@ fn insert_repository_class(defs: &mut PackageDeclaration, statics: BTreeMap<Stri
             ],
             ret: object(&[("branches", array(Type::String))], false),
             predicate: None,
-            doc: crate::doc(FileId::GIT, "/** Fetch remote-tracking branches. Empty branch requests every remote branch; every selected branch must be authorized. GIT_TOKEN is optional for public repositories.\n * @capability git.fetch { path: string, remoteName: remote, remote: string, branch }\n */"),
+            doc: crate::doc(FileId::GIT, "/** Fetch remote-tracking branches. Empty branch requests every remote branch; every selected branch must be authorized. GIT_TOKEN is optional for public repositories.\n * @capability git.fetch { path: string, remoteName: $remote, remote: string, branch: string }\n */"),
         },
     );
     methods.insert(
@@ -277,7 +277,7 @@ fn insert_repository_class(defs: &mut PackageDeclaration, statics: BTreeMap<Stri
                 false,
             ),
             predicate: None,
-            doc: crate::doc(FileId::GIT, "/** Fetch and fast-forward the current branch under git.fetch. Divergence and dirty worktrees are refused.\n * @capability git.fetch { path: string, remoteName: remote, remote: string, branch: string }\n */"),
+            doc: crate::doc(FileId::GIT, "/** Fetch and fast-forward the current branch under git.fetch. Divergence and dirty worktrees are refused.\n * @capability git.fetch { path: string, remoteName: $remote, remote: string, branch: string }\n */"),
         },
     );
     defs.types.insert(

@@ -14,11 +14,12 @@
 use wasmtime::{ArrayRef, ArrayRefPre, Caller, Rooted, StructRef, StructRefPre, StructType, Val};
 
 use crate::runtime::StoreData;
+use crate::runtime::fuel;
 use crate::runtime::host::{
-    host_array_vtable, host_boxed_boolean_vtable, host_boxed_number_vtable, host_object_vtable,
-    host_opaque_vtable, type_error, write_submilli_string_struct_units,
+    host_boxed_boolean_vtable, host_boxed_number_vtable, host_object_vtable, host_opaque_vtable,
+    read_code_units, type_error, write_submilli_string_struct_units,
 };
-use crate::runtime::intrinsic_types::build_intrinsic_types;
+use crate::runtime::intrinsic_types::intrinsic_types;
 
 /// Bounds the pre-check walk. `toJson` has its own bound, but this pass runs
 /// first, so a cycle must be caught here or it recurses on the native stack.
@@ -92,20 +93,20 @@ struct Shapes {
 
 impl Shapes {
     fn recover(caller: &mut Caller<'_, StoreData>) -> wasmtime::Result<Self> {
-        let intr = build_intrinsic_types(caller.engine())?;
+        let intr = intrinsic_types(&mut *caller)?;
         let (map_backing, set_backing) = {
             let abi = host_abi(caller)?;
             (abi.map_backing_type.clone(), abi.set_backing_type.clone())
         };
         Ok(Self {
-            closure: intr.closure,
-            regex: intr.regex,
-            regex_match: intr.regex_match,
-            regex_match_box: intr.regex_match_box,
+            closure: intr.closure.clone(),
+            regex: intr.regex.clone(),
+            regex_match: intr.regex_match.clone(),
+            regex_match_box: intr.regex_match_box.clone(),
             map_backing,
             set_backing,
-            array: intr.array,
-            object_shape: intr.object_shape,
+            array: intr.array.clone(),
+            object_shape: intr.object_shape.clone(),
             opaque_vtable: host_opaque_vtable(caller)?,
         })
     }
@@ -148,7 +149,8 @@ fn reject_unsupported(
     depth: u32,
 ) -> wasmtime::Result<()> {
     let shapes = Shapes::recover(caller)?;
-    walk(caller, value, depth, &shapes)
+    let mut remaining = crate::runtime::MAX_STRUCTURAL_WALK_NODES;
+    walk(caller, value, depth, &shapes, &mut remaining)
 }
 
 fn walk(
@@ -156,6 +158,7 @@ fn walk(
     value: &Val,
     depth: u32,
     shapes: &Shapes,
+    remaining: &mut u32,
 ) -> wasmtime::Result<()> {
     if depth > MAX_DEPTH {
         return Err(type_error(format!(
@@ -163,12 +166,20 @@ fn walk(
              JSON form — a value reachable from itself reaches this bound too"
         )));
     }
+    *remaining = remaining.checked_sub(1).ok_or_else(|| {
+        type_error(format!(
+            "session: the value exceeds {} structural visits; store a smaller value or reduce shared nesting",
+            crate::runtime::MAX_STRUCTURAL_WALK_NODES,
+        ))
+    })?;
     if let Some(what) = shapes.refusal(caller, value)? {
         return Err(unsupported(what));
     }
+    // Per node visited: shared substructure is visited once per path.
+    fuel::charge(&mut *caller, fuel::ELEM, 1)?;
     if is_a(caller, value, &shapes.array)? {
         for element in crate::runtime::prelude::collection::read_array_vals(caller, value)? {
-            walk(caller, &element, depth + 1, shapes)?;
+            walk(caller, &element, depth + 1, shapes, remaining)?;
         }
         return Ok(());
     }
@@ -181,7 +192,7 @@ fn walk(
         for (_, field) in
             crate::runtime::prelude::vtable::read_object_entries(caller, value, "session value")?
         {
-            walk(caller, &field, depth + 1, shapes)?;
+            walk(caller, &field, depth + 1, shapes, remaining)?;
         }
     }
     Ok(())
@@ -448,19 +459,7 @@ pub(super) fn build_array(
     caller: &mut Caller<'_, StoreData>,
     elements: Vec<Val>,
 ) -> wasmtime::Result<Val> {
-    let (array_ty, raw_ty) = {
-        let abi = host_abi(caller)?;
-        (abi.array_type.clone(), abi.raw_array_type.clone())
-    };
-    let vtable = host_array_vtable(caller)?;
-    let raw_pre = ArrayRefPre::new(&mut *caller, raw_ty);
-    let raw = ArrayRef::new_fixed(&mut *caller, &raw_pre, &elements)?;
-    let pre = StructRefPre::new(&mut *caller, array_ty);
-    let st = StructRef::new(
-        &mut *caller,
-        &pre,
-        &[vtable, Val::AnyRef(Some(raw.to_anyref()))],
-    )?;
+    let st = crate::runtime::host::write_submilli_array_struct(caller, &elements)?;
     Ok(Val::AnyRef(Some(st.to_anyref())))
 }
 
@@ -490,6 +489,7 @@ fn build_object(
             vtable,
             Val::AnyRef(Some(names.to_anyref())),
             Val::AnyRef(Some(values.to_anyref())),
+            Val::AnyRef(None),
         ],
     )?;
     Ok(Val::AnyRef(Some(st.to_anyref())))
@@ -519,6 +519,15 @@ pub(super) fn read_units(
     val: &Val,
     name: &str,
 ) -> wasmtime::Result<Vec<u16>> {
+    read_units_bounded(caller, val, name, u64::MAX)
+}
+
+pub(super) fn read_units_bounded(
+    caller: &mut Caller<'_, StoreData>,
+    val: &Val,
+    name: &str,
+    max_units: u64,
+) -> wasmtime::Result<Vec<u16>> {
     let Val::AnyRef(Some(any)) = val else {
         return Err(type_error(format!("{name} expects a string, got null")));
     };
@@ -533,14 +542,10 @@ pub(super) fn read_units(
         },
         None => any.unwrap_array(&mut *caller)?,
     };
-    let len = payload.len(&mut *caller)?;
-    let mut units = Vec::with_capacity(len as usize);
-    for i in 0..len {
-        let unit = payload
-            .get(&mut *caller, i)?
-            .i32()
-            .ok_or_else(|| wasmtime::Error::msg(format!("{name}: malformed code unit at {i}")))?;
-        units.push(unit as u16);
+    if u64::from(payload.len(&mut *caller)?) > max_units {
+        return Err(crate::runtime::host::range_error(format!(
+            "{name} exceeds {max_units} code units; pass an unchanged cursor from the previous page"
+        )));
     }
-    Ok(units)
+    read_code_units(&mut *caller, payload, name)
 }

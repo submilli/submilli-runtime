@@ -5,7 +5,7 @@ use std::io;
 use std::path::{Component, Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
-use submilli_server::config::{ServerDirectories, VolumeTable};
+use submilli_server::config::{ServerDirectories, VolumeKind, VolumeTable};
 
 use super::{BLUEPRINTS, LegacyLayout, SERVER_DIR, SESSIONS, STAGING_DIR, VFS_SESSIONS};
 
@@ -24,11 +24,11 @@ pub(crate) fn validate_dependencies(
             fs::canonicalize(path).with_context(|| format!("resolving `{}`", path.display()))
         })
         .collect::<Result<Vec<_>>>()?;
-    for (name, path) in dependency_paths(directories).into_iter().chain(
-        volumes
-            .iter()
-            .map(|(name, path)| (name.as_str(), path.as_path())),
-    ) {
+    let local_paths = volumes.iter().filter_map(|(name, spec)| match &spec.kind {
+        VolumeKind::LocalPath { path } => Some((name.as_str(), path.as_path())),
+        VolumeKind::ManagedLocal => None,
+    });
+    for (name, path) in dependency_paths(directories).into_iter().chain(local_paths) {
         if let Some(index) = traversed_source(path, &resolved, 0)? {
             let pin_advice = if sources[index].starts_with(layout.root.join(STAGING_DIR)) {
                 ""
@@ -77,28 +77,34 @@ fn moving_directories(layout: &LegacyLayout) -> Vec<PathBuf> {
 fn dependency_paths(directories: &ServerDirectories) -> Vec<(&'static str, &Path)> {
     let ServerDirectories {
         blueprint_dir,
-        blueprint_seed_dir,
         package_store_root,
         package_fallback_root,
         secret_store_dir,
         secret_store_key_file,
         api_token_files,
+        github_token_file,
         session_storage_root,
         session_store_dir,
         ephemeral_storage_root,
+        managed_volume_root,
         config_file,
+        tls_key_file,
+        tls_cert_file,
     } = directories;
     [
         ("blueprint store", blueprint_dir),
-        ("blueprint seed directory", blueprint_seed_dir),
         ("package store", package_store_root),
         ("fallback package store", package_fallback_root),
         ("secret store", secret_store_dir),
         ("secret-store key file", secret_store_key_file),
+        ("GitHub token file", github_token_file),
         ("per-session VFS root", session_storage_root),
         ("durable session store", session_store_dir),
         ("ephemeral storage root", ephemeral_storage_root),
+        ("managed volume root", managed_volume_root),
         ("server config file", config_file),
+        ("TLS private key", tls_key_file),
+        ("TLS certificate file", tls_cert_file),
     ]
     .into_iter()
     .filter_map(|(name, path)| path.as_deref().map(|path| (name, path)))
@@ -175,11 +181,11 @@ mod tests {
         }
     }
 
-    fn check_seed(layout: &LegacyLayout, path: PathBuf) -> Result<()> {
+    fn check_package_root(layout: &LegacyLayout, path: PathBuf) -> Result<()> {
         validate_dependencies(
             layout,
             &ServerDirectories {
-                blueprint_seed_dir: Some(path),
+                package_store_root: Some(path),
                 ..Default::default()
             },
             &VolumeTable::new(),
@@ -191,10 +197,10 @@ mod tests {
         let home = tempfile::tempdir().unwrap();
         fs::create_dir(home.path().join(SESSIONS)).unwrap();
         let layout = layout(home.path());
-        let result = check_seed(&layout, home.path().join("sessions/missing/seed"));
-        assert!(result.unwrap_err().to_string().contains("blueprint seed"));
-        check_seed(&layout, home.path().join("server/blueprints")).unwrap();
-        check_seed(&layout, home.path().join("unrelated/seed")).unwrap();
+        let result = check_package_root(&layout, home.path().join("sessions/missing/packages"));
+        assert!(result.unwrap_err().to_string().contains("package store"));
+        check_package_root(&layout, home.path().join("server/blueprints")).unwrap();
+        check_package_root(&layout, home.path().join("unrelated/packages")).unwrap();
         assert!(!home.path().join(STAGING_DIR).exists());
     }
 
@@ -204,7 +210,7 @@ mod tests {
         fs::create_dir(home.path().join(SESSIONS)).unwrap();
         let mut layout = layout(home.path());
         layout.sessions = false;
-        check_seed(&layout, home.path().join("sessions/seed")).unwrap();
+        check_package_root(&layout, home.path().join("sessions/packages")).unwrap();
     }
 
     #[test]
@@ -213,22 +219,25 @@ mod tests {
         let staged = home.path().join("server.migrating/sessions");
         fs::create_dir_all(&staged).unwrap();
         let layout = layout(home.path());
-        let error = check_seed(&layout, staged.join("seed"))
+        let error = check_package_root(&layout, staged.join("packages"))
             .unwrap_err()
             .to_string();
         assert!(error.contains("relocate this dependency"));
         assert!(!error.contains("pin it"));
         fs::create_dir(home.path().join(SERVER_DIR)).unwrap();
-        assert!(check_seed(&layout, staged.join("seed")).is_err());
+        assert!(check_package_root(&layout, staged.join("packages")).is_err());
         fs::create_dir(home.path().join("server/sessions")).unwrap();
-        check_seed(&layout, staged.join("seed")).unwrap();
+        check_package_root(&layout, staged.join("packages")).unwrap();
     }
 
     #[test]
     fn volume_roots_are_dependencies() {
         let home = tempfile::tempdir().unwrap();
         fs::create_dir(home.path().join(SESSIONS)).unwrap();
-        let volumes = VolumeTable::from([("data".into(), home.path().join("sessions/data"))]);
+        let volumes = VolumeTable::from([(
+            "data".into(),
+            submilli_server::config::VolumeSpec::local_path(home.path().join("sessions/data")),
+        )]);
         assert!(
             validate_dependencies(
                 &layout(home.path()),
@@ -237,6 +246,31 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn the_managed_volume_root_is_a_dependency_and_managed_volumes_are_not() {
+        let home = tempfile::tempdir().unwrap();
+        fs::create_dir(home.path().join(SESSIONS)).unwrap();
+        let managed = VolumeTable::from([(
+            "memory".into(),
+            submilli_server::config::VolumeSpec::managed(
+                submilli_server::config::SizeLimit::Unlimited,
+            ),
+        )]);
+        let inside = ServerDirectories {
+            managed_volume_root: Some(home.path().join("sessions/volumes")),
+            ..ServerDirectories::default()
+        };
+        let err = validate_dependencies(&layout(home.path()), &inside, &managed)
+            .expect_err("a root inside a moving directory blocks the migration");
+        assert!(err.to_string().contains("managed volume root"), "{err}");
+        validate_dependencies(
+            &layout(home.path()),
+            &ServerDirectories::default(),
+            &managed,
+        )
+        .expect("a managed volume names no path of its own");
     }
 
     #[cfg(unix)]
@@ -252,9 +286,13 @@ mod tests {
         symlink(sessions.join("missing"), home.path().join("dangling")).unwrap();
         symlink(&outside, sessions.join("link")).unwrap();
         let layout = layout(home.path());
-        for path in ["alias/seed", "dangling/seed", "sessions/link/seed"] {
+        for path in [
+            "alias/packages",
+            "dangling/packages",
+            "sessions/link/packages",
+        ] {
             assert!(
-                check_seed(&layout, home.path().join(path)).is_err(),
+                check_package_root(&layout, home.path().join(path)).is_err(),
                 "{path}"
             );
         }
@@ -270,7 +308,7 @@ mod tests {
             return; // This filesystem distinguishes the two spellings.
         }
 
-        assert!(check_seed(&layout(home.path()), alias.join("missing/seed")).is_err());
+        assert!(check_package_root(&layout(home.path()), alias.join("missing/packages")).is_err());
         assert!(sessions.is_dir());
     }
 
@@ -283,7 +321,7 @@ mod tests {
             .path()
             .strip_prefix(&cwd)
             .unwrap()
-            .join("sessions/seed");
-        assert!(check_seed(&layout(home.path()), path).is_err());
+            .join("sessions/packages");
+        assert!(check_package_root(&layout(home.path()), path).is_err());
     }
 }

@@ -228,6 +228,7 @@ interface UsersResponse { ok: boolean; error?: string; members: ApiUser[]; respo
 /**
  * Return the bot user and workspace represented by `SLACK_BOT_TOKEN`.
  * Use this to verify an installation and obtain the bot's Slack user ID.
+  * @returns The bot's user and workspace identity as reported by `auth.test`.
  * @capability slack.com/bot/getIdentity {}
  */
 export function getIdentity(): SlackIdentity {
@@ -245,6 +246,7 @@ export function getIdentity(): SlackIdentity {
  * Set `threadTs` to reply in a thread. The bot must be allowed to post in the
  * target conversation, which normally means it must already be a member.
  * @param input Message text, destination, and optional thread/unfurl settings.
+  * @returns The message as stored by Slack, including its `ts` for later updates or threading.
  * @capability slack.com/bot/sendMessage { channelId: string }
  */
 export function sendMessage(input: SendMessageInput): SlackMessage {
@@ -265,6 +267,7 @@ export function sendMessage(input: SendMessageInput): SlackMessage {
  * Requires Slack's `im:write` and `chat:write` bot-token scopes.
  * @param userId Workspace user ID that should receive the message.
  * @param text Message text.
+  * @returns The message as stored by Slack, posted in the DM conversation.
  * @capability slack.com/bot/sendDirectMessage { userId: string }
  */
 export function sendDirectMessage(userId: string, text: string): SlackMessage {
@@ -284,6 +287,7 @@ export function sendDirectMessage(userId: string, text: string): SlackMessage {
  * Requires Slack's `mpim:write` and `chat:write` bot-token scopes.
  * @param userIds Workspace user IDs that should receive the message.
  * @param text Message text.
+  * @returns The message as stored by Slack, posted in the group DM conversation.
  * @capability slack.com/bot/sendGroupDirectMessage { userIds }
  */
 export function sendGroupDirectMessage(userIds: string[], text: string): SlackMessage {
@@ -302,6 +306,7 @@ export function sendGroupDirectMessage(userIds: string[], text: string): SlackMe
  * Slack does not allow a bot token to edit messages authored by another user or app.
  * @param ref Channel and timestamp of the bot-authored message.
  * @param text Replacement message text.
+  * @returns The edited message, re-read from Slack after the update.
  * @capability slack.com/bot/updateMessage { channelId: string }
  */
 export function updateMessage(ref: MessageRef, text: string): SlackMessage {
@@ -340,6 +345,7 @@ interface MessageWriteRequest {
  * Fetch one message by channel and Slack timestamp, returning null when absent.
  * When reading a thread reply, set `ref.threadTs` to the root message timestamp.
  * @param ref Stable Slack coordinates for the root message or reply.
+  * @returns The message, or `null` when no message with that timestamp is found.
  * @capability slack.com/bot/getMessage { channelId: string }
  */
 export function getMessage(ref: MessageRef): SlackMessage | null {
@@ -357,6 +363,7 @@ export function getMessage(ref: MessageRef): SlackMessage | null {
  * Timestamp bounds are Slack timestamps represented as strings.
  * @param channelId Conversation whose history should be read.
  * @param options Optional page size, cursor, and timestamp bounds.
+  * @returns One page of messages and a `nextCursor` that is empty on the last page.
  * @capability slack.com/bot/listMessages { channelId: string }
  */
 export function listMessages(channelId: string, options: MessageListOptions | null = null): MessagePage {
@@ -382,6 +389,7 @@ export function listMessages(channelId: string, options: MessageListOptions | nu
  * @param channelId Conversation containing the thread.
  * @param threadTs Timestamp of the thread's root message.
  * @param page Optional page size and continuation cursor.
+  * @returns The thread root and replies on this page, with a `nextCursor` that is empty on the last page.
  * @capability slack.com/bot/getThread { channelId: string }
  */
 export function getThread(channelId: string, threadTs: string, page: PageOptions | null = null): MessagePage {
@@ -397,6 +405,7 @@ export function getThread(channelId: string, threadTs: string, page: PageOptions
  * Fetch metadata for one channel, private group, or direct-message conversation.
  * Visibility follows the bot token's scopes and conversation membership.
  * @param channelId Slack conversation ID.
+  * @returns The conversation's metadata.
  * @capability slack.com/bot/getConversation { channelId: string }
  */
 export function getConversation(channelId: string): SlackConversation {
@@ -412,6 +421,7 @@ export function getConversation(channelId: string): SlackConversation {
  * List channels, private groups, DMs, and group DMs visible to the bot token.
  * A returned public channel is not necessarily one the bot has joined.
  * @param page Optional page size and continuation cursor.
+  * @returns One page of conversations and a `nextCursor` that is empty on the last page.
  * @capability slack.com/bot/listConversations {}
  */
 export function listConversations(page: PageOptions | null = null): ConversationPage {
@@ -431,6 +441,7 @@ export function listConversations(page: PageOptions | null = null): Conversation
  * List the Slack user IDs belonging to a conversation.
  * @param channelId Conversation whose membership should be read.
  * @param page Optional page size and continuation cursor.
+  * @returns One page of member user IDs and a `nextCursor` that is empty on the last page.
  * @capability slack.com/bot/listMembers { channelId: string }
  */
 export function listMembers(channelId: string, page: PageOptions | null = null): MemberPage {
@@ -452,6 +463,7 @@ interface MembersRequest { channel: string; limit?: number; cursor?: string; }
  * Open or resume a 1:1 direct-message conversation without sending a message.
  * Requires Slack's `im:write` bot-token scope.
  * @param userId Workspace user ID to include, excluding the bot itself.
+  * @returns The 1:1 DM conversation, including its conversation ID for later sends.
  * @capability slack.com/bot/openDirectMessage { userId }
  */
 export function openDirectMessage(userId: string): SlackConversation {
@@ -467,6 +479,7 @@ export function openDirectMessage(userId: string): SlackConversation {
  * Pass 2–8 workspace user IDs and do not include the bot itself.
  * Requires Slack's `mpim:write` bot-token scope.
  * @param userIds Workspace user IDs to include, excluding the bot itself.
+  * @returns The group DM conversation, including its conversation ID for later sends.
  * @capability slack.com/bot/openGroupDirectMessage { userIds }
  */
 export function openGroupDirectMessage(userIds: string[]): SlackConversation {
@@ -481,6 +494,7 @@ export function openGroupDirectMessage(userIds: string[]): SlackConversation {
 /**
  * Fetch one workspace user by Slack user ID.
  * @param userId Slack user ID, such as `U012ABCDEF`.
+  * @returns The user's profile data.
  * @capability slack.com/bot/getUser { userId: string }
  */
 export function getUser(userId: string): SlackUser {
@@ -495,6 +509,7 @@ export function getUser(userId: string): SlackUser {
 /**
  * List workspace users visible to the bot token, including deactivated users and bots.
  * @param page Optional page size and continuation cursor.
+  * @returns One page of users and a `nextCursor` that is empty on the last page.
  * @capability slack.com/bot/listUsers {}
  */
 export function listUsers(page: PageOptions | null = null): UserPage {

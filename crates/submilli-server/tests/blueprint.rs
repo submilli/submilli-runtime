@@ -7,7 +7,7 @@ use axum::http::{Request, StatusCode};
 use http_body_util::BodyExt;
 use serde_json::{Value, json};
 use submilli_server::blueprint::InMemoryBlueprintStore;
-use submilli_server::config::VolumeTable;
+use submilli_server::config::{VolumeSpec, VolumeTable};
 use submilli_server::{AppState, ServerConfig, app};
 use tower::ServiceExt;
 
@@ -21,7 +21,7 @@ fn seeded_router(yamls: &[&str]) -> Router {
     let blueprints = yamls
         .iter()
         .map(|yaml| submilli_blueprint::parse(yaml).expect("valid blueprint"));
-    let store = Arc::new(InMemoryBlueprintStore::seed(blueprints));
+    let store = Arc::new(InMemoryBlueprintStore::seed(blueprints).expect("seed blueprints"));
     app(AppState::new(ServerConfig {
         blueprints: Some(store),
         ..ServerConfig::default()
@@ -35,7 +35,12 @@ fn seeded_router(yamls: &[&str]) -> Router {
 fn router_with_volumes(names: &[&str]) -> Router {
     let volumes: VolumeTable = names
         .iter()
-        .map(|name| (name.to_string(), PathBuf::from(format!("/srv/{name}"))))
+        .map(|name| {
+            (
+                name.to_string(),
+                VolumeSpec::local_path(PathBuf::from(format!("/srv/{name}"))),
+            )
+        })
         .collect();
     app(AppState::new(ServerConfig {
         volumes,
@@ -49,7 +54,7 @@ fn router_with_volumes(names: &[&str]) -> Router {
 fn router_over_retired_form(dir: &std::path::Path) -> Router {
     std::fs::write(
         dir.join("tenant-alpha.000001.yaml"),
-        "name: tenant-alpha\nvfs:\n  mode: persistent\n  path: /srv/tenants/alpha\n",
+        "name: tenant-alpha\nvfs:\n  mode: persistent\n  volume: tenant-alpha\n",
     )
     .expect("plant revision");
     std::fs::write(
@@ -113,8 +118,8 @@ async fn a_reserved_name_reports_why_it_cannot_run_rather_than_not_found() {
             "{route} must not claim the name is unknown: {rendered}",
         );
         assert!(
-            rendered.contains("`path` key is retired") && rendered.contains("volume:"),
-            "{route} must name the retired key and its replacement: {rendered}",
+            rendered.contains("`persistent` was removed") && rendered.contains("mode: named"),
+            "{route} must name the retired mode and its replacement: {rendered}",
         );
         assert_eq!(
             body.pointer(code_at),
@@ -133,8 +138,8 @@ async fn a_reserved_name_reports_why_it_cannot_run_rather_than_not_found() {
         "auth-status must not claim the name is unregistered: {rendered}",
     );
     assert!(
-        rendered.contains("`path` key is retired") && rendered.contains("volume:"),
-        "auth-status must name the retired key and its replacement: {rendered}",
+        rendered.contains("`persistent` was removed") && rendered.contains("mode: named"),
+        "auth-status must name the retired mode and its replacement: {rendered}",
     );
 
     // The MCP endpoint answers in plain text, not JSON, so it is checked on its own
@@ -159,8 +164,8 @@ async fn a_reserved_name_reports_why_it_cannot_run_rather_than_not_found() {
         "/mcp must not claim the name is unknown: {rendered}",
     );
     assert!(
-        rendered.contains("`path` key is retired") && rendered.contains("volume:"),
-        "/mcp must name the retired key and its replacement: {rendered}",
+        rendered.contains("`persistent` was removed") && rendered.contains("mode: named"),
+        "/mcp must name the retired mode and its replacement: {rendered}",
     );
 }
 
@@ -385,8 +390,11 @@ async fn env_secret_source_rejected_over_the_api() {
     )
     .await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
-    assert_eq!(body["error"], json!("forbidden_secret_source"));
-    assert_eq!(body["diagnostics"][0]["path"], json!(["secrets", "KEY"]));
+    assert_eq!(body["error"], json!("parse_error"));
+    assert_eq!(
+        body["diagnostics"][0]["path"],
+        json!(["secrets", "KEY", "env"])
+    );
 }
 
 #[tokio::test]
@@ -399,7 +407,7 @@ async fn file_secret_source_rejected_over_the_api() {
     )
     .await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
-    assert_eq!(body["error"], json!("forbidden_secret_source"));
+    assert_eq!(body["error"], json!("parse_error"));
 }
 
 #[tokio::test]
@@ -667,9 +675,7 @@ async fn remove_missing_is_not_found() {
 
 #[tokio::test]
 async fn auth_proxy_with_harness_secret_accepted() {
-    // env/file secret sources are rejected over the API (see the forbidden-
-    // source tests above); an auth_proxy header referencing a declared harness
-    // secret is the allowed shape.
+    // Harness values bind at execution time, not blueprint registration.
     let router = router();
     let yaml = "name: ap-ok\nsecrets:\n  K:\n    harness:\n      required: true\nauth_proxy:\n  - host: api.example.com\n    headers:\n      Authorization: \"Bearer ${secrets.K}\"\n";
     let (status, body) = post(&router, "/v1/blueprints", json!({ "yaml": yaml })).await;
@@ -693,7 +699,7 @@ async fn add_with_undeclared_volume_rejected_and_stores_nothing() {
     let (status, body) = post(
         &router,
         "/v1/blueprints",
-        json!({ "yaml": "name: escaper\nvfs:\n  mode: persistent\n  volume: unknown-vol\n" }),
+        json!({ "yaml": "name: escaper\nvfs:\n  mode: named\n  volume: unknown-vol\n" }),
     )
     .await;
     assert_eq!(status, StatusCode::BAD_REQUEST, "got {body}");
@@ -714,7 +720,7 @@ async fn apply_with_undeclared_volume_rejected_and_stores_nothing() {
     let (status, body) = put(
         &router,
         "/v1/blueprints/escaper",
-        json!({ "yaml": "name: escaper\nvfs:\n  mode: persistent\n  volume: unknown-vol\n" }),
+        json!({ "yaml": "name: escaper\nvfs:\n  mode: named\n  volume: unknown-vol\n" }),
     )
     .await;
     assert_eq!(status, StatusCode::BAD_REQUEST, "got {body}");
@@ -731,7 +737,7 @@ async fn add_with_declared_volume_succeeds() {
     let (status, body) = post(
         &router,
         "/v1/blueprints",
-        json!({ "yaml": "name: worker\nvfs:\n  mode: persistent\n  volume: project-alpha\n" }),
+        json!({ "yaml": "name: worker\nvfs:\n  mode: named\n  volume: project-alpha\n" }),
     )
     .await;
     assert_eq!(status, StatusCode::OK, "got {body}");
@@ -747,7 +753,7 @@ async fn undeclared_volume_with_no_volumes_declared_says_how_to_declare_one() {
     let (status, body) = post(
         &router,
         "/v1/blueprints",
-        json!({ "yaml": "name: escaper\nvfs:\n  mode: persistent\n  volume: anything\n" }),
+        json!({ "yaml": "name: escaper\nvfs:\n  mode: named\n  volume: anything\n" }),
     )
     .await;
     assert_eq!(status, StatusCode::BAD_REQUEST, "got {body}");
@@ -759,7 +765,7 @@ async fn undeclared_volume_with_no_volumes_declared_says_how_to_declare_one() {
 }
 
 #[tokio::test]
-async fn non_persistent_modes_are_unaffected_by_the_volume_check() {
+async fn unnamed_modes_are_unaffected_by_the_volume_check() {
     let router = router_with_volumes(&[]);
     for (name, vfs) in [
         ("no-vfs", "vfs: none\n"),
@@ -774,4 +780,165 @@ async fn non_persistent_modes_are_unaffected_by_the_volume_check() {
         .await;
         assert_eq!(status, StatusCode::OK, "{name}: got {body}");
     }
+}
+
+#[tokio::test]
+async fn registration_rejects_missing_packages() {
+    let owned = tempfile::tempdir().expect("owned store");
+    let fallback = tempfile::tempdir().expect("fallback store");
+    let router = app(AppState::new(ServerConfig {
+        package_store_root: Some(owned.path().to_path_buf()),
+        package_fallback_root: Some(fallback.path().to_path_buf()),
+        ..ServerConfig::default()
+    })
+    .expect("state"));
+    let (status, body) = post(
+        &router,
+        "/v1/blueprints",
+        json!({
+            "yaml": "name: ghost\npackages: [\"@acme/ghost\"]\n"
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert_eq!(body["error"], "package_missing");
+    assert!(
+        body["message"]
+            .as_str()
+            .expect("message")
+            .contains("submilli server packages install <org/repo> @acme/ghost")
+    );
+}
+
+fn install_validation_package(
+    root: &std::path::Path,
+    name: &str,
+    dependencies: &[&str],
+    required: bool,
+) {
+    use submilli_build::{
+        ArtifactDependency, ArtifactMetadata, CapabilitySchema, RequiredCapability,
+    };
+    let declaration = interpreter::PackageDeclaration::with_package(name);
+    let mut capabilities: CapabilitySchema =
+        submilli_build::derive_capability_schema(&declaration, &[], &[]);
+    if required {
+        capabilities.requires.push(RequiredCapability {
+            capability: "http.get".to_string(),
+            filter: Some("host == \"example.com\"".to_string()),
+        });
+    }
+    let metadata = ArtifactMetadata::new(
+        name,
+        "0.1.0",
+        dependencies
+            .iter()
+            .map(|dep| ArtifactDependency::new(*dep, "0.1.0"))
+            .collect(),
+    );
+    submilli_build::write_package_artifact(
+        root.join(name),
+        b"\0asm\x01\0\0\0",
+        &interpreter::TypeInfoTable {
+            package_name: name.to_string(),
+            types: Vec::new(),
+        },
+        &capabilities,
+        &declaration,
+        &metadata,
+    )
+    .expect("install test package");
+}
+
+#[tokio::test]
+async fn registration_checks_dependency_requirements_and_preserves_existing_blueprint() {
+    let owned = tempfile::tempdir().expect("owned");
+    let fallback = tempfile::tempdir().expect("fallback");
+    install_validation_package(owned.path(), "@acme/root", &["@acme/dep"], false);
+    let router = app(AppState::new(ServerConfig {
+        package_store_root: Some(owned.path().to_path_buf()),
+        package_fallback_root: Some(fallback.path().to_path_buf()),
+        ..ServerConfig::default()
+    })
+    .expect("state"));
+    let original = json!({"yaml": "name: demo\n"});
+    assert_eq!(
+        post(&router, "/v1/blueprints", original).await.0,
+        StatusCode::OK
+    );
+    let package_yaml = "name: demo\npackages: [\"@acme/root\"]\n";
+    let (status, body) = put(
+        &router,
+        "/v1/blueprints/demo",
+        json!({"yaml": package_yaml}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert_eq!(body["error"], "package_missing");
+    assert!(body["message"].as_str().unwrap().contains("@acme/dep"));
+    install_validation_package(fallback.path(), "@acme/dep", &[], true);
+    let (status, body) = put(
+        &router,
+        "/v1/blueprints/demo",
+        json!({"yaml": package_yaml}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert_eq!(body["error"], "invalid_packages");
+    assert!(
+        body["message"]
+            .as_str()
+            .unwrap()
+            .contains("permissions.@acme/dep")
+    );
+    let (_, stored) = get(&router, "/v1/blueprints/demo").await;
+    assert!(
+        !stored["yaml"].as_str().unwrap().contains("@acme/root"),
+        "{stored}"
+    );
+    // An explicit deny is a valid operator choice, as it is for local lint.
+    let valid = format!(
+        "{package_yaml}permissions:\n  '@acme/dep':\n    - capability: http.get\n      action: deny\n"
+    );
+    let (status, body) = put(&router, "/v1/blueprints/demo", json!({"yaml": valid})).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    // A broken owned copy shadows an otherwise valid fallback package.
+    std::fs::create_dir_all(owned.path().join("@acme/dep")).unwrap();
+    let (status, body) = put(&router, "/v1/blueprints/demo", json!({"yaml": valid})).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert_eq!(body["error"], "invalid_packages");
+}
+
+#[tokio::test]
+async fn registration_validates_filter_fields_on_create_and_update() {
+    let router = router();
+    let valid = "name: filter-check\npermissions:\n  main:\n    - capability: http.get\n      filter: host == \"example.com\"\n      action: allow\n";
+    let invalid = valid.replace("host ==", "missing ==");
+    for endpoint in ["/v1/blueprints", "/v1/blueprints/filter-check"] {
+        let (status, body) = if endpoint == "/v1/blueprints" {
+            post(&router, endpoint, json!({"yaml": invalid})).await
+        } else {
+            assert_eq!(
+                post(&router, "/v1/blueprints", json!({"yaml": valid}))
+                    .await
+                    .0,
+                StatusCode::OK
+            );
+            put(&router, endpoint, json!({"yaml": invalid})).await
+        };
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+        assert_eq!(body["error"], "invalid_filter");
+        assert_eq!(
+            body["diagnostics"][0]["path"],
+            json!(["permissions", "main", 0, "filter"])
+        );
+        assert!(
+            body["message"]
+                .as_str()
+                .unwrap()
+                .contains("tests `missing`")
+        );
+    }
+    let (_, stored) = get(&router, "/v1/blueprints/filter-check").await;
+    assert!(!stored["yaml"].as_str().unwrap().contains("missing"));
 }

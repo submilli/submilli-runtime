@@ -52,13 +52,13 @@ Every top-level key, all optional except `name`:
 | `name` | Registered name; the REST `blueprint` field and the MCP path `/mcp/<name>` |
 | `variables` | Session variables. Each has `required: true` or `default: "value"`, never both. Referenced as `${vars.NAME}` in filters |
 | `packages` | Packages the program may import. Unlisted packages do not exist for it |
-| `secrets` | Declared secret names and sources: `{ env: VAR }`, `{ file: /path }`, `{ store: key }`, or `{ harness: { required: true } }` for a value the trusted application binds per session. A server accepts only `store` and `harness` sources in a blueprint registered over its API (see Workflow) |
+| `secrets` | Declared secret names and sources: `{ store: key }` or `{ harness: { required: true } }` for a value the trusted application binds per session. |
 | `allow_insecure_http` | Defaults to `false`: script HTTP (including packages/downloads) requires HTTPS. Does not govern MCP/LLM connections or inbound server HTTP |
 | `auth_proxy` | Host-keyed credential injection for direct HTTP: `host`, optional `allow_insecure_http: true` (also requires the blueprint flag), then `auth: { bearer: X }`, `auth: { basic: { username, password } }`, `headers`, or `query` |
 | `default` | Fall-through action: `deny` (the default and the norm), `allow`, or `ask-human` |
 | `permissions` | Per-caller rule lists; see below |
 | `mcp` | Outbound MCP servers keyed by local name: `url`, optional `transport` (`streamable_http`), `headers` with `${secrets.X}`, or `auth: { type: oauth2, ... }`. Imported as `@mcp/<name>`; gated by the `mcp.<name>` capability with a `tool` field; see MCP servers below |
-| `vfs` | The program's `/`: `none` (every `submilli:fs` call fails), `ephemeral` (default; a scratch directory deleted after the run), `per_session` (lasts as long as the session, like `submilli:session` state), or `persistent: { volume }` (an operator-declared volume kept across sessions and restarts). A program run outside a session gets one that closes when it returns. `ephemeral` and `per_session` take `size_limit` (`100MB`, binary units: 104,857,600 bytes). Every write counts, packages' included: `fs` writes, appends, writers, copies, `http.download`, and Git; `fs.remove` and `fs.move` free space. One past it throws a catchable `RangeError`; under `per_session` the limit spans the session. It counts bytes, not entries |
+| `vfs` | The program's `/`: `none` (every `submilli:fs` call fails), `ephemeral` (default; a scratch directory deleted after the run), `per_session` (lasts as long as the session, like `submilli:session` state), or `named` (`{ mode: named, volume, access? }`: an operator-declared volume kept across sessions and restarts and shared with other blueprints naming it). `mounts` adds named volumes below an `ephemeral`, `per_session` or `named` root: `mounts: { /memory: { mode: named, volume: memory, access: read_only } }`. `access` can only narrow the server's; a write under a read-only volume throws `PermissionDeniedError`. Mounts may not nest, and mount points cannot be moved or removed. A named root or mount takes `subPath`, a directory inside the volume to expose instead of all of it, relative and normalized; a whole component may be `${vars.NAME}` (`subPath: users/${vars.userId}`), which is how one volume gives each user their own directory at the same path. A writable mount creates it. `cwd` (absolute, default `/`, may use `${vars.NAME}`) is where relative paths resolve for `fs`, packages, Git, and downloads; `fs.cwd()` returns it. It confines nothing: permissions still match absolute paths. A program run outside a session gets one that closes when it returns. `ephemeral` and `per_session` take `size_limit` (`100MB`, binary units: 104,857,600 bytes). Every write counts, packages' included: `fs` writes, appends, writers, copies, `http.download`, and Git; `fs.remove` and `fs.move` free space. One past it throws a catchable `QuotaExceededError`; under `per_session` the limit spans the session. It counts bytes, not entries. A named volume's limit is set in the server config and shared by everyone using it |
 | `idle_timeout` | Session reaping window, e.g. `3600s`; default one day |
 | `llm` | Models a program may call through `submilli:llm`: `providers` (name → `type`, `api_key: ${secrets.X}`) and `models` (name → `provider`, optional `description`). A model not listed cannot be called; descriptions reach the model writing the program, so they say which model is for what |
 
@@ -85,11 +85,14 @@ Two kinds of capability, two homes:
   Then look for derived rules that leave a caller-chosen value open: `fs.*`
   with no `path` filter, `http.download` with no `vfs_path`. The package
   passes that value through from the program, so the program can steer the
-  package there. When `main`'s rules confine that resource (a user's
-  directory), give the package's rule the same filter, such as `fs.write`
-  with `path glob "/${vars.userId}/*"`, or the program routes around
-  `main`'s rules through the package. Lint then warns that the
-  rule differs from what the package declared, and `--fix` leaves it alone.
+  package there. To keep each user's files apart, mount only that user's
+  directory of a named volume, with `subPath: ${vars.userId}`: the program
+  and every package then see that directory alone, and no rule needs a
+  path filter. When rules confine the resource instead, give the
+  package's rule the same filter as `main`'s, such as `fs.write` with
+  `path glob "/data/*"`, or the program routes around `main`'s rules
+  through the package. Lint then warns that the rule differs from what the
+  package declared, and `--fix` leaves it alone.
 
 `secrets.get` can never be granted to `main`. Do not give `main` raw `http.*`
 access to a host a package already wraps: that reopens every argument the
@@ -149,7 +152,7 @@ variables:
 
 secrets:
   ORDERS_API_TOKEN:
-    env: ORDERS_API_TOKEN
+    store: ORDERS_API_TOKEN
 
 packages:
   - '@acme/orders'
@@ -331,21 +334,36 @@ submilli blueprint capability add acme.com/orders.list \
 submilli blueprint capability add acme.com/orders.cancel \
   --filter 'customerId == ${vars.customerId} and totalCents <= 5000' --action ask-human
 submilli blueprint auth-proxy add --host status.acme.com --bearer STATUS_TOKEN
-submilli blueprint lint blueprint.yaml          # --fix adds missing package rules
+submilli blueprint lint blueprint.yaml          # --fix adds rules packages require
+submilli blueprint capability list --unconfigured  # provided operations main has no rule for
 submilli blueprint prompt                       # what the model will be told
 ```
 
-`add-package` lists the package so imports resolve and writes the package's
-own derived `requires` grants; it warns about undeclared secrets. With
+`add-package` lists the package so imports resolve and writes its own derived
+`requires` grants, plus those of the packages it depends on (which stay out
+of `packages:`, so the program reaches them only through it); it warns about
+undeclared secrets. The first matching rule wins, so an existing rule is
+kept: an unfiltered `main` rule for a selected capability, any rule in the
+package's own caller list for a capability it requires, and a dependency's
+whole caller list if it has one (lint reports what that list lacks). With
 `--no-capabilities` it grants `main` nothing, which is the right first step:
 each operation the program may call is then one explicit `capability add`.
 `--capabilities NAME,...` and `--all-capabilities` are the shortcuts.
-`capability add` refuses a name it does not know unless `--force` is given,
-which lint cannot catch (a misspelled name is a rule that never matches). Add `variables`, `vfs`,
-`idle_timeout` and `llm` by editing the file; the CLI editors rewrite YAML
-and drop comments, so keep hand-written commentary elsewhere. Lint warns on
-unreachable `main` rules (an earlier rule shadows a later one), on
-`default: allow`, and on provided capabilities with no `main` rule.
+`capability add` refuses a name it does not know, or one only a dependency
+provides for `main` (which cannot import it), unless `--force` is given. It
+accepts any other HTTP method as `http.<method>` (`http.request("TRACE", …)`
+checks `http.trace`) and warns that the rule matches only that method, but
+refuses a near miss of a cataloged operation such as `http.dlete`. Add
+`variables`, `vfs`, `idle_timeout` and `llm` by editing the file; the CLI
+editors rewrite YAML and drop comments, so keep hand-written commentary
+elsewhere. Lint warns on the names `capability add` refuses or warns about (a
+name nothing provides never matches), on `main` rules the runtime never
+consults (such as `secrets.get`), on a rule
+that follows an unfiltered rule for the same capability and caller (it never
+matches; `capability add` warns when it writes one), and on `default: allow`,
+and checks the `requires` of listed packages' dependencies like those of the
+packages themselves. A provided capability with no `main` rule is withheld, not
+a finding; `submilli blueprint capability list --unconfigured` lists them.
 
 Register and run:
 
@@ -368,11 +386,8 @@ packages are installed; the first program that imports a missing one fails.
 The server and the `submilli server` commands share one token,
 `SUBMILLI_SERVER_TOKEN`; see [setup](setup.md).
 
-`apply` rejects a blueprint whose secrets use `env:` or `file:` with "not
-allowed for a blueprint registered over the API": those sources would let an
-API caller read the server's environment or filesystem. They work only for local runs (`submilli run --blueprint`). For a
-server, declare the secret with `--store` and provision the value into the
-server's secret store, or use a `harness` source bound per session:
+Declare a secret with `--store` and provision its value into the server's
+secret store, or use a `harness` source bound per session:
 
 ```sh
 submilli blueprint secret add ORDERS_API_TOKEN --store ORDERS_API_TOKEN

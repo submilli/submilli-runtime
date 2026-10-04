@@ -432,6 +432,8 @@ interface GoogleErrorDetail {
 
 /**
  * List calendars visible to the authenticated account.
+  * @param page Optional page size (1-250, default 20) and continuation token; `null` uses the defaults.
+  * @returns One page of calendars; `nextPageToken` is empty on the last page.
  * @capability submilli/google-calendar.listCalendars {}
  */
 export function listCalendars(page: PageOptions | null = null): Page<Calendar> {
@@ -448,6 +450,8 @@ export function listCalendars(page: PageOptions | null = null): Page<Calendar> {
 
 /**
  * List one page of events. The default calendar is `primary`.
+  * @param options Optional calendar ID (default `primary`), page size, time bounds, text query, ordering, and other filters; `null` lists the primary calendar with the API defaults.
+  * @returns One page of events; `items` is empty when nothing matches and `nextPageToken` is empty on the last page.
  * @capability submilli/google-calendar.listEvents { calendarId: string }
  */
 export function listEvents(options: EventListOptions | null = null): Page<Event> {
@@ -479,6 +483,9 @@ export function listEvents(options: EventListOptions | null = null): Page<Event>
 
 /**
  * Fetch one event, returning null when it does not exist.
+  * @param eventId Event ID within the calendar.
+  * @param calendarId Calendar holding the event, such as `primary` or a calendar's email-like ID.
+  * @returns The event, or `null` when it does not exist.
  * @capability submilli/google-calendar.getEvent { calendarId: string }
  */
 export function getEvent(eventId: string, calendarId: string = "primary"): Event | null {
@@ -496,6 +503,9 @@ function fetchEvent(eventId: string, calendarId: string): Event | null {
 /**
  * Create a Calendar event and optionally request a Google Meet conference. `attendees` in the
  * check holds each attendee's address once, in lowercase. `sendUpdates` is "none" when unset.
+  * @param input Title, start and end, and optional description, location, attendees, recurrence, reminders, visibility, Meet request, and notification mode.
+  * @param calendarId Calendar to create the event in; defaults to `primary`.
+  * @returns The created event, including its `id` and, when requested, its Google Meet link.
  * @capability submilli/google-calendar.createEvent { calendarId: string, attendees: string[], sendUpdates: string }
  */
 export function createEvent(input: EventCreateInput, calendarId: string = "primary"): Event {
@@ -557,6 +567,10 @@ export function createEvent(input: EventCreateInput, calendarId: string = "prima
  * in the check holds the address of each attendee the event has after the update, once, in
  * lowercase: the replacement list, or the event's current attendees when the patch has none.
  * The event is read for that before the check. `sendUpdates` is "none" when unset.
+  * @param eventId ID of the event to patch.
+  * @param input Fields to change; omitted fields keep their current values.
+  * @param calendarId Calendar holding the event; defaults to `primary`.
+  * @returns The event after the update.
  * @capability submilli/google-calendar.updateEvent { calendarId: string, attendees: string[], sendUpdates: string }
  */
 export function updateEvent(eventId: string, input: EventUpdateInput, calendarId: string = "primary"): Event {
@@ -625,6 +639,10 @@ export function updateEvent(eventId: string, input: EventUpdateInput, calendarId
 
 /**
  * Set the authenticated attendee's response status on an event.
+  * @param eventId ID of the event to respond to.
+  * @param response RSVP status: `accepted`, `declined`, `tentative`, or `needsAction`.
+  * @param calendarId Calendar holding the event; defaults to `primary`.
+  * @returns The event with the authenticated account's response status updated.
  * @capability submilli/google-calendar.respondToEvent { calendarId: string, response: string }
  */
 export function respondToEvent(eventId: string, response: string, calendarId: string = "primary"): Event {
@@ -657,6 +675,8 @@ export function respondToEvent(eventId: string, response: string, calendarId: st
 /**
  * Delete an event. This is idempotent when the event is already absent. `sendUpdates` in the
  * check is "none" when unset.
+  * @param eventId ID of the event to delete.
+  * @param options Optional calendar ID (default `primary`) and notification mode (default `none`); `null` uses the defaults.
  * @capability submilli/google-calendar.deleteEvent { calendarId: string, sendUpdates: string }
  */
 export function deleteEvent(eventId: string, options: EventDeleteOptions | null = null): void {
@@ -730,6 +750,8 @@ function sendUpdatesMode(requested: string | null): string {
 
 /**
  * Query busy intervals for explicit calendars and a bounded time range.
+  * @param input Calendar IDs (1-50), the time range, and an optional response time zone.
+  * @returns The normalized range and, for each requested calendar in order, its busy intervals; an empty `busy` array means the calendar is free throughout.
  * @capability submilli/google-calendar.queryFreeBusy { calendarIds: string[] }
  */
 export function queryFreeBusy(input: FreeBusyInput): FreeBusyResult {
@@ -766,6 +788,8 @@ export function queryFreeBusy(input: FreeBusyInput): FreeBusyResult {
 
 /**
  * Find bounded candidate slots by merging busy intervals from multiple calendars.
+  * @param input Calendar IDs, the search window, the required slot length in minutes, and optional time zone and slot cap.
+  * @returns Chronological candidate slots of the requested length that avoid every busy interval; empty when no gap is long enough.
  * @capability submilli/google-calendar.findFreeTime { calendarIds: string[] }
  */
 export function findFreeTime(input: FindFreeTimeInput): TimeSlot[] {
@@ -817,6 +841,8 @@ export function findFreeTime(input: FindFreeTimeInput): TimeSlot[] {
 
 /**
  * Build a bounded chronological agenda across explicit calendars or up to ten visible calendars.
+  * @param options Time window and optional calendar IDs, per-calendar bounds, and time zone; omitted calendar IDs use the account's visible calendars.
+  * @returns Events from all included calendars sorted by start time; `truncated` is true when calendars or events were dropped by the bounds.
  * @capability submilli/google-calendar.agenda {}
  */
 export function agenda(options: AgendaOptions): AgendaResult {

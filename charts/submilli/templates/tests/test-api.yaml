@@ -2,7 +2,7 @@
 {{/* Pod 0 by name through the headless Service, not the load-balanced one.
      Replicas share nothing, so a round-robin Service would register the probe
      blueprint on one server and then assert against another. */}}
-{{- $base := printf "http://%s-0.%s:%v" $fullname (include "submilli.headlessName" .) .Values.server.port -}}
+{{- $base := printf "%s://%s-0.%s:%v" (ternary "https" "http" .Values.tls.enabled) $fullname (include "submilli.headlessName" .) .Values.server.port -}}
 {{- $execProbe := printf "%s-helmtest-exec" $fullname | trunc 63 | trimSuffix "-" -}}
 
 {{/*
@@ -19,49 +19,6 @@ behaviour this test wants.
 */}}
 {{- $program := "import { readText, writeText } from \"submilli:fs\";\n\nexport function main(): string {\n  writeText(\"/probe.txt\", \"helm-test-ok\");\n  return readText(\"/probe.txt\")!;\n}\n" -}}
 
-{{/*
-Cross-checks the `file:` paths the operator's blueprints name against the paths
-the chart actually mounts. Two independent inputs — the blueprint YAML in
-`blueprints:` and the Secret references in `secrets:` — that have to agree on a
-path neither of them owns, which is the definition of a drift that nothing else
-catches.
-
-It is deliberately not an assertion that each declared Secret projects its key.
-That failure is not silent: the kubelet refuses the mount outright
-(`MountVolume.SetUp failed ... references non-existent secret key`) and the
-server pod never becomes ready, so `helm test` never runs and the assertion
-could not fire.
-
-Nor is it a probe blueprint registered over the API: the server refuses
-`env:`/`file:` sources on anything registered over the wire, even from an admin
-token, since those sources would let a caller make the server read its own
-environment and files — including the secret-store key and the API tokens.
-`file:` remains valid for blueprints an operator supplies locally, which is what
-`blueprints:` does.
-*/}}
-{{- $mountRoot := include "submilli.secretMountPath" . -}}
-{{- $declaredPaths := list -}}
-{{- range $name, $ref := .Values.secrets -}}
-{{-   $declaredPaths = append $declaredPaths (printf "%s/%s/%s" $mountRoot $name $ref.key) -}}
-{{- end -}}
-{{- $referencedPaths := list -}}
-{{- range $key, $yaml := .Values.blueprints -}}
-{{-   range $m := regexFindAll "file:[ \t]*\\S+" $yaml -1 -}}
-{{-     $referencedPaths = append $referencedPaths (trimPrefix "file:" $m | trim) -}}
-{{-   end -}}
-{{- end -}}
-{{/*
-Blueprint names come from the `name:` inside each YAML, not from the values key
-(the key only names the file). Anchored to column 0 so a nested `name:` — an mcp
-server, an auth_proxy host — cannot be mistaken for the blueprint's own.
-*/}}
-{{- $seeded := list -}}
-{{- range $key, $yaml := .Values.blueprints -}}
-{{-   $match := regexFind "(?m)^name:[ \t]*\\S+" $yaml -}}
-{{-   if $match -}}
-{{-     $seeded = append $seeded (trimPrefix "name:" $match | trim) -}}
-{{-   end -}}
-{{- end -}}
 apiVersion: v1
 kind: Pod
 metadata:
@@ -80,9 +37,8 @@ metadata:
     helm.sh/hook-weight: "1"
     # Deleted on success, and on the next run if it failed — so a failed pod
     # stays around for `kubectl logs` while a successful one does not linger.
-    # That matters here beyond tidiness: this pod mounts the admin token and
-    # every Secret named in `secrets:` and, unlike the distroless server, has a
-    # shell. Retaining it
+    # That matters here beyond tidiness: this pod mounts the admin token and,
+    # unlike the distroless server, has a shell. Retaining it
     # after a green run would leave operator secret material sitting in a pod
     # anyone with `pods/exec` could read, indefinitely.
     helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
@@ -106,15 +62,13 @@ spec:
         capabilities:
           drop: [ALL]
       volumeMounts:
-        - name: tmp
-          mountPath: /tmp
-        {{- range $name, $ref := .Values.secrets }}
-        # Same helper the StatefulSet mounts with, so the path under test is the
-        # one the chart actually contracts for.
-        - name: secret-{{ $name }}
-          mountPath: {{ include "submilli.secretMountPath" $ }}/{{ $name }}
+        {{- if .Values.tls.enabled }}
+        - name: tls-cert
+          mountPath: /etc/submilli/tls
           readOnly: true
         {{- end }}
+        - name: tmp
+          mountPath: /tmp
         {{- if .Values.auth.enabled }}
         - name: auth
           mountPath: {{ include "submilli.authMountPath" . }}
@@ -127,6 +81,9 @@ spec:
 
           BASE="{{ $base }}"
           CURL="curl -sS --connect-timeout 5 --max-time 30"
+          {{- if .Values.tls.enabled }}
+          CURL="$CURL --cacert /etc/submilli/tls/server.crt"
+          {{- end }}
 
           # The admin token, because registering and deleting the probe
           # blueprint are admin routes. It reaches curl through a config file
@@ -234,40 +191,19 @@ spec:
             || fail "execute did not return the expected result — the VFS write/read round-trip failed"
           echo "ok: POST /v1/execute round-tripped a file through the VFS"
 
-          {{- if $seeded }}
-
-          code=$(call GET /v1/blueprints)
-          [ "$code" = "200" ] || fail "GET /v1/blueprints returned $code"
-          {{- range $name := $seeded }}
-          grep -q '"name":"{{ $name }}"' /tmp/body \
-            || fail "seeded blueprint '{{ $name }}' is not registered — the ConfigMap seed did not reconcile"
-          echo "ok: seeded blueprint {{ $name }} is registered"
-          {{- end }}
-          {{- end }}
-
-          {{- if $referencedPaths }}
-
-          {{- range $path := $referencedPaths | uniq }}
-          if [ ! -e "{{ $path }}" ]; then
-            fail "a blueprint declares a secret at {{ $path }}, but the chart does not mount anything there. Paths the chart mounts: {{ if $declaredPaths }}{{ join ", " $declaredPaths }}{{ else }}(none — the secrets: values map is empty){{ end }}"
-          fi
-          echo "ok: blueprint secret path {{ $path }} is mounted"
-          {{- end }}
-          {{- end }}
-
           echo
           echo "PASS"
   volumes:
+    {{- if .Values.tls.enabled }}
+    - name: tls-cert
+      secret:
+        secretName: {{ .Values.tls.existingSecret | quote }}
+        items:
+          - key: {{ .Values.tls.certKey | quote }}
+            path: server.crt
+    {{- end }}
     - name: tmp
       emptyDir: {}
-    {{- range $name, $ref := .Values.secrets }}
-    - name: secret-{{ $name }}
-      secret:
-        secretName: {{ $ref.secretName }}
-        items:
-          - key: {{ $ref.key }}
-            path: {{ $ref.key }}
-    {{- end }}
     {{- if .Values.auth.enabled }}
     # The admin token alone; the test never acts as a `user`.
     - name: auth
