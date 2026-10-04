@@ -73,8 +73,8 @@ pub struct Cli {
     #[arg(long, value_name = "PATH")]
     tls_key_file: Option<PathBuf>,
 
-    /// Directory the registered blueprints are persisted to and loaded from on
-    /// startup. Created if absent. [default: ~/.submilli/server/blueprints
+    /// Source directory for the one-time blueprint import into SQLite.
+    /// Files are retained and ignored after import. [default: ~/.submilli/server/blueprints
     /// (override the base with $SUBMILLI_HOME)]
     /// Env: `$SUBMILLI_BLUEPRINT_DIR`.
     #[arg(long)]

@@ -250,7 +250,10 @@ and back up its state first.
 For a later upgrade, download `compose.yaml` from that published release's
 tag, set `SUBMILLI_IMAGE` in `.env` to the same version, and run
 `docker compose up -d`. Keep the API token and the store key. The volume
-carries the state across. Check the release's migration instructions before
+carries the state across, including `server/db/submilli.db` and its SQLite
+sidecar files. Stop the old server before the first database-backed startup.
+Blueprint revision files are imported once and retained untouched. See
+[Database settings](/docs/reference/server-settings#database). Check the release's migration instructions before
 reusing it.
 
 To back up, copy the volume while the server is stopped. Compose prefixes

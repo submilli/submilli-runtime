@@ -25,7 +25,7 @@ fn legacy_state_is_left_untouched_when_server_directory_is_missing() {
     stop(&mut server);
 
     assert!(names.is_empty(), "legacy blueprints must not be imported");
-    assert!(home.path().join("server/blueprints").is_dir());
+    assert!(home.path().join("server/db/submilli.db").is_file());
     assert!(
         home.path().join("blueprints").is_dir(),
         "legacy dir stays untouched"

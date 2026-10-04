@@ -32,7 +32,9 @@ use wasmtime::{Engine, Linker, Module};
 
 use crate::ServerConfig;
 use crate::auth::{Access, AuthConfig, Guard};
-use crate::blueprint::{BlueprintStore, FileBlueprintStore, InMemoryBlueprintStore};
+use crate::blueprint::{
+    BlueprintStore, FileBlueprintStore, InMemoryBlueprintStore, SqliteBlueprintStore,
+};
 use crate::config::{OAuthProvider, VolumeTable};
 use crate::idempotency::Coordinator;
 use crate::idempotency_store::{FileIdempotencyStore, IdempotencyStore, InMemoryIdempotencyStore};
@@ -76,6 +78,8 @@ type LlmDispatchFactory = Arc<
 struct AppStateInner {
     boot_lock: AsyncMutex<()>,
     booted: AtomicBool,
+    blueprint_mutations: tokio_util::task::TaskTracker,
+    blueprint_mutation_slots: Arc<tokio::sync::Semaphore>,
     router_ready: AtomicBool,
     database: Option<Arc<crate::database::ServerDatabase>>,
     audit: crate::audit::AuditLog,
@@ -161,10 +165,17 @@ impl AppState {
         let sessions = config
             .sessions
             .unwrap_or_else(|| Arc::new(InMemorySessionStore::default()));
-        let blueprints: Arc<dyn BlueprintStore> = match (config.blueprints, config.blueprint_dir) {
-            (Some(store), _) => store,
-            (None, Some(dir)) => Arc::new(FileBlueprintStore::new(dir)?),
-            (None, None) => Arc::new(InMemoryBlueprintStore::default()),
+        let blueprints: Arc<dyn BlueprintStore> = match (
+            config.blueprints,
+            config.database.as_ref(),
+            config.blueprint_dir,
+        ) {
+            (Some(store), _, _) => store,
+            (None, Some(database), source) => {
+                Arc::new(SqliteBlueprintStore::new(Arc::clone(database), source))
+            }
+            (None, None, Some(dir)) => Arc::new(FileBlueprintStore::new(dir)?),
+            (None, None, None) => Arc::new(InMemoryBlueprintStore::default()),
         };
         let secret_store = config.secret_store;
         let mcp_oauth_providers = Arc::new(config.mcp_oauth_providers);
@@ -245,6 +256,8 @@ impl AppState {
             inner: Arc::new(AppStateInner {
                 boot_lock: AsyncMutex::new(()),
                 booted: AtomicBool::new(false),
+                blueprint_mutations: tokio_util::task::TaskTracker::new(),
+                blueprint_mutation_slots: Arc::new(tokio::sync::Semaphore::new(64)),
                 router_ready: AtomicBool::new(false),
                 database: config.database,
                 audit,
@@ -291,6 +304,11 @@ impl AppState {
         if self.inner.booted.load(Ordering::Acquire) {
             return Ok(());
         }
+        self.inner
+            .blueprints
+            .initialize()
+            .await
+            .map_err(crate::session_manager::BootError::Blueprints)?;
         self.inner.session_manager.boot().await?;
         self.inner.session_manager.volume_registry().prepare();
         self.inner.session_manager.spawn_reaper(REAP_INTERVAL);
@@ -307,11 +325,53 @@ impl AppState {
             return Ok(());
         }
         if !self.inner.booted.load(Ordering::Acquire) {
+            self.inner
+                .blueprints
+                .initialize()
+                .await
+                .map_err(crate::session_manager::BootError::Blueprints)?;
             self.inner.session_manager.validate_stores().await?;
             self.inner.session_manager.spawn_reaper(REAP_INTERVAL);
         }
         self.inner.router_ready.store(true, Ordering::Release);
         Ok(())
+    }
+
+    /// Own the write and its postcommit work even if the HTTP caller disconnects.
+    pub(crate) async fn blueprint_mutation<T, F>(
+        &self,
+        work: F,
+    ) -> Result<T, crate::blueprint::StoreError>
+    where
+        T: Send + 'static,
+        F: std::future::Future<Output = T> + Send + 'static,
+    {
+        use crate::blueprint::StoreError;
+        let runtime = tokio::runtime::Handle::try_current()
+            .map_err(|error| StoreError::Io(error.to_string()))?;
+        let slot = self
+            .inner
+            .blueprint_mutation_slots
+            .clone()
+            .try_acquire_owned()
+            .map_err(|_| StoreError::Database(crate::database::DatabaseError::Busy))?;
+        let token = self.inner.blueprint_mutations.token();
+        if self.inner.blueprint_mutations.is_closed() {
+            return Err(StoreError::Database(crate::database::DatabaseError::Closed));
+        }
+        let work = crate::audit::inherit_request(work);
+        runtime
+            .spawn(async move {
+                let _token = token;
+                let _slot = slot;
+                work.await
+            })
+            .await
+            .map_err(|error| StoreError::Io(error.to_string()))
+    }
+
+    pub(crate) fn blueprint_mutations(&self) -> tokio_util::task::TaskTracker {
+        self.inner.blueprint_mutations.clone()
     }
 
     /// Handle `serve` awaits for graceful shutdown; `POST /v1/shutdown` signals it.
@@ -1290,3 +1350,6 @@ mod tests {
 
 #[cfg(test)]
 mod llm_setup_tests;
+
+#[cfg(test)]
+mod blueprint_mutation_tests;

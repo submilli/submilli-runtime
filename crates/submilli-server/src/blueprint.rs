@@ -12,9 +12,13 @@ use std::sync::RwLock;
 
 use submilli_blueprint::Blueprint;
 
+mod sqlite;
+pub use sqlite::SqliteBlueprintStore;
+
 #[derive(Debug)]
 pub enum StoreError {
     AlreadyExists,
+    Database(crate::database::DatabaseError),
     Io(String),
     Serialization(String),
     RevisionExhausted { name: String },
@@ -23,6 +27,7 @@ pub enum StoreError {
 impl std::fmt::Display for StoreError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::Database(error) => write!(f, "blueprint database failed: {error}"),
             Self::AlreadyExists => f.write_str("blueprint already exists"),
             Self::Io(message) => write!(f, "store I/O failed: {message}"),
             Self::Serialization(message) => write!(f, "blueprint serialization failed: {message}"),
@@ -34,6 +39,18 @@ impl std::fmt::Display for StoreError {
 }
 
 impl std::error::Error for StoreError {}
+
+impl From<crate::database::DatabaseError> for StoreError {
+    fn from(error: crate::database::DatabaseError) -> Self {
+        match error {
+            crate::database::DatabaseError::AlreadyExists => Self::AlreadyExists,
+            crate::database::DatabaseError::RevisionExhausted { name } => {
+                Self::RevisionExhausted { name }
+            }
+            error => Self::Database(error),
+        }
+    }
+}
 
 /// Log internal details without exposing stored credentials or host paths.
 pub(crate) fn store_failure_message(error: StoreError) -> &'static str {
@@ -59,6 +76,11 @@ fn serialize_blueprint(value: &impl serde::Serialize) -> Result<String, StoreErr
 
 #[async_trait::async_trait]
 pub trait BlueprintStore: Send + Sync + 'static {
+    /// Complete any startup import before exposing the store to requests.
+    async fn initialize(&self) -> Result<(), StoreError> {
+        Ok(())
+    }
+
     async fn add(&self, blueprint: Blueprint) -> Result<(), StoreError> {
         let yaml = serialize_blueprint(&blueprint)?;
         self.add_yaml(StoredBlueprint::new(blueprint, yaml)).await

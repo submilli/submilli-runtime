@@ -32,9 +32,9 @@ pub struct ServerConfig {
     /// Explicit blueprint store. Takes precedence over `blueprint_dir`; mainly
     /// for tests and embedded callers that inject their own store.
     pub blueprints: Option<Arc<dyn BlueprintStore>>,
-    /// Directory backing a file-persisted blueprint store. Used only when
-    /// `blueprints` is `None`; when both are `None`, `AppState::new` installs an
-    /// in-memory store.
+    /// Source directory for the one-time import when a database is supplied.
+    /// Explicit blueprint stores take precedence. Embedded callers without a
+    /// database retain the file store when this is set, otherwise an in-memory store.
     pub blueprint_dir: Option<PathBuf>,
     /// Explicit durable session store. Takes precedence over `session_store_dir`;
     /// mainly for tests and embedded callers that inject their own store.

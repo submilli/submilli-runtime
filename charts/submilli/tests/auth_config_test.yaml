@@ -543,7 +543,7 @@ tests:
       # re-run and copy the reported `Actual:` value.
       - equal:
           path: spec.template.metadata.annotations["checksum/config"]
-          value: 80a79e9dcbec50d41e944f4d3a9203ca59e4da4f8910ce63bfb276c83166b2db
+          value: 7862e7ad63c75bfc15fb06df5e79f81be7b29c23db22060d35674819949cd5ed
 
   - it: produces a different rollout trigger for different config
     template: statefulset.yaml
@@ -552,7 +552,7 @@ tests:
     asserts:
       - equal:
           path: spec.template.metadata.annotations["checksum/config"]
-          value: 43100cf2c50f780db50a31fd199e73fe47f29c700f22f6e130d3912f1fb89d96
+          value: 5130498cc44102914635980433ad2c518821dac6d6a5cf490f167149ae1fba0b
 
   - it: keeps the generated names inside the DNS label limit
     set:
@@ -568,3 +568,11 @@ tests:
           path: metadata.name
           value: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-config
         template: configmap-config.yaml
+
+
+  - it: keeps the SQLite database inside the existing state volume
+    template: configmap-config.yaml
+    asserts:
+      - matchRegex:
+          path: data["server.yaml"]
+          pattern: 'database_path: /var/lib/submilli/server/db/submilli.db'

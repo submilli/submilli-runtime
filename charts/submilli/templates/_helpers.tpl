@@ -192,7 +192,7 @@ and would do nothing.
 {{- if and .Values.auth.enabled (eq .Values.auth.adminTokenKey .Values.auth.userTokenKey) -}}
 {{-   fail "auth.adminTokenKey and auth.userTokenKey must differ: one key would give both roles the same token, which the server refuses" -}}
 {{- end -}}
-{{- $config := dict "bind" .Values.server.bind "max_execution_memory" .Values.execution.maxMemoryMB "shutdown_grace" .Values.server.shutdownGrace -}}
+{{- $config := dict "database_path" (printf "%s/server/db/submilli.db" (include "submilli.homePath" .)) "bind" .Values.server.bind "max_execution_memory" .Values.execution.maxMemoryMB "shutdown_grace" .Values.server.shutdownGrace -}}
 {{- if .Values.tls.enabled -}}
 {{-   if not .Values.tls.existingSecret -}}
 {{-     fail "tls.existingSecret is required when tls.enabled=true" -}}
