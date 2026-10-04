@@ -59,7 +59,7 @@ impl ControlledStore {
 
     fn write(&self) -> Result<(), StoreError> {
         if self.fail_writes.load(Ordering::SeqCst) {
-            Err(StoreError::Poisoned)
+            Err(StoreError::Io("injected private store detail".into()))
         } else {
             Ok(())
         }

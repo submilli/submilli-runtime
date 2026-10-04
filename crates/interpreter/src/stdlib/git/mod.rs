@@ -106,9 +106,8 @@ impl Job {
                         rule,
                         reason: Some(&reason),
                     });
-                let mut denial = self.denial.lock().map_err(|_| {
-                    crate::runtime::host::fatal_host_error("git worker denial lock poisoned")
-                })?;
+                // Poisoned state is unsupported; see AGENTS.md accepted poisoned-lock panics.
+                let mut denial = self.denial.lock().expect("git worker denial lock poisoned");
                 *denial = Some((capability.to_owned(), reason.clone()));
                 Err(permission_denied(&self.caller, capability, reason))
             }
@@ -532,10 +531,8 @@ async fn invoke(
         }
         other => other,
     };
-    let denial = denial
-        .lock()
-        .map_err(|_| crate::runtime::host::fatal_host_error("git: denial lock poisoned"))?
-        .take();
+    // Poisoned state is unsupported; see AGENTS.md accepted poisoned-lock panics.
+    let denial = denial.lock().expect("git: denial lock poisoned").take();
     drop(cancel_guard);
     fuel::settle_result(caller, |caller| {
         if let Some((capability, reason)) = denial {

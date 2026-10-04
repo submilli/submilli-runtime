@@ -514,23 +514,21 @@ impl RuntimeConfig {
         let _watchdog = self.arm_timeout(&engine);
         let inst = instantiate_program_async(&linker, &mut store, &module).await?;
         let value = dispatch_main_async(&mut store, &inst).await?;
-        let captured = buf
-            .lock()
-            .map_err(|_| host::fatal_host_error("console buffer lock poisoned"))?
-            .clone();
+        let captured = buf.lock().expect("console buffer lock poisoned").clone();
         let console = String::from_utf8(captured)
             .map_err(|e| wasmtime::Error::msg(format!("console output not utf-8: {e}")))?;
         Ok(RunResult { value, console })
     }
 }
 
+// Poisoned state is unsupported; see AGENTS.md accepted poisoned-lock panics.
 struct ConsoleSink(Arc<Mutex<Vec<u8>>>);
 
 impl Write for ConsoleSink {
     fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
         self.0
             .lock()
-            .map_err(|_| std::io::Error::other("console buffer lock poisoned"))?
+            .expect("console buffer lock poisoned")
             .write(buf)
     }
 
@@ -547,28 +545,4 @@ pub(crate) fn read_submilli_string(
     let units = host::read_code_units(&mut ctx, msg, "string")?;
     fuel::charge(ctx, fuel::SCAN, units.len() as u64)?;
     Ok(String::from_utf16_lossy(&units))
-}
-
-#[cfg(test)]
-mod console_capture_tests {
-    use super::*;
-
-    #[test]
-    fn poisoned_console_writer_returns_error_without_discarding_bytes() {
-        let buffer = Arc::new(Mutex::new(b"before\n".to_vec()));
-        let poisoned = Arc::clone(&buffer);
-        let _ = std::thread::spawn(move || {
-            let _guard = poisoned.lock().unwrap();
-            panic!("injected console poison");
-        })
-        .join();
-        let mut sink = ConsoleSink(Arc::clone(&buffer));
-        assert!(sink.write_all(b"after\n").is_err());
-        assert_eq!(*buffer.lock().unwrap_err().into_inner(), b"before\n");
-        let healthy = Arc::new(Mutex::new(Vec::new()));
-        ConsoleSink(Arc::clone(&healthy))
-            .write_all(b"healthy\n")
-            .unwrap();
-        assert_eq!(*healthy.lock().unwrap(), b"healthy\n");
-    }
 }

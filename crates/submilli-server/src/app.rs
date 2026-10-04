@@ -263,10 +263,6 @@ impl AppState {
     /// Rehydrate persisted sessions and sweep orphan directories. Await once
     /// before serving so reconnects resolve and stale directories are reclaimed.
     pub async fn boot(&self) -> Result<(), crate::session_manager::BootError> {
-        self.inner
-            .session_manager
-            .validate_state()
-            .map_err(|_| crate::session_manager::BootError::StatePoisoned)?;
         if self.inner.booted.load(Ordering::Acquire) {
             return Ok(());
         }
@@ -282,10 +278,6 @@ impl AppState {
     }
 
     async fn ready_for_router(&self) -> Result<(), crate::session_manager::BootError> {
-        self.inner
-            .session_manager
-            .validate_state()
-            .map_err(|_| crate::session_manager::BootError::StatePoisoned)?;
         if self.inner.router_ready.load(Ordering::Acquire) {
             return Ok(());
         }
@@ -711,11 +703,8 @@ impl AppState {
         cache.retain(|key, _| !cache_key_belongs_to_blueprint(key, name));
     }
 
-    pub(crate) async fn wipe_blueprint_sessions(
-        &self,
-        name: &str,
-    ) -> Result<(), crate::session_manager::SessionError> {
-        self.inner.session_manager.wipe_blueprint(name).await
+    pub(crate) async fn wipe_blueprint_sessions(&self, name: &str) {
+        self.inner.session_manager.wipe_blueprint(name).await;
     }
 }
 
@@ -1200,34 +1189,6 @@ mod tests {
         let response = router.oneshot(request()).await.expect("response");
         assert_eq!(response.status(), StatusCode::OK);
         assert_eq!(Arc::strong_count(&state.inner.session_manager), 2);
-    }
-
-    #[tokio::test]
-    async fn router_refuses_requests_after_session_state_is_poisoned() {
-        use tower::ServiceExt;
-
-        let state = AppState::new(ServerConfig::default()).expect("app state");
-        let router = app(state.clone());
-        let request = || {
-            axum::http::Request::builder()
-                .uri("/healthz")
-                .body(axum::body::Body::empty())
-                .expect("request")
-        };
-        let healthy = router
-            .clone()
-            .oneshot(request())
-            .await
-            .expect("healthy response");
-        assert_eq!(healthy.status(), StatusCode::OK);
-
-        state.session_manager().poison_state_for_test();
-        assert!(matches!(
-            state.boot().await,
-            Err(crate::session_manager::BootError::StatePoisoned)
-        ));
-        let failed = router.oneshot(request()).await.expect("failed response");
-        assert_eq!(failed.status(), StatusCode::INTERNAL_SERVER_ERROR);
     }
 
     /// Compile `src`, run it through the server engine, and return the dispatch

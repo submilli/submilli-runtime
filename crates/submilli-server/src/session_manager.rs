@@ -57,7 +57,6 @@ pub type HttpClientFactory = Arc<dyn Fn() -> Arc<dyn HttpClient> + Send + Sync>;
 pub enum BootError {
     Sessions(StoreError),
     Idempotency(StoreError),
-    StatePoisoned,
 }
 
 impl std::fmt::Display for BootError {
@@ -65,7 +64,6 @@ impl std::fmt::Display for BootError {
         match self {
             Self::Sessions(_) => f.write_str("cannot enumerate persisted sessions"),
             Self::Idempotency(_) => f.write_str("cannot enumerate idempotency sessions"),
-            Self::StatePoisoned => f.write_str("session manager state lock poisoned"),
         }
     }
 }
@@ -74,7 +72,6 @@ impl std::error::Error for BootError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::Sessions(error) | Self::Idempotency(error) => Some(error),
-            Self::StatePoisoned => None,
         }
     }
 }
@@ -106,7 +103,6 @@ pub use submilli_shared::llm::provider::DEFAULT_MAX_CONCURRENCY;
 #[derive(Debug)]
 pub enum SessionError {
     UnknownSession,
-    PoisonedState,
     Io(String),
     InvalidVfs(String),
     /// The blueprint names a volume this server does not declare — the operator
@@ -128,7 +124,6 @@ impl std::fmt::Display for SessionError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             SessionError::UnknownSession => f.write_str("unknown or expired session"),
-            SessionError::PoisonedState => f.write_str("session manager state lock poisoned"),
             SessionError::InvalidVfs(msg) => write!(f, "invalid session filesystem: {msg}"),
             SessionError::Io(msg) => write!(f, "session vfs io: {msg}"),
             SessionError::UnknownVolume(name) => write!(
@@ -344,15 +339,15 @@ impl SessionManager {
     /// The HTTP client for `session_id`, built once and cached on the session so
     /// every execute in that session shares one connection pool — and no other
     /// session does. An unregistered session id gets a throwaway client.
-    pub fn http_client(&self, session_id: &str) -> Result<Arc<dyn HttpClient>, SessionError> {
-        let mut state = self.lock()?;
-        Ok(match state.sessions.get_mut(session_id) {
+    pub fn http_client(&self, session_id: &str) -> Arc<dyn HttpClient> {
+        let mut state = self.lock();
+        match state.sessions.get_mut(session_id) {
             Some(entry) => entry
                 .http_client
                 .get_or_insert_with(|| (self.http_client_factory)())
                 .clone(),
             None => (self.http_client_factory)(),
-        })
+        }
     }
 
     /// The `submilli:session` store for `session_id`, built once and cached on
@@ -363,18 +358,15 @@ impl SessionManager {
     /// `POST /v1/execute` route mints a transient session per call, so its state
     /// has nothing to outlive the call and is discarded at completion. The
     /// aggregate budget still covers it, and releases when it drops.
-    pub fn session_kv_for_execute(
-        &self,
-        session_id: &str,
-    ) -> Result<Arc<dyn SessionKvStore>, SessionError> {
-        let mut state = self.lock()?;
-        Ok(match state.sessions.get_mut(session_id) {
+    pub fn session_kv_for_execute(&self, session_id: &str) -> Arc<dyn SessionKvStore> {
+        let mut state = self.lock();
+        match state.sessions.get_mut(session_id) {
             Some(entry) => entry
                 .session_kv
                 .get_or_insert_with(|| self.session_kv.build())
                 .clone(),
             None => self.session_kv.build(),
-        })
+        }
     }
 
     /// A fresh `submilli:llm` token budget for one execution, sharing this
@@ -420,11 +412,11 @@ impl SessionManager {
         harness_secrets: Arc<HarnessSecretBindings>,
     ) -> Result<(), SessionError> {
         let _binding = self.bind_lock.lock().await;
-        let existed = self.contains(session_id)?;
-        let old_variables = self.variables(session_id)?;
+        let existed = self.contains(session_id);
+        let old_variables = self.variables(session_id);
         let audit_variables = crate::audit::bindings(&variables);
         if self
-            .blueprint_name(session_id)?
+            .blueprint_name(session_id)
             .is_some_and(|name| name != blueprint.name)
         {
             return Err(SessionError::UnknownSession);
@@ -477,7 +469,7 @@ impl SessionManager {
         variables: Arc<VarBindings>,
         harness_secrets: Arc<HarnessSecretBindings>,
     ) -> Result<(SessionRecord, bool), SessionError> {
-        let mut state = self.lock()?;
+        let mut state = self.lock();
         let now = SystemTime::now();
         let (entry, registered) = match state.sessions.entry(session_id.to_string()) {
             Entry::Occupied(slot) => {
@@ -526,9 +518,7 @@ impl SessionManager {
         };
         // Keep the state lock through deletion so registration cannot claim this root
         // after the absence check and before it is removed.
-        let Ok(state) = self.lock() else {
-            return;
-        };
+        let state = self.lock();
         if !state.sessions.contains_key(session_id)
             && let Err(error) = std::fs::remove_dir_all(root)
         {
@@ -538,24 +528,19 @@ impl SessionManager {
 
     /// The session's bound variables, or an empty set if none were bound (an
     /// absent `${vars.NAME}` is then a non-match at filter eval).
-    pub fn variables(&self, session_id: &str) -> Result<Arc<VarBindings>, SessionError> {
-        Ok(self
-            .lock()?
+    pub fn variables(&self, session_id: &str) -> Arc<VarBindings> {
+        self.lock()
             .sessions
             .get(session_id)
             .map(|entry| Arc::clone(&entry.variables))
-            .unwrap_or_default())
+            .unwrap_or_default()
     }
 
-    pub fn harness_secrets(
-        &self,
-        session_id: &str,
-    ) -> Result<Option<Arc<HarnessSecretBindings>>, SessionError> {
-        Ok(self
-            .lock()?
+    pub fn harness_secrets(&self, session_id: &str) -> Option<Arc<HarnessSecretBindings>> {
+        self.lock()
             .sessions
             .get(session_id)
-            .and_then(|entry| entry.harness_secrets.as_ref().map(Arc::clone)))
+            .and_then(|entry| entry.harness_secrets.as_ref().map(Arc::clone))
     }
 
     pub fn rebind_harness_secrets(
@@ -563,7 +548,7 @@ impl SessionManager {
         session_id: &str,
         harness_secrets: Arc<HarnessSecretBindings>,
     ) -> Result<(), SessionError> {
-        let mut state = self.lock()?;
+        let mut state = self.lock();
         let entry = state
             .sessions
             .get_mut(session_id)
@@ -612,12 +597,11 @@ impl SessionManager {
 
     /// The blueprint a session is bound to, or `None` for an unknown session.
     /// The session-scoped execute path reads it to load the bound sandbox.
-    pub fn blueprint_name(&self, session_id: &str) -> Result<Option<String>, SessionError> {
-        Ok(self
-            .lock()?
+    pub fn blueprint_name(&self, session_id: &str) -> Option<String> {
+        self.lock()
             .sessions
             .get(session_id)
-            .map(|entry| entry.blueprint_name.clone()))
+            .map(|entry| entry.blueprint_name.clone())
     }
 
     /// Idempotently register a session under `session_id`. Callers invoke this
@@ -641,7 +625,7 @@ impl SessionManager {
         let owns_vfs_dir = matches!(blueprint.vfs, VfsConfig::PerSession { .. });
         let now = SystemTime::now();
         {
-            let mut state = self.lock()?;
+            let mut state = self.lock();
             if let Entry::Vacant(slot) = state.sessions.entry(session_id.to_string()) {
                 let vfs_root = if owns_vfs_dir {
                     let dir = self.session_root.join(session_id);
@@ -684,14 +668,14 @@ impl SessionManager {
         Ok(())
     }
 
-    pub fn contains(&self, session_id: &str) -> Result<bool, SessionError> {
-        Ok(self.lock()?.sessions.contains_key(session_id))
+    pub fn contains(&self, session_id: &str) -> bool {
+        self.lock().sessions.contains_key(session_id)
     }
 
     /// Number of live sessions — what `submilli server status` reports as
     /// active connections.
-    pub fn active_count(&self) -> Result<usize, SessionError> {
-        Ok(self.lock()?.sessions.len())
+    pub fn active_count(&self) -> usize {
+        self.lock().sessions.len()
     }
 
     /// The session's VFS + info, without its size limit: enough for reading its
@@ -702,7 +686,7 @@ impl SessionManager {
         session_id: &str,
         blueprint: &Blueprint,
     ) -> Result<(Vfs, VfsInfo), SessionError> {
-        let variables = self.variables(session_id)?;
+        let variables = self.variables(session_id);
         self.session_vfs_with_variables(session_id, blueprint, &variables)
     }
 
@@ -713,7 +697,7 @@ impl SessionManager {
         variables: &VarBindings,
     ) -> Result<(Vfs, VfsInfo), SessionError> {
         let session_root = {
-            let state = self.lock()?;
+            let state = self.lock();
             let entry = state
                 .sessions
                 .get(session_id)
@@ -741,7 +725,7 @@ impl SessionManager {
         session_id: &str,
         blueprint: &Blueprint,
     ) -> Result<(Vfs, VfsInfo), SessionError> {
-        let variables = self.variables(session_id)?;
+        let variables = self.variables(session_id);
         self.vfs_for_execute_with_variables(session_id, blueprint, &variables)
             .await
     }
@@ -759,11 +743,11 @@ impl SessionManager {
     /// Mark execute activity, keeping the session alive and resetting idle.
     /// Persistence of the new `last_activity` is debounced (see
     /// [`PERSIST_INTERVAL`]).
-    pub async fn touch(&self, session_id: &str) -> Result<bool, SessionError> {
+    pub async fn touch(&self, session_id: &str) -> bool {
         let record = {
-            let mut state = self.lock()?;
+            let mut state = self.lock();
             let Some(entry) = state.sessions.get_mut(session_id) else {
-                return Ok(false);
+                return false;
             };
             let now = SystemTime::now();
             entry.last_activity = now;
@@ -772,21 +756,21 @@ impl SessionManager {
                 .unwrap_or_default()
                 < PERSIST_INTERVAL
             {
-                return Ok(true);
+                return true;
             }
             entry.persisted_activity = now;
             entry.to_record(session_id)
         };
         self.persist(record).await;
-        Ok(true)
+        true
     }
 
     /// Terminate a session now: wipe its owned directory and drop the entry.
     /// The MCP transport's HTTP `DELETE` maps here. Returns whether a session
     /// existed.
-    pub async fn wipe_now(&self, session_id: &str) -> Result<bool, SessionError> {
+    pub async fn wipe_now(&self, session_id: &str) -> bool {
         let existed = {
-            let mut state = self.lock()?;
+            let mut state = self.lock();
             remove_entry(&mut state, session_id)
         };
         if existed {
@@ -797,16 +781,16 @@ impl SessionManager {
             );
             self.forget(session_id).await;
         }
-        Ok(existed)
+        existed
     }
 
     /// Terminate all live sessions bound to a removed blueprint. This drops both
     /// the in-memory lifecycle entry and the durable record, including rmcp's
     /// restore payload, so re-creating the blueprint by the same name cannot
     /// resurrect old MCP sessions.
-    pub async fn wipe_blueprint(&self, blueprint_name: &str) -> Result<(), SessionError> {
+    pub async fn wipe_blueprint(&self, blueprint_name: &str) {
         let ids: Vec<String> = {
-            let mut state = self.lock()?;
+            let mut state = self.lock();
             let ids: Vec<String> = state
                 .sessions
                 .iter()
@@ -826,14 +810,13 @@ impl SessionManager {
             );
             self.forget(id).await;
         }
-        Ok(())
     }
 
     /// Wipe sessions whose idle window has elapsed. Returns the count wiped
     /// (useful for tests).
-    pub async fn reap(&self, now: SystemTime) -> Result<usize, SessionError> {
+    pub async fn reap(&self, now: SystemTime) -> usize {
         let expired: Vec<String> = {
-            let mut state = self.lock()?;
+            let mut state = self.lock();
             let ids: Vec<String> = state
                 .sessions
                 .iter()
@@ -849,10 +832,10 @@ impl SessionManager {
             self.audit_session(id, "expired", serde_json::json!({"reason": "idle_timeout"}));
             self.forget(id).await;
         }
-        Ok(expired.len())
+        expired.len()
     }
 
-    pub async fn reap_now(&self) -> Result<usize, SessionError> {
+    pub async fn reap_now(&self) -> usize {
         self.reap(SystemTime::now()).await
     }
 
@@ -863,7 +846,7 @@ impl SessionManager {
     pub async fn boot(&self) -> Result<(), BootError> {
         let (records, ledger_sessions) = self.enumerate_stores().await?;
         {
-            let mut state = self.lock().map_err(|_| BootError::StatePoisoned)?;
+            let mut state = self.lock();
             for record in records {
                 self.audit_session(
                     &record.session_id,
@@ -891,22 +874,13 @@ impl SessionManager {
                 state.sessions.insert(record.session_id, entry);
             }
         }
-        self.reconcile_orphans()
-            .await
-            .map_err(|_| BootError::StatePoisoned)?;
-        self.reconcile_ledger(ledger_sessions)
-            .await
-            .map_err(|_| BootError::StatePoisoned)?;
+        self.reconcile_orphans().await;
+        self.reconcile_ledger(ledger_sessions).await;
         Ok(())
     }
 
     pub(crate) async fn validate_stores(&self) -> Result<(), BootError> {
         self.enumerate_stores().await?;
-        self.validate_state().map_err(|_| BootError::StatePoisoned)
-    }
-
-    pub(crate) fn validate_state(&self) -> Result<(), SessionError> {
-        drop(self.lock()?);
         Ok(())
     }
 
@@ -929,36 +903,35 @@ impl SessionManager {
     ///
     /// Runs after `reconcile_orphans`, so records it dropped are already gone
     /// from the live set and their ledgers are swept in the same pass.
-    async fn reconcile_ledger(&self, ledger_sessions: Vec<String>) -> Result<(), SessionError> {
+    async fn reconcile_ledger(&self, ledger_sessions: Vec<String>) {
         for session_id in ledger_sessions {
-            if self.contains(&session_id)? {
+            if self.contains(&session_id) {
                 continue;
             }
             if let Err(err) = self.idempotency.purge_session(&session_id).await {
                 tracing::warn!(?err, "failed to purge orphan idempotency entries");
             }
         }
-        Ok(())
     }
 
     /// Sweep `per_session` directories no live session owns, and drop records
     /// whose directory has vanished. Only `session_root` holds these dirs, so a
     /// session in any other mode is untouched.
-    async fn reconcile_orphans(&self) -> Result<(), SessionError> {
+    async fn reconcile_orphans(&self) {
         if let Ok(entries) = std::fs::read_dir(&self.session_root) {
             for entry in entries.flatten() {
                 let path = entry.path();
                 let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
                     continue;
                 };
-                if path.is_dir() && !self.contains(name)? {
+                if path.is_dir() && !self.contains(name) {
                     let _ = std::fs::remove_dir_all(&path);
                 }
             }
         }
 
         let stale: Vec<String> = {
-            let state = self.lock()?;
+            let state = self.lock();
             state
                 .sessions
                 .iter()
@@ -972,10 +945,9 @@ impl SessionManager {
                 "lost",
                 serde_json::json!({"reason": "workspace_missing"}),
             );
-            self.lock()?.sessions.remove(id);
+            self.lock().sessions.remove(id);
             self.forget(id).await;
         }
-        Ok(())
     }
 
     /// Spawn a background reaper if a tokio runtime is available. The sweep
@@ -997,10 +969,7 @@ impl SessionManager {
             let mut ticker = tokio::time::interval(interval);
             loop {
                 ticker.tick().await;
-                if let Err(error) = manager.reap_now().await {
-                    tracing::error!(%error, "session reaper stopped");
-                    break;
-                }
+                manager.reap_now().await;
             }
         });
     }
@@ -1034,20 +1003,11 @@ impl SessionManager {
         }
     }
 
-    fn lock(&self) -> Result<std::sync::MutexGuard<'_, State>, SessionError> {
-        self.inner.lock().map_err(|_| SessionError::PoisonedState)
-    }
-
-    #[cfg(test)]
-    pub(crate) fn poison_state_for_test(&self) {
-        std::thread::scope(|scope| {
-            let _ = scope
-                .spawn(|| {
-                    let _guard = self.inner.lock().expect("unpoisoned test manager");
-                    panic!("inject session state poison");
-                })
-                .join();
-        });
+    fn lock(&self) -> std::sync::MutexGuard<'_, State> {
+        // Poisoned state is unsupported; see AGENTS.md accepted poisoned-lock panics.
+        self.inner
+            .lock()
+            .expect("session manager state lock poisoned")
     }
 }
 
@@ -1459,7 +1419,7 @@ mod tests {
                 .is_err()
         );
         assert!(!root.path().join("new").exists());
-        assert!(!mgr.contains("new").expect("session state"));
+        assert!(!mgr.contains("new"));
         let good = submilli_blueprint::parse("name: x\nvfs: per_session\nvariables:\n  user: {}\n")
             .unwrap();
         let original = Arc::new(VarBindings::from([("user".into(), "ada".into())]));
@@ -1472,7 +1432,7 @@ mod tests {
                 .await
                 .is_err()
         );
-        assert_eq!(mgr.variables("existing").expect("session state"), original);
+        assert_eq!(mgr.variables("existing"), original);
         assert_eq!(
             std::fs::read_to_string(root.path().join("existing/kept")).unwrap(),
             "keep"
@@ -1509,7 +1469,7 @@ mod tests {
         let bp = per_session(HOUR);
         mgr.ensure("sid", &bp).await.unwrap();
         mgr.ensure("sid", &bp).await.unwrap();
-        assert!(mgr.contains("sid").expect("session state"));
+        assert!(mgr.contains("sid"));
     }
 
     #[tokio::test]
@@ -1619,12 +1579,9 @@ mod tests {
             mem_ledger(),
             CapabilitySettings::default(),
         );
-        assert!(!restarted.contains("sid").expect("session state"));
+        assert!(!restarted.contains("sid"));
         restarted.boot().await.expect("boot");
-        assert!(
-            restarted.contains("sid").expect("session state"),
-            "boot must rehydrate the session"
-        );
+        assert!(restarted.contains("sid"), "boot must rehydrate the session");
         // Resume works without a fresh `ensure`, and the binding is intact.
         restarted.vfs_for_execute("sid", &bp).await.unwrap();
     }
@@ -1660,8 +1617,8 @@ mod tests {
             CapabilitySettings::default(),
         );
         mgr.boot().await.expect("boot");
-        assert!(mgr.contains("old").expect("session state"));
-        assert_eq!(mgr.reap_now().await.expect("session state"), 1);
+        assert!(mgr.contains("old"));
+        assert_eq!(mgr.reap_now().await, 1);
         assert!(!dir.exists(), "an idle rehydrated session is reaped");
     }
 
@@ -1691,15 +1648,11 @@ mod tests {
             )]));
             mgr.bind("s1", &bp, Arc::clone(&vars), bound).await.unwrap();
             assert_eq!(
-                mgr.variables("s1")
-                    .expect("session state")
-                    .get("tenant")
-                    .map(String::as_str),
+                mgr.variables("s1").get("tenant").map(String::as_str),
                 Some("u_42")
             );
             assert_eq!(
                 mgr.harness_secrets("s1")
-                    .expect("session state")
                     .and_then(|values| values.get("TOKEN").cloned())
                     .as_deref(),
                 Some("session-only")
@@ -1719,13 +1672,10 @@ mod tests {
         );
         mgr.boot().await.expect("boot");
         assert_eq!(
-            mgr.variables("s1")
-                .expect("session state")
-                .get("tenant")
-                .map(String::as_str),
+            mgr.variables("s1").get("tenant").map(String::as_str),
             Some("u_42")
         );
-        assert!(mgr.harness_secrets("s1").expect("session state").is_none());
+        assert!(mgr.harness_secrets("s1").is_none());
     }
 
     #[tokio::test]
@@ -1782,10 +1732,7 @@ mod tests {
             CapabilitySettings::default(),
         );
         mgr.boot().await.expect("boot");
-        assert!(
-            !mgr.contains("vanished").expect("session state"),
-            "a record with no dir is dropped"
-        );
+        assert!(!mgr.contains("vanished"), "a record with no dir is dropped");
         assert!(
             store.load_all().await.expect("list sessions").is_empty(),
             "the stale record is purged from the store too"
@@ -1812,12 +1759,12 @@ mod tests {
             .unwrap();
         let dir = root.path().join(&id);
         std::fs::write(dir.join("a.txt"), b"hi").unwrap();
-        assert!(mgr.wipe_now(&id).await.expect("session state"));
+        assert!(mgr.wipe_now(&id).await);
         assert!(
             !dir.exists(),
             "explicit terminate must wipe the session dir"
         );
-        assert!(!mgr.contains(&id).expect("session state"));
+        assert!(!mgr.contains(&id));
     }
 
     #[tokio::test]
@@ -1833,7 +1780,7 @@ mod tests {
             .unwrap();
         ledger.put(reserved(&id, "k")).await.unwrap();
 
-        assert!(mgr.wipe_now(&id).await.expect("session state"));
+        assert!(mgr.wipe_now(&id).await);
         assert_eq!(ledger.load(&id, "k").await.unwrap(), None);
     }
 
@@ -1850,7 +1797,7 @@ mod tests {
             .unwrap();
         ledger.put(reserved(&id, "k")).await.unwrap();
 
-        assert_eq!(mgr.reap(way_later()).await.expect("session state"), 1);
+        assert_eq!(mgr.reap(way_later()).await, 1);
         assert_eq!(ledger.load(&id, "k").await.unwrap(), None);
     }
 
@@ -1871,7 +1818,7 @@ mod tests {
         mgr.ensure("other", &none_bp()).await.unwrap();
         ledger.put(reserved("other", "k")).await.unwrap();
 
-        mgr.wipe_blueprint(&bp.name).await.expect("session state");
+        mgr.wipe_blueprint(&bp.name).await;
 
         for id in &ids {
             assert_eq!(ledger.load(id, "k").await.unwrap(), None);
@@ -1985,7 +1932,7 @@ mod tests {
     #[tokio::test]
     async fn wipe_now_unknown_is_false() {
         let (mgr, _root) = manager();
-        assert!(!mgr.wipe_now("nope").await.expect("session state"));
+        assert!(!mgr.wipe_now("nope").await);
     }
 
     #[tokio::test]
@@ -1999,7 +1946,7 @@ mod tests {
             )
             .await
             .unwrap();
-        assert_eq!(mgr.reap(way_later()).await.expect("session state"), 1);
+        assert_eq!(mgr.reap(way_later()).await, 1);
         assert!(!root.path().join(&id).exists());
     }
 
@@ -2014,7 +1961,7 @@ mod tests {
             )
             .await
             .unwrap();
-        assert_eq!(mgr.reap(SystemTime::now()).await.expect("session state"), 0);
+        assert_eq!(mgr.reap(SystemTime::now()).await, 0);
         assert!(root.path().join(&id).is_dir());
     }
 
@@ -2070,7 +2017,7 @@ mod tests {
             "the managed volume carries its shared limit"
         );
         drop(vfs);
-        mgr.reap(way_later()).await.expect("session state");
+        mgr.reap(way_later()).await;
         assert!(
             !session_root.path().join(&id).exists(),
             "the session dir is wiped"
@@ -2113,7 +2060,7 @@ mod tests {
             .await
             .unwrap();
         assert!(!root.path().join(&id).exists());
-        mgr.reap(way_later()).await.expect("session state");
+        mgr.reap(way_later()).await;
         assert!(root.path().is_dir());
     }
 
@@ -2132,14 +2079,10 @@ mod tests {
             .unwrap();
 
         mgr.session_kv_for_execute(&id)
-            .expect("session state")
             .set(&key("k"), &key("\"v\""))
             .expect("set");
         assert!(
-            mgr.session_kv_for_execute(&id)
-                .expect("session state")
-                .has(&key("k"))
-                .expect("has"),
+            mgr.session_kv_for_execute(&id).has(&key("k")).expect("has"),
             "a later execute in the same session must see the write"
         );
 
@@ -2149,7 +2092,6 @@ mod tests {
             .unwrap();
         assert!(
             !mgr.session_kv_for_execute(&other)
-                .expect("session state")
                 .has(&key("k"))
                 .expect("has"),
             "a different session must not see it"
@@ -2162,12 +2104,10 @@ mod tests {
     async fn an_unregistered_session_gets_a_throwaway_store() {
         let (mgr, _root) = manager();
         mgr.session_kv_for_execute("one-shot")
-            .expect("session state")
             .set(&key("k"), &key("\"v\""))
             .expect("set");
         assert!(
             !mgr.session_kv_for_execute("one-shot")
-                .expect("session state")
                 .has(&key("k"))
                 .expect("has"),
             "an unregistered id must not accumulate state across calls"
@@ -2188,16 +2128,12 @@ mod tests {
             .await
             .unwrap();
         mgr.session_kv_for_execute(&id)
-            .expect("session state")
             .set(&key("k"), &key("\"v\""))
             .expect("set");
 
-        assert_eq!(mgr.reap(way_later()).await.expect("session state"), 1);
+        assert_eq!(mgr.reap(way_later()).await, 1);
         assert!(
-            !mgr.session_kv_for_execute(&id)
-                .expect("session state")
-                .has(&key("k"))
-                .expect("has"),
+            !mgr.session_kv_for_execute(&id).has(&key("k")).expect("has"),
             "a reaped session's state must not survive its entry"
         );
     }
@@ -2212,17 +2148,14 @@ mod tests {
             .create(&none_bp(), Arc::new(VarBindings::new()), no_secrets())
             .await
             .unwrap();
-        let held = mgr.session_kv_for_execute(&id).expect("session state");
+        let held = mgr.session_kv_for_execute(&id);
         held.set(&key("k"), &key("\"v\"")).expect("set");
 
-        assert!(mgr.wipe_now(&id).await.expect("session state"));
+        assert!(mgr.wipe_now(&id).await);
 
         assert!(held.has(&key("k")).expect("has"), "the in-flight handle");
         assert!(
-            !mgr.session_kv_for_execute(&id)
-                .expect("session state")
-                .has(&key("k"))
-                .expect("has"),
+            !mgr.session_kv_for_execute(&id).has(&key("k")).expect("has"),
             "the session id resolves to a fresh, empty store"
         );
     }
@@ -2303,30 +2236,26 @@ mod tests {
             .unwrap();
 
         mgr.session_kv_for_execute(&first)
-            .expect("session state")
             .set(&key("k"), &key("\"v\""))
             .expect("the first session fits");
         assert!(budget.used() > 0);
         mgr.session_kv_for_execute(&second)
-            .expect("session state")
             .set(&key("k"), &key("\"v\""))
             .expect_err("the second exceeds the shared budget");
         assert!(
             mgr.session_kv_for_execute(&first)
-                .expect("session state")
                 .has(&key("k"))
                 .expect("has"),
             "an exhausted budget must never evict another session's entries"
         );
 
-        assert!(mgr.wipe_now(&first).await.expect("session state"));
+        assert!(mgr.wipe_now(&first).await);
         assert_eq!(
             budget.used(),
             0,
             "ending a session must release its reservation"
         );
         mgr.session_kv_for_execute(&second)
-            .expect("session state")
             .set(&key("k"), &key("\"v\""))
             .expect("capacity released");
     }
@@ -2370,13 +2299,13 @@ mod tests {
             manager.boot().await,
             Err(BootError::Idempotency(_))
         ));
-        assert!(!manager.contains("live").expect("session state"));
+        assert!(!manager.contains("live"));
         assert!(orphan.exists());
         std::fs::remove_file(&ledger_root).expect("unblock ledger path");
         std::fs::rename(saved_ledger, ledger_root).expect("restore ledger");
 
         manager.boot().await.expect("boot after store recovers");
-        assert!(manager.contains("live").expect("session state"));
+        assert!(manager.contains("live"));
         assert!(!orphan.exists());
         assert!(
             ledger
@@ -2429,61 +2358,5 @@ mod tests {
                 .expect("read entry")
                 .is_none()
         );
-    }
-
-    #[tokio::test]
-    async fn poisoned_session_state_refuses_access_without_creating_a_workspace() {
-        let (manager, root) = manager();
-        manager.poison_state_for_test();
-        let blueprint = per_session(HOUR);
-
-        assert!(matches!(
-            manager.contains("sid"),
-            Err(SessionError::PoisonedState)
-        ));
-        assert!(matches!(
-            manager.variables("sid"),
-            Err(SessionError::PoisonedState)
-        ));
-        assert!(matches!(
-            manager.harness_secrets("sid"),
-            Err(SessionError::PoisonedState)
-        ));
-        assert!(matches!(
-            manager.http_client("sid"),
-            Err(SessionError::PoisonedState)
-        ));
-        assert!(matches!(
-            manager.session_kv_for_execute("sid"),
-            Err(SessionError::PoisonedState)
-        ));
-        assert!(matches!(
-            manager.ensure("sid", &blueprint).await,
-            Err(SessionError::PoisonedState)
-        ));
-        assert!(matches!(
-            manager.touch("sid").await,
-            Err(SessionError::PoisonedState)
-        ));
-        assert!(matches!(
-            manager.wipe_now("sid").await,
-            Err(SessionError::PoisonedState)
-        ));
-        assert!(matches!(
-            manager.reap_now().await,
-            Err(SessionError::PoisonedState)
-        ));
-        assert!(matches!(
-            manager.boot().await,
-            Err(BootError::StatePoisoned)
-        ));
-        assert!(!root.path().join("sid").exists());
-
-        let (healthy, _) = self::manager();
-        healthy
-            .ensure("sid", &blueprint)
-            .await
-            .expect("healthy manager still works");
-        assert!(healthy.contains("sid").expect("healthy state"));
     }
 }
