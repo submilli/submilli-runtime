@@ -414,7 +414,11 @@ pub async fn remove(
     let owner = state.clone();
     let changed_name = name.clone();
     owned_mutation(&state, async move {
-        let removed = owner.blueprints().remove(&changed_name).await.map_err(store_error)?;
+        let removed = owner
+            .blueprints()
+            .remove(&changed_name)
+            .await
+            .map_err(store_error)?;
         if !removed {
             return Err(not_found(changed_name));
         }
@@ -423,7 +427,8 @@ pub async fn remove(
         owner.evict_mcp_catalog(&changed_name);
         owner.evict_prepared_packages(&changed_name);
         Ok(())
-    }).await?;
+    })
+    .await?;
     Ok((StatusCode::OK, Json(AddResponse { name })))
 }
 
