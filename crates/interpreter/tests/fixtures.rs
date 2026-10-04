@@ -9,8 +9,8 @@
 //! denying `llm.call` only for that model — the shape a blueprint `model`
 //! filter has. `deny-capability` cannot express it: it matches on the
 //! capability name and ignores context, and `call`, `batch`, and `models()`
-//! share the single `llm.call` capability, so denying by name would refuse
-//! `models()` outright rather than filtering its candidates.
+//! share the single `llm.call` capability, so denying by name hides every
+//! candidate instead of selecting individual models.
 //!
 //! A fixture whose name contains `llm_` also gets a canned [`FixtureLlm`]
 //! provider, and the budget-oriented ones get ceilings small enough to reach.
@@ -1112,9 +1112,8 @@ fn install_llm_fixture_support(data: &mut StoreData, fixture: &str) {
 ///
 /// `// deny-capability:` cannot express this. It matches on the capability name
 /// and ignores context, and `call`, `batch`, and `models()` all share the single
-/// `llm.call` capability — so denying by name would refuse `models()` itself
-/// before it ever reached the per-candidate filter, and the filtering this
-/// exists to test would never run. A blueprint `model` filter is precisely a
+/// `llm.call` capability — so denying by name would hide every candidate.
+/// A blueprint `model` filter is precisely a
 /// context-keyed rule, so the fixture policy has to be one too.
 ///
 /// This is a *policy* denial, which is the half that filters candidates. An

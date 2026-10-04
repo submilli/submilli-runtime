@@ -10,11 +10,11 @@
 //! completion, so a program never silently reasons over text no model produced
 //! — the rule `submilli:session` follows for its store.
 //!
-//! **One capability, double-gated.** `call`, `batch`, and `models()` are the
+//! **One capability, per-model filtering.** `call`, `batch`, and `models()` are the
 //! same grant, with `prompt_count` in the filter context rather than separate
 //! names: enumerating the operator's models is not a
-//! distinct risk class from calling one. `models()` gates the operation and
-//! then filters each candidate through the same `model` filter that gates
+//! distinct risk class from calling one. `models()` filters each candidate
+//! through the same `model` filter that gates
 //! calling, so a listing never offers a model the caller would be denied at
 //! call time — the `session.list` / `session.read` shape.
 //!
@@ -361,10 +361,10 @@ fn gate(
     )
 }
 
-/// `models()`: gate the operation, then gate each candidate with the same
+/// `models()`: check runtime invariants, then gate each candidate with the same
 /// `model` filter that gates calling.
 ///
-/// The per-candidate half acts **only** on a policy denial. An invariant denial
+/// Filtering acts **only** on a policy denial. An invariant denial
 /// means the check itself could not be made, and swallowing it would turn a
 /// runtime refusal into a silently short listing — the `session.list` rule.
 ///
@@ -372,7 +372,9 @@ fn gate(
 /// count, not an index, not a gap. The visible list is byte-identical to what a
 /// runtime configured with only those models would return.
 async fn models(caller: &mut wasmtime::Caller<'_, StoreData>) -> wasmtime::Result<Val> {
-    gate(caller, "", 0)?;
+    // Validate attribution and fuel even for an empty catalog. The empty-name
+    // policy answer cannot decide visibility: only candidate names can do that.
+    filters_candidate(gate(caller, "", 0))?;
     let provider = provider(caller, "models", "")?;
     let candidates = provider.models().await.map_err(|e| throw("models", e))?;
 
@@ -390,7 +392,7 @@ async fn models(caller: &mut wasmtime::Caller<'_, StoreData>) -> wasmtime::Resul
     build_array(caller, built)
 }
 
-/// The per-candidate half of the double gate. A denial omits the model rather
+/// The per-candidate gate. A denial omits the model rather
 /// than failing the call: a listing that threw on the first forbidden model
 /// would itself disclose that the operator configured it.
 fn may_call(caller: &mut wasmtime::Caller<'_, StoreData>, model: &str) -> wasmtime::Result<bool> {
@@ -1325,7 +1327,7 @@ mod tests {
         assert!(messages[0].contains("permission denied"), "{}", messages[0]);
     }
 
-    /// `models()` is double-gated — the op, then each candidate through
+    /// `models()` filters each candidate through
     /// the same `model` filter that gates calling. A listing that ignored the
     /// policy would hand the program a menu it cannot order from.
     #[tokio::test]
@@ -1333,9 +1335,7 @@ mod tests {
         let (provider, _) = MockProvider::new(Vec::new(), two_models());
         let (policy, _) = RecordingPolicy::new(|ctx| {
             let model = ctx["model"].as_str().unwrap_or_default();
-            // The op-level check presents no model; each candidate presents its
-            // own name, and only the cheap one is granted.
-            if model.is_empty() || model.starts_with("claude-") {
+            if model.starts_with("claude-") {
                 CheckOutcome::Allow { rule: None }
             } else {
                 CheckOutcome::Deny {
@@ -1366,6 +1366,31 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn models_returns_empty_when_policy_denies_all_candidates() {
+        for candidates in [two_models(), Vec::new()] {
+            let (provider, recorder) = MockProvider::new(Vec::new(), candidates);
+            let (policy, _) = RecordingPolicy::new(|_| CheckOutcome::Deny {
+                rule: None,
+                reason: "no models allowed".to_string(),
+            });
+            let out = Harness::new()
+                .provider(provider)
+                .policy(policy)
+                .run(
+                    r#"import llm from "submilli:llm";
+                       function main(): string { return JSON.stringify(llm.models()); }"#,
+                )
+                .await
+                .expect("a policy denial hides candidates without failing discovery");
+            assert_eq!(out, "[]");
+            assert!(
+                recorder.dispatches().is_empty(),
+                "discovery never dispatches"
+            );
+        }
+    }
+
     /// KTD6/KTD7: the visible list must be byte-identical to what a runtime
     /// configured with only those models would return — no index, no position,
     /// no count derived from the candidates the policy removed. This is the
@@ -1377,7 +1402,7 @@ mod tests {
         let (wide, _) = MockProvider::new(Vec::new(), two_models());
         let (policy, _) = RecordingPolicy::new(|ctx| {
             let model = ctx["model"].as_str().unwrap_or_default();
-            if model.is_empty() || model.starts_with("claude-") {
+            if model.starts_with("claude-") {
                 CheckOutcome::Allow { rule: None }
             } else {
                 CheckOutcome::Deny {

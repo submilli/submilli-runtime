@@ -161,8 +161,7 @@ pub fn package_declaration() -> PackageDeclaration {
         Vec::new(),
         Type::Array(Box::new(model_type())),
         "/**\n * The models this runtime serves and this caller may call.\n *\n * \
-         Double-gated: the call itself is gated under `llm.call` with `op: \
-         \"models\"`, and then each candidate is filtered by the same `model` \
+         Each candidate is filtered under `llm.call` by the same `model` \
          filter that gates calling — so a listing never offers a model the caller \
          would be denied at `call` time. The list can therefore come back short, or \
          empty, and nothing in it reveals how many candidates were filtered out.\n \
@@ -174,8 +173,7 @@ pub fn package_declaration() -> PackageDeclaration {
          for a chunk-size decision, because you should not size against a number \
          nobody asserted.\n *\n * Treat `description` as advice, not fact: it is \
          operator-authored free text that steers which model your program calls.\n * \
-         @capability llm.call { model: \"\", prompt_count: 0 } for \
-         the call, then per candidate with that candidate's `model`\n */",
+         @capability llm.call { prompt_count: 0 }\n */",
     );
     defs
 }
