@@ -105,11 +105,15 @@ impl AuditLog {
                 reason,
             },
         );
+        let Ok(context) = context(metadata) else {
+            report("cannot encode server audit decision payload");
+            return;
+        };
         if allowed && self.config.allows == Allows::Summary {
             fields.insert("count".into(), json!(1));
-            fields.insert("contexts".into(), json!([context(metadata)]));
+            fields.insert("contexts".into(), json!([context]));
         } else {
-            fields.insert("context".into(), context(metadata));
+            fields.insert("context".into(), context);
         }
         self.emit("decision", fields);
     }
@@ -122,23 +126,31 @@ impl AuditLog {
         if !self.config.enabled {
             return;
         }
-        let timestamp = jiff::Timestamp::now();
-        fields.insert("schema".into(), json!("submilli.audit/1"));
-        fields.insert("type".into(), json!(kind));
-        fields.insert("event_id".into(), json!(Uuid::new_v4().to_string()));
-        let result = encode_record(
-            timestamp,
-            &tracing::Level::INFO,
-            Stream::Audit,
-            "submilli_server::audit",
-            kind,
-            &fields,
-        )
-        .and_then(|line| self.output.write_record(&line));
+        let event_id = Uuid::new_v4().to_string();
+        let result = encode_audit_record(kind, &mut fields, &event_id)
+            .and_then(|line| self.output.write_record(&line));
         if result.is_err() {
             report("cannot encode or write server audit record");
         }
     }
+}
+
+fn encode_audit_record(
+    kind: &str,
+    fields: &mut Map<String, Value>,
+    event_id: &str,
+) -> std::io::Result<String> {
+    fields.insert("schema".into(), json!("submilli.audit/1"));
+    fields.insert("type".into(), json!(kind));
+    fields.insert("event_id".into(), json!(event_id));
+    encode_record(
+        jiff::Timestamp::now(),
+        &tracing::Level::INFO,
+        Stream::Audit,
+        "submilli_server::audit",
+        kind,
+        fields,
+    )
 }
 
 fn report(message: &str) {
@@ -213,8 +225,8 @@ pub(crate) fn hash(bytes: &[u8]) -> String {
     format!("{:x}", Sha256::digest(bytes))
 }
 
-/// Only scalar policy metadata is retained. Free-form payload fields are excluded.
-pub(crate) fn context(value: &Value) -> Value {
+/// Keep the full policy context as JSON while retaining the existing scalar fields.
+pub(crate) fn context(value: &Value) -> std::io::Result<Value> {
     const FIELDS: &[&str] = &[
         "host",
         "path",
@@ -256,7 +268,61 @@ pub(crate) fn context(value: &Value) -> Value {
         };
         fields.insert((*key).into(), value);
     }
-    Value::Object(fields)
+    fields.insert("payload_json".into(), json!(payload_json(value)?));
+    Ok(Value::Object(fields))
+}
+
+fn payload_json(value: &Value) -> std::io::Result<String> {
+    check_payload_depth(value, 0)?;
+    let mut encoded = BoundedJson(Vec::new());
+    serde_json::to_writer(&mut encoded, value).map_err(std::io::Error::other)?;
+    String::from_utf8(encoded.0).map_err(std::io::Error::other)
+}
+
+fn check_payload_depth(value: &Value, depth: usize) -> std::io::Result<()> {
+    const MAX_DEPTH: usize = 128;
+    if depth >= MAX_DEPTH {
+        return Err(std::io::Error::other("audit payload is too deeply nested"));
+    }
+    match value {
+        Value::Array(values) => {
+            for value in values {
+                check_payload_depth(value, depth + 1)?;
+            }
+        }
+        Value::Object(values) => {
+            for value in values.values() {
+                check_payload_depth(value, depth + 1)?;
+            }
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+struct BoundedJson(Vec<u8>);
+
+impl Write for BoundedJson {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        const MAX_BYTES: usize = 1024 * 1024;
+        if self
+            .0
+            .len()
+            .checked_add(bytes.len())
+            .is_none_or(|size| size > MAX_BYTES)
+        {
+            return Err(std::io::Error::other("audit payload exceeds 1 MiB"));
+        }
+        self.0
+            .try_reserve(bytes.len())
+            .map_err(std::io::Error::other)?;
+        self.0.extend_from_slice(bytes);
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
 }
 
 pub(crate) fn bindings(vars: &submilli_blueprint::VarBindings) -> Value {
@@ -478,7 +544,10 @@ impl ExecutionAudit {
             return;
         }
         let mut fields = decision_fields(&state.fields, &decision);
-        let context = context(decision.context);
+        let Ok(context) = context(decision.context) else {
+            report("cannot encode server audit decision payload");
+            return;
+        };
         if decision.allowed && self.log.config.allows == Allows::Summary {
             let key = (
                 hash(decision.caller.as_bytes()),
@@ -580,23 +649,26 @@ impl ExecutionState {
         const MAX_BYTES: usize = 1024 * 1024;
         let context_bytes = serde_json::to_vec(&context).map_or(usize::MAX, |v| v.len());
         if let Some(summary) = self.summaries.get_mut(&key) {
-            summary.count = summary.count.saturating_add(1);
-            if summary.contexts.len() < 10 && !summary.contexts.contains(&context) {
-                if self.summary_bytes.saturating_add(context_bytes) <= MAX_BYTES {
-                    self.summary_bytes = self.summary_bytes.saturating_add(context_bytes);
-                    summary.contexts.push(context);
-                } else {
-                    summary
-                        .fields
-                        .insert("contexts_truncated".into(), json!(true));
+            if !summary.contexts.contains(&context) {
+                if summary.contexts.len() >= 10
+                    || self.summary_bytes.saturating_add(context_bytes) > MAX_BYTES
+                    || !summary_record_fits(&summary.fields, &summary.contexts, &context)
+                {
+                    return Some(fields);
                 }
+                self.summary_bytes = self.summary_bytes.saturating_add(context_bytes);
+                summary.contexts.push(context);
             }
+            summary.count = summary.count.saturating_add(1);
             return None;
         }
         let bytes = serde_json::to_vec(&fields)
             .map_or(usize::MAX, |v| v.len())
             .saturating_add(context_bytes);
-        if self.summaries.len() >= 1024 || self.summary_bytes.saturating_add(bytes) > MAX_BYTES {
+        if self.summaries.len() >= 1024
+            || self.summary_bytes.saturating_add(bytes) > MAX_BYTES
+            || !summary_record_fits(&fields, &[], &context)
+        {
             return Some(fields);
         }
         self.summary_bytes = self.summary_bytes.saturating_add(bytes);
@@ -610,6 +682,21 @@ impl ExecutionState {
         );
         None
     }
+}
+
+/// Test the actual logfmt encoding: JSON strings can expand again when escaped.
+fn summary_record_fits(fields: &Map<String, Value>, contexts: &[Value], next: &Value) -> bool {
+    let mut preview = fields.clone();
+    let mut contexts = contexts.to_vec();
+    contexts.push(next.clone());
+    preview.insert("contexts".into(), Value::Array(contexts));
+    preview.insert("count".into(), json!(u64::MAX));
+    encode_audit_record(
+        "decision",
+        &mut preview,
+        "00000000-0000-0000-0000-000000000000",
+    )
+    .is_ok()
 }
 
 impl Drop for ExecutionAudit {
@@ -884,10 +971,39 @@ mod tests {
         );
         let metadata = context(
             &json!({"remote": "https://u:secret@example.com:8443/repo?token=x", "remoteName": "origin", "branch": "main", "recursive": true, "transport": "streamable_http", "body": "body-canary", "diff": "file-canary", "prompt": "prompt-canary", "arguments": {"x": "tool-canary"}}),
-        );
+        )
+        .unwrap();
         assert_eq!(metadata["remote"], "https://example.com:8443/repo");
         assert_eq!(metadata["recursive"], true);
-        assert!(!metadata.to_string().contains("canary"));
+        let payload: Value =
+            serde_json::from_str(metadata["payload_json"].as_str().unwrap()).unwrap();
+        assert_eq!(payload["body"], "body-canary");
+        assert_eq!(payload["arguments"]["x"], "tool-canary");
+        assert_eq!(
+            payload["remote"],
+            "https://u:secret@example.com:8443/repo?token=x"
+        );
+    }
+
+    #[test]
+    fn oversized_payload_skips_decision_without_partial_record() {
+        let (_dir, path, log) = sink();
+        let execution = ExecutionAudit::new(log, "app", "http", None);
+        execution.begin();
+        let payload = json!({"body": "x".repeat(1_100_000)});
+        execution.decision(AuditDecision {
+            caller: "main",
+            capability: "x/op",
+            context: &payload,
+            allowed: false,
+            source: "policy",
+            rule: None,
+            reason: Some("denied"),
+        });
+        execution.finish(true);
+        let text = std::fs::read_to_string(path).unwrap();
+        assert!(!text.contains("type=decision"));
+        assert!(text.contains("event=finished"));
     }
 
     #[test]
@@ -1014,6 +1130,65 @@ mod tests {
         let text = std::fs::read_to_string(path).unwrap();
         assert_eq!(text.matches("summary_overflow=true").count(), 6);
         assert_eq!(text.matches("type=decision").count(), 1030);
+    }
+
+    #[test]
+    fn summary_accounts_for_logfmt_escaping_without_losing_decisions() {
+        let (_dir, path, log) = sink();
+        let execution = ExecutionAudit::new(log, "app", "http", None);
+        execution.begin();
+        for index in 0..10 {
+            execution.decision(AuditDecision {
+                caller: "pkg",
+                capability: "security.check",
+                context: &json!({"index": index, "text": "\n".repeat(50_000)}),
+                allowed: true,
+                source: "policy",
+                rule: Some(0),
+                reason: None,
+            });
+        }
+        execution.finish(true);
+        let text = std::fs::read_to_string(path).unwrap();
+        let decisions: Vec<_> = text
+            .lines()
+            .filter(|line| line.contains("type=decision"))
+            .collect();
+        assert!(decisions.len() > 1);
+        assert!(decisions.iter().all(|line| line.len() < 1024 * 1024));
+        let represented: usize = decisions
+            .iter()
+            .map(|line| {
+                line.split_whitespace()
+                    .find_map(|field| field.strip_prefix("count="))
+                    .map_or(1, |count| count.parse().unwrap())
+            })
+            .sum();
+        assert_eq!(represented, 10);
+    }
+
+    #[test]
+    fn distinct_contexts_past_summary_limit_have_individual_records() {
+        let (_dir, path, log) = sink();
+        let execution = ExecutionAudit::new(log, "app", "http", None);
+        execution.begin();
+        for index in 0..11 {
+            execution.decision(AuditDecision {
+                caller: "pkg",
+                capability: "security.check",
+                context: &json!({"index": index}),
+                allowed: true,
+                source: "policy",
+                rule: Some(0),
+                reason: None,
+            });
+        }
+        execution.finish(true);
+        let text = std::fs::read_to_string(path).unwrap();
+        assert_eq!(text.matches("type=decision").count(), 2);
+        assert!(text.contains("count=10"));
+        assert!(text.contains("summary_overflow=true"));
+        assert!(text.contains("context.payload_json=\"{\\\"index\\\":10}\""));
     }
 
     #[test]

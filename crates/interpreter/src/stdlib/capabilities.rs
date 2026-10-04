@@ -401,8 +401,8 @@ const LLM: &[Capability] = &[Capability {
         field(
             "model",
             "string",
-            "Model name the call targets or the candidate being listed. The empty-name \
-             runtime preflight for models does not decide visibility",
+            "Model name the call targets or the candidate being listed. \
+             The runtime preflight does not ask policy about an empty name",
         ),
         field(
             "prompt_count",

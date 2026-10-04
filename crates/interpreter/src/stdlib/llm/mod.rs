@@ -372,9 +372,7 @@ fn gate(
 /// count, not an index, not a gap. The visible list is byte-identical to what a
 /// runtime configured with only those models would return.
 async fn models(caller: &mut wasmtime::Caller<'_, StoreData>) -> wasmtime::Result<Val> {
-    // Validate attribution and fuel even for an empty catalog. The empty-name
-    // policy answer cannot decide visibility: only candidate names can do that.
-    filters_candidate(gate(caller, "", 0))?;
+    preflight_models(caller)?;
     let provider = provider(caller, "models", "")?;
     let candidates = provider.models().await.map_err(|e| throw("models", e))?;
 
@@ -390,6 +388,27 @@ async fn models(caller: &mut wasmtime::Caller<'_, StoreData>) -> wasmtime::Resul
         built.push(build_model(caller, model)?);
     }
     build_array(caller, built)
+}
+
+/// Charge for the check and establish caller attribution even for an empty
+/// catalog, without asking policy about a model that does not exist.
+fn preflight_models(caller: &mut wasmtime::Caller<'_, StoreData>) -> wasmtime::Result<()> {
+    fuel::charge_host_fuel(&mut *caller, fuel::GATE)?;
+    crate::stdlib::shared::running_package(caller)
+        .map(|_| ())
+        .map_err(|error| {
+            if let crate::stdlib::shared::PrincipalError::Unknown(ref unknown) = error {
+                crate::stdlib::shared::audit_denial(
+                    caller.data().security_check.as_ref(),
+                    unknown.label,
+                    CAPABILITY,
+                    &serde_json::json!({ "model": "", "prompt_count": 0 }),
+                    "invariant",
+                    unknown.reason,
+                );
+            }
+            error.into_denial(CAPABILITY)
+        })
 }
 
 /// The per-candidate gate. A denial omits the model rather
@@ -1098,13 +1117,8 @@ mod tests {
 
         assert_eq!(counts[0], 1, "call: {counts:?}");
         assert_eq!(counts[1], 3, "batch: {counts:?}");
-        // The listing's own check, then one per candidate — every one of them a
-        // zero-prompt discovery, never a dispatch.
-        assert_eq!(
-            counts.len(),
-            5,
-            "listing check plus one per candidate: {counts:?}"
-        );
+        // Only real candidates reach policy. Each is a zero-prompt discovery.
+        assert_eq!(counts.len(), 4, "one check per candidate: {counts:?}");
         for count in &counts[2..] {
             assert_eq!(*count, 0, "discovery dispatches no prompts: {counts:?}");
         }
@@ -1333,7 +1347,7 @@ mod tests {
     #[tokio::test]
     async fn models_hides_candidates_the_model_filter_denies() {
         let (provider, _) = MockProvider::new(Vec::new(), two_models());
-        let (policy, _) = RecordingPolicy::new(|ctx| {
+        let (policy, contexts) = RecordingPolicy::new(|ctx| {
             let model = ctx["model"].as_str().unwrap_or_default();
             if model.starts_with("claude-") {
                 CheckOutcome::Allow { rule: None }
@@ -1364,6 +1378,9 @@ mod tests {
             out, "1|claude-haiku-4-5;",
             "only the permitted candidate is visible"
         );
+        let contexts = contexts.lock().expect("contexts");
+        assert_eq!(contexts.len(), 2);
+        assert!(contexts.iter().all(|context| context["model"] != ""));
     }
 
     #[tokio::test]

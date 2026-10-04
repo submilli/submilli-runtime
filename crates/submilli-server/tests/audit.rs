@@ -5,7 +5,9 @@ use axum::Router;
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use http_body_util::BodyExt;
+use interpreter::{ModulePath, PackageSourceModule, compile_package};
 use serde_json::{Value, json};
+use submilli_build::{ArtifactMetadata, write_package_artifact};
 use submilli_server::audit::{Allows, AuditConfig, AuditLog};
 use submilli_server::auth::{ApiToken, AuthConfig, Role};
 use submilli_server::blueprint::InMemoryBlueprintStore;
@@ -29,6 +31,62 @@ fn configured(path: std::path::PathBuf, allows: Allows, policy: &str) -> AppStat
         ..Default::default()
     })
     .unwrap()
+}
+
+fn configured_with_package(
+    path: std::path::PathBuf,
+    allows: Allows,
+    policy: &str,
+    package_store_root: std::path::PathBuf,
+) -> AppState {
+    let blueprints = Arc::new(
+        InMemoryBlueprintStore::seed([submilli_blueprint::parse(policy).unwrap()]).unwrap(),
+    );
+    AppState::new(ServerConfig {
+        blueprints: Some(blueprints),
+        package_store_root: Some(package_store_root),
+        audit: AuditConfig {
+            file: Some(path),
+            allows,
+            ..Default::default()
+        },
+        ..Default::default()
+    })
+    .unwrap()
+}
+
+fn install_credits_package(store_root: &std::path::Path) {
+    let package = compile_package(
+        "@acme/credits",
+        ModulePath::from("lib"),
+        &[PackageSourceModule {
+            path: ModulePath::from("lib"),
+            source: r#"
+import { check } from "submilli:security";
+/** @capability acme.com/credits.apply { customerId: string, amount: number, customerClass: string } */
+export function applyCredits(): void {
+    check("acme.com/credits.apply", {
+        customerId: "cus_northwind", amount: 42, customerClass: "business"
+    });
+}
+"#,
+        }],
+        &[],
+    )
+    .unwrap();
+    write_package_artifact(
+        store_root.join("@acme").join("credits"),
+        &package.wasm,
+        &package.type_info,
+        &submilli_build::derive_capability_schema(
+            &package.declaration,
+            &[],
+            &package.required_capabilities,
+        ),
+        &package.declaration,
+        &ArtifactMetadata::new("@acme/credits", "0.0.0-test", Vec::new()),
+    )
+    .unwrap();
 }
 
 async fn request(router: Router, method: &str, path: &str, body: Value) -> (StatusCode, Value) {
@@ -82,6 +140,87 @@ fn records(path: &std::path::Path) -> Vec<BTreeMap<String, String>> {
 }
 
 #[tokio::test]
+async fn package_and_stdlib_decisions_record_complete_json_payloads() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = dir.path().join("packages");
+    install_credits_package(&store);
+    let code = r#"
+import { applyCredits } from "@acme/credits";
+import { writeText } from "submilli:fs";
+function main(): void {
+    try { applyCredits(); } catch (e: PermissionDeniedError) {}
+    try { writeText("/denied", "body-canary"); } catch (e: PermissionDeniedError) {}
+}
+"#;
+    let denied_path = dir.path().join("denied.log");
+    let denied = app(configured_with_package(
+        denied_path.clone(),
+        Allows::Summary,
+        "name: test\ndefault: deny\npackages:\n  - \"@acme/credits\"\n",
+        store.clone(),
+    ));
+    let (_, response) = request(
+        denied,
+        "POST",
+        "/v1/execute",
+        json!({"blueprint": "test", "code": code}),
+    )
+    .await;
+    assert!(response["error"].is_null(), "{response}");
+    let rows = records(&denied_path);
+    let package = rows
+        .iter()
+        .find(|row| row.get("capability") == Some(&"acme.com/credits.apply".to_string()))
+        .unwrap();
+    let package_payload: Value = serde_json::from_str(&package["context.payload_json"]).unwrap();
+    assert_eq!(
+        package_payload,
+        json!({
+            "customerId": "cus_northwind", "amount": 42, "customerClass": "business"
+        })
+    );
+    assert_eq!(package["decision"], "deny");
+    let stdlib = rows
+        .iter()
+        .find(|row| row.get("capability") == Some(&"fs.write".to_string()))
+        .unwrap();
+    let stdlib_payload: Value = serde_json::from_str(&stdlib["context.payload_json"]).unwrap();
+    assert_eq!(stdlib_payload["path"], "/denied");
+    assert_eq!(stdlib_payload["length"], 11);
+
+    let allowed_path = dir.path().join("allowed.log");
+    let allowed = app(configured_with_package(
+        allowed_path.clone(),
+        Allows::Summary,
+        "name: test\ndefault: deny\npackages:\n  - \"@acme/credits\"\npermissions:\n  main:\n    - capability: acme.com/credits.apply\n      action: allow\n    - capability: fs.write\n      action: allow\n",
+        store,
+    ));
+    let (_, response) = request(
+        allowed,
+        "POST",
+        "/v1/execute",
+        json!({"blueprint": "test", "code": code}),
+    )
+    .await;
+    assert!(response["error"].is_null(), "{response}");
+    let rows = records(&allowed_path);
+    let package = rows
+        .iter()
+        .find(|row| row.get("capability") == Some(&"acme.com/credits.apply".to_string()))
+        .unwrap();
+    assert_eq!(package["decision"], "allow");
+    let package_payload: Value = serde_json::from_str(&package["contexts.0.payload_json"]).unwrap();
+    assert_eq!(package_payload["customerId"], "cus_northwind");
+    let stdlib = rows
+        .iter()
+        .find(|row| row.get("capability") == Some(&"fs.write".to_string()))
+        .unwrap();
+    assert_eq!(stdlib["decision"], "allow");
+    let stdlib_payload: Value = serde_json::from_str(&stdlib["contexts.0.payload_json"]).unwrap();
+    assert_eq!(stdlib_payload["length"], 11);
+}
+
+#[tokio::test]
 async fn allow_modes_keep_denials_and_attribute_rules_without_charging_fuel() {
     let mut fuel = Vec::new();
     for allows in [Allows::All, Allows::Summary, Allows::None] {
@@ -122,10 +261,23 @@ function main(): void {
         match allows {
             Allows::All => assert_eq!(allows_rows.len(), 1000),
             Allows::Summary => {
-                assert_eq!(allows_rows.len(), 1);
-                assert_eq!(allows_rows[0]["count"], "1000");
-                assert!(allows_rows[0].contains_key("contexts.9.path"));
-                assert!(!allows_rows[0].contains_key("contexts.10.path"));
+                assert_eq!(allows_rows.len(), 991);
+                let summary = allows_rows
+                    .iter()
+                    .find(|row| row.contains_key("count"))
+                    .unwrap();
+                assert_eq!(summary["count"], "10");
+                assert!(summary.contains_key("contexts.9.payload_json"));
+                assert!(!summary.contains_key("contexts.10.payload_json"));
+                assert_eq!(
+                    allows_rows
+                        .iter()
+                        .filter(
+                            |row| row.get("summary_overflow").map(String::as_str) == Some("true")
+                        )
+                        .count(),
+                    990
+                );
             }
             Allows::None => assert!(allows_rows.is_empty()),
         }
@@ -335,7 +487,7 @@ async fn shared_output_records_remain_whole_under_concurrent_runs() {
 }
 
 #[tokio::test]
-async fn invariant_egress_and_state_quota_denials_do_not_log_payloads() {
+async fn invariant_egress_and_quota_decisions_log_only_their_check_context() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("audit.log");
     let mut policy = submilli_blueprint::parse("name: test\ndefault: allow\n").unwrap();
@@ -378,7 +530,8 @@ async fn invariant_egress_and_state_quota_denials_do_not_log_payloads() {
         assert!(
             rows.iter()
                 .any(|r| r.get("source").map(String::as_str) == Some(source)
-                    && r["decision"] == "deny"),
+                    && r["decision"] == "deny"
+                    && r.contains_key("context.payload_json")),
             "missing {source}: {rows:?}"
         );
     }
