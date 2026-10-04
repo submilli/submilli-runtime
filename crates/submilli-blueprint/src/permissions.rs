@@ -13,7 +13,7 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
-use crate::filter::{FilterExpr, VarBindings};
+use crate::filter::{ComparisonFailure, FilterExpr, VarBindings};
 use crate::{BlueprintError, Fault, yaml_path};
 
 /// Fall-through action when no rule matches. Absent in the blueprint, it
@@ -54,6 +54,11 @@ impl From<DefaultAction> for Action {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PermissionRule {
+    /// Label decisions cite this rule by. Unique within a caller block
+    /// (`blueprint lint` enforces it); the rule's position identifies it
+    /// otherwise.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
     pub capability: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub filter: Option<FilterExpr>,
@@ -78,6 +83,12 @@ pub(crate) fn validate(
                 return Err(BlueprintError::InvalidPermissions(Fault::at(
                     yaml_path!["permissions", caller, i, "capability"],
                     format!("caller '{caller}': a rule has an empty capability name"),
+                )));
+            }
+            if rule.name.as_deref() == Some("") {
+                return Err(BlueprintError::InvalidPermissions(Fault::at(
+                    yaml_path!["permissions", caller, i, "name"],
+                    format!("caller '{caller}': a rule has an empty name"),
                 )));
             }
         }
@@ -121,6 +132,91 @@ pub(crate) fn resolve_with_rule(
     (default_action.into(), None)
 }
 
+/// A resolved decision with the reasoning behind it.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct Resolution {
+    /// Identical to what [`resolve`] returns for the same inputs.
+    pub action: Action,
+    pub cause: ResolutionCause,
+    /// Rules for the capability, ahead of the deciding rule (or all of them
+    /// when the default decided), whose filters rejected the call.
+    pub near_misses: Vec<NearMiss>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case", tag = "kind")]
+pub enum ResolutionCause {
+    Rule(RuleRef),
+    /// No rule matched. `caller_block` is whether the caller has any rules.
+    Default {
+        caller_block: bool,
+    },
+}
+
+/// A rule located by caller block and zero-based position, with its name when
+/// it has one.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct RuleRef {
+    pub caller: String,
+    pub index: usize,
+    pub name: Option<String>,
+}
+
+/// A rule that named the right capability but whose filter rejected the call.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct NearMiss {
+    pub rule: RuleRef,
+    /// The rule's whole filter, from its `Display` impl.
+    pub filter: String,
+    pub failures: Vec<ComparisonFailure>,
+}
+
+pub(crate) fn explain(
+    permissions: &BTreeMap<String, Vec<PermissionRule>>,
+    default_action: DefaultAction,
+    caller: &str,
+    capability: &str,
+    ctx: &serde_json::Value,
+    vars: &VarBindings,
+) -> Resolution {
+    let (action, matched) =
+        resolve_with_rule(permissions, default_action, caller, capability, ctx, vars);
+    let rules = permissions.get(caller);
+    let rule_ref = |index: usize, rule: &PermissionRule| RuleRef {
+        caller: caller.to_string(),
+        index,
+        name: rule.name.clone(),
+    };
+    let cause = match matched.and_then(|index| Some((index, rules?.get(index)?))) {
+        Some((index, rule)) => ResolutionCause::Rule(rule_ref(index, rule)),
+        None => ResolutionCause::Default {
+            caller_block: rules.is_some(),
+        },
+    };
+    let walked = matched.unwrap_or(usize::MAX);
+    let near_misses = rules
+        .into_iter()
+        .flatten()
+        .enumerate()
+        .take_while(|(index, _)| *index < walked)
+        .filter(|(_, rule)| rule.capability == capability)
+        .filter_map(|(index, rule)| {
+            let filter = rule.filter.as_ref()?;
+            let evaluation = filter.explain_with(ctx, vars);
+            (!evaluation.matched).then(|| NearMiss {
+                rule: rule_ref(index, rule),
+                filter: filter.to_string(),
+                failures: evaluation.failures,
+            })
+        })
+        .collect();
+    Resolution {
+        action,
+        cause,
+        near_misses,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -137,11 +233,13 @@ mod tests {
             "main".to_string(),
             vec![
                 PermissionRule {
+                    name: None,
                     capability: "stripe.com/charge".into(),
                     filter: Some(filter("amount < 500")),
                     action: Action::Allow,
                 },
                 PermissionRule {
+                    name: None,
                     capability: "stripe.com/charge".into(),
                     filter: None,
                     action: Action::AskHuman,
@@ -213,6 +311,7 @@ mod tests {
         perms.insert(
             "main".to_string(),
             vec![PermissionRule {
+                name: None,
                 capability: "stripe.com/charge".into(),
                 filter: None,
                 action: Action::Allow,
@@ -230,5 +329,204 @@ mod tests {
             ),
             Action::Deny
         );
+    }
+
+    fn rule(
+        name: Option<&str>,
+        capability: &str,
+        f: Option<&str>,
+        action: Action,
+    ) -> PermissionRule {
+        PermissionRule {
+            name: name.map(str::to_string),
+            capability: capability.into(),
+            filter: f.map(filter),
+            action,
+        }
+    }
+
+    fn vars(pairs: &[(&str, &str)]) -> VarBindings {
+        pairs
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect()
+    }
+
+    fn explain_main(
+        rules: Vec<PermissionRule>,
+        default: DefaultAction,
+        capability: &str,
+        ctx: serde_json::Value,
+        bindings: &VarBindings,
+    ) -> Resolution {
+        let perms = BTreeMap::from([("main".to_string(), rules)]);
+        let resolution = explain(&perms, default, "main", capability, &ctx, bindings);
+        // The explanation never disagrees with enforcement.
+        assert_eq!(
+            resolution.action,
+            resolve(&perms, default, "main", capability, &ctx, bindings)
+        );
+        resolution
+    }
+
+    #[test]
+    fn explain_filter_miss_is_a_near_miss_under_default() {
+        let resolution = explain_main(
+            vec![rule(
+                Some("own-customer"),
+                "acme.com/charges.list",
+                Some("customerId == ${vars.customerId}"),
+                Action::Allow,
+            )],
+            DefaultAction::Deny,
+            "acme.com/charges.list",
+            json!({ "customerId": "cus_initech" }),
+            &vars(&[("customerId", "cus_northwind")]),
+        );
+        assert_eq!(resolution.action, Action::Deny);
+        assert_eq!(
+            resolution.cause,
+            ResolutionCause::Default { caller_block: true }
+        );
+        let [miss] = resolution.near_misses.as_slice() else {
+            panic!("expected one near miss: {resolution:?}");
+        };
+        assert_eq!(miss.rule.index, 0);
+        assert_eq!(miss.rule.name.as_deref(), Some("own-customer"));
+        assert_eq!(miss.filter, "customerId == ${vars.customerId}");
+        let [failure] = miss.failures.as_slice() else {
+            panic!("expected one failure: {miss:?}");
+        };
+        assert_eq!(failure.comparison, "customerId == ${vars.customerId}");
+        assert_eq!(failure.actual, Some(json!("cus_initech")));
+        assert_eq!(failure.expected.as_deref(), Some("cus_northwind"));
+    }
+
+    #[test]
+    fn explain_second_rule_match_cites_index_and_name() {
+        let resolution = explain_main(
+            vec![
+                rule(
+                    None,
+                    "stripe.com/charge",
+                    Some("amount < 500"),
+                    Action::Allow,
+                ),
+                rule(Some("big-charges"), "stripe.com/charge", None, Action::Deny),
+            ],
+            DefaultAction::Allow,
+            "stripe.com/charge",
+            json!({ "amount": 900 }),
+            &VarBindings::new(),
+        );
+        assert_eq!(resolution.action, Action::Deny);
+        assert_eq!(
+            resolution.cause,
+            ResolutionCause::Rule(RuleRef {
+                caller: "main".into(),
+                index: 1,
+                name: Some("big-charges".into()),
+            })
+        );
+        // The earlier rule that rejected the call is still reported.
+        assert_eq!(resolution.near_misses.len(), 1);
+        assert_eq!(resolution.near_misses[0].rule.index, 0);
+        assert_eq!(resolution.near_misses[0].rule.name, None);
+    }
+
+    #[test]
+    fn explain_without_caller_block_reports_it() {
+        let perms = BTreeMap::new();
+        let resolution = explain(
+            &perms,
+            DefaultAction::Deny,
+            "main",
+            "x",
+            &json!({}),
+            &VarBindings::new(),
+        );
+        assert_eq!(resolution.action, Action::Deny);
+        assert_eq!(
+            resolution.cause,
+            ResolutionCause::Default {
+                caller_block: false
+            }
+        );
+        assert!(resolution.near_misses.is_empty());
+    }
+
+    #[test]
+    fn explain_ask_human_stays_distinct_and_names_the_rule() {
+        let resolution = explain_main(
+            vec![rule(
+                Some("review-refunds"),
+                "stripe.com/refund",
+                None,
+                Action::AskHuman,
+            )],
+            DefaultAction::Deny,
+            "stripe.com/refund",
+            json!({}),
+            &VarBindings::new(),
+        );
+        assert_eq!(resolution.action, Action::AskHuman);
+        let ResolutionCause::Rule(rule) = &resolution.cause else {
+            panic!("expected a rule cause: {resolution:?}");
+        };
+        assert_eq!(rule.name.as_deref(), Some("review-refunds"));
+    }
+
+    #[test]
+    fn explain_unbound_variable_failure() {
+        let resolution = explain_main(
+            vec![rule(None, "x", Some("id == ${vars.x}"), Action::Allow)],
+            DefaultAction::Deny,
+            "x",
+            json!({ "id": "a" }),
+            &VarBindings::new(),
+        );
+        assert_eq!(
+            resolution.near_misses[0].failures[0].reason,
+            crate::filter::FailureReason::VariableNotBound("x".into())
+        );
+    }
+
+    #[test]
+    fn explain_ignores_other_capabilities() {
+        let resolution = explain_main(
+            vec![rule(None, "a", Some("n == 1"), Action::Allow)],
+            DefaultAction::Deny,
+            "b",
+            json!({ "n": 2 }),
+            &VarBindings::new(),
+        );
+        assert!(resolution.near_misses.is_empty());
+    }
+
+    #[test]
+    fn rule_name_is_optional_and_unknown_fields_still_rejected() {
+        let rules: Vec<PermissionRule> = serde_yml::from_str(
+            "- capability: a\n  action: allow\n- name: n\n  capability: b\n  action: deny\n",
+        )
+        .expect("rules parse");
+        assert_eq!(rules[0].name, None);
+        assert_eq!(rules[1].name.as_deref(), Some("n"));
+        let reserialized = serde_yml::to_string(&rules).expect("serialize");
+        assert!(!reserialized.contains("name: null"), "{reserialized}");
+        assert!(
+            serde_yml::from_str::<Vec<PermissionRule>>(
+                "- capability: a\n  action: allow\n  label: x\n"
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn empty_rule_name_is_invalid() {
+        let perms = BTreeMap::from([(
+            "main".to_string(),
+            vec![rule(Some(""), "a", None, Action::Allow)],
+        )]);
+        assert!(validate(&perms).is_err());
     }
 }

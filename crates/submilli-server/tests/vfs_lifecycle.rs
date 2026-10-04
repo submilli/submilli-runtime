@@ -26,6 +26,7 @@ fn allow_fs() -> BTreeMap<String, Vec<PermissionRule>> {
     let rules = ["fs.read", "fs.write"]
         .into_iter()
         .map(|cap| PermissionRule {
+            name: None,
             capability: cap.into(),
             filter: None,
             action: Action::Allow,
