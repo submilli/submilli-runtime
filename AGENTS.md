@@ -264,3 +264,10 @@ Rules:
 - If graphify-out/wiki/index.md exists, use it for broad navigation instead of raw source browsing.
 - Read graphify-out/GRAPH_REPORT.md only for broad architecture review or when query/path/explain do not surface enough context.
 - After modifying code, run `graphify update .` to keep the graph current (AST-only, no API cost).
+
+## Review artifacts
+
+Do not commit generated review screenshots, before/after captures, recordings, or
+test-output dumps. Show them in the conversation or attach them to the PR outside
+Git. Product assets and required test fixtures are separate; commit review evidence
+only when the user explicitly requests it.
