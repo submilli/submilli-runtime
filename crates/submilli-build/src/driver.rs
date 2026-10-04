@@ -221,6 +221,13 @@ pub enum DriverError {
     NonUtf8ModulePath {
         path: PathBuf,
     },
+    ModuleOutsideSource {
+        source_root: PathBuf,
+        path: PathBuf,
+    },
+    SourceDirectoryCycle {
+        path: PathBuf,
+    },
     AmbiguousModulePath {
         module: String,
         first: PathBuf,
@@ -305,6 +312,17 @@ impl fmt::Display for DriverError {
             DriverError::NonUtf8ModulePath { path } => write!(
                 f,
                 "package source path {} is not valid UTF-8; rename the file",
+                path.display()
+            ),
+            DriverError::ModuleOutsideSource { source_root, path } => write!(
+                f,
+                "package source path {} is outside source directory {}",
+                path.display(),
+                source_root.display()
+            ),
+            DriverError::SourceDirectoryCycle { path } => write!(
+                f,
+                "package source directory {} forms a link cycle; remove the cyclic link",
                 path.display()
             ),
             DriverError::AmbiguousModulePath {
@@ -632,7 +650,10 @@ fn discover_modules(
 fn module_path(src_dir: &Path, file: &Path) -> Result<String, DriverError> {
     let relative = file
         .strip_prefix(src_dir)
-        .expect("walked paths stay under src_dir");
+        .map_err(|_| DriverError::ModuleOutsideSource {
+            source_root: src_dir.to_path_buf(),
+            path: file.to_path_buf(),
+        })?;
     let without_ext = relative.with_extension("");
     let module_path = without_ext
         .to_str()
@@ -644,16 +665,62 @@ fn module_path(src_dir: &Path, file: &Path) -> Result<String, DriverError> {
 }
 
 fn collect_source_files(dir: &Path, out: &mut Vec<PathBuf>) -> Result<(), DriverError> {
-    let read_error = |source| DriverError::SourceRead {
+    struct Directory {
+        path: PathBuf,
+        canonical: PathBuf,
+        entries: fs::ReadDir,
+    }
+
+    let canonical = fs::canonicalize(dir).map_err(|source| DriverError::SourceRead {
         path: dir.to_path_buf(),
         source,
-    };
-    for entry in fs::read_dir(dir).map_err(read_error)? {
-        let path = entry.map_err(read_error)?.path();
-        if path.is_dir() {
-            collect_source_files(&path, out)?;
-        } else if is_source_file(&path) {
-            out.push(path);
+    })?;
+    let entries = fs::read_dir(dir).map_err(|source| DriverError::SourceRead {
+        path: dir.to_path_buf(),
+        source,
+    })?;
+    let mut ancestors = BTreeSet::from([canonical.clone()]);
+    let mut directories = vec![Directory {
+        path: dir.to_path_buf(),
+        canonical,
+        entries,
+    }];
+    while let Some(directory) = directories.last_mut() {
+        let Some(entry) = directory.entries.next() else {
+            ancestors.remove(&directory.canonical);
+            directories.pop();
+            continue;
+        };
+        let child = entry
+            .map_err(|source| DriverError::SourceRead {
+                path: directory.path.clone(),
+                source,
+            })?
+            .path();
+        let metadata = fs::metadata(&child).map_err(|source| DriverError::SourceRead {
+            path: child.clone(),
+            source,
+        })?;
+        if metadata.is_dir() {
+            let canonical = fs::canonicalize(&child).map_err(|source| DriverError::SourceRead {
+                path: child.clone(),
+                source,
+            })?;
+            if ancestors.contains(&canonical) {
+                return Err(DriverError::SourceDirectoryCycle { path: child });
+            }
+            let entries = fs::read_dir(&child).map_err(|source| DriverError::SourceRead {
+                path: child.clone(),
+                source,
+            })?;
+            ancestors.insert(canonical.clone());
+            directories.push(Directory {
+                path: child,
+                canonical,
+                entries,
+            });
+        } else if is_source_file(&child) {
+            out.push(child);
         }
     }
     Ok(())
@@ -713,6 +780,37 @@ mod tests {
     use tempfile::tempdir;
 
     use super::*;
+
+    #[test]
+    fn module_path_rejects_file_outside_source_directory() {
+        let error = module_path(Path::new("package/src"), Path::new("other/lib.ts"))
+            .expect_err("the file is outside the source directory");
+        assert!(matches!(error, DriverError::ModuleOutsideSource { .. }));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn source_discovery_rejects_directory_link_cycle() {
+        let root = tempfile::tempdir().expect("source root");
+        std::os::unix::fs::symlink(root.path(), root.path().join("loop"))
+            .expect("create directory link");
+        let mut files = Vec::new();
+        let error = collect_source_files(root.path(), &mut files)
+            .expect_err("a cyclic source directory must fail");
+        assert!(matches!(error, DriverError::SourceDirectoryCycle { .. }));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn source_discovery_reports_self_referential_link() {
+        let root = tempfile::tempdir().expect("source root");
+        std::os::unix::fs::symlink("loop", root.path().join("loop"))
+            .expect("create self-referential link");
+        let mut files = Vec::new();
+        let error = collect_source_files(root.path(), &mut files)
+            .expect_err("an unreadable source entry must fail");
+        assert!(matches!(error, DriverError::SourceRead { .. }));
+    }
 
     fn write_module(src_dir: &Path, relative: &str, text: &str) {
         let path = src_dir.join(relative);
