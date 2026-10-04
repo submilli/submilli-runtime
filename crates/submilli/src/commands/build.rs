@@ -21,6 +21,8 @@ use submilli_build::{
 
 use crate::commands::github::retry;
 
+mod security_review;
+
 #[derive(clap::Args)]
 pub struct Args {
     #[command(subcommand)]
@@ -39,6 +41,8 @@ enum BuildCmd {
     PublishLocal(CompileArgs),
     /// Compile and run the project's `tests/**/*.test.{ts,subm}` files.
     Test(TestArgs),
+    /// Review package authorization with Codex, Claude Code, or Copilot CLI.
+    SecurityReview(security_review::Args),
 }
 
 #[derive(clap::Args)]
@@ -103,6 +107,7 @@ impl Args {
             BuildCmd::Check(_) => "build.check",
             BuildCmd::PublishLocal(_) => "build.publish_local",
             BuildCmd::Test(_) => "build.test",
+            BuildCmd::SecurityReview(_) => "build.security_review",
         }
     }
 
@@ -112,6 +117,7 @@ impl Args {
                 vec![("has_package", compile.package.is_some())]
             }
             BuildCmd::Test(test) => vec![("has_package", test.compile.package.is_some())],
+            BuildCmd::SecurityReview(review) => vec![("has_package", review.package.is_some())],
             BuildCmd::Init(_) | BuildCmd::New(_) => Vec::new(),
         }
     }
@@ -124,6 +130,7 @@ pub fn execute(args: Args) -> anyhow::Result<ExitCode> {
         BuildCmd::Check(compile) => execute_check(compile),
         BuildCmd::PublishLocal(compile) => execute_publish_local(compile),
         BuildCmd::Test(compile) => test_runner::execute_test(compile),
+        BuildCmd::SecurityReview(review) => security_review::execute(review),
     }
 }
 

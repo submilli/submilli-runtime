@@ -4944,6 +4944,7 @@ dependencies = [
  "dialoguer",
  "getrandom 0.2.17",
  "interpreter",
+ "libc",
  "rcgen",
  "rustls",
  "sentry",

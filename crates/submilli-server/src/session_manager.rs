@@ -30,6 +30,7 @@
 use std::collections::HashMap;
 use std::collections::hash_map::Entry;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime};
 
@@ -41,6 +42,7 @@ use interpreter::runtime::{
 use submilli_blueprint::{Blueprint, HarnessSecretBindings, VarBindings, VfsConfig};
 use uuid::Uuid;
 
+use crate::blueprint::StoreError;
 use crate::config::VolumeTable;
 use crate::idempotency_store::IdempotencyStore;
 use crate::session_store::{DurableSessionStore, SessionRecord};
@@ -50,6 +52,29 @@ use crate::volumes::VolumeRegistry;
 /// the manager owns each session's client lifecycle without depending on the
 /// concrete reqwest type.
 pub type HttpClientFactory = Arc<dyn Fn() -> Arc<dyn HttpClient> + Send + Sync>;
+
+#[derive(Debug)]
+pub enum BootError {
+    Sessions(StoreError),
+    Idempotency(StoreError),
+}
+
+impl std::fmt::Display for BootError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Sessions(_) => f.write_str("cannot enumerate persisted sessions"),
+            Self::Idempotency(_) => f.write_str("cannot enumerate idempotency sessions"),
+        }
+    }
+}
+
+impl std::error::Error for BootError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Sessions(error) | Self::Idempotency(error) => Some(error),
+        }
+    }
+}
 
 /// Minimum gap between persisting a session's `last_activity`. An exact
 /// timestamp is not worth an fsync per execute against a multi-hour idle window;
@@ -152,6 +177,7 @@ struct State {
 pub struct SessionManager {
     audit: Option<crate::audit::AuditLog>,
     inner: Mutex<State>,
+    reaper_started: AtomicBool,
     bind_lock: tokio::sync::Mutex<()>,
     /// Durable root for `per_session` directories (keyed by session id).
     session_root: PathBuf,
@@ -279,6 +305,7 @@ impl SessionManager {
             inner: Mutex::new(State {
                 sessions: HashMap::new(),
             }),
+            reaper_started: AtomicBool::new(false),
             session_root,
             ephemeral_root,
             volumes,
@@ -777,8 +804,9 @@ impl SessionManager {
     /// `per_session` directory tree against it. Call once, before serving:
     /// pre-restart sessions become resumable and directories no live session
     /// owns are swept.
-    pub async fn boot(&self) {
-        for record in self.store.load_all().await {
+    pub async fn boot(&self) -> Result<(), BootError> {
+        let (records, ledger_sessions) = self.enumerate_stores().await?;
+        for record in records {
             self.audit_session(
                 &record.session_id,
                 "found",
@@ -805,7 +833,22 @@ impl SessionManager {
             self.lock().sessions.insert(record.session_id, entry);
         }
         self.reconcile_orphans().await;
-        self.reconcile_ledger().await;
+        self.reconcile_ledger(ledger_sessions).await;
+        Ok(())
+    }
+
+    pub(crate) async fn validate_stores(&self) -> Result<(), BootError> {
+        self.enumerate_stores().await.map(|_| ())
+    }
+
+    async fn enumerate_stores(&self) -> Result<(Vec<SessionRecord>, Vec<String>), BootError> {
+        let records = self.store.load_all().await.map_err(BootError::Sessions)?;
+        let ledger_sessions = self
+            .idempotency
+            .session_ids()
+            .await
+            .map_err(BootError::Idempotency)?;
+        Ok((records, ledger_sessions))
     }
 
     /// Drop idempotency entries for sessions that did not come back. `forget`
@@ -817,8 +860,8 @@ impl SessionManager {
     ///
     /// Runs after `reconcile_orphans`, so records it dropped are already gone
     /// from the live set and their ledgers are swept in the same pass.
-    async fn reconcile_ledger(&self) {
-        for session_id in self.idempotency.session_ids().await {
+    async fn reconcile_ledger(&self, ledger_sessions: Vec<String>) {
+        for session_id in ledger_sessions {
             if self.contains(&session_id) {
                 continue;
             }
@@ -871,6 +914,13 @@ impl SessionManager {
         let Ok(handle) = tokio::runtime::Handle::try_current() else {
             return;
         };
+        if self
+            .reaper_started
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .is_err()
+        {
+            return;
+        }
         let manager = Arc::clone(self);
         handle.spawn(async move {
             let mut ticker = tokio::time::interval(interval);
@@ -1484,7 +1534,7 @@ mod tests {
             CapabilitySettings::default(),
         );
         assert!(!restarted.contains("sid"));
-        restarted.boot().await;
+        restarted.boot().await.expect("boot");
         assert!(restarted.contains("sid"), "boot must rehydrate the session");
         // Resume works without a fresh `ensure`, and the binding is intact.
         restarted.vfs_for_execute("sid", &bp).await.unwrap();
@@ -1520,7 +1570,7 @@ mod tests {
             mem_ledger(),
             CapabilitySettings::default(),
         );
-        mgr.boot().await;
+        mgr.boot().await.expect("boot");
         assert!(mgr.contains("old"));
         assert_eq!(mgr.reap_now().await, 1);
         assert!(!dir.exists(), "an idle rehydrated session is reaped");
@@ -1574,7 +1624,7 @@ mod tests {
             mem_ledger(),
             CapabilitySettings::default(),
         );
-        mgr.boot().await;
+        mgr.boot().await.expect("boot");
         assert_eq!(
             mgr.variables("s1").get("tenant").map(String::as_str),
             Some("u_42")
@@ -1600,7 +1650,7 @@ mod tests {
             mem_ledger(),
             CapabilitySettings::default(),
         );
-        mgr.boot().await;
+        mgr.boot().await.expect("boot");
         assert!(
             !orphan.exists(),
             "boot must sweep a dir with no live session"
@@ -1635,10 +1685,10 @@ mod tests {
             mem_ledger(),
             CapabilitySettings::default(),
         );
-        mgr.boot().await;
+        mgr.boot().await.expect("boot");
         assert!(!mgr.contains("vanished"), "a record with no dir is dropped");
         assert!(
-            store.load_all().await.is_empty(),
+            store.load_all().await.expect("list sessions").is_empty(),
             "the stale record is purged from the store too"
         );
     }
@@ -1759,7 +1809,7 @@ mod tests {
             Arc::clone(&ledger),
             CapabilitySettings::default(),
         );
-        mgr.boot().await;
+        mgr.boot().await.expect("boot");
 
         assert_eq!(ledger.load("vanished", "k").await.unwrap(), None);
     }
@@ -1784,10 +1834,16 @@ mod tests {
             Arc::clone(&ledger),
             CapabilitySettings::default(),
         );
-        mgr.boot().await;
+        mgr.boot().await.expect("boot");
 
         assert_eq!(ledger.load("gone", "k").await.unwrap(), None);
-        assert!(ledger.session_ids().await.is_empty());
+        assert!(
+            ledger
+                .session_ids()
+                .await
+                .expect("list ledger sessions")
+                .is_empty()
+        );
     }
 
     #[tokio::test]
@@ -1819,7 +1875,7 @@ mod tests {
             Arc::clone(&ledger),
             CapabilitySettings::default(),
         );
-        restarted.boot().await;
+        restarted.boot().await.expect("boot");
 
         assert!(
             ledger.load("sid", "k").await.unwrap().is_some(),
@@ -1920,7 +1976,7 @@ mod tests {
             !session_root.path().join(&id).exists(),
             "the session dir is wiped"
         );
-        mgr.boot().await;
+        mgr.boot().await.expect("boot");
         assert_eq!(
             std::fs::read_to_string(managed.join("note.txt")).unwrap(),
             "note"
@@ -2156,5 +2212,105 @@ mod tests {
         mgr.session_kv_for_execute(&second)
             .set(&key("k"), &key("\"v\""))
             .expect("capacity released");
+    }
+
+    #[tokio::test]
+    async fn ledger_enumeration_failure_prevents_boot_mutation() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let session_root = dir.path().join("sessions");
+        let orphan = session_root.join("orphan");
+        std::fs::create_dir_all(&orphan).expect("orphan directory");
+        let store: Arc<dyn DurableSessionStore> = Arc::new(InMemoryDurableSessionStore::default());
+        store
+            .put(SessionRecord {
+                session_id: "live".into(),
+                blueprint_name: "bp".into(),
+                idle_timeout: HOUR,
+                last_activity: SystemTime::now(),
+                owns_vfs_dir: false,
+                mcp_state: None,
+                variables: Default::default(),
+            })
+            .await
+            .expect("persist session");
+        let ledger_root = dir.path().join("ledger");
+        let ledger = Arc::new(FileIdempotencyStore::new(ledger_root.clone()).expect("ledger"));
+        ledger.put(reserved("live", "key")).await.expect("entry");
+        let manager = SessionManager::new(
+            session_root,
+            None,
+            Arc::default(),
+            no_http(),
+            store,
+            ledger.clone(),
+            CapabilitySettings::default(),
+        );
+
+        let saved_ledger = dir.path().join("saved-ledger");
+        std::fs::rename(&ledger_root, &saved_ledger).expect("hide ledger");
+        std::fs::write(&ledger_root, b"unavailable").expect("block ledger path");
+        assert!(matches!(
+            manager.boot().await,
+            Err(BootError::Idempotency(_))
+        ));
+        assert!(!manager.contains("live"));
+        assert!(orphan.exists());
+        std::fs::remove_file(&ledger_root).expect("unblock ledger path");
+        std::fs::rename(saved_ledger, ledger_root).expect("restore ledger");
+
+        manager.boot().await.expect("boot after store recovers");
+        assert!(manager.contains("live"));
+        assert!(!orphan.exists());
+        assert!(
+            ledger
+                .load("live", "key")
+                .await
+                .expect("read entry")
+                .is_some()
+        );
+    }
+
+    #[tokio::test]
+    async fn session_enumeration_failure_prevents_boot_mutation() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let session_root = dir.path().join("sessions");
+        let orphan = session_root.join("orphan");
+        std::fs::create_dir_all(&orphan).expect("orphan directory");
+        let store_root = dir.path().join("store");
+        let store: Arc<dyn DurableSessionStore> =
+            Arc::new(FileDurableSessionStore::new(store_root.clone()).expect("session store"));
+        let ledger = Arc::new(InMemoryIdempotencyStore::default());
+        ledger.put(reserved("orphan", "key")).await.expect("entry");
+        let manager = SessionManager::new(
+            session_root,
+            None,
+            Arc::default(),
+            no_http(),
+            store,
+            ledger.clone(),
+            CapabilitySettings::default(),
+        );
+
+        std::fs::remove_dir(&store_root).expect("make session store unavailable");
+        assert!(matches!(manager.boot().await, Err(BootError::Sessions(_))));
+        assert!(orphan.exists());
+        assert!(
+            ledger
+                .load("orphan", "key")
+                .await
+                .expect("read entry")
+                .is_some()
+        );
+
+        std::fs::create_dir(&store_root).expect("restore session store");
+        manager.boot().await.expect("boot after store recovers");
+        assert!(!orphan.exists());
+        assert!(
+            ledger
+                .load("orphan", "key")
+                .await
+                .expect("read entry")
+                .is_none()
+        );
     }
 }

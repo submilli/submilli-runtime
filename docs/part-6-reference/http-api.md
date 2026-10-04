@@ -3,7 +3,7 @@ title: "HTTP API"
 description: "The endpoints a harness calls to run programs over HTTP: sessions and their execute, rebind, last-run, and delete; the execute result; the prompt, package, and built-in descriptions; and one-off runs."
 slug: reference/http-api
 sidebar:
-  order: 13
+  order: 14
 ---
 
 This page describes the endpoints of `submilli-server` a harness calls to run

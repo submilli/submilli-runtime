@@ -26,4 +26,28 @@ for (const file of files.filter((file) => file.endsWith('.html'))) {
 	assert.ok(!html.includes('rel="alternate" type="text/markdown"'), file);
 	assert.ok(!html.includes('>View Markdown</a>'), file);
 }
+const whyPage = await readFile(new URL('docs/why/index.html', directory), 'utf8');
+assert.ok(whyPage.includes('Why agents execute code'), 'Introduction lives in the current Start here chapter');
+assert.ok(!whyPage.includes('/docs/docs/'), 'Sidebar links must not duplicate the docs base');
+assert.ok(!whyPage.includes('<video'), 'Unpublished video must not create a production player');
+const oldExecutionPage = await readFile(new URL('docs/concepts/execution-model/index.html', directory), 'utf8');
+assert.ok(oldExecutionPage.includes('/docs/why/'), 'Former Concepts route redirects into the current book');
+const embedPage = await readFile(new URL('docs/videos/embed/code-execution-introduction/index.html', directory), 'utf8');
+assert.ok(embedPage.includes('/docs/videos/code-execution-introduction.svg'), 'Embed renders the registered poster');
+assert.ok(embedPage.includes('Video publication pending'), 'Embed names unpublished state');
+assert.ok(embedPage.includes('noindex, nofollow'), 'Embeds stay out of search');
+assert.ok(!embedPage.includes('<video') && !embedPage.includes('_video-preview'), 'Production embed never exposes local preview media');
+const libraryPage = await readFile(new URL('docs/videos/index.html', directory), 'utf8');
+assert.ok(!libraryPage.includes('class="transcript"') && !libraryPage.includes('Consider an agent used by a small business.'), 'Library keeps the full transcript on its deeper docs page');
+const transcriptPage = await readFile(new URL('docs/videos/code-execution-introduction/index.html', directory), 'utf8');
+assert.ok(transcriptPage.includes('Consider an agent used by a small business.'), 'Approved transcript remains available on its dedicated page');
+assert.ok(!libraryPage.includes('Open the execution model') && !libraryPage.includes('<video'), 'Library needs no article detour or unpublished production player');
+const galleryOrder = ['code-execution-introduction', 'challenges', 'helps', 'using', 'works'];
+let previousCard = -1;
+for (const id of galleryOrder) {
+  const card = libraryPage.indexOf(`data-video-id="${id}"`);
+  assert.ok(card > previousCard, `Series order preserves ${id}`);
+  previousCard = card;
+}
+assert.ok(!chapters.some((chapter) => chapter.slug.startsWith('next/')), 'Retired draft routes stay outside the book exports');
 console.log(`Verified exports and HTML discovery for ${chapters.length} visible chapters.`);
