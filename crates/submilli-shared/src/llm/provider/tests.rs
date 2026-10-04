@@ -985,3 +985,94 @@ async fn the_whole_5xx_range_is_provider_unavailable_and_its_neighbours_are_not(
         );
     }
 }
+
+#[tokio::test]
+async fn empty_single_and_extreme_concurrency_batches_preserve_results() {
+    for bound in [0, 1, usize::MAX] {
+        let provider = provider(Always(Ok(stopped("ok")))).with_max_concurrency(bound);
+        for count in [0, 1, 7] {
+            let prompts = vec!["prompt".to_string(); count];
+            let outcomes = provider.call(MODEL, &prompts, None).await.unwrap();
+            assert_eq!(outcomes.len(), count);
+            assert!(
+                outcomes
+                    .iter()
+                    .all(|outcome| outcome.text.as_deref() == Some("ok"))
+            );
+        }
+    }
+}
+
+struct CancellableDispatch {
+    active: AtomicUsize,
+    started: AtomicUsize,
+    park: std::sync::atomic::AtomicBool,
+}
+
+struct ActiveDispatch<'a>(&'a AtomicUsize);
+
+impl Drop for ActiveDispatch<'_> {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::SeqCst);
+    }
+}
+
+impl ModelDispatch for CancellableDispatch {
+    fn dispatch<'a>(
+        &'a self,
+        _request: ModelRequest<'a>,
+    ) -> Pin<Box<dyn Future<Output = Result<ProviderResponse, ProviderFailure>> + Send + 'a>> {
+        Box::pin(async move {
+            self.started.fetch_add(1, Ordering::SeqCst);
+            self.active.fetch_add(1, Ordering::SeqCst);
+            let _active = ActiveDispatch(&self.active);
+            if self.park.load(Ordering::SeqCst) {
+                std::future::pending::<()>().await;
+            }
+            Ok(stopped("ok"))
+        })
+    }
+}
+
+#[tokio::test]
+async fn cancelled_batch_drops_active_dispatches_and_admits_no_queued_work() {
+    let dispatch = Arc::new(CancellableDispatch {
+        active: AtomicUsize::new(0),
+        started: AtomicUsize::new(0),
+        park: std::sync::atomic::AtomicBool::new(true),
+    });
+    let provider = BlueprintLlmProvider::new(blueprint(), dispatch.clone()).with_max_concurrency(2);
+    let prompts = vec!["prompt".to_string(); 7];
+    let mut call = provider.call(MODEL, &prompts, None);
+    assert!(futures::poll!(call.as_mut()).is_pending());
+    assert_eq!(dispatch.active.load(Ordering::SeqCst), 2);
+    drop(call);
+    assert_eq!(dispatch.active.load(Ordering::SeqCst), 0);
+    assert_eq!(dispatch.started.load(Ordering::SeqCst), 2);
+    dispatch.park.store(false, Ordering::SeqCst);
+    assert_eq!(provider.call(MODEL, &prompts, None).await.unwrap().len(), 7);
+}
+
+#[tokio::test]
+async fn empty_batches_still_validate_credentials() {
+    struct Unauthorized;
+    impl ModelDispatch for Unauthorized {
+        fn dispatch<'a>(
+            &'a self,
+            _: ModelRequest<'a>,
+        ) -> Pin<Box<dyn Future<Output = Result<ProviderResponse, ProviderFailure>> + Send + 'a>>
+        {
+            panic!("preflight must stop dispatch");
+        }
+        fn preflight<'a>(
+            &'a self,
+            _: &'a str,
+        ) -> Pin<Box<dyn Future<Output = Result<(), ProviderFailure>> + Send + 'a>> {
+            Box::pin(async { Err(ProviderFailure::Unauthorized) })
+        }
+    }
+    assert!(matches!(
+        provider(Unauthorized).call(MODEL, &[], None).await,
+        Err(LlmCallError::Unauthorized { .. })
+    ));
+}

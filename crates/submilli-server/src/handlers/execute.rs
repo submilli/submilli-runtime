@@ -317,6 +317,23 @@ pub(crate) async fn execute_core(state: &AppState, inputs: ExecuteInputs<'_>) ->
         }
     };
 
+    let execution_audit = crate::audit::execution();
+    let network_policy = execution_audit.as_ref().map_or_else(
+        || state.network_policy().clone(),
+        |audit| audit.network_policy(state.network_policy()),
+    );
+    let llm_provider = match state.llm_provider_for(&blueprint, &harness_secrets, &network_policy) {
+        Ok(provider) => provider,
+        Err(error) => {
+            tracing::error!(error = ?error, "LLM dispatch initialization failed");
+            return ExecuteOutcome::undispatched(error_response(
+                session_id,
+                ErrorKind::RuntimeError,
+                error.to_string(),
+            ));
+        }
+    };
+
     let manager = state.session_manager();
     if let Err(err) = manager.ensure(session_id, &blueprint).await {
         return ExecuteOutcome::undispatched(error_response(
@@ -348,11 +365,6 @@ pub(crate) async fn execute_core(state: &AppState, inputs: ExecuteInputs<'_>) ->
         }
     };
 
-    let execution_audit = crate::audit::execution();
-    let network_policy = execution_audit.as_ref().map_or_else(
-        || state.network_policy().clone(),
-        |audit| audit.network_policy(state.network_policy()),
-    );
     let http_client = manager.http_client(session_id);
     let session_kv = manager.session_kv_for_execute(session_id);
     let mcp_transport = Arc::new(
@@ -395,7 +407,7 @@ pub(crate) async fn execute_core(state: &AppState, inputs: ExecuteInputs<'_>) ->
         http_client,
         mcp_transport,
         session_kv,
-        llm_provider: state.llm_provider_for(&blueprint, &harness_secrets, &network_policy),
+        llm_provider,
         llm_budget: Some(manager.llm_budget_for_execute()),
     };
     let mcp_catalog = state

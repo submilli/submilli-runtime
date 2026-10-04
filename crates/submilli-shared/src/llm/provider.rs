@@ -26,12 +26,11 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 
-use futures::stream::{FuturesUnordered, StreamExt};
+use futures::stream::{self, StreamExt};
 use interpreter::runtime::{
     FailureReason, LlmCallError, LlmFailure, LlmModel, LlmOutcome, LlmProvider,
 };
 use submilli_blueprint::Blueprint;
-use tokio::sync::Semaphore;
 
 /// Elements dispatched at once. Chosen rather than inherited: a 429 is the one
 /// structurally-detectable provider error and unbounded fan-out manufactures it,
@@ -317,41 +316,29 @@ impl LlmProvider for BlueprintLlmProvider {
                 });
             }
 
-            let limit = Arc::new(Semaphore::new(self.max_concurrency));
-
-            // Positional ordering is contractual, and completion order is not
-            // input order under varied per-element latency — so each element
-            // carries its index and the results are placed, not pushed.
-            let mut running: FuturesUnordered<_> = prompts
+            let concurrency = self.max_concurrency.min(prompts.len()).max(1);
+            // Completion order can differ from prompt order. Keep the original
+            // positions on completed outcomes instead of publishing empty slots.
+            let requests: Vec<_> = prompts
                 .iter()
                 .enumerate()
                 .map(|(index, prompt)| {
-                    let limit = Arc::clone(&limit);
-                    async move {
-                        let _permit = limit
-                            .acquire()
-                            .await
-                            .expect("the semaphore outlives every permit it issues");
-                        let request = ModelRequest {
-                            model,
-                            provider,
-                            prompt,
-                            schema_json,
-                            output_cap,
-                        };
-                        (index, classify(self.dispatch.dispatch(request).await))
-                    }
+                    let request = ModelRequest {
+                        model,
+                        provider,
+                        prompt,
+                        schema_json,
+                        output_cap,
+                    };
+                    async move { (index, classify(self.dispatch.dispatch(request).await)) }
                 })
                 .collect();
-
-            let mut outcomes: Vec<Option<LlmOutcome>> = vec![None; prompts.len()];
-            while let Some((index, outcome)) = running.next().await {
-                outcomes[index] = Some(outcome);
-            }
-            Ok(outcomes
-                .into_iter()
-                .map(|outcome| outcome.expect("every element reported exactly once"))
-                .collect())
+            let mut outcomes: Vec<_> = stream::iter(requests)
+                .buffer_unordered(concurrency)
+                .collect()
+                .await;
+            outcomes.sort_unstable_by_key(|(index, _)| *index);
+            Ok(outcomes.into_iter().map(|(_, outcome)| outcome).collect())
         })
     }
 
@@ -414,69 +401,59 @@ fn classify_response(response: ProviderResponse) -> LlmOutcome {
     outcome.with_usage(input_tokens, output_tokens)
 }
 
-fn classify_failure(failure: ProviderFailure) -> LlmOutcome {
-    // Step 1: unwrap before anything else. Nested wrappers unwrap to the
-    // innermost, since a wrapper's last error may itself be one.
-    let failure = unwrap_retry(failure);
-
-    match failure {
-        // Step 1 unwrapped everything; a wrapper cannot survive to here.
-        ProviderFailure::Retry { .. } => unreachable!("step 1 unwraps every retry wrapper"),
-
-        // Step 2: before the structural step, where an abort would read as a
-        // transport death — the cause is on this side, not the wire.
-        ProviderFailure::Abort => failed(FailureReason::Cancelled, None::<String>),
-
-        ProviderFailure::Unauthorized => failed(FailureReason::RequestRejected, None::<String>),
-
-        ProviderFailure::Transport { .. } => failed(FailureReason::Transport, None::<String>),
-
-        // Step 3 on the structured-output path. The object path never consults
-        // the stop reason itself, so a `content-filter` stop arrives as an
-        // ordinary "no object" and would flatten into `invalid-output` — the
-        // asymmetry this arm exists to undo.
-        //
-        // `text` is raw model output and is dropped here, at the taxonomy
-        // boundary, not carried onto the failure.
-        ProviderFailure::NoObjectGenerated {
-            text: _,
-            usage,
-            stop_reason,
-        } => {
-            let reason = stop_reason
-                .as_ref()
-                .and_then(StopReason::failure_reason)
-                .unwrap_or(FailureReason::InvalidOutput);
-            let mut error = LlmFailure::new(reason, reason.default_message());
-            if let Some(stop_reason) = &stop_reason {
-                error = error.with_finish_reason(stop_reason.as_str());
+fn classify_failure(mut failure: ProviderFailure) -> LlmOutcome {
+    loop {
+        return match failure {
+            ProviderFailure::Retry { last_error } => {
+                failure = *last_error;
+                continue;
             }
-            let (input_tokens, output_tokens) = usage.resolved();
-            LlmOutcome::failed(error, None::<String>).with_usage(input_tokens, output_tokens)
-        }
+            // Step 2: before the structural step, where an abort would read as a
+            // transport death — the cause is on this side, not the wire.
+            ProviderFailure::Abort => failed(FailureReason::Cancelled, None::<String>),
 
-        ProviderFailure::ApiCall {
-            status,
-            message,
-            response_body,
-            retry_after_secs: _,
-            retry_after_present,
-        } => classify_api_call(
-            status,
-            &message,
-            response_body.as_deref(),
-            retry_after_present,
-        ),
-    }
-}
+            ProviderFailure::Unauthorized => failed(FailureReason::RequestRejected, None::<String>),
 
-/// Step 1. Loops rather than recursing once, because a wrapper's last error may
-/// itself be a wrapper.
-fn unwrap_retry(mut failure: ProviderFailure) -> ProviderFailure {
-    while let ProviderFailure::Retry { last_error } = failure {
-        failure = *last_error;
+            ProviderFailure::Transport { .. } => failed(FailureReason::Transport, None::<String>),
+
+            // Step 3 on the structured-output path. The object path never consults
+            // the stop reason itself, so a `content-filter` stop arrives as an
+            // ordinary "no object" and would flatten into `invalid-output` — the
+            // asymmetry this arm exists to undo.
+            //
+            // `text` is raw model output and is dropped here, at the taxonomy
+            // boundary, not carried onto the failure.
+            ProviderFailure::NoObjectGenerated {
+                text: _,
+                usage,
+                stop_reason,
+            } => {
+                let reason = stop_reason
+                    .as_ref()
+                    .and_then(StopReason::failure_reason)
+                    .unwrap_or(FailureReason::InvalidOutput);
+                let mut error = LlmFailure::new(reason, reason.default_message());
+                if let Some(stop_reason) = &stop_reason {
+                    error = error.with_finish_reason(stop_reason.as_str());
+                }
+                let (input_tokens, output_tokens) = usage.resolved();
+                LlmOutcome::failed(error, None::<String>).with_usage(input_tokens, output_tokens)
+            }
+
+            ProviderFailure::ApiCall {
+                status,
+                message,
+                response_body,
+                retry_after_secs: _,
+                retry_after_present,
+            } => classify_api_call(
+                status,
+                &message,
+                response_body.as_deref(),
+                retry_after_present,
+            ),
+        };
     }
-    failure
 }
 
 /// Steps 4 and 5.

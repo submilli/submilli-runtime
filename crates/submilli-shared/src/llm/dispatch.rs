@@ -96,46 +96,61 @@ pub struct HttpModelDispatch {
     client: reqwest::Client,
 }
 
+/// Failure to construct the outbound client before any model call is dispatched.
+#[derive(Debug)]
+pub struct HttpModelDispatchError {
+    source: reqwest::Error,
+}
+
+impl std::fmt::Display for HttpModelDispatchError {
+    fn fmt(&self, out: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        out.write_str("LLM dispatch initialization failed")
+    }
+}
+
+impl std::error::Error for HttpModelDispatchError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(&self.source)
+    }
+}
+
+impl From<reqwest::Error> for HttpModelDispatchError {
+    fn from(source: reqwest::Error) -> Self {
+        Self { source }
+    }
+}
+
 impl HttpModelDispatch {
     pub fn new(
         blueprint: Arc<Blueprint>,
         secret_store: Option<Arc<dyn SecretStore>>,
         policy: Arc<NetworkPolicy>,
-    ) -> Self {
-        Self {
+    ) -> Result<Self, HttpModelDispatchError> {
+        let builder = policy.client_builder();
+        Self::with_client_builder(blueprint, secret_store, policy, builder)
+    }
+
+    fn with_client_builder(
+        blueprint: Arc<Blueprint>,
+        secret_store: Option<Arc<dyn SecretStore>>,
+        policy: Arc<NetworkPolicy>,
+        builder: reqwest::ClientBuilder,
+    ) -> Result<Self, HttpModelDispatchError> {
+        // Refuse redirects: Anthropic and Google authenticate using custom
+        // headers that reqwest otherwise forwards to a redirected destination.
+        // Cookies are disabled, so elements can share this connection pool.
+        let client = builder
+            .timeout(REQUEST_TIMEOUT)
+            .connect_timeout(CONNECT_TIMEOUT)
+            .redirect(reqwest::redirect::Policy::none())
+            .build()?;
+        Ok(Self {
             blueprint,
             secret_store,
             harness_secrets: Arc::new(HarnessSecretBindings::new()),
-            // No cookie store is ever enabled, so the client carries no
-            // cross-request state and one pool is safe to share across the
-            // elements of a fan-out.
-            client: policy
-                .client_builder()
-                .timeout(REQUEST_TIMEOUT)
-                .connect_timeout(CONNECT_TIMEOUT)
-                // Redirects are refused outright, which is stricter than the
-                // `submilli:http` client and deliberately so.
-                //
-                // reqwest's default follows up to ten hops and strips only
-                // `Authorization` when the host changes. Two of the four kinds
-                // authenticate with a *custom* header — Anthropic's `x-api-key`
-                // and Google's `x-goog-api-key` — which survive the hop, so a
-                // `307 Location: https://attacker/` from any endpoint would
-                // hand over the operator's key and the prompt body. The
-                // exposure is inverted from intuition: the first-party kinds
-                // are the vulnerable ones, and `openai`/`openai-compatible`
-                // are only incidentally safe for riding `authorization`.
-                //
-                // No provider's completions endpoint legitimately redirects, so
-                // a redirect is refused rather than followed to a
-                // same-host-only policy: a `3xx` here means the endpoint is not
-                // what the operator declared, and that is worth surfacing as a
-                // transport failure rather than quietly chasing.
-                .redirect(reqwest::redirect::Policy::none())
-                .build()
-                .expect("the reqwest client builds from static configuration"),
+            client,
             policy,
-        }
+        })
     }
 
     pub fn with_harness_secrets(mut self, secrets: Arc<HarnessSecretBindings>) -> Self {

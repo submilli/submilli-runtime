@@ -433,13 +433,13 @@ fn execute_on_this_thread(
         // resolves through. A blueprint that declares no `llm:` block still gets
         // a provider — and `llm.call` against it fails on the undeclared model,
         // naming the block to add, rather than on a missing provider.
-        let dispatch = llm_dispatch.clone().unwrap_or_else(|| {
-            Arc::new(HttpModelDispatch::new(
+        let dispatch = prepare_llm_dispatch(llm_dispatch.clone(), || {
+            Ok(Arc::new(HttpModelDispatch::new(
                 bp.clone(),
                 secret_store.clone(),
                 Arc::clone(&network_policy),
-            ))
-        });
+            )?) as Arc<dyn ModelDispatch>)
+        })?;
         data.llm_provider = Some(Arc::new(
             BlueprintLlmProvider::new(bp.clone(), dispatch).with_max_concurrency(llm_concurrency),
         ));
@@ -625,6 +625,16 @@ fn register_package_sources(
         }
     }
     Ok(())
+}
+
+fn prepare_llm_dispatch(
+    installed: Option<Arc<dyn ModelDispatch>>,
+    build: impl FnOnce() -> anyhow::Result<Arc<dyn ModelDispatch>>,
+) -> anyhow::Result<Arc<dyn ModelDispatch>> {
+    match installed {
+        Some(dispatch) => Ok(dispatch),
+        None => build().context("initialize LLM provider"),
+    }
 }
 
 #[cfg(test)]
@@ -918,5 +928,37 @@ mod worker_cleanup_tests {
                 &[interpreter::runtime::blocking::BlockingWorkError::WorkerPanicked]
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod llm_setup_tests {
+    use super::*;
+
+    #[test]
+    fn dispatch_setup_failure_keeps_context_and_source() {
+        let source = std::io::Error::other("injected client construction failure");
+        let error = prepare_llm_dispatch(None, || Err(source.into()))
+            .err()
+            .unwrap();
+        assert_eq!(error.to_string(), "initialize LLM provider");
+        assert!(error.is::<std::io::Error>());
+    }
+
+    #[test]
+    fn installed_dispatch_bypasses_construction() {
+        let dispatch: Arc<dyn ModelDispatch> = Arc::new(
+            HttpModelDispatch::new(
+                Arc::new(Blueprint::default()),
+                None,
+                Arc::new(NetworkPolicy::allow_all()),
+            )
+            .unwrap(),
+        );
+        let selected = prepare_llm_dispatch(Some(dispatch.clone()), || {
+            panic!("must use installed dispatch")
+        })
+        .unwrap();
+        assert!(Arc::ptr_eq(&dispatch, &selected));
     }
 }

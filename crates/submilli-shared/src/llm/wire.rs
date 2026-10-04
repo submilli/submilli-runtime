@@ -158,18 +158,22 @@ fn anthropic_request(
     output_cap: Option<u64>,
     api_key: Option<&str>,
 ) -> WireRequest {
-    let mut body = json!({
-        "model": model,
-        "max_tokens": output_cap.unwrap_or(ANTHROPIC_DEFAULT_MAX_TOKENS),
-        "messages": [{ "role": "user", "content": prompt }],
-    });
+    let mut body = Map::from_iter([
+        ("model".into(), json!(model)),
+        (
+            "max_tokens".into(),
+            json!(output_cap.unwrap_or(ANTHROPIC_DEFAULT_MAX_TOKENS)),
+        ),
+        (
+            "messages".into(),
+            json!([{ "role": "user", "content": prompt }]),
+        ),
+    ]);
     if let Some(schema) = schema_json {
-        body.as_object_mut()
-            .expect("the body is a JSON object")
-            .insert(
-                "output_config".to_string(),
-                json!({ "format": { "type": "json_schema", "schema": schema } }),
-            );
+        body.insert(
+            "output_config".to_string(),
+            json!({ "format": { "type": "json_schema", "schema": schema } }),
+        );
     }
     let mut headers = vec![(
         "anthropic-version".to_string(),
@@ -181,7 +185,7 @@ fn anthropic_request(
     WireRequest {
         url: format!("{base}/v1/messages"),
         headers,
-        body,
+        body: Value::Object(body),
     }
 }
 
@@ -224,16 +228,15 @@ fn google_request(
         generation_config.insert("responseSchema".to_string(), schema.clone());
     }
 
-    let mut body = json!({
-        "contents": [{ "role": "user", "parts": [{ "text": prompt }] }],
-    });
+    let mut body = Map::from_iter([(
+        "contents".into(),
+        json!([{ "role": "user", "parts": [{ "text": prompt }] }]),
+    )]);
     if !generation_config.is_empty() {
-        body.as_object_mut()
-            .expect("the body is a JSON object")
-            .insert(
-                "generationConfig".to_string(),
-                Value::Object(generation_config),
-            );
+        body.insert(
+            "generationConfig".to_string(),
+            Value::Object(generation_config),
+        );
     }
 
     let mut headers = Vec::new();
@@ -243,7 +246,7 @@ fn google_request(
     WireRequest {
         url: format!("{base}/v1beta/{path_model}:generateContent"),
         headers,
-        body,
+        body: Value::Object(body),
     }
 }
 
@@ -288,20 +291,22 @@ fn openai_request(
     output_cap: Option<u64>,
     api_key: Option<&str>,
 ) -> WireRequest {
-    let mut body = json!({
-        "model": model,
-        "messages": [{ "role": "user", "content": prompt }],
-    });
-    let object = body.as_object_mut().expect("the body is a JSON object");
+    let mut body = Map::from_iter([
+        ("model".into(), json!(model)),
+        (
+            "messages".into(),
+            json!([{ "role": "user", "content": prompt }]),
+        ),
+    ]);
     if let Some(cap) = output_cap {
         let field = match kind {
             ProviderKind::OpenAiCompatible => "max_tokens",
             _ => "max_completion_tokens",
         };
-        object.insert(field.to_string(), json!(cap));
+        body.insert(field.to_string(), json!(cap));
     }
     if let Some(schema) = schema_json {
-        object.insert(
+        body.insert(
             "response_format".to_string(),
             json!({
                 "type": "json_schema",
@@ -317,7 +322,7 @@ fn openai_request(
     WireRequest {
         url: format!("{base}/v1/chat/completions"),
         headers,
-        body,
+        body: Value::Object(body),
     }
 }
 

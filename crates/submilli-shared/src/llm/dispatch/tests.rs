@@ -72,6 +72,7 @@ llm:
 
 fn dispatcher(blueprint: Arc<Blueprint>) -> HttpModelDispatch {
     HttpModelDispatch::new(blueprint, None, Arc::new(NetworkPolicy::allow_all()))
+        .expect("dispatch client")
         .with_harness_secrets(Arc::new(submilli_blueprint::HarnessSecretBindings::from([
             (SECRET_NAME.into(), KEY.into()),
         ])))
@@ -709,6 +710,7 @@ llm:
     bindings.insert(HARNESS_SECRET.to_string(), KEY.to_string());
 
     let dispatch = HttpModelDispatch::new(Arc::new(bp), None, Arc::new(NetworkPolicy::allow_all()))
+        .expect("dispatch client")
         .with_harness_secrets(Arc::new(bindings));
 
     // The value comes from the session bindings.
@@ -755,11 +757,10 @@ llm:
     let error = block_on(async {
         BlueprintLlmProvider::new(
             Arc::clone(&bp),
-            Arc::new(HttpModelDispatch::new(
-                bp,
-                None,
-                Arc::new(NetworkPolicy::allow_all()),
-            )),
+            Arc::new(
+                HttpModelDispatch::new(bp, None, Arc::new(NetworkPolicy::allow_all()))
+                    .expect("dispatch client"),
+            ),
         )
         .call(
             MODEL,
@@ -946,7 +947,8 @@ async fn a_private_provider_endpoint_is_blocked_by_the_network_policy() {
         // No key, so nothing has to resolve before the destination is judged.
         let blueprint = blueprint("openai-compatible", base_url, false);
         let dispatch =
-            HttpModelDispatch::new(blueprint, None, Arc::new(NetworkPolicy::deny_private()));
+            HttpModelDispatch::new(blueprint, None, Arc::new(NetworkPolicy::deny_private()))
+                .expect("dispatch client");
         let failure = dispatch
             .dispatch(request(None))
             .await
@@ -959,4 +961,20 @@ async fn a_private_provider_endpoint_is_blocked_by_the_network_policy() {
             other => panic!("{base_url}: expected a transport failure, got {other:?}"),
         }
     }
+}
+
+#[test]
+fn client_initialization_failure_retains_cause_and_healthy_follow_up() {
+    use std::error::Error;
+
+    let bp = blueprint("openai-compatible", "https://placeholder.invalid", false);
+    let policy = Arc::new(NetworkPolicy::allow_all());
+    let builder = policy.client_builder().user_agent("invalid\nheader");
+    let error =
+        HttpModelDispatch::with_client_builder(Arc::clone(&bp), None, Arc::clone(&policy), builder)
+            .err()
+            .expect("invalid header must fail client construction");
+    assert_eq!(error.to_string(), "LLM dispatch initialization failed");
+    assert!(error.source().unwrap().is::<reqwest::Error>());
+    assert!(HttpModelDispatch::new(bp, None, policy).is_ok());
 }

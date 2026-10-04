@@ -23,7 +23,9 @@ use interpreter::runtime::{
 use interpreter::{PackageDeclaration, ScriptImports};
 use submilli_blueprint::Blueprint;
 use submilli_build::{ArtifactMetadata, PackageStore, PackageStoreError};
-use submilli_shared::llm::{BlueprintLlmProvider, HttpModelDispatch, ModelDispatch};
+use submilli_shared::llm::{
+    BlueprintLlmProvider, HttpModelDispatch, HttpModelDispatchError, ModelDispatch,
+};
 use submilli_shared::secret_store::SecretStore;
 use tokio::sync::{Mutex as AsyncMutex, Notify};
 use wasmtime::{Engine, Linker, Module};
@@ -60,6 +62,16 @@ const IDEMPOTENCY_SUBDIR: &str = "idempotency";
 pub struct AppState {
     inner: Arc<AppStateInner>,
 }
+
+type LlmDispatchFactory = Arc<
+    dyn Fn(
+            Arc<Blueprint>,
+            Option<Arc<dyn SecretStore>>,
+            Arc<interpreter::runtime::NetworkPolicy>,
+        ) -> std::result::Result<HttpModelDispatch, HttpModelDispatchError>
+        + Send
+        + Sync,
+>;
 
 struct AppStateInner {
     boot_lock: AsyncMutex<()>,
@@ -115,10 +127,18 @@ struct AppStateInner {
     /// every blueprint's provider. `None` — the default — means
     /// [`AppState::llm_provider_for`] builds the real per-blueprint HTTP one.
     llm_dispatch: Option<Arc<dyn ModelDispatch>>,
+    llm_dispatch_factory: LlmDispatchFactory,
 }
 
 impl AppState {
     pub fn new(config: ServerConfig) -> Result<Self> {
+        Self::with_llm_dispatch_factory(config, Arc::new(HttpModelDispatch::new))
+    }
+
+    fn with_llm_dispatch_factory(
+        config: ServerConfig,
+        llm_dispatch_factory: LlmDispatchFactory,
+    ) -> Result<Self> {
         let audit = config
             .audit_log
             .unwrap_or_else(|| crate::audit::AuditLog::new(config.audit, None));
@@ -256,6 +276,7 @@ impl AppState {
                 shutdown: Arc::new(Notify::new()),
                 bind_addr: OnceLock::new(),
                 llm_dispatch: config.llm_dispatch,
+                llm_dispatch_factory,
             }),
         })
     }
@@ -388,22 +409,22 @@ impl AppState {
         blueprint: &Arc<Blueprint>,
         harness_secrets: &Arc<submilli_blueprint::HarnessSecretBindings>,
         network_policy: &Arc<interpreter::runtime::NetworkPolicy>,
-    ) -> Option<Arc<dyn LlmProvider>> {
+    ) -> std::result::Result<Option<Arc<dyn LlmProvider>>, HttpModelDispatchError> {
         let dispatch = match self.inner.llm_dispatch.as_ref() {
             Some(installed) => Arc::clone(installed),
             None => Arc::new(
-                HttpModelDispatch::new(
+                (self.inner.llm_dispatch_factory)(
                     Arc::clone(blueprint),
                     self.secret_store().cloned(),
                     Arc::clone(network_policy),
-                )
+                )?
                 .with_harness_secrets(Arc::clone(harness_secrets)),
             ) as Arc<dyn ModelDispatch>,
         };
-        Some(Arc::new(
+        Ok(Some(Arc::new(
             BlueprintLlmProvider::new(Arc::clone(blueprint), dispatch)
                 .with_max_concurrency(self.inner.session_manager.llm_max_concurrency()),
-        ))
+        )))
     }
 
     /// The operator-declared volume table, read from the session manager so
@@ -1266,3 +1287,6 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+mod llm_setup_tests;
