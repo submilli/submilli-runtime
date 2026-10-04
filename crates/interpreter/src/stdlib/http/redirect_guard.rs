@@ -6,12 +6,14 @@
 //! denies for the request's caller is never sent.
 
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU32, Ordering};
 
 use url::Url;
 
 use super::transport::{RedirectDenied, RedirectGuard, RedirectHop};
+use crate::runtime::decision::{CallSite, CallTicket, EntryPath};
 use crate::runtime::security::SecurityCheck;
-use crate::stdlib::shared::authorize_capability;
+use crate::stdlib::shared::{audit_denial_at, authorize_capability};
 use crate::stdlib::url::host_without_trailing_dots;
 
 /// Host and path of `url` for capability context / metrics.
@@ -69,6 +71,10 @@ pub(super) struct CapabilityGuard {
     security_check: Arc<dyn SecurityCheck>,
     request: GuardedRequest,
     cwd: String,
+    /// The call that started the request: a hop's record names it and reuses its line,
+    /// since the program's stack is gone by the time a hop is authorized.
+    parent: Option<CallTicket>,
+    hops: AtomicU32,
 }
 
 impl std::fmt::Debug for CapabilityGuard {
@@ -85,13 +91,33 @@ impl CapabilityGuard {
         security_check: Arc<dyn SecurityCheck>,
         request: GuardedRequest,
         cwd: String,
+        parent: Option<CallTicket>,
     ) -> Self {
         Self {
             caller,
             security_check,
             request,
             cwd,
+            parent,
+            hops: AtomicU32::new(0),
         }
+    }
+
+    /// The recorder's identity for the next hop, when one is installed.
+    fn hop_site(&self, capability: &str) -> CallSite {
+        let Some(recorder) = self.security_check.recorder() else {
+            return CallSite::default();
+        };
+        let line = self.parent.and_then(|parent| parent.line);
+        let ticket = recorder.begin_call(&self.caller, capability, line);
+        let index = self.hops.fetch_add(1, Ordering::Relaxed);
+        CallSite::new(
+            Some(ticket),
+            EntryPath::RedirectHop {
+                parent_call_index: self.parent.map_or(0, |parent| parent.call_index),
+                index,
+            },
+        )
     }
 
     /// The capability and context a hop is checked against. A hop whose method a
@@ -119,13 +145,14 @@ impl CapabilityGuard {
 impl RedirectGuard for CapabilityGuard {
     fn audit_egress_denial(&self, hop: &RedirectHop<'_>) {
         let (capability, context) = self.hop_check(hop);
-        crate::stdlib::shared::audit_denial(
+        audit_denial_at(
             self.security_check.as_ref(),
             &self.caller,
             &capability,
             &context,
             "egress_guard",
             "outbound destination refused",
+            self.hop_site(&capability),
         );
     }
 
@@ -137,6 +164,7 @@ impl RedirectGuard for CapabilityGuard {
             &capability,
             &context,
             &self.cwd,
+            self.hop_site(&capability),
         )
         .map_err(RedirectDenied::from_error)
     }

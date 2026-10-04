@@ -38,8 +38,8 @@ use crate::stdlib::abi::{
 };
 use crate::stdlib::dot_segments::refuse_dot_segments;
 use crate::stdlib::shared::{
-    check_security, contain_trap, quota_refusal, refuse_volume_root, require_writable,
-    resolve_content_or_trap,
+    check_security, check_security_call, contain_trap, quota_refusal, refuse_volume_root,
+    require_writable, resolve_content_or_trap,
 };
 use redirect_guard::{
     CapabilityGuard, DownloadTarget, GuardedRequest, host_and_path, verb_context,
@@ -384,7 +384,7 @@ async fn perform_request(
     // Capability is verb-shaped: http.get, http.post, etc.
     let capability = format!("http.{}", method.to_ascii_lowercase());
     let (host_str, path_str) = url_host_and_path(url);
-    check_security(
+    let ticket = check_security_call(
         &mut *caller,
         &capability,
         verb_context(&host_str, &path_str, body.len() as u64, DEFAULT_TIMEOUT_MS),
@@ -395,6 +395,7 @@ async fn perform_request(
         GuardedRequest::Verb {
             timeout_ms: DEFAULT_TIMEOUT_MS,
         },
+        ticket,
     )?;
     let req = HttpRequest {
         method: method.to_ascii_uppercase(),
@@ -485,6 +486,7 @@ fn response_bytes(resp: &HttpResponse) -> u64 {
 fn request_principal(
     caller: &Caller<'_, StoreData>,
     request: GuardedRequest,
+    ticket: Option<crate::runtime::decision::CallTicket>,
 ) -> wasmtime::Result<(String, std::sync::Arc<CapabilityGuard>)> {
     let who = crate::stdlib::shared::running_package(caller)
         .or_else(crate::stdlib::shared::PrincipalError::label_or_error)?;
@@ -493,6 +495,7 @@ fn request_principal(
         std::sync::Arc::clone(&caller.data().security_check),
         request,
         caller.data().vfs.cwd().to_owned(),
+        ticket,
     );
     Ok((who, std::sync::Arc::new(guard)))
 }
@@ -611,7 +614,7 @@ async fn perform_download(
         decompress: options.decompress,
     };
     // http-side check first; remote-only policies can deny without path-context cost.
-    check_security(
+    let ticket = check_security_call(
         &mut *caller,
         "http.download",
         target.context(&host_str, &url_path_str),
@@ -648,7 +651,7 @@ async fn perform_download(
         .check_rename_end()
         .map_err(|err| contain_trap("http.download", &guest_path, &err))?;
 
-    let (who, guard) = request_principal(caller, GuardedRequest::Download(target))?;
+    let (who, guard) = request_principal(caller, GuardedRequest::Download(target), ticket)?;
     let req = HttpRequest {
         method: "GET".to_string(),
         url: url.clone(),

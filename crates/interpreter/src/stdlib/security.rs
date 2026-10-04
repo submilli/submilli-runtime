@@ -9,13 +9,14 @@ use crate::runtime::host::abi_arg;
 use wasmtime::{FuncType, HeapType, Linker, RefType, Val, ValType};
 
 use crate::runtime::StoreData;
+use crate::runtime::decision::{CallSite, EntryPath};
 use crate::runtime::fuel;
 use crate::runtime::host::{
     permission_denied, permission_denied_invariant, read_string_arg, register_host_fn_async,
 };
 use crate::runtime::intrinsic_types::build_intrinsic_types;
 use crate::runtime::prelude::vtable::dispatch_vtable_slot;
-use crate::runtime::security::CheckOutcome;
+use crate::runtime::security::{AuditDecision, CheckOutcome};
 use crate::{MangledName, PackageDeclaration, Param, Span, Type, ValueKind, ValueSymbol};
 
 pub const MODULE_NAME: &str = "submilli:security";
@@ -105,36 +106,45 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
                     },
                 )?;
                 let policy = caller.data().security_check.clone();
-                let outcome =
-                    policy.check_with_cwd(&who, &capability, &context, caller.data().vfs.cwd());
-                let audit_context =
-                    policy.audit_context(&capability, &context, caller.data().vfs.cwd());
+                let cwd = caller.data().vfs.cwd().to_owned();
+                let ticket =
+                    crate::stdlib::shared::begin_recorded_call(&*caller, &who, &capability);
+                let site = CallSite::new(ticket, EntryPath::PackageCheck);
+                let outcome = policy.check_with_cwd(&who, &capability, &context, &cwd);
+                let explanation = policy
+                    .recorder()
+                    .and_then(|_| policy.explain(&who, &capability, &context, &cwd));
+                let audit_context = policy.audit_context(&capability, &context, &cwd);
                 match outcome {
                     CheckOutcome::Allow { rule } => {
-                        caller.data().security_check.audit(
-                            crate::runtime::security::AuditDecision {
-                                caller: &who,
-                                capability: &capability,
-                                context: audit_context.as_ref(),
-                                allowed: true,
-                                source: "policy",
+                        policy.audit(
+                            AuditDecision::new(
+                                &who,
+                                &capability,
+                                audit_context.as_ref(),
+                                true,
+                                "policy",
                                 rule,
-                                reason: None,
-                            },
+                                None,
+                            )
+                            .with_explanation(explanation.as_ref())
+                            .with_site(site),
                         );
                         Ok(())
                     }
                     CheckOutcome::Deny { reason, rule } => {
-                        caller.data().security_check.audit(
-                            crate::runtime::security::AuditDecision {
-                                caller: &who,
-                                capability: &capability,
-                                context: audit_context.as_ref(),
-                                allowed: false,
-                                source: "policy",
+                        policy.audit(
+                            AuditDecision::new(
+                                &who,
+                                &capability,
+                                audit_context.as_ref(),
+                                false,
+                                "policy",
                                 rule,
-                                reason: Some(&reason),
-                            },
+                                Some(&reason),
+                            )
+                            .with_explanation(explanation.as_ref())
+                            .with_site(site),
                         );
                         Err(permission_denied(who, capability, reason))
                     }

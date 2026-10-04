@@ -285,8 +285,8 @@ async fn dispatch(
                 Ok(who) => who,
                 Err(error) => return error,
             };
-            crate::stdlib::shared::audit_denial(
-                caller.data().security_check.as_ref(),
+            crate::stdlib::shared::audit_denial_in(
+                &*caller,
                 &who,
                 "llm.call",
                 &serde_json::json!({ "model": model }),
@@ -306,8 +306,8 @@ async fn dispatch(
                     Ok(who) => who,
                     Err(error) => return error,
                 };
-                crate::stdlib::shared::audit_denial(
-                    caller.data().security_check.as_ref(),
+                crate::stdlib::shared::audit_denial_in(
+                    &*caller,
                     &who,
                     "llm.call",
                     &serde_json::json!({"model": model}),
@@ -398,8 +398,8 @@ fn preflight_models(caller: &mut wasmtime::Caller<'_, StoreData>) -> wasmtime::R
         .map(|_| ())
         .map_err(|error| {
             if let crate::stdlib::shared::PrincipalError::Unknown(ref unknown) = error {
-                crate::stdlib::shared::audit_denial(
-                    caller.data().security_check.as_ref(),
+                crate::stdlib::shared::audit_denial_in(
+                    &*caller,
                     unknown.label,
                     CAPABILITY,
                     &serde_json::json!({ "model": "", "prompt_count": 0 }),
@@ -415,7 +415,11 @@ fn preflight_models(caller: &mut wasmtime::Caller<'_, StoreData>) -> wasmtime::R
 /// than failing the call: a listing that threw on the first forbidden model
 /// would itself disclose that the operator configured it.
 fn may_call(caller: &mut wasmtime::Caller<'_, StoreData>, model: &str) -> wasmtime::Result<bool> {
-    filters_candidate(gate(caller, model, 0))
+    let keeps = filters_candidate(gate(caller, model, 0))?;
+    if !keeps {
+        crate::stdlib::shared::mark_filtered(&*caller);
+    }
+    Ok(keeps)
 }
 
 /// Whether a per-candidate check's answer removes the candidate (`Ok(false)`),

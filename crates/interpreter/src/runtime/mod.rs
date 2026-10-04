@@ -2,6 +2,7 @@
 
 pub(crate) mod array_storage;
 pub mod blocking;
+pub mod decision;
 pub mod disk_quota;
 pub mod exec;
 pub mod fs;
@@ -22,6 +23,11 @@ pub mod session_kv;
 pub mod vfs;
 pub mod watchdog;
 
+pub use decision::{
+    CallSite, CallTicket, DecisionAction, DecisionCause, DecisionExplanation, DecisionLog,
+    DecisionLogConfig, DecisionLogOutput, DecisionRecord, DecisionRecorder, EntryPath,
+    FailureReasonRecord, FailureRecord, NearMissRecord, RuleCitation, SourceLine,
+};
 pub use disk_quota::{DiskQuota, Holder, OpenFileGuard, QuotaCharge, QuotaExceeded};
 pub use exec::{RunResult, dispatch_main_async, instantiate_program_async};
 pub use host::{
@@ -33,7 +39,7 @@ pub use host::{
 };
 pub use json::JSON_MODULE_NAME;
 pub use limits::{
-    DEFAULT_MAX_STORE_BYTES, MemoryCapExceeded, MemoryExhausted, TenantLimits,
+    DEFAULT_MAX_STORE_BYTES, HostBudget, MemoryCapExceeded, MemoryExhausted, TenantLimits,
     install_tenant_limits, is_memory_exhausted,
 };
 pub use llm::{
@@ -49,7 +55,7 @@ pub use metrics::{HttpMetric, MetricsSink, NoopMetricsSink};
 pub use prelude::bigint::ops::BIGINT_MODULE_NAME;
 pub use prelude::temporal::shared::TEMPORAL_MODULE_NAME;
 pub use secrets::{NoopSecretProvider, SecretProvider};
-pub use security::{AllowAllCheck, CheckOutcome, SecurityCheck};
+pub use security::{AllowAllCheck, AuditDecision, CheckOutcome, SecurityCheck};
 pub use session_kv::{
     InMemorySessionKv, SessionKvEntry, SessionKvError, SessionKvLimitKind, SessionKvLimits,
     SessionKvPage, SessionKvStore, SharedKvBudget,

@@ -20,13 +20,14 @@ mod transport;
 mod work;
 mod worker;
 
+use crate::runtime::decision::{CallSite, EntryPath, SourceLine};
 use crate::runtime::fuel;
 use crate::runtime::host::{
     permission_denied, read_string_arg, register_host_fn_async, write_submilli_string_struct,
     write_submilli_uint8array_struct,
 };
 use crate::runtime::intrinsic_types::{IntrinsicTypes, build_intrinsic_types};
-use crate::runtime::security::CheckOutcome;
+use crate::runtime::security::{AuditDecision, CheckOutcome};
 use crate::runtime::{HttpClient, SecretProvider, SecurityCheck, StoreData};
 use crate::stdlib::{session::value, shared::running_package};
 use serde_json::Value;
@@ -69,6 +70,8 @@ struct Job {
     algorithm_fuel: Arc<work::AlgorithmWork>,
     denial: Arc<Mutex<Option<(String, String)>>>,
     history_cache: Option<Arc<log_cache::Cache>>,
+    /// The program line that started the operation, captured only while recording.
+    line: Option<SourceLine>,
 }
 impl Job {
     fn remote_capability(&self) -> &'static str {
@@ -81,31 +84,50 @@ impl Job {
 
     fn check(&self, capability: &str, context: Value) -> Result<()> {
         self.check_cancelled()?;
-        match self.security.check(&self.caller, capability, &context) {
+        let outcome = self.security.check(&self.caller, capability, &context);
+        // Git's decisions are made on a worker thread, after the program's stack is gone;
+        // they reuse the line the host call captured on entry.
+        let site = CallSite::new(
+            self.security
+                .recorder()
+                .map(|recorder| recorder.begin_call(&self.caller, capability, self.line)),
+            EntryPath::Git,
+        );
+        let explanation = self.security.recorder().and_then(|_| {
+            self.security
+                .explain(&self.caller, capability, &context, "/")
+        });
+        match outcome {
             CheckOutcome::Allow { rule } => {
-                self.security
-                    .audit(crate::runtime::security::AuditDecision {
-                        caller: &self.caller,
+                self.security.audit(
+                    AuditDecision::new(
+                        &self.caller,
                         capability,
-                        context: &context,
-                        allowed: true,
-                        source: "policy",
+                        &context,
+                        true,
+                        "policy",
                         rule,
-                        reason: None,
-                    });
+                        None,
+                    )
+                    .with_explanation(explanation.as_ref())
+                    .with_site(site),
+                );
                 Ok(())
             }
             CheckOutcome::Deny { reason, rule } => {
-                self.security
-                    .audit(crate::runtime::security::AuditDecision {
-                        caller: &self.caller,
+                self.security.audit(
+                    AuditDecision::new(
+                        &self.caller,
                         capability,
-                        context: &context,
-                        allowed: false,
-                        source: "policy",
+                        &context,
+                        false,
+                        "policy",
                         rule,
-                        reason: Some(&reason),
-                    });
+                        Some(&reason),
+                    )
+                    .with_explanation(explanation.as_ref())
+                    .with_site(site),
+                );
                 // Poison may leave the denied capability and reason partly updated.
                 // AGENTS.md permits poisoned-lock panics rather than recovering this
                 // attribution; it does not permit the panic that caused poisoning.
@@ -491,6 +513,11 @@ async fn invoke(
         algorithm_fuel: Arc::new(work::AlgorithmWork::with_meter(Arc::clone(&meter))),
         denial: Arc::new(Mutex::new(None)),
         history_cache: caller.data().git_history.clone(),
+        line: if caller.data().security_check.recorder().is_some() {
+            crate::stdlib::shared::source_line(&*caller)
+        } else {
+            None
+        },
     };
     let vfs = caller.data().vfs.clone();
     let op = op.to_owned();

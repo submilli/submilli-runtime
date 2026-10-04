@@ -362,7 +362,10 @@ fn may_read(caller: &mut wasmtime::Caller<'_, StoreData>, key: &[u16]) -> wasmti
     // could not be made at all, and swallowing it would turn a runtime refusal
     // into a silently short listing.
     match err.downcast_ref::<crate::runtime::host::PermissionDenied>() {
-        Some(denial) if denial.is_policy() => Ok(false),
+        Some(denial) if denial.is_policy() => {
+            crate::stdlib::shared::mark_filtered(&*caller);
+            Ok(false)
+        }
         _ => Err(err),
     }
 }
@@ -469,8 +472,8 @@ fn trap(caller: &wasmtime::Caller<'_, StoreData>, error: &SessionKvError) -> was
                 Ok(who) => who,
                 Err(error) => return error,
             };
-            crate::stdlib::shared::audit_denial(
-                caller.data().security_check.as_ref(),
+            crate::stdlib::shared::audit_denial_in(
+                caller,
                 &who,
                 "session.write",
                 &serde_json::json!({}),
