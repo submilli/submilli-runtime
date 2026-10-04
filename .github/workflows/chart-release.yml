@@ -92,4 +92,5 @@ jobs:
         run: |
           helm install submilli oci://ghcr.io/submilli/charts/submilli \
             --version "$CHART_VERSION" --wait --timeout 6m
-          helm test submilli --logs --timeout 5m
+          # Successful API hooks are deleted before Helm can collect their logs.
+          helm test submilli --timeout 5m

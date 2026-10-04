@@ -73,8 +73,8 @@ On a machine with no registry credentials and a Kubernetes cluster whose CNI
 enforces NetworkPolicy, run:
 
 ```sh
-helm install submilli oci://ghcr.io/submilli/charts/submilli --version 0.3.4 --wait
-helm test submilli --logs
+helm install submilli oci://ghcr.io/submilli/charts/submilli --version 0.3.5 --wait
+helm test submilli
 ```
 
 The chart's API hook checks authenticated execution and its network hook checks
