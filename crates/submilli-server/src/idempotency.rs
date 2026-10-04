@@ -179,6 +179,9 @@ impl InFlight {
     }
 
     fn lock(&self) -> std::sync::MutexGuard<'_, Option<Resolution>> {
+        // A poisoned resolution may contain a partial update. AGENTS.md's
+        // idempotency exception accepts a panic instead of recovery, including in
+        // guard cleanup, where a second panic during unwinding can abort the process.
         self.resolution
             .lock()
             .expect("idempotency resolution poisoned")
@@ -428,6 +431,9 @@ impl Coordinator {
     }
 
     fn lock(&self) -> std::sync::MutexGuard<'_, HashMap<EntryKey, Arc<InFlight>>> {
+        // Poison may leave the in-flight claims partly updated. AGENTS.md's
+        // idempotency exception accepts a panic instead of recovery, including in
+        // guard cleanup, where a second panic during unwinding can abort the process.
         self.inflight
             .lock()
             .expect("idempotency coordinator poisoned")
