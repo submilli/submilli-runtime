@@ -33,7 +33,7 @@ fn a_server_with_no_tokens_refuses_to_start() {
     assert!(error.contains("SUBMILLI_SERVER_TOKEN"), "{error}");
     assert!(error.contains("api_tokens"), "{error}");
     assert!(error.contains("--allow-unauthenticated"), "{error}");
-    // Refused before the boot migration or any store touched the disk.
+    // Refused before any store touched the disk.
     assert!(!home.path().join("server").exists());
 }
 
