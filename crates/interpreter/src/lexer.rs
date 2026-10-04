@@ -95,7 +95,7 @@ impl<'a> Lexer<'a> {
                 // Returns early to bypass finalize so pending_docs survive intervening newlines.
                 b'\n' | b'\r' => return self.lex_newline(),
                 b'0'..=b'9' => self.lex_number(),
-                b'.' if self.peek_at(1).is_some_and(|b| b.is_ascii_digit()) => self.lex_number(),
+                b'.' if self.digit_at(1) => self.lex_number(),
                 b'"' | b'\'' => self.lex_string(b),
                 b'`' => {
                     let start = self.pos;
@@ -187,6 +187,10 @@ impl<'a> Lexer<'a> {
             return None;
         }
         self.bytes.get(self.pos as usize).copied()
+    }
+
+    fn digit_at(&self, offset: usize) -> bool {
+        self.peek_at(offset).is_some_and(|b| b.is_ascii_digit())
     }
 
     fn peek_at(&self, offset: usize) -> Option<u8> {
@@ -351,6 +355,8 @@ impl<'a> Lexer<'a> {
         Token::new(TokenKind::Newline, self.span(start, self.pos))
     }
 
+    /// Entered at a digit, or at a `.` followed by a digit (`.5`), whose integer
+    /// part is then empty.
     fn lex_number(&mut self) -> Token {
         let start = self.pos;
 
@@ -440,7 +446,7 @@ impl<'a> Lexer<'a> {
 
     /// What the `.` at the current position, after the integer part `int_part`, is.
     fn decimal_point_role(&self, int_part: &str) -> DecimalPoint {
-        if self.peek_at(1).is_some_and(|b| b.is_ascii_digit()) {
+        if self.digit_at(1) {
             return DecimalPoint::Literal;
         }
         if is_legacy_octal_digits(int_part) {
@@ -464,8 +470,7 @@ impl<'a> Lexer<'a> {
                 while self.peek_at(offset) == Some(b'_') {
                     offset += 1;
                 }
-                self.peek_at(offset).is_some_and(|b| b.is_ascii_digit())
-                    || !self.identifier_continues_at(offset)
+                self.digit_at(offset) || !self.identifier_continues_at(offset)
             }
             _ => false,
         }
@@ -1180,7 +1185,7 @@ impl<'a> Lexer<'a> {
             b';' => TokenKind::Semicolon,
             b'?' => match self.peek() {
                 // `?.5` is a ternary on `.5`, as in JavaScript, not optional chaining.
-                Some(b'.') if !self.peek_at(1).is_some_and(|b| b.is_ascii_digit()) => {
+                Some(b'.') if !self.digit_at(1) => {
                     self.pos += 1;
                     TokenKind::QuestionDot
                 }
@@ -1974,6 +1979,20 @@ mod tests {
         assert!(matches!(tokens[2].kind, TokenKind::NumberLiteral(v) if v == 0.5));
         let (tokens, _) = tokenize_all("c?.x");
         assert_eq!(tokens[1].kind, TokenKind::QuestionDot);
+        // Errors in a leading-dot literal are checked as in any other.
+        let (_, _, diags) = tokenize_one(".5n");
+        assert_eq!(diags.len(), 1, "diags: {diags:?}");
+        assert!(
+            diags[0]
+                .message
+                .contains("bigint literal cannot have a fractional")
+        );
+        let (_, _, diags) = tokenize_one(".5_");
+        assert_eq!(diags.len(), 1, "diags: {diags:?}");
+        assert_eq!(
+            diags[0].message,
+            "numeric separators are only allowed between digits"
+        );
     }
 
     #[test]

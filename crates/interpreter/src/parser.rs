@@ -4303,9 +4303,9 @@ impl<'a> Parser<'a> {
             if prec < min_prec {
                 break;
             }
-            if let Some(last) = last_op
+            if !reported_mixing
+                && let Some(last) = last_op
                 && mixed_logical(last, op)
-                && !reported_mixing
             {
                 reported_mixing = true;
                 let op_span = self.peek().span;
