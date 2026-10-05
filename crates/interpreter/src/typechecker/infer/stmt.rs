@@ -1764,7 +1764,9 @@ impl Inferer<'_> {
                 narrowed_shadow_ty,
             });
         }
-        Ok(if let Some(entry) = self.top_symbols.get(&target.name) {
+        let hidden = self.prepare_top_symbol_lookup(&target.name, target.span)?;
+        let global = self.top_symbols.get(&target.name).filter(|_| !hidden);
+        Ok(if let Some(entry) = global {
             let kind_clone = entry.kind.clone();
             let prev_span = entry.declaration_span;
             let mangled = entry.mangled_name.clone();
@@ -1937,7 +1939,9 @@ impl Inferer<'_> {
                 narrowed_shadow_ty,
             });
         }
-        Ok(if let Some(entry) = self.top_symbols.get(&target.name) {
+        let hidden = self.prepare_top_symbol_lookup(&target.name, target.span)?;
+        let global = self.top_symbols.get(&target.name).filter(|_| !hidden);
+        Ok(if let Some(entry) = global {
             let kind_clone = entry.kind.clone();
             let prev_span = entry.declaration_span;
             let mangled = entry.mangled_name.clone();

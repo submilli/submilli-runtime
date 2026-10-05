@@ -537,7 +537,7 @@ impl Inferer<'_> {
                 {
                     self.check_nested_function_use(index, span)?;
                 }
-                Ok(self.resolve_ident(ident, span))
+                self.resolve_ident(ident, span)
             }
             ExprKind::Binary { op, lhs, rhs } => self.infer_binary(op, lhs, rhs, expected, span),
             ExprKind::Unary { op, operand } => self.infer_unary(op, operand),
@@ -732,7 +732,11 @@ impl Inferer<'_> {
         Ok((id, ty))
     }
 
-    fn resolve_ident(&mut self, ident: Ident, span: Span) -> (TypedExprKind, Type) {
+    fn resolve_ident(
+        &mut self,
+        ident: Ident,
+        span: Span,
+    ) -> Result<(TypedExprKind, Type), CompilerFailure> {
         if let Some(entry) = self.scopes.get(&ident.name) {
             // Plan 75.8: consult the active narrow-scope stack. If
             // this binding has been narrowed in an enclosing branch,
@@ -747,15 +751,15 @@ impl Inferer<'_> {
             if let Some(view) = self.lookup_narrowed_view(&path) {
                 let binding = view.binding.clone();
                 let narrowed_ty = view.narrowed_ty.clone();
-                return (TypedExprKind::LocalNarrowRef { binding, path }, narrowed_ty);
+                return Ok((TypedExprKind::LocalNarrowRef { binding, path }, narrowed_ty));
             }
-            return (
+            return Ok((
                 TypedExprKind::LocalRef {
                     ident: ident.clone(),
                     boxed: false,
                 },
                 entry.ty.clone(),
-            );
+            ));
         }
         // `JSON` is a compiler-intrinsic namespace
         // recognised only as the head of a member call
@@ -764,7 +768,10 @@ impl Inferer<'_> {
         // because the member-access expression infers its receiver via
         // `infer_expr` first. A top-level `JSON` of the user's own is an
         // ordinary value and resolves below.
-        if ident.name == "JSON" && !self.top_symbols.contains_key("JSON") {
+        if ident.name == "JSON"
+            && !self.top_symbols.contains_key("JSON")
+            && !self.is_later_global("JSON")
+        {
             self.error_with_help(
                 span,
                 "`JSON` is a compiler intrinsic, not a value".to_string(),
@@ -775,15 +782,17 @@ impl Inferer<'_> {
                         .to_string(),
                 ],
             );
-            return (
+            return Ok((
                 TypedExprKind::LocalRef {
                     ident,
                     boxed: false,
                 },
                 Type::Error,
-            );
+            ));
         }
-        if let Some(entry) = self.top_symbols.get(&ident.name) {
+        let hidden = self.prepare_top_symbol_lookup(&ident.name, span)?;
+        let global = self.top_symbols.get(&ident.name).filter(|_| !hidden);
+        if let Some(entry) = global {
             let mangled = entry.mangled_name.clone();
             // Plan 75.8: globals narrow too (TS-compatible — TS
             // narrows non-exported module-level lets and all consts).
@@ -796,13 +805,13 @@ impl Inferer<'_> {
             if let Some(view) = self.lookup_narrowed_view(&global_path) {
                 let binding = view.binding.clone();
                 let narrowed_ty = view.narrowed_ty.clone();
-                return (
+                return Ok((
                     TypedExprKind::LocalNarrowRef {
                         binding,
                         path: global_path,
                     },
                     narrowed_ty,
-                );
+                ));
             }
             // Reject generic functions used as first-class values —
             // `let f = identity` and friends. Rationale: a generic
@@ -821,13 +830,13 @@ impl Inferer<'_> {
                         ident.name,
                     ),
                 );
-                return (
+                return Ok((
                     TypedExprKind::FunctionRef {
                         mangled,
                         name: ident.clone(),
                     },
                     Type::Error,
-                );
+                ));
             }
             let (kind, ty) = match &entry.kind {
                 ValueKind::Function {
@@ -859,14 +868,16 @@ impl Inferer<'_> {
                     ty.clone(),
                 ),
             };
-            return (kind, ty);
+            return Ok((kind, ty));
         }
         // namespace symbol (`Math`, `Temporal`, …) — sourced
         // from any loaded `PackageDeclaration` — used as a bare value, e.g.
         // `let x = Math;`. Same shape as the namespace-not-
         // a-value error, with a help block pointing at member-access.
-        if self.namespace_symbols.contains_key(&ident.name) {
-            return self.reject_bare_namespace_symbol(ident, span);
+        // A later declaration of the name shadows the namespace, but isn't
+        // declared yet: report the name as unresolved.
+        if self.namespace_symbols.contains_key(&ident.name) && !self.is_later_global(&ident.name) {
+            return Ok(self.reject_bare_namespace_symbol(ident, span));
         }
 
         // namespace import used as a bare value. The
@@ -883,13 +894,13 @@ impl Inferer<'_> {
                         .to_string(),
                 ],
             );
-            return (
+            return Ok((
                 TypedExprKind::LocalRef {
                     ident,
                     boxed: false,
                 },
                 Type::Error,
-            );
+            ));
         }
         // Enum types used as a bare value (without `.Variant`) get
         // a tailored diagnostic: the name resolves in type-space
@@ -925,13 +936,13 @@ impl Inferer<'_> {
                     ),
                     help,
                 );
-                return (
+                return Ok((
                     TypedExprKind::LocalRef {
                         ident,
                         boxed: false,
                     },
                     Type::Error,
-                );
+                ));
             }
             // Class names are not first-class values either — only `new C(…)`
             // and static member access give them expression meaning.
@@ -957,13 +968,13 @@ impl Inferer<'_> {
                     format!("`{}` is a class, not a value", ident.name),
                     help,
                 );
-                return (
+                return Ok((
                     TypedExprKind::LocalRef {
                         ident,
                         boxed: false,
                     },
                     Type::Error,
-                );
+                ));
             }
         }
         // `WeakMap` / `WeakSet` are intentionally out of scope.
@@ -977,13 +988,13 @@ impl Inferer<'_> {
                     "use `Map<K, V>` instead — Submilli has no weak references, so `WeakMap` would behave identically to `Map`".to_string(),
                 ],
             );
-            return (
+            return Ok((
                 TypedExprKind::LocalRef {
                     ident,
                     boxed: false,
                 },
                 Type::Error,
-            );
+            ));
         }
         if ident.name == "WeakSet" {
             self.error_with_help(
@@ -993,13 +1004,13 @@ impl Inferer<'_> {
                     "use `Set<T>` instead — Submilli has no weak references, so `WeakSet` would behave identically to `Set`".to_string(),
                 ],
             );
-            return (
+            return Ok((
                 TypedExprKind::LocalRef {
                     ident,
                     boxed: false,
                 },
                 Type::Error,
-            );
+            ));
         }
         // legacy `Date` is intentionally out of scope. One branch
         // covers `new Date(...)`, `Date.now()`, `Date.parse(...)`,
@@ -1013,13 +1024,13 @@ impl Inferer<'_> {
                     "use `Temporal.Now.instant()` for wall-clock time, or `Temporal.ZonedDateTime` / `Temporal.Instant` for time values. `Date` is intentionally out of scope — see Temporal for a correct, immutable, timezone-aware time API.".to_string(),
                 ],
             );
-            return (
+            return Ok((
                 TypedExprKind::LocalRef {
                     ident,
                     boxed: false,
                 },
                 Type::Error,
-            );
+            ));
         }
         let help: Vec<String> = self
             .closest_local_or_global(&ident.name)
@@ -1032,13 +1043,13 @@ impl Inferer<'_> {
         );
         // Placeholder for unresolved names. `Type::Error` already suppresses
         // downstream cascades, so the variant choice doesn't propagate.
-        (
+        Ok((
             TypedExprKind::LocalRef {
                 ident,
                 boxed: false,
             },
             Type::Error,
-        )
+        ))
     }
 
     fn infer_binary(
@@ -5916,7 +5927,9 @@ impl Inferer<'_> {
     /// Only for namespaces the prelude does not itself bind at top level: `BigInt` is a
     /// top-level constructor binding, so it would always read as shadowed.
     fn shadows_namespace(&self, name: &str) -> bool {
-        self.scopes.get(name).is_some() || self.top_symbols.contains_key(name)
+        self.scopes.get(name).is_some()
+            || self.top_symbols.contains_key(name)
+            || self.is_later_global(name)
     }
 
     fn infer_field_access(
@@ -7552,7 +7565,9 @@ impl Inferer<'_> {
                 result_ty,
             ));
         }
-        Ok(if let Some(entry) = self.top_symbols.get(&target.name) {
+        let hidden = self.prepare_top_symbol_lookup(&target.name, target.span)?;
+        let global = self.top_symbols.get(&target.name).filter(|_| !hidden);
+        Ok(if let Some(entry) = global {
             let kind_clone = entry.kind.clone();
             let prev_span = entry.declaration_span;
             let mangled = entry.mangled_name.clone();

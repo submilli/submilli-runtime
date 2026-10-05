@@ -11,6 +11,7 @@ mod exports;
 pub mod expr;
 mod format_definition;
 mod format_signature;
+mod forward_globals;
 pub mod generic;
 mod generic_scopes;
 mod globals;
@@ -134,6 +135,7 @@ pub fn infer_with_transitive_checked<'a>(
         super_seen: false,
         read_before_super: false,
         in_nested_function: false,
+        later_globals: BTreeMap::new(),
         super_call_is_statement: false,
         in_super_arguments: false,
         in_super_handler: false,
@@ -390,6 +392,7 @@ pub fn infer_package_checked<'a>(
         super_seen: false,
         read_before_super: false,
         in_nested_function: false,
+        later_globals: BTreeMap::new(),
         super_call_is_statement: false,
         in_super_arguments: false,
         in_super_handler: false,
@@ -741,6 +744,9 @@ pub(super) struct Inferer<'a> {
     /// function nested in the constructor rather than the constructor's own
     /// body. A `super(...)` there can run late or never.
     pub(super) in_nested_function: bool,
+    /// Module-level `let`/`const` declarations step 2 has yet to reach, by
+    /// name. See [`forward_globals`].
+    pub(super) later_globals: BTreeMap<String, forward_globals::LaterGlobal>,
     /// Set by an expression statement that is a bare `super(...)` call, for
     /// `infer_super_call` to take. A call inside an expression can be skipped
     /// (`c ? super(1) : f()`), which the super-call rule can't see.

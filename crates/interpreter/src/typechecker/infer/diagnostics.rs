@@ -699,7 +699,13 @@ impl<'a> Inferer<'a> {
     pub(super) fn closest_local_or_global(&self, query: &str) -> Option<String> {
         let locals: Vec<&str> = self.scopes.all_names().collect();
         let globals = self.top_symbols.keys().map(String::as_str);
-        did_you_mean::closest_match(query, locals.into_iter().chain(globals)).map(String::from)
+        // A later global bound early is in `top_symbols` though hidden here;
+        // suggesting the name itself would not help.
+        let candidates = locals
+            .into_iter()
+            .chain(globals)
+            .filter(|name| *name != query);
+        did_you_mean::closest_match(query, candidates).map(String::from)
     }
 
     /// Suggest the closest type name to `query` from the four

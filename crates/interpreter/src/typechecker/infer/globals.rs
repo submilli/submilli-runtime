@@ -9,6 +9,7 @@ use super::Inferer;
 impl<'a> Inferer<'a> {
     pub(super) fn infer_global_variables(&mut self) -> Result<(), CompilerFailure> {
         let top_level: Vec<_> = self.ast.top_level.clone();
+        self.collect_later_globals()?;
         for stmt_id in top_level {
             let stmt = self
                 .ast
@@ -37,6 +38,7 @@ impl<'a> Inferer<'a> {
                     doc,
                 } => {
                     if self.reject_intrinsic_name(&name) {
+                        self.forget_later_global(&name.name);
                         continue;
                     }
                     let hint = ty.as_ref().map(|a| self.resolve_type(a)).transpose()?;
@@ -44,6 +46,7 @@ impl<'a> Inferer<'a> {
                     // Reassignable, so an inferred literal widens; see the block-scoped
                     // `Let` arm in `stmt.rs`.
                     let bound = hint.unwrap_or_else(|| value_ty.widen_literal());
+                    self.finish_later_global(&name, &bound);
                     self.bind_top(
                         &name,
                         ValueKind::Let {
@@ -84,6 +87,7 @@ impl<'a> Inferer<'a> {
                     doc,
                 } => {
                     if self.reject_intrinsic_name(&name) {
+                        self.forget_later_global(&name.name);
                         continue;
                     }
                     // See `literal_type_of` for the rule.
@@ -97,6 +101,7 @@ impl<'a> Inferer<'a> {
                         )?;
                     let (typed_value, value_ty) = self.infer_expr(value, hint.as_ref())?;
                     let bound = hint.unwrap_or(value_ty);
+                    self.finish_later_global(&name, &bound);
                     self.bind_top(
                         &name,
                         ValueKind::Const {
