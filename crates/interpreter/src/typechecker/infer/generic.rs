@@ -1048,10 +1048,10 @@ impl Inferer<'_> {
             {
                 continue;
             }
-            let at = close_match.argument.unwrap_or(span);
+            let error_span = close_match.argument_span.unwrap_or(span);
             let (expected, got) = self.close_match_mismatch(sub, close_match);
             self.error_with_help(
-                at,
+                error_span,
                 format!("expected `{expected}`, got `{got}`"),
                 super::type_diff::type_mismatch_help(&expected, &got),
             );

@@ -36,7 +36,7 @@ pub struct CloseMatch {
     pub sibling: Type,
     pub arg: Type,
     /// The call argument it came from, once the call has located it.
-    pub argument: Option<Span>,
+    pub argument_span: Option<Span>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -109,11 +109,10 @@ impl TypeParamSubstitution {
     }
 
     /// Locate the close matches recorded after the first `count` in the
-    /// call argument at `argument`, unless an earlier argument they belong
-    /// to was located already.
-    pub fn locate_close_matches_after(&mut self, count: usize, argument: Span) {
+    /// call argument at `argument_span`.
+    pub fn locate_close_matches_after(&mut self, count: usize, argument_span: Span) {
         for close_match in self.close_matches.iter_mut().skip(count) {
-            close_match.argument.get_or_insert(argument);
+            close_match.argument_span = Some(argument_span);
         }
     }
 
@@ -638,7 +637,7 @@ impl<'a> Unifier<'a> {
                     }
                     self.restore(snap);
                 }
-                if self.try_defer_into_lone_type_var(pa, arg_ty) {
+                if self.unify_by_lone_type_var_rule(pa, arg_ty) {
                     return Ok(());
                 }
                 for m in pa {
@@ -891,29 +890,25 @@ impl<'a> Unifier<'a> {
         Some((type_var, others))
     }
 
-    /// tsc's rule for a non-union argument against a union parameter, as
-    /// `Box<boolean>` against `T | Box<number>`. When `params` has exactly
-    /// one unbound type parameter and `arg` [`closely_matches`] one of the
-    /// other members without unifying with any of them, `arg` is deferred as
-    /// a union argument whose members are all closely matched is: it is
-    /// recorded as a close match, checked once inference is done, and
-    /// offered as the type parameter's fallback. Once the type parameter has
-    /// a fallback, an `arg` another member takes goes to that member, as tsc
-    /// infers nothing from it, rather than binding the type parameter ahead
-    /// of the fallback. Returns true when `arg` was deferred or taken, false
-    /// when the caller should try each member in order.
-    fn try_defer_into_lone_type_var(&mut self, params: &[Type], arg: &Type) -> bool {
+    /// tsc's rule for a non-union argument against a union parameter whose
+    /// members include exactly one unbound type parameter. Returns true when
+    /// it unified `arg`, false when the caller should try each member in
+    /// order. It unifies `arg` when either:
+    /// - the type parameter has a fallback and another member takes `arg`
+    ///   (see [`Self::member_takes_beside_fallback`]); or
+    /// - `arg` [`closely_matches`] another member without unifying with any,
+    ///   as `Box<boolean>` does `Box<number>` in `T | Box<number>`. It is then
+    ///   treated like a union argument whose members all closely matched:
+    ///   recorded as a close match, checked once inference is done, and
+    ///   offered as the type parameter's fallback.
+    fn unify_by_lone_type_var_rule(&mut self, params: &[Type], arg: &Type) -> bool {
         if !self.is_argument || self.contravariant {
             return false;
         }
         let Some((type_var, others)) = self.split_lone_unbound_type_var(params) else {
             return false;
         };
-        if self.has_whole_union_fallback(type_var)
-            && others
-                .iter()
-                .any(|other| self.unifies_or_rolls_back(other, arg))
-        {
+        if self.member_takes_beside_fallback(type_var, &others, arg) {
             return true;
         }
         let Some(sibling) = others.iter().find(|other| closely_matches(other, arg)) else {
@@ -927,9 +922,23 @@ impl<'a> Unifier<'a> {
         true
     }
 
-    /// Whether `type_var` has a whole-union fallback.
-    fn has_whole_union_fallback(&self, type_var: &Type) -> bool {
-        matches!(type_var.peel(), Type::TypeVar(name) if self.sub.whole_union_fallbacks.contains_key(name))
+    /// Whether one of `others` takes `arg`, keeping its bindings, when
+    /// `type_var` has a whole-union fallback. tsc infers nothing from such an
+    /// argument, so it must not bind the type parameter ahead of the fallback.
+    fn member_takes_beside_fallback(
+        &mut self,
+        type_var: &Type,
+        others: &[&Type],
+        arg: &Type,
+    ) -> bool {
+        let has_fallback = matches!(
+            type_var.peel(),
+            Type::TypeVar(name) if self.sub.whole_union_fallbacks.contains_key(name)
+        );
+        has_fallback
+            && others
+                .iter()
+                .any(|other| self.unifies_or_rolls_back(other, arg))
     }
 
     /// Record that `arg` closely matched `sibling`, a member of the union
@@ -939,7 +948,7 @@ impl<'a> Unifier<'a> {
             param: Type::union(params.to_vec()),
             sibling: sibling.clone(),
             arg: arg.clone(),
-            argument: None,
+            argument_span: None,
         });
     }
 
