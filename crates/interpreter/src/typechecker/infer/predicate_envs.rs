@@ -945,7 +945,10 @@ impl<'a> Inferer<'a> {
         crate::compiler_error::CompilerFailure,
     > {
         // Where they are equal, each side holds a value the other allows.
-        let equal = match (self.equal_to(lhs_id, rhs_id)?, self.equal_to(rhs_id, lhs_id)?) {
+        let equal = match (
+            self.equal_to(lhs_id, rhs_id)?,
+            self.equal_to(rhs_id, lhs_id)?,
+        ) {
             (None, None) => return Ok(None),
             (Some(equal), None) | (None, Some(equal)) => equal,
             (Some(mut equal), Some(other)) => {
