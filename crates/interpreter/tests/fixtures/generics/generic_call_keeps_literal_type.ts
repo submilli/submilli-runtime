@@ -49,6 +49,21 @@ function orList<T, E>(value: T, fallback: E[]): T | E[] {
   return value;
 }
 
+type Opt<A> = A | null;
+type Id<A> = A;
+
+function orNull<A>(value: A): Opt<A> {
+  return value;
+}
+
+function same<A>(value: A): Id<A> {
+  return value;
+}
+
+function oneOrMany<T>(many: T[], one: T): T | T[] {
+  return one;
+}
+
 function head<T>(pair: [T, number]): T {
   return pair[0];
 }
@@ -179,4 +194,14 @@ function main(): void {
   let listed = orList("on", modes);
   listed = "elsewhere";
   assert(listed === "elsewhere", "a nested declared literal");
+
+  // A fresh literal behind a generic alias still widens at a `let`, and one
+  // beside a declared array's elements takes their declared type.
+  let optional = orNull("on");
+  optional = "elsewhere";
+  let aliased = same(1);
+  aliased = 2;
+  let many = oneOrMany(modes, "on");
+  const declaredMany: Mode | Mode[] = many;
+  assert(optional === "elsewhere" && aliased === 2 && declaredMany === "on", "through an alias");
 }

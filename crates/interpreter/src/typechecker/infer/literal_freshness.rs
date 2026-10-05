@@ -125,13 +125,43 @@ struct ArgumentBinding {
     callee_return: Type,
 }
 
+/// How a parameter takes its argument as a type parameter's value.
+enum WholeBinding {
+    Always,
+    Sometimes,
+    Never,
+}
+
 impl ArgumentBinding {
-    /// Whether the parameter takes the argument whole as a type parameter's
-    /// value (`A`, `A | null`) rather than inside one (`A[]`).
-    fn binds_whole_value(&self) -> bool {
-        union_members(&self.param)
+    /// How the parameter takes the argument as a type parameter's value:
+    /// whole (`A`, `A | null`), only inside one (`A[]`), or either way
+    /// (`A | A[]`).
+    fn whole_binding(&self) -> WholeBinding {
+        let members: Vec<&Type> = union_members(&self.param)
             .into_iter()
-            .any(|member| matches!(member, Type::TypeVar(_)))
+            .filter(|member| super::expr::type_contains_type_var(member))
+            .collect();
+        let bare = members
+            .iter()
+            .filter(|member| matches!(member, Type::TypeVar(_)))
+            .count();
+        if bare == 0 {
+            WholeBinding::Never
+        } else if bare == members.len() {
+            WholeBinding::Always
+        } else {
+            WholeBinding::Sometimes
+        }
+    }
+
+    /// Whether an array or tuple argument could bind a type parameter to its
+    /// elements: a member of the parameter that mentions one is itself an
+    /// array or tuple (`A | A[]`, not `A | Box<A>`).
+    fn binds_inside_array(&self) -> bool {
+        union_members(&self.param).into_iter().any(|member| {
+            matches!(member.peel(), Type::Array(_) | Type::Tuple(_))
+                && super::expr::type_contains_type_var(member)
+        })
     }
 
     /// Whether a literal type the value bound here holds regular is the one
@@ -622,26 +652,21 @@ impl Inferer<'_> {
             return Ok(BTreeSet::new());
         }
         let mut fresh = BTreeSet::new();
-        for operand in call_operands(receiver, args) {
-            fresh.extend(self.possibly_fresh_literals(operand)?);
+        let operands: Vec<ExprId> = call_operands(receiver, args).collect();
+        let mut reaching = Vec::with_capacity(operands.len());
+        for operand in &operands {
+            reaching.push(self.regular_literals_reaching_result(*operand)?);
         }
-        let bindings = &self.literal_freshness.argument_bindings;
-        for operand in call_operands(receiver, args) {
-            let binding = bindings.get(&operand);
-            if !binding.is_none_or(ArgumentBinding::may_reach_result) {
-                continue;
+        // An operand's own regular literals are already left out of its
+        // fresh ones, so only the other operands' cancel them.
+        for (index, operand) in operands.iter().enumerate() {
+            let mut own = self.possibly_fresh_literals(*operand)?;
+            for (other, regular) in reaching.iter().enumerate() {
+                if other != index {
+                    own.retain(|literal| !regular.contains(literal));
+                }
             }
-            // A value bound whole (`a: A`, `a: A | null`) reaches the result
-            // with only its top-level literals; one bound inside (`xs: A[]`)
-            // with the ones nested in it.
-            let held = if binding.is_some_and(ArgumentBinding::binds_whole_value) {
-                self.regular_literals(operand)?
-            } else {
-                self.held_regular_literals(operand)?
-            };
-            for literal in held {
-                fresh.remove(&literal);
-            }
+            fresh.extend(own);
         }
         if let Some(callee_return) = self.callee_return(args) {
             for literal in declared_literals(callee_return) {
@@ -649,6 +674,43 @@ impl Inferer<'_> {
             }
         }
         Ok(fresh)
+    }
+
+    /// The regular literals `operand` carries into the call's result: none
+    /// when its binding can't reach it (see
+    /// [`ArgumentBinding::may_reach_result`]). A value bound whole (`a: A`,
+    /// `a: A | null`) carries its top-level literals, one bound inside
+    /// (`xs: A[]`) the ones nested in it, and one bound either way
+    /// (`a: A | A[]`) the nested ones only when it is an array the parameter's
+    /// array member can take. A receiver, whose binding isn't recorded,
+    /// carries all it holds.
+    fn regular_literals_reaching_result(
+        &self,
+        operand: ExprId,
+    ) -> Result<BTreeSet<Type>, CompilerFailure> {
+        let Some(binding) = self.literal_freshness.argument_bindings.get(&operand) else {
+            return self.held_regular_literals(operand);
+        };
+        if !binding.may_reach_result() {
+            return Ok(BTreeSet::new());
+        }
+        let nested = match binding.whole_binding() {
+            WholeBinding::Never => true,
+            WholeBinding::Always => false,
+            WholeBinding::Sometimes => {
+                let ty = &self
+                    .typed_ast
+                    .try_expr(operand)
+                    .map_err(crate::typechecker::arena_failure)?
+                    .ty;
+                binding.binds_inside_array() && matches!(ty.peel(), Type::Array(_) | Type::Tuple(_))
+            }
+        };
+        if nested {
+            self.held_regular_literals(operand)
+        } else {
+            self.regular_literals(operand)
+        }
     }
 
     /// The declared return type of the callee given `args`. Every argument of
@@ -718,8 +780,33 @@ impl Inferer<'_> {
     }
 
     /// The regular literals `value` holds, at the top or, when every nested
-    /// one is regular, inside it.
+    /// one is regular, inside it; an object, array or tuple literal holds
+    /// those of its parts.
     fn held_regular_literals(&self, value: ExprId) -> Result<BTreeSet<Type>, CompilerFailure> {
+        let expr = self
+            .typed_ast
+            .try_expr(value)
+            .map_err(crate::typechecker::arena_failure)?;
+        let parts: Option<Vec<ExprId>> = match &expr.kind {
+            TypedExprKind::ObjectLiteral { members, .. } => {
+                Some(members.iter().map(|member| member.expr_id()).collect())
+            }
+            TypedExprKind::ArrayLiteral { elements, .. } => Some(
+                elements
+                    .iter()
+                    .map(crate::TypedArrayElement::expr_id)
+                    .collect(),
+            ),
+            TypedExprKind::TupleLiteral { elements, .. } => Some(elements.clone()),
+            _ => None,
+        };
+        if let Some(parts) = parts {
+            let mut regular = BTreeSet::new();
+            for part in parts {
+                regular.extend(self.held_regular_literals(part)?);
+            }
+            return Ok(regular);
+        }
         let mut regular = self.regular_literals(value)?;
         if self.are_nested_literals_regular(value)? {
             let ty = &self
@@ -1037,6 +1124,16 @@ fn widen_only(ty: &Type, fresh: &BTreeSet<Type>) -> Type {
                 .map(|member| widen_only(member, fresh))
                 .collect(),
         ),
+        Type::Alias {
+            args, ty: inner, ..
+        } if !args.is_empty() => {
+            let widened = widen_only(inner, fresh);
+            if widened == **inner {
+                ty.clone()
+            } else {
+                widened
+            }
+        }
         _ => ty.clone(),
     }
 }
@@ -1055,6 +1152,18 @@ fn widen_unless_regular(ty: &Type, regular: &BTreeSet<Type>) -> Type {
                 .map(|member| widen_unless_regular(member, regular))
                 .collect(),
         ),
+        // An instantiated generic alias may hold an inferred literal
+        // (`Opt<"on">`); a plain alias's literals are declared.
+        Type::Alias {
+            args, ty: inner, ..
+        } if !args.is_empty() => {
+            let widened = widen_unless_regular(inner, regular);
+            if widened == **inner {
+                ty.clone()
+            } else {
+                widened
+            }
+        }
         _ => ty.widen_literal(),
     }
 }
