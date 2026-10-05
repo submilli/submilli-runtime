@@ -80,6 +80,7 @@ separate resource/dependency backlog.
 | R12 | Complete: simplified | 24 same-builder type lookup expectations; build failures remain fallible |
 | R13 | Complete: simplified | Removed four private numeric engine-error wrappers; range errors preserved |
 | R14 | Complete: retained | Keep shared raw-slice ABI helpers and boundary validation |
+| R15 | Complete: simplified | Removed HMAC-init and fixed-digest-only error layers |
 
 ### R01 execution evidence
 
@@ -323,6 +324,23 @@ change. Keep their fatal trap classification and current boundary regression tes
 This completes R14 as a no-revert decision, not a claim that fixed slots are all
 fallible or that an ABI bug was found. Source review only; no code/tests changed.
 Three independent reviews reported no findings; diff checks passed.
+
+### R15 execution evidence
+
+HMAC's documented any-key-length contract supports an infallible private
+constructor; removed `from_initial` and its artificial error layer. SHA-256 output
+is converted to a 32-byte array; only 8/16-byte truncation callers exist. `tag` and
+truncation now return arrays directly. Prefix sizing, entropy initialization,
+malformed cursor checks, authentication, UTF-16 and allocation failures remain.
+Deterministic encoding vectors are unchanged.
+
+Replaced impossible HMAC fault injection with real entropy and checked
+size/reservation failures. Compilation found two stale test references, corrected
+before a second complete three-role review; no findings remained. All 18 cursor
+tests passed, including wire vectors, guest-catch classification and healthy
+follow-up. Formatting and workspace/all-target Clippy passed; graph updated with
+existing limitations. Full tests disabled and HTTP skipped. Accepted invariants
+recorded/verified in SUB-633; this commit records R15.
 
 ## Completed fixes: candidates and decisions
 
