@@ -11,7 +11,7 @@
     "build": "astro build && node --experimental-strip-types ./scripts/check-built-agent-docs.ts",
     "preview": "astro preview",
     "reference": "node --experimental-strip-types ./scripts/generate-reference.ts",
-    "check": "astro check && node --experimental-strip-types --test ./scripts/agent-docs.test.ts ./scripts/theme.test.mjs ./scripts/videos.test.ts",
+    "check": "astro check && node --experimental-strip-types --test ./scripts/agent-docs.test.ts ./scripts/structured-data.test.ts ./scripts/theme.test.mjs ./scripts/videos.test.ts",
     "precheck": "node ./scripts/ensure-root-tsconfig.mjs"
   },
   "dependencies": {

@@ -2,6 +2,8 @@
 import DefaultHead from '@astrojs/starlight/components/Head.astro';
 import { DOCS_INDEX, DOCS_ORIGIN, markdownPath } from '../lib/agent-docs';
 
+import { documentationSchema, serializeStructuredData } from '../lib/structured-data';
+
 const { entry } = Astro.locals.starlightRoute;
 const slug = entry.id === 'index' ? '' : entry.id;
 ---
@@ -9,6 +11,7 @@ const slug = entry.id === 'index' ? '' : entry.id;
 <DefaultHead />
 {entry.id !== '404' && !entry.data.sidebar.hidden && (
 	<>
+		<script type="application/ld+json" is:inline set:html={serializeStructuredData(documentationSchema({ slug, title: entry.data.title, description: entry.data.description || entry.data.title }))} />
 		<link rel="alternate" type="text/markdown" href={DOCS_ORIGIN + markdownPath(slug)} />
 		<link rel="describedby" href={DOCS_ORIGIN + DOCS_INDEX} />
 	</>
