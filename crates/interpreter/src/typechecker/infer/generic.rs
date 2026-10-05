@@ -1339,7 +1339,9 @@ impl Inferer<'_> {
                 }
                 let unified = sub.unify_argument(&param_ty, &arg_ty, self.resolver());
                 // A reported argument's close matches, including those its
-                // object literal's fields recorded, would report it again.
+                // object literal's fields recorded, would mostly report it
+                // again. The call is rejected either way, so an error
+                // elsewhere in the argument may hide a close-match mismatch.
                 if already_reported || unified.is_err() {
                     sub.forget_close_matches_after(close_matches_before);
                 }
