@@ -1,4 +1,4 @@
-types: 82 of 223 tsc entries compared, 13 differ
+types: 83 of 223 tsc entries compared, 13 differ
 
 line 7: !!true
   tsc:  true
@@ -46,16 +46,14 @@ line 123: MyEnum.B
 
 line 240: k
   tsc:  keyof O
-  ours: K
+  ours: "a" | "b"
 
 line 241: k
   tsc:  keyof O
-  ours: K
+  ours: "a" | "b"
 
 errors:
-line 240: tsc TS2367: This comparison appears to be unintentional because the types 'keyof O' and '"c"' have no overlap. (we accept)
 line 12: ours: unreachable code (tsc accepts)
 line 15: ours: expected `Error`, got `number` (tsc accepts)
 line 236: ours: non-exhaustive `switch`: missing case(s) "a", "b" (tsc accepts)
 line 237: ours: `switch` case body must end with `break` or `return` — no fallthrough (tsc accepts)
-line 241: ours: no field `c` on type `O` (tsc accepts)

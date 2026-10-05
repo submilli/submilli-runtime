@@ -14,6 +14,15 @@ for (const chapter of chapters) {
 	const path = `docs/${chapter.slug ? `${chapter.slug}/` : ''}index.html`;
 	const html = await readFile(new URL(path, directory), 'utf8');
 	const markdown = markdownPath(chapter.slug);
+	const jsonLd = [...html.matchAll(/<script type="application\/ld\+json">([\s\S]*?)<\/script>/g)].map(match => JSON.parse(match[1]));
+	assert.equal(jsonLd.length, 1, `${path}: one JSON-LD graph`);
+	const pageSchema = jsonLd[0]['@graph'][0];
+	assert.equal(pageSchema.url, `https://submilli.ai/docs/${chapter.slug ? `${chapter.slug}/` : ''}`, path);
+	assert.equal(pageSchema.headline, chapter.title, path);
+	assert.equal(pageSchema['@type'], chapter.slug ? 'TechArticle' : 'CollectionPage', path);
+	assert.equal(jsonLd[0]['@graph'].length, chapter.slug ? 2 : 1, path);
+	assert.ok(chapter.authorshipLabel, `${path}: missing confirmed authorship`);
+	assert.ok(html.includes(`${chapter.authorshipLabel}. Authorship details`), `${path}: missing authorship icon`);
 	assert.ok(html.includes(`rel="alternate" type="text/markdown" href="https://submilli.ai${markdown}"`), path);
 	assert.ok(html.includes('rel="describedby" href="https://submilli.ai/docs/llms.txt"'), path);
 	assert.match(html, new RegExp(`href="${markdown.replace('.', '\\.')}"[^>]*>View Markdown</a>`), path);
@@ -33,6 +42,7 @@ for (const file of files.filter((file) => file.endsWith('.html'))) {
 	const slug = file === 'index.html' ? '' : file.replace(/\/index\.html$/, '');
 	if (chapters.some((chapter) => chapter.slug === slug)) continue;
 	const html = await readFile(new URL(`docs/${file}`, directory), 'utf8');
+	assert.ok(!html.includes('application/ld+json'), `${file}: no documentation schema on non-chapter pages`);
 	assert.ok(!html.includes('rel="alternate" type="text/markdown"'), file);
 	assert.ok(!html.includes('>View Markdown</a>'), file);
 }

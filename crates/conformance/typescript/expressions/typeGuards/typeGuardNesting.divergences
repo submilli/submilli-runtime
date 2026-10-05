@@ -1,17 +1,1 @@
-types: 59 of 102 tsc entries compared, 4 differ
-
-line 5: (typeof strOrBool === 'boolean') ? strOrBool : false
-  tsc:  false
-  ours: boolean
-
-line 7: (typeof strOrBool !== 'string') ? strOrBool : false
-  tsc:  false
-  ours: boolean
-
-line 12: (typeof strOrBool === 'boolean') ? strOrBool : false
-  tsc:  false
-  ours: boolean
-
-line 14: (typeof strOrBool !== 'string') ? strOrBool : false
-  tsc:  false
-  ours: boolean
+types: 59 of 102 tsc entries compared, 0 differ

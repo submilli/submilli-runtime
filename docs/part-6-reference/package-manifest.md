@@ -1,14 +1,19 @@
 ---
 title: "Package manifest"
-description: "A package project: its layout, every key of submilli.toml and the dependency forms, submilli.lock, the doc-comment tags the build reads, the derived capabilities.yaml, docs/readme.md, and the test API of submilli build test."
+description: "A Package project: its layout, every key of submilli.toml and the dependency forms, submilli.lock, the doc-comment tags the build reads, the derived capabilities.yaml, docs/readme.md, and the test API of submilli build test."
 slug: reference/package-manifest
 sidebar:
   order: 11
+authorship:
+  label: ai-assisted
+  confirmed: true
+  contentHash: "c79ae1075feef5fdf61d7bd8eff0301abd89f4b9f3b52a3df12f06a073bfa862"
+  confirmedAt: "2026-10-05T13:01:53.009Z"
 ---
 
-This page describes a package project as `submilli build` reads and writes
+This page describes a Package project as `submilli build` reads and writes
 it. It covers the files in the project, `submilli.toml`, `submilli.lock`, the
-doc-comment tags in a package's source, the derived `capabilities.yaml`,
+doc-comment tags in a Package's source, the derived `capabilities.yaml`,
 `docs/readme.md`, and the test files and test API. The commands themselves
 are in the [CLI reference](/docs/reference/cli). The how-to pages start at
 [Start a project](/docs/packages/start-a-project).
@@ -30,34 +35,34 @@ created …/packages/billing/README.md
 created …/packages/billing/tests/lib.test.ts
 ```
 
-`init` takes the package name (prompted on stdin when omitted) and the
-package's path relative to `submilli.toml` (default `.`).
+`init` takes the Package name (prompted on stdin when omitted) and the
+Package's path relative to `submilli.toml` (default `.`).
 `submilli build new <@scope/name> <path>` appends a `[[package]]` table to the
-`submilli.toml` in the current directory and creates the same four package
+`submilli.toml` in the current directory and creates the same four Package
 files.
 
 | Path | Created by | Holds |
 | --- | --- | --- |
 | `submilli.toml` | `init`, and `new` appends | The [manifest](#submillitoml) |
-| `<path>/src/lib.ts` | `init`, `new` | The entry point, whose exports are the package's API |
+| `<path>/src/lib.ts` | `init`, `new` | The entry point, whose exports are the Package's API |
 | `<path>/src/**/*.ts` | You | Other modules, imported by relative path |
 | `<path>/docs/readme.md` | `init`, `new` | [The readme the model reads](#docsreadmemd). Required |
-| `<path>/README.md` | `init`, `new` | The readme for the person who installs and grants the package. Not read by the build |
+| `<path>/README.md` | `init`, `new` | The readme for the person who installs and grants the Package. Not read by the build |
 | `<path>/tests/**/*.test.ts` | `init`, `new` (`lib.test.ts`) | [Test files](#test-files) |
-| `<path>/capabilities.yaml` | Every `check`, `test`, `publish-local` | [What the package provides and requires](#capabilitiesyaml). Rewritten on every build |
+| `<path>/capabilities.yaml` | Every `check`, `test`, `publish-local` | [What the Package provides and requires](#capabilitiesyaml). Rewritten on every build |
 | `submilli.lock` | A build with a GitHub dependency | [The resolved GitHub dependencies](#submillilock) |
 | `tsconfig.json` | `init` | One line extending `.submilli/tsconfig.submilli.json` |
 | `.vscode/tasks.json` | `init` | A build task that runs `submilli build check` |
 | `.gitignore` | `init` | The entry `.submilli/` |
-| `.submilli/` | `init`, and refreshed on every build | Editor configuration and type declarations of the standard library, the project's packages, and their dependencies |
+| `.submilli/` | `init`, and refreshed on every build | Editor configuration and type declarations of the standard library, the project's Packages, and their dependencies |
 
 The `.subm` extension is accepted wherever `.ts` is, in `src/lib.subm`, other
-modules, and `*.test.subm`. A package with both `src/lib.ts` and
+modules, and `*.test.subm`. A Package with both `src/lib.ts` and
 `src/lib.subm` is an error, and so is one with neither.
 
 ## submilli.toml
 
-The manifest has one `[[package]]` table per package and an optional
+The manifest has one `[[package]]` table per Package and an optional
 top-level `[dependencies]` table. Keys the build doesn't know are ignored.
 
 ```toml title="submilli.toml"
@@ -79,7 +84,7 @@ path = "packages/support"
 dependencies = ["@acme/billing", "@submilli/jina"]
 ```
 
-### [[package]]
+### [[Package]]
 
 At least one `[[package]]` table is required.
 
@@ -89,32 +94,32 @@ At least one `[[package]]` table is required.
 | `version` | string | Yes | — | Any string. Not parsed as a semantic version. |
 | `description` | string | Yes | — | Not empty or whitespace. |
 | `keywords` | array of strings | No | `[]` | Each not empty or whitespace. |
-| `path` | string | When the manifest has two or more packages | `.` | Relative to `submilli.toml`. May not be absolute or climb above the manifest's directory. |
+| `path` | string | When the manifest has two or more Packages | `.` | Relative to `submilli.toml`. May not be absolute or climb above the manifest's directory. |
 | `dependencies` | array of strings | No | `[]` | Each the `name` of another `[[package]]`, or a key of `[dependencies]`. |
 
 `name` is the name programs import. `submilli search` and the agent's
-package search match `name`, `description`, `keywords`, and the names of
-the package's exports, case-insensitively, as substrings.
+Package search match `name`, `description`, `keywords`, and the names of
+the Package's exports, case-insensitively, as substrings.
 `description` is the line `submilli search` and `submilli docs` print after
 the name.
 
 ### [dependencies]
 
-A key is a package name, and its value takes one of two forms.
+A key is a Package name, and its value takes one of two forms.
 
 | Form | Example | Resolved from |
 | --- | --- | --- |
-| Version string | `"@submilli/jina" = "0.1.0"` | The local package store. The stored package's version must equal the string exactly. |
-| GitHub table | `"@submilli/jina" = { github = "github.com/org/repo", rev = "<sha>" }` | The repository at that commit, fetched into the local package store by the build. |
+| Version string | `"@submilli/jina" = "0.1.0"` | The local Package store. The stored Package's version must equal the string exactly. |
+| GitHub table | `"@submilli/jina" = { github = "github.com/org/repo", rev = "<sha>" }` | The repository at that commit, fetched into the local Package store by the build. |
 
 In the GitHub table, `github` must name a `github.com/` repository
 (`https://` and `http://` prefixes are accepted) and `rev` must be a full
 40-character hexadecimal commit SHA. Branches and tags are refused. A GitHub
-dependency takes its version from the fetched package's own manifest. A
+dependency takes its version from the fetched Package's own manifest. A
 private repository needs a GitHub token that can read it (see
 [Add a dependency](/docs/packages/add-a-dependency)).
 
-A package's `dependencies` entry resolves to a sibling `[[package]]` first,
+A Package's `dependencies` entry resolves to a sibling `[[package]]` first,
 then to `[dependencies]`.
 
 ### Manifest errors
@@ -125,11 +130,11 @@ Each error stops the build with exit code 1 and points at the manifest line.
 | --- | --- |
 | No `[[package]]` | `add a [[package]] table to submilli.toml` |
 | `name` not scoped | ``package `acme/demo` must use scoped form `@org/name` (GitHub org as the scope)`` |
-| Two packages with one `name` | `rename duplicate package "@acme/demo"; package names must be unique` |
+| Two Packages with one `name` | `rename duplicate package "@acme/demo"; package names must be unique` |
 | `description` missing | `add description = "..." for package "@acme/demo"` |
 | `description` empty | `replace empty package description with a one-line summary` |
 | Empty keyword | `remove empty package keyword or replace it with a search term` |
-| `path` missing in a multi-package manifest | `add path = "..." for package "@acme/demo"; path is required in a monorepo` |
+| `path` missing in a multi-Package manifest | `add path = "..." for package "@acme/demo"; path is required in a monorepo` |
 | `path` absolute | `replace path "/x" with a path relative to submilli.toml` |
 | `path` above the manifest | `replace path "../x"; package paths may not escape the manifest directory` |
 | No entry point | `create packages/billing/src/lib.ts; package entrypoints are conventional` |
@@ -158,8 +163,8 @@ source_hash = "sha256:7a91f7149c8eb353896386cfe938c1c9b8cb9d9bce076571e791d0b2e8
 
 | Key | Holds |
 | --- | --- |
-| `name` | The package's name |
-| `version` | The version in the fetched package's manifest |
+| `name` | The Package's name |
+| `version` | The version in the fetched Package's manifest |
 | `github` | The repository |
 | `sha` | The commit |
 | `source_hash` | `sha256:` and the SHA-256 of the downloaded source archive |
@@ -224,7 +229,7 @@ A field is written one of these ways:
 | `<field>` | `customerId` | The parameter of that name | The parameter's type |
 | `<field>: $<param>` | `orderId: $id` | The parameter `<param>` | The parameter's type |
 | `<field>: $<param>.<path>` | `team: $input.teamId` | A property inside the parameter, by a dotted path | The property's type |
-| `<field>: <type>` | `amount: number`, `tags: string[]` | A value the package computes | The type as written |
+| `<field>: <type>` | `amount: number`, `tags: string[]` | A value the Package computes | The type as written |
 | `<field>: "<text>"` | `kind: "goodwill"` | A fixed string | `string` |
 | `<field>: <number>` | `version: 2` | A fixed number | `number` |
 | `<field>: true`, `false` | `live: true` | A fixed boolean | `boolean` |
@@ -257,9 +262,9 @@ is in [Export a function](/docs/packages/export-a-function).
 
 ## capabilities.yaml
 
-`capabilities.yaml` is derived from the package's source and rewritten in
-the package's directory by every `submilli build check`, `test`, and
-`publish-local`. The same file is part of the installed package.
+`capabilities.yaml` is derived from the Package's source and rewritten in
+the Package's directory by every `submilli build check`, `test`, and
+`publish-local`. The same file is part of the installed Package.
 `submilli blueprint add-package` reads it.
 
 ```yaml title="packages/billing/capabilities.yaml"
@@ -314,18 +319,18 @@ export function listInvoices(query: InvoiceQuery): string[] {
 
 | Key | Holds |
 | --- | --- |
-| `namespace` | The package name's scope, without `@` (`acme` for `@acme/billing`) |
+| `namespace` | The Package name's scope, without `@` (`acme` for `@acme/billing`) |
 | `provides` | One entry per capability name declared by an `@capability` tag, sorted by name |
 | `provides[].name` | The capability's name |
 | `provides[].description` | The summary of the first documented callable that declares it. Omitted when empty |
 | `provides[].fields` | Each field, sorted by name, with its `type` and, for a field bound to a parameter, that parameter's `@param` description |
-| `requires` | One entry per distinct capability and filter the package's code calls, sorted |
+| `requires` | One entry per distinct capability and filter the Package's code calls, sorted |
 | `requires[].capability` | The capability of a called standard-library function or function of a dependency |
 | `requires[].filter` | The filter derived from the call. Omitted when nothing was derived |
 
 For `provides`, the build reads the exported functions, in name order, then
 the public static and instance methods of each exported class,
-including instance methods inherited from a class of the same package.
+including instance methods inherited from a class of the same Package.
 When several callables declare one capability, their fields are merged into
 one entry.
 
@@ -351,38 +356,38 @@ warning: non-literal argument for `path`; no static capability filter for `path`
 For an HTTP host the warning is ``cannot statically resolve the host in the
 URL passed to `http.get`; no host capability filter was derived``. A
 relative path given to a filesystem function gets no path filter, since it
-depends on the session's working directory. A package that calls
+depends on the session's working directory. A Package that calls
 `read` from `@submilli/jina`, whose tag binds `host: string`, requires
 `jina.ai/read` with no filter.
 
 ## docs/readme.md
 
-`<path>/docs/readme.md` is required, and a package without it fails to build. It
-is copied into the installed package. The server's documentation tool and
+`<path>/docs/readme.md` is required, and a Package without it fails to build. It
+is copied into the installed Package. The server's documentation tool and
 HTTP API return it, followed by a `## Declarations` section with
-the package's declarations. `submilli docs` prints only the declarations.
+the Package's declarations. `submilli docs` prints only the declarations.
 
 `submilli build test` compiles every fenced block in it whose info string is
-exactly `ts` or `typescript`, against the package and its dependencies, and
+exactly `ts` or `typescript`, against the Package and its dependencies, and
 counts each as a test, named `example <n> (compile)`. The blocks are
 compiled, not run. A block with any other info string, such as
 `ts ignore`, `text`, or `yaml`, is skipped. A compile error is reported at
 the readme's line.
 
-`<path>/README.md`, at the package's root, is not read by the build.
+`<path>/README.md`, at the Package's root, is not read by the build.
 
 ## Test files
 
-`submilli build test` runs, for each package, every file named `*.test.ts`
+`submilli build test` runs, for each Package, every file named `*.test.ts`
 or `*.test.subm` anywhere under `<path>/tests/`, in path order, then
-compiles the package's readme examples. `-p <@scope/name>` limits the run to
-one package.
+compiles the Package's readme examples. `-p <@scope/name>` limits the run to
+one Package.
 
-A test file is a program. It imports the package by name, as a program does,
+A test file is a program. It imports the Package by name, as a program does,
 and defines `function main(): void`. Each file runs on its own, with a
-fresh, empty filesystem, and with no blueprint, so every `check` is allowed
+fresh, empty filesystem, and with no Blueprint, so every `check` is allowed
 and printed on a `[security]` line. Calls made by the test's `main` have the
-caller `main`, and calls made inside a package have the package's name as the
+caller `main`, and calls made inside a Package have the Package's name as the
 caller.
 
 A file named `network.test.ts` or `network_<anything>.test.ts` (or the
@@ -396,7 +401,7 @@ is by file name only.
 next, or to the end of `main`. A file with no `label` is one segment, named
 by its path. The first uncaught error ends the file. The segments before it
 pass, the one it happened in fails, and the ones after it don't run and
-aren't counted. An error in a package's or the file's top-level statements
+aren't counted. An error in a Package's or the file's top-level statements
 fails the first segment.
 
 ```text

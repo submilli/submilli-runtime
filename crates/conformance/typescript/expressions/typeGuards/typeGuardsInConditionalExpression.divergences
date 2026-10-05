@@ -1,28 +1,4 @@
-types: 172 of 256 tsc entries compared, 34 differ
-
-line 16: x = "hello"
-  tsc:  "hello"
-  ours: string
-
-line 21: x = 10
-  tsc:  10
-  ours: number
-
-line 27: x = 10
-  tsc:  10
-  ours: number
-
-line 32: x = "hello"
-  tsc:  "hello"
-  ours: string
-
-line 37: x = 10
-  tsc:  10
-  ours: number
-
-line 38: x = "hello"
-  tsc:  "hello"
-  ours: string
+types: 172 of 256 tsc entries compared, 25 differ
 
 line 49: typeof x === "string" ? x === "hello" : ((b = x) && // number | boolean (typeof x === "boolean" ? x // boolean : x == 10))
   tsc:  boolean | 0
@@ -100,14 +76,6 @@ line 78: x
   tsc:  number | true
   ours: number | boolean
 
-line 79: (x = 10)
-  tsc:  10
-  ours: number
-
-line 79: x = 10
-  tsc:  10
-  ours: number
-
 line 80: x
   tsc:  number
   ours: number | string | boolean
@@ -115,10 +83,6 @@ line 80: x
 line 85: typeof x === "string" ? ((x = 10) && x.toString().length) // number : ((b = x) // x is number | boolean && typeof x === "number" && x)
   tsc:  number | false
   ours: number | boolean
-
-line 86: x = 10
-  tsc:  10
-  ours: number
 
 line 87: ((b = x) // x is number | boolean && typeof x === "number" && x)
   tsc:  number | false

@@ -1,5 +1,5 @@
 ---
-import { createHash } from 'node:crypto';
+import AuthorshipBadge from './AuthorshipBadge.astro';
 
 /**
  * Article header: the sidebar group as a mono eyebrow, then the title. The
@@ -19,59 +19,13 @@ function containsCurrent(entries: Entries): boolean {
 const group = sidebar.find((item) => item.type === 'group' && containsCurrent(item.entries));
 const eyebrow = group?.label;
 
-const authorship = entry.data.authorship;
-const body = entry.body?.replace(/\r\n/g, '\n').trim();
-const authorshipLabel = {
-	'human-written': {
-		label: 'Human-written',
-		description: 'The author wrote the prose. AI may have proofread it, but did not draft it.',
-	},
-	'ai-assisted': {
-		label: 'AI-assisted',
-		description: 'The prose includes both human and AI contributions.',
-	},
-	'ai-generated': {
-		label: 'AI-generated',
-		description: 'AI generated the prose. This label does not attest to human review.',
-	},
-	'generated-from-source': {
-		label: 'Generated from source',
-		description: 'Mechanically generated from source material.',
-	},
-} as const;
-const confirmedAuthorship =
-	authorship?.confirmed &&
-	body &&
-	createHash('sha256').update(body, 'utf8').digest('hex') === authorship.contentHash
-		? authorshipLabel[authorship.label]
-		: undefined;
 ---
 
 <div class="page-title">
 	{eyebrow && <p class="page-title__eyebrow">{eyebrow}</p>}
 	<div class="page-title__heading">
 		<h1 id="_top">{entry.data.title}</h1>
-		{confirmedAuthorship && (
-			<details class="authorship">
-				<summary aria-label={`${confirmedAuthorship.label}. Authorship details`}>
-					<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-						{authorship?.label === 'human-written' ? (
-							<><circle cx="12" cy="8" r="3"/><path d="M5 21v-2a7 7 0 0 1 14 0v2"/></>
-						) : authorship?.label === 'generated-from-source' ? (
-							<path d="m8 5-6 7 6 7m8-14 6 7-6 7m-3-17-2 20"/>
-						) : (
-							<>
-								<rect x="4" y="7" width="16" height="13" rx="4"/>
-								<path d="M12 3v4M2 12v4m20-4v4M9 16h6"/>
-								<circle cx="9" cy="12" r=".7"/>
-								<circle cx="15" cy="12" r=".7"/>
-							</>
-						)}
-					</svg>
-				</summary>
-				<span class="authorship__tooltip" role="tooltip"><strong>{confirmedAuthorship.label}</strong>{confirmedAuthorship.description}</span>
-			</details>
-		)}
+		<AuthorshipBadge />
 	</div>
 </div>
 
@@ -98,15 +52,6 @@ const confirmedAuthorship =
 		text-wrap: balance;
 	}
 	.page-title__heading { display: flex; align-items: center; gap: 0.8rem; }
-	.authorship { position: relative; flex-shrink: 0; }
-	.authorship summary { display: flex; align-items: center; justify-content: center; width: 28px; height: 28px; list-style: none; color: var(--sl-color-gray-3); cursor: pointer; border-radius: 5px; }
-	.authorship summary::-webkit-details-marker { display: none; }
-	.authorship summary:hover, .authorship summary:focus-visible { color: var(--sl-color-white); background: var(--sl-color-gray-6); }
-	.authorship summary:focus-visible { outline: 2px solid var(--sl-color-text-accent); outline-offset: 2px; }
-	.authorship__tooltip { display: none; position: absolute; z-index: 10; top: calc(100% + 8px); right: 0; width: min(260px, 75vw); padding: 12px 14px; background: var(--sl-color-gray-6); color: var(--sl-color-white); border: 1px solid var(--sl-color-gray-5); border-radius: 8px; box-shadow: 0 5px 18px #0003; font: 400 0.8rem/1.5 var(--sl-font); }
-	.authorship__tooltip strong { display: block; margin-bottom: 3px; }
-	.authorship:is(:hover, :focus-within)::details-content { content-visibility: visible; }
-	.authorship[open] .authorship__tooltip, .authorship:hover .authorship__tooltip, .authorship:focus-within .authorship__tooltip { display: block; }
 
 	@media (max-width: 49.99rem) {
 		.page-title__eyebrow {

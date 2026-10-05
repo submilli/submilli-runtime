@@ -1,24 +1,29 @@
 ---
-title: "Document the package"
-description: "How to document a package for its two readers: the doc comments and docs/readme.md the model reads, with examples the build compiles, and the readme the person who installs and grants it reads."
+title: "Document the Package"
+description: "How to document a Package for its two readers: the doc comments and docs/readme.md the model reads, with examples the build compiles, and the readme the person who installs and grants it reads."
 slug: packages/document-the-package
 sidebar:
   order: 3
+authorship:
+  label: ai-assisted
+  confirmed: true
+  contentHash: "f14b4e6514a0f86e2dac9ad0fa6a6972d35838a0ec6fb728791459a135f76910"
+  confirmedAt: "2026-10-05T13:01:53.009Z"
 ---
 
-Two readers decide how to use the package, and neither reads its source.
+Two readers decide how to use the Package, and neither reads its source.
 The person who chooses, installs, and grants it, or their coding agent,
-reads the package's readme. The model reads the declarations and
+reads the Package's readme. The model reads the declarations and
 `docs/readme.md` through its documentation tool, seconds before it writes
 a program nobody reviews. What each file leaves out, that reader guesses.
 
-This guide shows you how to document a package for both readers. The
-example is Acme's billing package. Substitute your operations and your
+This guide shows you how to document a Package for both readers. The
+example is Acme's billing Package. Substitute your operations and your
 service.
 
 ## Doc comments are the API
 
-Every export and every field of a type the package returns gets a doc
+Every export and every field of a type the Package returns gets a doc
 comment, and a function's comment names each parameter with `@param`
 and what it returns with `@returns`. The build warns about an export
 without a comment, and about a comment that leaves a parameter or the
@@ -79,7 +84,7 @@ unit, and what the fields mean.
 ## The readme the model reads
 
 `docs/readme.md` is returned to the model with the declarations. Say what
-the package is for, what each operation takes and returns, when it
+the Package is for, what each operation takes and returns, when it
 throws, what a denial means and that the program should stop, and end
 with one complete `main`:
 
@@ -114,7 +119,7 @@ function main(): string {
 ## The examples are compiled
 
 Every `ts` or `typescript` example in `docs/readme.md` is compiled
-against the package by `submilli build test` and counted as a test, so
+against the Package by `submilli build test` and counted as a test, so
 an example can't drift from the API it shows:
 
 ```sh
@@ -128,7 +133,7 @@ ok   packages/billing/docs/readme.md :: example 1 (compile)
 2 passed, 0 failed across 2 files
 ```
 
-An example that names a function the package doesn't have fails the run,
+An example that names a function the Package doesn't have fails the run,
 with the line in the readme:
 
 ```text
@@ -148,9 +153,9 @@ program as `ts ignore` and it is left alone.
 
 ## The readme people read
 
-`README.md` in the package's directory is for the person deciding to use
-the package, and for the coding agent doing it for them. Replace the
-scaffold's placeholder. Say what the package is for, which credential to
+`README.md` in the Package's directory is for the person deciding to use
+the Package, and for the coding agent doing it for them. Replace the
+scaffold's placeholder. Say what the Package is for, which credential to
 bind and how the service issues it, what the credential needs on the
 service's side, which operations to grant and the fields their filters
 can test, and give the install and grant commands:

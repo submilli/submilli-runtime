@@ -199,7 +199,7 @@ fn insert_repository_class(defs: &mut PackageDeclaration, statics: BTreeMap<Stri
             params: vec![string("message")],
             ret: Type::String,
             predicate: None,
-            doc: crate::doc(FileId::GIT, "/** Commit staged changes with blueprint identity and return the commit ID. Empty commits are refused.\n * @capability git.commit { path: string, branch: string }\n */"),
+            doc: crate::doc(FileId::GIT, "/** Commit staged changes with Blueprint identity and return the commit ID. Empty commits are refused.\n * @capability git.commit { path: string, branch: string }\n */"),
         },
     );
     methods.insert(

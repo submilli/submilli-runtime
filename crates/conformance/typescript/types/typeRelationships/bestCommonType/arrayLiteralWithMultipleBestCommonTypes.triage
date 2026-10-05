@@ -1,3 +1,1 @@
-line 12 extra: bug SUB-1071 an array literal takes its first element's type even when another element's type fits them all
 line 8, 9, 10, 14, 15 type: bug SUB-1196 (array element union) an array literal whose elements all fit one element's type takes that type, where tsc makes their union
-line 12 type: bug SUB-1071 an array literal takes its first element's type even when another element's type fits them all

@@ -1,33 +1,38 @@
 ---
 title: "Add a dependency"
-description: "How to make a package import another, from the same project, your local store, or a GitHub repository, and what the dependency adds to what the package requires and to the blueprint."
+description: "How to make a Package import another, from the same project, your local store, or a GitHub repository, and what the dependency adds to what the Package requires and to the Blueprint."
 slug: packages/add-a-dependency
 sidebar:
   order: 4
+authorship:
+  label: ai-assisted
+  confirmed: true
+  contentHash: "717f92c8888abcb1fcbd9dbaa3eb6511190e192d4c5471ead2f34348fd03679f"
+  confirmedAt: "2026-10-05T13:01:53.009Z"
 ---
 
-A package often builds on another. Acme's support package apologizes to
-a customer with a credit, so it imports the billing package and doesn't
-call Stripe again. A package that reads a web page imports the curated
-Jina package. The build has to know where each import comes from. The
-blueprint needs rules for every package in the chain, including the ones
+A Package often builds on another. Acme's support Package apologizes to
+a customer with a credit, so it imports the billing Package and doesn't
+call Stripe again. A Package that reads a web page imports the curated
+Jina Package. The build has to know where each import comes from. The
+Blueprint needs rules for every Package in the chain, including the ones
 the program doesn't import directly, and `add-package` writes them.
 
-This guide shows you how to make a package import another, and what the
-dependency adds to the blueprint. The example is `@acme/support`, which
-imports `@acme/billing`. Substitute your packages.
+This guide shows you how to make a Package import another, and what the
+dependency adds to the Blueprint. The example is `@acme/support`, which
+imports `@acme/billing`. Substitute your Packages.
 
-Start with the billing package from
+Start with the billing Package from
 [Export a function](/docs/packages/export-a-function), including its Stripe
 implementation. The final run needs a Stripe test-mode key and a customer
 in the same test account.
 
 ## Import it
 
-`@acme/support` is the second package of the project, added with
+`@acme/support` is the second Package of the project, added with
 `submilli build new @acme/support packages/support`, as shown in
 [Start a project](/docs/packages/start-a-project#add-a-second-package).
-Its one operation credits the customer through the billing package:
+Its one operation credits the customer through the billing Package:
 
 ```typescript title="packages/support/src/lib.ts"
 import { applyCredit } from "@acme/billing";
@@ -61,12 +66,12 @@ error: package `@acme/billing` not found
 
 | The dependency is | Declare it |
 | --- | --- |
-| Another package in the project | In the package's `dependencies` |
-| A package in the local store | There, and in `[dependencies]` with its version |
-| A package in a GitHub repository | There, and in `[dependencies]` as `{ github = "github.com/org/repo", rev = "<commit>" }` |
-| A package in a private GitHub repository | The same, and whoever builds needs a GitHub token that can read it |
+| Another Package in the project | In the Package's `dependencies` |
+| A Package in the local store | There, and in `[dependencies]` with its version |
+| A Package in a GitHub repository | There, and in `[dependencies]` as `{ github = "github.com/org/repo", rev = "<commit>" }` |
+| A Package in a private GitHub repository | The same, and whoever builds needs a GitHub token that can read it |
 
-The billing package is a sibling, so one line in the support package's
+The billing Package is a sibling, so one line in the support Package's
 block declares it:
 
 ```toml title="submilli.toml (fragment)"
@@ -87,9 +92,9 @@ checked @acme/billing v0.1.0
 checked @acme/support v0.1.0
 ```
 
-`-p` builds the package and the siblings it depends on, in order. A
-package from the local store or from GitHub is declared at the top of
-`submilli.toml` as well, and named in the package's list the same way:
+`-p` builds the Package and the siblings it depends on, in order. A
+Package from the local store or from GitHub is declared at the top of
+`submilli.toml` as well, and named in the Package's list the same way:
 
 The following fragment illustrates those other sources. Keep the sibling-only
 declaration for this guide. To use the fragment in your own project, install
@@ -116,14 +121,14 @@ one, such as `@acme/crm` above, is fetched with the GitHub token of whoever
 builds or installs. That is your token on your machine
 (`submilli github authenticate`) and the server's token on a server, as
 [Install private
-packages](/docs/server/install-private-packages) explains. The token needs
+Packages](/docs/server/install-private-packages) explains. The token needs
 Contents: Read-only on every private repository in the dependencies,
 including the ones your dependencies depend on.
 
-## What it adds to the blueprint
+## What it adds to the Blueprint
 
-What a package uses of another shows up in what it requires. The build
-derived this for the support package:
+What a Package uses of another shows up in what it requires. The build
+derived this for the support Package:
 
 ```yaml title="packages/support/capabilities.yaml"
 namespace: acme
@@ -132,10 +137,10 @@ requires:
 - capability: acme.com/credits.apply
 ```
 
-A blueprint grants that to `@acme/support` as it would to a program. The
-billing package makes its own calls, as the caller `@acme/billing`,
+A Blueprint grants that to `@acme/support` as it would to a program. The
+billing Package makes its own calls, as the caller `@acme/billing`,
 so it needs rules too, and so does the secret it reads. `add-package`
-adds rules for the chain. First publish the support package and its sibling
+adds rules for the chain. First publish the support Package and its sibling
 dependency to the local store. `build check` installs neither:
 
 ```sh
@@ -147,7 +152,7 @@ installed @acme/billing v0.1.0 -> …/packages/@acme/billing
 installed @acme/support v0.1.0 -> …/packages/@acme/support
 ```
 
-Then create the blueprint and add the package:
+Then create the Blueprint and add the Package:
 
 ```sh
 submilli blueprint init support
@@ -167,9 +172,9 @@ warning: blueprint.yaml: package `@acme/billing` requires secret `BILLING_API_KE
     allow secrets.get (filter: name == "BILLING_API_KEY")
 ```
 
-Each package in the chain gets its own caller list from what it
-requires, but only the package you named is listed under `packages:`,
-the packages a program may import. A program can credit a customer only
+Each Package in the chain gets its own caller list from what it
+requires, but only the Package you named is listed under `packages:`,
+the Packages a program may import. A program can credit a customer only
 through `apologize`, which fixes the amount. Declare the secret the
 warning names, and put your Stripe test-mode key in the store if it isn't
 there yet:
@@ -204,9 +209,9 @@ submilli run --blueprint blueprint.yaml apology.ts
 credited $15
 ```
 
-The program called the support package, the support package called the
-billing package, and the billing package called Stripe, each under its
-own rules. The complete blueprint:
+The program called the support Package, the support Package called the
+billing Package, and the billing Package called Stripe, each under its
+own rules. The complete Blueprint:
 
 ```yaml title="blueprint.yaml"
 kind: blueprint

@@ -1,1 +1,0 @@
-line 2, 8 type: bug SUB-1204 a `let` or object property widens a literal type that isn't fresh, where tsc keeps it

@@ -6,6 +6,7 @@ use std::collections::BTreeMap;
 
 use crate::{Span, Type};
 
+use super::literal_freshness::LiteralOrigin;
 use super::narrowing;
 
 #[derive(Default)]
@@ -29,6 +30,8 @@ pub(super) struct ScopeEntry {
     /// For a function declared inside another function, its index in
     /// `Inferer::nested_functions`.
     pub(super) nested_function: Option<usize>,
+    /// Where the literal types in `ty` came from; see `literal_freshness`.
+    pub(super) literal_origin: LiteralOrigin,
 }
 
 impl Scopes {
@@ -46,7 +49,26 @@ impl Scopes {
     }
 
     pub(super) fn insert(&mut self, name: String, ty: Type, is_const: bool, decl_span: Span) {
-        self.insert_entry(name, ty, is_const, decl_span, None);
+        self.insert_entry(name, ty, is_const, decl_span, None, LiteralOrigin::Unknown);
+    }
+
+    /// Bind a `let`, `const` or loop variable whose literal types came from
+    /// `literal_origin`.
+    pub(super) fn insert_with_literal_origin(
+        &mut self,
+        name: String,
+        ty: Type,
+        is_const: bool,
+        decl_span: Span,
+        literal_origin: LiteralOrigin,
+    ) {
+        self.insert_entry(name, ty, is_const, decl_span, None, literal_origin);
+    }
+
+    /// Bind a parameter whose type is written out, so every literal type in it
+    /// is regular.
+    pub(super) fn insert_annotated_param(&mut self, name: String, ty: Type, decl_span: Span) {
+        self.insert_entry(name, ty, false, decl_span, None, LiteralOrigin::Declared);
     }
 
     /// Bind a nested function declaration's name, which cannot be reassigned.
@@ -57,7 +79,14 @@ impl Scopes {
         decl_span: Span,
         index: usize,
     ) {
-        self.insert_entry(name, ty, true, decl_span, Some(index));
+        self.insert_entry(
+            name,
+            ty,
+            true,
+            decl_span,
+            Some(index),
+            LiteralOrigin::Unknown,
+        );
     }
 
     fn insert_entry(
@@ -67,6 +96,7 @@ impl Scopes {
         is_const: bool,
         decl_span: Span,
         nested_function: Option<usize>,
+        literal_origin: LiteralOrigin,
     ) {
         if let Some(top) = self.stack.last_mut() {
             let decl_scope = top.id;
@@ -78,6 +108,7 @@ impl Scopes {
                     decl_span,
                     decl_scope,
                     nested_function,
+                    literal_origin,
                 },
             );
         }

@@ -879,10 +879,19 @@ fn assignable_rec(
             };
             predicate_ok
                 && Type::function_arity_fits(pa.len(), pe.len(), *rest_a)
-                && pa
-                    .iter()
-                    .zip(pe.iter())
-                    .all(|(a, e)| assignable_rec(e, a, types, seen))
+                && pa.iter().zip(pe.iter()).enumerate().all(|(i, (a, e))| {
+                    let both_rest = *rest_a && i + 1 == pa.len() && i + 1 == pe.len();
+                    if both_rest {
+                        assignable_rec(
+                            e.rest_array_ignoring_readonly(),
+                            a.rest_array_ignoring_readonly(),
+                            types,
+                            seen,
+                        )
+                    } else {
+                        assignable_rec(e, a, types, seen)
+                    }
+                })
                 && (re.is_void()
                     || (ra.is_void() && matches!(re.peel(), Type::TypeVar(_)))
                     || assignable_rec(ra, re, types, seen))

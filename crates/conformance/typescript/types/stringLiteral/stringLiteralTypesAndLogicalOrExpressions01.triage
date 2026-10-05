@@ -1,2 +1,2 @@
-line 8, 10 extra: bug SUB-1204 a literal widens to its base type where tsc keeps the literal type
-line 7, 8, 9, 10 type: bug SUB-1204 a literal widens to its base type where tsc keeps the literal type
+line 10 extra: bug SUB-1204 a literal widens to its base type where tsc keeps the literal type
+line 9, 10 type: bug SUB-1204 a literal widens to its base type where tsc keeps the literal type

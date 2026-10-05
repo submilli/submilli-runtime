@@ -95,6 +95,8 @@ pub enum ExprKind {
     TemplateLiteral {
         parts: Vec<String>,
         exprs: Vec<ExprId>,
+        /// Each substitution's span, `${` through `}`, parallel to `exprs`.
+        substitution_spans: Vec<Span>,
     },
     Ternary {
         cond: ExprId,

@@ -15,9 +15,9 @@ material that only a code-writing agent needs belongs there.
 The book follows [Diátaxis](https://diataxis.fr/): every page is one of four
 types, and the type decides how it is written. The parts are a single reading
 line: each page assumes only what earlier pages established. Blueprints come
-before packages everywhere, the policy first and then the operation it governs.
+before Packages everywhere, the policy first and then the operation it governs.
 One scenario runs through the book: the Acme support agent, its billing
-package, the customer `cus_northwind`, and the injected ticket.
+Package, the customer `cus_northwind`, and the injected ticket.
 
 | Part | Folder | Type | Read |
 | --- | --- | --- | --- |
@@ -35,7 +35,7 @@ A folder inside a part is a sidebar group, named in `astro.config.mjs`.
 ### Explanation
 
 Say what the thing *is* before what it does, with an analogy the reader
-already holds (a blueprint is to a session what a blueprint is to a house).
+already holds (a Blueprint is to a session what a blueprint is to a house).
 Then list its main parts and say which one the page is about. Explain why by
 contrast with what the reader uses today, named concretely. Put the concept in
 the heading, so the argument reads in the table of contents. Order ideas so
@@ -170,8 +170,6 @@ authorship:
   confirmedAt: "REPLACE_WITH_CONFIRMATION_TIME_FROM_THE_COMMAND_BELOW"
 ---
 
-Authorship: AI-assisted.
-
 The page content starts here.
 ```
 
@@ -182,12 +180,13 @@ label for this version; an assistant must not set it without that confirmation.
 `contentHash` is the lowercase SHA-256 digest of the Markdown body, excluding
 frontmatter, with CRLF converted to LF and surrounding whitespace trimmed.
 
-Include the visible `Authorship: …` line as the first body paragraph. Use the
-human-readable label from the table. The current Markdown exporter omits
-frontmatter, so this line keeps disclosure in the exported chapter and combined
-agent documentation. For mixed content, add an explicit note beside the relevant
-section, for example: `Authorship of this table: Generated from source.` Include
-these notes before calculating the hash.
+The site shows this declaration as a subtle icon beside the page title. The
+Markdown exporter adds `Authorship: AI-assisted.` (or the corresponding label)
+to the exported chapter and combined agent documentation automatically, using
+the same confirmed metadata and body-hash check. Do not add a duplicate disclosure
+paragraph to the source body. For mixed content, add an explicit note beside the
+relevant section, for example: `Authorship of this table: Generated from source.`
+Include these notes before calculating the hash.
 
 After the person confirms the label and the body is final, run this from
 `docs-site/` to calculate the values. Replace the example path with the page's
@@ -209,14 +208,16 @@ JS
 Copy the digest and timestamp into the frontmatter, keeping the timestamp
 quoted. Use the actual confirmation time if confirmation happened earlier.
 Changing only frontmatter does not change the body hash. After any body edit,
-recheck the visible disclosure and obtain confirmation again, then regenerate
+recheck the label and obtain confirmation again, then regenerate
 the hash and timestamp.
 
 The site displays the authorship icon only when `confirmed` is true and the
 hash matches the current body. Missing or stale metadata suppresses the icon;
-it does not mean Human-written. The schema currently permits missing metadata,
-so build success alone does not satisfy the disclosure requirement. Reviewers
-must check both the frontmatter and visible disclosure before publication.
+it does not mean Human-written. The schema permits missing metadata for
+unpublished stubs, but the docs checks and built-output validation reject visible
+book pages with missing or stale
+confirmation. Reviewers must still check that the declared label reflects the
+authoring process. A matching hash does not prove authorship.
 
 ## Prose style
 
@@ -348,7 +349,7 @@ Before handing a page over for review, check it against this list:
   it, and name the warning the next step clears.
 - **Explain arguments the first time** a command appears, and define a term
   in a sentence or two where the reader first needs it.
-- **Real examples, not stubs.** A package makes its HTTP call and reads its
+- **Real examples, not stubs.** A Package makes its HTTP call and reads its
   key; names, paths, and ids stay consistent within the page.
 - **Purpose before command,** in the reader's terms and with concrete things:
   "the customer the agent is serving", not "the session's context".

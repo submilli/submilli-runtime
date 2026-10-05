@@ -382,6 +382,43 @@ pub fn tuple_union_discriminant(
     None
 }
 
+/// The literal type a compared literal value has.
+pub fn literal_type(literal: &LiteralValue) -> Type {
+    match literal {
+        LiteralValue::String(s) => Type::StringLiteral(s.clone()),
+        LiteralValue::Number(n) => Type::NumberLiteral(*n),
+        LiteralValue::Boolean(b) => Type::BooleanLiteral(*b),
+    }
+}
+
+/// Whether `ty` is, or has a member that is, a literal or `null`: what makes
+/// a property a discriminant in TypeScript.
+pub fn has_unit_member(ty: &Type) -> bool {
+    match ty.peel() {
+        Type::Union(members) => members.iter().any(has_unit_member),
+        Type::Null => true,
+        other => unit_literal_value(other).is_some(),
+    }
+}
+
+/// Whether every value `ty` holds is one of the `covered` literals.
+pub fn is_covered_by_literals(ty: &Type, covered: &BTreeSet<LiteralValue>) -> bool {
+    match ty.peel() {
+        Type::Union(members) => members
+            .iter()
+            .all(|member| is_covered_by_literals(member, covered)),
+        other => unit_literal_value(other).is_some_and(|value| covered.contains(&value)),
+    }
+}
+
+/// Whether `ty` is a type parameter, or a union with one.
+pub fn has_type_parameter_member(ty: &Type) -> bool {
+    match ty.peel() {
+        Type::Union(members) => members.iter().any(has_type_parameter_member),
+        other => matches!(other, Type::TypeVar(_) | Type::GenericParam { .. }),
+    }
+}
+
 fn unit_literal_value(ty: &Type) -> Option<LiteralValue> {
     match ty.peel() {
         Type::StringLiteral(s) => Some(LiteralValue::String(s.clone())),
@@ -1053,7 +1090,7 @@ pub fn union_envs(
 
 /// Flow joins collapse a literal already covered by a broad primitive. Keep
 /// authored unions unchanged: their overlap is meaningful to JSON diagnostics.
-fn join_flow_types(left: &Type, right: &Type) -> Type {
+pub(super) fn join_flow_types(left: &Type, right: &Type) -> Type {
     let joined = Type::union(vec![left.clone(), right.clone()]);
     let Type::Union(mut members) = joined else {
         return joined;

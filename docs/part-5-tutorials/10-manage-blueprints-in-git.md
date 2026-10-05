@@ -1,22 +1,27 @@
 ---
-title: "Manage blueprints in Git"
-description: "Keep the blueprints in a repository: on every pull request, lint them and test each one as two sessions, one it must allow and one it must refuse; on every merge to main or every release, register them on the server, with the packages pinned in the same commit and a rollback that is a revert."
+title: "Manage Blueprints in Git"
+description: "Keep the Blueprints in a repository: on every pull request, lint them and test each one as two sessions, one it must allow and one it must refuse; on every merge to main or every release, register them on the server, with the Packages pinned in the same commit and a rollback that is a revert."
 slug: tutorials/manage-blueprints-in-git
 # The workflows have not run on GitHub: the installer is not public yet.
 # SUB-1309 runs them. Every command inside them was run locally.
 sidebar:
   order: 10
+authorship:
+  label: ai-assisted
+  confirmed: true
+  contentHash: "4294291ef58c21623a74c432628e953e21d36b5387c871de6b47f43a7745e506"
+  confirmedAt: "2026-10-05T13:01:53.009Z"
 ---
 
-A blueprint is policy, and `apply` from a laptop leaves no record of who
+A Blueprint is policy, and `apply` from a laptop leaves no record of who
 changed it, when, or why. The server holds whatever was applied last. Kept
 in a repository, each change is a reviewed commit, the pipeline proves
 each rule refuses what it should before the merge, and the server holds
 what the main branch says.
 
-In this tutorial we will put a blueprint in a repository and give it a
+In this tutorial we will put a Blueprint in a repository and give it a
 pipeline that tests it on pull requests and registers it on the server
-from main. The blueprint grants the book's example billing package, which
+from main. The Blueprint grants the book's example billing Package, which
 reads fixed data, so nothing here needs a key. You need a server, as
 [Run the server](/docs/server/run-the-server) shows, with its admin
 token in your shell.
@@ -34,14 +39,14 @@ blueprints/
     └── test.sh
 ```
 
-Each blueprint gets its own folder, with the file named
+Each Blueprint gets its own folder, with the file named
 `blueprint.yaml`. The `submilli blueprint` commands read that file from
 the current directory, so in the folder `capability add`, `secret add`,
 and the rest work on it without naming it. A `README.md` beside it says
 what the agent is for and who owns the policy, and the program and
 script that test it sit there too.
 
-The blueprint lets the agent list the charges of the customer the
+The Blueprint lets the agent list the charges of the customer the
 session is for:
 
 ```yaml title="blueprints/support/blueprint.yaml"
@@ -69,8 +74,8 @@ permissions:
   '@submilli/acme-billing': []
 ```
 
-`packages.txt` names each package the blueprints list, one per line, with
-the GitHub repository it is installed from, the package, and the commit to
+`packages.txt` names each Package the Blueprints list, one per line, with
+the GitHub repository it is installed from, the Package, and the commit to
 pin:
 
 ```text title="packages.txt"
@@ -105,7 +110,7 @@ submilli run --blueprint blueprint.yaml --var customerId=cus_northwind total.ts
 submilli run --blueprint blueprint.yaml --var customerId=cus_initech total.ts 2>&1 | grep PermissionDeniedError
 ```
 
-Install the pinned package, lint, and run the test, as the pull-request
+Install the pinned Package, lint, and run the test, as the pull-request
 job will:
 
 ```sh
@@ -162,9 +167,9 @@ jobs:
           done
 ```
 
-`SUBMILLI_DENY_WARNINGS` makes any warning fail the job. A package
+`SUBMILLI_DENY_WARNINGS` makes any warning fail the job. A Package
 whose `check` and `@capability` tag disagree fails `submilli install`,
-and a blueprint that lint warns about, such as one with `default: allow`,
+and a Blueprint that lint warns about, such as one with `default: allow`,
 fails `submilli blueprint lint`.
 
 Now break the rule the way a careless edit would, by dropping the filter
@@ -179,8 +184,8 @@ file is well formed. The policy test doesn't:
 The second run was allowed, so `grep` found no denial, the script exits
 1, and the pull request's check turns red with that line in its log.
 
-A package in `packages.txt` can also be held to an agent's security review
-before its commit is pinned there. [Review a package's
+A Package in `packages.txt` can also be held to an agent's security review
+before its commit is pinned there. [Review a Package's
 security](/docs/packages/review-package-security#make-deployment-wait-for-it)
 shows how.
 
@@ -188,7 +193,7 @@ shows how.
 
 The second job runs only on a push to main, after the check, and talks
 to the server. It needs the server's address and an admin token, since
-registering a blueprint is an admin operation. Store them in the
+registering a Blueprint is an admin operation. Store them in the
 repository with the GitHub CLI, from a checkout of it. The address is a
 variable, since it isn't secret. The token is a secret, which `gh`
 prompts for so it never lands in your shell history:
@@ -226,8 +231,8 @@ commands look for them:
 
 The server has to be reachable from the runner, so a server inside your
 network takes a self-hosted runner in the same network. Merge the pull
-request, and the job's log shows the server taking the package and the
-blueprint:
+request, and the job's log shows the server taking the Package and the
+Blueprint:
 
 ```text
 installed @submilli/acme-billing @ 88656b81c537
@@ -257,11 +262,11 @@ holds, which is the main branch's. When it isn't, someone ran `apply` by
 hand, and the next merge puts the repository's version back. A change
 that turns out wrong is reverted like any other (`git revert HEAD` and a
 push), and the job registers the previous file. The job doesn't remove
-blueprints. A blueprint whose folder is deleted stays registered
+Blueprints. A Blueprint whose folder is deleted stays registered
 until `submilli server blueprint remove` is run, which ends its
 sessions, so make that call part of the same change.
 
-You have a blueprint that reaches the server from main alone, linted and
-tested from both sides on the way, with the package it needs pinned
+You have a Blueprint that reaches the server from main alone, linted and
+tested from both sides on the way, with the Package it needs pinned
 beside it and a history of its changes. Next: [Add the GitHub MCP
 server](/docs/tutorials/add-the-github-mcp-server).

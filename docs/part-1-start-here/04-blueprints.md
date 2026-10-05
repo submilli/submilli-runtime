@@ -1,15 +1,20 @@
 ---
 title: "Blueprints"
-description: "The blueprint in full: default deny, rules per caller, the variable the application binds, secrets, files, and models, and what no rule can grant."
+description: "The Blueprint in full: default deny, rules per caller, the variable the application binds, secrets, files, and models, and what no rule can grant."
 slug: blueprints
 sidebar:
   order: 4
+authorship:
+  label: ai-assisted
+  confirmed: true
+  contentHash: "dcf5f3512bb368efb589e4f6a08418ee77c95e3fa41e9c940551f666ebd7de9f"
+  confirmedAt: "2026-10-05T13:01:53.009Z"
 ---
 
 Your agent's program has to run somewhere. That somewhere is an environment
-the server builds for each run: the packages the program can import, the
-files it can see, the secrets its packages may use, and the rules for all
-of it. A blueprint is the plan for that environment.
+the server builds for each run: the Packages the program can import, the
+files it can see, the secrets its Packages may use, and the rules for all
+of it. A Blueprint is the plan for that environment.
 It is to the environment what a blueprint is to a house, or an image to a
 container. It is the definition the environment is built from. The
 server keeps the plan under a name. Each time your application opens a
@@ -26,12 +31,12 @@ what it says, how a call is decided against it, and where its power stops.
 
 ## What the plan says
 
-Before the details, the shopping list. A blueprint has these parts:
+Before the details, the shopping list. A Blueprint has these parts:
 
-1. **Packages.** The Submilli packages the program may import. They are like
+1. **Packages.** The Submilli Packages the program may import. They are like
    npm packages, but written for Submilli, so every operation in them can
    be checked against the rules.
-2. **Permissions.** What the program may do, and what each package may do
+2. **Permissions.** What the program may do, and what each Package may do
    on its behalf. These are the rules, per caller, for every operation that reaches
    outside, and the default when no rule matches.
 3. **Secrets and variables.** Secrets are credentials, declared by name,
@@ -40,7 +45,7 @@ Before the details, the shopping list. A blueprint has these parts:
 4. **Auth proxy.** When the program uses HTTP directly, this adds the
    credential on the way out, without exposing it to the model.
 5. **MCP servers.** Tool servers you already run, declared here so they
-   become packages the program can import.
+   become Packages the program can import.
 6. **Files.** What filesystem the program sees: nothing, a scratch directory
    for the run, a directory that lasts the session, or a volume the
    server's operator declared. How long an idle session lives is set here
@@ -48,11 +53,11 @@ Before the details, the shopping list. A blueprint has these parts:
 
 The rest of this chapter is about the rules, because that is where the plan
 does its work. The other parts each get a page in the how-to part on
-blueprints.
+Blueprints.
 
 ## Nothing is allowed until you say so
 
-The smallest blueprint permits nothing:
+The smallest Blueprint permits nothing:
 
 ```yaml
 kind: blueprint
@@ -65,15 +70,15 @@ permissions:
 `name` is what the application and the server call it. `permissions` is a
 map from *caller* to a list of rules. `main` is the generated program.
 `default` is the answer when no rule matches. Leaving `default` out means
-`deny` as well, so a blueprint containing only a name denies everything.
+`deny` as well, so a Blueprint containing only a name denies everything.
 
 Under this file, a program that computes and returns a value runs fine.
 Anything that reaches outside the instance, such as a file, a request, or a
-package operation, fails with a permission error. Each rule you add widens that.
+Package operation, fails with a permission error. Each rule you add widens that.
 
 ## Rules
 
-A rule has three fields: `capability`, the name the package or the standard
+A rule has three fields: `capability`, the name the Package or the standard
 library gave the operation; an optional `filter` over the fields the
 operation reports; and `action`, `allow` or `deny`.
 
@@ -97,13 +102,13 @@ field the operation didn't report never matches.
 
 ## Code you trust and code you don't
 
-Two kinds of code run inside one program: the packages you reviewed and
+Two kinds of code run inside one program: the Packages you reviewed and
 installed, and the code the model wrote a moment ago. Submilli keeps them
-apart, and the blueprint gives each a separate list of rules. `main` holds
-the rules for the generated code, and each package has a list under its name. Permissions are per
+apart, and the Blueprint gives each a separate list of rules. `main` holds
+the rules for the generated code, and each Package has a list under its name. Permissions are per
 caller, not per program.
 
-A package declares its **capabilities**. It *provides* operations a
+A Package declares its **capabilities**. It *provides* operations a
 program can be granted, such as `acme.com/credits.apply`. It *requires*
 what its own code needs to do its job, such as an HTTP request to the
 billing host and the secret that authenticates it.
@@ -126,10 +131,10 @@ permissions:
     action: allow
 ```
 
-Under this blueprint, generated code can't send a request to the billing
-host or read the key. It can call `applyCredit`, and the package sends the
+Under this Blueprint, generated code can't send a request to the billing
+host or read the key. It can call `applyCredit`, and the Package sends the
 request, authenticated with the key. Generated
-code can use the billing API only through the package's function. The CLI writes a package's own list from what it requires when
+code can use the billing API only through the Package's function. The CLI writes a Package's own list from what it requires when
 you add it. What it provides, you grant to `main`, narrowed with filters
 and variables.
 
@@ -146,8 +151,8 @@ uses, and again when a service changes its API.
 And the fact the rule most needs, the customer's class, isn't in the
 request at all.
 
-Submilli inverts that. The package that performs the operation says what it
-means. `acme.com/credits.apply` means applying a credit, and the package
+Submilli inverts that. The Package that performs the operation says what it
+means. `acme.com/credits.apply` means applying a credit, and the Package
 hands the runtime the customer, the amount, and the customer's class, typed,
 before anything is sent. The rule is written against those fields, never
 against a raw payload. Nobody guesses what a request does, and the model is never asked
@@ -160,7 +165,7 @@ The other thing a sandbox or a gateway can't see is context, meaning which
 customer this conversation is about. The request doesn't carry it, and the model
 can't be trusted to state it. A **variable** brings that context into the
 rules. Your application binds it when it opens a session, from what it
-knows, and a rule can test against it. You write one blueprint and bind a
+knows, and a rule can test against it. You write one Blueprint and bind a
 different customer for each session:
 
 ```yaml
@@ -178,7 +183,7 @@ permissions:
 ```
 
 The filter compares two values. `customerId` is the customer the program is
-asking to credit, supplied by the package in the permission check.
+asking to credit, supplied by the Package in the permission check.
 `${vars.customerId}` is the customer the application authorized for this
 session, taken from trusted context such as the signed-in account and
 supplied outside the generated program. With `cus_northwind` bound, a
@@ -192,20 +197,20 @@ when it opens and last as long as it does.
 ## Secrets stay on the trusted side
 
 Anything generated code can read, the model can be talked into repeating.
-That holds for whatever an allowed operation returns. The blueprint decides
+That holds for whatever an allowed operation returns. The Blueprint decides
 what a program may fetch, and has no say over what the model says afterwards. So credentials
 must be unreadable altogether.
 
-The blueprint declares each **secret** by name and says where the runtime
+The Blueprint declares each **secret** by name and says where the runtime
 finds the value: a secret store, or the application when it opens the
 session. The value never enters the file.
 
-- A package reads a secret by name with `secrets.get`. The runtime refuses
-  the same call from `main` whatever the blueprint says, even one that
+- A Package reads a secret by name with `secrets.get`. The runtime refuses
+  the same call from `main` whatever the Blueprint says, even one that
   allows it.
-- When a blueprint lets generated code call an HTTP endpoint directly,
+- When a Blueprint lets generated code call an HTTP endpoint directly,
   Submilli's **auth proxy** adds the credential outside the program. The
   program sees the response, never the header.
 
-Next: [packages](/docs/packages), where the operations a blueprint
+Next: [Packages](/docs/packages), where the operations a Blueprint
 rules on come from.

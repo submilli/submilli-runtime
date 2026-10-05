@@ -8,15 +8,14 @@ import ThemeSelect from './ThemeSelect.astro';
 const WEBSITE_URL = 'https://submilli.ai';
 ---
 
-<div class="header">
+<div class="docs-header">
 	<div class="title-wrapper">
 		<SiteTitle />
 	</div>
 	<div class="search-wrapper print:hidden">
 		<Search />
 	</div>
-	<a href="/docs/quickstart/#agent-setup" class="setup-link print:hidden" aria-label="Set up with your coding agent">Set up<span> with your agent</span></a>
-	<div class="sl-hidden md:sl-flex print:hidden right-group">
+	<nav class="header-actions print:hidden" aria-label="Documentation resources">
 		<a href={WEBSITE_URL} class="website-link">
 			submilli.ai
 			<svg
@@ -33,97 +32,85 @@ const WEBSITE_URL = 'https://submilli.ai';
 				<path d="M7 17 17 7M8 7h9v9"></path>
 			</svg>
 		</a>
-		<DiscordLink variant="label" />
-		<GitHubLink variant="label" />
-		<ThemeSelect />
-	</div>
-	<div class="sl-flex md:sl-hidden print:hidden mobile-group">
-		<DiscordLink variant="icon" />
-		<GitHubLink variant="icon" />
-	</div>
+		<div class="utilities">
+			<GitHubLink variant="icon" />
+			<DiscordLink variant="icon" />
+			<ThemeSelect />
+		</div>
+		<a href="/docs/quickstart/#agent-setup" class="setup-link">Agent setup<span aria-hidden="true">→</span></a>
+	</nav>
 </div>
 
 <style>
-	.setup-link {
-		display: inline-flex;
-		align-items: center;
-		justify-content: center;
-		min-height: 44px;
-		padding: 0 0.75rem;
-		border: 1px solid var(--sl-color-text-accent);
-		border-radius: var(--radius-md);
-		color: var(--sl-color-text-accent);
-		font: 600 0.875rem/1.4 var(--sl-font);
-		text-decoration: none;
-		white-space: nowrap;
-	}
-	.setup-link:hover { background: var(--sub-hover); }
-	.setup-link:focus-visible { outline: 2px solid currentColor; outline-offset: 3px; }
-	.setup-link span { display: none; white-space: pre; }
-	@media (min-width: 72rem) { .setup-link span { display: inline; } }
-	@media (max-width: 30rem) { .mobile-group { display: none; } }
-
-	.header {
+	.docs-header {
 		display: flex;
-		gap: 0.75rem;
+		gap: 1.25rem;
 		align-items: center;
 		height: 100%;
 	}
 	.title-wrapper {
-		display: flex;
-		align-items: center;
-		flex: 1;
+		flex: none;
 		min-width: 0;
-		/* Avoid clipping the focus ring around the logo link. */
+		/* Keep the logo's focus ring visible. */
 		padding: 0.25rem;
 		margin: -0.25rem;
 	}
 	.search-wrapper {
 		display: flex;
 		align-items: center;
+		flex: 1;
+		min-width: 0;
 	}
-	.right-group {
-		gap: 0.5rem;
+	.search-wrapper > :global(*) {
+		width: 100%;
+		max-width: 25rem;
+	}
+	.header-actions, .utilities {
+		display: flex;
 		align-items: center;
 	}
-	/* `display` comes from Starlight's `sl-flex` / `md:sl-hidden` utilities so
-	   the layered breakpoint rule is not overridden by this unlayered style. */
-	.mobile-group {
-		align-items: center;
+	.header-actions { gap: 1rem; flex: none; }
+	.utilities { gap: 0.125rem; }
+	.utilities :global(.theme-toggle) {
+		width: 2.75rem;
+		height: 2.75rem;
+		border: 0;
 	}
 	.website-link {
 		display: flex;
 		align-items: center;
 		gap: 0.375rem;
-		height: 2.25rem;
-		padding: 0 0.75rem;
-		border-radius: var(--radius-md);
-		font: 600 0.875rem/1 var(--sl-font);
+		min-height: 44px;
+		font: 500 0.875rem/1 var(--sl-font);
 		color: var(--sl-color-gray-2);
 		text-decoration: none;
-		transition:
-			color var(--sub-dur-base) var(--sub-ease-out),
-			background-color var(--sub-dur-base) var(--sub-ease-out);
 	}
-	.website-link:hover {
-		color: var(--sl-color-white);
-		background: var(--sub-hover);
+	.website-link:hover { color: var(--sl-color-white); }
+	.setup-link {
+		display: inline-flex;
+		align-items: center;
+		justify-content: center;
+		gap: 0.625rem;
+		min-height: 2.75rem;
+		padding: 0 0.875rem;
+		border: 1px solid var(--sub-line-strong);
+		border-radius: var(--radius-md);
+		background: var(--sl-color-accent-low);
+		color: var(--sl-color-text-accent);
+		font: 600 0.875rem/1.4 var(--sl-font);
+		text-decoration: none;
+		white-space: nowrap;
 	}
-
-	@media (min-width: 50rem) {
-		.header {
-			gap: 1.25rem;
-		}
-		.title-wrapper {
-			flex: none;
-		}
-		.search-wrapper {
-			flex: 1;
-			margin-inline-start: 0.25rem;
-		}
-		.search-wrapper > :global(*) {
-			width: 100%;
-			max-width: 22.5rem;
-		}
+	.setup-link:hover { border-color: var(--sl-color-text-accent); }
+	@media (max-width: 71.99rem) {
+		.website-link { display: none; }
+		.docs-header { gap: 0.75rem; }
+		.header-actions { gap: 0.5rem; }
+	}
+	@media (max-width: 49.99rem) {
+		/* Resource links and setup remain available in the mobile menu. */
+		.header-actions { display: none; }
+		.title-wrapper { flex: 1; }
+		.search-wrapper { flex: none; }
 	}
 </style>

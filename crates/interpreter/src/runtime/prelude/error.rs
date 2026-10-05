@@ -981,7 +981,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                             readonly: false,
                             optional: false,
                             doc: doc(
-                                "/** The package the denied call was attributed to (e.g. `\"main\"`). */",
+                                "/** The Package the denied call was attributed to (e.g. `\"main\"`). */",
                             ),
                         },
                     ),

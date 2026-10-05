@@ -515,8 +515,11 @@ impl Inferer<'_> {
             let stored_return = sig_ret_type.clone();
             self.scopes.push();
             for (p, body_ty) in params.iter().zip(body_param_types.iter()) {
-                self.scopes
-                    .insert(p.name.name.clone(), body_ty.clone(), false, p.name.span);
+                self.scopes.insert_annotated_param(
+                    p.name.name.clone(),
+                    body_ty.clone(),
+                    p.name.span,
+                );
             }
             let prev_return = self.current_return.replace(body_ret_type.clone());
             // Reset to `true`: a previous function that ended unreachable would
@@ -720,9 +723,10 @@ impl Inferer<'_> {
                 .last()
                 .ok_or_else(|| super::inference_failure("rest signature has no parameters"))?
                 .ty
+                .rest_element()
             {
-                Type::Array(elem) => (**elem).clone(),
-                _ => Type::Error,
+                Some(elem) => Type::clone(elem),
+                None => Type::Error,
             }
         } else {
             Type::Error
@@ -998,6 +1002,16 @@ impl Inferer<'_> {
             .is_some_and(|params| params.iter().any(|p| p.ty.is_none())))
     }
 
+    /// A function literal that annotates every parameter, so it types itself.
+    pub(super) fn is_fully_annotated_function(
+        &self,
+        expr: ExprId,
+    ) -> Result<bool, CompilerFailure> {
+        Ok(self
+            .function_literal_params(expr)?
+            .is_some_and(|params| params.iter().all(|p| p.ty.is_some())))
+    }
+
     /// Infer a generic call's arguments against `params`, binding its type
     /// parameters in `sub`. A function literal with an unannotated parameter,
     /// passed for a function-typed parameter, is inferred after the others,
@@ -1205,9 +1219,10 @@ impl Inferer<'_> {
                 .last()
                 .ok_or_else(|| super::inference_failure("rest signature has no parameters"))?
                 .ty
+                .rest_element()
             {
-                Type::Array(elem) => (**elem).clone(),
-                _ => Type::Error,
+                Some(elem) => Type::clone(elem),
+                None => Type::Error,
             }
         } else {
             Type::Error

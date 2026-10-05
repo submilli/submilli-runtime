@@ -4,12 +4,17 @@ description: "What submilli-server is and why it is built the way it is: an isol
 slug: server
 sidebar:
   order: 6
+authorship:
+  label: ai-assisted
+  confirmed: true
+  contentHash: "d71d2cb520e175e3f1dcae496f0cad39ca7e5e42951c9b57ee7cd0855be71b28"
+  confirmedAt: "2026-10-05T13:01:53.009Z"
 ---
 
 `submilli-server` is the process that runs the agent's programs. It is one
-long-lived service that holds your blueprints, packages, and secrets. For
-each run it builds the environment a blueprint describes, runs the program
-inside, and answers every check from that blueprint.
+long-lived service that holds your Blueprints, Packages, and secrets. For
+each run it builds the environment a Blueprint describes, runs the program
+inside, and answers every check from that Blueprint.
 
 Consider the alternative, a large machine running a microVM per agent with
 Firecracker or the like. Each microVM takes half a gigabyte to a gigabyte
@@ -26,7 +31,7 @@ WebAssembly isolates one program from another, and the server puts
 limits around it, on memory and on compute among others. It is a microVM's
 isolation at a fraction of the cost.
 
-In the quickstart you started the server, registered a blueprint, and sent
+In the quickstart you started the server, registered a Blueprint, and sent
 it two programs. This chapter is what happened in between.
 
 ## What happens to a program
@@ -34,20 +39,20 @@ it two programs. This chapter is what happened in between.
 <!-- video:works -->
 
 Your application, or your agent framework, sends the server three things:
-the program's source, the name of a blueprint, and values for the
-blueprint's variables. The server then does four things.
+the program's source, the name of a Blueprint, and values for the
+Blueprint's variables. The server then does four things.
 
 1. **Compile.** The server parses and type-checks the source and compiles it
    to WebAssembly, a binary format designed for running code in isolation.
    A program with a type error never starts. Generated programs are compiled
    on every request. Packages are compiled once, when you install them.
 2. **Create an instance.** Each run gets its own instance and memory, the
-   environment the blueprint describes, and sees nothing left by an earlier
-   run, apart from the file area or session state a blueprint can grant.
+   environment the Blueprint describes, and sees nothing left by an earlier
+   run, apart from the file area or session state a Blueprint can grant.
    Creating one takes less than a millisecond.
 3. **Run `main`.** The program runs inside the server process. Whenever it
    calls an operation that touches the outside world, the runtime consults
-   the blueprint first.
+   the Blueprint first.
 4. **Return.** The value `main` returns is the result. A successful run
    returns only that value. The logs stay on the server for the framework
    to fetch with another tool call. A failed run returns the error and the
@@ -70,11 +75,11 @@ instance you can set:
 - **Files**, the size of what a session may keep.
 - **Network**. By default, the server refuses connections to private
   addresses, loopback, the private ranges, and link-local, which covers the
-  cloud metadata endpoint that hands out credentials, whatever a blueprint
+  cloud metadata endpoint that hands out credentials, whatever a Blueprint
   allows.
 
 A run that passes a limit stops with an error the model can read. The
-limits belong to the operator. A blueprint can cap its own files and narrow
+limits belong to the operator. A Blueprint can cap its own files and narrow
 with filters, but it can't raise them.
 
 ## When a program fails
@@ -109,9 +114,9 @@ the server has been reviewed against it.
 ## MCP
 
 The server exposes MCP, the protocol agent frameworks use to call tools,
-with one endpoint per blueprint: `/mcp/<blueprint>`. Point your harness at
+with one endpoint per Blueprint: `/mcp/<blueprint>`. Point your harness at
 it and the agent gets Submilli as a set of tools: run a program, look up
-packages, read the session's files. An application that would rather build
+Packages, read the session's files. An application that would rather build
 those tools itself, as the quickstart's did, uses the HTTP API instead.
 
 ## Availability

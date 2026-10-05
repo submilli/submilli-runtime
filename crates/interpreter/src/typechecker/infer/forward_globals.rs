@@ -253,7 +253,7 @@ impl Inferer<'_> {
             return self.resolve_type(annotation).map(Some);
         }
         let value = declaration.value;
-        if let Some(literal) = super::stmt::literal_type_of(self.ast, value)? {
+        if let Some(literal) = stated_literal_type(self.ast, value)? {
             return Ok(Some(if declaration.is_const {
                 literal
             } else {
@@ -297,4 +297,32 @@ impl Inferer<'_> {
             has_rest: params.last().is_some_and(|p| p.rest),
         }))
     }
+}
+
+/// The literal type an initializer states without being inferred: a literal
+/// token through any parentheses, or a `?:` whose branches are literals of one
+/// primitive type. Any other initializer states nothing.
+fn stated_literal_type(ast: &crate::Ast, value: ExprId) -> Result<Option<Type>, CompilerFailure> {
+    Ok(
+        match &ast.try_expr(value).map_err(super::arena_failure)?.kind {
+            ExprKind::Number(v) => Some(Type::NumberLiteral(crate::types::LiteralF64(*v))),
+            ExprKind::String(s) => Some(Type::StringLiteral(s.clone())),
+            ExprKind::Boolean(b) => Some(Type::BooleanLiteral(*b)),
+            ExprKind::Paren(inner) => stated_literal_type(ast, *inner)?,
+            ExprKind::Ternary { then_, else_, .. } => {
+                match (
+                    stated_literal_type(ast, *then_)?,
+                    stated_literal_type(ast, *else_)?,
+                ) {
+                    (Some(then_ty), Some(else_ty))
+                        if then_ty.widen_literal() == else_ty.widen_literal() =>
+                    {
+                        Some(Type::union(vec![then_ty, else_ty]))
+                    }
+                    _ => None,
+                }
+            }
+            _ => None,
+        },
+    )
 }

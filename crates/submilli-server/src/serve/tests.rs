@@ -277,20 +277,43 @@ async fn startup_migrates_sqlite_before_constructing_application_state() {
         .add(submilli_blueprint::parse("name: imported").unwrap())
         .await
         .unwrap();
-    let database = Arc::new(
-        crate::database::ServerDatabase::open(&directory.path().join("db/server.db"))
-            .await
-            .unwrap(),
-    );
-    let mut config = ServerConfig {
-        database: Some(Arc::clone(&database)),
-        blueprint_dir: Some(source.clone()),
-        ..Default::default()
-    };
-    config.blueprints = Some(prepare_blueprint_store(&config).await.unwrap());
-    let state = AppState::new(config).unwrap();
-    assert_eq!(state.blueprints().list().await.unwrap(), ["imported"]);
-    assert!(!source.exists());
-    assert!(directory.path().join("archive/blueprints").is_dir());
-    database.close().await.unwrap();
+    for _ in 0..3 {
+        let database = Arc::new(
+            crate::database::ServerDatabase::open(&directory.path().join("db/server.db"))
+                .await
+                .unwrap(),
+        );
+        let mut config = ServerConfig {
+            database: Some(Arc::clone(&database)),
+            blueprint_dir: Some(source.clone()),
+            ..Default::default()
+        };
+        config.blueprints = Some(prepare_blueprint_store(&config).await.unwrap());
+        let state = AppState::new(config).unwrap();
+        assert_eq!(state.blueprints().list().await.unwrap(), ["imported"]);
+        assert!(!source.exists());
+        assert!(directory.path().join("archive/blueprints").is_dir());
+        database.close().await.unwrap();
+    }
+}
+
+#[tokio::test]
+async fn sqlite_startup_does_not_create_legacy_blueprint_directory() {
+    let directory = tempfile::tempdir().unwrap();
+    let source = directory.path().join("blueprints");
+    let path = directory.path().join("db/server.db");
+    for _ in 0..3 {
+        let database = Arc::new(crate::database::ServerDatabase::open(&path).await.unwrap());
+        let mut config = ServerConfig {
+            database: Some(Arc::clone(&database)),
+            blueprint_dir: Some(source.clone()),
+            ..Default::default()
+        };
+        config.blueprints = Some(prepare_blueprint_store(&config).await.unwrap());
+        let state = AppState::new(config).unwrap();
+        assert!(state.blueprints().list().await.unwrap().is_empty());
+        assert!(!source.exists());
+        assert!(!directory.path().join("archive").exists());
+        database.close().await.unwrap();
+    }
 }

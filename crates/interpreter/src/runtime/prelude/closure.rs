@@ -64,6 +64,20 @@ impl Closure {
                 .all(|(default, _)| default.is_some()))
     }
 
+    /// Whether this function declares `count` parameters, the last of them a
+    /// rest parameter: the packed calling convention of a rest function type.
+    pub(crate) fn ends_in_rest(
+        &self,
+        caller: &mut Caller<'_, StoreData>,
+        count: usize,
+    ) -> wasmtime::Result<bool> {
+        Ok(
+            super::arguments::metadata(caller, &self.env)?.is_some_and(|params| {
+                params.len() == count && params.last().is_some_and(|(_, rest)| *rest)
+            }),
+        )
+    }
+
     /// Re-enter the guest: call the funcref with the uniform ABI (env as the
     /// leading argument), filling `out` with the results in place.
     async fn invoke(

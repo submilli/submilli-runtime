@@ -75,3 +75,24 @@ caller upload denial prevents the session request and transfer.
 ```sh
 node --test packages/google-drive/scripts/contract.test.mjs
 ```
+
+## Download destination policy
+
+Downloads check the caller's `fs.write { path, max_bytes }` before credentials
+or remote requests. Grant `main` a write rule for the intended VFS folder; this
+check normalizes relative paths and `..` segments. The package's download
+capability keeps its original `path` field for existing filters.
+
+Drive downloads default to 20 MB. An explicit `FileDownloadOptions.maxBytes`
+is checked and passed unchanged to the transfer; it must be a non-negative safe
+integer. The runtime tier limit still applies.
+
+`tests/policy/download-path.ts` verifies caller attribution and normalized paths
+without credentials or network, under its matching blueprint.
+
+Offline transfer and size-boundary contract checks run with Node 24's native
+base64 feature enabled:
+
+```sh
+node --js-base-64 --test packages/google-drive/scripts/*.test.mjs
+```

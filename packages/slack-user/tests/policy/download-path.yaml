@@ -1,0 +1,15 @@
+kind: blueprint
+name: slack-user-download-path-test
+packages:
+  - '@submilli/slack-user'
+default: deny
+permissions:
+  main:
+    - capability: slack.com/user/downloadFile
+      filter: path != "/downloads/business-denied"
+      action: allow
+    - capability: fs.write
+      filter: path glob "/downloads/*" and max_bytes <= 20000000
+      action: allow
+  # An allowed path stops before credentials or network access.
+  '@submilli/slack-user': []

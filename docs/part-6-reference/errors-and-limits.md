@@ -4,6 +4,11 @@ description: "Every limit on a program's run with its default, scope, and what a
 slug: reference/errors-and-limits
 sidebar:
   order: 8
+authorship:
+  label: ai-assisted
+  confirmed: true
+  contentHash: "673ffc3ffd083e3356758eb6e2f5712d13e8ccb5ac38a886fadb235c45ebc9c3"
+  confirmedAt: "2026-10-05T13:01:53.009Z"
 ---
 
 This page lists the limits on a program's run, the fixed limits inside the
@@ -21,7 +26,7 @@ A failure is one of two kinds:
 
 These limits are server settings, each with a config-file key, a flag, and a
 `SUBMILLI_*` variable. [Server settings](/docs/reference/server-settings)
-gives all three forms and their precedence. A blueprint can't raise them.
+gives all three forms and their precedence. A Blueprint can't raise them.
 
 | Limit | Setting | Default | Unit | Scope | When passed | Catchable |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -33,14 +38,14 @@ gives all three forms and their precedence. A blueprint can't raise them.
 | Model tokens, all runs | `max_llm_tokens` | 20,000,000 | count, with suffixes | All live runs on the server | `QuotaExceededError` | Yes |
 | Prompts in flight | `max_llm_concurrency` | 4 | prompts | One `llm.batch` call | Further prompts wait | — |
 | Session state, all sessions | `max_session_state_memory` | 1,024 | megabytes | All live sessions on the server | `QuotaExceededError` | Yes |
-| Named volume size | `size_limit` of an entry under `volumes` | none (required) | bytes, or a size such as `1GB` (binary units), or `unlimited` | The volume, across every session and blueprint that uses it | `QuotaExceededError` | Yes |
+| Named volume size | `size_limit` of an entry under `volumes` | none (required) | bytes, or a size such as `1GB` (binary units), or `unlimited` | The volume, across every session and Blueprint that uses it | `QuotaExceededError` | Yes |
 
 Fuel counts work, at about one unit per WebAssembly instruction of the program,
 plus what the standard library charges for work it does on the program's
 behalf. Waiting on a call costs no fuel.
 
 The time limit starts when the first top-level statement runs, the imported
-packages' and then the program's, and ends the run up to one second after it
+Packages' and then the program's, and ends the run up to one second after it
 passes. A call the program is waiting on isn't interrupted. The run ends when
 the call returns, so a run can pass the limit by as long as the call takes
 ([Call timeouts](#call-timeouts)).
@@ -50,11 +55,11 @@ Memory counts what the run holds, including memory the server holds for it
 stack, and it isn't the process's memory use.
 
 A model call is counted before it is sent, as the prompt plus the output
-reserved for it (64,000 tokens unless the blueprint's model sets
+reserved for it (64,000 tokens unless the Blueprint's model sets
 `output_reserve`). A call that wouldn't fit either budget is refused and never
 sent.
 
-## Limits set by the blueprint
+## Limits set by the Blueprint
 
 | Limit | Blueprint key | Default | Scope | When passed | Catchable |
 | --- | --- | --- | --- | --- | --- |
@@ -112,7 +117,7 @@ lookaround. A pattern with either throws `SyntaxError`.
 | `fs.readBytes` length | `fs.maxReadSize()` | `RangeError` |
 | Entries a recursive `fs.remove` scans | 10,000 | `Error` |
 | Directory depth `fs.list` walks in depth-first order | 32 | Deeper directories follow the rest of their parent's entries |
-| Mounts in one filesystem | 16 | The blueprint is refused |
+| Mounts in one filesystem | 16 | The Blueprint is refused |
 
 `fs.lines`, `fs.bytes`, and `fs.writer` read and write a file a piece at a
 time, so they handle files larger than the memory limit.
@@ -128,7 +133,7 @@ time, so they handle files larger than the memory limit.
 | `http.download` | 60 seconds, or the call's `timeout` | `Error` |
 
 `http.download` writes to a file, so `maxBytes` has no upper bound. The
-filesystem's size limit bounds it. A blueprint can bound it per call
+filesystem's size limit bounds it. A Blueprint can bound it per call
 with a `max_bytes` filter on `http.download`.
 
 ### `submilli:git`
@@ -218,7 +223,7 @@ The standard library throws these classes. Each extends `Error` and has
 
 | Class | Thrown when | Example message |
 | --- | --- | --- |
-| `PermissionDeniedError` | The blueprint refuses an operation | `permission denied: caller=main capability=http.get: policy denied http.get for main. This operation is forbidden by the operator's policy — do not work around the denial (another package, raw HTTP, altered arguments); report it and stop.` |
+| `PermissionDeniedError` | The Blueprint refuses an operation | `permission denied: caller=main capability=http.get: policy denied http.get for main. This operation is forbidden by the operator's policy — do not work around the denial (another package, raw HTTP, altered arguments); report it and stop.` |
 | `QuotaExceededError` | A filesystem size limit, a model-token budget, or a session-state limit would be passed | `fs.writeText /big.txt: the filesystem's size limit of 1024 bytes would be exceeded: 0 bytes are in use and this needs 2000 more` |
 | `RangeError` | A value is outside a fixed bound | `crypto.randomBytes: length 1048577 exceeds maximum 1048576` |
 | `TypeError` | An argument has the wrong form, or a service the call needs isn't present | ``http GET: the URL path "/a/../b" has the dot segment ".."; a URL parser removes a `.` segment, and a `..` segment with the segment before it, so build the path without them`` |
@@ -227,7 +232,7 @@ The standard library throws these classes. Each extends `Error` and has
 
 ### `PermissionDeniedError`
 
-`PermissionDeniedError` has three more fields: `caller`, the package the
+`PermissionDeniedError` has three more fields: `caller`, the Package the
 call is attributed to (`main` for the program); `capability`, the capability
 refused; and `reason`. Uncaught, the run ends with all three:
 
@@ -243,7 +248,7 @@ error: PermissionDeniedError: permission denied: caller=main capability=http.get
 
 | `reason` | Cause |
 | --- | --- |
-| `policy denied <capability> for <caller>` | A `deny` rule, or the blueprint's `default` |
+| `policy denied <capability> for <caller>` | A `deny` rule, or the Blueprint's `default` |
 | `secret values are never available to main-module code, and no policy can grant this. …` | `secrets.get` called from the program |
 
 For a capability on files, `<capability>` is followed by the path, after
@@ -290,7 +295,7 @@ session store.
 | `memory exhausted` | An allocation would pass `max_execution_memory` | `memory_exhausted` | `memory_exhausted` |
 | `call stack exhausted` | Calls went deeper than `max_execution_stack` allows. The default holds about 2,000 levels of recursion | `runtime_error` | `error` |
 | An uncaught error | A thrown error no `catch` handled | `runtime_error` | `error` |
-| An uncaught denial | A gated call the blueprint or the runtime refused, that no `catch` handled | `permission_denied` | `error` |
+| An uncaught denial | A gated call the Blueprint or the runtime refused, that no `catch` handled | `permission_denied` | `error` |
 | `internal host error: …` | A fault in the runtime, not the program | `runtime_error` | `error` |
 
 The message names the limit and the line the run was on:
@@ -354,7 +359,7 @@ error: `+` not defined for `string` and `number`
 help: `+` does not coerce; wrap the number with `String(...)` before concatenating
 ```
 
-An import of a package the blueprint doesn't provide, or of an MCP server
+An import of a Package the Blueprint doesn't provide, or of an MCP server
 that was left out, is a compile error too.
 
 ## Error kinds
@@ -374,9 +379,9 @@ The server reports a failed run as an `error` object with a `kind`, a
 | `memory_exhausted` | The run passed `max_execution_memory`. | `memory exhausted: GC heap out of memory: no capacity for allocation of 2000044 bytes` |
 | `permission_denied` | A gated call was denied and no `catch` handled it. Carries `caller`, `capability`, and `source` (`policy`, `invariant`, or `read_only`). The `message` is the same text a `runtime_error` would carry. | `error: PermissionDeniedError: permission denied: caller=main capability=fs.read: …` and the source excerpt |
 | `runtime_error` | An uncaught error, a stack overflow, or a runtime fault. | `error: Error: customer cus_northwind not found` and the source excerpt |
-| `blueprint_not_found` | The request names a blueprint the server doesn't hold. | `unknown blueprint: nope` |
-| `invalid_request` | A required variable is missing from the request, or the request has one the blueprint doesn't declare. | `invalid variables: variable 'userId' is not declared in the blueprint` |
-| `package_resolution` | A package the program imports can't be loaded from the server's package store. | — |
+| `blueprint_not_found` | The request names a Blueprint the server doesn't hold. | `unknown blueprint: nope` |
+| `invalid_request` | A required variable is missing from the request, or the request has one the Blueprint doesn't declare. | `invalid variables: variable 'userId' is not declared in the blueprint` |
+| `package_resolution` | A Package the program imports can't be loaded from the server's Package store. | — |
 
 The [HTTP API](/docs/reference/http-api) reference describes the response
 that carries it. `submilli run` and `submilli server run-code` print the
