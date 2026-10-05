@@ -8,7 +8,7 @@ use crate::{
     TypedSwitchCase, TypedSwitchValue,
 };
 
-use super::{Inferer, assignable, narrowing};
+use super::{Inferer, narrowing};
 
 /// An enclosing `switch`: the `let`/`const` its clauses declare directly, and
 /// the clause being inferred.
@@ -330,7 +330,6 @@ impl Inferer<'_> {
             ty: disc_ty,
             source_span: disc_source_span,
         } = discriminant;
-        let label_hint = switch_label_hint(&disc_ty);
         let entry_reachable = self.reachable;
         self.push_pending_join_frame(narrowing::PendingJoinKind::Switch);
         let mut typed_cases: Vec<TypedSwitchCase> = Vec::new();
@@ -348,17 +347,14 @@ impl Inferer<'_> {
                     .try_expr(*value_expr)
                     .map_err(super::arena_failure)?
                     .span;
-                let (typed_val, val_ty) = self.infer_expr(*value_expr, Some(&label_hint))?;
-                let val_kind = self
+                let (typed_val, _) = self.infer_expr(*value_expr, None)?;
+                let typed_val_expr = self
                     .typed_ast
                     .try_expr(typed_val)
-                    .map_err(crate::typechecker::arena_failure)?
-                    .kind
-                    .clone();
-                if !matches!(disc_ty, Type::Error)
-                    && !matches!(val_ty, Type::Error)
-                    && !assignable(&val_ty, &label_hint, self.resolver())
-                {
+                    .map_err(crate::typechecker::arena_failure)?;
+                let val_kind = typed_val_expr.kind.clone();
+                let val_ty = super::expr::literal_comparison_type(&self.typed_ast, typed_val_expr)?;
+                if !super::comparable::comparable(&val_ty, &disc_ty, self.resolver()) {
                     self.error(
                         value_span,
                         format!(
@@ -829,15 +825,5 @@ fn index_position(kind: &TypedExprKind) -> Option<usize> {
             Some(*n as usize)
         }
         _ => None,
-    }
-}
-
-/// Labels compare runtime values; they do not need the generic identity carried
-/// by the discriminant's refinement.
-fn switch_label_hint(ty: &Type) -> Type {
-    match ty.without_aliases() {
-        Type::Refined { ty, .. } => switch_label_hint(ty),
-        Type::Union(members) => Type::union(members.iter().map(switch_label_hint).collect()),
-        _ => ty.clone(),
     }
 }

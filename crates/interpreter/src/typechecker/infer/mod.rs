@@ -5,6 +5,7 @@ pub(crate) mod assignable;
 mod binding_analysis;
 mod classes;
 mod closure_arity;
+mod comparable;
 mod diagnostics;
 mod enums;
 mod exports;
