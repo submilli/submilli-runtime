@@ -10,25 +10,32 @@ For explanation-only or instructions-only requests, respond without installing,
 creating files, or starting processes.
 If the developer supplies a particular example or workflow, keep that scope.
 
-## Build the first example
+## Choose the first example
+
+Read [use cases](use-cases.md). If the developer has not selected a workflow,
+offer API workflows, Customer support, and Internal operations with their short
+invitations and wait for a choice. If the request already names a workflow,
+continue with it. Do not make a billing balance demo the universal default.
+
+## Build the selected example
 
 Read [setup](setup.md) to check the CLI and server. Work in the requested
 directory. In an existing project, put a standalone trial in a separate
 directory without replacing its manifests, authentication, or agent tools.
 
-Use the offline `@acme/billing` / `support-read` fixture in
-[harnesses](harnesses.md), stopping before connecting a model. The linked
-references provide the snippets for its package, blueprint, test, and REST
-request. Create the files from those snippets and keep their names together. The public
-[quickstart](https://submilli.ai/docs/quickstart) uses `listCharges`,
-`acme.com/charges.list`, and the blueprint `quickstart`; if following that
-chapter, use its complete example rather than mixing it with `readBalance`
-and `acme.com/balance.read` from this skill.
+Use the selected recipe in [use cases](use-cases.md), with package and
+blueprint mechanics from [packages](packages.md) and [blueprints](blueprints.md).
+The [harness setup](harnesses.md) provides the server and REST request pattern;
+adapt its endpoint, binding, package, capability, and expected result together.
+Its `readBalance` / `support-read` fixture remains available when explicitly
+requested, but does not replace the chosen profile or charge-listing example.
 
-Explain the customer-scoped rule, then create the blueprint and its package.
-Mark the fixed customer binding as demo application state. The fixture needs
-no business credentials, provider key, or live model call. Do not start a
-requirements interview for the fixture's already-defined read-only policy.
+Explain the scoped rule, then create the blueprint and package. Mark fixed
+identity bindings and account relationships as demo application state. These
+fixtures need no business credentials, provider key, or live model call. Do
+not interview the developer about production business policy to run a defined
+fixture. For Internal operations, preserve the recipe's explicit decision
+before widening the demo's permissions.
 
 Compile, test, publish locally, and lint as in [harnesses](harnesses.md).
 Use an isolated `SUBMILLI_HOME` for the trial's package store and server data,
@@ -37,13 +44,15 @@ loopback-only server with a generated local token. If the port is occupied,
 choose a free port and use it consistently instead of stopping another server.
 Keep the token out of generated TypeScript and the reported transcript.
 
-Save a runnable client or commands and exercise the real runtime:
-
-1. Bind `customerId=cus_northwind` in the application request and call
-   `readBalance("cus_northwind")`. Assert the result is `6150`.
-2. Keep that binding and call `readBalance("cus_initech")`. Assert a policy
-   denial naming `acme.com/balance.read`, not merely a failed HTTP request.
-3. Omit the required binding. Assert `invalid_request` names `customerId`.
+Save a runnable client or commands and exercise the real runtime against the
+selected recipe: its allowed result, a cross-customer policy denial, and a
+missing-binding rejection. Assert the actual result or fields for that recipe
+and the correct capability in the denial. For Internal operations, verify the
+original policy first. Only after the recipe's approval condition is met, apply
+and verify the revision, including an unrelated customer that must remain
+denied. If approval is pending or declined, retain the original policy and
+report the observed denial without claiming a revised-policy result. A failed
+HTTP request alone is not proof that the permission rule ran.
 
 Use [verification](verification.md) before calling the trial complete. Show
 the commands and observed results, with the blueprint rule and the package's
