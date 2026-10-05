@@ -7,6 +7,9 @@ import { check } from "submilli:security";
 const API = "https://gmail.googleapis.com/gmail/v1/users/me";
 const MAX_BODY_BYTES = 1048576;
 const MAX_ATTACHMENT_BYTES = 10485760;
+const DOWNLOAD_MAX_BYTES = 20000000;
+// Gmail returns base64url; bound the encoded input before allocating decoded bytes.
+const DOWNLOAD_MAX_ENCODED_LENGTH = Math.ceil(DOWNLOAD_MAX_BYTES / 3) * 4;
 // Exactly one `@` between two runs of printable ASCII. A character outside that range can look
 // like, or be dropped to leave, an address policy refuses, and a lone surrogate is encoded as
 // U+FFFD, so the header would not carry the string the check read. The characters RFC 5322
@@ -718,17 +721,28 @@ export function modifyMessageLabels(messageId: string, changes: LabelChanges): M
 }
 
 /**
- * Decode one Gmail attachment into the VFS.
+ * Decode one Gmail attachment into the VFS, limited to 20 MB of decoded bytes.
+ * The caller's `fs.write` rule checks the normalized destination and byte limit.
+ * The package capability retains the caller's original `path` for compatibility.
  * @param messageId ID of the message containing the attachment.
  * @param attachmentId Attachment body ID from `Attachment.attachmentId`.
  * @param path Destination path in the session VFS, written with the decoded bytes.
  * @capability submilli/gmail.downloadAttachment { path: string }
+ * @capability fs.write { path: string, max_bytes: number }
  */
 export function downloadAttachment(messageId: string, attachmentId: string, path: string): void {
     check("submilli/gmail.downloadAttachment", { path: path });
+    check("fs.write", { path: path, max_bytes: DOWNLOAD_MAX_BYTES });
     const endpoint = "/messages/" + encodeComponent(messageId) + "/attachments/" + encodeComponent(attachmentId);
     const data = gmailGet(endpoint, new Map<string, string>()).json() as AttachmentResponse;
-    write(path, Uint8Array.fromBase64(data.data, { alphabet: "base64url" }));
+    if (data.data.length > DOWNLOAD_MAX_ENCODED_LENGTH) {
+        throw new GmailError("attachment_too_large", "attachment download exceeds 20 MB", 0);
+    }
+    const bytes = Uint8Array.fromBase64(data.data, { alphabet: "base64url" });
+    if (bytes.length > DOWNLOAD_MAX_BYTES) {
+        throw new GmailError("attachment_too_large", "attachment download exceeds 20 MB", 0);
+    }
+    write(path, bytes);
 }
 
 /**

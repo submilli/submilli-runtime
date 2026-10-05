@@ -52,3 +52,22 @@ blueprints of the same name, without a token or network:
   rejected with `invalid_user_id` before the check.
 
 `cargo test -p submilli --test package_policy` runs them.
+
+## Download destination policy
+
+Downloads check the caller's `fs.write { path, max_bytes }` before credentials
+or remote requests. Grant `main` a write rule for the intended VFS folder; this
+check normalizes relative paths and `..` segments. The package's download
+capability keeps its original `path` field for existing filters.
+
+Slack downloads pass a 20 MB limit to the transfer.
+
+`tests/policy/download-path.ts` verifies caller attribution and normalized paths
+without credentials or network, under its matching blueprint.
+
+Offline transfer and size-boundary contract checks run with Node 24's native
+base64 feature enabled:
+
+```sh
+node --js-base-64 --test packages/slack-user/scripts/*.test.mjs
+```

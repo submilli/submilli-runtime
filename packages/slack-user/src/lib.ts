@@ -5,6 +5,7 @@ import { check } from "submilli:security";
 
 const API = "https://slack.com/api/";
 const FILES_API = "https://files.slack.com/";
+const DOWNLOAD_MAX_BYTES = 20000000;
 // One Slack user ID: a `U` or `W` followed by capital letters and digits.
 const USER_ID = /^[UW][A-Z0-9]+$/;
 
@@ -763,22 +764,26 @@ export function getFile(fileId: string): SlackFile {
 }
 
 /**
- * Stream a Slack-hosted private file into the Submilli VFS.
+ * Stream a Slack-hosted private file into the Submilli VFS, limited to 20 MB.
+ * The caller's `fs.write` rule checks the normalized destination and byte limit.
+ * The package capability retains the caller's original `path` for compatibility.
  * The package rejects download URLs outside `files.slack.com`; the destination is
  * not overwritten unless the underlying download policy permits it.
  * @param fileId Slack file ID to download.
  * @param path Destination path in the session VFS.
   * @returns The download result for the file saved at `path` in the VFS.
  * @capability slack.com/user/downloadFile { path: string }
+ * @capability fs.write { path: string, max_bytes: number }
  */
 export function downloadFile(fileId: string, path: string): DownloadResult {
     check("slack.com/user/downloadFile", { path: path });
+    check("fs.write", { path: path, max_bytes: DOWNLOAD_MAX_BYTES });
     const file = fetchFile(fileId);
     if (file.urlPrivateDownload === "" || !file.urlPrivateDownload.startsWith(FILES_API)) {
         throw new SlackError("unsafe_file_url", "Slack returned a file URL outside files.slack.com", 200);
     }
     const headers = authHeaders();
-    const options: DownloadOptions = { headers: headers };
+    const options: DownloadOptions = { headers: headers, maxBytes: DOWNLOAD_MAX_BYTES };
     return download(FILES_API + file.urlPrivateDownload.slice(FILES_API.length), path, options);
 }
 
