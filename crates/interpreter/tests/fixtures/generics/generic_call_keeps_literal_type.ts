@@ -64,6 +64,33 @@ function oneOrMany<T>(many: T[], one: T): T | T[] {
   return one;
 }
 
+type OrErr<T> = T | "err";
+
+function listOf<A>(a: A): OrErr<A>[] {
+  return [a, "err"];
+}
+
+function tagged<L, R>(o: { a: L | null; tag: Mode }, b: R): L | R {
+  return b;
+}
+
+interface Tagged<L> {
+  a: L;
+  tag: Mode;
+}
+
+function taggedBox<L, R>(o: Tagged<L>, b: R): L | R {
+  return b;
+}
+
+function orWrapped<A, B>(a: A, b: Tagged<B>): A | B {
+  return a;
+}
+
+function taggedPair<L, R>(t: [L, Mode], b: R): L | R {
+  return b;
+}
+
 function head<T>(pair: [T, number]): T {
   return pair[0];
 }
@@ -204,4 +231,22 @@ function main(): void {
   let many = oneOrMany(modes, "on");
   const declaredMany: Mode | Mode[] = many;
   assert(optional === "elsewhere" && aliased === 2 && declaredMany === "on", "through an alias");
+
+  // A literal the alias itself declares stays.
+  let listedFirst = listOf(mode)[0];
+  const declaredFirst: OrErr<Mode> = listedFirst;
+  assert(declaredFirst === "on", "an alias's own literal");
+
+  // A declared literal in a part that binds no type parameter of the result
+  // leaves a fresh one fresh.
+  let fromObject = tagged({ a: 1, tag: mode }, "on");
+  fromObject = "elsewhere";
+  let fromTuple = taggedPair([1, mode], "off");
+  fromTuple = "elsewhere";
+  let fromInterface = taggedBox({ a: 1, tag: mode }, "on");
+  fromInterface = "elsewhere";
+  let fromWrapped = orWrapped("on", { a: mode, tag: "off" });
+  const declaredWrapped: Mode = fromWrapped;
+  assert(fromObject === "elsewhere" && fromTuple === "elsewhere", "an unrelated part");
+  assert(fromInterface === "elsewhere" && declaredWrapped === "on", "an interface's part");
 }
