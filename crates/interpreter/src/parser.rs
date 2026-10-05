@@ -1025,10 +1025,10 @@ impl<'a> Parser<'a> {
             if self.peek_word_is_class_modifier("public")
                 || self.peek_word_is_class_modifier("private")
             {
-                let word = if self.peek_identifier_text_is("private") {
-                    "private"
+                let (kind, word) = if self.peek_identifier_text_is("private") {
+                    (crate::Visibility::Private, "private")
                 } else {
-                    "public"
+                    (crate::Visibility::Public, "public")
                 };
                 let tok = self.advance();
                 if visibility_span.is_some() {
@@ -1051,11 +1051,7 @@ impl<'a> Parser<'a> {
                         vec![format!("write `{word} {preceding} <name>`")],
                     );
                 }
-                visibility = if word == "private" {
-                    crate::Visibility::Private
-                } else {
-                    crate::Visibility::Public
-                };
+                visibility = kind;
                 visibility_span = Some(tok.span);
                 continue;
             }
@@ -1265,15 +1261,15 @@ impl<'a> Parser<'a> {
     /// Consume the separator after an interface or type-literal member and return
     /// where the member ends. `;` and `,` are interchangeable and the last member's
     /// is optional. A line break also ends a member, as in TypeScript: ASI inserts
-    /// `;` there except before `[` and `(`, which it keeps attached. `body_end` is
+    /// `;` there, but keeps some tokens, such as `[` and `(`, attached. `body_end` is
     /// where the member ends when it carries no separator of its own.
-    fn finish_type_member(&mut self, body_end: u32, error: &str) -> Option<u32> {
+    fn finish_type_member(&mut self, body_end: u32, message: &str) -> Option<u32> {
         match self.peek().kind {
             TokenKind::Semicolon | TokenKind::Comma => Some(self.advance().span.end),
             TokenKind::RightBrace => Some(body_end),
             _ if self.line_break_before_peek() => Some(body_end),
             _ => {
-                self.error_at_peek(error);
+                self.error_at_peek(message);
                 None
             }
         }
@@ -3588,7 +3584,10 @@ impl<'a> Parser<'a> {
     /// ordinary members, as in TypeScript.
     fn peek_is_construct_signature(&self) -> bool {
         matches!(self.peek().kind, TokenKind::New)
-            && matches!(self.peek_at(1).kind, TokenKind::LeftParen | TokenKind::LessThan)
+            && matches!(
+                self.peek_at(1).kind,
+                TokenKind::LeftParen | TokenKind::LessThan
+            )
     }
 
     /// Only interfaces declare construct signatures, so one in a type literal (see
