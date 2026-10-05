@@ -1,28 +1,20 @@
-types: 118 of 200 tsc entries compared, 19 differ
+types: 118 of 200 tsc entries compared, 17 differ
 
 line 13: { none: '' }
   tsc:  { none: string; }
   ours: None
 
-line 37: x
-  tsc:  string | number
-  ours: number | string | boolean
+line 27: result
+  tsc:  Optional<r>
+  ours: None | Some<r>
 
-line 38: x
-  tsc:  string | number
-  ours: number | string | boolean
+line 28: result
+  tsc:  Optional<r>
+  ours: None | Some<r>
 
 line 38: x.slice
   tsc:  (start?: number, end?: number) => string
   ours: <error>
-
-line 48: x
-  tsc:  string | number
-  ours: number | string | boolean
-
-line 49: x
-  tsc:  string | number
-  ours: number | string | boolean
 
 line 50: x.slice
   tsc:  (start?: number, end?: number) => string

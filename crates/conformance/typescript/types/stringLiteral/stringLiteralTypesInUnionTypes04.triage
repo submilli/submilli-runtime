@@ -1,0 +1,1 @@
+line 14, 18, 22, 26, 30, 34, 38 type: artifact one side prints a type alias (or `keyof`) by name and the other expands it (the join after each `if` gives back every member of `T`)

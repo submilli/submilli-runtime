@@ -1,4 +1,8 @@
-types: 37 of 97 tsc entries compared, 3 differ
+types: 37 of 97 tsc entries compared, 4 differ
+
+line 28: x
+  tsc:  Foo<string>
+  ours: Bar<string>
 
 line 40: s
   tsc:  string

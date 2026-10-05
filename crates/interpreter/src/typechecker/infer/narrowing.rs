@@ -1053,7 +1053,7 @@ pub fn union_envs(
 
 /// Flow joins collapse a literal already covered by a broad primitive. Keep
 /// authored unions unchanged: their overlap is meaningful to JSON diagnostics.
-fn join_flow_types(left: &Type, right: &Type) -> Type {
+pub(super) fn join_flow_types(left: &Type, right: &Type) -> Type {
     let joined = Type::union(vec![left.clone(), right.clone()]);
     let Type::Union(mut members) = joined else {
         return joined;

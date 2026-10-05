@@ -1,2 +1,0 @@
-line 6, 14 type: bug SUB-1204 a literal widens to its base type where tsc keeps the literal type
-line 8, 9, 17, 18, 26, 27 type: bug SUB-1152 a rejected assignment, `++` or `--` still narrows its target (`x = null`)

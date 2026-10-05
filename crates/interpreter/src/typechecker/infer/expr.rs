@@ -7792,21 +7792,19 @@ impl Inferer<'_> {
             let result_ty = postfix_result_ty(&operand_ty);
             // For non-error declared types that aren't assignable from
             // the result, mirror `infer_assign`'s rejection.
-            if !matches!(entry.ty, Type::Error)
-                && !assignable(&result_ty, &entry.ty, self.resolver())
-            {
+            let fits = assignable(&result_ty, &entry.ty, self.resolver());
+            if !matches!(entry.ty, Type::Error) && !fits {
                 self.error(
                     span,
                     format!("expected `{}`, got `{}`", entry.ty, result_ty),
                 );
             }
-            // Re-install assignment narrowing: result reads see the
-            // post-increment type.
-            if !matches!(entry.ty, Type::Error) {
-                let path = narrowing::ReferencePath::root(narrowing::BindingId::Local {
-                    name: target.name.clone(),
-                    decl_scope: entry.decl_scope,
-                });
+            // A rejected write leaves the declared type, as in TypeScript.
+            if !fits {
+                self.invalidate_for_reassignment(path, target.span);
+            } else if !matches!(entry.ty, Type::Error) {
+                // Re-install assignment narrowing: result reads see the
+                // post-increment type.
                 self.install_assignment_narrowing(
                     path,
                     target.clone(),
@@ -11243,14 +11241,17 @@ mod tests {
 
     #[test]
     fn logical_or_nullable_lhs_strips_null() {
-        let ta = run_clean(r#"let s: string | null = null; let x: string = s || "d";"#);
+        let ta = run_clean(
+            r#"function name(): string | null { return null; } let s: string | null = name(); let x: string = s || "d";"#,
+        );
         assert_eq!(nth_decl_value_ty(&ta, 1), Type::String);
     }
 
     #[test]
     fn logical_and_nullable_lhs_keeps_null_in_result() {
-        let ta =
-            run_clean("let xs: number[] | null = null; let x: number | null = xs && xs.length;");
+        let ta = run_clean(
+            "function items(): number[] | null { return null; } let xs: number[] | null = items(); let x: number | null = xs && xs.length;",
+        );
         assert_eq!(
             nth_decl_value_ty(&ta, 1),
             Type::union(vec![Type::Number, Type::Null])
