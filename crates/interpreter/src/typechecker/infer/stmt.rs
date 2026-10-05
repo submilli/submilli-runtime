@@ -149,7 +149,7 @@ impl Inferer<'_> {
                 discriminant,
                 cases,
                 default,
-            } => self.infer_switch(discriminant, cases, default, span),
+            } => self.infer_switch(stmt_id, discriminant, cases, default, span),
             StmtKind::Break => {
                 if self.loop_depth == 0 && self.switch_depth == 0 {
                     self.error(span, "`break` outside of a loop or `switch`".to_string());
@@ -217,7 +217,7 @@ impl Inferer<'_> {
                 }
                 Ok(TypedStmtKind::Block(typed_stmts))
             }
-            StmtKind::Assign { target, value } => self.infer_assign(target, value, span),
+            StmtKind::Assign { target, value } => self.infer_assign(target, value),
             StmtKind::AssignField {
                 receiver,
                 field_name,
@@ -1733,9 +1733,11 @@ impl Inferer<'_> {
         &mut self,
         target: Ident,
         value: ExprId,
-        span: Span,
     ) -> Result<TypedStmtKind, CompilerFailure> {
-        if let Some(entry) = self.scopes.get(&target.name).cloned() {
+        let shadowed = self
+            .declaration_in_another_case_clause(&target.name)
+            .is_some();
+        if let Some(entry) = self.scopes.get(&target.name).cloned().filter(|_| !shadowed) {
             if entry.is_const {
                 self.report_const_local_write(&target, &entry);
             }
@@ -1764,7 +1766,7 @@ impl Inferer<'_> {
                 narrowed_shadow_ty,
             });
         }
-        let hidden = self.prepare_top_symbol_lookup(&target.name, target.span)?;
+        let hidden = shadowed || self.prepare_top_symbol_lookup(&target.name, target.span)?;
         let global = self.top_symbols.get(&target.name).filter(|_| !hidden);
         Ok(if let Some(entry) = global {
             let kind_clone = entry.kind.clone();
@@ -1828,15 +1830,7 @@ impl Inferer<'_> {
                 }
             }
         } else {
-            let help: Vec<String> = self
-                .closest_local_or_global(&target.name)
-                .map(|s| vec![format!("did you mean `{}`?", s)])
-                .unwrap_or_default();
-            self.error_with_help(
-                span,
-                format!("unresolved identifier `{}`", target.name),
-                help,
-            );
+            self.report_unresolved_identifier(&target.name, target.span);
             let (typed_value, _) = self.infer_expr(value, None)?;
             // Placeholder; downstream Type::Error suppression handles cascades.
             TypedStmtKind::AssignLocal {
@@ -1859,7 +1853,10 @@ impl Inferer<'_> {
         value: ExprId,
         span: Span,
     ) -> Result<TypedStmtKind, CompilerFailure> {
-        if let Some(entry) = self.scopes.get(&target.name).cloned() {
+        let shadowed = self
+            .declaration_in_another_case_clause(&target.name)
+            .is_some();
+        if let Some(entry) = self.scopes.get(&target.name).cloned().filter(|_| !shadowed) {
             if entry.is_const {
                 self.report_const_local_write(&target, &entry);
             }
@@ -1939,7 +1936,7 @@ impl Inferer<'_> {
                 narrowed_shadow_ty,
             });
         }
-        let hidden = self.prepare_top_symbol_lookup(&target.name, target.span)?;
+        let hidden = shadowed || self.prepare_top_symbol_lookup(&target.name, target.span)?;
         let global = self.top_symbols.get(&target.name).filter(|_| !hidden);
         Ok(if let Some(entry) = global {
             let kind_clone = entry.kind.clone();
@@ -1987,15 +1984,7 @@ impl Inferer<'_> {
                 }
             }
         } else {
-            let help: Vec<String> = self
-                .closest_local_or_global(&target.name)
-                .map(|s| vec![format!("did you mean `{}`?", s)])
-                .unwrap_or_default();
-            self.error_with_help(
-                span,
-                format!("unresolved identifier `{}`", target.name),
-                help,
-            );
+            self.report_unresolved_identifier(&target.name, target.span);
             let (typed_value, _) = self.infer_expr(value, None)?;
             TypedStmtKind::AssignLocal {
                 ident: target,

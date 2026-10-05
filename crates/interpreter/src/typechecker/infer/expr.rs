@@ -737,6 +737,21 @@ impl Inferer<'_> {
         ident: Ident,
         span: Span,
     ) -> Result<(TypedExprKind, Type), CompilerFailure> {
+        // Another clause's declaration hides every binding and namespace of the
+        // name from outside the `switch`.
+        if self
+            .declaration_in_another_case_clause(&ident.name)
+            .is_some()
+        {
+            self.report_unresolved_identifier(&ident.name, span);
+            return Ok((
+                TypedExprKind::LocalRef {
+                    ident,
+                    boxed: false,
+                },
+                Type::Error,
+            ));
+        }
         if let Some(entry) = self.scopes.get(&ident.name) {
             // Plan 75.8: consult the active narrow-scope stack. If
             // this binding has been narrowed in an enclosing branch,
@@ -1032,15 +1047,7 @@ impl Inferer<'_> {
                 Type::Error,
             ));
         }
-        let help: Vec<String> = self
-            .closest_local_or_global(&ident.name)
-            .map(|s| vec![format!("did you mean `{}`?", s)])
-            .unwrap_or_default();
-        self.error_with_help(
-            span,
-            format!("unresolved identifier `{}`", ident.name),
-            help,
-        );
+        self.report_unresolved_identifier(&ident.name, span);
         // Placeholder for unresolved names. `Type::Error` already suppresses
         // downstream cascades, so the variant choice doesn't propagate.
         Ok((
@@ -5922,14 +5929,16 @@ impl Inferer<'_> {
         ))
     }
 
-    /// Whether a user binding named `name` — local or top-level — hides the prelude
-    /// namespace of that name (`const Math = { … }` makes `Math.floor` the user's).
+    /// Whether a user binding named `name` — local, top-level, or another `case`
+    /// clause's — hides the prelude namespace of that name (`const Math = { … }`
+    /// makes `Math.floor` the user's).
     /// Only for namespaces the prelude does not itself bind at top level: `BigInt` is a
     /// top-level constructor binding, so it would always read as shadowed.
     fn shadows_namespace(&self, name: &str) -> bool {
         self.scopes.get(name).is_some()
             || self.top_symbols.contains_key(name)
             || self.is_later_global(name)
+            || self.declaration_in_another_case_clause(name).is_some()
     }
 
     fn infer_field_access(
@@ -7501,7 +7510,10 @@ impl Inferer<'_> {
         span: Span,
     ) -> Result<(TypedExprKind, Type), crate::compiler_error::CompilerFailure> {
         // Function-local first, then top-level (mirrors `infer_assign`).
-        if let Some(entry) = self.scopes.get(&target.name).cloned() {
+        let shadowed = self
+            .declaration_in_another_case_clause(&target.name)
+            .is_some();
+        if let Some(entry) = self.scopes.get(&target.name).cloned().filter(|_| !shadowed) {
             if entry.is_const {
                 self.report_const_local_write(&target, &entry);
             }
@@ -7565,7 +7577,7 @@ impl Inferer<'_> {
                 result_ty,
             ));
         }
-        let hidden = self.prepare_top_symbol_lookup(&target.name, target.span)?;
+        let hidden = shadowed || self.prepare_top_symbol_lookup(&target.name, target.span)?;
         let global = self.top_symbols.get(&target.name).filter(|_| !hidden);
         Ok(if let Some(entry) = global {
             let kind_clone = entry.kind.clone();
@@ -7621,15 +7633,7 @@ impl Inferer<'_> {
                 }
             }
         } else {
-            let help: Vec<String> = self
-                .closest_local_or_global(&target.name)
-                .map(|s| vec![format!("did you mean `{}`?", s)])
-                .unwrap_or_default();
-            self.error_with_help(
-                span,
-                format!("unresolved identifier `{}`", target.name),
-                help,
-            );
+            self.report_unresolved_identifier(&target.name, target.span);
             (
                 TypedExprKind::PostfixUnary {
                     op,

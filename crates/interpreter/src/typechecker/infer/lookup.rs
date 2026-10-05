@@ -35,7 +35,9 @@ pub(super) enum MemberFieldMiss {
 impl<'a> Inferer<'a> {
     /// Direct-call metadata belongs only to a function that survives lexical lookup.
     pub(super) fn lookup_top_function(&self, name: &str) -> Option<&super::ValueEntry> {
-        if self.scopes.get(name).is_some() {
+        if self.scopes.get(name).is_some()
+            || self.declaration_in_another_case_clause(name).is_some()
+        {
             return None;
         }
         self.top_symbols

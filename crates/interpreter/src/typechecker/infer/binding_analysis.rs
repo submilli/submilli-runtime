@@ -152,15 +152,26 @@ fn visit_stmt(ast: &Ast, id: StmtId, out: &mut Analysis) -> Result<(), CompilerF
             default,
         } => {
             visit_expr(ast, *discriminant, out)?;
-            for case in cases {
-                for &value in &case.values {
+            // The clauses share one scope, as in JavaScript: a name declared in
+            // two clauses is a redeclaration, a function is hoisted to the body's
+            // start, and a `let`/`const` is uninitialized until its statement.
+            let clauses =
+                super::switch_stmt::clauses_in_source_order(ast, cases, default.as_ref())?;
+            out.scopes.push(Default::default());
+            let all_stmts: Vec<StmtId> = clauses
+                .iter()
+                .flat_map(|c| c.stmts.iter().copied())
+                .collect();
+            out.reserve_statements(ast, &all_stmts)?;
+            for clause in &clauses {
+                for &value in clause.values {
                     visit_expr(ast, value, out)?;
                 }
-                visit_stmt(ast, case.body, out)?;
+                for &stmt in &clause.stmts {
+                    visit_stmt(ast, stmt, out)?;
+                }
             }
-            if let Some(d) = default {
-                visit_stmt(ast, d.body, out)?;
-            }
+            out.scopes.pop();
         }
         StmtKind::Try {
             body,
