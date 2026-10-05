@@ -341,40 +341,49 @@ fn emit_structural_test_inner(
         ),
         Type::Function { has_rest, .. } => {
             let signature = crate::codegen::closures::classify(ty)?;
-            let structure = ctx
-                .symbols
-                .closure_struct_type_idx(signature)
-                .ok_or_else(|| {
-                    crate::codegen::internal_failure("closure signature registered during analysis")
-                })?;
-            emit_ref_test(emitter, value_local, structure);
-            if !has_rest {
-                // A rest closure shares the struct of its Wasm arity but takes
-                // its arguments packed, so a closure that may have one is
-                // checked against its metadata like a closure of another arity.
-                emitter.emit_if(BlockType::Result(ValType::I32));
-                super::closure_coercions::emit_may_have_argument_metadata(
-                    emitter,
-                    ctx,
-                    value_local,
-                    structure,
-                )?;
-                emitter.instruction(Instruction::I32Eqz);
-                emitter.emit_else();
-                emitter.instruction(Instruction::I32Const(0));
-                emitter.emit_end();
-                emitter.emit_if(BlockType::Result(ValType::I32));
-                emitter.instruction(Instruction::I32Const(1));
-                emitter.emit_else();
+            let closure_struct =
+                ctx.symbols
+                    .closure_struct_type_idx(signature)
+                    .ok_or_else(|| {
+                        crate::codegen::internal_failure(
+                            "closure signature registered during analysis",
+                        )
+                    })?;
+            // A rest closure shares the struct of its Wasm arity but takes its
+            // arguments packed, and only a closure whose environment carries
+            // argument metadata can have one. So a closure of the target's struct
+            // without metadata passes outright unless the target ends in a rest
+            // parameter, and `__value_defaults_fit` decides every other case.
+            let fit = |emitter: &mut FunctionEmitter| {
                 super::closure_coercions::emit_defaults_fit(
                     emitter,
                     ctx,
                     value_local,
                     signature.arity,
                     Some(signature.is_void),
-                )?;
-                emitter.emit_end();
+                    *has_rest,
+                )
+            };
+            emit_ref_test(emitter, value_local, closure_struct);
+            emitter.emit_if(BlockType::Result(ValType::I32));
+            super::closure_coercions::emit_may_have_argument_metadata(
+                emitter,
+                ctx,
+                value_local,
+                closure_struct,
+            )?;
+            emitter.emit_if(BlockType::Result(ValType::I32));
+            fit(emitter)?;
+            emitter.emit_else();
+            emitter.instruction(Instruction::I32Const(i32::from(!*has_rest)));
+            emitter.emit_end();
+            emitter.emit_else();
+            if *has_rest {
+                emitter.instruction(Instruction::I32Const(0));
+            } else {
+                fit(emitter)?;
             }
+            emitter.emit_end();
         }
         // Generic leaves use the caller's concrete predicate when available.
         // Legacy entry points without descriptors retain their erased checks.
@@ -858,6 +867,7 @@ pub(crate) fn emit_operation_cast_on_stack(
                 scratch,
                 signature.arity,
                 None,
+                false,
             )?;
             emitter.emit_end();
         }

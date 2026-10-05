@@ -337,7 +337,7 @@ pub fn emit_erased_cast(
         source_struct,
     )));
     emitter.emit_else();
-    emit_defaults_fit(emitter, ctx, original, target.arity, None)?;
+    emit_defaults_fit(emitter, ctx, original, target.arity, None, false)?;
     emitter.emit_end();
     emitter.emit_if(wasm_encoder::BlockType::Result(target_slot));
     emit_wrap(emitter, ctx, target, original)?;
@@ -377,18 +377,26 @@ fn emit_wrap(
     Ok(())
 }
 
+/// Pushes whether `__value_defaults_fit` lets the function in `function` stand
+/// for a closure of `arity` arguments: one returning `is_void`'s convention, or
+/// either when `None`, and ending in a rest parameter when `ends_in_rest`.
 pub(super) fn emit_defaults_fit(
     emitter: &mut FunctionEmitter<'_>,
     ctx: &CodegenCtx<'_>,
     function: u32,
     arity: u8,
     is_void: Option<bool>,
+    ends_in_rest: bool,
 ) -> Result<(), crate::compiler_error::CompilerFailure> {
     emitter.instruction(Instruction::LocalGet(function));
     emitter.instruction(Instruction::F64Const(f64::from(arity).into()));
     super::function_emitter::cast::emit_box(emitter, ctx, &crate::Type::Number)?;
     let results = is_void.map_or(-1.0, |is_void| if is_void { 0.0 } else { 1.0 });
     emitter.instruction(Instruction::F64Const(results.into()));
+    super::function_emitter::cast::emit_box(emitter, ctx, &crate::Type::Number)?;
+    emitter.instruction(Instruction::F64Const(
+        f64::from(u8::from(ends_in_rest)).into(),
+    ));
     super::function_emitter::cast::emit_box(emitter, ctx, &crate::Type::Number)?;
     emitter.instruction(Instruction::Call(
         ctx.symbols
@@ -407,8 +415,8 @@ pub(super) fn emit_defaults_fit(
 pub(super) fn emit_may_have_argument_metadata(
     emitter: &mut FunctionEmitter<'_>,
     ctx: &CodegenCtx<'_>,
-    function: u32,
-    structure: u32,
+    function_local: u32,
+    closure_struct: u32,
 ) -> Result<(), crate::compiler_error::CompilerFailure> {
     let metadata = ctx
         .symbols
@@ -422,10 +430,12 @@ pub(super) fn emit_may_have_argument_metadata(
         nullable: true,
         heap_type: HeapType::ANY,
     }))?;
-    emitter.instruction(Instruction::LocalGet(function));
-    emitter.instruction(Instruction::RefCastNonNull(HeapType::Concrete(structure)));
+    emitter.instruction(Instruction::LocalGet(function_local));
+    emitter.instruction(Instruction::RefCastNonNull(HeapType::Concrete(
+        closure_struct,
+    )));
     emitter.instruction(Instruction::StructGet {
-        struct_type_index: structure,
+        struct_type_index: closure_struct,
         field_index: 2,
     });
     emitter.instruction(Instruction::LocalTee(env));
