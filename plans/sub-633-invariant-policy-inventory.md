@@ -72,6 +72,7 @@ separate resource/dependency backlog.
 | R04 | Complete: simplified | Removed invariant-only namespace resolution/field Result interfaces |
 | R05 | Complete: retained | Preserve capture/narrowing behavior and existing error propagation |
 | R06 | Complete: retained | Keep ordered substitution and numeric filter dispatch structure |
+| R07 | Complete: retained | Keep cross-phase registration checks and fallible emission |
 
 ### R01 execution evidence
 
@@ -184,6 +185,27 @@ mechanism now adds an invariant-only error interface. Restoring the old lookup o
 nested unreachable arm would make the code less direct. Retain both changes;
 this is a resolved no-revert decision. Source inspection only, no code/tests changed.
 Three independent reviewers reported no findings; diff checks passed.
+
+### R07 execution evidence
+
+Retain registration/layout propagation. Public codegen entry points consume
+TypedAst and dependency declarations; tree-height validation does not certify all
+symbol/layout registrations. SymbolTable is built incrementally and exposes
+optional lookup results. Class collection can fail on unavailable parents and
+layout ordering; closure emission also handles captured-field lowering and arity
+limits. Recursive-validator discovery/expansion can fail on type-size limits.
+These phases cannot drop Result merely because a builtin registration is normally
+present. A producer's completeness must cover public/imported metadata as well.
+
+The leaf `ok_or_else(internal_failure)` checks are compact and use an already
+required error channel. Retain them rather than expanding this task into a
+validated-context API redesign or selectively restoring assertions without a
+clearer interface. Actual cast failures and compiler failures remain distinct.
+This closes the reversion decision for this family; it does not certify every
+registration as an invariant or close SUB-633's implicit audit. Reviewed current
+symbol/class/closure/recursive-validator contracts and public codegen entry;
+documentation-only, no tests rerun. Three independent reviews had no findings;
+diff checks passed.
 
 ## Completed fixes: candidates and decisions
 
