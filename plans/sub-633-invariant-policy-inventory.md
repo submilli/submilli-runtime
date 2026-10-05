@@ -88,6 +88,7 @@ separate resource/dependency backlog.
 | R20 | Complete: retained | Keep bounded unordered collection and positional sort |
 | R21 | Complete: simplified | Remove compiled schema asset error chain |
 | R22 | Complete: retained | Keep iterative filesystem traversal; explicit sites handled individually |
+| R23 | Complete: retained | Preserve parser, closure arity and compiler limits |
 
 ### R01 execution evidence
 
@@ -440,6 +441,17 @@ layer exists solely for a proven invariant here. Serialization/path expects rema
 separate P02–P06 decisions below; R22 does not pre-approve them. Existing source
 cycle/path tests were inspected, not rerun. Documentation-only retention. Three
 independent reviewers found no issues; diff checks passed.
+
+### R23 execution evidence
+
+Retain parser recursion guards and closure-arity/type/work budgets. Source text can
+supply arbitrarily nested syntax and signatures; these limits are part of accepting
+external input, not guaranteed private construction. The historical parser and
+closure-arity fixes include boundary/process tests, and current parser entry points
+retain depth accounting. The relaxed invariant policy does not justify undoing
+these fixes or their error propagation. This resolves the reversion decision only;
+aggregate resource work remains in item 38. Documentation-only, no tests rerun.
+Three independent reviews found no issues; diff checks passed.
 
 ## Completed fixes: candidates and decisions
 
