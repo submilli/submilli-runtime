@@ -273,7 +273,7 @@ The built-in error class.
 | `static isError(value: unknown): boolean` | Returns `true` when `value` is an `Error` instance (including subclasses). |
 | `message: string` | The human-readable message passed to `new Error(message)`. |
 | `name: string` | The error class name. |
-| `constructor(message: string)` |  |
+| `constructor(message?: string)` |  |
 
 ## `Map`
 
@@ -378,7 +378,7 @@ A budget refusal (`extends Error`): filesystem space, model tokens, or session s
 
 | Member | Description |
 | --- | --- |
-| `constructor(message: string)` |  |
+| `constructor(message?: string)` |  |
 
 ## `RangeError`
 
@@ -386,7 +386,7 @@ The built-in range-error class (`extends Error`, `name` = `"RangeError"`).
 
 | Member | Description |
 | --- | --- |
-| `constructor(message: string)` |  |
+| `constructor(message?: string)` |  |
 
 ## `Record`
 
@@ -520,7 +520,7 @@ The built-in syntax-error class (`extends Error`, `name` = `"SyntaxError"`).
 
 | Member | Description |
 | --- | --- |
-| `constructor(message: string)` |  |
+| `constructor(message?: string)` |  |
 
 ## `TextDecoder`
 
@@ -568,7 +568,7 @@ The built-in type-error class (`extends Error`, `name` = `"TypeError"`).
 
 | Member | Description |
 | --- | --- |
-| `constructor(message: string)` |  |
+| `constructor(message?: string)` |  |
 
 ## `Uint8Array`
 

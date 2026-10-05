@@ -655,7 +655,7 @@ pub fn truthiness_class(member: &Type) -> TruthinessClass {
     }
 }
 
-fn union_members(ty: &Type) -> Vec<&Type> {
+pub(super) fn union_members(ty: &Type) -> Vec<&Type> {
     match ty.peel() {
         Type::Union(members) => members.iter().collect(),
         // `ty` itself, not its peel: peeling drops a `readonly` wrapper.

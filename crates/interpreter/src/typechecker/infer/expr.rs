@@ -9079,7 +9079,11 @@ impl Inferer<'_> {
         let target_to_inner = assignable(&shape, &inner_ty, self.resolver());
         let target_to_widened =
             assignable(&shape, &widen_assertion_source(&inner_ty), self.resolver());
-        if !inner_to_target && !target_to_inner && !target_to_widened {
+        if !inner_to_target
+            && !target_to_inner
+            && !target_to_widened
+            && !self.union_members_overlap(&inner_ty, &shape)
+        {
             let blockers = optional_vs_required_blockers(&inner_ty, &shape, self.resolver());
             if let Some(first) = blockers.first() {
                 let (subj, verb) = if blockers.len() == 1 {
@@ -9152,6 +9156,29 @@ impl Inferer<'_> {
             },
             target_ty,
         ))
+    }
+
+    /// Whether some member of `source` and some member of `target` pass one of the
+    /// assertion directions [`infer_as`](Self::infer_as) asks of the whole types.
+    /// This is tsc's comparability for a union on either side, at the top level
+    /// only (a union inside a field or an element still needs a whole-type match):
+    /// `str as S[] | S` is accepted for `type S = "a" | "b"` because `string`
+    /// overlaps `S`, and `(number | boolean) as string | number` because `number`
+    /// overlaps `number`.
+    fn union_members_overlap(&self, source: &Type, target: &Type) -> bool {
+        if !matches!(source.peel(), Type::Union(_)) && !matches!(target.peel(), Type::Union(_)) {
+            return false;
+        }
+        let resolver = self.resolver();
+        let target_members = narrowing::union_members(target);
+        narrowing::union_members(source).into_iter().any(|source_member| {
+            let widened = widen_assertion_source(source_member);
+            target_members.iter().any(|target_member| {
+                assignable(source_member, target_member, resolver)
+                    || assignable(target_member, source_member, resolver)
+                    || assignable(target_member, &widened, resolver)
+            })
+        })
     }
 
     /// `x instanceof Foo` — a runtime class test. `Foo` must name a class (interfaces aren't

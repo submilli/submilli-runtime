@@ -1,5 +1,5 @@
 // test262: test/built-ins/NativeErrors/cause_property_native_error.js
-// expect-error: constructor of `RangeError` expects 1 argument(s), got 2
+// expect-error: constructor of `RangeError` expects 0-1 argument(s), got 2
 //
 // The `{ cause }` options bag (ES2022) is not part of the Error surface in
 // spec.md §1.8 — same pin as Error/cause_property.ts, for the subclasses.

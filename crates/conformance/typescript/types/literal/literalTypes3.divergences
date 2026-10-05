@@ -22,4 +22,3 @@ line 65: x
 
 errors:
 line 15: ours: `switch` case body must end with `break` or `return` — no fallthrough (tsc accepts)
-line 34: ours: constructor of `Error` expects 1 argument(s), got 0 (tsc accepts)
