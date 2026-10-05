@@ -1,5 +1,12 @@
 namespace: submilli
 provides:
+- name: fs.write
+  description: Stream a Drive file or native-document export into the VFS. The caller's `fs.write` rule checks the normalized destination and byte limit. The package capability retains the caller's original `path` for compatibility.
+  fields:
+    max_bytes:
+      type: number
+    path:
+      type: string
 - name: submilli/google-drive.copyFile
   description: Copy a file with an optional new name or parent. `parentId` in the check is the destination folder, or "" when the copy stays beside the source.
   fields:
@@ -13,7 +20,7 @@ provides:
     parentId:
       type: string
 - name: submilli/google-drive.downloadFile
-  description: Stream a Drive file or native-document export into the VFS.
+  description: Stream a Drive file or native-document export into the VFS. The caller's `fs.write` rule checks the normalized destination and byte limit. The package capability retains the caller's original `path` for compatibility.
   fields:
     fileId:
       type: string

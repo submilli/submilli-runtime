@@ -18,6 +18,7 @@ const GOOGLE_API = "https://www.googleapis.com/";
 const API = GOOGLE_API + "drive/v3";
 const UPLOAD_API = GOOGLE_API + "upload/drive/v3";
 const CHUNK_SIZE = 8388608;
+const DOWNLOAD_MAX_BYTES = 20000000;
 // Exactly one `@` between two runs of printable ASCII, without the characters RFC 5322 reserves
 // for address syntax, `()<>[]:;\,"`, so one value names one account.
 const BARE_ADDRESS = /^[!#-'*+\-.\/0-9=?A-Z^_`a-z{|}~]+@[!#-'*+\-.\/0-9=?A-Z^_`a-z{|}~]+$/;
@@ -153,7 +154,7 @@ export interface FileDownloadOptions {
     exportMimeType?: string;
     /** Replace the destination VFS file if it already exists. */
     overwrite?: boolean;
-    /** Abort the download once this many bytes have been received. */
+    /** Non-negative integer byte limit; defaults to 20 MB. The runtime tier limit still applies. */
     maxBytes?: number;
 }
 
@@ -367,17 +368,25 @@ export function readText(fileId: string): string {
 
 /**
  * Stream a Drive file or native-document export into the VFS.
+ * The caller's `fs.write` rule checks the normalized destination and byte limit.
+ * The package capability retains the caller's original `path` for compatibility.
   * @param fileId Drive file ID to download.
   * @param path Destination path in the session VFS.
   * @param options Optional export MIME type (required for native Google files), overwrite flag, and byte limit; `null` downloads binary content without overwriting.
   * @returns The download result for the file saved at `path`; throws `DriveError` `download_failed` on a non-2xx response.
  * @capability submilli/google-drive.downloadFile { fileId: string, path: string }
+ * @capability fs.write { path: string, max_bytes: number }
  */
 export function downloadFile(fileId: string, path: string, options: FileDownloadOptions | null = null): DownloadResult {
-    const exportMimeType = options === null ? null : options.exportMimeType;
-    const overwrite = options === null ? null : options.overwrite;
-    const maxBytes = options === null ? null : options.maxBytes;
+    const exportMimeType = options === null ? null : options.exportMimeType ?? null;
+    const overwrite = options === null ? null : options.overwrite ?? null;
+    const requestedMaxBytes = options === null ? null : options.maxBytes;
+    const maxBytes = requestedMaxBytes ?? DOWNLOAD_MAX_BYTES;
+    if (!Number.isSafeInteger(maxBytes) || maxBytes < 0) {
+        throw new RangeError("maxBytes must be a non-negative safe integer");
+    }
     check("submilli/google-drive.downloadFile", { fileId: fileId, path: path });
+    check("fs.write", { path: path, max_bytes: maxBytes });
     const file = fetchFile(fileId);
     if (file === null) throw new DriveError("not_found", "Drive file was not found", 404);
     let endpoint = "/files/" + encodeComponent(fileId);
@@ -392,9 +401,8 @@ export function downloadFile(fileId: string, path: string, options: FileDownload
         query.set("alt", "media");
     }
     const encoded = encodeQuery(query);
-    const downloadOptions: DownloadOptions = { headers: authHeaders() };
+    const downloadOptions: DownloadOptions = { headers: authHeaders(), maxBytes: maxBytes };
     if (overwrite !== null) downloadOptions.overwrite = overwrite;
-    if (maxBytes !== null) downloadOptions.maxBytes = maxBytes;
     const result = download(API + endpoint + "?" + encoded, path, downloadOptions);
     if (result.status < 200 || result.status >= 300) {
         throw new DriveError("download_failed", "Drive download failed with HTTP " + result.status.toString(), result.status);
