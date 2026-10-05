@@ -612,7 +612,7 @@ impl Inferer<'_> {
                 args,
             } => self.infer_new(callee, type_args, args, expected, span),
             ExprKind::TemplateLiteral { parts, exprs } => {
-                self.lower_template_literal(parts, exprs, span)
+                self.lower_template_literal(parts, exprs, expected, span)
             }
             ExprKind::Ternary { cond, then_, else_ } => {
                 self.infer_ternary(cond, then_, else_, expected, span)
@@ -4328,6 +4328,7 @@ impl Inferer<'_> {
         &mut self,
         parts: Vec<String>,
         exprs: Vec<ExprId>,
+        expected: Option<&Type>,
         span: Span,
     ) -> Result<(TypedExprKind, Type), CompilerFailure> {
         if parts.len().checked_sub(1) != Some(exprs.len()) {
@@ -4391,8 +4392,12 @@ impl Inferer<'_> {
                 .map_err(crate::typechecker::arena_failure)?
                 .clone();
             // A template is a `string` whatever it interpolates, as in
-            // TypeScript: `` `${h}` `` with `h: "hello"` is not `"hello"`.
-            return Ok((single.kind, result_ty));
+            // TypeScript: `` `${h}` `` with `h: "hello"` is not `"hello"`,
+            // unless a string literal type is expected of it.
+            let keeps_literal = matches!(single.ty, Type::StringLiteral(_))
+                && expects_literal(expected, |ty| matches!(ty, Type::StringLiteral(_)));
+            let ty = if keeps_literal { single.ty } else { result_ty };
+            return Ok((single.kind, ty));
         }
 
         // Defensive: the parser guarantees `exprs.len() >= 1` (the
@@ -12196,7 +12201,7 @@ mod invariant_tests {
         super::super::test_support::with_inferer(|tc| {
             let span = Span::at(crate::FileId(0));
             assert!(matches!(
-                tc.lower_template_literal(Vec::new(), Vec::new(), span),
+                tc.lower_template_literal(Vec::new(), Vec::new(), None, span),
                 Err(CompilerFailure::Internal { .. })
             ));
             let part = ChainPart::NonNull { span };

@@ -115,6 +115,8 @@ function main(): void {
   let boxed = new Box(fresh).value;
   boxed = "c";
   assert(template + first + boxed === "qbc", "a template or generic result widens");
+  const exact: "hello" = `${declared}`;
+  assert(hello(exact) + hello(`${declared}`) === 10, "a template takes an expected literal type");
 
   let assigned: { key: string } | null = null;
   assigned = { key: fresh };
