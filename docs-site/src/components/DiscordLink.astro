@@ -2,8 +2,8 @@
 import { Icon } from '@astrojs/starlight/components';
 
 interface Props {
-	/** `icon` renders the glyph only; `label` includes the community name. */
-	variant?: 'icon' | 'label';
+	/** `text` is an unboxed footer link; `icon` renders only the glyph. */
+	variant?: 'icon' | 'label' | 'text';
 }
 
 const DISCORD_URL = 'https://discord.gg/VphpukeGGj';
@@ -18,7 +18,7 @@ const visibleLabel = 'Join Discord';
 	aria-label={accessibleLabel}
 >
 	<Icon name="discord" />
-	{variant === 'label' && <span>{visibleLabel}</span>}
+	{variant !== 'icon' && <span>{visibleLabel}</span>}
 </a>
 
 <style>
@@ -45,6 +45,15 @@ const visibleLabel = 'Join Discord';
 		color: var(--sl-color-white);
 		border-color: var(--sub-line-strong);
 		background: var(--sub-hover);
+	}
+	.discord-link--text {
+		min-height: 2.75rem;
+		font-weight: 500;
+	}
+	.discord-link--text:hover {
+		color: var(--sl-color-white);
+		text-decoration: underline;
+		text-underline-offset: 0.2em;
 	}
 	.discord-link--icon {
 		width: 2.75rem;
