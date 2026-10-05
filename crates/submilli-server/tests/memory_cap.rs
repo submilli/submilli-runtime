@@ -10,6 +10,9 @@
 //! So the assertion that matters is not "the engine enforces a cap" but "a
 //! request served by this binary is bounded". Only the real path can make it.
 
+#[path = "common/in_memory_config.rs"]
+mod in_memory_config;
+
 use std::sync::Arc;
 
 use axum::Router;
@@ -52,7 +55,7 @@ fn router_with_cap(max_store_bytes: u64) -> Router {
             max_store_bytes,
             ..RuntimeConfig::default()
         },
-        ..ServerConfig::default()
+        ..in_memory_config::config()
     };
     app(AppState::new(config).expect("build AppState"))
 }

@@ -12,6 +12,9 @@
 //! Read-only on it. They pass the token to each child process explicitly and
 //! clear every other source.
 
+#[path = "../../submilli-server/tests/common/in_memory_config.rs"]
+mod in_memory_config;
+
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
@@ -272,7 +275,7 @@ async fn private_server_install_uses_the_server_token() {
         let config = submilli_server::ServerConfig {
             package_store_root: Some(dir.path().join(store)),
             github_token_file: with_token.then(|| token_file.clone()),
-            ..submilli_server::ServerConfig::default()
+            ..in_memory_config::config()
         };
         let state = submilli_server::AppState::new(config).unwrap();
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();

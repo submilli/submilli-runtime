@@ -4,6 +4,9 @@
 //! bind once at create, run many executes against the same per-session VFS, then
 //! terminate.
 
+#[path = "common/in_memory_config.rs"]
+mod in_memory_config;
+
 use std::path::Path;
 use std::sync::Arc;
 
@@ -48,7 +51,7 @@ fn router() -> Router {
     let blueprints = Arc::new(InMemoryBlueprintStore::seed([blueprint]).expect("seed blueprints"));
     let config = ServerConfig {
         blueprints: Some(blueprints),
-        ..ServerConfig::default()
+        ..in_memory_config::config()
     };
     app(AppState::new(config).expect("build AppState"))
 }
@@ -102,7 +105,7 @@ fn secret_router(store_root: &Path) -> Router {
     app(AppState::new(ServerConfig {
         blueprints: Some(blueprints),
         package_store_root: Some(store_root.to_path_buf()),
-        ..ServerConfig::default()
+        ..in_memory_config::config()
     })
     .expect("build AppState"))
 }

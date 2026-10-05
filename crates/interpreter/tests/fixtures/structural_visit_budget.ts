@@ -1,12 +1,13 @@
 import session from "submilli:session";
 
 function main(): void {
-  const left: number[] = [];
-  const right: number[] = [];
-  for (let i = 0; i < 100001; i++) {
-    left.push(i);
-    right.push(i);
+  // Cross the visit limit without spending most of the test on individual pushes.
+  let left: number[] = [0];
+  while (left.length < 100001) {
+    left = left.concat(left);
   }
+  left = left.slice(0, 100001);
+  const right = left.slice();
 
   let comparisonLimited = false;
   try {

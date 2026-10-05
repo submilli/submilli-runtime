@@ -5,6 +5,9 @@
 //! that the CLI reaches the same resolution decisions as MCP and REST -- was
 //! asserted rather than checked.
 
+#[path = "../../submilli-server/tests/common/in_memory_config.rs"]
+mod in_memory_config;
+
 use std::path::PathBuf;
 use std::process::{Command, Output};
 
@@ -50,7 +53,7 @@ async fn mcp_docs_work_locally_and_through_a_registered_blueprint() {
         blueprints: Some(Arc::new(
             InMemoryBlueprintStore::seed([blueprint]).expect("seed blueprints"),
         )),
-        ..ServerConfig::default()
+        ..in_memory_config::config()
     })
     .unwrap()))
     .await;

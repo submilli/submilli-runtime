@@ -9,6 +9,9 @@
 //! `submilli-shared`'s own tests drive — so these exercise the wiring with zero
 //! live provider calls.
 
+#[path = "common/in_memory_config.rs"]
+mod in_memory_config;
+
 use std::collections::BTreeMap;
 use std::future::Future;
 use std::pin::Pin;
@@ -243,7 +246,7 @@ impl Harness {
             )),
             session_storage_root: Some(vfs_root.path().to_path_buf()),
             llm_dispatch: dispatch,
-            ..ServerConfig::default()
+            ..in_memory_config::config()
         };
         Self {
             state: AppState::new(tweak(config)).expect("AppState"),

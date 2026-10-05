@@ -1,3 +1,6 @@
+#[path = "common/in_memory_config.rs"]
+mod in_memory_config;
+
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -30,7 +33,7 @@ fn router() -> Router {
     );
     let config = ServerConfig {
         blueprints: Some(blueprints),
-        ..ServerConfig::default()
+        ..in_memory_config::config()
     };
     app(AppState::new(config).expect("build AppState"))
 }
@@ -60,7 +63,7 @@ fn router_with_packages_and_runtime(
         blueprints: Some(blueprints),
         package_store_root: Some(package_store_root),
         runtime,
-        ..ServerConfig::default()
+        ..in_memory_config::config()
     };
     app(AppState::new(config).expect("build AppState"))
 }
@@ -89,7 +92,7 @@ fn router_with_oauth_mcp() -> Router {
     );
     let config = ServerConfig {
         blueprints: Some(blueprints),
-        ..ServerConfig::default()
+        ..in_memory_config::config()
     };
     app(AppState::new(config).expect("build AppState"))
 }
@@ -331,7 +334,7 @@ async fn blueprint_package_resolves_from_the_fallback_store() {
         blueprints: Some(blueprints),
         package_store_root: Some(owned.clone()),
         package_fallback_root: Some(fallback),
-        ..ServerConfig::default()
+        ..in_memory_config::config()
     })
     .expect("build AppState"));
     let code = r#"
@@ -546,7 +549,7 @@ async fn prepared_package_cache_survives_store_removal() {
 }
 
 #[tokio::test]
-async fn prepared_package_cache_only_evicts_when_blueprint_packages_change() {
+async fn prepared_package_cache_evicts_on_every_blueprint_apply() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let store_root = tmp.path().join("packages");
     write_acme_util_package(&store_root);
@@ -559,7 +562,7 @@ async fn prepared_package_cache_only_evicts_when_blueprint_packages_change() {
 
     let (_, first) = execute_on(&router, code).await;
     // Registration needs valid artifacts; change the on-disk result to distinguish
-    // reuse of the prepared module from reloading it after a package-list change.
+    // reuse of the prepared module from reloading it after an apply.
     write_acme_util_package_with_source(
         &store_root,
         "export function answer(): number { return 99; } export function plusOne(n: number): number { return n + 1; }",
@@ -595,7 +598,7 @@ vfs: none
     assert_eq!(first["result"], json!("42"), "got: {first:#}");
     assert_eq!(
         after_non_package_update["result"],
-        json!("42"),
+        json!("100"),
         "got: {after_non_package_update:#}"
     );
     assert_eq!(

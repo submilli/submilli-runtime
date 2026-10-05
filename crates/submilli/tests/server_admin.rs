@@ -1,6 +1,9 @@
 //! End-to-end integration tests for `submilli server status` / `submilli server
 //! stop` against a running server's admin endpoints.
 
+#[path = "../../submilli-server/tests/common/in_memory_config.rs"]
+mod in_memory_config;
+
 use std::path::PathBuf;
 use std::process::{Command, Output};
 
@@ -46,7 +49,7 @@ fn stop(server: &str) -> Output {
 }
 
 async fn spawn_server() -> (String, std::sync::Arc<tokio::sync::Notify>) {
-    spawn_server_with(ServerConfig::default()).await
+    spawn_server_with(in_memory_config::config()).await
 }
 
 /// A server that requires a token: one admin and one user.
@@ -57,7 +60,7 @@ async fn spawn_authenticated_server() -> (String, std::sync::Arc<tokio::sync::No
             token("ops", Role::Admin, ADMIN_TOKEN),
             token("app", Role::User, USER_TOKEN),
         ]),
-        ..ServerConfig::default()
+        ..in_memory_config::config()
     })
     .await
 }

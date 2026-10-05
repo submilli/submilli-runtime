@@ -1,18 +1,21 @@
-//! Server-owned SQLite lifecycle. Entity tables arrive in later migrations.
+//! Server-owned SQLx connection, migrations, and native connection cleanup.
 
 use std::fs::{File, OpenOptions};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, mpsc};
 use std::time::Duration;
 
-use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior};
+use futures::{FutureExt, future::BoxFuture};
+use sqlx::{
+    Connection, SqliteConnection,
+    sqlite::{SqliteConnectOptions, SqliteJournalMode, SqliteSynchronous},
+};
 use tokio::sync::{oneshot, watch};
-use uuid::Uuid;
 
 const MAX_WAITING: usize = 64;
-const SCHEMA_VERSION: i64 = 1;
+static MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("./migrations");
 
-type Job = Box<dyn FnOnce(&mut Connection) + Send>;
+type Job = Box<dyn for<'a> FnOnce(&'a mut SqliteConnection) -> BoxFuture<'a, ()> + Send>;
 type CloseResult = Option<Result<(), Arc<DatabaseError>>>;
 
 #[derive(Debug, thiserror::Error)]
@@ -29,14 +32,16 @@ pub enum DatabaseError {
     AlreadyOpen(PathBuf),
     #[error("database path {0} has multiple hard links")]
     MultipleLinks(PathBuf),
-    #[error("database identity generation failed: {0}")]
-    Entropy(String),
     #[error("SQLite operation failed: {0}")]
-    Sql(#[from] rusqlite::Error),
-    #[error("database schema version {found} is newer than supported version 1")]
-    NewerSchema { found: i64 },
-    #[error("database schema version {found} is invalid")]
-    InvalidSchemaVersion { found: i64 },
+    Sql(#[from] sqlx::Error),
+    #[error("database migration failed: {0}")]
+    Migration(#[from] sqlx::migrate::MigrateError),
+    #[error("blueprint import failed: {0}")]
+    Import(String),
+    #[error("blueprint already exists")]
+    AlreadyExists,
+    #[error("blueprint '{name}' revision counter exhausted")]
+    RevisionExhausted { name: String },
     #[error("database work queue is full")]
     Busy,
     #[error("database WAL checkpoint could not complete because readers are active")]
@@ -53,8 +58,6 @@ pub enum DatabaseError {
     CallbackPanicked,
     #[error("database cleanup failed: {0}")]
     Cleanup(#[source] Arc<DatabaseError>),
-    #[error("database metadata is missing or malformed")]
-    InvalidMetadata,
 }
 
 /// An async handle to one SQLite worker, with a bounded work queue. The worker
@@ -64,8 +67,6 @@ pub struct ServerDatabase {
     path: PathBuf,
     sender: Mutex<Option<mpsc::SyncSender<Job>>>,
     completion: watch::Receiver<CloseResult>,
-    store_id: Uuid,
-    startup_generation: Uuid,
 }
 
 impl ServerDatabase {
@@ -78,42 +79,60 @@ impl ServerDatabase {
             .name("submilli-sqlite".into())
             .spawn(move || database_worker(path, receiver, ready, finished))
             .map_err(DatabaseError::WorkerStart)?;
-        let (path, store_id, startup_generation) =
-            startup.await.map_err(|_| DatabaseError::WorkerStopped)??;
+        let path = startup.await.map_err(|_| DatabaseError::WorkerStopped)??;
         Ok(Self {
             path,
             sender: Mutex::new(Some(sender)),
             completion,
-            store_id,
-            startup_generation,
         })
-    }
-
-    pub fn store_id(&self) -> Uuid {
-        self.store_id
-    }
-
-    pub fn startup_generation(&self) -> Uuid {
-        self.startup_generation
     }
 
     pub fn path(&self) -> &Path {
         &self.path
     }
 
-    /// Run a write transaction on the SQLite thread. The callback performs
-    /// synchronous database work there; callers await only the reply. Success
-    /// commits, errors roll back, and cancellation cannot abandon accepted work.
-    /// Callbacks must finish without waiting for another call to this database.
+    /// Run a transaction while its caller is waiting. Cancellation drops the
+    /// transaction, allowing SQLx to roll it back unless commit has already begun.
+    /// The callback must not submit another operation to this database.
     pub async fn transaction<T, F>(&self, operation: F) -> Result<T, DatabaseError>
     where
         T: Send + 'static,
-        F: FnOnce(&Transaction<'_>) -> Result<T, DatabaseError> + Send + 'static,
+        F: for<'a> FnOnce(&'a mut SqliteConnection) -> BoxFuture<'a, Result<T, DatabaseError>>
+            + Send
+            + 'static,
     {
-        let (reply, result) = oneshot::channel();
+        self.submit(move |connection| Box::pin(run_transaction(connection, operation)))
+            .await
+    }
+
+    /// Execute a read without acquiring a SQLite write transaction.
+    pub(crate) async fn read<T, F>(&self, operation: F) -> Result<T, DatabaseError>
+    where
+        T: Send + 'static,
+        F: for<'a> FnOnce(&'a mut SqliteConnection) -> BoxFuture<'a, Result<T, DatabaseError>>
+            + Send
+            + 'static,
+    {
+        self.submit(operation).await
+    }
+
+    async fn submit<T, F>(&self, operation: F) -> Result<T, DatabaseError>
+    where
+        T: Send + 'static,
+        F: for<'a> FnOnce(&'a mut SqliteConnection) -> BoxFuture<'a, Result<T, DatabaseError>>
+            + Send
+            + 'static,
+    {
+        let (mut reply, result) = oneshot::channel();
         let job: Job = Box::new(move |connection| {
-            let outcome = run_transaction(connection, operation);
-            let _ = reply.send(outcome);
+            Box::pin(async move {
+                let outcome = tokio::select! {
+                    biased;
+                    () = reply.closed() => return,
+                    outcome = contain_panic(async move { operation(connection).await }) => outcome,
+                };
+                let _ = reply.send(outcome);
+            })
         });
         {
             let sender = self.sender.lock().map_err(|_| DatabaseError::Poisoned)?;
@@ -129,7 +148,8 @@ impl ServerDatabase {
         result.await.map_err(|_| DatabaseError::WorkerStopped)?
     }
 
-    /// Stop admission immediately; the owner drains accepted work, checkpoints,
+    /// Stop admission immediately; the owner finishes work whose callers still
+    /// wait, skips cancelled work, checkpoints,
     /// and closes SQLite before releasing its process lock. Dropping the final
     /// handle also disconnects the queue and starts the same cleanup.
     pub(crate) fn begin_close(&self) -> Result<(), DatabaseError> {
@@ -159,111 +179,153 @@ impl ServerDatabase {
 fn database_worker(
     path: PathBuf,
     receiver: mpsc::Receiver<Job>,
-    ready: oneshot::Sender<Result<(PathBuf, Uuid, Uuid), DatabaseError>>,
+    ready: oneshot::Sender<Result<PathBuf, DatabaseError>>,
     finished: watch::Sender<CloseResult>,
 ) {
-    let mut database = match OwnedDatabase::open(&path) {
+    let runtime = match tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+    {
+        Ok(runtime) => runtime,
+        Err(error) => {
+            let _ = ready.send(Err(DatabaseError::WorkerStart(error)));
+            return;
+        }
+    };
+    let mut database = match runtime.block_on(OwnedDatabase::open(&path)) {
         Ok(database) => database,
         Err(error) => {
             let _ = ready.send(Err(error));
             return;
         }
     };
-    let _ = ready.send(Ok((
-        database.path.clone(),
-        database.store_id,
-        database.startup_generation,
-    )));
+    let _ = ready.send(Ok(database.path.clone()));
     while let Ok(job) = receiver.recv() {
-        // Cancelled callers leave returned values for the worker to drop. Their
-        // destructors are caller code too and must not terminate the owner.
         if let Err(payload) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            job(&mut database.connection);
+            runtime.block_on(job(&mut database.connection));
         })) {
             dispose_panic_payload(payload);
             tracing::error!("database job cleanup panicked");
         }
     }
-    let result = database.close().map_err(Arc::new);
+    let result = runtime.block_on(database.close()).map_err(Arc::new);
     if let Err(error) = &result {
         tracing::error!(%error, "database cleanup failed");
     }
     finished.send_replace(Some(result));
 }
 
-// Field order ensures native SQLite closes before the lock on every error and
-// unwind path, including a callback that unwinds during worker execution.
+/// An uncertain native close must never allow another server to acquire the lock.
+struct DatabaseLock(Option<File>);
+
+impl DatabaseLock {
+    fn release(&mut self, path: &Path) -> Result<(), DatabaseError> {
+        if let Some(lock) = &self.0 {
+            // A child may inherit this descriptor before exec closes it.
+            // Explicit unlock releases ownership even while that copy exists.
+            lock.unlock().map_err(|source| DatabaseError::Io {
+                path: path.to_path_buf(),
+                source,
+            })?;
+        }
+        drop(self.0.take());
+        Ok(())
+    }
+}
+
+impl Drop for DatabaseLock {
+    fn drop(&mut self) {
+        if let Some(lock) = self.0.take() {
+            std::mem::forget(lock);
+            tracing::error!(
+                "retaining database lock until process exit: native close was not confirmed"
+            );
+        }
+    }
+}
+
 struct OwnedDatabase {
-    connection: Connection,
-    _lock: File,
+    connection: SqliteConnection,
+    lock: DatabaseLock,
     path: PathBuf,
-    store_id: Uuid,
-    startup_generation: Uuid,
 }
 
 impl OwnedDatabase {
-    fn open(path: &Path) -> Result<Self, DatabaseError> {
+    async fn open(path: &Path) -> Result<Self, DatabaseError> {
         let (lock, path) = lock_database(path)?;
-        let mut connection = Connection::open(&path)?;
-        reject_multiple_links(&path)?;
-        connection.busy_timeout(Duration::from_secs(5))?;
-        let mode: String = connection.query_row("PRAGMA journal_mode=WAL", [], |row| row.get(0))?;
-        if !mode.eq_ignore_ascii_case("wal") {
-            return Err(DatabaseError::InvalidMetadata);
+        let mut lock = DatabaseLock(Some(lock));
+        let options = SqliteConnectOptions::new()
+            .filename(&path)
+            .create_if_missing(true)
+            .journal_mode(SqliteJournalMode::Wal)
+            .synchronous(SqliteSynchronous::Full)
+            .foreign_keys(true)
+            .busy_timeout(Duration::from_secs(5))
+            .pragma("wal_autocheckpoint", "1000")
+            .optimize_on_close(false, None);
+        let mut connection = SqliteConnection::connect_with(&options).await?;
+        let initialized = async {
+            reject_multiple_links(&path)?;
+            MIGRATOR.run(&mut connection).await?;
+            Ok::<(), DatabaseError>(())
         }
-        connection.execute_batch(
-            "PRAGMA synchronous=FULL; PRAGMA foreign_keys=ON; PRAGMA wal_autocheckpoint=1000;",
-        )?;
-        let (store_id, startup_generation) = migrate(&mut connection)?;
+        .await;
+        if let Err(error) = initialized {
+            connection.close().await?;
+            lock.release(&path)?;
+            return Err(error);
+        }
         Ok(Self {
             connection,
-            _lock: lock,
+            lock,
             path,
-            store_id,
-            startup_generation,
         })
     }
 
-    fn close(self) -> Result<(), DatabaseError> {
-        let checkpoint = self
-            .connection
-            .query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |row| {
-                row.get::<_, i64>(0)
-            });
-        self.connection.close().map_err(|(connection, error)| {
-            drop(connection);
-            DatabaseError::Sql(error)
-        })?;
-        if checkpoint? != 0 {
+    async fn close(mut self) -> Result<(), DatabaseError> {
+        let checkpoint: Result<(i64, i64, i64), _> =
+            sqlx::query_as("PRAGMA wal_checkpoint(TRUNCATE)")
+                .fetch_one(&mut self.connection)
+                .await;
+        self.connection.close().await?;
+        self.lock.release(&self.path)?;
+        if checkpoint?.0 != 0 {
             return Err(DatabaseError::CheckpointBusy);
         }
         Ok(())
     }
 }
 
-fn run_transaction<T, F>(connection: &mut Connection, operation: F) -> Result<T, DatabaseError>
+async fn run_transaction<T, F>(
+    connection: &mut SqliteConnection,
+    operation: F,
+) -> Result<T, DatabaseError>
 where
-    F: FnOnce(&Transaction<'_>) -> Result<T, DatabaseError>,
+    T: Send,
+    F: for<'a> FnOnce(&'a mut SqliteConnection) -> BoxFuture<'a, Result<T, DatabaseError>> + Send,
 {
-    let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
-    // Contain panics from caller-supplied code while retaining the transaction
-    // for rollback. Database setup and cleanup use ordinary typed errors.
-    let outcome =
-        match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| operation(&transaction))) {
-            Ok(outcome) => outcome,
-            Err(payload) => {
-                dispose_panic_payload(payload);
-                Err(DatabaseError::CallbackPanicked)
-            }
-        };
+    let mut transaction = connection.begin_with("BEGIN IMMEDIATE").await?;
+    let outcome = contain_panic(async { operation(&mut transaction).await }).await;
     match outcome {
         Ok(value) => {
-            transaction.commit()?;
+            transaction.commit().await?;
             Ok(value)
         }
         Err(error) => {
-            transaction.rollback()?;
+            transaction.rollback().await?;
             Err(error)
+        }
+    }
+}
+
+async fn contain_panic<T>(
+    future: impl std::future::Future<Output = Result<T, DatabaseError>>,
+) -> Result<T, DatabaseError> {
+    match std::panic::AssertUnwindSafe(future).catch_unwind().await {
+        Ok(result) => result,
+        Err(payload) => {
+            dispose_panic_payload(payload);
+            Err(DatabaseError::CallbackPanicked)
         }
     }
 }
@@ -384,69 +446,6 @@ fn windows_link_count(path: &Path) -> std::io::Result<u64> {
     Ok(u64::from(
         unsafe { information.assume_init() }.nNumberOfLinks,
     ))
-}
-
-fn random_uuid() -> Result<Uuid, DatabaseError> {
-    let mut bytes = [0; 16];
-    getrandom::fill(&mut bytes).map_err(|error| DatabaseError::Entropy(error.to_string()))?;
-    Ok(uuid::Builder::from_random_bytes(bytes).into_uuid())
-}
-
-fn migrate(connection: &mut Connection) -> Result<(Uuid, Uuid), DatabaseError> {
-    let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
-    let version: i64 = transaction.query_row("PRAGMA user_version", [], |row| row.get(0))?;
-    if version > SCHEMA_VERSION {
-        return Err(DatabaseError::NewerSchema { found: version });
-    }
-    if version < 0 {
-        return Err(DatabaseError::InvalidSchemaVersion { found: version });
-    }
-    if version == 0 {
-        transaction.execute_batch(
-            "CREATE TABLE server_metadata (singleton INTEGER PRIMARY KEY CHECK (singleton = 1), store_id TEXT NOT NULL, startup_generation TEXT NOT NULL);
-             CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, name TEXT NOT NULL);
-             INSERT INTO schema_migrations (version, name) VALUES (1, 'server_metadata');
-             PRAGMA user_version=1;",
-        )?;
-        transaction.execute(
-            "INSERT INTO server_metadata (singleton, store_id, startup_generation) VALUES (1, ?1, ?2)",
-            (random_uuid()?.to_string(), Uuid::nil().to_string()),
-        )?;
-    }
-    let migration_name: Option<String> = transaction
-        .query_row(
-            "SELECT name FROM schema_migrations WHERE version = 1",
-            [],
-            |row| row.get(0),
-        )
-        .optional()?;
-    if migration_name.as_deref() != Some("server_metadata") {
-        return Err(DatabaseError::InvalidMetadata);
-    }
-    let unknown_migrations: i64 = transaction.query_row(
-        "SELECT COUNT(*) FROM schema_migrations WHERE version != 1",
-        [],
-        |row| row.get(0),
-    )?;
-    if unknown_migrations != 0 {
-        return Err(DatabaseError::InvalidMetadata);
-    }
-    let store_id: String = transaction
-        .query_row(
-            "SELECT store_id FROM server_metadata WHERE singleton = 1",
-            [],
-            |row| row.get(0),
-        )
-        .optional()?
-        .ok_or(DatabaseError::InvalidMetadata)?;
-    let store_id = Uuid::parse_str(&store_id).map_err(|_| DatabaseError::InvalidMetadata)?;
-    let generation = random_uuid()?;
-    transaction.execute(
-        "UPDATE server_metadata SET startup_generation = ?1 WHERE singleton = 1",
-        (generation.to_string(),),
-    )?;
-    transaction.commit()?;
-    Ok((store_id, generation))
 }
 
 #[cfg(test)]
