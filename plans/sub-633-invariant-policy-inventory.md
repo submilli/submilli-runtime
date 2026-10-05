@@ -1,0 +1,567 @@
+# SUB-633: invariant policy and simplification inventory
+
+Reviewed 2026-10-05. This is a proposal ledger, not an instruction to revert whole
+commits. No runtime changes or Linear status changes accompany this inventory.
+The policy is [AGENTS.md](../AGENTS.md#no-panic-execution-paths).
+
+The useful rollback is selective: remove error propagation that exists only for
+documented invariants. Keep input validation, resource bounds, operational errors,
+and fixes to actual compiler behavior. Several changes already express invariants
+more clearly without panicking; permission to panic is no reason to undo them.
+
+## Sources and review boundary
+
+- [SUB-633](https://linear.app/submilli/issue/SUB-633/no-panic), including its
+  completion notes and comments, and the
+  [original source-site inventory](https://linear.app/submilli/document/sub-633-complete-baseline-source-site-inventory-4b6b6b5a42c5).
+- Original source baseline: `25717faee899650ebbf81c1e4310547594be42e2`;
+  original engine baseline: submilli-wasm 0.1.4. Preserve these historical records.
+- Checkout inspected: `16e10725a08aabd5937bb64abf6f5a3c9b49fff1` on
+  `codex/bounded-diagnostics`; engine locked at 0.1.9. The proposed policy edit
+  in AGENTS.md is uncommitted at this baseline.
+- Cached local main: `f9c1608b0a39d4a22a3fccd4ae624812d573398b`;
+  cached upstream/main at the end of inspection:
+  `dc1e61f47d909d5cbfdc540c8bcd5373cf60599a`. No fetch or rebase was performed.
+  Recheck current main before implementing a row; upstream moved during review.
+- Reviewed the relevant hardening commits and current implementations, grouped
+  below. This is a contract/family inventory, not a fresh proof of every one of
+  the original 1,613 first-party indexes or every transitive dependency.
+
+Historical counts (837 explicit first-party candidates in 108 files, 1,613
+first-party indexes, 227 engine explicit candidates and 318 engine indexes) are
+search inventories, not counts of present defects or work to undo.
+
+## How to maintain this inventory
+
+Stable IDs R01–R26 identify code decisions; P01–P09 identify current explicit
+sites; T01–T06 identify tracking changes. Keep IDs when splitting work, using
+suffixes such as R04a. Keep original SUB-633 item numbers too.
+
+Each code row has a proposed disposition:
+
+- **Simplify:** a concrete local guarantee supports removing invariant-only
+  checks. Verify all callers and document the guarantee in the implementing diff.
+- **Prove first:** there is a plausible guarantee, but a public boundary,
+  serialization contract, cross-phase dependency, or mutation needs proof.
+- **Keep:** real failures or useful structural improvements remain.
+- **Already simplified:** the historical reversal has already happened.
+- **Deferred:** intentionally not reopened by this review.
+
+These are recommendations, not completion statuses. All new simplifications are
+unimplemented. On execution, append owner/PR, exact symbols changed, proof,
+remaining error cases, focused checks and final disposition to the row. A row is
+finished only when its code and tracking disposition agree. An accepted invariant
+stays recorded; it does not count as a removed panic. Do not delete history or
+reinterpret a checked historical item as a promise of zero panics.
+
+## Completed fixes: candidates and decisions
+
+### R01 — Compiler fatal-error architecture: keep; prune leaves
+
+Items 03, 06, 12, 22. History: `3ca8e039`, `0c170376`, `e5ef4670`,
+`5b127296`, `6faec525`, `8d1eb415`, `b699da07`.
+[Compiler errors](../crates/interpreter/src/compiler_error.rs),
+[arena](../crates/interpreter/src/arena.rs),
+[source](../crates/interpreter/src/source.rs).
+
+`CompilerFailure::Limit`, allocation failures and malformed public metadata still
+need propagation through compilation. Keep `CompileError`, fatal-vs-diagnostic
+separation and fallible compiler entry points. Remove individual internal-only
+branches and private `Result` signatures after proving their contracts; do not
+remove `Internal` globally while remaining callers use it. No partial artifacts.
+
+### R02 — Parser/lexer dispatch: simplify local cases
+
+Item 05; `3ca8e039`.
+[Lexer](../crates/interpreter/src/lexer.rs), [parser](../crates/interpreter/src/parser.rs).
+
+`next_token_inner` dispatches newline bytes directly to `lex_newline` without an
+intervening mutation. Its other-byte fatal branch can be a documented invariant.
+Likewise inspect parser helpers entered immediately after matching a literal or
+template token, and first/last accesses on vectors just populated locally.
+Document cursor movement and rollback before accepting each parser site; this is
+not blanket approval for all token access. Keep `parse_checked`, token-stream/EOF
+and source-span validation, resource limits and the fatal latch needed by those
+failures. Verify malformed tokens and existing syntax/depth regressions.
+
+### R03 — Arenas and spans: prove first; retain public checked APIs
+
+Item 06; `0c170376`, `e5ef4670`, `5b127296`, `6faec525`.
+Public IDs and mutable AST metadata do not by themselves establish valid indexing.
+`InvalidId`, invalid source/span/UTF-8 bounds, capacity and allocation errors have
+different contracts. A private just-allocated ID can qualify locally; arbitrary
+IDs supplied to public APIs cannot. Keep checked arena/source entry points unless
+a separate, explicit validated-input API contract is established. Do not undertake
+an arena redesign merely to remove `?`. Retain checked-arena/source boundary tests.
+
+### R04 — Namespace dispatch: simplify redundant private checks
+
+Item 08; `0dde88f3`.
+[Namespace resolution](../crates/interpreter/src/typechecker/infer/namespace_symbol.rs).
+
+The expression callers establish a nonempty chain and root membership before
+dispatching namespace resolution. Inspect `resolve_namespace_chain` and the
+nonempty-path checks against all callers: where no mutation intervenes, use that
+contract instead of a second internal failure. A private helper whose only error
+is the established root/path condition can lose `Result`; enclosing inference
+still reports genuine language/setup failures. Verify namespace/import fixtures.
+
+### R05 — Capture, narrowing and scope restoration: prove first
+
+Items 07–11; `0dde88f3`, with later confirmation in `6086f295` (SUB-1070).
+Saved flow state, pending joins, binding tables and restoration stacks can have
+invariants, but these conversions were mixed with actual narrowing isolation and
+top-level block closure fixes. Retain those semantic fixes. Review each push/pop,
+early return and reentrant path before simplifying a state helper. A generic
+“typechecking guarantees it” is insufficient. Preserve closure/narrowing fixtures.
+
+### R06 — Generic substitution and exhaustiveness: keep structural improvements
+
+Items 11, 36; `0dde88f3`, `5ab68b6b` (merge `9640d6c1`).
+[Substitution](../crates/interpreter/src/typechecker/type_param_substitution.rs),
+[filters](../crates/submilli-blueprint/src/filter.rs).
+
+Matching BTreeMap key sets established the old lookup invariant; paired ordered
+values avoid the lookup altogether. The old nested comparison match was also
+narrowed to its numeric variants; the extracted numeric evaluator expresses this
+cleanly. Retain both structural changes. Retire any requirement to make those
+specific established cases recoverable, without reintroducing old code.
+
+### R07 — Symbol, class, closure and validator registration: prove first
+
+Items 09, 13, 15–17, 19–21; `982a7db5`, `b699da07`, `c2dce469`.
+Candidates include builtin/intrinsic registration, preallocated functions,
+class layouts/vtables, closure environments and recursive-validator tables.
+For each lookup, identify the producer, full supported variant set, ordering,
+all consumers, and any imported/public metadata that bypasses the producer.
+Only then simplify internal-only propagation. Missing dependency metadata and
+unsupported source constructs still need errors. Keep emitted cast/throw behavior
+and the distinction between failed compilation and a valid guest trap.
+
+### R08 — Emitter root scope and temporary state: simplify selectively
+
+Items 18–20; `b699da07`.
+[Function emitter](../crates/interpreter/src/codegen/function_emitter/mod.rs).
+
+Construction seeds a root scope and `pop_scope` prevents removing it. This supports
+removing repeated `require_scope` failures at private accesses. Inspect
+`define_local`, `record_single_evaluation`, `end_single_evaluations` and their
+callers; marks/slots need their own provenance proof. A public invalid-pop call
+cannot silently acquire a new precondition. Keep local-count/parameter limits,
+allocation failures and real emission errors. The emitter as a whole remains
+fallible. Verify scope/finally/temporary evaluation and local-limit behavior.
+
+### R09 — Literal pools: prove first, with one narrow simplification
+
+Item 14; `982a7db5`.
+String pool tables and BigInt literal storage are publicly mutable, so “interned
+earlier” is not a universal guarantee. Keep invalid-index checks at those boundaries,
+UTF-16 handling, Wasm-width and limb-count limits. After `check_decimal_digits`
+establishes a nonempty decimal string, the BigUint parser's rejection branch is a
+candidate invariant under its documented contract; remove duplicate validation
+only within that proven call path. Do not make the entire pool API infallible.
+
+### R10 — Call metadata serialization: prove first, promising small API reduction
+
+Item 14; `982a7db5`.
+[Call arguments](../crates/interpreter/src/codegen/call_arguments.rs),
+[default values](../crates/interpreter/src/package_declaration.rs),
+[floating-point serializer](../crates/interpreter/src/artifact_f64.rs).
+
+`metadata` serializes a closed vector of optional `DefaultValue` plus flags;
+`typed_metadata` propagates it. Audit every enum/custom serializer and the
+in-memory JSON serializer contract, including non-finite numbers. The f64 bridge
+explicitly serializes non-finite values as strings. If all shapes are supported,
+these metadata-only `Result` returns can disappear. Keep wrapper emission fallible
+for emitter limits/registration. Verify default/rest/enum/non-finite metadata.
+
+### R11 — DWARF and diagnostics: keep limits and real writer failures
+
+Items 14, 33; `982a7db5`, `16e10725` (upstream merge `0f66c9d6`).
+Plain formatting into an unrestricted String using known scalar formatters can
+qualify as an invariant. This does not apply to the bounded diagnostic writer:
+truncation, allocation, invalid source/metadata and formatting failure are tracked.
+Keep bounded recursion/output, useful source-less errors and actual gimli writer
+errors. Do not revert item 33 to recover a handful of formatting `expect`s.
+
+### R12 — Singleton GC type lookup: simplify after successful build
+
+Item 23; `0f8395eb`.
+[Singleton helpers](../crates/interpreter/src/runtime/gc_singleton.rs).
+
+Each helper declares, defines and builds one type, then looks up that same ID and
+kind. Document the builder's successful-build contract and use a descriptive
+`expect` for that lookup. **Keep `build()` fallible** and retain its fatal error
+classification. Apply the same reasoning individually to intrinsic/error/Git type
+construction; this is not permission to unwrap arbitrary engine setup failures.
+
+### R13 — Number formatting wrappers: prove first; remove invariant-only layer
+
+Item 24; `8a1ff644`.
+[Number operations](../crates/interpreter/src/runtime/number.rs).
+
+Candidates: missing/unparseable exponent after Rust's own finite exponential
+formatting, finite-f64 BigInt conversion, and `from_digit` after a proven radix
+bound. Check edge cases individually. If these are the only failures of private
+`to_*_checked` functions, remove their engine-error layer and retain the ordinary
+string error interface for invalid precision/radix. Preserve numeric semantics,
+non-finite behavior, UTF-16 fixes and resource accounting. Verify rounding,
+subnormals, negative zero and radix/precision boundaries.
+
+### R14 — Fixed host ABI slots: simplify after boundary validation
+
+Items 04, 25; `3ca8e039`, `8a1ff644`.
+[Host wrappers](../crates/interpreter/src/runtime/host.rs),
+[fuel wrappers](../crates/interpreter/src/runtime/fuel.rs).
+
+`check_host_abi` validates buffers before registered callbacks. Fixed `abi_arg` /
+`abi_result` accesses can rely on the declared signature if every registration
+route, including async/fuel wrappers, passes through that check and no mutation
+invalidates it. Remove redundant private errors there. Keep boundary validation
+initially; removing it is a separate engine-contract proof. Dynamic guest indexes,
+GC casts and arbitrary host callbacks need independent checks. Keep fatal host
+errors, guest exception separation, capabilities and fuel behavior.
+
+### R15 — Cursor crypto and fixed-width conversions: prove first
+
+Item 28; `8a1ff644`.
+[Cursor implementation](../crates/interpreter/src/stdlib/session/cursor.rs).
+
+HMAC construction with an accepted key length and truncation of a fixed digest to
+8/16 bytes are promising invariant-only errors. Prove the crypto API contract and
+every `truncate<const N>` instantiation. `CursorError::Internal` also represents
+size/allocation failures, so do not delete it wholesale. Keep entropy failures,
+untrusted cursor decoding, prefix/authentication checks, UTF-16 fidelity and size
+bounds. Verify tampering, prefix mismatch, no entropy and maximum-size inputs.
+
+### R16 — Git byte widths and borrowing: prove first
+
+Item 28; `8a1ff644`.
+A fixed-size conversion immediately after an exact-length check can be an
+invariant. Remote pack headers, request paths and dynamically selected slices
+remain untrusted. `try_borrow_mut` around pending worktree state needs proof about
+callbacks/reentry and ownership before replacement with a panicking borrow.
+Retain Git publication/cancellation and memory checks. Git changes require the
+focused Git memory-limit suite specified in AGENTS.md.
+
+### R17 — Blocking workers and client factories: keep
+
+Items 26, 27; `878eb30d`, `c2dce469`.
+Thread spawn, runtime acquisition, allocation, HTTP client construction and
+join/channel failure are real operational or lifecycle cases. Keep
+`BlockingWorkError`, fallible spawn/factories, owner draining and fatal handling.
+An allowed invariant panic in a worker does not make worker ownership unnecessary.
+Do not reintroduce `resume_unwind` just because the original panic is now allowed.
+
+### R18 — Poison-only server/store plumbing: already simplified
+
+Items 29, 30. Introductions include `bca59bfe`, `29ccc412`, `0013e022`
+(merge `02cd1383`), `57a662c4` (merge `18619267`). Reversal:
+`91c2ec7c` (corresponding local commit `e46b7903`).
+
+The poison-only simplification already removed about 698 lines and added 199
+across 19 files. Do not propose it as fresh work. Keep Result contracts that also
+carry SQLite/backend/I/O/setup failures, and keep console writer failures distinct
+from poisoned console locks. Record current locks under P01 and update obsolete
+issue acceptance text. Recheck later edits for new poison-only wrappers.
+
+### R19 — LLM request construction and retry dispatch: keep structural changes
+
+Item 34; `51bdeecf` (merge `a40754bc`).
+[Wire construction](../crates/submilli-shared/src/llm/wire.rs).
+
+An object created by `json!` is known to be an object; old `as_object_mut().expect`
+sites were genuine construction invariants. Direct Map construction is already
+clear and needs no reversal. The retry dispatcher can rely on unwrapping Retry
+variants, but the current loop is also clear. Keep real client-build errors and
+provider failure/accounting behavior.
+
+### R20 — LLM batch bookkeeping: optional simplification, prove first
+
+Item 34; same history as R19. A locally owned semaphore never closed by any
+participant can establish successful acquisition. An exhausted stream of exactly
+one indexed future per input can establish complete result slots. Current bounded
+stream collection plus ordering is valid too. Compare readability and ordering
+cost before choosing positional slots again; no performance benefit was measured
+here. Preserve concurrency bounds, order, per-result failures and accounting.
+This is lower priority than removing whole error-only API layers.
+
+### R21 — Embedded MCP schema packs: prove first, strongest plumbing candidate
+
+Item 35; `041d980a` (corresponding `c4ee873a`).
+[Schema registry](../crates/submilli-shared/src/mcp/schema_registry.rs),
+[discovery](../crates/submilli-shared/src/mcp/discovery.rs).
+
+Production packs come from `include_str!`, not a remote response. With every
+compiled asset's JSON/tools shape validated by maintained tests/build checks,
+initialization can use a documented invariant. Candidate removal chain:
+`SchemaPackError` → cached `OnceLock<Result<...>>` → fallible `github_pack` /
+`initialize_builtin_packs` / `pack_for_url` → `DiscoveryError::SchemaPack` and
+asset-only caller propagation. `pack_for_url` can then return Option directly.
+
+Inspect all callers before deletion. Keep `DiscoveryError::ClientBuild`, actual
+allocation failures and remote schema/discovery errors. Keep asset validation
+tests; replace only tests whose sole contract is recoverability from corrupt
+compiled assets. Lazy initialization may panic on a broken binary asset under the
+new policy; document that explicitly rather than claiming inputs can never fail.
+
+### R22 — Blueprint/build traversal and serialization: mixed; keep traversal
+
+Item 36; `5ab68b6b` (merge `9640d6c1`). Retain iterative, symlink-aware module
+walking and filesystem errors: those address actual external state. Filter
+exhaustiveness is R06. Existing YAML/JSON/path `expect`s are P02–P06; assess their
+actual serializer/path contracts instead of treating every serialize call as
+fallible or every generated value as infallible.
+
+### R23 — Parser, arity and compiler limits: keep
+
+Items 01, 02, 12. `9e7b7773`; `6e5e1728`, `a691e275`, `3789596d`;
+`982a7db5`, `8d1eb415`, `adbeed14`.
+Parser recursion produced a process abort; excessive closure arity produced a
+panic. Keep validation across methods/adapters/imported signatures, compiler
+type/work limits and reduced recursion frame sizes. Those are input-reachable
+limits, not internal invariants. Aggregate budgets remain open under item 38.
+
+### R24 — Request boundaries and recording: keep real errors; narrow audit
+
+Item 31. Keep preparation/import/discovery/store/recording failures through CLI,
+HTTP, MCP and direct library entry points. A string conversion at an outer boundary
+is not itself a panic defect. No additional typed propagation should be demanded
+solely for an invariant that qualifies under this policy. Inventory any remaining
+concrete failure and its caller before commissioning another propagation cascade.
+
+### R25 — Cancellation/settlement: deferred, no new panic finding
+
+Item 32. The user explicitly deferred this item.
+[Request ownership](../crates/submilli-server/src/graceful_shutdown.rs) spawns
+the watched request; disconnect does not cancel the request fiber. Normal shutdown
+drains requests; forced shutdown/serving failure/dropped serving futures are
+separate cases. Existing workers have ownership/draining mechanisms. No new
+unaccepted panic was demonstrated here. Do not demand an ownership redesign or
+mark this complete from that observation; leave its historical status deferred.
+
+### R26 — Remaining budgets and dependencies: keep a focused audit
+
+Items 37–40. Resource exhaustion is not justified by an invariant comment. Keep
+request/aggregate limits, including checks that allocate traversal frontiers
+before enforcing a limit (for example type-size measurement), and relate work to
+SUB-1108/SUB-1123 where appropriate. Review actual dependency preconditions and
+OS failures. Engine stack expectations require validation/execution proof, not
+automatic conversion to Result. Details and tracking changes appear below.
+
+## Which fallible contracts can actually disappear?
+
+Remove a leaf first, then walk callers upward until encountering a real remaining
+failure. Do not infer that a whole API becomes infallible from one accepted check.
+
+| Contract | Candidate change | What prevents broader deletion |
+| --- | --- | --- |
+| Embedded schema-pack APIs and error type | R21: potentially remove the complete asset-only chain | Remote discovery/client construction remain fallible |
+| Numeric `to_*_checked` wrappers | R13: remove internal-only engine-error layer after proof | User precision/radix errors remain |
+| Call `metadata` / `typed_metadata` | R10: return metadata directly after serializer proof | Call-wrapper emission still has limits/errors |
+| Private namespace chain helpers | R04: remove redundant root/path error return | Other inference failures remain |
+| Private lexer/parser dispatch helpers | R02: remove only locally established branches | Token/source validation and limits still use fatal state |
+| Emitter scope/temporary access helpers | R08: remove invariant-only Results where callers establish state | Local counts, registration, emission remain fallible |
+| GC singleton helpers | R12: remove lookup error branch | `RecGroupBuilder::build` still returns real errors |
+| Fixed host slot accessors | R14: simplify after ABI check | Boundary ABI errors and dynamic values remain |
+| Cursor crypto helpers | R15: remove impossible fixed-width/key errors | Entropy, malformed input, size/allocation remain |
+| Compiler/typechecker/codegen entry points | R01/R03/R07: prune individual internal cases | Limits, diagnostics, public metadata, allocation remain |
+| Server caches/stores/console | R18: poison-only work already removed | Backend/I/O/writer failures remain |
+| Workers/client factories | R17: retain contracts | OS/runtime/join/ownership failures remain |
+| Diagnostics/DWARF | R11: keep bounded writer error propagation | Truncation/source/allocation/emitter failures remain |
+
+## Every SUB-633 numbered item
+
+The historical state below is the fetched issue state, not a new assessment of
+completion. Checked: 01–30 and 33–36. Open: 31, 32, 37–42.
+
+| Item | Historical subject | State | Proposed disposition / inventory |
+| --- | --- | --- | --- |
+| 01 | Parser recursion | Checked | Keep reproduced abort fix; R23 |
+| 02 | Closure arity | Checked | Keep reproduced panic fix; R23 |
+| 03 | Compiler fatal contracts | Checked | Keep architecture, prune leaves; R01 |
+| 04 | Fatal host vs guest errors | Checked | Keep semantic separation; R14 |
+| 05 | Lexer/parser assumptions | Checked | Simplify proven local dispatch; R02 |
+| 06 | Arenas/spans/source | Checked | Keep public checks, prove private accesses; R03 |
+| 07 | Patterns/capture/desugaring | Checked | Preserve real fixes; prove state helpers; R05 |
+| 08 | Inference setup/namespaces | Checked | Simplify local namespace checks; R04/R07 |
+| 09 | Class inference | Checked | Registration/metadata proof first; R07 |
+| 10 | Expressions/flow state | Checked | Preserve narrowing fixes; R05 |
+| 11 | Generics/schema/substitution | Checked | Keep structure, prove other assumptions; R05/R06 |
+| 12 | Compiler walks/work | Checked | Keep bounds; aggregate scope stays in 38; R23 |
+| 13 | Symbol/type lowering | Checked | Prove registration before simplifying; R07 |
+| 14 | Pools/metadata/DWARF | Checked | Separate pool boundaries, serializers and writers; R09–R11 |
+| 15 | Closures/adapters | Checked | Keep arity; prove registration; R07/R23 |
+| 16 | Class/imported-class emission | Checked | Prove producer and imported metadata contracts; R07 |
+| 17 | Casts/guards/validators | Checked | Prove registration; retain guest type checks; R07 |
+| 18 | Emitter state/parameters | Checked | Simplify root-scope invariants; retain limits; R08 |
+| 19 | Expression emission | Checked | Prune proven leaves, keep fallible emitter; R07/R08 |
+| 20 | Statement/finally emission | Checked | Prove stack/label lifetime; R08 |
+| 21 | JSON/MCP/throw emission | Checked | Preserve compile-error vs guest-trap distinction; R07 |
+| 22 | Top-level propagation | Checked | Keep fallible entry points and artifact integrity; R01 |
+| 23 | GC/intrinsic/error types | Checked | Simplify post-build lookups only; R12 |
+| 24 | Prelude operations | Checked | Numeric wrapper candidate; keep input/UTF-16 fixes; R13 |
+| 25 | Host ABI/value access | Checked | Simplify fixed slots after validation; R14 |
+| 26 | Workers | Checked | Keep operational errors and ownership; R17 |
+| 27 | Client/runtime setup | Checked | Keep real construction/context failures; R17 |
+| 28 | Other stdlib | Checked | Crypto/width proofs; keep input/borrow checks until proven; R15/R16 |
+| 29 | Console | Checked | Poison requirement superseded; writer errors remain; R18 |
+| 30 | Poisoned caches/stores | Checked | Poison conversion requirement superseded and reversed; R18 |
+| 31 | Outer preparation/recording | Open | Narrow to concrete real failures; R24 |
+| 32 | Cleanup/idempotency | Open | Deferred by user; no new panic finding; R25 |
+| 33 | Diagnostics/backtraces | Checked | Keep bounded rendering; R11 |
+| 34 | LLM | Checked | Keep structure; optional batch simplification; R19/R20 |
+| 35 | MCP discovery/packs | Checked | Asset-only chain is a removal candidate; R21 |
+| 36 | Blueprint/build | Checked | Keep structural/traversal fixes; classify retained sites; R06/R22 |
+| 37 | Implicit panics | Open | Accept proven accesses; retain unresolved/input-controlled audit; R26 |
+| 38 | Allocation/work bounds | Open | Keep real budget work; R26 |
+| 39 | Engine | Open | Update current version and accept proven engine invariants; R26/T04 |
+| 40 | Other dependencies | Open | Keep input/OS precondition audit; R26/T04 |
+| 41 | Regression gate | Open | Gate unreviewed violations, not all panic syntax; T05 |
+| 42 | Adversarial verification | Open | Test actual contracts; revise invalid-state expectations; T06 |
+
+No entire open item is justified as completed solely by changing policy. What can
+be removed now is the blanket requirement to convert proven invariants, the old
+poison-only acceptance requirements, and fault-injection expectations that
+contradict accepted invariant contracts. Individual sites can leave the unresolved
+queue once their proof is recorded; retain them in the accepted ledger.
+
+## Explicit panics still present in this checkout
+
+A Rust syntax-tree scan excluded test files and test-only nodes and inspected
+panic/assert/unreachable macros and `unwrap`/`expect` calls. It found 51 candidate
+nodes: 40 poisoned-lock accesses, six non-panicking `self.expect` parser calls in
+session value decoding, and five other sites. A separate textual inspection found
+three additional calls inside macro token trees. Thus the inspected production
+set has **40 lock sites and eight other explicit candidates**, not 48 confirmed
+defects. This is a scoped scan, not proof about macro expansion, implicit panics,
+dependencies or all conditional compilations. Line numbers below are baseline
+locators; follow symbols after edits.
+
+| ID | Site | Proposed disposition and reason |
+| --- | --- | --- |
+| P01 | 40 std poisoned-lock accesses, grouped below | Accept under explicit poison policy; keep reason and distinguish initiating panic |
+| P02 | `submilli-blueprint/src/lib.rs:1302`, `to_yaml` | Prove first: audit full Blueprint serializer graph and YAML supported shapes; generic serialization is not inherently infallible |
+| P03 | `submilli-build/src/scaffold.rs:428`, generated tsconfig JSON | Accept candidate: fixed JSON Value construction; document serializer contract; setup/scaffolding scope |
+| P04 | `submilli-build/src/scaffold.rs:466`, generated task JSON | Same as P03; call is inside a formatting macro |
+| P05 | `submilli-build/src/scaffold.rs:530`, package path `to_str` | Prove first: filesystem paths can be non-UTF-8; prove construction from validated UTF-8 or handle the path error |
+| P06 | `submilli/src/commands/blueprint/package_secrets.rs:46`, filter YAML | Accept candidate: FilterExpr serializes as a string; document YAML string serializer contract; recursive formatting bounds remain separate |
+| P07 | `submilli/src/commands/skill.rs:225`, Sync unreachable | Accept: preceding dispatch returns for Sync and does not mutate the command |
+| P08 | `submilli/src/commands/mcp/authenticate.rs:151`, client ID | Accept: if absent, successful registration assigns Some; failure returns before access |
+| P09 | `submilli/src/commands/server/run_code.rs:135`, JSON Value serialization | Accept candidate under JSON Value serializer contract; prefer descriptive expect over bare unwrap; deep-value recursion is a separate resource question |
+
+P01 lock groups (paths below `crates/`):
+
+| File | Count | Baseline locators |
+| --- | --- | --- |
+| interpreter/src/runtime/mod.rs | 2 | 520, 534 |
+| interpreter/src/stdlib/git/mod.rs | 2 | 112, 539 |
+| submilli-server/src/session_manager.rs | 1 | 1017–1019 |
+| submilli-server/src/session.rs | 2 | 57, 65 |
+| submilli-server/src/idempotency.rs | 2 | 185–187, 437–439 |
+| submilli-server/src/blueprint.rs | 15 | 146, 155, 162, 169, 179, 188, 201, 379, 387, 392, 399, 410, 422, 430, 444 |
+| submilli-server/src/runner.rs | 2 | 716, 728 |
+| submilli-server/src/session_store.rs | 1 | 108 |
+| submilli-server/src/idempotency_store.rs | 3 | 196, 245, 274 |
+| submilli-server/src/app.rs | 9 | 525, 537, 586, 606, 645, 710, 720, 736, 750 |
+| submilli-server/src/mcp/router.rs | 1 | 141 |
+
+These groups support accepting poison access, not declaring the surrounding
+functions panic-free. No new input-triggered panic was reproduced by this review.
+P05 is a concrete contract question to resolve before classifying the remaining
+explicit set as accepted; P02 also needs its full serialization proof.
+
+## Proposed SUB-633 tracking changes
+
+### T01 — Replace the obsolete overarching requirement
+
+Align the issue's blanket “even internal invariants” requirement with AGENTS.md.
+Define outcomes as fixed input/operational failure, accepted documented invariant,
+accepted poisoned lock, out of scope with reachability evidence, or unresolved.
+Keep baseline source links and completion history. Do not rewrite a past fix as
+if it never happened. Link simplification decisions to R IDs and implementing PRs.
+
+### T02 — Reclassify historical invariant-only work
+
+Attach R01–R23 to their completed numbered items. Mark the poison-conversion
+requirements in 29/30 superseded, citing the existing reversal. For 05–25 and
+34–36, permit selective simplification rather than reopening all completed items.
+Record structural improvements as retained, even when the previous panic would
+now be acceptable. The exact code changes remain proposals until implemented.
+
+### T03 — Narrow 31/37 and preserve 32/38
+
+Item 31 needs concrete boundary failures, not another universal Result cascade.
+Item 37 needs proof/disposition of potentially panicking operations, not mandatory
+replacement of all indexes. Keep unresolved arithmetic, narrowing, borrow,
+recursive traversal/drop and unchecked-size questions. Do not treat serde_json
+indexing or fallible `unwrap_*` as panics by name. Leave 32 deferred. Keep 38's
+actual per-request/shared resource requirements and related prerequisite issues.
+
+### T04 — Refresh dependency scope without erasing its baseline
+
+Item 39 names engine 0.1.4; the inspected lockfile uses 0.1.9. Keep the original
+ledger and add a current-version disposition. The operand-stack
+`pop().expect("operand stack underflow")` in engine `exec/stack.rs:137`, and tagged
+stack operations, are proof candidates: show that validation and every execution
+transition preserve height, including host calls and cleanup. They are not defects
+merely because `expect` remains. The separate submilli-wasm agent is handling that
+area; incorporate its proof/fix and required version adoption before closing work.
+
+Keep real engine memory/GC/ABI and untrusted-module failure questions open. The
+engine's own guidance already permits documented post-validation invariants while
+requiring resource bounds and state restoration around host panics.
+
+For item 40, distinguish documented dependency preconditions from operational
+failure. The recorded git2/libgit2 initialization risk on the SUB-1229 SSH branch
+is an OS-failure question, not an invariant; its `shared/src/github/ssh.rs` path
+is absent from this checkout. Recheck when that branch is integrated rather than
+claiming it is currently reachable here. Crypto, serializers, encoders and context
+APIs each need their actual contract, not a blanket dependency exception.
+
+### T05 — Replace a zero-panic target with a review gate
+
+Item 41 should detect unreviewed explicit panic sites and require a documented
+invariant, poison exception or ordinary error path. Its target is zero unreviewed
+violations, not zero `expect`/assert/index syntax. Keep macro-aware inspection and
+reject unimplemented input behavior or success defaults that hide failure.
+An allowlist entry needs a symbol, guarantee and review evidence, not a blanket
+module allow. This inventory does not implement a lint/CI gate.
+
+### T06 — Test supported failure contracts
+
+Item 42 should retain source/arity regressions, malformed public metadata,
+resource boundaries, operational fault injection, fatal-vs-guest classification
+and healthy-request-after-failure coverage. A test that corrupts a private,
+documented invariant may legitimately assert a panic; it need not force production
+recovery plumbing. Poisoned-lock tests must reflect the accepted poison policy.
+Keep cleanup tests for actual supported lifecycle paths without reopening deferred
+32 here. Parent closure still requires dispositions for unresolved in-scope sites.
+
+## Suggested execution order
+
+1. Synchronize tracking language (T01–T06) and record already-simplified poison
+   work. This removes misleading future work without changing runtime behavior.
+2. Take small local changes: R02 newline dispatch, R04 namespace checks, R12
+   singleton lookups. Separate each proof from broader nearby checks.
+3. Remove meaningful invariant-only API layers: R21 embedded packs, R10 metadata,
+   R13 numeric wrappers, then R14 repeated fixed ABI accesses. Prove the complete
+   caller chain before changing signatures.
+4. Resolve P02/P05 and document the other retained explicit sites. Review R08/R09/
+   R15 locally; leave cross-phase R05/R07 and borrowing R16 behind explicit proof
+   tasks. R20 is optional and low priority.
+5. Continue real limits/dependency work under 37–40 and incorporate the engine
+   agent's findings. Do not schedule whole-commit reverts or reopen 32 by default.
+
+Each implementation should show the invariant where it is used, list which real
+errors remain, and run focused affected checks. Preserve meaningful regression
+tests; remove only tests requiring recovery from newly accepted private invariant
+violations. Follow the repository's review and single post-rebase full-test gate
+when opening a PR. Do not run full suites merely to edit this inventory.
+
+## Verification of this inventory
+
+Documentation-only review: check source links, all 42 item mappings, commit
+references, distinction between proposed and completed work, and Markdown/diff
+consistency. No runtime reversions, new panic reproductions, implementation tests,
+Linear edits or engine modifications are claimed by this document.
