@@ -1992,7 +1992,8 @@ impl Inferer<'_> {
                         span,
                     );
                 }
-                return self.infer_generic_method_call(
+                let is_array = matches!(recv_ty.peel(), Type::Array(_));
+                let call = self.infer_generic_method_call(
                     typed_receiver,
                     iface_mangled,
                     name.clone(),
@@ -2002,7 +2003,11 @@ impl Inferer<'_> {
                     args,
                     expected,
                     span,
-                );
+                )?;
+                if is_array {
+                    return self.narrow_by_callback_predicate(&name.name, call, span);
+                }
+                return Ok(call);
             }
             if matches!(recv_ty.peel(), Type::InterfaceRef { .. })
                 && self
@@ -2411,6 +2416,69 @@ impl Inferer<'_> {
     /// receiver's element type. `depth` must be a non-negative integer literal
     /// (default `1`) so the result type is statically known; anything else is a
     /// compile error and the depth falls back to `1`.
+    /// `filter`, `find` and `findLast` on an array, given a type guard
+    /// `(x) => x is S`, return `S[]` or `S | null`, as tsc's overloads do. The
+    /// call keeps its declared result type and is wrapped in the cast `as`
+    /// would build, so a guard that lies traps instead of reading a wrong type.
+    fn narrow_by_callback_predicate(
+        &mut self,
+        method: &str,
+        (kind, ty): (TypedExprKind, Type),
+        span: Span,
+    ) -> Result<(TypedExprKind, Type), CompilerFailure> {
+        let callback = match &kind {
+            TypedExprKind::MethodCall { args, .. } => args.first().copied(),
+            TypedExprKind::GenericMethodCall { args, .. } => args.first().map(|arg| arg.expr),
+            _ => None,
+        };
+        let Some(callback) = callback else {
+            return Ok((kind, ty));
+        };
+        let callback_ty = self
+            .typed_ast
+            .try_expr(callback)
+            .map_err(crate::typechecker::arena_failure)?
+            .ty
+            .clone();
+        let Type::Function {
+            predicate: Some(predicate),
+            ..
+        } = callback_ty.peel()
+        else {
+            return Ok((kind, ty));
+        };
+        if predicate.parameter_index != 0 {
+            return Ok((kind, ty));
+        }
+        let guarded = predicate.asserted_type.clone();
+        let target_ty = match method {
+            "filter" => Type::Array(Box::new(guarded)),
+            "find" | "findLast" => Type::union(vec![guarded, Type::Null]),
+            _ => return Ok((kind, ty)),
+        };
+        let shape = self.reduce_interfaces_to_shapes(&target_ty);
+        let check = if assignable(&ty, &shape, self.resolver()) {
+            None
+        } else if unsupported_cast_target_reason(&shape, self.resolver(), &mut Vec::new()).is_some()
+        {
+            return Ok((kind, ty));
+        } else {
+            Some(Box::new(shape))
+        };
+        let value = self
+            .typed_ast
+            .try_push_expr(TypedExpr { kind, span, ty })
+            .map_err(crate::typechecker::arena_failure)?;
+        Ok((
+            TypedExprKind::Cast {
+                value,
+                target_ty: target_ty.clone(),
+                check,
+            },
+            target_ty,
+        ))
+    }
+
     fn array_flat_return_type(
         &mut self,
         recv_ty: &Type,
