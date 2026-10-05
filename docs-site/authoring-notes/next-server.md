@@ -177,39 +177,11 @@ private installs ran for real against the runtime repository.
   machine setup itself stays on Run the server. The seed-directory
   section and the reconcile-line outputs were dropped (SUB-1265).
 - **Evidence:** `deploying` ("On one machine") for the shape; the
-  installer's `--install-dir` flag from `install.sh`'s usage line.
-  SUB-1273 was run on 2026-10-05 with release v0.2.0 in an Ubuntu 24.04
-  x86-64 Docker container, with systemd 255 as PID 1, under QEMU on
-  Docker Desktop for Apple Silicon. The public installer, `useradd`,
-  `install -d`, token ownership/modes, config and unit heredocs,
-  `enable --now`, journal and local/remote CLI status passed. Separate
-  containers exercised MCP initialize (the expanded hostname accepted;
-  another Host rejected with 403) and private-network access (blocked
-  before `network.allow_ip`, successful afterward). HTTPS passed with
-  the CLI's interactive fingerprint approval and the Node/Python
-  certificate examples. Installer rerun at v0.2.0 and service restart
-  preserved the registered blueprint; this did not test migration
-  between releases. `Restart=on-failure` restarted a deliberately killed
-  process. A three-second request completed during shutdown in 3.019s;
-  a twelve-second request was cancelled when the grace expired, and
-  stop completed in 5.116s with exit status 0, without systemd's SIGKILL.
-  The page now describes that bound and waits for HTTPS readiness:
-  the immediate status command once raced startup and reported stopped.
-  Test-image setup masks `systemd-binfmt.service` and its automount to
-  keep it from changing Docker's shared emulation registrations.
-  This checks service management inside a container, not a VM boot,
-  cloud firewall, backup restoration, or certificate renewal.
-  The final PR replay passed on the integrated page, including installer
-  rerun and service restart, in a fresh container limited to two CPUs
-  and 768 MiB of memory. `journalctl -f` observed the new
-  `protocol=https` listening line before the HTTPS status check.
-  The automated replay used an independently calculated OpenSSL SPKI
-  fingerprint with `server trust add --fingerprint`; interactive
-  approval had already passed in the first run. An earlier replay's
-  final installer rerun timed out and Docker's API became unresponsive,
-  requiring a Docker Desktop relaunch. The successful bounded replay
-  resolves that validation gap. Default Rosetta emulation could not
-  start journald (exit status 255), so the test used QEMU.
+  installer's `--install-dir` flag from `install.sh`'s usage line (the
+  published URL is 404 until launch, so the installer could not be run);
+  the unit file, `useradd`, `install -d`, `systemctl` and `journalctl`
+  commands are written for Linux and not run (no systemd on the
+  authoring machine), which is why the page shows no journal output.
   `TimeoutStopSec=10` mirrors `compose.yaml`'s `stop_grace_period`.
   Doron's framing (2026-10-02): the application is on another machine,
   so the server binds `0.0.0.0`, the port is opened in the cloud's
