@@ -43,7 +43,7 @@ function inArray(x: string | number): number {
   }
   const values = [x, 3];
   const onlyDead = [x];
-  const nested = [[x], [1, 2], ...[x]];
+  const nested = [[1, 2], [x], ...[x]];
   return values.length + onlyDead.length + nested.length;
 }
 

@@ -320,20 +320,21 @@ impl Inferer<'_> {
     /// value's type with its fresh literal types widened, or the element type
     /// of a spread source (whose own literal types were already settled).
     /// `None` for an element that holds no value: a `never` value, or a
-    /// spread of a `never[]`.
+    /// spread of a `never[]`. A source that can't spread yields `Type::Error`,
+    /// which is no primitive union, so the caller keeps `seed`.
     fn kept_element_member(
         &self,
         element: &crate::TypedArrayElement,
     ) -> Result<Option<Type>, CompilerFailure> {
-        let ty = &self
+        let expr_ty = &self
             .typed_ast
             .try_expr(element.expr_id())
             .map_err(crate::typechecker::arena_failure)?
             .ty;
         let member = match element {
-            crate::TypedArrayElement::Value(id) => self.widen_fresh_literals(*id, ty)?,
+            crate::TypedArrayElement::Value(id) => self.widen_fresh_literals(*id, expr_ty)?,
             crate::TypedArrayElement::Spread(_) => {
-                super::expr::spread_element_type(ty.peel()).unwrap_or(Type::Error)
+                super::expr::spread_element_type(expr_ty.peel()).unwrap_or(Type::Error)
             }
         };
         Ok((!matches!(member.peel(), Type::Never)).then_some(member))
