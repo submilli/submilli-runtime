@@ -91,6 +91,7 @@ separate resource/dependency backlog.
 | R23 | Complete: retained | Preserve parser, closure arity and compiler limits |
 | R24 | Complete: retained | Keep real boundary errors; narrow item 31 |
 | R25 | Deferred by user | Item 32 stays open; no cancellation redesign |
+| R26 | Complete: retained as backlog | Keep resource/dependency backlog with proof-based scope |
 
 ### R01 execution evidence
 
@@ -478,6 +479,20 @@ has been demonstrated here, and this review neither redesigns ownership nor mark
 item 32 complete. The inventory disposition is recorded; the underlying audit stays
 deferred. Documentation-only, no tests rerun. Three independent reviewers found
 no issues; diff checks passed.
+
+### R26 execution evidence
+
+Retain items 37–40 as focused follow-up audits. `type_size::measure` pushes children
+onto its pending vector before their subsequent budget checks; an iterative walk
+alone is not an aggregate allocation bound. Resource prerequisites SUB-1108/SUB-1123
+remain relevant. Cargo currently resolves submilli-wasm 0.1.9; the ledger's 0.1.4
+reference is a historical baseline. Engine expectations require validator/executor
+proof from the separate engine review; this task makes no engine change or claim
+of completion. The previously recorded Git SSH callback finding is an integration
+check for the branch containing it, not a reproduced current-checkout defect.
+This resolves what to retain, not the underlying budget/dependency audits.
+Documentation-only; no tests rerun. Three independent reviews found no issues;
+diff checks passed.
 
 ## Completed fixes: candidates and decisions
 
