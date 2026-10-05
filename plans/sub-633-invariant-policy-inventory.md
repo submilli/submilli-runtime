@@ -69,6 +69,7 @@ separate resource/dependency backlog.
 | R01 | Complete: retained | Keep compiler fatal-error architecture; evidence below; leaf simplifications remain assigned to their individual rows |
 | R02 | Complete: selectively simplified | Nine accepted local dispatch invariants; real validation/failure contracts retained; evidence below |
 | R03 | Complete: retained | Keep checked public arena/span/source contracts; no API redesign |
+| R04 | Complete: simplified | Removed invariant-only namespace resolution/field Result interfaces |
 
 ### R01 execution evidence
 
@@ -131,6 +132,24 @@ Result paths in place, as the policy permits. This closes R03's simplification
 decision without claiming a general implicit-index audit. Documentation-only;
 existing source/tests inspected, no runtime tests rerun. Three independent reviews
 reported no findings; diff checks passed. Completion is recorded by this commit.
+
+### R04 execution evidence
+
+Both namespace dispatchers in `expr.rs` check root membership immediately before
+entry. Call dispatch checks a nonempty chain; field dispatch appends its member.
+Resolution only borrows state; the NotFound root lookup precedes any mutation or
+callback. Those four expectations now state their guarantees.
+`resolve_namespace_chain` returns ChainResolution directly and namespace field
+access returns its typed result directly. Call inference and chain extraction
+remain fallible for real inference/allocation/arena failures. Unknown members
+still produce the same diagnostics. Removed only the private-state recovery test.
+
+Three independent reviewers reported no findings. Formatting, offline workspace
+Clippy with all targets and `-D warnings`, 17 namespace library tests and focused
+fixture runs (27 namespace, 6 math) passed, with full tests disabled and HTTP
+skipped. Graphify AST update completed with the existing extraction limitations.
+Recorded and verified accepted invariants in SUB-633's source-site ledger. R02's
+implementation commit is `a50130c4`; this entry's commit records R04 completion.
 
 ## Completed fixes: candidates and decisions
 
