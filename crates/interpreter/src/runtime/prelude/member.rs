@@ -155,13 +155,17 @@ fn defaults_fit(caller: &mut Caller<'_, StoreData>, params: &[Val]) -> wasmtime:
     let results = host::read_boxed_number(caller, abi_arg(params, 2)?, "return convention")?;
     let results = (results >= 0.0).then_some(results as usize);
     let fits = value::is_callable(caller, abi_arg(params, 0)?)? && {
-        // The cast wraps this function as it is, so its own return convention
-        // must fit; but an adapter takes whatever the function it wraps takes.
+        // An adapter takes whatever the function it wraps takes. A cast adapts
+        // to its target by calling that original too, so the original's return
+        // convention fits as well as the value's own: a value-returning function
+        // stored as a `void` one still returns its value.
         let function = super::closure::read(caller, abi_arg(params, 0)?, "function")?;
         let original = super::closure::original(caller, *abi_arg(params, 0)?)?;
-        results.is_none_or(|expected_results| function.result_count(caller) == expected_results)
-            && super::closure::read(caller, &original, "function")?
-                .accepts_arguments(caller, argument_count)?
+        let original = super::closure::read(caller, &original, "function")?;
+        results.is_none_or(|expected_results| {
+            function.result_count(caller) == expected_results
+                || original.result_count(caller) == expected_results
+        }) && original.accepts_arguments(caller, argument_count)?
     };
     box_result(caller, Val::I32(i32::from(fits)))
 }
