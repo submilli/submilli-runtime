@@ -5615,7 +5615,13 @@ impl Inferer<'_> {
                         .try_expr(elem_id)
                         .map_err(super::arena_failure)?
                         .span;
-                    let hint = if open_element_type && self.types_itself(elem_id)? {
+                    // A literal that will normalize takes a hint only from a running
+                    // type of its own shape, which one with other fields can't match.
+                    let hint = if open_element_type
+                        && (self.types_itself(elem_id)?
+                            || normalization.is_some()
+                                && !has_running_shape(self.ast, elem_id, element_ty.as_ref())?)
+                    {
                         None
                     } else {
                         element_ty.as_ref().or(expected_elem)
@@ -5658,7 +5664,7 @@ impl Inferer<'_> {
                             running,
                             &elem_ty,
                             ElementMismatch {
-                                external_hint: hint_pins_element_ty,
+                                hint_pins_element_ty,
                                 running_is_first,
                                 already_errored,
                             },
@@ -5759,7 +5765,7 @@ impl Inferer<'_> {
         actual: &Type,
         mismatch: ElementMismatch,
     ) {
-        if !mismatch.external_hint || !mismatch.already_errored {
+        if !mismatch.hint_pins_element_ty || !mismatch.already_errored {
             self.report_contextual_mismatch(
                 span,
                 expected,
@@ -5782,22 +5788,26 @@ impl Inferer<'_> {
         join: ElementJoin,
     ) -> Option<Type> {
         let fits = assignable(elem_ty, running, self.resolver());
-        // Object literals with differing fields join as tsc's normalized union:
-        // `[{ a: 0 }, { a: 1, b: "x" }]` holds
-        // `{ a: number; b?: null } | { a: number; b: string }`.
-        if let Some(nested_fields) = join.normalization
-            && (!fits || !same_field_names(running, elem_ty))
-        {
-            return normalized_object_union(running, &elem_ty.widen_literal(), nested_fields);
-        }
-        if fits {
+        // Object literals with the same fields join by type like any other
+        // elements; only differing fields need normalizing.
+        let normalization = join
+            .normalization
+            .filter(|_| !same_field_names(running, elem_ty));
+        if fits && normalization.is_none() {
             return Some(running.clone());
         }
         // A later element every earlier one fits becomes the element type, as
         // tsc's best common type: `[(x) => x, (x, y) => x * y]` holds
         // two-parameter functions.
-        (join.widens && assignable(running, elem_ty, self.resolver()))
-            .then(|| elem_ty.widen_literal())
+        if join.widens && normalization.is_none() && assignable(running, elem_ty, self.resolver()) {
+            return Some(elem_ty.widen_literal());
+        }
+        // Object literals with differing fields, or the same fields neither of
+        // which fits the other, join as tsc's normalized union:
+        // `[{ a: 0 }, { a: 1, b: "x" }]` holds
+        // `{ a: number; b?: null } | { a: number; b: string }`.
+        let nested_fields = join.normalization?;
+        normalized_object_union(running, &elem_ty.widen_literal(), nested_fields)
     }
 
     /// Whether an array element is typed on its own rather than against the
@@ -5819,7 +5829,7 @@ impl Inferer<'_> {
 
     /// Whether an expression needs a hint to be typed: an empty array, a function
     /// with an unannotated parameter, a call that may infer from its return, or
-    /// an object or array literal holding one.
+    /// an expression holding one. Unlisted kinds count as needing one.
     fn needs_hint(&self, expr: ExprId) -> Result<bool, CompilerFailure> {
         let id = peel_parens(self.ast, expr)?;
         Ok(
@@ -5834,7 +5844,13 @@ impl Inferer<'_> {
                 | ExprKind::This
                 | ExprKind::TemplateLiteral { .. }
                 | ExprKind::Unary { .. }
-                | ExprKind::Typeof { .. } => false,
+                | ExprKind::Typeof { .. }
+                | ExprKind::IndexAccess { .. }
+                | ExprKind::As { .. }
+                | ExprKind::InstanceOf { .. } => false,
+                ExprKind::Binary { lhs, rhs, .. } => {
+                    self.any_needs_hint([*lhs, *rhs].into_iter())?
+                }
                 ExprKind::Arrow { .. } | ExprKind::FunctionExpression { .. } => {
                     !self.is_fully_annotated_function(id)?
                 }
@@ -8305,11 +8321,11 @@ impl Inferer<'_> {
         let result_ty = if matches!(lhs_ty.peel(), Type::Null) {
             rhs_ty
         } else {
-            conditional_result_type(
-                super::narrowing::strip_null(&lhs_ty),
-                rhs_ty,
-                self.resolver(),
-            )
+            let present = super::narrowing::strip_null(&lhs_ty);
+            match empty_literal_join(self.ast, (lhs, &present), (rhs, &rhs_ty))? {
+                Some(joined) => joined,
+                None => conditional_result_type(present, rhs_ty, self.resolver()),
+            }
         };
         Ok((
             TypedExprKind::NullishCoalesce {
@@ -10251,8 +10267,6 @@ fn empty_array_cast_hint(ty: &Type) -> Option<&Type> {
     }
 }
 
-type FieldMap = BTreeMap<String, crate::ObjectField>;
-
 /// How a mismatch message names the elements a later one failed to match.
 fn matched_elements(running_is_first: bool) -> &'static str {
     if running_is_first {
@@ -10273,7 +10287,7 @@ struct ElementJoin<'a> {
 
 #[derive(Clone, Copy)]
 struct ElementMismatch {
-    external_hint: bool,
+    hint_pins_element_ty: bool,
     running_is_first: bool,
     already_errored: bool,
 }
@@ -10336,6 +10350,26 @@ fn fresh_object_fields(
             _ => None,
         })
         .collect())
+}
+
+/// Whether the object literal `expr` names exactly the fields of `running`, a
+/// single object type.
+fn has_running_shape(
+    ast: &crate::Ast,
+    expr: ExprId,
+    running: Option<&Type>,
+) -> Result<bool, CompilerFailure> {
+    let Some(Type::Object { fields, .. }) = running else {
+        return Ok(false);
+    };
+    let Some(literal_fields) = fresh_object_fields(ast, expr)? else {
+        return Ok(false);
+    };
+    let literal_names = literal_fields
+        .iter()
+        .map(|field| &field.name.name)
+        .collect::<BTreeSet<_>>();
+    Ok(literal_names == fields.keys().collect())
 }
 
 /// Whether `expr` evaluates to a fresh object literal: one, or a conditional
@@ -10414,7 +10448,7 @@ fn normalized_object_union(
 
 /// The field maps of the object members of `left` and `right`, or `None`
 /// unless every member is an index-free object.
-fn object_field_maps<'a>(left: &'a Type, right: &'a Type) -> Option<Vec<&'a FieldMap>> {
+fn object_field_maps<'a>(left: &'a Type, right: &'a Type) -> Option<Vec<&'a ObjectFields>> {
     let mut members = object_members(left)?;
     members.extend(object_members(right)?);
     members
@@ -10432,7 +10466,7 @@ fn object_field_maps<'a>(left: &'a Type, right: &'a Type) -> Option<Vec<&'a Fiel
 /// For each of `candidates` that holds objects in every member that has it,
 /// the field names across those objects.
 fn nested_object_field_names(
-    members: &[&FieldMap],
+    members: &[&ObjectFields],
     candidates: &BTreeSet<String>,
 ) -> BTreeMap<String, BTreeSet<String>> {
     candidates
@@ -10487,9 +10521,9 @@ fn type_with_missing_fields(ty: &Type, names: &BTreeSet<String>) -> Type {
 }
 
 fn fields_with_missing<'a>(
-    mut fields: FieldMap,
+    mut fields: ObjectFields,
     names: impl Iterator<Item = &'a String>,
-) -> FieldMap {
+) -> ObjectFields {
     for name in names {
         fields
             .entry(name.clone())
@@ -10660,7 +10694,7 @@ fn has_to_string(ty: &Type) -> bool {
     )
 }
 
-type ObjectFields = std::collections::BTreeMap<String, crate::ObjectField>;
+type ObjectFields = BTreeMap<String, crate::ObjectField>;
 
 /// The fields a spread copies. `by_name`: the source has no one layout, so each
 /// field is found by name at run time.

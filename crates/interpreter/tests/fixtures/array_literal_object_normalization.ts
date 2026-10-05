@@ -37,4 +37,15 @@ function main(): void {
 
   const json = JSON.stringify([{ a: 0 }, { a: 1, b: "x" }]);
   assert(json === '[{"a":0},{"a":1,"b":"x"}]', "a missing field stays missing");
+
+  const n = rows.length;
+  const computed = [{ id: 1 }, { id: 2, v: n + 1 }, { id: 3, v: rows[0].a, w: show(n) }];
+  assert(JSON.stringify(computed) === '[{"id":1},{"id":2,"v":4},{"id":3,"v":0,"w":"3"}]', "computed field values");
+
+  const arities = [{ f: (x: number) => x }, { f: (x: number, y: number) => x * y }];
+  assert(arities.map((o) => o.f(3, 4)).join(",") === "3,12", "same fields join by type before normalizing");
+
+  const missing: { foo?: string } | null = flag ? opts : null;
+  const fallback = missing ?? {};
+  assert(show(fallback.foo ?? null) === "null", "`??` joins `{}` too");
 }
