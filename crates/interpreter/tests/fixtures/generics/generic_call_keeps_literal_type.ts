@@ -37,6 +37,14 @@ function second<A, B>(a: A, b: B): B {
   return b;
 }
 
+function whichever<L, R>(left: L, right: R): L | R {
+  return right;
+}
+
+function orMode<B>(mode: Mode, value: B): B | Mode {
+  return value;
+}
+
 function head<T>(pair: [T, number]): T {
   return pair[0];
 }
@@ -154,4 +162,11 @@ function main(): void {
   let nested = field({ value: pick(mode, "on") });
   const carried: Mode[] = [paired, nested];
   assert(other === "elsewhere" && carried.join(",") === "on,on", "per type parameter");
+
+  // A literal one type parameter of the result binds regular stays declared
+  // however another binds it, as does one the callee's return type names.
+  let joined = whichever(mode, "on");
+  let orDeclared = orMode(mode, "on");
+  const unioned: Mode[] = [joined, orDeclared];
+  assert(unioned.join(",") === "on,on", "a declared literal in the result");
 }
