@@ -618,9 +618,11 @@ impl Inferer<'_> {
                 type_args,
                 args,
             } => self.infer_new(callee, type_args, args, expected, span),
-            ExprKind::TemplateLiteral { parts, exprs } => {
-                self.lower_template_literal(parts, exprs, span)
-            }
+            ExprKind::TemplateLiteral {
+                parts,
+                exprs,
+                substitution_spans,
+            } => self.lower_template_literal(parts, exprs, substitution_spans, span),
             ExprKind::Ternary { cond, then_, else_ } => {
                 self.infer_ternary(cond, then_, else_, expected, span)
             }
@@ -4364,9 +4366,12 @@ impl Inferer<'_> {
         &mut self,
         parts: Vec<String>,
         exprs: Vec<ExprId>,
+        substitution_spans: Vec<Span>,
         span: Span,
     ) -> Result<(TypedExprKind, Type), CompilerFailure> {
-        if parts.len().checked_sub(1) != Some(exprs.len()) {
+        if parts.len().checked_sub(1) != Some(exprs.len())
+            || substitution_spans.len() != exprs.len()
+        {
             return Err(
                 super::inference_failure("template part/interpolation count mismatch")
                     .with_span(span),
@@ -4380,7 +4385,8 @@ impl Inferer<'_> {
         let mut had_error = false;
         let typed_interps: Vec<ExprId> = exprs
             .into_iter()
-            .map(|expr_id| {
+            .zip(substitution_spans)
+            .map(|(expr_id, substitution_span)| {
                 let (typed_id, ty) = self.infer_expr(expr_id, None)?;
                 if matches!(ty, Type::Error) {
                     had_error = true;
@@ -4390,7 +4396,7 @@ impl Inferer<'_> {
                     .try_expr(typed_id)
                     .map_err(crate::typechecker::arena_failure)?
                     .span;
-                self.wrap_interpolation_in_to_string(typed_id, &ty, interp_span)
+                self.wrap_interpolation_in_to_string(typed_id, &ty, interp_span, substitution_span)
             })
             .collect::<Result<_, _>>()?;
 
@@ -4478,11 +4484,16 @@ impl Inferer<'_> {
     /// The allowlist is shared with the nullable-narrowing hint below: the hint may
     /// only claim narrowing is the fix when the non-null form is a receiver this
     /// accepts, or it advises a guard that leaves the same error behind.
+    ///
+    /// Diagnostics point at the interpolated expression. The conversion node
+    /// spans the whole `${…}`: it is not the source expression, and sharing that
+    /// expression's span would make the conversion's `string` read as its type.
     fn wrap_interpolation_in_to_string(
         &mut self,
         expr_id: ExprId,
         ty: &Type,
         span: Span,
+        substitution_span: Span,
     ) -> Result<ExprId, crate::compiler_error::CompilerFailure> {
         let peeled = ty.primitive_behavior();
         if matches!(peeled, Type::String | Type::StringLiteral(_)) {
@@ -4538,7 +4549,7 @@ impl Inferer<'_> {
                         args: Vec::new(),
                         type_predicate: None,
                     },
-                    span,
+                    span: substitution_span,
                     ty: Type::Error,
                 })
                 .map_err(crate::typechecker::arena_failure);
@@ -4573,7 +4584,7 @@ impl Inferer<'_> {
                     args,
                     type_predicate: None,
                 },
-                span,
+                span: substitution_span,
                 ty: if matches!(ty, Type::Error) {
                     Type::Error
                 } else {
@@ -11650,6 +11661,35 @@ function main(): void { if (result < 10) { } }
     }
 
     #[test]
+    fn template_interpolation_conversion_spans_its_substitution() {
+        let src =
+            r#"function main(): void { const n: number = 1; const s: string = `a${n}${ n }`; }"#;
+        let ta = run_clean(src);
+        let body = ta.functions[0].body;
+        let TypedStmtKind::Block(stmts) = &ta.try_stmt(body).unwrap().kind else {
+            panic!("expected Block")
+        };
+        let TypedStmtKind::Const { value, .. } = &ta.try_stmt(stmts[1]).unwrap().kind else {
+            panic!("expected Const for s")
+        };
+        let text = |span: crate::Span| &src[span.start as usize..span.end as usize];
+        let spans: Vec<(&str, &str)> = collect_to_string_calls(&ta, *value)
+            .into_iter()
+            .map(|call| {
+                let call_expr = ta.try_expr(call).unwrap();
+                let TypedExprKind::MethodCall { receiver, .. } = &call_expr.kind else {
+                    unreachable!();
+                };
+                (
+                    text(call_expr.span),
+                    text(ta.try_expr(*receiver).unwrap().span),
+                )
+            })
+            .collect();
+        assert_eq!(spans, vec![("${n}", "n"), ("${ n }", "n")]);
+    }
+
+    #[test]
     fn template_literal_string_interpolation_elides_to_string() {
         // The acceptance criterion: when the interpolation is
         // already string-typed, no `.toString()` wrapping is emitted.
@@ -12276,7 +12316,7 @@ mod invariant_tests {
         super::super::test_support::with_inferer(|tc| {
             let span = Span::at(crate::FileId(0));
             assert!(matches!(
-                tc.lower_template_literal(Vec::new(), Vec::new(), span),
+                tc.lower_template_literal(Vec::new(), Vec::new(), Vec::new(), span),
                 Err(CompilerFailure::Internal { .. })
             ));
             let part = ChainPart::NonNull { span };
