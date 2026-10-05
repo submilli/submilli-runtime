@@ -2687,9 +2687,10 @@ impl Inferer<'_> {
             );
             let entry_falsified =
                 widen_entry_to_cover_next_pass(&mut entry_env, &outcome, &mut widened);
-            if !outer_falsified && !entry_falsified {
+            if outer_falsified.is_empty() && !entry_falsified {
                 return Ok(outcome);
             }
+            self.widen_outer_into_entry(&mut entry_env, outer_falsified, &outcome, &mut widened)?;
             // Discard speculative diagnostics and exits before retyping under
             // the widened state.
             self.diagnostics.truncate(diag_len);
@@ -2738,17 +2739,59 @@ impl Inferer<'_> {
         })
     }
 
-    /// Invalidate outer views that the next pass widens or kills.
-    /// Bindings declared within the body are recreated on each iteration.
+    /// Give the body's next try each outer narrowing it falsified, widened to
+    /// cover the next pass too, as `x: string` joined with `x: number` after
+    /// `x = len(x)`. A path widened once already, or that the next pass does
+    /// not narrow, stays dropped.
+    fn widen_outer_into_entry(
+        &mut self,
+        entry_env: &mut narrowing::NarrowEnv,
+        falsified: Vec<(narrowing::ReferencePath, narrowing::NarrowedView)>,
+        outcome: &LoopBodyOutcome,
+        widened: &mut std::collections::BTreeSet<narrowing::ReferencePath>,
+    ) -> Result<(), CompilerFailure> {
+        let Some(next_pass) = &outcome.next_pass else {
+            return Ok(());
+        };
+        for (path, view) in falsified {
+            let Some(post) = next_pass.get(&path) else {
+                continue;
+            };
+            if entry_env.contains_key(&path) || !widened.insert(path.clone()) {
+                continue;
+            }
+            let span = self
+                .typed_ast
+                .try_expr(view.source)
+                .map_err(super::arena_failure)?
+                .span;
+            let narrowed_ty = narrowing::join_flow_types(&view.narrowed_ty, &post.narrowed_ty);
+            entry_env.insert(
+                path,
+                narrowing::NarrowedView {
+                    narrowed_ty,
+                    facts: narrowing::TypeFacts::EMPTY,
+                    excluded_literals: std::collections::BTreeSet::new(),
+                    binding: self.mint_narrow_binding(span)?,
+                    source: view.source,
+                },
+            );
+        }
+        Ok(())
+    }
+
+    /// Invalidate outer views that the next pass widens or kills, and give
+    /// them back. Bindings declared within the body are recreated on each
+    /// iteration.
     fn drop_narrowings_the_body_falsifies(
         &mut self,
         body: StmtId,
         outcome: &LoopBodyOutcome,
         body_scope_floor: narrowing::ScopeId,
         body_span: Span,
-    ) -> bool {
+    ) -> Vec<(narrowing::ReferencePath, narrowing::NarrowedView)> {
         let Some(next_pass) = &outcome.next_pass else {
-            return false;
+            return Vec::new();
         };
         let (active, _) = self.snapshot_active_narrowings(0);
         let falsified: Vec<_> = active
@@ -2777,7 +2820,7 @@ impl Inferer<'_> {
                 narrowing::InvalidationReason::Write { span: body_span },
             );
         }
-        !falsified.is_empty()
+        falsified
     }
 
     /// Reuse widening discovered by an earlier pass through this syntax node.

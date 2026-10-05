@@ -466,12 +466,7 @@ impl<'a> Inferer<'a> {
         self.pop_narrow_frame()?;
         let mut rhs_failure = lhs_true.clone();
         rhs_failure.extend(rhs_false);
-        let (false_env, _) = narrowing::union_envs(
-            lhs_false,
-            Default::default(),
-            rhs_failure,
-            Default::default(),
-        );
+        let false_env = join_reachable_envs(lhs_false, rhs_failure);
         // RHS supersedes LHS — ran under LHS narrowing, so its view is at least as specific.
         let mut composed = lhs_true;
         for (path, view) in rhs_true.into_iter() {
@@ -494,12 +489,7 @@ impl<'a> Inferer<'a> {
         self.pop_narrow_frame()?;
         let mut rhs_success = lhs_false.clone();
         rhs_success.extend(rhs_true);
-        let (true_env, _) = narrowing::union_envs(
-            lhs_true,
-            Default::default(),
-            rhs_success,
-            Default::default(),
-        );
+        let true_env = join_reachable_envs(lhs_true, rhs_success);
         let mut composed = lhs_false;
         for (path, view) in rhs_false.into_iter() {
             composed.insert(path, view);
@@ -1748,4 +1738,26 @@ fn comparison_literal(
         },
         |value| Ok(Some(value)),
     )
+}
+
+/// Joins the two ways a short-circuit condition can reach one outcome. A way
+/// that narrows some path to nothing cannot happen, so the other way alone
+/// decides: in `typeof x === "string" || typeof x === "string"` the right
+/// side is never true, and the true branch keeps `x: string`.
+fn join_reachable_envs(
+    left: narrowing::NarrowEnv,
+    right: narrowing::NarrowEnv,
+) -> narrowing::NarrowEnv {
+    if is_unreachable_env(&right) {
+        return left;
+    }
+    if is_unreachable_env(&left) {
+        return right;
+    }
+    narrowing::union_envs(left, Default::default(), right, Default::default()).0
+}
+
+fn is_unreachable_env(env: &narrowing::NarrowEnv) -> bool {
+    env.values()
+        .any(|view| matches!(view.narrowed_ty.peel(), Type::Never | Type::Error))
 }

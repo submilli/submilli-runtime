@@ -1,1 +1,29 @@
-types: 36 of 42 tsc entries compared, 0 differ
+types: 36 of 42 tsc entries compared, 7 differ
+
+line 14: x
+  tsc:  T
+  ours: "" | "foo"
+
+line 18: x
+  tsc:  T
+  ours: "" | "foo"
+
+line 22: x
+  tsc:  T
+  ours: "" | "foo"
+
+line 26: x
+  tsc:  T
+  ours: "" | "foo"
+
+line 30: x
+  tsc:  T
+  ours: "" | "foo"
+
+line 34: x
+  tsc:  T
+  ours: "" | "foo"
+
+line 38: x
+  tsc:  T
+  ours: "" | "foo"

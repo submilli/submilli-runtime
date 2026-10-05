@@ -1,4 +1,36 @@
-types: 41 of 68 tsc entries compared, 1 differ
+types: 41 of 68 tsc entries compared, 9 differ
+
+line 27: num
+  tsc:  number
+  ours: number | string
+
+line 28: str
+  tsc:  string
+  ours: number | string
+
+line 41: num
+  tsc:  number
+  ours: number | string
+
+line 42: num
+  tsc:  number
+  ours: number | string
+
+line 43: num
+  tsc:  number
+  ours: number | string
+
+line 44: str
+  tsc:  string
+  ours: number | string
+
+line 45: str
+  tsc:  string
+  ours: number | string
+
+line 46: str
+  tsc:  string
+  ours: number | string
 
 line 66: t
   tsc:  T
@@ -6,3 +38,6 @@ line 66: t
 
 errors:
 line 66: tsc TS2322: Type 'T' is not assignable to type 'U'.   'U' could be instantiated with an arbitrary type which could be unrelated to 'T'. (we accept)
+line 28: ours: expected `string`, got `number | string` (tsc accepts)
+line 41: ours: expected `number`, got `number | string` (tsc accepts)
+line 45: ours: expected `string`, got `number | string` (tsc accepts)

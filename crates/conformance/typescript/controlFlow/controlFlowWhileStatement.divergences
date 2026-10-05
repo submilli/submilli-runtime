@@ -1,4 +1,4 @@
-types: 84 of 128 tsc entries compared, 7 differ
+types: 84 of 128 tsc entries compared, 3 differ
 
 line 23: x
   tsc:  string
@@ -11,23 +11,3 @@ line 25: x
 line 55: cond
   tsc:  never
   ours: true
-
-line 83: x
-  tsc:  string | number
-  ours: number | string | boolean
-
-line 94: x
-  tsc:  string | number
-  ours: number | string | boolean
-
-line 103: x
-  tsc:  string | number
-  ours: number | string | boolean
-
-line 104: x
-  tsc:  string | number
-  ours: number | string | boolean
-
-errors:
-line 94: ours: expected `number | string`, got `number | string | boolean` (tsc accepts)
-line 104: ours: expected `number | string`, got `number | string | boolean` (tsc accepts)

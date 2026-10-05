@@ -1,4 +1,4 @@
-types: 44 of 86 tsc entries compared, 10 differ
+types: 44 of 86 tsc entries compared, 12 differ
 
 line 4: [5, "foo", true]
   tsc:  [number, string, boolean]
@@ -36,6 +36,18 @@ line 19: [ {}, 5]
   tsc:  [{}, number]
   ours: [{ a: string }, number]
 
+line 20: numStrTuple
+  tsc:  [number, string]
+  ours: [number, string, boolean]
+
 line 21: ["foo", "bar", 5]
   tsc:  [string, string, number]
   ours: [string, string]
+
+line 25: unionTuple
+  tsc:  [C, string | number]
+  ours: [C, number | string, D]
+
+errors:
+line 20: tsc TS2322: Type '[number, string]' is not assignable to type '[number, string, boolean]'.   Source has 2 element(s) but target requires 3. (we accept)
+line 25: tsc TS2322: Type '[C, string | number]' is not assignable to type '[C, string | number, D]'.   Source has 2 element(s) but target requires 3. (we accept)

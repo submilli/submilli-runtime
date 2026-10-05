@@ -1,4 +1,16 @@
-types: 69 of 133 tsc entries compared, 11 differ
+types: 69 of 133 tsc entries compared, 14 differ
+
+line 101: a
+  tsc:  boolean
+  ours: true
+
+line 102: a
+  tsc:  boolean
+  ours: true
+
+line 103: a
+  tsc:  boolean
+  ours: true
 
 line 105: b
   tsc:  any

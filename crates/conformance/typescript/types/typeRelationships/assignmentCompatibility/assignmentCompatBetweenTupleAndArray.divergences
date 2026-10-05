@@ -1,4 +1,8 @@
-types: 32 of 40 tsc entries compared, 0 differ
+types: 32 of 40 tsc entries compared, 1 differ
+
+line 19: emptyObjArray
+  tsc:  {}[]
+  ours: [number, {}]
 
 errors:
 line 13: ours: expected `{}[]`, got `[number, string]` (tsc accepts)

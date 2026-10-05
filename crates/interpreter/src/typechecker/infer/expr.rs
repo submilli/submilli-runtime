@@ -10718,14 +10718,17 @@ mod tests {
 
     #[test]
     fn logical_or_nullable_lhs_strips_null() {
-        let ta = run_clean(r#"let s: string | null = null; let x: string = s || "d";"#);
+        let ta = run_clean(
+            r#"function name(): string | null { return null; } let s: string | null = name(); let x: string = s || "d";"#,
+        );
         assert_eq!(nth_decl_value_ty(&ta, 1), Type::String);
     }
 
     #[test]
     fn logical_and_nullable_lhs_keeps_null_in_result() {
-        let ta =
-            run_clean("let xs: number[] | null = null; let x: number | null = xs && xs.length;");
+        let ta = run_clean(
+            "function items(): number[] | null { return null; } let xs: number[] | null = items(); let x: number | null = xs && xs.length;",
+        );
         assert_eq!(
             nth_decl_value_ty(&ta, 1),
             Type::union(vec![Type::Number, Type::Null])

@@ -1,4 +1,3 @@
-line 94, 104 extra: bug SUB-1199 a loop that writes the variable widens it to its declared type at the loop head
-line 23, 83, 94, 103, 104 type: bug SUB-1199 a loop that writes the variable widens it to its declared type at the loop head
+line 23 type: bug SUB-1152 a rejected assignment, `++` or `--` still narrows its target (`x = null`, so the `continue` edge carries a type the guard rules out)
 line 25 type: bug SUB-1152 a rejected assignment, `++` or `--` still narrows its target (`x = null`)
 line 55 type: bug SUB-1210 a narrowing that rules out every member keeps a type instead of `never`

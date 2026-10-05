@@ -1,2 +1,4 @@
 line 66 missed: bug SUB-1152 a rejected assignment, `++` or `--` still narrows its target (`t = u` on line 65)
 line 66 type: bug SUB-1152 a rejected assignment, `++` or `--` still narrows its target
+line 27, 28, 41, 42, 43, 44, 45, 46 type: bug SUB-1152 a rejected assignment, `++` or `--` still narrows its target
+line 28, 41, 45 extra: bug SUB-1152 a rejected assignment, `++` or `--` still narrows its target

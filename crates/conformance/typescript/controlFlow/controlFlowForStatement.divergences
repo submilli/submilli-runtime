@@ -1,11 +1,7 @@
-types: 51 of 82 tsc entries compared, 6 differ
+types: 51 of 82 tsc entries compared, 5 differ
 
 line 5: x = 5
   tsc:  5
-  ours: number | string | boolean
-
-line 6: x
-  tsc:  string | number
   ours: number | string | boolean
 
 line 11: x = x.length
