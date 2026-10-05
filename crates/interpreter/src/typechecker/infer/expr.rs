@@ -9987,8 +9987,10 @@ fn equality_types_overlap(
 /// the `+` arm and the narrowing hint it emits: a hint may only claim a guard is the
 /// fix when the guarded pair is one this accepts.
 pub(super) fn plus_result(lt: &Type, rt: &Type) -> Option<Type> {
-    if let Some(result) = never_operand_result(lt, rt, true) {
-        return result;
+    match never_operand_result(lt, rt, NeverPartners::NumericOrString) {
+        NeverOperand::Accepted(result) => return Some(result),
+        NeverOperand::Rejected => return None,
+        NeverOperand::Absent => {}
     }
     match (lt.primitive_behavior(), rt.primitive_behavior()) {
         // A literal operand behaves as its base and yields the base, never a
@@ -10007,8 +10009,10 @@ pub(super) fn plus_result(lt: &Type, rt: &Type) -> Option<Type> {
 
 /// [`plus_result`] for `-`, `*`, `/`, `%`, `**` — same role, no string arm.
 pub(super) fn arithmetic_result(lt: &Type, rt: &Type) -> Option<Type> {
-    if let Some(result) = never_operand_result(lt, rt, false) {
-        return result;
+    match never_operand_result(lt, rt, NeverPartners::NumericOnly) {
+        NeverOperand::Accepted(result) => return Some(result),
+        NeverOperand::Rejected => return None,
+        NeverOperand::Absent => {}
     }
     match (lt.primitive_behavior(), rt.primitive_behavior()) {
         (Type::Number | Type::NumberLiteral(_), Type::Number | Type::NumberLiteral(_)) => {
@@ -10024,8 +10028,10 @@ pub(super) fn arithmetic_result(lt: &Type, rt: &Type) -> Option<Type> {
 fn ordering_accepts(lt: &Type, rt: &Type) -> bool {
     // A `never` operand orders against numbers and bigints only: tsc rejects
     // `never < string`, unlike `never + string`.
-    if let Some(result) = never_operand_result(lt, rt, false) {
-        return result.is_some();
+    match never_operand_result(lt, rt, NeverPartners::NumericOnly) {
+        NeverOperand::Accepted(_) => return true,
+        NeverOperand::Rejected => return false,
+        NeverOperand::Absent => {}
     }
     matches!(
         (lt.primitive_behavior(), rt.primitive_behavior()),
@@ -10055,24 +10061,42 @@ fn unary_arith_result(op: UnOp, ty: &Type) -> Option<Type> {
     }
 }
 
-/// The binary operator result when either operand is `never`, or `None` when neither is.
-///
+/// What a binary operator makes of a `never` operand.
+enum NeverOperand {
+    /// Neither operand is `never`; the operator's ordinary rules apply.
+    Absent,
+    Accepted(Type),
+    Rejected,
+}
+
+/// Which partners of a `never` operand an operator accepts besides numbers and
+/// bigints.
+#[derive(Clone, Copy)]
+enum NeverPartners {
+    NumericOnly,
+    /// `+`, which also concatenates.
+    NumericOrString,
+}
+
 /// A `never` value can't exist, so the operator is accepted whenever some operand type
 /// would be, and its result comes from the other operand as tsc's does: `never + string`
 /// is `string`, `never - bigint` is `bigint`, and `never` with `never` is `number`.
-/// `allows_string` admits a string partner, which only `+` does.
-fn never_operand_result(lt: &Type, rt: &Type, allows_string: bool) -> Option<Option<Type>> {
+fn never_operand_result(lt: &Type, rt: &Type, partners: NeverPartners) -> NeverOperand {
     let other = match (lt.peel(), rt.peel()) {
         (Type::Never, _) => rt,
         (_, Type::Never) => lt,
-        _ => return None,
+        _ => return NeverOperand::Absent,
     };
-    Some(match other.primitive_behavior() {
-        Type::Never | Type::Number | Type::NumberLiteral(_) => Some(Type::Number),
-        Type::BigInt => Some(Type::BigInt),
-        Type::String | Type::StringLiteral(_) if allows_string => Some(Type::String),
-        _ => None,
-    })
+    match (other.primitive_behavior(), partners) {
+        (Type::Never | Type::Number | Type::NumberLiteral(_), _) => {
+            NeverOperand::Accepted(Type::Number)
+        }
+        (Type::BigInt, _) => NeverOperand::Accepted(Type::BigInt),
+        (Type::String | Type::StringLiteral(_), NeverPartners::NumericOrString) => {
+            NeverOperand::Accepted(Type::String)
+        }
+        _ => NeverOperand::Rejected,
+    }
 }
 
 /// Types whose values reach a `toString` — the receivers `String(x)` and `${x}` accept.

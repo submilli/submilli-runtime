@@ -2402,6 +2402,11 @@ pub(super) fn compound_arith_result(op: BinOp, lt: &Type, rt: &Type) -> Option<T
     if matches!(lt.peel(), Type::Error) || matches!(rt.peel(), Type::Error) {
         return Some(Type::Error);
     }
+    // A `never` target can't take the result back, so the read-modify-write has no
+    // rule even where the binary operator accepts the pair.
+    if matches!(lt.peel(), Type::Never) {
+        return None;
+    }
     match op {
         BinOp::Add => super::expr::plus_result(lt, rt),
         BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Rem | BinOp::Pow => {

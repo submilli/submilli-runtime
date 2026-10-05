@@ -3018,7 +3018,7 @@ fn emit_binary(
     rhs: ExprId,
     result_ty: &Type,
 ) -> Result<(), crate::compiler_error::CompilerFailure> {
-    let is_operator_on_values = matches!(
+    let lowers_to_numeric_instruction = matches!(
         op,
         BinOp::Add
             | BinOp::Sub
@@ -3031,7 +3031,9 @@ fn emit_binary(
             | BinOp::Le
             | BinOp::Ge
     );
-    if is_operator_on_values && emit_unreachable_for_never_operand(emitter, ctx, &[lhs, rhs])? {
+    if lowers_to_numeric_instruction
+        && try_emit_unreachable_for_never_operand(emitter, ctx, &[lhs, rhs])?
+    {
         return Ok(());
     }
     let _: () = match op {
@@ -3475,7 +3477,7 @@ fn emit_logical(
 /// `never`, returning whether it did. The typechecker accepts arithmetic on a
 /// `never` operand because no value of it exists, but that operand's slot is a
 /// reference no numeric instruction takes, so the operator itself isn't emitted.
-fn emit_unreachable_for_never_operand(
+fn try_emit_unreachable_for_never_operand(
     emitter: &mut FunctionEmitter,
     ctx: &CodegenCtx,
     operands: &[ExprId],
@@ -4770,7 +4772,7 @@ fn emit_unary(
     operand: ExprId,
 ) -> Result<(), crate::compiler_error::CompilerFailure> {
     if matches!(op, UnOp::Neg | UnOp::Pos)
-        && emit_unreachable_for_never_operand(emitter, ctx, &[operand])?
+        && try_emit_unreachable_for_never_operand(emitter, ctx, &[operand])?
     {
         return Ok(());
     }
