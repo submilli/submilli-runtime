@@ -610,7 +610,11 @@ fn emit_function_ref(
     // adapter (slot 0 = env, slot 1 = adapter funcref, slot 2
     // = env sentinel). The shared closure vtable reuses for
     // the env slot — adapter bodies ignore it, and the slot
-    // just needs a non-null `(ref any)`.
+    // just needs a non-null `(ref any)`. The closure is built
+    // once and cached in a global, so every read is the same value.
+    // A `FunctionRef` is always typed by its declared signature, so
+    // `result_ty` classifies like the adapter's signature and the
+    // cached struct type matches the global's.
     let closure_struct_idx = ctx
         .symbols
         .closure_struct_type_idx(crate::codegen::closures::classify(result_ty)?)
@@ -622,11 +626,20 @@ fn emit_function_ref(
     let adapter_idx = ctx.symbols.adapter_func_idx(mangled).ok_or_else(|| {
         crate::codegen::internal_failure("adapter func recorded for every function-as-value")
     })?;
+    let closure_global_idx = ctx
+        .symbols
+        .adapter_closure_global_idx(mangled)
+        .ok_or_else(|| {
+            crate::codegen::internal_failure("closure global recorded for every function-as-value")
+        })?;
     let vtable_idx = ctx.symbols.closure_vtable_global_idx().ok_or_else(|| {
         crate::codegen::internal_failure(
             "closure vtable global emitted whenever closures or adapters exist",
         )
     })?;
+    emitter.instruction(Instruction::GlobalGet(closure_global_idx));
+    emitter.instruction(Instruction::RefIsNull);
+    emitter.emit_if(BlockType::Empty);
     emitter.instruction(Instruction::GlobalGet(vtable_idx));
     emitter.instruction(Instruction::RefFunc(adapter_idx));
     emitter.instruction(Instruction::GlobalGet(vtable_idx));
@@ -635,6 +648,10 @@ fn emit_function_ref(
     }
     emitter.instruction(Instruction::I64Const(0));
     emitter.instruction(Instruction::StructNew(closure_struct_idx));
+    emitter.instruction(Instruction::GlobalSet(closure_global_idx));
+    emitter.emit_end();
+    emitter.instruction(Instruction::GlobalGet(closure_global_idx));
+    emitter.instruction(Instruction::RefAsNonNull);
 
     Ok(())
 }

@@ -1,9 +1,12 @@
 //! Collects top-level functions used in value position and emits closure-shaped adapter bodies for them.
 
-use wasm_encoder::{CodeSection, HeapType, Instruction, RefType, ValType};
+use wasm_encoder::{
+    CodeSection, ConstExpr, GlobalSection, GlobalType, HeapType, Instruction, RefType, ValType,
+};
 
 use crate::codegen::CodegenCtx;
 use crate::codegen::function_emitter::{FunctionEmitter, cast};
+use crate::codegen::symbol_table::SymbolTable;
 use crate::{Ident, Span, Type};
 
 #[derive(Clone, Debug)]
@@ -11,6 +14,42 @@ pub struct AdapterMeta {
     pub name: String,
     pub mangled: crate::MangledName,
     pub signature: Type,
+}
+
+/// Allocates one global per adapter that caches the function's closure, so every
+/// read of a top-level function yields the same value and `f === f` holds. The
+/// closure has no environment, so one instance serves every read. Each starts
+/// null and is filled on first read. Returns how many globals were added.
+pub fn allocate_closure_globals(
+    metas: &[AdapterMeta],
+    globals: &mut GlobalSection,
+    symbols: &mut SymbolTable,
+    next_global_idx: &mut u32,
+) -> Result<u32, crate::compiler_error::CompilerFailure> {
+    for meta in metas {
+        let closure_struct_idx = symbols
+            .closure_struct_type_idx(super::closures::classify(&meta.signature)?)
+            .ok_or_else(|| {
+                crate::codegen::internal_failure(
+                    "closure struct type registered for every function-as-value",
+                )
+            })?;
+        let heap_type = HeapType::Concrete(closure_struct_idx);
+        globals.global(
+            GlobalType {
+                val_type: ValType::Ref(RefType {
+                    nullable: true,
+                    heap_type,
+                }),
+                mutable: true,
+                shared: false,
+            },
+            &ConstExpr::ref_null(heap_type),
+        );
+        symbols.record_adapter_closure_global_idx(meta.mangled.clone(), *next_global_idx);
+        crate::codegen::next_index(next_global_idx)?;
+    }
+    crate::codegen::wasm_u32(metas.len())
 }
 
 pub fn emit_bodies(
