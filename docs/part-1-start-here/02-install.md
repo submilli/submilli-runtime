@@ -6,10 +6,10 @@ sidebar:
   order: 2
 ---
 
-If you use Codex or Claude Code, start with the setup prompt. It asks your
-agent to install the Submilli skill in this project, read its instructions, and
-verify the CLI and server. Follow the manual steps below when you prefer to set
-up Submilli yourself.
+Use the [skill setup box above](#agent-setup) to get started with Codex or
+Claude Code. The prompt asks your agent to install and read the Submilli skill
+in this project, then verify the CLI and server. If you prefer
+to install them yourself, follow the manual steps below.
 
 Two things to install: the `submilli` command, which comes with the
 `submilli-server` binary, and the Submilli skill for your coding assistant.
