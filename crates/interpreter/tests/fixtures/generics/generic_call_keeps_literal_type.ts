@@ -11,6 +11,12 @@ function maybe<T>(x: T, keep: boolean): T | null {
   return keep ? x : null;
 }
 
+type Mode = "on" | "off";
+
+function first<T>(xs: T[]): T {
+  return xs[0];
+}
+
 function pick<T>(first: T, second: T): T {
   return second;
 }
@@ -48,6 +54,19 @@ function main(): void {
   const lengths = [1, 2].map(() => id(0));
   lengths.push(4);
   assert(letter() === "b" && lengths.join(",") === "0,0,4", "a returned call widens");
+
+  // A literal type the call declares, rather than takes from a fresh
+  // argument, stays.
+  const modes: Mode[] = ["on", "off"];
+  const lookup = new Map<string, Mode>([["x", "off"]]);
+  const firstMode = () => first(modes);
+  const found = () => modes.find((mode) => mode === "off") ?? null;
+  const stored = () => lookup.get("x") ?? null;
+  const mode: Mode = firstMode();
+  const maybeMode: Mode | null = found() ?? stored();
+  const echoed: Mode[] = modes.map((each) => id(each));
+  assert(mode === "on" && maybeMode === "off", "a declared literal type stays");
+  assert(echoed.join(",") === "on,off", "through a call that keeps it");
 
   let copy = id(1);
   copy = 5;

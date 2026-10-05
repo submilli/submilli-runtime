@@ -98,9 +98,32 @@ pub(super) struct LiteralFreshness {
     /// The value each temporary an assignment used as a value holds, by the
     /// temporary's name. Such a temporary is never a scope entry.
     held_values: BTreeMap<String, ExprId>,
+    /// The arguments whose literal type a generic call's result keeps, as the
+    /// sole candidate of a type parameter that is the result (`id(1)` is `1`):
+    /// such a result is as fresh as its argument.
+    kept_arguments: BTreeSet<ExprId>,
 }
 
 impl Inferer<'_> {
+    /// The type a function literal infers from a value it returns, `value` of
+    /// type `ty`: with each literal member known to be fresh widened, as tsc
+    /// widens a function's inferred return type. A literal of unknown origin
+    /// stays, since a closure returning a declared literal (`() => ms.pop()`
+    /// with `ms: Mode[]`) must keep it.
+    pub(super) fn widen_known_fresh_literals(
+        &self,
+        value: ExprId,
+        ty: &Type,
+    ) -> Result<Type, CompilerFailure> {
+        Ok(widen_only(ty, &self.known_fresh_literals(value)?))
+    }
+
+    /// Record that a generic call's result keeps the literal type of
+    /// `argument`.
+    pub(super) fn record_kept_literal_argument(&mut self, argument: ExprId) {
+        self.literal_freshness.kept_arguments.insert(argument);
+    }
+
     /// The type a mutable binding or property takes from `value`: its type
     /// `ty` with each fresh literal member widened to its base type.
     pub(super) fn widen_fresh_literals(
@@ -343,7 +366,8 @@ impl Inferer<'_> {
     }
 
     /// The literal members of the type of `value` known to be fresh: written
-    /// as literals, or read from a binding that recorded them as fresh. The
+    /// as literals, read from a binding that recorded them as fresh, or kept
+    /// by a generic call from such an argument. The
     /// counterpart of [`regular_literals`](Self::regular_literals) for where a
     /// literal of unknown origin must not widen.
     fn known_fresh_literals(&self, value: ExprId) -> Result<BTreeSet<Type>, CompilerFailure> {
@@ -376,6 +400,16 @@ impl Inferer<'_> {
                     if let Some((origin, _)) = self.root_literal_origin(path) {
                         fresh.extend(origin.known_fresh_members(&expr.ty));
                     }
+                }
+                TypedExprKind::GenericCall { args, .. }
+                | TypedExprKind::GenericMethodCall { args, .. } => {
+                    pending.extend(
+                        args.iter()
+                            .map(|argument| argument.expr)
+                            .filter(|argument| {
+                                self.literal_freshness.kept_arguments.contains(argument)
+                            }),
+                    );
                 }
                 _ => {}
             }

@@ -9,6 +9,10 @@ class Sub extends Base {
   b: number = 2;
 }
 
+function applyToSub<T>(f: (sub: Sub) => T): T {
+  return f(new Sub());
+}
+
 function main(): void {
   const doubled = (a: unknown): number => (typeof a === "number" ? a * 2 : -1);
   assert([5].map(doubled).join(",") === "10", "an `unknown` parameter over a `number[]`");
@@ -33,6 +37,8 @@ function main(): void {
 
   const position = (x: unknown, i: unknown): string => String(i);
   assert([7, 8].map(position).join(",") === "0,1", "an `unknown` index parameter");
+
+  assert(applyToSub((b: Base) => b.a) === 1, "a base class parameter in a generic slot");
 
   const count = (...xs: unknown[]): number => xs.length;
   assert([4, 5].map(count).join(",") === "3,3", "a rest parameter of `unknown`");

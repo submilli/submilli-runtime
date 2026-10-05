@@ -1314,6 +1314,9 @@ impl Inferer<'_> {
         self.finish_object_argument_inference(enclosing, sub);
         self.arguments_hinted_by_expected_result.remove(&arg_id);
         let (typed_id, arg_ty) = inferred?;
+        if keeps_literal {
+            self.record_kept_literal_argument(typed_id);
+        }
         // A literal the call's expected result asks for is not widened,
         // as in tsc: `const f: () => "a" = later(c)` binds `"a"`.
         let asked_for =
@@ -1347,15 +1350,15 @@ impl Inferer<'_> {
         ))
     }
 
-    /// Whether `expr` is an object or array literal, in parentheses or as a
-    /// conditional's branch.
+    /// Whether `expr` is an object or array literal, in parentheses or as both
+    /// of a conditional's branches.
     fn builds_literal(&self, expr: ExprId) -> Result<bool, CompilerFailure> {
         Ok(
             match &self.ast.try_expr(expr).map_err(super::arena_failure)?.kind {
                 ExprKind::ObjectLiteral { .. } | ExprKind::ArrayLiteral { .. } => true,
                 ExprKind::Paren(inner) => self.builds_literal(*inner)?,
                 ExprKind::Ternary { then_, else_, .. } => {
-                    self.builds_literal(*then_)? || self.builds_literal(*else_)?
+                    self.builds_literal(*then_)? && self.builds_literal(*else_)?
                 }
                 _ => false,
             },

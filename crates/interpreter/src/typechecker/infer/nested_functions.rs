@@ -426,13 +426,15 @@ impl Inferer<'_> {
             .span;
         self.nested_function_bodies.push(index);
         self.enter_function_declaration_narrow_boundary();
+        // A declaration's returns widen whatever it is passed to.
+        let keeps_returned_literals = false;
         let (kind, closure_ty, _reported) = self.infer_arrow(
             declaration.params.clone(),
             declaration.return_type.clone(),
             declaration.type_predicate.clone(),
             ArrowBody::Block(declaration.body),
             Some(&ty),
-            false,
+            keeps_returned_literals,
             span,
         )?;
         self.exit_closure_narrow_boundary()?;

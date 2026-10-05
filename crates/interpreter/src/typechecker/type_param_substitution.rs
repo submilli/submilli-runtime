@@ -396,6 +396,9 @@ impl<'a> Unifier<'a> {
                     ..
                 },
             ) => {
+                if ma != mb && self.accepts_as_supertype(arg_ty, param_ty) {
+                    return Ok(());
+                }
                 if ma != mb || aa.len() != ab.len() {
                     return Err(UnifyError::Mismatch {
                         expected: param_ty.clone(),

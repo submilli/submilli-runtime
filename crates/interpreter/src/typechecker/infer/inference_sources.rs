@@ -75,10 +75,11 @@ impl<'a> Inferer<'a> {
 
     /// Infer the value a `return` gives, marking the object literals it builds
     /// directly when the enclosing function literal infers its return type.
-    /// That type widens a fresh literal, as tsc widens a function's inferred
-    /// return type, unless the literal is kept for a type parameter (see
-    /// `returns_keep_literals`) or the hint asks for one: `() => id(1)` is
-    /// `() => number`.
+    /// That type widens a literal known to be fresh, as tsc widens a
+    /// function's inferred return type, unless the literal is kept for a type
+    /// parameter (see `returns_keep_literals`) or the function literal has a
+    /// contextual return type other than a bare type parameter: `() => id(1)`
+    /// is `() => number`.
     pub(super) fn infer_returned_value(
         &mut self,
         expr: ExprId,
@@ -95,11 +96,11 @@ impl<'a> Inferer<'a> {
             this.keeps_literal_types = this.returns_keep_literals;
             this.infer_expr(expr, hint)
         })?;
-        let asks_for_literal = hint.is_some_and(|hint| !is_type_parameter_position(hint));
-        if self.returns_keep_literals || asks_for_literal {
+        let has_contextual_return_type = hint.is_some_and(|hint| !is_type_parameter_position(hint));
+        if self.returns_keep_literals || has_contextual_return_type {
             return Ok((typed, ty));
         }
-        Ok((typed, self.widen_fresh_literals(typed, &ty)?))
+        Ok((typed, self.widen_known_fresh_literals(typed, &ty)?))
     }
 
     pub(super) fn is_inference_source(&self, literal: ExprId) -> bool {

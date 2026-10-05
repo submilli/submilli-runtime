@@ -63,4 +63,8 @@ function main(): void {
   const chosen = unbox(word.length > 0 ? { v: "a" } : { v: "b" });
   assert(found !== null && found.length === 1, "a nullable interface");
   assert(wrapped.length + chosen.length === 2, "parentheses and a conditional");
+  // A conditional with a branch that isn't a literal keeps the interface hint.
+  const extra = { v: 5, w: 6 };
+  const mixed = unbox(word.length > 0 ? { v: 1 } : extra);
+  assert(String(mixed) === "1", "a conditional with a non-literal branch");
 }
