@@ -14,11 +14,12 @@ explained, and every upstream test left out is listed with its reason.
 ## Running conformance
 
 Both suite bodies are disabled by default, including with `SUBMILLI_FULL_TEST=1`.
-Only `SUBMILLI_CONFORMANCE_TEST=1` enables them (`true`, `yes`, and `on`,
+Only `SUBMILLI_TEST_NIGHTLY_ONLY=1` enables them (`true`, `yes`, and `on`,
 case-insensitive, are also accepted). Filters and baseline-update settings do not
 opt in. Harness unit tests and metadata checks remain available without the flag.
 
-The Conformance workflow runs nightly at 02:00 UTC. The
+The Nightly tests workflow runs these suites, compiler determinism, and expensive
+CLI fuel-accounting tests nightly at 02:00 UTC. The
 [release skill](../../.agents/skills/release/SKILL.md) runs both complete suites
 locally on the operator machine against the final candidate before publication,
 with inherited filters and baseline-update settings cleared. The release workflow
@@ -28,7 +29,7 @@ is unchanged.
 
 Hand-ported, vendored subset of [tc39/test262](https://github.com/tc39/test262),
 the official ECMA-262 conformance suite, adapted to our strict TypeScript
-subset. Run via `SUBMILLI_CONFORMANCE_TEST=1 cargo test -p conformance`.
+subset. Run via `SUBMILLI_TEST_NIGHTLY_ONLY=1 cargo test -p conformance`.
 
 **Why a hand-ported vendored subset (not a scripted port):** test262 cases
 assume dynamic typing, `undefined`, `var`, sparse arrays, `Symbol`,
@@ -52,7 +53,7 @@ SKIPS.md          skip/reject conventions + blanket rules
 skips/<Area>.md   per-area record of what was skipped or rejected, and why
 ```
 
-`CONFORMANCE_FILTER=<path substring> SUBMILLI_CONFORMANCE_TEST=1 cargo test -p conformance` runs the
+`CONFORMANCE_FILTER=<path substring> SUBMILLI_TEST_NIGHTLY_ONLY=1 cargo test -p conformance` runs the
 matching subset of cases.
 
 A ported case is a self-contained program with a `main(): void` entry point

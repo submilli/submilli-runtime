@@ -386,7 +386,7 @@ function typescriptChecks() {
   const out = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "coverage-")), "checks.tsv");
   execFileSync("cargo", ["test", "--release", "-p", "conformance", "--test", "typescript"], {
     cwd: workspace,
-    env: { ...process.env, SUBMILLI_CONFORMANCE_TEST: "1", TYPESCRIPT_CHECKS_OUT: out },
+    env: { ...process.env, SUBMILLI_TEST_NIGHTLY_ONLY: "1", TYPESCRIPT_CHECKS_OUT: out },
     stdio: ["ignore", "ignore", "inherit"],
   });
   return fs.readFileSync(out, "utf8").split("\n").filter(Boolean).map((row) => {
