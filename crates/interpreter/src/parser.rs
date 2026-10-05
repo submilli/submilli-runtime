@@ -4934,18 +4934,17 @@ impl<'a> Parser<'a> {
             let expr = self.parse_expression()?;
             exprs.push(expr);
             let closing = self.peek().span.start;
+            let substitution_span = self.span(substitution_start, closing.saturating_add(1));
             match self.peek().kind.clone() {
                 TokenKind::TemplateMiddle(s) => {
                     let tok = self.advance();
-                    substitution_spans
-                        .push(self.span(substitution_start, closing.saturating_add(1)));
+                    substitution_spans.push(substitution_span);
                     substitution_start = tok.span.end.saturating_sub(2);
                     parts.push(s);
                 }
                 TokenKind::TemplateTail(s) => {
                     let tok = self.advance();
-                    substitution_spans
-                        .push(self.span(substitution_start, closing.saturating_add(1)));
+                    substitution_spans.push(substitution_span);
                     parts.push(s);
                     return parse_arena_result(
                         self.ast.try_push_expr(Expr {

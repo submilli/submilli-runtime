@@ -379,12 +379,13 @@ fn sole_array_like_member(hint: &Type) -> Option<&Type> {
 }
 
 /// The element type `...src` contributes to an array literal, or `None` when `src` is
-/// not spreadable. A tuple spreads as the union of its positions — it is an array at
-/// runtime and routes to `Array` for member dispatch (`Type::interface_routing`).
+/// not spreadable. A tuple spreads as the union of its positions, and a union of
+/// arrays and tuples as any member's element: both are arrays at runtime.
 fn spread_element_type(peeled_source: &Type) -> Option<Type> {
     match peeled_source {
         Type::Array(elem) => Some((**elem).clone()),
         Type::Tuple(elements) => Some(Type::union(elements.clone())),
+        Type::Union(_) => peeled_source.array_like_union_element(),
         _ => None,
     }
 }
@@ -1656,7 +1657,7 @@ impl Inferer<'_> {
     /// that must not change: a `readonly` array or tuple, any tuple, or a union of
     /// arrays and tuples. A union also refuses methods taking an element. Returns
     /// whether it reported, in which case the caller poisons the call.
-    fn reject_mutating_array_call(&mut self, recv_ty: &Type, name: &crate::Ident) -> bool {
+    fn reject_unsupported_array_call(&mut self, recv_ty: &Type, name: &crate::Ident) -> bool {
         if self.reject_array_like_union_call(recv_ty, name) {
             return true;
         }
@@ -1719,7 +1720,10 @@ impl Inferer<'_> {
             format!("cannot call `{}` on `{}`", name.name, recv_ty),
             vec![
                 format!("`{}`: {reason}", name.name),
-                "narrow to one member first, e.g. with `typeof` on an element".to_string(),
+                format!(
+                    "copy it first with `slice()`, which gives a `{view}` that can be changed \
+                     and searched"
+                ),
             ],
         );
         true
@@ -2001,7 +2005,7 @@ impl Inferer<'_> {
                     }
                 }
             }
-            if self.reject_mutating_array_call(&recv_ty, name) {
+            if self.reject_unsupported_array_call(&recv_ty, name) {
                 return Ok((TypedExprKind::Null, Type::Error));
             }
             if let Some((sig, interface_bindings, iface_mangled, _dispatch)) =
@@ -4492,7 +4496,7 @@ impl Inferer<'_> {
         &mut self,
         expr_id: ExprId,
         ty: &Type,
-        span: Span,
+        expr_span: Span,
         substitution_span: Span,
     ) -> Result<ExprId, crate::compiler_error::CompilerFailure> {
         let peeled = ty.primitive_behavior();
@@ -4501,9 +4505,10 @@ impl Inferer<'_> {
         }
         let method_name = crate::Ident {
             name: "toString".to_string(),
-            span,
+            span: expr_span,
         };
-        if !has_to_string(peeled) {
+        // A union of arrays answers `toString` as an array, through its joined view.
+        if !has_to_string(peeled) && !peeled.is_array_like_union() {
             let nullable = matches!(peeled, Type::Null)
                 || matches!(
                     peeled,
@@ -4512,7 +4517,7 @@ impl Inferer<'_> {
                 );
             if nullable {
                 let help = self.nullable_string_fix_help(
-                    span,
+                    expr_span,
                     super::diagnostics::NullableStringContext::Interpolation,
                 );
                 // "narrow first" is the standing advice here, so a reader who
@@ -4522,7 +4527,7 @@ impl Inferer<'_> {
                 // `toString`, or the outer allowlist would have rejected it too.
                 let culprit = self.nullable_culprit(&[(expr_id, ty)], |t| has_to_string(t.peel()));
                 self.error_with_narrowing_hint(
-                    span,
+                    expr_span,
                     format!(
                         "template-literal interpolation: receiver `{ty}` \
                          may be `null`; narrow to a non-null type first"
@@ -4532,7 +4537,7 @@ impl Inferer<'_> {
                 )?;
             } else {
                 self.error(
-                    span,
+                    expr_span,
                     format!(
                         "template-literal interpolation: `.toString()` \
                          not supported on `{ty}`"
@@ -4569,7 +4574,7 @@ impl Inferer<'_> {
                     .collect::<Vec<_>>()
                     .into_iter()
                     .map(|(default, param_ty)| {
-                        self.synthesize_default_arg(&default, &param_ty, span)
+                        self.synthesize_default_arg(&default, &param_ty, expr_span)
                     })
                     .collect::<Result<Vec<_>, CompilerFailure>>()
             })
@@ -5598,10 +5603,10 @@ impl Inferer<'_> {
                     if let Some(hint) = &source_hint {
                         self.drop_readonly_from_hint_mismatch(value, hint, &source_ty)?;
                     }
-                    // The spread source must be an array — or a tuple, which is one at
-                    // runtime and contributes the union of its positions. Reject other
-                    // shapes (primitive, object, unknown, union, function) with a typed
-                    // diagnostic. Aliases peel first.
+                    // The spread source must be an array, or a tuple or a union of
+                    // arrays and tuples, which are arrays at runtime. Reject other
+                    // shapes (primitive, object, unknown, other unions, function)
+                    // with a typed diagnostic. Aliases peel first.
                     let peeled_source = source_ty.peel().clone();
                     match spread_element_type(&peeled_source) {
                         // A `Type::Error` source was already reported by inner inference.
@@ -6422,17 +6427,17 @@ impl Inferer<'_> {
                     }
                 }
             }
-            // indexed read on Uint8Array returns the byte as
-            // an unsigned number 0..=255. Indexed write isn't a parse
-            // form at all (`arr[i] = v` is rejected by the parser as
-            // "invalid assignment target"), so no separate check
-            // needed here.
             // A union of arrays and tuples is one `$Array` at runtime, so a read
             // takes each member's element at the index and joins them. A tuple
             // member needs a literal index in its range, as a lone tuple does.
             Type::Union(members) if receiver_ty.is_array_like_union() => {
                 self.array_like_union_element(members, index, pattern_origin.as_ref())?
             }
+            // indexed read on Uint8Array returns the byte as
+            // an unsigned number 0..=255. Indexed write isn't a parse
+            // form at all (`arr[i] = v` is rejected by the parser as
+            // "invalid assignment target"), so no separate check
+            // needed here.
             Type::Uint8Array => Type::Number,
             Type::Error => Type::Error,
             // indexing into un-narrowed `unknown` is rejected.
@@ -6554,7 +6559,7 @@ impl Inferer<'_> {
         };
         let mut elements: Vec<Type> = Vec::with_capacity(members.len());
         let mut min_tuple_arity: Option<usize> = None;
-        let mut out_of_bounds = false;
+        let mut tuple_lacks_index = false;
         for member in members {
             match member.peel() {
                 Type::Array(element) => elements.push((**element).clone()),
@@ -6563,7 +6568,7 @@ impl Inferer<'_> {
                         Some(min_tuple_arity.map_or(positions.len(), |m| m.min(positions.len())));
                     match literal_idx.and_then(|idx| positions.get(idx)) {
                         Some(element) => elements.push(element.clone()),
-                        None => out_of_bounds = true,
+                        None => tuple_lacks_index = true,
                     }
                 }
                 _ => {
@@ -6583,9 +6588,20 @@ impl Inferer<'_> {
             );
             return Ok(Type::Error);
         };
-        if !out_of_bounds {
+        if !tuple_lacks_index {
             return Ok(Type::union(elements));
         }
+        self.report_union_tuple_index_out_of_bounds(idx, min_arity, index_span, pattern_origin);
+        Ok(Type::Error)
+    }
+
+    fn report_union_tuple_index_out_of_bounds(
+        &mut self,
+        idx: usize,
+        min_arity: usize,
+        index_span: Span,
+        pattern_origin: Option<&crate::PatternOrigin>,
+    ) {
         let plural = if min_arity == 1 { "" } else { "s" };
         if let Some(origin) = pattern_origin {
             let slot_plural = if origin.slot_arity == 1 { "" } else { "s" };
@@ -6604,7 +6620,6 @@ impl Inferer<'_> {
                 ),
             );
         }
-        Ok(Type::Error)
     }
 
     /// Infer data fields before method bodies so receiver types do not depend on
@@ -8301,7 +8316,7 @@ impl Inferer<'_> {
                 optional,
                 span,
             } => {
-                if self.reject_mutating_array_call(receiver_ty, &name) {
+                if self.reject_unsupported_array_call(receiver_ty, &name) {
                     *pending_method = None;
                     let typed_part = TypedChainPart::Field {
                         name,
@@ -8391,6 +8406,9 @@ impl Inferer<'_> {
                                 Type::Error
                             }
                         }
+                    }
+                    Type::Union(members) if receiver_ty.is_array_like_union() => {
+                        self.array_like_union_element(members, idx, None)?
                     }
                     Type::Error => Type::Error,
                     Type::Unknown => Type::Unknown,
@@ -9114,9 +9132,11 @@ impl Inferer<'_> {
         // array element type, as under an annotation. Other operands infer
         // unhinted: a hint is enforced (an object literal rejects fields the target
         // lacks), while a cast only needs one type assignable to the other.
-        let hints_empty_array =
-            gives_empty_array_element_type(&target_ty) && is_empty_array_literal(self.ast, inner)?;
-        let operand_hint = hints_empty_array.then_some(&target_ty);
+        let operand_hint = if is_empty_array_literal(self.ast, inner)? {
+            empty_array_cast_hint(&target_ty)
+        } else {
+            None
+        };
         let (inner_id, inner_ty) = self.infer_expr(inner, operand_hint)?;
         // Error escape — already in error state; produce a Cast so
         // downstream passes see a sensible node, but don't emit more
@@ -9991,18 +10011,16 @@ fn branch_result_type(left: Type, right: Type, types: super::assignable::TypeRes
     }
 }
 
-/// Whether an empty array literal hinted with `ty` takes an element type from it:
-/// the hint is an array, or a union of tuples and arrays that includes an array,
-/// which `infer_array_literal` matches member by member.
-fn gives_empty_array_element_type(ty: &Type) -> bool {
-    match array_literal_hint_shape(ty) {
-        Type::Array(_) => true,
-        Type::Union(members) => {
-            let array_like = || members.iter().map(Type::peel);
-            array_like().any(|m| matches!(m, Type::Array(_)))
-                && array_like().any(|m| matches!(m, Type::Tuple(_)))
-        }
-        _ => false,
+/// The hint an empty array literal cast to `ty` takes its element type from: `ty`
+/// itself when it is an array, or a union's first array member, which the empty
+/// literal then satisfies as it would any other.
+fn empty_array_cast_hint(ty: &Type) -> Option<&Type> {
+    match ty.peel() {
+        Type::Array(_) => Some(ty),
+        Type::Union(members) => members
+            .iter()
+            .find(|member| matches!(member.peel(), Type::Array(_))),
+        _ => None,
     }
 }
 

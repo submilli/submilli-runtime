@@ -52,6 +52,9 @@ function main(): void {
   const either = [] as [number, number] | string[];
   assert(Array.isArray(either), "array member of a tuple-or-array union");
 
+  const column = [] as number[] | string[];
+  assert(column.length === 0, "first array member of a union of arrays");
+
   assert(orEmpty([] as string[]).length === 0, "argument position");
   assert(orEmpty<number>(null).length === 0, "generic element type");
 }

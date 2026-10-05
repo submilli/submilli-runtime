@@ -56,6 +56,11 @@ function firstOfEither<T, U>(xs: T[] | U[]): T | U | null {
   return null;
 }
 
+function viaOtherReads(column: Column | null): string {
+  const label = column === null ? "none" : `${column}|${[...column].length}`;
+  return label + "|" + show(column?.[1] ?? null);
+}
+
 function joinPairs(pairs: [string, number][] | [string, string][]): string {
   let joined = "";
   for (const [k, v] of pairs) {
@@ -64,6 +69,7 @@ function joinPairs(pairs: [string, number][] | [string, string][]): string {
   return joined;
 }
 
+// A union of string literals still iterates as a string, not as an array.
 type Direction = "up" | "down";
 
 function letters(d: Direction): string {
@@ -98,4 +104,6 @@ function main(): void {
 
   const counts: [string, number][] = [["a", 1], ["b", 2]];
   assert(joinPairs(counts) === "a1b2", "union of tuple arrays");
+  assert(viaOtherReads(["a", "b"]) === "a,b|2|b", "spread, template, optional index");
+  assert(viaOtherReads(null) === "none|null", "null column");
 }

@@ -110,23 +110,8 @@ impl<'a> Inferer<'a> {
                 ..
             } => {
                 let mut sig = methods.get(name)?.clone();
-                // A union of arrays reads as an array of the joined element, which
-                // is sound only where elements flow out. An argument of the element
-                // type would have to suit every member at once (tsc intersects the
-                // members' parameters), so such a method isn't offered.
                 if array_view.is_some() {
-                    if sig
-                        .params
-                        .iter()
-                        .any(|param| generic_flows_in(&param.ty, generics))
-                    {
-                        return None;
-                    }
-                    // A callback's `array` argument is the receiver itself, so
-                    // it may only be read through the joined element type.
-                    for param in &mut sig.params {
-                        param.ty = readonly_callback_arrays(&param.ty, generics);
-                    }
+                    sig = restrict_to_reads(sig, generics)?;
                 }
                 let bindings: BTreeMap<String, Type> = generics.iter().cloned().zip(args).collect();
                 Some((sig, bindings, sym.mangled_name.clone(), *dispatch))
@@ -622,8 +607,25 @@ impl<'a> Inferer<'a> {
     }
 }
 
-/// Whether one of `generics` appears in `ty` other than as a parameter of a
-/// function type, where a callback receives it and so reads it.
+/// `sig` as a union of arrays offers it through its joined element type, which
+/// is sound only where elements flow out: `None` for a method taking an element,
+/// which would have to suit every member at once (tsc intersects the members'
+/// parameters). A callback's array argument is the receiver itself, so it
+/// becomes `readonly`.
+fn restrict_to_reads(mut sig: MethodSig, generics: &[String]) -> Option<MethodSig> {
+    if sig
+        .params
+        .iter()
+        .any(|param| generic_flows_in(&param.ty, generics))
+    {
+        return None;
+    }
+    for param in &mut sig.params {
+        param.ty = readonly_callback_arrays(&param.ty, generics);
+    }
+    Some(sig)
+}
+
 /// `ty` with each array of an interface generic that a function parameter takes
 /// made `readonly`, at any depth of callback.
 fn readonly_callback_arrays(ty: &Type, generics: &[String]) -> Type {
@@ -659,6 +661,8 @@ fn readonly_callback_arrays(ty: &Type, generics: &[String]) -> Type {
     }
 }
 
+/// Whether one of `generics` appears in `ty` other than as a parameter of a
+/// function type, where a callback receives it and so reads it.
 fn generic_flows_in(ty: &Type, generics: &[String]) -> bool {
     match ty {
         Type::TypeVar(name) => generics.contains(name),

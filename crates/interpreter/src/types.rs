@@ -492,11 +492,11 @@ impl Type {
         }
     }
 
-    /// A union of arrays and tuples read as one array, whose element is any
-    /// member's element. `None` for any other type. Only reads may go through this
-    /// view; writing a member's element through the joined type could store
+    /// The element of a union of arrays and tuples read as one array: any
+    /// member's element. `None` for any other type. Only reads may go through
+    /// it; writing a member's element through the joined type could store
     /// another member's element type.
-    pub fn array_like_union_view(&self) -> Option<Type> {
+    pub fn array_like_union_element(&self) -> Option<Type> {
         let Type::Union(members) = self.peel() else {
             return None;
         };
@@ -508,7 +508,14 @@ impl Type {
                 _ => None,
             })
             .collect::<Option<Vec<_>>>()?;
-        Some(Type::Array(Box::new(Type::union(elements))))
+        Some(Type::union(elements))
+    }
+
+    /// The array a union of arrays and tuples reads as: see
+    /// [`Self::array_like_union_element`].
+    pub fn array_like_union_view(&self) -> Option<Type> {
+        self.array_like_union_element()
+            .map(|element| Type::Array(Box::new(element)))
     }
 
     /// Whether this type is `void`, through any depth of alias.
