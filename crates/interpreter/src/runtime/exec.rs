@@ -940,7 +940,7 @@ mod tests {
     #[tokio::test]
     async fn double_eq_same_as_strict_eq() {
         let bytes = compile(
-            "function main(): boolean { return (1 === 1) && (1 == 1) && (1 !== 2) && (1 != 2); }",
+            "function main(): boolean { const two: number = 2; return (1 === 1) && (1 == 1) && (1 !== two) && (1 != two); }",
         );
         let result = RuntimeConfig::default().run(&bytes).await.expect("runs");
         assert_eq!(result.value.as_deref(), Some("true"));

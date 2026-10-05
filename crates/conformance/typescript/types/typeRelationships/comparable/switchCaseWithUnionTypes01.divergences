@@ -4,4 +4,4 @@ errors:
 line 11: ours: `case` label must be a literal (string, number, boolean, `null`, or enum member) (tsc accepts)
 line 15: ours: `case` label must be a literal (string, number, boolean, `null`, or enum member) (tsc accepts)
 line 16: ours: `case` label must be a literal (string, number, boolean, `null`, or enum member) (tsc accepts)
-line 20: ours: expected `number | string`, got `number | boolean` (tsc accepts)
+line 20: ours: `case` label must be a literal (string, number, boolean, `null`, or enum member) (tsc accepts)

@@ -4791,7 +4791,7 @@ function main(): number { return counter + max_iterations; }"#,
             1
         );
         assert_eq!(
-            run_main_i32("function main(): boolean { return 1 !== 2; }"),
+            run_main_i32("function main(): boolean { const two: number = 2; return 1 !== two; }"),
             1
         );
         assert_eq!(
@@ -4811,7 +4811,9 @@ function main(): number { return counter + max_iterations; }"#,
             1
         );
         assert_eq!(
-            run_main_i32("function main(): boolean { return true !== false; }"),
+            run_main_i32(
+                "function main(): boolean { const no: boolean = false; return true !== no; }"
+            ),
             1
         );
     }
@@ -4823,11 +4825,15 @@ function main(): number { return counter + max_iterations; }"#,
             1
         );
         assert_eq!(
-            run_main_i32(r#"function main(): boolean { return "ab" !== "ac"; }"#),
+            run_main_i32(
+                r#"function main(): boolean { const ac: string = "ac"; return "ab" !== ac; }"#
+            ),
             1
         );
         assert_eq!(
-            run_main_i32(r#"function main(): boolean { return "ab" === "ac"; }"#),
+            run_main_i32(
+                r#"function main(): boolean { const ac: string = "ac"; return "ab" === ac; }"#
+            ),
             0
         );
     }

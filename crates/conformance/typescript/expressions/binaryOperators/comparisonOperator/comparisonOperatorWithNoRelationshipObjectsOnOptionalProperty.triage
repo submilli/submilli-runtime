@@ -1,2 +1,1 @@
 line 14, 15, 18, 19, 22, 23, 26, 27 extra: by-design spec §1.6 `<`, `>`, `<=`, `>=` compare only two numbers or two strings
-line 30, 31, 34, 35, 38, 39, 42, 43 extra: bug SUB-1203 `===` requires one operand to be assignable to the other, where tsc accepts overlapping types

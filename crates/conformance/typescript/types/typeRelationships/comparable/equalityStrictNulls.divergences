@@ -1,5 +1,4 @@
 types: 60 of 67 tsc entries compared, 0 differ
 
 errors:
-line 73: ours: expected `string`, got `null` (tsc accepts)
-line 75: ours: expected `string`, got `null` (tsc accepts)
+line 75: ours: duplicate `case` label (tsc accepts)

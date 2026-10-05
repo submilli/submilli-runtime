@@ -50,5 +50,4 @@ line 14: ours: `case` label must be a literal (string, number, boolean, `null`, 
 line 17: ours: `case` label must be a literal (string, number, boolean, `null`, or enum member) (tsc accepts)
 line 27: ours: `case` label must be a literal (string, number, boolean, `null`, or enum member) (tsc accepts)
 line 30: ours: `case` label must be a literal (string, number, boolean, `null`, or enum member) (tsc accepts)
-line 61: ours: expected `0 | 1 | string | true`, got `null` (tsc accepts)
-line 64: ours: expected `0 | 1 | string | true`, got `null` (tsc accepts)
+line 64: ours: duplicate `case` label (tsc accepts)
