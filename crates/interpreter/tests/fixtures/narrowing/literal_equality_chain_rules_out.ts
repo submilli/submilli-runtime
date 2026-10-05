@@ -76,17 +76,17 @@ function byReferenceOnTheRight(a: "a", b: "b", x: "a" | "b"): number {
   return assertNever(x);
 }
 
-// A field's narrowed literal can go stale through an alias, so comparing with
-// it rules nothing out.
-function againstAliasedField(x: "a"): string {
-  const o = { y: "a" as "a" | "b" };
-  const alias = o;
-  o.y = "a";
-  alias.y = "b";
-  if (x === o.y) {
-    return "equal";
+// A guarded field narrows the local it is compared with, as in TypeScript.
+class Holder {
+  k: "a" | "b" = "a";
+}
+
+function againstGuardedField(holder: Holder, x: "a" | "b" | "c"): string {
+  if (holder.k === "a" && x === holder.k) {
+    const y: "a" = x;
+    return y;
   }
-  return "kept " + x;
+  return "other";
 }
 
 // Code after the chain still type-checks; a read of `x` there would trap.
@@ -124,6 +124,7 @@ function main(): void {
   console.log(letter("a"), letter("b"), digit(1), digit(2), flag(true), flag(false));
   console.log(letterOrNull(null), letterOrNull("a"), single("b"), primitive("s"), primitive(0));
   console.log(byReference("a", "a", "b"), byReference("b", "a", "b"), testedAfter("b"));
-  console.log(byReferenceOnTheRight("a", "b", "a"), byReferenceOnTheRight("a", "b", "b"), againstAliasedField("a"));
+  console.log(byReferenceOnTheRight("a", "b", "a"), byReferenceOnTheRight("a", "b", "b"));
+  console.log(againstGuardedField(new Holder(), "a"), againstGuardedField(new Holder(), "c"));
   console.log(localChain(), topResult);
 }
