@@ -132,6 +132,11 @@ impl TypeParamSubstitution {
         self.whole_union_fallbacks.get(name)
     }
 
+    /// Whether a whole union argument stands in for `name`.
+    pub fn has_whole_union_fallback(&self, name: &str) -> bool {
+        self.whole_union_fallbacks.contains_key(name)
+    }
+
     /// Bind each type parameter still unbound that a whole union argument
     /// stands in for, as tsc does with its lowest-priority inference.
     pub fn bind_whole_union_fallbacks(&mut self) {
@@ -895,7 +900,7 @@ impl<'a> Unifier<'a> {
     /// it unified `arg`, false when the caller should try each member in
     /// order. It unifies `arg` when either:
     /// - the type parameter has a fallback and another member takes `arg`
-    ///   (see [`Self::member_takes_beside_fallback`]); or
+    ///   (see [`Self::unify_with_member_beside_fallback`]); or
     /// - `arg` [`closely_matches`] another member without unifying with any,
     ///   as `Box<boolean>` does `Box<number>` in `T | Box<number>`. It is then
     ///   treated like a union argument whose members all closely matched:
@@ -908,7 +913,7 @@ impl<'a> Unifier<'a> {
         let Some((type_var, others)) = self.split_lone_unbound_type_var(params) else {
             return false;
         };
-        if self.member_takes_beside_fallback(type_var, &others, arg) {
+        if self.unify_with_member_beside_fallback(type_var, &others, arg) {
             return true;
         }
         let Some(sibling) = others.iter().find(|other| closely_matches(other, arg)) else {
@@ -922,11 +927,12 @@ impl<'a> Unifier<'a> {
         true
     }
 
-    /// Whether one of `others` takes `arg`, keeping its bindings, when
-    /// `type_var` has a whole-union fallback: tsc counts such an argument at
-    /// most as another candidate of the fallback's priority, so it must not
-    /// bind the type parameter ahead of the fallback.
-    fn member_takes_beside_fallback(
+    /// Unify `arg` with one of `others`, keeping its bindings, when
+    /// `type_var` has a whole-union fallback; returns whether one took it.
+    /// tsc counts such an argument at most as another candidate of the
+    /// fallback's priority, so it must not bind the type parameter ahead of
+    /// the fallback.
+    fn unify_with_member_beside_fallback(
         &mut self,
         type_var: &Type,
         others: &[&Type],
@@ -934,12 +940,14 @@ impl<'a> Unifier<'a> {
     ) -> bool {
         let has_fallback = matches!(
             type_var.peel(),
-            Type::TypeVar(name) if self.sub.whole_union_fallbacks.contains_key(name)
+            Type::TypeVar(name) if self.sub.has_whole_union_fallback(name)
         );
-        has_fallback
-            && others
-                .iter()
-                .any(|other| self.unifies_or_rolls_back(other, arg))
+        if !has_fallback {
+            return false;
+        }
+        others
+            .iter()
+            .any(|other| self.unifies_or_rolls_back(other, arg))
     }
 
     /// Record that `arg` closely matched `sibling`, a member of the union

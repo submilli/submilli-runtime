@@ -1414,7 +1414,7 @@ impl Inferer<'_> {
             && super::assignable(&arg_ty, &hint, self.resolver());
         if arguments.literal_types.widens(param_ty)
             && !fits_binding
-            && !self.fits_member_beside_fallback(sub, param_ty, &arg_ty)
+            && !self.fits_concrete_member_beside_fallback(sub, param_ty, &arg_ty)
         {
             let widened = self.widen_fresh_literals(typed_id, &arg_ty)?;
             return Ok((typed_id, widened));
@@ -1424,9 +1424,10 @@ impl Inferer<'_> {
 
     /// Whether `arg_ty` fits a member of the union `param_ty` that names no
     /// type parameter while a type parameter in it has a whole-union
-    /// fallback: `"x"` for `T | "x"` goes to that member, as tsc matches it
-    /// before widening, and must not bind the type parameter widened.
-    fn fits_member_beside_fallback(
+    /// fallback: `"x"` for `T | "x"` then goes to that member (see
+    /// `Unifier::unify_with_member_beside_fallback`), as tsc matches it before
+    /// widening, and must not bind the type parameter widened.
+    fn fits_concrete_member_beside_fallback(
         &self,
         sub: &TypeParamSubstitution,
         param_ty: &Type,
@@ -1437,12 +1438,14 @@ impl Inferer<'_> {
         };
         let has_fallback = top_level_type_params(param_ty)
             .iter()
-            .any(|name| sub.whole_union_fallback(name).is_some());
-        has_fallback
-            && members.iter().any(|member| {
-                !super::expr::mentions_type_var(member, &|_| true)
-                    && super::assignable(arg_ty, member, self.resolver())
-            })
+            .any(|name| sub.has_whole_union_fallback(name));
+        if !has_fallback {
+            return false;
+        }
+        members.iter().any(|member| {
+            let names_no_type_param = !super::expr::mentions_type_var(member, &|_| true);
+            names_no_type_param && super::assignable(arg_ty, member, self.resolver())
+        })
     }
 
     /// The hint for an object or array literal argument, with each data-only
