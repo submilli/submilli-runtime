@@ -168,7 +168,10 @@ fn format_method(
     if let Some(d) = &sig.doc {
         super::format_definition::write_doc_block(&mut out, "", d);
     }
-    write!(out, "{receiver_ty}.{name}").unwrap();
+    match receiver_ty {
+        Type::Union(_) => write!(out, "({receiver_ty}).{name}").unwrap(),
+        _ => write!(out, "{receiver_ty}.{name}").unwrap(),
+    }
     write_generic_list(&mut out, &sig.generics);
     out.push('(');
     for (i, p) in sig.params.iter().enumerate() {
@@ -387,6 +390,31 @@ mod tests {
             &sub,
         );
         assert_eq!(out, "number.toString(): string");
+    }
+
+    #[test]
+    fn method_on_union_receiver_parenthesizes_it() {
+        let sig = MethodSig {
+            generics: vec![],
+            params: vec![],
+            ret: Type::String,
+            predicate: None,
+            doc: None,
+        };
+        let receiver = Type::Union(vec![
+            Type::Array(Box::new(Type::Number)),
+            Type::Array(Box::new(Type::String)),
+        ]);
+        let sub = TypeParamSubstitution::new();
+        let out = format_signature(
+            SignatureKind::Method {
+                receiver_ty: &receiver,
+                name: "join",
+                sig: &sig,
+            },
+            &sub,
+        );
+        assert_eq!(out, "(number[] | string[]).join(): string");
     }
 
     #[test]

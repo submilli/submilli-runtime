@@ -31,4 +31,10 @@ function main(): void {
   const opts: { foo?: string; bar?: string } = { foo: "f" };
   const chosen = flag ? {} : opts;
   assert(show(chosen.foo ?? null) === "f", "{} joins an all-optional object as that object");
+
+  const tagged = [{ name: "a", tags: ["x"] }, { name: "b", tags: [] }];
+  assert(tagged.map((t) => t.name + String(t.tags.length)).join(",") === "a1,b0", "a field typed by the elements before it");
+
+  const json = JSON.stringify([{ a: 0 }, { a: 1, b: "x" }]);
+  assert(json === '[{"a":0},{"a":1,"b":"x"}]', "a missing field stays missing");
 }
