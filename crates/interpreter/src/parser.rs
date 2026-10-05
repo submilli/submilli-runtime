@@ -3538,7 +3538,7 @@ impl<'a> Parser<'a> {
         let open = self.advance();
         let mut fields: Vec<TypeAnnotationField> = Vec::new();
         let mut index = None;
-        while !matches!(self.peek().kind, TokenKind::RightBrace) {
+        while !matches!(self.peek().kind, TokenKind::RightBrace | TokenKind::Eof) {
             let member_start = self.peek().span.start;
             let readonly = self.eat_readonly_property_modifier();
             if self.peek_is_parameterless_index_signature() {
@@ -11204,6 +11204,38 @@ class Dog extends Animal {
             &single_stmt(&ast).kind,
             StmtKind::ClassDecl { .. }
         ));
+    }
+
+    #[test]
+    fn parameterless_index_signature_is_reported_from_its_member_start() {
+        for source in [
+            "interface P { readonly []: number }",
+            "let p: { readonly []: number } = {};",
+            "let q: { []: number } = {};",
+        ] {
+            let (_ast, diags) = parse_str(source);
+            let diag = diags
+                .iter()
+                .find(|d| d.message.contains("must declare exactly one parameter"))
+                .unwrap_or_else(|| panic!("no diagnostic for {source}"));
+            let start = diag.span.start as usize;
+            let reported = &source[start..diag.span.end as usize];
+            let expected = if source.contains("readonly") {
+                "readonly []"
+            } else {
+                "[]"
+            };
+            assert_eq!(reported, expected, "{source}");
+        }
+    }
+
+    #[test]
+    fn unterminated_object_type_expects_closing_brace() {
+        let (_ast, diags) = parse_str("let p: { a: number\n");
+        assert!(
+            diags.iter().any(|d| d.message == "expected `}`"),
+            "{diags:?}"
+        );
     }
 
     #[test]
