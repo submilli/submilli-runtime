@@ -39,60 +39,23 @@ pub fn execute(args: Args) -> anyhow::Result<ExitCode> {
         return Ok(ExitCode::from(1));
     }
 
-    if wait_until_stopped(|| agent.get(&format!("{base}/healthz")).call().map(|_| ()))? {
-        println!("stopped");
-        return Ok(ExitCode::SUCCESS);
-    }
-
-    eprintln!("error: server did not stop within {POLL_ATTEMPTS} attempts");
-    Ok(ExitCode::from(1))
-}
-
-fn wait_until_stopped(mut probe: impl FnMut() -> Result<(), ureq::Error>) -> anyhow::Result<bool> {
-    // Any health response means the listener is still up. A reset can race with
-    // listener shutdown, so retry until a fresh connection is refused.
+    // Poll until the listener stops accepting — then it's down. `/healthz`
+    // rather than `/v1/status`: any answer at all means "still up", and this
+    // one needs no token.
     for _ in 0..POLL_ATTEMPTS {
-        match probe() {
-            Ok(()) => {}
+        match agent.get(&format!("{base}/healthz")).call() {
+            Ok(_) => {}
             Err(ureq::Error::Io(error))
                 if error.kind() == std::io::ErrorKind::ConnectionRefused =>
             {
-                return Ok(true);
+                println!("stopped");
+                return Ok(ExitCode::SUCCESS);
             }
-            Err(ureq::Error::Io(error)) if error.kind() == std::io::ErrorKind::ConnectionReset => {}
             Err(error) => return Err(error.into()),
         }
         std::thread::sleep(POLL_INTERVAL);
     }
-    Ok(false)
-}
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use std::io::ErrorKind;
-
-    #[test]
-    fn a_reset_during_drain_requires_a_later_refused_connection() {
-        let mut responses = [
-            Err(ureq::Error::Io(ErrorKind::ConnectionReset.into())),
-            Ok(()),
-            Err(ureq::Error::Io(ErrorKind::ConnectionRefused.into())),
-        ]
-        .into_iter();
-        let stopped = wait_until_stopped(|| responses.next().expect("unexpected extra poll"))
-            .expect("shutdown polling");
-        assert!(stopped);
-        assert!(responses.next().is_none(), "reset must not report success");
-    }
-
-    #[test]
-    fn unrelated_poll_errors_are_reported() {
-        let error = wait_until_stopped(|| Err(ureq::Error::Io(ErrorKind::PermissionDenied.into())))
-            .expect_err("permission failure must not report a stopped server");
-        assert!(matches!(
-            error.downcast_ref::<ureq::Error>(),
-            Some(ureq::Error::Io(error)) if error.kind() == ErrorKind::PermissionDenied
-        ));
-    }
+    eprintln!("error: server did not stop within {POLL_ATTEMPTS} attempts");
+    Ok(ExitCode::from(1))
 }

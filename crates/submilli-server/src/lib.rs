@@ -17,7 +17,6 @@ pub mod logging;
 mod mcp;
 pub mod metrics;
 pub mod packages;
-mod request_tasks;
 pub mod runner;
 pub mod serve;
 pub mod session;

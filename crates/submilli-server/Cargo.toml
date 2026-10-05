@@ -44,10 +44,10 @@ ipnet = { workspace = true }
 rmcp = { workspace = true }
 tower = { workspace = true, features = ["util"] }
 futures = { workspace = true }
+getrandom = "0.4"
 ureq = { workspace = true }
-sqlx = { version = "0.9", default-features = false, features = ["sqlite", "runtime-tokio", "macros", "migrate"] }
+rusqlite = { version = "0.40", default-features = false, features = ["bundled"] }
 thiserror = "2"
-tokio-util = { version = "0.7", features = ["rt"] }
 
 rustls.workspace = true
 tokio-rustls.workspace = true
