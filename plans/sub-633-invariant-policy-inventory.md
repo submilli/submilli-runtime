@@ -884,7 +884,7 @@ locators; follow symbols after edits.
 | P02 | `submilli-blueprint/src/lib.rs:1302`, `to_yaml` | Accepted: closed YAML-supported serialization graph; proof below |
 | P03 | `submilli-build/src/scaffold.rs:428`, generated tsconfig JSON | Accepted: fixed JSON Value construction and in-memory serializer contract |
 | P04 | `submilli-build/src/scaffold.rs:466`, generated task JSON | Accepted: fixed JSON Value and in-memory writer; documented at macro call |
-| P05 | `submilli-build/src/scaffold.rs:530`, package path `to_str` | Prove first: filesystem paths can be non-UTF-8; prove construction from validated UTF-8 or handle the path error |
+| P05 | `submilli-build/src/scaffold.rs:530`, package path `to_str` | Accepted: both callers pass validated UTF-8 components; malformed paths already return an error |
 | P06 | `submilli/src/commands/blueprint/package_secrets.rs:46`, filter YAML | Accept candidate: FilterExpr serializes as a string; document YAML string serializer contract; recursive formatting bounds remain separate |
 | P07 | `submilli/src/commands/skill.rs:225`, Sync unreachable | Accept: preceding dispatch returns for Sync and does not mutate the command |
 | P08 | `submilli/src/commands/mcp/authenticate.rs:151`, client ID | Accept: if absent, successful registration assigns Some; failure returns before access |
@@ -919,6 +919,15 @@ expect inside the formatting macro. Allocation limits remain separate. No behavi
 change. Three independent reviews found no issues; formatting, workspace Clippy
 and diff checks passed; graph updated. Runtime tests not rerun.
 
+P05 execution: both `package_block` callers (`init_project`, `add_package`) pass
+`validated_package_path` output. That helper rejects non-UTF-8 paths with
+InvalidPackagePath before normalization. Normalization copies/removes components
+of that validated string, or returns the literal dot path; no filesystem operation
+mutates the owned PathBuf before use. The expect is therefore accepted without
+removing the real public-path error. Added the caller proof at the expect.
+Comment-only source change. Three independent reviews found no issues; formatting,
+workspace Clippy and diff checks passed; graph updated. Runtime tests not rerun.
+
 P01 lock groups (paths below `crates/`):
 
 | File | Count | Baseline locators |
@@ -944,8 +953,8 @@ reviews found no issues; diff checks passed.
 
 These groups support accepting poison access, not declaring the surrounding
 functions panic-free. No new input-triggered panic was reproduced by this review.
-P05 is a concrete contract question to resolve before classifying the remaining
-explicit set as accepted. P02's serializer proof is now recorded above.
+P02 and P05 now have their serialization and caller-validation proofs recorded
+above. The remaining candidates are tracked individually.
 
 ## Proposed SUB-633 tracking changes
 

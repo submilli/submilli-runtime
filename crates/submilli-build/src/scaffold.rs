@@ -531,6 +531,8 @@ fn test_stub(name: &str) -> String {
 }
 
 fn package_block(name: &str, package_path: &Path) -> String {
+    // Both callers pass validated_package_path output: non-UTF-8 input is
+    // rejected, and normalization only copies/removes those UTF-8 components.
     let path = package_path
         .to_str()
         .expect("validated package path is UTF-8")
