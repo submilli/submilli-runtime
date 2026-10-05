@@ -699,9 +699,12 @@ impl<'a> Unifier<'a> {
     /// [`closely_matches`] another member, as `Box<string>` does `Box<number>`,
     /// is not given to the type parameter, as tsc pairs them, but must fit
     /// some member once the type parameter is bound; a parameter member
-    /// identical to some argument member is not closely matched with others. When none is left over, the
-    /// whole argument becomes the type parameter's fallback. None when no
-    /// single member is such a type parameter, so the members pair up instead.
+    /// identical to some argument member is not closely matched with others.
+    /// When none is left over and the type parameter is still unbound, it
+    /// takes the closely matched members, so a later argument that binds it
+    /// otherwise must agree with them, or else the whole argument becomes its
+    /// fallback. None when no single member is such a type parameter, so the
+    /// members pair up instead.
     #[allow(clippy::result_large_err)]
     fn unify_union_into_lone_type_var(
         &mut self,
@@ -749,9 +752,17 @@ impl<'a> Unifier<'a> {
         }
         // Absorbing argument members into another member, as `Box<T>` does
         // `Box<number>`, may have bound the type parameter after all.
-        if let Type::TypeVar(name) = type_var.peel()
-            && self.is_unbound_type_var(type_var)
-        {
+        if !self.is_unbound_type_var(type_var) {
+            return Some(self.check_closely_matched(params, &closely_matched));
+        }
+        if !closely_matched.is_empty() {
+            let unmatched = closely_matched
+                .iter()
+                .map(|(_, arg)| (*arg).clone())
+                .collect();
+            return Some(self.unify(type_var, &Type::union(unmatched)));
+        }
+        if let Type::TypeVar(name) = type_var.peel() {
             self.sub
                 .whole_union_fallbacks
                 .entry(name.clone())

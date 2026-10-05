@@ -4,7 +4,8 @@
 // expect-error: expected `number`, got `string`
 // expect-error: expected `number`, got `string`
 // expect-error: expected `number`, got `string`
-// expect-error-count: 3
+// expect-error: type parameter `T` already bound to `number`, cannot bind to `string`
+// expect-error-count: 4
 class Box<A> {
   constructor(public v: A) {}
 }
@@ -37,8 +38,17 @@ function holderOrFlag(flag: boolean): Holder<string> | boolean {
   return flag ? { v: "q" } : false;
 }
 
+function unwrap<T>(x: T | Box<T>): number {
+  return 0;
+}
+
+function eitherBox(flag: boolean): Box<number> | Box<string> {
+  return flag ? new Box(1) : new Box("s");
+}
+
 function main(): void {
   fromBox(boxOrText(true));
+  unwrap(eitherBox(false));
   fromList(listOrFlag(true));
   fromHolder(holderOrFlag(true));
 }

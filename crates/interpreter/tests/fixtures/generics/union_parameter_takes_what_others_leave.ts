@@ -59,6 +59,10 @@ function inCallback<T>(value: T | string | number, use: (each: T) => number): nu
   return 0;
 }
 
+function inObject<T>(holder: { value: T | string | number; use: (each: T) => number }): number {
+  return 1;
+}
+
 function listOrNumbers<T>(value: T | number[]): T | null {
   return null;
 }
@@ -102,7 +106,9 @@ function main(): void {
   const inferredAgreeing = withLater(textOrCount(1), "x");
   const agreeing: string[] = inferredAgreeing;
   const viaCallback = inCallback(textOrCount(1), (each) => (typeof each === "string" ? 1 : 2));
+  const viaField = inObject({ value: textOrCount(1), use: (each) => (typeof each === "string" ? 1 : 2) });
   assert(fromBox.length === 0 && fromField && agreeing[0] === "x" && viaCallback === 0, "other arguments");
+  assert(viaField === 1, "a callback beside the union");
 
   const inferredList = listOrNumbers(lists(true));
   const fromList: string[] | null = inferredList;

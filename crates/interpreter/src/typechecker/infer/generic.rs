@@ -1136,7 +1136,9 @@ impl Inferer<'_> {
             .as_ref()
             .filter(|inference| inference.literal == literal)?;
         let field = inference.fields.get(name)?;
-        Some(inference.sub.apply_or_record(&field.ty, &self.type_limits))
+        let mut sub = inference.sub.clone();
+        sub.bind_whole_union_fallbacks();
+        Some(sub.apply_or_record(&field.ty, &self.type_limits))
     }
 
     /// Bind the type parameters field `name` of `literal` determines, for the
@@ -1790,11 +1792,12 @@ fn type_param_name(ty: &Type) -> Option<&str> {
     }
 }
 
-/// How many interfaces one literal argument's hint expands at most.
-/// Interfaces that name each other in their fields expand along every order
-/// of them, so without a bound the hint grows factorially, and checking a
-/// literal against a large structural hint takes time in proportion to its size; a
-/// literal's hint needs few levels in practice.
+/// How many interfaces one literal argument's hint expands at most, give or
+/// take those of the last union level. Interfaces that name each other in their fields
+/// expand along every order of them, so without a bound the hint grows
+/// factorially, and checking a literal against a large structural hint takes
+/// time in proportion to its size; a literal's hint needs few levels in
+/// practice.
 const MAX_HINT_INTERFACE_EXPANSIONS: usize = 64;
 
 /// How many unions deep one literal argument's hint expands at most.
@@ -1804,8 +1807,12 @@ const MAX_HINT_UNION_DEPTH: usize = 8;
 struct InterfaceExpansion {
     /// The interfaces being expanded, outermost first.
     expanding: Vec<crate::MangledName>,
-    /// How many more interfaces may expand.
+    /// How many more interfaces may expand under `max_union_depth` unions.
     remaining: usize,
+    /// How many more interfaces may expand under fewer unions.
+    remaining_shallower: usize,
+    /// How many interfaces have expanded.
+    expanded: usize,
     /// How many unions enclose the type being expanded.
     union_depth: usize,
     /// How many enclosing unions an interface may have and still expand.
@@ -1818,10 +1825,14 @@ struct InterfaceExpansion {
 }
 
 impl InterfaceExpansion {
-    fn new(max_union_depth: usize) -> Self {
+    /// A walk that expands up to `remaining` interfaces under
+    /// `max_union_depth` unions, after those under fewer.
+    fn new(max_union_depth: usize, remaining: usize) -> Self {
         Self {
             expanding: Vec::new(),
-            remaining: MAX_HINT_INTERFACE_EXPANSIONS,
+            remaining,
+            remaining_shallower: MAX_HINT_INTERFACE_EXPANSIONS,
+            expanded: 0,
             union_depth: 0,
             max_union_depth,
             starved: false,
@@ -1832,27 +1843,26 @@ impl InterfaceExpansion {
 
 /// `ty` expanded by [`expand_inferred_interfaces`] through as many levels of
 /// nested unions as the budget covers. Each pass goes one union deeper, and
-/// the deepest pass that stayed within the budget wins (the first pass's
-/// result stands even when it ran out), so the members of an outer union all
-/// expand before any member of a union inside them: a wide union of
-/// interfaces that name it again (`Lit<T> | Add<T> | …`) expands its own
-/// members rather than the first member's descendants.
+/// the interfaces at that depth share what the shallower ones, which the
+/// pass before expanded, left of the budget, until a pass runs out of it or
+/// reaches every interface. So the members of an outer union all expand
+/// before any member of a union inside them: a wide union of interfaces that
+/// name it again (`Lit<T> | Add<T> | …`) expands its own members rather than
+/// the first member's descendants.
 fn expand_hint_interfaces(
     ty: &Type,
     inferred_generics: &[String],
     types: super::assignable::TypeResolver,
 ) -> Type {
-    let mut expansion = InterfaceExpansion::new(1);
+    let mut expansion = InterfaceExpansion::new(1, MAX_HINT_INTERFACE_EXPANSIONS);
     let mut deepest = expand_inferred_interfaces(ty, inferred_generics, types, &mut expansion);
     for max_union_depth in 2..=MAX_HINT_UNION_DEPTH {
-        if expansion.starved || !expansion.cut_at_union_depth {
+        let remaining = MAX_HINT_INTERFACE_EXPANSIONS.saturating_sub(expansion.expanded);
+        if expansion.starved || !expansion.cut_at_union_depth || remaining == 0 {
             break;
         }
-        expansion = InterfaceExpansion::new(max_union_depth);
-        let expanded = expand_inferred_interfaces(ty, inferred_generics, types, &mut expansion);
-        if !expansion.starved {
-            deepest = expanded;
-        }
+        expansion = InterfaceExpansion::new(max_union_depth, remaining);
+        deepest = expand_inferred_interfaces(ty, inferred_generics, types, &mut expansion);
     }
     deepest
 }
@@ -1883,7 +1893,12 @@ fn expand_inferred_interfaces(
                 expansion.cut_at_union_depth = true;
                 return ty.clone();
             }
-            if expansion.remaining == 0 {
+            let budget = if expansion.union_depth < expansion.max_union_depth {
+                &mut expansion.remaining_shallower
+            } else {
+                &mut expansion.remaining
+            };
+            if *budget == 0 {
                 expansion.starved = true;
                 return ty.clone();
             }
@@ -1891,7 +1906,8 @@ fn expand_inferred_interfaces(
             else {
                 return ty.clone();
             };
-            expansion.remaining -= 1;
+            *budget -= 1;
+            expansion.expanded += 1;
             expansion.expanding.push(mangled.clone());
             let expanded = expand(&shape, expansion);
             expansion.expanding.pop();
