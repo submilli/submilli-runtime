@@ -3,6 +3,9 @@
 //! `CountingAllocator` measures every host allocation independently, including
 //! gix's on the blocking worker. Pack files gix memory-maps are file-backed and
 //! not counted; they're paged from disk, not held by the process.
+//!
+//! Set `SUBMILLI_TEST_NIGHTLY_ONLY=1` for nightly, release, or Git stdlib checks.
+//! `SUBMILLI_FULL_TEST` does not enable these measurements.
 
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::path::Path;
@@ -467,10 +470,14 @@ fn measure_operation(operation: &Operation, shape: Shape, cap: u64) -> Result<Me
 
 /// Prints each operation's peak native memory against repository size.
 /// Calibration for the per-operation estimates: run with
-/// `cargo test -p interpreter --test git_memory -- --ignored --nocapture`.
+/// `SUBMILLI_TEST_NIGHTLY_ONLY=1 cargo test -p interpreter --test git_memory -- --ignored --nocapture`.
 #[test]
 #[ignore = "calibration report; slow"]
 fn report_peak_memory_per_operation() {
+    if !nightly_only_requested() {
+        eprintln!("Git memory calibration: skipped; set SUBMILLI_TEST_NIGHTLY_ONLY=1 to run");
+        return;
+    }
     let _guard = TEST_LOCK
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -571,6 +578,10 @@ fn clone_and_work(files: &[(String, usize)]) -> Result<Measured, String> {
 /// stays within what it was charged.
 #[test]
 fn a_large_repository_works_end_to_end_under_the_default_limit() {
+    if !nightly_only_requested() {
+        eprintln!("Git repository memory: skipped; set SUBMILLI_TEST_NIGHTLY_ONLY=1 to run");
+        return;
+    }
     let _guard = TEST_LOCK
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -588,6 +599,10 @@ fn a_large_repository_works_end_to_end_under_the_default_limit() {
 /// refused with a message naming what to raise.
 #[test]
 fn a_file_larger_than_git_may_hold_is_refused_clearly() {
+    if !nightly_only_requested() {
+        eprintln!("Git file memory: skipped; set SUBMILLI_TEST_NIGHTLY_ONLY=1 to run");
+        return;
+    }
     let _guard = TEST_LOCK
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -597,4 +612,13 @@ fn a_file_larger_than_git_may_hold_is_refused_clearly() {
     let error = clone_and_work(&[("large".into(), 12_000_000)])
         .expect_err("a 12 MB file needs more than Git has under 50 MB");
     assert!(error.contains("raise max_execution_memory"), "{error}");
+}
+
+fn nightly_only_requested() -> bool {
+    std::env::var("SUBMILLI_TEST_NIGHTLY_ONLY").is_ok_and(|value| {
+        matches!(
+            value.to_ascii_lowercase().as_str(),
+            "1" | "true" | "yes" | "on"
+        )
+    })
 }

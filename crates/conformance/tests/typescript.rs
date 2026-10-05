@@ -14,7 +14,7 @@
 //! divergences differ from it, in either direction, so a fixed divergence and a
 //! new one both show up in review. `UPDATE_TYPESCRIPT_EXPECTED=1` rewrites it.
 //!
-//! Suite execution requires `SUBMILLI_CONFORMANCE_TEST=1`; filters and update
+//! Suite execution requires `SUBMILLI_TEST_NIGHTLY_ONLY=1`; filters and update
 //! settings alone do not opt in. `SUBMILLI_FULL_TEST` does not enable this suite.
 //!
 //! Each divergence is explained in the case's `<case>.triage`, or listed in
@@ -48,7 +48,7 @@ const UNEXPLAINED: &str = "unexplained.txt";
 #[test]
 fn typescript_baselines() {
     if !conformance_gate::requested() {
-        eprintln!("typescript: skipped; set SUBMILLI_CONFORMANCE_TEST=1 to run");
+        eprintln!("typescript: skipped; set SUBMILLI_TEST_NIGHTLY_ONLY=1 to run");
         return;
     }
     let root = Path::new(ROOT).join("typescript");
