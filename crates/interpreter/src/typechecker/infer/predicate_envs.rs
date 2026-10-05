@@ -280,7 +280,22 @@ impl<'a> Inferer<'a> {
         Ok(())
     }
 
-    fn predicate_envs_unfiltered(
+    pub(super) fn predicate_envs_unfiltered(
+        &mut self,
+        cond_expr_id: ExprId,
+    ) -> Result<(narrowing::NarrowEnv, narrowing::NarrowEnv), crate::compiler_error::CompilerFailure>
+    {
+        let (mut true_env, mut false_env) = self.direct_predicate_envs(cond_expr_id)?;
+        if let Some((alias_true, alias_false)) = self.aliased_condition_envs(cond_expr_id)? {
+            add_missing_views(&mut true_env, alias_true);
+            add_missing_views(&mut false_env, alias_false);
+        }
+        Ok((true_env, false_env))
+    }
+
+    /// What `cond_expr_id` narrows by its own form, before any `const` it
+    /// reads is seen through.
+    fn direct_predicate_envs(
         &mut self,
         cond_expr_id: ExprId,
     ) -> Result<(narrowing::NarrowEnv, narrowing::NarrowEnv), crate::compiler_error::CompilerFailure>
@@ -1760,4 +1775,13 @@ fn join_reachable_envs(
 fn is_unreachable_env(env: &narrowing::NarrowEnv) -> bool {
     env.values()
         .any(|view| matches!(view.narrowed_ty.peel(), Type::Never | Type::Error))
+}
+
+/// Adds the views of `extra` on paths `env` doesn't narrow.
+fn add_missing_views(env: &mut narrowing::NarrowEnv, extra: narrowing::NarrowEnv) {
+    for (path, view) in extra.into_iter() {
+        if !env.contains_key(&path) {
+            env.insert(path, view);
+        }
+    }
 }

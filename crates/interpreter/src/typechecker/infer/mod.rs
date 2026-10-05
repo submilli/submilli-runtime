@@ -1,5 +1,6 @@
 //! Inference pass — produces the Typed AST.
 
+mod aliased_conditions;
 mod assign_expr;
 pub(crate) mod assignable;
 mod binding_analysis;
@@ -120,6 +121,7 @@ pub fn infer_with_transitive_checked<'a>(
         pattern_sources: BTreeMap::new(),
         literal_freshness: literal_freshness::LiteralFreshness::default(),
         keeps_literal_types: false,
+        aliased_conditions: Default::default(),
         captured_mutators: bindings.mutators,
         last_assignments: bindings.last_assignments,
         nested_function_creation_points: bindings.nested_function_creation_points,
@@ -378,6 +380,7 @@ pub fn infer_package_checked<'a>(
         pattern_sources: BTreeMap::new(),
         literal_freshness: literal_freshness::LiteralFreshness::default(),
         keeps_literal_types: false,
+        aliased_conditions: Default::default(),
         captured_mutators: Default::default(),
         last_assignments: Default::default(),
         nested_function_creation_points: Default::default(),
@@ -680,6 +683,7 @@ pub(super) struct Inferer<'a> {
     /// for one: an unannotated `const`'s initializer. Read and cleared on
     /// entry, so it reaches only the operands that carry the value.
     keeps_literal_types: bool,
+    aliased_conditions: aliased_conditions::AliasedConditions,
     pub(super) source: &'a str,
     pub(super) package_name: &'a str,
     pub(super) ast: &'a Ast,
@@ -892,6 +896,7 @@ impl<'a> Inferer<'a> {
         self.clause_write_scopes.clear();
         self.tombstone_scopes.clear();
         self.last_write_spans.clear();
+        self.aliased_conditions = Default::default();
         self.suspended_narrow_scopes.clear();
         self.pending_post_if_materializations.clear();
         if !self.pending_implements.is_empty() {
