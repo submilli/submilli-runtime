@@ -1,4 +1,4 @@
-types: 93 of 142 tsc entries compared, 16 differ
+types: 93 of 142 tsc entries compared, 6 differ
 
 line 23: typeof x !== "string" // string | number | boolean && ((b = x) && (typeof x !== "number" // number | boolean && x))
   tsc:  boolean | 0
@@ -12,14 +12,6 @@ line 24: (b = x) && (typeof x !== "number" // number | boolean && x)
   tsc:  boolean | 0
   ours: number | boolean
 
-line 24: x
-  tsc:  number | true
-  ours: number | boolean
-
-line 25: x
-  tsc:  true
-  ours: boolean
-
 line 38: typeof x !== "string" && ((z = x) // number | boolean && (typeof x === "number" // change value of x ? ((x = 10) && x.toString()) // x is number // do not change value : ((y = x) && x.toString())))
   tsc:  string | false | 0
   ours: number | string | false
@@ -31,38 +23,6 @@ line 39: ((z = x) // number | boolean && (typeof x === "number" // change value 
 line 39: (z = x) // number | boolean && (typeof x === "number" // change value of x ? ((x = 10) && x.toString()) // x is number // do not change value : ((y = x) && x.toString()))
   tsc:  string | false | 0
   ours: number | string | false
-
-line 40: (typeof x === "number" // change value of x ? ((x = 10) && x.toString()) // x is number // do not change value : ((y = x) && x.toString()))
-  tsc:  string
-  ours: string | false
-
-line 40: typeof x === "number" // change value of x ? ((x = 10) && x.toString()) // x is number // do not change value : ((y = x) && x.toString())
-  tsc:  string
-  ours: string | false
-
-line 40: x
-  tsc:  number | true
-  ours: number | boolean
-
-line 44: ((y = x) && x.toString())
-  tsc:  string
-  ours: string | false
-
-line 44: (y = x) && x.toString()
-  tsc:  string
-  ours: string | false
-
-line 44: y = x
-  tsc:  true
-  ours: boolean
-
-line 44: x
-  tsc:  true
-  ours: boolean
-
-line 44: x
-  tsc:  true
-  ours: boolean
 
 errors:
 line 23: ours: expected `0 | boolean`, got `number | boolean` (tsc accepts)

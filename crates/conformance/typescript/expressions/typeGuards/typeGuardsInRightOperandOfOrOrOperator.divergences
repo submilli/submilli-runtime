@@ -1,4 +1,4 @@
-types: 93 of 141 tsc entries compared, 15 differ
+types: 90 of 141 tsc entries compared, 11 differ
 
 line 10: typeof x !== "string" || ((x = 10) || x)
   tsc:  true | 10
@@ -24,43 +24,26 @@ line 14: (x = "hello") || x
   tsc:  "hello"
   ours: string
 
-line 25: x
-  tsc:  number | false
-  ours: number | boolean
+line 39: typeof x === "string" || ((z = x) // number | boolean || (typeof x === "number" // change value of x ? ((x = 10) && x.toString()) // number | boolean | string // do not change value : ((y = x) && x.toString())))
+  tsc:  string | number | boolean
+  ours: <error>
 
-line 26: x
-  tsc:  false
-  ours: boolean
+line 40: ((z = x) // number | boolean || (typeof x === "number" // change value of x ? ((x = 10) && x.toString()) // number | boolean | string // do not change value : ((y = x) && x.toString())))
+  tsc:  string | number | boolean
+  ours: <error>
 
-line 41: x
-  tsc:  number | false
-  ours: number | boolean
+line 40: (z = x) // number | boolean || (typeof x === "number" // change value of x ? ((x = 10) && x.toString()) // number | boolean | string // do not change value : ((y = x) && x.toString()))
+  tsc:  string | number | boolean
+  ours: <error>
 
-line 45: ((y = x) && x.toString())
-  tsc:  false
-  ours: string | false
+line 41: (typeof x === "number" // change value of x ? ((x = 10) && x.toString()) // number | boolean | string // do not change value : ((y = x) && x.toString()))
+  tsc:  string | false
+  ours: <error>
 
-line 45: (y = x) && x.toString()
-  tsc:  false
-  ours: string | false
-
-line 45: y = x
-  tsc:  false
-  ours: boolean
-
-line 45: x
-  tsc:  false
-  ours: boolean
-
-line 45: x
-  tsc:  never
-  ours: boolean
-
-line 45: x.toString()
-  tsc:  any
-  ours: string
+line 41: typeof x === "number" // change value of x ? ((x = 10) && x.toString()) // number | boolean | string // do not change value : ((y = x) && x.toString())
+  tsc:  string | false
+  ours: <error>
 
 errors:
-line 45: tsc TS2339: Property 'toString' does not exist on type 'never'. (we accept)
 line 10: ours: expected `10 | true`, got `number` (tsc accepts)
 line 14: ours: expected `"hello" | true`, got `string` (tsc accepts)

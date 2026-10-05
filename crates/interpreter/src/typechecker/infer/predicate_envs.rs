@@ -1797,6 +1797,101 @@ impl<'a> Inferer<'a> {
         path_expr_id: ExprId,
     ) -> Result<(narrowing::NarrowEnv, narrowing::NarrowEnv), crate::compiler_error::CompilerFailure>
     {
+        let (mut true_env, mut false_env) = self.predicate_envs_truthiness_of_path(path_expr_id)?;
+        // `(z = x)` has the value of `x`, so testing it tests `x` too, unless
+        // the write replaced what `x` reads from.
+        let Some((target, value)) = self.assignment_target_and_value(path_expr_id)? else {
+            return Ok((true_env, false_env));
+        };
+        let value_expr = self
+            .typed_ast
+            .try_expr(value)
+            .map_err(crate::typechecker::arena_failure)?;
+        let Some(value_path) = self.expr_to_reference_path(value_expr)? else {
+            return Ok((true_env, false_env));
+        };
+        if target.is_prefix_of(&value_path) {
+            return Ok((true_env, false_env));
+        }
+        let (value_true, value_false) = self.predicate_envs_truthiness(value)?;
+        for (env, value_env) in [(&mut true_env, value_true), (&mut false_env, value_false)] {
+            for (path, view) in value_env {
+                env.entry(path).or_insert(view);
+            }
+        }
+        Ok((true_env, false_env))
+    }
+
+    /// The path an assignment expression writes and the value it writes.
+    fn assignment_target_and_value(
+        &self,
+        expr_id: ExprId,
+    ) -> Result<Option<(narrowing::ReferencePath, ExprId)>, crate::compiler_error::CompilerFailure>
+    {
+        let crate::TypedExprKind::Sequence { stmts, .. } = &self
+            .typed_ast
+            .try_expr(expr_id)
+            .map_err(crate::typechecker::arena_failure)?
+            .kind
+        else {
+            return Ok(None);
+        };
+        let Some(&last) = stmts.last() else {
+            return Ok(None);
+        };
+        let value = match &self
+            .typed_ast
+            .try_stmt(last)
+            .map_err(crate::typechecker::arena_failure)?
+            .kind
+        {
+            crate::TypedStmtKind::AssignLocal { value, .. }
+            | crate::TypedStmtKind::AssignGlobal { value, .. } => *value,
+            _ => return Ok(None),
+        };
+        let stmts = stmts.clone();
+        let Some(target) = self.sequence_binding_path(&stmts)? else {
+            return Ok(None);
+        };
+        Ok(Some((target, self.held_value(&stmts, value)?)))
+    }
+
+    /// The expression a sequence's temporary `value` holds, when `value`
+    /// reads one the sequence declares; otherwise `value` itself.
+    fn held_value(
+        &self,
+        stmts: &[crate::StmtId],
+        value: ExprId,
+    ) -> Result<ExprId, crate::compiler_error::CompilerFailure> {
+        let crate::TypedExprKind::LocalRef { ident, .. } = &self
+            .typed_ast
+            .try_expr(value)
+            .map_err(crate::typechecker::arena_failure)?
+            .kind
+        else {
+            return Ok(value);
+        };
+        for &stmt in stmts {
+            if let crate::TypedStmtKind::Const {
+                name, value: held, ..
+            } = &self
+                .typed_ast
+                .try_stmt(stmt)
+                .map_err(crate::typechecker::arena_failure)?
+                .kind
+                && name.name == ident.name
+            {
+                return Ok(*held);
+            }
+        }
+        Ok(value)
+    }
+
+    fn predicate_envs_truthiness_of_path(
+        &mut self,
+        path_expr_id: ExprId,
+    ) -> Result<(narrowing::NarrowEnv, narrowing::NarrowEnv), crate::compiler_error::CompilerFailure>
+    {
         let path_expr = self
             .typed_ast
             .try_expr(path_expr_id)
@@ -1833,7 +1928,6 @@ impl<'a> Inferer<'a> {
         let false_ty = narrowing::intersect_with(&from_ty, narrowing::TypeFacts::FALSY);
         // An outcome a local's type can't take makes it `never` there (an
         // `Error` view), when the type lists every value the local can hold.
-        // An assigned value's truthiness is SUB-1156's to follow.
         let assigns = matches!(fallback_kind, crate::TypedExprKind::Sequence { .. });
         let empty_is_never =
             narrowing::rules_out_to_never(&path) && narrowing::is_unit_union(&from_ty) && !assigns;
@@ -2274,10 +2368,7 @@ fn comparison_literal_union(
     let Type::Union(members) = expr.ty.peel() else {
         return Ok(None);
     };
-    Ok(members
-        .iter()
-        .map(narrowing::unit_literal_value)
-        .collect())
+    Ok(members.iter().map(narrowing::unit_literal_value).collect())
 }
 
 /// Joins the two ways a short-circuit condition can reach one outcome. A way

@@ -387,6 +387,14 @@ impl<'a> Inferer<'a> {
         &self,
         path: &narrowing::ReferencePath,
     ) -> Option<DiagnosticAddon> {
+        // Guards that ruled out every value hold here: no write or boundary
+        // dropped them, though a write elsewhere may have left a tombstone.
+        if self
+            .narrowed_read(path.clone())
+            .is_some_and(|(_, ty)| matches!(ty, Type::Never))
+        {
+            return None;
+        }
         if let Some(reason) = self.lookup_tombstone(path) {
             return Some(self.invalidation_reason_hint(path, &reason));
         }

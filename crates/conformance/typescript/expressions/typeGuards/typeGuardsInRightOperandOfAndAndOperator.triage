@@ -1,7 +1,2 @@
-line 23, 24 extra: by-design spec §1.6 `&&` keeps `number` whole in its falsy part, where tsc narrows to `0`
-line 38, 39 extra: bug SUB-1156 narrowing doesn't follow a value through the truthiness of an assignment; also bug SUB-1204 a literal widens to its base type where tsc keeps the literal type; also by-design spec §1.6 `&&` keeps `number` whole in its falsy part, where tsc narrows to `0`
-line 23 type: by-design spec §1.6 `&&` keeps `number` whole in its falsy part, where tsc narrows to `0`
-line 24 type: bug SUB-1156 narrowing doesn't follow a value through the truthiness of an assignment; also by-design spec §1.6 `&&` keeps `number` whole in its falsy part, where tsc narrows to `0`
-line 25, 44 type: bug SUB-1156 narrowing doesn't follow a value through the truthiness of an assignment
-line 38, 39 type: bug SUB-1156 narrowing doesn't follow a value through the truthiness of an assignment; also bug SUB-1204 a literal widens to its base type where tsc keeps the literal type; also by-design spec §1.6 `&&` keeps `number` whole in its falsy part, where tsc narrows to `0`
-line 40 type: bug SUB-1156 narrowing doesn't follow a value through the truthiness of an assignment; also bug SUB-1204 a literal widens to its base type where tsc keeps the literal type
+line 23, 24, 38, 39 extra: by-design spec §1.6 `&&` keeps `number` whole in its falsy part, where tsc narrows to `0`
+line 23, 24, 38, 39 type: by-design spec §1.6 `&&` keeps `number` whole in its falsy part, where tsc narrows to `0`
