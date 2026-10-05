@@ -888,7 +888,7 @@ locators; follow symbols after edits.
 | P06 | `submilli/src/commands/blueprint/package_secrets.rs:46`, filter YAML | Accepted: the input is a Rust str serialized as a YAML scalar; filter parse failure remains None |
 | P07 | `submilli/src/commands/skill.rs:225`, Sync unreachable | Accepted: preceding dispatch returns for Sync and does not mutate the command |
 | P08 | `submilli/src/commands/mcp/authenticate.rs:151`, client ID | Accepted: if absent, successful registration assigns Some; failure returns before access |
-| P09 | `submilli/src/commands/server/run_code.rs:135`, JSON Value serialization | Accept candidate under JSON Value serializer contract; prefer descriptive expect over bare unwrap; deep-value recursion is a separate resource question |
+| P09 | `submilli/src/commands/server/run_code.rs:135`, JSON Value serialization | Accepted: JSON Value serializer contract; descriptive expect and proof added; resource bounds remain separate |
 
 P02 execution: inspected every Blueprint field and custom serializer. VFS/mounts
 and SecretSource serialize maps; idle duration and FilterExpr serialize strings;
@@ -951,6 +951,15 @@ No mutation occurs between the branch and access. The existing expect names thes
 three sources. Keep it and all actual configuration/network errors; no new fallible
 layer is needed. Documentation-only, no tests rerun. Three independent reviews
 found no issues; diff checks passed.
+
+P09 execution: the response result is an owned serde_json::Value, whose variants
+and string object keys are supported by the in-memory JSON serializer. It contains
+no external Serialize implementation or fallible writer. Replaced the bare unwrap
+with a descriptive expect and documented the contract. Output and remote-response
+handling are unchanged. Recursive/large-value resource limits remain in 37–40;
+this acceptance does not establish those bounds. Three independent reviews found
+no issues. Formatting, workspace Clippy and diff checks passed; graph updated.
+No runtime tests rerun for this comment/message-only change.
 
 P01 lock groups (paths below `crates/`):
 
