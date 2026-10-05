@@ -354,7 +354,7 @@ impl Inferer<'_> {
                     .try_expr(*value_expr)
                     .map_err(super::arena_failure)?
                     .span;
-                let (typed_val, _) = self.infer_expr(*value_expr, None)?;
+                let (typed_val, val_ty) = self.infer_expr(*value_expr, None)?;
                 let val_kind = self
                     .typed_ast
                     .try_expr(typed_val)
