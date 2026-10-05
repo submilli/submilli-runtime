@@ -2,12 +2,12 @@
 
 use std::collections::BTreeMap;
 
-use crate::Type;
 use crate::type_size::{TypeBudget, TypeLimits, TypeTooLarge, map_children};
 use crate::typechecker::infer::assignable::{
     TypeResolver, assignable, expand_alias_ref, expand_interface_data_shape, rest_function_accepts,
 };
 use crate::typechecker::infer::type_aliases::rehydrate_alias_refs;
+use crate::{Span, Type};
 
 /// BTreeMap for deterministic ordering (stable snapshots and error messages).
 #[derive(Default, Clone, Debug, PartialEq, Eq)]
@@ -35,6 +35,8 @@ pub struct CloseMatch {
     pub param: Type,
     pub sibling: Type,
     pub arg: Type,
+    /// The call argument it came from, once the call has located it.
+    pub argument: Option<Span>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -104,6 +106,15 @@ impl TypeParamSubstitution {
             }
         }
         distinct
+    }
+
+    /// Locate the close matches recorded after the first `count` in the
+    /// call argument at `argument`, unless an earlier argument they belong
+    /// to was located already.
+    pub fn locate_close_matches_after(&mut self, count: usize, argument: Span) {
+        for close_match in self.close_matches.iter_mut().skip(count) {
+            close_match.argument.get_or_insert(argument);
+        }
     }
 
     /// How many close matches wait to be checked.
@@ -928,6 +939,7 @@ impl<'a> Unifier<'a> {
             param: Type::union(params.to_vec()),
             sibling: sibling.clone(),
             arg: arg.clone(),
+            argument: None,
         });
     }
 

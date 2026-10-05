@@ -1037,7 +1037,8 @@ impl Inferer<'_> {
 
     /// Report each union argument member that closely matched a parameter
     /// member while inference ran and fits no member of the parameter now
-    /// that it is done, against the member it closely matched.
+    /// that it is done, against the member it closely matched, at its
+    /// argument (or at the call at `span` when no argument was located).
     fn check_deferred_close_matches(&mut self, sub: &mut TypeParamSubstitution, span: Span) {
         for close_match in sub.take_close_matches() {
             if sub
@@ -1047,9 +1048,10 @@ impl Inferer<'_> {
             {
                 continue;
             }
+            let at = close_match.argument.unwrap_or(span);
             let (expected, got) = self.close_match_mismatch(sub, close_match);
             self.error_with_help(
-                span,
+                at,
                 format!("expected `{expected}`, got `{got}`"),
                 super::type_diff::type_mismatch_help(&expected, &got),
             );
@@ -1344,6 +1346,9 @@ impl Inferer<'_> {
                 // error elsewhere in the argument may hide a close-match one.
                 if already_reported || unified.is_err() {
                     sub.forget_close_matches_after(close_matches_before);
+                } else {
+                    let arg_span = self.argument_span(typed_id)?;
+                    sub.locate_close_matches_after(close_matches_before, arg_span);
                 }
                 if let Err(error) = unified {
                     self.unify_argument_error(
@@ -1461,11 +1466,7 @@ impl Inferer<'_> {
         already_reported: bool,
         signature_help: &impl Fn(&mut Self) -> String,
     ) -> Result<(), crate::compiler_error::CompilerFailure> {
-        let arg_span = self
-            .typed_ast
-            .try_expr(arg)
-            .map_err(crate::typechecker::arena_failure)?
-            .span;
+        let arg_span = self.argument_span(arg)?;
         let _: () = match error {
             UnifyError::Conflict { .. } if already_reported => {}
             UnifyError::Conflict { name, prev, new } => self.error(
@@ -1488,6 +1489,14 @@ impl Inferer<'_> {
             }
         };
         Ok(())
+    }
+
+    fn argument_span(&self, arg: ExprId) -> Result<Span, crate::compiler_error::CompilerFailure> {
+        Ok(self
+            .typed_ast
+            .try_expr(arg)
+            .map_err(crate::typechecker::arena_failure)?
+            .span)
     }
 
     #[allow(clippy::too_many_arguments)]
