@@ -1,6 +1,6 @@
-// An empty array typed `never[]` is a real value, so it can't sit in an
-// array of numbers just because it comes first.
-// expect-error: expected `number` (matching first element), got `never[]`
+// An empty array typed `never[]` is a real value, so an array literal can't
+// skip it the way it skips a dead `never` read: it fixes the element type.
+// expect-error: expected `never[]` (matching first element), got `number`
 const empty: never[] = [];
 const mixed = [empty, 1];
 

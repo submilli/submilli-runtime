@@ -378,15 +378,23 @@ fn sole_array_like_member(hint: &Type) -> Option<&Type> {
     }
 }
 
-/// Whether a type is `never` or an array of only `never` at any depth (`[x]`
-/// with `x` read in code no value reaches). Only bare `never` holds no value;
-/// a `never[]` is a real, empty array.
+/// Whether a type is an array of only `never` at any depth, the type of `[x]`
+/// with `x` read in code no value reaches. As an array literal's first
+/// element it gives way to a later element it fits in (`[[x], [1]]`).
 fn is_built_from_never(ty: &Type) -> bool {
     match ty.peel() {
         Type::Never => true,
         Type::Array(element) => is_built_from_never(element),
         _ => false,
     }
+}
+
+/// The element type seeded so far, as a hint for the next element, unless it
+/// is built from `never` and may still give way.
+fn unpinned_seed_hint(element_ty: &Option<Type>, hint_pins_element_ty: bool) -> Option<&Type> {
+    element_ty
+        .as_ref()
+        .filter(|ty| hint_pins_element_ty || !is_built_from_never(ty))
 }
 
 /// The element type `...src` contributes to an array literal, or `None` when `src` is
@@ -5534,10 +5542,7 @@ impl Inferer<'_> {
         } else {
             None
         };
-        let mut never_seed: Option<Type> = None;
-        // Arrays of `never`, checked once the elements that hold values have
-        // fixed the element type.
-        let mut never_arrays: Vec<(Span, Type, bool)> = Vec::new();
+        let mut saw_never = false;
         for el in elements {
             match el {
                 crate::ArrayLiteralElement::Value(elem_id) => {
@@ -5546,7 +5551,8 @@ impl Inferer<'_> {
                         .try_expr(elem_id)
                         .map_err(super::arena_failure)?
                         .span;
-                    let hint = element_ty.as_ref().or(expected_elem);
+                    let hint =
+                        unpinned_seed_hint(&element_ty, hint_pins_element_ty).or(expected_elem);
                     let ValueOperand {
                         typed_expr: typed_id,
                         ty: elem_ty,
@@ -5558,14 +5564,10 @@ impl Inferer<'_> {
                         typed_elements.push(crate::TypedArrayElement::Value(typed_id));
                         continue;
                     }
-                    // An element built from `never` (read in code no value reaches)
-                    // doesn't seed the element type, so `[[x], [1]]` is `number[][]`;
-                    // the first one is the fallback when every element is one.
-                    if is_built_from_never(&elem_ty) {
-                        never_seed.get_or_insert_with(|| elem_ty.clone());
-                        if !matches!(elem_ty.peel(), Type::Never) {
-                            never_arrays.push((elem_span, elem_ty, already_errored));
-                        }
+                    // A `never` element holds no value (it is read in code no value
+                    // reaches), so it neither seeds nor narrows the element type.
+                    if matches!(elem_ty.peel(), Type::Never) {
+                        saw_never = true;
                         typed_elements.push(crate::TypedArrayElement::Value(typed_id));
                         continue;
                     }
@@ -5579,6 +5581,13 @@ impl Inferer<'_> {
                             // `const a = 1; const xs = [a, 2];` is `number[]`, not
                             // `1[]`. An annotation that pins the element type takes
                             // the `hint_pins_element_ty` path above instead.
+                            element_ty = Some(elem_ty.widen_literal());
+                        }
+                        Some(running)
+                            if !hint_pins_element_ty
+                                && is_built_from_never(running)
+                                && assignable(running, &elem_ty, self.resolver()) =>
+                        {
                             element_ty = Some(elem_ty.widen_literal());
                         }
                         Some(running) => {
@@ -5600,8 +5609,7 @@ impl Inferer<'_> {
                     span: spread_span,
                 } => {
                     // A spread only reads its source, so a readonly one qualifies.
-                    let source_hint = element_ty
-                        .as_ref()
+                    let source_hint = unpinned_seed_hint(&element_ty, hint_pins_element_ty)
                         .map(|t| Type::Readonly(Box::new(Type::Array(Box::new(t.clone())))));
                     let errors_before = self.error_count();
                     let (typed_source, source_ty) = self.infer_expr(value, source_hint.as_ref())?;
@@ -5621,17 +5629,17 @@ impl Inferer<'_> {
                             spread_span,
                             format!("expected an array to spread, got `{peeled_source}`"),
                         ),
-                        Some(elem_t) if is_built_from_never(&elem_t) => {
-                            never_seed.get_or_insert_with(|| elem_t.clone());
-                            if !matches!(elem_t.peel(), Type::Never) {
-                                let value_span =
-                                    self.ast.try_expr(value).map_err(super::arena_failure)?.span;
-                                never_arrays.push((value_span, elem_t, already_errored));
-                            }
-                        }
+                        Some(elem_t) if matches!(elem_t.peel(), Type::Never) => saw_never = true,
                         Some(elem_t) => match &element_ty {
                             // Widens for the same reason as the value seed above.
                             None => element_ty = Some(elem_t.widen_literal()),
+                            Some(running)
+                                if !hint_pins_element_ty
+                                    && is_built_from_never(running)
+                                    && assignable(running, &elem_t, self.resolver()) =>
+                            {
+                                element_ty = Some(elem_t.widen_literal());
+                            }
                             Some(running) if !assignable(&elem_t, running, self.resolver()) => {
                                 if !hint_pins_element_ty {
                                     self.report_contextual_mismatch(
@@ -5660,26 +5668,16 @@ impl Inferer<'_> {
             }
         }
 
-        if let Some(running) = &element_ty {
-            for (span, never_array, already_errored) in never_arrays {
-                if !assignable(&never_array, running, self.resolver()) {
-                    self.report_array_element_mismatch(
-                        span,
-                        running,
-                        &never_array,
-                        hint_pins_element_ty,
-                        already_errored,
-                    );
-                }
-            }
-        }
-        // If every element failed to determine an element type (e.g.
-        // every spread had an invalid source), fall back to the hint, to the
-        // first element when all are built from `never` (`[x]` with `x: never`
-        // is `never[]`, as in TypeScript), or `Type::Error` rather than panicking.
+        // If no element fixed an element type, take a pinning hint; else
+        // `never` when the elements were all `never` (`[x]` and `[...e]` with
+        // `e: never[]` are `never[]`, as in TypeScript, and a generic hint
+        // then infers from it); else the hint, or `Type::Error` (every spread
+        // had an invalid source) rather than panicking.
         let element_ty = element_ty.unwrap_or_else(|| match expected_elem {
+            Some(t) if hint_pins_element_ty => t.clone(),
+            _ if saw_never => Type::Never,
             Some(t) => t.clone(),
-            None => never_seed.unwrap_or(Type::Error),
+            None => Type::Error,
         });
         // The seed widened every literal type to check the elements against;
         // the regular ones stay, as in TypeScript: `[h]` with `h: "hello"` is
