@@ -190,7 +190,9 @@ impl IdempotencyStore for InMemoryIdempotencyStore {
 
 impl InMemoryIdempotencyStore {
     fn lock(&self) -> std::sync::MutexGuard<'_, LedgerMap> {
-        // Poisoned state is unsupported; see AGENTS.md accepted poisoned-lock panics.
+        // Poison may leave reservation or completion records partly updated.
+        // AGENTS.md permits poisoned-lock panics rather than recovering reservation
+        // state; it does not permit the panic that caused poisoning.
         self.inner.lock().expect("store lock poisoned")
     }
 }
@@ -212,6 +214,10 @@ pub struct FileIdempotencyStore {
     /// caches nothing on failure, so a write that fails mid-sync leaves the
     /// next one to redo it rather than inheriting a durability claim that was
     /// never earned.
+    // Poison may leave directory initialization cells partly registered or removed.
+    // Reusing that map could skip the fsync required for a recreated directory.
+    // AGENTS.md permits poisoned-lock panics instead of recovery; the panic that
+    // caused poisoning is still subject to the no-panic policy.
     session_dirs: Mutex<HashMap<String, Arc<OnceCell<()>>>>,
 }
 

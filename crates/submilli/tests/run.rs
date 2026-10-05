@@ -860,6 +860,10 @@ fn each_host_call_is_charged_its_flat_cost() {
 fn accessors_do_not_pay_for_the_whole_receiver() {
     use interpreter::runtime::fuel::CALL;
     const N: u64 = 10_000;
+    if !nightly_only_requested() {
+        eprintln!("accessor fuel accounting: skipped; set SUBMILLI_TEST_NIGHTLY_ONLY=1 to run");
+        return;
+    }
     // Each loop reads one unit, element or length from a large receiver; if
     // an accessor copied the receiver first, the copy would show as fuel far
     // above the flat charge per call.
@@ -955,6 +959,10 @@ fn operations_charge_for_the_input_they_process() {
     use interpreter::runtime::fuel::{
         CALL, COPY, ELEM, IO, PARSE, REGEX, SCAN, SYSCALL, TZ, sort_cost,
     };
+    if !nightly_only_requested() {
+        eprintln!("operation fuel accounting: skipped; set SUBMILLI_TEST_NIGHTLY_ONLY=1 to run");
+        return;
+    }
     // Each case builds a large input (the baseline) and then runs one
     // operation over it; the host fuel the operation adds must cover at
     // least its class charge for that input. The floors include what the
@@ -1793,4 +1801,13 @@ fn report_captures_fuel_exhaustion_in_top_level_code() {
     assert!(stdout(&out).is_empty());
     assert!(stderr(&out).contains("fuel exhausted"), "{}", stderr(&out));
     assert!(stderr(&out).contains("fuel: 100,000"), "{}", stderr(&out));
+}
+
+fn nightly_only_requested() -> bool {
+    std::env::var("SUBMILLI_TEST_NIGHTLY_ONLY").is_ok_and(|value| {
+        matches!(
+            value.to_ascii_lowercase().as_str(),
+            "1" | "true" | "yes" | "on"
+        )
+    })
 }

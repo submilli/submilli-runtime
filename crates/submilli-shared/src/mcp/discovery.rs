@@ -28,10 +28,64 @@ use tracing::warn;
 
 use crate::mcp::ToolWarning;
 use crate::mcp::catalog::{ToolCatalogEntry, build_mcp_definitions, package_name};
-use crate::mcp::schema_registry;
+use crate::mcp::schema_registry::{self, SchemaPackError};
 use crate::mcp_auth::{AuthState, blueprint_auth_state};
 use crate::mcp_token::OAuthTokenManager;
 use crate::secret_store::SecretStore;
+use interpreter::runtime::McpCallError;
+
+/// Local initialization or invariant failures; remote failures remain warnings.
+#[derive(Debug)]
+pub enum DiscoveryError {
+    SchemaPack(SchemaPackError),
+    ClientBuild(reqwest::Error),
+    Internal { message: &'static str },
+}
+
+impl std::fmt::Display for DiscoveryError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("MCP discovery initialization failed")
+    }
+}
+
+impl std::error::Error for DiscoveryError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::SchemaPack(error) => Some(error),
+            Self::ClientBuild(error) => Some(error),
+            Self::Internal { .. } => None,
+        }
+    }
+}
+
+impl From<SchemaPackError> for DiscoveryError {
+    fn from(error: SchemaPackError) -> Self {
+        Self::SchemaPack(error)
+    }
+}
+
+#[derive(Debug)]
+enum DiscoveryAttemptError {
+    Unavailable(anyhow::Error),
+    Fatal(DiscoveryError),
+}
+
+impl From<anyhow::Error> for DiscoveryAttemptError {
+    fn from(error: anyhow::Error) -> Self {
+        Self::Unavailable(error)
+    }
+}
+
+fn response_failure(error: McpCallError) -> DiscoveryAttemptError {
+    match error {
+        McpCallError::Internal { message } => {
+            DiscoveryAttemptError::Fatal(DiscoveryError::Internal { message })
+        }
+        error => DiscoveryAttemptError::Unavailable(anyhow::anyhow!(
+            "MCP discovery response failed: {error:?}"
+        )),
+    }
+}
 
 /// The auth inputs discovery needs, decoupled from any server state: the secret
 /// store (for `blueprint_auth_state` and static-`headers:` `${secrets.X}`) and
@@ -161,13 +215,14 @@ pub async fn discover_all(
     auth: DiscoveryAuth<'_>,
     blueprint_name: &str,
     blueprint: &Blueprint,
-) -> McpCatalog {
+) -> Result<McpCatalog, DiscoveryError> {
     discover_matching(
         auth,
         blueprint_name,
         blueprint,
         None,
         DiscoveryOrigin::Server,
+        &super::transport::policy_http_client,
     )
     .await
 }
@@ -177,13 +232,14 @@ pub async fn discover_all_local(
     auth: DiscoveryAuth<'_>,
     blueprint_name: &str,
     blueprint: &Blueprint,
-) -> McpCatalog {
+) -> Result<McpCatalog, DiscoveryError> {
     discover_matching(
         auth,
         blueprint_name,
         blueprint,
         None,
         DiscoveryOrigin::Local,
+        &super::transport::policy_http_client,
     )
     .await
 }
@@ -193,13 +249,14 @@ pub async fn discover_selected(
     blueprint_name: &str,
     blueprint: &Blueprint,
     servers: &BTreeSet<String>,
-) -> McpCatalog {
+) -> Result<McpCatalog, DiscoveryError> {
     discover_matching(
         auth,
         blueprint_name,
         blueprint,
         Some(servers),
         DiscoveryOrigin::Server,
+        &super::transport::policy_http_client,
     )
     .await
 }
@@ -210,13 +267,14 @@ pub async fn discover_selected_local(
     blueprint_name: &str,
     blueprint: &Blueprint,
     servers: &BTreeSet<String>,
-) -> McpCatalog {
+) -> Result<McpCatalog, DiscoveryError> {
     discover_matching(
         auth,
         blueprint_name,
         blueprint,
         Some(servers),
         DiscoveryOrigin::Local,
+        &super::transport::policy_http_client,
     )
     .await
 }
@@ -232,7 +290,9 @@ async fn discover_matching(
     blueprint: &Blueprint,
     servers: Option<&BTreeSet<String>>,
     origin: DiscoveryOrigin,
-) -> McpCatalog {
+    client_factory: &super::transport::PolicyClientFactory,
+) -> Result<McpCatalog, DiscoveryError> {
+    schema_registry::initialize_builtin_packs()?;
     let unauthenticated: HashSet<String> =
         match blueprint_auth_state(blueprint, auth.secret_store).await {
             AuthState::Pending { unauthenticated } => unauthenticated.into_iter().collect(),
@@ -263,15 +323,27 @@ async fn discover_matching(
             unavailable.push(ToolWarning::server_unavailable(server_name, reason));
             continue;
         }
-        match discover_server(auth, blueprint_name, blueprint, server_name, server).await {
+        match discover_server(
+            auth,
+            blueprint_name,
+            blueprint,
+            server_name,
+            server,
+            client_factory,
+        )
+        .await
+        {
             Ok(pkg) => packages.push(pkg),
-            Err(reason) => unavailable.push(ToolWarning::server_unavailable(server_name, &reason)),
+            Err(DiscoveryAttemptError::Unavailable(reason)) => unavailable.push(
+                ToolWarning::server_unavailable(server_name, &format!("{reason:#}")),
+            ),
+            Err(DiscoveryAttemptError::Fatal(error)) => return Err(error),
         }
     }
-    McpCatalog {
+    Ok(McpCatalog {
         packages,
         unavailable,
-    }
+    })
 }
 
 #[derive(Default)]
@@ -282,7 +354,7 @@ struct DiscoveryConnection {
 }
 
 impl DiscoveryConnection {
-    async fn close(&mut self) {
+    async fn close(&mut self) -> Option<McpCallError> {
         use rmcp::transport::Transport;
         if let Some(client) = self.client.take() {
             let _ = client.cancel().await;
@@ -294,7 +366,9 @@ impl DiscoveryConnection {
         }
         if let Some(budget) = self.budget.take() {
             budget.wait_idle().await;
+            return budget.error();
         }
+        None
     }
 }
 
@@ -305,7 +379,8 @@ async fn discover_server(
     blueprint: &Blueprint,
     server_name: &str,
     server: &McpServer,
-) -> Result<McpPackage, String> {
+    client_factory: &super::transport::PolicyClientFactory,
+) -> Result<McpPackage, DiscoveryAttemptError> {
     let mut connection = DiscoveryConnection::default();
     let fetch = fetch_tools(
         auth,
@@ -314,14 +389,18 @@ async fn discover_server(
         server_name,
         server,
         &mut connection,
+        client_factory,
     );
     let result = tokio::time::timeout(DISCOVERY_TIMEOUT, fetch).await;
-    connection.close().await;
+    if let Some(error) = connection.close().await {
+        return Err(response_failure(error));
+    }
     match result {
         Ok(Ok(tools)) => {
             // A built-in schema pack (matched by endpoint host) fills typed returns for
             // tools whose server publishes no representable `outputSchema`.
-            let pack = schema_registry::pack_for_url(&server.url);
+            let pack = schema_registry::pack_for_url(&server.url)
+                .map_err(|error| DiscoveryAttemptError::Fatal(error.into()))?;
             if let Some(pack) = pack {
                 tracing::info!(
                     server = server_name,
@@ -339,25 +418,27 @@ async fn discover_server(
                 warnings,
             })
         }
-        Ok(Err(err)) => {
+        Ok(Err(DiscoveryAttemptError::Fatal(error))) => Err(DiscoveryAttemptError::Fatal(error)),
+        Ok(Err(DiscoveryAttemptError::Unavailable(err))) => {
             warn!(server = server_name, %err, "MCP discovery failed; @mcp/{server_name} omitted");
-            Err(format!("{err:#}"))
+            Err(DiscoveryAttemptError::Unavailable(err))
         }
         Err(_) => {
             warn!(
                 server = server_name,
                 "MCP discovery timed out; @mcp/{server_name} omitted"
             );
-            Err(format!(
+            Err(anyhow::anyhow!(
                 "discovery timed out after {} seconds",
                 DISCOVERY_TIMEOUT.as_secs()
-            ))
+            )
+            .into())
         }
     }
 }
 
 /// Connect to one server and return its tool catalog. `anyhow` here is server
-/// glue — the error becomes a discovery warning.
+/// glue — ordinary remote errors become warnings, while local failures stay fatal.
 async fn fetch_tools(
     auth: DiscoveryAuth<'_>,
     blueprint_name: &str,
@@ -365,7 +446,8 @@ async fn fetch_tools(
     server_name: &str,
     server: &McpServer,
     connection: &mut DiscoveryConnection,
-) -> anyhow::Result<Vec<ToolCatalogEntry>> {
+    client_factory: &super::transport::PolicyClientFactory,
+) -> Result<Vec<ToolCatalogEntry>, DiscoveryAttemptError> {
     let (auth_header, custom_headers) =
         resolve_auth(auth, blueprint_name, blueprint, server_name, server).await?;
 
@@ -392,7 +474,8 @@ async fn fetch_tools(
         .await
         .map_err(anyhow::Error::msg)?;
     let http = super::bounded_client::BoundedClient::new(
-        crate::mcp::transport::policy_http_client(auth.network_policy)?,
+        client_factory(auth.network_policy)
+            .map_err(|error| DiscoveryAttemptError::Fatal(DiscoveryError::ClientBuild(error)))?,
     )
     .with_timeout(DISCOVERY_TIMEOUT);
     let budget = http.budget.clone();
@@ -404,12 +487,12 @@ async fn fetch_tools(
     let client = tokio::select! {
         result = ClientInfo::default().serve(transport) => {
             if let Some(error) = budget.error() {
-                return Err(anyhow::anyhow!("MCP discovery response failed: {error:?}"));
+                return Err(response_failure(error));
             }
-            result?
+            result.map_err(anyhow::Error::from)?
         }
         error = budget.wait() => {
-            return Err(anyhow::anyhow!("MCP discovery response failed: {error:?}"));
+            return Err(response_failure(error));
         }
     };
     connection.pending = None;
@@ -417,15 +500,17 @@ async fn fetch_tools(
     let client = connection
         .client
         .as_ref()
-        .ok_or_else(|| anyhow::anyhow!("MCP discovery client is missing"))?;
+        .ok_or(DiscoveryAttemptError::Fatal(DiscoveryError::Internal {
+            message: "MCP discovery client is missing",
+        }))?;
     let tools = tokio::select! {
         result = client.list_all_tools() => {
             match budget.error() {
-                Some(error) => Err(anyhow::anyhow!("MCP discovery response failed: {error:?}")),
-                None => result.map_err(anyhow::Error::from),
+                Some(error) => Err(response_failure(error)),
+                None => result.map_err(|error| DiscoveryAttemptError::Unavailable(error.into())),
             }
         }
-        error = budget.wait() => Err(anyhow::anyhow!("MCP discovery response failed: {error:?}")),
+        error = budget.wait() => Err(response_failure(error)),
     };
     let tools = tools?;
 
@@ -492,6 +577,188 @@ async fn resolve_auth(
 
 #[cfg(test)]
 mod tests {
+    fn broken_client(_: &Arc<NetworkPolicy>) -> Result<reqwest::Client, reqwest::Error> {
+        reqwest::Client::builder()
+            .user_agent("invalid\nheader")
+            .build()
+    }
+
+    #[tokio::test]
+    async fn client_initialization_failure_is_fatal_and_retains_the_source() {
+        use std::error::Error;
+        let bp =
+            submilli_blueprint::parse("name: x\nmcp:\n  local:\n    url: http://127.0.0.1:1/mcp\n")
+                .unwrap();
+        let policy = Arc::new(NetworkPolicy::allow_all());
+        let error = discover_matching(
+            DiscoveryAuth {
+                secret_store: None,
+                oauth: None,
+                harness_secrets: None,
+                network_policy: &policy,
+            },
+            "x",
+            &bp,
+            None,
+            DiscoveryOrigin::Local,
+            &broken_client,
+        )
+        .await
+        .err()
+        .unwrap();
+        assert!(matches!(error, DiscoveryError::ClientBuild(_)));
+        assert!(error.source().is_some());
+        assert_eq!(error.to_string(), "MCP discovery initialization failed");
+        let empty = submilli_blueprint::Blueprint::default();
+        assert!(
+            discover_all(
+                DiscoveryAuth {
+                    secret_store: None,
+                    oauth: None,
+                    harness_secrets: None,
+                    network_policy: &policy
+                },
+                "x",
+                &empty
+            )
+            .await
+            .is_ok()
+        );
+    }
+
+    #[cfg_attr(skip_http_tests, ignore = "HTTP tests disabled")]
+    #[tokio::test]
+    async fn fatal_failure_discards_previously_discovered_packages_and_allows_recovery() {
+        use httpmock::MockServer;
+        use serde_json::json;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let server = MockServer::start_async().await;
+        server
+            .mock_async(|when, then| {
+                when.method("POST")
+                    .json_body_partial(json!({"method": "initialize"}).to_string());
+                then.status(200)
+                    .header("content-type", "application/json")
+                    .json_body(json!({
+                        "jsonrpc": "2.0", "id": 0, "result": {
+                            "protocolVersion": "2025-06-18", "capabilities": {"tools": {}},
+                            "serverInfo": {"name": "test", "version": "1"}
+                        }
+                    }));
+            })
+            .await;
+        server
+            .mock_async(|when, then| {
+                when.method("POST")
+                    .json_body_partial(json!({"method": "notifications/initialized"}).to_string());
+                then.status(202);
+            })
+            .await;
+        let listed = server
+            .mock_async(|when, then| {
+                when.method("POST")
+                    .json_body_partial(json!({"method": "tools/list"}).to_string());
+                then.status(200)
+                    .header("content-type", "application/json")
+                    .json_body(json!({
+                        "jsonrpc": "2.0", "id": 1, "result": {"tools": [{
+                            "name": "raw", "inputSchema": {"type": "object", "properties": {}}
+                        }]}
+                    }));
+            })
+            .await;
+        let bp = submilli_blueprint::parse(&format!(
+            "name: x\nmcp:\n  a_good:\n    url: {}\n  b_broken:\n    url: {}\n",
+            server.url("/mcp"),
+            server.url("/mcp")
+        ))
+        .unwrap();
+        let policy = Arc::new(NetworkPolicy::allow_all());
+        let auth = DiscoveryAuth {
+            secret_store: None,
+            oauth: None,
+            harness_secrets: None,
+            network_policy: &policy,
+        };
+        let attempts = AtomicUsize::new(0);
+        let factory = move |policy: &Arc<NetworkPolicy>| {
+            if attempts.fetch_add(1, Ordering::SeqCst) == 0 {
+                super::super::transport::policy_http_client(policy)
+            } else {
+                broken_client(policy)
+            }
+        };
+        let result =
+            discover_matching(auth, "x", &bp, None, DiscoveryOrigin::Local, &factory).await;
+        assert!(matches!(result, Err(DiscoveryError::ClientBuild(_))));
+        assert_eq!(listed.hits_async().await, 1);
+        let selected = BTreeSet::from(["a_good".to_string()]);
+        let recovered = discover_selected_local(auth, "x", &bp, &selected)
+            .await
+            .unwrap();
+        assert_eq!(recovered.packages.len(), 1);
+        assert!(recovered.unavailable.is_empty());
+        assert_eq!(listed.hits_async().await, 2);
+    }
+
+    #[test]
+    fn allocation_failure_is_fatal_but_response_limits_are_unavailability() {
+        assert!(matches!(
+            response_failure(McpCallError::Internal {
+                message: "allocation failure"
+            }),
+            DiscoveryAttemptError::Fatal(DiscoveryError::Internal {
+                message: "allocation failure"
+            })
+        ));
+        assert!(matches!(
+            response_failure(McpCallError::ResponseTooLarge),
+            DiscoveryAttemptError::Unavailable(_)
+        ));
+    }
+
+    #[tokio::test]
+    async fn discovery_cleanup_preserves_a_late_internal_response_failure() {
+        let budget = Arc::new(super::super::bounded_client::ResponseBudget::default());
+        let activity = budget.activity();
+        let mut connection = DiscoveryConnection {
+            budget: Some(budget.clone()),
+            ..Default::default()
+        };
+        let mut closing = Box::pin(connection.close());
+        assert!(
+            tokio::time::timeout(Duration::ZERO, &mut closing)
+                .await
+                .is_err()
+        );
+        budget.inject_allocation_failure();
+        drop(activity);
+        let error = closing.await.unwrap();
+        assert!(matches!(
+            response_failure(error),
+            DiscoveryAttemptError::Fatal(_)
+        ));
+    }
+
+    #[tokio::test]
+    async fn discovery_cleanup_waits_for_response_activity() {
+        let budget = Arc::new(super::super::bounded_client::ResponseBudget::default());
+        let activity = budget.activity();
+        let mut connection = DiscoveryConnection {
+            budget: Some(budget),
+            ..Default::default()
+        };
+        let mut closing = Box::pin(connection.close());
+        assert!(
+            tokio::time::timeout(Duration::ZERO, &mut closing)
+                .await
+                .is_err()
+        );
+        drop(activity);
+        closing.await;
+    }
+
     #[tokio::test]
     async fn unauthenticated_guidance_matches_local_and_server_execution() {
         let bp = submilli_blueprint::parse(
@@ -505,11 +772,13 @@ mod tests {
             harness_secrets: None,
             network_policy: &policy,
         };
-        let local = discover_all_local(auth, "x", &bp).await;
-        let server = discover_all(auth, "x", &bp).await;
+        let local = discover_all_local(auth, "x", &bp).await.unwrap();
+        let server = discover_all(auth, "x", &bp).await.unwrap();
         let selected = BTreeSet::from(["pending".to_string()]);
-        let local_selected = discover_selected_local(auth, "x", &bp, &selected).await;
-        let server_selected = discover_selected(auth, "x", &bp, &selected).await;
+        let local_selected = discover_selected_local(auth, "x", &bp, &selected)
+            .await
+            .unwrap();
+        let server_selected = discover_selected(auth, "x", &bp, &selected).await.unwrap();
         let local_selected: Vec<_> = local_selected.warnings().collect();
         let server_selected: Vec<_> = server_selected.warnings().collect();
         assert_eq!(local_selected.len(), 1);
@@ -554,7 +823,8 @@ mod tests {
             "x",
             &bp,
         )
-        .await;
+        .await
+        .unwrap();
         let warnings: Vec<_> = catalog.warnings().collect();
         assert_eq!(warnings.len(), 1);
         assert!(

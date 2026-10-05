@@ -334,6 +334,27 @@ pub(crate) async fn execute_core(state: &AppState, inputs: ExecuteInputs<'_>) ->
         }
     };
 
+    let mcp_catalog = match state
+        .mcp_catalog_for_imports(
+            blueprint_name,
+            &blueprint,
+            &script_imports.mcp_servers,
+            &harness_secrets,
+            &network_policy,
+        )
+        .await
+    {
+        Ok(catalog) => catalog,
+        Err(error) => {
+            tracing::error!(error = ?error, "MCP discovery initialization failed");
+            return ExecuteOutcome::undispatched(error_response(
+                session_id,
+                ErrorKind::RuntimeError,
+                error.to_string(),
+            ));
+        }
+    };
+
     let manager = state.session_manager();
     if let Err(err) = manager.ensure(session_id, &blueprint).await {
         return ExecuteOutcome::undispatched(error_response(
@@ -410,15 +431,6 @@ pub(crate) async fn execute_core(state: &AppState, inputs: ExecuteInputs<'_>) ->
         llm_provider,
         llm_budget: Some(manager.llm_budget_for_execute()),
     };
-    let mcp_catalog = state
-        .mcp_catalog_for_imports(
-            blueprint_name,
-            &blueprint,
-            &script_imports.mcp_servers,
-            &harness_secrets,
-            &network_policy,
-        )
-        .await;
     let packages =
         match state.prepared_packages_for_imports(blueprint_name, &blueprint, &script_imports) {
             Ok(packages) => packages,

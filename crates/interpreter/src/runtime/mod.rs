@@ -514,6 +514,9 @@ impl RuntimeConfig {
         let _watchdog = self.arm_timeout(&engine);
         let inst = instantiate_program_async(&linker, &mut store, &module).await?;
         let value = dispatch_main_async(&mut store, &inst).await?;
+        // A poisoned ConsoleSink may contain output from an interrupted write.
+        // AGENTS.md permits this poisoned-lock panic instead of recovering partial
+        // output; it does not permit the panic that caused poisoning.
         let captured = buf.lock().expect("console buffer lock poisoned").clone();
         let console = String::from_utf8(captured)
             .map_err(|e| wasmtime::Error::msg(format!("console output not utf-8: {e}")))?;
@@ -521,7 +524,9 @@ impl RuntimeConfig {
     }
 }
 
-// Poisoned state is unsupported; see AGENTS.md accepted poisoned-lock panics.
+// A panic during writing may leave partial console output. AGENTS.md permits
+// panicking on poisoned access instead of recovering it; the panic that caused
+// poisoning is still subject to the no-panic policy.
 struct ConsoleSink(Arc<Mutex<Vec<u8>>>);
 
 impl Write for ConsoleSink {
