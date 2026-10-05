@@ -612,7 +612,7 @@ impl Inferer<'_> {
                 narrowing::PathElem::Index(narrowing::LiteralValue::Number(index)) => {
                     Self::pattern_index_flow_type(&ty, tuple_index(index.0)?)?
                 }
-                narrowing::PathElem::Index(_) => return None,
+                narrowing::PathElem::Index(_) | narrowing::PathElem::Key(..) => return None,
             };
         }
         Some(ty)

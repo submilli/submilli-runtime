@@ -23,21 +23,17 @@ impl ReferencePath {
     }
 
     pub fn render(&self) -> String {
-        let mut out = match &self.root {
-            BindingId::Local { name, .. } => name.clone(),
-            BindingId::Global(mangled) => mangled
-                .as_str()
-                .rsplit('#')
-                .next()
-                .unwrap_or(mangled.as_str())
-                .to_string(),
-            BindingId::This => "this".to_string(),
-        };
+        let mut out = self.root.render();
         for elem in &self.chain {
             match elem {
                 PathElem::Field(name) => {
                     out.push('.');
                     out.push_str(name);
+                }
+                PathElem::Key(binding, _) => {
+                    out.push('[');
+                    out.push_str(&binding.render());
+                    out.push(']');
                 }
                 PathElem::Index(lit) => {
                     use std::fmt::Write;
@@ -71,15 +67,41 @@ pub enum BindingId {
     This,
 }
 
+impl BindingId {
+    /// The name the source reads the binding by.
+    pub fn render(&self) -> String {
+        match self {
+            BindingId::Local { name, .. } => name.clone(),
+            BindingId::Global(mangled) => mangled
+                .as_str()
+                .rsplit('#')
+                .next()
+                .unwrap_or(mangled.as_str())
+                .to_string(),
+            BindingId::This => "this".to_string(),
+        }
+    }
+}
+
 #[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct ScopeId(pub u32);
 
 /// `Index` is restricted to constant literal indices so paths stay hash-comparable;
-/// non-constant index expressions are not narrowable.
+/// `Key` indexes by a binding that holds one value for its whole life (a
+/// `const`, or a parameter or `let` never assigned), as TypeScript narrows
+/// `obj[key]`. Other index expressions are not narrowable.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum PathElem {
     Field(String),
     Index(LiteralValue),
+    Key(BindingId, KeyKind),
+}
+
+/// What a [`PathElem::Key`] reads: a property, by a string key, or an element.
+#[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum KeyKind {
+    Property,
+    Element,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]

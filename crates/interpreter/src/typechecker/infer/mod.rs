@@ -16,6 +16,7 @@ mod forward_globals;
 pub mod generic;
 mod generic_scopes;
 mod globals;
+mod iife;
 mod import_graph;
 mod imports;
 mod inference_sources;
@@ -126,6 +127,8 @@ pub fn infer_with_transitive_checked<'a>(
         returns_keep_literals: false,
         next_function_keeps_returned_literals: false,
         aliased_conditions: Default::default(),
+        immediately_invoked: None,
+        invoked_body_exit: None,
         captured_mutators: bindings.mutators,
         last_assignments: bindings.last_assignments,
         nested_function_creation_points: bindings.nested_function_creation_points,
@@ -392,6 +395,8 @@ pub fn infer_package_checked<'a>(
         returns_keep_literals: false,
         next_function_keeps_returned_literals: false,
         aliased_conditions: Default::default(),
+        immediately_invoked: None,
+        invoked_body_exit: None,
         captured_mutators: Default::default(),
         last_assignments: Default::default(),
         nested_function_creation_points: Default::default(),
@@ -711,6 +716,12 @@ pub(super) struct Inferer<'a> {
     /// whose function types couldn't form one callable union.
     next_function_keeps_returned_literals: bool,
     aliased_conditions: aliased_conditions::AliasedConditions,
+    /// The span of the arrow an immediately-invoked call is about to infer;
+    /// see [`iife::immediately_invoked_arrow`].
+    immediately_invoked: Option<Span>,
+    /// What the immediately-invoked body just inferred leaves for the code
+    /// after its call.
+    invoked_body_exit: Option<iife::InvokedBodyExit>,
     pub(super) source: &'a str,
     pub(super) package_name: &'a str,
     pub(super) ast: &'a Ast,

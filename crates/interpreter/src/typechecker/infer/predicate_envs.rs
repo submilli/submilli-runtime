@@ -97,16 +97,10 @@ impl<'a> Inferer<'a> {
                 else {
                     return Ok(None);
                 };
-                let Some(lit) = index_literal_value(
-                    &self
-                        .typed_ast
-                        .try_expr(*index)
-                        .map_err(crate::typechecker::arena_failure)?
-                        .kind,
-                ) else {
+                let Some(element) = self.index_path_elem(*index)? else {
                     return Ok(None);
                 };
-                state.path.chain.push(narrowing::PathElem::Index(lit));
+                state.path.chain.push(element);
                 Some(state)
             }
             TypedExprKind::NonNullAssert { value } | TypedExprKind::Cast { value, .. } => self
@@ -119,6 +113,37 @@ impl<'a> Inferer<'a> {
                 )?,
             _ => None,
         })
+    }
+
+    /// The path element an index reads at: its literal value, or the binding
+    /// holding it when that binding holds one value for its whole life.
+    pub(super) fn index_path_elem(
+        &self,
+        index: ExprId,
+    ) -> Result<Option<narrowing::PathElem>, crate::compiler_error::CompilerFailure> {
+        let index_expr = self
+            .typed_ast
+            .try_expr(index)
+            .map_err(crate::typechecker::arena_failure)?;
+        if let Some(literal) = index_literal_value(&index_expr.kind) {
+            return Ok(Some(narrowing::PathElem::Index(literal)));
+        }
+        let Some(state) = self.kind_to_reference_path_state(&index_expr.kind)? else {
+            return Ok(None);
+        };
+        let root = state.path.root;
+        if !state.path.chain.is_empty()
+            || matches!(root, narrowing::BindingId::This)
+            || self.constant_root_type(&root).is_none()
+        {
+            return Ok(None);
+        }
+        let kind = if is_property_key(&index_expr.ty) {
+            narrowing::KeyKind::Property
+        } else {
+            narrowing::KeyKind::Element
+        };
+        Ok(Some(narrowing::PathElem::Key(root, kind)))
     }
 
     pub(super) fn type_has_getter(&self, ty: &Type, field: &str) -> bool {
@@ -1845,7 +1870,7 @@ impl<'a> Inferer<'a> {
                     let field_ty = self.narrow_source_field_ty(&ty, name)?;
                     ty = super::narrow_scopes::non_null_form(field_ty)?;
                 }
-                narrowing::PathElem::Index(_) => return None,
+                narrowing::PathElem::Index(_) | narrowing::PathElem::Key(..) => return None,
             }
         }
         Some(ty)
@@ -1942,6 +1967,16 @@ fn tombstone_covering<'a>(
         .iter()
         .find(|(key, _)| key.is_prefix_of(path))
         .map(|(_, reason)| reason)
+}
+
+/// Whether a key of type `ty` reads a property, as a string does, rather
+/// than an element.
+fn is_property_key(ty: &Type) -> bool {
+    match ty.peel() {
+        Type::Union(members) => members.iter().all(is_property_key),
+        Type::String | Type::StringLiteral(_) | Type::StringEnum { .. } => true,
+        _ => false,
+    }
 }
 
 pub(super) fn index_literal_value(kind: &crate::TypedExprKind) -> Option<narrowing::LiteralValue> {

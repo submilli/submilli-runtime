@@ -56,16 +56,25 @@ impl<'a> Inferer<'a> {
     /// across the frame as a shadow local. The seeded sources are plain
     /// `LocalRef`/`GlobalRef` reads, so they name no narrow binding at all.
     ///
+    /// A closure invoked where it is created starts with every narrowing at
+    /// its call, as in TypeScript: nothing runs between the two.
+    ///
     /// Call after the closure's params are in scope.
     pub(super) fn enter_closure_narrow_boundary(
         &mut self,
         span: Span,
+        immediately_invoked: bool,
     ) -> Result<narrowing::NarrowEnv, crate::compiler_error::CompilerFailure> {
         let (active, _assigned) = self.snapshot_active_narrowings(0);
         self.suspend_narrow_scopes();
         let mut seed = narrowing::NarrowEnv::new();
         for (path, view) in active {
-            if !self.narrowing_survives_closure(&path, span) {
+            let survives = if immediately_invoked {
+                self.narrowing_reaches_invoked_body(&path)
+            } else {
+                self.narrowing_survives_closure(&path, span)
+            };
+            if !survives {
                 continue;
             }
             let Some(source_kind) = self.synthesize_unnarrowed_source(&path, span)? else {
@@ -189,6 +198,21 @@ impl<'a> Inferer<'a> {
         }
     }
 
+    /// Whether a narrowing at an immediately-invoked call holds in its body:
+    /// any whose root the body still reads, which a parameter may shadow.
+    /// `this` is refused as in [`Self::narrowing_survives_closure`], since a
+    /// function expression has its own.
+    fn narrowing_reaches_invoked_body(&self, path: &narrowing::ReferencePath) -> bool {
+        match &path.root {
+            narrowing::BindingId::Local { name, decl_scope } => self
+                .scopes
+                .get(name)
+                .is_some_and(|entry| entry.decl_scope == *decl_scope),
+            narrowing::BindingId::Global(_) => true,
+            narrowing::BindingId::This => false,
+        }
+    }
+
     /// The narrow binding a source expression ultimately reads through, if any.
     /// Walks the same receiver steps a [`narrowing::ReferencePath`] can hold —
     /// field *and* index — down to the root, which is a `LocalRef`, a
@@ -247,11 +271,21 @@ impl<'a> Inferer<'a> {
             .collect();
     }
 
-    /// Whether a path's root binding is still in lexical scope, by identity —
-    /// `decl_scope` equality, so a same-named binding in a sibling scope does
-    /// not count as the same root.
+    /// Whether a path's root binding, and each binding it indexes by, is still
+    /// in lexical scope, by identity — `decl_scope` equality, so a same-named
+    /// binding in a sibling scope does not count as the same root.
     pub(super) fn path_root_in_scope(&self, path: &narrowing::ReferencePath) -> bool {
-        match &path.root {
+        let keys = path.chain.iter().filter_map(|element| match element {
+            narrowing::PathElem::Key(binding, _) => Some(binding),
+            narrowing::PathElem::Field(_) | narrowing::PathElem::Index(_) => None,
+        });
+        std::iter::once(&path.root)
+            .chain(keys)
+            .all(|binding| self.binding_in_scope(binding))
+    }
+
+    fn binding_in_scope(&self, binding: &narrowing::BindingId) -> bool {
+        match binding {
             narrowing::BindingId::Local { name, decl_scope } => self
                 .scopes
                 .get(name)
@@ -1350,29 +1384,19 @@ impl<'a> Inferer<'a> {
         let _ = &mut current_kind;
         let chain_len = path.chain.len();
         for (idx, elem) in path.chain.iter().enumerate() {
-            let narrowing::PathElem::Field(field_name) = elem else {
-                return Ok(None);
-            };
             current_path.chain.push(elem.clone());
-            let Some(field_ty) = self.narrow_source_field_ty(&current_ty, field_name) else {
+            let Some((step_kind, step_ty)) =
+                self.synthesize_path_step(current_id, &current_ty, elem, span)?
+            else {
                 return Ok(None);
             };
             // Intermediate steps use the env-narrowed type so the next
-            // FieldAccess dispatches against the right shape. The final
-            // element keeps the raw field type — the surrounding NarrowRegion's
-            // cast widens it to `narrowed_ty`.
+            // step dispatches against the right shape. The final element keeps
+            // the raw read type — the surrounding NarrowRegion's cast widens it
+            // to `narrowed_ty`.
             let is_final = idx + 1 == chain_len;
             let (kind, ty) = if is_final {
-                (
-                    crate::TypedExprKind::FieldAccess {
-                        receiver: current_id,
-                        name: crate::Ident {
-                            name: field_name.clone(),
-                            span,
-                        },
-                    },
-                    field_ty,
-                )
+                (step_kind, step_ty)
             } else {
                 match env
                     .get(&current_path)
@@ -1388,19 +1412,10 @@ impl<'a> Inferer<'a> {
                     // No enclosing region pinned this prefix, but the guard
                     // still proves it non-null here — codegen can't read a
                     // field through a nullable union.
-                    None => (
-                        crate::TypedExprKind::FieldAccess {
-                            receiver: current_id,
-                            name: crate::Ident {
-                                name: field_name.clone(),
-                                span,
-                            },
-                        },
-                        match non_null_form(field_ty) {
-                            Some(value) => value,
-                            None => return Ok(None),
-                        },
-                    ),
+                    None => match non_null_form(step_ty) {
+                        Some(value) => (step_kind, value),
+                        None => return Ok(None),
+                    },
                 }
             };
             current_id = self
@@ -1414,6 +1429,107 @@ impl<'a> Inferer<'a> {
             current_ty = ty;
         }
         Ok(Some((current_id, current_ty)))
+    }
+
+    /// One unnarrowed read of a path element on `receiver`, typed `receiver_ty`:
+    /// the read and its declared type. None when the declared types can't
+    /// rebuild it.
+    fn synthesize_path_step(
+        &mut self,
+        receiver: ExprId,
+        receiver_ty: &Type,
+        elem: &narrowing::PathElem,
+        span: Span,
+    ) -> Result<Option<(crate::TypedExprKind, Type)>, crate::compiler_error::CompilerFailure> {
+        let (index_kind, key_ty) = match elem {
+            narrowing::PathElem::Field(field_name) => {
+                let Some(field_ty) = self.narrow_source_field_ty(receiver_ty, field_name) else {
+                    return Ok(None);
+                };
+                let read = crate::TypedExprKind::FieldAccess {
+                    receiver,
+                    name: crate::Ident {
+                        name: field_name.clone(),
+                        span,
+                    },
+                };
+                return Ok(Some((read, field_ty)));
+            }
+            narrowing::PathElem::Index(narrowing::LiteralValue::Number(n)) => {
+                (crate::TypedExprKind::Number(n.0), Type::NumberLiteral(*n))
+            }
+            narrowing::PathElem::Index(narrowing::LiteralValue::String(key)) => (
+                crate::TypedExprKind::String(key.clone()),
+                Type::StringLiteral(key.clone()),
+            ),
+            narrowing::PathElem::Index(narrowing::LiteralValue::Boolean(_)) => return Ok(None),
+            narrowing::PathElem::Key(binding, _) => {
+                let key_path = narrowing::ReferencePath::root(binding.clone());
+                let (Some(kind), Some(key_ty)) = (
+                    self.synthesize_unnarrowed_source(&key_path, span)?,
+                    self.declared_root_ty(&key_path),
+                ) else {
+                    return Ok(None);
+                };
+                (kind, key_ty)
+            }
+        };
+        let Some(read_ty) = self.declared_index_read_ty(receiver_ty, &key_ty, elem, span) else {
+            return Ok(None);
+        };
+        let index = self
+            .typed_ast
+            .try_push_expr(TypedExpr {
+                kind: index_kind,
+                span,
+                ty: key_ty,
+            })
+            .map_err(crate::typechecker::arena_failure)?;
+        Ok(Some((
+            crate::TypedExprKind::IndexAccess { receiver, index },
+            read_ty,
+        )))
+    }
+
+    /// The declared type of an index read by a key of type `key_ty`, as
+    /// [`Self::infer_index_access`] types it, for a read it already accepted.
+    fn declared_index_read_ty(
+        &mut self,
+        receiver_ty: &Type,
+        key_ty: &Type,
+        elem: &narrowing::PathElem,
+        span: Span,
+    ) -> Option<Type> {
+        if receiver_ty.is_structural_object() {
+            let diagnostics_before = self.diagnostics.len();
+            let read_ty = self.object_index_read_type(receiver_ty, key_ty, span);
+            if self.diagnostics.len() != diagnostics_before || matches!(read_ty, Type::Error) {
+                self.diagnostics.truncate(diagnostics_before);
+                return None;
+            }
+            return Some(read_ty);
+        }
+        let position = match elem {
+            narrowing::PathElem::Index(narrowing::LiteralValue::Number(n))
+                if n.0.is_finite() && n.0.fract() == 0.0 && n.0 >= 0.0 =>
+            {
+                Some(n.0 as usize)
+            }
+            _ => None,
+        };
+        let element_at = |member: &Type| match (member.peel(), position) {
+            (Type::Array(element), _) => Some((**element).clone()),
+            (Type::Tuple(elements), Some(position)) => elements.get(position).cloned(),
+            _ => None,
+        };
+        match receiver_ty.peel() {
+            Type::Union(members) => members
+                .iter()
+                .map(element_at)
+                .collect::<Option<Vec<_>>>()
+                .map(Type::union),
+            member => element_at(member),
+        }
     }
 
     /// Three cases:

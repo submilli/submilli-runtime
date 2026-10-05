@@ -33,7 +33,7 @@ Upstream: 4463 single-file TypeScript tests. Suite: 451 TypeScript cases, 657 te
 | Feature | Spec | Status | Upstream tests | In the suite | Excluded | Not yet dealt with | Lines checked | Forms checked | test262 cases | test262 checks | Note |
 |:--|:--|:--|--:|--:|--:|--:|--:|--:|--:|--:|:--|
 | `number` | §1.1 | done | 1407 | 225 | 1182 | 0 | 2320 | 1 of 1 | — | — |  |
-| `string` | §1.1 | done | 1498 | 243 | 1255 | 0 | 2303 | 1 of 1 | — | — |  |
+| `string` | §1.1 | done | 1498 | 243 | 1255 | 0 | 2304 | 1 of 1 | — | — |  |
 | `boolean` | §1.1 | done | 482 | 107 | 375 | 0 | 1707 | 1 of 1 | — | — |  |
 | `null` | §1.1 | done | 386 | 73 | 313 | 0 | 1372 | 1 of 1 | — | — |  |
 | `void` | §1.1 | done | 500 | 41 | 459 | 0 | 583 | 1 of 1 | — | — |  |
