@@ -1057,6 +1057,12 @@ pub fn union_envs(
     for (path, a_view) in &a_narrowings {
         if let Some(b_view) = b_narrowings.get(path) {
             let joined_ty = join_flow_types(&a_view.narrowed_ty, &b_view.narrowed_ty);
+            // A `never` view has no shadow, so the join reads through the other.
+            let a_view = if matches!(a_view.narrowed_ty, Type::Error) {
+                b_view
+            } else {
+                a_view
+            };
             joined_narrowings.insert(
                 path.clone(),
                 NarrowedView {
@@ -1110,9 +1116,32 @@ pub fn union_envs(
     (joined_narrowings, joined_assigned)
 }
 
+/// Whether `ty` is made of unit types only (literals and `null`), so it lists
+/// every value it holds.
+pub fn is_unit_union(ty: &Type) -> bool {
+    match ty.peel() {
+        Type::Union(members) => members.iter().all(is_unit_union),
+        Type::Null => true,
+        other => unit_literal_value(other).is_some(),
+    }
+}
+
+/// Whether a guard that rules out every value of `path` makes it `never`
+/// where it holds. Only a local qualifies: a field, an element or a global
+/// can change behind the guard's back (through an alias, or in a call).
+pub fn rules_out_to_never(path: &ReferencePath) -> bool {
+    path.chain.is_empty() && matches!(path.root, BindingId::Local { .. })
+}
+
 /// Flow joins collapse a literal already covered by a broad primitive. Keep
 /// authored unions unchanged: their overlap is meaningful to JSON diagnostics.
 pub(super) fn join_flow_types(left: &Type, right: &Type) -> Type {
+    // A view typed `Error` is a guard that ruled out every value: `never`,
+    // which adds nothing to the other side.
+    match (left, right) {
+        (Type::Error, other) | (other, Type::Error) => return other.clone(),
+        _ => {}
+    }
     let joined = Type::union(vec![left.clone(), right.clone()]);
     let Type::Union(mut members) = joined else {
         return joined;

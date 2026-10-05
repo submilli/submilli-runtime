@@ -536,6 +536,10 @@ impl Inferer<'_> {
             ),
             (true, false) => (then_narrowings, then_assigned),
             (false, true) => (else_narrowings, else_assigned),
+            // Neither branch falls through and the condition can't be false:
+            // code after the `if` is reached only through the false outcome
+            // no value takes, so what that outcome rules out reads as `never`.
+            (false, false) if !else_possible => (else_narrowings, else_assigned),
             (false, false) => (
                 crate::typechecker::infer::narrowing::NarrowEnv::new(),
                 std::collections::BTreeSet::new(),

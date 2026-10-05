@@ -628,11 +628,16 @@ impl<'a> Inferer<'a> {
                 ty: path_ty.clone(),
             })
             .map_err(crate::typechecker::arena_failure)?;
-        if can_be_null {
+        // A local whose type can't hold `null` is `never` where it equals
+        // `null`. A type parameter can hold anything, so it narrows nothing.
+        let never_null = !can_be_null
+            && narrowing::rules_out_to_never(&path)
+            && !narrowing::has_erased_member(&path_ty);
+        if can_be_null || never_null {
             eq_env.insert(
                 path.clone(),
                 narrowing::NarrowedView {
-                    narrowed_ty: Type::Null,
+                    narrowed_ty: if can_be_null { Type::Null } else { Type::Error },
                     facts: narrowing::TypeFacts::EQ_NULL,
                     excluded_literals: std::collections::BTreeSet::new(),
                     binding: self.mint_narrow_binding(path_span)?,
@@ -640,14 +645,16 @@ impl<'a> Inferer<'a> {
                 },
             );
         }
+        // A field that is `null` reads as `never` once proven otherwise, but
+        // re-reads its live value: an alias may have written it.
+        let non_null_ty = match narrowing::strip_null(&path_ty) {
+            Type::Error if !narrowing::rules_out_to_never(&path) => Type::Never,
+            ty => ty,
+        };
         neq_env.insert(
             path,
             narrowing::NarrowedView {
-                narrowed_ty: if matches!(path_ty.peel(), Type::Null) {
-                    Type::Never
-                } else {
-                    narrowing::strip_null(&path_ty)
-                },
+                narrowed_ty: non_null_ty,
                 facts: narrowing::TypeFacts::NE_NULL,
                 excluded_literals: std::collections::BTreeSet::new(),
                 binding: self.mint_narrow_binding(path_span)?,
@@ -1644,7 +1651,15 @@ impl<'a> Inferer<'a> {
 
         let true_ty = narrowing::intersect_with(&from_ty, narrowing::TypeFacts::TRUTHY);
         let false_ty = narrowing::intersect_with(&from_ty, narrowing::TypeFacts::FALSY);
-        let refines = |ty: &Type| !matches!(ty, Type::Error) && ty.peel() != from_ty.peel();
+        // An outcome a local's type can't take makes it `never` there (an
+        // `Error` view), when the type lists every value the local can hold.
+        // An assigned value's truthiness is SUB-1156's to follow.
+        let empty_is_never = narrowing::rules_out_to_never(&path)
+            && narrowing::is_unit_union(&from_ty)
+            && !matches!(fallback_kind, crate::TypedExprKind::Sequence { .. });
+        let refines = |ty: &Type| {
+            (empty_is_never || !matches!(ty, Type::Error)) && ty.peel() != from_ty.peel()
+        };
         let (mut true_env, mut false_env) = root_envs.unwrap_or_default();
 
         if !refines(&true_ty) && !refines(&false_ty) {
@@ -1935,11 +1950,53 @@ impl<'a> Inferer<'a> {
         &self,
         path: &narrowing::ReferencePath,
     ) -> Option<&narrowing::NarrowedView> {
+        // `never` narrowings get no shadow local in codegen; fall through to
+        // the un-narrowed type rather than naming a binding that has none.
+        self.innermost_narrowing(path)
+            .filter(|view| !matches!(view.narrowed_ty, Type::Error))
+    }
+
+    /// A read of `path` under the narrowing that holds there. A guard that
+    /// rules out every value (its view typed `Error`) reads as `never`, as in
+    /// TypeScript, where [`narrowing::rules_out_to_never`] allows: no value
+    /// reaches the read, and codegen emits a trap for it.
+    pub(super) fn narrowed_read(
+        &self,
+        path: narrowing::ReferencePath,
+    ) -> Option<(crate::TypedExprKind, Type)> {
+        let view = self.innermost_narrowing(&path)?;
+        let narrowed_ty = match view.narrowed_ty {
+            Type::Error if self.reads_as_never(&path) => Type::Never,
+            Type::Error => return None,
+            ref ty => ty.clone(),
+        };
+        let binding = view.binding.clone();
+        Some((
+            crate::TypedExprKind::LocalNarrowRef { binding, path },
+            narrowed_ty,
+        ))
+    }
+
+    /// Whether a guard that ruled out every value of `path` makes it read as
+    /// `never`. A type parameter or `unknown` hides values a guard can't see
+    /// ruled out, so `typeof x === "object"` on a `T` is not a contradiction.
+    fn reads_as_never(&self, path: &narrowing::ReferencePath) -> bool {
+        narrowing::rules_out_to_never(path)
+            && self.declared_root_ty(path).is_some_and(|declared| {
+                !narrowing::has_erased_member(&declared)
+                    && !matches!(declared.peel(), Type::Unknown)
+            })
+    }
+
+    /// The view the innermost frame holding `path` gives it, unless a frame
+    /// in between tombstones it.
+    fn innermost_narrowing(
+        &self,
+        path: &narrowing::ReferencePath,
+    ) -> Option<&narrowing::NarrowedView> {
         for (frame_idx, frame) in self.narrow_scopes.iter().enumerate().rev() {
             if let Some(view) = frame.get(path) {
-                // `never` narrowings get no shadow local in codegen; fall through
-                // to the un-narrowed type rather than naming a binding that has none.
-                return (!matches!(view.narrowed_ty, Type::Error)).then_some(view);
+                return Some(view);
             }
             if self.tombstone_scopes.get(frame_idx).is_some_and(|tombs| {
                 tombs

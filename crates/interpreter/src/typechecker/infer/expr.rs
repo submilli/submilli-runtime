@@ -794,10 +794,8 @@ impl Inferer<'_> {
                 name: ident.name.clone(),
                 decl_scope: entry.decl_scope,
             });
-            if let Some(view) = self.lookup_narrowed_view(&path) {
-                let binding = view.binding.clone();
-                let narrowed_ty = view.narrowed_ty.clone();
-                return Ok((TypedExprKind::LocalNarrowRef { binding, path }, narrowed_ty));
+            if let Some(read) = self.narrowed_read(path) {
+                return Ok(read);
             }
             return Ok((
                 TypedExprKind::LocalRef {
@@ -842,16 +840,8 @@ impl Inferer<'_> {
             let global_path = super::narrowing::ReferencePath::root(
                 super::narrowing::BindingId::Global(mangled.clone()),
             );
-            if let Some(view) = self.lookup_narrowed_view(&global_path) {
-                let binding = view.binding.clone();
-                let narrowed_ty = view.narrowed_ty.clone();
-                return Ok((
-                    TypedExprKind::LocalNarrowRef {
-                        binding,
-                        path: global_path,
-                    },
-                    narrowed_ty,
-                ));
+            if let Some(read) = self.narrowed_read(global_path) {
+                return Ok(read);
             }
             // Reject generic functions used as first-class values —
             // `let f = identity` and friends. Rationale: a generic
@@ -6124,11 +6114,9 @@ impl Inferer<'_> {
                     .push(super::narrowing::PathElem::Field(name.name.clone()));
                 p
             })
-            && let Some(view) = self.lookup_narrowed_view(&path)
+            && let Some(read) = self.narrowed_read(path)
         {
-            let binding = view.binding.clone();
-            let narrowed_ty = view.narrowed_ty.clone();
-            return Ok((TypedExprKind::LocalNarrowRef { binding, path }, narrowed_ty));
+            return Ok(read);
         }
         // interface-property dispatch lands here BEFORE the
         // user-object field path. `lookup_interface_property` returns `None`
@@ -6560,15 +6548,9 @@ impl Inferer<'_> {
         read_ty: Type,
     ) -> Result<(TypedExprKind, Type), CompilerFailure> {
         if let Some(path) = self.kind_to_reference_path(&kind)?
-            && let Some(view) = self.lookup_narrowed_view(&path)
+            && let Some(read) = self.narrowed_read(path)
         {
-            return Ok((
-                TypedExprKind::LocalNarrowRef {
-                    binding: view.binding.clone(),
-                    path,
-                },
-                view.narrowed_ty.clone(),
-            ));
+            return Ok(read);
         }
         Ok((kind, read_ty))
     }

@@ -151,6 +151,11 @@ fn emit_expr_value(
                 cast::emit_unerase(emitter, ctx, &expr.ty)?;
             }
         }
+        // A guard that rules out every value leaves no shadow to read, and
+        // no value ever reaches the read.
+        TypedExprKind::LocalNarrowRef { .. } if matches!(expr.ty, Type::Never) => {
+            emitter.instruction(Instruction::Unreachable);
+        }
         TypedExprKind::LocalNarrowRef { binding, path, .. } => {
             emit_local_narrow_ref(emitter, ctx, binding, path, &expr.ty)?;
         }
