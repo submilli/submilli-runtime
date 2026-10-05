@@ -1238,16 +1238,19 @@ impl Inferer<'_> {
                 let contextual_rhs = equality_operand_needs_context(self.ast, rhs)?;
                 let rhs_hint = contextual_rhs.then_some(&lt);
                 let (typed_rhs, rt) = self.infer_expr(rhs, rhs_hint)?;
-                let comparison_rhs = literal_comparison_type(
-                    &self.typed_ast,
-                    self.typed_ast
-                        .try_expr(typed_rhs)
-                        .map_err(crate::typechecker::arena_failure)?,
-                )?;
-                if !super::comparable::comparable(&lt, &comparison_rhs, self.resolver()) {
+                let lhs_operand = self.comparison_operand(lhs, typed_lhs)?;
+                let rhs_operand = self.comparison_operand(rhs, typed_rhs)?;
+                if !super::comparison_operand::operands_comparable(
+                    &lhs_operand,
+                    &rhs_operand,
+                    self.resolver(),
+                ) {
                     self.error(
                         self.ast.try_expr(rhs).map_err(super::arena_failure)?.span,
-                        format!("expected `{lt}`, got `{comparison_rhs}`"),
+                        format!(
+                            "expected `{}`, got `{}`",
+                            lhs_operand.label, rhs_operand.label
+                        ),
                     );
                 }
                 // `void` has no runtime value to compare, and the comparison
@@ -9891,6 +9894,13 @@ fn equality_operand_needs_context(ast: &crate::Ast, id: ExprId) -> Result<bool, 
     )
 }
 
+/// The literal type of a number, with `-0` read as `0`: they are one value
+/// under `===`.
+pub(super) fn number_literal_type(value: f64) -> Type {
+    let canonical = if value == 0.0 { 0.0 } else { value };
+    Type::NumberLiteral(crate::types::LiteralF64(canonical))
+}
+
 pub(super) fn literal_comparison_type(
     ast: &crate::TypedAst,
     expr: &TypedExpr,
@@ -9912,8 +9922,7 @@ pub(super) fn literal_comparison_type(
             };
             let negative = matches!(expr.kind, TypedExprKind::Unary { op: UnOp::Neg, .. });
             let signed = if negative { -value } else { value };
-            let canonical = if signed == 0.0 { 0.0 } else { signed };
-            Type::NumberLiteral(crate::types::LiteralF64(canonical))
+            number_literal_type(signed)
         }
         _ => expr.ty.clone(),
     })
@@ -10591,7 +10600,7 @@ mod tests {
     fn equality_different_type_diagnoses() {
         let (_, d) = run(r#"let x: boolean = 1 === "a";"#);
         assert_eq!(d.len(), 1);
-        assert_eq!(d[0].message, "expected `number`, got `\"a\"`");
+        assert_eq!(d[0].message, "expected `1`, got `\"a\"`");
     }
 
     #[test]

@@ -1,4 +1,4 @@
-// expect-error: expected `First`, got `Second | Third`
+// expect-error: expected `First.A`, got `Second | Third`
 enum First { A = 2 }
 enum Second { B = 3 }
 enum Third { C = 4 }

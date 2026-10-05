@@ -6,6 +6,7 @@ mod binding_analysis;
 mod classes;
 mod closure_arity;
 mod comparable;
+mod comparison_operand;
 mod diagnostics;
 mod enums;
 mod exports;

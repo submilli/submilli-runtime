@@ -13,7 +13,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use crate::compiler_limits::{MAX_TYPE_DEPTH, MAX_TYPE_NODES};
 use crate::type_size::measure;
-use crate::{IndexSignature, MangledName, ObjectField, Type};
+use crate::{IndexSignature, MangledName, ObjectField, Type, TypeKind};
 
 use super::assignable::{PrivateMembers, TypeResolver, assignable, expand_alias_ref};
 
@@ -406,13 +406,53 @@ fn is_primitive_like(ty: &Type) -> bool {
 }
 
 fn primitives_comparable(left: &Type, right: &Type, types: TypeResolver) -> bool {
+    if let Some(overlap) =
+        enum_admits_literal(left, right, types).or_else(|| enum_admits_literal(right, left, types))
+    {
+        return overlap;
+    }
     let both_enums = is_enum(left) && is_enum(right);
     let (left, right) = if both_enums {
         (left, right)
     } else {
-        (left.primitive_behavior(), right.primitive_behavior())
+        (enum_base(left), enum_base(right))
     };
     assignable(left, right, types) || assignable(right, left, types)
+}
+
+/// The primitive an enum's values are, so an enum overlaps its base type. Two
+/// enums are compared by identity instead.
+fn enum_base(ty: &Type) -> &Type {
+    match ty {
+        Type::NumberEnum { .. } => &Type::Number,
+        Type::StringEnum { .. } => &Type::String,
+        _ => ty,
+    }
+}
+
+/// Whether `enum_ty` has a member whose value is `literal`, when `enum_ty` is an
+/// enum and `literal` a literal of its kind: `Color` and `0` share no value when
+/// no member of `Color` is `0`.
+fn enum_admits_literal(enum_ty: &Type, literal: &Type, types: TypeResolver) -> Option<bool> {
+    match (enum_ty, literal) {
+        (Type::NumberEnum { mangled, name, .. }, Type::NumberLiteral(value)) => {
+            match &types.lookup(mangled, name)?.kind {
+                TypeKind::NumberEnum { variants, .. } => {
+                    Some(variants.iter().any(|(_, member)| *member == value.0))
+                }
+                _ => None,
+            }
+        }
+        (Type::StringEnum { mangled, name, .. }, Type::StringLiteral(value)) => {
+            match &types.lookup(mangled, name)?.kind {
+                TypeKind::StringEnum { variants, .. } => {
+                    Some(variants.iter().any(|(_, member)| member == value))
+                }
+                _ => None,
+            }
+        }
+        _ => None,
+    }
 }
 
 fn is_enum(ty: &Type) -> bool {
