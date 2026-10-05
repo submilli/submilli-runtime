@@ -155,12 +155,7 @@ impl Inferer<'_> {
                 .try_stmt(d.body)
                 .map_err(super::arena_failure)?
                 .span;
-            let default_residual =
-                if saw_null.is_some() && matches!(site, ResidualSite::Scrutinee { .. }) {
-                    narrowing::strip_null(&residual)
-                } else {
-                    residual.clone()
-                };
+            let default_residual = self.unmatched_residual(&residual, &site, saw_null.is_some());
             let env = self.build_default_narrow_env(&default_residual, &site, body_span)?;
             self.push_narrow_frame(env.clone());
             self.switch_depth += 1;
@@ -192,8 +187,19 @@ impl Inferer<'_> {
             any_arm_reachable_exit = true;
         }
         self.merge_assigned_into_outer(all_assigned, switch_span);
-        let natural =
-            (typed_default.is_none() && !matches!(residual, Type::Never)).then_some(entry_env);
+        let natural = if typed_default.is_none() && !matches!(residual, Type::Never) {
+            // The no-match path saw none of the case values, so it carries the
+            // narrowing to the rest, as a `default` arm would.
+            let mut natural = entry_env;
+            natural.extend_env(self.build_default_narrow_env(
+                &self.unmatched_residual(&residual, &site, saw_null.is_some()),
+                &site,
+                switch_span,
+            )?);
+            Some(natural)
+        } else {
+            None
+        };
         self.fold_exits_into_outer(natural, frame.breaks, switch_span)?;
 
         self.reachable = any_arm_reachable_exit;
@@ -367,6 +373,16 @@ impl Inferer<'_> {
                 (residual, ResidualSite::Anonymous)
             },
         )
+    }
+
+    /// What the discriminant can be when no case matched: the residual, less
+    /// `null` when a `case null` matched it.
+    fn unmatched_residual(&self, residual: &Type, site: &ResidualSite, saw_null: bool) -> Type {
+        if saw_null && matches!(site, ResidualSite::Scrutinee { .. }) {
+            narrowing::strip_null(residual)
+        } else {
+            residual.clone()
+        }
     }
 
     fn build_default_narrow_env(

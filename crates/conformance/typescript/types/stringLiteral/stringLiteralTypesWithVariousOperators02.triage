@@ -1,1 +1,1 @@
-line 14 type: bug SUB-1152 a rejected assignment, `++` or `--` still narrows its target
+line 14 type: artifact the runner pairs tsc's entry for the operand with our postfix node, which has the result type `number`

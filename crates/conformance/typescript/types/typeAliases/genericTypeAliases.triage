@@ -1,1 +1,2 @@
 line 40, 41 type: artifact one side prints a type alias (or `keyof`) by name and the other expands it (tsc expands it to the primitive `string`)
+line 28 type: by-design spec §1.6 after an assignment the variable has the assigned value's type, where tsc keeps the declared one

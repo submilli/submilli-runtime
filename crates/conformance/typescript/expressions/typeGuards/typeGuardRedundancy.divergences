@@ -1,23 +1,7 @@
-types: 33 of 76 tsc entries compared, 4 differ
-
-line 4: x
-  tsc:  number
-  ours: number | string
-
-line 6: x
-  tsc:  number
-  ours: number | string
-
-line 8: x
-  tsc:  string
-  ours: number | string
-
-line 10: x
-  tsc:  string
-  ours: number | string
+types: 33 of 76 tsc entries compared, 0 differ
 
 errors:
 line 4: ours: field `substr` does not exist on `string` (tsc accepts)
-line 6: ours: cannot read field `toFixed` on non-object type `number | string` (tsc accepts)
-line 8: ours: cannot read field `substr` on non-object type `number | string` (tsc accepts)
+line 6: ours: method `toFixed` must be called — a method reference is not a value (tsc accepts)
+line 8: ours: field `substr` does not exist on `string` (tsc accepts)
 line 10: ours: method `toFixed` must be called — a method reference is not a value (tsc accepts)

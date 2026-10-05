@@ -1,0 +1,1 @@
+line 8, 13, 15 type: by-design spec §1.6 after an assignment the variable has the assigned value's type, where tsc keeps the declared one

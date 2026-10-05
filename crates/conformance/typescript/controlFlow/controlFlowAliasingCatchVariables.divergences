@@ -26,11 +26,11 @@ line 20: e
 
 line 23: e
   tsc:  unknown
-  ours: number
+  ours: Error
 
 line 26: e
   tsc:  unknown
-  ours: number
+  ours: Error
 
 line 27: e
   tsc:  string
