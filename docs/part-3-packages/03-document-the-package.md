@@ -4,6 +4,11 @@ description: "How to document a package for its two readers: the doc comments an
 slug: packages/document-the-package
 sidebar:
   order: 3
+authorship:
+  label: ai-assisted
+  confirmed: true
+  contentHash: "8d76038da82f4783abeb043190bdf2a97b4dc8bbf819162ae9df6f5f4ddc629a"
+  confirmedAt: "2026-10-05T10:59:51.488Z"
 ---
 
 Two readers decide how to use the package, and neither reads its source.

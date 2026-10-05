@@ -4,6 +4,11 @@ description: "Have your coding assistant write and test a blueprint: a curated p
 slug: tutorials/craft-a-blueprint
 sidebar:
   order: 1
+authorship:
+  label: ai-assisted
+  confirmed: true
+  contentHash: "0f79963f480dae379b4a42e1405d2ca7bceb1a53cfee3b01a7f8e1d15977b744"
+  confirmedAt: "2026-10-05T10:59:51.481Z"
 ---
 
 The blueprint pages showed the commands. With the Submilli skill, your

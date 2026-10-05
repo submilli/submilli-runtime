@@ -4,6 +4,11 @@ description: "How to make a package import another, from the same project, your 
 slug: packages/add-a-dependency
 sidebar:
   order: 4
+authorship:
+  label: ai-assisted
+  confirmed: true
+  contentHash: "3242a0adfb96f2898a65dfa28870bf2f29f5aad4672a411081a666544186157d"
+  confirmedAt: "2026-10-05T10:59:51.489Z"
 ---
 
 A package often builds on another. Acme's support package apologizes to

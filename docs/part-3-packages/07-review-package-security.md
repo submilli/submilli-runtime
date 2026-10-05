@@ -9,6 +9,11 @@ slug: packages/review-package-security
 # source-built CLI. The CLI also accepts `-a copilot`; this page leaves it out.
 sidebar:
   order: 7
+authorship:
+  label: ai-assisted
+  confirmed: true
+  contentHash: "c3364d3e25214a01d20d59e48079c486ec1cc5ee98035a7e361eaec549ba073a"
+  confirmedAt: "2026-10-05T10:59:51.490Z"
 ---
 
 A blueprint's rules see only what a package passes to `check()`. A package

@@ -4,6 +4,11 @@ description: "How to give programs a directory that outlives sessions and is sha
 slug: server/mount-a-shared-volume
 sidebar:
   order: 9
+authorship:
+  label: ai-assisted
+  confirmed: true
+  contentHash: "224ee8b79165f3a4b41ee1791c147ca6beee7a8728fdc3fccc6f26b05cee1afa"
+  confirmedAt: "2026-10-05T10:59:51.487Z"
 ---
 
 A session's files end with the session. Some things an agent works with

@@ -4,6 +4,11 @@ description: "The endpoints a harness calls to run programs over HTTP: sessions 
 slug: reference/http-api
 sidebar:
   order: 14
+authorship:
+  label: ai-assisted
+  confirmed: true
+  contentHash: "472972cbc0d08c0a43d0a295a0006c90201caaa4d8fbd0f4165e0515a0f175fe"
+  confirmedAt: "2026-10-05T10:59:51.477Z"
 ---
 
 This page describes the endpoints of `submilli-server` a harness calls to run

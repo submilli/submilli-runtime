@@ -4,6 +4,11 @@ description: "Set up the server and the research blueprint the five harness tuto
 slug: tutorials/connect-a-harness
 sidebar:
   order: 0
+authorship:
+  label: ai-assisted
+  confirmed: true
+  contentHash: "989bcbde59110b3579c094c02aaa141014672f0268b3c9b36ae953674be8cc4c"
+  confirmedAt: "2026-10-05T10:59:51.484Z"
 ---
 
 Your application, or the agent framework it uses, is the **harness**, the

@@ -4,6 +4,11 @@ description: "Install the Submilli CLI and server, and the skill for your coding
 slug: install
 sidebar:
   order: 2
+authorship:
+  label: ai-assisted
+  confirmed: true
+  contentHash: "02394c125642a973a92405201178188ddd8f14295fd40ecdf7ff02f5c75e3dfb"
+  confirmedAt: "2026-10-05T10:59:51.493Z"
 ---
 
 Use the [skill setup box above](#agent-setup) to get started with Codex or

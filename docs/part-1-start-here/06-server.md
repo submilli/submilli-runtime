@@ -4,6 +4,11 @@ description: "What submilli-server is and why it is built the way it is: an isol
 slug: server
 sidebar:
   order: 6
+authorship:
+  label: ai-assisted
+  confirmed: true
+  contentHash: "01385368bc24aa7aaaa42d1e0f231a0f0dbe71ee966988fe4722afda97ed859d"
+  confirmedAt: "2026-10-05T10:59:51.494Z"
 ---
 
 `submilli-server` is the process that runs the agent's programs. It is one

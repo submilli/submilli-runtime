@@ -4,6 +4,11 @@ description: "Take one PermissionDeniedError from message to cause to fix: read 
 slug: tutorials/diagnose-a-denial
 sidebar:
   order: 8
+authorship:
+  label: ai-assisted
+  confirmed: true
+  contentHash: "82e9862464b6bd7698866d0f97a055893a62a3f20aedd67ee9961bb999e437ac"
+  confirmedAt: "2026-10-05T10:59:51.480Z"
 ---
 
 A denial is the system working. A program asked for something the

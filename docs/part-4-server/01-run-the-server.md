@@ -4,6 +4,11 @@ description: "How to run submilli-server for an application: start it, configure
 slug: server/run-the-server
 sidebar:
   order: 1
+authorship:
+  label: ai-assisted
+  confirmed: true
+  contentHash: "1942e26eb25291d52a2bd8a2fff9a506f36d420d6779fd8d612d6830760ba162"
+  confirmedAt: "2026-10-05T10:59:51.485Z"
 ---
 
 This guide shows you how to run `submilli-server` for an application.

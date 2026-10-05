@@ -4,6 +4,11 @@ description: "Every top-level key and field of a blueprint file: types, defaults
 slug: reference/blueprint-file
 sidebar:
   order: 1
+authorship:
+  label: ai-assisted
+  confirmed: true
+  contentHash: "8dd8e1c15d8641712b26459dfa4efd50a6819de7eb333dd00d4b6473e1f293f2"
+  confirmedAt: "2026-10-05T10:59:51.473Z"
 ---
 
 A blueprint file is one YAML document. This page describes each of its

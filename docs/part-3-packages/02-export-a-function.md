@@ -4,6 +4,11 @@ description: "How to export a function a blueprint can allow, filter, or deny: d
 slug: packages/export-a-function
 sidebar:
   order: 2
+authorship:
+  label: ai-assisted
+  confirmed: true
+  contentHash: "ff885f87e7cd970871899431711b0fcba96e34a2ce860cde373b35be918b8470"
+  confirmedAt: "2026-10-05T10:59:51.488Z"
 ---
 
 The agent's program is going to call a function of yours, and the program

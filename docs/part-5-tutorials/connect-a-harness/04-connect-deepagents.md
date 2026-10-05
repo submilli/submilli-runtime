@@ -4,6 +4,11 @@ description: "Run the research agent on LangChain deepagents: one session held o
 slug: tutorials/connect-deepagents
 sidebar:
   order: 4
+authorship:
+  label: ai-assisted
+  confirmed: true
+  contentHash: "51e1e453ddb307d2bf3357c392b3747efb1540dbe81e56285e356c15b1faa2b6"
+  confirmedAt: "2026-10-05T10:59:51.483Z"
 ---
 
 In this tutorial we will run the research agent on LangChain deepagents,

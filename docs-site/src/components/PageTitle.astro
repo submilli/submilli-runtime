@@ -1,5 +1,5 @@
 ---
-import { createHash } from 'node:crypto';
+import { confirmedAuthorshipFor } from '../lib/authorship';
 
 /**
  * Article header: the sidebar group as a mono eyebrow, then the title. The
@@ -20,31 +20,7 @@ const group = sidebar.find((item) => item.type === 'group' && containsCurrent(it
 const eyebrow = group?.label;
 
 const authorship = entry.data.authorship;
-const body = entry.body?.replace(/\r\n/g, '\n').trim();
-const authorshipLabel = {
-	'human-written': {
-		label: 'Human-written',
-		description: 'The author wrote the prose. AI may have proofread it, but did not draft it.',
-	},
-	'ai-assisted': {
-		label: 'AI-assisted',
-		description: 'The prose includes both human and AI contributions.',
-	},
-	'ai-generated': {
-		label: 'AI-generated',
-		description: 'AI generated the prose. This label does not attest to human review.',
-	},
-	'generated-from-source': {
-		label: 'Generated from source',
-		description: 'Mechanically generated from source material.',
-	},
-} as const;
-const confirmedAuthorship =
-	authorship?.confirmed &&
-	body &&
-	createHash('sha256').update(body, 'utf8').digest('hex') === authorship.contentHash
-		? authorshipLabel[authorship.label]
-		: undefined;
+const confirmedAuthorship = confirmedAuthorshipFor(authorship, entry.body);
 ---
 
 <div class="page-title">

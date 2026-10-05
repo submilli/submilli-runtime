@@ -4,6 +4,11 @@ description: "Run the research agent on the OpenAI Agents SDK: the connection sc
 slug: tutorials/connect-openai-agents
 sidebar:
   order: 5
+authorship:
+  label: ai-assisted
+  confirmed: true
+  contentHash: "c473bac5288e905e4c3fd23104c0dc3f3ccee456a82beb1cb0c6ed615784438c"
+  confirmedAt: "2026-10-05T10:59:51.483Z"
 ---
 
 In this tutorial we will run the research agent on the OpenAI Agents SDK,

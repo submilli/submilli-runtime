@@ -4,6 +4,11 @@ description: "The TypeScript Submilli programs are written in: the shape of a pr
 slug: reference/language
 sidebar:
   order: 4
+authorship:
+  label: ai-assisted
+  confirmed: true
+  contentHash: "c7724a3dafd6a1d75acdd56fde44b4b5c702d722187fb02c06f86d729bc2072f"
+  confirmedAt: "2026-10-05T10:59:51.477Z"
 ---
 
 You write Submilli programs in TypeScript. Submilli makes deliberate choices

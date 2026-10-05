@@ -4,6 +4,11 @@ description: "The blueprint's mcp block, discovery, how tools become functions, 
 slug: reference/mcp-servers
 sidebar:
   order: 13
+authorship:
+  label: ai-assisted
+  confirmed: true
+  contentHash: "7218ac5dbf77e3752b3478e3f905188b2e2413deedfb79490e15d67007ce7db9"
+  confirmedAt: "2026-10-05T10:59:51.477Z"
 ---
 
 An entry in a blueprint's `mcp` block declares an outbound MCP server, which

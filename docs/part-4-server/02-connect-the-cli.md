@@ -4,6 +4,11 @@ description: "How to point the submilli server commands at a server: its token f
 slug: server/connect-the-cli
 sidebar:
   order: 2
+authorship:
+  label: ai-assisted
+  confirmed: true
+  contentHash: "4454eb41f05507ae24295c0a81cb337844e4083b490941cac9b2909a90bd0668"
+  confirmedAt: "2026-10-05T10:59:51.485Z"
 ---
 
 The `submilli server` commands talk to a running server over HTTP or

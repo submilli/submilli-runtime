@@ -4,6 +4,11 @@ description: "Run the research agent on the Claude Agent SDK with every action g
 slug: tutorials/connect-claude-agent-sdk
 sidebar:
   order: 6
+authorship:
+  label: ai-assisted
+  confirmed: true
+  contentHash: "01b286785daefbfe01a30ed8d96d59ef6e2371991e2d9d141f66bba2f6bbecda"
+  confirmedAt: "2026-10-05T10:59:51.484Z"
 ---
 
 In this tutorial we will run the research agent on the Claude Agent SDK,

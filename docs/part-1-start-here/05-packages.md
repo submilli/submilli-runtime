@@ -4,6 +4,11 @@ description: "What a package is in Submilli: a library built for agents, where e
 slug: packages
 sidebar:
   order: 5
+authorship:
+  label: ai-assisted
+  confirmed: true
+  contentHash: "39167099e58b67bc4cdb229bca99c0ca79e10d771966727f94a955345dfd71f2"
+  confirmedAt: "2026-10-05T10:59:51.493Z"
 ---
 
 A package in Submilli is like a package in npm or pip, a library you

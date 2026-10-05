@@ -4,6 +4,11 @@ description: "How to let a program call a model through submilli:llm: declare th
 slug: blueprints/allow-model-calls
 sidebar:
   order: 5
+authorship:
+  label: ai-assisted
+  confirmed: true
+  contentHash: "24aea5d03fc0c984631b0b2c465b8fa24a78dda9b48700c8b015551203d00917"
+  confirmedAt: "2026-10-05T10:59:51.491Z"
 ---
 
 The agent is a model already, so why would its program call another?

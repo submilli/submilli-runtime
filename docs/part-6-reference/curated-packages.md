@@ -4,6 +4,11 @@ description: "The packages Submilli maintains for common services: each package,
 slug: reference/curated-packages
 sidebar:
   order: 7
+authorship:
+  label: ai-assisted
+  confirmed: true
+  contentHash: "3cf2d0cbe1dd3a82f0169129732a68589bc9584e1249c78deb335e2869237133"
+  confirmedAt: "2026-10-05T10:59:51.475Z"
 ---
 
 This page lists the curated packages, the `@submilli/*` packages maintained

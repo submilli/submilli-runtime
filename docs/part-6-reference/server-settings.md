@@ -4,6 +4,11 @@ description: "Every submilli-server setting with its config-file key, flag, and 
 slug: reference/server-settings
 sidebar:
   order: 9
+authorship:
+  label: ai-assisted
+  confirmed: true
+  contentHash: "4f38a30a3103ed81a55279440cbc884252bd6e6529429691252ae1406eafae35"
+  confirmedAt: "2026-10-05T10:59:51.479Z"
 ---
 
 This page describes how `submilli-server` is configured. It covers every

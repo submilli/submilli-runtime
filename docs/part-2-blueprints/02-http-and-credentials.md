@@ -4,6 +4,11 @@ description: "How to let programs call an HTTP endpoint that has no package, giv
 slug: blueprints/http-and-credentials
 sidebar:
   order: 2
+authorship:
+  label: ai-assisted
+  confirmed: true
+  contentHash: "7f932d9b7938d18ee629a82cf8b4157876060db4759c836544464b0853749657"
+  confirmedAt: "2026-10-05T10:59:51.490Z"
 ---
 
 This guide shows you how to let programs call an HTTP endpoint that has no
