@@ -69,7 +69,9 @@ pub struct PayloadRecord {
 /// Token counts a model provider reported for one call. Absent when not reported.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
 pub struct ModelUsage {
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub input_tokens: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub output_tokens: Option<u64>,
 }
 

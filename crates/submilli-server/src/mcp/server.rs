@@ -8,9 +8,7 @@ use std::sync::Arc;
 
 use interpreter::runtime::fs::{ContainError, ContentPath, guest_normalize, resolve_content};
 use interpreter::runtime::security::AuditDecision;
-use interpreter::runtime::{
-    CallSite, CheckOutcome, DecisionLog, EntryPath, SecurityCheck, Vfs, VfsInfo,
-};
+use interpreter::runtime::{CallSite, CheckOutcome, EntryPath, SecurityCheck, Vfs, VfsInfo};
 use interpreter::stdlib::fs::handles::kind_of;
 use rmcp::handler::server::router::tool::ToolRouter;
 use rmcp::handler::server::tool::{Extension, ToolCallContext};
@@ -144,6 +142,10 @@ struct ExecuteOutput {
 /// The client's name from its `initialize`, for the run's record.
 #[derive(Clone)]
 struct McpClient(String);
+
+/// The client's id for the tool call, for the run's record and events.
+#[derive(Clone)]
+struct McpToolCall(String);
 
 /// The `mcp-session-id` header, present on every request in stateful mode.
 fn session_header(parts: &axum::http::request::Parts) -> Option<String> {
@@ -383,6 +385,10 @@ impl SubmilliMcp {
                     .extensions
                     .get::<McpClient>()
                     .map(|client| client.0.clone()),
+                tool_call_id: parts
+                    .extensions
+                    .get::<McpToolCall>()
+                    .map(|call| call.0.clone()),
                 idempotency_key: None,
             },
         )
@@ -710,12 +716,7 @@ impl SubmilliMcp {
         guest_normalize(config.cwd(), path)
             .map_err(|error| FileToolError::file(path, error.into()))?;
         let recording = self.file_tool_recording(parts, &blueprint, &variables, tool);
-        let log = recording.as_ref().map(|recording| {
-            DecisionLog::new(
-                recording.recorder.log_config(),
-                recording.recorder.observer(),
-            )
-        });
+        let log = recording.as_ref().map(crate::record::Recording::log);
         let policy: Arc<dyn SecurityCheck> =
             Arc::new(PolicyCheck::with_variables(blueprint.clone(), variables));
         let policy = log.as_ref().map_or(policy.clone(), |log| log.wrap(policy));
@@ -760,7 +761,7 @@ impl SubmilliMcp {
             if let Some(recorder) = policy.recorder() {
                 recorder.exit_host_call(marker, allowed);
             }
-            recording.recorder.finish(crate::record::FinishedRun {
+            recording.finish(crate::record::FinishedRun {
                 dispatched: true,
                 error: refusal.as_ref().map(|reason| ExecuteError {
                     kind: crate::error::ErrorKind::PermissionDenied,
@@ -793,9 +794,8 @@ impl SubmilliMcp {
         variables: &Arc<submilli_blueprint::VarBindings>,
         tool: &str,
     ) -> Option<crate::record::Recording> {
-        let factory = self.state.run_recorder()?;
         crate::record::Recording::start(
-            Some(factory),
+            &self.state,
             crate::record::RunStart {
                 execution_id: uuid::Uuid::new_v4().to_string(),
                 label: parts
@@ -804,6 +804,7 @@ impl SubmilliMcp {
                     .map_or_else(|| "unauthenticated".to_owned(), |p| p.0.clone()),
                 entry: crate::record::RunEntry::McpFileTool { tool: tool.into() },
                 client: parts.extensions.get::<McpClient>().map(|c| c.0.clone()),
+                tool_call_id: parts.extensions.get::<McpToolCall>().map(|c| c.0.clone()),
                 session_id: session_header(parts),
                 idempotency_key: None,
                 blueprint_name: self.blueprint_name.clone(),
@@ -1020,16 +1021,9 @@ fn read_window(
     })
 }
 
-// Hand-written rather than `#[tool_handler]` so `list_tools` can serve a
-// per-blueprint description (the canonical prompt with `{vfs_mode}` resolved).
-// Argument normalization and tool failures are handled before returning to clients.
-impl ServerHandler for SubmilliMcp {
-    fn get_info(&self) -> ServerInfo {
-        ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
-            .with_instructions("Submilli: compile and run TypeScript-subset programs in a sandbox.")
-    }
-
-    async fn call_tool(
+impl SubmilliMcp {
+    /// Runs a tool call: the audit, argument normalization, and the tool itself.
+    async fn dispatch_tool(
         &self,
         mut request: CallToolRequestParams,
         mut context: RequestContext<RoleServer>,
@@ -1095,6 +1089,71 @@ impl ServerHandler for SubmilliMcp {
         let success = result.as_ref().is_ok_and(|r| !r.is_error.unwrap_or(false));
         audit.finish(success);
         with_execution_id(result, &audit.id)
+    }
+}
+
+/// The client's id for this tool call, when it names one: Claude Code sends
+/// `claudecode/toolUseId` in the request's `_meta`.
+fn tool_call_id(context: &RequestContext<RoleServer>) -> Option<String> {
+    context
+        .meta
+        .0
+        .get("claudecode/toolUseId")
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_owned)
+}
+
+// Hand-written rather than `#[tool_handler]` so `list_tools` can serve a
+// per-blueprint description (the canonical prompt with `{vfs_mode}` resolved).
+// Argument normalization and tool failures are handled before returning to clients.
+impl ServerHandler for SubmilliMcp {
+    fn get_info(&self) -> ServerInfo {
+        ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
+            .with_instructions("Submilli: compile and run TypeScript-subset programs in a sandbox.")
+    }
+
+    async fn call_tool(
+        &self,
+        request: CallToolRequestParams,
+        mut context: RequestContext<RoleServer>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let tool_call_id = tool_call_id(&context);
+        if let (Some(id), Some(parts)) = (
+            tool_call_id.clone(),
+            context.extensions.get_mut::<axum::http::request::Parts>(),
+        ) {
+            parts.extensions.insert(McpToolCall(id));
+        }
+        let Some(hub) = self.state.event_hub().cloned() else {
+            return self.dispatch_tool(request, context).await;
+        };
+        let started = std::time::Instant::now();
+        let tool = request.name.to_string();
+        let session = context
+            .extensions
+            .get::<axum::http::request::Parts>()
+            .and_then(session_header);
+        let result = self.dispatch_tool(request, context).await;
+        let (ok, bytes) = match &result {
+            Ok(result) => (
+                !result.is_error.unwrap_or(false),
+                serde_json::to_vec(result).map_or(0, |bytes| bytes.len() as u64),
+            ),
+            Err(error) => (
+                false,
+                serde_json::to_vec(error).map_or(0, |bytes| bytes.len() as u64),
+            ),
+        };
+        crate::record::events::tool_call(
+            Some(&hub),
+            session.as_deref(),
+            tool_call_id.as_deref(),
+            &tool,
+            ok,
+            bytes,
+            started.elapsed(),
+        );
+        result
     }
 
     async fn list_tools(

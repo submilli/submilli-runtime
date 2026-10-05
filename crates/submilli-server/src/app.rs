@@ -146,6 +146,8 @@ struct AppStateInner {
     llm_dispatch_factory: LlmDispatchFactory,
     mcp_setup: McpSetup,
     run_recorder: Option<Arc<dyn crate::record::RunRecorderFactory>>,
+    /// Session events for a recorder that wants them.
+    event_hub: Option<Arc<crate::record::events::EventHub>>,
     /// Cancellers of the recorded runs in flight, by execution id. Poison means a panic
     /// interrupted a registration; AGENTS.md permits the poisoned-lock panic.
     running: Mutex<HashMap<String, tokio::sync::oneshot::Sender<()>>>,
@@ -323,6 +325,11 @@ impl AppState {
                 llm_dispatch: config.llm_dispatch,
                 llm_dispatch_factory,
                 mcp_setup,
+                event_hub: config
+                    .run_recorder
+                    .as_ref()
+                    .filter(|factory| factory.wants_events())
+                    .map(|factory| crate::record::events::EventHub::new(factory.clone())),
                 run_recorder: config.run_recorder,
                 running: Mutex::new(HashMap::new()),
             }),
@@ -386,6 +393,10 @@ impl AppState {
 
     pub(crate) fn run_recorder(&self) -> Option<&Arc<dyn crate::record::RunRecorderFactory>> {
         self.inner.run_recorder.as_ref()
+    }
+
+    pub(crate) fn event_hub(&self) -> Option<&Arc<crate::record::events::EventHub>> {
+        self.inner.event_hub.as_ref()
     }
 
     /// Cancels a recorded run in flight, whoever sent it. The run ends with a

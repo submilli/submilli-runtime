@@ -19,7 +19,9 @@ use submilli_blueprint::{Blueprint, VarBindings};
 
 use crate::error::ExecuteError;
 
+pub mod events;
 mod program;
+pub use events::{EVENT_SCHEMA, EventKind, SessionEvent};
 pub use program::{ProgramRun, run_program};
 
 /// How a run reached the server.
@@ -48,6 +50,8 @@ pub struct RunStart {
     pub entry: RunEntry,
     /// The MCP client's name from its `initialize`, such as `langchain-mcp-adapters`.
     pub client: Option<String>,
+    /// The MCP client's id for the tool call that started the run, when it sent one.
+    pub tool_call_id: Option<String>,
     pub session_id: Option<String>,
     pub idempotency_key: Option<String>,
     pub blueprint_name: String,
@@ -94,11 +98,6 @@ pub trait RunRecorder: Send + Sync {
         DecisionLogConfig::default()
     }
 
-    /// Sees records as the run makes them, for streaming a run while it executes.
-    fn observer(&self) -> Option<Arc<dyn RecordObserver>> {
-        None
-    }
-
     /// The run ended. Called once, from the task that owns the run, including when the
     /// client disconnected or the run timed out.
     fn finish(&self, run: FinishedRun);
@@ -116,6 +115,16 @@ pub trait RunRecorderFactory: Send + Sync {
 
     /// An idempotent retry was answered without running.
     fn retried(&self, _retry: RetryLink) {}
+
+    /// Whether to stream [`SessionEvent`]s to [`event`](Self::event). Asked once, when
+    /// the server starts.
+    fn wants_events(&self) -> bool {
+        false
+    }
+
+    /// One event, in sequence order, on a task of the server's that delivers nothing
+    /// else meanwhile. See [`events`] for what is dropped under load.
+    fn event(&self, _event: SessionEvent) {}
 }
 
 /// A run being recorded: its recorder and when it started.
@@ -123,23 +132,59 @@ pub trait RunRecorderFactory: Send + Sync {
 pub(crate) struct Recording {
     pub recorder: Arc<dyn RunRecorder>,
     pub started: std::time::Instant,
+    events: Option<Arc<events::RunEvents>>,
 }
 
 impl Recording {
-    pub(crate) fn start(
-        factory: Option<&Arc<dyn RunRecorderFactory>>,
-        run: RunStart,
-    ) -> Option<Self> {
-        let recorder = factory?.start(run)?;
+    pub(crate) fn start(state: &crate::app::AppState, run: RunStart) -> Option<Self> {
+        let started = std::time::Instant::now();
+        let recorder = state.run_recorder()?.start(run.clone())?;
+        let events = state
+            .event_hub()
+            .map(|hub| events::RunEvents::start(hub, &run));
         Some(Self {
             recorder,
-            started: std::time::Instant::now(),
+            started,
+            events,
         })
+    }
+
+    /// What sees the run's records as they are made.
+    pub(crate) fn observer(&self) -> Option<Arc<dyn RecordObserver>> {
+        self.events
+            .clone()
+            .map(|events| events as Arc<dyn RecordObserver>)
+    }
+
+    /// The decision log for the run.
+    pub(crate) fn log(&self) -> Arc<interpreter::runtime::DecisionLog> {
+        interpreter::runtime::DecisionLog::new(self.recorder.log_config(), self.observer())
+    }
+
+    /// The run ended.
+    pub(crate) fn finish(&self, run: FinishedRun) {
+        if let Some(events) = &self.events {
+            events.finished(
+                run.dispatched,
+                run.error.as_ref().map(|error| error.kind),
+                run.wall,
+                run.console.len() as u64,
+            );
+        }
+        self.recorder.finish(run);
+    }
+
+    /// What its caller received.
+    pub(crate) fn returned(&self, bytes: u64) {
+        if let Some(events) = &self.events {
+            events.returned(bytes);
+        }
+        self.recorder.returned(bytes);
     }
 
     /// Finishes a run that never reached the runner.
     pub(crate) fn undispatched(&self, error: &ExecuteError) {
-        self.recorder.finish(FinishedRun {
+        self.finish(FinishedRun {
             dispatched: false,
             error: Some(error.clone()),
             result: None,

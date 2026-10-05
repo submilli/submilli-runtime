@@ -324,6 +324,7 @@ async fn run(
             audit: crate::audit::execution(),
             entry: execute::ExecuteEntry::Http,
             client: None,
+            tool_call_id: None,
             idempotency_key,
         },
     )

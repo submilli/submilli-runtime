@@ -209,6 +209,7 @@ pub(crate) async fn one_shot(
             audit,
             entry: ExecuteEntry::Http,
             client: None,
+            tool_call_id: None,
             idempotency_key: None,
         },
     )
@@ -242,6 +243,8 @@ pub(crate) struct ExecuteInputs<'a> {
     pub entry: ExecuteEntry,
     /// The MCP client's name, for the run's record.
     pub client: Option<String>,
+    /// The MCP client's id for the tool call, for the run's record.
+    pub tool_call_id: Option<String>,
     /// The session API's `Idempotency-Key`, for the run's record.
     pub idempotency_key: Option<&'a str>,
 }
@@ -290,7 +293,7 @@ impl ExecuteOutcome {
 /// session id (idempotent), builds the per-session VFS + HTTP client + host
 /// services, resolves imports, runs, and touches the session's idle timer.
 pub(crate) async fn execute_core(state: &AppState, inputs: ExecuteInputs<'_>) -> ExecuteOutcome {
-    let recording = crate::record::Recording::start(state.run_recorder(), run_start(&inputs));
+    let recording = crate::record::Recording::start(state, run_start(&inputs));
     let registration = recording
         .as_ref()
         .zip(inputs.audit.as_ref())
@@ -300,9 +303,7 @@ pub(crate) async fn execute_core(state: &AppState, inputs: ExecuteInputs<'_>) ->
     if let Some(recording) = &recording {
         match (&outcome.response.error, outcome.dispatched) {
             (Some(error), false) => recording.undispatched(error),
-            _ => recording
-                .recorder
-                .returned(returned_bytes(&outcome.response)),
+            _ => recording.returned(returned_bytes(&outcome.response)),
         }
     }
     outcome
@@ -326,6 +327,7 @@ fn run_start(inputs: &ExecuteInputs<'_>) -> crate::record::RunStart {
         ),
         entry,
         client: inputs.client.clone(),
+        tool_call_id: inputs.tool_call_id.clone(),
         session_id: (!inputs.session_id.is_empty()).then(|| inputs.session_id.to_owned()),
         idempotency_key: inputs.idempotency_key.map(str::to_owned),
         blueprint_name: inputs.blueprint_name.to_owned(),
@@ -369,6 +371,7 @@ async fn execute_recorded(
         audit: execution_audit,
         entry,
         client: _,
+        tool_call_id: _,
         idempotency_key: _,
     } = inputs;
     if let Some(audit) = &execution_audit {

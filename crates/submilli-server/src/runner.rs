@@ -150,12 +150,7 @@ pub(crate) async fn run(
         let audit = services.audit.clone();
         let budget = services.llm_budget.clone();
         let recording = services.recording.clone();
-        let log = recording.as_ref().map(|recording| {
-            DecisionLog::new(
-                recording.recorder.log_config(),
-                recording.recorder.observer(),
-            )
-        });
+        let log = recording.as_ref().map(crate::record::Recording::log);
         let outcome = run_inner(
             &owned_code,
             parsed,
@@ -180,7 +175,7 @@ pub(crate) async fn run(
             audit.finish(outcome.error.is_none());
         }
         if let (Some(recording), Some(log)) = (recording, log) {
-            recording.recorder.finish(FinishedRun {
+            recording.finish(FinishedRun {
                 dispatched: true,
                 error: outcome.error.clone(),
                 result: outcome.value.clone(),
