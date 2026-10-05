@@ -90,6 +90,7 @@ separate resource/dependency backlog.
 | R22 | Complete: retained | Keep iterative filesystem traversal; explicit sites handled individually |
 | R23 | Complete: retained | Preserve parser, closure arity and compiler limits |
 | R24 | Complete: retained | Keep real boundary errors; narrow item 31 |
+| R25 | Deferred by user | Item 32 stays open; no cancellation redesign |
 
 ### R01 execution evidence
 
@@ -466,6 +467,17 @@ boundary failures, not a mandate to turn every internal invariant into a Result.
 This is a retention/scope decision, not a claim that all boundaries are panic-free.
 Documentation-only; no tests rerun. Three independent reviews found no issues;
 diff checks passed.
+
+### R25 execution evidence
+
+Preserve the user's explicit deferral of item 32. `GracefulShutdownTracker::watch`
+spawns owned work; dropping its waiter does not abort the spawned request. Its
+separate stop token can cancel work during forced shutdown. This distinction is
+visible in implementation and the waiter-cancellation test. No new unaccepted panic
+has been demonstrated here, and this review neither redesigns ownership nor marks
+item 32 complete. The inventory disposition is recorded; the underlying audit stays
+deferred. Documentation-only, no tests rerun. Three independent reviewers found
+no issues; diff checks passed.
 
 ## Completed fixes: candidates and decisions
 
