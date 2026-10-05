@@ -88,6 +88,11 @@ function textsAndCounts(): (string | number)[] {
   return ["a", 1];
 }
 
+function annotatedEach<T>(use: (x: T | Box<number>, i: number) => number, value: T): T {
+  use(new Box(5), 0);
+  return value;
+}
+
 function listOrNumbers<T>(value: T | number[]): T | null {
   return null;
 }
@@ -143,7 +148,11 @@ function main(): void {
   const label = "x";
   const inferredTagged = tagged({ value: textOrCount(1), list: textsAndCounts(), last: label, use: (each) => 1 });
   const taggedList: (string | number)[] = inferredTagged;
-  assert(expectedWider instanceof Box && taggedList.length === 2, "an expected result and a field binding the fallback's type");
+  assert(expectedWider instanceof Box, "an expected result's close match is not checked");
+  assert(taggedList.length === 2, "a non-callback field binds the fallback's type");
+
+  const viaAnnotation = annotatedEach((x: Box<string> | Box<number | string>, i) => i, new Box("s"));
+  assert(viaAnnotation.value === "s", "an annotated callback parameter wider than its slot");
 
   const inferredList = listOrNumbers(lists(true));
   const fromList: string[] | null = inferredList;

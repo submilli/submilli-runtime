@@ -263,22 +263,25 @@ impl TypeParamSubstitution {
         arg_ty: &Type,
         types: TypeResolver<'_>,
     ) -> Result<(), UnifyError> {
-        let close_matches_len = self.close_matches.len();
-        let unified = Unifier::new(self, Some(types), types.limits).unify(param_ty, arg_ty);
-        self.forget_close_matches_of_failure(&unified, close_matches_len);
-        unified
+        self.keeping_close_matches_on_success(|sub| {
+            Unifier::new(sub, Some(types), types.limits).unify(param_ty, arg_ty)
+        })
     }
 
-    /// Drop the close matches a unification recorded when it failed: its
-    /// mismatch is reported already, and its members never took part.
-    fn forget_close_matches_of_failure(
+    /// Run `unify` and keep the close matches it records only if it
+    /// succeeds: a failed unification's mismatch is reported already, and
+    /// its members never took part.
+    #[allow(clippy::result_large_err)]
+    fn keeping_close_matches_on_success(
         &mut self,
-        unified: &Result<(), UnifyError>,
-        close_matches_len: usize,
-    ) {
+        unify: impl FnOnce(&mut Self) -> Result<(), UnifyError>,
+    ) -> Result<(), UnifyError> {
+        let count = self.close_match_count();
+        let unified = unify(self);
         if unified.is_err() {
-            self.close_matches.truncate(close_matches_len);
+            self.forget_close_matches_after(count);
         }
+        unified
     }
 
     /// [`unify`](Self::unify) for a **call-argument** position.
@@ -303,13 +306,12 @@ impl TypeParamSubstitution {
         {
             return Ok(());
         }
-        let close_matches_len = self.close_matches.len();
-        let mut unifier = Unifier::new(self, Some(types), types.limits);
-        unifier.subtype_widening = true;
-        unifier.is_argument = true;
-        let unified = unifier.unify(param_ty, arg_ty);
-        self.forget_close_matches_of_failure(&unified, close_matches_len);
-        unified
+        self.keeping_close_matches_on_success(|sub| {
+            let mut unifier = Unifier::new(sub, Some(types), types.limits);
+            unifier.subtype_widening = true;
+            unifier.is_argument = true;
+            unifier.unify(param_ty, arg_ty)
+        })
     }
 }
 
@@ -802,6 +804,10 @@ impl<'a> Unifier<'a> {
     ///   only when nothing else binds it, and each closely matched member
     ///   waits to be checked once inference is done (see
     ///   [`TypeParamSubstitution::take_close_matches`]).
+    ///
+    /// In a callback's parameter (a contravariant position), a closely
+    /// matched member is dropped instead: the parameter only has to accept
+    /// what the slot passes.
     #[allow(clippy::result_large_err)]
     fn unify_union_into_lone_type_var(
         &mut self,
@@ -836,8 +842,6 @@ impl<'a> Unifier<'a> {
             {
                 continue;
             }
-            // A callback's parameter needs only to accept what the slot
-            // passes, so its closely matched members need not fit.
             match pairable.iter().find(|other| closely_matches(other, arg)) {
                 Some(_) if self.contravariant => {}
                 Some(other) => closely_matched.push((*other, arg)),

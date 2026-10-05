@@ -965,7 +965,7 @@ impl Inferer<'_> {
     /// before its arguments are inferred, as bindings an argument may still
     /// replace (see [`TypeParamSubstitution::mark_from_expected_result`]).
     ///
-    /// The expected type is no argument, so the union members it closely
+    /// The expected type is not an argument, so the union members it closely
     /// matches are not checked.
     fn bind_from_expected_result(&self, sub: &mut TypeParamSubstitution, ret: &Type, want: &Type) {
         let before = sub.clone();
@@ -1101,12 +1101,16 @@ impl Inferer<'_> {
             return Ok(());
         };
         let diagnostics_before = self.diagnostics.len();
+        // An annotation only has to accept what the slot passes, so its
+        // closely matched members are not checked.
+        let close_matches_before = sub.close_match_count();
         for (declared, param) in declared_params.iter().zip(params) {
             if let Some(annotation) = &declared.ty {
                 let annotated = self.resolve_type(annotation)?;
                 let _ = sub.unify_argument(param, &annotated, self.resolver());
             }
         }
+        sub.forget_close_matches_after(close_matches_before);
         self.diagnostics.truncate(diagnostics_before);
 
         Ok(())
@@ -1318,6 +1322,7 @@ impl Inferer<'_> {
                     fix_callback_parameters(sub, &param_ty, inferred_generics);
                 }
                 let errors_before = self.error_count();
+                let close_matches_before = sub.close_match_count();
                 let (typed_id, arg_ty) =
                     self.infer_generic_argument(arg_id, &param_ty, &arguments, sub)?;
                 typed_slots[i] = Some(typed_id);
@@ -1332,7 +1337,13 @@ impl Inferer<'_> {
                 if already_reported {
                     sub.keep_replaceable_bindings(&param_ty);
                 }
-                if let Err(error) = sub.unify_argument(&param_ty, &arg_ty, self.resolver()) {
+                let unified = sub.unify_argument(&param_ty, &arg_ty, self.resolver());
+                // A reported argument's close matches, including those its
+                // object literal's fields recorded, would report it again.
+                if already_reported || unified.is_err() {
+                    sub.forget_close_matches_after(close_matches_before);
+                }
+                if let Err(error) = unified {
                     self.unify_argument_error(
                         error,
                         sub,

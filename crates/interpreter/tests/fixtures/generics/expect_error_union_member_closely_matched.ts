@@ -2,14 +2,16 @@
 // class, interface or array kind pairs with it rather than going to the
 // parameter's type variable, so a mismatch inside it is reported, as in tsc,
 // including when absorbing another member already bound the type variable
-// or a later argument binds it, as for a constructor.
+// or a later argument or field binds it, for a function or a constructor call,
+// once for each argument.
 // expect-error: expected `number`, got `string`
 // expect-error: expected `number`, got `string`
 // expect-error: expected `number`, got `string`
 // expect-error: type parameter `T` already bound to `number`, cannot bind to `string`
 // expect-error: expected `number`, got `boolean`
 // expect-error: expected `number`, got `boolean`
-// expect-error-count: 6
+// expect-error: expected `number`, got `string`
+// expect-error-count: 7
 class Box<A> {
   constructor(public v: A) {}
 }
@@ -58,6 +60,10 @@ function textOrFlagBox(flag: boolean): Box<string> | Box<boolean> {
   return flag ? new Box("a") : new Box(true);
 }
 
+function fromFields<T>(holder: { value: T | Box<number>; last: T; use: (each: T) => number }): T {
+  return holder.last;
+}
+
 class Pair<T> {
   constructor(first: T | Box<number>, second: T) {}
 }
@@ -66,6 +72,7 @@ function main(): void {
   fromBox(boxOrText(true));
   laterDecides(textOrFlagBox(true), new Box("s"));
   new Pair(textOrFlagBox(true), new Box("s"));
+  fromFields({ value: textOrFlagBox(true), last: new Box(true), use: (each) => 1 });
   unwrap(eitherBox(false));
   fromList(listOrFlag(true));
   fromHolder(holderOrFlag(true));
