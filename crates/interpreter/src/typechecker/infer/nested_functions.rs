@@ -184,11 +184,6 @@ impl Inferer<'_> {
         let local = missing.created_after.as_ref().ok_or_else(|| {
             super::inference_failure("missing nested function creation point").with_span(span)
         })?;
-        // A local declared below the function is already reported where the
-        // function's body reads it, as for any closure.
-        if local.span.start > missing.name.span.start {
-            return Ok(());
-        }
         let message = if missing.name.name == *name {
             format!(
                 "`{name}` is used before `{}`, which it uses, is declared",

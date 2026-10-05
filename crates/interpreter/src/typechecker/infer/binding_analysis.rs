@@ -470,10 +470,10 @@ impl Analysis {
             .find_map(|(index, s)| s.get(name).map(|binding| (index, binding)))
     }
 
-    /// The binding a use of `ident` resolves to. A `let`/`const` it names is
-    /// captured by each nested function being scanned that is declared in the
-    /// same block, which keeps the last declared of those.
-    fn resolve_use(&mut self, ident: &Ident) -> Option<Binding> {
+    /// The binding a use of `ident` resolves to, and the index of its scope. A
+    /// `let`/`const` it names is captured by each nested function being scanned
+    /// that is declared in the same block, which keeps the last declared of those.
+    fn resolve_use(&mut self, ident: &Ident) -> Option<(usize, Binding)> {
         let (scope, binding) = self.lookup(&ident.name)?;
         let binding = *binding;
         if binding.block_local {
@@ -485,7 +485,18 @@ impl Analysis {
                 },
             );
         }
-        Some(binding)
+        Some((scope, binding))
+    }
+
+    /// Whether the use is inside a nested function declared in block `scope`.
+    /// `resolve_use` has recorded each such function's capture of the local
+    /// (`note_capture` keeps the same functions), so its closure is created
+    /// only once the local is declared, and calling it earlier is reported
+    /// where it is called.
+    fn is_inside_function_declared_in(&self, scope: usize) -> bool {
+        self.nested_functions
+            .iter()
+            .any(|&(_, declaring_scope)| declaring_scope == scope)
     }
 
     fn note_capture(&mut self, scope: usize, local: Ident) {
@@ -505,10 +516,10 @@ impl Analysis {
     }
 
     fn read(&mut self, ident: &Ident) {
-        let Some(binding) = self.resolve_use(ident) else {
+        let Some((scope, binding)) = self.resolve_use(ident) else {
             return;
         };
-        if binding.initialized {
+        if binding.initialized || self.is_inside_function_declared_in(scope) {
             return;
         }
         let declaration = binding.span;
@@ -522,7 +533,7 @@ impl Analysis {
     }
 
     fn write(&mut self, ident: &Ident) {
-        let Some(binding) = self.resolve_use(ident) else {
+        let Some((_, binding)) = self.resolve_use(ident) else {
             return;
         };
         let declaration = binding.span;
