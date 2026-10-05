@@ -71,6 +71,7 @@ separate resource/dependency backlog.
 | R03 | Complete: retained | Keep checked public arena/span/source contracts; no API redesign |
 | R04 | Complete: simplified | Removed invariant-only namespace resolution/field Result interfaces |
 | R05 | Complete: retained | Preserve capture/narrowing behavior and existing error propagation |
+| R06 | Complete: retained | Keep ordered substitution and numeric filter dispatch structure |
 
 ### R01 execution evidence
 
@@ -171,6 +172,18 @@ reversion is justified. This is a decision to keep the current simple fallible
 paths, not a claim that every private pop is input-triggerable. Source/history
 review only; no runtime changes/tests rerun. All three independent review roles
 reported no findings; diff checks passed. This commit records the disposition.
+
+### R06 execution evidence
+
+The exact-object unifier checks equal lengths and ordered keys before zipping
+BTreeMap values; corresponding values therefore share keys. Its real mismatch
+and recursive unification errors remain necessary. `Comparison::eval` dispatches
+each numeric operator directly to `eval_numeric` with its comparison; that helper
+handles nonnumeric/missing values as the established non-match semantics. Neither
+mechanism now adds an invariant-only error interface. Restoring the old lookup or
+nested unreachable arm would make the code less direct. Retain both changes;
+this is a resolved no-revert decision. Source inspection only, no code/tests changed.
+Three independent reviewers reported no findings; diff checks passed.
 
 ## Completed fixes: candidates and decisions
 
