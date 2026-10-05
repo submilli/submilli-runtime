@@ -1,9 +1,9 @@
 // A union argument's member that matches a parameter member of the same
 // class, interface or array kind pairs with it rather than going to the
-// parameter's type variable, so a mismatch inside it is reported, as in tsc,
-// including when absorbing another member already bound the type variable
-// or a later argument or field binds it, for a function or a constructor call,
-// once for each argument.
+// parameter's type variable, so a mismatch inside it is reported, as in tsc.
+// This holds when absorbing another member already bound the type variable,
+// or when a later argument or object-literal field binds it, for function and
+// constructor calls alike. Each mismatching argument is reported once.
 // expect-error: expected `number`, got `string`
 // expect-error: expected `number`, got `string`
 // expect-error: expected `number`, got `string`

@@ -268,18 +268,18 @@ impl TypeParamSubstitution {
         })
     }
 
-    /// Run `unify` and keep the close matches it records only if it
+    /// Run `attempt` and keep the close matches it records only if it
     /// succeeds: a failed unification's mismatch is reported already, and
     /// its members never took part.
     #[allow(clippy::result_large_err)]
     fn keeping_close_matches_on_success(
         &mut self,
-        unify: impl FnOnce(&mut Self) -> Result<(), UnifyError>,
+        attempt: impl FnOnce(&mut Self) -> Result<(), UnifyError>,
     ) -> Result<(), UnifyError> {
-        let count = self.close_match_count();
-        let unified = unify(self);
+        let close_matches_before = self.close_match_count();
+        let unified = attempt(self);
         if unified.is_err() {
-            self.forget_close_matches_after(count);
+            self.forget_close_matches_after(close_matches_before);
         }
         unified
     }
