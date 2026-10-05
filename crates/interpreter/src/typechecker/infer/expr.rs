@@ -121,10 +121,17 @@ impl ChainField {
 /// `type Status = "a" | "b"` and a plain `"a" | "b"` hint behave identically.
 fn expects_literal(expected: Option<&Type>, is_literal: fn(&Type) -> bool) -> bool {
     match expected.map(crate::types::Type::peel) {
-        Some(Type::Union(ms)) => ms.iter().any(|m| is_literal(m.peel())),
-        Some(ty) => is_literal(ty),
+        Some(Type::Union(ms)) => ms.iter().any(|m| names_literal(m.peel(), is_literal)),
+        Some(ty) => names_literal(ty, is_literal),
         None => false,
     }
+}
+
+/// Whether `ty` is a literal type `is_literal` accepts, counting `boolean` as
+/// the `true | false` it is, as TypeScript does: `[s, true]` against
+/// `[string, boolean]` is `[string, true]`.
+fn names_literal(ty: &Type, is_literal: fn(&Type) -> bool) -> bool {
+    is_literal(ty) || (matches!(ty, Type::Boolean) && is_literal(&Type::BooleanLiteral(true)))
 }
 
 /// Whether an object literal providing exactly `lit_names` could only be
@@ -5643,6 +5650,14 @@ impl Inferer<'_> {
             Some(t) => t.clone(),
             None => Type::Error,
         });
+        // The seed widened every literal type to check the elements against;
+        // the regular ones stay, as in TypeScript: `[h]` with `h: "hello"` is
+        // `"hello"[]`.
+        let element_ty = if hint_pins_element_ty {
+            element_ty
+        } else {
+            self.kept_element_type(element_ty, &typed_elements)?
+        };
 
         Ok((
             TypedExprKind::ArrayLiteral {
@@ -10684,18 +10699,15 @@ mod tests {
     #[test]
     fn logical_and_correct() {
         let ta = run_clean("let x: boolean = true && false;");
-        assert_eq!(nth_decl_value_ty(&ta, 0), Type::Boolean);
+        assert_eq!(nth_decl_value_ty(&ta, 0), Type::BooleanLiteral(false));
     }
 
     #[test]
-    fn logical_and_number_lhs_widens_result() {
-        // `1` widens to `number` (no literal-type inference without a hint),
-        // so the falsy part of the lhs survives in the result union.
+    fn logical_and_keeps_literal_operands() {
+        // A `let` initializer keeps its literal types, as in TypeScript: `1`
+        // is never falsy, so the result is the right side's `true`.
         let ta = run_clean("let x: number | boolean = 1 && true;");
-        assert_eq!(
-            nth_decl_value_ty(&ta, 0),
-            Type::union(vec![Type::Number, Type::Boolean])
-        );
+        assert_eq!(nth_decl_value_ty(&ta, 0), Type::BooleanLiteral(true));
     }
 
     #[test]

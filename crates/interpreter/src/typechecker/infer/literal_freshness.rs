@@ -29,7 +29,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use crate::compiler_error::CompilerFailure;
 use crate::{BinOp, ExprId, MangledName, Type, TypedExprKind};
 
-use super::{Inferer, narrowing};
+use super::{Inferer, assignable, narrowing};
 
 /// Where the literal types in a binding's type came from.
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -285,6 +285,40 @@ impl Inferer<'_> {
         Ok(regular)
     }
 
+    /// The element type of an array literal whose elements were checked
+    /// against `seed`, their first element's type with every literal type
+    /// widened: the union of the elements' own types with only their fresh
+    /// literal types widened.
+    ///
+    /// Only an array of primitives narrows, and only when every element is a
+    /// value that fits `seed`, so the result names no type `seed` doesn't.
+    pub(super) fn kept_element_type(
+        &self,
+        seed: Type,
+        elements: &[crate::TypedArrayElement],
+    ) -> Result<Type, CompilerFailure> {
+        if !is_primitive_union(&seed) {
+            return Ok(seed);
+        }
+        let mut members = Vec::with_capacity(elements.len());
+        for element in elements {
+            let crate::TypedArrayElement::Value(value) = element else {
+                return Ok(seed);
+            };
+            let ty = &self
+                .typed_ast
+                .try_expr(*value)
+                .map_err(crate::typechecker::arena_failure)?
+                .ty;
+            let kept = self.widen_fresh_literals(*value, ty)?;
+            if !is_primitive_union(&kept) || !assignable(&kept, &seed, self.resolver()) {
+                return Ok(seed);
+            }
+            members.extend(union_members(&kept).into_iter().cloned());
+        }
+        Ok(without_absorbed_literals(members))
+    }
+
     /// The literal types `&&` or `||` keeps of a left side whose type doesn't
     /// name them: `s && x` with `s: string` keeps the `""` that is the falsy
     /// part of `string`, a regular literal type as in TypeScript.
@@ -386,6 +420,18 @@ impl Inferer<'_> {
                     pending.push(*receiver);
                     self.method_result_is_declared(*receiver, &name.name, &expr.ty)?
                 }
+                // An element's own literal types are nested in the array.
+                TypedExprKind::ArrayLiteral { elements, .. } => {
+                    let mut regular = true;
+                    for element in elements {
+                        let id = element.expr_id();
+                        if let crate::TypedArrayElement::Value(value) = element {
+                            regular &= self.are_literals_regular(*value)?;
+                        }
+                        pending.push(id);
+                    }
+                    regular
+                }
                 // A value with no literal type inside it has nothing to be
                 // fresh: a number, a string, a call to a closure returning one.
                 _ => !contains_literal(&expr.ty),
@@ -419,6 +465,16 @@ impl Inferer<'_> {
                 .map(|value| vec![*value]),
             _ => None,
         }
+    }
+
+    /// Whether every literal type of the type of `value` is regular.
+    fn are_literals_regular(&self, value: ExprId) -> Result<bool, CompilerFailure> {
+        let ty = &self
+            .typed_ast
+            .try_expr(value)
+            .map_err(crate::typechecker::arena_failure)?
+            .ty;
+        Ok(literal_members(ty).is_subset(&self.regular_literals(value)?))
     }
 
     /// Whether the literal types in the result of calling `method` on
@@ -537,6 +593,23 @@ impl Inferer<'_> {
 /// The element a numeric path index names, when it is one.
 fn tuple_index(index: f64) -> Option<usize> {
     (index >= 0.0 && index.fract() == 0.0 && index <= u32::MAX as f64).then_some(index as usize)
+}
+
+/// Whether `ty` is made only of `string`, `number`, `boolean`, `null` and
+/// their literal types.
+fn is_primitive_union(ty: &Type) -> bool {
+    union_members(ty).into_iter().all(|member| {
+        matches!(
+            member,
+            Type::String
+                | Type::Number
+                | Type::Boolean
+                | Type::Null
+                | Type::StringLiteral(_)
+                | Type::NumberLiteral(_)
+                | Type::BooleanLiteral(_)
+        )
+    })
 }
 
 /// `ty`'s union members, through aliases, or `ty` itself.

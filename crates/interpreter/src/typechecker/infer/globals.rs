@@ -40,6 +40,7 @@ impl<'a> Inferer<'a> {
                         continue;
                     }
                     let hint = ty.as_ref().map(|a| self.resolve_type(a)).transpose()?;
+                    self.keeps_literal_types = true;
                     let (typed_value, value_ty) = self.infer_expr(value, hint.as_ref())?;
                     // Reassignable, so a fresh literal widens; see the block-scoped
                     // `Let` arm in `stmt.rs`.
@@ -238,7 +239,11 @@ mod tests {
     #[test]
     fn let_without_annotation_infers_initializer_type() {
         let ta = run_clean("let x = 1;");
-        assert_eq!(nth_decl_value_ty(&ta, 0), Type::Number);
+        // The initializer keeps its literal type; the binding widens it.
+        assert_eq!(
+            nth_decl_value_ty(&ta, 0),
+            Type::NumberLiteral(crate::types::LiteralF64(1.0))
+        );
         let reg = PackageDeclaration::from_typed_ast(&ta);
         match &reg.values.get("x").unwrap().kind {
             ValueKind::Let { ty, .. } => assert_eq!(*ty, Type::Number),
@@ -291,7 +296,11 @@ mod tests {
     #[test]
     fn let_without_annotation_widens_to_the_base_primitive() {
         let ta = run_clean(r#"let y = "hi";"#);
-        assert_eq!(nth_decl_value_ty(&ta, 0), Type::String);
+        let reg = PackageDeclaration::from_typed_ast(&ta);
+        match &reg.values.get("y").unwrap().kind {
+            ValueKind::Let { ty, .. } => assert_eq!(*ty, Type::String),
+            _ => panic!("expected Let"),
+        }
     }
 
     /// Only a bare literal keeps its type; a computed initializer widens even under

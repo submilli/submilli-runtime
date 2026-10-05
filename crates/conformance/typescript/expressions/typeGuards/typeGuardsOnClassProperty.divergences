@@ -1,8 +1,4 @@
-types: 31 of 71 tsc entries compared, 2 differ
-
-line 22: { prop1: "string" , prop2: true }
-  tsc:  { prop1: string; prop2: true; }
-  ours: { prop1: string; prop2: boolean }
+types: 31 of 71 tsc entries compared, 1 differ
 
 line 27: typeof o.prop1 === "string" && o.prop1.toLowerCase()
   tsc:  string | false
