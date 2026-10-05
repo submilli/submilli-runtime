@@ -352,6 +352,13 @@ fn postfix_result_ty(operand_ty: &Type) -> Type {
     }
 }
 
+/// The type an array literal reads its hint as: peeled, and narrowed to the sole
+/// array-like member of a union.
+fn array_literal_hint_shape(hint: &Type) -> &Type {
+    let peeled = hint.peel();
+    sole_array_like_member(peeled).unwrap_or(peeled)
+}
+
 /// The one `Array`/`Tuple` member of a union hint, when it has exactly one. An array
 /// literal can be none of a union's other members, so that member pins its shape —
 /// `[number, number] | null` is still a tuple hint, and `new Map<string, number>([["x",
@@ -5414,9 +5421,7 @@ impl Inferer<'_> {
         // Peel first: a tuple reached through an alias (`type Pair = [A, B]`,
         // including a generic one) is still a tuple hint, and dropping to the
         // array path below would infer `A[]` and fail the assignability check.
-        let expected = expected
-            .map(Type::peel)
-            .map(|hint| sole_array_like_member(hint).unwrap_or(hint));
+        let expected = expected.map(array_literal_hint_shape);
         if let Some(Type::Tuple(expected_elems)) = expected {
             if has_spread {
                 return self.infer_spread_tuple_literal(elements, expected_elems, span);
@@ -9039,7 +9044,14 @@ impl Inferer<'_> {
         span: Span,
     ) -> Result<(TypedExprKind, Type), CompilerFailure> {
         let target_ty = self.resolve_type(&ty)?;
-        let (inner_id, inner_ty) = self.infer_expr(inner, None)?;
+        // An empty `[]` has no element type of its own, so it takes the target's
+        // array element type, as under an annotation. Other operands infer
+        // unhinted: a hint is enforced (an object literal rejects fields the target
+        // lacks), while a cast only needs one type assignable to the other.
+        let hints_empty_array =
+            gives_empty_array_element_type(&target_ty) && is_empty_array_literal(self.ast, inner)?;
+        let operand_hint = hints_empty_array.then_some(&target_ty);
+        let (inner_id, inner_ty) = self.infer_expr(inner, operand_hint)?;
         // Error escape — already in error state; produce a Cast so
         // downstream passes see a sensible node, but don't emit more
         // diagnostics on top.
@@ -9910,6 +9922,31 @@ fn branch_result_type(left: Type, right: Type, types: super::assignable::TypeRes
         left
     } else {
         Type::union(vec![left, right])
+    }
+}
+
+/// Whether an empty array literal hinted with `ty` takes an element type from it:
+/// the hint is an array, or a union of tuples and arrays that includes an array,
+/// which `infer_array_literal` matches member by member.
+fn gives_empty_array_element_type(ty: &Type) -> bool {
+    match array_literal_hint_shape(ty) {
+        Type::Array(_) => true,
+        Type::Union(members) => {
+            let array_like = || members.iter().map(Type::peel);
+            array_like().any(|m| matches!(m, Type::Array(_)))
+                && array_like().any(|m| matches!(m, Type::Tuple(_)))
+        }
+        _ => false,
+    }
+}
+
+fn is_empty_array_literal(ast: &crate::Ast, mut id: ExprId) -> Result<bool, CompilerFailure> {
+    loop {
+        match &ast.try_expr(id).map_err(super::arena_failure)?.kind {
+            ExprKind::Paren(inner) => id = *inner,
+            ExprKind::ArrayLiteral { elements } => return Ok(elements.is_empty()),
+            _ => return Ok(false),
+        }
     }
 }
 
