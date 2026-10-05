@@ -64,18 +64,23 @@ pub fn compile_doc_example_warnings(
     let (sources, file) = Sources::single(display_path.to_string(), padded.clone())
         .map_err(|error| error.to_string())?;
     match compile_script(&padded, display_path, file, declarations, &[]) {
-        Ok(compiled) => Ok(compiled
-            .warnings
-            .iter()
-            .map(|warning| diagnostics::render(warning, &sources))
-            .collect()),
-        Err(diags) => {
-            let mut rendered = String::new();
-            for d in &diags {
-                rendered.push_str(&diagnostics::render(d, &sources));
-            }
-            Err(rendered)
-        }
+        Ok(compiled) => diagnostics::render_list(&compiled.warnings, &sources)
+            .map_err(|error| error.to_string()),
+        Err(diags) => Err(
+            diagnostics::render_collection(&diags, &sources).map_or_else(
+                |error| {
+                    interpreter::rendering::failure_text(
+                        diags
+                            .first()
+                            .map_or("documentation example compilation failed", |diagnostic| {
+                                diagnostic.message.as_str()
+                            }),
+                        &error,
+                    )
+                },
+                |rendered| rendered.text,
+            ),
+        ),
     }
 }
 

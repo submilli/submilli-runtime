@@ -696,8 +696,10 @@ impl Inferer<'_> {
             && !arrow_reported
             && !assignable(&ty, want, self.resolver())
         {
-            let has_structural_diff = super::type_diff::format_type_diff(want, &ty).is_some();
-            let mut help = super::type_diff::type_mismatch_help(want, &ty);
+            let has_structural_diff = self
+                .render_optional_help(super::type_diff::format_type_diff(want, &ty))
+                .is_some();
+            let mut help = self.render_help_list(super::type_diff::type_mismatch_help(want, &ty));
             // No structural diff to show (e.g. `number` vs an interface): lift
             // the expected interface's shape so the fix is visible in-place. Keyed
             // on the structural half alone — a lossy-rendering note is not a
@@ -2280,7 +2282,9 @@ impl Inferer<'_> {
             };
             let mut hints = vec![help];
             if lift_function.is_none() {
-                hints.extend(super::type_diff::guard_loss_note(&callee_ty));
+                hints.extend(
+                    self.render_optional_help(super::type_diff::guard_loss_note(&callee_ty)),
+                );
             }
             self.error_with_help(span, msg, hints);
         }
@@ -3789,7 +3793,7 @@ impl Inferer<'_> {
             };
             let mut hints = vec![help];
             if let CallLift::Anon { ty } = lift {
-                hints.extend(super::type_diff::guard_loss_note(ty));
+                hints.extend(self.render_optional_help(super::type_diff::guard_loss_note(ty)));
             }
             self.error_with_help(span, msg, hints);
         }

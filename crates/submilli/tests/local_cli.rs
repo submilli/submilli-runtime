@@ -2603,3 +2603,27 @@ fn deny_warnings_lint_fix_uses_remaining_findings() {
         stderr(&out)
     );
 }
+
+#[test]
+fn oversized_diagnostic_and_warning_are_abbreviated_without_changing_exit_status() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("render.ts");
+    let source = format!(
+        "function main(): number {{ {} return missing; }}",
+        " ".repeat(100_000)
+    );
+    fs::write(&path, source).unwrap();
+    let failed = run(&[os("check"), path.as_os_str()]);
+    assert!(!failed.status.success());
+    assert!(stderr(&failed).contains("[diagnostic output truncated]"));
+    let warning = format!(
+        "/** @{} */\nfunction main(): void {{}}",
+        "unknown".repeat(15_000)
+    );
+    fs::write(&path, warning).unwrap();
+    let warning = run(&[os("check"), path.as_os_str()]);
+    assert!(warning.status.success(), "{}", stderr(&warning));
+    assert!(stderr(&warning).contains("[diagnostic output truncated]"));
+    fs::write(&path, "function main(): number { return 42; }").unwrap();
+    assert!(run(&[os("check"), path.as_os_str()]).status.success());
+}
