@@ -1,4 +1,4 @@
-types: 24 of 32 tsc entries compared, 10 differ
+types: 24 of 32 tsc entries compared, 11 differ
 
 line 8: y
   tsc:  string
@@ -37,5 +37,9 @@ line 22: y
   ours: T
 
 line 23: y
+  tsc:  string
+  ours: T
+
+line 23: x
   tsc:  string
   ours: T

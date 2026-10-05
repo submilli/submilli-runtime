@@ -128,7 +128,7 @@ impl ComparisonOperand {
 fn constant_template(ast: &crate::Ast, id: ExprId) -> Result<Option<String>, CompilerFailure> {
     let (parts, exprs) = match &ast.try_expr(id).map_err(super::arena_failure)?.kind {
         ExprKind::Paren(inner) => return constant_template(ast, *inner),
-        ExprKind::TemplateLiteral { parts, exprs } => (parts, exprs),
+        ExprKind::TemplateLiteral { parts, exprs, .. } => (parts, exprs),
         _ => return Ok(None),
     };
     let mut text = String::new();

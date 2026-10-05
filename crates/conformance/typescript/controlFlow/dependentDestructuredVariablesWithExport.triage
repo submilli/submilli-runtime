@@ -1,1 +1,0 @@
-line 24, 30 type: bug SUB-1197 a condition or discriminant stored in a `const`, or a destructured discriminant, doesn't narrow

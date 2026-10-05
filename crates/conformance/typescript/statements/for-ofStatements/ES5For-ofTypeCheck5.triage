@@ -1,1 +1,1 @@
-line 3 extra: bug SUB-1206 indexing, destructuring and `for-of` reject a union of arrays, tuples or strings
+line 3 extra: bug SUB-1206 `for-of` rejects a union of a string with arrays or tuples

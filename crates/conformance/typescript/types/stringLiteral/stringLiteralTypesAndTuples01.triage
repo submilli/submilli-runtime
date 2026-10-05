@@ -1,5 +1,5 @@
 line 21 extra: by-design spec §1.8 `throw` accepts only `Error` values
 line 6 type: bug SUB-1196 (array pattern) an array literal destructured by an array pattern is typed as an array, not a tuple
-line 9 type: bug SUB-1196 (literal under an expected type) a literal checked against an expected type takes that type, where tsc keeps its own; also bug SUB-1204 a `let` or object property widens a literal type that isn't fresh, where tsc keeps it
+line 9 type: bug SUB-1196 (literal under an expected type) a literal checked against an expected type takes that type, where tsc keeps its own
 line 11 type: bug SUB-1196 (literal under an expected type) a literal checked against an expected type takes that type, where tsc keeps its own
 line 21 type: bug SUB-1210 a narrowing that rules out every member keeps a type instead of `never`

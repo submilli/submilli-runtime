@@ -10,7 +10,11 @@ impl<'a> Inferer<'a> {
     pub(super) fn infer_global_variables(&mut self) -> Result<(), CompilerFailure> {
         let top_level: Vec<_> = self.ast.top_level.clone();
         self.collect_later_globals()?;
+        // Assignments to module `let`s narrow them for later top-level
+        // statements. Function bodies are inferred after this frame is gone.
+        self.push_narrow_frame(super::narrowing::NarrowEnv::new());
         for stmt_id in top_level {
+            self.keep_only_global_narrowings();
             let stmt = self
                 .ast
                 .try_stmt(stmt_id)
@@ -42,10 +46,14 @@ impl<'a> Inferer<'a> {
                         continue;
                     }
                     let hint = ty.as_ref().map(|a| self.resolve_type(a)).transpose()?;
+                    self.keeps_literal_types = true;
                     let (typed_value, value_ty) = self.infer_expr(value, hint.as_ref())?;
-                    // Reassignable, so an inferred literal widens; see the block-scoped
+                    // Reassignable, so a fresh literal widens; see the block-scoped
                     // `Let` arm in `stmt.rs`.
-                    let bound = hint.unwrap_or_else(|| value_ty.widen_literal());
+                    let bound = match hint {
+                        Some(hint) => hint,
+                        None => self.widen_fresh_literals(typed_value, &value_ty)?,
+                    };
                     self.finish_later_global(&name, &bound)?;
                     self.bind_top(
                         &name,
@@ -55,6 +63,9 @@ impl<'a> Inferer<'a> {
                         },
                     )?;
                     let mangled = self.mangle_top_symbol(&name.name)?;
+                    let origin =
+                        self.initializer_literal_origin(ty.is_some(), typed_value, &bound)?;
+                    self.record_global_literal_origin(mangled.clone(), origin);
                     self.typed_ast
                         .rebindable_globals
                         .insert(mangled.clone(), name.name.clone());
@@ -66,6 +77,7 @@ impl<'a> Inferer<'a> {
                         doc,
                         span,
                     })?;
+                    self.narrow_global_initializer(&name, &mangled, &bound, typed_value, value_ty)?;
                     let assign_id = self
                         .typed_ast
                         .try_push_stmt(TypedStmt {
@@ -90,16 +102,13 @@ impl<'a> Inferer<'a> {
                         self.forget_later_global(&name.name);
                         continue;
                     }
-                    // See `literal_type_of` for the rule.
-                    let hint = ty
-                        .as_ref()
-                        .map(|a| self.resolve_type(a))
-                        .transpose()?
-                        .map_or_else(
-                            || super::stmt::literal_type_of(self.ast, value),
-                            |ty| Ok(Some(ty)),
-                        )?;
+                    // Keeps the literal types its value passes through; see the
+                    // block-scoped `Const` arm in `stmt.rs`.
+                    let hint = ty.as_ref().map(|a| self.resolve_type(a)).transpose()?;
+                    self.keeps_literal_types = hint.is_none();
                     let (typed_value, value_ty) = self.infer_expr(value, hint.as_ref())?;
+                    let origin =
+                        self.initializer_literal_origin(ty.is_some(), typed_value, &value_ty)?;
                     let bound = hint.unwrap_or(value_ty);
                     self.finish_later_global(&name, &bound)?;
                     self.bind_top(
@@ -110,6 +119,10 @@ impl<'a> Inferer<'a> {
                         },
                     )?;
                     let mangled = self.mangle_top_symbol(&name.name)?;
+                    self.record_global_literal_origin(mangled.clone(), origin);
+                    if ty.is_none() {
+                        self.record_global_aliased_condition(mangled.clone(), typed_value);
+                    }
                     self.add_typed_global(crate::TypedGlobal {
                         name: name.clone(),
                         mangled_name: mangled.clone(),
@@ -139,8 +152,42 @@ impl<'a> Inferer<'a> {
                 }
             }
         }
-
+        self.pop_narrow_frame()?;
         Ok(())
+    }
+
+    /// A module `let` declared as a union starts narrowed to its initializer,
+    /// as a local one does, unless the initializer was rejected.
+    fn narrow_global_initializer(
+        &mut self,
+        name: &crate::Ident,
+        mangled: &crate::MangledName,
+        declared: &crate::Type,
+        value: crate::ExprId,
+        value_ty: crate::Type,
+    ) -> Result<(), CompilerFailure> {
+        if !matches!(
+            declared.peel(),
+            crate::Type::Union(_) | crate::Type::Boolean
+        ) || matches!(value_ty, crate::Type::Error)
+            || value_ty == *declared
+            || !super::assignable(&value_ty, declared, self.resolver())
+        {
+            return Ok(());
+        }
+        let flow_ty = self.assigned_flow_type(declared, value, value_ty)?;
+        let narrowed = self.initializer_narrowed_ty(declared, flow_ty);
+        self.renarrow_global_after_write(name, mangled, declared, narrowed)
+    }
+
+    /// Top-level statements are not wrapped in narrowing regions, so only a
+    /// module variable's own narrowing, read live, carries to the next one.
+    fn keep_only_global_narrowings(&mut self) {
+        if let Some(env) = self.narrow_scopes.last_mut() {
+            env.retain(|path, _| {
+                path.chain.is_empty() && matches!(path.root, super::narrowing::BindingId::Global(_))
+            });
+        }
     }
 
     /// One module global per static field, keyed `Class#static#name`. Fields
@@ -239,7 +286,11 @@ mod tests {
     #[test]
     fn let_without_annotation_infers_initializer_type() {
         let ta = run_clean("let x = 1;");
-        assert_eq!(nth_decl_value_ty(&ta, 0), Type::Number);
+        // The initializer keeps its literal type; the binding widens it.
+        assert_eq!(
+            nth_decl_value_ty(&ta, 0),
+            Type::NumberLiteral(crate::types::LiteralF64(1.0))
+        );
         let reg = PackageDeclaration::from_typed_ast(&ta);
         match &reg.values.get("x").unwrap().kind {
             ValueKind::Let { ty, .. } => assert_eq!(*ty, Type::Number),
@@ -292,7 +343,11 @@ mod tests {
     #[test]
     fn let_without_annotation_widens_to_the_base_primitive() {
         let ta = run_clean(r#"let y = "hi";"#);
-        assert_eq!(nth_decl_value_ty(&ta, 0), Type::String);
+        let reg = PackageDeclaration::from_typed_ast(&ta);
+        match &reg.values.get("y").unwrap().kind {
+            ValueKind::Let { ty, .. } => assert_eq!(*ty, Type::String),
+            _ => panic!("expected Let"),
+        }
     }
 
     /// Only a bare literal keeps its type; a computed initializer widens even under

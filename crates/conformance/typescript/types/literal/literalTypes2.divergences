@@ -1,80 +1,28 @@
-types: 107 of 202 tsc entries compared, 25 differ
-
-line 50: c2
-  tsc:  1 | "two"
-  ours: number | string
-
-line 50: cond ? 1 : "two"
-  tsc:  1 | "two"
-  ours: number | string
+types: 107 of 202 tsc entries compared, 12 differ
 
 line 51: c3
   tsc:  true | E.A | 123
-  ours: number | boolean
+  ours: 123 | true | E
 
 line 51: cond ? E.A : cond ? true : 123
   tsc:  true | E.A | 123
-  ours: number | boolean
+  ours: 123 | true | E
 
 line 51: E.A
   tsc:  E.A
   ours: E
 
-line 51: cond ? true : 123
-  tsc:  true | 123
-  ours: number | boolean
-
-line 52: c4
-  tsc:  "abc" | null
-  ours: string | null
-
-line 52: cond ? "abc" : null
-  tsc:  "abc" | null
-  ours: string | null
-
-line 53: c5
-  tsc:  456 | null
-  ours: number | null
-
-line 53: cond ? 456 : null
-  tsc:  456 | null
-  ours: number | null
-
 line 55: [1, "bar"]
   tsc:  [1, "bar"]
   ours: [1 | 2, "bar" | "foo"]
 
-line 56: c8
-  tsc:  { kind: 123; } | [1 | 2, "foo" | "bar"] | "hello"
-  ours: string | { kind: 123 } | [1 | 2, "bar" | "foo"]
-
-line 56: cond ? c6 : cond ? c7 : "hello"
-  tsc:  { kind: 123; } | [1 | 2, "foo" | "bar"] | "hello"
-  ours: string | { kind: 123 } | [1 | 2, "bar" | "foo"]
-
-line 56: cond ? c7 : "hello"
-  tsc:  [1 | 2, "foo" | "bar"] | "hello"
-  ours: string | [1 | 2, "bar" | "foo"]
-
-line 58: c2
-  tsc:  1 | "two"
-  ours: number | string
+line 59: x3
+  tsc:  number | boolean
+  ours: number | boolean | E
 
 line 59: c3
   tsc:  true | E.A | 123
-  ours: number | boolean
-
-line 60: c4
-  tsc:  "abc" | null
-  ours: string | null
-
-line 61: c5
-  tsc:  456 | null
-  ours: number | null
-
-line 64: c8
-  tsc:  { kind: 123; } | [1 | 2, "foo" | "bar"] | "hello"
-  ours: string | { kind: 123 } | [1 | 2, "bar" | "foo"]
+  ours: 123 | true | E
 
 line 94: c1
   tsc:  (string | number)[]

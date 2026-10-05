@@ -1,12 +1,13 @@
-types: 42 of 98 tsc entries compared, 2 differ
+types: 43 of 98 tsc entries compared, 3 differ
 
 line 21: { x: 0, y: null }
   tsc:  { x: number; y: null; }
   ours: Point
 
-line 37: []
+line 36: []
   tsc:  never[]
   ours: string[]
 
-errors:
-line 36: ours: cannot infer element type of empty array; add a `: T[]` annotation (tsc accepts)
+line 37: []
+  tsc:  never[]
+  ours: string[]

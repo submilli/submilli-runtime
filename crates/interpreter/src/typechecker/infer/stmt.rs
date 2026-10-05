@@ -8,46 +8,6 @@ use crate::{
 use super::classes::{FieldRw, StaticResolution};
 use super::{Inferer, assignable, narrowing};
 
-/// The literal type of a literal initializer, for an unannotated `const`.
-///
-/// A literal token qualifies, through any number of parentheses, and so does a
-/// `?:` whose branches all qualify with literals of one primitive type:
-/// `const c = cond ? "a" : "b"` is `"a" | "b"`, as in TypeScript. A computed
-/// initializer widens even under `const` (`const a = 1 + 1` is `number`), matching
-/// TypeScript, and so do arrays, object literals, and call results.
-///
-/// Branches of different primitives, or with `null`, don't qualify:
-/// `cond ? "a" : null` is `string | null`, where TypeScript keeps `"a" | null`.
-/// A `let` copying such a `const` would widen to a union, and a union-typed `let`
-/// starts out narrowed to its initializer's literals; TypeScript widens instead
-/// because those literals are fresh, which Submilli doesn't track.
-pub(super) fn literal_type_of(
-    ast: &crate::Ast,
-    value: crate::ExprId,
-) -> Result<Option<Type>, CompilerFailure> {
-    Ok(
-        match &ast.try_expr(value).map_err(super::arena_failure)?.kind {
-            ExprKind::Number(v) => Some(Type::NumberLiteral(crate::types::LiteralF64(*v))),
-            ExprKind::String(s) => Some(Type::StringLiteral(s.clone())),
-            ExprKind::Boolean(b) => Some(Type::BooleanLiteral(*b)),
-            // `const a = (1)` is `1`, as in TypeScript: parentheses group, they do not
-            // compute.
-            ExprKind::Paren(inner) => literal_type_of(ast, *inner)?,
-            ExprKind::Ternary { then_, else_, .. } => {
-                match (literal_type_of(ast, *then_)?, literal_type_of(ast, *else_)?) {
-                    (Some(then_ty), Some(else_ty))
-                        if then_ty.widen_literal() == else_ty.widen_literal() =>
-                    {
-                        Some(Type::union(vec![then_ty, else_ty]))
-                    }
-                    _ => None,
-                }
-            }
-            _ => None,
-        },
-    )
-}
-
 /// Outcome of peeking at `ClassName.member` on the left of a write.
 pub(super) enum StaticWrite {
     /// The receiver is not a bare class name; fall through to instance-field inference.
@@ -418,11 +378,18 @@ impl Inferer<'_> {
         span: Span,
     ) -> Result<TypedStmtKind, CompilerFailure> {
         let hint = ty.as_ref().map(|a| self.resolve_type(a)).transpose()?;
+        // The value keeps its literal types for the binding's initial
+        // narrowing: `let done = false` reads as `false` until reassigned.
+        self.keeps_literal_types = true;
         let (typed_value, value_ty) = self.infer_expr(value, hint.as_ref())?;
-        // A `let` is reassignable, so an inferred literal type would be wrong
-        // the moment it is written to: `const a = 1; let b = a;` binds `number`,
-        // not `1`. An explicit annotation is honoured as written.
-        let bound = hint.unwrap_or_else(|| value_ty.widen_literal());
+        // A `let` is reassignable, so a fresh literal type widens: `const a = 1;
+        // let b = a;` binds `number`, not `1`. A literal type the value got from
+        // a declaration stays (`let v = c` with `c: "x"` is `"x"`), and an
+        // explicit annotation is honoured as written.
+        let bound = match hint {
+            Some(hint) => hint,
+            None => self.widen_fresh_literals(typed_value, &value_ty)?,
+        };
         let bound = self.pattern_binding_storage_type(value, bound)?;
         // Reject a void binding; poison the slot so codegen never
         // sees a void value-type.
@@ -431,9 +398,18 @@ impl Inferer<'_> {
         } else {
             bound
         };
-        self.scopes
-            .insert(name.name.clone(), bound.clone(), false, name.span);
-        let flow_ty = self.pattern_binding_flow_type(value)?.unwrap_or(value_ty);
+        let origin = self.initializer_literal_origin(ty.is_some(), typed_value, &bound)?;
+        self.scopes.insert_with_literal_origin(
+            name.name.clone(),
+            bound.clone(),
+            false,
+            name.span,
+            origin,
+        );
+        let flow_ty = match self.pattern_binding_flow_type(value)? {
+            Some(flow_ty) => flow_ty,
+            None => self.assigned_flow_type(&bound, typed_value, value_ty)?,
+        };
         self.narrow_local_initializer(&name, &bound, flow_ty)?;
         Ok(TypedStmtKind::Let {
             name,
@@ -452,17 +428,15 @@ impl Inferer<'_> {
         doc: Option<crate::DocComment>,
         span: Span,
     ) -> Result<TypedStmtKind, CompilerFailure> {
-        // An unannotated `const` bound to a literal, or to a `?:` of literals of
-        // one primitive type, keeps the literal type, as in TypeScript: the
-        // binding cannot be reassigned, so nothing can invalidate it. `let` widens
-        // (it is reassignable), and so does any other initializer; see
-        // `literal_type_of`.
-        let hint = ty
-            .as_ref()
-            .map(|a| self.resolve_type(a))
-            .transpose()?
-            .map_or_else(|| literal_type_of(self.ast, value), |ty| Ok(Some(ty)))?;
+        // An unannotated `const` keeps the literal types its value passes
+        // through, as in TypeScript: `cond ? "a" : null` is `"a" | null` and
+        // `x ?? "d"` adds `"d"`. The binding cannot be reassigned, so nothing
+        // can invalidate them, and they are fresh, so a `let` copying it widens.
+        // A computed value still widens (`const a = 1 + 1` is `number`).
+        let hint = ty.as_ref().map(|a| self.resolve_type(a)).transpose()?;
+        self.keeps_literal_types = hint.is_none();
         let (typed_value, value_ty) = self.infer_expr(value, hint.as_ref())?;
+        let origin = self.initializer_literal_origin(ty.is_some(), typed_value, &value_ty)?;
         let bound = hint.unwrap_or_else(|| value_ty.clone());
         let bound = self.pattern_binding_storage_type(value, bound)?;
         // Reject a void binding; poison the slot so codegen never
@@ -472,12 +446,23 @@ impl Inferer<'_> {
         } else {
             bound
         };
-        self.scopes
-            .insert(name.name.clone(), bound.clone(), true, name.span);
+        self.scopes.insert_with_literal_origin(
+            name.name.clone(),
+            bound.clone(),
+            true,
+            name.span,
+            origin,
+        );
         if name.name.starts_with("#pattern_dst_") {
             self.pattern_sources.insert(name.name.clone(), typed_value);
         }
-        let flow_ty = self.pattern_binding_flow_type(value)?.unwrap_or(value_ty);
+        if ty.is_none() {
+            self.record_aliased_condition(&name.name, typed_value);
+        }
+        let flow_ty = match self.pattern_binding_flow_type(value)? {
+            Some(flow_ty) => flow_ty,
+            None => self.assigned_flow_type(&bound, typed_value, value_ty)?,
+        };
         self.narrow_local_initializer(&name, &bound, flow_ty)?;
         Ok(TypedStmtKind::Const {
             name,
@@ -623,11 +608,13 @@ impl Inferer<'_> {
         // carry to the next iteration's entry.
         let body_scope_floor = self.scopes.next_scope_id();
         self.scopes.push();
-        self.scopes.insert(
+        let origin = self.element_literal_origin(ann.is_some(), typed_iter)?;
+        self.scopes.insert_with_literal_origin(
             name.name.clone(),
             bound_ty.clone(),
             matches!(binding_kind, BindingKind::Const),
             name.span,
+            origin,
         );
         let body_span = self.ast.try_stmt(body).map_err(super::arena_failure)?.span;
         let (loop_entry, _) = self.snapshot_active_narrowings(0);
@@ -1095,7 +1082,8 @@ impl Inferer<'_> {
         }
         let path = narrowing::ReferencePath::root(narrowing::BindingId::Global(mangled.clone()));
         let written_ty = self.assignment_narrowed_ty(declared_ty, written_ty);
-        if written_ty == *declared_ty {
+        // A rejected write narrows to nothing it wrote, as in TypeScript.
+        if written_ty == *declared_ty || !assignable(&written_ty, declared_ty, self.resolver()) {
             self.invalidate_for_reassignment(path, ident.span);
             return Ok(());
         }
@@ -1411,6 +1399,7 @@ impl Inferer<'_> {
         if matches!(written, Type::Error) || !assignable(&written, &declared, self.resolver()) {
             return Ok(());
         }
+        let written = self.assigned_flow_type(&declared, value, written)?;
         let narrowed_ty = self.assignment_narrowed_ty(&declared, written);
         if narrowed_ty == declared {
             return Ok(());
@@ -1646,7 +1635,7 @@ impl Inferer<'_> {
             .map(|view| view.narrowed_ty.clone()))
     }
 
-    fn pattern_index_flow_type(source: &Type, index: usize) -> Option<Type> {
+    pub(super) fn pattern_index_flow_type(source: &Type, index: usize) -> Option<Type> {
         match source.peel() {
             Type::Tuple(elems) => elems.get(index).cloned(),
             Type::Array(elem) => Some((**elem).clone()),
@@ -1667,7 +1656,8 @@ impl Inferer<'_> {
         declared: &Type,
         value: Type,
     ) -> Result<(), crate::compiler_error::CompilerFailure> {
-        if !matches!(declared.peel(), Type::Union(_))
+        // `boolean` narrows as the `true | false` it is.
+        if !matches!(declared.peel(), Type::Union(_) | Type::Boolean)
             || matches!(value, Type::Error)
             || value == *declared
         {
@@ -1714,7 +1704,8 @@ impl Inferer<'_> {
             decl_scope,
         });
         let written_ty = self.assignment_narrowed_ty(declared_ty, written_ty);
-        if written_ty == *declared_ty {
+        // A rejected write narrows to nothing it wrote, as in TypeScript.
+        if written_ty == *declared_ty || !assignable(&written_ty, declared_ty, self.resolver()) {
             self.invalidate_for_reassignment(path, target.span);
             return Ok(None);
         }
@@ -1732,6 +1723,10 @@ impl Inferer<'_> {
         target_ty: Option<&Type>,
     ) -> Result<(ExprId, Type, bool), CompilerFailure> {
         let errors_before = self.error_count();
+        // An assignment has its value's type, literal types included, as in
+        // TypeScript: `(x = 10)` is `10`. What the target narrows to is
+        // `assigned_flow_type`'s answer.
+        self.keeps_literal_types = true;
         let (typed_value, value_ty) = self.infer_expr(value, target_ty)?;
         Ok((typed_value, value_ty, self.error_count() > errors_before))
     }
@@ -1760,8 +1755,9 @@ impl Inferer<'_> {
                     format!("expected `{}`, got `{}`", entry.ty, value_ty),
                 );
             }
+            let flow_ty = self.assigned_flow_type(&entry.ty, typed_value, value_ty)?;
             let narrowed_shadow_ty =
-                self.renarrow_local_after_write(&target, entry.decl_scope, &entry.ty, value_ty)?;
+                self.renarrow_local_after_write(&target, entry.decl_scope, &entry.ty, flow_ty)?;
             return Ok(TypedStmtKind::AssignLocal {
                 ident: target,
                 target_ty: entry.ty.clone(),
@@ -1784,7 +1780,8 @@ impl Inferer<'_> {
                     if !reported && !assignable(&value_ty, &ty, self.resolver()) {
                         self.error(value_span, format!("expected `{ty}`, got `{value_ty}`"));
                     }
-                    self.renarrow_global_after_write(&target, &mangled, &ty, value_ty)?;
+                    let flow_ty = self.assigned_flow_type(&ty, typed_value, value_ty)?;
+                    self.renarrow_global_after_write(&target, &mangled, &ty, flow_ty)?;
                     TypedStmtKind::AssignGlobal {
                         ident: target,
                         mangled,
@@ -2689,9 +2686,10 @@ impl Inferer<'_> {
             );
             let entry_falsified =
                 widen_entry_to_cover_next_pass(&mut entry_env, &outcome, &mut widened);
-            if !outer_falsified && !entry_falsified {
+            if outer_falsified.is_empty() && !entry_falsified {
                 return Ok(outcome);
             }
+            self.widen_outer_into_entry(&mut entry_env, outer_falsified, &outcome, &mut widened)?;
             // Discard speculative diagnostics and exits before retyping under
             // the widened state.
             self.diagnostics.truncate(diag_len);
@@ -2740,17 +2738,59 @@ impl Inferer<'_> {
         })
     }
 
-    /// Invalidate outer views that the next pass widens or kills.
-    /// Bindings declared within the body are recreated on each iteration.
+    /// Give the body's next try each outer narrowing it falsified, widened to
+    /// cover the next pass too, as `x: string` joined with `x: number` after
+    /// `x = len(x)`. A path widened once already, or that the next pass does
+    /// not narrow, stays dropped.
+    fn widen_outer_into_entry(
+        &mut self,
+        entry_env: &mut narrowing::NarrowEnv,
+        falsified: Vec<(narrowing::ReferencePath, narrowing::NarrowedView)>,
+        outcome: &LoopBodyOutcome,
+        widened: &mut std::collections::BTreeSet<narrowing::ReferencePath>,
+    ) -> Result<(), CompilerFailure> {
+        let Some(next_pass) = &outcome.next_pass else {
+            return Ok(());
+        };
+        for (path, view) in falsified {
+            let Some(post) = next_pass.get(&path) else {
+                continue;
+            };
+            if entry_env.contains_key(&path) || !widened.insert(path.clone()) {
+                continue;
+            }
+            let span = self
+                .typed_ast
+                .try_expr(view.source)
+                .map_err(super::arena_failure)?
+                .span;
+            let narrowed_ty = narrowing::join_flow_types(&view.narrowed_ty, &post.narrowed_ty);
+            entry_env.insert(
+                path,
+                narrowing::NarrowedView {
+                    narrowed_ty,
+                    facts: narrowing::TypeFacts::EMPTY,
+                    excluded_literals: std::collections::BTreeSet::new(),
+                    binding: self.mint_narrow_binding(span)?,
+                    source: view.source,
+                },
+            );
+        }
+        Ok(())
+    }
+
+    /// Invalidate outer views that the next pass widens or kills, and give
+    /// them back. Bindings declared within the body are recreated on each
+    /// iteration.
     fn drop_narrowings_the_body_falsifies(
         &mut self,
         body: StmtId,
         outcome: &LoopBodyOutcome,
         body_scope_floor: narrowing::ScopeId,
         body_span: Span,
-    ) -> bool {
+    ) -> Vec<(narrowing::ReferencePath, narrowing::NarrowedView)> {
         let Some(next_pass) = &outcome.next_pass else {
-            return false;
+            return Vec::new();
         };
         let (active, _) = self.snapshot_active_narrowings(0);
         let falsified: Vec<_> = active
@@ -2779,7 +2819,7 @@ impl Inferer<'_> {
                 narrowing::InvalidationReason::Write { span: body_span },
             );
         }
-        !falsified.is_empty()
+        falsified
     }
 
     /// Reuse widening discovered by an earlier pass through this syntax node.
@@ -3138,6 +3178,11 @@ impl Inferer<'_> {
             // Strings, literal ones included, iterate by code point through
             // `String#iterator`.
             ty if ty.is_string_shaped() => Some((Type::String, crate::ForOfKind::Iterable)),
+            // A union of arrays and tuples is one `$Array` at runtime too. It
+            // follows the string arm, which takes unions of string literals.
+            Type::Union(_) => iter_ty
+                .array_like_union_element()
+                .map(|element| (element, crate::ForOfKind::Array)),
             // Exact-name match keeps Iterator<U> on its own desugar path
             // (it declares `next()`, not `iterator()`, so it fails the structural check below).
             Type::InterfaceRef { name, args, .. } if name == "Iterator" && args.len() == 1 => {

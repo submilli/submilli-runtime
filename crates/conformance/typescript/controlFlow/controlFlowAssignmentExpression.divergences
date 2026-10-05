@@ -1,16 +1,1 @@
-types: 22 of 41 tsc entries compared, 3 differ
-
-line 6: x
-  tsc:  string
-  ours: number | string | boolean
-
-line 7: x
-  tsc:  number
-  ours: number | string | boolean
-
-line 11: x
-  tsc:  true
-  ours: number | string | boolean
-
-errors:
-line 6: ours: cannot read field `length` on non-object type `number | string | boolean` (tsc accepts)
+types: 23 of 41 tsc entries compared, 0 differ

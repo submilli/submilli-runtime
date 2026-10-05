@@ -1,8 +1,4 @@
-types: 58 of 86 tsc entries compared, 2 differ
-
-line 39: maybeNumber
-  tsc:  number
-  ours: number | null
+types: 58 of 86 tsc entries compared, 1 differ
 
 line 48: test
   tsc:  string

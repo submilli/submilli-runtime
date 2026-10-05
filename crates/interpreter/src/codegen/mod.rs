@@ -4812,7 +4812,7 @@ function main(): number { return counter + max_iterations; }"#,
         );
         assert_eq!(
             run_main_i32(
-                "function main(): boolean { const no: boolean = false; return true !== no; }"
+                "function no(): boolean { return false; } function main(): boolean { return true !== no(); }"
             ),
             1
         );
