@@ -9,7 +9,7 @@ import { createAgentDocs, readChapters, type Chapter } from '../src/lib/agent-do
 
 test('the index and exports cover exactly the visible book, with summaries', async () => {
 	const directory = new URL('../../docs/', import.meta.url);
-	const files = (await readdir(directory, { recursive: true })).filter((file) => file.endsWith('.md'));
+	const files = (await readdir(directory, { recursive: true })).filter((file) => file.endsWith('.md') && file !== 'WRITING.md');
 	const expectedPaths: string[] = [];
 	const hiddenPaths: string[] = [];
 	for (const file of files) {
@@ -67,6 +67,7 @@ test('hidden stubs need no description; malformed and colliding published slugs 
 	const url = pathToFileURL(`${directory}/`);
 	try {
 		await writeFile(join(directory, 'hidden.md'), '---\ntitle: Stub\nsidebar:\n  hidden: true\n---\nStub.');
+		await writeFile(join(directory, 'WRITING.md'), '# Contributor writing guidance\nNot a book chapter.');
 		assert.deepEqual(await readChapters(url), []);
 		await writeFile(join(directory, 'page.md'), '---\ntitle: Page\nslug: page\n---\nBody.');
 		await assert.rejects(readChapters(url), /provide a description/);

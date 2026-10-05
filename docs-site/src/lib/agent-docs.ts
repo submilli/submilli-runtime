@@ -23,7 +23,7 @@ export function markdownPath(slug: string): string {
 
 export async function readChapters(directory = docsDirectory): Promise<Chapter[]> {
 	const files = (await readdir(directory, { recursive: true }))
-		.filter((file) => file.endsWith('.md')).sort();
+		.filter((file) => file.endsWith('.md') && file !== 'WRITING.md').sort();
 	const chapters: Chapter[] = [];
 	const paths = new Set<string>();
 	for (const file of files) {
