@@ -167,6 +167,10 @@ function main(): void {
   const bothBoxes: Box<string> | Box<boolean> | null = narrowerLater ?? widerLater;
   assert(bothBoxes === null, "two union slots take the wider of their arguments");
 
+  const exactLater = eitherOf(new Box(true), new Box(1));
+  const flagBox: Box<boolean> | null = exactLater;
+  assert(flagBox === null, "a later argument its own member takes leaves the fallback");
+
   const inferredList = listOrNumbers(lists(true));
   const fromList: string[] | null = inferredList;
   const inferredPair = pairOrFlag(single(true));

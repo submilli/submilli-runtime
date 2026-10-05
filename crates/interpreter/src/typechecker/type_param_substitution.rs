@@ -627,7 +627,7 @@ impl<'a> Unifier<'a> {
                     }
                     self.restore(snap);
                 }
-                if self.try_defer_close_match_into_lone_type_var(pa, arg_ty) {
+                if self.try_defer_into_lone_type_var(pa, arg_ty) {
                     return Ok(());
                 }
                 for m in pa {
@@ -886,15 +886,25 @@ impl<'a> Unifier<'a> {
     /// other members without unifying with any of them, `arg` is deferred as
     /// a union argument whose members are all closely matched is: it is
     /// recorded as a close match, checked once inference is done, and
-    /// offered as the type parameter's fallback. Returns true when `arg` was
-    /// deferred, false when the caller should try each member in order.
-    fn try_defer_close_match_into_lone_type_var(&mut self, params: &[Type], arg: &Type) -> bool {
+    /// offered as the type parameter's fallback. Once the type parameter has
+    /// a fallback, an `arg` another member takes goes to that member, as tsc
+    /// infers nothing from it, rather than binding the type parameter ahead
+    /// of the fallback. Returns true when `arg` was deferred or taken, false
+    /// when the caller should try each member in order.
+    fn try_defer_into_lone_type_var(&mut self, params: &[Type], arg: &Type) -> bool {
         if !self.is_argument || self.contravariant {
             return false;
         }
         let Some((type_var, others)) = self.split_lone_unbound_type_var(params) else {
             return false;
         };
+        if self.has_whole_union_fallback(type_var)
+            && others
+                .iter()
+                .any(|other| self.unifies_or_rolls_back(other, arg))
+        {
+            return true;
+        }
         let Some(sibling) = others.iter().find(|other| closely_matches(other, arg)) else {
             return false;
         };
@@ -904,6 +914,11 @@ impl<'a> Unifier<'a> {
         self.record_close_match(params, sibling, arg);
         self.offer_whole_union_fallback(type_var, arg.clone());
         true
+    }
+
+    /// Whether `type_var` has a whole-union fallback.
+    fn has_whole_union_fallback(&self, type_var: &Type) -> bool {
+        matches!(type_var.peel(), Type::TypeVar(name) if self.sub.whole_union_fallbacks.contains_key(name))
     }
 
     /// Record that `arg` closely matched `sibling`, a member of the union
