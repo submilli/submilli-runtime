@@ -4,7 +4,7 @@
 // an array or tuple of the interface, for a nullable interface, in
 // parentheses or a conditional, and a recursive interface's own literal,
 // including interfaces that name each other in a union, and a union member
-// whose fields hold another member.
+// whose fields hold another member, however deep, or many such members.
 interface Box<T> {
   v: T;
 }
@@ -53,6 +53,59 @@ interface Pair<T> {
 
 function leftmost<T>(node: Leaf<T> | Pair<T>): T {
   return "leaf" in node ? node.leaf : node.left.leaf;
+}
+
+interface Outer<T> {
+  a: Middle<T>;
+}
+
+interface Middle<T> {
+  b: Inner<T>;
+}
+
+interface Inner<T> {
+  c: Box<T>;
+}
+
+function innermost<T>(outer: Outer<T>): T {
+  return outer.a.b.c.v;
+}
+
+interface Num<T> {
+  kind: "num";
+  at: T;
+}
+
+interface Neg<T> {
+  kind: "neg";
+  at: T;
+  of: Expression<T>;
+}
+
+interface Sum<T> {
+  kind: "sum";
+  at: T;
+  left: Expression<T>;
+  right: Expression<T>;
+}
+
+interface Product<T> {
+  kind: "product";
+  at: T;
+  left: Expression<T>;
+  right: Expression<T>;
+}
+
+interface Call<T> {
+  kind: "call";
+  at: T;
+  argument: Expression<T>;
+}
+
+type Expression<T> = Num<T> | Neg<T> | Sum<T> | Product<T> | Call<T>;
+
+function positions<T>(expression: Expression<T>): T[] {
+  return [];
 }
 
 function unbox<T>(box: Box<T>): T {
@@ -112,4 +165,18 @@ function main(): void {
   const fromPair = leftmost({ left: { leaf: "a" }, right: { leaf: "b" } });
   const fromLeaf = leftmost({ leaf: 5 });
   assert(fromPair.length === 1 && fromLeaf + 1 === 6, "a member holding another");
+
+  const deepest = innermost({ a: { b: { c: { v: "d" } } } });
+  const values = positions({
+    kind: "sum",
+    at: 0,
+    left: { kind: "neg", at: 1, of: { kind: "num", at: 2 } },
+    right: {
+      kind: "call",
+      at: 3,
+      argument: { kind: "product", at: 4, left: { kind: "num", at: 5 }, right: { kind: "num", at: 6 } },
+    },
+  });
+  const numbers: number[] = values;
+  assert(deepest.length === 1 && numbers.length === 0, "deep and wide");
 }

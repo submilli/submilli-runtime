@@ -13,12 +13,15 @@ use crate::typechecker::infer::type_aliases::rehydrate_alias_refs;
 #[derive(Default, Clone, Debug, PartialEq, Eq)]
 pub struct TypeParamSubstitution {
     bindings: BTreeMap<String, Type>,
-    /// Bindings a later argument may still replace, as tsc infers them at a
-    /// lower priority: those taken from the type a call's result is expected
-    /// to have, since what the arguments say comes first, and those from a
-    /// whole union argument whose members the parameter's other members all
-    /// took. One stays replaceable until an argument agrees with it.
+    /// Bindings taken from the type a call's result is expected to have, which
+    /// an argument may still replace: as in tsc, what the arguments say comes
+    /// first. One stays replaceable until an argument agrees with it.
     replaceable: std::collections::BTreeSet<String>,
+    /// For a type parameter in a union parameter whose other members took
+    /// every member of a union argument, that whole argument: tsc infers it at
+    /// the lowest priority, so it binds the type parameter only when nothing
+    /// else does (see [`Self::bind_whole_union_fallbacks`]).
+    whole_union_fallbacks: BTreeMap<String, Type>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -49,6 +52,7 @@ impl TypeParamSubstitution {
                 .map(|(name, ty)| (name.clone(), ty.clone()))
                 .collect(),
             replaceable: Default::default(),
+            whole_union_fallbacks: Default::default(),
         }
     }
 
@@ -60,6 +64,7 @@ impl TypeParamSubstitution {
         Self {
             bindings,
             replaceable: Default::default(),
+            whole_union_fallbacks: Default::default(),
         }
     }
 
@@ -69,6 +74,26 @@ impl TypeParamSubstitution {
         for name in self.bindings.keys() {
             if !before.bindings.contains_key(name) {
                 self.replaceable.insert(name.clone());
+            }
+        }
+    }
+
+    /// The whole union argument that stands in for `name` when nothing else
+    /// binds it.
+    pub fn whole_union_fallback(&self, name: &str) -> Option<&Type> {
+        self.whole_union_fallbacks.get(name)
+    }
+
+    /// Bind each type parameter still unbound that a whole union argument
+    /// stands in for, as tsc does with its lowest-priority inference.
+    pub fn bind_whole_union_fallbacks(&mut self) {
+        for (name, ty) in &self.whole_union_fallbacks {
+            let unbound = match self.bindings.get(name) {
+                None => true,
+                Some(bound) => matches!(bound.peel(), Type::TypeVar(other) if other == name),
+            };
+            if unbound {
+                self.bindings.insert(name.clone(), ty.clone());
             }
         }
     }
@@ -192,6 +217,7 @@ impl TypeParamSubstitution {
 struct Snapshot {
     bindings: BTreeMap<String, Type>,
     replaceable: std::collections::BTreeSet<String>,
+    whole_union_fallbacks: BTreeMap<String, Type>,
     assumed_len: usize,
 }
 
@@ -665,12 +691,11 @@ impl<'a> Unifier<'a> {
     /// is bound to the union of the members left over (`T | null` with
     /// `"on" | "off" | null` binds `T` to `"on" | "off"`). A member that only
     /// [`closely_matches`] another member, as `Box<string>` does `Box<number>`,
-    /// is unified with it and fails there, as tsc pairs them and then rejects
-    /// the call. When none is left over the type parameter is bound to all of
-    /// `args` replaceably, as tsc infers from the whole argument at a lower
-    /// priority, so it isn't left unbound and a later argument may still
-    /// replace it. None when no single member is such a type parameter, so the
-    /// members pair up instead.
+    /// is not given to the type parameter, as tsc pairs them, but must fit
+    /// some member once the type parameter is bound; a member identical to an
+    /// argument member pairs with that one only. When none is left over, the
+    /// whole argument becomes the type parameter's fallback. None when no
+    /// single member is such a type parameter, so the members pair up instead.
     #[allow(clippy::result_large_err)]
     fn unify_union_into_lone_type_var(
         &mut self,
@@ -691,8 +716,13 @@ impl<'a> Unifier<'a> {
             .filter(|(index, _)| *index != type_var_index)
             .map(|(_, member)| member)
             .collect();
+        let pairable: Vec<&Type> = others
+            .iter()
+            .copied()
+            .filter(|other| !args.iter().any(|arg| arg.peel() == other.peel()))
+            .collect();
         let mut rest = Vec::new();
-        let mut closely_matched = None;
+        let mut closely_matched = Vec::new();
         for arg in args {
             if others
                 .iter()
@@ -700,22 +730,47 @@ impl<'a> Unifier<'a> {
             {
                 continue;
             }
-            match others.iter().find(|other| closely_matches(other, arg)) {
-                Some(other) => closely_matched = closely_matched.or(Some((*other, arg))),
+            match pairable.iter().find(|other| closely_matches(other, arg)) {
+                Some(other) => closely_matched.push((*other, arg)),
                 None => rest.push(arg.clone()),
             }
         }
-        if let Some((other, arg)) = closely_matched {
-            return Some(self.unify(other, arg));
-        }
         if !rest.is_empty() {
-            return Some(self.unify(type_var, &Type::union(rest)));
+            if let Err(error) = self.unify(type_var, &Type::union(rest)) {
+                return Some(Err(error));
+            }
+            return Some(self.check_closely_matched(params, &closely_matched));
         }
-        let unified = self.unify(type_var, &Type::union(args.to_vec()));
-        if let (Ok(()), Type::TypeVar(name)) = (&unified, type_var.peel()) {
-            self.sub.replaceable.insert(name.clone());
+        if let Type::TypeVar(name) = type_var.peel()
+            && self.is_unbound_type_var(type_var)
+        {
+            self.sub
+                .whole_union_fallbacks
+                .entry(name.clone())
+                .or_insert_with(|| Type::union(args.to_vec()));
         }
-        Some(unified)
+        Some(Ok(()))
+    }
+
+    /// Check each closely matched argument member against the whole
+    /// parameter now that its type parameter is bound, as tsc checks the
+    /// argument once inference is done: one no member takes is reported
+    /// against the member it closely matched.
+    #[allow(clippy::result_large_err)]
+    fn check_closely_matched(
+        &mut self,
+        params: &[Type],
+        closely_matched: &[(&Type, &Type)],
+    ) -> Result<(), UnifyError> {
+        for (other, arg) in closely_matched {
+            if !params
+                .iter()
+                .any(|param| self.unifies_or_rolls_back(param, arg))
+            {
+                return self.unify(other, arg);
+            }
+        }
+        Ok(())
     }
 
     /// Whether `ty` is a type parameter with no binding yet, or bound only to
@@ -748,6 +803,7 @@ impl<'a> Unifier<'a> {
         Snapshot {
             bindings: self.sub.bindings.clone(),
             replaceable: self.sub.replaceable.clone(),
+            whole_union_fallbacks: self.sub.whole_union_fallbacks.clone(),
             assumed_len: self.assumed_pairs.len(),
         }
     }
@@ -755,6 +811,7 @@ impl<'a> Unifier<'a> {
     fn restore(&mut self, snapshot: Snapshot) {
         self.sub.bindings = snapshot.bindings;
         self.sub.replaceable = snapshot.replaceable;
+        self.sub.whole_union_fallbacks = snapshot.whole_union_fallbacks;
         self.assumed_pairs.truncate(snapshot.assumed_len);
     }
 
@@ -874,15 +931,17 @@ fn is_primitive_literal(ty: &Type) -> bool {
     )
 }
 
-/// Whether `arg` is the same kind of type as the union member `param` but
-/// with other type arguments or elements, as `Box<string>` is to
-/// `Box<number>`: tsc pairs such a member with that sibling rather than
-/// giving it to the union's type parameter.
+/// Whether `arg` names the same declaration as the union member `param`
+/// with other type arguments, as `Box<string>` does `Box<number>`: tsc's
+/// "closely matched" rule, which pairs such a member with that sibling rather
+/// than giving it to the union's type parameter. Arrays match arrays of the
+/// same mutability, as `Array` and `ReadonlyArray` are distinct in tsc;
+/// tuples, which name no declaration, match nothing.
 fn closely_matches(param: &Type, arg: &Type) -> bool {
     match (param.peel(), arg.peel()) {
         (Type::InterfaceRef { mangled: p, .. }, Type::InterfaceRef { mangled: a, .. }) => p == a,
         (Type::ClassRef { mangled: p, .. }, Type::ClassRef { mangled: a, .. }) => p == a,
-        (Type::Array(_), Type::Array(_)) | (Type::Tuple(_), Type::Tuple(_)) => true,
+        (Type::Array(_), Type::Array(_)) => param.is_readonly_array() == arg.is_readonly_array(),
         _ => false,
     }
 }

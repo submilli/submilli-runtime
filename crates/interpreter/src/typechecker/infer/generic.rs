@@ -804,6 +804,7 @@ impl Inferer<'_> {
             sub.insert("U".into(), element);
         }
 
+        sub.bind_whole_union_fallbacks();
         self.bind_leftover_type_parameters(
             &mut sub,
             &sig.generics,
@@ -1351,12 +1352,10 @@ impl Inferer<'_> {
         if !self.builds_literal(arg_id)? {
             return Ok(hint);
         }
-        let mut expansion = InterfaceExpansion::new();
-        Ok(expand_inferred_interfaces(
+        Ok(expand_hint_interfaces(
             &hint,
             inferred_generics,
             self.resolver(),
-            &mut expansion,
         ))
     }
 
@@ -1572,6 +1571,7 @@ impl Inferer<'_> {
             .map_err(type_limit_at(span))?;
         }
 
+        sub.bind_whole_union_fallbacks();
         self.bind_leftover_type_parameters(&mut sub, &generics, &ret, expected, errors_before_args);
         self.bind_uninferred_to_unknown(&mut sub, &generics, &mangled, span)?;
         if let Err(unbound) = sub
@@ -1797,10 +1797,8 @@ fn type_param_name(ty: &Type) -> Option<&str> {
 /// literal's hint needs few levels in practice.
 const MAX_HINT_INTERFACE_EXPANSIONS: usize = 64;
 
-/// How many interfaces deep one literal argument's hint expands at most.
-/// Checking a literal against a union of expanded interfaces tries each
-/// member at every level, so a deep hint costs exponential time in its depth.
-const MAX_HINT_INTERFACE_DEPTH: usize = 3;
+/// How many unions deep one literal argument's hint expands at most.
+const MAX_HINT_UNION_DEPTH: usize = 8;
 
 /// The state of one [`expand_inferred_interfaces`] walk.
 struct InterfaceExpansion {
@@ -1808,24 +1806,62 @@ struct InterfaceExpansion {
     expanding: Vec<crate::MangledName>,
     /// How many more interfaces may expand.
     remaining: usize,
+    /// How many unions enclose the type being expanded.
+    union_depth: usize,
+    /// How many enclosing unions an interface may have and still expand.
+    max_union_depth: usize,
+    /// Whether an interface stayed as it is for want of budget.
+    starved: bool,
+    /// Whether an interface stayed as it is for being nested in more unions
+    /// than `max_union_depth`.
+    cut_at_union_depth: bool,
 }
 
 impl InterfaceExpansion {
-    fn new() -> Self {
+    fn new(max_union_depth: usize) -> Self {
         Self {
             expanding: Vec::new(),
             remaining: MAX_HINT_INTERFACE_EXPANSIONS,
+            union_depth: 0,
+            max_union_depth,
+            starved: false,
+            cut_at_union_depth: false,
         }
     }
+}
+
+/// `ty` expanded by [`expand_inferred_interfaces`] through as many levels of
+/// nested unions as the budget covers. Each pass goes one union deeper, and
+/// the deepest pass that stayed within the budget wins, so the members of an
+/// outer union all expand before any member of a union inside them: a wide
+/// union of interfaces that name it again (`Lit<T> | Add<T> | …`) expands its
+/// own members rather than the first member's descendants.
+fn expand_hint_interfaces(
+    ty: &Type,
+    inferred_generics: &[String],
+    types: super::assignable::TypeResolver,
+) -> Type {
+    let mut deepest_within_budget = None;
+    for max_union_depth in 1..=MAX_HINT_UNION_DEPTH {
+        let mut expansion = InterfaceExpansion::new(max_union_depth);
+        let expanded = expand_inferred_interfaces(ty, inferred_generics, types, &mut expansion);
+        if expansion.starved {
+            return deepest_within_budget.unwrap_or(expanded);
+        }
+        if !expansion.cut_at_union_depth {
+            return expanded;
+        }
+        deepest_within_budget = Some(expanded);
+    }
+    deepest_within_budget.unwrap_or_else(|| ty.clone())
 }
 
 /// `ty` with each data-only interface that names one of `inferred_generics`
 /// replaced by its fields, through object fields, array and tuple elements and
 /// union members: the positions a literal's own fields and elements take
 /// their hints from. An interface stays as it is when met again inside its
-/// own fields (so a recursive one expands once), when
-/// [`MAX_HINT_INTERFACE_DEPTH`] interfaces are already being expanded around
-/// it, or once the walk has used its budget.
+/// own fields (so a recursive one expands once), when more unions than the
+/// walk allows enclose it, or once the walk has used its budget.
 fn expand_inferred_interfaces(
     ty: &Type,
     inferred_generics: &[String],
@@ -1837,13 +1873,19 @@ fn expand_inferred_interfaces(
     };
     match ty.peel() {
         interface @ Type::InterfaceRef { mangled, .. }
-            if expansion.remaining > 0
-                && expansion.expanding.len() < MAX_HINT_INTERFACE_DEPTH
-                && !expansion.expanding.contains(mangled)
+            if !expansion.expanding.contains(mangled)
                 && super::expr::mentions_type_var(interface, &|var| {
                     inferred_generics.iter().any(|name| name == var)
                 }) =>
         {
+            if expansion.union_depth > expansion.max_union_depth {
+                expansion.cut_at_union_depth = true;
+                return ty.clone();
+            }
+            if expansion.remaining == 0 {
+                expansion.starved = true;
+                return ty.clone();
+            }
             let Some(shape) = super::assignable::expand_interface_data_shape(interface, types)
             else {
                 return ty.clone();
@@ -1877,12 +1919,15 @@ fn expand_inferred_interfaces(
                 .map(|element| expand(element, expansion))
                 .collect(),
         ),
-        Type::Union(members) => Type::union(
-            members
+        Type::Union(members) => {
+            expansion.union_depth += 1;
+            let expanded = members
                 .iter()
                 .map(|member| expand(member, expansion))
-                .collect(),
-        ),
+                .collect();
+            expansion.union_depth -= 1;
+            Type::union(expanded)
+        }
         _ => ty.clone(),
     }
 }
@@ -1916,7 +1961,8 @@ fn fix_callback_parameters(sub: &mut TypeParamSubstitution, param_ty: &Type, inf
             .iter()
             .any(|param| super::expr::mentions_type_var(param, &|var| var == name));
         if taken && sub.get(name).is_none() {
-            sub.insert(name.clone(), Type::Unknown);
+            let fixed = sub.whole_union_fallback(name).cloned();
+            sub.insert(name.clone(), fixed.unwrap_or(Type::Unknown));
         }
     }
 }
