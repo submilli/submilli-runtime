@@ -1077,7 +1077,9 @@ impl<'a> Inferer<'a> {
         let mut shared = Vec::new();
         for member in narrowing::union_members(path_ty) {
             for value_member in &value_members {
-                if super::assignable(member, value_member, self.resolver()) {
+                if super::assignable(member, value_member, self.resolver())
+                    || may_share_an_object(member, value_member)
+                {
                     shared.push(member.clone());
                 } else if super::assignable(value_member, member, self.resolver()) {
                     shared.push((*value_member).clone());
@@ -2412,6 +2414,28 @@ fn is_unreachable_env(env: &narrowing::NarrowEnv) -> bool {
         let ty = view.narrowed_ty.peel();
         matches!(ty, Type::Never) || narrowing::is_ruled_out(ty)
     })
+}
+
+/// Whether one object can have both types though neither is assignable to the
+/// other: structural types overlap (`{ a: number }` and `{ b: number }` both
+/// hold `{ a: 1, b: 2 }`). Two classes can't, since an instance has one class
+/// and assignability already covers a subclass.
+fn may_share_an_object(left: &Type, right: &Type) -> bool {
+    let is_object = |ty: &Type| {
+        !matches!(
+            ty.peel(),
+            Type::Null
+                | Type::String
+                | Type::StringLiteral(_)
+                | Type::Number
+                | Type::NumberLiteral(_)
+                | Type::Boolean
+                | Type::BooleanLiteral(_)
+                | Type::BigInt
+        )
+    };
+    let is_class = |ty: &Type| matches!(ty.peel(), Type::ClassRef { .. });
+    is_object(left) && is_object(right) && !(is_class(left) && is_class(right))
 }
 
 /// Adds the views of `extra` on paths `env` doesn't narrow.

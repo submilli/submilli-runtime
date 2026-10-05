@@ -590,7 +590,6 @@ impl Inferer<'_> {
     }
 }
 
-/// The element a numeric path index names, when it is one.
 /// Whether `ty` is made only of `string`, `number`, `boolean`, `null` and
 /// their literal types.
 fn is_primitive_union(ty: &Type) -> bool {

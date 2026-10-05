@@ -177,11 +177,20 @@ impl<'a> Inferer<'a> {
     }
 
     /// Top-level statements are not wrapped in narrowing regions, so only a
-    /// module variable's own narrowing, read live, carries to the next one.
+    /// module variable's own narrowing, read live, carries to the next one,
+    /// and only for a variable no function writes: a statement between may
+    /// call that function.
     fn keep_only_global_narrowings(&mut self) {
+        let written: std::collections::BTreeSet<crate::MangledName> = self
+            .top_symbols
+            .iter()
+            .filter(|(name, _)| self.function_written_globals.contains(*name))
+            .map(|(_, entry)| entry.mangled_name.clone())
+            .collect();
         if let Some(env) = self.narrow_scopes.last_mut() {
             env.retain(|path, _| {
-                path.chain.is_empty() && matches!(path.root, super::narrowing::BindingId::Global(_))
+                path.chain.is_empty()
+                    && matches!(&path.root, super::narrowing::BindingId::Global(mangled) if !written.contains(mangled))
             });
         }
     }

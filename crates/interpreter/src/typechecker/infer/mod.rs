@@ -129,7 +129,7 @@ pub fn infer_with_transitive_checked<'a>(
         immediately_invoked: None,
         invoked_body_exit: None,
         captured_mutators: bindings.mutators,
-        function_written_globals: bindings.global_writes,
+        function_written_globals: bindings.function_written_globals,
         last_assignments: bindings.last_assignments,
         nested_function_creation_points: bindings.nested_function_creation_points,
         nested_functions: Vec::new(),
@@ -942,7 +942,7 @@ impl<'a> Inferer<'a> {
         }
         let bindings = binding_analysis::analyze(ast)?;
         self.captured_mutators = bindings.mutators;
-        self.function_written_globals = bindings.global_writes;
+        self.function_written_globals = bindings.function_written_globals;
         self.last_assignments = bindings.last_assignments;
         self.nested_function_creation_points = bindings.nested_function_creation_points;
         self.nested_functions.clear();

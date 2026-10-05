@@ -1649,10 +1649,9 @@ impl Inferer<'_> {
     /// Records the narrowings that hold here as a way out of the innermost
     /// loop or `switch`, as a `break` here leaves it.
     pub(super) fn record_break_exit(&mut self) {
-        let Some(target) = self.pending_joins.last() else {
+        let Some(base) = self.pending_joins.last().map(|target| target.narrow_depth) else {
             return;
         };
-        let base = target.narrow_depth;
         let (env, _) = self.snapshot_active_narrowings(0);
         let (_, assigned) = self.snapshot_active_narrowings(base);
         if let Some(target) = self.pending_joins.last_mut() {
@@ -3227,6 +3226,7 @@ pub(super) fn initializer_may_narrow(declared: &Type, value: &Type) -> bool {
         && !matches!(value, Type::Error)
         && value != declared
 }
+
 #[cfg(test)]
 mod tests {
     use super::super::test_support::run;

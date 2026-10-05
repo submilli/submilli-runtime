@@ -473,12 +473,12 @@ impl Inferer<'_> {
             Some(typed_body)
         } else {
             let unmatched = self.unmatched_residual(&residual, &site, saw_null.is_some());
-            // `strip_null` of a lone `null` is `Error`: nothing is left unmatched.
-            if matches!(unmatched, Type::Never | Type::Error) {
-            } else if requires_every_case(&disc_ty, &site) {
-                self.emit_non_exhaustive(&unmatched, &site, switch_span);
-                any_arm_reachable_exit |= entry_reachable;
-            } else {
+            let leaves_values_unmatched =
+                !matches!(unmatched, Type::Never) && !narrowing::is_ruled_out(&unmatched);
+            if leaves_values_unmatched {
+                if requires_every_case(&disc_ty) {
+                    self.emit_non_exhaustive(&unmatched, &site, switch_span);
+                }
                 any_arm_reachable_exit |= entry_reachable;
             }
             None
@@ -756,14 +756,11 @@ impl Inferer<'_> {
 }
 
 /// Whether a `switch` without `default` must list every value of its
-/// discriminant. A discriminated receiver always must. A scrutinee must when
-/// its type is made of literals alone, which cases can cover; one with a
-/// member such as `number` or `null` can't be listed out, so the switch may
+/// discriminant: when its type is made of literals alone, which cases can
+/// cover. One with a member such as `string` or `null`, even in a single
+/// member of a discriminated union, can't be listed out, so the switch may
 /// simply fall through.
-fn requires_every_case(disc_ty: &Type, site: &ResidualSite) -> bool {
-    if matches!(site, ResidualSite::DiscriminatedReceiver { .. }) {
-        return true;
-    }
+fn requires_every_case(disc_ty: &Type) -> bool {
     narrowing::union_members(disc_ty).into_iter().all(|member| {
         narrowing::unit_literal_value(member).is_some() || matches!(member.peel(), Type::Boolean)
     })

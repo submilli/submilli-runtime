@@ -458,44 +458,15 @@ impl Inferer<'_> {
     // Expression inference
     // --------------------------------------------------------------------
 
-    /// A primitive literal's type: the literal itself where it is kept or the
-    /// expected type names a literal of its kind, else its base primitive.
-    fn literal_or_base(
-        &self,
-        keeps_literal: bool,
-        expected: Option<&Type>,
-        literal: Type,
-        is_literal: fn(&Type) -> bool,
-    ) -> Type {
-        if self.keeps_literal_type(keeps_literal, expected, &literal)
-            || expects_literal(expected, is_literal)
-        {
-            return literal;
-        }
-        literal.widen_literal()
-    }
-
-    /// Whether a literal asked to keep its literal type does. One that its
-    /// expected type rejects reports at its base type, as TypeScript does:
-    /// `o.x = "a"` with `x: number` is "got `string`".
-    fn keeps_literal_type(
-        &self,
-        keeps_literal: bool,
-        expected: Option<&Type>,
-        literal: &Type,
-    ) -> bool {
-        keeps_literal && expected.is_none_or(|want| assignable(literal, want, self.resolver()))
-    }
-
-    /// [`Self::infer_expr`], keeping the literal type of a literal `expr_id`
-    /// is, or passes its value through from, when `keep` is set.
+    /// [`Self::infer_expr`], keeping the literal type `expr_id` produces or
+    /// passes through when `keep_literals` is set.
     pub(super) fn infer_expr_keeping_literals(
         &mut self,
         expr_id: ExprId,
         expected: Option<&Type>,
-        keep: bool,
+        keep_literals: bool,
     ) -> Result<(ExprId, Type), CompilerFailure> {
-        self.keeps_literal_types = keep;
+        self.keeps_literal_types = keep_literals;
         self.infer_expr(expr_id, expected)
     }
 
@@ -785,6 +756,35 @@ impl Inferer<'_> {
             self.type_size_checkpoint(Some(span))?;
         }
         Ok((id, ty))
+    }
+
+    /// A primitive literal's type: the literal itself where it is kept or the
+    /// expected type names a literal of its kind, else its base primitive.
+    fn literal_or_base(
+        &self,
+        keeps_literal: bool,
+        expected: Option<&Type>,
+        literal: Type,
+        is_literal: fn(&Type) -> bool,
+    ) -> Type {
+        if self.keeps_literal_type(keeps_literal, expected, &literal)
+            || expects_literal(expected, is_literal)
+        {
+            return literal;
+        }
+        literal.widen_literal()
+    }
+
+    /// Whether a literal asked to keep its literal type does. One that its
+    /// expected type rejects reports at its base type, as TypeScript does:
+    /// `o.x = "a"` with `x: number` is "got `string`".
+    fn keeps_literal_type(
+        &self,
+        keeps_literal: bool,
+        expected: Option<&Type>,
+        literal: &Type,
+    ) -> bool {
+        keeps_literal && expected.is_none_or(|want| assignable(literal, want, self.resolver()))
     }
 
     fn resolve_ident(
@@ -4460,7 +4460,8 @@ impl Inferer<'_> {
         span: Span,
     ) -> Result<ExprId, crate::compiler_error::CompilerFailure> {
         let peeled = ty.primitive_behavior();
-        if matches!(peeled, Type::String | Type::StringLiteral(_)) {
+        // A `never` value is never read: the code holding it doesn't run.
+        if matches!(peeled, Type::String | Type::StringLiteral(_) | Type::Never) {
             return Ok(expr_id);
         }
         let method_name = crate::Ident {
@@ -10019,6 +10020,10 @@ pub(super) fn plus_result(lt: &Type, rt: &Type) -> Option<Type> {
         (Type::String | Type::StringLiteral(_), Type::String | Type::StringLiteral(_)) => {
             Some(Type::String)
         }
+        // A `never` operand is in code that doesn't run, as TypeScript reads
+        // `"bad: " + x` after every member of `x` was ruled out.
+        (Type::String | Type::StringLiteral(_), Type::Never)
+        | (Type::Never, Type::String | Type::StringLiteral(_)) => Some(Type::String),
         // Mixed `number` ↔ `bigint` is rejected, so no widening arm here.
         (Type::BigInt, Type::BigInt) => Some(Type::BigInt),
         _ => None,

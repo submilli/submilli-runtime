@@ -12,7 +12,7 @@ pub(super) struct Analysis {
     pub(super) mutators: HashSet<(String, Span)>,
     /// Names a function body writes that no enclosing block declares: the
     /// module-level bindings functions write.
-    pub(super) global_writes: HashSet<String>,
+    pub(super) function_written_globals: HashSet<String>,
     pub(super) last_assignments: HashMap<Span, u32>,
     /// Nested function declarations, by name span, whose bodies read or write a
     /// `let`/`const` of the block they are declared in, with the last declared
@@ -240,9 +240,11 @@ fn visit_stmt(ast: &Ast, id: StmtId, out: &mut Analysis) -> Result<(), CompilerF
                         let params: Vec<_> = param.iter().map(|p| (**p).clone()).collect();
                         scan_function(ast, &params, crate::ArrowBody::Block(*body), out)?;
                     }
+                    // An instance field's initializer runs at each `new`, as a
+                    // constructor body does.
                     crate::ClassMember::Field { initializer, .. } => {
                         if let Some(init) = initializer {
-                            visit_expr(ast, *init, out)?;
+                            scan_function(ast, &[], crate::ArrowBody::Expr(*init), out)?;
                         }
                     }
                 }
@@ -563,7 +565,7 @@ impl Analysis {
     fn write(&mut self, ident: &Ident) {
         let Some((_, binding)) = self.resolve_use(ident) else {
             if self.function_depth > 0 {
-                self.global_writes.insert(ident.name.clone());
+                self.function_written_globals.insert(ident.name.clone());
             }
             return;
         };

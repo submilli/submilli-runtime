@@ -161,18 +161,6 @@ impl Inferer<'_> {
         }))
     }
 
-    /// The type and declaration span of the module `const` named `mangled`.
-    fn global_const(&self, mangled: &crate::MangledName) -> Option<(&Type, crate::Span)> {
-        self.top_symbols
-            .values()
-            .find_map(|symbol| match &symbol.kind {
-                ValueKind::Const { ty, .. } if &symbol.mangled_name == mangled => {
-                    Some((ty, symbol.declaration_span))
-                }
-                _ => None,
-            })
-    }
-
     /// The declared type and name span of the `const` at `root`.
     fn const_declaration(&self, root: &narrowing::BindingId) -> Option<(Type, crate::Span)> {
         match root {
@@ -345,6 +333,18 @@ impl Inferer<'_> {
             }
             narrowing::BindingId::This => self.current_class.clone(),
         }
+    }
+
+    /// The type and declaration span of the module `const` named `mangled`.
+    fn global_const(&self, mangled: &crate::MangledName) -> Option<(&Type, crate::Span)> {
+        self.top_symbols
+            .values()
+            .find_map(|symbol| match &symbol.kind {
+                ValueKind::Const { ty, .. } if &symbol.mangled_name == mangled => {
+                    Some((ty, symbol.declaration_span))
+                }
+                _ => None,
+            })
     }
 
     /// The type of `receiver`'s member `elem` when that member is `readonly`

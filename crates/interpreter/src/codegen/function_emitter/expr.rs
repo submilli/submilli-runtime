@@ -557,6 +557,12 @@ fn emit_expr_value(
             )?;
         }
     };
+    // A `never` expression doesn't complete, so what an enclosing expression
+    // would do with its value is unreachable: `"a" + fail()` never concatenates.
+    if matches!(expr.ty, Type::Never) && !matches!(expr.kind, TypedExprKind::LocalNarrowRef { .. })
+    {
+        emitter.instruction(Instruction::Unreachable);
+    }
     Ok(())
 }
 
