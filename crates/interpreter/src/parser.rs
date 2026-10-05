@@ -11208,23 +11208,17 @@ class Dog extends Animal {
 
     #[test]
     fn parameterless_index_signature_is_reported_from_its_member_start() {
-        for source in [
-            "interface P { readonly []: number }",
-            "let p: { readonly []: number } = {};",
-            "let q: { []: number } = {};",
+        for (source, expected) in [
+            ("interface P { readonly []: number }", "readonly []"),
+            ("let p: { readonly []: number } = {};", "readonly []"),
+            ("let q: { []: number } = {};", "[]"),
         ] {
             let (_ast, diags) = parse_str(source);
             let diag = diags
                 .iter()
                 .find(|d| d.message.contains("must declare exactly one parameter"))
                 .unwrap_or_else(|| panic!("no diagnostic for {source}"));
-            let start = diag.span.start as usize;
-            let reported = &source[start..diag.span.end as usize];
-            let expected = if source.contains("readonly") {
-                "readonly []"
-            } else {
-                "[]"
-            };
+            let reported = &source[diag.span.start as usize..diag.span.end as usize];
             assert_eq!(reported, expected, "{source}");
         }
     }
