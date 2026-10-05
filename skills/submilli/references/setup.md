@@ -86,7 +86,8 @@ installs do not automatically propagate to remote/cloud machines.
 
 ## Deploying the server
 
-The server needs a bearer token on every request except `GET /healthz`.
+With authentication enabled, the server needs a bearer token on every request
+except `GET /healthz`.
 Export `SUBMILLI_SERVER_TOKEN` (`openssl rand -hex 32`) before starting it:
 the server takes it as its admin token, and `submilli server` commands and the
 application send the same variable. For an agent that runs where the user
@@ -96,14 +97,16 @@ programs but not change blueprints. Compose reads the token from `.env`; the
 Helm chart generates both tokens into the Secret `<release>-auth`.
 
 Still run one server per application and make sure only that application can
-reach it. Read https://submilli.ai/docs/server/deploy-on-linux before advising on
-production; the mechanics that matter most:
+reach it. Read the deployment guide for the chosen environment before advising
+on production. The mechanics that matter most are in [Deploy on Linux](https://submilli.ai/docs/server/deploy-on-linux),
+[Deploy with Compose](https://submilli.ai/docs/server/deploy-with-compose), and
+[Deploy on Kubernetes](https://submilli.ai/docs/server/deploy-on-kubernetes):
 
 | The application runs | Server setup | How only the application reaches it |
 | --- | --- | --- |
 | As a process on a machine | `submilli-server --config server.yaml` with `SUBMILLI_HOME` on durable disk | `bind: 127.0.0.1` (the default); the app calls `http://127.0.0.1:8128` |
-| In containers on one host | The published `compose.yaml` (`curl -fsSLO https://raw.githubusercontent.com/submilli/submilli-runtime/main/compose.yaml`) | Port published as `127.0.0.1:8128:8128`, never `8128:8128` (Docker bypasses host firewalls such as ufw); the app joins the `submilli-net` network and calls `http://submilli:8128` |
-| On Kubernetes | `helm install submilli oci://ghcr.io/submilli/charts/submilli -f values.yaml` | Default-deny NetworkPolicy; list the app's pods in `networkPolicy.allowFrom`, and the app calls `http://submilli.<namespace>.svc:8128` |
+| In containers on one host | Download the published `compose.yaml` at the runtime release tag and set `SUBMILLI_IMAGE` to the matching image tag | Port published as `127.0.0.1:8128:8128`, never `8128:8128` (Docker bypasses host firewalls such as ufw); the app joins the `submilli-net` network and calls `http://submilli:8128` |
+| On Kubernetes | `helm install submilli oci://ghcr.io/submilli/charts/submilli --version <chart-version> -f values.yaml` | Default-deny NetworkPolicy; list the app's pods in `networkPolicy.allowFrom`, and the app calls `http://submilli.<namespace>.svc:8128` |
 
 In every setup, apply blueprints from source control with
 `submilli server blueprint apply` using an admin token. Populate `store:`
@@ -111,6 +114,16 @@ secrets first with `submilli server secret put`, or use `harness:` for
 session-scoped credentials. The chart enables the encrypted store by default
 and generates its encryption-key Secret; users supply application secret values
 through the CLI.
+
+Persist the server's durable state directories. Registered blueprints are kept
+in SQLite, defaulting to `$SUBMILLI_HOME/server/db/submilli.db`; `database_path`,
+`--database-path`, or `SUBMILLI_DATABASE_PATH` can override it. Preserve its
+SQLite sidecar and lock files, plus the separate session, package, secret, and
+named-volume directories. The Compose file and Helm chart place that database on their existing
+state volume. When a server starts with a legacy blueprint directory, it imports
+the revision files once and moves the directory under
+`server/archive/blueprints/`; stop the old server before an upgrade that performs
+this import and back up the state volume while the server is stopped.
 
 Mistakes to avoid:
 
@@ -152,6 +165,7 @@ variable beats file). A blueprint can't raise them.
 | `max_execution_stack` (KiB, ≤ 16384) | 512 | Run ends `call stack exhausted` |
 | `max_execution_llm_tokens` / `max_llm_tokens` | 1M / 20M | Catchable `QuotaExceededError` before the prompt is billed |
 | `max_session_state_memory` (MB) | 1024 | Catchable `QuotaExceededError` |
+| `max_llm_concurrency` | 4 prompts | Limits prompts in one `llm.batch` |
 
 Without `max_execution_time` a runaway loop runs until its fuel is gone, far
 longer than any caller waits: set it a few seconds under the caller's own

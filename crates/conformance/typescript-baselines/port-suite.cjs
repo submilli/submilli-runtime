@@ -108,10 +108,11 @@ const EXCLUDED_NAMES = [
 // TypeScript file.
 const MULTI_FILE_OR_JS = /^\s*\/\/\s*@(filename|allowJs|checkJs)\s*:/im;
 
-// A construct signature, `{ new (): T }`, which we read as a method named `new`
-// rather than rejecting (SUB-1026), so pruning can't take it out.
+// A construct signature, `new (): T`. One in an object type is rejected, but one
+// in an interface is read as a method named `new`, which pruning can't take out,
+// and the pattern can't tell the two apart.
 const CONSTRUCT_SIGNATURE = /(^|[{;,])\s*new\s*[<(]/m;
-const CONSTRUCT_SIGNATURE_FEATURE = "construct signatures (SUB-1026: read as a method named `new`)";
+const CONSTRUCT_SIGNATURE_FEATURE = "construct signatures";
 
 // An error the port causes wherever a class has a field with no initializer, since
 // every case is made strict. It isn't a check the case makes, and both sides agree

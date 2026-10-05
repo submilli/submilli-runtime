@@ -1,5 +1,4 @@
 types: 3 of 19 tsc entries compared, 0 differ
 
 errors:
-line 8: tsc TS1029: 'public' modifier must precede 'readonly' modifier. (we accept)
 line 14: tsc TS2341: Property 'x' is private and only accessible within class 'F'. (we accept)

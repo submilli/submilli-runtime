@@ -7,6 +7,7 @@ generate code. "Allow a refund up to $500", not as a safeguard in the prompt,
 but as a check outside the model's control.
 
 [Docs](https://submilli.ai/docs/) ·
+[Set up with your agent](https://submilli.ai/docs/quickstart/#agent-setup) ·
 [Quickstart](https://submilli.ai/docs/quickstart) ·
 [Discord](https://discord.gg/VphpukeGGj) ·
 [Website](https://submilli.ai)
