@@ -63,6 +63,18 @@ function inObject<T>(holder: { value: T | string | number; use: (each: T) => num
   return 1;
 }
 
+function counted<T>(holder: { value: T | string | number; list: T[]; use: (each: T) => number }): number {
+  return holder.list.map(holder.use).length;
+}
+
+function orBox<T>(value: T | Box<number> | null): T[] {
+  return [];
+}
+
+function textBox(flag: boolean): Box<string> | null {
+  return flag ? new Box("s") : null;
+}
+
 function listOrNumbers<T>(value: T | number[]): T | null {
   return null;
 }
@@ -108,7 +120,10 @@ function main(): void {
   const viaCallback = inCallback(textOrCount(1), (each) => (typeof each === "string" ? 1 : 2));
   const viaField = inObject({ value: textOrCount(1), use: (each) => (typeof each === "string" ? 1 : 2) });
   assert(fromBox.length === 0 && fromField && agreeing[0] === "x" && viaCallback === 0, "other arguments");
-  assert(viaField === 1, "a callback beside the union");
+  const viaList = counted({ value: textOrCount(1), list: [true, false], use: (each) => (each ? 1 : 2) });
+  const inferredBoxes = orBox(textBox(false));
+  const boxes: (Box<string> | null)[] = inferredBoxes;
+  assert(viaField === 1 && viaList === 2 && boxes.length === 0, "a callback beside the union");
 
   const inferredList = listOrNumbers(lists(true));
   const fromList: string[] | null = inferredList;

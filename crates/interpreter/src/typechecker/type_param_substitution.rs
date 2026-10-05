@@ -22,6 +22,19 @@ pub struct TypeParamSubstitution {
     /// the lowest priority, so it binds the type parameter only when nothing
     /// else does (see [`Self::bind_whole_union_fallbacks`]).
     whole_union_fallbacks: BTreeMap<String, Type>,
+    /// Union argument members that only closely matched a member of their
+    /// union parameter while its type parameter was unbound: each must fit
+    /// the parameter once inference is done, as tsc checks the argument then.
+    close_matches: Vec<CloseMatch>,
+}
+
+/// An argument member that closely matched `sibling`, a member of the union
+/// parameter `param`, as `Box<string>` does `Box<number>`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CloseMatch {
+    pub param: Type,
+    pub sibling: Type,
+    pub arg: Type,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -53,6 +66,7 @@ impl TypeParamSubstitution {
                 .collect(),
             replaceable: Default::default(),
             whole_union_fallbacks: Default::default(),
+            close_matches: Vec::new(),
         }
     }
 
@@ -65,6 +79,7 @@ impl TypeParamSubstitution {
             bindings,
             replaceable: Default::default(),
             whole_union_fallbacks: Default::default(),
+            close_matches: Vec::new(),
         }
     }
 
@@ -78,6 +93,12 @@ impl TypeParamSubstitution {
         }
     }
 
+    /// The argument members that closely matched a union parameter member
+    /// and wait to be checked once inference is done; none are left after.
+    pub fn take_close_matches(&mut self) -> Vec<CloseMatch> {
+        std::mem::take(&mut self.close_matches)
+    }
+
     /// The whole union argument that stands in for `name` when nothing else
     /// binds it.
     pub fn whole_union_fallback(&self, name: &str) -> Option<&Type> {
@@ -87,13 +108,51 @@ impl TypeParamSubstitution {
     /// Bind each type parameter still unbound that a whole union argument
     /// stands in for, as tsc does with its lowest-priority inference.
     pub fn bind_whole_union_fallbacks(&mut self) {
+        self.bind_whole_union_fallbacks_where(|_| true);
+    }
+
+    /// [`Self::bind_whole_union_fallbacks`] for the type parameters `names`.
+    pub fn bind_whole_union_fallbacks_named(&mut self, names: &[String]) {
+        self.bind_whole_union_fallbacks_where(|name| names.iter().any(|each| each == name));
+    }
+
+    /// [`Self::bind_whole_union_fallbacks`] for the type parameters `types`
+    /// mention.
+    pub fn bind_whole_union_fallbacks_in(&mut self, types: &[Type]) {
+        self.bind_whole_union_fallbacks_where(|name| {
+            types
+                .iter()
+                .any(|ty| super::infer::expr::mentions_type_var(ty, &|var| var == name))
+        });
+    }
+
+    fn bind_whole_union_fallbacks_where(&mut self, applies: impl Fn(&str) -> bool) {
         let unbound: Vec<(String, Type)> = self
             .whole_union_fallbacks
             .iter()
-            .filter(|(name, _)| self.is_unbound(name))
+            .filter(|(name, _)| applies(name) && self.is_unbound(name))
             .map(|(name, ty)| (name.clone(), ty.clone()))
             .collect();
         self.bindings.extend(unbound);
+    }
+
+    /// Unbind, and return, each type parameter unbound in `before` that is
+    /// now bound to just its whole-union fallback, as a callback field typed
+    /// from the fallback binds it: the fallback stays the lowest-priority
+    /// inference, so a later field may still bind the type parameter.
+    pub fn unbind_fallback_echoes(&mut self, before: &TypeParamSubstitution) -> Vec<String> {
+        let echoes: Vec<String> = self
+            .whole_union_fallbacks
+            .iter()
+            .filter(|(name, fallback)| {
+                before.is_unbound(name) && self.bindings.get(name.as_str()) == Some(fallback)
+            })
+            .map(|(name, _)| name.clone())
+            .collect();
+        for name in &echoes {
+            self.bindings.remove(name);
+        }
+        echoes
     }
 
     /// Whether `name` has no binding yet, or is bound only to itself.
@@ -224,6 +283,7 @@ struct Snapshot {
     bindings: BTreeMap<String, Type>,
     replaceable: std::collections::BTreeSet<String>,
     whole_union_fallbacks: BTreeMap<String, Type>,
+    close_matches_len: usize,
     assumed_len: usize,
 }
 
@@ -692,19 +752,22 @@ impl<'a> Unifier<'a> {
     }
 
     /// tsc's union-to-union rule when exactly one of `params` is a type
-    /// parameter not yet bound. Each member of `args` that unifies with one of
-    /// the other members of `params` is absorbed by it, and the type parameter
-    /// is bound to the union of the members left over (`T | null` with
-    /// `"on" | "off" | null` binds `T` to `"on" | "off"`). A member that only
+    /// parameter not yet bound; None otherwise, so the members pair up
+    /// instead. Each member of `args` that unifies with one of the other
+    /// members of `params` is absorbed by it. A member that only
     /// [`closely_matches`] another member, as `Box<string>` does `Box<number>`,
-    /// is not given to the type parameter, as tsc pairs them, but must fit
-    /// some member once the type parameter is bound; a parameter member
-    /// identical to some argument member is not closely matched with others.
-    /// When none is left over and the type parameter is still unbound, it
-    /// takes the closely matched members, so a later argument that binds it
-    /// otherwise must agree with them, or else the whole argument becomes its
-    /// fallback. None when no single member is such a type parameter, so the
-    /// members pair up instead.
+    /// is not given to the type parameter, as tsc pairs them (a parameter
+    /// member identical to some argument member is not closely matched with
+    /// others). Then, in order:
+    /// - members left over bind the type parameter (`T | null` with
+    ///   `"on" | "off" | null` binds `T` to `"on" | "off"`), and each closely
+    ///   matched member must fit some member of `params`;
+    /// - if absorbing bound the type parameter, each closely matched member
+    ///   must fit some member of `params`;
+    /// - otherwise the whole argument is the type parameter's fallback, used
+    ///   only when nothing else binds it, and each closely matched member
+    ///   waits to be checked once inference is done (see
+    ///   [`TypeParamSubstitution::take_close_matches`]).
     #[allow(clippy::result_large_err)]
     fn unify_union_into_lone_type_var(
         &mut self,
@@ -755,12 +818,13 @@ impl<'a> Unifier<'a> {
         if !self.is_unbound_type_var(type_var) {
             return Some(self.check_closely_matched(params, &closely_matched));
         }
-        if !closely_matched.is_empty() {
-            let unmatched = closely_matched
-                .iter()
-                .map(|(_, arg)| (*arg).clone())
-                .collect();
-            return Some(self.unify(type_var, &Type::union(unmatched)));
+        let param = Type::union(params.to_vec());
+        for (sibling, arg) in closely_matched {
+            self.sub.close_matches.push(CloseMatch {
+                param: param.clone(),
+                sibling: sibling.clone(),
+                arg: arg.clone(),
+            });
         }
         if let Type::TypeVar(name) = type_var.peel() {
             self.sub
@@ -817,6 +881,7 @@ impl<'a> Unifier<'a> {
             bindings: self.sub.bindings.clone(),
             replaceable: self.sub.replaceable.clone(),
             whole_union_fallbacks: self.sub.whole_union_fallbacks.clone(),
+            close_matches_len: self.sub.close_matches.len(),
             assumed_len: self.assumed_pairs.len(),
         }
     }
@@ -825,6 +890,7 @@ impl<'a> Unifier<'a> {
         self.sub.bindings = snapshot.bindings;
         self.sub.replaceable = snapshot.replaceable;
         self.sub.whole_union_fallbacks = snapshot.whole_union_fallbacks;
+        self.sub.close_matches.truncate(snapshot.close_matches_len);
         self.assumed_pairs.truncate(snapshot.assumed_len);
     }
 

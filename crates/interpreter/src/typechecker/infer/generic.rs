@@ -805,6 +805,7 @@ impl Inferer<'_> {
         }
 
         sub.bind_whole_union_fallbacks();
+        self.check_close_matches(&mut sub, span);
         self.bind_leftover_type_parameters(
             &mut sub,
             &sig.generics,
@@ -1030,6 +1031,34 @@ impl Inferer<'_> {
         bind_remaining(sub, generics, Type::Unknown, &self.type_limits).map_err(type_limit_at(span))
     }
 
+    /// Report each union argument member that closely matched a parameter
+    /// member while inference ran and fits no member of the parameter now
+    /// that it is done, against the member it closely matched.
+    fn check_close_matches(&mut self, sub: &mut TypeParamSubstitution, span: Span) {
+        for close_match in sub.take_close_matches() {
+            if sub
+                .clone()
+                .unify(&close_match.param, &close_match.arg, self.resolver())
+                .is_ok()
+            {
+                continue;
+            }
+            let (expected, got) =
+                match sub
+                    .clone()
+                    .unify(&close_match.sibling, &close_match.arg, self.resolver())
+                {
+                    Err(UnifyError::Mismatch { expected, got }) => (expected, got),
+                    _ => (close_match.sibling, close_match.arg),
+                };
+            self.error_with_help(
+                span,
+                format!("expected `{expected}`, got `{got}`"),
+                super::type_diff::type_mismatch_help(&expected, &got),
+            );
+        }
+    }
+
     /// `ty` with `sub` applied, at a call site at `span`.
     fn instantiate(
         &self,
@@ -1112,6 +1141,7 @@ impl Inferer<'_> {
                 literal: arg,
                 fields,
                 sub: sub.clone(),
+                fallback_echoes: Vec::new(),
             });
         }
         Ok(enclosing)
@@ -1123,13 +1153,22 @@ impl Inferer<'_> {
         enclosing: Option<ObjectArgumentInference>,
         sub: &mut TypeParamSubstitution,
     ) {
-        if let Some(finished) = std::mem::replace(&mut self.object_argument_inference, enclosing) {
+        if let Some(mut finished) =
+            std::mem::replace(&mut self.object_argument_inference, enclosing)
+        {
+            finished
+                .sub
+                .bind_whole_union_fallbacks_named(&finished.fallback_echoes);
             *sub = finished.sub;
         }
     }
 
     /// The hint for field `name` of `literal`, with what its earlier fields
-    /// bound, if the literal's fields are being inferred one at a time.
+    /// bound, if the literal's fields are being inferred one at a time. A
+    /// callback field's parameters take the whole-union fallbacks of the type
+    /// parameters still unbound, as [`fix_callback_parameters`] gives them;
+    /// they apply to the hint only, so its returns or a later field can still
+    /// bind them.
     pub(super) fn object_argument_field_hint(&self, literal: ExprId, name: &str) -> Option<Type> {
         let inference = self
             .object_argument_inference
@@ -1137,7 +1176,9 @@ impl Inferer<'_> {
             .filter(|inference| inference.literal == literal)?;
         let field = inference.fields.get(name)?;
         let mut sub = inference.sub.clone();
-        sub.bind_whole_union_fallbacks();
+        if let Some(Type::Function { params, .. }) = function_part(&field.ty) {
+            sub.bind_whole_union_fallbacks_in(params);
+        }
         Some(sub.apply_or_record(&field.ty, &self.type_limits))
     }
 
@@ -1156,9 +1197,12 @@ impl Inferer<'_> {
             return;
         };
         if let Some(field) = inference.fields.get(name) {
+            let before = inference.sub.clone();
             let _ = inference
                 .sub
                 .unify_argument(&field.ty, value_ty, self.resolver());
+            let echoes = inference.sub.unbind_fallback_echoes(&before);
+            inference.fallback_echoes.extend(echoes);
         }
         self.object_argument_inference = Some(inference);
     }
@@ -1574,6 +1618,7 @@ impl Inferer<'_> {
         }
 
         sub.bind_whole_union_fallbacks();
+        self.check_close_matches(&mut sub, span);
         self.bind_leftover_type_parameters(&mut sub, &generics, &ret, expected, errors_before_args);
         self.bind_uninferred_to_unknown(&mut sub, &generics, &mangled, span)?;
         if let Err(unbound) = sub
@@ -1792,12 +1837,13 @@ fn type_param_name(ty: &Type) -> Option<&str> {
     }
 }
 
-/// How many interfaces one literal argument's hint expands at most, give or
-/// take those of the last union level. Interfaces that name each other in their fields
-/// expand along every order of them, so without a bound the hint grows
-/// factorially, and checking a literal against a large structural hint takes
-/// time in proportion to its size; a literal's hint needs few levels in
-/// practice.
+/// How many interfaces one literal argument's hint expands at most per pass
+/// of [`expand_hint_interfaces`], apart from the first pass, which may also
+/// expand as many again at the top union level. Interfaces that name each
+/// other in their fields expand along every order of them, so without a
+/// bound the hint grows factorially, and checking a literal against a large
+/// structural hint takes time in proportion to its size; a literal's hint
+/// needs few levels in practice.
 const MAX_HINT_INTERFACE_EXPANSIONS: usize = 64;
 
 /// How many unions deep one literal argument's hint expands at most.
@@ -1808,11 +1854,11 @@ struct InterfaceExpansion {
     /// The interfaces being expanded, outermost first.
     expanding: Vec<crate::MangledName>,
     /// How many more interfaces may expand under `max_union_depth` unions.
-    remaining: usize,
+    remaining_at_max_depth: usize,
     /// How many more interfaces may expand under fewer unions.
     remaining_shallower: usize,
     /// How many interfaces have expanded.
-    expanded: usize,
+    expansion_count: usize,
     /// How many unions enclose the type being expanded.
     union_depth: usize,
     /// How many enclosing unions an interface may have and still expand.
@@ -1825,30 +1871,54 @@ struct InterfaceExpansion {
 }
 
 impl InterfaceExpansion {
-    /// A walk that expands up to `remaining` interfaces under
+    /// A walk that expands up to `remaining_at_max_depth` interfaces under
     /// `max_union_depth` unions, after those under fewer.
-    fn new(max_union_depth: usize, remaining: usize) -> Self {
+    fn new(max_union_depth: usize, remaining_at_max_depth: usize) -> Self {
         Self {
             expanding: Vec::new(),
-            remaining,
+            remaining_at_max_depth,
             remaining_shallower: MAX_HINT_INTERFACE_EXPANSIONS,
-            expanded: 0,
+            expansion_count: 0,
             union_depth: 0,
             max_union_depth,
             starved: false,
             cut_at_union_depth: false,
         }
     }
+
+    /// The budget an interface at the current union depth expands from.
+    fn budget(&mut self) -> &mut usize {
+        if self.union_depth < self.max_union_depth {
+            &mut self.remaining_shallower
+        } else {
+            &mut self.remaining_at_max_depth
+        }
+    }
+
+    /// Whether an interface at the current union depth may expand, noting
+    /// when one may not.
+    fn can_expand(&mut self) -> bool {
+        let available = *self.budget() > 0;
+        self.starved |= !available;
+        available
+    }
+
+    /// Count an interface at the current union depth as expanded.
+    fn spend(&mut self) {
+        *self.budget() -= 1;
+        self.expansion_count += 1;
+    }
 }
 
 /// `ty` expanded by [`expand_inferred_interfaces`] through as many levels of
-/// nested unions as the budget covers. Each pass goes one union deeper, and
-/// the interfaces at that depth share what the shallower ones, which the
-/// pass before expanded, left of the budget, until a pass runs out of it or
-/// reaches every interface. So the members of an outer union all expand
-/// before any member of a union inside them: a wide union of interfaces that
-/// name it again (`Lit<T> | Add<T> | …`) expands its own members rather than
-/// the first member's descendants.
+/// nested unions as the budget covers. Each pass re-expands what the pass
+/// before did and gives the interfaces one union deeper the rest of
+/// [`MAX_HINT_INTERFACE_EXPANSIONS`]; the passes stop once one runs out of
+/// budget, cuts nothing at its depth, or leaves no budget for the next. So
+/// the members of an outer union all expand before any member of a union
+/// inside them: a wide union of interfaces that name it again
+/// (`Lit<T> | Add<T> | …`) expands its own members rather than the first
+/// member's descendants.
 fn expand_hint_interfaces(
     ty: &Type,
     inferred_generics: &[String],
@@ -1857,7 +1927,7 @@ fn expand_hint_interfaces(
     let mut expansion = InterfaceExpansion::new(1, MAX_HINT_INTERFACE_EXPANSIONS);
     let mut deepest = expand_inferred_interfaces(ty, inferred_generics, types, &mut expansion);
     for max_union_depth in 2..=MAX_HINT_UNION_DEPTH {
-        let remaining = MAX_HINT_INTERFACE_EXPANSIONS.saturating_sub(expansion.expanded);
+        let remaining = MAX_HINT_INTERFACE_EXPANSIONS.saturating_sub(expansion.expansion_count);
         if expansion.starved || !expansion.cut_at_union_depth || remaining == 0 {
             break;
         }
@@ -1893,21 +1963,14 @@ fn expand_inferred_interfaces(
                 expansion.cut_at_union_depth = true;
                 return ty.clone();
             }
-            let budget = if expansion.union_depth < expansion.max_union_depth {
-                &mut expansion.remaining_shallower
-            } else {
-                &mut expansion.remaining
-            };
-            if *budget == 0 {
-                expansion.starved = true;
+            if !expansion.can_expand() {
                 return ty.clone();
             }
             let Some(shape) = super::assignable::expand_interface_data_shape(interface, types)
             else {
                 return ty.clone();
             };
-            *budget -= 1;
-            expansion.expanded += 1;
+            expansion.spend();
             expansion.expanding.push(mangled.clone());
             let expanded = expand(&shape, expansion);
             expansion.expanding.pop();
@@ -1992,6 +2055,10 @@ pub(crate) struct ObjectArgumentInference {
     /// The parameter's fields, in terms of the type parameters.
     fields: std::collections::BTreeMap<String, crate::ObjectField>,
     sub: TypeParamSubstitution,
+    /// Type parameters a callback field bound to just their whole-union
+    /// fallback, left unbound so a later field may bind them; see
+    /// [`TypeParamSubstitution::unbind_fallback_echoes`].
+    fallback_echoes: Vec<String>,
 }
 
 /// A coarse category of value, used to skip the union members a call's result

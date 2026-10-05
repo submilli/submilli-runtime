@@ -1,11 +1,14 @@
 // A union argument's member that matches a parameter member of the same
 // class, interface or array kind pairs with it rather than going to the
-// parameter's type variable, so a mismatch inside it is reported, as in tsc.
+// parameter's type variable, so a mismatch inside it is reported, as in tsc,
+// including when absorbing another member already bound the type variable
+// or a later argument binds it.
 // expect-error: expected `number`, got `string`
 // expect-error: expected `number`, got `string`
 // expect-error: expected `number`, got `string`
 // expect-error: type parameter `T` already bound to `number`, cannot bind to `string`
-// expect-error-count: 4
+// expect-error: expected `number`, got `boolean`
+// expect-error-count: 5
 class Box<A> {
   constructor(public v: A) {}
 }
@@ -46,8 +49,17 @@ function eitherBox(flag: boolean): Box<number> | Box<string> {
   return flag ? new Box(1) : new Box("s");
 }
 
+function laterDecides<T>(x: T | Box<number>, y: T): number {
+  return 0;
+}
+
+function textOrFlagBox(flag: boolean): Box<string> | Box<boolean> {
+  return flag ? new Box("a") : new Box(true);
+}
+
 function main(): void {
   fromBox(boxOrText(true));
+  laterDecides(textOrFlagBox(true), new Box("s"));
   unwrap(eitherBox(false));
   fromList(listOrFlag(true));
   fromHolder(holderOrFlag(true));
