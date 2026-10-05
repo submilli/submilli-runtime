@@ -1,20 +1,8 @@
-types: 112 of 184 tsc entries compared, 7 differ
+types: 112 of 184 tsc entries compared, 4 differ
 
 line 118: typeof x === "number" ? ( // change value of x x = 10 && x.toString() // number | boolean | string ) : ( // do not change value y = x && x.toString() // number | boolean | string )
   tsc:  string | false
-  ours: number | string | boolean
-
-line 119: ( // change value of x x = 10 && x.toString() // number | boolean | string )
-  tsc:  string
-  ours: number | string
-
-line 121: x = 10 && x.toString()
-  tsc:  string
-  ours: number | string
-
-line 121: 10 && x.toString()
-  tsc:  string
-  ours: number | string
+  ours: string | boolean
 
 line 123: ( // do not change value y = x && x.toString() // number | boolean | string )
   tsc:  string | false
@@ -29,5 +17,6 @@ line 125: x && x.toString()
   ours: string | boolean
 
 errors:
-line 118: ours: expected `string | false`, got `number | string | boolean` (tsc accepts)
+line 121: tsc TS2872: This kind of expression is always truthy. (we accept)
+line 118: ours: expected `string | false`, got `string | boolean` (tsc accepts)
 line 125: ours: expected `string | false`, got `string | boolean` (tsc accepts)

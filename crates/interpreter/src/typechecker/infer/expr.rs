@@ -451,6 +451,18 @@ impl Inferer<'_> {
     // Expression inference
     // --------------------------------------------------------------------
 
+    /// Whether a literal asked to keep its literal type does. One that its
+    /// expected type rejects reports at its base type, as TypeScript does:
+    /// `o.x = "a"` with `x: number` is "got `string`".
+    fn keeps_literal_type(
+        &self,
+        keeps_literal: bool,
+        expected: Option<&Type>,
+        literal: &Type,
+    ) -> bool {
+        keeps_literal && expected.is_none_or(|want| assignable(literal, want, self.resolver()))
+    }
+
     pub(super) fn infer_expr(
         &mut self,
         expr_id: ExprId,
@@ -504,11 +516,12 @@ impl Inferer<'_> {
             // to the base primitive — `let x = "hi"` stays
             // `x: string`, not `x: "hi"`.
             ExprKind::Number(v) => {
-                let ty = if keeps_literal
+                let canonical = if v == 0.0 { 0.0 } else { v };
+                let literal = Type::NumberLiteral(crate::types::LiteralF64(canonical));
+                let ty = if self.keeps_literal_type(keeps_literal, expected, &literal)
                     || expects_literal(expected, |t| matches!(t, Type::NumberLiteral(_)))
                 {
-                    let canonical = if v == 0.0 { 0.0 } else { v };
-                    Type::NumberLiteral(crate::types::LiteralF64(canonical))
+                    literal
                 } else {
                     Type::Number
                 };
@@ -518,20 +531,22 @@ impl Inferer<'_> {
             // (no `Type::BigIntLiteral` narrowing variant in v1).
             ExprKind::BigInt(digits) => Ok((TypedExprKind::BigInt(digits), Type::BigInt)),
             ExprKind::String(s) => {
-                let ty = if keeps_literal
+                let literal = Type::StringLiteral(s.clone());
+                let ty = if self.keeps_literal_type(keeps_literal, expected, &literal)
                     || expects_literal(expected, |t| matches!(t, Type::StringLiteral(_)))
                 {
-                    Type::StringLiteral(s.clone())
+                    literal
                 } else {
                     Type::String
                 };
                 Ok((TypedExprKind::String(s), ty))
             }
             ExprKind::Boolean(b) => {
-                let ty = if keeps_literal
+                let literal = Type::BooleanLiteral(b);
+                let ty = if self.keeps_literal_type(keeps_literal, expected, &literal)
                     || expects_literal(expected, |t| matches!(t, Type::BooleanLiteral(_)))
                 {
-                    Type::BooleanLiteral(b)
+                    literal
                 } else {
                     Type::Boolean
                 };

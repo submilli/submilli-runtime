@@ -1,2 +1,1 @@
-line 5 type: bug SUB-1204 a literal widens to its base type where tsc keeps the literal type
 line 6 type: by-design spec §1.6 an assignment that may not run installs no narrowing, so the variable keeps its declared type

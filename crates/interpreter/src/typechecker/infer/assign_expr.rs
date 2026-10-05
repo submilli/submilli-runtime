@@ -250,6 +250,7 @@ impl Inferer<'_> {
             name: format!("#assign_{role}_{}", expr.0),
             span,
         };
+        self.record_held_value(name.name.clone(), expr);
         stmts.push(self.push_typed_stmt(
             TypedStmtKind::Const {
                 name: name.clone(),

@@ -378,6 +378,9 @@ impl Inferer<'_> {
         span: Span,
     ) -> Result<TypedStmtKind, CompilerFailure> {
         let hint = ty.as_ref().map(|a| self.resolve_type(a)).transpose()?;
+        // The value keeps its literal types for the binding's initial
+        // narrowing: `let done = false` reads as `false` until reassigned.
+        self.keeps_literal_types = true;
         let (typed_value, value_ty) = self.infer_expr(value, hint.as_ref())?;
         // A `let` is reassignable, so a fresh literal type widens: `const a = 1;
         // let b = a;` binds `number`, not `1`. A literal type the value got from
@@ -405,7 +408,7 @@ impl Inferer<'_> {
         );
         let flow_ty = match self.pattern_binding_flow_type(value)? {
             Some(flow_ty) => flow_ty,
-            None => self.initializer_flow_type(&bound, typed_value, value_ty)?,
+            None => self.assigned_flow_type(&bound, typed_value, value_ty)?,
         };
         self.narrow_local_initializer(&name, &bound, flow_ty)?;
         Ok(TypedStmtKind::Let {
@@ -455,7 +458,7 @@ impl Inferer<'_> {
         }
         let flow_ty = match self.pattern_binding_flow_type(value)? {
             Some(flow_ty) => flow_ty,
-            None => self.initializer_flow_type(&bound, typed_value, value_ty)?,
+            None => self.assigned_flow_type(&bound, typed_value, value_ty)?,
         };
         self.narrow_local_initializer(&name, &bound, flow_ty)?;
         Ok(TypedStmtKind::Const {
@@ -1386,6 +1389,7 @@ impl Inferer<'_> {
         if matches!(written, Type::Error) || !assignable(&written, &declared, self.resolver()) {
             return Ok(());
         }
+        let written = self.assigned_flow_type(&declared, value, written)?;
         let narrowed_ty = self.assignment_narrowed_ty(&declared, written);
         if narrowed_ty == declared {
             return Ok(());
@@ -1641,7 +1645,8 @@ impl Inferer<'_> {
         declared: &Type,
         value: Type,
     ) -> Result<(), crate::compiler_error::CompilerFailure> {
-        if !matches!(declared.peel(), Type::Union(_))
+        // `boolean` narrows as the `true | false` it is.
+        if !matches!(declared.peel(), Type::Union(_) | Type::Boolean)
             || matches!(value, Type::Error)
             || value == *declared
         {
@@ -1706,6 +1711,10 @@ impl Inferer<'_> {
         target_ty: Option<&Type>,
     ) -> Result<(ExprId, Type, bool), CompilerFailure> {
         let errors_before = self.error_count();
+        // An assignment has its value's type, literal types included, as in
+        // TypeScript: `(x = 10)` is `10`. What the target narrows to is
+        // `assigned_flow_type`'s answer.
+        self.keeps_literal_types = true;
         let (typed_value, value_ty) = self.infer_expr(value, target_ty)?;
         Ok((typed_value, value_ty, self.error_count() > errors_before))
     }
@@ -1735,8 +1744,9 @@ impl Inferer<'_> {
                     format!("expected `{}`, got `{}`", entry.ty, value_ty),
                 );
             }
+            let flow_ty = self.assigned_flow_type(&entry.ty, typed_value, value_ty)?;
             let narrowed_shadow_ty =
-                self.renarrow_local_after_write(&target, entry.decl_scope, &entry.ty, value_ty)?;
+                self.renarrow_local_after_write(&target, entry.decl_scope, &entry.ty, flow_ty)?;
             return Ok(TypedStmtKind::AssignLocal {
                 ident: target,
                 target_ty: entry.ty.clone(),
@@ -1757,7 +1767,8 @@ impl Inferer<'_> {
                     if !reported && !assignable(&value_ty, &ty, self.resolver()) {
                         self.error(value_span, format!("expected `{ty}`, got `{value_ty}`"));
                     }
-                    self.renarrow_global_after_write(&target, &mangled, &ty, value_ty)?;
+                    let flow_ty = self.assigned_flow_type(&ty, typed_value, value_ty)?;
+                    self.renarrow_global_after_write(&target, &mangled, &ty, flow_ty)?;
                     TypedStmtKind::AssignGlobal {
                         ident: target,
                         mangled,

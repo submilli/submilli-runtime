@@ -95,6 +95,9 @@ pub(super) struct LiteralFreshness {
     /// narrowing was still active: a read inside a `?:` branch or the right of
     /// `&&` outlives the narrowing frame it was inferred under.
     narrowed_reads: BTreeMap<ExprId, BTreeSet<Type>>,
+    /// The value each temporary an assignment used as a value holds, by the
+    /// temporary's name. Such a temporary is never a scope entry.
+    held_values: BTreeMap<String, ExprId>,
 }
 
 impl Inferer<'_> {
@@ -110,14 +113,15 @@ impl Inferer<'_> {
     }
 
     /// The type a binding declared `declared_ty` narrows to on being
-    /// initialized with `value` of type `flow`.
+    /// initialized with, or assigned, `value` of type `flow`.
     ///
     /// A literal known to be fresh that the declared type doesn't name widens
     /// first, as in TypeScript: `let x: string | null = c1` reads as `string`,
     /// not `"hello"`, so a later `x === "other"` is still a comparison that can
-    /// be true. A literal of unknown origin narrows as it always has, since
-    /// widening it could reject a read the narrowing allowed.
-    pub(super) fn initializer_flow_type(
+    /// be true, while `let done = false` reads as `false`, a member of the
+    /// `boolean` it declares. A literal of unknown origin narrows as it always
+    /// has, since widening it could reject a read the narrowing allowed.
+    pub(super) fn assigned_flow_type(
         &self,
         declared_ty: &Type,
         value: ExprId,
@@ -164,6 +168,10 @@ impl Inferer<'_> {
             return Ok(LiteralOrigin::Declared);
         }
         Ok(LiteralOrigin::Unknown)
+    }
+
+    pub(super) fn record_held_value(&mut self, temporary: String, value: ExprId) {
+        self.literal_freshness.held_values.insert(temporary, value);
     }
 
     pub(super) fn record_global_literal_origin(
@@ -234,7 +242,7 @@ impl Inferer<'_> {
             {
                 regular.extend(self.short_circuit_literals(*op, *lhs)?);
             }
-            if let Some(operands) = passed_through_operands(&expr.kind) {
+            if let Some(operands) = self.passed_through_operands(&expr.kind) {
                 pending.extend(operands);
                 continue;
             }
@@ -312,7 +320,7 @@ impl Inferer<'_> {
                 .typed_ast
                 .try_expr(id)
                 .map_err(crate::typechecker::arena_failure)?;
-            if let Some(operands) = passed_through_operands(&expr.kind) {
+            if let Some(operands) = self.passed_through_operands(&expr.kind) {
                 pending.extend(operands);
                 continue;
             }
@@ -350,7 +358,7 @@ impl Inferer<'_> {
                 .typed_ast
                 .try_expr(id)
                 .map_err(crate::typechecker::arena_failure)?;
-            if let Some(operands) = passed_through_operands(&expr.kind) {
+            if let Some(operands) = self.passed_through_operands(&expr.kind) {
                 pending.extend(operands);
                 continue;
             }
@@ -387,6 +395,30 @@ impl Inferer<'_> {
             }
         }
         Ok(true)
+    }
+
+    /// The operands whose value, and so whose freshness, an expression of
+    /// `kind` passes through: `?:`, `??`, `&&`, `||`, a narrowing, `!`, and
+    /// an assignment used as a value, through the temporary holding its value.
+    fn passed_through_operands(&self, kind: &TypedExprKind) -> Option<Vec<ExprId>> {
+        match kind {
+            TypedExprKind::Ternary { then_, else_, .. } => Some(vec![*then_, *else_]),
+            TypedExprKind::NullishCoalesce { lhs, rhs }
+            | TypedExprKind::Binary {
+                op: BinOp::And | BinOp::Or,
+                lhs,
+                rhs,
+            } => Some(vec![*lhs, *rhs]),
+            TypedExprKind::Narrowed { inner, .. }
+            | TypedExprKind::NonNullAssert { value: inner }
+            | TypedExprKind::Sequence { result: inner, .. } => Some(vec![*inner]),
+            TypedExprKind::LocalRef { ident, .. } => self
+                .literal_freshness
+                .held_values
+                .get(&ident.name)
+                .map(|value| vec![*value]),
+            _ => None,
+        }
     }
 
     /// Whether the literal types in the result of calling `method` on
@@ -499,24 +531,6 @@ impl Inferer<'_> {
             narrowing::BindingId::Global(mangled.clone()),
         ))?;
         Some((origin.clone(), declared_ty))
-    }
-}
-
-/// The operands whose value, and so whose freshness, an expression of `kind`
-/// passes through: `?:`, `??`, `&&`, `||`, a narrowing and `!`.
-fn passed_through_operands(kind: &TypedExprKind) -> Option<Vec<ExprId>> {
-    match kind {
-        TypedExprKind::Ternary { then_, else_, .. } => Some(vec![*then_, *else_]),
-        TypedExprKind::NullishCoalesce { lhs, rhs }
-        | TypedExprKind::Binary {
-            op: BinOp::And | BinOp::Or,
-            lhs,
-            rhs,
-        } => Some(vec![*lhs, *rhs]),
-        TypedExprKind::Narrowed { inner, .. } | TypedExprKind::NonNullAssert { value: inner } => {
-            Some(vec![*inner])
-        }
-        _ => None,
     }
 }
 

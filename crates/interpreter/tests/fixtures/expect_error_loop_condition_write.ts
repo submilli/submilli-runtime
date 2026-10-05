@@ -3,7 +3,7 @@
 // Each line below is an error `tsc --strict` reports too.
 // expect-error-count: 11
 // expect-error: cannot read field `toFixed` on non-object type `number | string`
-// expect-error: cannot read field `length` on non-object type `5 | string`
+// expect-error: cannot read field `length` on non-object type `number | string`
 // expect-error: expected `number`, got `string`
 // expect-error: cannot read field `length` on non-object type `number | string`
 // expect-error: expected `string`, got `number | string`
