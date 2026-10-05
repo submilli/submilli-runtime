@@ -542,6 +542,11 @@ impl<'a> Inferer<'a> {
                 .kind,
             TypedExprKind::OptionalChain { .. }
         ) {
+            if let Some(envs) =
+                self.narrow_optional_chain_discriminant(op, chain_id, &Type::Null)?
+            {
+                return Ok(envs);
+            }
             let nonnull = self.optional_chain_nonnull_env(chain_id)?;
             return Ok(if op == BinOp::Eq {
                 (narrowing::NarrowEnv::new(), nonnull)
@@ -688,6 +693,11 @@ impl<'a> Inferer<'a> {
                 .map_err(crate::typechecker::arena_failure)?;
             if self.receiver_type_has_getter(receiver_expr, &name.name)? {
                 return Ok(narrowing::NarrowEnv::new());
+            }
+            // A primitive's property (`s?.length`) is no field path: a view on
+            // it would read `s` as an object.
+            if !Self::is_field_bearing(&narrowing::strip_null(&receiver_expr.ty)) {
+                return Ok(env);
             }
             receiver = self
                 .typed_ast
@@ -863,6 +873,19 @@ impl<'a> Inferer<'a> {
             .typed_ast
             .try_expr(path_id)
             .map_err(crate::typechecker::arena_failure)?;
+        if matches!(path_expr.kind, crate::TypedExprKind::OptionalChain { .. }) {
+            let literal_ty = narrowing::literal_type(&literal);
+            if let Some(envs) = self.narrow_optional_chain_discriminant(op, path_id, &literal_ty)? {
+                return Ok(Some(envs));
+            }
+            // Equal to a literal, the chain reached its end: nothing on it is `null`.
+            let reached = self.optional_chain_nonnull_env(path_id)?;
+            return Ok(Some(if op == crate::BinOp::Eq {
+                (reached, narrowing::NarrowEnv::new())
+            } else {
+                (narrowing::NarrowEnv::new(), reached)
+            }));
+        }
         let Some(path) = self.expr_to_reference_path(path_expr)? else {
             return Ok(None);
         };
@@ -924,7 +947,7 @@ impl<'a> Inferer<'a> {
         Option<(narrowing::NarrowEnv, narrowing::NarrowEnv)>,
         crate::compiler_error::CompilerFailure,
     > {
-        use crate::{BinOp, TypedExprKind};
+        use crate::TypedExprKind;
         enum DiscKey {
             Field(String),
             Position(usize),
@@ -1011,15 +1034,13 @@ impl<'a> Inferer<'a> {
         let Type::Union(members) = root_ty.peel() else {
             return Ok(None);
         };
-        let table_lookup: Option<narrowing::VariantIdx> = match &disc_key_from_path {
+        let (matching, remaining) = match &disc_key_from_path {
             DiscKey::Field(key_field) => {
-                let Some((disc_key, table)) = self.union_discriminant_with_nominals(members) else {
+                let literal_ty = narrowing::literal_type(&literal);
+                let Some(split) = self.discriminant_split(members, key_field, &literal_ty) else {
                     return Ok(None);
                 };
-                if disc_key != *key_field {
-                    return Ok(None);
-                }
-                table.get(&literal).copied()
+                split
             }
             DiscKey::Position(pos) => {
                 let Some((disc_pos, table)) = narrowing::tuple_union_discriminant(members) else {
@@ -1028,22 +1049,60 @@ impl<'a> Inferer<'a> {
                 if disc_pos != *pos {
                     return Ok(None);
                 }
-                table.get(&literal).copied()
+                let Some(matching_idx) = table.get(&literal).copied() else {
+                    return Ok(None);
+                };
+                let (matching, remaining): (Vec<_>, Vec<_>) = members
+                    .iter()
+                    .enumerate()
+                    .partition(|(i, _)| (*i as u32) == matching_idx.0);
+                (
+                    matching.into_iter().map(|(_, m)| m.clone()).collect(),
+                    remaining.into_iter().map(|(_, m)| m.clone()).collect(),
+                )
             }
         };
-        let Some(matching_idx) = table_lookup else {
-            return Ok(None);
-        };
-        let matched_variant = members
-            .get(matching_idx.0 as usize)
-            .ok_or_else(|| super::inference_failure("invalid discriminant variant index"))?
-            .clone();
-        let remaining: Vec<Type> = members
-            .iter()
-            .enumerate()
-            .filter(|(i, _)| (*i as u32) != matching_idx.0)
-            .map(|(_, m)| m.clone())
-            .collect();
+        let (mut true_env, mut false_env) = self.root_discriminant_envs(
+            op,
+            root_path,
+            root_ty,
+            root_span,
+            root_kind,
+            (matching, remaining),
+        )?;
+        // Also narrow the field path: `s.kind` stays usable as a refined literal
+        // and `excluded_literals` enables 3+-variant chain composition.
+        let direct_source_kind = self
+            .synthesize_unnarrowed_source(&path, path_span)?
+            .unwrap_or(path_kind);
+        if let Some((extra_true, extra_false)) =
+            self.narrow_direct_literal(op, path, path_ty, direct_source_kind, path_span, literal)?
+        {
+            for (p, v) in extra_true {
+                true_env.insert(p, v);
+            }
+            for (p, v) in extra_false {
+                false_env.insert(p, v);
+            }
+        }
+
+        Ok(Some((true_env, false_env)))
+    }
+
+    /// The views a discriminant test puts on the tested object: the members
+    /// `split` found equal to the literal on one side, the rest on the other.
+    fn root_discriminant_envs(
+        &mut self,
+        op: crate::BinOp,
+        root_path: narrowing::ReferencePath,
+        root_ty: Type,
+        root_span: Span,
+        root_kind: crate::TypedExprKind,
+        (matching, remaining): (Vec<Type>, Vec<Type>),
+    ) -> Result<(narrowing::NarrowEnv, narrowing::NarrowEnv), crate::compiler_error::CompilerFailure>
+    {
+        use crate::BinOp;
+        let matched_variant = Type::union(matching);
         let remaining_ty = Type::union(remaining);
 
         let (true_root_ty, false_root_ty) = match op {
@@ -1096,23 +1155,128 @@ impl<'a> Inferer<'a> {
                 source: source_false,
             },
         );
-        // Also narrow the field path: `s.kind` stays usable as a refined literal
-        // and `excluded_literals` enables 3+-variant chain composition.
-        let direct_source_kind = self
-            .synthesize_unnarrowed_source(&path, path_span)?
-            .unwrap_or(path_kind);
-        if let Some((extra_true, extra_false)) =
-            self.narrow_direct_literal(op, path, path_ty, direct_source_kind, path_span, literal)?
-        {
-            for (p, v) in extra_true {
-                true_env.insert(p, v);
+        Ok((true_env, false_env))
+    }
+
+    /// `x?.key === literal` (or `=== null`): a discriminant test that is never equal when `x`
+    /// is `null`. Only `x` narrows; `x.key` has no reading where `x` is `null`.
+    fn narrow_optional_chain_discriminant(
+        &mut self,
+        op: crate::BinOp,
+        chain: ExprId,
+        literal_ty: &Type,
+    ) -> Result<
+        Option<(narrowing::NarrowEnv, narrowing::NarrowEnv)>,
+        crate::compiler_error::CompilerFailure,
+    > {
+        use crate::{TypedChainPart, TypedExprKind};
+        let TypedExprKind::OptionalChain { base, parts } = self
+            .typed_ast
+            .try_expr(chain)
+            .map_err(crate::typechecker::arena_failure)?
+            .kind
+            .clone()
+        else {
+            return Ok(None);
+        };
+        let [
+            TypedChainPart::Field {
+                name,
+                optional: true,
+                ..
+            },
+        ] = parts.as_slice()
+        else {
+            return Ok(None);
+        };
+        let base_expr = self
+            .typed_ast
+            .try_expr(base)
+            .map_err(crate::typechecker::arena_failure)?
+            .clone();
+        let Some(root_path) = self.expr_to_reference_path(&base_expr)? else {
+            return Ok(None);
+        };
+        if self.path_root_is_captured_mutator(&root_path) {
+            return Ok(None);
+        }
+        let root_ty = self.narrowing_source_ty(&base_expr)?;
+        let Type::Union(members) = root_ty.peel() else {
+            return Ok(None);
+        };
+        let Some(split) = self.discriminant_split(members, &name.name, literal_ty) else {
+            return Ok(None);
+        };
+        let root_kind = self
+            .synthesize_unnarrowed_source(&root_path, base_expr.span)?
+            .unwrap_or(base_expr.kind);
+        self.root_discriminant_envs(op, root_path, root_ty, base_expr.span, root_kind, split)
+            .map(Some)
+    }
+
+    /// The members of a union `x.key === literal` keeps, and those
+    /// `x.key !== literal` keeps, as TypeScript narrows by a discriminant:
+    /// a member stays on the equal side when its `key` can hold the literal,
+    /// and leaves the unequal side only when its `key` is that literal alone.
+    /// A `null` member is reached through `x?.key`, which is then `null`: equal
+    /// to a `null` literal and to nothing else (where TypeScript's `undefined`
+    /// is never `=== null`). None unless
+    /// some member types `key` with a literal, which makes it a discriminant.
+    fn discriminant_split(
+        &self,
+        members: &[Type],
+        key: &str,
+        literal_ty: &Type,
+    ) -> Option<(Vec<Type>, Vec<Type>)> {
+        let field_tys = self.discriminant_field_types(members, key)?;
+        let mut equal = Vec::new();
+        let mut unequal = Vec::new();
+        for (member, field_ty) in members.iter().zip(field_tys) {
+            let Some(field_ty) = field_ty else {
+                if matches!(literal_ty, Type::Null) {
+                    equal.push(member.clone());
+                } else {
+                    unequal.push(member.clone());
+                }
+                continue;
+            };
+            if super::assignable(literal_ty, &field_ty, self.resolver()) {
+                equal.push(member.clone());
             }
-            for (p, v) in extra_false {
-                false_env.insert(p, v);
+            if field_ty.peel() != literal_ty {
+                unequal.push(member.clone());
             }
         }
+        Some((equal, unequal))
+    }
 
-        Ok(Some((true_env, false_env)))
+    /// Each member's `key` type, or None for a `null` member, when `key` is a
+    /// discriminant: every other member has it, the members type it
+    /// differently, some with a unit type, and none with a type parameter
+    /// (which TypeScript never treats as a discriminant).
+    pub(super) fn discriminant_field_types(
+        &self,
+        members: &[Type],
+        key: &str,
+    ) -> Option<Vec<Option<Type>>> {
+        let mut has_unit_member = false;
+        let mut field_tys = Vec::with_capacity(members.len());
+        for member in members {
+            if matches!(member.peel(), Type::Null) {
+                field_tys.push(None);
+                continue;
+            }
+            let field_ty = self.member_shape(member)?.get(key)?.read_ty();
+            if narrowing::has_type_parameter_member(&field_ty) {
+                return None;
+            }
+            has_unit_member |= narrowing::has_unit_member(&field_ty);
+            field_tys.push(Some(field_ty));
+        }
+        let mut present = field_tys.iter().flatten();
+        let first = present.next()?;
+        let is_uniform = present.all(|field_ty| field_ty == first);
+        (has_unit_member && !is_uniform).then_some(field_tys)
     }
 
     fn narrow_direct_literal(
@@ -1451,12 +1615,15 @@ impl<'a> Inferer<'a> {
             return Ok(envs);
         }
 
+        let root_envs = self.truthiness_discriminant_envs(&fallback_kind)?;
+
         let true_ty = narrowing::intersect_with(&from_ty, narrowing::TypeFacts::TRUTHY);
         let false_ty = narrowing::intersect_with(&from_ty, narrowing::TypeFacts::FALSY);
         let refines = |ty: &Type| !matches!(ty, Type::Error) && ty.peel() != from_ty.peel();
+        let (mut true_env, mut false_env) = root_envs.unwrap_or_default();
 
         if !refines(&true_ty) && !refines(&false_ty) {
-            return Ok((narrowing::NarrowEnv::new(), narrowing::NarrowEnv::new()));
+            return Ok((true_env, false_env));
         }
 
         // A falsy outcome proves `x === null` only when null is the sole falsy
@@ -1470,8 +1637,6 @@ impl<'a> Inferer<'a> {
         let source_kind = self
             .synthesize_unnarrowed_source(&path, span)?
             .unwrap_or(fallback_kind);
-        let mut true_env = narrowing::NarrowEnv::new();
-        let mut false_env = narrowing::NarrowEnv::new();
         for (env, ty, facts) in [
             (
                 &mut true_env,
@@ -1503,6 +1668,71 @@ impl<'a> Inferer<'a> {
             );
         }
         Ok((true_env, false_env))
+    }
+
+    /// `if (x.error)` where `error` is a discriminant (`null` in one member,
+    /// an object in another) narrows `x` to the members whose `error` can be
+    /// truthy, and `!x.error` to those whose `error` can be falsy.
+    fn truthiness_discriminant_envs(
+        &mut self,
+        path_kind: &crate::TypedExprKind,
+    ) -> Result<
+        Option<(narrowing::NarrowEnv, narrowing::NarrowEnv)>,
+        crate::compiler_error::CompilerFailure,
+    > {
+        let crate::TypedExprKind::FieldAccess { receiver, name } = path_kind else {
+            return Ok(None);
+        };
+        let receiver_expr = self
+            .typed_ast
+            .try_expr(*receiver)
+            .map_err(crate::typechecker::arena_failure)?
+            .clone();
+        let Some(root_path) = self.expr_to_reference_path(&receiver_expr)? else {
+            return Ok(None);
+        };
+        let Type::Union(members) = receiver_expr.ty.peel() else {
+            return Ok(None);
+        };
+        let mut is_discriminant = false;
+        let mut truthy = Vec::new();
+        let mut falsy = Vec::new();
+        for member in members {
+            let Some(field_ty) = self
+                .member_shape(member)
+                .and_then(|shape| shape.get(&name.name).map(crate::ObjectField::read_ty))
+            else {
+                return Ok(None);
+            };
+            is_discriminant |= narrowing::has_unit_member(&field_ty);
+            let can_be = |facts| {
+                !matches!(
+                    narrowing::intersect_with(&field_ty, facts).peel(),
+                    Type::Error | Type::Never
+                )
+            };
+            if can_be(narrowing::TypeFacts::TRUTHY) {
+                truthy.push(member.clone());
+            }
+            if can_be(narrowing::TypeFacts::FALSY) {
+                falsy.push(member.clone());
+            }
+        }
+        if !is_discriminant || (truthy.len() == members.len() && falsy.len() == members.len()) {
+            return Ok(None);
+        }
+        let root_kind = self
+            .synthesize_unnarrowed_source(&root_path, receiver_expr.span)?
+            .unwrap_or_else(|| receiver_expr.kind.clone());
+        self.root_discriminant_envs(
+            crate::BinOp::Eq,
+            root_path,
+            receiver_expr.ty.clone(),
+            receiver_expr.span,
+            root_kind,
+            (truthy, falsy),
+        )
+        .map(Some)
     }
 
     /// Leading `#` prevents collision with user identifiers (first-char rule: `[A-Za-z_$]`).

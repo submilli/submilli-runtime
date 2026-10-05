@@ -4,5 +4,5 @@ line 116 extra: by-design spec §1.5 a case must end with `break` or `return`, n
 line 127, 136 extra: bug SUB-1196 (non-exhaustive `switch`) a `switch` without `default` must cover every case, which the spec doesn't state
 line 140 extra: bug SUB-1208 `new Error()` without a message is rejected
 line 62 type: bug SUB-1199 after an exhaustive `switch` whose cases all return, the value isn't narrowed to `never`
-line 72, 74, 75, 78, 86, 97, 104, 107, 110, 117, 119, 122, 132, 142 type: bug SUB-1198 a discriminant doesn't narrow when one member types it as a non-literal or a literal union
-line 91 type: bug SUB-1210 a narrowing that rules out every member keeps a type instead of `never`
+line 97 type: bug SUB-1212 comparing with a union-typed value doesn't narrow (here a discriminant)
+line 119 type: by-design spec §1.5 a case must end with `break` or `return`, no fallthrough

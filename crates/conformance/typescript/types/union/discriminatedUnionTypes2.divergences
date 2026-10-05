@@ -1,50 +1,5 @@
-types: 39 of 140 tsc entries compared, 10 differ
-
-line 6: x
-  tsc:  { kind: false; a: string; }
-  ours: { a: string; kind: false } | { b: string; kind: true } | { c: string; kind: string }
-
-line 8: x
-  tsc:  { kind: true; b: string; } | { kind: string; c: string; }
-  ours: { a: string; kind: false } | { b: string; kind: true } | { c: string; kind: string }
-
-line 9: x
-  tsc:  { kind: true; b: string; }
-  ours: { a: string; kind: false } | { b: string; kind: true } | { c: string; kind: string }
-
-line 12: x
-  tsc:  { kind: string; c: string; }
-  ours: { a: string; kind: false } | { b: string; kind: true } | { c: string; kind: string }
-
-line 19: x
-  tsc:  { kind: false; a: string; }
-  ours: { a: string; kind: false } | { b: string; kind: true } | { c: string; kind: string }
-
-line 22: x
-  tsc:  { kind: true; b: string; }
-  ours: { a: string; kind: false } | { b: string; kind: true } | { c: string; kind: string }
-
-line 25: x
-  tsc:  { kind: string; c: string; }
-  ours: { a: string; kind: false } | { b: string; kind: true } | { c: string; kind: string }
-
-line 43: x
-  tsc:  { error?: null; value: number; }
-  ours: Result<number>
-
-line 46: x
-  tsc:  { error: Error; }
-  ours: Result<number>
+types: 46 of 140 tsc entries compared, 1 differ
 
 line 50: { value: 10 }
   tsc:  { value: number; }
   ours: { error?: null; value: number }
-
-errors:
-line 6: ours: field `a` does not exist on all members of `{ a: string; kind: false } | { b: string; kind: true } | { c: string; kind: string }` (missing on `{ b: string; kind: true }`) (tsc accepts)
-line 9: ours: field `b` does not exist on all members of `{ a: string; kind: false } | { b: string; kind: true } | { c: string; kind: string }` (missing on `{ a: string; kind: false }`) (tsc accepts)
-line 12: ours: field `c` does not exist on all members of `{ a: string; kind: false } | { b: string; kind: true } | { c: string; kind: string }` (missing on `{ a: string; kind: false }`) (tsc accepts)
-line 19: ours: field `a` does not exist on all members of `{ a: string; kind: false } | { b: string; kind: true } | { c: string; kind: string }` (missing on `{ b: string; kind: true }`) (tsc accepts)
-line 22: ours: field `b` does not exist on all members of `{ a: string; kind: false } | { b: string; kind: true } | { c: string; kind: string }` (missing on `{ a: string; kind: false }`) (tsc accepts)
-line 25: ours: field `c` does not exist on all members of `{ a: string; kind: false } | { b: string; kind: true } | { c: string; kind: string }` (missing on `{ a: string; kind: false }`) (tsc accepts)
-line 43: ours: field `value` does not exist on all members of `Result<number>` (missing on `{ error: Error }`) (tsc accepts)

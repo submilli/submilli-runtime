@@ -300,18 +300,20 @@ impl Inferer<'_> {
                 .try_expr(*receiver)
                 .map_err(crate::typechecker::arena_failure)?;
             if let Type::Union(members) = receiver_expr.ty.peel()
-                && let Some((disc_key, table)) = self.union_discriminant_with_nominals(members)
-                && disc_key == name.name
+                && let Some(field_tys) = self.discriminant_field_types(members, &name.name)
             {
+                let disc_key = name.name.clone();
+                // A member leaves only when the cases cover every value its
+                // discriminant can hold, as in TypeScript.
                 let kept: Vec<Type> = members
                     .iter()
-                    .enumerate()
-                    .filter(|(idx, _)| {
-                        !table.iter().any(|(lit, variant)| {
-                            variant.0 as usize == *idx && covered.contains(lit)
-                        })
+                    .zip(field_tys)
+                    .filter(|(_, field_ty)| {
+                        !field_ty
+                            .as_ref()
+                            .is_some_and(|ty| narrowing::is_covered_by_literals(ty, covered))
                     })
-                    .map(|(_, m)| m.clone())
+                    .map(|(m, _)| m.clone())
                     .collect();
                 let residual =
                     narrowing::with_source_refinement(&receiver_expr.ty, Type::union(kept));
