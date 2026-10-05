@@ -5539,7 +5539,9 @@ impl Inferer<'_> {
                         rejected_void,
                     } =
                         self.infer_value_operand(elem_id, hint, ValuePosition::ArrayElement, None)?;
-                    if rejected_void {
+                    // A `never` element holds no value (it is read in code no value
+                    // reaches), so it neither seeds nor narrows the element type.
+                    if rejected_void || matches!(elem_ty.peel(), Type::Never) {
                         typed_elements.push(crate::TypedArrayElement::Value(typed_id));
                         continue;
                     }

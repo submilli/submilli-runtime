@@ -923,10 +923,18 @@ impl<'a> Inferer<'a> {
     > {
         let lhs_lit = comparison_literal(&self.typed_ast, lhs_id)?;
         let rhs_lit = comparison_literal(&self.typed_ast, rhs_id)?;
+        // The left side was read before the right one ran: if the right one
+        // writes it (`a === f(a = "y")`), the comparison says nothing about the
+        // value it holds now.
+        let lhs_rewritten = self.is_written_within(lhs_id, rhs_id)?;
         match (lhs_lit, rhs_lit) {
+            (None, Some(_) | None) if lhs_rewritten => Ok(None),
             (None, Some(lit)) => self.narrow_to_other_literal(op, lhs_id, lit),
             (Some(lit), None) => self.narrow_to_other_literal(op, rhs_id, lit),
             (None, None) => self.narrow_equal_to_union(op, lhs_id, rhs_id),
+            (Some(lhs_lit), Some(_)) if lhs_rewritten => {
+                self.narrow_to_other_literal(op, rhs_id, lhs_lit)
+            }
             (Some(lhs_lit), Some(rhs_lit)) => {
                 let lhs_envs = self.narrow_to_other_literal(op, lhs_id, rhs_lit)?;
                 let rhs_envs = self.narrow_to_other_literal(op, rhs_id, lhs_lit)?;
@@ -940,6 +948,32 @@ impl<'a> Inferer<'a> {
                 })
             }
         }
+    }
+
+    /// Whether the reference `path_id` reads is written while `other_id` runs.
+    fn is_written_within(
+        &self,
+        path_id: ExprId,
+        other_id: ExprId,
+    ) -> Result<bool, crate::compiler_error::CompilerFailure> {
+        let path_expr = self
+            .typed_ast
+            .try_expr(path_id)
+            .map_err(crate::typechecker::arena_failure)?;
+        let Some(path) = self.expr_to_reference_path(path_expr)? else {
+            return Ok(false);
+        };
+        let other = self
+            .typed_ast
+            .try_expr(other_id)
+            .map_err(crate::typechecker::arena_failure)?
+            .span;
+        Ok(self.last_write_spans.iter().any(|(written, span)| {
+            written.is_prefix_of(&path)
+                && span.file == other.file
+                && other.start <= span.start
+                && span.end <= other.end
+        }))
     }
 
     /// Narrows `path_id` compared with a value whose type is the literal

@@ -33,7 +33,39 @@ function viaContradiction(x: number | null): string {
   return "null";
 }
 
+// A `never` element holds no value, so it doesn't fix the array's type.
+function inArray(x: string | number): number {
+  if (typeof x === "string") {
+    return 1;
+  }
+  if (typeof x === "number") {
+    return 2;
+  }
+  const values = [x, 3];
+  return values.length;
+}
+
+// The right side rewrites `a` after the left side read it, so the comparison
+// says nothing about the value `a` holds afterwards.
+function rewrittenByOtherSide(start: "x" | "y"): string {
+  let a: "x" | "y" = start;
+  if (
+    a ===
+    ((): "y" => {
+      a = "y";
+      return "y";
+    })()
+  ) {
+    return "same";
+  }
+  if (a === "x") {
+    return "x";
+  }
+  return "now " + a;
+}
+
 function main(): void {
   console.log(viaArrow("s"), viaArrow(1), viaFunctionExpression("a"), viaFunctionExpression("b"));
   console.log(viaContradiction(1), viaContradiction(null));
+  console.log(inArray("s"), inArray(1), rewrittenByOtherSide("x"), rewrittenByOtherSide("y"));
 }
