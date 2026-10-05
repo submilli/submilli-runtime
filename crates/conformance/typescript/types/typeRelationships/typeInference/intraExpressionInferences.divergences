@@ -82,7 +82,7 @@ line 100: b
 
 line 174: example({ fetch: (params: Params) => 123, map: (number) => String(number) })
   tsc:  (params: Params) => string
-  ours: (arg0: TParams) => TMapped
+  ours: (arg0: unknown) => unknown
 
 line 174: { fetch: (params: Params) => 123, map: (number) => String(number) }
   tsc:  { fetch: (params: Params) => number; map: (number: number) => string; }
@@ -94,7 +94,7 @@ line 176: (number) => String(number)
 
 line 179: example({ fetch: (params: Params, foo: number) => 123, map: (number) => String(number) })
   tsc:  (params: Params) => string
-  ours: (arg0: TParams) => TMapped
+  ours: (arg0: unknown) => unknown
 
 line 179: { fetch: (params: Params, foo: number) => 123, map: (number) => String(number) }
   tsc:  { fetch: (params: Params, foo: number) => number; map: (number: number) => string; }
@@ -106,7 +106,7 @@ line 181: (number) => String(number)
 
 line 184: example({ fetch: (params: Params, foo) => 123, map: (number) => String(number) })
   tsc:  (params: Params) => string
-  ours: (arg0: TParams) => TMapped
+  ours: (arg0: unknown) => unknown
 
 line 184: { fetch: (params: Params, foo) => 123, map: (number) => String(number) }
   tsc:  { fetch: (params: Params, foo: number) => number; map: (number: number) => string; }
@@ -123,6 +123,3 @@ line 26: ours: field `toFixed` does not exist on `T` (tsc accepts)
 line 31: ours: field `toFixed` does not exist on `T` (tsc accepts)
 line 32: ours: field `toFixed` does not exist on `T` (tsc accepts)
 line 56: ours: field `foo` does not exist on `M` (tsc accepts)
-line 174: ours: cannot infer type parameter(s) `TParams`, `TDone`, `TMapped`; consider adding an explicit type argument (tsc accepts)
-line 179: ours: cannot infer type parameter(s) `TParams`, `TDone`, `TMapped`; consider adding an explicit type argument (tsc accepts)
-line 184: ours: cannot infer type parameter(s) `TParams`, `TDone`, `TMapped`; consider adding an explicit type argument (tsc accepts)

@@ -1,12 +1,1 @@
-types: 6 of 17 tsc entries compared, 2 differ
-
-line 14: d
-  tsc:  D<unknown, unknown>
-  ours: D<T, U>
-
-line 14: new D()
-  tsc:  D<unknown, unknown>
-  ours: D<T, U>
-
-errors:
-line 14: ours: cannot infer type parameter(s) `T`, `U`; consider adding an explicit type argument (tsc accepts)
+types: 6 of 17 tsc entries compared, 0 differ

@@ -794,6 +794,7 @@ impl Inferer<'_> {
             expected,
             errors_before_args,
         );
+        self.bind_uninferred_to_unknown(&mut sub, &sig.generics, &iface_mangled, span)?;
         if let Err(unbound) = sub
             .resolve_all(&sig.generics, &self.type_limits)
             .map_err(type_limit_at(span))?
@@ -982,6 +983,24 @@ impl Inferer<'_> {
         if let Some(bindings) = agreed {
             *sub = bindings;
         }
+    }
+
+    /// Bind the type parameters of a program's own generic that nothing
+    /// inferred to `unknown`, as tsc does: every type is assignable to it.
+    /// Built-in generics keep reporting them, since tsc gives several of them
+    /// `any` instead (`new Map()` is `Map<any, any>`), which a later use may
+    /// still resolve here (`new Map().set(k, v)`).
+    fn bind_uninferred_to_unknown(
+        &self,
+        sub: &mut TypeParamSubstitution,
+        generics: &[String],
+        declared_by: &crate::MangledName,
+        span: Span,
+    ) -> Result<(), CompilerFailure> {
+        if crate::mangle::is_builtin(declared_by) {
+            return Ok(());
+        }
+        bind_remaining(sub, generics, Type::Unknown, &self.type_limits).map_err(type_limit_at(span))
     }
 
     /// `ty` with `sub` applied, at a call site at `span`.
@@ -1330,6 +1349,7 @@ impl Inferer<'_> {
         }
 
         self.bind_leftover_type_parameters(&mut sub, &generics, &ret, expected, errors_before_args);
+        self.bind_uninferred_to_unknown(&mut sub, &generics, &mangled, span)?;
         if let Err(unbound) = sub
             .resolve_all(&generics, &self.type_limits)
             .map_err(type_limit_at(span))?
