@@ -17,220 +17,290 @@ pub struct Diagnostic {
     pub notes: Vec<(Span, String)>,
 }
 
-pub fn render(diagnostic: &Diagnostic, sources: &Sources) -> String {
-    let gutter_width = gutter_width_for_spans(
-        sources,
-        std::iter::once(diagnostic.span).chain(diagnostic.notes.iter().map(|(s, _)| *s)),
-    );
-    let gutter_blank = " ".repeat(gutter_width);
+use crate::rendering::{RenderError, RenderLimits, RenderedText, Writer};
 
-    let mut out = String::new();
-    out.push_str(&format!(
-        "{}: {}\n",
-        severity_str(diagnostic.severity),
-        diagnostic.message
-    ));
-    render_anchored_block(
-        &mut out,
-        sources,
-        diagnostic.span,
-        &gutter_blank,
-        gutter_width,
-    );
-
-    for help in &diagnostic.help {
-        out.push_str(&format!("{gutter_blank} |\n"));
-        out.push_str(&format!("help: {help}\n"));
-    }
-
-    for (note_span, note_msg) in &diagnostic.notes {
-        out.push_str(&format!("{gutter_blank} |\n"));
-        out.push_str(&format!("note: {note_msg}\n"));
-        render_anchored_block(&mut out, sources, *note_span, &gutter_blank, gutter_width);
-    }
-
-    out
+/// Borrowed diagnostic fields for callers with a different owned diagnostic model.
+pub struct DiagnosticView<'a> {
+    pub severity: Severity,
+    pub span: Span,
+    pub message: &'a str,
+    pub help: &'a [String],
+    pub notes: &'a [(Span, String)],
 }
 
-fn severity_str(s: Severity) -> &'static str {
-    match s {
+impl<'a> From<&'a Diagnostic> for DiagnosticView<'a> {
+    fn from(value: &'a Diagnostic) -> Self {
+        Self {
+            severity: value.severity,
+            span: value.span,
+            message: &value.message,
+            help: &value.help,
+            notes: &value.notes,
+        }
+    }
+}
+
+pub fn render(diagnostic: &Diagnostic, sources: &Sources) -> String {
+    render_checked(diagnostic, sources).map_or_else(
+        |error| crate::rendering::failure_text(&diagnostic.message, &error),
+        |rendered| rendered.text,
+    )
+}
+
+pub fn render_checked(
+    diagnostic: &Diagnostic,
+    sources: &Sources,
+) -> Result<RenderedText, RenderError> {
+    render_with_limits(diagnostic, sources, RenderLimits::default())
+}
+
+pub fn render_with_limits(
+    diagnostic: &Diagnostic,
+    sources: &Sources,
+    limits: RenderLimits,
+) -> Result<RenderedText, RenderError> {
+    Writer::render(limits, |out| {
+        write_diagnostic(out, &diagnostic.into(), sources)
+    })
+}
+
+pub fn render_collection(
+    diagnostics: &[Diagnostic],
+    sources: &Sources,
+) -> Result<RenderedText, RenderError> {
+    render_collection_with_limits(diagnostics, sources, RenderLimits::collection())
+}
+
+pub fn render_collection_with_limits(
+    diagnostics: &[Diagnostic],
+    sources: &Sources,
+    limits: RenderLimits,
+) -> Result<RenderedText, RenderError> {
+    render_views(
+        diagnostics.iter().map(|diagnostic| Ok(diagnostic.into())),
+        sources,
+        limits,
+    )
+}
+
+pub fn render_views<'a>(
+    diagnostics: impl IntoIterator<Item = Result<DiagnosticView<'a>, RenderError>>,
+    sources: &Sources,
+    limits: RenderLimits,
+) -> Result<RenderedText, RenderError> {
+    Writer::render(limits, |out| {
+        for diagnostic in diagnostics {
+            out.step()?;
+            let diagnostic = diagnostic?;
+            let rendered = Writer::render(out.child_limits(), |child| {
+                write_diagnostic(child, &diagnostic, sources)
+            })?;
+            out.append(rendered)?;
+        }
+        Ok(())
+    })
+}
+
+fn write_diagnostic(
+    out: &mut Writer,
+    diagnostic: &DiagnosticView<'_>,
+    sources: &Sources,
+) -> Result<(), RenderError> {
+    validate_span(sources, diagnostic.span)?;
+    let severity = match diagnostic.severity {
         Severity::Error => "error",
         Severity::Warning => "warning",
-    }
-}
-
-fn gutter_width_for_spans(sources: &Sources, spans: impl IntoIterator<Item = Span>) -> usize {
-    let mut max_line: u32 = 1;
-    for span in spans {
-        let Some(file) = sources.get(span.file) else {
-            continue;
-        };
-        let line_index = file.line_index();
-        let line_count = line_index.line_count().max(1);
-        let Ok((end_line, _)) = line_index.line_col(span.end) else {
-            continue;
-        };
-        // +1 for the context line below, clamped to file bounds.
-        max_line = max_line.max(end_line.saturating_add(1).min(line_count));
-    }
-    max_line.to_string().len()
-}
-
-fn render_anchored_block(
-    out: &mut String,
-    sources: &Sources,
-    span: Span,
-    gutter_blank: &str,
-    gutter_width: usize,
-) {
-    match source_context(sources, span, gutter_blank, gutter_width) {
-        Ok(context) => out.push_str(&context),
-        Err(error) => out.push_str(&format!(
-            "{gutter_blank} | source context unavailable: {error}\n"
-        )),
-    }
-}
-
-fn source_context(
-    sources: &Sources,
-    span: Span,
-    gutter_blank: &str,
-    gutter_width: usize,
-) -> Result<String, SourceError> {
-    Span::new(span.file, span.start, span.end)?;
-    if let Some(path) = span.file.reserved_path() {
-        return Ok(format!("{gutter_blank}--> {path}\n"));
-    }
-    let file = sources
-        .get(span.file)
-        .ok_or(SourceError::UnknownFile { file: span.file })?;
-    file.span_text(span)?;
-    let line_index = file.line_index();
-    let (start_line, start_col) = line_index.line_col(span.start)?;
-    let mut out = format!(
-        "{gutter_blank}--> {}:{start_line}:{start_col}\n{gutter_blank} |\n",
-        file.path
-    );
-    render_source_block(&mut out, line_index, span, gutter_blank, gutter_width)?;
-    Ok(out)
-}
-
-/// Source-context block for `span`. Shared with `backtrace` so compile and
-/// runtime outputs use the same `N | text` / `  | ^^^` shape. Caller owns
-/// the `--> file:line:col` header.
-pub(crate) fn render_source_block(
-    out: &mut String,
-    line_index: &LineIndex,
-    span: Span,
-    gutter_blank: &str,
-    gutter_width: usize,
-) -> Result<(), SourceError> {
-    span.text(line_index.source(), span.file)?;
-    let (start_line, start_col) = line_index.line_col(span.start)?;
-    let (end_line, end_col) = line_index.line_col(span.end)?;
-    let line_count = line_index.line_count();
-
-    if start_line > 1 {
-        let prev = line_index.line_text(start_line - 1)?;
-        out.push_str(&format!(
-            "{:>width$} | {}\n",
-            start_line - 1,
-            expand_tabs(prev),
-            width = gutter_width
-        ));
-    }
-
-    let start_text = line_index.line_text(start_line)?;
-    out.push_str(&format!(
-        "{start_line:>gutter_width$} | {}\n",
-        expand_tabs(start_text)
-    ));
-    let caret_indent = display_column(start_text, start_col - 1);
-    let caret_len = if start_line == end_line {
-        display_column(start_text, end_col - 1)
-            .saturating_sub(caret_indent)
-            .max(1)
-    } else {
-        // Multi-line: extend to end of line.
-        display_column(start_text, u32::MAX)
-            .saturating_sub(caret_indent)
-            .max(1)
     };
-    out.push_str(&format!(
-        "{} | {}{}\n",
-        gutter_blank,
-        " ".repeat(caret_indent),
-        "^".repeat(caret_len)
-    ));
-
-    if end_line > start_line {
-        for mid_line in (start_line + 1)..end_line {
-            let mid_text = line_index.line_text(mid_line)?;
-            out.push_str(&format!(
-                "{mid_line:>gutter_width$} | {}\n",
-                expand_tabs(mid_text)
-            ));
-            let mid_carets = display_column(mid_text, u32::MAX).max(1);
-            out.push_str(&format!("{} | {}\n", gutter_blank, "^".repeat(mid_carets)));
+    let mut max_line = 1;
+    let validation_allowance = out.remaining_steps() / 2;
+    let mut validation_truncated = false;
+    for (visited, span) in std::iter::once(diagnostic.span)
+        .chain(diagnostic.notes.iter().map(|(span, _)| *span))
+        .enumerate()
+    {
+        if visited >= validation_allowance {
+            validation_truncated = true;
+            break;
         }
-        let end_text = line_index.line_text(end_line)?;
-        out.push_str(&format!(
-            "{end_line:>gutter_width$} | {}\n",
-            expand_tabs(end_text)
-        ));
-        let end_carets = display_column(end_text, end_col.saturating_sub(1)).max(1);
-        out.push_str(&format!("{} | {}\n", gutter_blank, "^".repeat(end_carets)));
+        out.step()?;
+        validate_span(sources, span)?;
+        if let Some(source) = sources.get(span.file) {
+            let index = source.line_index();
+            let (line, _) = index.line_col(span.end)?;
+            max_line = max_line.max(line.saturating_add(1).min(index.line_count()));
+        }
     }
-
-    // Skip at EOF; line_count is the last addressable line.
-    if end_line < line_count {
-        let next = line_index.line_text(end_line + 1)?;
-        out.push_str(&format!(
-            "{:>width$} | {}\n",
-            end_line + 1,
-            expand_tabs(next),
-            width = gutter_width
-        ));
+    out.format(format_args!("{severity}: {}\n", diagnostic.message))?;
+    if validation_truncated {
+        return Err(RenderError::Truncated);
+    }
+    let width = max_line.to_string().len();
+    write_context(out, sources, diagnostic.span, width)?;
+    for help in diagnostic.help {
+        out.format(format_args!("{:width$} |\nhelp: {help}\n", ""))?;
+    }
+    for (span, message) in diagnostic.notes {
+        out.format(format_args!("{:width$} |\nnote: {message}\n", ""))?;
+        write_context(out, sources, *span, width)?;
     }
     Ok(())
 }
 
-/// Terminal column at a byte offset. Source columns remain byte-based for LSP
-/// round trips; only the displayed source and underline use terminal widths.
-fn display_column(line: &str, offset: u32) -> usize {
+pub(crate) fn validate_span(sources: &Sources, span: Span) -> Result<(), SourceError> {
+    Span::new(span.file, span.start, span.end)?;
+    if span.file.reserved_path().is_some() {
+        return Ok(());
+    }
+    sources
+        .get(span.file)
+        .ok_or(SourceError::UnknownFile { file: span.file })?
+        .span_text(span)?;
+    Ok(())
+}
+
+fn write_context(
+    out: &mut Writer,
+    sources: &Sources,
+    span: Span,
+    width: usize,
+) -> Result<(), RenderError> {
+    if let Some(path) = span.file.reserved_path() {
+        return out.format(format_args!("{:width$}--> {path}\n", ""));
+    }
+    let source = sources
+        .get(span.file)
+        .ok_or(SourceError::UnknownFile { file: span.file })?;
+    let index = source.line_index();
+    let (line, col) = index.line_col(span.start)?;
+    out.format(format_args!(
+        "{:width$}--> {}:{line}:{col}\n{:width$} |\n",
+        "", source.path, ""
+    ))?;
+    write_source_block(out, index, span, width)
+}
+
+pub(crate) fn write_source_block(
+    out: &mut Writer,
+    index: &LineIndex,
+    span: Span,
+    width: usize,
+) -> Result<(), RenderError> {
+    span.text(index.source(), span.file)?;
+    let (start, start_col) = index.line_col(span.start)?;
+    let (end, end_col) = index.line_col(span.end)?;
+    if start > 1 {
+        write_line(out, index, start - 1, width)?;
+    }
+    for line in start..=end {
+        out.step()?;
+        let text = index.line_text(line)?;
+        write_line(out, index, line, width)?;
+        let indent = if line == start {
+            display_column(out, text, start_col.saturating_sub(1))?
+        } else {
+            0
+        };
+        let last = if line == end {
+            end_col.saturating_sub(1)
+        } else {
+            u32::MAX
+        };
+        let carets = display_column(out, text, last)?
+            .saturating_sub(indent)
+            .max(1);
+        out.format(format_args!("{:width$} | ", ""))?;
+        out.repeat(' ', indent)?;
+        out.repeat('^', carets)?;
+        out.push("\n")?;
+    }
+    if end < index.line_count() {
+        write_line(out, index, end + 1, width)?;
+    }
+    Ok(())
+}
+
+fn write_line(
+    out: &mut Writer,
+    index: &LineIndex,
+    line: u32,
+    width: usize,
+) -> Result<(), RenderError> {
+    use unicode_width::UnicodeWidthStr;
+    out.format(format_args!("{line:>width$} | "))?;
+    let text = index.line_text(line)?;
+    let mut column = 0usize;
+    for (i, segment) in text.split('\t').enumerate() {
+        out.step()?;
+        if i != 0 {
+            let spaces = 4 - column % 4;
+            out.repeat(' ', spaces)?;
+            column = column.checked_add(spaces).ok_or(RenderError::Formatting)?;
+        }
+        // The byte limit is checked before scanning potentially huge text for width.
+        out.push(segment)?;
+        column = column
+            .checked_add(segment.width())
+            .ok_or(RenderError::Formatting)?;
+    }
+    out.push("\n")
+}
+
+fn display_column(out: &mut Writer, line: &str, offset: u32) -> Result<usize, RenderError> {
     use unicode_width::UnicodeWidthStr;
     let mut end = (offset as usize).min(line.len());
     while !line.is_char_boundary(end) {
-        end -= 1;
+        end = end.saturating_sub(1);
     }
-    line[..end]
-        .split('\t')
-        .enumerate()
-        .fold(0, |column, (index, text)| {
-            let start = if index == 0 {
-                column
-            } else {
-                column + 4 - column % 4
-            };
-            start + text.width()
-        })
+    let text = line.get(..end).ok_or(RenderError::Formatting)?;
+    let mut column = 0usize;
+    for (i, segment) in text.split('\t').enumerate() {
+        out.step()?;
+        if i != 0 {
+            column = column
+                .checked_add(4 - column % 4)
+                .ok_or(RenderError::Formatting)?;
+        }
+        // A line successfully emitted above is already bounded by the output limit.
+        column = column
+            .checked_add(segment.width())
+            .ok_or(RenderError::Formatting)?;
+    }
+    Ok(column)
 }
 
-/// Expand tabs at four-column stops relative to the source, excluding the gutter.
-fn expand_tabs(line: &str) -> String {
-    use unicode_width::UnicodeWidthStr;
-    let mut out = String::new();
-    let mut column = 0;
-    for (index, text) in line.split('\t').enumerate() {
-        if index != 0 {
-            let spaces = 4 - column % 4;
-            out.push_str(&" ".repeat(spaces));
-            column += spaces;
+/// Individually rendered warnings with a shared collection byte/work allowance.
+pub fn render_list(
+    diagnostics: &[Diagnostic],
+    sources: &Sources,
+) -> Result<Vec<String>, RenderError> {
+    let mut result = Vec::new();
+    let mut remaining = RenderLimits::collection().bytes;
+    let mut steps = RenderLimits::collection().steps;
+    for diagnostic in diagnostics.iter().take(RenderLimits::collection().steps) {
+        if remaining < crate::rendering::TRUNCATED.len() * 2 || steps == 0 {
+            break;
         }
-        out.push_str(text);
-        column += text.width();
+        let rendered = render_with_limits(
+            diagnostic,
+            sources,
+            RenderLimits {
+                bytes: remaining
+                    .min(RenderLimits::default().bytes)
+                    .saturating_sub(crate::rendering::TRUNCATED.len()),
+                steps,
+                ..RenderLimits::default()
+            },
+        )?;
+        steps = steps.saturating_sub(rendered.steps());
+        remaining = remaining.saturating_sub(rendered.text.len());
+        result.try_reserve(1).map_err(|_| RenderError::Allocation)?;
+        result.push(rendered.text);
     }
-    out
+    if result.len() < diagnostics.len() {
+        result.try_reserve(1).map_err(|_| RenderError::Allocation)?;
+        result.push(crate::rendering::TRUNCATED.into());
+    }
+    Ok(result)
 }
 
 #[cfg(test)]
@@ -313,7 +383,6 @@ mod tests {
 
     #[test]
     fn carets_follow_terminal_columns() {
-        use unicode_width::UnicodeWidthStr;
         for (source, target, indent, width) in [
             ("let s = \"日本😀\"; bad;", "bad", 18, 3),
             ("\tlet s = \"e\u{301}\";\tbad;", "bad", 20, 3),
@@ -331,10 +400,8 @@ mod tests {
             let rendered = render(&diag, &sources(source));
             assert!(!rendered.contains('\t'), "{rendered}");
             let caret = rendered.lines().find(|line| line.contains('^')).unwrap();
-            let expanded = super::expand_tabs(source);
             assert_eq!(caret.find('^').unwrap(), 4 + indent, "{rendered}");
             assert_eq!(caret.matches('^').count(), width, "{rendered}");
-            assert_eq!(expanded.width(), super::display_column(source, u32::MAX));
             assert!(rendered.contains(&format!("script.subm:1:{}", start + 1)));
         }
     }

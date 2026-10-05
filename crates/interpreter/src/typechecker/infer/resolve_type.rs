@@ -112,7 +112,10 @@ impl<'a> Inferer<'a> {
             }
             TypeKind::Interface { generics, .. } => {
                 if args.len() != generics.len() {
-                    let header = format_definition::format_interface_header(display_name, generics);
+                    let header = self.render_help(format_definition::format_interface_header(
+                        display_name,
+                        generics,
+                    ));
                     let plural = if generics.len() == 1 {
                         "argument"
                     } else {
@@ -189,7 +192,10 @@ impl<'a> Inferer<'a> {
                 );
                 return Ok(Type::Error);
             }
-            let header = format_definition::format_class_header(display_name, generics);
+            let header = self.render_help(format_definition::format_class_header(
+                display_name,
+                generics,
+            ));
             let plural = if generics.len() == 1 {
                 "argument"
             } else {
@@ -452,8 +458,9 @@ impl<'a> Inferer<'a> {
                         }
                         TypeKind::Interface { generics, .. } => {
                             if args.len() != generics.len() {
-                                let header =
-                                    format_definition::format_interface_header(text, generics);
+                                let header = self.render_help(
+                                    format_definition::format_interface_header(text, generics),
+                                );
                                 let plural = if generics.len() == 1 {
                                     "argument"
                                 } else {
@@ -579,8 +586,9 @@ impl<'a> Inferer<'a> {
                         }
                         TypeKind::Interface { generics, .. } => {
                             if args.len() != generics.len() {
-                                let header =
-                                    format_definition::format_interface_header(&text, generics);
+                                let header = self.render_help(
+                                    format_definition::format_interface_header(&text, generics),
+                                );
                                 let plural = if generics.len() == 1 {
                                     "argument"
                                 } else {

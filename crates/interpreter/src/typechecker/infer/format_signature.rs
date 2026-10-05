@@ -1,8 +1,9 @@
-use std::fmt::Write;
+use crate::rendering::{RenderError, RenderLimits, Writer};
+use crate::type_rendering::write_type;
 
-use crate::type_size::TypeLimits;
+use crate::type_rendering::CopyBudget;
 use crate::typechecker::type_param_substitution::TypeParamSubstitution;
-use crate::{DefaultValue, EnumVariantValue, Intrinsic, MethodSig, Param, Type};
+use crate::{DefaultValue, Intrinsic, MethodSig, Param, Type};
 
 #[derive(Clone, Copy)]
 pub(super) enum SignatureKind<'a> {
@@ -34,26 +35,16 @@ pub(super) enum SignatureKind<'a> {
     },
 }
 
-/// `substitution` is the method lift's type-parameter table, empty for every
-/// other kind. It arrives from the caller because only member resolution knows
-/// which declaration a signature is written in. A substitution that passes a
-/// type limit renders as `Type::Error` and is recorded in `limits`.
 pub(super) fn format_signature(
     kind: SignatureKind<'_>,
     substitution: &TypeParamSubstitution,
-    limits: &TypeLimits,
-) -> String {
-    match kind {
+) -> Result<String, RenderError> {
+    let limits = CopyBudget::default();
+    Writer::render(RenderLimits::default(), |out| match kind {
         SignatureKind::Constructor { name, params } => {
-            let mut out = format!("new {name}(");
-            for (i, p) in params.iter().enumerate() {
-                if i > 0 {
-                    out.push_str(", ");
-                }
-                write_named_param(&mut out, &p.name, &p.ty, p.default.as_ref(), p.rest);
-            }
-            out.push(')');
-            out
+            out.format(format_args!("new {name}("))?;
+            write_params(out, params, &TypeParamSubstitution::new(), &limits)?;
+            out.push(")")
         }
         SignatureKind::Function {
             name,
@@ -62,215 +53,262 @@ pub(super) fn format_signature(
             ret,
             doc,
             predicate,
-        } => format_function(name, generics, params, ret, doc, predicate, limits),
+        } => {
+            validate_predicate(params, predicate)?;
+            if let Some(doc) = doc {
+                super::format_definition::write_doc_block(out, "", doc)?;
+            }
+            out.format(format_args!("function {name}"))?;
+            write_generic_list(out, generics)?;
+            out.push("(")?;
+            write_params(out, params, &TypeParamSubstitution::new(), &limits)?;
+            out.push("): ")?;
+            write_return(
+                out,
+                params,
+                ret,
+                predicate,
+                &TypeParamSubstitution::new(),
+                &limits,
+            )
+        }
         SignatureKind::Method {
             receiver_ty,
             name,
             sig,
-        } => format_method(receiver_ty, name, sig, substitution, limits),
+        } => {
+            validate_predicate(&sig.params, sig.predicate.as_ref())?;
+            if let Some(doc) = &sig.doc {
+                super::format_definition::write_doc_block(out, "", doc)?;
+            }
+            write_type(out, receiver_ty)?;
+            out.format(format_args!(".{name}"))?;
+            write_generic_list(out, &sig.generics)?;
+            out.push("(")?;
+            write_params(out, &sig.params, substitution, &limits)?;
+            out.push("): ")?;
+            write_return(
+                out,
+                &sig.params,
+                &sig.ret,
+                sig.predicate.as_ref(),
+                substitution,
+                &limits,
+            )
+        }
         SignatureKind::Anon {
             params,
             ret,
             has_rest,
-        } => format_anon(params, ret, has_rest),
-        SignatureKind::Intrinsic { kind } => format_intrinsic(kind),
-    }
+        } => {
+            write_synthetic_params(out, params, has_rest)?;
+            out.push(" => ")?;
+            write_type(out, ret)
+        }
+        SignatureKind::Intrinsic { kind } => write_intrinsic(out, kind),
+    })
+    .map(|rendered| rendered.text)
 }
 
-fn format_function(
-    name: &str,
-    generics: &[String],
+pub(super) fn validate_predicate(
     params: &[Param],
-    ret: &Type,
-    doc: Option<&crate::DocComment>,
     predicate: Option<&crate::TypePredicate>,
-    limits: &TypeLimits,
-) -> String {
-    let mut out = String::new();
-    if let Some(d) = doc {
-        super::format_definition::write_doc_block(&mut out, "", d);
+) -> Result<(), RenderError> {
+    if predicate.is_some_and(|predicate| {
+        usize::try_from(predicate.parameter_index)
+            .ok()
+            .and_then(|index| params.get(index))
+            .is_none()
+    }) {
+        return Err(RenderError::InvalidMetadata(
+            "predicate parameter is absent",
+        ));
     }
-    out.push_str("function ");
-    out.push_str(name);
-    write_generic_list(&mut out, generics);
-    out.push('(');
-    for (i, p) in params.iter().enumerate() {
-        if i > 0 {
-            out.push_str(", ");
+    Ok(())
+}
+
+pub(super) fn substituted(
+    ty: &Type,
+    sub: &TypeParamSubstitution,
+    limits: &CopyBudget,
+) -> Result<Type, RenderError> {
+    // Validate before substitution can clone a malformed, over-deep input.
+    limits.check_substitution(ty, sub)?;
+    sub.apply(ty, &limits.types)
+        .map_err(|_| RenderError::Truncated)
+}
+
+pub(super) fn write_params(
+    out: &mut Writer,
+    params: &[Param],
+    sub: &TypeParamSubstitution,
+    limits: &CopyBudget,
+) -> Result<(), RenderError> {
+    for (i, param) in params.iter().enumerate() {
+        out.step()?;
+        if i != 0 {
+            out.push(", ")?;
         }
-        write_named_param(&mut out, &p.name, &p.ty, p.default.as_ref(), p.rest);
+        let ty = substituted(&param.ty, sub, limits)?;
+        write_named_param(out, &param.name, &ty, param.default.as_ref(), param.rest)?;
     }
-    out.push_str("): ");
-    write_return(
-        &mut out,
-        params,
-        ret,
-        predicate,
-        &TypeParamSubstitution::new(),
-        limits,
-    );
-    out
+    Ok(())
 }
 
 pub(super) fn write_named_param(
-    out: &mut String,
+    out: &mut Writer,
     name: &str,
     ty: &Type,
     default: Option<&DefaultValue>,
     rest: bool,
-) {
+) -> Result<(), RenderError> {
     if rest {
-        out.push_str("...");
+        out.push("...")?;
     }
-    if name.is_empty() {
-        write!(out, "{ty}").unwrap();
-    } else {
-        write!(out, "{name}: {ty}").unwrap();
+    if !name.is_empty() {
+        out.format(format_args!("{name}: "))?;
     }
-    if let Some(d) = default {
-        out.push_str(" = ");
-        write_default_value(out, d);
+    write_type(out, ty)?;
+    if let Some(default) = default {
+        out.push(" = ")?;
+        write_default_value(out, default)?;
     }
+    Ok(())
 }
 
-pub(super) fn write_default_value(out: &mut String, default: &DefaultValue) {
+pub(super) fn write_default_value(
+    out: &mut Writer,
+    default: &DefaultValue,
+) -> Result<(), RenderError> {
     match default {
-        DefaultValue::Number(n) => out.push_str(&crate::runtime::number::format_number_js(*n)),
-        DefaultValue::String(s) => write!(out, "{s:?}").unwrap(),
-        DefaultValue::Boolean(b) => write!(out, "{b}").unwrap(),
-        DefaultValue::Null => out.push_str("null"),
-        DefaultValue::EmptyArray => out.push_str("[]"),
-        DefaultValue::EmptyObject => out.push_str("{}"),
-        DefaultValue::GlobalConst(m) => out.push_str(short_symbol(m.as_str())),
+        DefaultValue::Number(n) => out.push(&crate::runtime::number::format_number_js(*n)),
+        DefaultValue::String(s) => out.format(format_args!("{s:?}")),
+        DefaultValue::Boolean(b) => out.format(format_args!("{b}")),
+        DefaultValue::Null => out.push("null"),
+        DefaultValue::EmptyArray => out.push("[]"),
+        DefaultValue::EmptyObject => out.push("{}"),
+        DefaultValue::GlobalConst(m) => out.push(short_symbol(m.as_str())),
         DefaultValue::EnumVariant {
             enum_mangled,
             variant,
             ..
-        } => write!(out, "{}.{}", short_symbol(enum_mangled.as_str()), variant).unwrap(),
+        } => out.format(format_args!(
+            "{}.{variant}",
+            short_symbol(enum_mangled.as_str())
+        )),
     }
-    // EnumVariantValue is consulted only when codegen needs the
-    // raw value; rendering uses the source-level name (`Color.Red`).
-    let _ = EnumVariantValue::Number(0.0);
 }
 
 fn short_symbol(mangled: &str) -> &str {
     mangled.rsplit('#').next().unwrap_or(mangled)
 }
 
-fn format_method(
-    receiver_ty: &Type,
-    name: &str,
-    sig: &MethodSig,
-    substitution: &TypeParamSubstitution,
-    limits: &TypeLimits,
-) -> String {
-    let mut out = String::new();
-    if let Some(d) = &sig.doc {
-        super::format_definition::write_doc_block(&mut out, "", d);
-    }
-    write!(out, "{receiver_ty}.{name}").unwrap();
-    write_generic_list(&mut out, &sig.generics);
-    out.push('(');
-    for (i, p) in sig.params.iter().enumerate() {
-        if i > 0 {
-            out.push_str(", ");
-        }
-        write_named_param(
-            &mut out,
-            &p.name,
-            &substitution.apply_or_record(&p.ty, limits),
-            p.default.as_ref(),
-            p.rest,
-        );
-    }
-    out.push_str("): ");
-    write_return(
-        &mut out,
-        &sig.params,
-        &sig.ret,
-        sig.predicate.as_ref(),
-        substitution,
-        limits,
-    );
-    out
-}
-
 fn write_return(
-    out: &mut String,
+    out: &mut Writer,
     params: &[Param],
     ret: &Type,
     predicate: Option<&crate::TypePredicate>,
-    substitution: &TypeParamSubstitution,
-    limits: &TypeLimits,
-) {
-    if let Some(predicate) = predicate
-        && let Some(param) = params.get(predicate.parameter_index as usize)
-    {
-        let asserted = substitution.apply_or_record(&predicate.asserted_type, limits);
-        out.push_str(&format!("{} is {asserted}", param.name));
-        return;
+    sub: &TypeParamSubstitution,
+    limits: &CopyBudget,
+) -> Result<(), RenderError> {
+    if let Some(predicate) = predicate {
+        let param =
+            params
+                .get(predicate.parameter_index as usize)
+                .ok_or(RenderError::InvalidMetadata(
+                    "predicate parameter is absent",
+                ))?;
+        out.format(format_args!("{} is ", param.name))?;
+        return write_type(out, &substituted(&predicate.asserted_type, sub, limits)?);
     }
-    let ret = substitution.apply_or_record(ret, limits);
-    out.push_str(&ret.to_string());
+    write_type(out, &substituted(ret, sub, limits)?)
 }
 
-/// An anonymous callee has only parameter *types* to lift, so it renders through
-/// the same synthesized-name path [`Type`]'s own `Display` uses — which is what
-/// keeps the lift and the type it describes spelled identically.
-fn format_anon(params: &[Type], ret: &Type, has_rest: bool) -> String {
-    let mut out = String::new();
-    crate::types::write_synthetic_params(&mut out, params, has_rest).unwrap();
-    write!(out, " => {ret}").unwrap();
-    out
+pub(super) fn write_synthetic_params(
+    out: &mut Writer,
+    params: &[Type],
+    rest: bool,
+) -> Result<(), RenderError> {
+    if rest && params.is_empty() {
+        return Err(RenderError::InvalidMetadata(
+            "rest signature has no parameter",
+        ));
+    }
+    out.push("(")?;
+    for (i, param) in params.iter().enumerate() {
+        if i != 0 {
+            out.push(", ")?;
+        }
+        if rest && i == params.len().saturating_sub(1) {
+            out.push("...")?;
+        }
+        out.format(format_args!("arg{i}: "))?;
+        write_type(out, param)?;
+    }
+    out.push(")")
 }
 
-fn format_intrinsic(kind: Intrinsic) -> String {
-    // Type::Error stub param renders badly; hardcode the readable form.
+fn write_intrinsic(out: &mut Writer, kind: Intrinsic) -> Result<(), RenderError> {
     if matches!(kind, Intrinsic::JsonStringify) {
-        return "JSON.stringify<T>(value: T, replacer?: null, space?: number | string | null): string"
-            .to_string();
+        return out.push(
+            "JSON.stringify<T>(value: T, replacer?: null, space?: number | string | null): string",
+        );
     }
-    // Type::Error sentinel for per-call return; hardcode the readable form.
     if matches!(kind, Intrinsic::JsonParse) {
-        return "JSON.parse(text: string): unknown".to_string();
+        return out.push("JSON.parse(text: string): unknown");
     }
-    let mut out = String::from(kind.name());
-    let params = kind.params();
-    out.push('(');
-    for (i, p) in params.iter().enumerate() {
-        if i > 0 {
-            out.push_str(", ");
-        }
-        write_named_param(&mut out, &p.name, &p.ty, p.default.as_ref(), p.rest);
-    }
-    write!(out, "): {}", kind.ret()).unwrap();
-    out
+    out.push(kind.name())?;
+    out.push("(")?;
+    write_params(
+        out,
+        &kind.params(),
+        &TypeParamSubstitution::new(),
+        &CopyBudget::default(),
+    )?;
+    out.push("): ")?;
+    write_type(out, &kind.ret())
 }
 
-fn write_generic_list(out: &mut String, generics: &[String]) {
+pub(super) fn write_generic_list(out: &mut Writer, generics: &[String]) -> Result<(), RenderError> {
     if generics.is_empty() {
-        return;
+        return Ok(());
     }
-    out.push('<');
-    for (i, g) in generics.iter().enumerate() {
-        if i > 0 {
-            out.push_str(", ");
+    out.push("<")?;
+    for (i, generic) in generics.iter().enumerate() {
+        if i != 0 {
+            out.push(", ")?;
         }
-        out.push_str(g);
+        out.push(generic)?;
     }
-    out.push('>');
+    out.push(">")
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    /// Renders without a type limit being reached; shadows the 3-argument form.
     fn format_signature(kind: SignatureKind<'_>, substitution: &TypeParamSubstitution) -> String {
-        let limits = TypeLimits::default();
-        let out = super::format_signature(kind, substitution, &limits);
-        assert_eq!(limits.take(), Ok(()));
-        out
+        super::format_signature(kind, substitution).unwrap()
+    }
+
+    #[test]
+    fn oversized_signature_does_not_hide_invalid_predicate() {
+        let predicate = crate::TypePredicate {
+            parameter_index: 9,
+            asserted_type: Type::String,
+        };
+        let name = "f".repeat(100_000);
+        let result = super::format_signature(
+            SignatureKind::Function {
+                name: &name,
+                generics: &[],
+                params: &[],
+                ret: &Type::Boolean,
+                doc: None,
+                predicate: Some(&predicate),
+            },
+            &TypeParamSubstitution::new(),
+        );
+        assert!(matches!(result, Err(RenderError::InvalidMetadata(_))));
     }
 
     #[test]

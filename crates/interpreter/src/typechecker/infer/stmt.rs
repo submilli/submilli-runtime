@@ -1241,7 +1241,9 @@ impl Inferer<'_> {
                 let (typed_value, value_ty, reported) =
                     self.infer_assigned_value(value, Some(&field_ty))?;
                 if !reported && !assignable(&value_ty, &field_ty, self.resolver()) {
-                    let help = super::type_diff::type_mismatch_help(&field_ty, &value_ty);
+                    let help = self.render_help_list(super::type_diff::type_mismatch_help(
+                        &field_ty, &value_ty,
+                    ));
                     self.error_with_help(
                         value_span,
                         format!("expected `{field_ty}`, got `{value_ty}`"),
@@ -1286,7 +1288,9 @@ impl Inferer<'_> {
                 let (typed_value, value_ty, reported) =
                     self.infer_assigned_value(value, Some(&field_ty))?;
                 if !reported && !assignable(&value_ty, &field_ty, self.resolver()) {
-                    let help = super::type_diff::type_mismatch_help(&field_ty, &value_ty);
+                    let help = self.render_help_list(super::type_diff::type_mismatch_help(
+                        &field_ty, &value_ty,
+                    ));
                     self.error_with_help(
                         value_span,
                         format!("expected `{field_ty}`, got `{value_ty}`"),
@@ -1330,7 +1334,9 @@ impl Inferer<'_> {
                 let (typed_value, value_ty, reported) =
                     self.infer_assigned_value(value, Some(&field_ty))?;
                 if !reported && !assignable(&value_ty, &field_ty, self.resolver()) {
-                    let help = super::type_diff::type_mismatch_help(&field_ty, &value_ty);
+                    let help = self.render_help_list(super::type_diff::type_mismatch_help(
+                        &field_ty, &value_ty,
+                    ));
                     self.error_with_help(
                         value_span,
                         format!("expected `{field_ty}`, got `{value_ty}`"),
@@ -1466,7 +1472,8 @@ impl Inferer<'_> {
                 !matches!(target, Type::Error) && !assignable(&value_ty, target, self.resolver())
             })
         {
-            let help = super::type_diff::type_mismatch_help(target, &value_ty);
+            let help =
+                self.render_help_list(super::type_diff::type_mismatch_help(target, &value_ty));
             self.error_with_help(
                 value_span,
                 format!("expected `{target}`, got `{value_ty}`"),
