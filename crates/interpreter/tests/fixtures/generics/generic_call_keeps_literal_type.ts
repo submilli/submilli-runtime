@@ -33,6 +33,14 @@ function last<T>(...xs: T[]): T {
   return xs[xs.length - 1];
 }
 
+function second<A, B>(a: A, b: B): B {
+  return b;
+}
+
+function head<T>(pair: [T, number]): T {
+  return pair[0];
+}
+
 function first<T>(xs: T[]): T {
   return xs[0];
 }
@@ -137,4 +145,13 @@ function main(): void {
   let rested = last<1>(1);
   const restedOne: 1 = rested;
   assert(declaredModes.join(",") === "on,on,on" && restedOne === 1, "declared through a call");
+
+  // A declared literal for one type parameter leaves a fresh one for another
+  // fresh, and a tuple or nested call carries its own declared literals.
+  let other = second(mode, "on");
+  other = "elsewhere";
+  let paired = head([mode, 1]);
+  let nested = field({ value: pick(mode, "on") });
+  const carried: Mode[] = [paired, nested];
+  assert(other === "elsewhere" && carried.join(",") === "on,on", "per type parameter");
 }

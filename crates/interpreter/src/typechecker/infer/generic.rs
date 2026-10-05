@@ -851,6 +851,7 @@ impl Inferer<'_> {
             })),
             None => None,
         };
+        self.record_generic_call_arguments(&typed_args, &sig.params, type_args.is_some());
 
         // TypeVar params/return need box/cast at the Wasm boundary; composite types use plain MethodCall.
         let any_generic_arg = sig.params.iter().any(|p| matches!(p.ty, Type::TypeVar(_)));
@@ -859,9 +860,6 @@ impl Inferer<'_> {
         // bare `V`, but also `V | null` and other erased unions (their object
         // members lower to the narrower `$ObjectShape`).
         let return_needs_cast = return_erases_to_object_slot(&sig.ret);
-        if type_args.is_some() {
-            self.record_arguments_of_call_with_written_type_arguments(&typed_args);
-        }
         if any_generic_arg || return_needs_cast {
             let generic_args: Vec<crate::GenericArgument> = typed_args
                 .into_iter()
@@ -1647,9 +1645,7 @@ impl Inferer<'_> {
         if let Some(schema) = &llm_schema {
             self.substitute_schema_argument(&params, &mut typed_args, schema, span)?;
         }
-        if type_args_written {
-            self.record_arguments_of_call_with_written_type_arguments(&typed_args);
-        }
+        self.record_generic_call_arguments(&typed_args, &params, type_args_written);
 
         let generic_args: Vec<crate::GenericArgument> = typed_args
             .into_iter()

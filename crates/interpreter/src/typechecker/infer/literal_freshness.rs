@@ -108,7 +108,10 @@ pub(super) struct LiteralFreshness {
     kept_arguments: BTreeSet<ExprId>,
     /// The arguments of the generic calls whose type arguments are written
     /// (`id<1>(1)`): such a result's literal types are as declared.
-    written_type_argument_calls: BTreeSet<ExprId>,
+    written_type_call_arguments: BTreeSet<ExprId>,
+    /// The parameter type each generic call argument was checked against,
+    /// which names the type parameters it can bind.
+    argument_parameters: BTreeMap<ExprId, Type>,
 }
 
 impl Inferer<'_> {
@@ -138,15 +141,24 @@ impl Inferer<'_> {
         self.literal_freshness.kept_arguments.insert(argument);
     }
 
-    /// Record that `arguments` are those of a generic call whose type
-    /// arguments are written.
-    pub(super) fn record_arguments_of_call_with_written_type_arguments(
+    /// Record a generic call's `arguments`, as checked against `params`, and
+    /// whether its type arguments are `written`.
+    pub(super) fn record_generic_call_arguments(
         &mut self,
         arguments: &[ExprId],
+        params: &[crate::Param],
+        written: bool,
     ) {
-        self.literal_freshness
-            .written_type_argument_calls
-            .extend(arguments.iter().copied());
+        for (argument, param) in arguments.iter().zip(params) {
+            self.literal_freshness
+                .argument_parameters
+                .insert(*argument, param.ty.clone());
+        }
+        if written {
+            self.literal_freshness
+                .written_type_call_arguments
+                .extend(arguments.iter().copied());
+        }
     }
 
     /// The type a mutable binding or property takes from `value`: its type
@@ -536,21 +548,16 @@ impl Inferer<'_> {
         args: &[crate::GenericArgument],
     ) -> Result<BTreeSet<Type>, CompilerFailure> {
         let mut regular = declared_literals(result_ty);
-        let mut fresh = self.inferable_fresh_literals(receiver, args)?;
-        let values = receiver
-            .into_iter()
-            .chain(args.iter().map(|argument| argument.expr));
-        for value in values {
-            for literal in self.held_regular_literals(value)? {
-                fresh.remove(&literal);
-            }
-        }
+        let fresh = self.inferable_fresh_literals(receiver, args)?;
         regular.retain(|literal| !fresh.contains(literal));
         Ok(regular)
     }
 
     /// The fresh literals a generic call given `receiver` and `args` may have
-    /// inferred a type argument from: none when its type arguments are written.
+    /// inferred a type argument from: none when its type arguments are
+    /// written. A literal one operand holds fresh stays declared when another
+    /// operand that can bind the same type parameter holds it regular, as
+    /// the parameter then takes the declared type (`pick(m, "on")`).
     fn inferable_fresh_literals(
         &self,
         receiver: Option<ExprId>,
@@ -558,42 +565,75 @@ impl Inferer<'_> {
     ) -> Result<BTreeSet<Type>, CompilerFailure> {
         let has_written_type_arguments = args.iter().any(|argument| {
             self.literal_freshness
-                .written_type_argument_calls
+                .written_type_call_arguments
                 .contains(&argument.expr)
         });
-        let mut fresh = BTreeSet::new();
         if has_written_type_arguments {
-            return Ok(fresh);
+            return Ok(BTreeSet::new());
         }
-        let values = receiver
-            .into_iter()
-            .chain(args.iter().map(|argument| argument.expr));
-        for value in values {
-            fresh.extend(self.possibly_fresh_literals(value)?);
+        let operands: Vec<ExprId> = call_operands(receiver, args).collect();
+        let mut held = Vec::with_capacity(operands.len());
+        for operand in &operands {
+            held.push(self.held_regular_literals(*operand)?);
+        }
+        let mut fresh = BTreeSet::new();
+        for operand in &operands {
+            let mut own = self.possibly_fresh_literals(*operand)?;
+            for (other, regular) in operands.iter().zip(&held) {
+                if self.may_bind_same_type_parameter(*operand, *other, receiver) {
+                    own.retain(|literal| !regular.contains(literal));
+                }
+            }
+            fresh.extend(own);
         }
         Ok(fresh)
     }
 
+    /// Whether operands `a` and `b` of a generic call may bind the same type
+    /// parameter. A receiver binds its interface's, which any argument may
+    /// name, and an argument whose parameter wasn't recorded may bind any.
+    fn may_bind_same_type_parameter(&self, a: ExprId, b: ExprId, receiver: Option<ExprId>) -> bool {
+        if a == b || receiver == Some(a) || receiver == Some(b) {
+            return true;
+        }
+        let parameters = &self.literal_freshness.argument_parameters;
+        let (Some(a_param), Some(b_param)) = (parameters.get(&a), parameters.get(&b)) else {
+            return true;
+        };
+        super::expr::mentions_type_var(a_param, &|name| {
+            super::expr::mentions_type_var(b_param, &|other| other == name)
+        })
+    }
+
     /// The literal types in the type of `value`, at the top or nested inside
-    /// it, that may be fresh. A function literal's returns were already
-    /// widened unless a generic call kept them, and its parameters are not
-    /// values it holds, so it has none otherwise.
+    /// it, that may be fresh. A function-typed value has none unless a
+    /// generic call kept its returns: a function literal's returns were
+    /// already widened, a declared function's are regular, and its
+    /// parameters are not values it holds.
     fn possibly_fresh_literals(&self, value: ExprId) -> Result<BTreeSet<Type>, CompilerFailure> {
         let expr = self
             .typed_ast
             .try_expr(value)
             .map_err(crate::typechecker::arena_failure)?;
-        let mut fresh = BTreeSet::new();
         match &expr.kind {
             TypedExprKind::ObjectLiteral { members, .. } => {
+                let mut fresh = BTreeSet::new();
                 for member in members {
                     fresh.extend(self.possibly_fresh_literals(member.expr_id())?);
                 }
                 return Ok(fresh);
             }
             TypedExprKind::ArrayLiteral { elements, .. } => {
+                let mut fresh = BTreeSet::new();
                 for element in elements {
                     fresh.extend(self.possibly_fresh_literals(element.expr_id())?);
+                }
+                return Ok(fresh);
+            }
+            TypedExprKind::TupleLiteral { elements, .. } => {
+                let mut fresh = BTreeSet::new();
+                for element in elements {
+                    fresh.extend(self.possibly_fresh_literals(*element)?);
                 }
                 return Ok(fresh);
             }
@@ -607,11 +647,11 @@ impl Inferer<'_> {
         }
         if let Type::Function { ret, .. } = expr.ty.peel() {
             if self.literal_freshness.kept_arguments.contains(&value) {
-                fresh.extend(deep_literals(ret));
+                return Ok(deep_literals(ret));
             }
-            return Ok(fresh);
+            return Ok(BTreeSet::new());
         }
-        fresh = if self.are_nested_literals_regular(value)? {
+        let mut fresh = if self.are_nested_literals_regular(value)? {
             literal_members(&expr.ty)
         } else {
             deep_literals(&expr.ty)
@@ -787,6 +827,16 @@ impl Inferer<'_> {
 /// The element a numeric path index names, when it is one.
 fn tuple_index(index: f64) -> Option<usize> {
     (index >= 0.0 && index.fract() == 0.0 && index <= u32::MAX as f64).then_some(index as usize)
+}
+
+/// The values a generic call is given: its `receiver`, then its `args`.
+fn call_operands(
+    receiver: Option<ExprId>,
+    args: &[crate::GenericArgument],
+) -> impl Iterator<Item = ExprId> + '_ {
+    receiver
+        .into_iter()
+        .chain(args.iter().map(|argument| argument.expr))
 }
 
 /// Whether `ty` is one literal type, what tsc calls a unit type.
