@@ -752,6 +752,7 @@ impl Inferer<'_> {
         let mut typed_args = self.infer_generic_arguments(
             &args,
             &sig.params,
+            &sig.ret,
             inferred_generics,
             &rest_elem_ty,
             &mut sub,
@@ -1192,10 +1193,12 @@ impl Inferer<'_> {
     /// isn't checked for unknown fields ([`super::inference_sources`]).
     ///
     /// `signature_help` renders the callee for a mismatch diagnostic.
+    #[allow(clippy::too_many_arguments)]
     fn infer_generic_arguments(
         &mut self,
         args: &[ExprId],
         params: &[Param],
+        ret: &Type,
         inferred_generics: &[String],
         rest_elem_ty: &Type,
         sub: &mut TypeParamSubstitution,
@@ -1217,6 +1220,8 @@ impl Inferer<'_> {
             .collect();
         let literal_inferred =
             self.literal_inferred_type_params(&args_with_param_types, inferred_generics)?;
+        let literal_types =
+            LiteralTypeArguments::new(&args_with_param_types, ret, inferred_generics);
         let mut typed_slots: Vec<Option<ExprId>> = vec![None; args.len()];
         for deferred_pass in [false, true] {
             for (i, (arg_id, param_ty)) in args_with_param_types.iter().enumerate() {
@@ -1250,6 +1255,15 @@ impl Inferer<'_> {
                 self.finish_object_argument_inference(enclosing, sub);
                 self.arguments_hinted_by_expected_result.remove(&arg_id);
                 let (typed_id, arg_ty) = inferred?;
+                // A literal the call's expected result asks for is not widened,
+                // as in tsc: `const f: () => "a" = later(c)` binds `"a"`.
+                let asked_for =
+                    hinted_by_expected_result && super::assignable(&arg_ty, &hint, self.resolver());
+                let arg_ty = if literal_types.widens(&param_ty) && !asked_for {
+                    self.widen_fresh_literals(typed_id, &arg_ty)?
+                } else {
+                    arg_ty
+                };
                 typed_slots[i] = Some(typed_id);
                 let missing_slot = i >= fixed_count && !has_rest;
                 if missing_slot || matches!(arg_ty, Type::Error) {
@@ -1430,6 +1444,7 @@ impl Inferer<'_> {
         let mut typed_args = self.infer_generic_arguments(
             &args,
             &params,
+            &ret,
             inferred_generics,
             &rest_elem_ty,
             &mut sub,
@@ -1602,6 +1617,64 @@ impl Inferer<'_> {
             return self.checked_llm_cast(call, &result_ty, span);
         }
         Ok((call, result_ty))
+    }
+}
+
+/// The type parameters of a call whose arguments' fresh literal types widen,
+/// as in tsc, so the result can hold other values: `box(c)` with
+/// `const c = "a"` is a `{ v: string }`. That is one every parameter names at
+/// its top level (one nested in another, as in `append<T>(a: T[], x: T)`, has
+/// candidates tsc doesn't widen), unless its sole candidate is passed for a
+/// type parameter the result is (`id<T>(x: T): T`, or a union naming it).
+/// An annotated literal type is not fresh and stays.
+struct LiteralTypeArguments {
+    widened: Vec<String>,
+}
+
+impl LiteralTypeArguments {
+    fn new(args: &[(ExprId, Type)], ret: &Type, inferred_generics: &[String]) -> Self {
+        let in_result = top_level_type_params(ret);
+        let mut widened = Vec::new();
+        for name in inferred_generics {
+            let mentioning: Vec<&Type> = args
+                .iter()
+                .map(|(_, param)| param)
+                .filter(|param| super::expr::mentions_type_var(param, &|var| var == name))
+                .collect();
+            let only_top_level = mentioning
+                .iter()
+                .all(|param| top_level_type_params(param).contains(&name.as_str()));
+            if mentioning.is_empty() || !only_top_level {
+                continue;
+            }
+            let sole_candidate = mentioning.len() == 1;
+            if !(sole_candidate && in_result.contains(&name.as_str())) {
+                widened.push(name.clone());
+            }
+        }
+        Self { widened }
+    }
+
+    /// Whether an argument for `param` widens its fresh literal types.
+    fn widens(&self, param: &Type) -> bool {
+        top_level_type_params(param)
+            .iter()
+            .any(|name| self.widened.iter().any(|widened| widened == name))
+    }
+}
+
+/// The type parameters `ty` is, alone or as a member of a union.
+fn top_level_type_params(ty: &Type) -> Vec<&str> {
+    match ty.peel() {
+        Type::Union(members) => members.iter().filter_map(type_param_name).collect(),
+        other => type_param_name(other).into_iter().collect(),
+    }
+}
+
+fn type_param_name(ty: &Type) -> Option<&str> {
+    match ty.peel() {
+        Type::TypeVar(name) => Some(name),
+        _ => None,
     }
 }
 

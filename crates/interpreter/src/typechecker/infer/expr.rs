@@ -5143,6 +5143,19 @@ impl Inferer<'_> {
                         inferred_fields.remove(&field.value),
                     )?;
                     self.object_this_hint = previous_hint;
+                    // A type parameter's position doesn't ask for a literal
+                    // type, so a fresh one widens before it binds anything, as
+                    // in tsc: `h({ k: c })` with `h<K>(o: { k: K }): K` and
+                    // `const c = "a"` binds `string`.
+                    let value_ty = match expected_fields
+                        .as_ref()
+                        .and_then(|m| m.get(&field.name.name))
+                    {
+                        Some(expected) if matches!(expected.ty.peel(), Type::TypeVar(_)) => {
+                            self.widen_fresh_literals(typed_value, &value_ty)?
+                        }
+                        _ => value_ty,
+                    };
                     self.infer_from_object_argument_field(literal, &field.name.name, &value_ty);
                     if !has_spread {
                         object_members.push(crate::TypedObjectMember::Value(typed_value));
@@ -6091,9 +6104,12 @@ impl Inferer<'_> {
             let (typed_id, elem_ty) = self.infer_expr(*elem_id, Some(expected_ty))?;
             // Unbound generic-param slots take the inferred element type —
             // `new Map([["a", 1]])` must report `[string, number]`, not
-            // `[K, V]`, so the call site can bind K and V.
+            // `[K, V]`, so the call site can bind K and V. A type parameter
+            // doesn't ask for a literal type, so a fresh one widens, as in
+            // tsc: `new Map([[c, 1]])` with `const c = "a"` is a
+            // `Map<string, number>`.
             let slot = if matches!(expected_ty, Type::TypeVar(_) | Type::GenericParam { .. }) {
-                elem_ty.clone()
+                self.widen_fresh_literals(typed_id, &elem_ty)?
             } else {
                 if self.error_count() == errors_before
                     && !assignable(&elem_ty, expected_ty, self.resolver())

@@ -466,7 +466,13 @@ impl Inferer<'_> {
             {
                 self.error(span, format!("expected `{hint}`, got `{value_ty}`"));
             }
-            let value_ty = if hint.is_some() {
+            // A type parameter's position doesn't ask for a literal type, so a
+            // fresh one widens there as without a hint, as in tsc:
+            // `h({ k: c })` with `h<K>(o: { k: K }): K` binds `string`.
+            let asks_for_type = hint
+                .as_ref()
+                .is_some_and(|hint| !matches!(hint.peel(), Type::TypeVar(_)));
+            let value_ty = if asks_for_type {
                 value_ty
             } else {
                 self.widen_fresh_literals(value, &value_ty)?
