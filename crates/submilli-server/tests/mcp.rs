@@ -40,6 +40,7 @@ fn allow_fs() -> BTreeMap<String, Vec<PermissionRule>> {
     let rules = ["fs.read", "fs.write", "fs.mkdir", "fs.list"]
         .into_iter()
         .map(|cap| PermissionRule {
+            name: None,
             capability: cap.into(),
             filter: None,
             action: Action::Allow,
@@ -2247,6 +2248,7 @@ async fn mcp_virtual_package_discovers_typechecks_and_calls() {
         permissions: BTreeMap::from([(
             "main".to_string(),
             vec![PermissionRule {
+                name: None,
                 capability: "mcp.up".into(),
                 filter: None,
                 action: Action::Allow,
@@ -2367,6 +2369,7 @@ async fn a_program_calls_an_mcp_server_over_one_session() {
         permissions: BTreeMap::from([(
             "main".to_string(),
             vec![PermissionRule {
+                name: None,
                 capability: "mcp.up".into(),
                 filter: None,
                 action: Action::Allow,

@@ -223,6 +223,7 @@ object.
 | `error` | object or null | `null` on success |
 | `error.kind` | string | One of the kinds below |
 | `error.message` | string | Rendered message, with source excerpts for compile and runtime errors |
+| `error.caller`, `error.capability`, `error.source` | strings | Present on `permission_denied` only: the package that was refused, the capability it asked for, and who refused: `policy` (the blueprint), `invariant` (the runtime, ahead of any policy), or `read_only` (a write to a read-only volume) |
 | `error.diagnostics` | object[] | Present on compile errors only: `severity`, `line`, `column`, `message`, and `notes` (each `line`, `column`, `message`) when there are any |
 | `discovery_warnings` | string[] | Present only when non-empty. Tools of an imported `@mcp/<server>` package that were dropped or degraded at discovery |
 
@@ -232,7 +233,8 @@ successful run.
 | `error.kind` | Cause |
 | --- | --- |
 | `compile_error` | The program does not compile |
-| `runtime_error` | The program threw, a call was denied by the blueprint, or the run failed for another reason |
+| `runtime_error` | The program threw, or the run failed for another reason |
+| `permission_denied` | A gated call was denied and the denial escaped the program uncaught. Only a denial the runtime threw counts: a `PermissionDeniedError` the program constructs is a `runtime_error` |
 | `timeout` | The run passed `max_execution_time` |
 | `fuel_exhausted` | The run burned `max_execution_fuel` |
 | `memory_exhausted` | The run passed `max_execution_memory` |

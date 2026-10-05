@@ -127,6 +127,7 @@ fn run(args: &Args) -> Result<String> {
             .entry("main".to_string())
             .or_default()
             .push(PermissionRule {
+                name: None,
                 capability: capability.clone(),
                 filter: None,
                 action: Action::Deny,

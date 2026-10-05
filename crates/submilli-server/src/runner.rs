@@ -28,7 +28,7 @@ use wasmtime::{Engine, Linker, Module, Trap};
 
 use crate::app::PreparedBlueprintPackages;
 use crate::compiler_thread;
-use crate::error::{DiagnosticNote, DiagnosticPayload, ErrorKind, ExecuteError};
+use crate::error::{DenialDetails, DiagnosticNote, DiagnosticPayload, ErrorKind, ExecuteError};
 use crate::mcp::McpCatalog;
 
 pub struct RunOutcome {
@@ -440,6 +440,7 @@ fn compile_failure(
             kind: ErrorKind::CompileError,
             message,
             diagnostics: diagnostics_out,
+            denial: None,
         }),
         discovery_warnings,
     }
@@ -519,12 +520,19 @@ fn diagnostic_position(
 }
 
 fn classify_runtime_error(err: &wasmtime::Error, sources: &Sources, file: FileId) -> ExecuteError {
-    let kind = match err.downcast_ref::<Trap>() {
-        Some(Trap::Interrupt) => ErrorKind::Timeout,
-        Some(Trap::OutOfFuel) => ErrorKind::FuelExhausted,
-        Some(Trap::StackOverflow) => ErrorKind::StackExhausted,
-        _ if is_memory_exhausted(err) => ErrorKind::MemoryExhausted,
-        _ => ErrorKind::RuntimeError,
+    let denial = err
+        .downcast_ref::<interpreter::backtrace::ThrownError>()
+        .and_then(|thrown| thrown.denial.as_ref());
+    let kind = if denial.is_some() {
+        ErrorKind::PermissionDenied
+    } else {
+        match err.downcast_ref::<Trap>() {
+            Some(Trap::Interrupt) => ErrorKind::Timeout,
+            Some(Trap::OutOfFuel) => ErrorKind::FuelExhausted,
+            Some(Trap::StackOverflow) => ErrorKind::StackExhausted,
+            _ if is_memory_exhausted(err) => ErrorKind::MemoryExhausted,
+            _ => ErrorKind::RuntimeError,
+        }
     };
     // drops middle host frames; full trace available from the CLI
     let message =
@@ -538,6 +546,11 @@ fn classify_runtime_error(err: &wasmtime::Error, sources: &Sources, file: FileId
         kind,
         message,
         diagnostics: Vec::new(),
+        denial: denial.map(|denial| DenialDetails {
+            caller: denial.caller.clone(),
+            capability: denial.capability.clone(),
+            source: denial.source.as_str(),
+        }),
     }
 }
 
@@ -648,6 +661,7 @@ fn error_kind_tag(kind: ErrorKind) -> &'static str {
         ErrorKind::MemoryExhausted => "memory_exhausted",
         ErrorKind::StackExhausted => "stack_exhausted",
         ErrorKind::Cancelled => "cancelled",
+        ErrorKind::PermissionDenied => "permission_denied",
         ErrorKind::RuntimeError => "runtime_error",
         ErrorKind::BlueprintNotFound => "blueprint_not_found",
         ErrorKind::PackageResolution => "package_resolution",
@@ -704,6 +718,7 @@ fn internal_failure(msg: &str) -> RunOutcome {
             kind: ErrorKind::RuntimeError,
             message: format!("internal: {msg}"),
             diagnostics: Vec::new(),
+            denial: None,
         }),
         discovery_warnings: Vec::new(),
     }
@@ -840,6 +855,7 @@ mod tests {
             kind: ErrorKind::RuntimeError,
             message: "boom".into(),
             diagnostics: Vec::new(),
+            denial: None,
         };
         let keys = |include: bool| -> Vec<&'static str> {
             sentry_extras("function main(): number { return 1; }", &error, include)

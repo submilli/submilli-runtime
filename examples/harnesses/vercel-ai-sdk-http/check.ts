@@ -81,6 +81,24 @@ try {
   );
   const last: any = await tools.submilli__typescript__last_run.execute?.({}, call);
   assert.deepEqual(last.console, ["seen"]);
+  // The blueprint grants `main` nothing outside Jina, the model and its notes.
+  const refused: any = await tools.submilli__typescript__execute.execute?.(
+    {
+      code: 'import { check } from "submilli:security";\n' +
+        'function main(): void { check("example.com/op", {}); }',
+    },
+    call,
+  );
+  assert.equal(refused.denied, true);
+  assert.equal(refused.error.kind, "permission_denied");
+  assert.equal(refused.error.capability, "example.com/op");
+  assert.equal(refused.error.source, "policy");
+  const failed: any = await tools.submilli__typescript__execute.execute?.(
+    { code: 'function main(): void { throw new Error("boom"); }' },
+    call,
+  );
+  assert.equal(failed.denied, false);
+  assert.equal(failed.error.kind, "runtime_error");
 } finally {
   await session.close();
 }

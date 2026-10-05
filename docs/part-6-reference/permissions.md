@@ -43,6 +43,7 @@ capability.
 
 | Field | Type | Required | Meaning |
 | --- | --- | --- | --- |
+| `name` | non-empty string | No | A label for the rule, unique within the caller's list (`blueprint lint` errors on a repeat). Names the rule instead of its position |
 | `capability` | string | Yes | The operation's name, such as `fs.write`, `acme.com/credits.apply`, or `mcp.linear` |
 | `filter` | string | No | A condition on the operation's fields, in the [filter language](/docs/reference/filter-language) |
 | `action` | `allow` or `deny` | Yes | What happens when the rule matches |
