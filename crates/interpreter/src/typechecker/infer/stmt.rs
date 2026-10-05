@@ -113,14 +113,8 @@ impl Inferer<'_> {
             StmtKind::Break => {
                 if self.loop_depth == 0 && self.switch_depth == 0 {
                     self.error(span, "`break` outside of a loop or `switch`".to_string());
-                } else if self.reachable
-                    && let Some(target_idx) = self.pending_joins.iter().rposition(|_| true)
-                {
-                    let base = self.pending_joins[target_idx].narrow_depth;
-                    let (env, _) = self.snapshot_active_narrowings(0);
-                    let (_, assigned) = self.snapshot_active_narrowings(base);
-                    let snap = (env, assigned);
-                    self.pending_joins[target_idx].breaks.push(snap);
+                } else if self.reachable {
+                    self.record_break_exit();
                 }
                 self.reachable = false;
                 Ok(TypedStmtKind::Break)
@@ -1649,6 +1643,20 @@ impl Inferer<'_> {
                 .collect::<Option<Vec<_>>>()
                 .map(Type::union),
             _ => None,
+        }
+    }
+
+    /// Records the narrowings that hold here as a way out of the innermost
+    /// loop or `switch`, as a `break` here leaves it.
+    pub(super) fn record_break_exit(&mut self) {
+        let Some(target) = self.pending_joins.last() else {
+            return;
+        };
+        let base = target.narrow_depth;
+        let (env, _) = self.snapshot_active_narrowings(0);
+        let (_, assigned) = self.snapshot_active_narrowings(base);
+        if let Some(target) = self.pending_joins.last_mut() {
+            target.breaks.push((env, assigned));
         }
     }
 

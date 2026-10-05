@@ -343,6 +343,14 @@ impl Inferer<'_> {
         let mut saw_null: Option<Span> = None;
         let mut all_assigned: BTreeSet<narrowing::ReferencePath> = BTreeSet::new();
         let mut any_arm_reachable_exit = false;
+        // The clause last in the source leaves the switch when it runs off
+        // its end, as a `break` there would.
+        let last_clause = cases
+            .iter()
+            .map(|case| (case.span.start, case.body))
+            .chain(default.as_ref().map(|d| (d.span.start, d.body)))
+            .max()
+            .map(|(_, body)| body);
 
         for case in cases {
             let case_span = case.span;
@@ -422,6 +430,9 @@ impl Inferer<'_> {
             self.reachable = entry_reachable;
             let typed_body = self.infer_case_clause(switch_id, case.body, body_span)?;
             let body_reachable = self.reachable;
+            if body_reachable && last_clause == Some(case.body) {
+                self.record_break_exit();
+            }
             self.switch_depth -= 1;
             let (_n, body_assigned) = self.pop_narrow_frame_capture()?;
             let typed_body = self.wrap_narrow_regions(typed_body, &true_env, body_span)?;
@@ -451,6 +462,9 @@ impl Inferer<'_> {
             self.reachable = entry_reachable;
             let typed_body = self.infer_case_clause(switch_id, d.body, body_span)?;
             let body_reachable = self.reachable;
+            if body_reachable && last_clause == Some(d.body) {
+                self.record_break_exit();
+            }
             self.switch_depth -= 1;
             let (_n, body_assigned) = self.pop_narrow_frame_capture()?;
             let typed_body = self.wrap_narrow_regions(typed_body, &env, body_span)?;
