@@ -195,11 +195,13 @@ function main(): void {
   others.push(new Box(false));
   assert(others.length === 1, "another type parameter takes a later argument beside the fallback");
 
-  const fitsFallback = boxThenOther(new Box(true), new Box(false), 3);
-  const counts: number[] = fitsFallback;
+  const othersAfterFallbackFit = boxThenOther(new Box(true), new Box(false), 3);
+  const counts: number[] = othersAfterFallbackFit;
+  assert(counts[0] === 3, "an argument fitting the fallback leaves the other type parameter free");
   const unionForOther = boxOrOther(new Box(true), textOrCountFor(true));
+  assert(unionForOther.length === 0, "the other type parameter takes a union argument");
   const nestedForOther = boxOrOther(new Box(true), [new Box(5)][0]);
-  assert(counts[0] === 3 && unionForOther.length === 0 && nestedForOther.length === 0, "the fallback's type parameter leaves the rest to another");
+  assert(nestedForOther.length === 0, "the other type parameter takes a nested box");
 
   const inferredList = listOrNumbers(lists(true));
   const fromList: string[] | null = inferredList;
