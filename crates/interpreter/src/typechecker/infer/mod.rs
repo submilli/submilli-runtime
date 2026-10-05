@@ -129,6 +129,7 @@ pub fn infer_with_transitive_checked<'a>(
         immediately_invoked: None,
         invoked_body_exit: None,
         captured_mutators: bindings.mutators,
+        function_written_globals: bindings.global_writes,
         last_assignments: bindings.last_assignments,
         nested_function_creation_points: bindings.nested_function_creation_points,
         nested_functions: Vec::new(),
@@ -393,6 +394,7 @@ pub fn infer_package_checked<'a>(
         immediately_invoked: None,
         invoked_body_exit: None,
         captured_mutators: Default::default(),
+        function_written_globals: Default::default(),
         last_assignments: Default::default(),
         nested_function_creation_points: Default::default(),
         nested_functions: Vec::new(),
@@ -718,6 +720,9 @@ pub(super) struct Inferer<'a> {
     pub(super) narrow_scopes: Vec<narrowing::NarrowEnv>,
     /// Bindings reassigned inside closures; narrowings on these paths are dropped (a closure could invalidate the narrowing between check and use).
     pub(super) captured_mutators: std::collections::HashSet<(String, Span)>,
+    /// Module-level names some function body writes; top-level code may call
+    /// that function between a guard on the name and its use.
+    pub(super) function_written_globals: std::collections::HashSet<String>,
     pub(super) last_assignments: std::collections::HashMap<Span, u32>,
     /// From the binding analysis: nested functions that capture a local of
     /// their block, by name span, with the last declared of those locals. See
@@ -936,6 +941,7 @@ impl<'a> Inferer<'a> {
         }
         let bindings = binding_analysis::analyze(ast)?;
         self.captured_mutators = bindings.mutators;
+        self.function_written_globals = bindings.global_writes;
         self.last_assignments = bindings.last_assignments;
         self.nested_function_creation_points = bindings.nested_function_creation_points;
         self.nested_functions.clear();

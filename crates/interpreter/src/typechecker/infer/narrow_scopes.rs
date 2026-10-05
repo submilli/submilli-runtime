@@ -589,7 +589,16 @@ impl<'a> Inferer<'a> {
                     self.captured_mutators
                         .contains(&(name.clone(), entry.decl_span))
                 }),
-            narrowing::BindingId::Global(_) | narrowing::BindingId::This => false,
+            // Top-level code calls functions between a guard and its use, and
+            // a module `let` a function writes may change at any such call.
+            narrowing::BindingId::Global(mangled) => {
+                self.current_return.is_none()
+                    && self.top_symbols.iter().any(|(name, entry)| {
+                        &entry.mangled_name == mangled
+                            && self.function_written_globals.contains(name)
+                    })
+            }
+            narrowing::BindingId::This => false,
         }
     }
 

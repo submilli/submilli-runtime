@@ -18,8 +18,18 @@ impl ReferencePath {
         }
     }
 
+    /// Whether a write to `self` may change what `other` reads. A key step
+    /// of `other` (`o[key]`) may name any field or element, so any written
+    /// step matches it. A written key matches only itself, as in
+    /// TypeScript: `values[index] = 4` leaves `values[0]` narrowed.
     pub fn is_prefix_of(&self, other: &ReferencePath) -> bool {
-        self.root == other.root && other.chain.starts_with(&self.chain)
+        self.root == other.root
+            && self.chain.len() <= other.chain.len()
+            && self
+                .chain
+                .iter()
+                .zip(&other.chain)
+                .all(|(written, read)| read.is_written_by(written))
     }
 
     pub fn render(&self) -> String {
@@ -95,6 +105,12 @@ pub enum PathElem {
     Field(String),
     Index(LiteralValue),
     Key(BindingId, KeyKind),
+}
+
+impl PathElem {
+    fn is_written_by(&self, written: &PathElem) -> bool {
+        matches!(self, PathElem::Key(..)) || self == written
+    }
 }
 
 /// What a [`PathElem::Key`] reads: a property, by a string key, or an element.
@@ -429,6 +445,10 @@ pub fn is_covered_by_literals(ty: &Type, covered: &BTreeSet<LiteralValue>) -> bo
         Type::Union(members) => members
             .iter()
             .all(|member| is_covered_by_literals(member, covered)),
+        // `boolean` is `true | false`.
+        Type::Boolean => [true, false]
+            .into_iter()
+            .all(|value| covered.contains(&LiteralValue::Boolean(value))),
         other => unit_literal_value(other).is_some_and(|value| covered.contains(&value)),
     }
 }

@@ -1035,7 +1035,12 @@ fn emit_field_compare(
             load_slot_nullable(f, b_t);
             f.instruction(&Instruction::RefIsNull);
         }
-        Type::Void | Type::Error | Type::Never => {
+        // A field whose value would be `never` belongs to an object no code
+        // path builds, so nothing compares or hashes it.
+        Type::Never => {
+            f.instruction(&Instruction::Unreachable);
+        }
+        Type::Void | Type::Error => {
             return Err(unrepresentable_field(field_ty));
         }
         Type::Union(_) => {
@@ -1292,7 +1297,12 @@ fn emit_field_hash(
         Type::Null => {
             f.instruction(&Instruction::I32Const(0));
         }
-        Type::Void | Type::Error | Type::Never => {
+        // A field whose value would be `never` belongs to an object no code
+        // path builds, so nothing compares or hashes it.
+        Type::Never => {
+            f.instruction(&Instruction::Unreachable);
+        }
+        Type::Void | Type::Error => {
             return Err(unrepresentable_field(field_ty));
         }
         Type::Union(_) => {
