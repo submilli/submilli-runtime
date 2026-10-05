@@ -1,5 +1,8 @@
 //! End-to-end integration tests for `submilli server run-code`.
 
+#[path = "../../submilli-server/tests/common/in_memory_config.rs"]
+mod in_memory_config;
+
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::PathBuf;
@@ -33,7 +36,7 @@ async fn spawn_server() -> String {
     );
     let config = ServerConfig {
         blueprints: Some(blueprints),
-        ..ServerConfig::default()
+        ..in_memory_config::config()
     };
     let state = AppState::new(config).expect("AppState");
     let router = app(state);

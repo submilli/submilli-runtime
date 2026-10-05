@@ -5,6 +5,9 @@
 //! response, so the leak assertion compares against the actual configured
 //! paths rather than a substring guess.
 
+#[path = "common/in_memory_config.rs"]
+mod in_memory_config;
+
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use http_body_util::BodyExt;
@@ -23,7 +26,7 @@ async fn list(volumes: VolumeTable) -> (StatusCode, Value, String) {
 async fn send(volumes: VolumeTable, method: &str) -> (StatusCode, Value, String) {
     let config = ServerConfig {
         volumes,
-        ..ServerConfig::default()
+        ..in_memory_config::config()
     };
     let state = AppState::new(config).expect("AppState");
     let req = Request::builder()
@@ -130,7 +133,7 @@ async fn injected_database_path_is_guarded_even_with_a_different_configured_path
         let config = ServerConfig {
             database: Some(Arc::clone(&database)),
             database_path: configured_path,
-            ..ServerConfig::default()
+            ..in_memory_config::config()
         };
         let volumes =
             VolumeTable::from([("exposed".into(), VolumeSpec::local_path(directory.path()))]);

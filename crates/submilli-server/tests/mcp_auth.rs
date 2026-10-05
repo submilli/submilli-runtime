@@ -1,6 +1,9 @@
 //! End-to-end tests for the MCP OAuth admin surface + the PENDING/ACTIVE bind
 //! gate, driven in-process through `app(state).oneshot(...)`.
 
+#[path = "common/in_memory_config.rs"]
+mod in_memory_config;
+
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
@@ -57,7 +60,7 @@ impl Harness {
                 InMemoryBlueprintStore::seed([blueprint]).expect("seed blueprints"),
             )),
             secret_store: Some(store.clone()),
-            ..ServerConfig::default()
+            ..in_memory_config::config()
         };
         Self {
             state: AppState::new(config).expect("AppState"),
