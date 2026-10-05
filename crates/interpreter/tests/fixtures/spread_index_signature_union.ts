@@ -21,8 +21,32 @@ function show(label: string, actual: string, expected: string): void {
   assert(actual === expected, label);
 }
 
+// Each union reaches its spread through a parameter, so flow narrowing
+// can't reduce it to the one type of an initializer.
 function copy(x: Dict | { a: string }): string {
   return JSON.stringify({ ...x, z: 1 });
+}
+
+function copyRecord(x: Record<string, number> | { a: string }): string {
+  return JSON.stringify({ ...x });
+}
+
+function copyNamed(x: Named | { a: number; n: string }): string {
+  const copied = { ...x };
+  return `${String(copied.n)} ${String(copied.a)}`;
+}
+
+function copyTable(x: Table<boolean> | { a: number }): string {
+  return JSON.stringify({ ...x });
+}
+
+function laterField(x: Dict | { a: string }): string {
+  return JSON.stringify({ ...x, b: "late" });
+}
+
+function earlierField(x: Dict | { a: string }): string {
+  const copied = { b: "first", ...x };
+  return String(copied.b);
 }
 
 function main(): void {
@@ -32,21 +56,18 @@ function main(): void {
   show("empty dictionary", copy({}), '{"z":1}');
 
   const record: Record<string, number> = { a: 5 };
-  const fromRecord: Record<string, number> | { a: string } = record;
-  show("record", JSON.stringify({ ...fromRecord }), '{"a":5}');
+  show("record", copyRecord(record), '{"a":5}');
+  show("record object", copyRecord({ a: "r" }), '{"a":"r"}');
 
   const named: Named = { n: 1, a: "q" };
-  const fromNamed: Named | { a: number; n: string } = named;
-  const namedCopy = { ...fromNamed };
-  show("named field", `${namedCopy.n} ${String(namedCopy.a)}`, "1 q");
+  show("named field", copyNamed(named), "1 q");
 
   const flags: Table<boolean> = { a: true };
-  const fromTable: Table<boolean> | { a: number } = flags;
-  show("generic", JSON.stringify({ ...fromTable }), '{"a":true}');
+  show("generic", copyTable(flags), '{"a":true}');
 
-  const late: Dict | { a: string } = dict;
-  show("later field", JSON.stringify({ ...late, b: "late" }), '{"a":7,"b":"late"}');
-  show("earlier field", JSON.stringify({ a: "first", ...late }), '{"a":7,"b":8}');
+  show("later field", laterField(dict), '{"a":7,"b":"late"}');
+  show("earlier field", earlierField(dict), "8");
+  show("earlier field kept", earlierField({ a: "s" }), "first");
 
   const both: (Dict | { a: string })[] = [dict, { a: "z" }];
   show(

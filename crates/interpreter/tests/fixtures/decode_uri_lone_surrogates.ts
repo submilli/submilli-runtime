@@ -36,6 +36,7 @@ function main(): void {
     "61 d800 41 dfff 20ac",
   );
   show("reserved kept", decoded(decodeURI, low + high + "%23"), "dfff d800 25 32 33");
+  show("reserved case kept", decoded(decodeURI, "%2f" + high), "25 32 66 d800");
   show("astral escape", decoded(decodeURIComponent, "%F0%9F%98%80" + high), "d83d de00 d800");
   show("escaped surrogate", decoded(decodeURIComponent, "%ED%A0%80"), "throws");
   show("short escape", decoded(decodeURIComponent, high + "%E2%82"), "throws");
