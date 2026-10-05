@@ -109,7 +109,7 @@ and [plain HTTP](https://submilli.ai/docs/tutorials/use-the-http-api).
 - [Packages](https://submilli.ai/docs/packages) that wrap your APIs and hold the
   credentials, so generated code never sees a secret. Curated Packages for
   GitHub, Slack, Gmail, Google Drive and Calendar, Linear, Notion, Sentry, and
-  web search are [included](https://submilli.ai/docs/reference/curated-packages).
+  web search are [included](packages/README.md).
 - [Limits](https://submilli.ai/docs/server/set-limits) on fuel, memory, time,
   stack, and model tokens. A failing run ends alone, and the rest of the
   server keeps serving.
@@ -119,6 +119,8 @@ and [plain HTTP](https://submilli.ai/docs/tutorials/use-the-http-api).
 - Checks for Package authors: `--deny-warnings` in CI and an
   [agent security review](https://submilli.ai/docs/packages/review-package-security).
 - HTTPS, API tokens with admin and user roles, and an encrypted secret store.
+
+Missing an integration? [Request a curated Package](https://github.com/submilli/submilli-runtime/issues/new?template=curated-package.yml).
 
 ## Status
 

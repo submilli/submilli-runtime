@@ -7,8 +7,8 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "e88419825fd5ee272d3c05947cc3da713529423694252185a466e8dbc8c20eb4"
-  confirmedAt: "2026-10-05T13:01:53.009Z"
+  contentHash: "729fb33a25d224ca1207f7b519d4206801482436a7eaa3d0cceddd22a1a32d04"
+  confirmedAt: "2026-10-05T13:07:41.890Z"
 ---
 
 This page lists the curated Packages, the `@submilli/*` Packages maintained
@@ -16,6 +16,8 @@ in the `submilli/submilli-runtime` repository, under `packages/<name>`. All
 are at version `0.1.0`. How to add a Package to a Blueprint and bind its
 secret is in [Packages](/docs/packages) and
 [HTTP and credentials](/docs/blueprints/http-and-credentials).
+
+Missing an integration? [Request a curated Package](https://github.com/submilli/submilli-runtime/issues/new?template=curated-package.yml).
 
 ## The Packages
 
