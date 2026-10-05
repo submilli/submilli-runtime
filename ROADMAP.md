@@ -4,7 +4,7 @@
 
 We want agents to carry out longer tasks, recover when things go wrong, and bring people in when a decision needs them. These are four areas we plan to build in Submilli.
 
-| [Durability](#durability) | [Public package registry](#public-package-registry) | [Ask human](#ask-human) | [Managed cloud](#managed-cloud) |
+| [Durability](#durability) | [Submilli Registry](#submilli-registry) | [Ask human](#ask-human) | [Managed cloud](#managed-cloud) |
 | :--- | :--- | :--- | :--- |
 | Resume interrupted work | Discover and share Packages | Pause for a person | Run without managing servers |
 
@@ -25,11 +25,11 @@ External effects need explicit recovery rules: when a service's response is lost
 
 ---
 
-## Public package registry
+## Submilli Registry
 
 **Discover, publish, and install Submilli Packages in one place.**
 
-We plan a public registry for [Packages](https://submilli.ai/docs/packages), similar to npm. Package authors could publish versioned releases, and developers could find integrations and reuse them in their agents.
+We plan Submilli Registry, a public registry for [Packages](https://submilli.ai/docs/packages), similar to npm. Package authors could publish versioned releases, and developers could find integrations and reuse them in their agents.
 
 **Example:** A developer publishes a Package for a billing API. Another team finds it in the registry, checks its documentation and capabilities, and installs a specific version in their project. Their [Blueprint](https://submilli.ai/docs/blueprints) controls which operations the agent can use.
 
