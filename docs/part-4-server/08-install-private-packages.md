@@ -7,8 +7,8 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "0dbe7049070ee3c4f87c3c522c1ca5aeb4019b67fe48a023ce826d26f22bb768"
-  confirmedAt: "2026-10-05T10:59:51.487Z"
+  contentHash: "4fde35ceb2a56ae7f6d8f02b3be412504e03587fc2800084e42a78acabb9b1fd"
+  confirmedAt: "2026-10-05T13:01:53.009Z"
 ---
 
 A server fetches Packages from GitHub with its own token, never

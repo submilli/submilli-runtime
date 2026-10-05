@@ -13,8 +13,8 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "1b0eae934c64c209083e8c2cd3db5684eec2841dbbdefb54bb3014f4ffb3c70d"
-  confirmedAt: "2026-10-05T10:59:51.486Z"
+  contentHash: "89213ede6a9e59b90e8ba17bac96a1b85ddbba36fcf73ff5adb0c3ededdfc6ed"
+  confirmedAt: "2026-10-05T13:01:53.009Z"
 ---
 
 If your application runs in containers on one host, the server runs as

@@ -7,8 +7,8 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "114768d644f033e39db84d8820ebd77529c50e2d3759ef2a3d399ea7b863688d"
-  confirmedAt: "2026-10-05T10:59:51.492Z"
+  contentHash: "7b441d963577a83a1ba4be8a12858ac5aa2447c4ff6fd0373797705cd8bca8dd"
+  confirmedAt: "2026-10-05T13:01:53.009Z"
 ---
 
 Agents use tools to perform tasks. Most of them call one tool at a time, wait for the service to respond, process its response using inference tokens, and make the decision on next steps. This typically means slow (model turns, waiting for tool call completion), expensive (context bloat, inference) and potentially brittle - inference is not meant for highly deterministic tasks (like mathematical functions).

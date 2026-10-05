@@ -7,8 +7,8 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "7c3fd6b93757b878c580413d55efe7c0a3015201f450b1c5b6057a14cdb2e93a"
-  confirmedAt: "2026-10-05T10:59:51.491Z"
+  contentHash: "e4c05c0403171431673ca919294307dfeee21dd9dfa7f5ecc7f36dcbadd84868"
+  confirmedAt: "2026-10-05T13:01:53.009Z"
 ---
 
 Coding assistants write the code. A Submilli agent more often needs to

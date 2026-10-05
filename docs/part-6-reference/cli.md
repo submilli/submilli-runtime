@@ -7,8 +7,8 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "cc2bc858d1ec20f87d8e3a9f15f67f05313d16177ba87eed6044afe3663494e5"
-  confirmedAt: "2026-10-05T10:59:51.475Z"
+  contentHash: "cdfc8e55a7af5a449f6634166e9ee4126660f2d209108e1451a89665a08e8dcf"
+  confirmedAt: "2026-10-05T13:01:53.009Z"
 ---
 
 This page describes `submilli`, the command-line tool. It covers the

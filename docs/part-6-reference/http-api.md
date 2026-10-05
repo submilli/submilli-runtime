@@ -7,8 +7,8 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "472972cbc0d08c0a43d0a295a0006c90201caaa4d8fbd0f4165e0515a0f175fe"
-  confirmedAt: "2026-10-05T10:59:51.477Z"
+  contentHash: "f5f03b7e4f6462ebb85e331c9cb877cc9922e81b4d350234af45c38305e64c7b"
+  confirmedAt: "2026-10-05T13:01:53.009Z"
 ---
 
 This page describes the endpoints of `submilli-server` a harness calls to run

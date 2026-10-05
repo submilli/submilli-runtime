@@ -7,8 +7,8 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "8253af93e547b61383b60367c60cce57831bb86ad8f100bf13824f03c3aaa528"
-  confirmedAt: "2026-10-05T10:59:51.489Z"
+  contentHash: "99a2b84231ebe268cf02ae72e602ff8e005e655a54a43cd1b27f43f60310a70b"
+  confirmedAt: "2026-10-05T13:01:53.009Z"
 ---
 
 The Package compiles and its tests pass, but nothing can import it yet.

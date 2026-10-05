@@ -7,8 +7,8 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "615d19e891d22fbe007e989f4b7139cde138ce70b3cd4cd806a13844ae70d17f"
-  confirmedAt: "2026-10-05T10:59:51.494Z"
+  contentHash: "b1e1361a3aeb6f12fb14857abc8880eacd955626170edc2f384c2a829cbbd173"
+  confirmedAt: "2026-10-05T13:01:53.009Z"
 ---
 
 Your application, or the agent framework it uses, is the **harness**, the

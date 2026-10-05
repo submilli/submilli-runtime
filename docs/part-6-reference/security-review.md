@@ -9,8 +9,8 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "59de2570557a5e96b2691d1cea95e0868bbfa74d37f3e723d7023131e9afbfd2"
-  confirmedAt: "2026-10-05T10:59:51.478Z"
+  contentHash: "d4d84745120b1431b996adbe8ea4540c7434775d67c15111664e2e8885292916"
+  confirmedAt: "2026-10-05T13:01:53.009Z"
 ---
 
 `submilli build security-review` runs an installed coding agent against a source

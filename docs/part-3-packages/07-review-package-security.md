@@ -12,8 +12,8 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "c3364d3e25214a01d20d59e48079c486ec1cc5ee98035a7e361eaec549ba073a"
-  confirmedAt: "2026-10-05T10:59:51.490Z"
+  contentHash: "6eb28f0d6d9d6ee4adcb891330e728c9f48bf919a46eeb145135cab249322307"
+  confirmedAt: "2026-10-05T13:01:53.009Z"
 ---
 
 A Blueprint's rules see only what a Package passes to `check()`. A Package

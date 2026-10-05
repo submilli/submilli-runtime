@@ -7,8 +7,8 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "bb1415caa827cac20a5dd90f8c2304e65d53e3656374084a5e9733d08a370580"
-  confirmedAt: "2026-10-05T10:59:51.490Z"
+  contentHash: "c4650cb06f9ddfc0306ce764ca89272292c0397c347f808ac3bc59923f9a51c4"
+  confirmedAt: "2026-10-05T13:01:53.009Z"
 ---
 
 This guide shows you how to build a Blueprint block by block with the

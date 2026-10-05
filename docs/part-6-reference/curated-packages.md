@@ -7,8 +7,8 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "3cf2d0cbe1dd3a82f0169129732a68589bc9584e1249c78deb335e2869237133"
-  confirmedAt: "2026-10-05T10:59:51.475Z"
+  contentHash: "e88419825fd5ee272d3c05947cc3da713529423694252185a466e8dbc8c20eb4"
+  confirmedAt: "2026-10-05T13:01:53.009Z"
 ---
 
 This page lists the curated Packages, the `@submilli/*` Packages maintained

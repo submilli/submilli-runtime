@@ -7,8 +7,8 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "01b286785daefbfe01a30ed8d96d59ef6e2371991e2d9d141f66bba2f6bbecda"
-  confirmedAt: "2026-10-05T10:59:51.484Z"
+  contentHash: "9f635fdc1a1c66c7145624dd46478b1792bce822c5ef6729e26da468e9e8c784"
+  confirmedAt: "2026-10-05T13:01:53.009Z"
 ---
 
 In this tutorial we will run the research agent on the Claude Agent SDK,

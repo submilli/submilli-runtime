@@ -7,8 +7,8 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "da80701c169052f945cabf6daaa6ce8ff000dd840add7cd4d1357abe419b3e3b"
-  confirmedAt: "2026-10-05T10:59:51.478Z"
+  contentHash: "c79ae1075feef5fdf61d7bd8eff0301abd89f4b9f3b52a3df12f06a073bfa862"
+  confirmedAt: "2026-10-05T13:01:53.009Z"
 ---
 
 This page describes a Package project as `submilli build` reads and writes

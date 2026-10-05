@@ -7,8 +7,8 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "6c707ea6d4bfcd134f5242554a33a1fb4277437b5585c04d82f32d39ba2a3f48"
-  confirmedAt: "2026-10-05T10:59:51.488Z"
+  contentHash: "41710c4637bfbe79411c5b0cf6ad03dc0937da72341c20f0fc409c75baa7f904"
+  confirmedAt: "2026-10-05T13:01:53.009Z"
 ---
 
 The agent needs to reach a system of yours, such as a billing API, a CRM,

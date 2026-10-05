@@ -9,8 +9,8 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "26edabfefa59989832cbf3e5f75e6f7de686d45929677038d1f74d4847e58ae7"
-  confirmedAt: "2026-10-05T10:59:51.481Z"
+  contentHash: "4294291ef58c21623a74c432628e953e21d36b5387c871de6b47f43a7745e506"
+  confirmedAt: "2026-10-05T13:01:53.009Z"
 ---
 
 A Blueprint is policy, and `apply` from a laptop leaves no record of who

@@ -7,8 +7,8 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "8d76038da82f4783abeb043190bdf2a97b4dc8bbf819162ae9df6f5f4ddc629a"
-  confirmedAt: "2026-10-05T10:59:51.488Z"
+  contentHash: "f14b4e6514a0f86e2dac9ad0fa6a6972d35838a0ec6fb728791459a135f76910"
+  confirmedAt: "2026-10-05T13:01:53.009Z"
 ---
 
 Two readers decide how to use the Package, and neither reads its source.

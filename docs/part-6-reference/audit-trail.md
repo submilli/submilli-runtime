@@ -10,8 +10,8 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "2f6cc84e7e593b1cf2b2721e9de7401cacf2bd1b9c39b74d2c502dc3d585e715"
-  confirmedAt: "2026-10-05T10:59:51.473Z"
+  contentHash: "7511d0e84bdca3f79d65960a41007bfe1018507a6d3697580479e34bcec26d71"
+  confirmedAt: "2026-10-05T13:01:53.009Z"
 ---
 
 The server writes one audit record per line, in logfmt, to its log's

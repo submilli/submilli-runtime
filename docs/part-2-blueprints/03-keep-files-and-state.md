@@ -7,8 +7,8 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "1507cf9287ce25c887012e13211c88c70ec4eb2937db97997d624bf080182aaf"
-  confirmedAt: "2026-10-05T10:59:51.491Z"
+  contentHash: "5ac75e0814de4bae8a50d4393324f7ad56c5c8f97277ef83e1c2ab30ee5b4dac"
+  confirmedAt: "2026-10-05T13:01:53.009Z"
 ---
 
 An agent often needs more than one program to finish a job. It downloads a

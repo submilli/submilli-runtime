@@ -7,8 +7,8 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "0f79963f480dae379b4a42e1405d2ca7bceb1a53cfee3b01a7f8e1d15977b744"
-  confirmedAt: "2026-10-05T10:59:51.481Z"
+  contentHash: "553073a8c5f5db7e516c8625c4f0983eab3b3787b47783444ebcbc43e0f46995"
+  confirmedAt: "2026-10-05T13:01:53.009Z"
 ---
 
 The Blueprint pages showed the commands. With the Submilli skill, your

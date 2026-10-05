@@ -7,8 +7,8 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "7f932d9b7938d18ee629a82cf8b4157876060db4759c836544464b0853749657"
-  confirmedAt: "2026-10-05T10:59:51.490Z"
+  contentHash: "6b24574ac5506c694f6a5e8b6331655274c54230b265c91cbe6a2b4879e6f8ea"
+  confirmedAt: "2026-10-05T13:01:53.009Z"
 ---
 
 This guide shows you how to let programs call an HTTP endpoint that has no

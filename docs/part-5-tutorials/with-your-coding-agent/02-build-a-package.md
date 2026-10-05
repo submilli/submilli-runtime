@@ -11,8 +11,8 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "49dde49b63fcba52ff794b07dbf34cb6ef2114cf68306d4a195ed6235ac09aff"
-  confirmedAt: "2026-10-05T10:59:51.482Z"
+  contentHash: "ad8cf21f475947d5952a9fdb4434acd5262bfacb2ceb3686ca02fd717c3037df"
+  confirmedAt: "2026-10-05T13:01:53.009Z"
 ---
 
 The Package pages showed how a Package is written by hand. With the

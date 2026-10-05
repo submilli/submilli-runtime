@@ -7,8 +7,8 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "39167099e58b67bc4cdb229bca99c0ca79e10d771966727f94a955345dfd71f2"
-  confirmedAt: "2026-10-05T10:59:51.493Z"
+  contentHash: "abec4d0a47f11e9d8d987a39d8915f6947254efe420923afcd68f56ee1e91a0e"
+  confirmedAt: "2026-10-05T13:01:53.009Z"
 ---
 
 A Package in Submilli is like a package in npm or pip, a library you

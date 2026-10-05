@@ -7,8 +7,8 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "7218ac5dbf77e3752b3478e3f905188b2e2413deedfb79490e15d67007ce7db9"
-  confirmedAt: "2026-10-05T10:59:51.477Z"
+  contentHash: "78032a3ef09beb8b9c064f16d6f0aff5f82a4a3765c549ae2f4e1370e5bdae38"
+  confirmedAt: "2026-10-05T13:01:53.009Z"
 ---
 
 An entry in a Blueprint's `mcp` block declares an outbound MCP server, which

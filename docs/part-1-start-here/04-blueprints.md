@@ -7,8 +7,8 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "ed48648eaad302a15adffafd92a5013f40220f4dbe98516f364a1d1de3770059"
-  confirmedAt: "2026-10-05T10:59:51.493Z"
+  contentHash: "dcf5f3512bb368efb589e4f6a08418ee77c95e3fa41e9c940551f666ebd7de9f"
+  confirmedAt: "2026-10-05T13:01:53.009Z"
 ---
 
 Your agent's program has to run somewhere. That somewhere is an environment

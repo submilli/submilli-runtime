@@ -7,8 +7,8 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "3242a0adfb96f2898a65dfa28870bf2f29f5aad4672a411081a666544186157d"
-  confirmedAt: "2026-10-05T10:59:51.489Z"
+  contentHash: "717f92c8888abcb1fcbd9dbaa3eb6511190e192d4c5471ead2f34348fd03679f"
+  confirmedAt: "2026-10-05T13:01:53.009Z"
 ---
 
 A Package often builds on another. Acme's support Package apologizes to

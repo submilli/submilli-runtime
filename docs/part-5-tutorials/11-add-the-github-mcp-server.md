@@ -7,8 +7,8 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "07a4ce4718ed88cfe591b56af7fea7b983a9ff0f9f1686f21b78733b28023c0e"
-  confirmedAt: "2026-10-05T10:59:51.481Z"
+  contentHash: "6ef64400e75539e1d36f23551d2a3220d2bc676cba65bd20f1b13d1e3f21ddcb"
+  confirmedAt: "2026-10-05T13:01:53.009Z"
 ---
 
 The curated `@submilli/github` Package covers what most agents need from

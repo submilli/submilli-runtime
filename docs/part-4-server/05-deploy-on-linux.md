@@ -10,8 +10,8 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "721cf2282e5ae497fce05a22ace9ceb90f313f3eae34407e034d6429a5b38dc5"
-  confirmedAt: "2026-10-05T10:59:51.486Z"
+  contentHash: "b15d0aa9fa0b1f5e4606e3215138661661eabce8adec1f3d0dde72a7371f9253"
+  confirmedAt: "2026-10-05T13:01:53.009Z"
 ---
 
 In production, `submilli-server` runs on a dedicated machine, and your

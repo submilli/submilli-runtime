@@ -7,8 +7,8 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "4f38a30a3103ed81a55279440cbc884252bd6e6529429691252ae1406eafae35"
-  confirmedAt: "2026-10-05T10:59:51.479Z"
+  contentHash: "b7db325fe76d2dcbb41e870584a06bdcecedaa78bb98c9fd5ad5aa0e9266e155"
+  confirmedAt: "2026-10-05T13:01:53.009Z"
 ---
 
 This page describes how `submilli-server` is configured. It covers every

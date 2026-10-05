@@ -7,8 +7,8 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "24aea5d03fc0c984631b0b2c465b8fa24a78dda9b48700c8b015551203d00917"
-  confirmedAt: "2026-10-05T10:59:51.491Z"
+  contentHash: "d1b649e5ab9c279cd942af36774176a032dbf7eebff4e0364b5923a31465b13d"
+  confirmedAt: "2026-10-05T13:01:53.009Z"
 ---
 
 The agent is a model already, so why would its program call another?

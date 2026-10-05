@@ -7,8 +7,8 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "2ea4b1af1b19c09cf65b88168d32ac9d91b0961d1d27427b1f96ceff38c38272"
-  confirmedAt: "2026-10-05T10:59:51.492Z"
+  contentHash: "d1aadc7d02600b00ae0e2cc66b9c5f4553ba617aefdcfa5e4b2788f03b9cb7dc"
+  confirmedAt: "2026-10-05T13:01:53.009Z"
 ---
 
 The curated Packages cover common services, and you can write a Package

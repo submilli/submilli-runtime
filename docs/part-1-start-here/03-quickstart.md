@@ -7,8 +7,8 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "fd3e2c0c9f1a3c0d8954460a85757f0c241b818a869f9fa37f3082784313dfae"
-  confirmedAt: "2026-10-05T10:59:51.493Z"
+  contentHash: "ba6a847184afb7c2a54a26515c281fff2771f366e9820b28c0739bc4166fb480"
+  confirmedAt: "2026-10-05T13:01:53.009Z"
 ---
 
 By the end of this chapter you will have watched a policy you wrote defeat a

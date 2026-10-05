@@ -12,8 +12,8 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "8bc2fc74a127cdacf6905f2070ea6de459e3f8c0843ca857d5db4036b21c1e13"
-  confirmedAt: "2026-10-05T10:59:51.480Z"
+  contentHash: "341e3e5a94b53c8a10a1d5f751ef255d7bc34fc5c52329541cb19ea70312f360"
+  confirmedAt: "2026-10-05T13:01:53.009Z"
 ---
 
 A Package is reviewed once and then called by programs nobody reviews,

@@ -7,8 +7,8 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "189104fa3920886ba781a3dc2d160b825c7ee2ddb941854cc58127c3b597e16a"
-  confirmedAt: "2026-10-05T10:59:51.479Z"
+  contentHash: "b316181a40f118b787f61623f5abc3a58db24051517cc308e14edc85f0fbfebd"
+  confirmedAt: "2026-10-05T13:01:53.009Z"
 ---
 
 This page describes what each `submilli:` module does, the capabilities

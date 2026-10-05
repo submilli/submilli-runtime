@@ -11,8 +11,8 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "c357427dae3314fc4b218faeb4a9f60977a16d92dcc141c0a0466272f460a8ef"
-  confirmedAt: "2026-10-05T10:59:51.487Z"
+  contentHash: "c40c39bfd706b61fa66aae9cf2ad2fc704e1eb6c7e1544fba1c043bff79bd090"
+  confirmedAt: "2026-10-05T13:01:53.009Z"
 ---
 
 If your application runs on Kubernetes, the server runs in the same

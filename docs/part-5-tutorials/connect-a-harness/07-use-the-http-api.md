@@ -7,8 +7,8 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "cefadbab4f3ba35fbb7eff3ba0dedf20398a74a383886c6583498203b1c0f8c0"
-  confirmedAt: "2026-10-05T10:59:51.484Z"
+  contentHash: "79afef72d271a57bf22500e24178145bf5ca5f8aa5e75722d717f00bede77189"
+  confirmedAt: "2026-10-05T13:01:53.009Z"
 ---
 
 The HTTP API offers the same operations as plain requests. Use it when

@@ -7,8 +7,8 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "65cb04bda9090f2ef0513284b46baf5f7415c4e37a7962a8231b6beaf96cba9d"
-  confirmedAt: "2026-10-05T10:59:51.485Z"
+  contentHash: "9ced2547a1bbc510a795584da66920b5e8789e6314ee6cda6ab4cef7bd1389d9"
+  confirmedAt: "2026-10-05T13:01:53.009Z"
 ---
 
 A Blueprint reaches a server as a file you register. The server keeps a

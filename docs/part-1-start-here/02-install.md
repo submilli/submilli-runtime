@@ -7,8 +7,8 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "02394c125642a973a92405201178188ddd8f14295fd40ecdf7ff02f5c75e3dfb"
-  confirmedAt: "2026-10-05T10:59:51.493Z"
+  contentHash: "74e6821aed4d6ad42e8feda7036086e4497af4fcd9efb545d94c8be875802dd1"
+  confirmedAt: "2026-10-05T13:01:53.009Z"
 ---
 
 Use the [skill setup box above](#agent-setup) to get started with Codex or

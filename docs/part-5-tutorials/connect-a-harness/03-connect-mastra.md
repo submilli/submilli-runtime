@@ -7,8 +7,8 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "bcebe2fc7c4a150d35c0eaf21be510263d5533f650a7847cb68646821ca2ab0a"
-  confirmedAt: "2026-10-05T10:59:51.482Z"
+  contentHash: "4f82a647cc45f81ac5341a018c8c042b06a2f77be38df924eb4ce0d56940981f"
+  confirmedAt: "2026-10-05T13:01:53.009Z"
 ---
 
 In this tutorial we will run the research agent on Mastra, with its programs

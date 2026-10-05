@@ -7,8 +7,8 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "ff885f87e7cd970871899431711b0fcba96e34a2ce860cde373b35be918b8470"
-  confirmedAt: "2026-10-05T10:59:51.488Z"
+  contentHash: "f6b915dfa61861dfab47e48f6d16d9f33aa7c54c004af48ac608dee86b858b1d"
+  confirmedAt: "2026-10-05T13:01:53.009Z"
 ---
 
 The agent's program is going to call a function of yours, and the program

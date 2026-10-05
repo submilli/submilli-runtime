@@ -7,8 +7,8 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "8dd8e1c15d8641712b26459dfa4efd50a6819de7eb333dd00d4b6473e1f293f2"
-  confirmedAt: "2026-10-05T10:59:51.473Z"
+  contentHash: "f1c47353a8b343f06f9f41d641a2a422a09258a631449b73cf0043a6bef56fbb"
+  confirmedAt: "2026-10-05T13:01:53.009Z"
 ---
 
 A Blueprint file is one YAML document. This page describes each of its

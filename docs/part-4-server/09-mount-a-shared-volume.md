@@ -7,8 +7,8 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "224ee8b79165f3a4b41ee1791c147ca6beee7a8728fdc3fccc6f26b05cee1afa"
-  confirmedAt: "2026-10-05T10:59:51.487Z"
+  contentHash: "05086b03dfa77e84521d4390ea813c1046e5016e3d0ea8a9cd0828a153966565"
+  confirmedAt: "2026-10-05T13:01:53.009Z"
 ---
 
 A session's files end with the session. Some things an agent works with

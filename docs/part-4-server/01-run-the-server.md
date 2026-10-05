@@ -7,8 +7,8 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "1942e26eb25291d52a2bd8a2fff9a506f36d420d6779fd8d612d6830760ba162"
-  confirmedAt: "2026-10-05T10:59:51.485Z"
+  contentHash: "e1a7cf98f4a97f20e4f46afd3716000e8620350a7c18e6ba8c8dea3d1051ea2a"
+  confirmedAt: "2026-10-05T13:01:53.009Z"
 ---
 
 This guide shows you how to run `submilli-server` for an application.

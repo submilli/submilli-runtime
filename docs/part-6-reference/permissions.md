@@ -7,8 +7,8 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "4dc724014aea6f599d944cf64eecbb3d008940c751d9248f7d7ed37a9b04b629"
-  confirmedAt: "2026-10-05T10:59:51.478Z"
+  contentHash: "715d8c58e8f58bf057583e06c6512b089a06e523413cf1c802d7bbf3228caa81"
+  confirmedAt: "2026-10-05T13:01:53.009Z"
 ---
 
 This page describes how the `permissions` and `default` blocks of a

@@ -7,8 +7,8 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "51e1e453ddb307d2bf3357c392b3747efb1540dbe81e56285e356c15b1faa2b6"
-  confirmedAt: "2026-10-05T10:59:51.483Z"
+  contentHash: "5032c4f3c6cd9f5cb9ee561cb6a586deb60998be22501e394fb27d8821540212"
+  confirmedAt: "2026-10-05T13:01:53.009Z"
 ---
 
 In this tutorial we will run the research agent on LangChain deepagents,

@@ -7,8 +7,8 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "82e9862464b6bd7698866d0f97a055893a62a3f20aedd67ee9961bb999e437ac"
-  confirmedAt: "2026-10-05T10:59:51.480Z"
+  contentHash: "ddfb5a1c574fa30ee8b025baa90336a0e0e86cbfb0e5e179141f73dad190c508"
+  confirmedAt: "2026-10-05T13:01:53.009Z"
 ---
 
 A denial is the system working. A program asked for something the
