@@ -463,6 +463,8 @@ fn tasks_json_text() -> String {
             },
         ],
     });
+    // This fixed JSON Value contains only strings, numbers, booleans and
+    // containers; its in-memory serializer has no data or I/O failure path.
     format!(
         "{}\n",
         serde_json::to_string_pretty(&tasks).expect("generated tasks.json is serializable")
