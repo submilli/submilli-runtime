@@ -1,26 +1,26 @@
 ---
 title: "Add an MCP server"
-description: "How to make an MCP server importable as a package: declare it, allow the tools the task needs, give it a credential or log in, register it on a server, and handle a server that can't be reached."
+description: "How to make an MCP server importable as a Package: declare it, allow the tools the task needs, give it a credential or log in, register it on a server, and handle a server that can't be reached."
 slug: blueprints/add-an-mcp-server
 sidebar:
   order: 6
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "2ea4b1af1b19c09cf65b88168d32ac9d91b0961d1d27427b1f96ceff38c38272"
-  confirmedAt: "2026-10-05T10:59:51.492Z"
+  contentHash: "d1aadc7d02600b00ae0e2cc66b9c5f4553ba617aefdcfa5e4b2788f03b9cb7dc"
+  confirmedAt: "2026-10-05T13:01:53.009Z"
 ---
 
-The curated packages cover common services, and you can write a package
-for your own. For a service that has neither yet, or whose package lacks
+The curated Packages cover common services, and you can write a Package
+for your own. For a service that has neither yet, or whose Package lacks
 a feature you need, there is often an MCP server. Declared in a
-blueprint, that server becomes a package. Submilli reads its tools and
+Blueprint, that server becomes a Package. Submilli reads its tools and
 their JSON schemas and turns them into a TypeScript library with one typed
-function per tool. A program imports and calls it like any other package,
-under the same rules. The blueprint says which of its tools a program may
+function per tool. A program imports and calls it like any other Package,
+under the same rules. The Blueprint says which of its tools a program may
 call, and the credential stays outside the program.
 
-This guide shows you how to make an MCP server importable as a package.
+This guide shows you how to make an MCP server importable as a Package.
 The examples are Playwright's server, which needs no account, and
 Linear's, which takes an API key or an OAuth login. Substitute your
 server's URL and tools.
@@ -53,7 +53,7 @@ mcp:
     url: http://localhost:8931/mcp
 ```
 
-The name you give becomes the key in the `mcp` block, the package name
+The name you give becomes the key in the `mcp` block, the Package name
 `@mcp/playwright`, and the capability `mcp.playwright`. The server must
 speak MCP over HTTP. If yours speaks it over standard input and output,
 put it behind an HTTP endpoint first, as `--port` does for Playwright's.
@@ -89,14 +89,14 @@ permissions:
 The three tools are allowed and other tools meet the default. To allow
 the tools whose names start the same way, use `glob`, as in
 `tool glob "list_*"`. Don't write the tool into the capability name, as in
-`mcp.playwright/browser_click`, because the blueprint is refused.
+`mcp.playwright/browser_click`, because the Blueprint is refused.
 
 Choose tools by what their arguments can do as well as by their names. A
 rule sees the tool's name and nothing else, and `browser_navigate` asked
 for a `javascript:` address runs script in the page as `browser_evaluate`
 would. If an allowed tool is that broad, restrict it where the server runs
-(Playwright's takes `--allowed-origins`), or put a package in front of it
-that checks the arguments and grant the package instead.
+(Playwright's takes `--allowed-origins`), or put a Package in front of it
+that checks the arguments and grant the Package instead.
 
 ## Call it
 
@@ -225,7 +225,7 @@ error: PermissionDeniedError: permission denied: caller=main capability=mcp.line
 
 ## Log in with OAuth
 
-Linear also takes an OAuth login, which spares you a key. In a blueprint
+Linear also takes an OAuth login, which spares you a key. In a Blueprint
 that doesn't declare `linear` yet, give `add-mcp` no credential flag. It
 asks the server whether it requires OAuth and writes `auth: type: oauth2`
 if it does:
@@ -249,7 +249,7 @@ mcp:
       type: oauth2
 ```
 
-Until someone logs in, the blueprint is `PENDING`. It still runs programs,
+Until someone logs in, the Blueprint is `PENDING`. It still runs programs,
 without that server:
 
 ```sh
@@ -290,7 +290,7 @@ found 68 tools this time where the key saw 59, because the server decides
 what a credential may see.
 
 The credential lands in the local secret store, and `deauthenticate`
-forgets it. One login serves all programs run under the blueprint, and
+forgets it. One login serves all programs run under the Blueprint, and
 on a server all users' sessions. Log in as an account that may do what
 you are willing to let any user's agent do, and narrow it with the `tool`
 filter. If users must act as themselves, use a per-user token in a header.
@@ -308,8 +308,8 @@ If a service refuses a login's refresh token, programs get
 
 ## Register it on a server
 
-Registered on `submilli-server`, the same blueprint (here with Linear
-declared for OAuth) gives all sessions the same packages. The server now
+Registered on `submilli-server`, the same Blueprint (here with Linear
+declared for OAuth) gives all sessions the same Packages. The server now
 owns the network it connects from, the store its logins are kept in, and
 the list of tools it has read. Register it and check its logins:
 
@@ -390,19 +390,19 @@ mcp_oauth:
 ```
 
 The server reads an MCP server's tools the first time a program or a
-search needs them, and keeps the list until the blueprint is applied
+search needs them, and keeps the list until the Blueprint is applied
 again, a login changes, or the server restarts. After an MCP server gains
-or loses a tool, apply the blueprint again.
+or loses a tool, apply the Blueprint again.
 
 ## If the server can't be reached
 
 When discovery can't reach an MCP server within ten seconds, the network
-rules block it, or it has no login yet, the blueprint still works without
-that package. Locally, a run warns `warning: @mcp/playwright: server
+rules block it, or it has no login yet, the Blueprint still works without
+that Package. Locally, a run warns `warning: @mcp/playwright: server
 unavailable:` with the reason. On a server, the same line is in
 `run-code`'s output, in the HTTP response's `discovery_warnings` list,
 and as a `WARN` line in the server's log. A program that imports the
-missing package doesn't compile:
+missing Package doesn't compile:
 
 ```text
 error: MCP server `playwright` is unavailable — `@mcp/playwright` is absent from the discovered catalog; check the blueprint's `mcp:` block and discovery warnings

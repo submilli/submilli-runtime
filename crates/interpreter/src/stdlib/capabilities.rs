@@ -260,7 +260,7 @@ const GIT: &[Capability] = &[
     Capability {
         name: "git.commit",
         main_denial: None,
-        summary: "Commit staged changes with blueprint identity",
+        summary: "Commit staged changes with Blueprint identity",
         filter_fields: &[PATH, BRANCH],
         example_filter: "path == \"/repo\" and branch == \"main\"",
     },
@@ -421,7 +421,7 @@ const SECRETS: &[Capability] = &[Capability {
          grant this. The package that needs this credential resolves it internally \
          and never returns it — pass the secret NAME to that package's API instead",
     ),
-    summary: "Read a blueprint-declared secret value",
+    summary: "Read a Blueprint-declared secret value",
     filter_fields: &[field("name", "string", "Declared secret name being read")],
     example_filter: "name == \"STRIPE_API_KEY\"",
 }];

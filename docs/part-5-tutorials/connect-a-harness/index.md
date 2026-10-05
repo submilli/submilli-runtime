@@ -1,24 +1,24 @@
 ---
 title: "Connect a harness"
-description: "Set up the server and the research blueprint the five harness tutorials share, prove it with one program, and know the three things a harness decides when it opens a session."
+description: "Set up the server and the research Blueprint the five harness tutorials share, prove it with one program, and know the three things a harness decides when it opens a session."
 slug: tutorials/connect-a-harness
 sidebar:
   order: 0
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "989bcbde59110b3579c094c02aaa141014672f0268b3c9b36ae953674be8cc4c"
-  confirmedAt: "2026-10-05T10:59:51.484Z"
+  contentHash: "4aced2a0d7f4e27fa7ff7a24354168d871da7632985f2f14acdf8fdfe7cc5d72"
+  confirmedAt: "2026-10-05T13:01:53.009Z"
 ---
 
 Your application, or the agent framework it uses, is the **harness**, the
 code that runs the agent's loop. Submilli replaces none of it. The harness
 keeps the model and the loop, and gains one tool that takes a program the
-model wrote and runs it on the server under your blueprint.
+model wrote and runs it on the server under your Blueprint.
 
 The tutorials in this part build the same research agent on five
 harnesses, one per page. This page sets up what they share, the server
-and the blueprint, then says what every harness decides when it
+and the Blueprint, then says what every harness decides when it
 connects. Take the page for yours when you are done:
 
 | Harness | Language | Connects over |
@@ -35,7 +35,7 @@ one learned. It runs on behalf of whoever is signed in to your
 application. The examples stand in for that person with one user id,
 `u_ada`.
 
-## 1. Save the blueprint
+## 1. Save the Blueprint
 
 Make a directory for the tutorials, `harnesses`, and save this in it:
 
@@ -143,10 +143,10 @@ permissions:
 ```
 
 In short, the agent may search and read through the curated
-`@submilli/jina` package, call one model, and keep notes at `/notes`.
+`@submilli/jina` Package, call one model, and keep notes at `/notes`.
 That path is the same for each user, but what is behind it isn't. The
 `notes` volume holds a directory per user, and `subPath` mounts the one
-the session's `userId` names, so neither the program nor the package
+the session's `userId` names, so neither the program nor the Package
 can reach another user's notes, and no rule has to name a user. The file names Anthropic as the
 provider and keeps Google and OpenAI entries commented out. Uncomment
 yours. For what each block does, refer to [Keep files and
@@ -175,7 +175,7 @@ function main(): string {
 
 The harness supplies no system prompt for Submilli. The instructions
 that teach a model the language arrive as the execute tool's
-description, with this blueprint's packages and rules filled in. The
+description, with this Blueprint's Packages and rules filled in. The
 harness does supply the agent's brief, and each tutorial's agent reads
 it from this file:
 
@@ -220,7 +220,7 @@ Its shape works. It says what the agent is for, how to work in programs
 rather than one call at a time, what it may reach, and how to answer.
 Edit it for your agent.
 
-## 4. Install the package
+## 4. Install the Package
 
 ```sh
 submilli install submilli/submilli-runtime @submilli/jina
@@ -246,7 +246,7 @@ volumes:
     size_limit: unlimited
 ```
 
-## 6. Start the server, store the keys, register the blueprint
+## 6. Start the server, store the keys, register the Blueprint
 
 ```sh
 head -c 32 /dev/urandom | base64 > store.key
@@ -303,8 +303,8 @@ Notice the second run. `u_ada` had already written `check.md`, and
 The binding, not the program, decides whose notes `/notes` holds,
 whichever harness opens the session.
 
-Now the model. This program reads a page through the package and asks
-the model to sum it up. `llm.models()` lists the models the blueprint
+Now the model. This program reads a page through the Package and asks
+the model to sum it up. `llm.models()` lists the models the Blueprint
 allows, so it works whichever provider you uncommented:
 
 ```typescript title="harnesses/summarize.ts"
@@ -334,12 +334,12 @@ model read it, and two sentences came back.
 Whatever the harness, three things are its decision, and the model has
 no part in them:
 
-- **The address names the blueprint.** The MCP endpoint is
+- **The address names the Blueprint.** The MCP endpoint is
   `http://127.0.0.1:8128/mcp/research`. Every program the harness sends
-  there runs under that blueprint, and no tool takes a blueprint as an
+  there runs under that Blueprint, and no tool takes a Blueprint as an
   argument.
 - **A header binds the variables.** `submilli-variables: userId=u_ada`.
-  The server checks the values against the blueprint before it accepts
+  The server checks the values against the Blueprint before it accepts
   the connection and refuses one that leaves out a required variable.
   Take the value from what your application knows (the signed-in user),
   never from the conversation.
@@ -350,12 +350,12 @@ no part in them:
 A secret that belongs to the user, such as their own token for a
 service, is declared with a `harness` source and sent the same way, in
 a `submilli-secrets` header. [Start a
-blueprint](/docs/blueprints/start-a-blueprint#declare-the-secret)
+Blueprint](/docs/blueprints/start-a-blueprint#declare-the-secret)
 shows the declaration, and the [HTTP API](/docs/tutorials/use-the-http-api)
 page shows the request. Connected, the model gets the tools [Your
 application](/docs/application#what-the-agent-gets) describes, with
-the execute tool's description already carrying this blueprint's
-packages and rules. The harness adds the brief from step 3 and nothing
+the execute tool's description already carrying this Blueprint's
+Packages and rules. The harness adds the brief from step 3 and nothing
 else.
 
 Now take the tutorial for your harness:

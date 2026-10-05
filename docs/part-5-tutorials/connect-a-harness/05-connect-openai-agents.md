@@ -7,16 +7,16 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "c473bac5288e905e4c3fd23104c0dc3f3ccee456a82beb1cb0c6ed615784438c"
-  confirmedAt: "2026-10-05T10:59:51.483Z"
+  contentHash: "f2c742b9d2d1f8d881ebe0af39bb211917ebf07bbce1390f48ba181cdbe1ccaa"
+  confirmedAt: "2026-10-05T13:01:53.009Z"
 ---
 
 In this tutorial we will run the research agent on the OpenAI Agents SDK,
 with its programs executed on the server as the signed-in user (`u_ada` in the examples). You need the server and the `research`
-blueprint from [Connect a harness](/docs/tutorials/connect-a-harness),
+Blueprint from [Connect a harness](/docs/tutorials/connect-a-harness),
 with `SUBMILLI_SERVER_TOKEN` still exported, Python 3.10 or later, and an
 OpenAI key for the conversation. This SDK speaks to OpenAI's models,
-whichever provider the blueprint's model uses.
+whichever provider the Blueprint's model uses.
 
 ## Start the project
 

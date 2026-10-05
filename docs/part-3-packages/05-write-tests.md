@@ -1,27 +1,27 @@
 ---
 title: "Write tests"
-description: "How to test a package with submilli build test: a test file and its helpers, labels and failures, a live test run with the key or skipped, and what package tests don't prove."
+description: "How to test a Package with submilli build test: a test file and its helpers, labels and failures, a live test run with the key or skipped, and what Package tests don't prove."
 slug: packages/write-tests
 sidebar:
   order: 5
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "4289320a60eb05335c124daa118a466104180465b559bb9570e672545966caf5"
-  confirmedAt: "2026-10-05T10:59:51.489Z"
+  contentHash: "57e4edb172b8312e6b8f5531e4706f4fcc5a474646c378764e385b65b6eb6598"
+  confirmedAt: "2026-10-05T13:01:53.009Z"
 ---
 
-A package is reviewed once and then called by programs nobody reviews.
-Tests are how it stays correct as the service and the package change.
+A Package is reviewed once and then called by programs nobody reviews.
+Tests are how it stays correct as the service and the Package change.
 `submilli build test` compiles the project, runs every test file, and
 compiles the examples in each readme.
 
-This guide shows you how to test a package. The example is Acme's
-billing package on Stripe. Substitute your package and its credential.
+This guide shows you how to test a Package. The example is Acme's
+billing Package on Stripe. Substitute your Package and its credential.
 
 ## A test file
 
-A test is a program. It imports from the package by name, as a program
+A test is a program. It imports from the Package by name, as a program
 would, and has a `main` that returns nothing. Replace the scaffold's
 `tests/lib.test.ts`:
 
@@ -47,11 +47,11 @@ ok   packages/billing/docs/readme.md :: example 1 (compile)
 2 passed, 0 failed across 2 files
 ```
 
-Test files are named `*.test.ts` and live anywhere under the package's
-`tests/` directory. `-p` runs one package's tests. The zero amount is
+Test files are named `*.test.ts` and live anywhere under the Package's
+`tests/` directory. `-p` runs one Package's tests. The zero amount is
 refused before the service is reached, so this test needs no key. The
 second line is the readme's example, compiled as [Document the
-package](/docs/packages/document-the-package) describes.
+Package](/docs/packages/document-the-package) describes.
 
 | | |
 | --- | --- |
@@ -185,10 +185,10 @@ ok   packages/billing/docs/readme.md :: example 1 (compile)
 1 network test files skipped (--skip-network)
 ```
 
-## What package tests don't prove
+## What Package tests don't prove
 
-Tests run with no blueprint. Every `check` is allowed, and printed, as
-the `[security]` lines above show. Read the line for the package's
+Tests run with no Blueprint. Every `check` is allowed, and printed, as
+the `[security]` lines above show. Read the line for the Package's
 operation, because a rule would see the same thing:
 
 ```text
@@ -196,8 +196,8 @@ operation, because a rule would see the same thing:
 ```
 
 The customer's class is there, looked up from the account, and so is the
-package's side of the contract, meaning the key it read and the two
+Package's side of the contract, meaning the key it read and the two
 requests it made. But a passing test says nothing about what a program
-is refused. For that, publish the package and run programs under a
-blueprint, one that should be allowed and one that shouldn't, as
-[Publish a package](/docs/packages/publish-a-package) shows.
+is refused. For that, publish the Package and run programs under a
+Blueprint, one that should be allowed and one that shouldn't, as
+[Publish a Package](/docs/packages/publish-a-package) shows.
