@@ -2,7 +2,7 @@ types: 26 of 45 tsc entries compared, 8 differ
 
 line 6: x
   tsc:  string | true
-  ours: boolean
+  ours: true
 
 line 8: x
   tsc:  string | number | boolean
@@ -14,15 +14,15 @@ line 9: x
 
 line 14: x
   tsc:  string | true
-  ours: boolean
+  ours: true
 
 line 17: x
   tsc:  string | number | boolean
-  ours: boolean | null
+  ours: true | null
 
 line 18: x
   tsc:  number | boolean
-  ours: boolean | null
+  ours: true | null
 
 line 26: x
   tsc:  string | number

@@ -1,3 +1,0 @@
-line 6, 11 type: bug SUB-1204 a `let` or object property widens a literal type that isn't fresh, where tsc keeps it
-line 12 type: bug SUB-1204 a `let` or object property widens a literal type that isn't fresh, where tsc keeps it; also bug SUB-1204 a literal widens to its base type where tsc keeps the literal type
-line 13 type: bug SUB-1204 a literal widens to its base type where tsc keeps the literal type

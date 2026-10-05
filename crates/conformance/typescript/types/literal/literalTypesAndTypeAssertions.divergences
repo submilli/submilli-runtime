@@ -1,13 +1,1 @@
-types: 7 of 16 tsc entries compared, 3 differ
-
-line 2: obj
-  tsc:  { a: "foo"; b: "foo"; c: string; }
-  ours: { a: string; b: string; c: string }
-
-line 2: { a: "foo" as "foo", b: <"foo">"foo", c: "foo" }
-  tsc:  { a: "foo"; b: "foo"; c: string; }
-  ours: { a: string; b: string; c: string }
-
-line 8: x1
-  tsc:  0 | 1
-  ours: number
+types: 7 of 16 tsc entries compared, 0 differ

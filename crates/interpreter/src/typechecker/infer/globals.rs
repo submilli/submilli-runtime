@@ -40,10 +40,14 @@ impl<'a> Inferer<'a> {
                         continue;
                     }
                     let hint = ty.as_ref().map(|a| self.resolve_type(a)).transpose()?;
+                    self.keeps_literal_types = true;
                     let (typed_value, value_ty) = self.infer_expr(value, hint.as_ref())?;
-                    // Reassignable, so an inferred literal widens; see the block-scoped
+                    // Reassignable, so a fresh literal widens; see the block-scoped
                     // `Let` arm in `stmt.rs`.
-                    let bound = hint.unwrap_or_else(|| value_ty.widen_literal());
+                    let bound = match hint {
+                        Some(hint) => hint,
+                        None => self.widen_fresh_literals(typed_value, &value_ty)?,
+                    };
                     self.bind_top(
                         &name,
                         ValueKind::Let {
@@ -52,6 +56,9 @@ impl<'a> Inferer<'a> {
                         },
                     )?;
                     let mangled = self.mangle_top_symbol(&name.name)?;
+                    let origin =
+                        self.initializer_literal_origin(ty.is_some(), typed_value, &bound)?;
+                    self.record_global_literal_origin(mangled.clone(), origin);
                     self.typed_ast
                         .rebindable_globals
                         .insert(mangled.clone(), name.name.clone());
@@ -86,16 +93,13 @@ impl<'a> Inferer<'a> {
                     if self.reject_intrinsic_name(&name) {
                         continue;
                     }
-                    // See `literal_type_of` for the rule.
-                    let hint = ty
-                        .as_ref()
-                        .map(|a| self.resolve_type(a))
-                        .transpose()?
-                        .map_or_else(
-                            || super::stmt::literal_type_of(self.ast, value),
-                            |ty| Ok(Some(ty)),
-                        )?;
+                    // Keeps the literal types its value passes through; see the
+                    // block-scoped `Const` arm in `stmt.rs`.
+                    let hint = ty.as_ref().map(|a| self.resolve_type(a)).transpose()?;
+                    self.keeps_literal_types = hint.is_none();
                     let (typed_value, value_ty) = self.infer_expr(value, hint.as_ref())?;
+                    let origin =
+                        self.initializer_literal_origin(ty.is_some(), typed_value, &value_ty)?;
                     let bound = hint.unwrap_or(value_ty);
                     self.bind_top(
                         &name,
@@ -105,6 +109,7 @@ impl<'a> Inferer<'a> {
                         },
                     )?;
                     let mangled = self.mangle_top_symbol(&name.name)?;
+                    self.record_global_literal_origin(mangled.clone(), origin);
                     self.add_typed_global(crate::TypedGlobal {
                         name: name.clone(),
                         mangled_name: mangled.clone(),
@@ -234,7 +239,11 @@ mod tests {
     #[test]
     fn let_without_annotation_infers_initializer_type() {
         let ta = run_clean("let x = 1;");
-        assert_eq!(nth_decl_value_ty(&ta, 0), Type::Number);
+        // The initializer keeps its literal type; the binding widens it.
+        assert_eq!(
+            nth_decl_value_ty(&ta, 0),
+            Type::NumberLiteral(crate::types::LiteralF64(1.0))
+        );
         let reg = PackageDeclaration::from_typed_ast(&ta);
         match &reg.values.get("x").unwrap().kind {
             ValueKind::Let { ty, .. } => assert_eq!(*ty, Type::Number),
@@ -287,7 +296,11 @@ mod tests {
     #[test]
     fn let_without_annotation_widens_to_the_base_primitive() {
         let ta = run_clean(r#"let y = "hi";"#);
-        assert_eq!(nth_decl_value_ty(&ta, 0), Type::String);
+        let reg = PackageDeclaration::from_typed_ast(&ta);
+        match &reg.values.get("y").unwrap().kind {
+            ValueKind::Let { ty, .. } => assert_eq!(*ty, Type::String),
+            _ => panic!("expected Let"),
+        }
     }
 
     /// Only a bare literal keeps its type; a computed initializer widens even under

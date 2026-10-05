@@ -1,52 +1,4 @@
-types: 48 of 61 tsc entries compared, 16 differ
-
-line 15: aa1
-  tsc:  "literal" | "whatever"
-  ours: string
-
-line 15: a1 ?? 'whatever'
-  tsc:  "literal" | "whatever"
-  ours: string
-
-line 16: aa2
-  tsc:  "" | "whatever"
-  ours: string
-
-line 16: a2 ?? 'whatever'
-  tsc:  "" | "whatever"
-  ours: string
-
-line 17: aa3
-  tsc:  1 | "whatever"
-  ours: 1 | string
-
-line 17: a3 ?? 'whatever'
-  tsc:  1 | "whatever"
-  ours: 1 | string
-
-line 18: aa4
-  tsc:  0 | "whatever"
-  ours: 0 | string
-
-line 18: a4 ?? 'whatever'
-  tsc:  0 | "whatever"
-  ours: 0 | string
-
-line 19: aa5
-  tsc:  true | "whatever"
-  ours: string | true
-
-line 19: a5 ?? 'whatever'
-  tsc:  true | "whatever"
-  ours: string | true
-
-line 20: aa6
-  tsc:  false | "whatever"
-  ours: string | false
-
-line 20: a6 ?? 'whatever'
-  tsc:  false | "whatever"
-  ours: string | false
+types: 48 of 61 tsc entries compared, 2 differ
 
 line 21: aa7
   tsc:  {}
@@ -55,11 +7,3 @@ line 21: aa7
 line 21: a7 ?? 'whatever'
   tsc:  {}
   ours: unknown
-
-line 22: aa8
-  tsc:  "whatever"
-  ours: string
-
-line 22: a8 ?? 'whatever'
-  tsc:  "whatever"
-  ours: string

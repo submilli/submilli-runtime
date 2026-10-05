@@ -469,7 +469,7 @@ impl Inferer<'_> {
             let value_ty = if hint.is_some() {
                 value_ty
             } else {
-                value_ty.widen_literal()
+                self.widen_fresh_literals(value, &value_ty)?
             };
             if let Some(key) = literal_key {
                 fields.insert(key, ObjectField::required(value_ty.clone()));

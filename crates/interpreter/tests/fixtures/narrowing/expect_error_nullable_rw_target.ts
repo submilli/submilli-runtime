@@ -23,7 +23,7 @@
 // A field whose non-null form has no `+=` at all is NOT a nullability problem —
 // a guard would change nothing — so those fall through to the operator's own
 // message rather than blaming the null.
-// expect-error: `+=` not defined for `boolean | null` and `boolean`
+// expect-error: `+=` not defined for `boolean | null` and `true`
 // expect-error: `+=` not defined for `"a" | "b" | null` and `"b"`
 // A numeric literal's arithmetic result widens to number, which cannot be stored
 // back into a literal-only field — `lit = lit + 1` would not compile.
