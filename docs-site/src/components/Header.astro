@@ -15,6 +15,7 @@ const WEBSITE_URL = 'https://submilli.ai';
 	<div class="search-wrapper print:hidden">
 		<Search />
 	</div>
+	<a href="/docs/quickstart/#agent-setup" class="setup-link print:hidden" aria-label="Set up with your coding agent">Set up<span> with your agent</span></a>
 	<div class="sl-hidden md:sl-flex print:hidden right-group">
 		<a href={WEBSITE_URL} class="website-link">
 			submilli.ai
@@ -43,6 +44,25 @@ const WEBSITE_URL = 'https://submilli.ai';
 </div>
 
 <style>
+	.setup-link {
+		display: inline-flex;
+		align-items: center;
+		justify-content: center;
+		min-height: 44px;
+		padding: 0 0.75rem;
+		border: 1px solid var(--sl-color-text-accent);
+		border-radius: var(--radius-md);
+		color: var(--sl-color-text-accent);
+		font: 600 0.875rem/1.4 var(--sl-font);
+		text-decoration: none;
+		white-space: nowrap;
+	}
+	.setup-link:hover { background: var(--sub-hover); }
+	.setup-link:focus-visible { outline: 2px solid currentColor; outline-offset: 3px; }
+	.setup-link span { display: none; white-space: pre; }
+	@media (min-width: 72rem) { .setup-link span { display: inline; } }
+	@media (max-width: 30rem) { .mobile-group { display: none; } }
+
 	.header {
 		display: flex;
 		gap: 0.75rem;

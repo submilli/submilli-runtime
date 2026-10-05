@@ -2,6 +2,9 @@
 //! script calls `submilli:security.check`, and the blueprint's rules decide
 //! whether it runs to completion or the check traps.
 
+#[path = "common/in_memory_config.rs"]
+mod in_memory_config;
+
 use std::path::Path;
 use std::sync::Arc;
 
@@ -30,7 +33,7 @@ fn router(policy_yaml: &str, package_store_root: Option<&Path>) -> Router {
     let config = ServerConfig {
         blueprints: Some(blueprints),
         package_store_root: package_store_root.map(Path::to_path_buf),
-        ..ServerConfig::default()
+        ..in_memory_config::config()
     };
     app(AppState::new(config).expect("build AppState"))
 }

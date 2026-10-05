@@ -1,3 +1,6 @@
+#[path = "../../submilli-server/tests/common/in_memory_config.rs"]
+mod in_memory_config;
+
 use std::{
     fs,
     path::Path,
@@ -380,7 +383,7 @@ async fn documented_package_and_blueprint_enforce_the_bound_customer() {
         )),
         package_store_root: Some(store.join("packages")),
         session_storage_root: Some(root.path().join("sessions")),
-        ..ServerConfig::default()
+        ..in_memory_config::config()
     })
     .unwrap());
     let code = code_block(&blueprint_doc, "typescript");

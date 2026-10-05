@@ -6,6 +6,9 @@
 //! deny-private blocks it; an `allow_localhost` / `allow_cidr` opt-out lets it
 //! through. This exercises the real `ureq` client + `PolicyResolver`.
 
+#[path = "common/in_memory_config.rs"]
+mod in_memory_config;
+
 use std::io::{Read, Write};
 use std::net::TcpListener;
 use std::time::{Duration, Instant};
@@ -91,7 +94,7 @@ async fn run_against_loopback_host(policy: NetworkPolicy, host: &str) -> Value {
     let port = spawn_ok_mock();
     let config = ServerConfig {
         network_policy: policy,
-        ..ServerConfig::default()
+        ..in_memory_config::config()
     };
     let router = app(AppState::new(config).expect("AppState"));
 

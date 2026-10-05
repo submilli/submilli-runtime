@@ -6,6 +6,9 @@
 //! to be reported under its own kind wherever the program reaches it: in `main`,
 //! in top-level statements, or under a callback a host function invoked.
 
+#[path = "common/in_memory_config.rs"]
+mod in_memory_config;
+
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -45,7 +48,7 @@ fn router(runtime: RuntimeConfig) -> Router {
     let config = ServerConfig {
         blueprints: Some(blueprints),
         runtime,
-        ..ServerConfig::default()
+        ..in_memory_config::config()
     };
     app(AppState::new(config).expect("build AppState"))
 }
@@ -107,7 +110,7 @@ fn deep_reentry_ends_the_run_on_the_servers_runtime() {
     };
     let server_config = ServerConfig {
         runtime: runtime_config.clone(),
-        ..ServerConfig::default()
+        ..in_memory_config::config()
     };
     let runtime = submilli_server::runtime(&server_config).expect("server runtime");
     let response = runtime.block_on(execute(&router(runtime_config), REENTRY));

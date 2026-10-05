@@ -14,9 +14,9 @@ const rendered = pageFilms.length ? await Astro.slots.render('default') : '';
 const sections = rendered.split(/<!-- video:([a-z][a-z0-9-]*) -->/);
 ---
 <DefaultContent>
+  {isQuickstartPage && <AgentSetup />}
   {isLibraryPage ? <><slot /><VideoLibrary /></> : pageFilms.length ? <>
     {topFilms.map(film => <VideoFigure film={film} />)}
-    {isQuickstartPage && <AgentSetup />}
     {sections.map((section, index) => {
       if (index % 2 === 0) return <Fragment set:html={section} />;
       const film = pageFilms.find(film => film.id === section);

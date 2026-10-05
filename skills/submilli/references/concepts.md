@@ -38,10 +38,17 @@ when explicitly granted; package-only access is a policy design, not an
 unconditional claim about every blueprint. Generated code cannot read secret
 values through `submilli:secrets`; package code or an auth proxy handles them.
 
+The coding assistant using this skill helps the developer author and verify
+packages, blueprints, and application integration. The runtime agent writes
+programs under those rules. Installing the skill does not put the coding
+assistant's own shell, files, or other tools behind Submilli policy.
+
 Public links: [why Submilli](https://submilli.ai/docs/why),
+[installation](https://submilli.ai/docs/install),
 [quickstart](https://submilli.ai/docs/quickstart),
-[blueprints](https://submilli.ai/docs/blueprints),
-[the launch post](https://submilli.ai/blog/why-submilli/).
-Do not invent SDK packages, hosted services, or website routes. Some book
-chapters may still be placeholders; installed help and declarations are useful
-offline sources of truth.
+[blueprints](https://submilli.ai/docs/blueprints), and
+[language compatibility](https://submilli.ai/docs/reference/language).
+Use https://submilli.ai/docs/llms.txt to locate current how-to and reference
+chapters. Page URLs come from the book's slugs, not source filenames.
+Do not invent SDK packages, hosted services, or website routes. Installed help
+and declarations are useful offline sources of truth.

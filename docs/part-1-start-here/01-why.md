@@ -19,14 +19,12 @@ start.
 
 ## Programmatic tool calling
 
-Programmatic tool calling is a strongly emerging pattern across the industry and its impact is backed by real numbers from market leaders.
+Programmatic tool calling is an emerging pattern across the industry, and its impact is evidenced by real numbers from market leaders.
 
-* [Anthropic](https://www.anthropic.com/engineering/code-execution-with-mcp)
-measured an agent's context dropping a whopping 98.7% when its tools became code APIs.
-* [CodeAct](https://arxiv.org/abs/2402.01030)
-measured *better* results as well as cheaper ones. Task success rose from
-53.7% to 74.4% when agents acted by writing code.
-* [Cloudflare's Code Mode](https://blog.cloudflare.com/code-mode-mcp/)
+* Anthropic published a piece showing
+[agent's context dropping a whopping 98.7%](https://www.anthropic.com/engineering/code-execution-with-mcp) when its tools became code APIs.
+* CodeAct [showed](https://arxiv.org/abs/2402.01030) *better* results with code execution vs tool calling. Task success rose from 53.7% to 74.4% when agents acted by writing code.
+* Cloudflare's [Code Mode](https://blog.cloudflare.com/code-mode-mcp/)
 serves their 2,500-endpoint API to the model in about 1,000 tokens. As tool
 schemas, the same API takes 1.17 million tokens.
 * [OpenAI](https://developers.openai.com/api/docs/guides/latest-model#programmatic-tool-calling)
@@ -75,18 +73,10 @@ async function investigate() {
 }
 ```
 
-This is ordinary TypeScript, and the tools are still there as building
-blocks inside a workflow. Three external calls fetch the required data.
-The loop, the conditions, and the arithmetic run as deterministic code,
-outside the model's context. The model receives a compact return value, and
-the charge and account records stay out of its context. It is important for 2 reasons: efficient context management, and preventing the model from accessing any data it doesn't strictly need to perform the task at hand.
+This code is written by an agent in vanilla TypeScript. The loop, the conditions, and the calculations run as deterministic code, outside the model's context. The model receives a compact return value, and the charge and account records stay out of its context. It is important for 2 reasons: efficient context management, and preventing the model from accessing any data it doesn't strictly need to perform the task at hand.
 
-That difference compounds with scale. The same program handles ten failures
-or ten thousand without the model emitting ten thousand JSON objects or
-supervising ten thousand calls. Only the evidence needed for a decision
-returns to context. The
-total is exact, too, because a CPU adds it up vs having the model try to reason it
-out token by token.
+The context savings grow with scale. The same program handles ten failures
+or ten thousand, and only the evidence needed for a decision returns to context. The model does not need a separate turn for each failure, though the returned summary can grow with the results. The total is exact, too, because a CPU adds it up vs having the model try to reason it out token by token.
 
 <span id="this-code-is-a-stranger"></span>
 
@@ -94,8 +84,7 @@ out token by token.
 
 <!-- video:challenges -->
 
-Look at what we just agreed to do: run a program that was written by a model,
-seconds before it executed, with no review, no testing, no CI.
+We want to run a program that was written by a model, with no review, no testing, no CI.
 
 Not only that, but the agent that wrote the code can be fooled into executing harmful code. To do its job, the agent reads support tickets written by customers (or by anyone who emails the support address). This is a vulnerability bad actors can capitalize on.
 
@@ -159,20 +148,19 @@ permissions:
 
 This agent may list Stripe charges and post Slack messages and nothing else, only for the signed-in customer, and only to one channel. Your application binds `stripeCustomerId` when the session starts. The value comes from the login, not the conversation, so the model cannot choose it or change it. Nothing else appears in the blueprint, so none of the other actions the agent may want to take (e.g. HTTP call to another Stripe API) are possible.
 
-Now replay the attack from the previous example. The injected program
-tries to export the customer list. No operation for that exists in the blueprint, so the call fails inside the runtime.
+Now let's think about the attack from the previous example. The injected program tries to export the customer list. No tool or capability for that exists in the blueprint, so it fails to get the information, and the Submilli runtime records the failed attempt.
 
-The agent then rewrites the program by trying to POST to `stripe-backup-eu.example.com`, but generated code has no way to even form that request. The runtime denies both attempts and records them. It doesn't matter that the model was persuaded, because the policy was written before the attacker arrived.
+It doesn't matter that the model was persuaded, because the policy is external to it.
 
-## What Submilli is
+<span id="what-submilli-is"></span>
+
+## Summary
 
 <!-- video:helps -->
 
-So what is Submilli, concretely? A runtime for a strict subset of
-TypeScript, compiled to WebAssembly and run in-process. Running in-process
-means no microVM and no cold start. It works with the harness you already
-run (LangChain, Mastra, or a loop you wrote yourself), connected over MCP or
-an SDK. Your agent keeps its brain, and Submilli runs its code.
+Submilli is a dedicated runtime for a strict subset of TypeScript, compiled to WebAssembly and run in-process.
+
+Running in-process means no microVM and no cold start delay. It works with the harness you choose, connected over MCP or an SDK. Your agent keeps its brain, and Submilli runs its code.
 
 Next: [install](/docs/install) the CLI and the server, then the
 [quickstart](/docs/quickstart), where you write a blueprint and a

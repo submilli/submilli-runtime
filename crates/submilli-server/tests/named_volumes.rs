@@ -2,6 +2,9 @@
 //! between blueprints, under the server's access ceiling and size limits, and
 //! across a restart.
 
+#[path = "common/in_memory_config.rs"]
+mod in_memory_config;
+
 use std::path::Path;
 use std::sync::Arc;
 
@@ -49,7 +52,7 @@ impl Server {
             session_storage_root: Some(data.join("sessions")),
             managed_volume_root: Some(data.join("volumes")),
             volumes,
-            ..ServerConfig::default()
+            ..in_memory_config::config()
         };
         Self {
             state: AppState::new(config).expect("AppState"),

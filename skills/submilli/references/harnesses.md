@@ -9,7 +9,22 @@ Choose just the relevant guide:
 - [Vercel AI SDK](vercel.md)
 - [LangChain / LangGraph](langchain.md)
 - [Mastra](mastra.md)
+- [OpenAI Agents SDK](https://submilli.ai/docs/tutorials/connect-openai-agents)
+- [Claude Agent SDK](https://submilli.ai/docs/tutorials/connect-claude-agent-sdk)
 - [Custom model loop / REST](custom-loop.md)
+
+For the OpenAI and Claude SDKs, fetch the linked chapter through
+https://submilli.ai/docs/llms.txt and inspect the project's installed SDK types
+before implementing. Preserve the shared authentication, binding, and cleanup
+rules below. If the chapter is unavailable, report that gap and use the
+installed SDK's documented MCP interface without inventing signatures.
+
+The book's [harness tutorial](https://submilli.ai/docs/tutorials/connect-a-harness)
+uses a `research` blueprint, `userId`, external search credentials, and a
+per-user notes volume. This reference uses an offline billing fixture with
+`support-read` and `customerId`. Adapt the endpoint, binding, operations, and
+dependencies together. A local first trial needs neither search credentials
+nor a live model.
 
 ## Prepare a working Submilli endpoint
 
@@ -96,7 +111,8 @@ explain the actual boundary. Keep model credentials in the host application
 and service credentials in the intended runtime/package credential path.
 
 First test initialization, tool discovery, an allowed call, a cross-identity
-denial, and missing-variable rejection deterministically. Then run one live
-model task if access is available. Inspect transcript and results; never claim
+denial, and missing-variable rejection deterministically. Run a live model
+task only when the user has authorized that check and its credential/cost use.
+An existing key alone is not authorization. Inspect transcript and results; never claim
 a live model test passed when only a mocked adapter ran. Network-accessible
 production servers need trusted ingress; variable binding alone is not auth.

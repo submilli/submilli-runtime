@@ -126,8 +126,12 @@ code preparation or PR creation merely because Linear is unavailable.
 - Match recent commit style and keep the subject concise (aim under 70 chars).
   For one linked issue, include its ID and title or a short paraphrase, for example
   `SUB-123: Handle nullable return types`. Strip a leading `N. ` plan-number prefix
-  from Linear titles. For multiple issues, use a covering subject and a short
-  paragraph per issue in the body, including each ID and what changed for it.
+  from Linear titles. For multiple issues, use one covering subject and list
+  the IDs together in the body.
+- Keep the message matter of fact: what problem is solved and how. A subject
+  alone is usually enough; add at most one short paragraph when context is
+  needed. Omit review history, test logs, workflow narration, and file inventories.
+  Required issue IDs and attribution trailers are separate from this prose.
 - Every commit created by this workflow must name the linked issues it addresses
   in its subject or body, subject to the partial-backlog exception above.
   Ensure every linked issue appears in at least one PR
@@ -196,12 +200,16 @@ attempts if the base advances. Use the selected PR base, not a hard-coded remote
 
 ## Open the PR and move issues to review
 
-1. Follow any repository PR template. Describe the concrete problem and resulting
-   behavior, link every associated Linear issue by ID and URL when available
-   except the parent excluded by the partial-backlog rule above,
-   and include scope, review rounds (new or reused), the completion reason,
-   finding dispositions, the full-run result and any focused follow-up results,
-   and unrelated outstanding findings or disclosed independent-review fallback. Do not claim unavailable checks passed.
+1. Keep the title and description short and matter of fact. Explain the problem
+   and the solution in two short paragraphs or a few bullets, then link the
+   associated Linear issues (subject to the partial-backlog exception above).
+   Aim for under 150 words. Follow required repository template fields concisely.
+   Include a compatibility or rollout note only when readers need it to use or
+   deploy the change. Omit review cycles, agent names, finding dispositions,
+   commit SHAs, rebase history, test transcripts, and exhaustive file lists.
+   Keep review and verification evidence in the working handoff for reuse.
+   If a template requests testing, use one brief summary and disclose material
+   skipped or blocked coverage accurately; never claim unavailable checks passed.
 2. Create the PR with explicit base repository/branch and head, or update the
    existing matching open PR rather than creating a duplicate. Use structured
    arguments or a temporary file with `gh pr create/edit --body-file` to preserve
@@ -219,9 +227,9 @@ attempts if the base advances. Use the selected PR base, not a hard-coded remote
    or failure; if an update fails, keep the PR open and report the incomplete step
    and reason. A subsequent invocation should reuse that PR and retry only the
    missing updates when its verified content and base are unchanged.
-6. Return the PR URL, verified head/base SHAs, validation summary, rebase attempts
-   and conflicts, commit issue IDs, confirmed Linear review states, and remaining
-   blockers. If publishing fails, say exactly what was committed or pushed.
+6. Return the PR URL and any remaining blockers or incomplete Linear updates.
+   Keep the detailed verification and publishing record in the working handoff.
+   If publishing fails, say exactly what was committed or pushed.
 
 This file is the canonical PR workflow. The Claude command at
 `.claude/commands/open-pr.md` delegates here; maintain the workflow in this file.
