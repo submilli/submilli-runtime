@@ -2,7 +2,7 @@
 // as in TypeScript, so a narrower target rejects it.
 // expect-error: expected `"a"`, got `"a" | null`
 // expect-error: expected `"y"`, got `"x" | "y"`
-// expect-error: expected `"t"`, got `"t" | boolean`
+// expect-error: expected `"t"`, got `"t" | false`
 // expect-error-count: 3
 function pick(): boolean {
   return "ab".length === 2;

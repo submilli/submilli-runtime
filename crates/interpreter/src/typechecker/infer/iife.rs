@@ -139,7 +139,7 @@ impl Inferer<'_> {
     /// What the immediately-invoked body being left hands to the code after
     /// its call: the paths it writes, and what each written binding holds at
     /// its end. Call before leaving the body's narrowing boundary.
-    pub(super) fn invoked_body_exit(&self, returns_before_end: bool) -> InvokedBodyExit {
+    pub(super) fn capture_invoked_body_exit(&self, returns_before_end: bool) -> InvokedBodyExit {
         let written = self.assigned_scopes.last().cloned().unwrap_or_default();
         let ends_normally = !returns_before_end;
         let narrowed = written

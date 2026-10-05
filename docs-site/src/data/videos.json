@@ -46,7 +46,7 @@
       "title": "Understanding Submilli",
       "status": "published",
       "destination": "Start here → The server",
-      "description": "How programs, packages, blueprints, and the runtime work together.",
+      "description": "How programs, Packages, Blueprints, and the runtime work together.",
       "canonicalPath": "/docs/server/#what-happens-to-a-program",
       "embedUrl": "https://submilli-videos.onrender.com/embed/works/",
       "language": "en"

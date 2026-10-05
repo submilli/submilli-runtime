@@ -414,7 +414,12 @@ pub fn emit_erased_cast(
         source_struct,
     )));
     emitter.emit_else();
-    emit_defaults_fit(emitter, ctx, original, target.arity, None)?;
+    emit_defaults_fit(
+        emitter,
+        ctx,
+        original,
+        DefaultsFitTarget::any_convention(target.arity),
+    )?;
     emitter.emit_end();
     emitter.emit_if(wasm_encoder::BlockType::Result(target_slot));
     emit_wrap(emitter, ctx, target, original)?;
@@ -454,18 +459,59 @@ fn emit_wrap(
     Ok(())
 }
 
+/// The closure shape `__value_defaults_fit` checks a function against.
+#[derive(Clone, Copy)]
+pub(super) struct DefaultsFitTarget {
+    arity: u8,
+    /// The return convention, or `None` when either fits.
+    is_void: Option<bool>,
+    ends_in_rest: bool,
+}
+
+impl DefaultsFitTarget {
+    /// A closure of `arity` arguments, returning by either convention and
+    /// without a rest parameter.
+    pub(super) fn any_convention(arity: u8) -> Self {
+        Self {
+            arity,
+            is_void: None,
+            ends_in_rest: false,
+        }
+    }
+
+    /// A closure of exactly `signature`, ending in a rest parameter when
+    /// `ends_in_rest`.
+    pub(super) fn exact(
+        signature: crate::codegen::closures::ClosureSig,
+        ends_in_rest: bool,
+    ) -> Self {
+        Self {
+            arity: signature.arity,
+            is_void: Some(signature.is_void),
+            ends_in_rest,
+        }
+    }
+}
+
+/// Pushes whether `__value_defaults_fit` lets the function in `function` stand
+/// for a closure of `target`'s shape.
 pub(super) fn emit_defaults_fit(
     emitter: &mut FunctionEmitter<'_>,
     ctx: &CodegenCtx<'_>,
     function: u32,
-    arity: u8,
-    is_void: Option<bool>,
+    target: DefaultsFitTarget,
 ) -> Result<(), crate::compiler_error::CompilerFailure> {
     emitter.instruction(Instruction::LocalGet(function));
-    emitter.instruction(Instruction::F64Const(f64::from(arity).into()));
+    emitter.instruction(Instruction::F64Const(f64::from(target.arity).into()));
     super::function_emitter::cast::emit_box(emitter, ctx, &crate::Type::Number)?;
-    let results = is_void.map_or(-1.0, |is_void| if is_void { 0.0 } else { 1.0 });
+    let results = target
+        .is_void
+        .map_or(-1.0, |is_void| if is_void { 0.0 } else { 1.0 });
     emitter.instruction(Instruction::F64Const(results.into()));
+    super::function_emitter::cast::emit_box(emitter, ctx, &crate::Type::Number)?;
+    emitter.instruction(Instruction::F64Const(
+        f64::from(u8::from(target.ends_in_rest)).into(),
+    ));
     super::function_emitter::cast::emit_box(emitter, ctx, &crate::Type::Number)?;
     emitter.instruction(Instruction::Call(
         ctx.symbols
@@ -474,6 +520,44 @@ pub(super) fn emit_defaults_fit(
     ));
     super::function_emitter::cast::emit_cast_to(emitter, ctx, &crate::Type::Boolean)?;
 
+    Ok(())
+}
+
+/// Pushes whether the `structure` closure in `function` may declare a default
+/// or a rest parameter. Only such a closure's environment carries argument
+/// metadata, possibly under a bound receiver; any other one takes exactly the
+/// arguments its struct's arity names, so a cast needs no host lookup for it.
+pub(super) fn emit_may_have_argument_metadata(
+    emitter: &mut FunctionEmitter<'_>,
+    ctx: &CodegenCtx<'_>,
+    function_local: u32,
+    closure_struct: u32,
+) -> Result<(), crate::compiler_error::CompilerFailure> {
+    let metadata = ctx
+        .symbols
+        .call_metadata_type
+        .ok_or_else(|| crate::codegen::internal_failure("call metadata type"))?;
+    let receiver = ctx
+        .symbols
+        .this_environment_type
+        .ok_or_else(|| crate::codegen::internal_failure("this environment"))?;
+    let env = emitter.add_anonymous_local(ValType::Ref(RefType {
+        nullable: true,
+        heap_type: HeapType::ANY,
+    }))?;
+    emitter.instruction(Instruction::LocalGet(function_local));
+    emitter.instruction(Instruction::RefCastNonNull(HeapType::Concrete(
+        closure_struct,
+    )));
+    emitter.instruction(Instruction::StructGet {
+        struct_type_index: closure_struct,
+        field_index: 2,
+    });
+    emitter.instruction(Instruction::LocalTee(env));
+    emitter.instruction(Instruction::RefTestNonNull(HeapType::Concrete(metadata)));
+    emitter.instruction(Instruction::LocalGet(env));
+    emitter.instruction(Instruction::RefTestNonNull(HeapType::Concrete(receiver)));
+    emitter.instruction(Instruction::I32Or);
     Ok(())
 }
 

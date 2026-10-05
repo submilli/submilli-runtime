@@ -127,6 +127,7 @@ pub(super) fn with_source_inferer(source: &str, test: impl FnOnce(&mut super::In
         immediately_invoked: None,
         invoked_body_exit: None,
         captured_mutators: bindings.mutators,
+        function_written_globals: bindings.function_written_globals,
         last_assignments: bindings.last_assignments,
         nested_function_creation_points: bindings.nested_function_creation_points,
         nested_functions: Vec::new(),
@@ -191,6 +192,7 @@ pub(super) fn with_source_inferer(source: &str, test: impl FnOnce(&mut super::In
         alias_resolution_stack: Vec::new(),
         type_resolution_depth: 0,
         type_limits: Default::default(),
+        diagnostic_failure: Default::default(),
     };
     tc.populate_prelude().unwrap();
     test(&mut tc);

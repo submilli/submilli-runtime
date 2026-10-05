@@ -1,4 +1,6 @@
 ---
+import AuthorshipBadge from './AuthorshipBadge.astro';
+
 /**
  * Article header: the sidebar group as a mono eyebrow, then the title. The
  * frontmatter description feeds the page's meta tags and search, not the
@@ -16,11 +18,15 @@ function containsCurrent(entries: Entries): boolean {
 
 const group = sidebar.find((item) => item.type === 'group' && containsCurrent(item.entries));
 const eyebrow = group?.label;
+
 ---
 
 <div class="page-title">
 	{eyebrow && <p class="page-title__eyebrow">{eyebrow}</p>}
-	<h1 id="_top">{entry.data.title}</h1>
+	<div class="page-title__heading">
+		<h1 id="_top">{entry.data.title}</h1>
+		<AuthorshipBadge />
+	</div>
 </div>
 
 <style>
@@ -45,6 +51,8 @@ const eyebrow = group?.label;
 		color: var(--sl-color-white);
 		text-wrap: balance;
 	}
+	.page-title__heading { display: flex; align-items: center; gap: 0.8rem; }
+
 	@media (max-width: 49.99rem) {
 		.page-title__eyebrow {
 			margin-bottom: 0.75rem;

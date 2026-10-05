@@ -9,6 +9,4 @@ line 23: f2
   ours: (...arg0: readonly [string, string]) => void
 
 errors:
-line 11: ours: rest parameter `args` type must be an array, got `readonly string[]` (tsc accepts)
 line 18: ours: rest parameter `args` type must be an array, got `readonly [string, string]` (tsc accepts)
-line 28: ours: rest parameter `args` type must be an array, got `readonly string[]` (tsc accepts)

@@ -101,9 +101,10 @@ function main(): string {
 
     write("/report.txt", new TextEncoder().encode("report"));
     reachesCredentialBoundary(() => { uploadFile("/report.txt", { name: "report.txt", mimeType: "text/plain", parentId: "allowedFolder" }); });
-    deniedAt("submilli/google-drive.uploadFile", "main", () => { uploadFile("/report.txt", { name: "report.txt", mimeType: "text/plain", parentId: "otherFolder" }); });
-    // No parent is My Drive root, which the rule does not allow.
-    deniedAt("submilli/google-drive.uploadFile", "main", () => { uploadFile("/report.txt", { name: "report.txt", mimeType: "text/plain" }); });
+    reachesCredentialBoundary(() => { uploadFile("/report.txt", { name: "report.txt", mimeType: "text/plain", parentId: "otherFolder" }); });
+    // Uploads resolve the actual drive before checking the parent/drive policy.
+    // The denied metadata read is the sentinel here; contract tests cover the check.
+    reachesCredentialBoundary(() => { uploadFile("/report.txt", { name: "report.txt", mimeType: "text/plain" }); });
 
     reachesCredentialBoundary(() => { copyFile("file1", { parentId: "allowedFolder" }); });
     deniedAt("submilli/google-drive.copyFile", "main", () => { copyFile("file1", { parentId: "otherFolder" }); });

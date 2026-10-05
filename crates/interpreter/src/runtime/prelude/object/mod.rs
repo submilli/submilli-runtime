@@ -67,7 +67,7 @@ pub(super) fn find_field_slot(
     index::lookup(caller, object, key, accessor, false)
 }
 
-pub(super) fn data_field_count(
+pub(crate) fn data_field_count(
     caller: &mut Caller<'_, StoreData>,
     object: &Val,
 ) -> wasmtime::Result<usize> {

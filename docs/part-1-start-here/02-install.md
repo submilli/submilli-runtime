@@ -4,7 +4,17 @@ description: "Install the Submilli CLI and server, and the skill for your coding
 slug: install
 sidebar:
   order: 2
+authorship:
+  label: ai-assisted
+  confirmed: true
+  contentHash: "74e6821aed4d6ad42e8feda7036086e4497af4fcd9efb545d94c8be875802dd1"
+  confirmedAt: "2026-10-05T13:01:53.009Z"
 ---
+
+Use the [skill setup box above](#agent-setup) to get started with Codex or
+Claude Code. The prompt asks your agent to install and read the Submilli skill
+in this project, then verify the CLI and server. If you prefer
+to install them yourself, follow the manual steps below.
 
 Two things to install: the `submilli` command, which comes with the
 `submilli-server` binary, and the Submilli skill for your coding assistant.
@@ -13,11 +23,11 @@ second.
 
 Submilli is open source under the [Apache License
 2.0](https://github.com/submilli/submilli-runtime/blob/main/LICENSE). The
-source, the curated packages, and the releases are in the
+source, the curated Packages, and the releases are in the
 [`submilli/submilli-runtime`](https://github.com/submilli/submilli-runtime)
 repository.
 
-## The CLI and the server
+## Install the CLI and server yourself
 
 macOS and Linux:
 
@@ -91,7 +101,7 @@ Later, `submilli upgrade` moves both binaries to the latest release in place.
 
 ## The skill
 
-The skill teaches your coding assistant to write blueprints and packages,
+The skill teaches your coding assistant to write Blueprints and Packages,
 test them, and connect your agent harness. Choose your assistant:
 
 | Assistant | Command | Installed at |

@@ -7,6 +7,11 @@ slug: reference/audit-trail
 # are described from the code; no example was captured.
 sidebar:
   order: 10
+authorship:
+  label: ai-assisted
+  confirmed: true
+  contentHash: "7511d0e84bdca3f79d65960a41007bfe1018507a6d3697580479e34bcec26d71"
+  confirmedAt: "2026-10-05T13:01:53.009Z"
 ---
 
 The server writes one audit record per line, in logfmt, to its log's
@@ -53,21 +58,21 @@ ts=2026-10-04T05:44:32.121Z level=info stream=audit target=submilli_server::audi
 | --- | --- |
 | `execution_id` | The run that asked. Absent for the MCP file tools, which read a session's files outside a run |
 | `session_id` | The session, when there is one |
-| `blueprint`, `blueprint_hash` | The blueprint, and a SHA-256 of the version in force |
+| `blueprint`, `blueprint_hash` | The Blueprint, and a SHA-256 of the version in force |
 | `principal` | The name of the API token the request carried |
-| `caller` | `main`, or the package that made the call |
+| `caller` | `main`, or the Package that made the call |
 | `capability` | The operation, such as `fs.write` or `acme.com/credits.apply` |
 | `context.*` | The operation's fields, as below, including `payload_json` |
 | `decision` | `allow` or `deny` |
-| `source` | What decided: `policy`, the blueprint's rules; `invariant`, a refusal no rule can change, such as `secrets.get` from `main`; `read_only`, a write into a read-only volume; `egress_guard`, the block on private addresses; `quota`, a model-token or session-state budget |
+| `source` | What decided: `policy`, the Blueprint's rules; `invariant`, a refusal no rule can change, such as `secrets.get` from `main`; `read_only`, a write into a read-only volume; `egress_guard`, the block on private addresses; `quota`, a model-token or session-state budget |
 | `rule` | The rule that decided, by its position in the caller's list from `0`, or `default` |
 | `reason` | Why it was refused, on refusals only |
 
 `context.payload_json` is the complete JSON context passed to the policy
 check, serialized as one logfmt text value. Parse that value as JSON to
 recover objects, arrays, numbers, booleans, and nulls. It is written for
-package `check()` calls and built-in operations alike, including refusals.
-It is not redacted or shortened, so package authors and operators should treat
+Package `check()` calls and built-in operations alike, including refusals.
+It is not redacted or shortened, so Package authors and operators should treat
 the audit destination as a store of the data passed to permission checks.
 An encoded audit record over 1 MiB is rejected in full, reported to
 standard error, and does not stop the program.
@@ -79,7 +84,7 @@ and only when their value is text, a number, or a boolean: `host`, `path`, `url_
 `max_bytes`, `overwrite`, `decompress`, `prompt_count`, `op`, `length`,
 `recursive`, `remote`, `remoteName`, `branch`, and `transport`.
 
-This refused `acme.com/credits.apply` call came from a package run with
+This refused `acme.com/credits.apply` call came from a Package run with
 `check("acme.com/credits.apply", { customerId: "cus_northwind", amount: 42,
 customerClass: "business" })`:
 
@@ -105,7 +110,7 @@ ts=2026-10-04T05:44:32.155Z level=info stream=audit target=submilli_server::audi
 
 Two for each run: `event=started` when it begins and `event=finished`
 when it ends. A request that is refused before the program runs, such
-as one naming a blueprint the server doesn't hold, still gets both.
+as one naming a Blueprint the server doesn't hold, still gets both.
 
 ```text
 ts=2026-10-03T20:02:39.695Z level=info stream=audit target=submilli_server::audit msg=execution blueprint=support blueprint_hash=5a2a1e61c440e6b36c43c60b2eff7ecad0ed7989bf5dee30d486678206a480d0 entry_point=http event=finished event_id=9b94bd43-647f-4b60-a740-0dee88e0d048 execution_id=0dfa846a-4483-4b8a-b271-45339daecbaf fuel=2264 host_fuel=2211 memory_peak=65536 model_tokens=0 outcome=ok principal=SUBMILLI_SERVER_TOKEN schema=submilli.audit/1 source_hash=9869da7b5d729a383bbfb33edf1a8ab68ab23fcc3fd3939a675b91bd906179cc source_size=265 type=execution vars.0.name=customerId vars.0.value=cus_northwind wall_ms=38 wasm_fuel=53
@@ -117,7 +122,7 @@ ts=2026-10-03T20:02:39.695Z level=info stream=audit target=submilli_server::audi
 | `entry_point` | `http`, a one-off `POST /v1/execute`; `session`, a session's execute endpoint; `mcp`, the MCP execute tool |
 | `session_id` | The session, when there is one |
 | `principal` | The name of the API token |
-| `blueprint`, `blueprint_hash` | The blueprint, and a SHA-256 of the version in force |
+| `blueprint`, `blueprint_hash` | The Blueprint, and a SHA-256 of the version in force |
 | `vars.*` | The variables bound for the run, each a `name` and a `value`. A value is `[redacted]` when the name contains `secret`, `token`, `password`, `credential`, `authorization`, or `api_key` |
 | `source_hash`, `source_size` | A SHA-256 of the program's source and its length in bytes, never the source |
 
@@ -126,7 +131,7 @@ ts=2026-10-03T20:02:39.695Z level=info stream=audit target=submilli_server::audi
 | Field | Value |
 | --- | --- |
 | `outcome` | `ok`, `error`, `fuel_exhausted`, `timeout`, `memory_exhausted`, `stack_exhausted`, or `cancelled` |
-| `error_class` | The error's `kind`, when the run failed |
+| `error_class` | The error's `kind`, when the run failed. A permission denial that no `catch` handled is `permission_denied` |
 | `fuel`, `wasm_fuel`, `host_fuel` | Fuel consumed, as in [Set limits](/docs/server/set-limits#measure-a-program) |
 | `memory_peak` | The most memory the run held, in bytes |
 | `model_tokens` | Model tokens the run spent |
@@ -148,8 +153,8 @@ Every `session` record has `session_id` and `principal`.
 | `created` | A session was opened | `blueprint`, `vars.*`, `file_area_mode` |
 | `rebound` | Its variables or harness secrets were bound again | `vars.*`, `old_vars.*` |
 | `deleted` | It was closed | `reason=disconnect` |
-| `evicted` | Its blueprint was removed | `reason=blueprint_deleted`, `blueprint` |
-| `expired` | It was idle past its blueprint's `idle_timeout` | `reason=idle_timeout` |
+| `evicted` | Its Blueprint was removed | `reason=blueprint_deleted`, `blueprint` |
+| `expired` | It was idle past its Blueprint's `idle_timeout` | `reason=idle_timeout` |
 | `found` | It was reloaded when the server started | `blueprint` |
 | `lost` | At startup, its files were missing, so it was dropped | `reason=workspace_missing` |
 
@@ -187,7 +192,7 @@ Every `admin` record has:
 | `oauth_code_exchanged` | `POST /v1/mcp/{blueprint}/{server}/oauth/exchange` | `blueprint`, `server` |
 | `shutdown_requested` | `POST /v1/shutdown` | |
 
-`new_hash` and `old_hash` are SHA-256s of the blueprint. `old_hash` is
+`new_hash` and `old_hash` are SHA-256s of the Blueprint. `old_hash` is
 `null` when there was none.
 
 ## `auth`

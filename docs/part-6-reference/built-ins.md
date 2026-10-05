@@ -4,6 +4,11 @@ description: "The globals every Submilli program has without an import: types, e
 slug: reference/built-ins
 sidebar:
   order: 5
+authorship:
+  label: ai-assisted
+  confirmed: true
+  contentHash: "c1b2cf2d290675642673a32cb9736721a5652bd3826d002e557814a98fcf3b5a"
+  confirmedAt: "2026-10-05T13:01:53.009Z"
 ---
 
 Built-ins are the globals in scope in every program without an `import`. They
@@ -118,7 +123,7 @@ These globals are in scope and are not in the `submilli builtins` catalog.
 | `URL`, `URLSearchParams` | `submilli:url` |
 | `crypto` | `submilli:crypto`, `submilli:uuid` |
 | `atob`, `btoa`, `Buffer` | `Uint8Array.fromBase64`, `toBase64`, `TextEncoder`, `TextDecoder` |
-| `process`, `require`, and other Node.js globals | The [standard library](/docs/reference/standard-library) and Submilli packages |
+| `process`, `require`, and other Node.js globals | The [standard library](/docs/reference/standard-library) and Submilli Packages |
 
 An absent global is a compile error. `Date` has its own message:
 
@@ -367,7 +372,7 @@ The built-in permission-denial class (`extends Error`, `name` = `"PermissionDeni
 
 | Member | Description |
 | --- | --- |
-| `caller: string` | The package the denied call was attributed to (e.g. `"main"`). |
+| `caller: string` | The Package the denied call was attributed to (e.g. `"main"`). |
 | `capability: string` | The denied capability name (e.g. `"fs.read"`, `"http.get"`). |
 | `reason: string` | The policy-supplied denial reason. |
 | `constructor(message: string, caller: string, capability: string, reason: string)` |  |

@@ -344,10 +344,7 @@ impl<'a> Inferer<'a> {
             self.error(span, msg);
         }
         let rest_elem_ty: Option<Type> = if has_rest {
-            params.last().and_then(|p| match &p.ty {
-                Type::Array(inner) => Some((**inner).clone()),
-                _ => None,
-            })
+            params.last().and_then(|p| p.ty.rest_element()).cloned()
         } else {
             None
         };

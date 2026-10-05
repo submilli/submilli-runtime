@@ -1,12 +1,4 @@
-types: 48 of 80 tsc entries compared, 2 differ
-
-line 21: t ? b : {}
-  tsc:  { a?: string; }
-  ours: {} | { a?: string }
-
-line 23: t ? d : {}
-  tsc:  { a?: string | null; }
-  ours: {} | { a?: string | null }
+types: 48 of 80 tsc entries compared, 0 differ
 
 errors:
 line 15: tsc TS2783: 'a' is specified more than once, so this usage will be overwritten. (we accept)

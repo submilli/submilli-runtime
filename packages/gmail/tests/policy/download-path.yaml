@@ -1,0 +1,15 @@
+kind: blueprint
+name: gmail-download-path-test
+packages:
+  - '@submilli/gmail'
+default: deny
+permissions:
+  main:
+    - capability: submilli/gmail.downloadAttachment
+      filter: path != "/downloads/business-denied"
+      action: allow
+    - capability: fs.write
+      filter: path glob "/downloads/*" and max_bytes <= 20000000
+      action: allow
+  # An allowed path stops before credentials or network access.
+  '@submilli/gmail': []

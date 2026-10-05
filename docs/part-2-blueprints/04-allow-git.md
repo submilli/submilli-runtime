@@ -4,6 +4,11 @@ description: "How to let a program clone a repository, find and change what it n
 slug: blueprints/allow-git
 sidebar:
   order: 4
+authorship:
+  label: ai-assisted
+  confirmed: true
+  contentHash: "e4c05c0403171431673ca919294307dfeee21dd9dfa7f5ecc7f36dcbadd84868"
+  confirmedAt: "2026-10-05T13:01:53.009Z"
 ---
 
 Coding assistants write the code. A Submilli agent more often needs to
@@ -14,14 +19,14 @@ Repositories also hold more than code. Notes and memory kept in Git get
 history, diffs, and review for free, so some memory frameworks store an
 agent's memory that way. In a program, `submilli:git` does the repository
 work and `submilli:code` the finding and editing, both inside the
-program's filesystem. The blueprint decides which repository, which
+program's filesystem. The Blueprint decides which repository, which
 directory, and whether the program may commit at all.
 
 This guide shows you how to let a program clone a repository, search and
 edit it, and commit. The example clones GitHub's Hello-World repository
 into `/repo`. Substitute your remote and paths.
 
-## Start from an empty blueprint
+## Start from an empty Blueprint
 
 ```sh
 submilli blueprint init coder
@@ -33,8 +38,8 @@ submilli blueprint init coder
 
 ## Set the identity
 
-`submilli:git` is off until the blueprint gives it an identity, because
-the blueprint, not the program, authors the commits it makes. The
+`submilli:git` is off until the Blueprint gives it an identity, because
+the Blueprint, not the program, authors the commits it makes. The
 module speaks HTTPS and not SSH, so the identity also carries the
 username a remote will ask for:
 

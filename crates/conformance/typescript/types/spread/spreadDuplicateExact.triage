@@ -1,2 +1,1 @@
 line 15, 17 missed: bug SUB-1153 a property a later spread always overwrites
-line 21, 23 type: bug SUB-1209 a union of `{}` and an all-optional object type isn't reduced to the object type

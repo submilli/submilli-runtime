@@ -53,6 +53,8 @@ function reachesCredentialBoundary(action: () => void): void {
 
 function ownerFilterHolds(capability: string, call: (repository: RepositoryRef) => void): void {
     deniedAt(capability, "main", () => { call({ owner: "victim-org", name: "repo" }); });
+    deniedAt(capability, "main", () => { call({ owner: "Victim-Org", name: "REPO" }); });
+    reachesCredentialBoundary(() => { call({ owner: "ALLOWED-ORG", name: "Repo" }); });
     reachesCredentialBoundary(() => { call({ owner: "allowed-org", name: "repo" }); });
 
     const flipping = new FlippingRepository();

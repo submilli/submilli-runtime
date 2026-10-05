@@ -1,4 +1,4 @@
-types: 19 of 34 tsc entries compared, 4 differ
+types: 19 of 34 tsc entries compared, 3 differ
 
 line 6: ["Hello", "Brave", "New", "World"]
   tsc:  [string, string, string, string]
@@ -11,10 +11,6 @@ line 9: ['I\'m', 'a', 't-rex']
 line 11: dinosaur
   tsc:  "t-rex"
   ours: RexOrRaptor
-
-line 21: dino
-  tsc:  never
-  ours: "raptor"
 
 errors:
 line 21: ours: expected `Error`, got `string` (tsc accepts)

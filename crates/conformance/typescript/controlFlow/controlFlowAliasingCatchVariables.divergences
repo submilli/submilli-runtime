@@ -6,7 +6,7 @@ line 6: e
 
 line 8: e
   tsc:  string
-  ours: Error
+  ours: never
 
 line 11: e
   tsc:  unknown
@@ -14,7 +14,7 @@ line 11: e
 
 line 12: e
   tsc:  string
-  ours: Error
+  ours: never
 
 line 18: e
   tsc:  unknown
@@ -26,7 +26,7 @@ line 20: e
 
 line 23: e
   tsc:  unknown
-  ours: Error
+  ours: never
 
 line 26: e
   tsc:  unknown
@@ -34,10 +34,10 @@ line 26: e
 
 line 27: e
   tsc:  string
-  ours: Error
+  ours: never
 
 errors:
-line 8: ours: field `toUpperCase` does not exist on `Error` (tsc accepts)
-line 12: ours: field `toUpperCase` does not exist on `Error` (tsc accepts)
+line 8: ours: cannot read field `toUpperCase` on non-object type `never` (tsc accepts)
+line 12: ours: cannot read field `toUpperCase` on non-object type `never` (tsc accepts)
 line 20: ours: cannot assign to const binding `e` (tsc accepts)
-line 27: ours: field `toUpperCase` does not exist on `Error` (tsc accepts)
+line 27: ours: cannot read field `toUpperCase` on non-object type `never` (tsc accepts)

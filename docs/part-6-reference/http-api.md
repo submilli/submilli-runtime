@@ -1,9 +1,14 @@
 ---
 title: "HTTP API"
-description: "The endpoints a harness calls to run programs over HTTP: sessions and their execute, rebind, last-run, and delete; the execute result; the prompt, package, and built-in descriptions; and one-off runs."
+description: "The endpoints a harness calls to run programs over HTTP: sessions and their execute, rebind, last-run, and delete; the execute result; the prompt, Package, and built-in descriptions; and one-off runs."
 slug: reference/http-api
 sidebar:
   order: 14
+authorship:
+  label: ai-assisted
+  confirmed: true
+  contentHash: "f5f03b7e4f6462ebb85e331c9cb877cc9922e81b4d350234af45c38305e64c7b"
+  confirmedAt: "2026-10-05T13:01:53.009Z"
 ---
 
 This page describes the endpoints of `submilli-server` a harness calls to run
@@ -79,10 +84,10 @@ its own. A program that fails is not an HTTP error. `POST /v1/execute` and
 
 ## Sessions
 
-A session binds a blueprint, variables, and harness secrets once, and every
-program run in it uses them. Its files last as long as the blueprint's `vfs`
-keeps them. A session ends on `DELETE`, when its blueprint is removed, or
-after the blueprint's `idle_timeout` without a request. Sessions survive a
+A session binds a Blueprint, variables, and harness secrets once, and every
+program run in it uses them. Its files last as long as the Blueprint's `vfs`
+keeps them. A session ends on `DELETE`, when its Blueprint is removed, or
+after the Blueprint's `idle_timeout` without a request. Sessions survive a
 server restart. Harness secrets do not, because the server keeps them in
 memory only.
 
@@ -92,9 +97,9 @@ Role: `user`. Opens a session.
 
 | Field | Type | Required | Value |
 | --- | --- | --- | --- |
-| `blueprint` | string | yes | Registered blueprint |
-| `variables` | object of strings | no | Values for the blueprint's `variables` |
-| `secrets` | object of strings | no | Values for the blueprint's `harness` secrets |
+| `blueprint` | string | yes | Registered Blueprint |
+| `variables` | object of strings | no | Values for the Blueprint's `variables` |
+| `secrets` | object of strings | no | Values for the Blueprint's `harness` secrets |
 
 Answers `200` with `{"session_id": <id>}` and the id in an `mcp-session-id`
 response header.
@@ -133,7 +138,7 @@ id in an `mcp-session-id` response header.
 | `409` | `session_requires_secrets`, below |
 | `400`, `409`, `503` | An `Idempotency-Key` refusal, below |
 
-`409 session_requires_secrets` answers a session whose blueprint requires a
+`409 session_requires_secrets` answers a session whose Blueprint requires a
 harness secret the server no longer holds, as after a restart. `required`
 lists the secrets to send to
 [`rebind`](#post-v1sessionssession_idrebind):
@@ -178,7 +183,7 @@ Role: `user`. Replaces the session's harness secrets.
 
 | Field | Type | Required | Value |
 | --- | --- | --- | --- |
-| `secrets` | object of strings | yes | Values for the blueprint's `harness` secrets |
+| `secrets` | object of strings | yes | Values for the Blueprint's `harness` secrets |
 
 | Status | Body |
 | --- | --- |
@@ -223,8 +228,9 @@ object.
 | `error` | object or null | `null` on success |
 | `error.kind` | string | One of the kinds below |
 | `error.message` | string | Rendered message, with source excerpts for compile and runtime errors |
+| `error.caller`, `error.capability`, `error.source` | strings | Present on `permission_denied` only: the Package that was refused, the capability it asked for, and who refused: `policy` (the Blueprint), `invariant` (the runtime, ahead of any policy), or `read_only` (a write to a read-only volume) |
 | `error.diagnostics` | object[] | Present on compile errors only: `severity`, `line`, `column`, `message`, and `notes` (each `line`, `column`, `message`) when there are any |
-| `discovery_warnings` | string[] | Present only when non-empty. Tools of an imported `@mcp/<server>` package that were dropped or degraded at discovery |
+| `discovery_warnings` | string[] | Present only when non-empty. Tools of an imported `@mcp/<server>` Package that were dropped or degraded at discovery |
 
 `GET /v1/sessions/{session_id}/last-run` returns the console of a
 successful run.
@@ -232,13 +238,14 @@ successful run.
 | `error.kind` | Cause |
 | --- | --- |
 | `compile_error` | The program does not compile |
-| `runtime_error` | The program threw, a call was denied by the blueprint, or the run failed for another reason |
+| `runtime_error` | The program threw, or the run failed for another reason |
+| `permission_denied` | A gated call was denied and the denial escaped the program uncaught. Only a denial the runtime threw counts: a `PermissionDeniedError` the program constructs is a `runtime_error` |
 | `timeout` | The run passed `max_execution_time` |
 | `fuel_exhausted` | The run burned `max_execution_fuel` |
 | `memory_exhausted` | The run passed `max_execution_memory` |
 | `stack_exhausted` | The run passed `max_execution_stack` |
-| `package_resolution` | An imported package could not be prepared |
-| `blueprint_not_found` | The blueprint is not registered or not usable (`POST /v1/execute` only) |
+| `package_resolution` | An imported Package could not be prepared |
+| `blueprint_not_found` | The Blueprint is not registered or not usable (`POST /v1/execute` only) |
 | `invalid_request` | Variables, secrets, or the `vfs` or `git` paths they fill are invalid (`POST /v1/execute` only) |
 
 Examples, from real runs:
@@ -262,7 +269,7 @@ Examples, from real runs:
 ## Blueprint discovery
 
 These endpoints serve what an agent needs to write programs for one
-blueprint. Each answers `404` for a blueprint that is not registered:
+Blueprint. Each answers `404` for a Blueprint that is not registered:
 
 ```json
 {"error":"not_found","message":"blueprint 'nope' is not registered","name":"nope"}
@@ -275,10 +282,10 @@ tools on this API.
 
 | Field | Type | Value |
 | --- | --- | --- |
-| `name` | string | The blueprint |
-| `prompt` | string | The execute tool's description, with this blueprint's modules, packages, files, and rules filled in |
-| `tools.search` | string | Description for a package-search tool |
-| `tools.docs` | string | Description for a package-docs tool |
+| `name` | string | The Blueprint |
+| `prompt` | string | The execute tool's description, with this Blueprint's modules, Packages, files, and rules filled in |
+| `tools.search` | string | Description for a Package-search tool |
+| `tools.docs` | string | Description for a Package-docs tool |
 | `tools.builtins` | string | Description for one tool that both lists built-ins and returns their declarations |
 | `tools.builtins_list` | string | Description for a built-ins list tool |
 | `tools.builtins_docs` | string | Description for a built-ins docs tool |
@@ -287,24 +294,24 @@ tools on this API.
 ### GET /v1/blueprints/{name}/packages/search
 
 Role: `user`. Query parameter `q` (optional, default empty) is a substring
-matched against package names, descriptions, and exported symbols. Searches
-the standard-library modules, the blueprint's packages, and its
-`@mcp/<server>` packages.
+matched against Package names, descriptions, and exported symbols. Searches
+the standard-library modules, the Blueprint's Packages, and its
+`@mcp/<server>` Packages.
 
 ```json
 {"results":[{"description":"UUID v4/v7 generation and validation.","name":"submilli:uuid","source":"host"}]}
 ```
 
 Each result has `name`, `description`, and `source`, which is `host` for a
-standard-library module, `registry` for an installed package, or `mcp` for an
-`@mcp/<server>` package. A search with no hits answers `results: []` with
+standard-library module, `registry` for an installed Package, or `mcp` for an
+`@mcp/<server>` Package. A search with no hits answers `results: []` with
 `available_packages` (the same entries), `builtins` (a pointer to the
 built-ins endpoint), and `available_packages_omitted` when the listing is
 cut short.
 
 ### GET /v1/blueprints/{name}/packages/docs
 
-Role: `user`. Query parameter `name` (required) is a package name.
+Role: `user`. Query parameter `name` (required) is a Package name.
 
 A standard-library module answers `200` with JSON `name`, `source`,
 `description`, and `declarations` (TypeScript declarations):
@@ -313,7 +320,7 @@ A standard-library module answers `200` with JSON `name`, `source`,
 {"declarations":"/**\n * Generate a random UUID v4 (RFC 4122). Returns the canonical lowercase hyphenated form.\n */\nfunction v4(): string;\n\n/**\n * Generate a time-ordered UUID v7 (RFC 9562). Sortable / index-friendly; prefer over `v4` when the destination is a sorted store. Returns the canonical lowercase hyphenated form.\n */\nfunction v7(): string;\n\n/**\n * Returns `true` if `string` is a valid UUID (any version), `false` otherwise.\n * @param string The candidate UUID text.\n */\nfunction validate(string: string): boolean;","description":"UUID v4/v7 generation and validation.","name":"submilli:uuid","source":"host"}
 ```
 
-An installed package and an `@mcp/<server>` package answer `200` with its
+An installed Package and an `@mcp/<server>` Package answer `200` with its
 documentation followed by its declarations, as
 `Content-Type: text/markdown; charset=utf-8`. A built-in name answers JSON
 with `source` `builtin`. An unknown name answers `404`:
@@ -339,7 +346,7 @@ Role: `user`. Query parameter `name`, repeated once per built-in
 (`?name=Math&name=Array`). Answers `200` with `results`, one entry per name
 in order. An entry is `{name, declarations}` when found, otherwise `{name, error,
 message}` and, when there is a suggestion, `did_you_mean`. `error` is
-`unknown_builtin`, or `not_a_builtin` for a package name:
+`unknown_builtin`, or `not_a_builtin` for a Package name:
 
 ```json
 {"results":[{"did_you_mean":"submilli:code","error":"unknown_builtin","message":"unknown built-in: Nope. Did you mean `submilli:code`?","name":"Nope"}]}
@@ -355,13 +362,13 @@ returns.
 | Field | Type | Required | Value |
 | --- | --- | --- | --- |
 | `code` | string | yes | Program source, with an exported `main` |
-| `blueprint` | string | yes | Registered blueprint to run under |
-| `variables` | object of strings | no | Values for the blueprint's `variables` |
-| `secrets` | object of strings | no | Values for the blueprint's `harness` secrets |
+| `blueprint` | string | yes | Registered Blueprint to run under |
+| `variables` | object of strings | no | Values for the Blueprint's `variables` |
+| `secrets` | object of strings | no | Values for the Blueprint's `harness` secrets |
 
 Answers `200` with the [execute result](#the-execute-result) and the session
 id in an `mcp-session-id` response header, for every outcome, including an
-unknown blueprint (`error.kind` `blueprint_not_found`) and invalid variables
+unknown Blueprint (`error.kind` `blueprint_not_found`) and invalid variables
 or secrets (`error.kind` `invalid_request`):
 
 ```json

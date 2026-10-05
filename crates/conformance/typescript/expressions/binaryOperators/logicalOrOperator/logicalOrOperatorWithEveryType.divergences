@@ -1,4 +1,4 @@
-types: 183 of 190 tsc entries compared, 38 differ
+types: 183 of 190 tsc entries compared, 26 differ
 
 line 36: rb7
   tsc:  { a: string; }
@@ -16,14 +16,6 @@ line 37: a8 || a2
   tsc:  string[]
   ours: boolean | string[]
 
-line 42: rc2
-  tsc:  number | true
-  ours: number | boolean
-
-line 42: a2 || a3
-  tsc:  number | true
-  ours: number | boolean
-
 line 47: rc7
   tsc:  { a: string; }
   ours: number | { a: string }
@@ -39,14 +31,6 @@ line 48: rc8
 line 48: a8 || a3
   tsc:  string[]
   ours: number | string[]
-
-line 53: rd2
-  tsc:  string | true
-  ours: string | boolean
-
-line 53: a2 || a4
-  tsc:  string | true
-  ours: string | boolean
 
 line 58: rd7
   tsc:  { a: string; }
@@ -64,14 +48,6 @@ line 59: a8 || a4
   tsc:  string[]
   ours: string | string[]
 
-line 86: rh2
-  tsc:  true | { a: string; }
-  ours: boolean | { a: string }
-
-line 86: a2 || a7
-  tsc:  true | { a: string; }
-  ours: boolean | { a: string }
-
 line 91: a7
   tsc:  never
   ours: { a: string }
@@ -84,14 +60,6 @@ line 92: a8 || a7
   tsc:  string[]
   ours: { a: string } | string[]
 
-line 97: ri2
-  tsc:  true | string[]
-  ours: boolean | string[]
-
-line 97: a2 || a8
-  tsc:  true | string[]
-  ours: boolean | string[]
-
 line 102: ri7
   tsc:  { a: string; }
   ours: { a: string } | string[]
@@ -103,14 +71,6 @@ line 102: a7 || a8
 line 103: a8
   tsc:  never
   ours: string[]
-
-line 108: rj2
-  tsc:  true | null
-  ours: boolean | null
-
-line 108: a2 || null
-  tsc:  true | null
-  ours: boolean | null
 
 line 113: rj7
   tsc:  { a: string; }
@@ -127,14 +87,6 @@ line 114: rj8
 line 114: a8 || null
   tsc:  string[]
   ours: null | string[]
-
-line 119: rf2
-  tsc:  true | null
-  ours: boolean | null
-
-line 119: a2 || null
-  tsc:  true | null
-  ours: boolean | null
 
 line 124: rf7
   tsc:  { a: string; }

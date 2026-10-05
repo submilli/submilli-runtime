@@ -30,6 +30,7 @@ use std::sync::Arc;
 use wasmtime::{FuncType, HeapType, Linker, RefType, StructType, Val, ValType};
 
 use crate::runtime::StoreData;
+use crate::runtime::decision::CallTicket;
 use crate::runtime::fuel;
 use crate::runtime::host::{
     quota_exceeded_error, range_error, read_string_arg, register_host_fn_async, type_error,
@@ -44,7 +45,7 @@ use crate::stdlib::abi::{
     self, backing_struct, i32_field, install_field_getters, nullable_boxed_number_field,
     nullable_string_field, string_field,
 };
-use crate::stdlib::shared::check_security;
+use crate::stdlib::shared::check_security_call;
 
 pub const MODULE_NAME: &str = "submilli:llm";
 
@@ -259,7 +260,7 @@ async fn dispatch(
     prompts: Vec<String>,
     schema: Option<String>,
 ) -> wasmtime::Result<Vec<LlmOutcome>> {
-    gate(caller, model, prompts.len())?;
+    let ticket = gate(caller, model, prompts.len())?;
 
     let budget = budget(caller);
     let limits = budget
@@ -285,8 +286,9 @@ async fn dispatch(
                 Ok(who) => who,
                 Err(error) => return error,
             };
-            crate::stdlib::shared::audit_denial(
-                caller.data().security_check.as_ref(),
+            crate::stdlib::shared::audit_denial_in(
+                &*caller,
+                ticket,
                 &who,
                 "llm.call",
                 &serde_json::json!({ "model": model }),
@@ -306,8 +308,9 @@ async fn dispatch(
                     Ok(who) => who,
                     Err(error) => return error,
                 };
-                crate::stdlib::shared::audit_denial(
-                    caller.data().security_check.as_ref(),
+                crate::stdlib::shared::audit_denial_in(
+                    &*caller,
+                    ticket,
                     &who,
                     "llm.call",
                     &serde_json::json!({"model": model}),
@@ -353,8 +356,8 @@ fn gate(
     caller: &mut wasmtime::Caller<'_, StoreData>,
     model: &str,
     prompt_count: usize,
-) -> wasmtime::Result<()> {
-    check_security(
+) -> wasmtime::Result<Option<CallTicket>> {
+    check_security_call(
         caller,
         CAPABILITY,
         serde_json::json!({ "model": model, "prompt_count": prompt_count }),
@@ -398,8 +401,8 @@ fn preflight_models(caller: &mut wasmtime::Caller<'_, StoreData>) -> wasmtime::R
         .map(|_| ())
         .map_err(|error| {
             if let crate::stdlib::shared::PrincipalError::Unknown(ref unknown) = error {
-                crate::stdlib::shared::audit_denial(
-                    caller.data().security_check.as_ref(),
+                crate::stdlib::shared::audit_entry_denial(
+                    &*caller,
                     unknown.label,
                     CAPABILITY,
                     &serde_json::json!({ "model": "", "prompt_count": 0 }),
@@ -415,7 +418,11 @@ fn preflight_models(caller: &mut wasmtime::Caller<'_, StoreData>) -> wasmtime::R
 /// than failing the call: a listing that threw on the first forbidden model
 /// would itself disclose that the operator configured it.
 fn may_call(caller: &mut wasmtime::Caller<'_, StoreData>, model: &str) -> wasmtime::Result<bool> {
-    filters_candidate(gate(caller, model, 0))
+    let keeps = filters_candidate(gate(caller, model, 0).map(|_| ()))?;
+    if !keeps {
+        crate::stdlib::shared::mark_filtered(&*caller);
+    }
+    Ok(keeps)
 }
 
 /// Whether a per-candidate check's answer removes the candidate (`Ok(false)`),

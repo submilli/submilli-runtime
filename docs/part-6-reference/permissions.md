@@ -1,13 +1,18 @@
 ---
 title: "Permissions"
-description: "How a call is decided, callers, actions, the refusals no rule changes, the capabilities and their fields, the errors when a blueprint is read, and the denials at run time."
+description: "How a call is decided, callers, actions, the refusals no rule changes, the capabilities and their fields, the errors when a Blueprint is read, and the denials at run time."
 slug: reference/permissions
 sidebar:
   order: 15
+authorship:
+  label: ai-assisted
+  confirmed: true
+  contentHash: "715d8c58e8f58bf057583e06c6512b089a06e523413cf1c802d7bbf3228caa81"
+  confirmedAt: "2026-10-05T13:01:53.009Z"
 ---
 
 This page describes how the `permissions` and `default` blocks of a
-blueprint decide a gated operation, the capabilities and their fields, and
+Blueprint decide a gated operation, the capabilities and their fields, and
 the errors and denials a rule produces. A rule's `filter` is written in the
 [filter language](/docs/reference/filter-language).
 
@@ -43,6 +48,7 @@ capability.
 
 | Field | Type | Required | Meaning |
 | --- | --- | --- | --- |
+| `name` | non-empty string | No | A label for the rule, unique within the caller's list (`blueprint lint` errors on a repeat). Names the rule instead of its position |
 | `capability` | string | Yes | The operation's name, such as `fs.write`, `acme.com/credits.apply`, or `mcp.linear` |
 | `filter` | string | No | A condition on the operation's fields, in the [filter language](/docs/reference/filter-language) |
 | `action` | `allow` or `deny` | Yes | What happens when the rule matches |
@@ -54,9 +60,9 @@ capability.
 | `allow` | The operation proceeds |
 | `deny` | The operation throws `PermissionDeniedError` |
 
-`default` takes the same values and is `deny` when the blueprint doesn't set
+`default` takes the same values and is `deny` when the Blueprint doesn't set
 it. Under `default: allow`, every operation no rule matches is permitted,
-including ones a package added later provides.
+including ones a Package added later provides.
 
 ## Callers
 
@@ -65,36 +71,36 @@ Each list under `permissions` belongs to a **caller**:
 | Caller | Its rules apply to |
 | --- | --- |
 | `main` | The program |
-| A package's name, such as `'@acme/billing'` | That package's own code, whether listed under `packages:` or a dependency of one |
+| A Package's name, such as `'@acme/billing'` | That Package's own code, whether listed under `packages:` or a dependency of one |
 
 The caller is the code that is running, not anything the program passes. A
 standard-library operation is attributed to the code that calls it, so a
-package's HTTP request is judged under the package's list. An operation a
-package checks with `check` is attributed to the code that called the
-package. A program calling `listCharges` is judged under `main` for
-`acme.com/charges.list`, and the request the package then sends under
-`'@acme/billing'`. A package with no list may do only what `default` allows.
+Package's HTTP request is judged under the Package's list. An operation a
+Package checks with `check` is attributed to the code that called the
+Package. A program calling `listCharges` is judged under `main` for
+`acme.com/charges.list`, and the request the Package then sends under
+`'@acme/billing'`. A Package with no list may do only what `default` allows.
 
 ## Refusals no rule can change
 
 These are refused before the rules are read, whatever `default` says:
 
-- `secrets.get` from `main`. A secret's value is available only to packages,
+- `secrets.get` from `main`. A secret's value is available only to Packages,
   and `submilli blueprint capability add` refuses to write the rule.
-- A write to a volume the blueprint mounts read-only.
+- A write to a volume the Blueprint mounts read-only.
 
 ## Capabilities
 
 | Source | Names | Fields |
 | --- | --- | --- |
 | The standard library | `fs.*`, `git.*`, `http.*`, `llm.call`, `secrets.get`, `session.*` | In the tables below |
-| A package | Chosen by its author, such as `acme.com/credits.apply` | Declared by its `@capability` tags ([Package manifest](/docs/reference/package-manifest)) |
-| An MCP server the blueprint declares | `mcp.<server>`, such as `mcp.linear` | `tool`, `transport` ([MCP servers](/docs/reference/mcp-servers)) |
+| A Package | Chosen by its author, such as `acme.com/credits.apply` | Declared by its `@capability` tags ([Package manifest](/docs/reference/package-manifest)) |
+| An MCP server the Blueprint declares | `mcp.<server>`, such as `mcp.linear` | `tool`, `transport` ([MCP servers](/docs/reference/mcp-servers)) |
 
-`submilli blueprint capability list` prints every capability a blueprint can
+`submilli blueprint capability list` prints every capability a Blueprint can
 use, with its fields and the rules written for it.
 
-A field is a `string`, a `number`, or a `boolean`. A package field may also
+A field is a `string`, a `number`, or a `boolean`. A Package field may also
 be an object, whose members a filter names with a dot.
 
 ### Fields only some calls report
@@ -108,7 +114,7 @@ missing field is false.
 | `fs.read` | `chunkSize` | `bytes` |
 | `fs.read`, `fs.stat` | `recursive` | The `submilli:code` workspace tools, always `true` |
 | `fs.write` | `length` | `write`, `writeText`, `append`, `appendText`, and code edits |
-| `fs.write` | `max_bytes` | `http.download`, and packages that stream a download to a file |
+| `fs.write` | `max_bytes` | `http.download`, and Packages that stream a download to a file |
 | `fs.write` | `diff` | Code edits |
 | `http.*` | `body_size`, `timeout_ms` | Every request, except a redirect turned into a `GET` |
 
@@ -160,7 +166,7 @@ missing field is false.
 | `git.init` | `path: string` | Create a local repository and its VFS directory | `path == "/repo"` |
 | `git.clone` | `path: string`, `remoteName: string`, `remote: string`, `branch: string` | Clone an HTTPS repository into a VFS directory | `path == "/repo" and remote == "https://github.com/acme/project.git"` |
 | `git.fetch` | `path: string`, `remoteName: string`, `remote: string`, `branch: string` | Fetch or pull HTTPS remote branches into an existing repository | `path == "/repo" and remote == "https://github.com/acme/project.git"` |
-| `git.commit` | `path: string`, `branch: string` | Commit staged changes with blueprint identity | `path == "/repo" and branch == "main"` |
+| `git.commit` | `path: string`, `branch: string` | Commit staged changes with Blueprint identity | `path == "/repo" and branch == "main"` |
 
 ### `submilli:http`
 
@@ -186,7 +192,7 @@ missing field is false.
 
 | Capability | Fields | Operation | Example filter |
 | --- | --- | --- | --- |
-| `secrets.get` | `name: string` | Read a blueprint-declared secret value | `name == "STRIPE_API_KEY"` |
+| `secrets.get` | `name: string` | Read a Blueprint-declared secret value | `name == "STRIPE_API_KEY"` |
 
 ### `submilli:session`
 
@@ -205,7 +211,7 @@ missing field is false.
 
 <!-- /generated:capabilities -->
 
-## Errors when the blueprint is read
+## Errors when the Blueprint is read
 
 `submilli blueprint lint`, the server's registration, and
 `submilli run --blueprint` stop on these:
@@ -217,7 +223,7 @@ missing field is false.
 | A key in a rule other than `capability`, `filter`, `action` | ``unknown field `extra`, expected one of `capability`, `filter`, `action` `` |
 | An MCP capability with the tool in its name | `permission rule 'mcp.linear/save_issue': use capability 'mcp.linear' with a filter such as 'tool == "name"' instead of '/tool'` |
 | A rule for an undeclared MCP server or `llm` model | `permission rule 'mcp.x' references undeclared mcp server 'x'` |
-| A package requires an operation its own list has no rule for (lint and registration) | ``package `@acme/billing` requires `http.get` with filter `…`, but `permissions.@acme/billing` has no matching rule`` (`submilli blueprint lint --fix` adds it) |
+| A Package requires an operation its own list has no rule for (lint and registration) | ``package `@acme/billing` requires `http.get` with filter `…`, but `permissions.@acme/billing` has no matching rule`` (`submilli blueprint lint --fix` adds it) |
 | A filter tests a field the capability doesn't report (lint and registration) | ``rule 1 for `fs.read` tests `owner`, which the operation doesn't report, …`` |
 
 `submilli blueprint lint` also warns, without stopping, about:
@@ -227,8 +233,8 @@ missing field is false.
 - a rule that an earlier unfiltered rule always decides first
 - a capability name nothing provides, with a suggestion
 - an `http.<method>` name that only `http.request` reaches
-- a package rule that differs from what the package requires
-- a package list for a package the blueprint doesn't use
+- a Package rule that differs from what the Package requires
+- a Package list for a Package the Blueprint doesn't use
 
 With `--deny-warnings`, or `SUBMILLI_DENY_WARNINGS=1`, any of these fails
 the lint.

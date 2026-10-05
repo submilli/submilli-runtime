@@ -102,7 +102,7 @@ line 192: x
 
 line 194: typeof x === "object" && x
   tsc:  false | (T & object) | (T & null)
-  ours: boolean | T
+  ours: false | T
 
 line 194: x
   tsc:  (T & object) | (T & null)

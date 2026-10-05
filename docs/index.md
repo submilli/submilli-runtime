@@ -19,8 +19,13 @@ nextSteps:
   - quickstart
   - blueprints
   - tutorials/connect-a-harness
+authorship:
+  label: ai-assisted
+  confirmed: true
+  contentHash: "9f73b1d51fc0e3b9a174a1291daae4a1ec84d10b910c43fc065f61207456b76d"
+  confirmedAt: "2026-10-05T13:01:53.009Z"
 ---
 
 Start with the [introduction](/docs/why) for the argument and a first
-look at a blueprint, then the quickstart to install the CLI and run your first
+look at a Blueprint, then the quickstart to install the CLI and run your first
 agent-generated program.

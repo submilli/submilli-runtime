@@ -1,3 +1,5 @@
+import { createHash } from 'node:crypto';
+import { confirmedAuthorshipFor, authorshipLabels } from '../src/lib/authorship.ts';
 import assert from 'node:assert/strict';
 import { mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -5,11 +7,11 @@ import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { test } from 'node:test';
 import { parseFrontmatter } from 'astro/markdown';
-import { createAgentDocs, readChapters, type Chapter } from '../src/lib/agent-docs.ts';
+import { createAgentDocs, readChapters, type Chapter, markdownPath } from '../src/lib/agent-docs.ts';
 
 test('the index and exports cover exactly the visible book, with summaries', async () => {
 	const directory = new URL('../../docs/', import.meta.url);
-	const files = (await readdir(directory, { recursive: true })).filter((file) => file.endsWith('.md'));
+	const files = (await readdir(directory, { recursive: true })).filter((file) => file.endsWith('.md') && file !== 'WRITING.md');
 	const expectedPaths: string[] = [];
 	const hiddenPaths: string[] = [];
 	for (const file of files) {
@@ -67,6 +69,7 @@ test('hidden stubs need no description; malformed and colliding published slugs 
 	const url = pathToFileURL(`${directory}/`);
 	try {
 		await writeFile(join(directory, 'hidden.md'), '---\ntitle: Stub\nsidebar:\n  hidden: true\n---\nStub.');
+		await writeFile(join(directory, 'WRITING.md'), '# Contributor writing guidance\nNot a book chapter.');
 		assert.deepEqual(await readChapters(url), []);
 		await writeFile(join(directory, 'page.md'), '---\ntitle: Page\nslug: page\n---\nBody.');
 		await assert.rejects(readChapters(url), /provide a description/);
@@ -110,3 +113,26 @@ function chapter(slug: string, body = 'Chapter text.'): Chapter {
 function source(slug: string): string {
 	return `---\ntitle: Page\nslug: "${slug}"\ndescription: Summary\n---\nBody.`;
 }
+
+
+test('authorship confirmation rejects changed prose and covers each label', () => {
+	const body = 'Example.\r\nSecond line.';
+	const contentHash = createHash('sha256').update('Example.\nSecond line.').digest('hex');
+	for (const label of Object.keys(authorshipLabels) as (keyof typeof authorshipLabels)[]) {
+		const metadata = { label, confirmed: true, contentHash, confirmedAt: '2026-10-05T10:00:00Z' };
+		assert.equal(confirmedAuthorshipFor(metadata, body)?.label, authorshipLabels[label].label);
+		assert.equal(confirmedAuthorshipFor(metadata, body + ' Changed.'), undefined);
+		assert.equal(confirmedAuthorshipFor({...metadata, confirmed: false}, body), undefined);
+	}
+	assert.equal(confirmedAuthorshipFor(undefined, body), undefined);
+});
+
+test('every current page exports its confirmed authorship', async () => {
+	const chapters = await readChapters();
+	const exports = createAgentDocs(chapters);
+	for (const chapter of chapters) {
+		assert.ok(chapter.authorshipLabel, `${chapter.file}: missing or stale authorship`);
+		const line = `Authorship: ${chapter.authorshipLabel}.`;
+		assert.ok(exports.get(markdownPath(chapter.slug))?.includes(line));
+	}
+});

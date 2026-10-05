@@ -434,9 +434,10 @@ impl<'a> Inferer<'a> {
         operand: ExprId,
         env: &narrowing::NarrowEnv,
         expected: Option<&Type>,
+        keep_literals: bool,
     ) -> Result<(ExprId, Type), CompilerFailure> {
         self.push_narrow_frame(env.clone());
-        let inferred = self.infer_expr(operand, expected)?;
+        let inferred = self.infer_expr_keeping_literals(operand, expected, keep_literals)?;
         let (_, assigned) = self.pop_narrow_frame_capture()?;
         let span = self
             .ast
@@ -629,6 +630,8 @@ impl<'a> Inferer<'a> {
     /// - members differing only in `readonly` (`readonly T[] | T[]`): the readonly one;
     /// - the most specific accepting member, when it keeps every `readonly` of
     ///   the value's own;
+    /// - among function types, the one with the most parameters, which is how
+    ///   TypeScript calls their union;
     /// - a subclass instance's own class, when an ancestor class is that member;
     /// - otherwise every accepting member, which is TypeScript's answer.
     ///
@@ -652,6 +655,9 @@ impl<'a> Inferer<'a> {
             && accepting.iter().all(|m| m.peel() == readonly.peel())
         {
             return Some((*readonly).clone());
+        }
+        if let Some(longest) = longest_function_member(&accepting) {
+            return Some(longest.clone());
         }
         match self.most_specific_member(&accepting) {
             Some(member) if !self.may_lose_readonly(&part, member) => Some(member.clone()),
@@ -1510,10 +1516,8 @@ impl<'a> Inferer<'a> {
             return Some(read_ty);
         }
         let position = match elem {
-            narrowing::PathElem::Index(narrowing::LiteralValue::Number(n))
-                if n.0.is_finite() && n.0.fract() == 0.0 && n.0 >= 0.0 =>
-            {
-                Some(n.0 as usize)
+            narrowing::PathElem::Index(narrowing::LiteralValue::Number(n)) => {
+                narrowing::tuple_position(n.0)
             }
             _ => None,
         };
@@ -1817,6 +1821,23 @@ fn join_exit_envs(mut level: Vec<narrowing::NarrowEnv>) -> Option<narrowing::Nar
         level = next;
     }
     level.pop()
+}
+
+/// The function type with the most parameters, when every member is a
+/// function type. A call to a union of function types passes the longest
+/// parameter list, and a function that fits a member with fewer parameters
+/// ignores the extra arguments.
+fn longest_function_member<'t>(members: &[&'t Type]) -> Option<&'t Type> {
+    let mut longest: Option<(&Type, usize)> = None;
+    for &member in members {
+        let Type::Function { params, .. } = member.peel() else {
+            return None;
+        };
+        if longest.is_none_or(|(_, count)| params.len() > count) {
+            longest = Some((member, params.len()));
+        }
+    }
+    longest.map(|(member, _)| member)
 }
 
 #[cfg(test)]

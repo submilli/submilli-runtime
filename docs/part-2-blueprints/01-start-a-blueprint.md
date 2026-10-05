@@ -1,25 +1,30 @@
 ---
-title: "Start a blueprint"
-description: "How to create a blueprint with the CLI: start from nothing allowed, check the file, add a package, grant operations, declare secrets and variables, test it, and register it on a server."
+title: "Start a Blueprint"
+description: "How to create a Blueprint with the CLI: start from nothing allowed, check the file, add a Package, grant operations, declare secrets and variables, test it, and register it on a server."
 slug: blueprints/start-a-blueprint
 sidebar:
   order: 1
+authorship:
+  label: ai-assisted
+  confirmed: true
+  contentHash: "c4650cb06f9ddfc0306ce764ca89272292c0397c347f808ac3bc59923f9a51c4"
+  confirmedAt: "2026-10-05T13:01:53.009Z"
 ---
 
-This guide shows you how to build a blueprint block by block with the
+This guide shows you how to build a Blueprint block by block with the
 `submilli blueprint` commands, test it, and register it on a server. The
-examples use the billing package from [Packages](/docs/packages).
-Substitute your own package, operation, and fields.
+examples use the billing Package from [Packages](/docs/packages).
+Substitute your own Package, operation, and fields.
 
 The commands edit `blueprint.yaml` in the current directory and rewrite it
 each time, so comments you add by hand don't survive them. Refer to the
-[blueprint file reference](/docs/reference/blueprint-file) for every
+[Blueprint file reference](/docs/reference/blueprint-file) for every
 block and field.
 
-## Install the package
+## Install the Package
 
-A blueprint can only list a package that is in your local store. If the
-package is your own, `submilli build publish-local` from its project puts
+A Blueprint can only list a Package that is in your local store. If the
+Package is your own, `submilli build publish-local` from its project puts
 it there. If someone else published it, install it from its repository:
 
 ```sh
@@ -27,19 +32,19 @@ submilli install acme/billing-package @acme/billing
 ```
 
 The first argument is the GitHub repository, `owner/repo`. The second is
-the package to build from it, since one repository can hold several. Leave
-the package out to install all the packages the repository declares. `install`
-fetches the repository, builds the package, and puts it in the local store,
+the Package to build from it, since one repository can hold several. Leave
+the Package out to install all the Packages the repository declares. `install`
+fetches the repository, builds the Package, and puts it in the local store,
 pinned to the commit it resolved. To pin a branch, tag, or commit yourself,
 append `@<ref>` to the repository name. This installs the curated Jina
-package at the runtime's `v0.2.0` tag:
+Package at the runtime's `v0.2.0` tag:
 
 ```sh
 submilli install submilli/submilli-runtime@v0.2.0 @submilli/jina
 ```
 
-Add `--upgrade` to replace a package already installed at another commit.
-The [curated packages](/docs/reference/curated-packages) all come from
+Add `--upgrade` to replace a Package already installed at another commit.
+The [curated Packages](/docs/reference/curated-packages) all come from
 that repository.
 
 ### From a private repository
@@ -59,7 +64,7 @@ submilli github authenticate
 `authenticate` prompts for the token, or reads it from piped standard
 input, and checks it with GitHub. In CI, put the token in `GH_TOKEN`.
 `submilli github auth-status` says which token applies. Refer
-to [Install private packages on a
+to [Install private Packages on a
 server](/docs/server/install-private-packages#create-the-token) for
 the token's settings, and to the [CLI
 reference](/docs/reference/cli) for the errors an install can
@@ -67,8 +72,8 @@ give.
 
 ### On a server
 
-A server has its own package store, so a blueprint that will run there
-needs the package installed there too. The `submilli server` commands talk
+A server has its own Package store, so a Blueprint that will run there
+needs the Package installed there too. The `submilli server` commands talk
 to a running server, and [Connect the CLI](/docs/server/connect-the-cli)
 shows how they reach it:
 
@@ -80,12 +85,12 @@ submilli server packages install acme/billing-package @acme/billing
 installed @acme/billing @ 3f9c2a1b7e40
 ```
 
-The server fetches, builds, and pins the package the same way. `--sha <ref>`
+The server fetches, builds, and pins the Package the same way. `--sha <ref>`
 pins a commit, tag, or branch, and `--upgrade` replaces an installed one.
 
-## Read the package's capabilities and docs
+## Read the Package's capabilities and docs
 
-Before granting anything, read what the package provides:
+Before granting anything, read what the Package provides:
 
 ```sh
 submilli blueprint capability list @acme/billing
@@ -119,7 +124,7 @@ permissions:
   main: []
 ```
 
-The application and the server refer to the blueprint by `name`.
+The application and the server refer to the Blueprint by `name`.
 `default: deny` means anything without a rule is refused. Leaving `default`
 out means the same.
 
@@ -133,12 +138,12 @@ submilli blueprint lint blueprint.yaml
 ✓ blueprint.yaml is valid
 ```
 
-`lint` validates the file against the installed packages and exits 1 on an
+`lint` validates the file against the installed Packages and exits 1 on an
 error and 0 on warnings, so it can gate a commit. `lint --fix` adds missing
-package rules. Run it after each step below, because its warnings say what
+Package rules. Run it after each step below, because its warnings say what
 the file still lacks.
 
-## Add the package
+## Add the Package
 
 ```sh
 submilli blueprint add-package @acme/billing --no-capabilities
@@ -167,10 +172,10 @@ permissions:
   main: []
 ```
 
-The package is listed, so the import resolves. It also got its own caller
+The Package is listed, so the import resolves. It also got its own caller
 list, written from what it declares it requires. `--no-capabilities`
 leaves `main` empty so that you grant operations one by one below.
-`--all-capabilities` or `--capabilities a,b` grants the package's operations
+`--all-capabilities` or `--capabilities a,b` grants the Package's operations
 in the same command. The warning is about the key, declared in
 [Declare the secret](#declare-the-secret).
 
@@ -204,9 +209,9 @@ a filter can test.
 
 ## Declare the secret
 
-The package reads `BILLING_API_KEY` by name, and `add-package` warned that
-the blueprint doesn't declare it. When a package reads a secret, the
-blueprint declares it by that name and says where its value comes from.
+The Package reads `BILLING_API_KEY` by name, and `add-package` warned that
+the Blueprint doesn't declare it. When a Package reads a secret, the
+Blueprint declares it by that name and says where its value comes from.
 The value itself never enters the file:
 
 ```sh
@@ -234,9 +239,9 @@ submilli blueprint lint blueprint.yaml
 ```
 
 `--store` names a key in a **secret store**, which keeps your credentials
-outside the blueprint. There are two. The local store is a directory under
+outside the Blueprint. There are two. The local store is a directory under
 `~/.submilli`, readable only by your user, and `submilli run` reads it. A
-server has its own store, encrypted at rest, and the blueprints registered
+server has its own store, encrypted at rest, and the Blueprints registered
 on that server read it. Put the value in the local store:
 
 ```sh
@@ -304,7 +309,7 @@ error: invalid variables: required variable 'customerId' was not supplied
 
 A filter refers to the variable as `${vars.customerId}`. Replace the grant
 above with one that also requires the customer to be the session's, so one
-blueprint serves all customers:
+Blueprint serves all customers:
 
 ```sh
 submilli blueprint capability remove acme.com/credits.apply
@@ -328,7 +333,7 @@ permissions:
 ## Test it
 
 Create `credit.ts`, a program like one a model would write under this
-blueprint. It imports the package and calls its operation for the premium
+Blueprint. It imports the Package and calls its operation for the premium
 customer:
 
 ```typescript title="credit.ts"
@@ -396,7 +401,7 @@ permissions:
 
 ## See the prompt
 
-The blueprint also shapes what the model is told. The description of the
+The Blueprint also shapes what the model is told. The description of the
 execute tool is assembled from it. It says which modules a program may
 import, what its filesystem is, and which hosts it may reach. Print it as the
 model receives it:
@@ -415,14 +420,14 @@ packages and discovered `@mcp/<server>` packages may also be available;
 ```
 
 Nothing here grants `fs.read` or `http.get`, so `submilli:fs` and
-`submilli:http` are not listed. A blueprint that grants them gets the
+`submilli:http` are not listed. A Blueprint that grants them gets the
 modules, a `Sandbox:` line naming its filesystem, and a `Network:` line
 listing its hosts. The rest of the text, on how to write a program and what to do with a
-denial, is the same for all blueprints.
+denial, is the same for all Blueprints.
 
 ## Register it on a server
 
-You register a blueprint file on a server. The server keeps its own copy
+You register a Blueprint file on a server. The server keeps its own copy
 and never reads the file again. Put the secret's value in the
 server's store first, since registration checks that every `store:` secret
 exists there:
@@ -440,7 +445,7 @@ Added blueprint 'support'
 
 Run `apply` again after an edit, and the answer is `Updated blueprint
 'support'`. Then run the program the way an application would, naming the
-blueprint by its name:
+Blueprint by its name:
 
 ```sh
 submilli server run-code credit.ts --blueprint support --var customerId=cus_northwind
@@ -450,6 +455,6 @@ submilli server run-code credit.ts --blueprint support --var customerId=cus_nort
 credited 1500 cents
 ```
 
-Applications name the blueprint the same way when they open a session.
-Refer to [Register a blueprint](/docs/server/register-a-blueprint) for
-applying blueprints, replacing them, and removing them.
+Applications name the Blueprint the same way when they open a session.
+Refer to [Register a Blueprint](/docs/server/register-a-blueprint) for
+applying Blueprints, replacing them, and removing them.

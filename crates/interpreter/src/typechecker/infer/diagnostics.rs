@@ -5,7 +5,9 @@
 //! delegate to [`crate::did_you_mean`] but need access to `self.types`
 //! and `self.scopes`, so the helper sits here on the `Inferer`.
 
-use crate::{Diagnostic, ExprId, MethodSig, Severity, Span, Type, TypeKind, ValueKind};
+use crate::{
+    Diagnostic, ExprId, MethodSig, Severity, Span, Type, TypeKind, TypedExprKind, ValueKind,
+};
 
 use super::format_signature::SignatureKind;
 use super::lookup::FieldWrite;
@@ -387,6 +389,14 @@ impl<'a> Inferer<'a> {
         &self,
         path: &narrowing::ReferencePath,
     ) -> Option<DiagnosticAddon> {
+        // Guards that ruled out every value hold here: no write or boundary
+        // dropped them, though a write elsewhere may have left a tombstone.
+        if self
+            .narrowed_read(path.clone())
+            .is_some_and(|(_, ty)| matches!(ty, Type::Never))
+        {
+            return None;
+        }
         if let Some(reason) = self.lookup_tombstone(path) {
             return Some(self.invalidation_reason_hint(path, &reason));
         }
@@ -563,34 +573,49 @@ impl<'a> Inferer<'a> {
     /// FQN registry (with `self.types` as fallback) so a library-typed value's
     /// shape is lifted into help even when the interface name was never imported.
     pub(super) fn format_definition(&self, ty: &Type) -> String {
-        self.render_help(
-            || {
-                format_definition::format_definition(
-                    ty,
-                    &self.types,
-                    &self.type_registry,
-                    &self.type_limits,
-                )
-            },
-            || ty.to_string(),
-        )
+        self.render_help(format_definition::format_definition(
+            ty,
+            &self.types,
+            &self.type_registry,
+        ))
     }
 
-    /// Help text from `render`, which may meet a type limit while substituting.
-    /// A limit met only while rendering help does not affect the program, so
-    /// it is discarded and `fallback` is shown; otherwise the error the help
-    /// belongs to would be dropped while the limit is pending.
-    fn render_help(
+    /// Infallible diagnostic builders retain the original diagnostic while the
+    /// phase checkpoint propagates rendering failure and discards compilation.
+    /// Rendering has its own budgets and never clears a pending semantic limit.
+    pub(super) fn render_help(
         &self,
-        render: impl FnOnce() -> String,
-        fallback: impl FnOnce() -> String,
+        rendered: Result<String, crate::rendering::RenderError>,
     ) -> String {
-        let limit_was_pending = self.type_limits.limit_reached();
-        let text = render();
-        if !limit_was_pending && self.type_limits.take().is_err() {
-            return fallback();
+        match rendered {
+            Ok(text) => text,
+            Err(crate::rendering::RenderError::Truncated) => crate::rendering::TRUNCATED.into(),
+            Err(error) => {
+                let previous = self.diagnostic_failure.take();
+                self.diagnostic_failure.set(Some(previous.unwrap_or(error)));
+                "[diagnostic help unavailable]".into()
+            }
         }
-        text
+    }
+
+    pub(super) fn render_help_list(
+        &self,
+        rendered: Result<Vec<String>, crate::rendering::RenderError>,
+    ) -> Vec<String> {
+        match rendered {
+            Ok(help) => help,
+            Err(error) => vec![self.render_help(Err(error))],
+        }
+    }
+
+    pub(super) fn render_optional_help(
+        &self,
+        rendered: Result<Option<String>, crate::rendering::RenderError>,
+    ) -> Option<String> {
+        match rendered {
+            Ok(help) => help,
+            Err(error) => Some(self.render_help(Err(error))),
+        }
     }
 
     /// The type's definition lifted as a `help:` block, empty when the lift is
@@ -625,7 +650,7 @@ impl<'a> Inferer<'a> {
     /// argument-type mismatches) that need to lift a callable's signature into a
     /// one-line `help:` block. A method lift substitutes at the args the member
     /// was actually looked up with — see
-    /// [`method_lift_substitution`](Self::method_lift_substitution).
+    /// checked definition lookup.
     pub(super) fn format_signature(&self, kind: format_signature::SignatureKind<'_>) -> String {
         if let SignatureKind::Function {
             name,
@@ -642,7 +667,7 @@ impl<'a> Inferer<'a> {
                     ValueKind::Function { type_predicate, .. } => type_predicate.as_ref(),
                     _ => None,
                 });
-            return format_signature::format_signature(
+            return self.render_help(format_signature::format_signature(
                 SignatureKind::Function {
                     name,
                     generics,
@@ -652,45 +677,23 @@ impl<'a> Inferer<'a> {
                     predicate,
                 },
                 &TypeParamSubstitution::new(),
-                &self.type_limits,
-            );
+            ));
         }
         let substitution = match &kind {
             SignatureKind::Method {
                 receiver_ty, name, ..
-            } => self.method_lift_substitution(receiver_ty, name),
+            } => match format_definition::method_bindings(
+                &self.types,
+                &self.type_registry,
+                receiver_ty,
+                name,
+            ) {
+                Ok(bindings) => bindings,
+                Err(error) => return self.render_help(Err(error)),
+            },
             _ => TypeParamSubstitution::new(),
         };
-        // Unsubstituted, the signature still names its type parameters.
-        self.render_help(
-            || format_signature::format_signature(kind, &substitution, &self.type_limits),
-            || {
-                format_signature::format_signature(
-                    kind,
-                    &TypeParamSubstitution::new(),
-                    &self.type_limits,
-                )
-            },
-        )
-    }
-
-    /// The type-parameter table a method lift renders with: re-asks
-    /// [`find_method`](Inferer::find_method) for the bindings it resolves at the
-    /// call site, rather than zipping a second table from the receiver's own
-    /// declaration.
-    ///
-    /// An inherited method is written in its *declaring* class's parameter
-    /// names. `class StringBox extends Box<string>` declares no generics at all,
-    /// so a receiver-side table is empty and the lift prints `Box`'s raw `T`;
-    /// `class Flip<A, B> extends Pair<B, A>` binds `A`/`B` while the signature
-    /// spells `K`/`V`, so even a non-empty one misses. Only the chain walk that
-    /// found the method resolved `Flip<string, number>` to `Pair<number,
-    /// string>`, and it hands the answer back.
-    fn method_lift_substitution(&self, receiver_ty: &Type, name: &str) -> TypeParamSubstitution {
-        match self.find_method(receiver_ty, name) {
-            Some((_, bindings, ..)) => TypeParamSubstitution::from_bindings(bindings),
-            None => TypeParamSubstitution::new(),
-        }
+        self.render_help(format_signature::format_signature(kind, &substitution))
     }
 
     /// Suggest the closest identifier (across local scopes + top
@@ -1559,13 +1562,18 @@ impl<'a> Inferer<'a> {
         }
     }
 
-    /// validate a condition expression's type, preferring
+    /// Validate a condition expression's type, preferring
     /// the "narrow first" diagnostic when the type is `unknown`
     /// (forcing the LLM toward `typeof` / `x === null` /
     /// `Array.isArray(x)` rather than puzzling over a generic
-    /// "expected boolean" mismatch). Falls back to the standard
-    /// boolean-compatibility check for all other non-condition types.
-    pub(super) fn check_condition_ty(&mut self, ty: &Type, span: Span) {
+    /// "expected boolean" mismatch). Otherwise defers to
+    /// [`is_condition_value`](Self::is_condition_value).
+    pub(super) fn check_condition_ty(
+        &mut self,
+        condition: ExprId,
+        ty: &Type,
+        span: Span,
+    ) -> Result<(), crate::compiler_error::CompilerFailure> {
         if matches!(ty.peel(), Type::Unknown) {
             self.error_with_help(
                 span,
@@ -1576,9 +1584,32 @@ impl<'a> Inferer<'a> {
                         .to_string(),
                 ],
             );
-        } else if !super::narrowing::condition_compatible(ty) {
+        } else if !self.is_condition_value(condition, ty)? {
             self.error_non_condition_type(span, ty);
         }
+        Ok(())
+    }
+
+    /// Whether a condition operand produces a value to test. A local that a
+    /// guard narrowed to `never` counts, as in TypeScript: the test sits in code no
+    /// value reaches (after an exhausted `else if` chain), and its read traps.
+    pub(super) fn is_condition_value(
+        &self,
+        condition: ExprId,
+        ty: &Type,
+    ) -> Result<bool, crate::compiler_error::CompilerFailure> {
+        if super::narrowing::condition_compatible(ty) {
+            return Ok(true);
+        }
+        let kind = &self
+            .typed_ast
+            .try_expr(condition)
+            .map_err(crate::typechecker::arena_failure)?
+            .kind;
+        Ok(
+            matches!(ty.peel(), Type::Never)
+                && matches!(kind, TypedExprKind::LocalNarrowRef { .. }),
+        )
     }
 }
 
@@ -1771,17 +1802,16 @@ mod help_rendering_tests {
     use crate::type_size::TypeTooLarge;
 
     #[test]
-    fn a_limit_met_only_while_rendering_help_is_discarded() {
+    fn invalid_rendering_is_fatal_at_the_checkpoint() {
         with_inferer(|tc| {
-            let text = tc.render_help(
-                || {
-                    tc.type_limits.record(TypeTooLarge::Nodes);
-                    "rendered".into()
-                },
-                || "fallback".into(),
-            );
-            assert_eq!(text, "fallback");
-            assert!(!tc.type_limits.limit_reached());
+            let text = tc.render_help(Err(crate::rendering::RenderError::InvalidMetadata(
+                "injected",
+            )));
+            assert_eq!(text, "[diagnostic help unavailable]");
+            assert!(matches!(
+                tc.type_size_checkpoint(None),
+                Err(crate::compiler_error::CompilerFailure::Internal { .. })
+            ));
         });
     }
 
@@ -1789,7 +1819,7 @@ mod help_rendering_tests {
     fn a_limit_pending_before_rendering_is_kept() {
         with_inferer(|tc| {
             tc.type_limits.record(TypeTooLarge::Depth);
-            let text = tc.render_help(|| "rendered".into(), || "fallback".into());
+            let text = tc.render_help(Ok("rendered".into()));
             assert_eq!(text, "rendered");
             assert_eq!(tc.type_limits.take(), Err(TypeTooLarge::Depth));
         });

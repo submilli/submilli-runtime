@@ -1066,3 +1066,21 @@ fn http_closure_arity_returns_diagnostics() {
         assert_eq!(body["result"], "42", "{body}");
     });
 }
+
+#[tokio::test]
+async fn oversized_diagnostic_is_abbreviated_and_next_request_succeeds() {
+    let router = router();
+    let source = format!(
+        "function main(): number {{ {} return missing; }}",
+        " ".repeat(100_000)
+    );
+    let (_, body) = execute_on(&router, &source).await;
+    assert_eq!(body["error"]["kind"], "compile_error");
+    let message = body["error"]["message"].as_str().unwrap();
+    assert!(message.contains(interpreter::rendering::TRUNCATED));
+    assert!(message.len() <= interpreter::rendering::RenderLimits::collection().bytes);
+    assert!(message.contains("missing"));
+    let (_, healthy) = execute_on(&router, "function main(): number { return 42; }").await;
+    assert_eq!(healthy["result"], "42");
+    assert!(healthy["error"].is_null());
+}

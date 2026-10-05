@@ -1,5 +1,12 @@
 namespace: submilli
 provides:
+- name: fs.write
+  description: Decode one Gmail attachment into the VFS, limited to 20 MB of decoded bytes. The caller's `fs.write` rule checks the normalized destination and byte limit. The package capability retains the caller's original `path` for compatibility.
+  fields:
+    max_bytes:
+      type: number
+    path:
+      type: string
 - name: submilli/gmail.createDraft
   description: Create a draft from structured headers, bodies, and VFS attachments.
   fields:
@@ -21,7 +28,7 @@ provides:
   description: Permanently delete a draft. Missing drafts are treated as already deleted.
   fields: {}
 - name: submilli/gmail.downloadAttachment
-  description: Decode one Gmail attachment into the VFS.
+  description: Decode one Gmail attachment into the VFS, limited to 20 MB of decoded bytes. The caller's `fs.write` rule checks the normalized destination and byte limit. The package capability retains the caller's original `path` for compatibility.
   fields:
     path:
       type: string
@@ -60,6 +67,8 @@ provides:
 - name: submilli/gmail.sendDraft
   description: Send an existing draft. The draft is read first, so the check covers every address in its To, Cc and Bcc headers.
   fields:
+    from:
+      type: string
     recipients:
       type: string[]
 - name: submilli/gmail.sendEmail

@@ -6,7 +6,7 @@ default: deny
 permissions:
   main:
     - capability: github.com/repositories.get
-      filter: owner == "allowed-org"
+      filter: not (owner == "victim-org") and repo == "repo"
       action: allow
     - capability: github.com/branches.list
       filter: owner == "allowed-org"

@@ -20,6 +20,9 @@ permissions:
     - capability: github.com/pulls.update
       filter: owner == "allowed-org" and (base == null or base == "main")
       action: allow
+    - capability: github.com/commits.list
+      filter: owner == "allowed-org" and ref == "main" and path == "src/lib.ts"
+      action: allow
   # Deliberate sentinel: permitted operations must reach secrets.get, which is
   # denied here before a token can be read or a network request can happen.
   '@submilli/github': []

@@ -8,7 +8,7 @@ use crate::{
     TypedSwitchCase, TypedSwitchValue,
 };
 
-use super::{Inferer, assignable, narrowing};
+use super::{Inferer, narrowing};
 
 /// An enclosing `switch`: the `let`/`const` its clauses declare directly, and
 /// the clause being inferred.
@@ -60,6 +60,9 @@ pub(super) fn clauses_in_source_order<'a>(
 
 /// A discriminant inferred ahead of the switch body.
 struct Discriminant {
+    /// The discriminant expression as written, which a `case` label is
+    /// compared against.
+    source: ExprId,
     /// The narrowings in force before the discriminant ran.
     entry_env: narrowing::NarrowEnv,
     typed: ExprId,
@@ -309,6 +312,7 @@ impl Inferer<'_> {
             );
         }
         Ok(Discriminant {
+            source: discriminant,
             entry_env,
             typed,
             ty,
@@ -329,8 +333,9 @@ impl Inferer<'_> {
             typed: typed_disc,
             ty: disc_ty,
             source_span: disc_source_span,
+            source: disc_source,
         } = discriminant;
-        let label_hint = switch_label_hint(&disc_ty);
+        let disc_operand = self.comparison_operand(disc_source, typed_disc)?;
         let entry_reachable = self.reachable;
         self.push_pending_join_frame(narrowing::PendingJoinKind::Switch);
         let mut typed_cases: Vec<TypedSwitchCase> = Vec::new();
@@ -338,6 +343,14 @@ impl Inferer<'_> {
         let mut saw_null: Option<Span> = None;
         let mut all_assigned: BTreeSet<narrowing::ReferencePath> = BTreeSet::new();
         let mut any_arm_reachable_exit = false;
+        // The clause last in the source leaves the switch when it runs off
+        // its end, as a `break` there would.
+        let last_clause = cases
+            .iter()
+            .map(|case| (case.span.start, case.body))
+            .chain(default.as_ref().map(|d| (d.span.start, d.body)))
+            .max()
+            .map(|(_, body)| body);
 
         for case in cases {
             let case_span = case.span;
@@ -348,21 +361,24 @@ impl Inferer<'_> {
                     .try_expr(*value_expr)
                     .map_err(super::arena_failure)?
                     .span;
-                let (typed_val, val_ty) = self.infer_expr(*value_expr, Some(&label_hint))?;
+                let (typed_val, _) = self.infer_expr(*value_expr, None)?;
                 let val_kind = self
                     .typed_ast
                     .try_expr(typed_val)
                     .map_err(crate::typechecker::arena_failure)?
                     .kind
                     .clone();
-                if !matches!(disc_ty, Type::Error)
-                    && !matches!(val_ty, Type::Error)
-                    && !assignable(&val_ty, &label_hint, self.resolver())
-                {
+                let case_operand = self.comparison_operand(*value_expr, typed_val)?;
+                if !super::comparison_operand::operands_comparable(
+                    &case_operand,
+                    &disc_operand,
+                    self.resolver(),
+                ) {
                     self.error(
                         value_span,
                         format!(
-                            "case label of type `{val_ty}` is not compatible with switch discriminant of type `{disc_ty}`",
+                            "case label of type `{}` is not compatible with switch discriminant of type `{}`",
+                            case_operand.label, disc_operand.label
                         ),
                     );
                     continue;
@@ -414,6 +430,9 @@ impl Inferer<'_> {
             self.reachable = entry_reachable;
             let typed_body = self.infer_case_clause(switch_id, case.body, body_span)?;
             let body_reachable = self.reachable;
+            if body_reachable && last_clause == Some(case.body) {
+                self.record_break_exit();
+            }
             self.switch_depth -= 1;
             let (_n, body_assigned) = self.pop_narrow_frame_capture()?;
             let typed_body = self.wrap_narrow_regions(typed_body, &true_env, body_span)?;
@@ -443,6 +462,9 @@ impl Inferer<'_> {
             self.reachable = entry_reachable;
             let typed_body = self.infer_case_clause(switch_id, d.body, body_span)?;
             let body_reachable = self.reachable;
+            if body_reachable && last_clause == Some(d.body) {
+                self.record_break_exit();
+            }
             self.switch_depth -= 1;
             let (_n, body_assigned) = self.pop_narrow_frame_capture()?;
             let typed_body = self.wrap_narrow_regions(typed_body, &env, body_span)?;
@@ -450,11 +472,13 @@ impl Inferer<'_> {
             any_arm_reachable_exit |= body_reachable;
             Some(typed_body)
         } else {
-            if matches!(residual, Type::Never) {
-            } else if residual != disc_ty {
-                self.emit_non_exhaustive(&residual, &site, switch_span);
-                any_arm_reachable_exit |= entry_reachable;
-            } else {
+            let unmatched = self.unmatched_residual(&residual, &site, saw_null.is_some());
+            let leaves_values_unmatched =
+                !matches!(unmatched, Type::Never) && !narrowing::is_ruled_out(&unmatched);
+            if leaves_values_unmatched {
+                if requires_every_case(&disc_ty) {
+                    self.emit_non_exhaustive(&unmatched, &site, switch_span);
+                }
                 any_arm_reachable_exit |= entry_reachable;
             }
             None
@@ -731,6 +755,17 @@ impl Inferer<'_> {
     }
 }
 
+/// Whether a `switch` without `default` must list every value of its
+/// discriminant: when its type is made of literals alone, which cases can
+/// cover. One with a member such as `string` or `null`, even in a single
+/// member of a discriminated union, can't be listed out, so the switch may
+/// simply fall through.
+fn requires_every_case(disc_ty: &Type) -> bool {
+    narrowing::union_members(disc_ty).into_iter().all(|member| {
+        narrowing::unit_literal_value(member).is_some() || matches!(member.peel(), Type::Boolean)
+    })
+}
+
 fn format_residual_missing(residual: &Type) -> String {
     let parts: Vec<String> = match residual.peel() {
         Type::Union(members) => members.iter().filter_map(format_one_literal).collect(),
@@ -847,15 +882,5 @@ fn index_position(kind: &TypedExprKind) -> Option<usize> {
             Some(*n as usize)
         }
         _ => None,
-    }
-}
-
-/// Labels compare runtime values; they do not need the generic identity carried
-/// by the discriminant's refinement.
-fn switch_label_hint(ty: &Type) -> Type {
-    match ty.without_aliases() {
-        Type::Refined { ty, .. } => switch_label_hint(ty),
-        Type::Union(members) => Type::union(members.iter().map(switch_label_hint).collect()),
-        _ => ty.clone(),
     }
 }

@@ -446,6 +446,7 @@ fn selected_provided_rules(
             continue;
         }
         changes.appended.push(PermissionRule {
+            name: None,
             capability: provided.name.clone(),
             filter: None,
             action: if selected {
@@ -517,6 +518,7 @@ fn required_rules(
                 )
             })?;
         changes.appended.push(PermissionRule {
+            name: None,
             capability: required.capability.clone(),
             filter,
             action: Action::Allow,

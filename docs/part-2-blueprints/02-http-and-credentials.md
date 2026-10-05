@@ -1,13 +1,18 @@
 ---
 title: "HTTP and credentials"
-description: "How to let programs call an HTTP endpoint that has no package, give that endpoint a credential the program never sees, and prove it arrived."
+description: "How to let programs call an HTTP endpoint that has no Package, give that endpoint a credential the program never sees, and prove it arrived."
 slug: blueprints/http-and-credentials
 sidebar:
   order: 2
+authorship:
+  label: ai-assisted
+  confirmed: true
+  contentHash: "6b24574ac5506c694f6a5e8b6331655274c54230b265c91cbe6a2b4879e6f8ea"
+  confirmedAt: "2026-10-05T13:01:53.009Z"
 ---
 
 This guide shows you how to let programs call an HTTP endpoint that has no
-package, and how to give that endpoint a credential the program never
+Package, and how to give that endpoint a credential the program never
 sees. The example is GitHub's REST API with a personal access token.
 Substitute your host and its authentication.
 
@@ -15,7 +20,7 @@ Substitute your host and its authentication.
 
 The program can't hold the credential itself. The model can be talked into
 repeating anything generated code can read, so `secrets.get` is refused
-from `main` whatever the blueprint says. The blueprint names the secret and
+from `main` whatever the Blueprint says. The Blueprint names the secret and
 the host, and the **authorization proxy** adds the credential to each
 matching request outside the program. The program sends a plain request and
 sees the response, but never the header.
@@ -24,7 +29,7 @@ sees the response, but never the header.
 
 `submilli:http` has one capability per verb, plus one for downloads, and
 `http.<method>` for any other method `http.request` sends. List
-them, with the fields a filter can test and the rules the blueprint already
+them, with the fields a filter can test and the rules the Blueprint already
 has for each:
 
 ```sh
@@ -166,7 +171,7 @@ go only to the same scheme, host, and port.
 ## Register it on a server
 
 The server has its own secret store. Put the token there before you
-register the blueprint, because registration checks that every `store:`
+register the Blueprint, because registration checks that every `store:`
 secret exists:
 
 ```sh
@@ -220,5 +225,5 @@ auth_proxy:
 ```
 
 Both flags default to `false`. The top-level one covers all HTTP calls
-the blueprint allows, including a package's. The entry's one covers the
+the Blueprint allows, including a Package's. The entry's one covers the
 credential.

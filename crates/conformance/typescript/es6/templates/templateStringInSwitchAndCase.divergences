@@ -13,5 +13,4 @@ line 6: `def${1}def`
   ours: string
 
 errors:
-line 4: tsc TS2678: Type '"123"' is not comparable to type '"abc0abc"'. (we accept)
 line 5: ours: `case` label must be a literal (string, number, boolean, `null`, or enum member) (tsc accepts)

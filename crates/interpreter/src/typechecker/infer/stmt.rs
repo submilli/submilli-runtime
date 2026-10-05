@@ -113,14 +113,8 @@ impl Inferer<'_> {
             StmtKind::Break => {
                 if self.loop_depth == 0 && self.switch_depth == 0 {
                     self.error(span, "`break` outside of a loop or `switch`".to_string());
-                } else if self.reachable
-                    && let Some(target_idx) = self.pending_joins.iter().rposition(|_| true)
-                {
-                    let base = self.pending_joins[target_idx].narrow_depth;
-                    let (env, _) = self.snapshot_active_narrowings(0);
-                    let (_, assigned) = self.snapshot_active_narrowings(base);
-                    let snap = (env, assigned);
-                    self.pending_joins[target_idx].breaks.push(snap);
+                } else if self.reachable {
+                    self.record_break_exit();
                 }
                 self.reachable = false;
                 Ok(TypedStmtKind::Break)
@@ -380,8 +374,8 @@ impl Inferer<'_> {
         let hint = ty.as_ref().map(|a| self.resolve_type(a)).transpose()?;
         // The value keeps its literal types for the binding's initial
         // narrowing: `let done = false` reads as `false` until reassigned.
-        self.keeps_literal_types = true;
-        let (typed_value, value_ty) = self.infer_expr(value, hint.as_ref())?;
+        let (typed_value, value_ty) =
+            self.infer_expr_keeping_literals(value, hint.as_ref(), true)?;
         // A `let` is reassignable, so a fresh literal type widens: `const a = 1;
         // let b = a;` binds `number`, not `1`. A literal type the value got from
         // a declaration stays (`let v = c` with `c: "x"` is `"x"`), and an
@@ -434,8 +428,8 @@ impl Inferer<'_> {
         // can invalidate them, and they are fresh, so a `let` copying it widens.
         // A computed value still widens (`const a = 1 + 1` is `number`).
         let hint = ty.as_ref().map(|a| self.resolve_type(a)).transpose()?;
-        self.keeps_literal_types = hint.is_none();
-        let (typed_value, value_ty) = self.infer_expr(value, hint.as_ref())?;
+        let (typed_value, value_ty) =
+            self.infer_expr_keeping_literals(value, hint.as_ref(), hint.is_none())?;
         let origin = self.initializer_literal_origin(ty.is_some(), typed_value, &value_ty)?;
         let bound = hint.unwrap_or_else(|| value_ty.clone());
         let bound = self.pattern_binding_storage_type(value, bound)?;
@@ -485,7 +479,7 @@ impl Inferer<'_> {
             .try_expr(condition)
             .map_err(super::arena_failure)?
             .span;
-        self.check_condition_ty(&cond_ty, cond_span);
+        self.check_condition_ty(typed_cond, &cond_ty, cond_span)?;
         let (true_env, false_env) = self.predicate_envs(typed_cond)?;
         let entry_reachable = self.reachable;
         let then_possible = self.condition_can_be(typed_cond, true)?;
@@ -527,6 +521,12 @@ impl Inferer<'_> {
                     entry_reachable && else_possible,
                 )
             };
+        // Neither branch falls through and the condition can't be false: code
+        // after the `if` is reached only through the false outcome no value
+        // takes. As in TypeScript it still counts as reachable, so an
+        // enclosing `else if` chain carries on, and what that outcome rules
+        // out reads as `never`.
+        let ruled_out_fallthrough = !then_reachable && !else_reachable && !else_possible;
         let (joined_narrowings, joined_assigned) = match (then_reachable, else_reachable) {
             (true, true) => crate::typechecker::infer::narrowing::union_envs(
                 then_narrowings,
@@ -536,12 +536,14 @@ impl Inferer<'_> {
             ),
             (true, false) => (then_narrowings, then_assigned),
             (false, true) => (else_narrowings, else_assigned),
+            (false, false) if ruled_out_fallthrough => (else_narrowings, else_assigned),
             (false, false) => (
                 crate::typechecker::infer::narrowing::NarrowEnv::new(),
                 std::collections::BTreeSet::new(),
             ),
         };
-        self.reachable = then_reachable || else_reachable;
+        self.reachable =
+            then_reachable || else_reachable || (entry_reachable && ruled_out_fallthrough);
         self.merge_assigned_into_outer(joined_assigned, span);
         self.install_joined_narrowings(joined_narrowings, span)?;
         Ok(TypedStmtKind::If {
@@ -727,6 +729,8 @@ impl Inferer<'_> {
             exits.extend(outcome.exit);
             all_assigned.extend(outcome.all_writes);
             self.scopes.pop();
+            // Catch-property materializations cannot outlive their parameter's scope.
+            self.drop_out_of_scope_narrowings();
             if let Some(body) = outcome.body {
                 typed_catches.push(crate::TypedCatchClause {
                     binding: clause.binding.clone(),
@@ -1229,7 +1233,9 @@ impl Inferer<'_> {
                 let (typed_value, value_ty, reported) =
                     self.infer_assigned_value(value, Some(&field_ty))?;
                 if !reported && !assignable(&value_ty, &field_ty, self.resolver()) {
-                    let help = super::type_diff::type_mismatch_help(&field_ty, &value_ty);
+                    let help = self.render_help_list(super::type_diff::type_mismatch_help(
+                        &field_ty, &value_ty,
+                    ));
                     self.error_with_help(
                         value_span,
                         format!("expected `{field_ty}`, got `{value_ty}`"),
@@ -1274,7 +1280,9 @@ impl Inferer<'_> {
                 let (typed_value, value_ty, reported) =
                     self.infer_assigned_value(value, Some(&field_ty))?;
                 if !reported && !assignable(&value_ty, &field_ty, self.resolver()) {
-                    let help = super::type_diff::type_mismatch_help(&field_ty, &value_ty);
+                    let help = self.render_help_list(super::type_diff::type_mismatch_help(
+                        &field_ty, &value_ty,
+                    ));
                     self.error_with_help(
                         value_span,
                         format!("expected `{field_ty}`, got `{value_ty}`"),
@@ -1318,7 +1326,9 @@ impl Inferer<'_> {
                 let (typed_value, value_ty, reported) =
                     self.infer_assigned_value(value, Some(&field_ty))?;
                 if !reported && !assignable(&value_ty, &field_ty, self.resolver()) {
-                    let help = super::type_diff::type_mismatch_help(&field_ty, &value_ty);
+                    let help = self.render_help_list(super::type_diff::type_mismatch_help(
+                        &field_ty, &value_ty,
+                    ));
                     self.error_with_help(
                         value_span,
                         format!("expected `{field_ty}`, got `{value_ty}`"),
@@ -1455,7 +1465,8 @@ impl Inferer<'_> {
                 !matches!(target, Type::Error) && !assignable(&value_ty, target, self.resolver())
             })
         {
-            let help = super::type_diff::type_mismatch_help(target, &value_ty);
+            let help =
+                self.render_help_list(super::type_diff::type_mismatch_help(target, &value_ty));
             self.error_with_help(
                 value_span,
                 format!("expected `{target}`, got `{value_ty}`"),
@@ -1641,6 +1652,19 @@ impl Inferer<'_> {
         }
     }
 
+    /// Records the narrowings that hold here as a way out of the innermost
+    /// loop or `switch`, as a `break` here leaves it.
+    pub(super) fn record_break_exit(&mut self) {
+        let Some(base) = self.pending_joins.last().map(|target| target.narrow_depth) else {
+            return;
+        };
+        let (env, _) = self.snapshot_active_narrowings(0);
+        let (_, assigned) = self.snapshot_active_narrowings(base);
+        if let Some(target) = self.pending_joins.last_mut() {
+            target.breaks.push((env, assigned));
+        }
+    }
+
     /// Keep the declared storage type while a union initializer establishes its
     /// current member. Non-union annotations still define the object's surface.
     fn narrow_local_initializer(
@@ -1649,11 +1673,7 @@ impl Inferer<'_> {
         declared: &Type,
         value: Type,
     ) -> Result<(), crate::compiler_error::CompilerFailure> {
-        // `boolean` narrows as the `true | false` it is.
-        if !matches!(declared.peel(), Type::Union(_) | Type::Boolean)
-            || matches!(value, Type::Error)
-            || value == *declared
-        {
+        if !initializer_may_narrow(declared, &value) {
             return Ok(());
         }
         let scope = self
@@ -1719,8 +1739,7 @@ impl Inferer<'_> {
         // An assignment has its value's type, literal types included, as in
         // TypeScript: `(x = 10)` is `10`. What the target narrows to is
         // `assigned_flow_type`'s answer.
-        self.keeps_literal_types = true;
-        let (typed_value, value_ty) = self.infer_expr(value, target_ty)?;
+        let (typed_value, value_ty) = self.infer_expr_keeping_literals(value, target_ty, true)?;
         Ok((typed_value, value_ty, self.error_count() > errors_before))
     }
 
@@ -3053,13 +3072,12 @@ impl Inferer<'_> {
         let diagnostics_from = self.diagnostics.len();
         self.clause_write_scopes.push(Default::default());
         let (typed, ty) = self.infer_expr(condition, None)?;
-        self.check_condition_ty(
-            &ty,
-            self.ast
-                .try_expr(condition)
-                .map_err(super::arena_failure)?
-                .span,
-        );
+        let cond_span = self
+            .ast
+            .try_expr(condition)
+            .map_err(super::arena_failure)?
+            .span;
+        self.check_condition_ty(typed, &ty, cond_span)?;
         let writes = self
             .clause_write_scopes
             .pop()
@@ -3088,7 +3106,7 @@ impl Inferer<'_> {
             .map_err(super::arena_failure)?
             .span;
         let (typed, ty) = self.infer_expr(condition, None)?;
-        self.check_condition_ty(&ty, cond_span);
+        self.check_condition_ty(typed, &ty, cond_span)?;
         let (_, false_env) = self.predicate_envs(typed)?;
         let mut exit = self.snapshot_active_narrowings(0).0;
         exit.extend_env(false_env);
@@ -3171,6 +3189,11 @@ impl Inferer<'_> {
             // Strings, literal ones included, iterate by code point through
             // `String#iterator`.
             ty if ty.is_string_shaped() => Some((Type::String, crate::ForOfKind::Iterable)),
+            // A union of arrays and tuples is one `$Array` at runtime too. It
+            // follows the string arm, which takes unions of string literals.
+            Type::Union(_) => iter_ty
+                .array_like_union_element()
+                .map(|element| (element, crate::ForOfKind::Array)),
             // Exact-name match keeps Iterator<U> on its own desugar path
             // (it declares `next()`, not `iterator()`, so it fails the structural check below).
             Type::InterfaceRef { name, args, .. } if name == "Iterator" && args.len() == 1 => {
@@ -3203,6 +3226,15 @@ impl Inferer<'_> {
             _ => None,
         }
     }
+}
+
+/// Whether a binding declared `declared` starts narrowed to an initializer of
+/// type `value`: only a union does (`boolean` as the `true | false` it is),
+/// and only to a value that is neither rejected nor the declared type itself.
+pub(super) fn initializer_may_narrow(declared: &Type, value: &Type) -> bool {
+    matches!(declared.peel(), Type::Union(_) | Type::Boolean)
+        && !matches!(value, Type::Error)
+        && value != declared
 }
 
 #[cfg(test)]

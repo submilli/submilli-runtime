@@ -3,6 +3,7 @@
 use std::io::Write;
 use std::sync::Arc;
 
+use crate::runtime::decision::{CallSite, CallTicket, EntryPath, SourceLine};
 use crate::runtime::fs::{ContainError, ContentPath, LinkPath, resolve_content, resolve_link};
 use crate::runtime::fuel;
 use crate::runtime::host::{
@@ -99,16 +100,26 @@ pub(crate) struct UnknownPrincipal {
 /// function, so the invariant does not extend to it; that path attributes to
 /// the caller and would deny anyway.
 pub fn check_security(
-    mut store: impl wasmtime::AsContextMut<Data = StoreData>,
+    store: impl wasmtime::AsContextMut<Data = StoreData>,
     capability: &str,
     context: serde_json::Value,
 ) -> wasmtime::Result<()> {
+    check_security_call(store, capability, context).map(|_| ())
+}
+
+/// [`check_security`], returning the recorder's ticket for the call when one is installed,
+/// for host functions whose later decisions (redirect hops) belong to the same call.
+pub(crate) fn check_security_call(
+    mut store: impl wasmtime::AsContextMut<Data = StoreData>,
+    capability: &str,
+    context: serde_json::Value,
+) -> wasmtime::Result<Option<CallTicket>> {
     // Direct caller attribution and the policy check have one flat gate charge.
     fuel::charge_host_fuel(&mut store, fuel::GATE)?;
     let caller = running_package(&store).map_err(|error| {
         if let PrincipalError::Unknown(ref unknown) = error {
-            audit_denial(
-                store.as_context().data().security_check.as_ref(),
+            audit_entry_denial(
+                &store,
                 unknown.label,
                 capability,
                 &context,
@@ -118,13 +129,62 @@ pub fn check_security(
         }
         error.into_denial(capability)
     })?;
+    // Uncharged on purpose; see `DecisionLogConfig::max_line_capture_frames`.
+    let ticket = begin_recorded_call(&store, &caller, capability);
     authorize_capability(
         &caller,
         store.as_context().data().security_check.as_ref(),
         capability,
         &context,
         store.as_context().data().vfs.cwd(),
-    )
+        CallSite::new(ticket, EntryPath::GatedOp),
+    )?;
+    Ok(ticket)
+}
+
+/// Begins the recorder's call for a host function at its entry, with the line of the
+/// submitted program that led to it. `None` when no recorder is installed.
+pub(crate) fn begin_recorded_call(
+    store: &impl wasmtime::AsContext<Data = StoreData>,
+    caller: &str,
+    capability: &str,
+) -> Option<CallTicket> {
+    let recorder = store.as_context().data().security_check.recorder()?;
+    Some(recorder.begin_call(caller, capability, source_line(store)))
+}
+
+/// The line in the submitted program that is running, or `None` when the lookup fails.
+///
+/// Walks a full backtrace, which costs more than [`running_package`]'s module visit, so
+/// it runs only while a recorder is installed and still wants lines, uncharged to guest
+/// fuel (see `DecisionLogConfig::max_line_capture_frames`). Package frames are skipped:
+/// the line is the user's call into the package, not a line inside it.
+pub(crate) fn source_line(
+    store: &impl wasmtime::AsContext<Data = StoreData>,
+) -> Option<SourceLine> {
+    let recorder = store.as_context().data().security_check.recorder()?;
+    if !recorder.wants_line() {
+        return None;
+    }
+    let backtrace = wasmtime::WasmBacktrace::force_capture(store);
+    recorder.note_line_capture(backtrace.frames().len());
+    let frame = backtrace
+        .frames()
+        .iter()
+        .find(|frame| frame.module().name() == Some(crate::mangle::USER_PACKAGE))?;
+    let symbol = frame.symbols().first()?;
+    Some(SourceLine {
+        line: symbol.line()?,
+        column: symbol.column(),
+    })
+}
+
+/// Marks the latest recorded decision as a denial this host function swallowed to filter a
+/// listing. A no-op without a recorder.
+pub(crate) fn mark_filtered(store: &impl wasmtime::AsContext<Data = StoreData>) {
+    if let Some(recorder) = store.as_context().data().security_check.recorder() {
+        recorder.mark_last_filtered();
+    }
 }
 
 /// [`check_security`] for a caller resolved earlier, such as the principal of a
@@ -135,6 +195,7 @@ pub(crate) fn authorize_capability(
     capability: &str,
     context: &serde_json::Value,
     cwd: &str,
+    site: CallSite,
 ) -> wasmtime::Result<()> {
     // The ordering is the invariant. This must precede both the delegation
     // below and any work the host fn does after we return — a reorder that
@@ -144,64 +205,134 @@ pub(crate) fn authorize_capability(
         && let Some(reason) =
             crate::stdlib::capabilities::find(capability).and_then(|entry| entry.main_denial)
     {
-        audit_denial(
+        audit_denial_at(
             security_check,
             caller,
             capability,
             context,
             "invariant",
             reason,
+            site,
         );
         return Err(permission_denied_invariant(caller, capability, reason));
     }
+    check_and_audit(security_check, caller, capability, context, cwd, site)
+        .map_err(|reason| permission_denied(caller, capability, reason))
+}
+
+/// Asks the policy whether `caller` may use `capability`, and audits its answer with the
+/// recorder's explanation. A denial returns the policy's reason.
+pub(crate) fn check_and_audit(
+    security_check: &dyn SecurityCheck,
+    caller: &str,
+    capability: &str,
+    context: &serde_json::Value,
+    cwd: &str,
+    site: CallSite,
+) -> Result<(), String> {
     let outcome = security_check.check_with_cwd(caller, capability, context, cwd);
+    // The explanation is for the recorder alone; enforcement never reads it.
+    let explanation = security_check
+        .recorder()
+        .and_then(|_| security_check.explain(caller, capability, context, cwd));
     let audit_context = security_check.audit_context(capability, context, cwd);
     let context = audit_context.as_ref();
     match outcome {
         CheckOutcome::Allow { rule } => {
-            security_check.audit(AuditDecision {
-                caller,
-                capability,
-                context,
-                allowed: true,
-                source: "policy",
-                rule,
-                reason: None,
-            });
+            security_check.audit(
+                AuditDecision::new(caller, capability, context, true, "policy", rule, None)
+                    .with_explanation(explanation.as_ref())
+                    .with_site(site),
+            );
             Ok(())
         }
         CheckOutcome::Deny { reason, rule } => {
-            security_check.audit(AuditDecision {
-                caller,
-                capability,
-                context,
-                allowed: false,
-                source: "policy",
-                rule,
-                reason: Some(&reason),
-            });
-            Err(permission_denied(caller, capability, reason))
+            security_check.audit(
+                AuditDecision::new(
+                    caller,
+                    capability,
+                    context,
+                    false,
+                    "policy",
+                    rule,
+                    Some(&reason),
+                )
+                .with_explanation(explanation.as_ref())
+                .with_site(site),
+            );
+            Err(reason)
         }
     }
 }
 
-pub(crate) fn audit_denial(
+pub(crate) fn audit_denial_at(
     security: &dyn SecurityCheck,
     caller: &str,
     capability: &str,
     context: &serde_json::Value,
     source: &str,
     reason: &str,
+    site: CallSite,
 ) {
-    security.audit(AuditDecision {
+    security.audit(
+        AuditDecision::new(
+            caller,
+            capability,
+            context,
+            false,
+            source,
+            None,
+            Some(reason),
+        )
+        .with_site(site),
+    );
+}
+
+/// Audits a refusal at the entry of a host call as a call of its own, with the program
+/// line that led to it. For a refusal after the call's gate, see [`audit_denial_in`].
+pub(crate) fn audit_entry_denial(
+    store: &impl wasmtime::AsContext<Data = StoreData>,
+    caller: &str,
+    capability: &str,
+    context: &serde_json::Value,
+    source: &str,
+    reason: &str,
+) {
+    let security = store.as_context().data().security_check.as_ref();
+    let ticket = security
+        .recorder()
+        .map(|recorder| recorder.begin_call(caller, capability, source_line(store)));
+    audit_denial_at(
+        security,
         caller,
         capability,
         context,
-        allowed: false,
         source,
-        rule: None,
-        reason: Some(reason),
-    });
+        reason,
+        CallSite::new(ticket, EntryPath::GatedOp),
+    );
+}
+
+/// Audits a further refusal inside the host call `ticket` names, such as a read-only or
+/// quota refusal after the policy allowed it. Without a ticket the refusal is its own call.
+pub(crate) fn audit_denial_in(
+    store: &impl wasmtime::AsContext<Data = StoreData>,
+    ticket: Option<CallTicket>,
+    caller: &str,
+    capability: &str,
+    context: &serde_json::Value,
+    source: &str,
+    reason: &str,
+) {
+    audit_denial_at(
+        store.as_context().data().security_check.as_ref(),
+        caller,
+        capability,
+        context,
+        source,
+        reason,
+        CallSite::new(ticket, EntryPath::GatedOp),
+    );
 }
 
 /// Resolve a guest path for an operation that reaches its contents — every component,
@@ -227,10 +358,12 @@ pub fn resolve_link_or_trap(
 }
 
 /// Refuse a write into a volume mounted read-only, attributed to the running
-/// package. Call after the capability check and resolution, before any other work,
-/// so the policy sees every attempt and a refused call changes nothing.
+/// package. Call after the capability check and resolution, before any other
+/// work, so the policy sees every attempt and a refused call changes nothing.
+/// `ticket` is the host call's gate, which the refusal continues.
 pub(crate) fn require_writable(
     store: impl wasmtime::AsContext<Data = StoreData>,
+    ticket: Option<CallTicket>,
     placement: &Placement,
     capability: &str,
     guest_path: &str,
@@ -240,8 +373,9 @@ pub(crate) fn require_writable(
     }
     let caller = running_package(&store).map_err(|error| {
         if let PrincipalError::Unknown(ref unknown) = error {
-            audit_denial(
-                store.as_context().data().security_check.as_ref(),
+            audit_denial_in(
+                &store,
+                ticket,
                 unknown.label,
                 capability,
                 &serde_json::json!({ "path": guest_path }),
@@ -251,8 +385,9 @@ pub(crate) fn require_writable(
         }
         error.into_denial(capability)
     })?;
-    audit_denial(
-        store.as_context().data().security_check.as_ref(),
+    audit_denial_in(
+        &store,
+        ticket,
         &caller,
         capability,
         &serde_json::json!({ "path": guest_path }),

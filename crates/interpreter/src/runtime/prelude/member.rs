@@ -38,7 +38,7 @@ pub(super) fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         ("invoke", 2),
         ("property", 3),
         ("invoke_defaults", 3),
-        ("defaults_fit", 3),
+        ("defaults_fit", 4),
     ] {
         host::register_host_fn_async(
             linker,
@@ -71,7 +71,7 @@ pub(super) fn declare(defs: &mut PackageDeclaration) {
         ("invoke", 2),
         ("property", 3),
         ("invoke_defaults", 3),
-        ("defaults_fit", 3),
+        ("defaults_fit", 4),
     ] {
         declare_method(
             defs,
@@ -154,14 +154,26 @@ fn defaults_fit(caller: &mut Caller<'_, StoreData>, params: &[Val]) -> wasmtime:
     let argument_count = host::read_boxed_number(caller, abi_arg(params, 1)?, "arity")? as usize;
     let results = host::read_boxed_number(caller, abi_arg(params, 2)?, "return convention")?;
     let results = (results >= 0.0).then_some(results as usize);
+    let ends_in_rest = host::read_boxed_number(caller, abi_arg(params, 3)?, "rest")? != 0.0;
     let fits = value::is_callable(caller, abi_arg(params, 0)?)? && {
-        // The cast wraps this function as it is, so its own return convention
-        // must fit; but an adapter takes whatever the function it wraps takes.
-        let function = super::closure::read(caller, abi_arg(params, 0)?, "function")?;
-        let original = super::closure::original(caller, *abi_arg(params, 0)?)?;
-        results.is_none_or(|expected_results| function.result_count(caller) == expected_results)
-            && super::closure::read(caller, &original, "function")?
-                .accepts_arguments(caller, argument_count)?
+        // A cast adapts to its target by calling what an adapter ultimately
+        // wraps, so that original decides: its parameters, and its return
+        // convention unless the target is `void`, which drops any result. A
+        // value-returning function stored as a `void` one still returns its value.
+        let original_ref = super::closure::original(caller, *abi_arg(params, 0)?)?;
+        let original = super::closure::read(caller, &original_ref, "function")?;
+        let returns_fit = results.is_none_or(|expected_results| {
+            expected_results == 0 || original.result_count(caller) == expected_results
+        });
+        returns_fit
+            && if ends_in_rest {
+                original.ends_in_rest(caller, argument_count)?
+            } else {
+                // As in assignability (spec §1.4), a rest function stands for a
+                // fixed-arity type only with a different number of parameters.
+                !original.ends_in_rest(caller, argument_count)?
+                    && original.accepts_arguments(caller, argument_count)?
+            }
     };
     box_result(caller, Val::I32(i32::from(fits)))
 }

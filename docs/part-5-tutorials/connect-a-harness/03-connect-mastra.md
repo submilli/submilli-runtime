@@ -4,11 +4,16 @@ description: "Run the research agent on Mastra: its programs executed on the ser
 slug: tutorials/connect-mastra
 sidebar:
   order: 3
+authorship:
+  label: ai-assisted
+  confirmed: true
+  contentHash: "4f82a647cc45f81ac5341a018c8c042b06a2f77be38df924eb4ce0d56940981f"
+  confirmedAt: "2026-10-05T13:01:53.009Z"
 ---
 
 In this tutorial we will run the research agent on Mastra, with its programs
 executed on the server as the signed-in user (`u_ada` in the examples). You need the server and the `research`
-blueprint from [Connect a harness](/docs/tutorials/connect-a-harness),
+Blueprint from [Connect a harness](/docs/tutorials/connect-a-harness),
 with `SUBMILLI_SERVER_TOKEN` still exported, Node.js 20 or later, and a
 key from your model provider for the conversation. The agent file
 names Claude. For Google or OpenAI, the `model` argument takes
@@ -216,7 +221,7 @@ user in the `submilli-variables` header, passes the tools to `generate`
 as `toolsets`, checks that the Submilli toolset loaded, and calls
 `disconnect` in a `finally`. The handler answers 502 when the tools are
 missing. The assistant noticed unprompted that the user id ends up in
-the blueprint's path filters, so it accepts ids of letters, digits, and
+the Blueprint's path filters, so it accepts ids of letters, digits, and
 `_ . @ -` alone. Then it says it guessed that format and asks what your
 ids look like.
 

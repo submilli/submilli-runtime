@@ -127,3 +127,37 @@ SUBMILLI_HOME="$gmail_test_home" cargo run -p submilli -- run packages/gmail/tes
 These are separate commands because `build test` uses an unrestricted policy;
 its ordinary unit tests cannot prove a `main` caller is constrained.
 `cargo test -p submilli --test package_policy` runs them all.
+
+## Stored-draft sender policy
+
+`sendDraft` checks `from` resolved from the stored From header as well as all To,
+Cc and Bcc recipients. Display names are parsed, mailbox case and trailing domain
+dots are normalized, and duplicate or ambiguous From headers are refused. Missing
+From is null, meaning Gmail chooses the authenticated account's default sender.
+An allow rule naming an alias therefore rejects a missing sender. Metadata is
+read before the send check; denial prevents the send request.
+
+```sh
+node --test packages/gmail/scripts/contract.test.mjs
+```
+
+## Download destination policy
+
+Downloads check the caller's `fs.write { path, max_bytes }` before credentials
+or remote requests. Grant `main` a write rule for the intended VFS folder; this
+check normalizes relative paths and `..` segments. The package's download
+capability keeps its original `path` field for existing filters.
+
+Attachment downloads are limited to 20 MB of decoded bytes. Oversized base64url
+input or decoded content throws `GmailError` with code `attachment_too_large`
+without writing the destination.
+
+`tests/policy/download-path.ts` verifies caller attribution and normalized paths
+without credentials or network, under its matching blueprint.
+
+Offline transfer and size-boundary contract checks run with Node 24's native
+base64 feature enabled:
+
+```sh
+node --js-base-64 --test packages/gmail/scripts/*.test.mjs
+```

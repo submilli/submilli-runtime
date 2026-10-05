@@ -1,2 +1,1 @@
-line 36 extra: bug SUB-1067 a cast doesn't give an empty array literal its element type
-line 21, 37 type: bug SUB-1196 (literal under an expected type) a literal checked against an expected type takes that type, where tsc keeps its own
+line 21, 36, 37 type: bug SUB-1196 (literal under an expected type) a literal checked against an expected type takes that type, where tsc keeps its own

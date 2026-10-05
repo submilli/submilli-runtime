@@ -1,9 +1,14 @@
 ---
 title: "Quickstart"
-description: "Write a blueprint, the package it governs, and an application that runs an agent's program on the server, and watch one rule refuse one call."
+description: "Write a Blueprint, the Package it governs, and an application that runs an agent's program on the server, and watch one rule refuse one call."
 slug: quickstart
 sidebar:
   order: 3
+authorship:
+  label: ai-assisted
+  confirmed: true
+  contentHash: "ba6a847184afb7c2a54a26515c281fff2771f366e9820b28c0739bc4166fb480"
+  confirmedAt: "2026-10-05T13:01:53.009Z"
 ---
 
 By the end of this chapter you will have watched a policy you wrote defeat a
@@ -12,7 +17,7 @@ prompt injection. It won't refuse a host or a port. It will refuse an
 ask about, and the runtime will stop that call while the rest of the
 program keeps running.
 
-Two authors work in this chapter. You write a blueprint, a package, and an
+Two authors work in this chapter. You write a Blueprint, a Package, and an
 application, and the agent writes everything that runs. For this
 walkthrough you type the agent's files yourself, so you can see the flow.
 
@@ -28,12 +33,12 @@ Make a directory to work in:
 mkdir quickstart && cd quickstart
 ```
 
-## The blueprint
+## The Blueprint
 
-A blueprint is a YAML file that says what your agent's programs may do.
+A Blueprint is a YAML file that says what your agent's programs may do.
 Writing it is your job. This one lets the agent list a customer's charges,
 and only for the customer your application names. That is one operation,
-`acme.com/charges.list`, which the package in the next step will provide.
+`acme.com/charges.list`, which the Package in the next step will provide.
 Save it as `blueprint.yaml`:
 
 ```yaml
@@ -66,16 +71,16 @@ for the customer this session was opened for. Whatever code the agent
 writes, it can call `charges.list` only with that customer's id. Any other
 call is denied.
 
-Two details are worth noting. Every blueprint starts from `default: deny`.
+Two details are worth noting. Every Blueprint starts from `default: deny`.
 Anything you have not written a rule for does not exist for this
 agent. `required: true` means a request that does not bind `customerId` is
 rejected before the agent's program runs.
 
-## The package
+## The Package
 
-A package is a small wrapper you write around your own API or business
+A Package is a small wrapper you write around your own API or business
 logic. It is your agent's only way in, because generated code can call nothing
-but the packages your blueprint lists. Scaffold one:
+but the Packages your Blueprint lists. Scaffold one:
 
 ```
 submilli build init @acme/billing package
@@ -132,14 +137,14 @@ export function listCharges(customerId: string): Charge[] {
 }
 ```
 
-Two lines carry the package. The `@capability` annotation names the
+Two lines carry the Package. The `@capability` annotation names the
 operation, `acme.com/charges.list`, and says that a rule may test its
 `customerId` argument. The `check(...)` call enforces the rules.
-It asks the blueprint whether *this* call, with *this* customer, is allowed,
+It asks the Blueprint whether *this* call, with *this* customer, is allowed,
 and throws if not. This line stops the agent from passing any
 customer other than the one your application bound for the session.
 
-Compile the package and install it into your local store, where the server
+Compile the Package and install it into your local store, where the server
 will find it:
 
 ```
@@ -169,8 +174,8 @@ provides:
 requires: []
 ```
 
-`customerId: string` is the key line, because the blueprint's rule tests
-that field. With the package installed, check the blueprint against it:
+`customerId: string` is the key line, because the Blueprint's rule tests
+that field. With the Package installed, check the Blueprint against it:
 
 ```
 submilli blueprint lint blueprint.yaml
@@ -182,7 +187,7 @@ submilli blueprint lint blueprint.yaml
 
 ## The application
 
-The server runs the agent's programs under the blueprint. It checks a token
+The server runs the agent's programs under the Blueprint. It checks a token
 on every request. Generate one, export it, and start the server in the
 background:
 
@@ -196,7 +201,7 @@ ts=2026-10-03T17:05:24.939Z level=info stream=log target=submilli_server::auth m
 ts=2026-10-03T17:05:24.947Z level=info stream=log target=submilli_server::serve msg="submilli-server listening" addr=127.0.0.1:8128 protocol=http
 ```
 
-Register the blueprint. The `submilli server` commands and your application
+Register the Blueprint. The `submilli server` commands and your application
 read the same variable, so stay in this terminal:
 
 ```
@@ -208,7 +213,7 @@ Added blueprint 'quickstart'
 ```
 
 Now the application. It is ordinary Node.js, outside Submilli, written once. It
-sends a program to the server with the blueprint's name and the customer
+sends a program to the server with the Blueprint's name and the customer
 the session is for, and prints what comes back. Save it as `app.mjs`:
 
 ```javascript
@@ -280,7 +285,7 @@ function main(): string {
 ```
 
 `main()` is the entry point, and its return value is the program's output.
-The program doesn't mention Submilli at all. It imports the package, and the
+The program doesn't mention Submilli at all. It imports the Package, and the
 rules apply behind the scenes. Run it:
 
 ```
@@ -359,7 +364,7 @@ reply, its logs, and whoever reads them.
 ## With a real agent
 
 The repository's `examples/quickstart/agent.py` points a real agent at the
-blueprint you registered, with the same server, the same package, and
+Blueprint you registered, with the same server, the same Package, and
 nothing new to configure. The agent reaches the server over MCP and gets its
 tools from it. The main tool takes TypeScript the agent writes, and the
 server runs it. The token and the customer id travel in headers, so the
@@ -386,4 +391,4 @@ You wrote the rules once, outside the agent's control. They allow one
 operation for one customer and deny everything else. The agent writes the code forever, and
 the rules never have to trust it.
 
-Next: [blueprints](/docs/blueprints), the file you just wrote, in full.
+Next: [Blueprints](/docs/blueprints), the file you just wrote, in full.

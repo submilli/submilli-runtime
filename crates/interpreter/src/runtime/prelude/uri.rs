@@ -9,8 +9,10 @@ use crate::runtime::StoreData;
 use crate::runtime::fuel;
 use crate::runtime::host::{
     intrinsic_string_type, read_string_arg, register_host_fn, write_submilli_string_struct,
+    write_submilli_string_struct_units,
 };
 use crate::runtime::prelude::MODULE_NAME;
+use crate::runtime::prelude::vtable::read_string_units;
 use crate::{PackageDeclaration, Param, Span, Type, ValueKind, ValueSymbol};
 
 /// `encodeURIComponent` leaves the ECMA "unreserved marks" alone.
@@ -50,26 +52,36 @@ pub fn encode_uri_js(input: &str) -> String {
     encode(input, |c| is_component_unreserved(c) || is_uri_reserved(c))
 }
 
-fn hex_byte(bytes: &[u8]) -> Result<u8, String> {
+/// The byte a `%XX` escape at the start of `units` encodes.
+fn hex_byte(units: &[u16]) -> Result<u8, String> {
     let malformed = || "URI malformed".to_string();
-    let [b'%', hi, lo, ..] = bytes else {
+    let [percent, hi, lo, ..] = units else {
         return Err(malformed());
     };
-    let hi = char::from(*hi).to_digit(16).ok_or_else(malformed)?;
-    let lo = char::from(*lo).to_digit(16).ok_or_else(malformed)?;
-    Ok((hi * 16 + lo) as u8)
+    if *percent != u16::from(b'%') {
+        return Err(malformed());
+    }
+    let digit = |unit: &u16| {
+        char::from_u32(u32::from(*unit))
+            .and_then(|c| c.to_digit(16))
+            .ok_or_else(malformed)
+    };
+    Ok((digit(hi)? * 16 + digit(lo)?) as u8)
 }
 
-fn decode(mut input: &str, preserve_reserved: bool) -> Result<String, String> {
+/// Decodes on UTF-16 code units, so a unit outside an escape is copied as is,
+/// a lone surrogate included, as the standard's Decode does.
+fn decode(input: &[u16], preserve_reserved: bool) -> Result<Vec<u16>, String> {
     let malformed = || "URI malformed".to_string();
-    let mut out = String::with_capacity(input.len());
-    while let Some(c) = input.chars().next() {
-        if c != '%' {
-            out.push(c);
-            input = &input[c.len_utf8()..];
+    let mut out = Vec::with_capacity(input.len());
+    let mut rest = input;
+    while let Some((&unit, tail)) = rest.split_first() {
+        if unit != u16::from(b'%') {
+            out.push(unit);
+            rest = tail;
             continue;
         }
-        let first = hex_byte(input.as_bytes())?;
+        let first = hex_byte(rest)?;
         let len = match first {
             0x00..=0x7F => 1,
             0xC0..=0xDF => 2,
@@ -77,10 +89,9 @@ fn decode(mut input: &str, preserve_reserved: bool) -> Result<String, String> {
             0xF0..=0xF7 => 4,
             _ => return Err(malformed()),
         };
-        let encoded = input.get(..3 * len).ok_or_else(malformed)?;
+        let (encoded, after) = rest.split_at_checked(3 * len).ok_or_else(malformed)?;
         let mut decoded = [0u8; 4];
         for (index, (chunk, slot)) in encoded
-            .as_bytes()
             .as_chunks::<3>()
             .0
             .iter()
@@ -95,38 +106,37 @@ fn decode(mut input: &str, preserve_reserved: bool) -> Result<String, String> {
         }
         let text = std::str::from_utf8(&decoded[..len]).map_err(|_| malformed())?;
         if preserve_reserved && len == 1 && is_uri_reserved(char::from(first)) {
-            out.push_str(encoded);
+            out.extend_from_slice(encoded);
         } else {
-            out.push_str(text);
+            out.extend(text.encode_utf16());
         }
-        input = &input[encoded.len()..];
+        rest = after;
     }
     Ok(out)
 }
 
-pub fn decode_uri_component_js(input: &str) -> Result<String, String> {
+pub fn decode_uri_component_js(input: &[u16]) -> Result<Vec<u16>, String> {
     decode(input, false)
 }
 
-pub fn decode_uri_js(input: &str) -> Result<String, String> {
+pub fn decode_uri_js(input: &[u16]) -> Result<Vec<u16>, String> {
     decode(input, true)
 }
 
 pub(crate) fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
-    type UriOp = fn(&str) -> Result<String, String>;
+    type EncodeOp = fn(&str) -> String;
+    type DecodeOp = fn(&[u16]) -> Result<Vec<u16>, String>;
     let engine = linker.engine().clone();
     let string_struct = ValType::Ref(RefType::new(
         false,
         HeapType::ConcreteStruct(intrinsic_string_type(&engine)?),
     ));
     let ty = FuncType::new(&engine, [string_struct.clone()], [string_struct]);
-    let ops: [(&str, UriOp); 4] = [
-        ("encodeURIComponent", |s| Ok(encode_uri_component_js(s))),
-        ("encodeURI", |s| Ok(encode_uri_js(s))),
-        ("decodeURIComponent", decode_uri_component_js),
-        ("decodeURI", decode_uri_js),
+    let encoders: [(&str, EncodeOp); 2] = [
+        ("encodeURIComponent", encode_uri_component_js),
+        ("encodeURI", encode_uri_js),
     ];
-    for (name, op) in ops {
+    for (name, op) in encoders {
         register_host_fn(
             linker,
             MODULE_NAME,
@@ -136,8 +146,28 @@ pub(crate) fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
             move |caller, params, results| -> wasmtime::Result<()> {
                 let s = read_string_arg(&mut *caller, abi_arg(params, 0)?, name)?;
                 fuel::charge(&mut *caller, fuel::SCAN, s.len() as u64)?;
-                let mapped = op(&s).map_err(wasmtime::Error::msg)?;
-                let st = write_submilli_string_struct(caller, &mapped)?;
+                let st = write_submilli_string_struct(caller, &op(&s))?;
+                *abi_result(results, 0)? = Val::AnyRef(Some(st.to_anyref()));
+                Ok(())
+            },
+        )?;
+    }
+    let decoders: [(&str, DecodeOp); 2] = [
+        ("decodeURIComponent", decode_uri_component_js),
+        ("decodeURI", decode_uri_js),
+    ];
+    for (name, op) in decoders {
+        register_host_fn(
+            linker,
+            MODULE_NAME,
+            crate::mangle::prelude(name),
+            ty.clone(),
+            /* deterministic = */ true,
+            move |caller, params, results| -> wasmtime::Result<()> {
+                let units = read_string_units(&mut *caller, abi_arg(params, 0)?, name)?;
+                fuel::charge(&mut *caller, fuel::SCAN, units.len() as u64)?;
+                let decoded = op(&units).map_err(wasmtime::Error::msg)?;
+                let st = write_submilli_string_struct_units(caller, &decoded)?;
                 *abi_result(results, 0)? = Val::AnyRef(Some(st.to_anyref()));
                 Ok(())
             },

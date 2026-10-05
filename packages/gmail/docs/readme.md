@@ -82,3 +82,8 @@ function main(): string {
     return lines.join("\n");
 }
 ```
+
+Downloads also require the caller's `fs.write { path, max_bytes }` permission.
+Use its normalized path filter to restrict the destination folder; package
+download capabilities retain the original `path` field. The default download
+limit is 20 MB of decoded attachment bytes.

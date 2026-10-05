@@ -463,6 +463,7 @@ fn add(args: &AddArgs) -> Result<String> {
 
     let action = Action::from(args.action);
     let rule = PermissionRule {
+        name: None,
         capability: args.capability.clone(),
         filter,
         action,

@@ -26,6 +26,7 @@ fn allow_fs() -> BTreeMap<String, Vec<PermissionRule>> {
     let rules = ["fs.read", "fs.write"]
         .into_iter()
         .map(|cap| PermissionRule {
+            name: None,
             capability: cap.into(),
             filter: None,
             action: Action::Allow,
@@ -380,9 +381,9 @@ async fn a_named_root_rejects_path_traversal() {
     let h = with_volume(dir.path());
     let escape = r#"import { writeText } from "submilli:fs"; function main(): void { writeText("../escape.txt", "x"); }"#;
     let (_, r) = h.execute(escape, None).await;
-    // The lexical `..` escape traps; the server surfaces it as a runtime error
+    // The lexical `..` escape is refused; the server surfaces it as a denial
     // and nothing is written to the parent of the configured root.
-    assert_eq!(r["error"]["kind"], json!("runtime_error"), "got: {r}");
+    assert_eq!(r["error"]["kind"], json!("permission_denied"), "got: {r}");
     let escaped = dir.path().parent().unwrap().join("escape.txt");
     assert!(
         !escaped.exists(),

@@ -1,236 +1,283 @@
-use std::collections::BTreeMap;
-use std::fmt::Write;
-
+use crate::rendering::{RenderError, RenderLimits, Writer};
+use crate::type_rendering::write_type;
 use crate::{ObjectField, Type};
+use std::collections::BTreeMap;
+#[cfg(test)]
+thread_local! {
+    static FAIL_RENDER: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
 
-/// Named in the help whenever a `void` expression reaches a value slot: the
-/// message alone ("expected `unknown`, got `void`") says what is wrong but not
-/// what to write instead.
 const VOID_IS_NOT_A_VALUE: &str = "`void` is not a value: a function declared `: void` produces nothing. \
 Call it as its own statement, then produce the value separately.";
 
-const NO_DIFFERENCE: &str = "(no structural difference detected)";
-
-/// The `help:` lines the *diff* earns: the structural difference, plus a note
-/// when one side's rendering is lossy. Call sites may add their own on top. Separate entries, because they are
-/// separate advice — folding them into one string prints the second without a
-/// gutter, as stray prose in the diagnostic body.
-pub(super) fn type_mismatch_help(expected: &Type, got: &Type) -> Vec<String> {
-    format_type_diff(expected, got)
-        .into_iter()
-        .chain(guard_loss_note(got))
-        .collect()
+pub(super) fn type_mismatch_help(expected: &Type, got: &Type) -> Result<Vec<String>, RenderError> {
+    let mut help = Vec::new();
+    help.try_reserve(2).map_err(|_| RenderError::Allocation)?;
+    if let Some(diff) = format_type_diff(expected, got)? {
+        help.push(diff);
+    }
+    if let Some(note) = guard_loss_note(got)? {
+        help.push(note);
+    }
+    Ok(help)
 }
 
-pub(super) fn format_type_diff(expected: &Type, got: &Type) -> Option<String> {
-    if matches!(got.peel(), Type::Void) && !matches!(expected.peel(), Type::Void) {
-        return Some(VOID_IS_NOT_A_VALUE.to_string());
+pub(super) fn format_type_diff(expected: &Type, got: &Type) -> Result<Option<String>, RenderError> {
+    #[cfg(test)]
+    if FAIL_RENDER.with(|fail| fail.replace(false)) {
+        return Err(RenderError::Allocation);
     }
-    if super::assignable::drops_readonly(got, expected) {
-        return Some(format!(
-            "`{got}` is `readonly` and cannot be assigned to the mutable type `{expected}`; \
-             copy it with `[...value]`, or make the target type `readonly` too"
-        ));
-    }
-    match (expected, got) {
-        (
-            Type::Object {
-                fields: a,
-                index: ai,
-            },
-            Type::Object {
-                fields: b,
-                index: bi,
-            },
-        ) => {
-            if ai != bi {
-                return Some(format!("expected `{expected}`, got `{got}`"));
-            }
-            Some(format_object_diff(a, b))
+
+    // Comparison helpers operate on compiler-bounded trees. Invalid direct inputs
+    // are abbreviated before invoking recursive equality/readonly comparison.
+    for ty in [expected, got] {
+        match crate::type_rendering::check_for_copy(ty) {
+            Ok(()) => {}
+            Err(RenderError::Truncated) => return Ok(Some(crate::rendering::TRUNCATED.into())),
+            Err(error) => return Err(error),
         }
-        (
-            Type::Function {
-                params: pa,
-                ret: ra,
-                has_rest: false,
-                ..
-            },
-            Type::Function {
-                params: pb,
-                ret: rb,
-                has_rest: true,
-                ..
-            },
-        ) => Some(format_rest_function_diff(pa, ra, pb, rb)),
-        (
-            Type::Function {
-                params: pa,
-                ret: ra,
-                ..
-            },
-            Type::Function {
-                params: pb,
-                ret: rb,
-                ..
-            },
-        ) => Some(format_function_diff(pa, ra, pb, rb)),
-        _ => None,
     }
+    let has_diff = matches!(
+        (expected, got),
+        (Type::Object { .. }, Type::Object { .. }) | (Type::Function { .. }, Type::Function { .. })
+    );
+    let is_void = matches!(got.peel(), Type::Void) && !matches!(expected.peel(), Type::Void);
+    let readonly = super::assignable::drops_readonly(got, expected);
+    if !has_diff && !is_void && !readonly {
+        return Ok(None);
+    }
+    Writer::render(RenderLimits::default(), |out| {
+        if is_void {
+            return out.push(VOID_IS_NOT_A_VALUE);
+        }
+        if readonly {
+            out.push("`")?;
+            write_type(out, got)?;
+            out.push("` is `readonly` and cannot be assigned to the mutable type `")?;
+            write_type(out, expected)?;
+            return out
+                .push("`; copy it with `[...value]`, or make the target type `readonly` too");
+        }
+        match (expected, got) {
+            (
+                Type::Object {
+                    fields: a,
+                    index: ai,
+                },
+                Type::Object {
+                    fields: b,
+                    index: bi,
+                },
+            ) => {
+                if ai == bi {
+                    write_object_diff(out, a, b)
+                } else {
+                    write_expected(out, expected, got)
+                }
+            }
+            (
+                Type::Function {
+                    params: a,
+                    ret: ar,
+                    has_rest: false,
+                    ..
+                },
+                Type::Function {
+                    params: b,
+                    ret: br,
+                    has_rest: true,
+                    ..
+                },
+            ) => write_rest_function_diff(out, a, ar, b, br),
+            (
+                Type::Function {
+                    params: a, ret: ar, ..
+                },
+                Type::Function {
+                    params: b, ret: br, ..
+                },
+            ) => write_function_diff(out, a, ar, b, br),
+            _ => Err(RenderError::InvalidMetadata(
+                "unsupported structural difference",
+            )),
+        }
+    })
+    .map(|rendered| Some(rendered.text))
 }
 
-/// A type guard prints as its `boolean` return: [`Type::Function`]'s `Display`
-/// has no spelling for the predicate, and the function-type grammar has no
-/// annotation form for one either.
-///
-/// The rendering *parses*, which is what makes it worth a note — pasted into an
-/// annotation it silently drops the narrowing, and the loss surfaces much later,
-/// as a failed read inside the `if` the guard was supposed to open.
-pub(super) fn guard_loss_note(got: &Type) -> Option<String> {
+fn write_expected(out: &mut Writer, expected: &Type, got: &Type) -> Result<(), RenderError> {
+    out.push("expected `")?;
+    write_type(out, expected)?;
+    out.push("`, got `")?;
+    write_type(out, got)?;
+    out.push("`")
+}
+
+pub(super) fn guard_loss_note(got: &Type) -> Result<Option<String>, RenderError> {
+    match crate::type_rendering::check_for_copy(got) {
+        Ok(()) => {}
+        Err(RenderError::Truncated) => return Ok(Some(crate::rendering::TRUNCATED.into())),
+        Err(error) => return Err(error),
+    }
     let Type::Function {
         predicate: Some(predicate),
         ..
     } = got.peel()
     else {
-        return None;
+        return Ok(None);
     };
-    let param = format!("arg{}", predicate.parameter_index);
-    Some(format!(
-        "this value is a type guard (`{param} is {}`), and the rendering above is lossy: \
-         no function-type annotation can carry a predicate, so a value declared at that \
-         type compiles and then narrows nothing. Only a direct call of the guard narrows.",
-        predicate.asserted_type,
-    ))
+    Writer::render(RenderLimits::default(), |out| {
+        out.format(format_args!("this value is a type guard (`arg{} is ", predicate.parameter_index))?;
+        write_type(out, &predicate.asserted_type)?;
+        out.push("`), and the rendering above is lossy: no function-type annotation can carry a predicate, so a value declared at that type compiles and then narrows nothing. Only a direct call of the guard narrows.")
+    }).map(|rendered| Some(rendered.text))
 }
 
-fn format_object_diff(
+fn newline(out: &mut Writer, has_rows: &mut bool) -> Result<(), RenderError> {
+    if *has_rows {
+        out.push("\n")?;
+    }
+    *has_rows = true;
+    Ok(())
+}
+
+fn write_object_diff(
+    out: &mut Writer,
     expected: &BTreeMap<String, ObjectField>,
     got: &BTreeMap<String, ObjectField>,
-) -> String {
-    let missing: Vec<&String> = expected
-        .keys()
-        .filter(|n| !got.contains_key(n.as_str()))
-        .collect();
-    let extra: Vec<&String> = got
-        .keys()
-        .filter(|n| !expected.contains_key(n.as_str()))
-        .collect();
-    let wrong: Vec<(&String, &ObjectField, &ObjectField)> = expected
-        .iter()
-        .filter_map(|(name, want)| {
-            got.get(name).and_then(|g| {
-                if g == want {
-                    None
-                } else {
-                    Some((name, want, g))
-                }
-            })
-        })
-        .collect();
-
-    let mut rows: Vec<String> = Vec::new();
-    if !missing.is_empty() {
-        rows.push(format!(
-            "missing field(s): {}",
-            missing
-                .iter()
-                .map(|n| format!("`{n}`"))
-                .collect::<Vec<_>>()
-                .join(", ")
-        ));
-    }
-    if !extra.is_empty() {
-        rows.push(format!(
-            "extra field(s): {}",
-            extra
-                .iter()
-                .map(|n| format!("`{n}`"))
-                .collect::<Vec<_>>()
-                .join(", ")
-        ));
-    }
-    if !wrong.is_empty() {
-        let mut s = String::from("field type mismatches:");
-        for (n, e, g) in &wrong {
-            if e.optional == g.optional {
-                write!(s, "\n  `{}`: expected `{}`, got `{}`", n, e.ty, g.ty).unwrap();
-            } else {
-                let e_marker = if e.optional { "?" } else { "" };
-                let g_marker = if g.optional { "?" } else { "" };
-                write!(
-                    s,
-                    "\n  `{}`: expected `{}: {}` (optional={}), got `{}: {}` (optional={})",
-                    n, e_marker, e.ty, e.optional, g_marker, g.ty, g.optional,
-                )
-                .unwrap();
+) -> Result<(), RenderError> {
+    let mut has_rows = false;
+    for (left, right, label) in [(expected, got, "missing"), (got, expected, "extra")] {
+        let mut first = true;
+        for name in left.keys() {
+            out.step()?;
+            if right.contains_key(name) {
+                continue;
             }
+            if first {
+                newline(out, &mut has_rows)?;
+                out.format(format_args!("{label} field(s): "))?;
+                first = false;
+            } else {
+                out.push(", ")?;
+            }
+            out.format(format_args!("`{name}`"))?;
         }
-        rows.push(s);
     }
-    join_diff_rows(rows)
+    let mut wrong = false;
+    for (name, e) in expected {
+        out.step()?;
+        let Some(g) = got.get(name) else {
+            continue;
+        };
+        if e == g {
+            continue;
+        }
+        if !wrong {
+            newline(out, &mut has_rows)?;
+            out.push("field type mismatches:")?;
+            wrong = true;
+        }
+        out.format(format_args!("\n  `{name}`: "))?;
+        if e.optional == g.optional {
+            write_expected(out, &e.ty, &g.ty)?;
+        } else {
+            out.format(format_args!(
+                "expected `{}: ",
+                if e.optional { "?" } else { "" }
+            ))?;
+            write_type(out, &e.ty)?;
+            out.format(format_args!(
+                "` (optional={}), got `{}: ",
+                e.optional,
+                if g.optional { "?" } else { "" }
+            ))?;
+            write_type(out, &g.ty)?;
+            out.format(format_args!("` (optional={})", g.optional))?;
+        }
+    }
+    if !has_rows {
+        out.push("(no structural difference detected)")?;
+    }
+    Ok(())
 }
 
-/// A function with a rest parameter, `pb`, where the fixed-arity `pa` is
+/// A function with a rest parameter, `b`, where the fixed-arity `a` is
 /// expected: each expected parameter past its fixed ones is compared with the
 /// rest parameter's element type. When they all fit, the only difference left
 /// is the parameter count Submilli needs to differ.
-fn format_rest_function_diff(pa: &[Type], ra: &Type, pb: &[Type], rb: &Type) -> String {
+fn write_rest_function_diff(
+    out: &mut Writer,
+    a: &[Type],
+    ar: &Type,
+    b: &[Type],
+    br: &Type,
+) -> Result<(), RenderError> {
     let Some((Type::Array(element), fixed)) =
-        pb.split_last().map(|(rest, fixed)| (rest.peel(), fixed))
+        b.split_last().map(|(rest, fixed)| (rest.peel(), fixed))
     else {
-        return format_function_diff(pa, ra, pb, rb);
+        return write_function_diff(out, a, ar, b, br);
     };
-    let spread: Vec<Type> = fixed
-        .iter()
-        .cloned()
-        .chain(std::iter::repeat_n(
-            (**element).clone(),
-            pa.len().saturating_sub(fixed.len()),
-        ))
-        .collect();
-    let rows = function_diff_rows(pa, ra, &spread, rb);
-    if pa.len() == pb.len() && rows.is_empty() {
-        return format!(
+    let spread_len = fixed.len().max(a.len());
+    let mut spread = Vec::new();
+    spread
+        .try_reserve(spread_len)
+        .map_err(|_| RenderError::Allocation)?;
+    spread.extend(fixed.iter().cloned());
+    spread.extend(std::iter::repeat_n(
+        (**element).clone(),
+        spread_len.saturating_sub(fixed.len()),
+    ));
+    let fits = spread.len() == a.len() && a == spread.as_slice() && ar == br;
+    if a.len() == b.len() && fits {
+        return out.format(format_args!(
             "a function with a rest parameter can't stand for one with as many parameters ({})",
-            pa.len()
-        );
-    }
-    join_diff_rows(rows)
-}
-
-fn format_function_diff(pa: &[Type], ra: &Type, pb: &[Type], rb: &Type) -> String {
-    join_diff_rows(function_diff_rows(pa, ra, pb, rb))
-}
-
-fn function_diff_rows(pa: &[Type], ra: &Type, pb: &[Type], rb: &Type) -> Vec<String> {
-    let mut rows: Vec<String> = Vec::new();
-    if pb.len() > pa.len() {
-        rows.push(format!(
-            "arity: expected at most {} param(s), got {}",
-            pa.len(),
-            pb.len(),
+            a.len()
         ));
     }
-    for (i, (e, g)) in pa.iter().zip(pb.iter()).enumerate() {
+    write_function_diff(out, a, ar, &spread, br)
+}
+
+fn write_function_diff(
+    out: &mut Writer,
+    a: &[Type],
+    ar: &Type,
+    b: &[Type],
+    br: &Type,
+) -> Result<(), RenderError> {
+    let mut has_rows = false;
+    if b.len() > a.len() {
+        newline(out, &mut has_rows)?;
+        out.format(format_args!(
+            "arity: expected at most {} param(s), got {}",
+            a.len(),
+            b.len()
+        ))?;
+    }
+    for (i, (e, g)) in a.iter().zip(b).enumerate() {
+        out.step()?;
         if e != g {
-            rows.push(format!("param {}: expected `{}`, got `{}`", i + 1, e, g));
+            newline(out, &mut has_rows)?;
+            out.format(format_args!("param {}: ", i.saturating_add(1)))?;
+            write_expected(out, e, g)?;
         }
     }
-    if ra != rb {
-        rows.push(format!("return: expected `{ra}`, got `{rb}`"));
+    if ar != br {
+        newline(out, &mut has_rows)?;
+        out.push("return: ")?;
+        write_expected(out, ar, br)?;
     }
-    rows
-}
-
-fn join_diff_rows(rows: Vec<String>) -> String {
-    if rows.is_empty() {
-        return NO_DIFFERENCE.to_string();
+    if !has_rows {
+        out.push("(no structural difference detected)")?;
     }
-    rows.join("\n")
+    Ok(())
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    fn format_type_diff(a: &Type, b: &Type) -> Option<String> {
+        super::format_type_diff(a, b).unwrap()
+    }
     use std::collections::BTreeMap;
 
     fn obj(pairs: &[(&str, Type)]) -> Type {
@@ -242,6 +289,42 @@ mod tests {
             index: None,
             fields,
         }
+    }
+
+    #[test]
+    fn rendering_failure_retains_triggering_type_mismatch() {
+        crate::type_size::tests::on_compiler_stack(|| {
+            FAIL_RENDER.with(|fail| fail.set(true));
+            let error = crate::compile::compile_script_checked(
+                "function main(): number { return \"wrong\"; }",
+                "broken.ts",
+                crate::FileId(0),
+                &[],
+                &[],
+            )
+            .unwrap_err();
+            assert!(matches!(
+                error.fatal,
+                Some(crate::compiler_error::CompilerFailure::Internal { .. })
+            ));
+            assert!(
+                error
+                    .diagnostics
+                    .iter()
+                    .any(|diag| diag.message.contains("expected `number`")),
+                "{error:?}"
+            );
+            assert!(
+                crate::compile::compile_script_checked(
+                    "function main(): number { return 42; }",
+                    "good.ts",
+                    crate::FileId(0),
+                    &[],
+                    &[],
+                )
+                .is_ok()
+            );
+        });
     }
 
     #[test]

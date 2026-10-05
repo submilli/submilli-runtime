@@ -71,8 +71,12 @@ impl Inferer<'_> {
         };
         let value_ty = expr.ty.clone();
         let Some(
-            TypedStmtKind::AssignLocal { target_ty, .. }
-            | TypedStmtKind::AssignGlobal { target_ty, .. },
+            TypedStmtKind::AssignLocal {
+                target_ty, value, ..
+            }
+            | TypedStmtKind::AssignGlobal {
+                target_ty, value, ..
+            },
         ) = stmts
             .last()
             .map(|&s| {
@@ -88,7 +92,8 @@ impl Inferer<'_> {
         else {
             return Ok(value_ty);
         };
-        Ok(self.assignment_narrowed_ty(target_ty, value_ty))
+        let flow_ty = self.assigned_flow_type(target_ty, *value, value_ty)?;
+        Ok(self.assignment_narrowed_ty(target_ty, flow_ty))
     }
 
     /// A field or index assignment, with its receiver, index, and value held.

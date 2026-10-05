@@ -1,18 +1,23 @@
 ---
 title: "Add the GitHub MCP server"
-description: "Give an agent GitHub through GitHub's hosted MCP server: declare it in a blueprint, register an OAuth application and log in once, allow a tool and call it, run it on a server, and know where a per-user token belongs instead."
+description: "Give an agent GitHub through GitHub's hosted MCP server: declare it in a Blueprint, register an OAuth application and log in once, allow a tool and call it, run it on a server, and know where a per-user token belongs instead."
 slug: tutorials/add-the-github-mcp-server
 sidebar:
   order: 11
+authorship:
+  label: ai-assisted
+  confirmed: true
+  contentHash: "6ef64400e75539e1d36f23551d2a3220d2bc676cba65bd20f1b13d1e3f21ddcb"
+  confirmedAt: "2026-10-05T13:01:53.009Z"
 ---
 
-The curated `@submilli/github` package covers what most agents need from
+The curated `@submilli/github` Package covers what most agents need from
 GitHub (repositories, issues, pull requests, releases, and search). Each
 operation reports the repository it acts on, so a rule can allow
 `github.com/issues.create` for one repository and no other. When an
-agent needs something the package doesn't have, such as sub-issues,
+agent needs something the Package doesn't have, such as sub-issues,
 issue types, or a Copilot review, GitHub's hosted MCP server has it.
-Declared in a blueprint, that server becomes a package the agent imports.
+Declared in a Blueprint, that server becomes a Package the agent imports.
 The trade is in the rules, because a rule over an MCP server sees which
 tool is called but not its arguments. GitHub is also the common case of
 a service that won't take a login from an application it hasn't heard
@@ -46,7 +51,7 @@ mcp:
 ```
 
 Notice `(oauth)`. `add-mcp` asked the server how it authenticates and
-wrote the answer. Until someone logs in, the blueprint is `PENDING`:
+wrote the answer. Until someone logs in, the Blueprint is `PENDING`:
 
 ```sh
 submilli mcp auth-status --blueprint blueprint.yaml
@@ -124,15 +129,15 @@ Waiting for the redirect on http://127.0.0.1:8765/callback …
 ```
 
 Open the address, approve the application, and the command finishes with
-the blueprint `ACTIVE`. The login lands in the local secret store, and one
-login serves each program run under the blueprint. If GitHub answers
+the Blueprint `ACTIVE`. The login lands in the local secret store, and one
+login serves each program run under the Blueprint. If GitHub answers
 "The redirect_uri is not associated with this application", the app's
 callback URL isn't the one above. Fix it in the app's settings and open
 the address again.
 
 ## Allow a tool and call it
 
-The server's 46 tools are now a package, `@mcp/github`, and `submilli docs
+The server's 46 tools are now a Package, `@mcp/github`, and `submilli docs
 @mcp/github --blueprint blueprint.yaml` lists them as declarations. One
 capability, `mcp.github`, covers them all, and a rule picks tools by
 name. Replace the deny rule `add-mcp` wrote with one that allows listing
@@ -148,7 +153,7 @@ submilli blueprint capability add mcp.github --filter 'tool == "list_issues"'
 ✓ added allow mcp.github (filter: tool == "list_issues") to caller 'main' in blueprint.yaml
 ```
 
-A program imports the server like any package:
+A program imports the server like any Package:
 
 ```typescript title="issues.ts"
 import github from "@mcp/github";
@@ -184,10 +189,10 @@ rule doesn't name is refused before a request leaves. [Add an
 MCP server](/docs/blueprints/add-an-mcp-server) covers choosing
 tools and what a rule over them can and can't see.
 
-## The same blueprint on a server
+## The same Blueprint on a server
 
-Registered on a server, the blueprint gives each session the same
-package, but the login and the provider are now the server's. The
+Registered on a server, the Blueprint gives each session the same
+Package, but the login and the provider are now the server's. The
 provider goes under `mcp_oauth` in the server's config file, with the
 client secret in the server's store:
 
@@ -205,7 +210,7 @@ mcp_oauth:
     - repo
 ```
 
-Register the blueprint and look at its logins:
+Register the Blueprint and look at its logins:
 
 ```sh
 submilli server blueprint apply blueprint.yaml
@@ -219,7 +224,7 @@ tracker: PENDING
 ```
 
 The local login doesn't carry over. Until someone logs in on the server,
-a program that imports the package doesn't compile, and `run-code` says
+a program that imports the Package doesn't compile, and `run-code` says
 which login is missing:
 
 ```sh
@@ -264,7 +269,7 @@ warning: @mcp/github: 29 tool(s) return unknown: result schemas are unavailable 
 ```
 
 Notice what the login is. It is one GitHub account, used by every session
-of the blueprint, for every user of your application. Log in as an account
+of the Blueprint, for every user of your application. Log in as an account
 that may do what you are willing to let any user's agent do, and keep the
 rule as narrow as the task needs.
 
@@ -272,7 +277,7 @@ rule as narrow as the task needs.
 
 One login means every user's agent acts as that account. When users must
 act on GitHub as themselves, there is no login to make. Your application
-holds each user's own token, and the blueprint declares it as a secret
+holds each user's own token, and the Blueprint declares it as a secret
 the harness supplies when it opens the session, written straight into
 the server's header:
 
@@ -307,8 +312,8 @@ shows how each harness supplies it. The rules are the same either way.
 What changes is whose account the call is made as.
 
 You have given an agent GitHub through its hosted MCP server, declared
-in a blueprint and logged in once through an application you registered.
+in a Blueprint and logged in once through an application you registered.
 Its read tools are allowed and its write tools refused until you say
 otherwise, on your machine and on a server. From here, go to
 the part on [Blueprints](/docs/blueprints/start-a-blueprint) for
-everything else a blueprint can grant.
+everything else a Blueprint can grant.

@@ -266,3 +266,44 @@ async fn duplicate_name_is_error() {
     assert!(!second.status.success());
     assert!(stderr(&second).contains("already"));
 }
+
+fn lint(contents: &str, name: &str) -> Output {
+    let file = write_blueprint(name, contents);
+    Command::new(submilli_bin())
+        .args(["blueprint", "lint", file.to_str().expect("path utf-8")])
+        .output()
+        .expect("invoke submilli blueprint lint")
+}
+
+#[test]
+fn lint_rejects_duplicate_rule_name_in_one_caller_block() {
+    let out = lint(
+        "name: dup-rules\npermissions:\n  main:\n    - name: same\n      capability: fs.read\n      action: allow\n    - name: same\n      capability: fs.write\n      action: allow\n",
+        "lint-dup-rule-name",
+    );
+    assert!(!out.status.success(), "{}", stderr(&out));
+    let err = stderr(&out);
+    assert!(err.contains("both named `same`"), "{err}");
+}
+
+#[test]
+fn lint_accepts_same_rule_name_in_different_caller_blocks() {
+    let out = lint(
+        "name: shared-names\npermissions:\n  main:\n    - name: same\n      capability: fs.read\n      action: allow\n  other:\n    - name: same\n      capability: fs.read\n      action: allow\n",
+        "lint-same-name-two-blocks",
+    );
+    assert!(
+        !stderr(&out).contains("both named"),
+        "unexpected duplicate-name error: {}",
+        stderr(&out)
+    );
+}
+
+#[test]
+fn lint_accepts_blueprint_without_rule_names() {
+    let out = lint(
+        "name: unnamed\npermissions:\n  main:\n    - capability: fs.read\n      action: allow\n    - capability: fs.read\n      action: deny\n",
+        "lint-unnamed-rules",
+    );
+    assert!(!stderr(&out).contains("both named"), "{}", stderr(&out));
+}

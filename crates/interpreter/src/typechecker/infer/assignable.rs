@@ -4,7 +4,7 @@
 use std::collections::BTreeMap;
 use std::ops::ControlFlow;
 
-use crate::{MangledName, ObjectField, Type, TypeKind};
+use crate::{MangledName, MethodSig, ObjectField, Type, TypeKind};
 
 use super::generic::substitute_or_record;
 use super::narrowing;
@@ -221,16 +221,7 @@ impl<'a> TypeResolver<'a> {
                         continue;
                     }
                     out.entry(name.clone()).or_insert(ObjectField {
-                        ty: Type::Function {
-                            params: sig
-                                .params
-                                .iter()
-                                .map(|p| substitute_or_record(&p.ty, bindings, self.limits))
-                                .collect(),
-                            ret: Box::new(substitute_or_record(&sig.ret, bindings, self.limits)),
-                            predicate: None,
-                            has_rest: sig.params.last().is_some_and(|p| p.rest),
-                        },
+                        ty: self.method_type(sig, bindings),
                         optional: false,
                         readonly: true,
                     });
@@ -248,6 +239,64 @@ impl<'a> TypeResolver<'a> {
             },
         )?;
         Some(out)
+    }
+
+    /// A method's signature as a function type, with the class's arguments
+    /// substituted.
+    fn method_type(&self, sig: &MethodSig, bindings: &BTreeMap<String, Type>) -> Type {
+        Type::Function {
+            params: sig
+                .params
+                .iter()
+                .map(|p| substitute_or_record(&p.ty, bindings, self.limits))
+                .collect(),
+            ret: Box::new(substitute_or_record(&sig.ret, bindings, self.limits)),
+            predicate: None,
+            has_rest: sig.params.last().is_some_and(|p| p.rest),
+        }
+    }
+
+    /// The private fields and methods of the class and its ancestors, the
+    /// members [`class_full_form`](Self::class_full_form) leaves out, with the
+    /// class's arguments substituted. Each is keyed by the class that declares
+    /// it and its name. `None` means the `extends` chain broke.
+    pub(super) fn class_private_members(
+        &self,
+        mangled: &MangledName,
+        args: &[Type],
+    ) -> Option<PrivateMembers> {
+        let mut private = BTreeMap::new();
+        super::classes::for_each_class_in_chain(
+            |m| self.sym_by_mangled(m).cloned(),
+            self.limits,
+            mangled,
+            args,
+            |sym, bindings| {
+                let TypeKind::Class {
+                    fields,
+                    methods,
+                    method_visibility,
+                    ..
+                } = &sym.kind
+                else {
+                    return;
+                };
+                let mut insert = |name: &String, ty: Type| {
+                    private.insert((sym.mangled_name.clone(), name.clone()), ty);
+                };
+                for (name, field) in fields {
+                    if field.visibility == crate::Visibility::Private {
+                        insert(name, substitute_or_record(&field.ty, bindings, self.limits));
+                    }
+                }
+                for (name, sig) in methods {
+                    if method_visibility.get(name).copied() == Some(crate::Visibility::Private) {
+                        insert(name, self.method_type(sig, bindings));
+                    }
+                }
+            },
+        )?;
+        Some(private)
     }
 
     /// Per-member conformance of a class against one interface it declares it
@@ -864,10 +913,19 @@ fn assignable_rec(
                 rest_function_accepts(pa, pe, |e, a| assignable_rec(e, a, types, seen))
             } else {
                 Type::function_arity_fits(pa.len(), pe.len(), *rest_a)
-                    && pa
-                        .iter()
-                        .zip(pe.iter())
-                        .all(|(a, e)| assignable_rec(e, a, types, seen))
+                    && pa.iter().zip(pe.iter()).enumerate().all(|(i, (a, e))| {
+                        let both_rest = *rest_a && i + 1 == pa.len() && i + 1 == pe.len();
+                        if both_rest {
+                            assignable_rec(
+                                e.rest_array_ignoring_readonly(),
+                                a.rest_array_ignoring_readonly(),
+                                types,
+                                seen,
+                            )
+                        } else {
+                            assignable_rec(e, a, types, seen)
+                        }
+                    })
             };
             predicate_ok
                 && params_ok
@@ -974,6 +1032,10 @@ pub(super) fn alias_identity(ty: &Type) -> Option<(&MangledName, &[Type])> {
         _ => None,
     }
 }
+
+/// A class's private members, keyed by the class that declares each and its
+/// name, as [`TypeResolver::class_private_members`] returns them.
+pub(super) type PrivateMembers = BTreeMap<(MangledName, String), Type>;
 
 /// Expand a recursion back-edge to the alias's underlying body (args
 /// substituted), by name. Returns the input unchanged for non-`AliasRef`

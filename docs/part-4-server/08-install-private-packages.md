@@ -1,19 +1,24 @@
 ---
-title: "Install private packages on a server"
-description: "How to let a server install packages from private GitHub repositories: create a token that can read them and give it to the server, under a process, Compose, or the Helm chart."
+title: "Install private Packages on a server"
+description: "How to let a server install Packages from private GitHub repositories: create a token that can read them and give it to the server, under a process, Compose, or the Helm chart."
 slug: server/install-private-packages
 sidebar:
   order: 8
+authorship:
+  label: ai-assisted
+  confirmed: true
+  contentHash: "4fde35ceb2a56ae7f6d8f02b3be412504e03587fc2800084e42a78acabb9b1fd"
+  confirmedAt: "2026-10-05T13:01:53.009Z"
 ---
 
-A server fetches packages from GitHub with its own token, never
+A server fetches Packages from GitHub with its own token, never
 the caller's, so out of the box it reaches public repositories only. A
-package in a private repository needs the server to hold a token that
+Package in a private repository needs the server to hold a token that
 can read it. On your own machine the CLI uses your token instead, as
-[Start a blueprint](/docs/blueprints/start-a-blueprint) shows.
+[Start a Blueprint](/docs/blueprints/start-a-blueprint) shows.
 
-This guide shows you how to let a server install private packages.
-The example is Acme's billing package in `acme/billing-package`.
+This guide shows you how to let a server install private Packages.
+The example is Acme's billing Package in `acme/billing-package`.
 Substitute your repository.
 
 ## Create the token
@@ -22,9 +27,9 @@ Substitute your repository.
 token](https://github.com/settings/personal-access-tokens/new?name=submilli&contents=read&expires_in=90)
 on GitHub:
 
-- **Resource owner:** the user or organization that owns the package
+- **Resource owner:** the user or organization that owns the Package
   repositories.
-- **Repository access:** Only select repositories, the package
+- **Repository access:** Only select repositories, the Package
   repositories, including private ones they depend on.
 - **Repository permissions:** Contents, Read-only. GitHub adds Metadata,
   Read-only, itself.

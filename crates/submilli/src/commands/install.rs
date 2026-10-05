@@ -5,14 +5,13 @@
 //! compile-and-store core is shared with `server packages install` via
 //! `submilli_build::install_from_dir`.
 
-use std::path::Path;
 use std::process::ExitCode;
 
-use interpreter::{Severity, Sources, Span, diagnostics};
+use super::build::render_manifest_diagnostics;
 use submilli_build::{
-    BuildDiagnostic, BuildSeverity, DriverError, GithubSource, InstallError, InstallPreparation,
-    Lockfile, PackageName, PackageSource, PackageStore, ResolveError, deny_warnings_from_env,
-    load_manifest, resolve_github_closure, warning_denial_message,
+    DriverError, GithubSource, InstallError, InstallPreparation, Lockfile, PackageName,
+    PackageSource, PackageStore, ResolveError, deny_warnings_from_env, load_manifest,
+    resolve_github_closure, warning_denial_message,
 };
 use submilli_shared::github;
 
@@ -192,56 +191,5 @@ fn render_resolve_error(err: &ResolveError) {
             ..
         } => render_manifest_diagnostics(manifest_path, manifest_text, diagnostics),
         other => eprintln!("error: {other}"),
-    }
-}
-
-fn render_manifest_diagnostics(
-    manifest_path: &Path,
-    manifest_text: &str,
-    diags: &[BuildDiagnostic],
-) {
-    let (sources, file) = match Sources::single(manifest_path.display().to_string(), manifest_text)
-    {
-        Ok(source) => source,
-        Err(error) => {
-            for diagnostic in diags {
-                eprintln!("error: {}", diagnostic.message);
-            }
-            eprintln!("source context unavailable: {error}");
-            return;
-        }
-    };
-    for diag in diags {
-        let span = match diag.span {
-            Some(span) => {
-                let Some(span) = u32::try_from(span.start)
-                    .ok()
-                    .zip(u32::try_from(span.end).ok())
-                    .and_then(|(start, end)| Span::new(file, start, end).ok())
-                else {
-                    eprintln!(
-                        "error: {}\nsource context unavailable: invalid manifest span",
-                        diag.message
-                    );
-                    continue;
-                };
-                span
-            }
-            None => Span::at(file),
-        };
-        let rendered = diagnostics::render(
-            &interpreter::Diagnostic {
-                severity: match diag.severity {
-                    BuildSeverity::Error => Severity::Error,
-                    BuildSeverity::Warning => Severity::Warning,
-                },
-                span,
-                message: diag.message.clone(),
-                help: diag.help.clone(),
-                notes: Vec::new(),
-            },
-            &sources,
-        );
-        eprint!("{rendered}");
     }
 }

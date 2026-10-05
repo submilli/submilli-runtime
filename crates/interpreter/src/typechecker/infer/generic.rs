@@ -728,9 +728,10 @@ impl Inferer<'_> {
                 .last()
                 .ok_or_else(|| super::inference_failure("rest signature has no parameters"))?
                 .ty
+                .rest_element()
             {
-                Type::Array(elem) => (**elem).clone(),
-                _ => Type::Error,
+                Some(elem) => Type::clone(elem),
+                None => Type::Error,
             }
         } else {
             Type::Error
@@ -1053,7 +1054,7 @@ impl Inferer<'_> {
             self.error_with_help(
                 error_span,
                 format!("expected `{expected}`, got `{got}`"),
-                super::type_diff::type_mismatch_help(&expected, &got),
+                self.render_help_list(super::type_diff::type_mismatch_help(&expected, &got)),
             );
         }
     }
@@ -1257,6 +1258,16 @@ impl Inferer<'_> {
         Ok(self
             .function_literal_params(expr)?
             .is_some_and(|params| params.iter().any(|p| p.ty.is_none())))
+    }
+
+    /// A function literal that annotates every parameter, so it types itself.
+    pub(super) fn is_fully_annotated_function(
+        &self,
+        expr: ExprId,
+    ) -> Result<bool, CompilerFailure> {
+        Ok(self
+            .function_literal_params(expr)?
+            .is_some_and(|params| params.iter().all(|p| p.ty.is_some())))
     }
 
     /// Infer a generic call's arguments against `params`, binding its type
@@ -1502,7 +1513,9 @@ impl Inferer<'_> {
                     return Ok(());
                 }
                 let mut help = vec![signature_help(self)];
-                help.extend(super::type_diff::type_mismatch_help(&expected, &got));
+                help.extend(
+                    self.render_help_list(super::type_diff::type_mismatch_help(&expected, &got)),
+                );
                 self.error_with_help(
                     arg_span,
                     format!("expected `{expected}`, got `{got}`"),
@@ -1618,9 +1631,10 @@ impl Inferer<'_> {
                 .last()
                 .ok_or_else(|| super::inference_failure("rest signature has no parameters"))?
                 .ty
+                .rest_element()
             {
-                Type::Array(elem) => (**elem).clone(),
-                _ => Type::Error,
+                Some(elem) => Type::clone(elem),
+                None => Type::Error,
             }
         } else {
             Type::Error

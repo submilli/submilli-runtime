@@ -807,6 +807,11 @@ pub struct TypedAst {
     /// selection. Physical slot types live on the lowered expressions.
     pub runtime_source_types: std::collections::BTreeMap<ExprId, Type>,
     pub runtime_chain_types: std::collections::BTreeMap<ExprId, Vec<Type>>,
+    /// For each spread source read by name, the fields its value is checked
+    /// against: every field one of its object types names, with the union of
+    /// the types they give it, an index signature's value type included.
+    pub spread_mask_fields:
+        std::collections::BTreeMap<ExprId, std::collections::BTreeMap<String, Type>>,
     /// Module name used for mangling. Defaults to `USER_PACKAGE` (`"main"`).
     pub package_name: String,
     exprs: Vec<TypedExpr>,

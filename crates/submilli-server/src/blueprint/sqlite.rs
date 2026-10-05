@@ -163,6 +163,11 @@ async fn import_files(
     let Some(SourceRecords { revisions, active }) = read_source(&source)? else {
         return Ok(None);
     };
+    // An empty legacy store has nothing to import or archive, including when
+    // an older server recreated it after a successful migration.
+    if revisions.is_empty() && active.is_empty() {
+        return Ok(None);
+    }
     let populated: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM blueprint_revisions)")
         .fetch_one(&mut *connection)
         .await?;

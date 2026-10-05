@@ -608,7 +608,7 @@ impl<'a> Inferer<'a> {
             // NOT peeled: an aliased array type passes this gate but the
             // rest-param lowering still dispatches on the unpeeled type and
             // emits a scalar where a ref is expected.
-            } else if !matches!(ty, Type::Array(_) | Type::Error) {
+            } else if ty.rest_element().is_none() && !matches!(ty, Type::Error) {
                 self.error(
                     p.name.span,
                     format!(

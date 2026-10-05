@@ -1,13 +1,18 @@
 ---
 title: "CLI"
-description: "The submilli command tree: what each command does and where it runs, exit codes, environment variables, the state directory, package installation and its errors, the GitHub token, and the help text of every command."
+description: "The submilli command tree: what each command does and where it runs, exit codes, environment variables, the state directory, Package installation and its errors, the GitHub token, and the help text of every command."
 slug: reference/cli
 sidebar:
   order: 3
+authorship:
+  label: ai-assisted
+  confirmed: true
+  contentHash: "cdfc8e55a7af5a449f6634166e9ee4126660f2d209108e1451a89665a08e8dcf"
+  confirmedAt: "2026-10-05T13:01:53.009Z"
 ---
 
 This page describes `submilli`, the command-line tool. It covers the
-command tree, the behaviour every command shares, package installation and the GitHub
+command tree, the behaviour every command shares, Package installation and the GitHub
 token it uses, and the help text of every command. The help text closes
 the page, one section per command from `submilli run` to `submilli server
 mcp auth-status`, generated from the binary's `--help`.
@@ -20,36 +25,36 @@ running `submilli-server`.
 
 | Command | Does | Runs |
 | --- | --- | --- |
-| `run` | Compile a program and run its `main`, optionally under a blueprint | Local |
+| `run` | Compile a program and run its `main`, optionally under a Blueprint | Local |
 | `check` | Compile and type-check a program without running it | Local |
-| `build` | Scaffold, compile, test, and install the packages of a project (`submilli.toml`) | Local |
-| `install` | Fetch a package from GitHub, compile it, and put it in the local store, pinned to a commit | Local, fetches from GitHub |
-| `docs` | Print a module's, package's, or built-in's description and declarations | Local |
-| `search` | List standard-library modules and installed packages matching a substring | Local |
+| `build` | Scaffold, compile, test, and install the Packages of a project (`submilli.toml`) | Local |
+| `install` | Fetch a Package from GitHub, compile it, and put it in the local store, pinned to a commit | Local, fetches from GitHub |
+| `docs` | Print a module's, Package's, or built-in's description and declarations | Local |
+| `search` | List standard-library modules and installed Packages matching a substring | Local |
 | `builtins` | List the language built-ins, or print the declarations of named ones | Local |
 | `skill` | Install, check, and update the coding-assistant skill | Local, and `sync` fetches releases |
 | `upgrade` | Replace `submilli` and `submilli-server` with a published release | Local, fetches releases |
 | `blueprint` | Create and edit a local `blueprint.yaml` | Local |
 | `secret` | Manage the local secret store | Local |
-| `mcp` | Authenticate a blueprint's OAuth MCP servers into the local secret store | Local, contacts the MCP server's OAuth host |
+| `mcp` | Authenticate a Blueprint's OAuth MCP servers into the local secret store | Local, contacts the MCP server's OAuth host |
 | `github` | Manage the GitHub token that `install` and `build` send | Local, contacts GitHub |
-| `server` | Run code, manage blueprints, packages, secrets, sessions, and MCP credentials on a server | Server |
+| `server` | Run code, manage Blueprints, Packages, secrets, sessions, and MCP credentials on a server | Server |
 
 ## Local and server commands
 
 Several local commands have a `submilli server` counterpart that does the
-same job against a server's state. A server has its own blueprints,
-package store, and secret store.
+same job against a server's state. A server has its own Blueprints,
+Package store, and secret store.
 
 | Local | Server | Difference |
 | --- | --- | --- |
-| `submilli run --blueprint <file>` | `submilli server run-code --blueprint <name>` or `--session <id>` | The local run reads a blueprint file, and the server run names a registered blueprint or an open session |
-| `submilli blueprint …` | `submilli server blueprint add`, `apply`, `list`, `show`, `remove` | The local commands edit a file, and the server commands register, list, and remove blueprints |
-| `submilli docs <name> --blueprint <file>` | `submilli server docs <name> --blueprint <name>` | The server reads a registered blueprint's catalog |
+| `submilli run --blueprint <file>` | `submilli server run-code --blueprint <name>` or `--session <id>` | The local run reads a Blueprint file, and the server run names a registered Blueprint or an open session |
+| `submilli blueprint …` | `submilli server blueprint add`, `apply`, `list`, `show`, `remove` | The local commands edit a file, and the server commands register, list, and remove Blueprints |
+| `submilli docs <name> --blueprint <file>` | `submilli server docs <name> --blueprint <name>` | The server reads a registered Blueprint's catalog |
 | `submilli install <repo>[@<ref>]` | `submilli server packages install <repo> [--sha <ref>]` | The local install sends your GitHub token. The server fetches with its own (`github_token_file`) and never receives yours |
 | `submilli secret put`, `delete`, `list` | `submilli server secret put`, `delete`, `list` | The local store is plaintext owner-only files, and the server's is encrypted |
-| `submilli mcp authenticate`, `deauthenticate`, `auth-status` | `submilli server mcp authenticate`, `deauthenticate`, `auth-status` | Locally the blueprint is a file (`--blueprint <file>`), and on the server it is a registered name (positional) |
-| `submilli search` | `submilli server packages list` | `search` lists installed packages and the standard library, and `packages list` lists the server's stores |
+| `submilli mcp authenticate`, `deauthenticate`, `auth-status` | `submilli server mcp authenticate`, `deauthenticate`, `auth-status` | Locally the Blueprint is a file (`--blueprint <file>`), and on the server it is a registered name (positional) |
+| `submilli search` | `submilli server packages list` | `search` lists installed Packages and the standard library, and `packages list` lists the server's stores |
 
 A server on the same machine and with the same `SUBMILLI_HOME` also reads
 the local `packages/` directory, as a fallback store it never writes.
@@ -90,8 +95,9 @@ for a shell.
 | Code | Meaning |
 | --- | --- |
 | `0` | The command succeeded |
-| `1` | The command failed. This includes a program that failed to compile or threw from `run`, a `blueprint lint` error, `server status` with no server running, `skill status` for a missing, outdated, or modified installation, and `upgrade --check` when a newer release exists |
+| `1` | The command failed. This includes a program that failed to compile or threw from `run` (except a denial, below), a `blueprint lint` error, `server status` with no server running, `skill status` for a missing, outdated, or modified installation, and `upgrade --check` when a newer release exists |
 | `2` | The command line was invalid: an unknown command or option, or a missing argument |
+| `3` | `run` only: the program let a permission denial escape, a gated call the Blueprint or the runtime refused (an invariant or a read-only volume) that no `catch` handled. The message is the same text exit code 1 prints |
 
 Errors go to standard error. A command's own errors begin with `error:`.
 An error that stopped the command before it could report one begins with
@@ -123,7 +129,7 @@ empty, otherwise under `~/.submilli`.
 
 | Path | Holds | Written by |
 | --- | --- | --- |
-| `packages/` | The local package store, one directory per package (`packages/@org/name/`) | `install`, `build publish-local`, `build` for GitHub dependencies |
+| `packages/` | The local Package store, one directory per Package (`packages/@org/name/`) | `install`, `build publish-local`, `build` for GitHub dependencies |
 | `secrets/` | The local secret store, one owner-only (`0600`) plaintext file per key, in an owner-only directory. Holds `store:` secrets for `run --blueprint` and MCP OAuth credentials under `mcp_oauth/<blueprint>/<server>/credential` | `secret put`, `mcp authenticate` |
 | `mcp_oauth.yaml` | Local OAuth provider apps: client id, client secret reference, and scopes per OAuth host. Owner-only | `mcp provider add`, `remove` |
 | `github_token` | The stored GitHub token. Owner-only (`0600`) | `github authenticate`, and removed by `github deauthenticate` |
@@ -138,21 +144,21 @@ apart.
 ## Package projects (`submilli build`)
 
 `submilli build` works on a project, a directory with a `submilli.toml`
-holding one `[[package]]` block per package. Every `build` subcommand
+holding one `[[package]]` block per Package. Every `build` subcommand
 except `init` finds the manifest in the current directory or the nearest
 parent that has one. [Package manifest](/docs/reference/package-manifest)
 describes the file.
 
 | Subcommand | Does |
 | --- | --- |
-| `build init [@scope/name] [path]` | Writes `submilli.toml` with a first package at `path` (default `.`), and scaffolds `src/lib.ts`, `docs/readme.md`, `README.md`, and `tests/lib.test.ts`, plus `tsconfig.json`, `.vscode/`, `.submilli/`, and `.gitignore`. Prompts for the name when it is omitted |
-| `build new <@scope/name> <path>` | Adds a package to `submilli.toml` and scaffolds its folders |
-| `build check` | Compiles the packages in dependency order and writes each one's `capabilities.yaml` beside its source. Installs nothing |
+| `build init [@scope/name] [path]` | Writes `submilli.toml` with a first Package at `path` (default `.`), and scaffolds `src/lib.ts`, `docs/readme.md`, `README.md`, and `tests/lib.test.ts`, plus `tsconfig.json`, `.vscode/`, `.submilli/`, and `.gitignore`. Prompts for the name when it is omitted |
+| `build new <@scope/name> <path>` | Adds a Package to `submilli.toml` and scaffolds its folders |
+| `build check` | Compiles the Packages in dependency order and writes each one's `capabilities.yaml` beside its source. Installs nothing |
 | `build test` | Compiles, then runs `tests/**/*.test.{ts,subm}` and compile-checks the readme's examples |
-| `build publish-local` | Compiles, then installs the packages into the local store |
+| `build publish-local` | Compiles, then installs the Packages into the local store |
 
 `check`, `test`, and `publish-local` take `-p <@scope/name>` to compile one
-package and the sibling packages it depends on. Before compiling, they
+Package and the sibling Packages it depends on. Before compiling, they
 fetch the project's GitHub dependencies into the local store, with the
 [GitHub token](#github-token), and record the commits in `submilli.lock`
 beside `submilli.toml`. A lock that already pins every dependency, with
@@ -183,22 +189,22 @@ When a name is supplied more than once, `--env-var` wins over
 
 `submilli install` installs into the local store and `submilli server
 packages install` into a server's store. Both fetch a GitHub repository
-at one commit, resolve its GitHub dependencies, compile the packages its
+at one commit, resolve its GitHub dependencies, compile the Packages its
 `submilli.toml` declares, and store them pinned to that commit. The
 repository is `org/repo`, `github.com/org/repo`, or a full URL. A second
-argument, `@org/name`, installs only that package. Without it, every
-package the repository declares is installed. A package must be scoped to
+argument, `@org/name`, installs only that Package. Without it, every
+Package the repository declares is installed. A Package must be scoped to
 the repository's owner. For example, `submilli/acme` can hold only
-`@submilli/…` packages.
+`@submilli/…` Packages.
 
 | | `submilli install` | `submilli server packages install` |
 | --- | --- | --- |
 | Pin to a branch, tag, or commit | `org/repo@<ref>` | `--sha <ref>` |
 | Without a pin | The default branch's head | The default branch's head |
 | GitHub token | Yours (see [GitHub token](#github-token)) | The server's `github_token_file`. The CLI sends none |
-| Replace a package installed at another commit | `--upgrade` | `--upgrade` |
+| Replace a Package installed at another commit | `--upgrade` | `--upgrade` |
 
-The first install reports the commit and the package's location:
+The first install reports the commit and the Package's location:
 
 ```sh
 submilli install submilli/acme @submilli/acme-billing
@@ -209,7 +215,7 @@ fetched github.com/submilli/acme at 88656b81c537
 installed @submilli/acme-billing v0.1.0 -> …/packages/@submilli/acme-billing
 ```
 
-The same command again, with the package already installed at that
+The same command again, with the Package already installed at that
 commit, changes nothing and exits 0:
 
 ```text
@@ -217,7 +223,7 @@ fetched github.com/submilli/acme at 88656b81c537
 up to date @submilli/acme-billing
 ```
 
-A package installed at another commit is refused, exit 1, until
+A Package installed at another commit is refused, exit 1, until
 `--upgrade` is given:
 
 ```text
@@ -239,11 +245,11 @@ up to date @submilli/acme-billing
 error: @submilli/acme-billing already installed at a different commit; retry with --upgrade to replace with 88656b81c537
 ```
 
-`submilli install` writes only to the store. It changes no blueprint and
+`submilli install` writes only to the store. It changes no Blueprint and
 no manifest. When it finds no public repository and no token was sent,
 and both standard input and standard error are a terminal, it offers to
 store a GitHub token and, if one is stored, tries once more. [Install
-private packages on a server](/docs/server/install-private-packages)
+private Packages on a server](/docs/server/install-private-packages)
 describes the server's token and its errors.
 
 ## GitHub token
@@ -264,7 +270,7 @@ something other than a token is skipped with a warning such as
 `` warning: ignoring `GH_TOKEN`: … ``. With no source, fetches are
 anonymous and reach public repositories only, at GitHub's lower
 anonymous rate limit. A token needs Repository permissions → Contents:
-Read-only on the package repositories (a fine-grained token) or the
+Read-only on the Package repositories (a fine-grained token) or the
 `repo` scope (a classic token).
 
 | Command | Does |
@@ -304,10 +310,10 @@ missing or wrong, the token-creation link.
 | `GitHub rejected <source> (expired or revoked)` | The token is expired or revoked. As a warning, fetches went on without it. As an error, the repository was not public | A new token from the same source clears it |
 | `` `org/repo` is in an organization that uses SAML single sign-on: authorize `` | The token is not authorized for the organization's single sign-on | Authorizing it, at the link in the message or with Configure SSO on the token, clears it |
 | `GitHub's rate limit is used up; try again in about N min` | The rate limit for this token, or for anonymous requests, is exhausted | It clears after the time given. A token has a higher limit than anonymous requests |
-| `` `@org/name` is already installed from github.com/org/repo@<sha>; pass --upgrade `` | The package is in the store at another commit | `--upgrade` replaces it |
-| `` package `@org/name` from github.com/org/repo must be scoped `@org/...` `` | The package's scope is not the repository's owner | — |
-| `` package `@org/name` is not declared in submilli.toml `` | The named package is not in the repository's manifest. The message lists the declared ones | — |
-| `… has no submilli.toml at its root` | The repository is not a Submilli package repository | — |
+| `` `@org/name` is already installed from github.com/org/repo@<sha>; pass --upgrade `` | The Package is in the store at another commit | `--upgrade` replaces it |
+| `` package `@org/name` from github.com/org/repo must be scoped `@org/...` `` | The Package's scope is not the repository's owner | — |
+| `` package `@org/name` is not declared in submilli.toml `` | The named Package is not in the repository's manifest. The message lists the declared ones | — |
+| `… has no submilli.toml at its root` | The repository is not a Submilli Package repository | — |
 
 `submilli github authenticate` adds three more errors:
 

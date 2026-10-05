@@ -1,1 +1,1 @@
-line 73, 75 extra: bug SUB-1203 a `case` value must be assignable to the discriminant, where tsc needs only overlap
+line 75 extra: bug SUB-1196 (duplicate `case` label) a repeated `case` label is rejected, where tsc accepts it

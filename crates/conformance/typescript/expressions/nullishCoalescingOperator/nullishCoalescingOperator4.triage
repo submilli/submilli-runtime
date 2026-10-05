@@ -1,1 +1,0 @@
-line 5 type: bug SUB-1212 `??` doesn't narrow its left operand to `null` in the right operand

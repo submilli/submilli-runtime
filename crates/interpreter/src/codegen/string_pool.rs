@@ -150,7 +150,8 @@ mod tests {
         let p = pool(
             r#"
             function main(): void {
-                if ("a" === "b") {
+                const a: string = "a";
+                if (a === "b") {
                     let x: string = "then";
                 } else {
                     let y: string = "else";

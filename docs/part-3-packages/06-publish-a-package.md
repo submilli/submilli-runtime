@@ -1,17 +1,22 @@
 ---
-title: "Publish a package"
-description: "How to publish a package: install it into your local store, see what programs see, add it to a blueprint and run a program under it, make it installable from your repository, and put it on a server."
+title: "Publish a Package"
+description: "How to publish a Package: install it into your local store, see what programs see, add it to a Blueprint and run a program under it, make it installable from your repository, and put it on a server."
 slug: packages/publish-a-package
 sidebar:
   order: 6
+authorship:
+  label: ai-assisted
+  confirmed: true
+  contentHash: "99a2b84231ebe268cf02ae72e602ff8e005e655a54a43cd1b27f43f60310a70b"
+  confirmedAt: "2026-10-05T13:01:53.009Z"
 ---
 
-The package compiles and its tests pass, but nothing can import it yet.
-Programs import from a package store, yours or a server's, and you test
-the policy by running a program under a blueprint.
+The Package compiles and its tests pass, but nothing can import it yet.
+Programs import from a Package store, yours or a server's, and you test
+the policy by running a program under a Blueprint.
 
-This guide shows you how to publish a package. The example is Acme's
-billing package on Stripe. Substitute your package.
+This guide shows you how to publish a Package. The example is Acme's
+billing Package on Stripe. Substitute your Package.
 
 ## Install it locally
 
@@ -25,11 +30,11 @@ installed @acme/billing v0.1.0 -> ~/.submilli/packages/@acme/billing
 
 `publish-local` compiles and installs into the local store, where
 `submilli run` and a server on the same machine find it. Nothing is
-uploaded. Without `-p`, it installs every package in the project.
+uploaded. Without `-p`, it installs every Package in the project.
 
 ## See what programs see
 
-The agent finds a package by searching, then reads its declarations. Do
+The agent finds a Package by searching, then reads its declarations. Do
 the same:
 
 ```sh
@@ -41,14 +46,14 @@ submilli search billing
 ```
 
 `submilli docs @acme/billing` prints the declarations and doc comments,
-as [Document the package](/docs/packages/document-the-package)
+as [Document the Package](/docs/packages/document-the-package)
 shows. The description in `submilli.toml` and the doc comments are all the
-model knows about the package.
+model knows about the Package.
 
-## Add it to a blueprint
+## Add it to a Blueprint
 
-In a new directory, start a blueprint and add the package. The
-blueprint commands read the `capabilities.yaml` the build derived on
+In a new directory, start a Blueprint and add the Package. The
+Blueprint commands read the `capabilities.yaml` the build derived on
 [Export a function](/docs/packages/export-a-function):
 
 ```sh
@@ -67,9 +72,9 @@ warning: blueprint.yaml: package `@acme/billing` requires secret `BILLING_API_KE
     allow secrets.get (filter: name == "BILLING_API_KEY")
 ```
 
-The three rules under the package's caller are `requires`, written as
+The three rules under the Package's caller are `requires`, written as
 grants, with the host from the constant and the secret by its name. The
-warning is the secret the package reads, which the blueprint must
+warning is the secret the Package reads, which the Blueprint must
 declare. The capability not selected comes from `provides`, with the
 fields the payload reports:
 
@@ -83,10 +88,10 @@ submilli blueprint capability list @acme/billing
       fields: amount: number, customerClass: string, customerId: string
 ```
 
-## Try it under a blueprint
+## Try it under a Blueprint
 
-Finish the blueprint as [Start a
-blueprint](/docs/blueprints/start-a-blueprint) does. Declare the key,
+Finish the Blueprint as [Start a
+Blueprint](/docs/blueprints/start-a-blueprint) does. Declare the key,
 the customer the session is for, and one rule over the payload's fields:
 
 ```sh
@@ -127,15 +132,15 @@ submilli run --blueprint blueprint.yaml --var customerId=cus_VMQR3azuTWVAWs cred
 credited 1500 cents, balance -1600
 ```
 
-The program reached Stripe through the package and came back with the
+The program reached Stripe through the Package and came back with the
 account's balance. Bound to another customer, the same program is refused
 at the `check`, as [Start a
-blueprint](/docs/blueprints/start-a-blueprint) shows.
+Blueprint](/docs/blueprints/start-a-blueprint) shows.
 
 ## Make it installable
 
 Other machines install from source. Push the project to GitHub, and a
-developer installs the package from the repository, built there and
+developer installs the Package from the repository, built there and
 pinned to the commit it resolved:
 
 ```sh
@@ -143,10 +148,10 @@ submilli install acme/billing-package @acme/billing
 ```
 
 The first argument is the repository, `owner/repo`, with `@<ref>` to pin
-a branch, tag, or commit. The second is the package, since one repository
+a branch, tag, or commit. The second is the Package, since one repository
 can hold several. A private repository installs the same way once the CLI
 has a GitHub token that can read it, as [Start a
-blueprint](/docs/blueprints/start-a-blueprint) shows:
+Blueprint](/docs/blueprints/start-a-blueprint) shows:
 
 ```sh
 submilli github authenticate
@@ -156,11 +161,11 @@ submilli install acme/billing-package @acme/billing
 ## Put it on a server
 
 A server on the same machine reads the local store, so it already has the
-package. Any other server installs it from the repository with
+Package. Any other server installs it from the repository with
 `submilli server packages install`, the same way. For a private
 repository, refer to
-[Install private packages](/docs/server/install-private-packages).
-Then put the Stripe key in the server's store, register the blueprint,
+[Install private Packages](/docs/server/install-private-packages).
+Then put the Stripe key in the server's store, register the Blueprint,
 and run the program there, the way an application would:
 
 ```sh
