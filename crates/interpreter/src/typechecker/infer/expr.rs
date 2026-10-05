@@ -386,15 +386,9 @@ fn sole_array_like_member(hint: &Type) -> Option<&Type> {
 }
 
 /// The element type `...src` contributes to an array literal, or `None` when `src` is
-<<<<<<< HEAD
-/// not spreadable. A tuple spreads as the union of its positions — it is an array at
-/// runtime and routes to `Array` for member dispatch (`Type::interface_routing`).
-pub(super) fn spread_element_type(peeled_source: &Type) -> Option<Type> {
-=======
 /// not spreadable. A tuple spreads as the union of its positions, and a union of
 /// arrays and tuples as any member's element: both are arrays at runtime.
-fn spread_element_type(peeled_source: &Type) -> Option<Type> {
->>>>>>> origin/main
+pub(super) fn spread_element_type(peeled_source: &Type) -> Option<Type> {
     match peeled_source {
         Type::Array(elem) => Some((**elem).clone()),
         Type::Tuple(elements) => Some(Type::union(elements.clone())),
@@ -1713,9 +1707,6 @@ impl Inferer<'_> {
         false
     }
 
-<<<<<<< HEAD
-    pub(super) fn infer_call(
-=======
     /// Reports a method a union of arrays and tuples can't offer through its
     /// joined element type: one that mutates the array, or one taking an element,
     /// which would have to suit every member at once.
@@ -1747,8 +1738,7 @@ impl Inferer<'_> {
         true
     }
 
-    fn infer_call(
->>>>>>> origin/main
+    pub(super) fn infer_call(
         &mut self,
         callee: ExprId,
         type_args: Option<Vec<crate::TypeAnnotation>>,
@@ -5588,9 +5578,7 @@ impl Inferer<'_> {
         } else {
             None
         };
-<<<<<<< HEAD
         let mut saw_never = false;
-=======
         // Unless a hint pins it, the element type stays open: an element that types
         // itself takes no hint from the elements before it, as in tsc, and the
         // elements join by type afterwards.
@@ -5603,7 +5591,6 @@ impl Inferer<'_> {
         // Whether the running element type is still the first element's, which
         // mismatch messages name.
         let mut running_is_first = true;
->>>>>>> origin/main
         for el in elements {
             match el {
                 crate::ArrayLiteralElement::Value(elem_id) => {
@@ -5633,7 +5620,6 @@ impl Inferer<'_> {
                         typed_elements.push(crate::TypedArrayElement::Value(typed_id));
                         continue;
                     }
-<<<<<<< HEAD
                     // A `never` element holds no value (it is read in code no value
                     // reaches), so it neither seeds nor narrows the element type.
                     if matches!(elem_ty.peel(), Type::Never) {
@@ -5641,29 +5627,6 @@ impl Inferer<'_> {
                         typed_elements.push(crate::TypedArrayElement::Value(typed_id));
                         continue;
                     }
-                    match &element_ty {
-                        None => {
-                            // First resolved value seeds the running
-                            // element type. Hint did not pin it (None
-                            // or unbound generic param).
-                            //
-                            // The seed widens: array elements are mutable, so
-                            // `const a = 1; const xs = [a, 2];` is `number[]`, not
-                            // `1[]`. An annotation that pins the element type takes
-                            // the `hint_pins_element_ty` path above instead.
-                            element_ty = Some(elem_ty.widen_literal());
-                        }
-                        Some(running) => {
-                            if !assignable(&elem_ty, running, self.resolver()) {
-                                self.report_array_element_mismatch(
-                                    elem_span,
-                                    running,
-                                    &elem_ty,
-                                    hint_pins_element_ty,
-                                    already_errored,
-                                );
-                            }
-=======
                     let Some(running) = &element_ty else {
                         // First resolved value seeds the running
                         // element type. Hint did not pin it (None
@@ -5685,7 +5648,6 @@ impl Inferer<'_> {
                         Some(joined) => {
                             running_is_first &= joined == *running;
                             element_ty = Some(joined);
->>>>>>> origin/main
                         }
                         None => self.report_array_element_mismatch(
                             elem_span,

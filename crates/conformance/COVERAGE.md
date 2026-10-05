@@ -37,11 +37,7 @@ Upstream: 4463 single-file TypeScript tests. Suite: 451 TypeScript cases, 657 te
 | `boolean` | §1.1 | done | 482 | 107 | 375 | 0 | 1707 | 1 of 1 | — | — |  |
 | `null` | §1.1 | done | 386 | 73 | 313 | 0 | 1370 | 1 of 1 | — | — |  |
 | `void` | §1.1 | done | 500 | 41 | 459 | 0 | 583 | 1 of 1 | — | — |  |
-<<<<<<< HEAD
-| `never` | §1.1 | done | 72 | 8 | 64 | 0 | 68 | 1 of 1 | — | — |  |
-=======
 | `never` | §1.1 | done | 72 | 8 | 64 | 0 | 69 | 1 of 1 | — | — |  |
->>>>>>> origin/main
 | `bigint` | §1.1 | done | 16 | 3 | 13 | 0 | 15 | 1 of 1 | 16 | 68 |  |
 | Radix literals (`0x`/`0b`/`0o`) | §1.1 | done | 22 | 3 | 19 | 0 | 15 | 4 of 4 | — | — |  |
 | Numeric separators (`1_000`) | §1.1 | done | 6 | 2 | 4 | 0 | 9 | 1 of 1 | — | — |  |
