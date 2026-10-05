@@ -46,8 +46,8 @@ impl<'a> Inferer<'a> {
                         continue;
                     }
                     let hint = ty.as_ref().map(|a| self.resolve_type(a)).transpose()?;
-                    self.keeps_literal_types = true;
-                    let (typed_value, value_ty) = self.infer_expr(value, hint.as_ref())?;
+                    let (typed_value, value_ty) =
+                        self.infer_expr_keeping_literals(value, hint.as_ref(), true)?;
                     // Reassignable, so a fresh literal widens; see the block-scoped
                     // `Let` arm in `stmt.rs`.
                     let bound = match hint {
@@ -105,8 +105,8 @@ impl<'a> Inferer<'a> {
                     // Keeps the literal types its value passes through; see the
                     // block-scoped `Const` arm in `stmt.rs`.
                     let hint = ty.as_ref().map(|a| self.resolve_type(a)).transpose()?;
-                    self.keeps_literal_types = hint.is_none();
-                    let (typed_value, value_ty) = self.infer_expr(value, hint.as_ref())?;
+                    let (typed_value, value_ty) =
+                        self.infer_expr_keeping_literals(value, hint.as_ref(), hint.is_none())?;
                     let origin =
                         self.initializer_literal_origin(ty.is_some(), typed_value, &value_ty)?;
                     let bound = hint.unwrap_or(value_ty);
@@ -166,11 +166,7 @@ impl<'a> Inferer<'a> {
         value: crate::ExprId,
         value_ty: crate::Type,
     ) -> Result<(), CompilerFailure> {
-        if !matches!(
-            declared.peel(),
-            crate::Type::Union(_) | crate::Type::Boolean
-        ) || matches!(value_ty, crate::Type::Error)
-            || value_ty == *declared
+        if !super::stmt::initializer_may_narrow(declared, &value_ty)
             || !super::assignable(&value_ty, declared, self.resolver())
         {
             return Ok(());

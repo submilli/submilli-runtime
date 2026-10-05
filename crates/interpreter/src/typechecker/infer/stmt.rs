@@ -380,8 +380,8 @@ impl Inferer<'_> {
         let hint = ty.as_ref().map(|a| self.resolve_type(a)).transpose()?;
         // The value keeps its literal types for the binding's initial
         // narrowing: `let done = false` reads as `false` until reassigned.
-        self.keeps_literal_types = true;
-        let (typed_value, value_ty) = self.infer_expr(value, hint.as_ref())?;
+        let (typed_value, value_ty) =
+            self.infer_expr_keeping_literals(value, hint.as_ref(), true)?;
         // A `let` is reassignable, so a fresh literal type widens: `const a = 1;
         // let b = a;` binds `number`, not `1`. A literal type the value got from
         // a declaration stays (`let v = c` with `c: "x"` is `"x"`), and an
@@ -434,8 +434,8 @@ impl Inferer<'_> {
         // can invalidate them, and they are fresh, so a `let` copying it widens.
         // A computed value still widens (`const a = 1 + 1` is `number`).
         let hint = ty.as_ref().map(|a| self.resolve_type(a)).transpose()?;
-        self.keeps_literal_types = hint.is_none();
-        let (typed_value, value_ty) = self.infer_expr(value, hint.as_ref())?;
+        let (typed_value, value_ty) =
+            self.infer_expr_keeping_literals(value, hint.as_ref(), hint.is_none())?;
         let origin = self.initializer_literal_origin(ty.is_some(), typed_value, &value_ty)?;
         let bound = hint.unwrap_or_else(|| value_ty.clone());
         let bound = self.pattern_binding_storage_type(value, bound)?;
@@ -1660,11 +1660,7 @@ impl Inferer<'_> {
         declared: &Type,
         value: Type,
     ) -> Result<(), crate::compiler_error::CompilerFailure> {
-        // `boolean` narrows as the `true | false` it is.
-        if !matches!(declared.peel(), Type::Union(_) | Type::Boolean)
-            || matches!(value, Type::Error)
-            || value == *declared
-        {
+        if !initializer_may_narrow(declared, &value) {
             return Ok(());
         }
         let scope = self
@@ -1730,8 +1726,7 @@ impl Inferer<'_> {
         // An assignment has its value's type, literal types included, as in
         // TypeScript: `(x = 10)` is `10`. What the target narrows to is
         // `assigned_flow_type`'s answer.
-        self.keeps_literal_types = true;
-        let (typed_value, value_ty) = self.infer_expr(value, target_ty)?;
+        let (typed_value, value_ty) = self.infer_expr_keeping_literals(value, target_ty, true)?;
         Ok((typed_value, value_ty, self.error_count() > errors_before))
     }
 
@@ -3216,6 +3211,14 @@ impl Inferer<'_> {
     }
 }
 
+/// Whether a binding declared `declared` starts narrowed to an initializer of
+/// type `value`: only a union does (`boolean` as the `true | false` it is),
+/// and only to a value that is neither rejected nor the declared type itself.
+pub(super) fn initializer_may_narrow(declared: &Type, value: &Type) -> bool {
+    matches!(declared.peel(), Type::Union(_) | Type::Boolean)
+        && !matches!(value, Type::Error)
+        && value != declared
+}
 #[cfg(test)]
 mod tests {
     use super::super::test_support::run;

@@ -434,9 +434,10 @@ impl<'a> Inferer<'a> {
         operand: ExprId,
         env: &narrowing::NarrowEnv,
         expected: Option<&Type>,
+        keep_literals: bool,
     ) -> Result<(ExprId, Type), CompilerFailure> {
         self.push_narrow_frame(env.clone());
-        let inferred = self.infer_expr(operand, expected)?;
+        let inferred = self.infer_expr_keeping_literals(operand, expected, keep_literals)?;
         let (_, assigned) = self.pop_narrow_frame_capture()?;
         let span = self
             .ast
@@ -1524,10 +1525,8 @@ impl<'a> Inferer<'a> {
             return Some(read_ty);
         }
         let position = match elem {
-            narrowing::PathElem::Index(narrowing::LiteralValue::Number(n))
-                if n.0.is_finite() && n.0.fract() == 0.0 && n.0 >= 0.0 =>
-            {
-                Some(n.0 as usize)
+            narrowing::PathElem::Index(narrowing::LiteralValue::Number(n)) => {
+                narrowing::tuple_position(n.0)
             }
             _ => None,
         };

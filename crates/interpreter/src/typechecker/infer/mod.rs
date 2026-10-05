@@ -697,7 +697,8 @@ pub(super) struct Inferer<'a> {
     /// The next expression `infer_expr` infers keeps the literal type of a
     /// literal it is, or passes its value through from, without a hint asking
     /// for one: an unannotated `const`'s initializer. Read and cleared on
-    /// entry, so it reaches only the operands that carry the value.
+    /// entry, so it reaches only the operands that carry the value; set it
+    /// through [`Inferer::infer_expr_keeping_literals`].
     keeps_literal_types: bool,
     aliased_conditions: aliased_conditions::AliasedConditions,
     /// The span of the arrow an immediately-invoked call is about to infer;

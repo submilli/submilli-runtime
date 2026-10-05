@@ -100,57 +100,77 @@ impl Inferer<'_> {
             if env.contains_key(&sibling) || !self.path_root_in_scope(&sibling) {
                 continue;
             }
-            let TypedExprKind::FieldAccess { receiver, name } = self
-                .typed_ast
-                .try_expr(initializer)
-                .map_err(crate::typechecker::arena_failure)?
-                .kind
-                .clone()
-            else {
-                continue;
-            };
-            let receiver = self
-                .typed_ast
-                .try_expr(receiver)
-                .map_err(crate::typechecker::arena_failure)?;
-            let Some(receiver_path) = self.expr_to_reference_path(receiver)? else {
-                continue;
-            };
-            let Some(receiver_view) = env.get(&receiver_path) else {
-                continue;
-            };
-            let Some(field_ty) = self.field_read_type(&receiver_view.narrowed_ty, &name.name)
-            else {
-                continue;
-            };
-            let Some((declared_ty, declared_at)) = self.const_declaration(&sibling.root) else {
-                continue;
-            };
-            let Some(source_kind) = self.synthesize_unnarrowed_source(&sibling, declared_at)?
-            else {
-                continue;
-            };
-            // The source reads the binding itself, as declared.
-            let source = self
-                .typed_ast
-                .try_push_expr(TypedExpr {
-                    kind: source_kind,
-                    span: declared_at,
-                    ty: declared_ty,
-                })
-                .map_err(crate::typechecker::arena_failure)?;
-            env.insert(
-                sibling,
-                narrowing::NarrowedView {
-                    narrowed_ty: field_ty,
-                    facts: narrowing::TypeFacts::EMPTY,
-                    excluded_literals: std::collections::BTreeSet::new(),
-                    binding: self.mint_narrow_binding(declared_at)?,
-                    source,
-                },
-            );
+            if let Some(view) = self.destructured_sibling_view(&sibling, initializer, env)? {
+                env.insert(sibling, view);
+            }
         }
         Ok(())
+    }
+
+    /// The view of `sibling`, a `const` initialized with `initializer`, under
+    /// `env`: the field it read, off its receiver as `env` narrows it.
+    fn destructured_sibling_view(
+        &mut self,
+        sibling: &narrowing::ReferencePath,
+        initializer: ExprId,
+        env: &narrowing::NarrowEnv,
+    ) -> Result<Option<narrowing::NarrowedView>, CompilerFailure> {
+        let TypedExprKind::FieldAccess { receiver, name } = self
+            .typed_ast
+            .try_expr(initializer)
+            .map_err(crate::typechecker::arena_failure)?
+            .kind
+            .clone()
+        else {
+            return Ok(None);
+        };
+        let receiver = self
+            .typed_ast
+            .try_expr(receiver)
+            .map_err(crate::typechecker::arena_failure)?;
+        let Some(receiver_path) = self.expr_to_reference_path(receiver)? else {
+            return Ok(None);
+        };
+        let Some(receiver_view) = env.get(&receiver_path) else {
+            return Ok(None);
+        };
+        let Some(field_ty) = self.field_read_type(&receiver_view.narrowed_ty, &name.name) else {
+            return Ok(None);
+        };
+        let Some((declared_ty, declared_at)) = self.const_declaration(&sibling.root) else {
+            return Ok(None);
+        };
+        let Some(source_kind) = self.synthesize_unnarrowed_source(sibling, declared_at)? else {
+            return Ok(None);
+        };
+        // The source reads the binding itself, as declared.
+        let source = self
+            .typed_ast
+            .try_push_expr(TypedExpr {
+                kind: source_kind,
+                span: declared_at,
+                ty: declared_ty,
+            })
+            .map_err(crate::typechecker::arena_failure)?;
+        Ok(Some(narrowing::NarrowedView {
+            narrowed_ty: field_ty,
+            facts: narrowing::TypeFacts::EMPTY,
+            excluded_literals: std::collections::BTreeSet::new(),
+            binding: self.mint_narrow_binding(declared_at)?,
+            source,
+        }))
+    }
+
+    /// The type and declaration span of the module `const` named `mangled`.
+    fn global_const(&self, mangled: &crate::MangledName) -> Option<(&Type, crate::Span)> {
+        self.top_symbols
+            .values()
+            .find_map(|symbol| match &symbol.kind {
+                ValueKind::Const { ty, .. } if &symbol.mangled_name == mangled => {
+                    Some((ty, symbol.declaration_span))
+                }
+                _ => None,
+            })
     }
 
     /// The declared type and name span of the `const` at `root`.
@@ -160,16 +180,9 @@ impl Inferer<'_> {
                 let entry = self.scopes.get_binding(name, *decl_scope)?;
                 entry.is_const.then(|| (entry.ty.clone(), entry.decl_span))
             }
-            narrowing::BindingId::Global(mangled) => {
-                self.top_symbols
-                    .values()
-                    .find_map(|symbol| match &symbol.kind {
-                        ValueKind::Const { ty, .. } if &symbol.mangled_name == mangled => {
-                            Some((ty.clone(), symbol.declaration_span))
-                        }
-                        _ => None,
-                    })
-            }
+            narrowing::BindingId::Global(mangled) => self
+                .global_const(mangled)
+                .map(|(ty, span)| (ty.clone(), span)),
             narrowing::BindingId::This => None,
         }
     }
@@ -252,7 +265,8 @@ impl Inferer<'_> {
                 continue;
             }
             if let Some(current) = self.lookup_narrowed_view(&path) {
-                view.narrowed_ty = self.within(&view.narrowed_ty, &current.narrowed_ty);
+                view.narrowed_ty =
+                    self.members_admitted_by(&view.narrowed_ty, &current.narrowed_ty);
             }
             kept.insert(path, view);
         }
@@ -261,7 +275,7 @@ impl Inferer<'_> {
 
     /// The members of `ty` that `current` admits. The initializer was typed
     /// where the `const` was declared; a guard since may have narrowed further.
-    fn within(&self, ty: &Type, current: &Type) -> Type {
+    fn members_admitted_by(&self, ty: &Type, current: &Type) -> Type {
         let members = match ty.peel() {
             Type::Union(members) => members.clone(),
             _ => vec![ty.clone()],
@@ -327,14 +341,7 @@ impl Inferer<'_> {
                 (entry.is_const || never_assigned).then(|| entry.ty.clone())
             }
             narrowing::BindingId::Global(mangled) => {
-                self.top_symbols
-                    .values()
-                    .find_map(|symbol| match &symbol.kind {
-                        ValueKind::Const { ty, .. } if &symbol.mangled_name == mangled => {
-                            Some(ty.clone())
-                        }
-                        _ => None,
-                    })
+                self.global_const(mangled).map(|(ty, _)| ty.clone())
             }
             narrowing::BindingId::This => self.current_class.clone(),
         }
@@ -381,11 +388,7 @@ fn readonly_element_type(receiver: &Type, index: &narrowing::LiteralValue) -> Op
     };
     match (inner.peel(), index) {
         (Type::Tuple(elements), narrowing::LiteralValue::Number(n)) => {
-            let position = n.0;
-            if position.fract() != 0.0 || position < 0.0 {
-                return None;
-            }
-            elements.get(position as usize).cloned()
+            elements.get(narrowing::tuple_position(n.0)?).cloned()
         }
         (Type::Array(element), narrowing::LiteralValue::Number(_)) => Some((**element).clone()),
         _ => None,

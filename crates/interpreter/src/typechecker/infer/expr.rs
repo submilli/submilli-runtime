@@ -458,6 +458,23 @@ impl Inferer<'_> {
     // Expression inference
     // --------------------------------------------------------------------
 
+    /// A primitive literal's type: the literal itself where it is kept or the
+    /// expected type names a literal of its kind, else its base primitive.
+    fn literal_or_base(
+        &self,
+        keeps_literal: bool,
+        expected: Option<&Type>,
+        literal: Type,
+        is_literal: fn(&Type) -> bool,
+    ) -> Type {
+        if self.keeps_literal_type(keeps_literal, expected, &literal)
+            || expects_literal(expected, is_literal)
+        {
+            return literal;
+        }
+        literal.widen_literal()
+    }
+
     /// Whether a literal asked to keep its literal type does. One that its
     /// expected type rejects reports at its base type, as TypeScript does:
     /// `o.x = "a"` with `x: number` is "got `string`".
@@ -468,6 +485,18 @@ impl Inferer<'_> {
         literal: &Type,
     ) -> bool {
         keeps_literal && expected.is_none_or(|want| assignable(literal, want, self.resolver()))
+    }
+
+    /// [`Self::infer_expr`], keeping the literal type of a literal `expr_id`
+    /// is, or passes its value through from, when `keep` is set.
+    pub(super) fn infer_expr_keeping_literals(
+        &mut self,
+        expr_id: ExprId,
+        expected: Option<&Type>,
+        keep: bool,
+    ) -> Result<(ExprId, Type), CompilerFailure> {
+        self.keeps_literal_types = keep;
+        self.infer_expr(expr_id, expected)
     }
 
     pub(super) fn infer_expr(
@@ -525,13 +554,9 @@ impl Inferer<'_> {
             ExprKind::Number(v) => {
                 let canonical = if v == 0.0 { 0.0 } else { v };
                 let literal = Type::NumberLiteral(crate::types::LiteralF64(canonical));
-                let ty = if self.keeps_literal_type(keeps_literal, expected, &literal)
-                    || expects_literal(expected, |t| matches!(t, Type::NumberLiteral(_)))
-                {
-                    literal
-                } else {
-                    Type::Number
-                };
+                let ty = self.literal_or_base(keeps_literal, expected, literal, |t| {
+                    matches!(t, Type::NumberLiteral(_))
+                });
                 Ok((TypedExprKind::Number(v), ty))
             }
             // bigint literal — always widens to `Type::BigInt`
@@ -539,24 +564,16 @@ impl Inferer<'_> {
             ExprKind::BigInt(digits) => Ok((TypedExprKind::BigInt(digits), Type::BigInt)),
             ExprKind::String(s) => {
                 let literal = Type::StringLiteral(s.clone());
-                let ty = if self.keeps_literal_type(keeps_literal, expected, &literal)
-                    || expects_literal(expected, |t| matches!(t, Type::StringLiteral(_)))
-                {
-                    literal
-                } else {
-                    Type::String
-                };
+                let ty = self.literal_or_base(keeps_literal, expected, literal, |t| {
+                    matches!(t, Type::StringLiteral(_))
+                });
                 Ok((TypedExprKind::String(s), ty))
             }
             ExprKind::Boolean(b) => {
                 let literal = Type::BooleanLiteral(b);
-                let ty = if self.keeps_literal_type(keeps_literal, expected, &literal)
-                    || expects_literal(expected, |t| matches!(t, Type::BooleanLiteral(_)))
-                {
-                    literal
-                } else {
-                    Type::Boolean
-                };
+                let ty = self.literal_or_base(keeps_literal, expected, literal, |t| {
+                    matches!(t, Type::BooleanLiteral(_))
+                });
                 Ok((TypedExprKind::Boolean(b), ty))
             }
             ExprKind::Null => Ok((TypedExprKind::Null, Type::Null)),
@@ -580,8 +597,7 @@ impl Inferer<'_> {
                 args,
             } => self.infer_call_running_invoked_body(callee, type_args, args, expected, span),
             ExprKind::Paren(inner) => {
-                self.keeps_literal_types = keeps_literal;
-                return self.infer_expr(inner, expected);
+                return self.infer_expr_keeping_literals(inner, expected, keeps_literal);
             }
             ExprKind::ObjectLiteral { members } => {
                 self.infer_object_literal(members, expected, span)
@@ -1318,8 +1334,8 @@ impl Inferer<'_> {
                 // type is TS-style: the branch that keeps the LHS
                 // contributes only the values that can short-circuit
                 // there (`falsy_part` for `&&`, `truthy_part` for `||`).
-                self.keeps_literal_types = keeps_literal;
-                let (typed_lhs, lhs_ty) = self.infer_expr(lhs, None)?;
+                let (typed_lhs, lhs_ty) =
+                    self.infer_expr_keeping_literals(lhs, None, keeps_literal)?;
                 let mut condition_error = false;
                 if matches!(lhs_ty.peel(), Type::Unknown) {
                     // `&&`/`||` on un-narrowed `unknown`
@@ -1348,9 +1364,8 @@ impl Inferer<'_> {
                     BinOp::Or => false_env,
                     _ => return Err(super::inference_failure("matched And | Or above")),
                 };
-                self.keeps_literal_types = keeps_literal;
                 let (typed_rhs, rhs_ty) =
-                    self.infer_conditional_operand(rhs, &rhs_env, expected)?;
+                    self.infer_conditional_operand(rhs, &rhs_env, expected, keeps_literal)?;
                 if matches!(rhs_ty.peel(), Type::Void | Type::Never) {
                     condition_error = true;
                     let rhs_span = self.ast.try_expr(rhs).map_err(super::arena_failure)?.span;
@@ -7274,7 +7289,7 @@ impl Inferer<'_> {
         };
 
         if immediately_invoked {
-            self.invoked_body_exit = Some(self.invoked_body_exit(returns_before_end));
+            self.invoked_body_exit = Some(self.capture_invoked_body_exit(returns_before_end));
         }
         // Restore frames.
         self.exit_closure_narrow_boundary()?;
@@ -7983,13 +7998,13 @@ impl Inferer<'_> {
 
         let (true_env, false_env) = self.predicate_envs(typed_cond)?;
 
-        self.keeps_literal_types = keeps_literal;
-        let (typed_then, then_ty) = self.infer_conditional_operand(then_, &true_env, expected)?;
+        let (typed_then, then_ty) =
+            self.infer_conditional_operand(then_, &true_env, expected, keeps_literal)?;
         let then_span = self.ast.try_expr(then_).map_err(super::arena_failure)?.span;
         let wrapped_then = self.wrap_narrow_exprs(typed_then, &true_env, then_span)?;
 
-        self.keeps_literal_types = keeps_literal;
-        let (typed_else, else_ty) = self.infer_conditional_operand(else_, &false_env, expected)?;
+        let (typed_else, else_ty) =
+            self.infer_conditional_operand(else_, &false_env, expected, keeps_literal)?;
         let else_span = self.ast.try_expr(else_).map_err(super::arena_failure)?.span;
         let wrapped_else = self.wrap_narrow_exprs(typed_else, &false_env, else_span)?;
 
@@ -8014,12 +8029,11 @@ impl Inferer<'_> {
         keeps_literal: bool,
         span: Span,
     ) -> Result<(TypedExprKind, Type), CompilerFailure> {
-        self.keeps_literal_types = keeps_literal;
-        let (typed_lhs, lhs_ty) = self.infer_expr(lhs, None)?;
+        let (typed_lhs, lhs_ty) = self.infer_expr_keeping_literals(lhs, None, keeps_literal)?;
         // The right side runs only where the left is `null`.
         let rhs_env = self.null_operand_env(typed_lhs)?;
-        self.keeps_literal_types = keeps_literal;
-        let (typed_rhs, rhs_ty) = self.infer_conditional_operand(rhs, &rhs_env, None)?;
+        let (typed_rhs, rhs_ty) =
+            self.infer_conditional_operand(rhs, &rhs_env, None, keeps_literal)?;
         let rhs_span = self.ast.try_expr(rhs).map_err(super::arena_failure)?.span;
         let typed_rhs = self.wrap_narrow_exprs(typed_rhs, &rhs_env, rhs_span)?;
 

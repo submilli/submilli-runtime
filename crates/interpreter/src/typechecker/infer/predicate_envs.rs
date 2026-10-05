@@ -262,8 +262,7 @@ impl<'a> Inferer<'a> {
                     // Unfiltered: dropping unemittable views could drop the empty one.
                     let (true_env, false_env) = self.predicate_envs_unfiltered(cond_expr_id)?;
                     let env = if outcome { true_env } else { false_env };
-                    !env.values()
-                        .any(|view| matches!(view.narrowed_ty.peel(), Type::Never | Type::Error))
+                    !is_unreachable_env(&env)
                 }
             },
         )
@@ -660,7 +659,11 @@ impl<'a> Inferer<'a> {
             eq_env.insert(
                 path.clone(),
                 narrowing::NarrowedView {
-                    narrowed_ty: if can_be_null { Type::Null } else { Type::Error },
+                    narrowed_ty: if can_be_null {
+                        Type::Null
+                    } else {
+                        narrowing::RULED_OUT
+                    },
                     facts: narrowing::TypeFacts::EQ_NULL,
                     excluded_literals: std::collections::BTreeSet::new(),
                     binding: self.mint_narrow_binding(path_span)?,
@@ -671,7 +674,9 @@ impl<'a> Inferer<'a> {
         // A field that is `null` reads as `never` once proven otherwise, but
         // re-reads its live value: an alias may have written it.
         let non_null_ty = match narrowing::strip_null(&path_ty) {
-            Type::Error if !narrowing::rules_out_to_never(&path) => Type::Never,
+            ty if narrowing::is_ruled_out(&ty) && !narrowing::rules_out_to_never(&path) => {
+                Type::Never
+            }
             ty => ty,
         };
         neq_env.insert(
@@ -921,7 +926,7 @@ impl<'a> Inferer<'a> {
         match (lhs_lit, rhs_lit) {
             (None, Some(lit)) => self.narrow_equal_to_literal(op, lhs_id, lit),
             (Some(lit), None) => self.narrow_equal_to_literal(op, rhs_id, lit),
-            (None, None) => self.narrow_equal_to_literal_union(op, lhs_id, rhs_id),
+            (None, None) => self.narrow_equal_to_union(op, lhs_id, rhs_id),
             (Some(_), Some(_)) => Ok(None),
         }
     }
@@ -930,7 +935,7 @@ impl<'a> Inferer<'a> {
     /// TypeScript does: where they are equal, the path holds a value both
     /// types allow. Where they differ nothing is known, since the value may be
     /// any member.
-    fn narrow_equal_to_literal_union(
+    fn narrow_equal_to_union(
         &mut self,
         op: crate::BinOp,
         lhs_id: ExprId,
@@ -1926,8 +1931,8 @@ impl<'a> Inferer<'a> {
 
         let true_ty = narrowing::intersect_with(&from_ty, narrowing::TypeFacts::TRUTHY);
         let false_ty = narrowing::intersect_with(&from_ty, narrowing::TypeFacts::FALSY);
-        // An outcome a local's type can't take makes it `never` there (an
-        // `Error` view), when the type lists every value the local can hold.
+        // An outcome a local's type can't take makes it `never` there (a
+        // ruled-out view), when the type lists every value the local can hold.
         let assigns = matches!(fallback_kind, crate::TypedExprKind::Sequence { .. });
         let empty_is_never =
             narrowing::rules_out_to_never(&path) && narrowing::is_unit_union(&from_ty) && !assigns;
@@ -1936,8 +1941,9 @@ impl<'a> Inferer<'a> {
         // test itself rules nothing out: an operand that may not run doesn't
         // keep the narrowing its write installs.
         let refines = |ty: &Type| {
-            (empty_is_never || !matches!(ty, Type::Error))
-                && (assigns || ty.peel() != from_ty.peel())
+            let possible = empty_is_never || !narrowing::is_ruled_out(ty);
+            let narrower = assigns || ty.peel() != from_ty.peel();
+            possible && narrower
         };
         let (mut true_env, mut false_env) = root_envs.unwrap_or_default();
 
@@ -2232,11 +2238,11 @@ impl<'a> Inferer<'a> {
         // `never` narrowings get no shadow local in codegen; fall through to
         // the un-narrowed type rather than naming a binding that has none.
         self.innermost_narrowing(path)
-            .filter(|view| !matches!(view.narrowed_ty, Type::Error))
+            .filter(|view| !narrowing::is_ruled_out(&view.narrowed_ty))
     }
 
     /// A read of `path` under the narrowing that holds there. A guard that
-    /// rules out every value (its view typed `Error`) reads as `never`, as in
+    /// rules out every value (its view [`narrowing::RULED_OUT`]) reads as `never`, as in
     /// TypeScript, where [`narrowing::rules_out_to_never`] allows: no value
     /// reaches the read, and codegen emits a trap for it.
     pub(super) fn narrowed_read(
@@ -2244,10 +2250,12 @@ impl<'a> Inferer<'a> {
         path: narrowing::ReferencePath,
     ) -> Option<(crate::TypedExprKind, Type)> {
         let view = self.innermost_narrowing(&path)?;
-        let narrowed_ty = match view.narrowed_ty {
-            Type::Error if self.reads_as_never(&path) => Type::Never,
-            Type::Error => return None,
-            ref ty => ty.clone(),
+        let narrowed_ty = if !narrowing::is_ruled_out(&view.narrowed_ty) {
+            view.narrowed_ty.clone()
+        } else if self.reads_as_never(&path) {
+            Type::Never
+        } else {
+            return None;
         };
         let binding = view.binding.clone();
         Some((
@@ -2389,8 +2397,10 @@ fn join_reachable_envs(
 }
 
 fn is_unreachable_env(env: &narrowing::NarrowEnv) -> bool {
-    env.values()
-        .any(|view| matches!(view.narrowed_ty.peel(), Type::Never | Type::Error))
+    env.values().any(|view| {
+        let ty = view.narrowed_ty.peel();
+        matches!(ty, Type::Never) || narrowing::is_ruled_out(ty)
+    })
 }
 
 /// Adds the views of `extra` on paths `env` doesn't narrow.

@@ -1077,8 +1077,8 @@ pub fn union_envs(
     for (path, a_view) in &a_narrowings {
         if let Some(b_view) = b_narrowings.get(path) {
             let joined_ty = join_flow_types(&a_view.narrowed_ty, &b_view.narrowed_ty);
-            // A `never` view has no shadow, so the join reads through the other.
-            let a_view = if matches!(a_view.narrowed_ty, Type::Error) {
+            // A ruled-out view has no shadow, so the join reads through the other.
+            let a_view = if is_ruled_out(&a_view.narrowed_ty) {
                 b_view
             } else {
                 a_view
@@ -1146,6 +1146,22 @@ pub fn is_unit_union(ty: &Type) -> bool {
     }
 }
 
+/// The tuple position a number names, if it names one.
+pub(super) fn tuple_position(index: f64) -> Option<usize> {
+    (index >= 0.0 && index.fract() == 0.0 && index <= u32::MAX as f64).then_some(index as usize)
+}
+
+/// The type of a view whose guard ruled out every value. Narrowing yields
+/// `Error` when nothing is left; a view keeps it, rather than `never`, so
+/// codegen gives the path no shadow local, and a read of the path turns it
+/// into `never` where [`rules_out_to_never`] allows.
+pub const RULED_OUT: Type = Type::Error;
+
+/// Whether a narrowed type is [`RULED_OUT`].
+pub fn is_ruled_out(ty: &Type) -> bool {
+    matches!(ty, Type::Error)
+}
+
 /// Whether a guard that rules out every value of `path` makes it `never`
 /// where it holds. Only a local qualifies: a field, an element or a global
 /// can change behind the guard's back (through an alias, or in a call).
@@ -1156,11 +1172,12 @@ pub fn rules_out_to_never(path: &ReferencePath) -> bool {
 /// Flow joins collapse a literal already covered by a broad primitive. Keep
 /// authored unions unchanged: their overlap is meaningful to JSON diagnostics.
 pub(super) fn join_flow_types(left: &Type, right: &Type) -> Type {
-    // A view typed `Error` is a guard that ruled out every value: `never`,
-    // which adds nothing to the other side.
-    match (left, right) {
-        (Type::Error, other) | (other, Type::Error) => return other.clone(),
-        _ => {}
+    // A ruled-out side holds no value, so it adds nothing to the other.
+    if is_ruled_out(left) {
+        return right.clone();
+    }
+    if is_ruled_out(right) {
+        return left.clone();
     }
     let joined = Type::union(vec![left.clone(), right.clone()]);
     let Type::Union(mut members) = joined else {

@@ -17,9 +17,9 @@
 //! ([`LiteralOrigin`]), on its scope entry or, for a module-level binding, under
 //! its mangled name.
 //!
-//! A literal type of unknown origin counts as fresh. Widening it is what
-//! Submilli did before tracking freshness, so a gap here costs a literal type
-//! TypeScript keeps, never a rejected program. Generic inference is the main
+//! A literal type of unknown origin counts as fresh. Widening is the
+//! conservative default: a gap here costs a literal type TypeScript keeps,
+//! never a rejected program. Generic inference is the main
 //! such origin: it can infer a literal type argument where TypeScript infers the
 //! widened one (`new Box(c1)` is `Box<"hello">`), so a literal read out of a
 //! value it produced counts as fresh, however it is reached.
@@ -119,8 +119,8 @@ impl Inferer<'_> {
     /// first, as in TypeScript: `let x: string | null = c1` reads as `string`,
     /// not `"hello"`, so a later `x === "other"` is still a comparison that can
     /// be true, while `let done = false` reads as `false`, a member of the
-    /// `boolean` it declares. A literal of unknown origin narrows as it always
-    /// has, since widening it could reject a read the narrowing allowed.
+    /// `boolean` it declares. A literal of unknown origin keeps its literal
+    /// type, since widening it could reject a read the narrowing allowed.
     pub(super) fn assigned_flow_type(
         &self,
         declared_ty: &Type,
@@ -314,7 +314,7 @@ impl Inferer<'_> {
             if !is_primitive_union(&kept) || !assignable(&kept, &seed, self.resolver()) {
                 return Ok(seed);
             }
-            members.extend(union_members(&kept).into_iter().cloned());
+            members.extend(flattened_union_members(&kept).into_iter().cloned());
         }
         Ok(without_absorbed_literals(members))
     }
@@ -519,8 +519,8 @@ impl Inferer<'_> {
         let Some(declared_ty) = self.declared_path_ty(path) else {
             return false;
         };
-        let declared_members = union_members(&declared_ty);
-        union_members(read_ty)
+        let declared_members = flattened_union_members(&declared_ty);
+        flattened_union_members(read_ty)
             .into_iter()
             .all(|member| !contains_literal(member) || declared_members.contains(&member))
     }
@@ -549,7 +549,7 @@ impl Inferer<'_> {
             ty = match elem {
                 narrowing::PathElem::Field(field) => self.narrow_source_field_ty(&ty, field)?,
                 narrowing::PathElem::Index(narrowing::LiteralValue::Number(index)) => {
-                    Self::pattern_index_flow_type(&ty, tuple_index(index.0)?)?
+                    Self::pattern_index_flow_type(&ty, narrowing::tuple_position(index.0)?)?
                 }
                 narrowing::PathElem::Index(_) | narrowing::PathElem::Key(..) => return None,
             };
@@ -591,14 +591,10 @@ impl Inferer<'_> {
 }
 
 /// The element a numeric path index names, when it is one.
-fn tuple_index(index: f64) -> Option<usize> {
-    (index >= 0.0 && index.fract() == 0.0 && index <= u32::MAX as f64).then_some(index as usize)
-}
-
 /// Whether `ty` is made only of `string`, `number`, `boolean`, `null` and
 /// their literal types.
 fn is_primitive_union(ty: &Type) -> bool {
-    union_members(ty).into_iter().all(|member| {
+    flattened_union_members(ty).into_iter().all(|member| {
         matches!(
             member,
             Type::String
@@ -613,7 +609,7 @@ fn is_primitive_union(ty: &Type) -> bool {
 }
 
 /// `ty`'s union members, through aliases, or `ty` itself.
-fn union_members(ty: &Type) -> Vec<&Type> {
+fn flattened_union_members(ty: &Type) -> Vec<&Type> {
     let mut members = Vec::new();
     let mut pending = vec![ty];
     while let Some(ty) = pending.pop() {
