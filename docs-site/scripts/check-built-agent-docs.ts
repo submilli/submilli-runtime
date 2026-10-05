@@ -3,6 +3,8 @@ import { readFile, readdir } from 'node:fs/promises';
 import { films, introduction } from '../src/lib/videos.ts';
 import { createAgentDocs, readChapters, markdownPath } from '../src/lib/agent-docs.ts';
 
+import { legacyDocsRoutes } from '../src/lib/legacy-docs.ts';
+
 const directory = new URL('../dist/', import.meta.url);
 const chapters = await readChapters();
 for (const [path, expected] of createAgentDocs(chapters)) {
@@ -18,7 +20,14 @@ for (const chapter of chapters) {
 	assert.match(html, /href="\/docs\/llms\.txt"[^>]*>Documentation for agents<\/a>/, path);
 }
 const files = await readdir(new URL('docs/', directory), { recursive: true });
-const expectedMarkdown = chapters.map((chapter) => markdownPath(chapter.slug)).sort();
+const legacyMarkdown = Object.keys(legacyDocsRoutes).map(source => `/docs${source}.md`);
+const expectedMarkdown = [...chapters.map(chapter => markdownPath(chapter.slug)), ...legacyMarkdown].sort();
+for (const [source, target] of Object.entries(legacyDocsRoutes)) {
+	const canonical = await readFile(new URL(`.${target.replace(/\/$/, '')}.md`, directory), 'utf8');
+	assert.equal(await readFile(new URL(`./docs${source}.md`, directory), 'utf8'), canonical, source);
+	const redirect = await readFile(new URL(`./docs${source}/index.html`, directory), 'utf8');
+	assert.ok(redirect.includes('http-equiv="refresh"') && redirect.includes(target), source);
+}
 assert.deepEqual(files.filter((file) => file.endsWith('.md')).map((file) => `/docs/${file}`).sort(), expectedMarkdown);
 for (const file of files.filter((file) => file.endsWith('.html'))) {
 	const slug = file === 'index.html' ? '' : file.replace(/\/index\.html$/, '');
