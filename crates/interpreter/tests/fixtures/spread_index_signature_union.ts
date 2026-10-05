@@ -40,6 +40,14 @@ function copyTable(x: Table<boolean> | { a: number }): string {
   return JSON.stringify({ ...x });
 }
 
+function chosen(flag: boolean, x: Dict | { a: string }, y: Table<string>): string {
+  return JSON.stringify({ ...(flag ? x : y) });
+}
+
+function threeWays(x: Dict | Table<string> | { a: boolean }): string {
+  return JSON.stringify({ ...x });
+}
+
 function laterField(x: Dict | { a: string }): string {
   return JSON.stringify({ ...x, b: "late" });
 }
@@ -64,6 +72,13 @@ function main(): void {
 
   const flags: Table<boolean> = { a: true };
   show("generic", copyTable(flags), '{"a":true}');
+
+  const strings: Table<string> = { a: "t" };
+  show("conditional dictionary", chosen(true, dict, strings), '{"a":7,"b":8}');
+  show("conditional other", chosen(false, dict, strings), '{"a":"t"}');
+  show("two dictionaries", threeWays(strings), '{"a":"t"}');
+  show("two dictionaries number", threeWays({ a: 3 } as Dict), '{"a":3}');
+  show("two dictionaries object", threeWays({ a: false }), '{"a":false}');
 
   show("later field", laterField(dict), '{"a":7,"b":"late"}');
   show("earlier field", earlierField(dict), "8");
