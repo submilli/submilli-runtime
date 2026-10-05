@@ -610,7 +610,11 @@ fn emit_function_ref(
     // adapter (slot 0 = env, slot 1 = adapter funcref, slot 2
     // = env sentinel). The shared closure vtable reuses for
     // the env slot — adapter bodies ignore it, and the slot
-    // just needs a non-null `(ref any)`.
+    // just needs a non-null `(ref any)`. The closure is built
+    // once and cached in a global, so every read is the same value.
+    // A `FunctionRef` is always typed by its declared signature, so
+    // `result_ty` classifies like the adapter's signature and the
+    // cached struct type matches the global's.
     let closure_struct_idx = ctx
         .symbols
         .closure_struct_type_idx(crate::codegen::closures::classify(result_ty)?)
@@ -622,11 +626,20 @@ fn emit_function_ref(
     let adapter_idx = ctx.symbols.adapter_func_idx(mangled).ok_or_else(|| {
         crate::codegen::internal_failure("adapter func recorded for every function-as-value")
     })?;
+    let closure_global_idx = ctx
+        .symbols
+        .adapter_closure_global_idx(mangled)
+        .ok_or_else(|| {
+            crate::codegen::internal_failure("closure global recorded for every function-as-value")
+        })?;
     let vtable_idx = ctx.symbols.closure_vtable_global_idx().ok_or_else(|| {
         crate::codegen::internal_failure(
             "closure vtable global emitted whenever closures or adapters exist",
         )
     })?;
+    emitter.instruction(Instruction::GlobalGet(closure_global_idx));
+    emitter.instruction(Instruction::RefIsNull);
+    emitter.emit_if(BlockType::Empty);
     emitter.instruction(Instruction::GlobalGet(vtable_idx));
     emitter.instruction(Instruction::RefFunc(adapter_idx));
     emitter.instruction(Instruction::GlobalGet(vtable_idx));
@@ -635,6 +648,10 @@ fn emit_function_ref(
     }
     emitter.instruction(Instruction::I64Const(0));
     emitter.instruction(Instruction::StructNew(closure_struct_idx));
+    emitter.instruction(Instruction::GlobalSet(closure_global_idx));
+    emitter.emit_end();
+    emitter.instruction(Instruction::GlobalGet(closure_global_idx));
+    emitter.instruction(Instruction::RefAsNonNull);
 
     Ok(())
 }
@@ -2576,7 +2593,7 @@ fn emit_object_spread(
             emitter.instruction(Instruction::RefNull(HeapType::Concrete(intrinsics.object)));
         }
         if matches!(source, TypedObjectMember::Spread { by_name: true, .. }) {
-            emit_spread_mask(emitter, ctx, source_local, narrowed_ty, shape)?;
+            emit_spread_mask(emitter, ctx, source_local, source.expr_id(), shape)?;
         } else {
             emitter.instruction(Instruction::RefNull(HeapType::Concrete(intrinsics.object)));
         }
@@ -2592,11 +2609,14 @@ fn emit_spread_mask(
     emitter: &mut FunctionEmitter,
     ctx: &CodegenCtx,
     source: u32,
-    source_ty: &Type,
+    source_expr: crate::ExprId,
     shape: &Type,
 ) -> Result<(), crate::compiler_error::CompilerFailure> {
-    let mut fields = std::collections::BTreeMap::new();
-    collect_spread_field_types(source_ty, &mut fields)?;
+    let fields = ctx
+        .ta
+        .spread_mask_fields
+        .get(&source_expr)
+        .ok_or_else(|| crate::codegen::internal_failure("by-name spread fields recorded"))?;
     let intrinsics = ctx
         .symbols
         .intrinsic_type_indices()
@@ -2617,7 +2637,7 @@ fn emit_spread_mask(
         array_type_index: intrinsics.field_names,
         array_size: crate::codegen::wasm_u32(fields.len())?,
     });
-    for (name, ty) in &fields {
+    for (name, ty) in fields {
         let global = ctx
             .symbols
             .field_name_string_global_idx(name)
@@ -2647,33 +2667,6 @@ fn emit_spread_mask(
     });
     emitter.instruction(Instruction::RefNull(HeapType::ANY));
     emitter.instruction(Instruction::StructNew(intrinsics.object_shape));
-    Ok(())
-}
-
-fn collect_spread_field_types(
-    ty: &Type,
-    fields: &mut std::collections::BTreeMap<String, Type>,
-) -> Result<(), crate::compiler_error::CompilerFailure> {
-    match ty.peel() {
-        Type::Object { fields: source, .. } => {
-            for (name, field) in source {
-                fields
-                    .entry(name.clone())
-                    .and_modify(|ty| *ty = Type::union(vec![ty.clone(), field.ty.clone()]))
-                    .or_insert_with(|| field.ty.clone());
-            }
-        }
-        Type::Union(members) => {
-            for member in members {
-                collect_spread_field_types(member, fields)?;
-            }
-        }
-        _ => {
-            return Err(crate::codegen::internal_failure(
-                "spread mask source is not structural",
-            ));
-        }
-    }
     Ok(())
 }
 

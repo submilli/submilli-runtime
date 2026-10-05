@@ -10,6 +10,7 @@ TypedAst {
     authored_arguments: {},
     runtime_source_types: {},
     runtime_chain_types: {},
+    spread_mask_fields: {},
     package_name: "main",
     exprs: [
         TypedExpr {

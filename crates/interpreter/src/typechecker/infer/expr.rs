@@ -5256,7 +5256,9 @@ impl Inferer<'_> {
     /// their join — `c ? a : {}` joins to `{}`, which would copy nothing when `a`
     /// is chosen — and a union contributes each member. Over more than one alternative, a
     /// field some lack is optional and its type is the union of theirs, as in
-    /// TypeScript. Only structural object types spread; anything else is reported.
+    /// TypeScript. Only structural object types and interfaces with an index
+    /// signature spread; anything else is reported. A `by_name` spread's fields
+    /// are recorded in `TypedAst::spread_mask_fields`, which codegen reads.
     pub(super) fn spread_source_fields(
         &mut self,
         typed_source: ExprId,
@@ -5265,27 +5267,25 @@ impl Inferer<'_> {
     ) -> Result<Option<SpreadFields>, crate::compiler_error::CompilerFailure> {
         let mut alternatives = Vec::new();
         self.collect_spread_alternatives(typed_source, source_ty, &mut alternatives)?;
-        let mut objects: Vec<ObjectFields> = Vec::new();
+        let mut objects: Vec<SpreadAlternative> = Vec::new();
         for alternative in alternatives {
-            match alternative {
-                Type::Object { fields, .. } => {
-                    if !objects.contains(&fields) {
-                        objects.push(fields);
-                    }
-                }
+            let index_value = self
+                .resolver()
+                .index_signature(&alternative)
+                .map(|index| *index.value);
+            let fields = match alternative {
+                Type::Object { fields, .. } => fields,
                 Type::InterfaceRef {
                     ref mangled,
                     ref name,
                     ref args,
                     ..
-                } if self.resolver().index_signature(&alternative).is_some() => {
+                } if index_value.is_some() => {
                     let Some(fields) = self.resolver().interface_full_form(mangled, name, args)
                     else {
                         return Ok(None);
                     };
-                    if !objects.contains(&fields) {
-                        objects.push(fields);
-                    }
+                    fields
                 }
                 Type::InterfaceRef { name, .. } => {
                     self.error(
@@ -5305,17 +5305,32 @@ impl Inferer<'_> {
                     );
                     return Ok(None);
                 }
+            };
+            let object = SpreadAlternative {
+                fields,
+                index_value,
+            };
+            if !objects.contains(&object) {
+                objects.push(object);
             }
         }
-        Ok(Some(match objects.as_slice() {
-            [only] => SpreadFields {
-                fields: only.clone(),
+        if let [only] = objects.as_slice() {
+            return Ok(Some(SpreadFields {
+                fields: only.fields.clone(),
                 by_name: false,
-            },
-            _ => SpreadFields {
-                fields: merge_spread_alternatives(&objects),
-                by_name: true,
-            },
+            }));
+        }
+        let fields = merge_spread_alternatives(&objects);
+        self.typed_ast.spread_mask_fields.insert(
+            typed_source,
+            fields
+                .iter()
+                .map(|(name, field)| (name.clone(), field.ty.clone()))
+                .collect(),
+        );
+        Ok(Some(SpreadFields {
+            fields,
+            by_name: true,
         }))
     }
 
@@ -10112,23 +10127,43 @@ fn collect_union_members(ty: &Type, out: &mut Vec<Type>) {
     }
 }
 
+/// One object type a spread's source may be, with its string index
+/// signature's value type when it has one.
+#[derive(PartialEq)]
+struct SpreadAlternative {
+    fields: ObjectFields,
+    index_value: Option<Type>,
+}
+
 /// The fields of a spread whose source is one of several object types: every
-/// field any of them has, optional where some lack it or have it optional.
-fn merge_spread_alternatives(alternatives: &[ObjectFields]) -> ObjectFields {
+/// field any of them has, optional where some lack it or have it optional. An
+/// alternative with an index signature can hold a field it doesn't name, so
+/// that field may also hold the index signature's value type.
+fn merge_spread_alternatives(alternatives: &[SpreadAlternative]) -> ObjectFields {
     let names: std::collections::BTreeSet<&String> = alternatives
         .iter()
-        .flat_map(|fields| fields.keys())
+        .flat_map(|alternative| alternative.fields.keys())
         .collect();
     names
         .into_iter()
         .map(|name| {
             let present: Vec<&crate::ObjectField> = alternatives
                 .iter()
-                .filter_map(|fields| fields.get(name))
+                .filter_map(|alternative| alternative.fields.get(name))
                 .collect();
             let optional =
                 present.len() < alternatives.len() || present.iter().any(|field| field.optional);
-            let ty = Type::union(present.iter().map(|field| field.ty.clone()).collect());
+            let index_values = alternatives
+                .iter()
+                .filter(|alternative| !alternative.fields.contains_key(name))
+                .filter_map(|alternative| alternative.index_value.clone());
+            let ty = Type::union(
+                present
+                    .iter()
+                    .map(|field| field.ty.clone())
+                    .chain(index_values)
+                    .collect(),
+            );
             (
                 name.clone(),
                 crate::ObjectField {

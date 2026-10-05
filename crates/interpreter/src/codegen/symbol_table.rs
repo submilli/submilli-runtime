@@ -107,6 +107,7 @@ pub struct SymbolTable {
     /// The sole exception tag's index, recorded at import emission.
     error_tag_idx: Option<u32>,
     adapter_func_idx: BTreeMap<MangledName, u32>,
+    adapter_closure_global_idx: BTreeMap<MangledName, u32>,
     /// Runtime validator helpers keyed by recursive alias or interface back-edges.
     runtime_validator_idx: BTreeMap<Type, u32>,
     generic_runtime_validators: BTreeMap<MangledName, (Vec<String>, u32)>,
@@ -487,6 +488,10 @@ impl SymbolTable {
         self.adapter_func_idx.get(mangled).copied()
     }
 
+    pub fn adapter_closure_global_idx(&self, mangled: &MangledName) -> Option<u32> {
+        self.adapter_closure_global_idx.get(mangled).copied()
+    }
+
     /// Whether a `value`-typed ref already satisfies a `slot` by WasmGC
     /// subtyping, so a coercion needs no instruction.
     ///
@@ -661,6 +666,10 @@ impl SymbolTable {
 
     pub fn record_adapter_func_idx(&mut self, mangled: MangledName, idx: u32) {
         self.adapter_func_idx.insert(mangled, idx);
+    }
+
+    pub fn record_adapter_closure_global_idx(&mut self, mangled: MangledName, idx: u32) {
+        self.adapter_closure_global_idx.insert(mangled, idx);
     }
 
     pub fn record_class_guard_layout(

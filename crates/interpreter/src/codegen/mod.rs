@@ -1679,9 +1679,16 @@ fn codegen_inner(
     } else {
         0
     };
+    let adapter_closure_globals_count = function_adapters::allocate_closure_globals(
+        &adapter_metas,
+        &mut globals,
+        &mut symbols,
+        &mut next_global_idx,
+    )?;
     let descriptor_globals_count =
         runtime_descriptors::allocate_globals(&mut globals, &mut symbols, &mut next_global_idx)?;
     if [
+        adapter_closure_globals_count,
         descriptor_globals_count,
         globals_count,
         vtable_globals_count,
