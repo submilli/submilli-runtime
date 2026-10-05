@@ -744,13 +744,7 @@ impl Inferer<'_> {
             .is_some()
         {
             self.report_unresolved_identifier(&ident.name, span);
-            return Ok((
-                TypedExprKind::LocalRef {
-                    ident,
-                    boxed: false,
-                },
-                Type::Error,
-            ));
+            return Ok(unresolved_ref(ident));
         }
         if let Some(entry) = self.scopes.get(&ident.name) {
             // Plan 75.8: consult the active narrow-scope stack. If
@@ -797,16 +791,10 @@ impl Inferer<'_> {
                         .to_string(),
                 ],
             );
-            return Ok((
-                TypedExprKind::LocalRef {
-                    ident,
-                    boxed: false,
-                },
-                Type::Error,
-            ));
+            return Ok(unresolved_ref(ident));
         }
-        let hidden = self.prepare_top_symbol_lookup(&ident.name, span)?;
-        let global = self.top_symbols.get(&ident.name).filter(|_| !hidden);
+        let visible = !self.hides_later_global(&ident.name, span)?;
+        let global = self.top_symbols.get(&ident.name).filter(|_| visible);
         if let Some(entry) = global {
             let mangled = entry.mangled_name.clone();
             // Plan 75.8: globals narrow too (TS-compatible — TS
@@ -909,13 +897,7 @@ impl Inferer<'_> {
                         .to_string(),
                 ],
             );
-            return Ok((
-                TypedExprKind::LocalRef {
-                    ident,
-                    boxed: false,
-                },
-                Type::Error,
-            ));
+            return Ok(unresolved_ref(ident));
         }
         // Enum types used as a bare value (without `.Variant`) get
         // a tailored diagnostic: the name resolves in type-space
@@ -951,13 +933,7 @@ impl Inferer<'_> {
                     ),
                     help,
                 );
-                return Ok((
-                    TypedExprKind::LocalRef {
-                        ident,
-                        boxed: false,
-                    },
-                    Type::Error,
-                ));
+                return Ok(unresolved_ref(ident));
             }
             // Class names are not first-class values either — only `new C(…)`
             // and static member access give them expression meaning.
@@ -983,13 +959,7 @@ impl Inferer<'_> {
                     format!("`{}` is a class, not a value", ident.name),
                     help,
                 );
-                return Ok((
-                    TypedExprKind::LocalRef {
-                        ident,
-                        boxed: false,
-                    },
-                    Type::Error,
-                ));
+                return Ok(unresolved_ref(ident));
             }
         }
         // `WeakMap` / `WeakSet` are intentionally out of scope.
@@ -1003,13 +973,7 @@ impl Inferer<'_> {
                     "use `Map<K, V>` instead — Submilli has no weak references, so `WeakMap` would behave identically to `Map`".to_string(),
                 ],
             );
-            return Ok((
-                TypedExprKind::LocalRef {
-                    ident,
-                    boxed: false,
-                },
-                Type::Error,
-            ));
+            return Ok(unresolved_ref(ident));
         }
         if ident.name == "WeakSet" {
             self.error_with_help(
@@ -1019,13 +983,7 @@ impl Inferer<'_> {
                     "use `Set<T>` instead — Submilli has no weak references, so `WeakSet` would behave identically to `Set`".to_string(),
                 ],
             );
-            return Ok((
-                TypedExprKind::LocalRef {
-                    ident,
-                    boxed: false,
-                },
-                Type::Error,
-            ));
+            return Ok(unresolved_ref(ident));
         }
         // legacy `Date` is intentionally out of scope. One branch
         // covers `new Date(...)`, `Date.now()`, `Date.parse(...)`,
@@ -1039,24 +997,10 @@ impl Inferer<'_> {
                     "use `Temporal.Now.instant()` for wall-clock time, or `Temporal.ZonedDateTime` / `Temporal.Instant` for time values. `Date` is intentionally out of scope — see Temporal for a correct, immutable, timezone-aware time API.".to_string(),
                 ],
             );
-            return Ok((
-                TypedExprKind::LocalRef {
-                    ident,
-                    boxed: false,
-                },
-                Type::Error,
-            ));
+            return Ok(unresolved_ref(ident));
         }
         self.report_unresolved_identifier(&ident.name, span);
-        // Placeholder for unresolved names. `Type::Error` already suppresses
-        // downstream cascades, so the variant choice doesn't propagate.
-        Ok((
-            TypedExprKind::LocalRef {
-                ident,
-                boxed: false,
-            },
-            Type::Error,
-        ))
+        Ok(unresolved_ref(ident))
     }
 
     fn infer_binary(
@@ -7510,10 +7454,7 @@ impl Inferer<'_> {
         span: Span,
     ) -> Result<(TypedExprKind, Type), crate::compiler_error::CompilerFailure> {
         // Function-local first, then top-level (mirrors `infer_assign`).
-        let shadowed = self
-            .declaration_in_another_case_clause(&target.name)
-            .is_some();
-        if let Some(entry) = self.scopes.get(&target.name).cloned().filter(|_| !shadowed) {
+        if let Some(entry) = self.visible_local(&target.name).cloned() {
             if entry.is_const {
                 self.report_const_local_write(&target, &entry);
             }
@@ -7577,8 +7518,8 @@ impl Inferer<'_> {
                 result_ty,
             ));
         }
-        let hidden = shadowed || self.prepare_top_symbol_lookup(&target.name, target.span)?;
-        let global = self.top_symbols.get(&target.name).filter(|_| !hidden);
+        let visible = self.top_symbol_visible(&target.name, target.span)?;
+        let global = self.top_symbols.get(&target.name).filter(|_| visible);
         Ok(if let Some(entry) = global {
             let kind_clone = entry.kind.clone();
             let prev_span = entry.declaration_span;
@@ -10208,6 +10149,18 @@ fn widen_assertion_source(source: &Type) -> Type {
         Type::Union(members) => Type::union(members.iter().map(widen_assertion_source).collect()),
         source => source.widen_literal(),
     }
+}
+
+/// The placeholder for a name that doesn't resolve to a value. `Type::Error`
+/// suppresses downstream cascades, so the reference kind doesn't matter.
+fn unresolved_ref(ident: Ident) -> (TypedExprKind, Type) {
+    (
+        TypedExprKind::LocalRef {
+            ident,
+            boxed: false,
+        },
+        Type::Error,
+    )
 }
 
 #[cfg(test)]

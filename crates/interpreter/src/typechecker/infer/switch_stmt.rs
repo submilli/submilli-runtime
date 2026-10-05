@@ -123,10 +123,22 @@ impl Inferer<'_> {
             self.scopes.pop();
         }
         self.switch_frames.pop();
-        let mut switch = switch?;
+        let switch = switch?;
         if opening.is_empty() {
             return Ok(switch);
         }
+        self.wrap_with_hoisted_functions(switch_id, switch, opening, switch_span)
+    }
+
+    /// Put the hoisted functions' opening statements ahead of the switch, after
+    /// the discriminant: `{ let temp = discriminant; opening…; switch (temp) }`.
+    fn wrap_with_hoisted_functions(
+        &mut self,
+        switch_id: StmtId,
+        mut switch: TypedStmtKind,
+        opening: Vec<StmtId>,
+        switch_span: Span,
+    ) -> Result<TypedStmtKind, CompilerFailure> {
         // Narrowing reads the discriminant's own expression, so the temporary
         // takes its place only once the clauses are inferred.
         let TypedStmtKind::Switch {
@@ -138,7 +150,7 @@ impl Inferer<'_> {
             return Err(super::inference_failure("inferred switch is not a Switch"));
         };
         let mut stmts =
-            vec![self.evaluate_before_hoisting(switch_id, discriminant, discriminant_ty)?];
+            vec![self.bind_discriminant_to_temporary(switch_id, discriminant, discriminant_ty)?];
         stmts.extend(opening);
         let switch_stmt = self
             .typed_ast
@@ -154,7 +166,7 @@ impl Inferer<'_> {
     /// Bind the discriminant's value to a temporary ahead of the hoisted
     /// functions, which codegen would otherwise resolve its names against, and
     /// read the temporary in its place.
-    fn evaluate_before_hoisting(
+    fn bind_discriminant_to_temporary(
         &mut self,
         switch_id: StmtId,
         discriminant: &mut ExprId,
@@ -267,11 +279,11 @@ impl Inferer<'_> {
         if let Some(frame) = self.switch_frames.last_mut() {
             frame.current_clause = body_span;
         }
-        let undefined = self.undefined_nested_functions(switch_id);
+        let pending_before_clause = self.nested_functions_not_yet_defined(switch_id);
         let typed_body = self.infer_stmt(body)?.ok_or_else(|| {
             super::inference_failure("switch clause body is a Block, never a type-only decl")
         })?;
-        self.undefine_nested_functions(&undefined)?;
+        self.mark_nested_functions_undefined(&pending_before_clause)?;
         Ok(typed_body)
     }
 

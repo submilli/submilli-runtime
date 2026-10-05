@@ -60,11 +60,10 @@ impl Inferer<'_> {
         Ok(())
     }
 
-    /// Prepare to look `name` up among the module-level values, and return
-    /// whether it must stay hidden: it names a later `let`/`const` and the code
-    /// runs directly at the top level. Used in a function body instead, a later
-    /// declaration is bound early here, so the lookup finds it.
-    pub(super) fn prepare_top_symbol_lookup(
+    /// Whether `name` names a later `let`/`const` that code running directly at
+    /// the top level can't see yet. Used in a function body instead, the later
+    /// declaration is bound early here, so a lookup finds it.
+    pub(super) fn hides_later_global(
         &mut self,
         name: &str,
         span: Span,
@@ -88,15 +87,21 @@ impl Inferer<'_> {
 
     /// Step 2 has reached the declaration of `name`, bound with type `bound`:
     /// drop its early binding, and report a use above it the binding couldn't
-    /// serve.
-    pub(super) fn finish_later_global(&mut self, name: &Ident, bound: &Type) {
+    /// serve. `declaration_failed` says the declaration reported an error itself.
+    pub(super) fn finish_later_global(
+        &mut self,
+        name: &Ident,
+        bound: &Type,
+        declaration_failed: bool,
+    ) {
         let Some(LaterGlobal::BoundEarly(early)) = self.forget_later_global(&name.name) else {
             return;
         };
         if let Some((use_span, why)) = early.untyped_use {
             // An annotation that fails at the declaration too is reported there.
-            let reported = matches!(why, Untyped::AnnotationUnresolved) && *bound == Type::Error;
-            if !reported {
+            let declaration_reports_it =
+                matches!(why, Untyped::AnnotationUnresolved) && declaration_failed;
+            if !declaration_reports_it {
                 self.report_untyped_later_global(name, use_span, why);
             }
             return;
@@ -131,7 +136,7 @@ impl Inferer<'_> {
             ),
             Untyped::AnnotationUnresolved => (
                 "so its type can't name anything declared below that function",
-                "write the type out in its annotation".to_string(),
+                "write that type out instead".to_string(),
             ),
         };
         self.error_with_help_and_notes(

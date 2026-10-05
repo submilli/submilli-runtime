@@ -138,7 +138,7 @@ impl Inferer<'_> {
     }
 
     /// The functions `block` declares that are not defined yet.
-    pub(super) fn undefined_nested_functions(&self, block: StmtId) -> Vec<usize> {
+    pub(super) fn nested_functions_not_yet_defined(&self, block: StmtId) -> Vec<usize> {
         self.nested_functions
             .iter()
             .enumerate()
@@ -148,7 +148,7 @@ impl Inferer<'_> {
     }
 
     /// Mark functions as not defined again, past the clause that created them.
-    pub(super) fn undefine_nested_functions(
+    pub(super) fn mark_nested_functions_undefined(
         &mut self,
         indices: &[usize],
     ) -> Result<(), CompilerFailure> {

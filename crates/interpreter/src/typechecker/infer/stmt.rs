@@ -1734,10 +1734,7 @@ impl Inferer<'_> {
         target: Ident,
         value: ExprId,
     ) -> Result<TypedStmtKind, CompilerFailure> {
-        let shadowed = self
-            .declaration_in_another_case_clause(&target.name)
-            .is_some();
-        if let Some(entry) = self.scopes.get(&target.name).cloned().filter(|_| !shadowed) {
+        if let Some(entry) = self.visible_local(&target.name).cloned() {
             if entry.is_const {
                 self.report_const_local_write(&target, &entry);
             }
@@ -1766,8 +1763,8 @@ impl Inferer<'_> {
                 narrowed_shadow_ty,
             });
         }
-        let hidden = shadowed || self.prepare_top_symbol_lookup(&target.name, target.span)?;
-        let global = self.top_symbols.get(&target.name).filter(|_| !hidden);
+        let visible = self.top_symbol_visible(&target.name, target.span)?;
+        let global = self.top_symbols.get(&target.name).filter(|_| visible);
         Ok(if let Some(entry) = global {
             let kind_clone = entry.kind.clone();
             let prev_span = entry.declaration_span;
@@ -1853,10 +1850,7 @@ impl Inferer<'_> {
         value: ExprId,
         span: Span,
     ) -> Result<TypedStmtKind, CompilerFailure> {
-        let shadowed = self
-            .declaration_in_another_case_clause(&target.name)
-            .is_some();
-        if let Some(entry) = self.scopes.get(&target.name).cloned().filter(|_| !shadowed) {
+        if let Some(entry) = self.visible_local(&target.name).cloned() {
             if entry.is_const {
                 self.report_const_local_write(&target, &entry);
             }
@@ -1936,8 +1930,8 @@ impl Inferer<'_> {
                 narrowed_shadow_ty,
             });
         }
-        let hidden = shadowed || self.prepare_top_symbol_lookup(&target.name, target.span)?;
-        let global = self.top_symbols.get(&target.name).filter(|_| !hidden);
+        let visible = self.top_symbol_visible(&target.name, target.span)?;
+        let global = self.top_symbols.get(&target.name).filter(|_| visible);
         Ok(if let Some(entry) = global {
             let kind_clone = entry.kind.clone();
             let prev_span = entry.declaration_span;
