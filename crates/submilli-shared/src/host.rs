@@ -11,7 +11,9 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use interpreter::runtime::{
-    AuthProxy, AuthProxyError, CheckOutcome, HttpRequest, SecretProvider, SecurityCheck,
+    AuthProxy, AuthProxyError, CheckOutcome, DecisionAction, DecisionCause, DecisionExplanation,
+    FailureReasonRecord, FailureRecord, HttpRequest, NearMissRecord, RuleCitation, SecretProvider,
+    SecurityCheck,
 };
 use interpreter::stdlib::http::HttpTransportPolicy;
 use url::Url;
@@ -19,7 +21,8 @@ use url::Url;
 use std::collections::BTreeMap;
 
 use submilli_blueprint::{
-    Action, AuthError, Blueprint, HarnessSecretBindings, Injections, SecretResolver, SecretSource,
+    Action, AuthError, Blueprint, ComparisonFailure, FailureReason, HarnessSecretBindings,
+    Injections, NearMiss, Resolution, ResolutionCause, RuleRef, SecretResolver, SecretSource,
     VarBindings, resolve_injections,
 };
 
@@ -78,6 +81,30 @@ impl SecurityCheck for PolicyCheck {
         self.check_with_cwd(caller, capability, context, "/")
     }
 
+    fn explain(
+        &self,
+        caller: &str,
+        capability: &str,
+        context: &serde_json::Value,
+        cwd: &str,
+    ) -> Option<DecisionExplanation> {
+        let context = match filesystem_policy_context(capability, context, cwd) {
+            Ok(context) => context,
+            // `check_with_cwd` refuses these before resolution: no rule can grant them.
+            Err(reason) => {
+                return Some(DecisionExplanation {
+                    action: DecisionAction::Deny,
+                    cause: DecisionCause::RuntimeInvariant { reason },
+                    near_misses: Vec::new(),
+                });
+            }
+        };
+        let resolution =
+            self.blueprint
+                .explain_permission(caller, capability, &context, &self.variables);
+        Some(explanation_of(resolution))
+    }
+
     fn check_with_cwd(
         &self,
         caller: &str,
@@ -113,6 +140,60 @@ impl SecurityCheck for PolicyCheck {
                 ),
             },
         }
+    }
+}
+
+fn explanation_of(resolution: Resolution) -> DecisionExplanation {
+    DecisionExplanation {
+        action: match resolution.action {
+            Action::Allow => DecisionAction::Allow,
+            Action::Deny => DecisionAction::Deny,
+            Action::AskHuman => DecisionAction::AskHuman,
+        },
+        cause: cause_of(resolution.cause),
+        near_misses: resolution
+            .near_misses
+            .into_iter()
+            .map(near_miss_record)
+            .collect(),
+    }
+}
+
+fn citation(rule: RuleRef) -> RuleCitation {
+    RuleCitation {
+        caller: rule.caller,
+        index: rule.index,
+        name: rule.name,
+    }
+}
+
+fn cause_of(cause: ResolutionCause) -> DecisionCause {
+    match cause {
+        ResolutionCause::Rule(rule) => DecisionCause::Rule(citation(rule)),
+        ResolutionCause::Default { caller_block } => DecisionCause::Default { caller_block },
+    }
+}
+
+fn near_miss_record(miss: NearMiss) -> NearMissRecord {
+    NearMissRecord {
+        rule: citation(miss.rule),
+        filter: miss.filter,
+        failures: miss.failures.into_iter().map(failure_record).collect(),
+    }
+}
+
+fn failure_record(failure: ComparisonFailure) -> FailureRecord {
+    let reason = match failure.reason {
+        FailureReason::FieldMissing => FailureReasonRecord::FieldMissing,
+        FailureReason::VariableNotBound(name) => FailureReasonRecord::VariableNotBound(name),
+        FailureReason::NotSatisfied => FailureReasonRecord::NotSatisfied,
+    };
+    FailureRecord {
+        comparison: failure.comparison,
+        actual: failure.actual,
+        expected: failure.expected,
+        reason,
+        negated: failure.negated,
     }
 }
 
@@ -454,6 +535,146 @@ mod tests {
                 "/notes"
             ),
             CheckOutcome::Deny { .. }
+        ));
+    }
+
+    fn explained_blueprint() -> PolicyCheck {
+        PolicyCheck::new(Arc::new(
+            parse(
+                r#"
+name: explained
+default: deny
+permissions:
+  main:
+    - capability: http.get
+      name: docs-only
+      filter: 'host == "docs.example"'
+      action: allow
+    - capability: fs.write
+      action: ask-human
+  "@acme/core": []
+"#,
+            )
+            .unwrap(),
+        ))
+    }
+
+    /// The explanation never disagrees with what enforcement did.
+    fn assert_explains(
+        policy: &PolicyCheck,
+        caller: &str,
+        capability: &str,
+        context: &serde_json::Value,
+    ) -> DecisionExplanation {
+        let explanation = policy.explain(caller, capability, context, "/").unwrap();
+        let outcome = policy.check_with_cwd(caller, capability, context, "/");
+        assert_eq!(
+            matches!(outcome, CheckOutcome::Allow { .. }),
+            explanation.action == DecisionAction::Allow,
+            "{capability}: {explanation:?}"
+        );
+        explanation
+    }
+
+    #[test]
+    fn explanations_name_the_matched_rule_the_default_and_the_near_misses() {
+        let policy = explained_blueprint();
+
+        let matched = assert_explains(
+            &policy,
+            "main",
+            "http.get",
+            &serde_json::json!({"host": "docs.example"}),
+        );
+        assert_eq!(matched.action, DecisionAction::Allow);
+        assert_eq!(
+            matched.cause,
+            DecisionCause::Rule(RuleCitation {
+                caller: "main".into(),
+                index: 0,
+                name: Some("docs-only".into()),
+            })
+        );
+        assert!(matched.near_misses.is_empty());
+
+        let missed = assert_explains(
+            &policy,
+            "main",
+            "http.get",
+            &serde_json::json!({"host": "other.example"}),
+        );
+        assert_eq!(missed.action, DecisionAction::Deny);
+        assert_eq!(missed.cause, DecisionCause::Default { caller_block: true });
+        let [near] = missed.near_misses.as_slice() else {
+            panic!("one near miss: {missed:?}");
+        };
+        assert_eq!(near.rule.name.as_deref(), Some("docs-only"));
+        assert_eq!(
+            near.failures[0].actual,
+            Some(serde_json::json!("other.example"))
+        );
+        assert_eq!(near.failures[0].reason, FailureReasonRecord::NotSatisfied);
+
+        let empty_block =
+            assert_explains(&policy, "@acme/core", "http.get", &serde_json::json!({}));
+        assert_eq!(
+            empty_block.cause,
+            DecisionCause::Default { caller_block: true }
+        );
+        let no_block = assert_explains(&policy, "@acme/other", "http.get", &serde_json::json!({}));
+        assert_eq!(
+            no_block.cause,
+            DecisionCause::Default {
+                caller_block: false
+            }
+        );
+    }
+
+    #[test]
+    fn ask_human_stays_distinct_in_the_explanation_while_enforcement_denies() {
+        let policy = explained_blueprint();
+        let context = serde_json::json!({"path": "/a"});
+        let explanation = policy.explain("main", "fs.write", &context, "/").unwrap();
+        assert_eq!(explanation.action, DecisionAction::AskHuman);
+        assert!(matches!(explanation.cause, DecisionCause::Rule(_)));
+        match policy.check_with_cwd("main", "fs.write", &context, "/") {
+            CheckOutcome::Deny { reason, rule } => {
+                assert_eq!(rule, Some(1));
+                assert!(reason.contains("deferred"), "{reason}");
+            }
+            _ => panic!("ask-human is enforced as a denial"),
+        }
+    }
+
+    #[test]
+    fn a_path_that_cannot_be_normalized_is_a_runtime_invariant_with_its_reason() {
+        let policy = PolicyCheck::new(Arc::new(parse("name: open\ndefault: allow\n").unwrap()));
+        let context = serde_json::json!({"path": "/a\u{0}b"});
+        // Enforcement is what it was: a denial with no rule, which reads as a default deny
+        // to the server's audit and keeps doing so.
+        match policy.check_with_cwd("main", "fs.read", &context, "/") {
+            CheckOutcome::Deny { rule, reason } => {
+                assert_eq!(rule, None);
+                assert!(reason.starts_with("invalid fs.read path"), "{reason}");
+            }
+            _ => panic!("an unnormalizable path is refused even under default: allow"),
+        }
+        let explanation = policy.explain("main", "fs.read", &context, "/").unwrap();
+        assert_eq!(explanation.action, DecisionAction::Deny);
+        let DecisionCause::RuntimeInvariant { reason } = explanation.cause else {
+            panic!("expected a runtime invariant: {explanation:?}");
+        };
+        assert!(reason.starts_with("invalid fs.read path"), "{reason}");
+        assert!(reason.to_lowercase().contains("nul"), "{reason}");
+        assert!(explanation.near_misses.is_empty());
+
+        // A context without the field is the same kind of refusal.
+        let missing = policy
+            .explain("main", "fs.read", &serde_json::json!({}), "/")
+            .unwrap();
+        assert!(matches!(
+            missing.cause,
+            DecisionCause::RuntimeInvariant { .. }
         ));
     }
 

@@ -4,6 +4,11 @@ description: "Every limit on a program's run with its default, scope, and what a
 slug: reference/errors-and-limits
 sidebar:
   order: 8
+authorship:
+  label: ai-assisted
+  confirmed: true
+  contentHash: "f7cb9ad7defae42e816039ebdc5533fbd966a1e4cbf4d9991d56d04fe0f04630"
+  confirmedAt: "2026-10-05T10:59:51.476Z"
 ---
 
 This page lists the limits on a program's run, the fixed limits inside the
@@ -290,6 +295,7 @@ session store.
 | `memory exhausted` | An allocation would pass `max_execution_memory` | `memory_exhausted` | `memory_exhausted` |
 | `call stack exhausted` | Calls went deeper than `max_execution_stack` allows. The default holds about 2,000 levels of recursion | `runtime_error` | `error` |
 | An uncaught error | A thrown error no `catch` handled | `runtime_error` | `error` |
+| An uncaught denial | A gated call the blueprint or the runtime refused, that no `catch` handled | `permission_denied` | `error` |
 | `internal host error: …` | A fault in the runtime, not the program | `runtime_error` | `error` |
 
 The message names the limit and the line the run was on:
@@ -371,6 +377,7 @@ The server reports a failed run as an `error` object with a `kind`, a
 | `fuel_exhausted` | The run used its fuel. | `error: fuel exhausted` and the source excerpt |
 | `timeout` | The run passed `max_execution_time`. | `error: timeout exceeded` and the source excerpt |
 | `memory_exhausted` | The run passed `max_execution_memory`. | `memory exhausted: GC heap out of memory: no capacity for allocation of 2000044 bytes` |
+| `permission_denied` | A gated call was denied and no `catch` handled it. Carries `caller`, `capability`, and `source` (`policy`, `invariant`, or `read_only`). The `message` is the same text a `runtime_error` would carry. | `error: PermissionDeniedError: permission denied: caller=main capability=fs.read: …` and the source excerpt |
 | `runtime_error` | An uncaught error, a stack overflow, or a runtime fault. | `error: Error: customer cus_northwind not found` and the source excerpt |
 | `blueprint_not_found` | The request names a blueprint the server doesn't hold. | `unknown blueprint: nope` |
 | `invalid_request` | A required variable is missing from the request, or the request has one the blueprint doesn't declare. | `invalid variables: variable 'userId' is not declared in the blueprint` |
@@ -378,4 +385,5 @@ The server reports a failed run as an `error` object with a `kind`, a
 
 The [HTTP API](/docs/reference/http-api) reference describes the response
 that carries it. `submilli run` and `submilli server run-code` print the
-message on standard error and exit with status 1.
+message on standard error and exit with status 1. `submilli run` exits with status 3
+instead for a `permission_denied` failure.

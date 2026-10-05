@@ -19,6 +19,11 @@ nextSteps:
   - quickstart
   - blueprints
   - tutorials/connect-a-harness
+authorship:
+  label: ai-assisted
+  confirmed: true
+  contentHash: "61d609cf33b6ec9c70a74a4aae59143ac4f0d71bd3caa3e6ac46a7b9cd5aefe0"
+  confirmedAt: "2026-10-05T10:59:51.470Z"
 ---
 
 Start with the [introduction](/docs/why) for the argument and a first

@@ -28,6 +28,7 @@ fn allow_session() -> BTreeMap<String, Vec<PermissionRule>> {
     let rules = ["session.read", "session.write", "session.remove"]
         .into_iter()
         .map(|cap| PermissionRule {
+            name: None,
             capability: cap.into(),
             filter: None,
             action: Action::Allow,

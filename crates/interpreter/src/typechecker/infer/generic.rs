@@ -1097,7 +1097,9 @@ impl Inferer<'_> {
                     return Ok(());
                 }
                 let mut help = vec![signature_help(self)];
-                help.extend(super::type_diff::type_mismatch_help(&expected, &got));
+                help.extend(
+                    self.render_help_list(super::type_diff::type_mismatch_help(&expected, &got)),
+                );
                 self.error_with_help(
                     arg_span,
                     format!("expected `{expected}`, got `{got}`"),

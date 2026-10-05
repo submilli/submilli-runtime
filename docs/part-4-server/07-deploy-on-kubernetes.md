@@ -8,6 +8,11 @@ slug: server/deploy-on-kubernetes
 # was available when it was written.
 sidebar:
   order: 7
+authorship:
+  label: ai-assisted
+  confirmed: true
+  contentHash: "c357427dae3314fc4b218faeb4a9f60977a16d92dcc141c0a0466272f460a8ef"
+  confirmedAt: "2026-10-05T10:59:51.487Z"
 ---
 
 If your application runs on Kubernetes, the server runs in the same

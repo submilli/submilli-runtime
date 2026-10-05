@@ -141,7 +141,12 @@ pub fn build_packages(
                     text: module.text.clone(),
                 })
                 .collect(),
-            warnings: render_diagnostics_list(&modules, &compiled.warnings),
+            warnings: render_diagnostics_list(&modules, &compiled.warnings).map_err(|source| {
+                DriverError::Diagnostic {
+                    package: package.name.clone(),
+                    source,
+                }
+            })?,
             type_info: compiled.type_info,
             source: None,
         });
@@ -193,6 +198,10 @@ pub fn install_packages(
 
 #[derive(Debug)]
 pub enum DriverError {
+    Diagnostic {
+        package: PackageName,
+        source: interpreter::rendering::RenderError,
+    },
     DependencyCycle {
         cycle: Vec<PackageName>,
     },
@@ -250,6 +259,11 @@ pub enum DriverError {
 impl fmt::Display for DriverError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            DriverError::Diagnostic { package, source } => write!(
+                f,
+                "package `{}` diagnostic failed: {source}",
+                package.as_str()
+            ),
             DriverError::DependencyCycle { cycle } => {
                 let names = cycle
                     .iter()
@@ -365,6 +379,7 @@ impl std::error::Error for DriverError {
             DriverError::SourceRead { source, .. }
             | DriverError::DocumentationRead { source, .. } => Some(source),
             DriverError::Install { source, .. } => Some(source),
+            DriverError::Diagnostic { source, .. } => Some(source),
             _ => None,
         }
     }
@@ -748,28 +763,29 @@ fn display_sources(
 }
 
 fn render_diagnostics(modules: &[DiscoveredModule], diags: &[Diagnostic]) -> String {
-    render_diagnostics_list(modules, diags).concat()
+    let result = display_sources(modules)
+        .map_err(interpreter::rendering::RenderError::from)
+        .and_then(|sources| diagnostics::render_collection(diags, &sources));
+    result.map_or_else(
+        |error| {
+            interpreter::rendering::failure_text(
+                diags
+                    .first()
+                    .map_or("package compilation failed", |diagnostic| {
+                        diagnostic.message.as_str()
+                    }),
+                &error,
+            )
+        },
+        |rendered| rendered.text,
+    )
 }
 
-fn render_diagnostics_list(modules: &[DiscoveredModule], diags: &[Diagnostic]) -> Vec<String> {
-    let sources = match display_sources(modules) {
-        Ok(sources) => sources,
-        Err(error) => {
-            return diags
-                .iter()
-                .map(|diagnostic| {
-                    format!(
-                        "error: {}\nsource context unavailable: {error}\n",
-                        diagnostic.message
-                    )
-                })
-                .collect();
-        }
-    };
-    diags
-        .iter()
-        .map(|d| diagnostics::render(d, &sources))
-        .collect()
+fn render_diagnostics_list(
+    modules: &[DiscoveredModule],
+    diags: &[Diagnostic],
+) -> Result<Vec<String>, interpreter::rendering::RenderError> {
+    diagnostics::render_list(diags, &display_sources(modules)?)
 }
 
 #[cfg(test)]

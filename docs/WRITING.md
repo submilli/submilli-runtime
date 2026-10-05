@@ -87,13 +87,139 @@ doc comment or help text in the code, then run `npm run reference` in
 `docs-site` with `SUBMILLI_BIN` and `SUBMILLI_SERVER_BIN` naming the freshly
 built binaries. Run it before every release.
 
-## People write, AI proofreads
+## Authorship and required disclosure
 
-A person writes each page: the argument, the order, the examples, and
-the sentences. An AI assistant proofreads it. It checks claims against
-the code, runs the examples, captures outputs, and points out what is
-unclear. It suggests, and the author decides. A page an assistant
-drafted gets rewritten by its author before review.
+Every published documentation page must disclose how it was written. Use one
+of these labels, based on the actual authoring process:
+
+| Label | Meaning |
+| --- | --- |
+| Human-written | A person wrote the prose, including its argument, structure, and sentences. AI may check facts, run examples, or identify problems, but its generated wording is not retained. |
+| AI-assisted | The prose combines human writing with retained AI-generated or AI-rewritten wording. Human review alone does not establish human authorship. |
+| AI-generated | AI produced the prose, with human review or light editing. |
+| Generated from source | A deterministic tool produced the content from code, schemas, CLI help, or other maintained source material. This is distinct from AI generation. |
+
+### Explanations and narrative are human-written
+
+A person must write explanations, conceptual introductions, arguments, and
+narrative passages intended to help readers understand Submilli. This includes
+the explanatory prose in tutorials and how-to guides, not just pages classified
+as Explanation. The author owns the reasoning, order, examples, and sentences.
+
+AI may research, check claims against the code, run examples, capture outputs,
+and point out unclear passages. The person writes the resulting explanation.
+An AI draft or paraphrase must be rewritten by a person before it meets this
+requirement. Editing to lower a detector score does not establish human authorship.
+
+### Reference may be AI-generated
+
+Reference material may be AI-generated or AI-assisted. Fields, flags, types,
+limits, errors, and lookup tables must still be accurate, complete, and checked
+against the implementation. Prefer deterministic generation for facts the
+binaries or schemas can provide. Disclose that as Generated from source.
+
+The reference exception applies to factual lookup material. Moving a narrative
+explanation into the reference folder does not exempt it from human authorship.
+
+### Disclosure is mandatory
+
+Show the authorship label on every published page. A subtle icon is acceptable
+if its meaning is available on hover, keyboard focus, and tap, with an accessible
+text label. Include the disclosure in Markdown exports and other published
+representations too.
+
+For mixed pages, use AI-assisted when AI-authored prose remains and identify
+sections with a different provenance where needed. Identify generated reference
+regions separately; generated API tables do not make surrounding human-written
+explanations AI-generated.
+
+A person confirms the label against the version being published. Reconfirm it
+after content changes. Detector scores can help prioritize editorial review;
+they must never assign or certify authorship. Human-written is an explicit
+human declaration, not the absence of an AI flag.
+
+For the existing-book migration, the owner has selected AI-assisted as the
+starting classification until individual pages are checked. This is a migration
+instruction, not an automatic site fallback. Existing pages without metadata or
+a visible disclosure remain migration work; this guide does not label them. A
+person may explicitly mark a page Human-written after confirming its prose meets
+that definition. The migration does not waive the human-writing requirement for
+explanations or permit known AI-generated pages to be mislabeled.
+
+Apply this gate to every new or revised page. Before publication, check both
+the writing requirement and the disclosure.
+Missing or stale disclosure leaves the page incomplete. Disclosure describes
+provenance; it is not a claim that the page is accurate or has been reviewed.
+
+### Declare authorship in Markdown
+
+Add `authorship` to the page's existing YAML frontmatter. Keep its `title`,
+`description`, `slug`, and other fields. Use exactly one of `human-written`,
+`ai-assisted`, `ai-generated`, or `generated-from-source` for `label`.
+
+```yaml
+---
+title: "Example reference"
+description: "Fields and defaults for an example configuration."
+slug: reference/example
+# Keep the page's other frontmatter fields here.
+authorship:
+  label: ai-assisted
+  confirmed: true
+  contentHash: "REPLACE_WITH_SHA256_FROM_THE_COMMAND_BELOW"
+  confirmedAt: "REPLACE_WITH_CONFIRMATION_TIME_FROM_THE_COMMAND_BELOW"
+---
+
+The page content starts here.
+```
+
+The uppercase placeholders are not valid metadata. Replace them before
+publication. `confirmed: true` records a person's explicit confirmation of the
+label for this version; an assistant must not set it without that confirmation.
+`confirmedAt` is the confirmation time in ISO 8601 format with a timezone.
+`contentHash` is the lowercase SHA-256 digest of the Markdown body, excluding
+frontmatter, with CRLF converted to LF and surrounding whitespace trimmed.
+
+The site shows this declaration as a subtle icon beside the page title. The
+Markdown exporter adds `Authorship: AI-assisted.` (or the corresponding label)
+to the exported chapter and combined agent documentation automatically, using
+the same confirmed metadata and body-hash check. Do not add a duplicate disclosure
+paragraph to the source body. For mixed content, add an explicit note beside the
+relevant section, for example: `Authorship of this table: Generated from source.`
+Include these notes before calculating the hash.
+
+After the person confirms the label and the body is final, run this from
+`docs-site/` to calculate the values. Replace the example path with the page's
+path. The command prints values only; it does not confirm authorship or edit files.
+
+```sh
+node --input-type=module - ../docs/part-6-reference/blueprint-file.md <<'JS'
+import { readFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { parseFrontmatter } from 'astro/markdown';
+
+const { content } = parseFrontmatter(readFileSync(process.argv[2], 'utf8'));
+const body = content.replace(/\r\n/g, '\n').trim();
+console.log('contentHash:', createHash('sha256').update(body, 'utf8').digest('hex'));
+console.log('confirmedAt:', new Date().toISOString());
+JS
+```
+
+Copy the digest and timestamp into the frontmatter, keeping the timestamp
+quoted. Use the actual confirmation time if confirmation happened earlier.
+Changing only frontmatter does not change the body hash. After any body edit,
+recheck the label and obtain confirmation again, then regenerate
+the hash and timestamp.
+
+The site displays the authorship icon only when `confirmed` is true and the
+hash matches the current body. Missing or stale metadata suppresses the icon;
+it does not mean Human-written. The schema permits missing metadata for
+unpublished stubs, but the docs checks and built-output validation reject visible
+book pages with missing or stale
+confirmation. Reviewers must still check that the declared label reflects the
+authoring process. A matching hash does not prove authorship.
+
+## Prose style
 
 Machine-written prose has a texture readers recognize, and once they
 notice it they stop trusting the page. Avoid:
@@ -206,7 +332,7 @@ explain their expected result or error. Resolve uncertain behavior before presen
 it as a rule. File confirmed compiler bugs in Linear's interpreter project.
 Write the book and agent prompt for the intended behavior after those fixes;
 keep bug caveats and workarounds in the issues. Check links and build the documentation site using the
-[site instructions](README.md#build-and-preview).
+[site instructions](../docs-site/README.md#build-and-preview).
 
 Then read the prose aloud. Rewrite anything you would struggle to say to a
 colleague. Cut repetition without removing details needed to use the feature.

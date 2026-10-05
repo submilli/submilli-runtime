@@ -4,6 +4,11 @@ description: "Every top-level key and field of a blueprint file: types, defaults
 slug: reference/blueprint-file
 sidebar:
   order: 1
+authorship:
+  label: ai-assisted
+  confirmed: true
+  contentHash: "8dd8e1c15d8641712b26459dfa4efd50a6819de7eb333dd00d4b6473e1f293f2"
+  confirmedAt: "2026-10-05T10:59:51.473Z"
 ---
 
 A blueprint file is one YAML document. This page describes each of its
@@ -540,9 +545,14 @@ program, or a package name for that package's own calls.
 
 | Field | Type | Required |
 | --- | --- | --- |
+| `name` | string, non-empty | no |
 | `capability` | string, non-empty | yes |
 | `filter` | filter expression | no |
 | `action` | `allow`, `deny` | yes |
+
+`name` is an optional label for the rule. It must be unique within a caller's
+list (`blueprint lint` reports a repeat as an error). It gives the rule a
+stable name to refer to instead of its position in the list.
 
 ```yaml title="blueprint.yaml (fragment)"
 permissions:

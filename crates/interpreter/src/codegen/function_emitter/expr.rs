@@ -615,7 +615,11 @@ fn emit_function_ref(
     // adapter (slot 0 = env, slot 1 = adapter funcref, slot 2
     // = env sentinel). The shared closure vtable reuses for
     // the env slot — adapter bodies ignore it, and the slot
-    // just needs a non-null `(ref any)`.
+    // just needs a non-null `(ref any)`. The closure is built
+    // once and cached in a global, so every read is the same value.
+    // A `FunctionRef` is always typed by its declared signature, so
+    // `result_ty` classifies like the adapter's signature and the
+    // cached struct type matches the global's.
     let closure_struct_idx = ctx
         .symbols
         .closure_struct_type_idx(crate::codegen::closures::classify(result_ty)?)
@@ -627,11 +631,20 @@ fn emit_function_ref(
     let adapter_idx = ctx.symbols.adapter_func_idx(mangled).ok_or_else(|| {
         crate::codegen::internal_failure("adapter func recorded for every function-as-value")
     })?;
+    let closure_global_idx = ctx
+        .symbols
+        .adapter_closure_global_idx(mangled)
+        .ok_or_else(|| {
+            crate::codegen::internal_failure("closure global recorded for every function-as-value")
+        })?;
     let vtable_idx = ctx.symbols.closure_vtable_global_idx().ok_or_else(|| {
         crate::codegen::internal_failure(
             "closure vtable global emitted whenever closures or adapters exist",
         )
     })?;
+    emitter.instruction(Instruction::GlobalGet(closure_global_idx));
+    emitter.instruction(Instruction::RefIsNull);
+    emitter.emit_if(BlockType::Empty);
     emitter.instruction(Instruction::GlobalGet(vtable_idx));
     emitter.instruction(Instruction::RefFunc(adapter_idx));
     emitter.instruction(Instruction::GlobalGet(vtable_idx));
@@ -640,6 +653,10 @@ fn emit_function_ref(
     }
     emitter.instruction(Instruction::I64Const(0));
     emitter.instruction(Instruction::StructNew(closure_struct_idx));
+    emitter.instruction(Instruction::GlobalSet(closure_global_idx));
+    emitter.emit_end();
+    emitter.instruction(Instruction::GlobalGet(closure_global_idx));
+    emitter.instruction(Instruction::RefAsNonNull);
 
     Ok(())
 }
@@ -2581,7 +2598,7 @@ fn emit_object_spread(
             emitter.instruction(Instruction::RefNull(HeapType::Concrete(intrinsics.object)));
         }
         if matches!(source, TypedObjectMember::Spread { by_name: true, .. }) {
-            emit_spread_mask(emitter, ctx, source_local, narrowed_ty, shape)?;
+            emit_spread_mask(emitter, ctx, source_local, source.expr_id(), shape)?;
         } else {
             emitter.instruction(Instruction::RefNull(HeapType::Concrete(intrinsics.object)));
         }
@@ -2597,11 +2614,14 @@ fn emit_spread_mask(
     emitter: &mut FunctionEmitter,
     ctx: &CodegenCtx,
     source: u32,
-    source_ty: &Type,
+    source_expr: crate::ExprId,
     shape: &Type,
 ) -> Result<(), crate::compiler_error::CompilerFailure> {
-    let mut fields = std::collections::BTreeMap::new();
-    collect_spread_field_types(source_ty, &mut fields)?;
+    let fields = ctx
+        .ta
+        .spread_mask_fields
+        .get(&source_expr)
+        .ok_or_else(|| crate::codegen::internal_failure("by-name spread fields recorded"))?;
     let intrinsics = ctx
         .symbols
         .intrinsic_type_indices()
@@ -2622,7 +2642,7 @@ fn emit_spread_mask(
         array_type_index: intrinsics.field_names,
         array_size: crate::codegen::wasm_u32(fields.len())?,
     });
-    for (name, ty) in &fields {
+    for (name, ty) in fields {
         let global = ctx
             .symbols
             .field_name_string_global_idx(name)
@@ -2652,33 +2672,6 @@ fn emit_spread_mask(
     });
     emitter.instruction(Instruction::RefNull(HeapType::ANY));
     emitter.instruction(Instruction::StructNew(intrinsics.object_shape));
-    Ok(())
-}
-
-fn collect_spread_field_types(
-    ty: &Type,
-    fields: &mut std::collections::BTreeMap<String, Type>,
-) -> Result<(), crate::compiler_error::CompilerFailure> {
-    match ty.peel() {
-        Type::Object { fields: source, .. } => {
-            for (name, field) in source {
-                fields
-                    .entry(name.clone())
-                    .and_modify(|ty| *ty = Type::union(vec![ty.clone(), field.ty.clone()]))
-                    .or_insert_with(|| field.ty.clone());
-            }
-        }
-        Type::Union(members) => {
-            for member in members {
-                collect_spread_field_types(member, fields)?;
-            }
-        }
-        _ => {
-            return Err(crate::codegen::internal_failure(
-                "spread mask source is not structural",
-            ));
-        }
-    }
     Ok(())
 }
 
@@ -3206,15 +3199,6 @@ fn emit_equality(
     lhs: ExprId,
     rhs: ExprId,
 ) -> Result<(), crate::compiler_error::CompilerFailure> {
-    // The inferer's Eq rule infers the RHS using the LHS's
-    // type as the hint, so both operands share a Wasm
-    // `value_type`. Dispatch off that value-type — the
-    // language `Type` might be a literal-refined primitive
-    // or a literal-only union; at the Wasm level those
-    // collapse to the same compare path as their base
-    // primitive (equality is value-level — the literal
-    // refinement is a typecheck-time restriction, not a
-    // runtime distinction).
     // Plan 75.8: when either operand is the `null` literal,
     // emit the non-null side followed by `ref.is_null`
     // (negated for `NotEq`). This covers `x === null` /
@@ -3270,44 +3254,46 @@ fn emit_equality(
         }
         return Ok(());
     }
-    // When either operand admits null the two may differ in Wasm shape
-    // (one `(ref null $Object)`, the other f64 / `(ref $string)` / …),
-    // and the `operand_val` dispatch below assumes a shared value-type.
-    // Route through a null-aware dispatch that boxes both sides to
-    // `(ref [null] $Object)` and calls `vtable.equals`.
-    let lhs_admits_null = may_hold_null(
-        &ctx.ta
-            .try_expr(lhs)
-            .map_err(crate::codegen::arena_failure)?
-            .ty,
-    );
-    let rhs_admits_null = may_hold_null(
-        &ctx.ta
-            .try_expr(rhs)
-            .map_err(crate::codegen::arena_failure)?
-            .ty,
-    );
-    if lhs_admits_null || rhs_admits_null {
-        emit_nullable_eq(emitter, ctx, lhs, rhs, op)?;
-        return Ok(());
-    }
-    let operand_ty = ctx
+    let lhs_ty = ctx
         .ta
         .try_expr(lhs)
         .map_err(crate::codegen::arena_failure)?
         .ty
         .clone();
+    let rhs_ty = ctx
+        .ta
+        .try_expr(rhs)
+        .map_err(crate::codegen::arena_failure)?
+        .ty
+        .clone();
+    let operand_val = ctx.symbols.value_type(lhs_ty.primitive_behavior())?;
+    // The typed dispatch below needs both operands in one Wasm shape. One that
+    // admits null is a `(ref null $Object)` beside the other's f64 or
+    // `(ref $string)`, and comparable operands need not share a representation
+    // at all (`t === 1` with `t: T`, `n === e` with `e: {}`). Those pairs box both
+    // sides to `(ref [null] $Object)` and dispatch through `vtable.equals`.
+    if may_hold_null(&lhs_ty)
+        || may_hold_null(&rhs_ty)
+        || operand_val != ctx.symbols.value_type(rhs_ty.primitive_behavior())?
+    {
+        emit_boxed_eq(emitter, ctx, lhs, rhs, op)?;
+        return Ok(());
+    }
     // bigint equality short-circuits to a direct
     // `submilli:bigint.cmp == 0` call — a faster path than the
     // generic `ValType::Ref(_)` arm's vtable `equals` dispatch.
-    if matches!(operand_ty.peel(), Type::BigInt) {
+    if matches!(lhs_ty.peel(), Type::BigInt) {
         emit_bigint_cmp_eq_inline(emitter, ctx, lhs, rhs, op)?;
         return Ok(());
     }
-    let operand_val = ctx.symbols.value_type(operand_ty.primitive_behavior())?;
     let string_idx = ctx.symbols.string_type_idx().ok_or_else(|| {
         crate::codegen::internal_failure("string type registered with intrinsics")
     })?;
+    // Operands that share a Wasm `value_type` dispatch off it. The language
+    // `Type` might be a literal-refined primitive or a literal-only union; at
+    // the Wasm level those collapse to the same compare path as their base
+    // primitive (equality is value-level; the literal refinement is a
+    // typecheck-time restriction, not a runtime distinction).
     match operand_val {
         ValType::F64 => {
             emit_primitive_operand(emitter, ctx, lhs)?;
@@ -3352,22 +3338,9 @@ fn emit_equality(
             // Enum values fall here too — they share the
             // `$BoxedNumber` / `$string` shapes whose
             // vtable `equals` slot is wired by the prelude.
-            //
-            // The Eq rule infers the RHS with the LHS type as
-            // hint, but a union LHS (`$Object` repr) can pair
-            // with an RHS that lands on a concrete primitive
-            // member (`first === 1`, RHS `f64`). Box both sides
-            // to `$Object` so they match the `equals` slot's
-            // signature.
             emit_expr(emitter, ctx, lhs)?;
-            cast::emit_box(emitter, ctx, &operand_ty)?;
+            cast::emit_box(emitter, ctx, &lhs_ty)?;
             emit_expr(emitter, ctx, rhs)?;
-            let rhs_ty = ctx
-                .ta
-                .try_expr(rhs)
-                .map_err(crate::codegen::arena_failure)?
-                .ty
-                .clone();
             cast::emit_box(emitter, ctx, &rhs_ty)?;
             emit_vtable_equality(emitter, ctx, op);
         }
@@ -5668,8 +5641,9 @@ fn emit_vtable_equality_checked(
     Ok(())
 }
 
-/// null-aware `===` / `!==` dispatch. Used when either
-/// operand's static type admits null. Bridges the operands to a
+/// Boxed, null-aware `===` / `!==` dispatch. Used when either operand's static
+/// type admits null, or when the operands have different Wasm representations.
+/// Bridges the operands to a
 /// common Wasm shape (`(ref null $Object)`) via `emit_box`, then
 /// emits a 4-way condition:
 ///
@@ -5679,7 +5653,7 @@ fn emit_vtable_equality_checked(
 /// - both non-null → `lhs.vtable.equals(lhs, rhs)`.
 ///
 /// Final `I32Eqz` flips the result for `NotEq`.
-fn emit_nullable_eq(
+fn emit_boxed_eq(
     emitter: &mut FunctionEmitter,
     ctx: &CodegenCtx,
     lhs: ExprId,

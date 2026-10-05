@@ -732,8 +732,10 @@ impl Inferer<'_> {
             && !arrow_reported
             && !assignable(&ty, want, self.resolver())
         {
-            let has_structural_diff = super::type_diff::format_type_diff(want, &ty).is_some();
-            let mut help = super::type_diff::type_mismatch_help(want, &ty);
+            let has_structural_diff = self
+                .render_optional_help(super::type_diff::format_type_diff(want, &ty))
+                .is_some();
+            let mut help = self.render_help_list(super::type_diff::type_mismatch_help(want, &ty));
             // No structural diff to show (e.g. `number` vs an interface): lift
             // the expected interface's shape so the fix is visible in-place. Keyed
             // on the structural half alone — a lossy-rendering note is not a
@@ -1261,30 +1263,24 @@ impl Inferer<'_> {
                 }
                 let (typed_lhs, lt) = self.infer_expr(lhs, None)?;
                 let lhs_void = lt.carries_void().then(|| lt.clone());
-                let either_is_null_literal = matches!(
-                    &self.ast.try_expr(lhs).map_err(super::arena_failure)?.kind,
-                    crate::ExprKind::Null
-                ) || matches!(
-                    &self.ast.try_expr(rhs).map_err(super::arena_failure)?.kind,
-                    crate::ExprKind::Null
-                );
                 // Contextual types help literals and callbacks, but an equality
                 // operand is not an assignment into the other operand's type.
                 let contextual_rhs = equality_operand_needs_context(self.ast, rhs)?;
                 let rhs_hint = contextual_rhs.then_some(&lt);
                 let (typed_rhs, rt) = self.infer_expr(rhs, rhs_hint)?;
-                let comparison_rhs = literal_comparison_type(
-                    &self.typed_ast,
-                    self.typed_ast
-                        .try_expr(typed_rhs)
-                        .map_err(crate::typechecker::arena_failure)?,
-                )?;
-                if !either_is_null_literal
-                    && !equality_types_overlap(&lt, &comparison_rhs, self.resolver())
-                {
+                let lhs_operand = self.comparison_operand(lhs, typed_lhs)?;
+                let rhs_operand = self.comparison_operand(rhs, typed_rhs)?;
+                if !super::comparison_operand::operands_comparable(
+                    &lhs_operand,
+                    &rhs_operand,
+                    self.resolver(),
+                ) {
                     self.error(
                         self.ast.try_expr(rhs).map_err(super::arena_failure)?.span,
-                        format!("expected `{lt}`, got `{comparison_rhs}`"),
+                        format!(
+                            "expected `{}`, got `{}`",
+                            lhs_operand.label, rhs_operand.label
+                        ),
                     );
                 }
                 // `void` has no runtime value to compare, and the comparison
@@ -2310,7 +2306,9 @@ impl Inferer<'_> {
             };
             let mut hints = vec![help];
             if lift_function.is_none() {
-                hints.extend(super::type_diff::guard_loss_note(&callee_ty));
+                hints.extend(
+                    self.render_optional_help(super::type_diff::guard_loss_note(&callee_ty)),
+                );
             }
             self.error_with_help(span, msg, hints);
         }
@@ -3819,7 +3817,7 @@ impl Inferer<'_> {
             };
             let mut hints = vec![help];
             if let CallLift::Anon { ty } = lift {
-                hints.extend(super::type_diff::guard_loss_note(ty));
+                hints.extend(self.render_optional_help(super::type_diff::guard_loss_note(ty)));
             }
             self.error_with_help(span, msg, hints);
         }
@@ -5294,7 +5292,9 @@ impl Inferer<'_> {
     /// their join — `c ? a : {}` joins to `{}`, which would copy nothing when `a`
     /// is chosen — and a union contributes each member. Over more than one alternative, a
     /// field some lack is optional and its type is the union of theirs, as in
-    /// TypeScript. Only structural object types spread; anything else is reported.
+    /// TypeScript. Only structural object types and interfaces with an index
+    /// signature spread; anything else is reported. A `by_name` spread's fields
+    /// are recorded in `TypedAst::spread_mask_fields`, which codegen reads.
     pub(super) fn spread_source_fields(
         &mut self,
         typed_source: ExprId,
@@ -5303,27 +5303,25 @@ impl Inferer<'_> {
     ) -> Result<Option<SpreadFields>, crate::compiler_error::CompilerFailure> {
         let mut alternatives = Vec::new();
         self.collect_spread_alternatives(typed_source, source_ty, &mut alternatives)?;
-        let mut objects: Vec<ObjectFields> = Vec::new();
+        let mut objects: Vec<SpreadAlternative> = Vec::new();
         for alternative in alternatives {
-            match alternative {
-                Type::Object { fields, .. } => {
-                    if !objects.contains(&fields) {
-                        objects.push(fields);
-                    }
-                }
+            let index_value = self
+                .resolver()
+                .index_signature(&alternative)
+                .map(|index| *index.value);
+            let fields = match alternative {
+                Type::Object { fields, .. } => fields,
                 Type::InterfaceRef {
                     ref mangled,
                     ref name,
                     ref args,
                     ..
-                } if self.resolver().index_signature(&alternative).is_some() => {
+                } if index_value.is_some() => {
                     let Some(fields) = self.resolver().interface_full_form(mangled, name, args)
                     else {
                         return Ok(None);
                     };
-                    if !objects.contains(&fields) {
-                        objects.push(fields);
-                    }
+                    fields
                 }
                 Type::InterfaceRef { name, .. } => {
                     self.error(
@@ -5343,17 +5341,32 @@ impl Inferer<'_> {
                     );
                     return Ok(None);
                 }
+            };
+            let object = SpreadAlternative {
+                fields,
+                index_value,
+            };
+            if !objects.contains(&object) {
+                objects.push(object);
             }
         }
-        Ok(Some(match objects.as_slice() {
-            [only] => SpreadFields {
-                fields: only.clone(),
+        if let [only] = objects.as_slice() {
+            return Ok(Some(SpreadFields {
+                fields: only.fields.clone(),
                 by_name: false,
-            },
-            _ => SpreadFields {
-                fields: merge_spread_alternatives(&objects),
-                by_name: true,
-            },
+            }));
+        }
+        let fields = merge_spread_alternatives(&objects);
+        self.typed_ast.spread_mask_fields.insert(
+            typed_source,
+            fields
+                .iter()
+                .map(|(name, field)| (name.clone(), field.ty.clone()))
+                .collect(),
+        );
+        Ok(Some(SpreadFields {
+            fields,
+            by_name: true,
         }))
     }
 
@@ -9945,6 +9958,13 @@ fn equality_operand_needs_context(ast: &crate::Ast, id: ExprId) -> Result<bool, 
     )
 }
 
+/// The literal type of a number, with `-0` read as `0`: they are one value
+/// under `===`.
+pub(super) fn number_literal_type(value: f64) -> Type {
+    let canonical = if value == 0.0 { 0.0 } else { value };
+    Type::NumberLiteral(crate::types::LiteralF64(canonical))
+}
+
 pub(super) fn literal_comparison_type(
     ast: &crate::TypedAst,
     expr: &TypedExpr,
@@ -9966,41 +9986,10 @@ pub(super) fn literal_comparison_type(
             };
             let negative = matches!(expr.kind, TypedExprKind::Unary { op: UnOp::Neg, .. });
             let signed = if negative { -value } else { value };
-            let canonical = if signed == 0.0 { 0.0 } else { signed };
-            Type::NumberLiteral(crate::types::LiteralF64(canonical))
+            number_literal_type(signed)
         }
         _ => expr.ty.clone(),
     })
-}
-
-fn equality_types_overlap(
-    left: &Type,
-    right: &Type,
-    types: super::assignable::TypeResolver<'_>,
-) -> bool {
-    if let Type::Union(members) = left.peel() {
-        return members
-            .iter()
-            .any(|member| equality_types_overlap(member, right, types));
-    }
-    if let Type::Union(members) = right.peel() {
-        return members
-            .iter()
-            .any(|member| equality_types_overlap(left, member, types));
-    }
-    let both_enums = matches!(
-        left.peel(),
-        Type::NumberEnum { .. } | Type::StringEnum { .. }
-    ) && matches!(
-        right.peel(),
-        Type::NumberEnum { .. } | Type::StringEnum { .. }
-    );
-    let (left, right) = if both_enums {
-        (left, right)
-    } else {
-        (left.primitive_behavior(), right.primitive_behavior())
-    };
-    assignable(left, right, types) || assignable(right, left, types)
 }
 
 /// The pairs `+` is defined for, and the result. The single source of truth for both
@@ -10172,23 +10161,43 @@ fn collect_union_members(ty: &Type, out: &mut Vec<Type>) {
     }
 }
 
+/// One object type a spread's source may be, with its string index
+/// signature's value type when it has one.
+#[derive(PartialEq)]
+struct SpreadAlternative {
+    fields: ObjectFields,
+    index_value: Option<Type>,
+}
+
 /// The fields of a spread whose source is one of several object types: every
-/// field any of them has, optional where some lack it or have it optional.
-fn merge_spread_alternatives(alternatives: &[ObjectFields]) -> ObjectFields {
+/// field any of them has, optional where some lack it or have it optional. An
+/// alternative with an index signature can hold a field it doesn't name, so
+/// that field may also hold the index signature's value type.
+fn merge_spread_alternatives(alternatives: &[SpreadAlternative]) -> ObjectFields {
     let names: std::collections::BTreeSet<&String> = alternatives
         .iter()
-        .flat_map(|fields| fields.keys())
+        .flat_map(|alternative| alternative.fields.keys())
         .collect();
     names
         .into_iter()
         .map(|name| {
             let present: Vec<&crate::ObjectField> = alternatives
                 .iter()
-                .filter_map(|fields| fields.get(name))
+                .filter_map(|alternative| alternative.fields.get(name))
                 .collect();
             let optional =
                 present.len() < alternatives.len() || present.iter().any(|field| field.optional);
-            let ty = Type::union(present.iter().map(|field| field.ty.clone()).collect());
+            let index_values = alternatives
+                .iter()
+                .filter(|alternative| !alternative.fields.contains_key(name))
+                .filter_map(|alternative| alternative.index_value.clone());
+            let ty = Type::union(
+                present
+                    .iter()
+                    .map(|field| field.ty.clone())
+                    .chain(index_values)
+                    .collect(),
+            );
             (
                 name.clone(),
                 crate::ObjectField {
@@ -10655,7 +10664,7 @@ mod tests {
     fn equality_different_type_diagnoses() {
         let (_, d) = run(r#"let x: boolean = 1 === "a";"#);
         assert_eq!(d.len(), 1);
-        assert_eq!(d[0].message, "expected `number`, got `\"a\"`");
+        assert_eq!(d[0].message, "expected `1`, got `\"a\"`");
     }
 
     #[test]

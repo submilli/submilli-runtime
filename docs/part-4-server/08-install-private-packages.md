@@ -4,6 +4,11 @@ description: "How to let a server install packages from private GitHub repositor
 slug: server/install-private-packages
 sidebar:
   order: 8
+authorship:
+  label: ai-assisted
+  confirmed: true
+  contentHash: "0dbe7049070ee3c4f87c3c522c1ca5aeb4019b67fe48a023ce826d26f22bb768"
+  confirmedAt: "2026-10-05T10:59:51.487Z"
 ---
 
 A server fetches packages from GitHub with its own token, never

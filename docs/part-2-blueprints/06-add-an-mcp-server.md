@@ -4,6 +4,11 @@ description: "How to make an MCP server importable as a package: declare it, all
 slug: blueprints/add-an-mcp-server
 sidebar:
   order: 6
+authorship:
+  label: ai-assisted
+  confirmed: true
+  contentHash: "2ea4b1af1b19c09cf65b88168d32ac9d91b0961d1d27427b1f96ceff38c38272"
+  confirmedAt: "2026-10-05T10:59:51.492Z"
 ---
 
 The curated packages cover common services, and you can write a package

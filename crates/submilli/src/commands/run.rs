@@ -10,7 +10,6 @@ use std::time::{Duration, Instant};
 use interpreter::runtime::limits::ExecutionUsage;
 
 use anyhow::{Context, anyhow};
-use interpreter::diagnostics;
 use interpreter::runtime::{
     DEFAULT_MAX_EXECUTION_TOKENS, ExecutionTokenBudget, HttpClient, LinkedPackageModule, LlmLimits,
     McpTransport, NetworkPolicy, ReqwestHttpClient, RuntimeConfig, SharedTokenBudget, StoreData,
@@ -18,7 +17,6 @@ use interpreter::runtime::{
 };
 use interpreter::{
     BacktraceMode, Sources, dispatch_main_async, failure_message, instantiate_program_async,
-    render_backtrace,
 };
 use submilli_blueprint::{Blueprint, VarBindings, resolve_variables};
 use submilli_build::{Artifact, PackageStore};
@@ -184,6 +182,18 @@ impl Args {
             ),
         ]
     }
+}
+
+/// Exit status for a program that stopped without a value: 3 for a denial the
+/// runtime threw and the program let escape, so a script can tell a refused
+/// capability from a bug; 1 for anything else.
+const EXIT_PERMISSION_DENIED: u8 = 3;
+
+fn exit_status_of(err: &wasmtime::Error) -> u8 {
+    let denied = err
+        .downcast_ref::<interpreter::backtrace::ThrownError>()
+        .is_some_and(|thrown| thrown.denial.is_some());
+    if denied { EXIT_PERMISSION_DENIED } else { 1 }
 }
 
 pub fn execute(args: Args) -> anyhow::Result<ExitCode> {
@@ -375,15 +385,11 @@ fn execute_on_this_thread(
     );
     let compiled = match compiled {
         Ok(compiled) => {
-            for d in &compiled.warnings {
-                eprint!("{}", diagnostics::render(d, &sources));
-            }
+            crate::commands::check::render(&compiled.warnings, &sources)?;
             compiled
         }
         Err(diags) => {
-            for d in &diags {
-                eprint!("{}", diagnostics::render(d, &sources));
-            }
+            crate::commands::check::render(&diags, &sources)?;
             return Ok(ExitCode::from(1));
         }
     };
@@ -494,12 +500,16 @@ fn execute_on_this_thread(
         }
         Ok(None) => Ok(ExitCode::SUCCESS),
         Err(err) => {
-            if let Some(bt) = render_backtrace(&err, &sources, file, BacktraceMode::Full) {
-                eprint!("{bt}");
-            } else {
-                eprintln!("error: {}", failure_message(&err));
+            match interpreter::backtrace::render_checked(&err, &sources, file, BacktraceMode::Full)
+            {
+                Ok(Some(rendered)) => eprint!("{}", rendered.text),
+                Ok(None) => eprintln!("error: {}", failure_message(&err)),
+                Err(failure) => eprintln!(
+                    "{}",
+                    interpreter::rendering::failure_text(&failure_message(&err), &failure)
+                ),
             }
-            Ok(ExitCode::from(1))
+            Ok(ExitCode::from(exit_status_of(&err)))
         }
     };
     if let Some(error) = secondary_cleanup {

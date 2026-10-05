@@ -4,6 +4,11 @@ description: "The language of a permission rule's filter: comparisons, operators
 slug: reference/filter-language
 sidebar:
   order: 2
+authorship:
+  label: ai-assisted
+  confirmed: true
+  contentHash: "23119b887b19eeed9296c545b4b9a6409f9c97aa1453dbb6b67d9cef0d482bae"
+  confirmedAt: "2026-10-05T10:59:51.476Z"
 ---
 
 This page describes the language of the `filter` in a permission rule.

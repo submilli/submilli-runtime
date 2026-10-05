@@ -26,7 +26,7 @@ been initialized; it never replaces an existing generated configuration.
 
 ## Editing
 
-Use the [writing framework](WRITING.md) to define a chapter's purpose and reader
+Use the [writing framework](../docs/WRITING.md) to define a chapter's purpose and reader
 outcomes before drafting, then review the draft against those outcomes.
 
 Edit pages in `docs/`. Frontmatter `slug` controls the path below `/docs/`;
@@ -87,6 +87,20 @@ To keep the public URL on the marketing domain, its static service can rewrite
 The `Documentation` workflow checks and builds the site and uploads a
 `documentation-site` artifact. It does not deploy. Connect the docs output to
 hosting before deploying the marketing site without its former book pages.
+
+### Retired documentation URLs
+
+`src/lib/legacy-docs.ts` lists retired chapter paths and their current destinations.
+The static build emits redirect documents at those paths, so the docs origin
+can replace old content with a link and browser redirect. These documents do
+not configure HTTP status codes on the hosting service.
+
+For permanent HTTP redirects on `submilli.ai`, configure matching 301 rules on
+the marketing service before its `/docs/*` proxy rewrite. Remove obsolete docs
+files from that service's published output first: Render serves an existing
+file before evaluating redirect or rewrite rules. Preserve the current docs
+proxy and query parameters. Verify both the old HTML URLs and their `.md`
+alternatives after deployment, along with representative bookmarked anchors.
 
 ### Crawling and search
 

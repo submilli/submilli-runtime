@@ -21,14 +21,14 @@ use interpreter::runtime::{
 use interpreter::{
     BacktraceMode, Diagnostic, FileId, ParsedScript, ScriptImports, Sources,
     compile_parsed_script_timed, dispatch_main_async, failure_message, instantiate_program_async,
-    parse_script, render_backtrace,
+    parse_script,
 };
 use tracing::debug;
 use wasmtime::{Engine, Linker, Module, Trap};
 
 use crate::app::PreparedBlueprintPackages;
 use crate::compiler_thread;
-use crate::error::{DiagnosticNote, DiagnosticPayload, ErrorKind, ExecuteError};
+use crate::error::{DenialDetails, DiagnosticNote, DiagnosticPayload, ErrorKind, ExecuteError};
 use crate::mcp::McpCatalog;
 
 pub struct RunOutcome {
@@ -54,11 +54,16 @@ pub(crate) struct ParsedExecute {
 impl ParsedExecute {
     pub(crate) fn imports(&self) -> Result<ScriptImports, String> {
         self.parsed.external_imports().map_err(|error| {
-            error
-                .into_diagnostics(self.file)
-                .iter()
-                .map(|diagnostic| diagnostics::render(diagnostic, &self.sources))
-                .collect()
+            let diagnostics = error.into_diagnostics(self.file);
+            diagnostics::render_collection(&diagnostics, &self.sources).map_or_else(
+                |failure| {
+                    let primary = diagnostics
+                        .first()
+                        .map_or("compilation failed", |diag| diag.message.as_str());
+                    interpreter::rendering::failure_text(primary, &failure)
+                },
+                |rendered| rendered.text,
+            )
         })
     }
 }
@@ -403,47 +408,30 @@ fn compile_failure(
     diags: &[Diagnostic],
     discovery_warnings: Vec<String>,
 ) -> RunOutcome {
-    let mut message = String::new();
-    for diagnostic in diags {
-        message.push_str(&diagnostics::render(diagnostic, sources));
-    }
-    let payloads = diags
-        .iter()
-        .map(|diagnostic| {
-            let (line, column) = diagnostic_position(sources, diagnostic.span)?;
-            let notes = diagnostic
-                .notes
-                .iter()
-                .map(|(span, message)| {
-                    let (line, column) = diagnostic_position(sources, *span)?;
-                    Ok(DiagnosticNote {
-                        line,
-                        column,
-                        message: message.clone(),
-                    })
-                })
-                .collect::<Result<Vec<_>, interpreter::source::SourceError>>()?;
-            Ok(DiagnosticPayload {
-                severity: match diagnostic.severity {
-                    Severity::Error => "error",
-                    Severity::Warning => "warning",
-                },
-                line,
-                column,
-                message: diagnostic.message.clone(),
-                notes,
-            })
-        })
-        .collect::<Result<Vec<_>, interpreter::source::SourceError>>();
-    let diagnostics_out = match payloads {
-        Ok(payloads) => payloads,
-        Err(error) => {
+    let rendered = diagnostics::render_collection_with_limits(
+        diags,
+        sources,
+        interpreter::rendering::RenderLimits {
+            bytes: 512 * 1024 - 64,
+            ..Default::default()
+        },
+    );
+    let payloads = diagnostic_payloads(sources, diags);
+    let (mut message, diagnostics_out, omitted) = match (rendered, payloads) {
+        (Ok(rendered), Ok((payloads, omitted))) => (rendered.text, payloads, omitted),
+        (Err(error), _) | (_, Err(error)) => {
+            let primary = diags.first().map_or("compilation failed", |diagnostic| {
+                diagnostic.message.as_str()
+            });
             let mut outcome =
-                internal_failure(&format!("{message}invalid diagnostic metadata: {error}"));
+                internal_failure(&interpreter::rendering::failure_text(primary, &error));
             outcome.discovery_warnings = discovery_warnings;
             return outcome;
         }
     };
+    if omitted {
+        message.push_str(interpreter::rendering::TRUNCATED);
+    }
     RunOutcome {
         usage: ExecutionUsage::default(),
         value: None,
@@ -452,9 +440,68 @@ fn compile_failure(
             kind: ErrorKind::CompileError,
             message,
             diagnostics: diagnostics_out,
+            denial: None,
         }),
         discovery_warnings,
     }
+}
+
+fn diagnostic_payloads(
+    sources: &Sources,
+    diagnostics: &[Diagnostic],
+) -> Result<(Vec<DiagnosticPayload>, bool), interpreter::rendering::RenderError> {
+    use interpreter::rendering::{RenderError, RenderLimits, bounded_text};
+    let mut remaining = 512 * 1024usize;
+    let mut result = Vec::new();
+    let mut omitted = false;
+    for diagnostic in diagnostics.iter().take(RenderLimits::default().steps) {
+        if remaining < 128 {
+            omitted = true;
+            break;
+        }
+        let (line, column) = diagnostic_position(sources, diagnostic.span)?;
+        let message = bounded_text(
+            &diagnostic.message,
+            remaining.min(RenderLimits::default().bytes),
+        )?;
+        remaining = remaining
+            .saturating_sub(message.text.len())
+            .saturating_sub(64);
+        omitted |= message.truncated;
+        let mut notes = Vec::new();
+        for (span, text) in diagnostic.notes.iter().take(RenderLimits::default().steps) {
+            if remaining < 128 {
+                omitted = true;
+                break;
+            }
+            let (line, column) = diagnostic_position(sources, *span)?;
+            let message = bounded_text(text, remaining.min(RenderLimits::default().bytes))?;
+            remaining = remaining
+                .saturating_sub(message.text.len())
+                .saturating_sub(64);
+            omitted |= message.truncated;
+            notes.try_reserve(1).map_err(|_| RenderError::Allocation)?;
+            notes.push(DiagnosticNote {
+                line,
+                column,
+                message: message.text,
+            });
+        }
+        omitted |= notes.len() != diagnostic.notes.len();
+        result.try_reserve(1).map_err(|_| RenderError::Allocation)?;
+        result.push(DiagnosticPayload {
+            severity: match diagnostic.severity {
+                Severity::Error => "error",
+                Severity::Warning => "warning",
+            },
+            line,
+            column,
+            message: message.text,
+            notes,
+        });
+    }
+    omitted |= result.len() != diagnostics.len();
+    Ok((result, omitted))
 }
 
 fn diagnostic_position(
@@ -473,20 +520,37 @@ fn diagnostic_position(
 }
 
 fn classify_runtime_error(err: &wasmtime::Error, sources: &Sources, file: FileId) -> ExecuteError {
-    let kind = match err.downcast_ref::<Trap>() {
-        Some(Trap::Interrupt) => ErrorKind::Timeout,
-        Some(Trap::OutOfFuel) => ErrorKind::FuelExhausted,
-        Some(Trap::StackOverflow) => ErrorKind::StackExhausted,
-        _ if is_memory_exhausted(err) => ErrorKind::MemoryExhausted,
-        _ => ErrorKind::RuntimeError,
+    let denial = err
+        .downcast_ref::<interpreter::backtrace::ThrownError>()
+        .and_then(|thrown| thrown.denial.as_ref());
+    let kind = if denial.is_some() {
+        ErrorKind::PermissionDenied
+    } else {
+        match err.downcast_ref::<Trap>() {
+            Some(Trap::Interrupt) => ErrorKind::Timeout,
+            Some(Trap::OutOfFuel) => ErrorKind::FuelExhausted,
+            Some(Trap::StackOverflow) => ErrorKind::StackExhausted,
+            _ if is_memory_exhausted(err) => ErrorKind::MemoryExhausted,
+            _ => ErrorKind::RuntimeError,
+        }
     };
     // drops middle host frames; full trace available from the CLI
-    let message = render_backtrace(err, sources, file, BacktraceMode::LlmTrimmed)
-        .unwrap_or_else(|| unframed_message(err));
+    let message =
+        match interpreter::backtrace::render_checked(err, sources, file, BacktraceMode::LlmTrimmed)
+        {
+            Ok(Some(rendered)) => rendered.text,
+            Ok(None) => unframed_message(err),
+            Err(failure) => interpreter::rendering::failure_text(&unframed_message(err), &failure),
+        };
     ExecuteError {
         kind,
         message,
         diagnostics: Vec::new(),
+        denial: denial.map(|denial| DenialDetails {
+            caller: denial.caller.clone(),
+            capability: denial.capability.clone(),
+            source: denial.source.as_str(),
+        }),
     }
 }
 
@@ -509,7 +573,10 @@ fn unframed_message(err: &wasmtime::Error) -> String {
     if err.is::<Trap>() || err.is::<interpreter::backtrace::ThrownError>() {
         return format!("error: {}", failure_message(err));
     }
-    format!("{err:#}")
+    interpreter::backtrace::failure_chain_checked(err).map_or_else(
+        |failure| interpreter::rendering::failure_text("runtime execution failed", &failure),
+        |rendered| rendered.text,
+    )
 }
 
 /// Emit a per-run phase breakdown at `debug` level so local runs show where the
@@ -594,6 +661,7 @@ fn error_kind_tag(kind: ErrorKind) -> &'static str {
         ErrorKind::MemoryExhausted => "memory_exhausted",
         ErrorKind::StackExhausted => "stack_exhausted",
         ErrorKind::Cancelled => "cancelled",
+        ErrorKind::PermissionDenied => "permission_denied",
         ErrorKind::RuntimeError => "runtime_error",
         ErrorKind::BlueprintNotFound => "blueprint_not_found",
         ErrorKind::PackageResolution => "package_resolution",
@@ -650,6 +718,7 @@ fn internal_failure(msg: &str) -> RunOutcome {
             kind: ErrorKind::RuntimeError,
             message: format!("internal: {msg}"),
             diagnostics: Vec::new(),
+            denial: None,
         }),
         discovery_warnings: Vec::new(),
     }
@@ -786,6 +855,7 @@ mod tests {
             kind: ErrorKind::RuntimeError,
             message: "boom".into(),
             diagnostics: Vec::new(),
+            denial: None,
         };
         let keys = |include: bool| -> Vec<&'static str> {
             sentry_extras("function main(): number { return 1; }", &error, include)

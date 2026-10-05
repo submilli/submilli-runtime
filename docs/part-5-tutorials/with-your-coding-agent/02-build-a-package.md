@@ -8,6 +8,11 @@ slug: tutorials/build-a-package
 # without the key" step change then.
 sidebar:
   order: 2
+authorship:
+  label: ai-assisted
+  confirmed: true
+  contentHash: "49dde49b63fcba52ff794b07dbf34cb6ef2114cf68306d4a195ed6235ac09aff"
+  confirmedAt: "2026-10-05T10:59:51.482Z"
 ---
 
 The package pages showed how a package is written by hand. With the

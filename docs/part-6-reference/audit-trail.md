@@ -7,6 +7,11 @@ slug: reference/audit-trail
 # are described from the code; no example was captured.
 sidebar:
   order: 10
+authorship:
+  label: ai-assisted
+  confirmed: true
+  contentHash: "2f6cc84e7e593b1cf2b2721e9de7401cacf2bd1b9c39b74d2c502dc3d585e715"
+  confirmedAt: "2026-10-05T10:59:51.473Z"
 ---
 
 The server writes one audit record per line, in logfmt, to its log's
@@ -126,7 +131,7 @@ ts=2026-10-03T20:02:39.695Z level=info stream=audit target=submilli_server::audi
 | Field | Value |
 | --- | --- |
 | `outcome` | `ok`, `error`, `fuel_exhausted`, `timeout`, `memory_exhausted`, `stack_exhausted`, or `cancelled` |
-| `error_class` | The error's `kind`, when the run failed |
+| `error_class` | The error's `kind`, when the run failed. A permission denial that no `catch` handled is `permission_denied` |
 | `fuel`, `wasm_fuel`, `host_fuel` | Fuel consumed, as in [Set limits](/docs/server/set-limits#measure-a-program) |
 | `memory_peak` | The most memory the run held, in bytes |
 | `model_tokens` | Model tokens the run spent |

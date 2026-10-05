@@ -2,13 +2,19 @@ namespace: submilli
 provides:
 - name: linear.app/createAgentActivity
   description: Emit progress, a question, a final response, or an error.
-  fields: {}
+  fields:
+    teamId:
+      type: string
 - name: linear.app/createAgentSessionOnComment
   description: Proactively create a session on an existing comment using the app's token.
-  fields: {}
+  fields:
+    teamId:
+      type: string
 - name: linear.app/createAgentSessionOnIssue
   description: Proactively create a session on an issue using the installed app's token.
-  fields: {}
+  fields:
+    teamId:
+      type: string
 - name: linear.app/createComment
   description: Create a comment on an issue; returns the created comment. The issue is read first, so the check carries `teamId`, the team the issue belongs to.
   fields:
@@ -21,10 +27,14 @@ provides:
       type: string
 - name: linear.app/getAgentSession
   description: Fetch a Linear agent session by UUID.
-  fields: {}
+  fields:
+    teamId:
+      type: string
 - name: linear.app/getIssue
   description: Fetch one issue by UUID; null when not found.
-  fields: {}
+  fields:
+    teamId:
+      type: string
 - name: linear.app/getTeam
   description: Fetch one team by UUID; null when not found.
   fields:
@@ -36,10 +46,14 @@ provides:
   fields: {}
 - name: linear.app/listAgentActivities
   description: Read a page of session activities, including user prompts and stop signals.
-  fields: {}
+  fields:
+    teamId:
+      type: string
 - name: linear.app/listComments
   description: Read comments, including parent IDs for threaded replies.
-  fields: {}
+  fields:
+    teamId:
+      type: string
 - name: linear.app/listIssues
   description: List issues, optionally filtered and paginated.
   fields:
@@ -56,7 +70,9 @@ provides:
   fields: {}
 - name: linear.app/updateAgentSession
   description: Update session links, summary, or the complete plan.
-  fields: {}
+  fields:
+    teamId:
+      type: string
 - name: linear.app/updateIssue
   description: Update an issue by UUID; returns the updated issue. The issue is read first, so the check carries `teamId`, the team the issue belongs to. `projectId` is the project the update moves the issue to, or null when it moves it nowhere.
   fields:

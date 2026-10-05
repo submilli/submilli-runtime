@@ -6,6 +6,11 @@ slug: tutorials/manage-blueprints-in-git
 # SUB-1309 runs them. Every command inside them was run locally.
 sidebar:
   order: 10
+authorship:
+  label: ai-assisted
+  confirmed: true
+  contentHash: "26edabfefa59989832cbf3e5f75e6f7de686d45929677038d1f74d4847e58ae7"
+  confirmedAt: "2026-10-05T10:59:51.481Z"
 ---
 
 A blueprint is policy, and `apply` from a laptop leaves no record of who

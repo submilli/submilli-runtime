@@ -25,11 +25,15 @@ pub use auth_proxy::{
     resolve_injections, secret_refs, verify_secrets,
 };
 pub use diag::{Fault, PathSeg, YamlPath};
-pub use filter::{FieldMatch, FilterExpr, VarBindings};
+pub use filter::{
+    ComparisonFailure, FailureReason, FieldMatch, FilterEvaluation, FilterExpr, VarBindings,
+};
 pub use git::{GitConfig, GitIdentity};
 pub use llm::{LlmConfig, LlmModelDecl, LlmProviderDecl};
 pub use mcp::{McpAuth, McpServer};
-pub use permissions::{Action, DefaultAction, PermissionRule};
+pub use permissions::{
+    Action, DefaultAction, NearMiss, PermissionRule, Resolution, ResolutionCause, RuleRef,
+};
 pub use secrets::{
     HarnessSecret, HarnessSecretBindings, HarnessSecretError, SecretSource,
     required_harness_secrets, resolve_harness_secrets,
@@ -169,6 +173,27 @@ impl Blueprint {
         vars: &VarBindings,
     ) -> (Action, Option<usize>) {
         permissions::resolve_with_rule(
+            &self.permissions,
+            self.default_action.unwrap_or_default(),
+            caller,
+            capability,
+            context,
+            vars,
+        )
+    }
+
+    /// [`Self::resolve_permission_with_rule`] plus the reasoning: the deciding
+    /// rule or default, and the rules that named the capability but whose
+    /// filters rejected the call. `action` always equals what
+    /// [`Self::resolve_permission`] returns for the same inputs.
+    pub fn explain_permission(
+        &self,
+        caller: &str,
+        capability: &str,
+        context: &serde_json::Value,
+        vars: &VarBindings,
+    ) -> Resolution {
+        permissions::explain(
             &self.permissions,
             self.default_action.unwrap_or_default(),
             caller,

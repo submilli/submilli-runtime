@@ -8,7 +8,7 @@ use wasm_encoder::{
 };
 
 use crate::codegen::intrinsics::IntrinsicTypeIndices;
-use crate::codegen::symbol_table::{SymbolTable, may_hold_null};
+use crate::codegen::symbol_table::SymbolTable;
 use crate::codegen::{GuardedBodies, internal_failure, next_index, wasm_u32};
 use crate::compiler_error::CompilerFailure;
 use crate::{ObjectField, Shape, Type, TypeInfoIndex, TypeInfoTable};
@@ -508,8 +508,6 @@ fn emit_subtype_to_json_vtable_body(
         let idx = wasm_u32(idx)?;
         let key_no_comma = format!("\"{}\":", json_escape_key(field_name));
         let key_with_comma = format!(",\"{}\":", json_escape_key(field_name));
-        // A present optional field may hold a written `null` its declared type lacks.
-        let field_nullable = field.optional || may_hold_null(&field.ty);
 
         f.instruction(&Instruction::LocalGet(self_t));
         f.instruction(&Instruction::StructGet {
@@ -561,24 +559,23 @@ fn emit_subtype_to_json_vtable_body(
         f.instruction(&Instruction::Call(string_concat_func_idx));
         f.instruction(&Instruction::LocalSet(acc));
 
+        // Every field is null-checked: the shape's field type is the object
+        // literal's own, and a binding with a wider type (`{ v: number | null }`
+        // holding `{ v: 1 }`) can later store `null` in it.
         f.instruction(&Instruction::LocalGet(acc));
-        if field_nullable {
-            f.instruction(&Instruction::LocalGet(elem));
-            f.instruction(&Instruction::RefIsNull);
-            f.instruction(&Instruction::If(BlockType::Result(string_ref)));
-            push_inline_string(
-                &mut f,
-                "null",
-                intrinsics.string,
-                intrinsics.raw_string,
-                string_vtable_global_idx,
-            )?;
-            f.instruction(&Instruction::Else);
-            emit_field_value_to_json(&mut f, elem, tj_fn, intrinsics);
-            f.instruction(&Instruction::End);
-        } else {
-            emit_field_value_to_json(&mut f, elem, tj_fn, intrinsics);
-        }
+        f.instruction(&Instruction::LocalGet(elem));
+        f.instruction(&Instruction::RefIsNull);
+        f.instruction(&Instruction::If(BlockType::Result(string_ref)));
+        push_inline_string(
+            &mut f,
+            "null",
+            intrinsics.string,
+            intrinsics.raw_string,
+            string_vtable_global_idx,
+        )?;
+        f.instruction(&Instruction::Else);
+        emit_field_value_to_json(&mut f, elem, tj_fn, intrinsics);
+        f.instruction(&Instruction::End);
         f.instruction(&Instruction::Call(string_concat_func_idx));
         f.instruction(&Instruction::LocalSet(acc));
 

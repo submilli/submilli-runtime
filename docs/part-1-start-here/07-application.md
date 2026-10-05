@@ -4,6 +4,11 @@ description: "How the application or agent framework connects: it opens a sessio
 slug: application
 sidebar:
   order: 7
+authorship:
+  label: ai-assisted
+  confirmed: true
+  contentHash: "615d19e891d22fbe007e989f4b7139cde138ce70b3cd4cd806a13844ae70d17f"
+  confirmedAt: "2026-10-05T10:59:51.494Z"
 ---
 
 Your application, or the agent framework it uses, is the **harness**, the

@@ -4,6 +4,11 @@ description: "The blueprint in full: default deny, rules per caller, the variabl
 slug: blueprints
 sidebar:
   order: 4
+authorship:
+  label: ai-assisted
+  confirmed: true
+  contentHash: "ed48648eaad302a15adffafd92a5013f40220f4dbe98516f364a1d1de3770059"
+  confirmedAt: "2026-10-05T10:59:51.493Z"
 ---
 
 Your agent's program has to run somewhere. That somewhere is an environment

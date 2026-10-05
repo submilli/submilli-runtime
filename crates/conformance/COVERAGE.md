@@ -35,7 +35,7 @@ Upstream: 4463 single-file TypeScript tests. Suite: 451 TypeScript cases, 657 te
 | `number` | §1.1 | done | 1407 | 225 | 1182 | 0 | 2317 | 1 of 1 | — | — |  |
 | `string` | §1.1 | done | 1498 | 243 | 1255 | 0 | 2301 | 1 of 1 | — | — |  |
 | `boolean` | §1.1 | done | 482 | 107 | 375 | 0 | 1707 | 1 of 1 | — | — |  |
-| `null` | §1.1 | done | 386 | 73 | 313 | 0 | 1372 | 1 of 1 | — | — |  |
+| `null` | §1.1 | done | 386 | 73 | 313 | 0 | 1370 | 1 of 1 | — | — |  |
 | `void` | §1.1 | done | 500 | 41 | 459 | 0 | 583 | 1 of 1 | — | — |  |
 | `never` | §1.1 | done | 72 | 8 | 64 | 0 | 68 | 1 of 1 | — | — |  |
 | `bigint` | §1.1 | done | 16 | 3 | 13 | 0 | 15 | 1 of 1 | 16 | 68 |  |
@@ -81,7 +81,7 @@ Upstream: 4463 single-file TypeScript tests. Suite: 451 TypeScript cases, 657 te
 | `do…while` | §1.5 | done | 19 | 3 | 16 | 0 | 22 | 1 of 1 | — | — |  |
 | `for` (C-style) | §1.5 | done | 57 | 4 | 53 | 0 | 17 | 1 of 1 | — | — |  |
 | `for…of` | §1.5 | done | 210 | 44 | 166 | 0 | 87 | 1 of 1 | — | — |  |
-| `switch` | §1.5 | done | 58 | 16 | 42 | 0 | 86 | 1 of 1 | — | — |  |
+| `switch` | §1.5 | done | 58 | 16 | 42 | 0 | 84 | 1 of 1 | — | — |  |
 | `break` / `continue` | §1.5 | done | 96 | 18 | 78 | 0 | 21 | 2 of 2 | — | — |  |
 
 ## Operators

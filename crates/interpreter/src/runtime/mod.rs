@@ -2,6 +2,7 @@
 
 pub(crate) mod array_storage;
 pub mod blocking;
+pub mod decision;
 pub mod disk_quota;
 pub mod exec;
 pub mod fs;
@@ -22,6 +23,11 @@ pub mod session_kv;
 pub mod vfs;
 pub mod watchdog;
 
+pub use decision::{
+    CallSite, CallTicket, DecisionAction, DecisionCause, DecisionExplanation, DecisionLog,
+    DecisionLogConfig, DecisionLogOutput, DecisionRecord, DecisionRecorder, EntryPath,
+    FailureReasonRecord, FailureRecord, NearMissRecord, RuleCitation, SourceLine,
+};
 pub use disk_quota::{DiskQuota, Holder, OpenFileGuard, QuotaCharge, QuotaExceeded};
 pub use exec::{RunResult, dispatch_main_async, instantiate_program_async};
 pub use host::{
@@ -49,7 +55,7 @@ pub use metrics::{HttpMetric, MetricsSink, NoopMetricsSink};
 pub use prelude::bigint::ops::BIGINT_MODULE_NAME;
 pub use prelude::temporal::shared::TEMPORAL_MODULE_NAME;
 pub use secrets::{NoopSecretProvider, SecretProvider};
-pub use security::{AllowAllCheck, CheckOutcome, SecurityCheck};
+pub use security::{AllowAllCheck, AuditDecision, CheckOutcome, SecurityCheck};
 pub use session_kv::{
     InMemorySessionKv, SessionKvEntry, SessionKvError, SessionKvLimitKind, SessionKvLimits,
     SessionKvPage, SessionKvStore, SharedKvBudget,
@@ -177,6 +183,8 @@ pub struct StoreData {
     pub(crate) vtable_walk_nodes: u32,
     /// Host-only result marshalling after an effect must not refuse for fuel.
     pub(crate) settling_host_result: bool,
+    /// Denials the runtime threw, by thrown object; see [`host::ThrownDenials`].
+    pub(crate) thrown_denials: host::ThrownDenials,
 }
 
 /// The nesting the universal-vtable walk allows before it reports a runaway.
@@ -256,6 +264,7 @@ impl StoreData {
             vtable_walk_depth: 0,
             vtable_walk_nodes: 0,
             settling_host_result: false,
+            thrown_denials: host::ThrownDenials::default(),
         }
     }
 
@@ -344,6 +353,7 @@ fn name_the_failing_initializer(
             thrown.message
         ),
         backtrace: thrown.backtrace.clone(),
+        denial: thrown.denial.clone(),
     }))
 }
 

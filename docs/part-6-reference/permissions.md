@@ -4,6 +4,11 @@ description: "How a call is decided, callers, actions, the refusals no rule chan
 slug: reference/permissions
 sidebar:
   order: 15
+authorship:
+  label: ai-assisted
+  confirmed: true
+  contentHash: "4dc724014aea6f599d944cf64eecbb3d008940c751d9248f7d7ed37a9b04b629"
+  confirmedAt: "2026-10-05T10:59:51.478Z"
 ---
 
 This page describes how the `permissions` and `default` blocks of a
@@ -43,6 +48,7 @@ capability.
 
 | Field | Type | Required | Meaning |
 | --- | --- | --- | --- |
+| `name` | non-empty string | No | A label for the rule, unique within the caller's list (`blueprint lint` errors on a repeat). Names the rule instead of its position |
 | `capability` | string | Yes | The operation's name, such as `fs.write`, `acme.com/credits.apply`, or `mcp.linear` |
 | `filter` | string | No | A condition on the operation's fields, in the [filter language](/docs/reference/filter-language) |
 | `action` | `allow` or `deny` | Yes | What happens when the rule matches |

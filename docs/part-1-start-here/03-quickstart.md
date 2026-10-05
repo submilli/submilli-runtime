@@ -4,6 +4,11 @@ description: "Write a blueprint, the package it governs, and an application that
 slug: quickstart
 sidebar:
   order: 3
+authorship:
+  label: ai-assisted
+  confirmed: true
+  contentHash: "fd3e2c0c9f1a3c0d8954460a85757f0c241b818a869f9fa37f3082784313dfae"
+  confirmedAt: "2026-10-05T10:59:51.493Z"
 ---
 
 By the end of this chapter you will have watched a policy you wrote defeat a

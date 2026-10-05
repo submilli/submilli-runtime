@@ -4,6 +4,11 @@ description: "The globals every Submilli program has without an import: types, e
 slug: reference/built-ins
 sidebar:
   order: 5
+authorship:
+  label: ai-assisted
+  confirmed: true
+  contentHash: "2c0a14c1e235f33f8a6180c19af7cf8c6c8e0ad0c79ebfc2e8e955860cc3c47e"
+  confirmedAt: "2026-10-05T10:59:51.474Z"
 ---
 
 Built-ins are the globals in scope in every program without an `import`. They

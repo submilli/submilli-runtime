@@ -4,6 +4,11 @@ description: "How to publish a package: install it into your local store, see wh
 slug: packages/publish-a-package
 sidebar:
   order: 6
+authorship:
+  label: ai-assisted
+  confirmed: true
+  contentHash: "8253af93e547b61383b60367c60cce57831bb86ad8f100bf13824f03c3aaa528"
+  confirmedAt: "2026-10-05T10:59:51.489Z"
 ---
 
 The package compiles and its tests pass, but nothing can import it yet.

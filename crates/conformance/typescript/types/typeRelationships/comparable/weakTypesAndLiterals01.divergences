@@ -11,7 +11,3 @@ line 38: arg
 line 47: arg
   tsc:  { toLowerCase?(): string; } | { toUpperCase?(): string; otherOptionalProp?: number; }
   ours: WeakTypes
-
-errors:
-line 28: ours: expected `WeakTypes`, got `"A"` (tsc accepts)
-line 46: ours: expected `WeakTypes`, got `"A" | "B"` (tsc accepts)

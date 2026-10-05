@@ -32,8 +32,9 @@ function main(): void {
   const fromCall = maybeString(true)!;
   assert(fromCall === "hello", "call result can be asserted non-null");
 
-  assert("a" != "b", "!= still parses as binary");
-  assert("a" !== "b", "!== still parses as binary");
+  const other: string = "b";
+  assert("a" != other, "!= still parses as binary");
+  assert("a" !== other, "!== still parses as binary");
 
   const absent = maybeString(false);
   let caught = false;

@@ -9,6 +9,9 @@ pub enum ErrorKind {
     MemoryExhausted,
     StackExhausted,
     Cancelled,
+    /// A capability denial the runtime threw escaped the program. A denial the
+    /// program constructed itself is a `RuntimeError`.
+    PermissionDenied,
     RuntimeError,
     BlueprintNotFound,
     PackageResolution,
@@ -34,10 +37,24 @@ pub struct DiagnosticPayload {
     pub notes: Vec<DiagnosticNote>,
 }
 
+/// Who was refused what, and by which layer: `policy` (the operator's
+/// blueprint), `invariant` (refused by the runtime ahead of any policy), or
+/// `read_only` (a write into a read-only volume).
+#[derive(Debug, Clone, Serialize)]
+pub struct DenialDetails {
+    pub caller: String,
+    pub capability: String,
+    pub source: &'static str,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct ExecuteError {
     pub kind: ErrorKind,
     pub message: String,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub diagnostics: Vec<DiagnosticPayload>,
+    /// Present exactly when `kind` is `permission_denied`; its fields sit
+    /// beside `kind` in the JSON.
+    #[serde(flatten, skip_serializing_if = "Option::is_none")]
+    pub denial: Option<DenialDetails>,
 }

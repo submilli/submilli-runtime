@@ -4,6 +4,11 @@ description: "The submilli command tree: what each command does and where it run
 slug: reference/cli
 sidebar:
   order: 3
+authorship:
+  label: ai-assisted
+  confirmed: true
+  contentHash: "cc2bc858d1ec20f87d8e3a9f15f67f05313d16177ba87eed6044afe3663494e5"
+  confirmedAt: "2026-10-05T10:59:51.475Z"
 ---
 
 This page describes `submilli`, the command-line tool. It covers the
@@ -90,8 +95,9 @@ for a shell.
 | Code | Meaning |
 | --- | --- |
 | `0` | The command succeeded |
-| `1` | The command failed. This includes a program that failed to compile or threw from `run`, a `blueprint lint` error, `server status` with no server running, `skill status` for a missing, outdated, or modified installation, and `upgrade --check` when a newer release exists |
+| `1` | The command failed. This includes a program that failed to compile or threw from `run` (except a denial, below), a `blueprint lint` error, `server status` with no server running, `skill status` for a missing, outdated, or modified installation, and `upgrade --check` when a newer release exists |
 | `2` | The command line was invalid: an unknown command or option, or a missing argument |
+| `3` | `run` only: the program let a permission denial escape, a gated call the blueprint or the runtime refused (an invariant or a read-only volume) that no `catch` handled. The message is the same text exit code 1 prints |
 
 Errors go to standard error. A command's own errors begin with `error:`.
 An error that stopped the command before it could report one begins with

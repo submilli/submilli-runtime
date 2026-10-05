@@ -58,3 +58,19 @@ blueprints of the same name, without a token or network:
   and that `deleteEvent` is held to a rule on `sendUpdates`.
 
 `cargo test -p submilli --test package_policy` runs them.
+
+## Notification recipients on updates
+
+`updateEvent` still checks post-update addresses as `attendees`. It additionally
+checks `removedAttendees` and `notificationRecipients`. For `all` and
+`externalOnly`, it reads current attendees and includes the union of current and
+replacement addresses in `notificationRecipients`; removed addresses appear in
+`removedAttendees`. This conservatively covers `externalOnly` without guessing
+which attendees Google considers internal. With `none`, both notification lists
+are empty. Replacements with `none` need no metadata read; omitted attendees still
+resolve current attendees. Only attendee emails and the omission flag are requested before the check. A
+denial, failed lookup, or incomplete attendee list prevents the patch.
+
+```sh
+node --test packages/google-calendar/scripts/contract.test.mjs
+```

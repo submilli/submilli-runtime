@@ -1,3 +1,4 @@
+import { confirmedAuthorshipFor } from './authorship.ts';
 import { readdir, readFile } from 'node:fs/promises';
 import { parseFrontmatter } from 'astro/markdown';
 import { parse, postprocess, preprocess } from 'micromark';
@@ -15,6 +16,7 @@ export interface Chapter {
 	description: string;
 	order: number;
 	body: string;
+	authorshipLabel?: string;
 }
 
 export function markdownPath(slug: string): string {
@@ -23,7 +25,7 @@ export function markdownPath(slug: string): string {
 
 export async function readChapters(directory = docsDirectory): Promise<Chapter[]> {
 	const files = (await readdir(directory, { recursive: true }))
-		.filter((file) => file.endsWith('.md')).sort();
+		.filter((file) => file.endsWith('.md') && file !== 'WRITING.md').sort();
 	const chapters: Chapter[] = [];
 	const paths = new Set<string>();
 	for (const file of files) {
@@ -39,6 +41,7 @@ export async function readChapters(directory = docsDirectory): Promise<Chapter[]
 		paths.add(path);
 		chapters.push({
 			file, slug: data.slug,
+			authorshipLabel: confirmedAuthorshipFor(data.authorship, content)?.label,
 			title: requiredText(data.title, file, 'title'),
 			description: requiredText(data.description, file, 'description'),
 			order: data.sidebar?.order ?? Number.POSITIVE_INFINITY,
@@ -56,7 +59,8 @@ export function createAgentDocs(chapters: Chapter[]): Map<string, string> {
 	for (const chapter of chapters) {
 		const url = DOCS_ORIGIN + markdownPath(chapter.slug);
 		const body = rewriteLinks(chapter.body, chapter.slug, visiblePaths);
-		const markdown = `# ${chapter.title}\n\nSource: ${url}\n\n${body}\n`;
+		const disclosure = chapter.authorshipLabel ? `Authorship: ${chapter.authorshipLabel}.\n\n` : '';
+		const markdown = `# ${chapter.title}\n\nSource: ${url}\n\n${disclosure}${body}\n`;
 		outputs.set(markdownPath(chapter.slug), markdown);
 		sections.push(markdown);
 	}

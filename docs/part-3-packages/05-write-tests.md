@@ -4,6 +4,11 @@ description: "How to test a package with submilli build test: a test file and it
 slug: packages/write-tests
 sidebar:
   order: 5
+authorship:
+  label: ai-assisted
+  confirmed: true
+  contentHash: "4289320a60eb05335c124daa118a466104180465b559bb9570e672545966caf5"
+  confirmedAt: "2026-10-05T10:59:51.489Z"
 ---
 
 A package is reviewed once and then called by programs nobody reviews.

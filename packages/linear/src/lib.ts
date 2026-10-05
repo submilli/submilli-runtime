@@ -417,10 +417,12 @@ export function getViewer(): User {
  * Fetch one issue by UUID; null when not found.
  * @param id Issue UUID (not the `ENG-123` identifier).
  * @returns The issue, or `null` when no issue has that ID.
- * @capability linear.app/getIssue {}
+ * @capability linear.app/getIssue { teamId: string }
  */
 export function getIssue(id: string): Issue | null {
-    check("linear.app/getIssue", {});
+    const teamId = nullableIssueTeamId(id);
+    check("linear.app/getIssue", { teamId: teamId });
+    if (teamId === null) return null;
     const vars: IdVars = { id: id };
     const envelope = graphqlPost(GET_ISSUE_QUERY, vars).json() as GraphQlResponse<IssueData>;
     return requireData(envelope).issue;
@@ -628,23 +630,44 @@ export function createComment(input: CommentCreateInput): Comment {
 // The team an issue belongs to, read from Linear and never taken from the caller, so a rule on
 // `teamId` holds for an operation that names only the issue.
 function issueTeamId(issueId: string): string {
-    const vars: IdVars = { id: issueId };
-    const envelope = graphqlPost(ISSUE_TEAM_QUERY, vars).json() as GraphQlResponse<IssueTeamData>;
+    const teamId = nullableIssueTeamId(issueId);
+    if (teamId === null) throw new Error("Linear issue was not found");
+    return teamId;
+}
+
+function nullableIssueTeamId(issueId: string): string | null {
+    const envelope = graphqlPost(ISSUE_TEAM_QUERY, { id: issueId }).json() as GraphQlResponse<IssueTeamData>;
     const issue = requireData(envelope).issue;
-    if (issue === null) throw new Error("Linear issue was not found");
-    return issue.team.id;
+    return issue === null ? null : issue.team.id;
+}
+
+function commentTeamId(commentId: string): string {
+    const envelope = graphqlPost(COMMENT_TEAM_QUERY, { id: commentId }).json() as GraphQlResponse<CommentTeamData>;
+    const comment = requireData(envelope).comment;
+    if (comment === null) throw new Error("Linear comment was not found");
+    if (comment.issue === null) throw new Error("Linear comment has no issue team");
+    return comment.issue.team.id;
+}
+
+function agentSessionTeamId(sessionId: string): string {
+    const envelope = graphqlPost(AGENT_SESSION_TEAM_QUERY, { id: sessionId }).json() as GraphQlResponse<AgentSessionTeamData>;
+    const session = requireData(envelope).agentSession;
+    if (session === null) throw new Error("Linear agent session was not found");
+    if (session.issue !== null) return session.issue.team.id;
+    if (session.comment !== null && session.comment.issue !== null) return session.comment.issue.team.id;
+    throw new Error("Linear agent session has no issue or comment team");
 }
 
 /** Read comments, including parent IDs for threaded replies.
  * @param issueId UUID of the issue whose comments to read.
  * @param page Optional `first` (page size, default 50, max 250) and `after` cursor; `null` requests the first 50 items.
  * @returns One page of comments in `nodes`; while `pageInfo.hasNextPage` is true, pass `pageInfo.endCursor` as `after` for the next page.
- * @capability linear.app/listComments {}
+ * @capability linear.app/listComments { teamId: string }
  */
 export function listComments(issueId: string, page: PageOptions | null = null): Page<Comment> {
     const first = page === null ? null : page.first;
     const after = page === null ? null : page.after;
-    check("linear.app/listComments", {});
+    check("linear.app/listComments", { teamId: issueTeamId(issueId) });
     const vars = buildEntityPageVars(issueId, first, after);
     const envelope = graphqlPost(LIST_COMMENTS_QUERY, vars).json() as GraphQlResponse<IssueCommentsData>;
     return requireData(envelope).issue.comments;
@@ -653,10 +676,10 @@ export function listComments(issueId: string, page: PageOptions | null = null): 
 /** Fetch a Linear agent session by UUID.
  * @param id Agent session UUID.
  * @returns The agent session.
- * @capability linear.app/getAgentSession {}
+ * @capability linear.app/getAgentSession { teamId: string }
  */
 export function getAgentSession(id: string): AgentSession {
-    check("linear.app/getAgentSession", {});
+    check("linear.app/getAgentSession", { teamId: agentSessionTeamId(id) });
     const vars: IdVars = { id: id };
     const envelope = graphqlPost(GET_AGENT_SESSION_QUERY, vars).json() as GraphQlResponse<AgentSessionData>;
     return requireData(envelope).agentSession;
@@ -666,12 +689,12 @@ export function getAgentSession(id: string): AgentSession {
  * @param id Agent session UUID.
  * @param page Optional `first` (page size, default 50, max 250) and `after` cursor; `null` requests the first 50 items.
  * @returns One page of session activities, including user prompts in `nodes`; while `pageInfo.hasNextPage` is true, pass `pageInfo.endCursor` as `after` for the next page.
- * @capability linear.app/listAgentActivities {}
+ * @capability linear.app/listAgentActivities { teamId: string }
  */
 export function listAgentActivities(id: string, page: PageOptions | null = null): Page<AgentActivity> {
     const first = page === null ? null : page.first;
     const after = page === null ? null : page.after;
-    check("linear.app/listAgentActivities", {});
+    check("linear.app/listAgentActivities", { teamId: agentSessionTeamId(id) });
     const vars = buildEntityPageVars(id, first, after);
     const envelope = graphqlPost(LIST_AGENT_ACTIVITIES_QUERY, vars).json() as GraphQlResponse<AgentActivitiesData>;
     return requireData(envelope).agentSession.activities;
@@ -680,11 +703,17 @@ export function listAgentActivities(id: string, page: PageOptions | null = null)
 /** Emit progress, a question, a final response, or an error.
  * @param input Target session UUID and the activity content to emit.
  * @returns The recorded activity.
- * @capability linear.app/createAgentActivity {}
+ * @capability linear.app/createAgentActivity { teamId: string }
  */
 export function createAgentActivity(input: AgentActivityCreateInput): AgentActivity {
-    check("linear.app/createAgentActivity", {});
-    const vars: CreateAgentActivityVars = { input: input };
+    const { agentSessionId, content, ephemeral, id, signal, signalMetadata } = input;
+    check("linear.app/createAgentActivity", { teamId: agentSessionTeamId(agentSessionId) });
+    const owned: AgentActivityCreateInput = { agentSessionId: agentSessionId, content: content };
+    if (ephemeral !== null) owned.ephemeral = ephemeral;
+    if (id !== null) owned.id = id;
+    if (signal !== null) owned.signal = signal;
+    if (signalMetadata !== null) owned.signalMetadata = signalMetadata;
+    const vars: CreateAgentActivityVars = { input: owned };
     const envelope = graphqlPost(CREATE_AGENT_ACTIVITY_QUERY, vars).json() as GraphQlResponse<AgentActivityCreateData>;
     const payload = requireData(envelope).agentActivityCreate;
     if (!payload.success || payload.agentActivity === null) {
@@ -697,10 +726,10 @@ export function createAgentActivity(input: AgentActivityCreateInput): AgentActiv
  * @param id Agent session UUID.
  * @param input Partial update; omitted fields remain unchanged, and `externalUrls` replaces the whole list.
  * @returns The session after the update.
- * @capability linear.app/updateAgentSession {}
+ * @capability linear.app/updateAgentSession { teamId: string }
  */
 export function updateAgentSession(id: string, input: AgentSessionUpdateInput): AgentSession {
-    check("linear.app/updateAgentSession", {});
+    check("linear.app/updateAgentSession", { teamId: agentSessionTeamId(id) });
     const vars: UpdateAgentSessionVars = { id: id, input: input };
     const envelope = graphqlPost(UPDATE_AGENT_SESSION_QUERY, vars).json() as GraphQlResponse<AgentSessionUpdateData>;
     return requireAgentSession(requireData(envelope).agentSessionUpdate, "agentSessionUpdate");
@@ -709,11 +738,14 @@ export function updateAgentSession(id: string, input: AgentSessionUpdateInput): 
 /** Proactively create a session on an issue using the installed app's token.
  * @param input Target issue UUID and optional external links.
  * @returns The newly created agent session.
- * @capability linear.app/createAgentSessionOnIssue {}
+ * @capability linear.app/createAgentSessionOnIssue { teamId: string }
  */
 export function createAgentSessionOnIssue(input: AgentSessionCreateOnIssueInput): AgentSession {
-    check("linear.app/createAgentSessionOnIssue", {});
-    const vars: CreateAgentSessionOnIssueVars = { input: input };
+    const { issueId, externalUrls } = input;
+    check("linear.app/createAgentSessionOnIssue", { teamId: issueTeamId(issueId) });
+    const owned: AgentSessionCreateOnIssueInput = { issueId: issueId };
+    if (externalUrls !== null) owned.externalUrls = externalUrls;
+    const vars: CreateAgentSessionOnIssueVars = { input: owned };
     const envelope = graphqlPost(CREATE_AGENT_SESSION_ON_ISSUE_QUERY, vars).json() as GraphQlResponse<AgentSessionCreateOnIssueData>;
     return requireAgentSession(requireData(envelope).agentSessionCreateOnIssue, "agentSessionCreateOnIssue");
 }
@@ -721,11 +753,14 @@ export function createAgentSessionOnIssue(input: AgentSessionCreateOnIssueInput)
 /** Proactively create a session on an existing comment using the app's token.
  * @param input Target comment UUID and optional external links.
  * @returns The newly created agent session.
- * @capability linear.app/createAgentSessionOnComment {}
+ * @capability linear.app/createAgentSessionOnComment { teamId: string }
  */
 export function createAgentSessionOnComment(input: AgentSessionCreateOnCommentInput): AgentSession {
-    check("linear.app/createAgentSessionOnComment", {});
-    const vars: CreateAgentSessionOnCommentVars = { input: input };
+    const { commentId, externalUrls } = input;
+    check("linear.app/createAgentSessionOnComment", { teamId: commentTeamId(commentId) });
+    const owned: AgentSessionCreateOnCommentInput = { commentId: commentId };
+    if (externalUrls !== null) owned.externalUrls = externalUrls;
+    const vars: CreateAgentSessionOnCommentVars = { input: owned };
     const envelope = graphqlPost(CREATE_AGENT_SESSION_ON_COMMENT_QUERY, vars).json() as GraphQlResponse<AgentSessionCreateOnCommentData>;
     return requireAgentSession(requireData(envelope).agentSessionCreateOnComment, "agentSessionCreateOnComment");
 }
@@ -974,6 +1009,12 @@ interface IssueTeamData {
 interface IssueTeam {
     team: TeamId;
 }
+interface CommentTeam { issue: IssueTeam | null; }
+interface CommentTeamData { comment: CommentTeam | null; }
+interface AgentSessionTeamData {
+    agentSession: { issue: IssueTeam | null; comment: CommentTeam | null } | null;
+}
+
 interface TeamId {
     id: string;
 }
@@ -1070,6 +1111,8 @@ const ISSUE_FIELDS =
 const VIEWER_QUERY = "query { viewer { id name email active } }";
 const GET_ISSUE_QUERY = `query($id: String!) { issue(id: $id) { ${ISSUE_FIELDS} } }`;
 const ISSUE_TEAM_QUERY = "query($id: String!) { issue(id: $id) { team { id } } }";
+const COMMENT_TEAM_QUERY = "query($id: String!) { comment(id: $id) { issue { team { id } } } }";
+const AGENT_SESSION_TEAM_QUERY = "query($id: String!) { agentSession(id: $id) { issue { team { id } } comment { issue { team { id } } } } }";
 const LIST_ISSUES_QUERY = `query($first: Int, $after: String, $filter: IssueFilter) { issues(first: $first, after: $after, filter: $filter) { nodes { ${ISSUE_FIELDS} } pageInfo { hasNextPage endCursor } } }`;
 const GET_TEAM_QUERY = "query($id: String!) { team(id: $id) { id key name } }";
 const LIST_TEAMS_QUERY = "query($first: Int, $after: String) { teams(first: $first, after: $after) { nodes { id key name } pageInfo { hasNextPage endCursor } } }";

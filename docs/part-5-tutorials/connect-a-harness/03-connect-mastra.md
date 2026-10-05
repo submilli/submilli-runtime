@@ -4,6 +4,11 @@ description: "Run the research agent on Mastra: its programs executed on the ser
 slug: tutorials/connect-mastra
 sidebar:
   order: 3
+authorship:
+  label: ai-assisted
+  confirmed: true
+  contentHash: "bcebe2fc7c4a150d35c0eaf21be510263d5533f650a7847cb68646821ca2ab0a"
+  confirmedAt: "2026-10-05T10:59:51.482Z"
 ---
 
 In this tutorial we will run the research agent on Mastra, with its programs
