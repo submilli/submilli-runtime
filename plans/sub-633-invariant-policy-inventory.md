@@ -70,6 +70,7 @@ separate resource/dependency backlog.
 | R02 | Complete: selectively simplified | Nine accepted local dispatch invariants; real validation/failure contracts retained; evidence below |
 | R03 | Complete: retained | Keep checked public arena/span/source contracts; no API redesign |
 | R04 | Complete: simplified | Removed invariant-only namespace resolution/field Result interfaces |
+| R05 | Complete: retained | Preserve capture/narrowing behavior and existing error propagation |
 
 ### R01 execution evidence
 
@@ -150,6 +151,26 @@ fixture runs (27 namespace, 6 math) passed, with full tests disabled and HTTP
 skipped. Graphify AST update completed with the existing extraction limitations.
 Recorded and verified accepted invariants in SUB-633's source-site ledger. R02's
 implementation commit is `a50130c4`; this entry's commit records R04 completion.
+
+### R05 execution evidence
+
+Retain the capture/narrowing changes. `capture` accepts a public TypedAst, and its
+walkers perform checked node access as well as state bookkeeping; they cannot
+become infallible by replacing stack pops. Closure processing recursively walks
+the body before re-reading its mutable node and saved frame, so this is not the
+immediate immutable dispatch proof used in R02/R04. Narrowing tracks parallel
+assignment/tombstone frames and suspended executable-body state. Its callers also
+perform genuinely fallible inference/materialization. Existing propagation is
+compact and already needed; introducing trusted variants would add complexity.
+
+`infer_body_with_narrowing_boundary` and `suspend_narrow_scopes` isolate body exit
+facts and pending materializations; retain that semantic behavior. History
+`6086f295` explicitly confirms that `0dde88f3` fixed the top-level block closure
+panic by walking module statements inside a frame. No whole or partial semantic
+reversion is justified. This is a decision to keep the current simple fallible
+paths, not a claim that every private pop is input-triggerable. Source/history
+review only; no runtime changes/tests rerun. All three independent review roles
+reported no findings; diff checks passed. This commit records the disposition.
 
 ## Completed fixes: candidates and decisions
 
