@@ -6,6 +6,11 @@ sidebar:
   order: 2
 ---
 
+If you use Codex or Claude Code, start with the setup prompt. It asks your
+agent to install the Submilli skill in this project, read its instructions, and
+verify the CLI and server. Follow the manual steps below when you prefer to set
+up Submilli yourself.
+
 Two things to install: the `submilli` command, which comes with the
 `submilli-server` binary, and the Submilli skill for your coding assistant.
 The quickstart needs the first. The tutorials later in the book use the
@@ -17,7 +22,7 @@ source, the curated packages, and the releases are in the
 [`submilli/submilli-runtime`](https://github.com/submilli/submilli-runtime)
 repository.
 
-## The CLI and the server
+## Install the CLI and server yourself
 
 macOS and Linux:
 
