@@ -40,6 +40,7 @@ fn allow_fs() -> BTreeMap<String, Vec<PermissionRule>> {
     let rules = ["fs.read", "fs.write", "fs.mkdir", "fs.list"]
         .into_iter()
         .map(|cap| PermissionRule {
+            name: None,
             capability: cap.into(),
             filter: None,
             action: Action::Allow,
@@ -2247,6 +2248,7 @@ async fn mcp_virtual_package_discovers_typechecks_and_calls() {
         permissions: BTreeMap::from([(
             "main".to_string(),
             vec![PermissionRule {
+                name: None,
                 capability: "mcp.up".into(),
                 filter: None,
                 action: Action::Allow,
@@ -2367,6 +2369,7 @@ async fn a_program_calls_an_mcp_server_over_one_session() {
         permissions: BTreeMap::from([(
             "main".to_string(),
             vec![PermissionRule {
+                name: None,
                 capability: "mcp.up".into(),
                 filter: None,
                 action: Action::Allow,
@@ -3200,4 +3203,23 @@ async fn last_run_read_failure_is_internal_and_hides_backend_details() {
         )
         .await;
     assert_eq!(output(&stored)["result"], "7");
+}
+
+#[tokio::test]
+async fn oversized_diagnostic_is_abbreviated_and_next_request_succeeds() {
+    let h = Harness::new();
+    let session = h.handshake(EPH).await;
+    let source = format!(
+        "function main(): number {{ {} return missing; }}",
+        " ".repeat(100_000)
+    );
+    let (_, _, rpc) = h.post(EPH, tools_call(1, &source), Some(&session)).await;
+    let error = &output(&rpc)["error"];
+    assert_eq!(error["kind"], "compile_error");
+    let message = error["message"].as_str().unwrap();
+    assert!(message.contains(interpreter::rendering::TRUNCATED));
+    assert!(message.len() <= interpreter::rendering::RenderLimits::collection().bytes);
+    let (_, _, healthy) = h.post(EPH, tools_call(2, SUM), Some(&session)).await;
+    assert_eq!(output(&healthy)["result"], "2");
+    assert!(output(&healthy)["error"].is_null());
 }

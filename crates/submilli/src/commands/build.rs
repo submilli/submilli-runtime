@@ -467,7 +467,7 @@ fn render_resolve_error(err: &ResolveError) {
             manifest_text,
             diagnostics,
             ..
-        } => render_manifest_diagnostics(manifest_path, manifest_text.clone(), diagnostics),
+        } => render_manifest_diagnostics(manifest_path, manifest_text.as_str(), diagnostics),
         other => eprintln!("error: {other}"),
     }
 }
@@ -495,54 +495,48 @@ fn write_local_capabilities(
     }
 }
 
-fn render_manifest_diagnostics(
+pub(super) fn render_manifest_diagnostics(
     manifest_path: &Path,
-    manifest_text: String,
+    manifest_text: impl AsRef<str>,
     diags: &[BuildDiagnostic],
 ) {
+    use interpreter::rendering::{RenderError, RenderLimits, failure_text};
+    let primary = diags
+        .first()
+        .map_or("invalid manifest", |diag| diag.message.as_str());
     let (sources, file) = match Sources::single(manifest_path.display().to_string(), manifest_text)
     {
         Ok(source) => source,
         Err(error) => {
-            for diagnostic in diags {
-                eprintln!("error: {}", diagnostic.message);
-            }
-            eprintln!("source context unavailable: {error}");
+            eprintln!("{}", failure_text(primary, &error.into()));
             return;
         }
     };
-    for diag in diags {
+    let views = diags.iter().map(|diag| {
         let span = match diag.span {
             Some(span) => {
-                let Some(span) = u32::try_from(span.start)
-                    .ok()
-                    .zip(u32::try_from(span.end).ok())
-                    .and_then(|(start, end)| Span::new(file, start, end).ok())
-                else {
-                    eprintln!(
-                        "error: {}\nsource context unavailable: invalid manifest span",
-                        diag.message
-                    );
-                    continue;
-                };
-                span
+                let start = u32::try_from(span.start)
+                    .map_err(|_| RenderError::InvalidMetadata("invalid manifest span"))?;
+                let end = u32::try_from(span.end)
+                    .map_err(|_| RenderError::InvalidMetadata("invalid manifest span"))?;
+                Span::new(file, start, end)?
             }
             None => Span::at(file),
         };
-        let rendered = diagnostics::render(
-            &interpreter::Diagnostic {
-                severity: match diag.severity {
-                    BuildSeverity::Error => Severity::Error,
-                    BuildSeverity::Warning => Severity::Warning,
-                },
-                span,
-                message: diag.message.clone(),
-                help: diag.help.clone(),
-                notes: Vec::new(),
+        Ok(diagnostics::DiagnosticView {
+            severity: match diag.severity {
+                BuildSeverity::Error => Severity::Error,
+                BuildSeverity::Warning => Severity::Warning,
             },
-            &sources,
-        );
-        eprint!("{rendered}");
+            span,
+            message: &diag.message,
+            help: &diag.help,
+            notes: &[],
+        })
+    });
+    match diagnostics::render_views(views, &sources, RenderLimits::collection()) {
+        Ok(rendered) => eprint!("{}", rendered.text),
+        Err(error) => eprintln!("{}", failure_text(primary, &error)),
     }
 }
 
@@ -566,8 +560,8 @@ mod test_runner {
         install_runtime_async, install_tenant_limits,
     };
     use interpreter::{
-        BacktraceMode, PackageDeclaration, Sources, compile_script_owned_by, diagnostics,
-        dispatch_main_async, failure_message, instantiate_program_async, render_backtrace,
+        BacktraceMode, PackageDeclaration, Sources, compile_script_owned_by, dispatch_main_async,
+        failure_message, instantiate_program_async,
     };
     use submilli_build::{
         Artifact, ArtifactSource, BuiltPackage, DriverError, PackageName, PackageStore,
@@ -1001,9 +995,7 @@ mod test_runner {
             &[],
         ) {
             Ok(compiled) => {
-                for w in &compiled.warnings {
-                    eprint!("{}", diagnostics::render(w, &sources));
-                }
+                crate::commands::check::render(&compiled.warnings, &sources)?;
                 *warning_count += compiled.warnings.len();
                 if deny_warnings && !compiled.warnings.is_empty() {
                     println!("FAIL {filename} (warnings denied)");
@@ -1012,9 +1004,7 @@ mod test_runner {
                 (compiled.wasm, compiled.type_info)
             }
             Err(diags) => {
-                for d in &diags {
-                    eprint!("{}", diagnostics::render(d, &sources));
-                }
+                crate::commands::check::render(&diags, &sources)?;
                 println!("FAIL {filename}  (compile error)");
                 return Ok((0, 1));
             }
@@ -1099,10 +1089,18 @@ mod test_runner {
                     println!("ok   {}", segment(Some(l)));
                 }
                 println!("FAIL {}", segment(labels.last().map(String::as_str)));
-                if let Some(bt) = render_backtrace(&err, sources, file, BacktraceMode::Full) {
-                    eprint!("{bt}");
-                } else {
-                    eprintln!("error: {}", failure_message(&err));
+                match interpreter::backtrace::render_checked(
+                    &err,
+                    sources,
+                    file,
+                    BacktraceMode::Full,
+                ) {
+                    Ok(Some(rendered)) => eprint!("{}", rendered.text),
+                    Ok(None) => eprintln!("error: {}", failure_message(&err)),
+                    Err(failure) => eprintln!(
+                        "{}",
+                        interpreter::rendering::failure_text(&failure_message(&err), &failure)
+                    ),
                 }
                 (passed, 1)
             }

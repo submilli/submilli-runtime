@@ -22,6 +22,46 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
 /// comparison coerces by the *other* operand's kind (see [`Comparison::eval`]).
 pub type VarBindings = BTreeMap<String, String>;
 
+/// Why one comparison did not hold, as reported by
+/// [`FilterExpr::explain_with`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "kebab-case", tag = "kind", content = "variable")]
+pub enum FailureReason {
+    /// The context has no value at the comparison's field path.
+    FieldMissing,
+    /// The operand references a `${vars.NAME}` the session did not bind.
+    VariableNotBound(String),
+    /// The field and operand were both available and the comparison is false
+    /// (or the value's JSON kind does not suit the operand).
+    NotSatisfied,
+}
+
+/// One leaf comparison that kept a filter from matching.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct ComparisonFailure {
+    /// The comparison as written, from its `Display` impl.
+    pub comparison: String,
+    /// The value the call's context holds at the field path, if any.
+    pub actual: Option<serde_json::Value>,
+    /// The operand with variables resolved: the bound variable's value, the
+    /// interpolated string, or the literal. `None` when a variable is unbound.
+    pub expected: Option<String>,
+    pub reason: FailureReason,
+    /// The comparison is under a `not` and held, which is what failed the
+    /// filter.
+    pub negated: bool,
+}
+
+/// The result of evaluating a filter for reporting: the same `matched` answer
+/// as [`FilterExpr::matches_with`], plus the leaves behind a non-match.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct FilterEvaluation {
+    pub matched: bool,
+    /// Empty when `matched`. Otherwise every leaf whose outcome ran against
+    /// what the filter needed, in source order.
+    pub failures: Vec<ComparisonFailure>,
+}
+
 /// A parsed filter expression. The grammar is `or` over `and` over `not` over
 /// comparisons and parenthesized groups; a bare comparison is a valid expression.
 #[derive(Debug, Clone, PartialEq)]
@@ -145,6 +185,49 @@ impl FilterExpr {
             }
             FilterExpr::Or(left, right) => {
                 left.matches_with(ctx, vars) || right.matches_with(ctx, vars)
+            }
+        }
+    }
+
+    /// Evaluate for reporting. Walks every branch (no short-circuiting) so each
+    /// failing leaf is found, and returns the same `matched` result as
+    /// [`Self::matches_with`], which decides enforcement.
+    pub fn explain_with(&self, ctx: &serde_json::Value, vars: &VarBindings) -> FilterEvaluation {
+        let mut failures = Vec::new();
+        let matched = self.evaluate_all(ctx, vars, true, &mut failures);
+        if matched {
+            failures.clear();
+        }
+        FilterEvaluation { matched, failures }
+    }
+
+    /// `wanted` is the outcome this subtree needs for the whole filter to
+    /// match; it flips under `not`. A leaf whose outcome differs is recorded.
+    fn evaluate_all(
+        &self,
+        ctx: &serde_json::Value,
+        vars: &VarBindings,
+        wanted: bool,
+        failures: &mut Vec<ComparisonFailure>,
+    ) -> bool {
+        match self {
+            FilterExpr::Compare(c) => {
+                let holds = c.eval(ctx, vars);
+                if holds != wanted {
+                    failures.push(c.failure(ctx, vars, !wanted));
+                }
+                holds
+            }
+            FilterExpr::Not(inner) => !inner.evaluate_all(ctx, vars, !wanted, failures),
+            FilterExpr::And(left, right) => {
+                let left_holds = left.evaluate_all(ctx, vars, wanted, failures);
+                let right_holds = right.evaluate_all(ctx, vars, wanted, failures);
+                left_holds && right_holds
+            }
+            FilterExpr::Or(left, right) => {
+                let left_holds = left.evaluate_all(ctx, vars, wanted, failures);
+                let right_holds = right.evaluate_all(ctx, vars, wanted, failures);
+                left_holds || right_holds
             }
         }
     }
@@ -291,6 +374,51 @@ impl Comparison {
                     .iter()
                     .any(|el| scalar_eq(el, &self.operand, vars).unwrap_or(false))
             }
+        }
+    }
+
+    fn failure(
+        &self,
+        ctx: &serde_json::Value,
+        vars: &VarBindings,
+        negated: bool,
+    ) -> ComparisonFailure {
+        let actual = resolve_path(ctx, &self.path).cloned();
+        let reason = match (self.unbound_variable(vars), &actual) {
+            (Some(name), _) => FailureReason::VariableNotBound(name.to_string()),
+            (None, None) => FailureReason::FieldMissing,
+            (None, Some(_)) => FailureReason::NotSatisfied,
+        };
+        ComparisonFailure {
+            comparison: self.to_string(),
+            actual,
+            expected: self.resolved_operand(vars),
+            reason,
+            negated,
+        }
+    }
+
+    /// The first `${vars.NAME}` the operand references that `vars` lacks.
+    fn unbound_variable<'a>(&'a self, vars: &VarBindings) -> Option<&'a str> {
+        match &self.operand {
+            Operand::Var(name) if !vars.contains_key(name) => Some(name),
+            Operand::Interp(segs) => segs.iter().find_map(|seg| match seg {
+                StrSegment::Var(name) if !vars.contains_key(name) => Some(name.as_str()),
+                _ => None,
+            }),
+            _ => None,
+        }
+    }
+
+    fn resolved_operand(&self, vars: &VarBindings) -> Option<String> {
+        match &self.operand {
+            Operand::Number(n) => Some(format_number(*n)),
+            Operand::Str(s) => Some(s.clone()),
+            Operand::Bool(b) => Some(b.to_string()),
+            Operand::Null => Some("null".to_string()),
+            Operand::Regex(re) => Some(re.source.clone()),
+            Operand::Var(name) => vars.get(name).cloned(),
+            Operand::Interp(segs) => render_segments(segs, vars, str::to_string),
         }
     }
 
@@ -1505,5 +1633,105 @@ mod tests {
             let reparsed = parse_filter(&parsed.to_string()).unwrap();
             assert_eq!(parsed, reparsed, "round-trip changed AST for {src:?}");
         }
+    }
+
+    #[test]
+    fn explain_matches_same_as_matches_with() {
+        let ctx = json!({
+            "host": "api.example.com",
+            "amount": 100,
+            "tags": ["a", "b"],
+            "nested": { "id": "x" },
+            "flag": true,
+        });
+        let bound = vars(&[("h", "api.example.com"), ("n", "100")]);
+        let filters = [
+            "amount < 500",
+            "amount > 500",
+            "host == ${vars.h} and amount == ${vars.n}",
+            "host == ${vars.h} and amount > 500",
+            "amount > 500 or host == \"api.example.com\"",
+            "amount > 500 or host == \"other\"",
+            "not amount > 500",
+            "not (host == \"api.example.com\" and amount < 500)",
+            "(amount < 5 or flag == true) and not nested.id == \"y\"",
+            "missing == 1",
+            "missing != 1",
+            "not missing == 1",
+            "amount == \"100\"",
+            "host < 5",
+            "tags contains \"b\"",
+            "nested.id == ${vars.unbound}",
+            "nested.id == ${vars.unbound} or flag == true",
+            "host glob \"*.example.com\" and not flag == false",
+        ];
+        for text in filters {
+            let f = filter(text);
+            for bindings in [&bound, &VarBindings::new()] {
+                let explained = f.explain_with(&ctx, bindings);
+                assert_eq!(explained.matched, f.matches_with(&ctx, bindings), "{text}");
+                assert_eq!(explained.matched, explained.failures.is_empty(), "{text}");
+            }
+        }
+    }
+
+    #[test]
+    fn explain_reports_every_failing_leaf() {
+        let f = filter("amount < 5 and host == \"a\" and missing == 1");
+        let ctx = json!({ "amount": 100, "host": "b" });
+        let explained = f.explain_with(&ctx, &VarBindings::new());
+        assert!(!explained.matched);
+        let rendered: Vec<&str> = explained
+            .failures
+            .iter()
+            .map(|failure| failure.comparison.as_str())
+            .collect();
+        assert_eq!(rendered, ["amount < 5", "host == \"a\"", "missing == 1"]);
+        assert_eq!(explained.failures[0].actual, Some(json!(100)));
+        assert_eq!(explained.failures[0].expected.as_deref(), Some("5"));
+        assert_eq!(explained.failures[0].reason, FailureReason::NotSatisfied);
+        assert_eq!(explained.failures[2].actual, None);
+        assert_eq!(explained.failures[2].reason, FailureReason::FieldMissing);
+    }
+
+    #[test]
+    fn explain_reports_unbound_variable() {
+        let f = filter("customerId == ${vars.customerId}");
+        let explained = f.explain_with(&json!({ "customerId": "cus_1" }), &VarBindings::new());
+        assert!(!explained.matched);
+        let failure = &explained.failures[0];
+        assert_eq!(
+            failure.reason,
+            FailureReason::VariableNotBound("customerId".to_string())
+        );
+        assert_eq!(failure.expected, None);
+        assert_eq!(failure.actual, Some(json!("cus_1")));
+
+        let interpolated = filter("url glob \"https://${vars.host}/*\"");
+        let explained =
+            interpolated.explain_with(&json!({ "url": "https://a/x" }), &VarBindings::new());
+        assert_eq!(
+            explained.failures[0].reason,
+            FailureReason::VariableNotBound("host".to_string())
+        );
+    }
+
+    #[test]
+    fn explain_reports_bound_variable_value_and_negation() {
+        let f = filter("customerId == ${vars.customerId}");
+        let explained = f.explain_with(
+            &json!({ "customerId": "cus_initech" }),
+            &vars(&[("customerId", "cus_northwind")]),
+        );
+        assert_eq!(
+            explained.failures[0].expected.as_deref(),
+            Some("cus_northwind")
+        );
+        assert!(!explained.failures[0].negated);
+
+        let negated = filter("not host == \"evil.com\"");
+        let explained = negated.explain_with(&json!({ "host": "evil.com" }), &VarBindings::new());
+        assert!(!explained.matched);
+        assert!(explained.failures[0].negated);
     }
 }

@@ -28,8 +28,8 @@ function main(): void {
   assert(one() === 1, "single-line function body needs no trailing `;`");
   assert(new C().x === 1, "single-line class body needs no trailing `;`");
   assert(loops() === 6, "single-line control-flow bodies need no trailing `;`");
-  assert(E.B !== E.A, "single-line enum body");
-  assert(F.B !== F.A, "newline-separated enum members take the `;` ASI inserts");
+  assert(E.A === 0 && E.B === 1, "single-line enum body");
+  assert(F.A === 0 && F.B === 1, "newline-separated enum members take the `;` ASI inserts");
 
   const i: I = { m: (): number => 2 };
   assert(i.m() === 2, "single-line interface body");

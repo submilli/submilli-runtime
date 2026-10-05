@@ -3210,15 +3210,6 @@ fn emit_equality(
     lhs: ExprId,
     rhs: ExprId,
 ) -> Result<(), crate::compiler_error::CompilerFailure> {
-    // The inferer's Eq rule infers the RHS using the LHS's
-    // type as the hint, so both operands share a Wasm
-    // `value_type`. Dispatch off that value-type — the
-    // language `Type` might be a literal-refined primitive
-    // or a literal-only union; at the Wasm level those
-    // collapse to the same compare path as their base
-    // primitive (equality is value-level — the literal
-    // refinement is a typecheck-time restriction, not a
-    // runtime distinction).
     // Plan 75.8: when either operand is the `null` literal,
     // emit the non-null side followed by `ref.is_null`
     // (negated for `NotEq`). This covers `x === null` /
@@ -3274,44 +3265,46 @@ fn emit_equality(
         }
         return Ok(());
     }
-    // When either operand admits null the two may differ in Wasm shape
-    // (one `(ref null $Object)`, the other f64 / `(ref $string)` / …),
-    // and the `operand_val` dispatch below assumes a shared value-type.
-    // Route through a null-aware dispatch that boxes both sides to
-    // `(ref [null] $Object)` and calls `vtable.equals`.
-    let lhs_admits_null = may_hold_null(
-        &ctx.ta
-            .try_expr(lhs)
-            .map_err(crate::codegen::arena_failure)?
-            .ty,
-    );
-    let rhs_admits_null = may_hold_null(
-        &ctx.ta
-            .try_expr(rhs)
-            .map_err(crate::codegen::arena_failure)?
-            .ty,
-    );
-    if lhs_admits_null || rhs_admits_null {
-        emit_nullable_eq(emitter, ctx, lhs, rhs, op)?;
-        return Ok(());
-    }
-    let operand_ty = ctx
+    let lhs_ty = ctx
         .ta
         .try_expr(lhs)
         .map_err(crate::codegen::arena_failure)?
         .ty
         .clone();
+    let rhs_ty = ctx
+        .ta
+        .try_expr(rhs)
+        .map_err(crate::codegen::arena_failure)?
+        .ty
+        .clone();
+    let operand_val = ctx.symbols.value_type(lhs_ty.primitive_behavior())?;
+    // The typed dispatch below needs both operands in one Wasm shape. One that
+    // admits null is a `(ref null $Object)` beside the other's f64 or
+    // `(ref $string)`, and comparable operands need not share a representation
+    // at all (`t === 1` with `t: T`, `n === e` with `e: {}`). Those pairs box both
+    // sides to `(ref [null] $Object)` and dispatch through `vtable.equals`.
+    if may_hold_null(&lhs_ty)
+        || may_hold_null(&rhs_ty)
+        || operand_val != ctx.symbols.value_type(rhs_ty.primitive_behavior())?
+    {
+        emit_boxed_eq(emitter, ctx, lhs, rhs, op)?;
+        return Ok(());
+    }
     // bigint equality short-circuits to a direct
     // `submilli:bigint.cmp == 0` call — a faster path than the
     // generic `ValType::Ref(_)` arm's vtable `equals` dispatch.
-    if matches!(operand_ty.peel(), Type::BigInt) {
+    if matches!(lhs_ty.peel(), Type::BigInt) {
         emit_bigint_cmp_eq_inline(emitter, ctx, lhs, rhs, op)?;
         return Ok(());
     }
-    let operand_val = ctx.symbols.value_type(operand_ty.primitive_behavior())?;
     let string_idx = ctx.symbols.string_type_idx().ok_or_else(|| {
         crate::codegen::internal_failure("string type registered with intrinsics")
     })?;
+    // Operands that share a Wasm `value_type` dispatch off it. The language
+    // `Type` might be a literal-refined primitive or a literal-only union; at
+    // the Wasm level those collapse to the same compare path as their base
+    // primitive (equality is value-level; the literal refinement is a
+    // typecheck-time restriction, not a runtime distinction).
     match operand_val {
         ValType::F64 => {
             emit_primitive_operand(emitter, ctx, lhs)?;
@@ -3356,22 +3349,9 @@ fn emit_equality(
             // Enum values fall here too — they share the
             // `$BoxedNumber` / `$string` shapes whose
             // vtable `equals` slot is wired by the prelude.
-            //
-            // The Eq rule infers the RHS with the LHS type as
-            // hint, but a union LHS (`$Object` repr) can pair
-            // with an RHS that lands on a concrete primitive
-            // member (`first === 1`, RHS `f64`). Box both sides
-            // to `$Object` so they match the `equals` slot's
-            // signature.
             emit_expr(emitter, ctx, lhs)?;
-            cast::emit_box(emitter, ctx, &operand_ty)?;
+            cast::emit_box(emitter, ctx, &lhs_ty)?;
             emit_expr(emitter, ctx, rhs)?;
-            let rhs_ty = ctx
-                .ta
-                .try_expr(rhs)
-                .map_err(crate::codegen::arena_failure)?
-                .ty
-                .clone();
             cast::emit_box(emitter, ctx, &rhs_ty)?;
             emit_vtable_equality(emitter, ctx, op);
         }
@@ -5706,8 +5686,9 @@ fn emit_vtable_equality_checked(
     Ok(())
 }
 
-/// null-aware `===` / `!==` dispatch. Used when either
-/// operand's static type admits null. Bridges the operands to a
+/// Boxed, null-aware `===` / `!==` dispatch. Used when either operand's static
+/// type admits null, or when the operands have different Wasm representations.
+/// Bridges the operands to a
 /// common Wasm shape (`(ref null $Object)`) via `emit_box`, then
 /// emits a 4-way condition:
 ///
@@ -5717,7 +5698,7 @@ fn emit_vtable_equality_checked(
 /// - both non-null → `lhs.vtable.equals(lhs, rhs)`.
 ///
 /// Final `I32Eqz` flips the result for `NotEq`.
-fn emit_nullable_eq(
+fn emit_boxed_eq(
     emitter: &mut FunctionEmitter,
     ctx: &CodegenCtx,
     lhs: ExprId,

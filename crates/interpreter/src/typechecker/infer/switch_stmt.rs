@@ -8,7 +8,7 @@ use crate::{
     TypedSwitchCase, TypedSwitchValue,
 };
 
-use super::{Inferer, assignable, narrowing};
+use super::{Inferer, narrowing};
 
 /// An enclosing `switch`: the `let`/`const` its clauses declare directly, and
 /// the clause being inferred.
@@ -60,6 +60,9 @@ pub(super) fn clauses_in_source_order<'a>(
 
 /// A discriminant inferred ahead of the switch body.
 struct Discriminant {
+    /// The discriminant expression as written, which a `case` label is
+    /// compared against.
+    source: ExprId,
     /// The narrowings in force before the discriminant ran.
     entry_env: narrowing::NarrowEnv,
     typed: ExprId,
@@ -309,6 +312,7 @@ impl Inferer<'_> {
             );
         }
         Ok(Discriminant {
+            source: discriminant,
             entry_env,
             typed,
             ty,
@@ -329,8 +333,9 @@ impl Inferer<'_> {
             typed: typed_disc,
             ty: disc_ty,
             source_span: disc_source_span,
+            source: disc_source,
         } = discriminant;
-        let label_hint = switch_label_hint(&disc_ty);
+        let disc_operand = self.comparison_operand(disc_source, typed_disc)?;
         let entry_reachable = self.reachable;
         self.push_pending_join_frame(narrowing::PendingJoinKind::Switch);
         let mut typed_cases: Vec<TypedSwitchCase> = Vec::new();
@@ -349,21 +354,24 @@ impl Inferer<'_> {
                     .try_expr(*value_expr)
                     .map_err(super::arena_failure)?
                     .span;
-                let (typed_val, val_ty) = self.infer_expr(*value_expr, Some(&label_hint))?;
+                let (typed_val, _) = self.infer_expr(*value_expr, None)?;
                 let val_kind = self
                     .typed_ast
                     .try_expr(typed_val)
                     .map_err(crate::typechecker::arena_failure)?
                     .kind
                     .clone();
-                if !matches!(disc_ty, Type::Error)
-                    && !matches!(val_ty, Type::Error)
-                    && !assignable(&val_ty, &label_hint, self.resolver())
-                {
+                let case_operand = self.comparison_operand(*value_expr, typed_val)?;
+                if !super::comparison_operand::operands_comparable(
+                    &case_operand,
+                    &disc_operand,
+                    self.resolver(),
+                ) {
                     self.error(
                         value_span,
                         format!(
-                            "case label of type `{val_ty}` is not compatible with switch discriminant of type `{disc_ty}`",
+                            "case label of type `{}` is not compatible with switch discriminant of type `{}`",
+                            case_operand.label, disc_operand.label
                         ),
                     );
                     continue;
@@ -842,15 +850,5 @@ fn index_position(kind: &TypedExprKind) -> Option<usize> {
             Some(*n as usize)
         }
         _ => None,
-    }
-}
-
-/// Labels compare runtime values; they do not need the generic identity carried
-/// by the discriminant's refinement.
-fn switch_label_hint(ty: &Type) -> Type {
-    match ty.without_aliases() {
-        Type::Refined { ty, .. } => switch_label_hint(ty),
-        Type::Union(members) => Type::union(members.iter().map(switch_label_hint).collect()),
-        _ => ty.clone(),
     }
 }

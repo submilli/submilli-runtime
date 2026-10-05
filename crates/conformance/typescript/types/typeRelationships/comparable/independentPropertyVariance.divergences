@@ -1,4 +1,1 @@
 types: 9 of 18 tsc entries compared, 0 differ
-
-errors:
-line 9: ours: expected `{ a: 1; b: string }`, got `{ a: number; b: "a" }` (tsc accepts)

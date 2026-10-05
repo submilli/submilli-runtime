@@ -126,7 +126,7 @@ ts=2026-10-03T20:02:39.695Z level=info stream=audit target=submilli_server::audi
 | Field | Value |
 | --- | --- |
 | `outcome` | `ok`, `error`, `fuel_exhausted`, `timeout`, `memory_exhausted`, `stack_exhausted`, or `cancelled` |
-| `error_class` | The error's `kind`, when the run failed |
+| `error_class` | The error's `kind`, when the run failed. A permission denial that no `catch` handled is `permission_denied` |
 | `fuel`, `wasm_fuel`, `host_fuel` | Fuel consumed, as in [Set limits](/docs/server/set-limits#measure-a-program) |
 | `memory_peak` | The most memory the run held, in bytes |
 | `model_tokens` | Model tokens the run spent |

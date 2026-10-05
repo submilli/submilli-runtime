@@ -901,6 +901,7 @@ mod tests {
                 algorithm_fuel: Arc::new(crate::stdlib::git::work::AlgorithmWork::new(u64::MAX)),
                 denial: Arc::new(Mutex::new(None)),
                 history_cache: None,
+                line: None,
             },
         }
     }

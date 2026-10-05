@@ -1,10 +1,11 @@
 //! Trap → Submilli-source backtrace rendering.
 
-use wasmtime::{Error, FrameInfo, FrameSymbol, Trap, WasmBacktrace};
+use wasmtime::{Error, FrameInfo, Trap, WasmBacktrace};
 
-use crate::diagnostics::render_source_block;
+use crate::diagnostics::write_source_block;
+use crate::rendering::{RenderError, RenderLimits, RenderedText, Writer};
 use crate::source::Sources;
-use crate::{FileId, LineIndex, Span};
+use crate::{FileId, Span};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BacktraceMode {
@@ -23,6 +24,9 @@ pub enum BacktraceMode {
 pub struct ThrownError {
     pub message: String,
     pub backtrace: Option<WasmBacktrace>,
+    /// Set when the escaped error is a denial the runtime itself threw, as
+    /// opposed to a `PermissionDeniedError` the program constructed.
+    pub denial: Option<crate::runtime::host::Denial>,
 }
 
 impl std::fmt::Display for ThrownError {
@@ -42,25 +46,106 @@ pub fn render(
     file: FileId,
     mode: BacktraceMode,
 ) -> Option<String> {
-    sources.get(file)?;
-
-    // A thrown `Error` carries its message plus a backtrace we captured at throw
-    // time. Render a message header, then the frames in the trap layout. With no
-    // captured backtrace, return `None`; the caller prints [`failure_message`].
-    if let Some(thrown) = error.downcast_ref::<ThrownError>() {
-        let frames = render_frames(thrown.backtrace.as_ref()?, sources, mode, "thrown here")?;
-        return Some(format!("error: {}\n{frames}", thrown.message));
+    match render_checked(error, sources, file, mode) {
+        Ok(rendered) => rendered.map(|text| text.text),
+        Err(failure) => Some(crate::rendering::failure_text(
+            &failure_message(error),
+            &failure,
+        )),
     }
-    // A raw trap carries its message only on the error value — unlike a thrown
-    // error, whose text also sits in the frames. Without this header the message
-    // is lost, and a trap stops rendering like a compile error.
-    let frames = render_frames(
-        error.downcast_ref::<WasmBacktrace>()?,
-        sources,
-        mode,
-        trap_label_for(error),
-    )?;
-    Some(format!("error: {}\n{frames}", failure_message(error)))
+}
+
+pub fn render_checked(
+    error: &Error,
+    sources: &Sources,
+    file: FileId,
+    mode: BacktraceMode,
+) -> Result<Option<RenderedText>, RenderError> {
+    let (trace, label) = if let Some(thrown) = error.downcast_ref::<ThrownError>() {
+        (thrown.backtrace.as_ref(), "thrown here")
+    } else {
+        (error.downcast_ref::<WasmBacktrace>(), trap_label_for(error))
+    };
+    let Some(trace) = trace else {
+        return Ok(None);
+    };
+    sources
+        .get(file)
+        .ok_or(crate::source::SourceError::UnknownFile { file })?;
+    let mut has_frame = false;
+    let rendered = Writer::render(RenderLimits::default(), |out| {
+        out.push("error: ")?;
+        write_failure(out, error)?;
+        out.push("\n")?;
+        let mut first = None;
+        let mut last = None;
+        for (i, frame) in trace.frames().iter().enumerate() {
+            out.step()?;
+            if frame.symbols().first().and_then(|s| s.name()).is_none() {
+                continue;
+            }
+            if !is_source_frame(frame, sources) {
+                first.get_or_insert(i);
+                last = Some(i);
+            }
+        }
+        let mut rendered_index = 0usize;
+        // No temporary frame vectors: both scans share the work budget.
+        let mut last_kept = None;
+        for (i, frame) in trace.frames().iter().enumerate() {
+            out.step()?;
+            if frame.symbols().first().and_then(|s| s.name()).is_none() {
+                continue;
+            }
+            if mode == BacktraceMode::Full
+                || is_source_frame(frame, sources)
+                || Some(i) == first
+                || Some(i) == last
+            {
+                last_kept = Some(i);
+            }
+        }
+        for (i, frame) in trace.frames().iter().enumerate() {
+            out.step()?;
+            if frame.symbols().first().and_then(|s| s.name()).is_none() {
+                continue;
+            }
+            if mode == BacktraceMode::LlmTrimmed
+                && !is_source_frame(frame, sources)
+                && Some(i) != first
+                && Some(i) != last
+            {
+                continue;
+            }
+            let role = if rendered_index == 0 {
+                label
+            } else if Some(i) == last_kept {
+                "entry"
+            } else {
+                "caller"
+            };
+            write_frame(out, frame, sources, role)?;
+            rendered_index = rendered_index
+                .checked_add(1)
+                .ok_or(RenderError::Formatting)?;
+            has_frame = true;
+        }
+        Ok(())
+    })?;
+    Ok((has_frame || rendered.truncated).then_some(rendered))
+}
+
+pub fn failure_message_checked(error: &Error) -> Result<RenderedText, RenderError> {
+    Writer::render(RenderLimits::default(), |out| write_failure(out, error))
+}
+
+fn write_failure(out: &mut Writer, error: &Error) -> Result<(), RenderError> {
+    match error.downcast_ref::<Trap>() {
+        Some(Trap::Interrupt) => out.push("timeout exceeded"),
+        Some(Trap::OutOfFuel) => out.push("fuel exhausted"),
+        Some(Trap::UnreachableCodeReached) => out.push("unreachable code reached"),
+        _ => out.format(format_args!("{error}")),
+    }
 }
 
 /// The one-line text for a run's failure: the header [`render`] puts above the
@@ -76,58 +161,10 @@ pub fn render(
 /// better as the engine's `call stack exhausted` in the header (it says what
 /// happened) and as `stack overflow` in the frame label (it names the frame).
 pub fn failure_message(error: &Error) -> String {
-    match error.downcast_ref::<Trap>() {
-        Some(Trap::Interrupt) => "timeout exceeded".to_string(),
-        Some(Trap::OutOfFuel) => "fuel exhausted".to_string(),
-        Some(Trap::UnreachableCodeReached) => "unreachable code reached".to_string(),
-        Some(_) | None => error.to_string(),
-    }
-}
-
-fn render_frames(
-    bt: &WasmBacktrace,
-    sources: &Sources,
-    mode: BacktraceMode,
-    frame0_label: &'static str,
-) -> Option<String> {
-    // Filter before role assignment so labels attach to rendered indices, not raw ones.
-    // Stack-overflow traps land in frames with no `symbols()`; without this, the
-    // innermost rendered frame would be tagged `[caller]` and the trap label dropped.
-    let renderable: Vec<&FrameInfo> = bt
-        .frames()
-        .iter()
-        .filter(|f| f.symbols().first().and_then(|s| s.name()).is_some())
-        .collect();
-
-    let renderable = match mode {
-        BacktraceMode::Full => renderable,
-        BacktraceMode::LlmTrimmed => {
-            let flags: Vec<bool> = renderable
-                .iter()
-                .map(|f| is_source_frame(f, sources))
-                .collect();
-            let kept = kept_indices(&flags);
-            kept.into_iter().map(|i| renderable[i]).collect()
-        }
-    };
-
-    let total = renderable.len();
-    let mut out = String::new();
-    for (i, frame) in renderable.iter().enumerate() {
-        let role = role_for(i, total, frame0_label);
-        render_frame(&mut out, frame, sources, role);
-    }
-    if out.is_empty() { None } else { Some(out) }
-}
-
-fn role_for(i: usize, total: usize, trap_label: &'static str) -> &'static str {
-    if i == 0 {
-        trap_label
-    } else if i + 1 == total {
-        "entry"
-    } else {
-        "caller"
-    }
+    failure_message_checked(error).map_or_else(
+        |failure| crate::rendering::failure_text("runtime execution failed", &failure),
+        |rendered| rendered.text,
+    )
 }
 
 fn trap_label_for(error: &Error) -> &'static str {
@@ -140,72 +177,50 @@ fn trap_label_for(error: &Error) -> &'static str {
     }
 }
 
-#[allow(clippy::too_many_arguments)]
-fn render_frame(out: &mut String, frame: &FrameInfo, sources: &Sources, role: &str) {
+fn write_frame(
+    out: &mut Writer,
+    frame: &FrameInfo,
+    sources: &Sources,
+    role: &str,
+) -> Result<(), RenderError> {
     let Some(sym) = frame.symbols().first() else {
-        return;
+        return Ok(());
     };
     let Some(name) = sym.name() else {
-        return;
+        return Ok(());
     };
-    let frame_file = sym.file().unwrap_or("?");
+    let path = sym.file().unwrap_or("?");
     let line = sym.line().unwrap_or(0);
     let col = sym.column().unwrap_or(0);
-
-    out.push_str(&format!(
-        "  at {name} ({frame_file}:{line}:{col})  [{role}]\n"
-    ));
-
-    if let Some((file, source_file)) = sources.find_path(frame_file) {
-        let gutter_width = source_file
-            .line_index()
-            .line_count()
-            .max(1)
-            .to_string()
-            .len();
-        let gutter_blank = " ".repeat(gutter_width);
-        emit_context(
-            out,
-            source_file.line_index(),
-            file,
-            sym,
-            &gutter_blank,
-            gutter_width,
-        );
-    }
+    write_symbol(out, name, path, line, col, sources, role)
 }
 
-fn emit_context(
-    out: &mut String,
-    line_index: &LineIndex,
-    file: FileId,
-    sym: &FrameSymbol,
-    gutter_blank: &str,
-    gutter_width: usize,
-) {
-    let line = sym.line().unwrap_or(0);
-    let col = sym.column().unwrap_or(0);
-    if line == 0 || line > line_index.line_count() {
-        return;
+fn write_symbol(
+    out: &mut Writer,
+    name: &str,
+    path: &str,
+    line: u32,
+    col: u32,
+    sources: &Sources,
+    role: &str,
+) -> Result<(), RenderError> {
+    let context = if let Some((file, source)) = sources.find_path(path)
+        && line != 0
+    {
+        let index = source.line_index();
+        let offset = index.byte_offset(line, col.max(1))?;
+        Some((index, Span::new(file, offset, offset)?))
+    } else {
+        None
+    };
+    out.format(format_args!(
+        "  at {name} ({path}:{line}:{col})  [{role}]\n"
+    ))?;
+    if let Some((index, span)) = context {
+        let width = index.line_count().max(1).to_string().len();
+        write_source_block(out, index, span, width)?;
     }
-    // DWARF gives us (line, col); synthesise a one-byte span at that
-    // position so we can share the diagnostic renderer's ±1 + caret
-    // logic. `col == 0` means "no column info" → put the caret at
-    // column 1 rather than dropping the block entirely.
-    let caret_col = col.max(1);
-    let context = (|| {
-        let offset = line_index.byte_offset(line, caret_col)?;
-        let span = Span::new(file, offset, offset)?;
-        let mut context = String::new();
-        render_source_block(&mut context, line_index, span, gutter_blank, gutter_width)?;
-        Ok::<_, crate::source::SourceError>(context)
-    })();
-    match context {
-        Ok(context) => out.push_str(&context),
-        Err(error) => out.push_str(&format!(
-            "{gutter_blank} | source context unavailable: {error}\n"
-        )),
-    }
+    Ok(())
 }
 
 fn is_source_frame(frame: &FrameInfo, sources: &Sources) -> bool {
@@ -216,7 +231,16 @@ fn is_source_frame(frame: &FrameInfo, sources: &Sources) -> bool {
         .is_some_and(|p| sources.find_path(p).is_some())
 }
 
-/// Returns indices for `LlmTrimmed`: every user frame plus the first and last non-user frame.
+/// The engine delegates alternate Display to anyhow's cause iterator. Its writes
+/// pass through the same bounded sink, including separators between causes.
+pub fn failure_chain_checked(error: &Error) -> Result<RenderedText, RenderError> {
+    Writer::render(RenderLimits::default(), |out| {
+        out.format(format_args!("{error:#}"))
+    })
+}
+
+/// Returns every user frame plus the first and last non-user frame.
+#[cfg(test)]
 fn kept_indices(is_user: &[bool]) -> Vec<usize> {
     let first_non_user = is_user.iter().position(|u| !u);
     let last_non_user = is_user.iter().rposition(|u| !u);
@@ -227,8 +251,36 @@ fn kept_indices(is_user: &[bool]) -> Vec<usize> {
 
 #[cfg(test)]
 mod tests {
-    use super::{failure_message, kept_indices};
-    use wasmtime::{Error, Trap};
+    use super::*;
+
+    #[test]
+    fn malformed_symbol_context_fails_before_a_long_frame_can_truncate() {
+        let (sources, _) = Sources::single("test.ts", "x").unwrap();
+        let long_name = "frame".repeat(20_000);
+        let result = Writer::render(RenderLimits::default(), |out| {
+            write_symbol(out, &long_name, "test.ts", 99, 1, &sources, "caller")
+        });
+        assert!(matches!(result, Err(RenderError::Source(_))));
+        let valid = Writer::render(RenderLimits::default(), |out| {
+            write_symbol(out, &long_name, "test.ts", 1, 1, &sources, "caller")
+        })
+        .unwrap();
+        assert!(valid.truncated);
+        let unknown = Writer::render(RenderLimits::default(), |out| {
+            write_symbol(out, "frame", "unknown.ts", 99, 1, &sources, "caller")
+        })
+        .unwrap();
+        assert!(unknown.text.contains("unknown.ts:99:1"));
+    }
+
+    #[test]
+    fn oversized_failure_chain_keeps_its_primary_message() {
+        let error = Error::msg("primary failure ".repeat(20_000));
+        let result = failure_chain_checked(&error).unwrap();
+        assert!(result.truncated);
+        assert!(result.text.starts_with("primary failure"));
+        assert!(result.text.len() <= RenderLimits::default().bytes);
+    }
 
     #[test]
     fn curated_trap_messages_replace_the_engines_wording() {

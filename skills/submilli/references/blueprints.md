@@ -71,7 +71,8 @@ every stdlib capability as a deny rule with example filters.
 package name is the caller for that package's own stdlib calls. Rules are an
 ordered list; the first rule whose capability name matches exactly and whose
 filter matches the call decides. No wildcards in names. A rule is
-`capability`, optional `filter`, and `action` (`allow`, `deny`, `ask-human`).
+`capability`, optional `filter`, `action` (`allow`, `deny`, `ask-human`), and an
+optional `name` that decisions cite (unique within a caller's list).
 
 Two kinds of capability, two homes:
 

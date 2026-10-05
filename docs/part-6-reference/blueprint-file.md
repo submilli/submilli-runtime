@@ -540,9 +540,14 @@ program, or a package name for that package's own calls.
 
 | Field | Type | Required |
 | --- | --- | --- |
+| `name` | string, non-empty | no |
 | `capability` | string, non-empty | yes |
 | `filter` | filter expression | no |
 | `action` | `allow`, `deny` | yes |
+
+`name` is an optional label for the rule. It must be unique within a caller's
+list (`blueprint lint` reports a repeat as an error). It gives the rule a
+stable name to refer to instead of its position in the list.
 
 ```yaml title="blueprint.yaml (fragment)"
 permissions:

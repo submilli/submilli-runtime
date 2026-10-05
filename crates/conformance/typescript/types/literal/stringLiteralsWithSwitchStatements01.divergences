@@ -1,4 +1,4 @@
 types: 9 of 12 tsc entries compared, 0 differ
 
 errors:
-line 10: ours: expected `"foo"`, got `"bar" | "foo"` (tsc accepts)
+line 10: ours: `case` label must be a literal (string, number, boolean, `null`, or enum member) (tsc accepts)

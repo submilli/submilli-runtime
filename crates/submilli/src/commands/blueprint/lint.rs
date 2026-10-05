@@ -126,6 +126,8 @@ fn inspect_blueprint(blueprint: &Blueprint) -> LintFindings {
         );
     }
 
+    errors.extend(duplicate_rule_name_errors(blueprint));
+
     let mut warnings = Vec::from_iter(default_allow_warning(blueprint));
     warnings.extend(unreachable_main_rule_warnings(blueprint));
     warnings.extend(shadowed_rule_warnings(blueprint));
@@ -161,6 +163,28 @@ fn inspect_blueprint(blueprint: &Blueprint) -> LintFindings {
         warnings,
         fixes,
     }
+}
+
+/// Decisions cite a rule by its name, so a name must pick out one rule within
+/// its caller block. The same name under different callers is unambiguous.
+fn duplicate_rule_name_errors(blueprint: &Blueprint) -> Vec<String> {
+    let mut errors = Vec::new();
+    for (caller, rules) in &blueprint.permissions {
+        let mut first_seen: BTreeMap<&str, usize> = BTreeMap::new();
+        for (position, rule) in (1..).zip(rules) {
+            let Some(name) = rule.name.as_deref() else {
+                continue;
+            };
+            let first = *first_seen.entry(name).or_insert(position);
+            if first != position {
+                errors.push(format!(
+                    "`permissions.{caller}` rules {first} and {position} are both named `{name}`; \
+                     rule names must be unique within a caller block"
+                ));
+            }
+        }
+    }
+    errors
 }
 
 /// A rule a package's `requires:` needs for its own calls; `--fix` grants it.
@@ -241,6 +265,7 @@ fn apply_fixes(blueprint: &mut Blueprint, fixes: Vec<MissingRequiresRule>) -> an
             .entry(fix.caller)
             .or_default()
             .push(PermissionRule {
+                name: None,
                 capability: fix.capability,
                 filter,
                 action: Action::Allow,

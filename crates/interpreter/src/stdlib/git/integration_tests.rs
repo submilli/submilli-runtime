@@ -116,6 +116,7 @@ fn job(vfs: &Vfs, op: &str) -> Job {
         denial: Arc::new(Mutex::new(None)),
         history_cache: (op == "log")
             .then(|| Arc::new(super::log_cache::Cache::new(&data.tenant_limits).unwrap())),
+        line: None,
     }
 }
 
