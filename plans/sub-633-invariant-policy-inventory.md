@@ -76,6 +76,7 @@ separate resource/dependency backlog.
 | R08 | Complete: selectively simplified | Removed root-scope-only failure checks; kept slot/mark/limit contracts |
 | R09 | Complete: selectively simplified | Removed duplicate decimal validation and private parse-error Result |
 | R10 | Complete: simplified | Metadata and typed_metadata return Option directly |
+| R11 | Complete: retained | Keep bounded rendering and DWARF writer/source errors |
 
 ### R01 execution evidence
 
@@ -253,6 +254,19 @@ Three independent reviews had no findings. Formatting, offline workspace/all-tar
 Clippy and filtered fixtures (39 default, 21 rest, including non-finite defaults)
 passed with full tests disabled and HTTP skipped. AST graph updated with existing
 limitations. Accepted site recorded/verified in SUB-633; this commit records R10.
+
+### R11 execution evidence
+
+`rendering::Writer` is not an unrestricted String writer: byte/step/depth budgets,
+fallible reservations and a latched error govern rendering. Truncation is consumed
+as presentation control flow; real allocation/source/metadata failures still return.
+DWARF generation validates source files and addresses, then propagates gimli's
+write/section errors. Changing these paths to expect would discard real contracts.
+Keep the shared error channels and existing compact formatting propagation; no
+separate invariant-only public interface was identified to remove. R11 is resolved
+as retention, not a statement that formatting can never panic. Inspected rendering,
+diagnostics and DWARF code; documentation-only, no tests rerun. Three independent
+reviewers reported no findings; diff checks passed.
 
 ## Completed fixes: candidates and decisions
 
