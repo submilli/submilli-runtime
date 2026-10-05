@@ -720,9 +720,10 @@ impl Inferer<'_> {
                 .last()
                 .ok_or_else(|| super::inference_failure("rest signature has no parameters"))?
                 .ty
+                .rest_element()
             {
-                Type::Array(elem) => (**elem).clone(),
-                _ => Type::Error,
+                Some(elem) => Type::clone(elem),
+                None => Type::Error,
             }
         } else {
             Type::Error
@@ -1203,9 +1204,10 @@ impl Inferer<'_> {
                 .last()
                 .ok_or_else(|| super::inference_failure("rest signature has no parameters"))?
                 .ty
+                .rest_element()
             {
-                Type::Array(elem) => (**elem).clone(),
-                _ => Type::Error,
+                Some(elem) => Type::clone(elem),
+                None => Type::Error,
             }
         } else {
             Type::Error

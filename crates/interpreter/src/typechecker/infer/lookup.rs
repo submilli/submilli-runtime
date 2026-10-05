@@ -98,6 +98,8 @@ impl<'a> Inferer<'a> {
         crate::MangledName,
         crate::Dispatch,
     )> {
+        let array_view = recv_ty.array_like_union_view();
+        let recv_ty = array_view.as_ref().unwrap_or(recv_ty);
         let (mangled, _package, interface_name, args) = recv_ty.interface_routing()?;
         let sym = self.lookup_structural_type(&mangled, interface_name)?;
         match &sym.kind {
@@ -107,7 +109,25 @@ impl<'a> Inferer<'a> {
                 dispatch,
                 ..
             } => {
-                let sig = methods.get(name)?.clone();
+                let mut sig = methods.get(name)?.clone();
+                // A union of arrays reads as an array of the joined element, which
+                // is sound only where elements flow out. An argument of the element
+                // type would have to suit every member at once (tsc intersects the
+                // members' parameters), so such a method isn't offered.
+                if array_view.is_some() {
+                    if sig
+                        .params
+                        .iter()
+                        .any(|param| generic_flows_in(&param.ty, generics))
+                    {
+                        return None;
+                    }
+                    // A callback's `array` argument is the receiver itself, so
+                    // it may only be read through the joined element type.
+                    for param in &mut sig.params {
+                        param.ty = readonly_callback_arrays(&param.ty, generics);
+                    }
+                }
                 let bindings: BTreeMap<String, Type> = generics.iter().cloned().zip(args).collect();
                 Some((sig, bindings, sym.mangled_name.clone(), *dispatch))
             }
@@ -167,6 +187,8 @@ impl<'a> Inferer<'a> {
         crate::MangledName,
         crate::Dispatch,
     )> {
+        let array_view = recv_ty.array_like_union_view();
+        let recv_ty = array_view.as_ref().unwrap_or(recv_ty);
         let (mangled, _package, interface_name, args) = recv_ty.interface_routing()?;
         let sym = self.lookup_structural_type(&mangled, interface_name)?;
         let TypeKind::Interface {
@@ -597,5 +619,68 @@ impl<'a> Inferer<'a> {
     ) -> Option<BTreeMap<String, ObjectField>> {
         self.resolver()
             .interface_data_shape(iface_mangled, iface_name, iface_args)
+    }
+}
+
+/// Whether one of `generics` appears in `ty` other than as a parameter of a
+/// function type, where a callback receives it and so reads it.
+/// `ty` with each array of an interface generic that a function parameter takes
+/// made `readonly`, at any depth of callback.
+fn readonly_callback_arrays(ty: &Type, generics: &[String]) -> Type {
+    match ty {
+        Type::Function {
+            params,
+            ret,
+            predicate,
+            has_rest,
+        } => Type::Function {
+            params: params
+                .iter()
+                .map(|param| match param {
+                    Type::Array(element)
+                        if matches!(element.as_ref(), Type::TypeVar(name) if generics.contains(name)) =>
+                    {
+                        Type::Readonly(Box::new(param.clone()))
+                    }
+                    _ => readonly_callback_arrays(param, generics),
+                })
+                .collect(),
+            ret: ret.clone(),
+            predicate: predicate.clone(),
+            has_rest: *has_rest,
+        },
+        Type::Union(members) => Type::Union(
+            members
+                .iter()
+                .map(|member| readonly_callback_arrays(member, generics))
+                .collect(),
+        ),
+        _ => ty.clone(),
+    }
+}
+
+fn generic_flows_in(ty: &Type, generics: &[String]) -> bool {
+    match ty {
+        Type::TypeVar(name) => generics.contains(name),
+        Type::Function { ret, .. } => generic_flows_in(ret, generics),
+        Type::Array(element) | Type::Readonly(element) => generic_flows_in(element, generics),
+        Type::Tuple(elements) | Type::Union(elements) => elements
+            .iter()
+            .any(|element| generic_flows_in(element, generics)),
+        Type::Object { fields, index } => {
+            index
+                .as_ref()
+                .is_some_and(|index| generic_flows_in(&index.value, generics))
+                || fields
+                    .values()
+                    .any(|field| generic_flows_in(&field.ty, generics))
+        }
+        Type::InterfaceRef { args, .. }
+        | Type::ClassRef { args, .. }
+        | Type::AliasRef { args, .. } => args.iter().any(|arg| generic_flows_in(arg, generics)),
+        Type::Alias { args, ty, .. } => {
+            args.iter().any(|arg| generic_flows_in(arg, generics)) || generic_flows_in(ty, generics)
+        }
+        _ => false,
     }
 }
