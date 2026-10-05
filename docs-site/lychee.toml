@@ -9,6 +9,10 @@ max_retries = 2
 timeout = 20
 max_concurrency = 8
 host_concurrency = 2
-# These two account-setup forms require a signed-in GitHub session.
+# These two GitHub account-setup forms require a signed-in session, and the
+# OpenAI API key page refuses automated requests with 403.
 # Repository and source links remain checked.
-exclude = ['^https://github\.com/settings/(applications/new|personal-access-tokens/new)(?:[?#].*)?$']
+exclude = [
+  '^https://github\.com/settings/(applications/new|personal-access-tokens/new)(?:[?#].*)?$',
+  '^https://platform\.openai\.com/api-keys(?:[?#].*)?$',
+]
