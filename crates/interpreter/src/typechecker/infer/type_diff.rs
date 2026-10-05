@@ -166,11 +166,7 @@ fn format_object_diff(
         }
         rows.push(s);
     }
-
-    if rows.is_empty() {
-        return NO_DIFFERENCE.to_string();
-    }
-    rows.join("\n")
+    join_diff_rows(rows)
 }
 
 /// A function with a rest parameter, `pb`, where the fixed-arity `pa` is
@@ -191,17 +187,21 @@ fn format_rest_function_diff(pa: &[Type], ra: &Type, pb: &[Type], rb: &Type) -> 
             pa.len().saturating_sub(fixed.len()),
         ))
         .collect();
-    let diff = format_function_diff(pa, ra, &spread, rb);
-    if pa.len() == pb.len() && diff == NO_DIFFERENCE {
+    let rows = function_diff_rows(pa, ra, &spread, rb);
+    if pa.len() == pb.len() && rows.is_empty() {
         return format!(
             "a function with a rest parameter can't stand for one with as many parameters ({})",
             pa.len()
         );
     }
-    diff
+    join_diff_rows(rows)
 }
 
 fn format_function_diff(pa: &[Type], ra: &Type, pb: &[Type], rb: &Type) -> String {
+    join_diff_rows(function_diff_rows(pa, ra, pb, rb))
+}
+
+fn function_diff_rows(pa: &[Type], ra: &Type, pb: &[Type], rb: &Type) -> Vec<String> {
     let mut rows: Vec<String> = Vec::new();
     if pb.len() > pa.len() {
         rows.push(format!(
@@ -218,6 +218,10 @@ fn format_function_diff(pa: &[Type], ra: &Type, pb: &[Type], rb: &Type) -> Strin
     if ra != rb {
         rows.push(format!("return: expected `{ra}`, got `{rb}`"));
     }
+    rows
+}
+
+fn join_diff_rows(rows: Vec<String>) -> String {
     if rows.is_empty() {
         return NO_DIFFERENCE.to_string();
     }

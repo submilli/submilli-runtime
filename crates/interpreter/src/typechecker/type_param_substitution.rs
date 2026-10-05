@@ -253,6 +253,9 @@ impl<'a> Unifier<'a> {
                 }
                 let arg_resolved = self.sub.apply_or_record(arg_ty, self.limits);
                 // Recurse instead of `==` to peel aliases at every level; remap to Conflict to pin the offending param.
+                // Unified with an argument, a binding from the expected result
+                // is the arguments' own from here on, whether or not it is
+                // replaced.
                 let replaceable = self.is_argument && self.sub.from_expected_result.remove(name);
                 return match self.unify(&resolved, &arg_resolved) {
                     Ok(()) => Ok(()),

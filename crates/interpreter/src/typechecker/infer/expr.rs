@@ -397,6 +397,15 @@ pub(crate) fn type_contains_type_var(ty: &Type) -> bool {
     mentions_type_var(ty, &|_| true)
 }
 
+/// Whether a value expected as `hint` is in a type parameter's position, which
+/// doesn't ask for a literal type: a fresh literal there widens before it
+/// binds anything, as in tsc. `h({ k: c })` with `h<K>(o: { k: K }): K` and
+/// `const c = "a"` binds `string`, and `new Map([[c, 1]])` is a
+/// `Map<string, number>`.
+pub(super) fn is_type_parameter_position(hint: &Type) -> bool {
+    matches!(hint.peel(), Type::TypeVar(_) | Type::GenericParam { .. })
+}
+
 /// Does `ty` mention a `TypeVar` whose name `wanted` accepts?
 pub(crate) fn mentions_type_var(ty: &Type, wanted: &impl Fn(&str) -> bool) -> bool {
     let recurse = |ty: &Type| mentions_type_var(ty, wanted);
@@ -483,6 +492,7 @@ impl Inferer<'_> {
         // Only this expression keeps its literal type; whatever it infers
         // inside starts out widening again, unless it passes the request on.
         let keeps_literal = std::mem::take(&mut self.keeps_literal_types);
+        let keeps_returned_literals = std::mem::take(&mut self.function_keeps_returned_literals);
         // A hint is read structurally — an object literal takes its per-field
         // hints from the expected type's fields — and `peel` stops at a
         // recursion back-edge, which carries no body to read. Rehydrating first
@@ -505,7 +515,13 @@ impl Inferer<'_> {
             .kind
             .clone()
         {
-            return self.infer_function_expression(name, function, this_type, expected);
+            return self.infer_function_expression(
+                name,
+                function,
+                this_type,
+                expected,
+                keeps_returned_literals,
+            );
         }
         let expr = self
             .ast
@@ -583,6 +599,7 @@ impl Inferer<'_> {
             } => self.infer_call(callee, type_args, args, expected, span),
             ExprKind::Paren(inner) => {
                 self.keeps_literal_types = keeps_literal;
+                self.function_keeps_returned_literals = keeps_returned_literals;
                 return self.infer_expr(inner, expected);
             }
             ExprKind::ObjectLiteral { members } => {
@@ -608,6 +625,7 @@ impl Inferer<'_> {
                 type_predicate,
                 body,
             } => {
+                self.function_keeps_returned_literals = keeps_returned_literals;
                 let (kind, ty, reported) =
                     self.infer_arrow(params, return_type, type_predicate, body, expected, span)?;
                 arrow_reported = reported;
@@ -2452,10 +2470,6 @@ impl Inferer<'_> {
         Ok((kind, ret_ty))
     }
 
-    /// Computes `flat`'s return type by un-nesting `depth` array levels from the
-    /// receiver's element type. `depth` must be a non-negative integer literal
-    /// (default `1`) so the result type is statically known; anything else is a
-    /// compile error and the depth falls back to `1`.
     /// `filter`, `find` and `findLast` on an array, given a type guard
     /// `(x) => x is S`, return `S[]` or `S | null`, as tsc's overloads do. The
     /// call keeps its declared result type and is wrapped in the cast `as`
@@ -2519,6 +2533,10 @@ impl Inferer<'_> {
         ))
     }
 
+    /// Computes `flat`'s return type by un-nesting `depth` array levels from the
+    /// receiver's element type. `depth` must be a non-negative integer literal
+    /// (default `1`) so the result type is statically known; anything else is a
+    /// compile error and the depth falls back to `1`.
     fn array_flat_return_type(
         &mut self,
         recv_ty: &Type,
@@ -5143,18 +5161,14 @@ impl Inferer<'_> {
                         inferred_fields.remove(&field.value),
                     )?;
                     self.object_this_hint = previous_hint;
-                    // A type parameter's position doesn't ask for a literal
-                    // type, so a fresh one widens before it binds anything, as
-                    // in tsc: `h({ k: c })` with `h<K>(o: { k: K }): K` and
-                    // `const c = "a"` binds `string`.
-                    let value_ty = match expected_fields
+                    let in_type_parameter_position = expected_fields
                         .as_ref()
                         .and_then(|m| m.get(&field.name.name))
-                    {
-                        Some(expected) if matches!(expected.ty.peel(), Type::TypeVar(_)) => {
-                            self.widen_fresh_literals(typed_value, &value_ty)?
-                        }
-                        _ => value_ty,
+                        .is_some_and(|expected| is_type_parameter_position(&expected.ty));
+                    let value_ty = if in_type_parameter_position {
+                        self.widen_fresh_literals(typed_value, &value_ty)?
+                    } else {
+                        value_ty
                     };
                     self.infer_from_object_argument_field(literal, &field.name.name, &value_ty);
                     if !has_spread {
@@ -6104,11 +6118,8 @@ impl Inferer<'_> {
             let (typed_id, elem_ty) = self.infer_expr(*elem_id, Some(expected_ty))?;
             // Unbound generic-param slots take the inferred element type —
             // `new Map([["a", 1]])` must report `[string, number]`, not
-            // `[K, V]`, so the call site can bind K and V. A type parameter
-            // doesn't ask for a literal type, so a fresh one widens, as in
-            // tsc: `new Map([[c, 1]])` with `const c = "a"` is a
-            // `Map<string, number>`.
-            let slot = if matches!(expected_ty, Type::TypeVar(_) | Type::GenericParam { .. }) {
+            // `[K, V]`, so the call site can bind K and V.
+            let slot = if is_type_parameter_position(expected_ty) {
                 self.widen_fresh_literals(typed_id, &elem_ty)?
             } else {
                 if self.error_count() == errors_before
@@ -7043,6 +7054,7 @@ impl Inferer<'_> {
         function: ExprId,
         this_type: Option<TypeAnnotation>,
         expected: Option<&Type>,
+        keeps_returned_literals: bool,
     ) -> Result<(ExprId, Type), CompilerFailure> {
         let signature = self.function_expression_signature(function, expected)?;
         self.scopes.push();
@@ -7060,6 +7072,7 @@ impl Inferer<'_> {
         let previous_this = self.function_this.replace(receiver.clone());
         let previous_class = self.current_class.take();
         let previous_static = self.current_static.take();
+        self.function_keeps_returned_literals = keeps_returned_literals;
         let (id, ty) = self.infer_expr(function, expected)?;
         self.function_this = previous_this;
         self.object_this_hint = previous_hint;
@@ -7187,6 +7200,7 @@ impl Inferer<'_> {
         expected: Option<&Type>,
         span: Span,
     ) -> Result<(TypedExprKind, Type, bool), CompilerFailure> {
+        let keeps_returned_literals = std::mem::take(&mut self.function_keeps_returned_literals);
         let errors_before = self.error_count();
         self.check_parameter_arity(&params)?;
         // Arrow parameters never reach `resolve_params`, so the duplicate check
@@ -7431,10 +7445,10 @@ impl Inferer<'_> {
         // Save / set return-type frames. Stack-based so nested arrows
         // restore correctly.
         let prev_return = std::mem::replace(&mut self.current_return, ret_hint.clone());
-        let keeps_returned_literals = annotated_ret.is_none()
-            && expected.is_some_and(|want| matches!(want.peel(), Type::TypeVar(_)));
-        let prev_keeps_returned_literals =
-            std::mem::replace(&mut self.returns_keep_literals, keeps_returned_literals);
+        let prev_keeps_returned_literals = std::mem::replace(
+            &mut self.returns_keep_literals,
+            keeps_returned_literals && annotated_ret.is_none(),
+        );
         let prev_collect = if annotated_ret.is_none() {
             self.inferred_returns.replace(Vec::new())
         } else {
@@ -7549,11 +7563,6 @@ impl Inferer<'_> {
         ))
     }
 
-    /// Reduce the `(Type, Span)` entries collected during a block-body
-    /// arrow's walk to a single return type. Empty → `Void`. Otherwise the
-    /// return every other one is `assignable` to, in whichever order they
-    /// appear: each returned value has to fit the closure's type. None such →
-    /// a diagnostic, plus `Type::Error` to keep downstream silent.
     /// The types of a block body's returns to unify. Literal types kept for a
     /// bare type parameter (see `returns_keep_literals`) widen when no one of
     /// them covers the rest, as they would have without it: tsc would infer
@@ -7573,6 +7582,11 @@ impl Inferer<'_> {
             .collect()
     }
 
+    /// Reduce the `(Type, Span)` entries collected during a block-body
+    /// arrow's walk to a single return type. Empty → `Void`. Otherwise the
+    /// return every other one is `assignable` to, in whichever order they
+    /// appear: each returned value has to fit the closure's type. None such →
+    /// a diagnostic, plus `Type::Error` to keep downstream silent.
     fn unify_returns(&mut self, collected: &[(Type, Span)]) -> Type {
         if collected.is_empty() {
             return Type::Void;

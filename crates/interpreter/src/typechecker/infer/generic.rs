@@ -785,9 +785,11 @@ impl Inferer<'_> {
                 )
             })
             .transpose()?;
-        // An array-like `{ length }` has no elements to infer `T` from.
-        if array_from && sub.get("T").is_none() {
-            sub.insert("T".into(), Type::Unknown);
+        // An array-like `{ length }` has no elements to infer the element type
+        // from.
+        let element_param = sig.generics.first().filter(|_| array_from);
+        if let Some(element) = element_param.filter(|element| sub.get(element).is_none()) {
+            sub.insert(element.clone(), Type::Unknown);
         }
         if array_from_mapper
             && mapper_type
@@ -955,9 +957,17 @@ impl Inferer<'_> {
     }
 
     /// Bind type parameters from the type a call's result is expected to have,
-    /// before its arguments are inferred.
+    /// before its arguments are inferred, as bindings an argument may still
+    /// replace (see [`TypeParamSubstitution::mark_from_expected_result`]).
+    fn bind_from_expected_result(&self, sub: &mut TypeParamSubstitution, ret: &Type, want: &Type) {
+        let before = sub.clone();
+        self.bind_from_expected_type(sub, ret, want);
+        sub.mark_from_expected_result(&before);
+    }
+
+    /// Bind type parameters by unifying the result type `ret` with `want`.
     ///
-    /// When that type is a union and the result type is neither a type
+    /// When `want` is a union and the result type is neither a type
     /// variable nor a union (both unify with the whole union), the result is
     /// unified with each member of its own [`ShapeKind`]. The type parameters
     /// bind only if every such member unifies, all to the same bindings;
@@ -969,12 +979,6 @@ impl Inferer<'_> {
     /// member unification can't match, such as a wider object or an interface.
     /// A mismatch is reported later, where the call's result is checked
     /// against the expected type.
-    fn bind_from_expected_result(&self, sub: &mut TypeParamSubstitution, ret: &Type, want: &Type) {
-        let before = sub.clone();
-        self.bind_from_expected_type(sub, ret, want);
-        sub.mark_from_expected_result(&before);
-    }
-
     fn bind_from_expected_type(&self, sub: &mut TypeParamSubstitution, ret: &Type, want: &Type) {
         let unifies_with_whole_union = matches!(ret.peel(), Type::TypeVar(_) | Type::Union(_));
         let members = match want.peel() {
@@ -1218,10 +1222,16 @@ impl Inferer<'_> {
                 (arg_id, param_ty)
             })
             .collect();
-        let literal_inferred =
-            self.literal_inferred_type_params(&args_with_param_types, inferred_generics)?;
-        let literal_types =
-            LiteralTypeArguments::new(&args_with_param_types, ret, inferred_generics);
+        let arguments = GenericArguments {
+            inferred_generics,
+            sourced_by_literals: self
+                .literal_inferred_type_params(&args_with_param_types, inferred_generics)?,
+            literal_types: LiteralTypeArguments::new(
+                &args_with_param_types,
+                ret,
+                inferred_generics,
+            ),
+        };
         let mut typed_slots: Vec<Option<ExprId>> = vec![None; args.len()];
         for deferred_pass in [false, true] {
             for (i, (arg_id, param_ty)) in args_with_param_types.iter().enumerate() {
@@ -1240,32 +1250,9 @@ impl Inferer<'_> {
                 if deferred {
                     fix_callback_parameters(sub, &param_ty, inferred_generics);
                 }
-                // An oversized hint fails at the argument's own checkpoint.
-                let hint = sub.apply_or_record(&param_ty, &self.type_limits);
                 let errors_before = self.error_count();
-                let hinted_by_expected_result = sub.mentions_expected_result_binding(&param_ty);
-                if hinted_by_expected_result {
-                    self.arguments_hinted_by_expected_result.insert(arg_id);
-                }
-                let enclosing = self.start_object_argument_inference(arg_id, &param_ty, sub)?;
-                let keeps_literal = literal_types.keeps(&param_ty);
-                let inferred =
-                    self.with_inferred_positions(arg_id, &param_ty, &literal_inferred, |this| {
-                        this.keeps_literal_types = keeps_literal;
-                        this.infer_expr(arg_id, Some(&hint))
-                    });
-                self.finish_object_argument_inference(enclosing, sub);
-                self.arguments_hinted_by_expected_result.remove(&arg_id);
-                let (typed_id, arg_ty) = inferred?;
-                // A literal the call's expected result asks for is not widened,
-                // as in tsc: `const f: () => "a" = later(c)` binds `"a"`.
-                let asked_for =
-                    hinted_by_expected_result && super::assignable(&arg_ty, &hint, self.resolver());
-                let arg_ty = if literal_types.widens(&param_ty) && !asked_for {
-                    self.widen_fresh_literals(typed_id, &arg_ty)?
-                } else {
-                    arg_ty
-                };
+                let (typed_id, arg_ty) =
+                    self.infer_generic_argument(arg_id, &param_ty, &arguments, sub)?;
                 typed_slots[i] = Some(typed_id);
                 let missing_slot = i >= fixed_count && !has_rest;
                 if missing_slot || matches!(arg_ty, Type::Error) {
@@ -1291,6 +1278,78 @@ impl Inferer<'_> {
             }
         }
         Ok(typed_slots.into_iter().flatten().collect())
+    }
+
+    /// Infer one argument of a generic call against `param_ty`, with what
+    /// `sub` has bound so far as its hint, and return the type to unify with
+    /// `param_ty`: a fresh literal widened where tsc would widen it.
+    fn infer_generic_argument(
+        &mut self,
+        arg_id: ExprId,
+        param_ty: &Type,
+        arguments: &GenericArguments,
+        sub: &mut TypeParamSubstitution,
+    ) -> Result<(ExprId, Type), CompilerFailure> {
+        // An oversized hint fails at the argument's own checkpoint.
+        let hint = sub.apply_or_record(param_ty, &self.type_limits);
+        let hint = self.literal_argument_hint(arg_id, hint, arguments.inferred_generics)?;
+        let hinted_by_expected_result = sub.mentions_expected_result_binding(param_ty);
+        if hinted_by_expected_result {
+            self.arguments_hinted_by_expected_result.insert(arg_id);
+        }
+        let enclosing = self.start_object_argument_inference(arg_id, param_ty, sub)?;
+        let keeps_literal = arguments.literal_types.keeps(param_ty);
+        let inferred = self.with_inferred_positions(
+            arg_id,
+            param_ty,
+            &arguments.sourced_by_literals,
+            |this| {
+                this.keeps_literal_types = keeps_literal;
+                this.function_keeps_returned_literals = keeps_literal;
+                this.infer_expr(arg_id, Some(&hint))
+            },
+        );
+        self.finish_object_argument_inference(enclosing, sub);
+        self.arguments_hinted_by_expected_result.remove(&arg_id);
+        let (typed_id, arg_ty) = inferred?;
+        // A literal the call's expected result asks for is not widened,
+        // as in tsc: `const f: () => "a" = later(c)` binds `"a"`.
+        let asked_for =
+            hinted_by_expected_result && super::assignable(&arg_ty, &hint, self.resolver());
+        if arguments.literal_types.widens(param_ty) && !asked_for {
+            let widened = self.widen_fresh_literals(typed_id, &arg_ty)?;
+            return Ok((typed_id, widened));
+        }
+        Ok((typed_id, arg_ty))
+    }
+
+    /// The hint for an object or array literal argument, with each data-only
+    /// interface whose type arguments are still being inferred replaced by
+    /// its fields, so the literal keeps its own field types to bind them
+    /// from. Typed as `Box<T>` itself, it would bind nothing
+    /// (`unbox({ v: "s" })`).
+    fn literal_argument_hint(
+        &self,
+        arg_id: ExprId,
+        hint: Type,
+        inferred_generics: &[String],
+    ) -> Result<Type, CompilerFailure> {
+        let is_literal = matches!(
+            self.ast
+                .try_expr(arg_id)
+                .map_err(super::arena_failure)?
+                .kind,
+            ExprKind::ObjectLiteral { .. } | ExprKind::ArrayLiteral { .. }
+        );
+        if !is_literal {
+            return Ok(hint);
+        }
+        Ok(expand_inferred_interfaces(
+            &hint,
+            inferred_generics,
+            self.resolver(),
+            &mut Vec::new(),
+        ))
     }
 
     /// Handle an argument that didn't unify with its parameter: a structural
@@ -1622,6 +1681,16 @@ impl Inferer<'_> {
     }
 }
 
+/// What every argument of one generic call is inferred with.
+struct GenericArguments<'a> {
+    /// The type parameters the call infers rather than takes as written.
+    inferred_generics: &'a [String],
+    /// Those that only object and array literals are candidates for
+    /// ([`super::inference_sources`]).
+    sourced_by_literals: Vec<String>,
+    literal_types: LiteralTypeArguments,
+}
+
 /// What a call does with the literal type of an argument passed straight for
 /// one of its inferred type parameters, as tsc does: a parameter the result
 /// is (`id<T>(x: T): T`, or a union naming it) keeps the literal (`id(1)` is
@@ -1694,6 +1763,57 @@ fn type_param_name(ty: &Type) -> Option<&str> {
     match ty.peel() {
         Type::TypeVar(name) => Some(name),
         _ => None,
+    }
+}
+
+/// `ty` with each data-only interface that names one of `inferred_generics`
+/// replaced by its fields, through object fields and array elements: the
+/// positions a literal's own fields and elements take their hints from. An
+/// interface met again inside its own fields stays as it is, so a recursive
+/// one expands once.
+fn expand_inferred_interfaces(
+    ty: &Type,
+    inferred_generics: &[String],
+    types: super::assignable::TypeResolver,
+    expanding: &mut Vec<crate::MangledName>,
+) -> Type {
+    let expand = |inner: &Type, expanding: &mut Vec<crate::MangledName>| {
+        expand_inferred_interfaces(inner, inferred_generics, types, expanding)
+    };
+    match ty.peel() {
+        interface @ Type::InterfaceRef { mangled, .. }
+            if !expanding.contains(mangled)
+                && super::expr::mentions_type_var(interface, &|var| {
+                    inferred_generics.iter().any(|name| name == var)
+                }) =>
+        {
+            let Some(shape) = super::assignable::expand_interface_data_shape(interface, types)
+            else {
+                return ty.clone();
+            };
+            expanding.push(mangled.clone());
+            let expanded = expand(&shape, expanding);
+            expanding.pop();
+            expanded
+        }
+        Type::Object { fields, index } => Type::Object {
+            fields: fields
+                .iter()
+                .map(|(name, field)| {
+                    let ty = expand(&field.ty, expanding);
+                    (
+                        name.clone(),
+                        crate::types::ObjectField {
+                            ty,
+                            ..field.clone()
+                        },
+                    )
+                })
+                .collect(),
+            index: index.clone(),
+        },
+        Type::Array(element) => Type::Array(Box::new(expand(element, expanding))),
+        _ => ty.clone(),
     }
 }
 

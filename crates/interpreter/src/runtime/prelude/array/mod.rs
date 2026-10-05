@@ -882,28 +882,26 @@ pub(super) async fn from(
 
 /// An array-like's `length` as JavaScript's `ToLength` reads it for
 /// `Array.from`: truncated toward zero, with `NaN` and negatives as `0`. A
-/// length past the largest array is a `RangeError` in JavaScript, and an error
-/// here.
+/// length past the largest array is a `RangeError`.
 fn array_like_length(caller: &mut Caller<'_, StoreData>, length: &Val) -> wasmtime::Result<usize> {
+    let not_a_number = || wasmtime::Error::msg("Array.from: `length` is not a number");
     let Val::AnyRef(Some(any)) = length else {
-        return Err(wasmtime::Error::msg("Array.from: `length` is not a number"));
+        return Err(not_a_number());
     };
-    let st = any
-        .as_struct(&mut *caller)?
-        .ok_or_else(|| wasmtime::Error::msg("Array.from: `length` is not a number"))?;
+    let st = any.as_struct(&mut *caller)?.ok_or_else(not_a_number)?;
     let Val::F64(bits) = st.field(&mut *caller, 1)? else {
-        return Err(wasmtime::Error::msg("Array.from: `length` is not a number"));
+        return Err(not_a_number());
     };
     let length = f64::from_bits(bits);
     if length.is_nan() || length <= 0.0 {
         return Ok(0);
     }
     let length = length.trunc();
+    let invalid = || crate::runtime::host::range_error("Invalid array length");
     if length > f64::from(u32::MAX) {
-        return Err(wasmtime::Error::msg("Array.from: invalid array length"));
+        return Err(invalid());
     }
-    usize::try_from(length as u32)
-        .map_err(|_| wasmtime::Error::msg("Array.from: invalid array length"))
+    usize::try_from(length as u32).map_err(|_| invalid())
 }
 
 async fn apply_map(

@@ -127,14 +127,14 @@ impl<'a> Inferer<'a> {
         if mentioned.is_empty() {
             return Ok(());
         }
-        let whole = |candidates: &mut Vec<(String, ExprId)>, candidate: ExprId| {
+        let add_candidate = |candidates: &mut Vec<(String, ExprId)>, candidate: ExprId| {
             for name in &mentioned {
                 candidates.push(((*name).clone(), candidate));
             }
         };
         match param.peel() {
             Type::TypeVar(_) => {
-                whole(candidates, expr);
+                add_candidate(candidates, expr);
                 return Ok(());
             }
             // Which member the argument is isn't known before inference, so
@@ -158,7 +158,7 @@ impl<'a> Inferer<'a> {
             }
             ExprKind::ObjectLiteral { members } => {
                 let Some(fields) = self.field_types(param) else {
-                    whole(candidates, expr);
+                    add_candidate(candidates, expr);
                     return Ok(());
                 };
                 for member in members {
@@ -174,7 +174,9 @@ impl<'a> Inferer<'a> {
                             }
                         }
                         ObjectLiteralMember::Spread { value, .. }
-                        | ObjectLiteralMember::Computed { value, .. } => whole(candidates, value),
+                        | ObjectLiteralMember::Computed { value, .. } => {
+                            add_candidate(candidates, value);
+                        }
                     }
                 }
                 Ok(())
@@ -184,7 +186,7 @@ impl<'a> Inferer<'a> {
                     let value = match element {
                         ArrayLiteralElement::Value(value) => value,
                         ArrayLiteralElement::Spread { value, .. } => {
-                            whole(candidates, value);
+                            add_candidate(candidates, value);
                             continue;
                         }
                     };
@@ -195,13 +197,13 @@ impl<'a> Inferer<'a> {
                             inferred_generics,
                             candidates,
                         )?,
-                        None => whole(candidates, value),
+                        None => add_candidate(candidates, value),
                     }
                 }
                 Ok(())
             }
             _ => {
-                whole(candidates, expr);
+                add_candidate(candidates, expr);
                 Ok(())
             }
         }

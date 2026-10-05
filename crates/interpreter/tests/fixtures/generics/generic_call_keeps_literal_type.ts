@@ -1,7 +1,8 @@
 // A literal passed straight for a type parameter that is the call's result
 // keeps its literal type, as in tsc: `id(1)` is `1`. So does the return of a
 // function literal passed for a bare type parameter: `id(() => 42)` is
-// `() => 42`. A `let` still widens what it copies.
+// `() => 42` when it is the type parameter's only candidate. A `let` still
+// widens what it copies.
 function id<T>(x: T): T {
   return x;
 }
@@ -10,9 +11,8 @@ function maybe<T>(x: T, keep: boolean): T | null {
   return keep ? x : null;
 }
 
-function run<A>(options: { a: A; b: (a: A) => void }): A {
-  options.b(options.a);
-  return options.a;
+function pick<T>(first: T, second: T): T {
+  return second;
 }
 
 function main(): void {
@@ -31,16 +31,15 @@ function main(): void {
   });
   assert(answer() === 42 && branches() === 2, "returned literals");
 
-  const seen: number[] = [];
-  const fromOption: () => 42 = run({
-    a: () => {
-      return 42;
-    },
-    b(a) {
-      seen.push(a());
-    },
-  });
-  assert(fromOption() === 42 && seen.join(",") === "42", "a sibling property");
+  // With two candidates neither keeps its literals, so they agree.
+  const later = pick(() => "a", () => "b");
+  const counts = pick((n: number) => 0, (n: number) => n + 1);
+  assert(later() === "b" && counts(4) === 5, "two candidates widen");
+
+  // Nor does a function literal in a conditional, whose branches would
+  // otherwise disagree.
+  const chosen = id(one > 5 ? () => 1 : () => 2);
+  assert(chosen() === 2, "a conditional's branches widen");
 
   let copy = id(1);
   copy = 5;

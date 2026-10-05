@@ -130,7 +130,7 @@ fn emit_body(
             .symbols
             .closure_struct_type_idx(source)
             .ok_or_else(|| crate::codegen::internal_failure("source closure type"))?;
-        emit_calls_directly(&mut body, ctx, structure, original, env)?;
+        emit_is_directly_callable(&mut body, ctx, structure, original, env)?;
         body.instruction(&Instruction::If(result));
         emit_direct_call(&mut body, ctx, source, target, original, receiver, env)?;
         body.instruction(&Instruction::Else);
@@ -148,7 +148,7 @@ fn emit_body(
 /// closures ignore the trailing arguments. Every argument such a closure
 /// declares is supplied, so its defaults are never needed, but a rest closure
 /// expects the arguments past its fixed parameters packed, so
-/// [`emit_calls_directly`] leaves those to the host.
+/// [`emit_is_directly_callable`] leaves those to the host.
 fn direct_sources(target: ClosureSig, symbols: &SymbolTable) -> Vec<ClosureSig> {
     let smaller = (0..target.arity)
         .rev()
@@ -159,22 +159,18 @@ fn direct_sources(target: ClosureSig, symbols: &SymbolTable) -> Vec<ClosureSig> 
         .collect()
 }
 
-/// Whether the closure in `original` is a `structure` closure without argument
-/// metadata, which an adapter can call directly. A closure with metadata may
-/// have a rest parameter, and only the host's binding packs its arguments. The
-/// metadata sits inside any receiver bindings of the closure's environment;
-/// `env` is free to use as scratch until the call binds it.
-fn emit_calls_directly(
+/// Push whether the closure in `original` is a `structure` closure without
+/// argument metadata, which an adapter can call directly. A closure with
+/// metadata may have a rest parameter, and only the host's binding packs its
+/// arguments. The metadata sits inside any receiver bindings of the closure's
+/// environment; `env` is free to use as scratch until the call binds it.
+fn emit_is_directly_callable(
     body: &mut Function,
     ctx: &CodegenCtx<'_>,
     structure: u32,
     original: u32,
     env: u32,
 ) -> Result<(), crate::compiler_error::CompilerFailure> {
-    let wrapper = ctx
-        .symbols
-        .this_environment_type
-        .ok_or_else(|| crate::codegen::internal_failure("this environment"))?;
     let metadata = ctx
         .symbols
         .call_metadata_type
@@ -191,6 +187,27 @@ fn emit_calls_directly(
         field_index: 2,
     });
     body.instruction(&Instruction::LocalSet(env));
+    emit_unwrap_receiver_bindings(body, ctx, env)?;
+    body.instruction(&Instruction::LocalGet(env));
+    body.instruction(&Instruction::RefTestNonNull(HeapType::Concrete(metadata)));
+    body.instruction(&Instruction::I32Eqz);
+    body.instruction(&Instruction::Else);
+    body.instruction(&Instruction::I32Const(0));
+    body.instruction(&Instruction::End);
+    Ok(())
+}
+
+/// Replace the environment in `env` with the one inside its receiver
+/// bindings (`this_environment` wrappers), however many are nested.
+fn emit_unwrap_receiver_bindings(
+    body: &mut Function,
+    ctx: &CodegenCtx<'_>,
+    env: u32,
+) -> Result<(), crate::compiler_error::CompilerFailure> {
+    let wrapper = ctx
+        .symbols
+        .this_environment_type
+        .ok_or_else(|| crate::codegen::internal_failure("this environment"))?;
     body.instruction(&Instruction::Block(wasm_encoder::BlockType::Empty));
     body.instruction(&Instruction::Loop(wasm_encoder::BlockType::Empty));
     body.instruction(&Instruction::LocalGet(env));
@@ -206,12 +223,6 @@ fn emit_calls_directly(
     body.instruction(&Instruction::LocalSet(env));
     body.instruction(&Instruction::Br(0));
     body.instruction(&Instruction::End);
-    body.instruction(&Instruction::End);
-    body.instruction(&Instruction::LocalGet(env));
-    body.instruction(&Instruction::RefTestNonNull(HeapType::Concrete(metadata)));
-    body.instruction(&Instruction::I32Eqz);
-    body.instruction(&Instruction::Else);
-    body.instruction(&Instruction::I32Const(0));
     body.instruction(&Instruction::End);
     Ok(())
 }

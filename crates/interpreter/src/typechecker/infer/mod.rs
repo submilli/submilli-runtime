@@ -122,6 +122,7 @@ pub fn infer_with_transitive_checked<'a>(
         literal_freshness: literal_freshness::LiteralFreshness::default(),
         keeps_literal_types: false,
         returns_keep_literals: false,
+        function_keeps_returned_literals: false,
         captured_mutators: bindings.mutators,
         last_assignments: bindings.last_assignments,
         nested_function_creation_points: bindings.nested_function_creation_points,
@@ -384,6 +385,7 @@ pub fn infer_package_checked<'a>(
         literal_freshness: literal_freshness::LiteralFreshness::default(),
         keeps_literal_types: false,
         returns_keep_literals: false,
+        function_keeps_returned_literals: false,
         captured_mutators: Default::default(),
         last_assignments: Default::default(),
         nested_function_creation_points: Default::default(),
@@ -690,9 +692,16 @@ pub(super) struct Inferer<'a> {
     /// entry, so it reaches only the operands that carry the value.
     keeps_literal_types: bool,
     /// Whether the unannotated function literal being inferred keeps the
-    /// literal types of the values it returns: one passed for a bare type
-    /// parameter, as in tsc (`id(() => 42)` is `() => 42`).
+    /// literal types of the values it returns (see
+    /// `function_keeps_returned_literals`).
     returns_keep_literals: bool,
+    /// The next expression `infer_expr` infers, when it is a function literal,
+    /// keeps the literal types of the values it returns: it is the sole
+    /// argument for a type parameter that is the call's result, as in tsc
+    /// (`id(() => 42)` is `() => 42`). Read and cleared on entry like
+    /// `keeps_literal_types`, so it doesn't reach a conditional's branches,
+    /// whose function types couldn't form one callable union.
+    function_keeps_returned_literals: bool,
     pub(super) source: &'a str,
     pub(super) package_name: &'a str,
     pub(super) ast: &'a Ast,
