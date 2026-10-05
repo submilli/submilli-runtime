@@ -274,7 +274,9 @@ fn destroying_tokio_runtime_does_not_release_worker_lock() {
                     sqlx::raw_sql("CREATE TABLE survived_runtime (value INTEGER)")
                         .execute(&mut *connection)
                         .await?;
-                    Ok(())
+                    // Cancellation is observed between polls. Keep commit out
+                    // of reach even if SQLx finishes within this blocking poll.
+                    std::future::pending::<Result<(), DatabaseError>>().await
                 })
             })
             .await
