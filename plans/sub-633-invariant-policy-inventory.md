@@ -78,6 +78,7 @@ separate resource/dependency backlog.
 | R10 | Complete: simplified | Metadata and typed_metadata return Option directly |
 | R11 | Complete: retained | Keep bounded rendering and DWARF writer/source errors |
 | R12 | Complete: simplified | 24 same-builder type lookup expectations; build failures remain fallible |
+| R13 | Complete: simplified | Removed four private numeric engine-error wrappers; range errors preserved |
 
 ### R01 execution evidence
 
@@ -284,6 +285,26 @@ tests passed. Required Git memory-limit suite passed two tests; optional calibra
 remained ignored. Full tests stayed disabled; only the required focused Git check
 enabled nightly bodies, using in-process transport. Graph updated with existing
 limitations. Accepted sites recorded/verified in SUB-633; this commit records R12.
+
+### R13 execution evidence
+
+Removed four private `*_js_checked` wrappers and their engine-error layer. Public
+formatters retain Result<String, String> for range rejections; legacy host adapters
+map those to ordinary errors and prelude adapters retain RangeError classification.
+Other host/string/ABI failures remain on their existing paths. Accepted finite
+exponential formatting/exponent parsing and finite BigInt conversion invariants.
+For integer radix 2–36, even `next_down(1)` times radix lies below the rounding
+midpoint to radix; subtracting the truncated part preserves [0,1), proving digit
+conversion cannot fail. Fuel formulas and timing are unchanged and catalogued.
+
+Removed two obsolete private formatter-trap injection tests; retained the generic
+fatal-host classification test. Added extreme-float/radix boundary coverage.
+Three independent roles reviewed both implementation and test delta, no findings.
+Initial compilation caught the obsolete injection signatures; after their removal,
+20 existing numeric unit tests, the new boundary test, three formatting fixtures,
+generic fatal-wrapper test, formatting and workspace/all-target Clippy passed.
+Full tests disabled, HTTP skipped; AST graph updated with existing limitations.
+Accepted sites recorded/verified in SUB-633; this commit records R13 completion.
 
 ## Completed fixes: candidates and decisions
 

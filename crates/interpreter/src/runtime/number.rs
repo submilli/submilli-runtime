@@ -28,15 +28,9 @@ pub fn format_number_js(n: f64) -> String {
 /// where JS rounds ties away from zero — visible only when the value sits
 /// exactly on a representable midpoint, e.g. `(2.5).toFixed(0)`.
 pub fn to_fixed_js(x: f64, digits: f64) -> Result<String, String> {
-    to_fixed_js_checked(x, digits).map_err(|error| error.to_string())
-}
-
-pub(crate) fn to_fixed_js_checked(x: f64, digits: f64) -> wasmtime::Result<String> {
     let d = digits.trunc();
     if !(0.0..=100.0).contains(&d) || digits.is_nan() {
-        return Err(wasmtime::Error::msg(
-            "toFixed digits must be between 0 and 100",
-        ));
+        return Err("toFixed digits must be between 0 and 100".to_string());
     }
     if !x.is_finite() || x.abs() >= 1e21 {
         return Ok(format_number_js(x));
@@ -48,10 +42,6 @@ pub(crate) fn to_fixed_js_checked(x: f64, digits: f64) -> wasmtime::Result<Strin
 /// is the omitted-argument sentinel: use however many digits uniquely
 /// identify the value.
 pub fn to_exponential_js(x: f64, fraction_digits: f64) -> Result<String, String> {
-    to_exponential_js_checked(x, fraction_digits).map_err(|error| error.to_string())
-}
-
-pub(crate) fn to_exponential_js_checked(x: f64, fraction_digits: f64) -> wasmtime::Result<String> {
     if !x.is_finite() {
         return Ok(format_number_js(x));
     }
@@ -60,9 +50,7 @@ pub(crate) fn to_exponential_js_checked(x: f64, fraction_digits: f64) -> wasmtim
     } else {
         let d = fraction_digits.trunc();
         if !(0.0..=100.0).contains(&d) {
-            return Err(wasmtime::Error::msg(
-                "toExponential digits must be between 0 and 100",
-            ));
+            return Err("toExponential digits must be between 0 and 100".to_string());
         }
         format!("{:.*e}", d as usize, x)
     };
@@ -72,18 +60,12 @@ pub(crate) fn to_exponential_js_checked(x: f64, fraction_digits: f64) -> wasmtim
 /// JS-spec `Number#toPrecision(precision)`. A NaN `precision` is the
 /// omitted-argument sentinel: behave like plain `toString`.
 pub fn to_precision_js(x: f64, precision: f64) -> Result<String, String> {
-    to_precision_js_checked(x, precision).map_err(|error| error.to_string())
-}
-
-pub(crate) fn to_precision_js_checked(x: f64, precision: f64) -> wasmtime::Result<String> {
     if precision.is_nan() {
         return Ok(format_number_js(x));
     }
     let p = precision.trunc();
     if !(1.0..=100.0).contains(&p) {
-        return Err(wasmtime::Error::msg(
-            "toPrecision precision must be between 1 and 100",
-        ));
+        return Err("toPrecision precision must be between 1 and 100".to_string());
     }
     let p = p as usize;
     if !x.is_finite() {
@@ -98,13 +80,13 @@ pub(crate) fn to_precision_js_checked(x: f64, precision: f64) -> wasmtime::Resul
     }
     // Round to p significant digits first; the decimal exponent decides
     // between fixed and exponential form (JS: e < -6 or e >= p → exponential).
+    // Rust exponential formatting of finite nonzero f64 always has an integer
+    // exponent (at most three decimal digits), even after rounding.
     let sci = format!("{:.*e}", p - 1, x);
     let (_, exponent) = sci
         .split_once('e')
-        .ok_or_else(|| super::host::invariant_trap("number: formatted exponent missing"))?;
-    let exp: i32 = exponent
-        .parse()
-        .map_err(|_| super::host::invariant_trap("number: invalid formatted exponent"))?;
+        .expect("finite exponential formatting includes an exponent");
+    let exp: i32 = exponent.parse().expect("an f64 decimal exponent fits i32");
     if exp < -6 || exp >= p as i32 {
         return Ok(jsify_exponent(&sci));
     }
@@ -127,15 +109,9 @@ fn jsify_exponent(s: &str) -> String {
 /// to 32 digits and stops (JS prints the shortest uniquely-identifying
 /// fraction, which can be longer or shorter).
 pub fn to_string_radix_js(x: f64, radix: f64) -> Result<String, String> {
-    to_string_radix_js_checked(x, radix).map_err(|error| error.to_string())
-}
-
-pub(crate) fn to_string_radix_js_checked(x: f64, radix: f64) -> wasmtime::Result<String> {
     let r = radix.trunc();
     if !(2.0..=36.0).contains(&r) || radix.is_nan() {
-        return Err(wasmtime::Error::msg(
-            "toString radix must be between 2 and 36",
-        ));
+        return Err("toString radix must be between 2 and 36".to_string());
     }
     let r = r as u32;
     if r == 10 || !x.is_finite() {
@@ -153,7 +129,7 @@ pub(crate) fn to_string_radix_js_checked(x: f64, radix: f64) -> wasmtime::Result
     // f64 → BigInt is exact for any finite value, so arbitrarily large
     // integer parts convert without drift.
     let int_digits = num_bigint::BigInt::from_f64(integer)
-        .ok_or_else(|| super::host::invariant_trap("number: finite integer conversion failed"))?
+        .expect("finite integer magnitude converts to BigInt")
         .to_str_radix(r);
     let mut out = String::new();
     if negative {
@@ -164,11 +140,14 @@ pub(crate) fn to_string_radix_js_checked(x: f64, radix: f64) -> wasmtime::Result
     if fraction > 0.0 {
         out.push('.');
         for _ in 0..32 {
+            // fraction is in [0, 1). Even its largest f64 value times the
+            // exact integer radix is below the midpoint between r and its previous
+            // representable value, so rounding
+            // cannot produce r. Subtracting trunc below preserves [0, 1).
             fraction *= f64::from(r);
             let digit = fraction.trunc() as u32;
             out.push(
-                char::from_digit(digit, r)
-                    .ok_or_else(|| super::host::invariant_trap("number: digit exceeds radix"))?,
+                char::from_digit(digit, r).expect("fraction digit is below the validated radix"),
             );
             fraction -= fraction.trunc();
             if fraction == 0.0 {
@@ -401,6 +380,26 @@ pub(crate) fn pow_js(base: f64, exponent: f64) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::{parse_float_js, parse_int_js, string_to_number_js};
+
+    #[test]
+    fn formatter_invariants_hold_at_float_boundaries() {
+        let below_one = f64::from_bits(1.0_f64.to_bits() - 1);
+        for radix in 2..=36 {
+            for value in [below_one, 0.5, f64::MIN_POSITIVE, f64::from_bits(1)] {
+                let text = super::to_string_radix_js(value, f64::from(radix)).unwrap();
+                if radix != 10 {
+                    assert!(text.chars().all(|c| c == '.' || c.is_digit(radix)));
+                }
+            }
+            assert!(super::to_string_radix_js(f64::MAX, f64::from(radix)).is_ok());
+        }
+        assert_eq!(
+            super::to_precision_js(f64::from_bits(1), 1.0).unwrap(),
+            "5e-324"
+        );
+        assert_eq!(super::to_precision_js(f64::MAX, 1.0).unwrap(), "2e+308");
+        assert_eq!(super::to_precision_js(-0.0, 3.0).unwrap(), "0.00");
+    }
 
     #[test]
     fn parse_int_decimal_prefix() {
