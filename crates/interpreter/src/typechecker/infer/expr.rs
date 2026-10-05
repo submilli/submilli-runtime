@@ -9490,6 +9490,11 @@ impl Inferer<'_> {
         if !matches!(source.peel(), Type::Union(_)) && !matches!(target.peel(), Type::Union(_)) {
             return false;
         }
+        // An already-reported error inside the source (an empty `[]` with no
+        // element type) relates to anything, so it can't show an overlap.
+        if has_error_component(source) {
+            return false;
+        }
         let resolver = self.resolver();
         let target_members = narrowing::union_members(target);
         narrowing::union_members(source)
@@ -12994,5 +12999,15 @@ mod invariant_tests {
                 Err(CompilerFailure::Internal { .. })
             ));
         });
+    }
+}
+
+/// Whether `ty` holds an error type anywhere a cast compares, as `<error>[]` does.
+fn has_error_component(ty: &Type) -> bool {
+    match ty.peel() {
+        Type::Error => true,
+        Type::Array(inner) => has_error_component(inner),
+        Type::Tuple(members) | Type::Union(members) => members.iter().any(has_error_component),
+        _ => false,
     }
 }
