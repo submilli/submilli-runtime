@@ -42,7 +42,9 @@ function inArray(x: string | number): number {
     return 2;
   }
   const values = [x, 3];
-  return values.length;
+  const onlyDead = [x];
+  const nested = [[x], [1, 2], ...[x]];
+  return values.length + onlyDead.length + nested.length;
 }
 
 // The right side rewrites `a` after the left side read it, so the comparison

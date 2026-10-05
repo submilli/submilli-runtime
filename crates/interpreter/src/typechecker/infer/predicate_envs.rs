@@ -963,16 +963,13 @@ impl<'a> Inferer<'a> {
         let Some(path) = self.expr_to_reference_path(path_expr)? else {
             return Ok(false);
         };
-        let other = self
+        let other_span = self
             .typed_ast
             .try_expr(other_id)
             .map_err(crate::typechecker::arena_failure)?
             .span;
-        Ok(self.last_write_spans.iter().any(|(written, span)| {
-            written.is_prefix_of(&path)
-                && span.file == other.file
-                && other.start <= span.start
-                && span.end <= other.end
+        Ok(self.last_write_spans.iter().any(|(written, write_span)| {
+            written.is_prefix_of(&path) && other_span.encloses(*write_span)
         }))
     }
 

@@ -381,6 +381,16 @@ fn sole_array_like_member(hint: &Type) -> Option<&Type> {
 /// The element type `...src` contributes to an array literal, or `None` when `src` is
 /// not spreadable. A tuple spreads as the union of its positions — it is an array at
 /// runtime and routes to `Array` for member dispatch (`Type::interface_routing`).
+/// Whether no value has this type: `never`, or an array whose elements are
+/// all `never` (a `[x]` read in code no value reaches).
+fn holds_no_value(ty: &Type) -> bool {
+    match ty.peel() {
+        Type::Never => true,
+        Type::Array(element) => holds_no_value(element),
+        _ => false,
+    }
+}
+
 fn spread_element_type(peeled_source: &Type) -> Option<Type> {
     match peeled_source {
         Type::Array(elem) => Some((**elem).clone()),
@@ -5523,6 +5533,7 @@ impl Inferer<'_> {
         } else {
             None
         };
+        let mut valueless_seed: Option<Type> = None;
         for el in elements {
             match el {
                 crate::ArrayLiteralElement::Value(elem_id) => {
@@ -5539,9 +5550,14 @@ impl Inferer<'_> {
                         rejected_void,
                     } =
                         self.infer_value_operand(elem_id, hint, ValuePosition::ArrayElement, None)?;
+                    if rejected_void {
+                        typed_elements.push(crate::TypedArrayElement::Value(typed_id));
+                        continue;
+                    }
                     // A `never` element holds no value (it is read in code no value
                     // reaches), so it neither seeds nor narrows the element type.
-                    if rejected_void || matches!(elem_ty.peel(), Type::Never) {
+                    if holds_no_value(&elem_ty) {
+                        valueless_seed.get_or_insert_with(|| elem_ty.clone());
                         typed_elements.push(crate::TypedArrayElement::Value(typed_id));
                         continue;
                     }
@@ -5597,6 +5613,9 @@ impl Inferer<'_> {
                             spread_span,
                             format!("expected an array to spread, got `{peeled_source}`"),
                         ),
+                        Some(elem_t) if holds_no_value(&elem_t) => {
+                            valueless_seed.get_or_insert(elem_t);
+                        }
                         Some(elem_t) => match &element_ty {
                             // Widens for the same reason as the value seed above.
                             None => element_ty = Some(elem_t.widen_literal()),
@@ -5629,11 +5648,12 @@ impl Inferer<'_> {
         }
 
         // If every element failed to determine an element type (e.g.
-        // every spread had an invalid source), fall back to the hint
-        // or `Type::Error` rather than panicking.
+        // every spread had an invalid source), fall back to the hint, to the
+        // first element when none holds a value (`[x]` with `x: never` is
+        // `never[]`, as in TypeScript), or `Type::Error` rather than panicking.
         let element_ty = element_ty.unwrap_or_else(|| match expected_elem {
             Some(t) => t.clone(),
-            None => Type::Error,
+            None => valueless_seed.unwrap_or(Type::Error),
         });
         // The seed widened every literal type to check the elements against;
         // the regular ones stay, as in TypeScript: `[h]` with `h: "hello"` is
