@@ -83,6 +83,7 @@ separate resource/dependency backlog.
 | R15 | Complete: simplified | Removed HMAC-init and fixed-digest-only error layers |
 | R16 | Complete: selectively simplified | Accepted first path component; retained pack and borrowing checks |
 | R17 | Complete: retained | Keep worker/client construction errors and ownership |
+| R18 | Complete: already simplified | Poison-only reversion already implemented; preserve real backend errors |
 
 ### R01 execution evidence
 
@@ -371,6 +372,18 @@ resources. Existing tests explicitly cover absent runtime, thread-spawn failure,
 worker panic and subsequent healthy work. Source/history reviewed; no code or test
 changes, no runtime checks rerun. R17 is resolved as retention; three independent
 reviews had no findings and diff checks passed.
+
+### R18 execution evidence
+
+Confirmed `91c2ec7c` already removes poison-only APIs (19 files, +199/-698).
+Current blueprint/session/idempotency store lock access uses documented poison
+expectations. Shared store traits still return StoreError because disk/backend
+implementations perform actual reads, serialization and atomic writes; an in-memory
+implementation returning Ok does not make the trait error redundant. Keep the
+existing reversal and backend contracts. Original 40 poisoned-lock accesses remain
+accepted under P01; initiating panics are assessed separately. No further poison
+reversion identified in this review. Documentation-only, no tests rerun. Three
+independent reviewers reported no findings; diff checks passed.
 
 ## Completed fixes: candidates and decisions
 
