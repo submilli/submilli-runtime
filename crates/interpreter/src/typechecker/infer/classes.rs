@@ -3732,8 +3732,11 @@ impl<'a> Inferer<'a> {
 
             self.scopes.push();
             for (p, body_ty) in params.iter().zip(body_param_types.iter()) {
-                self.scopes
-                    .insert(p.name.name.clone(), body_ty.clone(), false, p.name.span);
+                self.scopes.insert_annotated_param(
+                    p.name.name.clone(),
+                    body_ty.clone(),
+                    p.name.span,
+                );
             }
             let prev_return = self.current_return.replace(body_ret);
             let prev_reachable = std::mem::replace(&mut self.reachable, true);
@@ -3852,8 +3855,11 @@ impl<'a> Inferer<'a> {
 
             self.scopes.push();
             for (p, body_ty) in params.iter().zip(body_param_types.iter()) {
-                self.scopes
-                    .insert(p.name.name.clone(), body_ty.clone(), false, p.name.span);
+                self.scopes.insert_annotated_param(
+                    p.name.name.clone(),
+                    body_ty.clone(),
+                    p.name.span,
+                );
             }
             let prev_return = self.current_return.replace(body_ret);
             let prev_reachable = std::mem::replace(&mut self.reachable, true);
@@ -4012,7 +4018,7 @@ impl<'a> Inferer<'a> {
         self.scopes.push();
         for p in params {
             self.scopes
-                .insert(p.name.name.clone(), p.ty.clone(), false, p.name.span);
+                .insert_annotated_param(p.name.name.clone(), p.ty.clone(), p.name.span);
         }
         let prev_return = self.current_return.replace(ret.clone());
         let prev_reachable = std::mem::replace(&mut self.reachable, true);
@@ -4500,7 +4506,7 @@ fn bind_params_for_body(
         let ty = substitute_typevars(&sp.ty, bindings, &tc.type_limits)
             .map_err(type_limit_at(p.name.span))?;
         tc.scopes
-            .insert(p.name.name.clone(), ty, false, p.name.span);
+            .insert_annotated_param(p.name.name.clone(), ty, p.name.span);
     }
     Ok(params
         .iter()

@@ -41,9 +41,12 @@ impl<'a> Inferer<'a> {
                     }
                     let hint = ty.as_ref().map(|a| self.resolve_type(a)).transpose()?;
                     let (typed_value, value_ty) = self.infer_expr(value, hint.as_ref())?;
-                    // Reassignable, so an inferred literal widens; see the block-scoped
+                    // Reassignable, so a fresh literal widens; see the block-scoped
                     // `Let` arm in `stmt.rs`.
-                    let bound = hint.unwrap_or_else(|| value_ty.widen_literal());
+                    let bound = match hint {
+                        Some(hint) => hint,
+                        None => self.widen_fresh_literals(typed_value, &value_ty)?,
+                    };
                     self.bind_top(
                         &name,
                         ValueKind::Let {
@@ -52,6 +55,9 @@ impl<'a> Inferer<'a> {
                         },
                     )?;
                     let mangled = self.mangle_top_symbol(&name.name)?;
+                    let origin =
+                        self.initializer_literal_origin(ty.is_some(), typed_value, &bound)?;
+                    self.record_global_literal_origin(mangled.clone(), origin);
                     self.typed_ast
                         .rebindable_globals
                         .insert(mangled.clone(), name.name.clone());
@@ -96,6 +102,8 @@ impl<'a> Inferer<'a> {
                             |ty| Ok(Some(ty)),
                         )?;
                     let (typed_value, value_ty) = self.infer_expr(value, hint.as_ref())?;
+                    let origin =
+                        self.initializer_literal_origin(ty.is_some(), typed_value, &value_ty)?;
                     let bound = hint.unwrap_or(value_ty);
                     self.bind_top(
                         &name,
@@ -105,6 +113,7 @@ impl<'a> Inferer<'a> {
                         },
                     )?;
                     let mangled = self.mangle_top_symbol(&name.name)?;
+                    self.record_global_literal_origin(mangled.clone(), origin);
                     self.add_typed_global(crate::TypedGlobal {
                         name: name.clone(),
                         mangled_name: mangled.clone(),

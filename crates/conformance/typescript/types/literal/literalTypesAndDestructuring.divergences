@@ -1,12 +1,4 @@
-types: 16 of 27 tsc entries compared, 5 differ
-
-line 6: a1
-  tsc:  0 | 1 | null
-  ours: number | null
-
-line 11: b1
-  tsc:  0 | 1 | null
-  ours: number | null
+types: 16 of 27 tsc entries compared, 3 differ
 
 line 12: b2
   tsc:  0 | 1

@@ -722,6 +722,7 @@ impl Inferer<'_> {
                 ty: ty.clone(),
             })
             .map_err(crate::typechecker::arena_failure)?;
+        self.record_narrowed_read_freshness(id)?;
         self.record_runtime_type_test(&ty)
             .map_err(|failure| failure.with_span(span))?;
         // Report an oversized type met while inferring or checking this
@@ -5021,18 +5022,19 @@ impl Inferer<'_> {
                         // narrower literal-return shape the inferer
                         // produced. Keeping the override shape makes
                         // the codegen field-slot lookup deterministic.
-                        // An object-literal property is mutable, so an inferred literal
+                        // An object-literal property is mutable, so a fresh literal
                         // widens: `const a = 1; const o = { k: a };` gives `{ k: number }`
-                        // and `o.k = 5` stays legal, as in TypeScript. A field the
-                        // surrounding annotation pins keeps that annotation's type.
+                        // and `o.k = 5` stays legal, as in TypeScript. A literal type
+                        // from a declaration stays (`{ k: "x" as "x" }`), and a field
+                        // the surrounding annotation pins keeps that annotation's type.
                         let pinned = expected_fields
                             .as_ref()
                             .is_some_and(|m| m.contains_key(&field.name.name));
-                        let field_ty = override_sig.unwrap_or(if pinned {
-                            value_ty
-                        } else {
-                            value_ty.widen_literal()
-                        });
+                        let field_ty = match override_sig {
+                            Some(signature) => signature,
+                            None if pinned => value_ty,
+                            None => self.widen_fresh_literals(typed_value, &value_ty)?,
+                        };
                         if has_spread {
                             let source_ty = Type::Object {
                                 index: None,
@@ -7157,9 +7159,17 @@ impl Inferer<'_> {
 
         // Push scope, bind params.
         self.scopes.push();
-        for p in &typed_params {
-            self.scopes
-                .insert(p.name.name.clone(), p.ty.clone(), false, p.name.span);
+        for (p, decl) in typed_params.iter().zip(params) {
+            // A parameter typed only by the expected function type takes
+            // whatever literals that type was inferred with, so its literal
+            // types count as fresh.
+            if decl.ty.is_some() {
+                self.scopes
+                    .insert_annotated_param(p.name.name.clone(), p.ty.clone(), p.name.span);
+            } else {
+                self.scopes
+                    .insert(p.name.name.clone(), p.ty.clone(), false, p.name.span);
+            }
         }
         // Fresh narrowing stack for the body, seeded with the `const`-rooted
         // narrowings that legally cross the boundary. Params must already be in

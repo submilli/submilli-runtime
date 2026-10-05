@@ -1,12 +1,4 @@
-types: 120 of 162 tsc entries compared, 23 differ
-
-line 10: v3
-  tsc:  "hello"
-  ours: string
-
-line 12: v4
-  tsc:  "hello"
-  ours: string
+types: 120 of 162 tsc entries compared, 12 differ
 
 line 19: c4
   tsc:  "foo" | "bar" | "baz"
@@ -18,14 +10,6 @@ line 19: cond ? c3 : "baz"
 
 line 20: c4
   tsc:  "foo" | "bar" | "baz"
-  ours: string
-
-line 22: v2
-  tsc:  "foo" | "bar"
-  ours: string
-
-line 23: v3
-  tsc:  "foo" | "bar"
   ours: string
 
 line 24: c4
@@ -40,14 +24,6 @@ line 25: c5
   tsc:  "foo" | "bar" | "baz"
   ours: string
 
-line 34: v3
-  tsc:  123
-  ours: number
-
-line 36: v4
-  tsc:  123
-  ours: number
-
 line 43: c4
   tsc:  123 | 456 | 789
   ours: number
@@ -58,14 +34,6 @@ line 43: cond ? c3 : 789
 
 line 44: c4
   tsc:  123 | 456 | 789
-  ours: number
-
-line 46: v2
-  tsc:  123 | 456
-  ours: number
-
-line 47: v3
-  tsc:  123 | 456
   ours: number
 
 line 48: c4
@@ -79,18 +47,6 @@ line 49: v5
 line 49: c5
   tsc:  123 | 456 | 789
   ours: number
-
-line 56: v2
-  tsc:  "foo"
-  ours: string
-
-line 58: v3
-  tsc:  "foo"
-  ours: string
-
-line 60: v4
-  tsc:  "foo"
-  ours: string
 
 errors:
 line 20: ours: expected `"bar" | "baz" | "foo"`, got `string` (tsc accepts)

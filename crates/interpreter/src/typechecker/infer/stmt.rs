@@ -419,10 +419,14 @@ impl Inferer<'_> {
     ) -> Result<TypedStmtKind, CompilerFailure> {
         let hint = ty.as_ref().map(|a| self.resolve_type(a)).transpose()?;
         let (typed_value, value_ty) = self.infer_expr(value, hint.as_ref())?;
-        // A `let` is reassignable, so an inferred literal type would be wrong
-        // the moment it is written to: `const a = 1; let b = a;` binds `number`,
-        // not `1`. An explicit annotation is honoured as written.
-        let bound = hint.unwrap_or_else(|| value_ty.widen_literal());
+        // A `let` is reassignable, so a fresh literal type widens: `const a = 1;
+        // let b = a;` binds `number`, not `1`. A literal type the value got from
+        // a declaration stays (`let v = c` with `c: "x"` is `"x"`), and an
+        // explicit annotation is honoured as written.
+        let bound = match hint {
+            Some(hint) => hint,
+            None => self.widen_fresh_literals(typed_value, &value_ty)?,
+        };
         let bound = self.pattern_binding_storage_type(value, bound)?;
         // Reject a void binding; poison the slot so codegen never
         // sees a void value-type.
@@ -431,9 +435,14 @@ impl Inferer<'_> {
         } else {
             bound
         };
+        let origin = self.initializer_literal_origin(ty.is_some(), typed_value, &bound)?;
         self.scopes
             .insert(name.name.clone(), bound.clone(), false, name.span);
-        let flow_ty = self.pattern_binding_flow_type(value)?.unwrap_or(value_ty);
+        self.scopes.set_literal_origin(&name.name, origin);
+        let flow_ty = match self.pattern_binding_flow_type(value)? {
+            Some(flow_ty) => flow_ty,
+            None => self.initializer_flow_type(&bound, typed_value, value_ty)?,
+        };
         self.narrow_local_initializer(&name, &bound, flow_ty)?;
         Ok(TypedStmtKind::Let {
             name,
@@ -463,6 +472,7 @@ impl Inferer<'_> {
             .transpose()?
             .map_or_else(|| literal_type_of(self.ast, value), |ty| Ok(Some(ty)))?;
         let (typed_value, value_ty) = self.infer_expr(value, hint.as_ref())?;
+        let origin = self.initializer_literal_origin(ty.is_some(), typed_value, &value_ty)?;
         let bound = hint.unwrap_or_else(|| value_ty.clone());
         let bound = self.pattern_binding_storage_type(value, bound)?;
         // Reject a void binding; poison the slot so codegen never
@@ -474,10 +484,14 @@ impl Inferer<'_> {
         };
         self.scopes
             .insert(name.name.clone(), bound.clone(), true, name.span);
+        self.scopes.set_literal_origin(&name.name, origin);
         if name.name.starts_with("#pattern_dst_") {
             self.pattern_sources.insert(name.name.clone(), typed_value);
         }
-        let flow_ty = self.pattern_binding_flow_type(value)?.unwrap_or(value_ty);
+        let flow_ty = match self.pattern_binding_flow_type(value)? {
+            Some(flow_ty) => flow_ty,
+            None => self.initializer_flow_type(&bound, typed_value, value_ty)?,
+        };
         self.narrow_local_initializer(&name, &bound, flow_ty)?;
         Ok(TypedStmtKind::Const {
             name,
@@ -623,12 +637,14 @@ impl Inferer<'_> {
         // carry to the next iteration's entry.
         let body_scope_floor = self.scopes.next_scope_id();
         self.scopes.push();
+        let origin = self.element_literal_origin(ann.is_some(), typed_iter)?;
         self.scopes.insert(
             name.name.clone(),
             bound_ty.clone(),
             matches!(binding_kind, BindingKind::Const),
             name.span,
         );
+        self.scopes.set_literal_origin(&name.name, origin);
         let body_span = self.ast.try_stmt(body).map_err(super::arena_failure)?.span;
         let (loop_entry, _) = self.snapshot_active_narrowings(0);
         let entry_reachable = self.reachable;
@@ -1639,7 +1655,7 @@ impl Inferer<'_> {
             .map(|view| view.narrowed_ty.clone()))
     }
 
-    fn pattern_index_flow_type(source: &Type, index: usize) -> Option<Type> {
+    pub(super) fn pattern_index_flow_type(source: &Type, index: usize) -> Option<Type> {
         match source.peel() {
             Type::Tuple(elems) => elems.get(index).cloned(),
             Type::Array(elem) => Some((**elem).clone()),

@@ -119,6 +119,7 @@ pub(super) fn with_source_inferer(source: &str, test: impl FnOnce(&mut super::In
         suspended_narrow_scopes: Vec::new(),
         pending_post_if_materializations: Vec::new(),
         pattern_sources: BTreeMap::new(),
+        literal_freshness: super::literal_freshness::LiteralFreshness::default(),
         captured_mutators: bindings.mutators,
         last_assignments: bindings.last_assignments,
         nested_function_creation_points: bindings.nested_function_creation_points,

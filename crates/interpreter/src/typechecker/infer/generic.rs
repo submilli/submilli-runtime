@@ -515,8 +515,11 @@ impl Inferer<'_> {
             let stored_return = sig_ret_type.clone();
             self.scopes.push();
             for (p, body_ty) in params.iter().zip(body_param_types.iter()) {
-                self.scopes
-                    .insert(p.name.name.clone(), body_ty.clone(), false, p.name.span);
+                self.scopes.insert_annotated_param(
+                    p.name.name.clone(),
+                    body_ty.clone(),
+                    p.name.span,
+                );
             }
             let prev_return = self.current_return.replace(body_ret_type.clone());
             // Reset to `true`: a previous function that ended unreachable would
