@@ -4,6 +4,9 @@
 // declared type stays, so the copy reaches a literal-typed parameter. An object
 // literal's property follows the same rule. A fresh literal also doesn't
 // narrow a binding whose declared type doesn't name it.
+//
+// A literal type that may have come from a fresh literal widens: a template,
+// a generic call's result, an assignment's narrowing of an object type.
 interface Shape {
   kind: "circle" | "square";
   size: 1 | 2;
@@ -29,8 +32,20 @@ function module(m: "m"): number {
 function small(n: 1 | 2): number {
   return n;
 }
-function flag(b: true): number {
-  return b ? 1 : 0;
+function emptyOrHello(v: "" | "hello"): number {
+  return v.length;
+}
+
+class Box<T> {
+  value: T;
+  constructor(value: T) {
+    this.value = value;
+  }
+}
+class Named {
+  name(): "named" {
+    return "named";
+  }
 }
 
 function main(): void {
@@ -63,11 +78,12 @@ function main(): void {
     let narrowed = kind;
     assert(circle(narrowed) === 6, "a narrowing of a declared type stays");
   }
-  let isOn: boolean = pick();
-  if (isOn) {
-    let on = isOn;
-    assert(flag(on) === 1, "narrowing a `boolean` keeps `true`");
-  }
+  const named = new Named();
+  let name = named.name();
+  assert(name.length === 5 && hello(declared) === 5, "a method's declared result stays");
+  let text: string = pick() ? "abc" : "";
+  let either = text && declared;
+  assert(emptyOrHello(either) === 5, "`&&` keeps the `\"\"` of a `string`");
 
   const ternary = cond ? "a" : "b";
   if (ternary === "a") {
@@ -82,4 +98,29 @@ function main(): void {
 
   let nullable: string | null = fresh;
   assert(nullable !== "other", "a fresh literal doesn't narrow a `string` binding");
+
+  const yes = true;
+  let maybe: boolean | null = yes;
+  let copied = maybe;
+  copied = false;
+  const holder = { flag: maybe };
+  holder.flag = false;
+  assert(!copied && !holder.flag, "a fresh `true` narrowing a `boolean | null` widens");
+
+  let template = `${declared}`;
+  template = "q";
+  const counts: number[] = [1, 2];
+  let first = counts.map(() => fresh)[0];
+  first = "b";
+  let boxed = new Box(fresh).value;
+  boxed = "c";
+  assert(template + first + boxed === "qbc", "a template or generic result widens");
+
+  let assigned: { key: string } | null = null;
+  assigned = { key: fresh };
+  if (assigned !== null) {
+    let key = assigned.key;
+    key = "d";
+    assert(key === "d", "an assignment's narrowing to an object type widens");
+  }
 }

@@ -50,25 +50,25 @@ pub(super) enum LiteralOrigin {
 }
 
 impl LiteralOrigin {
-    /// The regular literal members of a binding of type `ty`.
-    fn regular_members(&self, ty: &Type) -> BTreeSet<Type> {
+    /// The regular literal members of a binding of type `declared_ty`.
+    fn regular_members(&self, declared_ty: &Type) -> BTreeSet<Type> {
         match self {
             LiteralOrigin::Unknown => BTreeSet::new(),
-            LiteralOrigin::Declared => declared_literals(ty),
+            LiteralOrigin::Declared => declared_literals(declared_ty),
             LiteralOrigin::Inferred { fresh, .. } => {
-                let mut regular = declared_literals(ty);
+                let mut regular = declared_literals(declared_ty);
                 regular.retain(|literal| !fresh.contains(literal));
                 regular
             }
         }
     }
 
-    /// The literal members of `ty`, a read of a binding with this origin,
+    /// The literal members of `read_ty`, a read of a binding with this origin,
     /// known to be fresh.
-    fn fresh_members(&self, ty: &Type) -> BTreeSet<Type> {
+    fn known_fresh_members(&self, read_ty: &Type) -> BTreeSet<Type> {
         match self {
             LiteralOrigin::Inferred { fresh, .. } => {
-                let mut members = literal_members(ty);
+                let mut members = literal_members(read_ty);
                 members.retain(|literal| fresh.contains(literal));
                 members
             }
@@ -76,7 +76,7 @@ impl LiteralOrigin {
         }
     }
 
-    fn nested_regular(&self) -> bool {
+    fn are_nested_literals_regular(&self) -> bool {
         match self {
             LiteralOrigin::Unknown => false,
             LiteralOrigin::Declared => true,
@@ -109,8 +109,8 @@ impl Inferer<'_> {
         Ok(widen_unless_regular(ty, &regular))
     }
 
-    /// The type a binding declared `declared` narrows to on being initialized
-    /// with `value` of type `flow`.
+    /// The type a binding declared `declared_ty` narrows to on being
+    /// initialized with `value` of type `flow`.
     ///
     /// A literal known to be fresh that the declared type doesn't name widens
     /// first, as in TypeScript: `let x: string | null = c1` reads as `string`,
@@ -119,7 +119,7 @@ impl Inferer<'_> {
     /// widening it could reject a read the narrowing allowed.
     pub(super) fn initializer_flow_type(
         &self,
-        declared: &Type,
+        declared_ty: &Type,
         value: ExprId,
         flow: Type,
     ) -> Result<Type, CompilerFailure> {
@@ -127,7 +127,7 @@ impl Inferer<'_> {
         if fresh.is_empty() {
             return Ok(flow);
         }
-        let named = declared_literals(declared);
+        let named = declared_literals(declared_ty);
         fresh.retain(|literal| !named.contains(literal));
         Ok(widen_only(&flow, &fresh))
     }
@@ -149,7 +149,7 @@ impl Inferer<'_> {
         fresh.retain(|literal| !regular.contains(literal));
         Ok(LiteralOrigin::Inferred {
             fresh,
-            nested_regular: self.nested_regular(value)?,
+            nested_regular: self.are_nested_literals_regular(value)?,
         })
     }
 
@@ -160,11 +160,10 @@ impl Inferer<'_> {
         annotated: bool,
         iterable: ExprId,
     ) -> Result<LiteralOrigin, CompilerFailure> {
-        Ok(if annotated || self.nested_regular(iterable)? {
-            LiteralOrigin::Declared
-        } else {
-            LiteralOrigin::Unknown
-        })
+        if annotated || self.are_nested_literals_regular(iterable)? {
+            return Ok(LiteralOrigin::Declared);
+        }
+        Ok(LiteralOrigin::Unknown)
     }
 
     pub(super) fn record_global_literal_origin(
@@ -196,8 +195,14 @@ impl Inferer<'_> {
         // their freshness: a `const` bound to `cond ? "a" : "b"` and narrowed
         // to `"a"` still widens at a `let`. A literal only the narrowing
         // introduced (an assignment's value) is fresh.
+        //
+        // A boolean literal counts as fresh whatever it narrows. TypeScript
+        // keeps a fresh `true` assigned to a `boolean | null` fresh, and the
+        // narrowing doesn't record which write it came from.
         let declared = self.declared_path_literals(path);
-        regular.retain(|literal| declared.contains(literal));
+        regular.retain(|literal| {
+            declared.contains(literal) && !matches!(literal, Type::BooleanLiteral(_))
+        });
         if !regular.is_empty() {
             self.literal_freshness.narrowed_reads.insert(id, regular);
         }
@@ -212,10 +217,7 @@ impl Inferer<'_> {
     /// regular literals of what it reads, and an assertion's are all regular.
     /// Anything else is fresh, including a generic call's result, whose literal
     /// may come from a fresh argument.
-    pub(super) fn regular_literals(
-        &self,
-        value: ExprId,
-    ) -> Result<BTreeSet<Type>, CompilerFailure> {
+    fn regular_literals(&self, value: ExprId) -> Result<BTreeSet<Type>, CompilerFailure> {
         let mut regular = BTreeSet::new();
         let mut pending = vec![value];
         while let Some(id) = pending.pop() {
@@ -223,6 +225,19 @@ impl Inferer<'_> {
                 .typed_ast
                 .try_expr(id)
                 .map_err(crate::typechecker::arena_failure)?;
+            // Before the pass-through below, which skips the rest of the loop.
+            if let TypedExprKind::Binary {
+                op: op @ (BinOp::And | BinOp::Or),
+                lhs,
+                ..
+            } = &expr.kind
+            {
+                regular.extend(self.short_circuit_literals(*op, *lhs)?);
+            }
+            if let Some(operands) = passed_through_operands(&expr.kind) {
+                pending.extend(operands);
+                continue;
+            }
             match &expr.kind {
                 TypedExprKind::LocalRef { ident, .. } => {
                     if let Some(entry) = self.scopes.get(&ident.name) {
@@ -230,8 +245,8 @@ impl Inferer<'_> {
                     }
                 }
                 TypedExprKind::GlobalRef { mangled, .. } => {
-                    if let Some((origin, declared)) = self.global_literal_origin(mangled) {
-                        regular.extend(origin.regular_members(&declared));
+                    if let Some((origin, declared_ty)) = self.global_literal_origin(mangled) {
+                        regular.extend(origin.regular_members(&declared_ty));
                     }
                 }
                 TypedExprKind::LocalNarrowRef { .. } => {
@@ -239,26 +254,20 @@ impl Inferer<'_> {
                         regular.extend(read.iter().cloned());
                     }
                 }
-                TypedExprKind::Ternary { then_, else_, .. } => pending.extend([*then_, *else_]),
-                TypedExprKind::Binary {
-                    op: op @ (BinOp::And | BinOp::Or),
-                    lhs,
-                    rhs,
-                } => {
-                    regular.extend(self.short_circuit_literals(*op, *lhs)?);
-                    pending.extend([*lhs, *rhs]);
-                }
-                TypedExprKind::NullishCoalesce { lhs, rhs } => pending.extend([*lhs, *rhs]),
-                TypedExprKind::Narrowed { inner, .. }
-                | TypedExprKind::NonNullAssert { value: inner } => pending.push(*inner),
                 TypedExprKind::Cast { .. } | TypedExprKind::Call { .. } => {
                     regular.extend(declared_literals(&expr.ty));
                 }
                 TypedExprKind::FieldAccess { receiver, .. }
                 | TypedExprKind::InterfacePropertyAccess { receiver, .. }
-                | TypedExprKind::IndexAccess { receiver, .. }
-                | TypedExprKind::MethodCall { receiver, .. } => {
-                    if self.nested_regular(*receiver)? {
+                | TypedExprKind::IndexAccess { receiver, .. } => {
+                    if self.are_nested_literals_regular(*receiver)? {
+                        regular.extend(declared_literals(&expr.ty));
+                    }
+                }
+                TypedExprKind::MethodCall { receiver, name, .. } => {
+                    let declared = self.are_nested_literals_regular(*receiver)?
+                        && self.method_result_is_declared(*receiver, &name.name, &expr.ty)?;
+                    if declared {
                         regular.extend(declared_literals(&expr.ty));
                     }
                 }
@@ -303,34 +312,29 @@ impl Inferer<'_> {
                 .typed_ast
                 .try_expr(id)
                 .map_err(crate::typechecker::arena_failure)?;
+            if let Some(operands) = passed_through_operands(&expr.kind) {
+                pending.extend(operands);
+                continue;
+            }
             match &expr.kind {
                 TypedExprKind::Number(_) | TypedExprKind::String(_) | TypedExprKind::Boolean(_) => {
                     fresh.extend(literal_members(&expr.ty));
                 }
                 TypedExprKind::LocalRef { ident, .. } => {
                     if let Some(entry) = self.scopes.get(&ident.name) {
-                        fresh.extend(entry.literal_origin.fresh_members(&expr.ty));
+                        fresh.extend(entry.literal_origin.known_fresh_members(&expr.ty));
                     }
                 }
                 TypedExprKind::GlobalRef { mangled, .. } => {
                     if let Some((origin, _)) = self.global_literal_origin(mangled) {
-                        fresh.extend(origin.fresh_members(&expr.ty));
+                        fresh.extend(origin.known_fresh_members(&expr.ty));
                     }
                 }
                 TypedExprKind::LocalNarrowRef { path, .. } if path.chain.is_empty() => {
                     if let Some((origin, _)) = self.root_literal_origin(path) {
-                        fresh.extend(origin.fresh_members(&expr.ty));
+                        fresh.extend(origin.known_fresh_members(&expr.ty));
                     }
                 }
-                TypedExprKind::Ternary { then_, else_, .. } => pending.extend([*then_, *else_]),
-                TypedExprKind::NullishCoalesce { lhs, rhs }
-                | TypedExprKind::Binary {
-                    op: BinOp::And | BinOp::Or,
-                    lhs,
-                    rhs,
-                } => pending.extend([*lhs, *rhs]),
-                TypedExprKind::Narrowed { inner, .. }
-                | TypedExprKind::NonNullAssert { value: inner } => pending.push(*inner),
                 _ => {}
             }
         }
@@ -339,49 +343,40 @@ impl Inferer<'_> {
 
     /// Whether every literal type inside the type of `value` (in a field, an
     /// element, a type argument) is regular.
-    fn nested_regular(&self, value: ExprId) -> Result<bool, CompilerFailure> {
+    fn are_nested_literals_regular(&self, value: ExprId) -> Result<bool, CompilerFailure> {
         let mut pending = vec![value];
         while let Some(id) = pending.pop() {
             let expr = self
                 .typed_ast
                 .try_expr(id)
                 .map_err(crate::typechecker::arena_failure)?;
+            if let Some(operands) = passed_through_operands(&expr.kind) {
+                pending.extend(operands);
+                continue;
+            }
             let regular = match &expr.kind {
                 TypedExprKind::LocalRef { ident, .. } => self
                     .scopes
                     .get(&ident.name)
-                    .is_some_and(|entry| entry.literal_origin.nested_regular()),
+                    .is_some_and(|entry| entry.literal_origin.are_nested_literals_regular()),
                 TypedExprKind::GlobalRef { mangled, .. } => self
                     .global_literal_origin(mangled)
-                    .is_some_and(|(origin, _)| origin.nested_regular()),
-                TypedExprKind::LocalNarrowRef { path, .. } => self.root_nested_regular(path),
+                    .is_some_and(|(origin, _)| origin.are_nested_literals_regular()),
+                TypedExprKind::LocalNarrowRef { path, .. } => {
+                    self.is_narrowing_declared(path, &expr.ty)
+                }
                 TypedExprKind::This | TypedExprKind::Cast { .. } | TypedExprKind::Call { .. } => {
                     true
                 }
                 TypedExprKind::FieldAccess { receiver, .. }
                 | TypedExprKind::InterfacePropertyAccess { receiver, .. }
-                | TypedExprKind::IndexAccess { receiver, .. }
-                | TypedExprKind::MethodCall { receiver, .. } => {
+                | TypedExprKind::IndexAccess { receiver, .. } => {
                     pending.push(*receiver);
                     true
                 }
-                TypedExprKind::Ternary { then_, else_, .. } => {
-                    pending.extend([*then_, *else_]);
-                    true
-                }
-                TypedExprKind::NullishCoalesce { lhs, rhs }
-                | TypedExprKind::Binary {
-                    op: BinOp::And | BinOp::Or,
-                    lhs,
-                    rhs,
-                } => {
-                    pending.extend([*lhs, *rhs]);
-                    true
-                }
-                TypedExprKind::Narrowed { inner, .. }
-                | TypedExprKind::NonNullAssert { value: inner } => {
-                    pending.push(*inner);
-                    true
+                TypedExprKind::MethodCall { receiver, name, .. } => {
+                    pending.push(*receiver);
+                    self.method_result_is_declared(*receiver, &name.name, &expr.ty)?
                 }
                 // A value with no literal type inside it has nothing to be
                 // fresh: a number, a string, a call to a closure returning one.
@@ -394,36 +389,92 @@ impl Inferer<'_> {
         Ok(true)
     }
 
+    /// Whether the literal types in the result of calling `method` on
+    /// `receiver` are the declared ones, given that the receiver's are.
+    ///
+    /// A method with type parameters of its own (`map`) can infer a literal
+    /// type argument from a fresh argument, so of its result only the literal
+    /// types the receiver already holds count.
+    fn method_result_is_declared(
+        &self,
+        receiver: ExprId,
+        method: &str,
+        result_ty: &Type,
+    ) -> Result<bool, CompilerFailure> {
+        let receiver_ty = &self
+            .typed_ast
+            .try_expr(receiver)
+            .map_err(crate::typechecker::arena_failure)?
+            .ty;
+        if self
+            .find_method(receiver_ty, method)
+            .is_some_and(|(signature, ..)| signature.generics.is_empty())
+        {
+            return Ok(true);
+        }
+        Ok(deep_literals(result_ty).is_subset(&deep_literals(receiver_ty)))
+    }
+
+    /// Whether the narrowed read of `path`, of type `read_ty`, holds only the
+    /// declared literal types of its binding.
+    ///
+    /// A narrowing to members of the declared type does. An assignment's can
+    /// hold fresh ones: `o = { k: c1 }` narrows `o: { k: string } | null` to
+    /// `{ k: "a" }`.
+    fn is_narrowing_declared(&self, path: &narrowing::ReferencePath, read_ty: &Type) -> bool {
+        if !self.are_root_nested_literals_regular(path) {
+            return false;
+        }
+        if !contains_literal(read_ty) {
+            return true;
+        }
+        let Some(declared_ty) = self.declared_path_ty(path) else {
+            return false;
+        };
+        let declared_members = union_members(&declared_ty);
+        union_members(read_ty)
+            .into_iter()
+            .all(|member| !contains_literal(member) || declared_members.contains(&member))
+    }
+
     /// The regular literals of the declared type of the narrowable `path`.
     fn declared_path_literals(&self, path: &narrowing::ReferencePath) -> BTreeSet<Type> {
         if path.chain.is_empty() {
             return match self.root_literal_origin(path) {
-                Some((origin, declared)) => origin.regular_members(&declared),
+                Some((origin, declared_ty)) => origin.regular_members(&declared_ty),
                 None => BTreeSet::new(),
             };
         }
-        if !self.root_nested_regular(path) {
+        if !self.are_root_nested_literals_regular(path) {
             return BTreeSet::new();
         }
-        let mut ty = self.declared_root_ty(path);
-        for elem in &path.chain {
-            ty = ty.and_then(|receiver| match elem {
-                narrowing::PathElem::Field(field) => self.narrow_source_field_ty(&receiver, field),
-                narrowing::PathElem::Index(narrowing::LiteralValue::Number(index)) => {
-                    Self::pattern_index_flow_type(&receiver, index.0 as usize)
-                }
-                narrowing::PathElem::Index(_) => None,
-            });
-        }
-        ty.map(|ty| declared_literals(&ty)).unwrap_or_default()
+        self.declared_path_ty(path)
+            .map(|declared_ty| declared_literals(&declared_ty))
+            .unwrap_or_default()
     }
 
-    fn root_nested_regular(&self, path: &narrowing::ReferencePath) -> bool {
+    /// The declared type of the narrowable `path`, read through the declared
+    /// types of its root and of each field or element on the way.
+    fn declared_path_ty(&self, path: &narrowing::ReferencePath) -> Option<Type> {
+        let mut ty = self.declared_root_ty(path)?;
+        for elem in &path.chain {
+            ty = match elem {
+                narrowing::PathElem::Field(field) => self.narrow_source_field_ty(&ty, field)?,
+                narrowing::PathElem::Index(narrowing::LiteralValue::Number(index)) => {
+                    Self::pattern_index_flow_type(&ty, tuple_index(index.0)?)?
+                }
+                narrowing::PathElem::Index(_) => return None,
+            };
+        }
+        Some(ty)
+    }
+
+    fn are_root_nested_literals_regular(&self, path: &narrowing::ReferencePath) -> bool {
         match &path.root {
             narrowing::BindingId::This => true,
             _ => self
                 .root_literal_origin(path)
-                .is_some_and(|(origin, _)| origin.nested_regular()),
+                .is_some_and(|(origin, _)| origin.are_nested_literals_regular()),
         }
     }
 
@@ -444,11 +495,47 @@ impl Inferer<'_> {
 
     fn global_literal_origin(&self, mangled: &MangledName) -> Option<(LiteralOrigin, Type)> {
         let origin = self.literal_freshness.globals.get(mangled)?;
-        let declared = self.declared_root_ty(&narrowing::ReferencePath::root(
+        let declared_ty = self.declared_root_ty(&narrowing::ReferencePath::root(
             narrowing::BindingId::Global(mangled.clone()),
         ))?;
-        Some((origin.clone(), declared))
+        Some((origin.clone(), declared_ty))
     }
+}
+
+/// The operands whose value, and so whose freshness, an expression of `kind`
+/// passes through: `?:`, `??`, `&&`, `||`, a narrowing and `!`.
+fn passed_through_operands(kind: &TypedExprKind) -> Option<Vec<ExprId>> {
+    match kind {
+        TypedExprKind::Ternary { then_, else_, .. } => Some(vec![*then_, *else_]),
+        TypedExprKind::NullishCoalesce { lhs, rhs }
+        | TypedExprKind::Binary {
+            op: BinOp::And | BinOp::Or,
+            lhs,
+            rhs,
+        } => Some(vec![*lhs, *rhs]),
+        TypedExprKind::Narrowed { inner, .. } | TypedExprKind::NonNullAssert { value: inner } => {
+            Some(vec![*inner])
+        }
+        _ => None,
+    }
+}
+
+/// The element a numeric path index names, when it is one.
+fn tuple_index(index: f64) -> Option<usize> {
+    (index >= 0.0 && index.fract() == 0.0 && index <= u32::MAX as f64).then_some(index as usize)
+}
+
+/// `ty`'s union members, through aliases, or `ty` itself.
+fn union_members(ty: &Type) -> Vec<&Type> {
+    let mut members = Vec::new();
+    let mut pending = vec![ty];
+    while let Some(ty) = pending.pop() {
+        match ty.peel() {
+            Type::Union(inner) => pending.extend(inner),
+            other => members.push(other),
+        }
+    }
+    members
 }
 
 /// The literal types `ty` is made of: itself, or its union members.
@@ -463,9 +550,9 @@ fn literal_members(ty: &Type) -> BTreeSet<Type> {
 }
 
 /// The literal types a declared type names, as TypeScript reduces it: `boolean`
-/// counts as the `true | false` it means, so a fresh `true` written to a
-/// `boolean` is the declared type's own `true`, and a literal beside its own
-/// base (`"a" | string`) is absorbed by it.
+/// counts as the `true | false` it means, so `if (b)` on a `b: boolean` reads
+/// the declared type's own `true`, and a literal beside its own base
+/// (`"a" | string`) is absorbed by it.
 fn declared_literals(ty: &Type) -> BTreeSet<Type> {
     let mut literals = declared_literals_unreduced(ty);
     let bases = declared_bases(ty);
@@ -493,16 +580,21 @@ fn declared_bases(ty: &Type) -> BTreeSet<Type> {
     }
 }
 
-/// Whether a literal type appears anywhere in `ty`.
+fn contains_literal(ty: &Type) -> bool {
+    !deep_literals(ty).is_empty()
+}
+
+/// Every literal type that appears in `ty`.
 ///
 /// A named type's body is declared, so only its type arguments are looked
 /// into: `Box<"a">` holds one, a non-generic interface never does.
-fn contains_literal(ty: &Type) -> bool {
+fn deep_literals(ty: &Type) -> BTreeSet<Type> {
+    let mut literals = BTreeSet::new();
     let mut pending = vec![ty];
     while let Some(ty) = pending.pop() {
         match ty {
             Type::NumberLiteral(_) | Type::StringLiteral(_) | Type::BooleanLiteral(_) => {
-                return true;
+                literals.insert(ty.clone());
             }
             Type::Union(members) | Type::Tuple(members) => pending.extend(members),
             Type::Array(inner) | Type::Readonly(inner) => pending.push(inner),
@@ -527,7 +619,7 @@ fn contains_literal(ty: &Type) -> bool {
             _ => {}
         }
     }
-    false
+    literals
 }
 
 /// [`Type::widen_literal`], applied only to the literal members in `fresh`.

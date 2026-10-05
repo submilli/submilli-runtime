@@ -4381,16 +4381,18 @@ impl Inferer<'_> {
         let result_ty = if had_error { Type::Error } else { Type::String };
 
         // Single-operand case (e.g. `` `${x}` ``): the lone
-        // interpolation *is* the result. Return its kind+type so the
-        // outer `infer_expr` push re-uses the existing node's span /
-        // ty rather than synthesising an extra wrapper.
+        // interpolation *is* the result. Return its kind so the outer
+        // `infer_expr` push re-uses the existing node rather than
+        // synthesising an extra wrapper.
         if operands.len() == 1 {
             let single = self
                 .typed_ast
                 .try_expr(operands[0])
                 .map_err(crate::typechecker::arena_failure)?
                 .clone();
-            return Ok((single.kind, single.ty));
+            // A template is a `string` whatever it interpolates, as in
+            // TypeScript: `` `${h}` `` with `h: "hello"` is not `"hello"`.
+            return Ok((single.kind, result_ty));
         }
 
         // Defensive: the parser guarantees `exprs.len() >= 1` (the

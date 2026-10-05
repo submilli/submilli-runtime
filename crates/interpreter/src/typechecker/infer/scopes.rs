@@ -52,6 +52,19 @@ impl Scopes {
         self.insert_entry(name, ty, is_const, decl_span, None, LiteralOrigin::Unknown);
     }
 
+    /// Bind a `let`, `const` or loop variable whose literal types came from
+    /// `literal_origin`.
+    pub(super) fn insert_with_literal_origin(
+        &mut self,
+        name: String,
+        ty: Type,
+        is_const: bool,
+        decl_span: Span,
+        literal_origin: LiteralOrigin,
+    ) {
+        self.insert_entry(name, ty, is_const, decl_span, None, literal_origin);
+    }
+
     /// Bind a parameter whose type is written out, so every literal type in it
     /// is regular.
     pub(super) fn insert_annotated_param(&mut self, name: String, ty: Type, decl_span: Span) {
@@ -98,17 +111,6 @@ impl Scopes {
                     literal_origin,
                 },
             );
-        }
-    }
-
-    /// Records where the literal types of the innermost scope's `name` came from.
-    pub(super) fn set_literal_origin(&mut self, name: &str, origin: LiteralOrigin) {
-        if let Some(entry) = self
-            .stack
-            .last_mut()
-            .and_then(|top| top.bindings.get_mut(name))
-        {
-            entry.literal_origin = origin;
         }
     }
 

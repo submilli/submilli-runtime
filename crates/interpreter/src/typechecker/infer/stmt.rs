@@ -436,9 +436,13 @@ impl Inferer<'_> {
             bound
         };
         let origin = self.initializer_literal_origin(ty.is_some(), typed_value, &bound)?;
-        self.scopes
-            .insert(name.name.clone(), bound.clone(), false, name.span);
-        self.scopes.set_literal_origin(&name.name, origin);
+        self.scopes.insert_with_literal_origin(
+            name.name.clone(),
+            bound.clone(),
+            false,
+            name.span,
+            origin,
+        );
         let flow_ty = match self.pattern_binding_flow_type(value)? {
             Some(flow_ty) => flow_ty,
             None => self.initializer_flow_type(&bound, typed_value, value_ty)?,
@@ -482,9 +486,13 @@ impl Inferer<'_> {
         } else {
             bound
         };
-        self.scopes
-            .insert(name.name.clone(), bound.clone(), true, name.span);
-        self.scopes.set_literal_origin(&name.name, origin);
+        self.scopes.insert_with_literal_origin(
+            name.name.clone(),
+            bound.clone(),
+            true,
+            name.span,
+            origin,
+        );
         if name.name.starts_with("#pattern_dst_") {
             self.pattern_sources.insert(name.name.clone(), typed_value);
         }
@@ -638,13 +646,13 @@ impl Inferer<'_> {
         let body_scope_floor = self.scopes.next_scope_id();
         self.scopes.push();
         let origin = self.element_literal_origin(ann.is_some(), typed_iter)?;
-        self.scopes.insert(
+        self.scopes.insert_with_literal_origin(
             name.name.clone(),
             bound_ty.clone(),
             matches!(binding_kind, BindingKind::Const),
             name.span,
+            origin,
         );
-        self.scopes.set_literal_origin(&name.name, origin);
         let body_span = self.ast.try_stmt(body).map_err(super::arena_failure)?.span;
         let (loop_entry, _) = self.snapshot_active_narrowings(0);
         let entry_reachable = self.reachable;
