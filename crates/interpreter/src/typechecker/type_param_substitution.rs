@@ -758,12 +758,11 @@ impl<'a> Unifier<'a> {
     /// [`closely_matches`] another member, as `Box<string>` does `Box<number>`,
     /// is not given to the type parameter, as tsc pairs them (a parameter
     /// member identical to some argument member is not closely matched with
-    /// others). Then, in order:
-    /// - members left over bind the type parameter (`T | null` with
-    ///   `"on" | "off" | null` binds `T` to `"on" | "off"`), and each closely
-    ///   matched member must fit some member of `params`;
-    /// - if absorbing bound the type parameter, each closely matched member
-    ///   must fit some member of `params`;
+    /// others). Then:
+    /// - if members are left over, they bind the type parameter (`T | null`
+    ///   with `"on" | "off" | null` binds `T` to `"on" | "off"`); once it is
+    ///   bound, by them or by absorbing, each closely matched member must fit
+    ///   some member of `params`;
     /// - otherwise the whole argument is the type parameter's fallback, used
     ///   only when nothing else binds it, and each closely matched member
     ///   waits to be checked once inference is done (see

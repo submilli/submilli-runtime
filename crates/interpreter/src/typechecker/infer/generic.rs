@@ -16,7 +16,7 @@ use crate::{
 
 use super::{Inferer, type_limit_at};
 use crate::type_size::{TypeBudget, TypeLimits, TypeTooLarge, map_children};
-use crate::typechecker::type_param_substitution::{TypeParamSubstitution, UnifyError};
+use crate::typechecker::type_param_substitution::{CloseMatch, TypeParamSubstitution, UnifyError};
 
 /// What a receiver-less generic call is calling. Only diagnostics differ: a
 /// constructor has to be described as one, because `function Box<T>(…)` is not
@@ -805,7 +805,7 @@ impl Inferer<'_> {
         }
 
         sub.bind_whole_union_fallbacks();
-        self.check_close_matches(&mut sub, span);
+        self.check_deferred_close_matches(&mut sub, span);
         self.bind_leftover_type_parameters(
             &mut sub,
             &sig.generics,
@@ -1034,7 +1034,7 @@ impl Inferer<'_> {
     /// Report each union argument member that closely matched a parameter
     /// member while inference ran and fits no member of the parameter now
     /// that it is done, against the member it closely matched.
-    fn check_close_matches(&mut self, sub: &mut TypeParamSubstitution, span: Span) {
+    fn check_deferred_close_matches(&mut self, sub: &mut TypeParamSubstitution, span: Span) {
         for close_match in sub.take_close_matches() {
             if sub
                 .clone()
@@ -1043,19 +1043,28 @@ impl Inferer<'_> {
             {
                 continue;
             }
-            let (expected, got) =
-                match sub
-                    .clone()
-                    .unify(&close_match.sibling, &close_match.arg, self.resolver())
-                {
-                    Err(UnifyError::Mismatch { expected, got }) => (expected, got),
-                    _ => (close_match.sibling, close_match.arg),
-                };
+            let (expected, got) = self.close_match_mismatch(sub, close_match);
             self.error_with_help(
                 span,
                 format!("expected `{expected}`, got `{got}`"),
                 super::type_diff::type_mismatch_help(&expected, &got),
             );
+        }
+    }
+
+    /// The types to report a closely matched member under: where it departs
+    /// from the member it closely matched.
+    fn close_match_mismatch(
+        &self,
+        sub: &TypeParamSubstitution,
+        close_match: CloseMatch,
+    ) -> (Type, Type) {
+        match sub
+            .clone()
+            .unify(&close_match.sibling, &close_match.arg, self.resolver())
+        {
+            Err(UnifyError::Mismatch { expected, got }) => (expected, got),
+            _ => (close_match.sibling, close_match.arg),
         }
     }
 
@@ -1618,7 +1627,7 @@ impl Inferer<'_> {
         }
 
         sub.bind_whole_union_fallbacks();
-        self.check_close_matches(&mut sub, span);
+        self.check_deferred_close_matches(&mut sub, span);
         self.bind_leftover_type_parameters(&mut sub, &generics, &ret, expected, errors_before_args);
         self.bind_uninferred_to_unknown(&mut sub, &generics, &mangled, span)?;
         if let Err(unbound) = sub

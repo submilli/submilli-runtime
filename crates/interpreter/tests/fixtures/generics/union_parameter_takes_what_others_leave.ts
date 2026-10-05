@@ -4,7 +4,8 @@
 // `A | number` with a `Mode` field. When the other members take every member,
 // `T` takes the whole argument unless another argument decides it. A member
 // of the same class or interface, or an array of the same mutability, pairs
-// with that member, unless an identical one already did.
+// with that member, unless an identical one already did; when nothing else
+// binds `T`, that member goes to `T` with the whole argument.
 type Mode = "on" | "off";
 
 function orElse<T>(value: T | null, fallback: T): T {
@@ -123,7 +124,8 @@ function main(): void {
   const viaList = counted({ value: textOrCount(1), list: [true, false], use: (each) => (each ? 1 : 2) });
   const inferredBoxes = orBox(textBox(false));
   const boxes: (Box<string> | null)[] = inferredBoxes;
-  assert(viaField === 1 && viaList === 2 && boxes.length === 0, "a callback beside the union");
+  assert(viaField === 1 && viaList === 2, "a callback beside the union");
+  assert(boxes.length === 0, "a closely matched member the fallback takes");
 
   const inferredList = listOrNumbers(lists(true));
   const fromList: string[] | null = inferredList;
