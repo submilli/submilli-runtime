@@ -309,6 +309,8 @@ async fn run(
             blueprint: Arc::new(blueprint),
             variables,
             harness_secrets,
+            audit: crate::audit::execution(),
+            entry: execute::ExecuteEntry::Http,
         },
     )
     .await

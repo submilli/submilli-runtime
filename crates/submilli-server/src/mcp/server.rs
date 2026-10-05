@@ -20,15 +20,13 @@ use rmcp::service::RequestContext;
 use rmcp::{ErrorData, RoleServer, ServerHandler, schemars, tool, tool_router};
 use serde::{Deserialize, Serialize};
 use submilli_blueprint::{Blueprint, HarnessSecretBindings, VfsConfig, required_harness_secrets};
+use submilli_shared::PolicyCheck;
 use submilli_shared::library_visibility::LibraryVisibility;
-use submilli_shared::{BlueprintAuthProxy, BlueprintSecretProvider, PolicyCheck};
 
 use crate::app::AppState;
 use crate::error::ExecuteError;
-use crate::handlers::execute::{blueprint_miss_message, outcome_to_parts, split_console};
+use crate::handlers::execute::{ExecuteEntry, ExecuteInputs, blueprint_miss_message, execute_core};
 use crate::packages;
-use crate::runner;
-use crate::session::LastRun;
 use crate::session_manager::{attach_limits, build_vfs, vfs_info};
 
 const TOOL_NAME: &str = "submilli__typescript__execute";
@@ -350,38 +348,8 @@ impl SubmilliMcp {
             }
         };
 
-        let parsed = runner::parse(&args.code).map_err(|error| {
-            audit.error(crate::error::ErrorKind::CompileError);
-            ErrorData::internal_error(error.to_string(), None)
-        })?;
-        let script_imports = parsed.imports().map_err(|message| {
-            audit.error(crate::error::ErrorKind::CompileError);
-            ErrorData::internal_error(message, None)
-        })?;
-        let network_policy = audit.network_policy(self.state.network_policy());
-        let llm_provider = self
-            .state
-            .llm_provider_for(&blueprint, &harness_secrets, &network_policy)
-            .map_err(|error| {
-                tracing::error!(error = ?error, "LLM dispatch initialization failed");
-                audit.error(crate::error::ErrorKind::RuntimeError);
-                ErrorData::internal_error(error.to_string(), None)
-            })?;
-        let mcp_catalog = self
-            .state
-            .mcp_catalog_for_imports(
-                &self.blueprint_name,
-                &blueprint,
-                &script_imports.mcp_servers,
-                &harness_secrets,
-                &network_policy,
-            )
-            .await
-            .map_err(|error| {
-                audit.error(crate::error::ErrorKind::RuntimeError);
-                mcp_discovery_error(error)
-            })?;
-
+        // The file area opens under this tool's rules (a `per_session` root needs
+        // the session id), ahead of the shared core, which does the rest.
         let (vfs, vfs_info) = self
             .acquire_vfs(
                 &blueprint,
@@ -393,93 +361,30 @@ impl SubmilliMcp {
             .inspect_err(|_| {
                 audit.error(crate::error::ErrorKind::RuntimeError);
             })?;
-
-        let manager = self.state.session_manager();
-        let http_client = manager.http_client(session_id.as_deref().unwrap_or(""));
-        let session_kv = manager.session_kv_for_execute(session_id.as_deref().unwrap_or(""));
-        let mcp_transport = Arc::new(
-            submilli_shared::mcp::transport::StreamableHttpTransport::new(
-                self.blueprint_name.clone(),
-                Arc::clone(&blueprint),
-                self.state.oauth_token_manager().cloned(),
-                self.state.secret_store().cloned(),
-                Arc::clone(&network_policy),
-            )
-            .with_harness_secrets(Arc::clone(&harness_secrets)),
-        );
-        let services = runner::HostServices {
-            audit: Some(audit.clone()),
-            git: submilli_shared::resolve_git(&blueprint, &variables)
-                .map_err(|error| error.to_string()),
-            auth_proxy: Arc::new(BlueprintAuthProxy::with_harness(
-                Arc::clone(&blueprint),
-                self.state.secret_store().cloned(),
-                Arc::clone(&harness_secrets),
-            )),
-            secret_provider: Arc::new(BlueprintSecretProvider::with_harness(
-                Arc::clone(&blueprint),
-                self.state.secret_store().cloned(),
-                Arc::clone(&harness_secrets),
-            )),
-            security_check: Arc::new(crate::audit::AuditedPolicy {
-                policy: Arc::new(PolicyCheck::with_variables(
-                    Arc::clone(&blueprint),
-                    variables,
-                )),
-                execution: audit.clone(),
-            }),
-            http_client,
-            mcp_transport,
-            session_kv,
-            llm_provider,
-            llm_budget: Some(manager.llm_budget_for_execute()),
-        };
-        let packages = self
-            .state
-            .prepared_packages_for_imports(&self.blueprint_name, &blueprint, &script_imports)
-            .map_err(|err| {
-                audit.error(crate::error::ErrorKind::PackageResolution);
-                ErrorData::internal_error(err.to_string(), None)
-            })?;
-        let outcome = runner::run(
-            &args.code,
-            parsed,
-            runner::RunnerRuntime {
-                blueprint: &self.blueprint_name,
-                session: session_id.as_deref().unwrap_or(""),
-                engine: self.state.engine(),
-                base_linker: self.state.base_linker(),
-                config: self.state.runtime(),
-            },
-            vfs,
-            vfs_info,
-            services,
-            runner::RunnerImports {
-                packages: &packages,
-                mcps: &mcp_catalog,
+        let outcome = execute_core(
+            &self.state,
+            ExecuteInputs {
+                session_id: session_id.as_deref().unwrap_or(""),
+                code: &args.code,
+                blueprint_name: &self.blueprint_name,
+                blueprint,
+                variables,
+                harness_secrets,
+                audit: Some(audit),
+                entry: ExecuteEntry::Mcp { vfs, vfs_info },
             },
         )
         .await;
-        let console_lines = split_console(&outcome.console_raw);
-        let (result, console, error) = outcome_to_parts(&outcome, &console_lines);
-
-        // Record the full (un-suppressed) console so `lastRun` can recover it.
-        if let Some(sid) = &session_id
-            && let Err(error) = self
-                .state
-                .sessions()
-                .record(
-                    sid,
-                    LastRun {
-                        result: result.clone(),
-                        console: console_lines,
-                        error: error.clone(),
-                    },
-                )
-                .await
-        {
-            tracing::warn!(operation = "record", session = %sid, %error, "last-run storage failed");
+        let response = outcome.response;
+        if !outcome.dispatched {
+            // Nothing ran: a protocol-level failure, as it always was for MCP.
+            let message = response
+                .error
+                .map(|error| error.message)
+                .unwrap_or_default();
+            return Err(ErrorData::internal_error(message, None));
         }
+        let (result, console, error) = (response.result, response.console, response.error);
 
         structured_result(ExecuteOutput {
             result,
