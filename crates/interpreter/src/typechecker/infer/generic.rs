@@ -666,7 +666,7 @@ impl Inferer<'_> {
         }
 
         if let Some(want) = expected.filter(|want| pins_type_parameters(want)) {
-            let _ = sub.unify(&sig.ret, want, self.resolver());
+            self.bind_from_expected_result(&mut sub, &sig.ret, want);
         }
 
         let has_rest = sig.params.last().is_some_and(|p| p.rest);
@@ -940,6 +940,50 @@ impl Inferer<'_> {
         }
     }
 
+    /// Bind type parameters from the type a call's result is expected to have,
+    /// before its arguments are inferred.
+    ///
+    /// When that type is a union and the result type is neither a type
+    /// variable nor a union (both unify with the whole union), the result is
+    /// unified with each member of its own [`ShapeKind`]. The type parameters
+    /// bind only if every such member unifies, all to the same bindings;
+    /// otherwise nothing binds. `Cmp<T>` expected as `Cmp<P> | null` binds
+    /// `T = P`.
+    ///
+    /// Adopting a partial match would fix the type parameters before the
+    /// arguments are seen, although the result could still be assigned to a
+    /// member unification can't match, such as a wider object or an interface.
+    /// A mismatch is reported later, where the call's result is checked
+    /// against the expected type.
+    fn bind_from_expected_result(&self, sub: &mut TypeParamSubstitution, ret: &Type, want: &Type) {
+        let unifies_with_whole_union = matches!(ret.peel(), Type::TypeVar(_) | Type::Union(_));
+        let members = match want.peel() {
+            Type::Union(members) if !unifies_with_whole_union => members,
+            _ => {
+                let _ = sub.unify(ret, want, self.resolver());
+                return;
+            }
+        };
+        let ret_kind = ShapeKind::of(ret);
+        let mut agreed: Option<TypeParamSubstitution> = None;
+        for member in members {
+            if !ret_kind.could_be(ShapeKind::of(member)) {
+                continue;
+            }
+            let mut trial = sub.clone();
+            if trial.unify(ret, member, self.resolver()).is_err() {
+                return;
+            }
+            match &agreed {
+                Some(bindings) if *bindings != trial => return,
+                _ => agreed = Some(trial),
+            }
+        }
+        if let Some(bindings) = agreed {
+            *sub = bindings;
+        }
+    }
+
     /// `ty` with `sub` applied, at a call site at `span`.
     fn instantiate(
         &self,
@@ -1184,8 +1228,7 @@ impl Inferer<'_> {
         }
 
         if let Some(want) = expected.filter(|want| pins_type_parameters(want)) {
-            // Mismatch surfaces later at the outer infer_expr site with a better span.
-            let _ = sub.unify(&ret, want, self.resolver());
+            self.bind_from_expected_result(&mut sub, &ret, want);
         }
 
         let has_rest = params.last().is_some_and(|p| p.rest);
@@ -1431,6 +1474,52 @@ fn function_part(ty: &Type) -> Option<&Type> {
             functions.next().is_none().then_some(function)
         }
         _ => None,
+    }
+}
+
+/// A coarse category of value, used to skip the union members a call's result
+/// can never be (a function result and `null`). `Uint8Array` is a primitive
+/// here: no generic result type can be one.
+#[derive(Clone, Copy, PartialEq)]
+enum ShapeKind {
+    Function,
+    /// An object, interface, class instance, array or tuple.
+    Structured,
+    Primitive,
+    /// A type parameter, `unknown`, an error: anything.
+    Any,
+}
+
+impl ShapeKind {
+    fn of(ty: &Type) -> Self {
+        match ty.peel() {
+            Type::Function { .. } => Self::Function,
+            // An array is assignable to an interface or object type of the
+            // fields it has (`{ length: number }`), so it is one kind with them.
+            Type::Object { .. }
+            | Type::InterfaceRef { .. }
+            | Type::ClassRef { .. }
+            | Type::Array(_)
+            | Type::Tuple(_) => Self::Structured,
+            Type::Number
+            | Type::NumberLiteral(_)
+            | Type::BigInt
+            | Type::String
+            | Type::StringLiteral(_)
+            | Type::Uint8Array
+            | Type::Boolean
+            | Type::BooleanLiteral(_)
+            | Type::NumberEnum { .. }
+            | Type::StringEnum { .. }
+            | Type::Null
+            | Type::Void
+            | Type::Never => Self::Primitive,
+            _ => Self::Any,
+        }
+    }
+
+    fn could_be(self, other: Self) -> bool {
+        self == other || self == Self::Any || other == Self::Any
     }
 }
 
