@@ -347,6 +347,13 @@ fn normalize(cwd: &str, path: &str) -> Result<String> {
 fn gate(caller: &mut Caller<'_, StoreData>, capability: &str, path: &str) -> Result<()> {
     check_security(caller, capability, json!({"path":path,"recursive":true}))
 }
+fn gate_call(
+    caller: &mut Caller<'_, StoreData>,
+    capability: &str,
+    path: &str,
+) -> Result<Option<crate::runtime::CallTicket>> {
+    check_security_call(caller, capability, json!({"path":path,"recursive":true}))
+}
 fn read_file(
     caller: &mut Caller<'_, StoreData>,
     budget: &mut Budget,
@@ -362,7 +369,7 @@ fn read_contents(
     op: &str,
     skip_binary: bool,
 ) -> Result<String> {
-    gate(caller, "fs.read", path)?;
+    let ticket = gate_call(caller, "fs.read", path)?;
     let resolved = resolve_content_or_trap(caller.data(), path, op)?;
     let (file, metadata) = resolved
         .open_regular()
@@ -378,6 +385,12 @@ fn read_contents(
     if bytes.len() > len {
         bail!("code.{op}: file grew during read; retry");
     }
+    crate::runtime::call_log::record_payload(
+        &*caller,
+        ticket,
+        crate::runtime::call_log::Side::Response,
+        || crate::runtime::call_log::Payload::meta(Value::Null).with_body(&bytes),
+    );
     if skip_binary && bytes.contains(&0) {
         return Ok(String::new());
     }

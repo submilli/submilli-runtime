@@ -20,6 +20,7 @@ use wasmtime::{
     Caller, FuncType, HeapType, Linker, RefType, Rooted, StructRef, StructType, Val, ValType,
 };
 
+use crate::runtime::call_log::{Payload, Side, mask_headers, record_payload};
 use crate::runtime::fs::{ContainError, ContentPath};
 use crate::runtime::fuel;
 use crate::runtime::host::{
@@ -389,6 +390,10 @@ async fn perform_request(
         &capability,
         verb_context(&host_str, &path_str, body.len() as u64, DEFAULT_TIMEOUT_MS),
     )?;
+    // The program's own request, before the auth proxy adds credentials.
+    record_payload(&*caller, ticket, Side::Request, || {
+        request_payload(method, url, &headers, &body)
+    });
 
     let (who, guard) = request_principal(
         caller,
@@ -433,7 +438,45 @@ async fn perform_request(
             .as_ref()
             .map(|resp| (resp.status, resp.body.len() as u64)),
     );
+    record_payload(&*caller, ticket, Side::Response, || {
+        response_payload(&send_result)
+    });
     settle_response(caller, send_result, method)
+}
+
+/// A request as the recorder keeps it: credential headers masked.
+fn request_payload<'a>(
+    method: &str,
+    url: &str,
+    headers: &[(String, String)],
+    body: &'a [u8],
+) -> Payload<'a> {
+    let (headers, masked) = mask_headers(headers);
+    Payload::meta(serde_json::json!({
+        "method": method.to_ascii_uppercase(),
+        "url": url,
+        "headers": headers,
+    }))
+    .with_body(body)
+    .with_masked(masked)
+}
+
+/// A response, or the transport failure, as the recorder keeps it.
+fn response_payload(result: &std::result::Result<HttpResponse, HttpError>) -> Payload<'_> {
+    match result {
+        Ok(resp) => {
+            let (headers, masked) = mask_headers(&resp.headers);
+            Payload::meta(serde_json::json!({
+                "status": resp.status,
+                "status_text": resp.status_text,
+                "url": resp.final_url,
+                "headers": headers,
+            }))
+            .with_body(&resp.body)
+            .with_masked(masked)
+        }
+        Err(error) => Payload::meta(serde_json::json!({ "error": error.to_string() })),
+    }
 }
 
 fn settle_response(
@@ -658,6 +701,9 @@ async fn perform_download(
         .map_err(|err| contain_trap("http.download", &guest_path, &err))?;
 
     let (who, guard) = request_principal(caller, GuardedRequest::Download(target), ticket)?;
+    record_payload(&*caller, ticket, Side::Request, || {
+        request_payload("GET", &url, &options.headers, &[]).with_size(0)
+    });
     let req = HttpRequest {
         method: "GET".to_string(),
         url: url.clone(),
@@ -691,6 +737,21 @@ async fn perform_download(
     let progress = DownloadProgress::default();
     let streamed = stream_to_temp(caller, &req, &tmp, &guest_path, disk_charge, &progress).await;
     // Network receipt and disk writes already happened, even on failure.
+    // The body went to disk, not to the program: the record keeps its size alone.
+    record_payload(&*caller, ticket, Side::Response, || {
+        let meta = match &streamed {
+            Ok(streamed) => serde_json::json!({
+                "status": streamed.meta.status,
+                "path": guest_path,
+                "bytes_written": streamed.meta.bytes_written,
+            }),
+            Err(DownloadFailure::Transport(_, message) | DownloadFailure::Full(_, message)) => {
+                serde_json::json!({ "error": message })
+            }
+            Err(DownloadFailure::Fs(error)) => serde_json::json!({ "error": error.to_string() }),
+        };
+        Payload::meta(meta).with_size(progress.bytes_received())
+    });
     fuel::settle(&mut *caller, fuel::IO, progress.bytes_received())?;
     fuel::settle(&mut *caller, fuel::IO, progress.bytes_written())?;
     // A filesystem failure has no transport outcome to record.

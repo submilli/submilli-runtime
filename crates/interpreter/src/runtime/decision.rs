@@ -25,6 +25,7 @@ use serde::Serialize;
 use serde_json::Value;
 
 use super::StoreData;
+use super::call_log::{self, CallOutcome, CallRecord, ModelUsage, Payload, Side};
 use super::security::{AuditDecision, CheckOutcome, SecurityCheck};
 
 /// What the policy decided. `AskHuman` is a denial today (the approval flow is deferred),
@@ -162,6 +163,28 @@ pub trait DecisionRecorder: Send + Sync {
     /// Counts the frames of a backtrace captured for a line. Past the recorder's frame
     /// budget it marks the run truncated and stops further captures.
     fn note_line_capture(&self, frames: usize);
+    /// A host function that can begin calls was entered. Returns the marker its
+    /// [`exit_host_call`](Self::exit_host_call) passes back.
+    fn enter_host_call(&self) -> u64;
+    /// That host function returned (`returned`) or failed. Ends every call begun since
+    /// `marker` that is still open; a nested host function has ended its own already.
+    fn exit_host_call(&self, marker: u64, returned: bool);
+    /// One side of a call that reached outside the program.
+    fn call_payload(&self, call_index: u64, side: Side, payload: Payload<'_>);
+    /// Token counts a model provider reported for a call.
+    fn call_usage(&self, call_index: u64, usage: ModelUsage);
+}
+
+/// Sees records as they are made, for an embedder that streams a run while it executes.
+///
+/// Called on the thread running the program, after the recorder has released its lock.
+/// It must not block: an implementation that cannot keep up drops what it cannot hold.
+/// What it sees is also in the [`DecisionLogOutput`] the run ends with, unless the
+/// recorder's own caps dropped it there.
+pub trait RecordObserver: Send + Sync {
+    fn call_started(&self, _call: &CallRecord) {}
+    fn decision(&self, _record: &DecisionRecord) {}
+    fn call_finished(&self, _call: &CallRecord) {}
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -215,6 +238,11 @@ pub struct DecisionLogConfig {
     /// and the run is marked truncated (a redirect hop or git worker check may still carry
     /// a line captured earlier).
     pub max_line_capture_frames: u64,
+    /// Calls kept per run; later ones are counted and mark the run truncated.
+    pub max_calls: usize,
+    /// Longest body copy a call's request or response keeps. Its digest and size always
+    /// describe the full body.
+    pub max_payload_bytes: usize,
 }
 
 impl Default for DecisionLogConfig {
@@ -224,6 +252,8 @@ impl Default for DecisionLogConfig {
             max_context_value_bytes: 1024,
             max_recorder_bytes: 16 * 1024 * 1024,
             max_line_capture_frames: 1_000_000,
+            max_calls: 10_000,
+            max_payload_bytes: 1024 * 1024,
         }
     }
 }
@@ -240,6 +270,10 @@ pub struct DecisionLogOutput {
     pub dropped: u64,
     /// Wasm frames walked by line captures over the run (diagnostic).
     pub line_frames: u64,
+    /// The run's calls in the order they began.
+    pub calls: Vec<CallRecord>,
+    /// Calls not kept at all, past the cap or the byte budget.
+    pub calls_dropped: u64,
 }
 
 /// Distinct (caller, capability) pairs tracked per run. Capability names come from
@@ -247,6 +281,7 @@ pub struct DecisionLogOutput {
 const MAX_TRACKED_PAIRS: usize = 4096;
 const PAIR_OVERHEAD_BYTES: u64 = 96;
 const RECORD_BASE_BYTES: u64 = std::mem::size_of::<DecisionRecord>() as u64;
+const CALL_BASE_BYTES: u64 = std::mem::size_of::<CallRecord>() as u64;
 const MAX_CONTEXT_DEPTH: usize = 8;
 const MAX_CONTEXT_ENTRIES: usize = 64;
 
@@ -271,6 +306,10 @@ struct LogState {
     /// A record was dropped whole for want of bytes: no new lines are captured. A smaller
     /// later record may still be kept, without a line.
     bytes_exhausted: bool,
+    calls: Vec<CallRecord>,
+    /// Position in `calls` of each call still running, in call order.
+    open_calls: Vec<(u64, usize)>,
+    calls_dropped: u64,
 }
 
 /// The per-run recorder.
@@ -279,6 +318,7 @@ pub struct DecisionLog {
     config: DecisionLogConfig,
     started: Instant,
     clock: AtomicU64,
+    observer: Option<Arc<dyn RecordObserver>>,
 }
 
 impl DecisionLog {
@@ -289,11 +329,21 @@ impl DecisionLog {
     /// audit decorator). Other wrappers do not forward [`SecurityCheck::recorder`], so a
     /// recorder installed beneath one is invisible to the host functions that begin calls.
     pub fn install(data: &mut StoreData, config: DecisionLogConfig) -> Arc<Self> {
+        Self::install_observed(data, config, None)
+    }
+
+    /// [`install`](Self::install), with an observer that sees each record as it is made.
+    pub fn install_observed(
+        data: &mut StoreData,
+        config: DecisionLogConfig,
+        observer: Option<Arc<dyn RecordObserver>>,
+    ) -> Arc<Self> {
         let log = Arc::new(Self {
             state: Mutex::new(LogState::default()),
             config,
             started: Instant::now(),
             clock: AtomicU64::new(0),
+            observer,
         });
         data.security_check = Arc::new(RecordingCheck {
             inner: data.security_check.clone(),
@@ -308,11 +358,18 @@ impl DecisionLog {
     pub fn finish(&self) -> DecisionLogOutput {
         let mut state = self.lock();
         let records = std::mem::take(&mut state.records);
+        for (_, position) in std::mem::take(&mut state.open_calls) {
+            if let Some(call) = state.calls.get_mut(position) {
+                call.outcome = Some(CallOutcome::Unfinished);
+            }
+        }
         let output = DecisionLogOutput {
             records,
             truncated: state.truncated,
             dropped: state.dropped,
             line_frames: state.line_frames,
+            calls: std::mem::take(&mut state.calls),
+            calls_dropped: state.calls_dropped,
         };
         state.charged = 0;
         state.pairs.clear();
@@ -407,22 +464,74 @@ impl DecisionLog {
                 + record.source.len()
                 + record.reason.as_ref().map_or(0, String::len)) as u64;
         let payload = payload_bytes(&record);
-        if self.charge(&mut state, minimal.saturating_add(payload)) {
-            state.records.push(record);
-            return;
+        if !self.charge(&mut state, minimal.saturating_add(payload)) {
+            // Keep the digest and the verdict; drop what carries the bytes.
+            record.context = Value::Null;
+            record.near_misses = Vec::new();
+            record.payload_dropped = true;
+            record.context_truncated = true;
+            state.truncated = true;
+            if !self.charge(&mut state, minimal) {
+                state.bytes_exhausted = true;
+                state.dropped = state.dropped.saturating_add(1);
+                return;
+            }
         }
-        // Keep the digest and the verdict; drop what carries the bytes.
-        record.context = Value::Null;
-        record.near_misses = Vec::new();
-        record.payload_dropped = true;
-        record.context_truncated = true;
-        state.truncated = true;
-        if self.charge(&mut state, minimal) {
-            state.records.push(record);
-        } else {
-            state.bytes_exhausted = true;
-            state.dropped = state.dropped.saturating_add(1);
+        let observed = self.observer.as_ref().map(|_| record.clone());
+        state.records.push(record);
+        drop(state);
+        if let (Some(observer), Some(record)) = (&self.observer, observed) {
+            observer.decision(&record);
         }
+    }
+
+    /// Opens the call `ticket` begins. Over the call cap or the byte budget it is
+    /// counted and the run marked truncated.
+    fn open_call(
+        &self,
+        state: &mut LogState,
+        caller: &str,
+        capability: &str,
+        ticket: CallTicket,
+    ) -> Option<CallRecord> {
+        let cost = CALL_BASE_BYTES + (caller.len() + capability.len()) as u64;
+        if state.calls.len() >= self.config.max_calls
+            || state.calls.try_reserve(1).is_err()
+            || state.open_calls.try_reserve(1).is_err()
+            || !self.charge(state, cost)
+        {
+            state.truncated = true;
+            state.calls_dropped = state.calls_dropped.saturating_add(1);
+            return None;
+        }
+        let call = CallRecord {
+            call_index: ticket.call_index,
+            caller: caller.to_owned(),
+            capability: capability.to_owned(),
+            started_micros: ticket.at_micros,
+            ended_micros: None,
+            outcome: None,
+            line: ticket.line,
+            request: None,
+            response: None,
+            usage: None,
+        };
+        let observed = self.observer.as_ref().map(|_| call.clone());
+        state
+            .open_calls
+            .push((ticket.call_index, state.calls.len()));
+        state.calls.push(call);
+        observed
+    }
+
+    fn call_mut(state: &mut LogState, call_index: u64) -> Option<&mut CallRecord> {
+        let position = state
+            .open_calls
+            .iter()
+            .rev()
+            .find(|(index, _)| *index == call_index)
+            .map(|(_, position)| *position)?;
+        state.calls.get_mut(position)
     }
 
     fn build(&self, decision: &AuditDecision<'_>, ticket: CallTicket) -> DecisionRecord {
@@ -503,7 +612,89 @@ impl DecisionLog {
 impl DecisionRecorder for DecisionLog {
     fn begin_call(&self, caller: &str, capability: &str, line: Option<SourceLine>) -> CallTicket {
         let mut state = self.lock();
-        self.begin(&mut state, caller, capability, line)
+        let ticket = self.begin(&mut state, caller, capability, line);
+        let opened = self.open_call(&mut state, caller, capability, ticket);
+        drop(state);
+        if let (Some(observer), Some(call)) = (&self.observer, opened) {
+            observer.call_started(&call);
+        }
+        ticket
+    }
+
+    fn enter_host_call(&self) -> u64 {
+        self.lock().next_call_index
+    }
+
+    fn exit_host_call(&self, marker: u64, returned: bool) {
+        let mut state = self.lock();
+        let Some(first) = state
+            .open_calls
+            .iter()
+            .position(|(index, _)| *index >= marker)
+        else {
+            return;
+        };
+        let ended = self.now_micros();
+        let closing: Vec<_> = state.open_calls.drain(first..).collect();
+        let mut finished = Vec::new();
+        for (_, position) in closing {
+            if let Some(call) = state.calls.get_mut(position) {
+                call.ended_micros = Some(ended);
+                call.outcome = Some(if returned {
+                    CallOutcome::Returned
+                } else {
+                    CallOutcome::Failed
+                });
+                if self.observer.is_some() {
+                    finished.push(call.clone());
+                }
+            }
+        }
+        drop(state);
+        if let Some(observer) = &self.observer {
+            for call in &finished {
+                observer.call_finished(call);
+            }
+        }
+    }
+
+    fn call_payload(&self, call_index: u64, side: Side, payload: Payload<'_>) {
+        let record = call_log::capture(
+            &payload,
+            self.config.max_context_value_bytes,
+            self.config.max_payload_bytes,
+        );
+        let mut state = self.lock();
+        if Self::call_mut(&mut state, call_index).is_none() {
+            return;
+        }
+        let cost = call_log::payload_cost(&record);
+        let record = if self.charge(&mut state, cost) {
+            record
+        } else {
+            // Keep the digest and the size; drop the copies.
+            state.truncated = true;
+            call_log::PayloadRecord {
+                meta: Value::Null,
+                body: None,
+                truncated: true,
+                ..record
+            }
+        };
+        let Some(call) = Self::call_mut(&mut state, call_index) else {
+            return;
+        };
+        match side {
+            Side::Request => call.request = Some(Box::new(record)),
+            Side::Response => call.response = Some(Box::new(record)),
+        }
+    }
+
+    fn call_usage(&self, call_index: u64, usage: ModelUsage) {
+        let mut state = self.lock();
+        if let Some(call) = Self::call_mut(&mut state, call_index) {
+            call.usage = Some(usage);
+        }
     }
 
     fn wants_line(&self) -> bool {
@@ -809,12 +1000,13 @@ mod tests {
     fn a_whole_record_drop_stops_lines_though_a_bare_record_would_fit() {
         let (data, log) = log_with(DecisionLogConfig {
             // After the call's pair is charged, the leftover is a bare record plus 2 bytes:
-            // less than this record's strings need.
+            // less than this record's strings need. No call records take a share.
             max_recorder_bytes: PAIR_OVERHEAD_BYTES
                 + "main".len() as u64
                 + "fs.read".len() as u64
                 + RECORD_BASE_BYTES
                 + 2,
+            max_calls: 0,
             ..DecisionLogConfig::default()
         });
         let recorder = data.security_check.recorder().unwrap();
