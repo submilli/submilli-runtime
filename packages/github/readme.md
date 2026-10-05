@@ -62,6 +62,12 @@ restricted blueprints. Each script has a blueprint of the same name:
   slash, or a dot segment is rejected with `invalid_input` before the check,
   and that a scope qualifier in a search query is refused whatever whitespace
   precedes it.
+- `search-scope.ts` checks all three search operations: visibility/state qualifiers
+  and quoted phrases pass, while scope qualifiers outside phrases are refused even
+  beside punctuation or format characters. Validation folds ASCII case and fullwidth
+  ASCII; requests retain the original query. Issue/PR kind qualifiers (including
+  `type:` aliases and quoted values) and OR are refused. Unterminated and escaped quotes are refused
+  because the search endpoints differ in their escape syntax.
 - `ref-filters.ts` shows that file reads are held to a rule on `ref`, and pull
   request creation and retargeting to rules on `head` and `base`.
 - `request-values.ts` shows that the request the package builds names the
