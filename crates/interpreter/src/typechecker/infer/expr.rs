@@ -121,10 +121,17 @@ impl ChainField {
 /// `type Status = "a" | "b"` and a plain `"a" | "b"` hint behave identically.
 fn expects_literal(expected: Option<&Type>, is_literal: fn(&Type) -> bool) -> bool {
     match expected.map(crate::types::Type::peel) {
-        Some(Type::Union(ms)) => ms.iter().any(|m| is_literal(m.peel())),
-        Some(ty) => is_literal(ty),
+        Some(Type::Union(ms)) => ms.iter().any(|m| names_literal(m.peel(), is_literal)),
+        Some(ty) => names_literal(ty, is_literal),
         None => false,
     }
+}
+
+/// Whether `ty` is a literal type `is_literal` accepts, counting `boolean` as
+/// the `true | false` it is, as TypeScript does: `[s, true]` against
+/// `[string, boolean]` is `[string, true]`.
+fn names_literal(ty: &Type, is_literal: fn(&Type) -> bool) -> bool {
+    is_literal(ty) || (matches!(ty, Type::Boolean) && is_literal(&Type::BooleanLiteral(true)))
 }
 
 /// Whether an object literal providing exactly `lit_names` could only be
@@ -459,6 +466,18 @@ impl Inferer<'_> {
     // Expression inference
     // --------------------------------------------------------------------
 
+    /// Whether a literal asked to keep its literal type does. One that its
+    /// expected type rejects reports at its base type, as TypeScript does:
+    /// `o.x = "a"` with `x: number` is "got `string`".
+    fn keeps_literal_type(
+        &self,
+        keeps_literal: bool,
+        expected: Option<&Type>,
+        literal: &Type,
+    ) -> bool {
+        keeps_literal && expected.is_none_or(|want| assignable(literal, want, self.resolver()))
+    }
+
     pub(super) fn infer_expr(
         &mut self,
         expr_id: ExprId,
@@ -467,6 +486,9 @@ impl Inferer<'_> {
         // A limit recorded before this expression belongs to an enclosing
         // check, whose own checkpoint reports it.
         let limit_was_pending = self.type_limits.limit_reached();
+        // Only this expression keeps its literal type; whatever it infers
+        // inside starts out widening again, unless it passes the request on.
+        let keeps_literal = std::mem::take(&mut self.keeps_literal_types);
         // A hint is read structurally — an object literal takes its per-field
         // hints from the expected type's fields — and `peel` stops at a
         // recursion back-edge, which carries no body to read. Rehydrating first
@@ -509,9 +531,12 @@ impl Inferer<'_> {
             // to the base primitive — `let x = "hi"` stays
             // `x: string`, not `x: "hi"`.
             ExprKind::Number(v) => {
-                let ty = if expects_literal(expected, |t| matches!(t, Type::NumberLiteral(_))) {
-                    let canonical = if v == 0.0 { 0.0 } else { v };
-                    Type::NumberLiteral(crate::types::LiteralF64(canonical))
+                let canonical = if v == 0.0 { 0.0 } else { v };
+                let literal = Type::NumberLiteral(crate::types::LiteralF64(canonical));
+                let ty = if self.keeps_literal_type(keeps_literal, expected, &literal)
+                    || expects_literal(expected, |t| matches!(t, Type::NumberLiteral(_)))
+                {
+                    literal
                 } else {
                     Type::Number
                 };
@@ -521,16 +546,22 @@ impl Inferer<'_> {
             // (no `Type::BigIntLiteral` narrowing variant in v1).
             ExprKind::BigInt(digits) => Ok((TypedExprKind::BigInt(digits), Type::BigInt)),
             ExprKind::String(s) => {
-                let ty = if expects_literal(expected, |t| matches!(t, Type::StringLiteral(_))) {
-                    Type::StringLiteral(s.clone())
+                let literal = Type::StringLiteral(s.clone());
+                let ty = if self.keeps_literal_type(keeps_literal, expected, &literal)
+                    || expects_literal(expected, |t| matches!(t, Type::StringLiteral(_)))
+                {
+                    literal
                 } else {
                     Type::String
                 };
                 Ok((TypedExprKind::String(s), ty))
             }
             ExprKind::Boolean(b) => {
-                let ty = if expects_literal(expected, |t| matches!(t, Type::BooleanLiteral(_))) {
-                    Type::BooleanLiteral(b)
+                let literal = Type::BooleanLiteral(b);
+                let ty = if self.keeps_literal_type(keeps_literal, expected, &literal)
+                    || expects_literal(expected, |t| matches!(t, Type::BooleanLiteral(_)))
+                {
+                    literal
                 } else {
                     Type::Boolean
                 };
@@ -547,14 +578,19 @@ impl Inferer<'_> {
                 }
                 Ok(self.resolve_ident(ident, span))
             }
-            ExprKind::Binary { op, lhs, rhs } => self.infer_binary(op, lhs, rhs, expected, span),
+            ExprKind::Binary { op, lhs, rhs } => {
+                self.infer_binary(op, lhs, rhs, expected, keeps_literal, span)
+            }
             ExprKind::Unary { op, operand } => self.infer_unary(op, operand),
             ExprKind::Call {
                 callee,
                 type_args,
                 args,
             } => self.infer_call(callee, type_args, args, expected, span),
-            ExprKind::Paren(inner) => return self.infer_expr(inner, expected),
+            ExprKind::Paren(inner) => {
+                self.keeps_literal_types = keeps_literal;
+                return self.infer_expr(inner, expected);
+            }
             ExprKind::ObjectLiteral { members } => {
                 self.infer_object_literal(members, expected, span)
             }
@@ -623,9 +659,9 @@ impl Inferer<'_> {
                 parts,
                 exprs,
                 substitution_spans,
-            } => self.lower_template_literal(parts, exprs, substitution_spans, span),
+            } => self.lower_template_literal(parts, exprs, substitution_spans, expected, span),
             ExprKind::Ternary { cond, then_, else_ } => {
-                self.infer_ternary(cond, then_, else_, expected, span)
+                self.infer_ternary(cond, then_, else_, expected, keeps_literal, span)
             }
             ExprKind::OptionalChain { base, parts } => {
                 self.infer_optional_chain(base, parts, expected, span)
@@ -732,6 +768,7 @@ impl Inferer<'_> {
                 ty: ty.clone(),
             })
             .map_err(crate::typechecker::arena_failure)?;
+        self.record_narrowed_read_freshness(id)?;
         self.record_runtime_type_test(&ty)
             .map_err(|failure| failure.with_span(span))?;
         // Report an oversized type met while inferring or checking this
@@ -1057,6 +1094,7 @@ impl Inferer<'_> {
         lhs: ExprId,
         rhs: ExprId,
         expected: Option<&Type>,
+        keeps_literal: bool,
         span: Span,
     ) -> Result<(TypedExprKind, Type), CompilerFailure> {
         // human-readable operator symbol for diagnostics.
@@ -1106,7 +1144,7 @@ impl Inferer<'_> {
         // its own typed-AST node so codegen and the type-result rule
         // (`union(strip_null(lhs), rhs)`) can be specialised cleanly.
         if matches!(op, BinOp::NullishCoalesce) {
-            return self.infer_nullish_coalesce(lhs, rhs, span);
+            return self.infer_nullish_coalesce(lhs, rhs, keeps_literal, span);
         }
         match op {
             BinOp::Add => {
@@ -1342,6 +1380,7 @@ impl Inferer<'_> {
                 // type is TS-style: the branch that keeps the LHS
                 // contributes only the values that can short-circuit
                 // there (`falsy_part` for `&&`, `truthy_part` for `||`).
+                self.keeps_literal_types = keeps_literal;
                 let (typed_lhs, lhs_ty) = self.infer_expr(lhs, None)?;
                 let mut condition_error = false;
                 if matches!(lhs_ty.peel(), Type::Unknown) {
@@ -1371,6 +1410,7 @@ impl Inferer<'_> {
                     BinOp::Or => false_env,
                     _ => return Err(super::inference_failure("matched And | Or above")),
                 };
+                self.keeps_literal_types = keeps_literal;
                 let (typed_rhs, rhs_ty) =
                     self.infer_conditional_operand(rhs, &rhs_env, expected)?;
                 if matches!(rhs_ty.peel(), Type::Void | Type::Never) {
@@ -4371,6 +4411,7 @@ impl Inferer<'_> {
         parts: Vec<String>,
         exprs: Vec<ExprId>,
         substitution_spans: Vec<Span>,
+        expected: Option<&Type>,
         span: Span,
     ) -> Result<(TypedExprKind, Type), CompilerFailure> {
         if parts.len().checked_sub(1) != Some(exprs.len())
@@ -4427,16 +4468,22 @@ impl Inferer<'_> {
         let result_ty = if had_error { Type::Error } else { Type::String };
 
         // Single-operand case (e.g. `` `${x}` ``): the lone
-        // interpolation *is* the result. Return its kind+type so the
-        // outer `infer_expr` push re-uses the existing node's span /
-        // ty rather than synthesising an extra wrapper.
+        // interpolation *is* the result. Return its kind so the outer
+        // `infer_expr` push re-uses the existing node rather than
+        // synthesising an extra wrapper.
         if operands.len() == 1 {
             let single = self
                 .typed_ast
                 .try_expr(operands[0])
                 .map_err(crate::typechecker::arena_failure)?
                 .clone();
-            return Ok((single.kind, single.ty));
+            // A template is a `string` whatever it interpolates, as in
+            // TypeScript: `` `${h}` `` with `h: "hello"` is not `"hello"`,
+            // unless a string literal type is expected of it.
+            let keeps_literal = matches!(single.ty, Type::StringLiteral(_))
+                && expects_literal(expected, |ty| matches!(ty, Type::StringLiteral(_)));
+            let ty = if keeps_literal { single.ty } else { result_ty };
+            return Ok((single.kind, ty));
         }
 
         // Defensive: the parser guarantees `exprs.len() >= 1` (the
@@ -5074,18 +5121,19 @@ impl Inferer<'_> {
                         // narrower literal-return shape the inferer
                         // produced. Keeping the override shape makes
                         // the codegen field-slot lookup deterministic.
-                        // An object-literal property is mutable, so an inferred literal
+                        // An object-literal property is mutable, so a fresh literal
                         // widens: `const a = 1; const o = { k: a };` gives `{ k: number }`
-                        // and `o.k = 5` stays legal, as in TypeScript. A field the
-                        // surrounding annotation pins keeps that annotation's type.
+                        // and `o.k = 5` stays legal, as in TypeScript. A literal type
+                        // from a declaration stays (`{ k: "x" as "x" }`), and a field
+                        // the surrounding annotation pins keeps that annotation's type.
                         let pinned = expected_fields
                             .as_ref()
                             .is_some_and(|m| m.contains_key(&field.name.name));
-                        let field_ty = override_sig.unwrap_or(if pinned {
-                            value_ty
-                        } else {
-                            value_ty.widen_literal()
-                        });
+                        let field_ty = match override_sig {
+                            Some(signature) => signature,
+                            None if pinned => value_ty,
+                            None => self.widen_fresh_literals(typed_value, &value_ty)?,
+                        };
                         if has_spread {
                             let source_ty = Type::Object {
                                 index: None,
@@ -5653,6 +5701,14 @@ impl Inferer<'_> {
             Some(t) => t.clone(),
             None => Type::Error,
         });
+        // The seed widened every literal type to check the elements against;
+        // the regular ones stay, as in TypeScript: `[h]` with `h: "hello"` is
+        // `"hello"[]`.
+        let element_ty = if hint_pins_element_ty {
+            element_ty
+        } else {
+            self.kept_element_type(element_ty, &typed_elements)?
+        };
 
         Ok((
             TypedExprKind::ArrayLiteral {
@@ -7243,9 +7299,17 @@ impl Inferer<'_> {
 
         // Push scope, bind params.
         self.scopes.push();
-        for p in &typed_params {
-            self.scopes
-                .insert(p.name.name.clone(), p.ty.clone(), false, p.name.span);
+        for (p, decl) in typed_params.iter().zip(params) {
+            // A parameter typed only by the expected function type takes
+            // whatever literals that type was inferred with, so its literal
+            // types count as fresh.
+            if decl.ty.is_some() {
+                self.scopes
+                    .insert_annotated_param(p.name.name.clone(), p.ty.clone(), p.name.span);
+            } else {
+                self.scopes
+                    .insert(p.name.name.clone(), p.ty.clone(), false, p.name.span);
+            }
         }
         // Fresh narrowing stack for the body, seeded with the `const`-rooted
         // narrowings that legally cross the boundary. Params must already be in
@@ -8030,6 +8094,7 @@ impl Inferer<'_> {
         then_: ExprId,
         else_: ExprId,
         expected: Option<&Type>,
+        keeps_literal: bool,
         _span: Span,
     ) -> Result<(TypedExprKind, Type), CompilerFailure> {
         let (typed_cond, cond_ty) = self.infer_expr(cond, None)?;
@@ -8038,10 +8103,12 @@ impl Inferer<'_> {
 
         let (true_env, false_env) = self.predicate_envs(typed_cond)?;
 
+        self.keeps_literal_types = keeps_literal;
         let (typed_then, then_ty) = self.infer_conditional_operand(then_, &true_env, expected)?;
         let then_span = self.ast.try_expr(then_).map_err(super::arena_failure)?.span;
         let wrapped_then = self.wrap_narrow_exprs(typed_then, &true_env, then_span)?;
 
+        self.keeps_literal_types = keeps_literal;
         let (typed_else, else_ty) = self.infer_conditional_operand(else_, &false_env, expected)?;
         let else_span = self.ast.try_expr(else_).map_err(super::arena_failure)?.span;
         let wrapped_else = self.wrap_narrow_exprs(typed_else, &false_env, else_span)?;
@@ -8064,9 +8131,12 @@ impl Inferer<'_> {
         &mut self,
         lhs: ExprId,
         rhs: ExprId,
+        keeps_literal: bool,
         span: Span,
     ) -> Result<(TypedExprKind, Type), CompilerFailure> {
+        self.keeps_literal_types = keeps_literal;
         let (typed_lhs, lhs_ty) = self.infer_expr(lhs, None)?;
+        self.keeps_literal_types = keeps_literal;
         let (typed_rhs, rhs_ty) =
             self.infer_conditional_operand(rhs, &super::narrowing::NarrowEnv::new(), None)?;
 
@@ -10750,18 +10820,15 @@ mod tests {
     #[test]
     fn logical_and_correct() {
         let ta = run_clean("let x: boolean = true && false;");
-        assert_eq!(nth_decl_value_ty(&ta, 0), Type::Boolean);
+        assert_eq!(nth_decl_value_ty(&ta, 0), Type::BooleanLiteral(false));
     }
 
     #[test]
-    fn logical_and_number_lhs_widens_result() {
-        // `1` widens to `number` (no literal-type inference without a hint),
-        // so the falsy part of the lhs survives in the result union.
+    fn logical_and_keeps_literal_operands() {
+        // A `let` initializer keeps its literal types, as in TypeScript: `1`
+        // is never falsy, so the result is the right side's `true`.
         let ta = run_clean("let x: number | boolean = 1 && true;");
-        assert_eq!(
-            nth_decl_value_ty(&ta, 0),
-            Type::union(vec![Type::Number, Type::Boolean])
-        );
+        assert_eq!(nth_decl_value_ty(&ta, 0), Type::BooleanLiteral(true));
     }
 
     #[test]
@@ -12334,7 +12401,7 @@ mod invariant_tests {
         super::super::test_support::with_inferer(|tc| {
             let span = Span::at(crate::FileId(0));
             assert!(matches!(
-                tc.lower_template_literal(Vec::new(), Vec::new(), Vec::new(), span),
+                tc.lower_template_literal(Vec::new(), Vec::new(), Vec::new(), None, span),
                 Err(CompilerFailure::Internal { .. })
             ));
             let part = ChainPart::NonNull { span };

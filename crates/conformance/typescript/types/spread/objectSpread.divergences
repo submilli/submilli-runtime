@@ -1,12 +1,4 @@
-types: 169 of 308 tsc entries compared, 52 differ
-
-line 8: { ...o, c: false }
-  tsc:  { c: false; a: number; b: string; }
-  ours: { a: number; b: string; c: boolean }
-
-line 10: { c: false, ...o }
-  tsc:  { a: number; b: string; c: false; }
-  ours: { a: number; b: string; c: boolean }
+types: 169 of 308 tsc entries compared, 50 differ
 
 line 14: { ...{ a: 3, ...{ b: false, c: 'overriden' } }, c: 'whatever' }
   tsc:  { c: string; b: false; a: number; }

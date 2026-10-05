@@ -1,5 +1,1 @@
-types: 7 of 23 tsc entries compared, 1 differ
-
-line 12: true ? 1 : ''
-  tsc:  "" | 1
-  ours: number | string
+types: 7 of 23 tsc entries compared, 0 differ

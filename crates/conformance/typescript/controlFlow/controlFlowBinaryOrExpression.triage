@@ -1,3 +1,2 @@
-line 5 type: bug SUB-1204 a literal widens to its base type where tsc keeps the literal type
 line 6, 10 type: by-design spec §1.6 an assignment that may not run installs no narrowing, so the variable keeps its declared type
 line 9 type: bug SUB-1204 a literal widens to its base type where tsc keeps the literal type; also bug SUB-1212 `||` keeps `boolean` whole in its left operand's truthy part instead of `true`

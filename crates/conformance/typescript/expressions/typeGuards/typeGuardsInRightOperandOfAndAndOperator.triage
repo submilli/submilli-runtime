@@ -1,7 +1,6 @@
 line 9, 13, 23, 24 extra: by-design spec §1.6 `&&` keeps `number` and `boolean` whole in its falsy part, where tsc narrows to `0` or `false`
 line 38, 39 extra: bug SUB-1156 narrowing doesn't follow a value through the truthiness of an assignment; also bug SUB-1204 a literal widens to its base type where tsc keeps the literal type; also by-design spec §1.6 `&&` keeps `number` and `boolean` whole in its falsy part, where tsc narrows to `0` or `false`
 line 40 extra: bug SUB-1156 narrowing doesn't follow a value through the truthiness of an assignment; also bug SUB-1204 a literal widens to its base type where tsc keeps the literal type
-line 42 extra: bug SUB-1204 a literal widens to its base type where tsc keeps the literal type
 line 44 extra: bug SUB-1156 narrowing doesn't follow a value through the truthiness of an assignment
 line 9, 13 type: bug SUB-1204 a literal widens to its base type where tsc keeps the literal type; also by-design spec §1.6 `&&` keeps `number` and `boolean` whole in its falsy part, where tsc narrows to `0` or `false`
 line 23 type: by-design spec §1.6 `&&` keeps `number` and `boolean` whole in its falsy part, where tsc narrows to `0` or `false`
@@ -9,4 +8,3 @@ line 24 type: bug SUB-1156 narrowing doesn't follow a value through the truthine
 line 25, 44 type: bug SUB-1156 narrowing doesn't follow a value through the truthiness of an assignment
 line 38, 39 type: bug SUB-1156 narrowing doesn't follow a value through the truthiness of an assignment; also bug SUB-1204 a literal widens to its base type where tsc keeps the literal type; also by-design spec §1.6 `&&` keeps `number` and `boolean` whole in its falsy part, where tsc narrows to `0` or `false`
 line 40 type: bug SUB-1156 narrowing doesn't follow a value through the truthiness of an assignment; also bug SUB-1204 a literal widens to its base type where tsc keeps the literal type
-line 42 type: bug SUB-1204 a literal widens to its base type where tsc keeps the literal type

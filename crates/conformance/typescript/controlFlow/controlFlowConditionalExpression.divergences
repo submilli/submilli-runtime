@@ -1,16 +1,4 @@
-types: 13 of 16 tsc entries compared, 4 differ
-
-line 5: cond ? x = "" : x = 3
-  tsc:  "" | 3
-  ours: number | string
-
-line 5: x = ""
-  tsc:  ""
-  ours: string
-
-line 5: x = 3
-  tsc:  3
-  ours: number
+types: 13 of 16 tsc entries compared, 1 differ
 
 line 6: x
   tsc:  string | number

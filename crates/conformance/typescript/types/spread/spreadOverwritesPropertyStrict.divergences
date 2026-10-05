@@ -6,7 +6,7 @@ line 17: { x: 1, ...obj }
 
 line 26: { command: "hi", ...{ spoiler: true }, spoiler2: true, ...t }
   tsc:  { command: string; ok: string; spoiler2: true; spoiler: true; }
-  ours: { command: string; ok: string; spoiler: boolean; spoiler2: boolean }
+  ours: { command: string; ok: string; spoiler: boolean; spoiler2: true }
 
 line 26: { spoiler: true }
   tsc:  { spoiler: true; }

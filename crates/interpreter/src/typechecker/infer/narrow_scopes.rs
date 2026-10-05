@@ -319,7 +319,7 @@ impl<'a> Inferer<'a> {
 
     /// Declared type of a depth-0 path's root — the `from_ty` a seeded region
     /// casts away from. Keeps `null`: the cast is declared → narrowed.
-    fn declared_root_ty(&self, path: &narrowing::ReferencePath) -> Option<Type> {
+    pub(super) fn declared_root_ty(&self, path: &narrowing::ReferencePath) -> Option<Type> {
         match &path.root {
             narrowing::BindingId::Local { name, .. } => Some(self.scopes.get(name)?.ty.clone()),
             narrowing::BindingId::This => self.current_class.clone(),
