@@ -36,7 +36,16 @@ pub struct HttpRequest {
 /// Authorizes one redirect hop before any byte of it is sent.
 pub trait RedirectGuard: Send + Sync + std::fmt::Debug {
     fn authorize(&self, hop: &RedirectHop<'_>) -> Result<(), RedirectDenied>;
-    fn audit_egress_denial(&self, _hop: &RedirectHop<'_>) {}
+    fn audit_egress_denial(&self, _hop: &RedirectHop<'_>, _at: EgressAt) {}
+}
+
+/// Which request an egress refusal belongs to, for a guard that records decisions.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EgressAt {
+    /// The original request, or the redirect hop the guard last authorized.
+    CurrentHop,
+    /// A redirect hop refused before the guard authorized it.
+    NewHop,
 }
 
 /// The request a redirect is about to send.
@@ -351,14 +360,20 @@ impl ReqwestHttpClient {
     /// a denied destination never receives a request or its body.
     async fn follow_redirects(&self, req: &HttpRequest) -> Result<reqwest::Response, HttpError> {
         let mut hop = self.initial_hop(req).inspect_err(|error| {
-            audit_egress(req, &req.url, &req.method, error);
+            audit_egress(req, &req.url, &req.method, error, EgressAt::CurrentHop);
         })?;
         let initial = hop.url.clone();
         let deadline = Deadline::new(req.timeout_ms);
         let mut redirects = 0;
         loop {
             let resp = self.send_hop(&hop, &deadline).await.inspect_err(|error| {
-                audit_egress(req, hop.url.as_str(), hop.method.as_str(), error);
+                audit_egress(
+                    req,
+                    hop.url.as_str(),
+                    hop.method.as_str(),
+                    error,
+                    EgressAt::CurrentHop,
+                );
             })?;
             let Some(next) = redirect_location(&resp, &hop.url) else {
                 return Ok(resp);
@@ -413,7 +428,13 @@ impl ReqwestHttpClient {
         }
         self.check_literal_ip(hop.url.as_str())
             .inspect_err(|error| {
-                audit_egress(req, hop.url.as_str(), hop.method.as_str(), error);
+                audit_egress(
+                    req,
+                    hop.url.as_str(),
+                    hop.method.as_str(),
+                    error,
+                    EgressAt::NewHop,
+                );
             })?;
         let Some(guard) = &req.redirect_guard else {
             return Ok(());
@@ -571,13 +592,19 @@ impl HttpClient for ReqwestHttpClient {
         body: &mut (dyn std::io::Write + Send),
     ) -> Result<HttpResponse, HttpError> {
         let hop = self.initial_hop(req).inspect_err(|error| {
-            audit_egress(req, &req.url, &req.method, error);
+            audit_egress(req, &req.url, &req.method, error, EgressAt::CurrentHop);
         })?;
         let resp = self
             .send_hop(&hop, &Deadline::new(req.timeout_ms))
             .await
             .inspect_err(|error| {
-                audit_egress(req, hop.url.as_str(), hop.method.as_str(), error);
+                audit_egress(
+                    req,
+                    hop.url.as_str(),
+                    hop.method.as_str(),
+                    error,
+                    EgressAt::CurrentHop,
+                );
             })?;
         let status = resp.status().as_u16();
         let status_text = resp.status().canonical_reason().unwrap_or("").to_string();
@@ -868,17 +895,18 @@ impl<W: std::io::Write> DecodeSink<W> {
     }
 }
 
-fn audit_egress(req: &HttpRequest, url: &str, method: &str, error: &HttpError) {
+fn audit_egress(req: &HttpRequest, url: &str, method: &str, error: &HttpError, at: EgressAt) {
     if !matches!(error, HttpError::EgressDenied(_)) {
         return;
     }
     if let (Some(guard), Ok(url)) = (&req.redirect_guard, url::Url::parse(url)) {
-        guard.audit_egress_denial(&RedirectHop {
+        let hop = RedirectHop {
             method,
             url: &url,
             method_rewritten: method != req.method,
             body_len: 0,
-        });
+        };
+        guard.audit_egress_denial(&hop, at);
     }
 }
 

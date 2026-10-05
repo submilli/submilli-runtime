@@ -22,12 +22,13 @@ use std::sync::Arc;
 use wasmtime::{FuncType, HeapType, Linker, RefType, StructType, Val, ValType};
 
 use crate::runtime::StoreData;
+use crate::runtime::decision::CallTicket;
 use crate::runtime::fuel;
 use crate::runtime::host::{register_host_fn, register_host_fn_async};
 use crate::runtime::intrinsic_types::{IntrinsicTypes, build_intrinsic_types};
 use crate::runtime::session_kv::{SessionKvEntry, SessionKvError, SessionKvPage, SessionKvStore};
 use crate::stdlib::abi::{self, backing_struct, f64_field, install_field_getters, string_field};
-use crate::stdlib::shared::check_security;
+use crate::stdlib::shared::{check_security, check_security_call};
 
 pub const MODULE_NAME: &str = "submilli:session";
 
@@ -77,7 +78,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
                 let key = read_key(caller, abi_arg(params, 0)?, "get")?;
                 gate(caller, "session.read", &key)?;
                 let store = provider(caller, "get")?;
-                let Some(payload) = store.get(&key).map_err(|e| trap(caller, &e))? else {
+                let Some(payload) = store.get(&key).map_err(|e| trap(caller, None, &e))? else {
                     *abi_result(results, 0)? = Val::AnyRef(None);
                     return Ok(());
                 };
@@ -102,8 +103,9 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
                 let key = read_key(caller, abi_arg(params, 0)?, "has")?;
                 gate(caller, "session.read", &key)?;
                 let store = provider(caller, "has")?;
-                *abi_result(results, 0)? =
-                    Val::I32(i32::from(store.has(&key).map_err(|e| trap(caller, &e))?));
+                *abi_result(results, 0)? = Val::I32(i32::from(
+                    store.has(&key).map_err(|e| trap(caller, None, &e))?,
+                ));
                 Ok(())
             })
         },
@@ -118,14 +120,16 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         |caller, params, _results| {
             Box::pin(async move {
                 let key = read_key(caller, abi_arg(params, 0)?, "set")?;
-                gate(caller, "session.write", &key)?;
+                let ticket = gate(caller, "session.write", &key)?;
                 // Serialization runs before the provider is consulted: a value
                 // with no JSON form must leave the previous entry intact.
                 let payload = value::serialize(caller, abi_arg(params, 1)?).await?;
                 // Written to the store: code units, two bytes each.
                 fuel::charge(&mut *caller, fuel::IO, 2 * payload.len() as u64)?;
                 let store = provider(caller, "set")?;
-                store.set(&key, &payload).map_err(|e| trap(caller, &e))
+                store
+                    .set(&key, &payload)
+                    .map_err(|e| trap(caller, ticket, &e))
             })
         },
     )?;
@@ -141,8 +145,9 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
                 let key = read_key(caller, abi_arg(params, 0)?, "remove")?;
                 gate(caller, "session.remove", &key)?;
                 let store = provider(caller, "remove")?;
-                *abi_result(results, 0)? =
-                    Val::I32(i32::from(store.remove(&key).map_err(|e| trap(caller, &e))?));
+                *abi_result(results, 0)? = Val::I32(i32::from(
+                    store.remove(&key).map_err(|e| trap(caller, None, &e))?,
+                ));
                 Ok(())
             })
         },
@@ -266,7 +271,7 @@ fn list(
 
     let mut scanned = store
         .scan(resume_after.as_deref(), &prefix, MAX_SCAN_PER_PAGE)
-        .map_err(|e| trap(caller, &e))?;
+        .map_err(|e| trap(caller, None, &e))?;
 
     // The `limit` applies to candidates, not to survivors of the filter: taking
     // `limit` candidates and only then filtering keeps the cursor independent of
@@ -416,8 +421,8 @@ fn gate(
     caller: &mut wasmtime::Caller<'_, StoreData>,
     capability: &str,
     key: &[u16],
-) -> wasmtime::Result<()> {
-    check_security(
+) -> wasmtime::Result<Option<CallTicket>> {
+    check_security_call(
         caller,
         capability,
         serde_json::json!({ "key": String::from_utf16_lossy(key) }),
@@ -456,7 +461,14 @@ fn cursor_trap(error: cursor::CursorError) -> wasmtime::Error {
 /// Every store failure reaches the guest as a catchable error. The `Display`
 /// impl already excludes the stored value, so the message can be passed
 /// through whole.
-fn trap(caller: &wasmtime::Caller<'_, StoreData>, error: &SessionKvError) -> wasmtime::Error {
+///
+/// A write-quota refusal continues the `session.write` call `ticket` names; any other
+/// operation passes `None`, so the refusal is recorded as a call of its own.
+fn trap(
+    caller: &wasmtime::Caller<'_, StoreData>,
+    ticket: Option<CallTicket>,
+    error: &SessionKvError,
+) -> wasmtime::Error {
     match error {
         SessionKvError::InvalidKey { .. } => crate::runtime::host::type_error(error.to_string()),
         SessionKvError::LimitExceeded {
@@ -474,6 +486,7 @@ fn trap(caller: &wasmtime::Caller<'_, StoreData>, error: &SessionKvError) -> was
             };
             crate::stdlib::shared::audit_denial_in(
                 caller,
+                ticket,
                 &who,
                 "session.write",
                 &serde_json::json!({}),

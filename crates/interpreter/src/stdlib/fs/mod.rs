@@ -23,6 +23,7 @@ use wasmtime::{
     Rooted, StorageType, StructRef, StructRefPre, StructType, Val, ValType,
 };
 
+use crate::runtime::decision::CallTicket;
 use crate::runtime::fs::{
     ContainError, ContentPath, FileIdentity, LinkPath, MAX_REMOVE_ENTRIES, guest_normalize,
     resolve_link,
@@ -42,7 +43,7 @@ use crate::stdlib::abi::{
     self, backing_struct, externref_field, f64_field, install_field_getters, string_field,
 };
 use crate::stdlib::shared::{
-    atomic_write, check_security, contain_trap, quota_refusal, refuse_volume_root,
+    atomic_write, check_security_call, contain_trap, quota_refusal, refuse_volume_root,
     require_writable, resolve_content_or_trap, resolve_link_or_trap, write_target_trap,
 };
 use handles::{
@@ -438,7 +439,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
                 } else {
                     read_uint8_array_arg(&mut *caller, abi_arg(params, 1)?, &ctx)?
                 };
-                gate(
+                let ticket = gate(
                     &mut *caller,
                     "fs.write",
                     serde_json::json!({
@@ -447,7 +448,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
                     }),
                 )?;
                 let resolved = resolve_content_or_trap(caller.data(), &path, &ctx)?;
-                require_writable(&*caller, resolved.placement(), "fs.write", &path)?;
+                require_writable(&*caller, ticket, resolved.placement(), "fs.write", &path)?;
                 refuse_volume_root(&resolved, &ctx, &path)?;
                 let quota = resolved.placement().quota().cloned();
                 fuel::charge(&mut *caller, fuel::IO, bytes.len() as u64)?;
@@ -469,14 +470,14 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         |caller, params, _results| {
             let path = read_string_arg(&mut *caller, abi_arg(params, 0)?, "fs.mkdir")?;
             let recursive = i32_flag(abi_arg(params, 1)?, "fs.mkdir (recursive)")?;
-            gate(
+            let ticket = gate(
                 &mut *caller,
                 "fs.mkdir",
                 serde_json::json!({ "path": &path, "recursive": recursive }),
             )?;
             let resolved = resolve_content_or_trap(caller.data(), &path, "fs.mkdir")?;
             if !(recursive && resolved.is_existing_dir()) {
-                require_writable(&*caller, resolved.placement(), "fs.mkdir", &path)?;
+                require_writable(&*caller, ticket, resolved.placement(), "fs.mkdir", &path)?;
             }
             let res = if recursive {
                 resolved.create_dir_all()
@@ -497,13 +498,13 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         |caller, params, _results| {
             let path = read_string_arg(&mut *caller, abi_arg(params, 0)?, "fs.remove")?;
             let recursive = i32_flag(abi_arg(params, 1)?, "fs.remove (recursive)")?;
-            gate(
+            let ticket = gate(
                 &mut *caller,
                 "fs.remove",
                 serde_json::json!({ "path": &path, "recursive": recursive }),
             )?;
             let resolved = resolve_link_or_trap(caller.data(), &path, "fs.remove")?;
-            require_writable(&*caller, resolved.placement(), "fs.remove", &path)?;
+            require_writable(&*caller, ticket, resolved.placement(), "fs.remove", &path)?;
             // `remove_dir_all(".")` drains the root and only then fails on the self-unlink,
             // so without this the guest destroys the operator's volume and is told the call
             // failed. Refuse before touching anything. A mount point is the root of its
@@ -536,15 +537,21 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         |caller, params, _results| {
             let from = read_string_arg(&mut *caller, abi_arg(params, 0)?, "fs.move (from)")?;
             let to = read_string_arg(&mut *caller, abi_arg(params, 1)?, "fs.move (to)")?;
-            gate(
+            let ticket = gate(
                 &mut *caller,
                 "fs.move",
                 serde_json::json!({ "from": &from, "to": &to }),
             )?;
             let from_resolved = resolve_link_or_trap(caller.data(), &from, "fs.move")?;
             let to_resolved = resolve_link_or_trap(caller.data(), &to, "fs.move")?;
-            require_writable(&*caller, from_resolved.placement(), "fs.move", &from)?;
-            require_writable(&*caller, to_resolved.placement(), "fs.move", &to)?;
+            require_writable(
+                &*caller,
+                ticket,
+                from_resolved.placement(),
+                "fs.move",
+                &from,
+            )?;
+            require_writable(&*caller, ticket, to_resolved.placement(), "fs.move", &to)?;
             let pair = format!("{from} -> {to}");
             if from_resolved.is_root() || to_resolved.is_root() {
                 wasmtime::bail!(
@@ -601,7 +608,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
             let from = read_string_arg(&mut *caller, abi_arg(params, 0)?, "fs.copy (from)")?;
             let to = read_string_arg(&mut *caller, abi_arg(params, 1)?, "fs.copy (to)")?;
             let recursive = i32_flag(abi_arg(params, 2)?, "fs.copy (recursive)")?;
-            gate(
+            let ticket = gate(
                 &mut *caller,
                 "fs.copy",
                 serde_json::json!({
@@ -624,7 +631,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
             // The content path routes to the same volume as the link path, and resolves
             // even when the destination's parent does not exist yet.
             let to_volume = resolve_content_or_trap(caller.data(), &to, "fs.copy")?;
-            require_writable(&*caller, to_volume.placement(), "fs.copy", &to)?;
+            require_writable(&*caller, ticket, to_volume.placement(), "fs.copy", &to)?;
             from_resolved
                 .check_copy_destination(&to_volume)
                 .map_err(|e| contain_trap("fs.copy", &pair, &e))?;
@@ -670,12 +677,12 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         /* deterministic = */ false,
         |caller, params, results| {
             let path = read_string_arg(&mut *caller, abi_arg(params, 0)?, "fs.writer (path)")?;
-            gate(
+            let ticket = gate(
                 &mut *caller,
                 "fs.write",
                 serde_json::json!({ "path": &path }),
             )?;
-            *abi_result(results, 0)? = open_writer(caller, &path)?;
+            *abi_result(results, 0)? = open_writer(caller, ticket, &path)?;
             Ok(())
         },
     )?;
@@ -1060,9 +1067,13 @@ fn read_byte_range(
 
 /// `writer(path)`: open the temp sibling and wrap the [`ChargedFileWriter`] in
 /// a `$FileWriterBacking`.
-fn open_writer(caller: &mut Caller<'_, StoreData>, path: &str) -> wasmtime::Result<Val> {
+fn open_writer(
+    caller: &mut Caller<'_, StoreData>,
+    ticket: Option<CallTicket>,
+    path: &str,
+) -> wasmtime::Result<Val> {
     let resolved = resolve_content_or_trap(caller.data(), path, "fs.writer")?;
-    require_writable(&*caller, resolved.placement(), "fs.write", path)?;
+    require_writable(&*caller, ticket, resolved.placement(), "fs.write", path)?;
     refuse_volume_root(&resolved, "fs.writer", path)?;
     let tmp = resolved.temp_sibling();
     let file = tmp
@@ -1484,9 +1495,10 @@ fn gate(
     caller: &mut Caller<'_, StoreData>,
     capability: &str,
     context: serde_json::Value,
-) -> wasmtime::Result<()> {
-    check_security(&mut *caller, capability, context)?;
-    fuel::charge(&mut *caller, fuel::SYSCALL, 1)
+) -> wasmtime::Result<Option<CallTicket>> {
+    let ticket = check_security_call(&mut *caller, capability, context)?;
+    fuel::charge(&mut *caller, fuel::SYSCALL, 1)?;
+    Ok(ticket)
 }
 
 /// The guest-relative prefix a listing's entries carry: `""` at the root, else `"tree/"`.

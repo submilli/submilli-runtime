@@ -118,7 +118,7 @@ pub(crate) fn check_security_call(
     fuel::charge_host_fuel(&mut store, fuel::GATE)?;
     let caller = running_package(&store).map_err(|error| {
         if let PrincipalError::Unknown(ref unknown) = error {
-            audit_denial_in(
+            audit_entry_denial(
                 &store,
                 unknown.label,
                 capability,
@@ -210,8 +210,22 @@ pub(crate) fn authorize_capability(
         );
         return Err(permission_denied_invariant(caller, capability, reason));
     }
+    check_and_audit(security_check, caller, capability, context, cwd, site)
+        .map_err(|reason| permission_denied(caller, capability, reason))
+}
+
+/// Asks the policy whether `caller` may use `capability`, and audits its answer with the
+/// recorder's explanation. A denial returns the policy's reason.
+pub(crate) fn check_and_audit(
+    security_check: &dyn SecurityCheck,
+    caller: &str,
+    capability: &str,
+    context: &serde_json::Value,
+    cwd: &str,
+    site: CallSite,
+) -> Result<(), String> {
     let outcome = security_check.check_with_cwd(caller, capability, context, cwd);
-    // The explanation is for the recorder alone; enforcement above never reads it.
+    // The explanation is for the recorder alone; enforcement never reads it.
     let explanation = security_check
         .recorder()
         .and_then(|_| security_check.explain(caller, capability, context, cwd));
@@ -240,28 +254,9 @@ pub(crate) fn authorize_capability(
                 .with_explanation(explanation.as_ref())
                 .with_site(site),
             );
-            Err(permission_denied(caller, capability, reason))
+            Err(reason)
         }
     }
-}
-
-pub(crate) fn audit_denial(
-    security: &dyn SecurityCheck,
-    caller: &str,
-    capability: &str,
-    context: &serde_json::Value,
-    source: &str,
-    reason: &str,
-) {
-    audit_denial_at(
-        security,
-        caller,
-        capability,
-        context,
-        source,
-        reason,
-        CallSite::default(),
-    );
 }
 
 pub(crate) fn audit_denial_at(
@@ -287,9 +282,9 @@ pub(crate) fn audit_denial_at(
     );
 }
 
-/// [`audit_denial`] for a host function holding the store: a further refusal of the host
-/// call already being recorded, with the program line that led to it.
-pub(crate) fn audit_denial_in(
+/// Audits a refusal at the entry of a host call as a call of its own, with the program
+/// line that led to it. For a refusal after the call's gate, see [`audit_denial_in`].
+pub(crate) fn audit_entry_denial(
     store: &impl wasmtime::AsContext<Data = StoreData>,
     caller: &str,
     capability: &str,
@@ -300,9 +295,31 @@ pub(crate) fn audit_denial_in(
     let security = store.as_context().data().security_check.as_ref();
     let ticket = security
         .recorder()
-        .map(|recorder| recorder.continue_call(caller, capability, source_line(store)));
+        .map(|recorder| recorder.begin_call(caller, capability, source_line(store)));
     audit_denial_at(
         security,
+        caller,
+        capability,
+        context,
+        source,
+        reason,
+        CallSite::new(ticket, EntryPath::GatedOp),
+    );
+}
+
+/// Audits a further refusal inside the host call `ticket` names, such as a read-only or
+/// quota refusal after the policy allowed it. Without a ticket the refusal is its own call.
+pub(crate) fn audit_denial_in(
+    store: &impl wasmtime::AsContext<Data = StoreData>,
+    ticket: Option<CallTicket>,
+    caller: &str,
+    capability: &str,
+    context: &serde_json::Value,
+    source: &str,
+    reason: &str,
+) {
+    audit_denial_at(
+        store.as_context().data().security_check.as_ref(),
         caller,
         capability,
         context,
@@ -335,10 +352,12 @@ pub fn resolve_link_or_trap(
 }
 
 /// Refuse a write into a volume mounted read-only, attributed to the running
-/// package. Call after the capability check and resolution, before any other work,
-/// so the policy sees every attempt and a refused call changes nothing.
+/// package. Call after the capability check and resolution, before any other
+/// work, so the policy sees every attempt and a refused call changes nothing.
+/// `ticket` is the host call's gate, which the refusal continues.
 pub(crate) fn require_writable(
     store: impl wasmtime::AsContext<Data = StoreData>,
+    ticket: Option<CallTicket>,
     placement: &Placement,
     capability: &str,
     guest_path: &str,
@@ -350,6 +369,7 @@ pub(crate) fn require_writable(
         if let PrincipalError::Unknown(ref unknown) = error {
             audit_denial_in(
                 &store,
+                ticket,
                 unknown.label,
                 capability,
                 &serde_json::json!({ "path": guest_path }),
@@ -361,6 +381,7 @@ pub(crate) fn require_writable(
     })?;
     audit_denial_in(
         &store,
+        ticket,
         &caller,
         capability,
         &serde_json::json!({ "path": guest_path }),

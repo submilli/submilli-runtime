@@ -39,7 +39,7 @@ pub use host::{
 };
 pub use json::JSON_MODULE_NAME;
 pub use limits::{
-    DEFAULT_MAX_STORE_BYTES, HostBudget, MemoryCapExceeded, MemoryExhausted, TenantLimits,
+    DEFAULT_MAX_STORE_BYTES, MemoryCapExceeded, MemoryExhausted, TenantLimits,
     install_tenant_limits, is_memory_exhausted,
 };
 pub use llm::{

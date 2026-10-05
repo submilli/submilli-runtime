@@ -5,19 +5,19 @@
 //! exactly what it would without a recorder, and taps the same `audit` calls. Recording
 //! never changes a decision, never fails a call, and never charges guest fuel.
 //!
-//! Record buffers are charged against the store's host-memory cap ([`HostBudget`]) and a
+//! Record buffers are charged against the recorder's own byte budget, separate from the
+//! run's memory limit so that recording never changes a run's memory behavior, and a
 //! per-run decision cap; a run that reaches either is marked truncated rather than refused.
 
 use std::collections::HashMap;
-use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Instant;
 
 use serde::Serialize;
 use serde_json::Value;
 
 use super::StoreData;
-use super::limits::HostBudget;
 use super::security::{AuditDecision, CheckOutcome, SecurityCheck};
 
 /// What the policy decided. `AskHuman` is a denial today (the approval flow is deferred),
@@ -144,10 +144,6 @@ impl CallSite {
 pub trait DecisionRecorder: Send + Sync {
     /// A new host call. `line` is the program line that led to it, when known.
     fn begin_call(&self, caller: &str, capability: &str, line: Option<SourceLine>) -> CallTicket;
-    /// Another decision of the host call already begun for this pair, such as a read-only
-    /// or quota refusal after the policy allowed it; begins a call if none is known.
-    fn continue_call(&self, caller: &str, capability: &str, line: Option<SourceLine>)
-    -> CallTicket;
     /// Marks the latest call's record as a denial the host function treated as a filter.
     fn mark_last_filtered(&self);
 }
@@ -176,7 +172,7 @@ pub struct DecisionRecord {
     pub line: Option<SourceLine>,
     /// A denial the host function swallowed to filter a listing.
     pub filtered: bool,
-    /// The context and near misses were dropped to stay within the host-memory cap.
+    /// The context and near misses were dropped to stay within the recorder's byte budget.
     pub payload_dropped: bool,
 }
 
@@ -186,6 +182,9 @@ pub struct DecisionLogConfig {
     pub max_decisions: usize,
     /// Longest string kept in a recorded context; longer ones end in a marker.
     pub max_context_value_bytes: usize,
+    /// Bytes the recorder may hold, independent of the run's memory limit. Past it, payloads
+    /// are dropped (verdict and digest kept), then whole records.
+    pub max_recorder_bytes: u64,
 }
 
 impl Default for DecisionLogConfig {
@@ -193,6 +192,7 @@ impl Default for DecisionLogConfig {
         Self {
             max_decisions: 10_000,
             max_context_value_bytes: 1024,
+            max_recorder_bytes: 16 * 1024 * 1024,
         }
     }
 }
@@ -201,7 +201,7 @@ impl Default for DecisionLogConfig {
 #[derive(Debug, Clone, Default)]
 pub struct DecisionLogOutput {
     pub records: Vec<DecisionRecord>,
-    /// Some decision was not kept in full: past the cap, over the memory charge, or
+    /// Some decision was not kept in full: past the cap, over the byte budget, or
     /// beyond the pairs the recorder tracks.
     pub truncated: bool,
     /// Decisions not kept at all.
@@ -236,31 +236,35 @@ struct LogState {
 /// The per-run recorder.
 pub struct DecisionLog {
     state: Mutex<LogState>,
-    budget: HostBudget,
     config: DecisionLogConfig,
     started: Instant,
     clock: AtomicU64,
 }
 
 impl DecisionLog {
-    /// Wraps the store's security check in a recording decorator, charging the recorder's
-    /// buffers to the store's host-memory cap. Returns the log to read results from.
-    pub fn install(data: &mut StoreData, config: DecisionLogConfig) -> std::sync::Arc<Self> {
-        let log = std::sync::Arc::new(Self {
+    /// Wraps the store's security check in a recording decorator. Returns the log to read
+    /// results from.
+    ///
+    /// Install it outermost: after any embedder wrapper of the check (such as the server's
+    /// audit decorator). Other wrappers do not forward [`SecurityCheck::recorder`], so a
+    /// recorder installed beneath one is invisible to the host functions that begin calls.
+    pub fn install(data: &mut StoreData, config: DecisionLogConfig) -> Arc<Self> {
+        let log = Arc::new(Self {
             state: Mutex::new(LogState::default()),
-            budget: data.tenant_limits.host_budget(),
             config,
             started: Instant::now(),
             clock: AtomicU64::new(0),
         });
-        data.security_check = std::sync::Arc::new(RecordingCheck {
+        data.security_check = Arc::new(RecordingCheck {
             inner: data.security_check.clone(),
             log: log.clone(),
         });
         log
     }
 
-    /// Takes the records, releasing their memory charge. The log keeps recording after.
+    /// Takes the run's records and releases their byte charge. Call once, when the
+    /// run ends: the truncation flags, drop count, and call numbering describe the
+    /// whole run, so a later call would not describe only its own records.
     pub fn finish(&self) -> DecisionLogOutput {
         let mut state = self.lock();
         let records = std::mem::take(&mut state.records);
@@ -269,13 +273,12 @@ impl DecisionLog {
             truncated: state.truncated,
             dropped: state.dropped,
         };
-        self.budget.release(state.charged);
         state.charged = 0;
         state.pairs.clear();
         output
     }
 
-    fn lock(&self) -> std::sync::MutexGuard<'_, LogState> {
+    fn lock(&self) -> MutexGuard<'_, LogState> {
         // A poisoned lock means a recorder call panicked; the data is still sound to read.
         self.state
             .lock()
@@ -289,10 +292,11 @@ impl DecisionLog {
     }
 
     fn charge(&self, state: &mut LogState, bytes: u64) -> bool {
-        if self.budget.charge(bytes).is_err() {
+        let next = state.charged.saturating_add(bytes);
+        if next > self.config.max_recorder_bytes {
             return false;
         }
-        state.charged = state.charged.saturating_add(bytes);
+        state.charged = next;
         true
     }
 
@@ -336,7 +340,8 @@ impl DecisionLog {
         let mut state = self.lock();
         let ticket = match decision.site.ticket {
             Some(ticket) => ticket,
-            None => self.continue_locked(&mut state, decision.caller, decision.capability, None),
+            // A decision with no call is its own call, never a follow-up of another one.
+            None => self.begin(&mut state, decision.caller, decision.capability, None),
         };
         if state.records.len() >= self.config.max_decisions || state.records.try_reserve(1).is_err()
         {
@@ -368,29 +373,9 @@ impl DecisionLog {
         }
     }
 
-    fn continue_locked(
-        &self,
-        state: &mut LogState,
-        caller: &str,
-        capability: &str,
-        line: Option<SourceLine>,
-    ) -> CallTicket {
-        let known = state
-            .pairs
-            .get(&(caller.to_owned(), capability.to_owned()))
-            .and_then(|pair| pair.last);
-        match known {
-            Some(ticket) => {
-                state.last_call_index = Some(ticket.call_index);
-                ticket
-            }
-            None => self.begin(state, caller, capability, line),
-        }
-    }
-
     fn build(&self, decision: &AuditDecision<'_>, ticket: CallTicket) -> DecisionRecord {
         let digest = digest_of(decision.context);
-        let (context, context_truncated) = if decision.capability == "secrets.get" {
+        let (context, mut context_truncated) = if decision.capability == "secrets.get" {
             // The key name is the record; nothing else a secret read carries is kept.
             let name = decision.context.get("name").cloned().unwrap_or(Value::Null);
             cap_context(
@@ -404,7 +389,7 @@ impl DecisionLog {
             Some(explanation) => (
                 enforced_action(decision.allowed, Some(explanation.action)),
                 explanation.cause.clone(),
-                explanation.near_misses.clone(),
+                self.capped_near_misses(&explanation.near_misses, &mut context_truncated),
             ),
             None => (
                 enforced_action(decision.allowed, None),
@@ -434,15 +419,32 @@ impl DecisionLog {
             payload_dropped: false,
         }
     }
-}
 
-impl Drop for DecisionLog {
-    fn drop(&mut self) {
-        let charged = self.state.get_mut().map_or_else(
-            |poisoned| poisoned.into_inner().charged,
-            |state| state.charged,
-        );
-        self.budget.release(charged);
+    /// Near misses carry the call's actual values, which are as unbounded as the context.
+    fn capped_near_misses(
+        &self,
+        near_misses: &[NearMissRecord],
+        truncated: &mut bool,
+    ) -> Vec<NearMissRecord> {
+        let max = self.config.max_context_value_bytes;
+        near_misses
+            .iter()
+            .map(|miss| NearMissRecord {
+                rule: miss.rule.clone(),
+                filter: miss.filter.clone(),
+                failures: miss
+                    .failures
+                    .iter()
+                    .map(|failure| FailureRecord {
+                        actual: failure
+                            .actual
+                            .as_ref()
+                            .map(|actual| cap_value(actual, max, 0, truncated)),
+                        ..failure.clone()
+                    })
+                    .collect(),
+            })
+            .collect()
     }
 }
 
@@ -450,16 +452,6 @@ impl DecisionRecorder for DecisionLog {
     fn begin_call(&self, caller: &str, capability: &str, line: Option<SourceLine>) -> CallTicket {
         let mut state = self.lock();
         self.begin(&mut state, caller, capability, line)
-    }
-
-    fn continue_call(
-        &self,
-        caller: &str,
-        capability: &str,
-        line: Option<SourceLine>,
-    ) -> CallTicket {
-        let mut state = self.lock();
-        self.continue_locked(&mut state, caller, capability, line)
     }
 
     fn mark_last_filtered(&self) {
@@ -525,19 +517,7 @@ pub(crate) fn cap_context(context: &Value, max_string_bytes: usize) -> (Value, b
 
 fn cap_value(value: &Value, max_string: usize, depth: usize, truncated: &mut bool) -> Value {
     match value {
-        Value::String(text) if text.len() > max_string => {
-            *truncated = true;
-            let mut end = max_string;
-            while end > 0 && !text.is_char_boundary(end) {
-                end -= 1;
-            }
-            let kept = text.get(..end).unwrap_or_default();
-            Value::String(format!(
-                "{kept}…[truncated, {} of {} bytes kept]",
-                kept.len(),
-                text.len()
-            ))
-        }
+        Value::String(text) => Value::String(cap_text(text, max_string, truncated)),
         Value::Array(_) | Value::Object(_) if depth >= MAX_CONTEXT_DEPTH => {
             *truncated = true;
             Value::String("…[truncated, nested too deep]".to_owned())
@@ -562,9 +542,10 @@ fn cap_value(value: &Value, max_string: usize, depth: usize, truncated: &mut boo
                 fields
                     .iter()
                     .take(MAX_CONTEXT_ENTRIES)
-                    .map(|(key, item)| {
+                    .enumerate()
+                    .map(|(position, (key, item))| {
                         (
-                            key.clone(),
+                            capped_key(key, position, max_string, truncated),
                             cap_value(item, max_string, depth + 1, truncated),
                         )
                     })
@@ -575,9 +556,37 @@ fn cap_value(value: &Value, max_string: usize, depth: usize, truncated: &mut boo
     }
 }
 
+/// A capped object key. Two long keys can share their kept prefix, so a cut key
+/// also names its position in the object to keep both entries.
+fn capped_key(key: &str, position: usize, max: usize, truncated: &mut bool) -> String {
+    let capped = cap_text(key, max, truncated);
+    if capped.len() == key.len() {
+        return capped;
+    }
+    format!("{capped} #{position}")
+}
+
+/// `text` cut to `max` bytes at a character boundary, ending in a marker when cut.
+fn cap_text(text: &str, max: usize, truncated: &mut bool) -> String {
+    if text.len() <= max {
+        return text.to_owned();
+    }
+    *truncated = true;
+    let mut end = max;
+    while end > 0 && !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    let kept = text.get(..end).unwrap_or_default();
+    format!(
+        "{kept}…[truncated, {} of {} bytes kept]",
+        kept.len(),
+        text.len()
+    )
+}
+
 struct RecordingCheck {
-    inner: std::sync::Arc<dyn SecurityCheck>,
-    log: std::sync::Arc<DecisionLog>,
+    inner: Arc<dyn SecurityCheck>,
+    log: Arc<DecisionLog>,
 }
 
 impl SecurityCheck for RecordingCheck {
@@ -629,15 +638,15 @@ mod tests {
     use super::*;
     use crate::runtime::Vfs;
 
-    fn log_with(cap: u64, config: DecisionLogConfig) -> (StoreData, std::sync::Arc<DecisionLog>) {
-        let mut data = StoreData::with_vfs_and_cap(Vfs::none(), cap);
+    fn log_with(config: DecisionLogConfig) -> (StoreData, Arc<DecisionLog>) {
+        let mut data = StoreData::with_vfs_and_cap(Vfs::none(), 1 << 20);
         let log = DecisionLog::install(&mut data, config);
         (data, log)
     }
 
     #[test]
     fn a_secret_read_keeps_the_key_name_and_nothing_else() {
-        let (data, log) = log_with(1 << 20, DecisionLogConfig::default());
+        let (data, log) = log_with(DecisionLogConfig::default());
         let context = serde_json::json!({ "name": "api-key", "value": "s3cret" });
         data.security_check.audit(AuditDecision::new(
             "main",
@@ -657,9 +666,12 @@ mod tests {
     }
 
     #[test]
-    fn an_exhausted_memory_budget_keeps_the_verdict_and_drops_the_payload() {
+    fn an_exhausted_recorder_budget_keeps_the_verdict_and_drops_the_payload() {
         // Room for the pair bookkeeping and a bare record, not for a big context.
-        let (data, log) = log_with(2048, DecisionLogConfig::default());
+        let (data, log) = log_with(DecisionLogConfig {
+            max_recorder_bytes: 2048,
+            ..DecisionLogConfig::default()
+        });
         let context = serde_json::json!({ "path": "p".repeat(900) });
         let recorder = data.security_check.recorder().unwrap();
         let ticket = recorder.begin_call("main", "fs.read", None);
@@ -675,7 +687,11 @@ mod tests {
         assert!(record.allowed && record.payload_dropped);
         assert_eq!(record.context, serde_json::Value::Null);
         assert_ne!(record.context_digest, 0, "the digest survives");
-        assert_eq!(data.tenant_limits.host_attached_bytes(), 0, "refunded");
+        assert_eq!(
+            data.tenant_limits.host_attached_bytes(),
+            0,
+            "the run's memory budget is not touched"
+        );
     }
 
     #[test]
@@ -705,17 +721,76 @@ mod tests {
     }
 
     #[test]
-    fn the_log_releases_what_it_charged_when_dropped() {
-        let (data, log) = log_with(1 << 20, DecisionLogConfig::default());
-        let context = serde_json::Value::Null;
-        data.security_check.audit(AuditDecision::new(
-            "main", "x", &context, true, "policy", None, None,
-        ));
-        assert!(data.tenant_limits.host_attached_bytes() > 0);
-        drop(log);
-        let mut data = data;
-        // The decorator held the last reference to the log.
-        data.security_check = crate::runtime::security::default_check();
+    fn finish_refunds_the_recorders_budget() {
+        let (data, log) = log_with(DecisionLogConfig {
+            max_recorder_bytes: 4096,
+            ..DecisionLogConfig::default()
+        });
+        let context = serde_json::json!({ "path": "p".repeat(300) });
+        for _ in 0..2 {
+            data.security_check.audit(AuditDecision::new(
+                "main", "fs.read", &context, true, "policy", None, None,
+            ));
+            let output = log.finish();
+            assert!(!output.truncated && output.records.len() == 1, "{output:?}");
+        }
         assert_eq!(data.tenant_limits.host_attached_bytes(), 0);
+    }
+
+    #[test]
+    fn long_keys_sharing_a_prefix_both_survive_capping() {
+        let long = "k".repeat(100);
+        let value = serde_json::json!({ format!("{long}a"): 1, format!("{long}b"): 2 });
+        let mut truncated = false;
+        let Value::Object(capped) = cap_value(&value, 16, 0, &mut truncated) else {
+            panic!("expected an object");
+        };
+        assert!(truncated);
+        assert_eq!(capped.len(), 2, "{capped:?}");
+        let mut values: Vec<_> = capped.values().cloned().collect();
+        values.sort_by_key(Value::as_i64);
+        assert_eq!(values, vec![serde_json::json!(1), serde_json::json!(2)]);
+    }
+
+    #[test]
+    fn near_miss_actual_values_and_keys_are_capped_like_the_context() {
+        let (data, log) = log_with(DecisionLogConfig {
+            max_context_value_bytes: 16,
+            ..DecisionLogConfig::default()
+        });
+        let explanation = DecisionExplanation {
+            action: DecisionAction::Deny,
+            cause: DecisionCause::Default { caller_block: true },
+            near_misses: vec![NearMissRecord {
+                rule: RuleCitation {
+                    caller: "main".into(),
+                    index: 0,
+                    name: None,
+                },
+                filter: "f".into(),
+                failures: vec![FailureRecord {
+                    comparison: "c".into(),
+                    actual: Some(serde_json::json!({ "k".repeat(100): "v".repeat(100) })),
+                    expected: None,
+                    reason: FailureReasonRecord::NotSatisfied,
+                    negated: false,
+                }],
+            }],
+        };
+        let context = serde_json::json!({});
+        data.security_check.audit(
+            AuditDecision::new("main", "fs.read", &context, false, "policy", None, None)
+                .with_explanation(Some(&explanation)),
+        );
+        let output = log.finish();
+        let [record] = output.records.as_slice() else {
+            panic!("one record");
+        };
+        assert!(record.context_truncated);
+        let actual = record.near_misses[0].failures[0].actual.as_ref().unwrap();
+        assert!(
+            serde_json::to_string(actual).unwrap().len() < 150,
+            "{actual}"
+        );
     }
 }

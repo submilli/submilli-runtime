@@ -38,8 +38,8 @@ use crate::stdlib::abi::{
 };
 use crate::stdlib::dot_segments::refuse_dot_segments;
 use crate::stdlib::shared::{
-    check_security, check_security_call, contain_trap, quota_refusal, refuse_volume_root,
-    require_writable, resolve_content_or_trap,
+    check_security_call, contain_trap, quota_refusal, refuse_volume_root, require_writable,
+    resolve_content_or_trap,
 };
 use redirect_guard::{
     CapabilityGuard, DownloadTarget, GuardedRequest, host_and_path, verb_context,
@@ -51,9 +51,9 @@ pub const MODULE_NAME: &str = "submilli:http";
 pub use declaration::package_declaration;
 pub use policy::NetworkPolicy;
 pub use transport::{
-    AuthProxy, AuthProxyError, HttpClient, HttpError, HttpRequest, HttpResponse, NoopAuthProxy,
-    RedirectDenied, RedirectGuard, RedirectHop, ReqwestHttpClient, default_auth_proxy,
-    default_http_client, describe_error_chain,
+    AuthProxy, AuthProxyError, EgressAt, HttpClient, HttpError, HttpRequest, HttpResponse,
+    NoopAuthProxy, RedirectDenied, RedirectGuard, RedirectHop, ReqwestHttpClient,
+    default_auth_proxy, default_http_client, describe_error_chain,
 };
 pub use transport_policy::{HttpTransportPolicy, TransportPolicyError};
 
@@ -619,7 +619,7 @@ async fn perform_download(
         "http.download",
         target.context(&host_str, &url_path_str),
     )?;
-    check_security(
+    let write_ticket = check_security_call(
         &mut *caller,
         "fs.write",
         serde_json::json!({
@@ -633,7 +633,13 @@ async fn perform_download(
     let resolved = resolve_content_or_trap(caller.data(), &guest_path, "http.download")?;
     // Before the request goes out, so a target that can never be written costs no
     // network traffic.
-    require_writable(&*caller, resolved.placement(), "fs.write", &guest_path)?;
+    require_writable(
+        &*caller,
+        write_ticket,
+        resolved.placement(),
+        "fs.write",
+        &guest_path,
+    )?;
     refuse_volume_root(&resolved, "http.download", &guest_path)?;
 
     if !options.overwrite

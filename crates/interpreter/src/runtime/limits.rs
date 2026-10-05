@@ -90,91 +90,23 @@ impl Drop for HostBytes {
 
 pub struct TenantLimits {
     pub max_total_bytes: u64,
-    observed_bytes: Arc<AtomicU64>,
-    peak_bytes: Arc<AtomicU64>,
+    observed_bytes: u64,
+    peak_bytes: AtomicU64,
     host_attached_bytes: Arc<AtomicU64>,
-}
-
-/// A handle on a store's host-memory accounting that outlives a borrow of its
-/// [`TenantLimits`], for host-side buffers owned by `Arc`s that reach threads
-/// the store does not (the decision recorder). Charges here and through
-/// [`TenantLimits::charge_host_bytes`] draw on the same cap.
-#[derive(Clone)]
-pub struct HostBudget {
-    max_total_bytes: u64,
-    observed_bytes: Arc<AtomicU64>,
-    peak_bytes: Arc<AtomicU64>,
-    host_attached_bytes: Arc<AtomicU64>,
-}
-
-impl HostBudget {
-    pub fn charge(&self, n: u64) -> Result<(), MemoryCapExceeded> {
-        charge_host(
-            self.max_total_bytes,
-            &self.observed_bytes,
-            &self.peak_bytes,
-            &self.host_attached_bytes,
-            n,
-        )
-    }
-
-    pub fn release(&self, n: u64) {
-        let _ = self.host_attached_bytes.fetch_update(
-            Ordering::Relaxed,
-            Ordering::Relaxed,
-            |current| Some(current.saturating_sub(n)),
-        );
-    }
-}
-
-fn charge_host(
-    max_total_bytes: u64,
-    observed: &AtomicU64,
-    peak: &AtomicU64,
-    host_attached: &AtomicU64,
-    n: u64,
-) -> Result<(), MemoryCapExceeded> {
-    let observed_bytes = observed.load(Ordering::Relaxed);
-    host_attached
-        .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
-            let next = current.checked_add(n)?;
-            (observed_bytes.saturating_add(next) <= max_total_bytes).then_some(next)
-        })
-        .map(|previous| {
-            peak.fetch_max(
-                observed_bytes.saturating_add(previous).saturating_add(n),
-                Ordering::Relaxed,
-            );
-        })
-        .map_err(|current| MemoryCapExceeded {
-            requested: n,
-            already_observed: observed_bytes,
-            already_host_attached: current,
-            cap: max_total_bytes,
-        })
 }
 
 impl TenantLimits {
     pub fn new(max_total_bytes: u64) -> Self {
         Self {
             max_total_bytes,
-            observed_bytes: Arc::new(AtomicU64::new(0)),
-            peak_bytes: Arc::new(AtomicU64::new(0)),
+            observed_bytes: 0,
+            peak_bytes: AtomicU64::new(0),
             host_attached_bytes: Arc::new(AtomicU64::new(0)),
         }
     }
 
-    pub fn host_budget(&self) -> HostBudget {
-        HostBudget {
-            max_total_bytes: self.max_total_bytes,
-            observed_bytes: Arc::clone(&self.observed_bytes),
-            peak_bytes: Arc::clone(&self.peak_bytes),
-            host_attached_bytes: Arc::clone(&self.host_attached_bytes),
-        }
-    }
-
     pub fn observed_bytes(&self) -> u64 {
-        self.observed_bytes.load(Ordering::Relaxed)
+        self.observed_bytes
     }
 
     /// High-water mark of admitted engine memory plus charged host bytes, not RSS.
@@ -193,13 +125,25 @@ impl TenantLimits {
     /// Charges happen on the store thread, but cancelled Git workers can refund
     /// their reservations concurrently during execution cleanup.
     pub fn charge_host_bytes(&self, n: u64) -> Result<(), MemoryCapExceeded> {
-        charge_host(
-            self.max_total_bytes,
-            &self.observed_bytes,
-            &self.peak_bytes,
-            &self.host_attached_bytes,
-            n,
-        )
+        self.host_attached_bytes
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
+                let next = current.checked_add(n)?;
+                (self.observed_bytes.saturating_add(next) <= self.max_total_bytes).then_some(next)
+            })
+            .map(|previous| {
+                self.peak_bytes.fetch_max(
+                    self.observed_bytes
+                        .saturating_add(previous)
+                        .saturating_add(n),
+                    Ordering::Relaxed,
+                );
+            })
+            .map_err(|current| MemoryCapExceeded {
+                requested: n,
+                already_observed: self.observed_bytes,
+                already_host_attached: current,
+                cap: self.max_total_bytes,
+            })
     }
 
     pub fn release_host_bytes(&self, n: u64) {
@@ -219,13 +163,13 @@ impl ResourceLimiter for TenantLimits {
         _maximum: Option<usize>,
     ) -> wasmtime::Result<bool> {
         let delta = (desired as u64).saturating_sub(current as u64);
-        let next = self.observed_bytes().saturating_add(delta);
+        let next = self.observed_bytes.saturating_add(delta);
         // host_attached_bytes is read-only here; writes belong to charge/release_host_bytes.
         let host = self.host_attached_bytes.load(Ordering::Relaxed);
         if next.saturating_add(host) > self.max_total_bytes {
             return Ok(false);
         }
-        self.observed_bytes.store(next, Ordering::Relaxed);
+        self.observed_bytes = next;
         self.peak_bytes
             .fetch_max(next.saturating_add(host), Ordering::Relaxed);
         Ok(true)

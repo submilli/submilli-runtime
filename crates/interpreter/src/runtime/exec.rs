@@ -91,10 +91,7 @@ fn thrown_denial(store: &mut Store<StoreData>, exn: Rooted<ExnRef>) -> Option<su
     let Val::AnyRef(Some(thrown)) = exn.field(&mut *store, 0).ok()? else {
         return None;
     };
-    let mut denials = std::mem::take(&mut store.data_mut().thrown_denials);
-    let found = denials.find(&*store, &thrown);
-    store.data_mut().thrown_denials = denials;
-    found
+    super::host::with_thrown_denials(store, |table, store| table.find(store, &thrown))
 }
 
 /// Reads `"name: message"` from a thrown exception's `$Error` payload, plus a

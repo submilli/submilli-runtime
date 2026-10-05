@@ -6,15 +6,17 @@ use std::sync::{Arc, Mutex};
 
 use interpreter::runtime::security::AuditDecision;
 use interpreter::runtime::{
-    CheckOutcome, DecisionAction, DecisionCause, DecisionExplanation, DecisionLog,
-    DecisionLogConfig, DecisionLogOutput, DecisionRecord, EntryPath, InMemorySessionKv,
-    LinkedPackageModule, RuleCitation, SecurityCheck, StoreData, Vfs,
+    Access, CheckOutcome, DecisionAction, DecisionCause, DecisionExplanation, DecisionLog,
+    DecisionLogConfig, DecisionLogOutput, DecisionRecord, EntryPath, ExecutionTokenBudget,
+    FailureReasonRecord, FailureRecord, InMemorySessionKv, LinkedPackageModule, LlmCallError,
+    LlmLimits, LlmModel, LlmOutcome, LlmProvider, MountSpec, NearMissRecord, RuleCitation,
+    SecurityCheck, SessionKvLimits, SharedTokenBudget, StoreData, Vfs,
     install_package_modules_async, install_runtime_host_functions, install_runtime_store_bound,
     install_tenant_limits, limits::ExecutionUsage,
 };
 use interpreter::stdlib::git::GitConfig;
 use interpreter::stdlib::http::transport::{
-    DownloadMeta, HttpClient, HttpError, HttpRequest, HttpResponse, RedirectHop,
+    DownloadMeta, EgressAt, HttpClient, HttpError, HttpRequest, HttpResponse, RedirectHop,
 };
 use interpreter::{
     CompiledPackage, FileId, ModulePath, PackageSourceModule, RuntimeConfig,
@@ -36,6 +38,8 @@ struct Deny {
 #[derive(Default)]
 struct Rules {
     deny: Vec<Deny>,
+    /// A rule that named the capability but whose filter rejected the call, with this actual.
+    near_miss_actual: Option<Value>,
     /// How many times the policy itself was consulted.
     consulted: AtomicU64,
 }
@@ -60,10 +64,11 @@ struct Capture {
 }
 
 impl Capture {
-    fn new(deny: Vec<Deny>) -> Arc<Self> {
+    fn new(deny: Vec<Deny>, near_miss_actual: Option<Value>) -> Arc<Self> {
         Arc::new(Self {
             rules: Rules {
                 deny,
+                near_miss_actual,
                 consulted: AtomicU64::new(0),
             },
             audits: Mutex::new(Vec::new()),
@@ -102,7 +107,27 @@ impl SecurityCheck for Capture {
         context: &Value,
         _cwd: &str,
     ) -> Option<DecisionExplanation> {
-        Some(match self.rules.denying(caller, capability, context) {
+        let near_misses = self
+            .rules
+            .near_miss_actual
+            .iter()
+            .map(|actual| NearMissRecord {
+                rule: RuleCitation {
+                    caller: caller.to_owned(),
+                    index: 9,
+                    name: None,
+                },
+                filter: "host == \"x\"".into(),
+                failures: vec![FailureRecord {
+                    comparison: "host == \"x\"".into(),
+                    actual: Some(actual.clone()),
+                    expected: Some("\"x\"".into()),
+                    reason: FailureReasonRecord::NotSatisfied,
+                    negated: false,
+                }],
+            })
+            .collect::<Vec<_>>();
+        let mut explanation = match self.rules.denying(caller, capability, context) {
             Some(index) => DecisionExplanation {
                 action: DecisionAction::Deny,
                 cause: DecisionCause::Rule(RuleCitation {
@@ -119,7 +144,9 @@ impl SecurityCheck for Capture {
                 },
                 near_misses: Vec::new(),
             },
-        })
+        };
+        explanation.near_misses = near_misses;
+        Some(explanation)
     }
 }
 
@@ -127,21 +154,55 @@ impl SecurityCheck for Capture {
 /// guard to that URL, as a compliant transport does for each hop it follows.
 struct Web {
     redirect_to: Option<&'static str>,
+    egress: Egress,
+}
+
+/// Where the transport refuses the destination at the network layer, as the real one does
+/// for a blocked address.
+#[derive(Clone, Copy, Default)]
+enum Egress {
+    #[default]
+    Off,
+    /// The original request's destination.
+    Original,
+    /// A redirect hop the guard authorized, refused before its send.
+    AuthorizedHop,
+    /// A redirect hop refused before the guard saw it.
+    UnauthorizedHop,
 }
 
 #[async_trait::async_trait]
 impl HttpClient for Web {
     async fn send(&self, req: &HttpRequest) -> Result<HttpResponse, HttpError> {
+        let denied = || HttpError::EgressDenied("blocked address".into());
+        if let (Egress::Original, Some(guard)) = (self.egress, req.redirect_guard.as_ref()) {
+            let url = url::Url::parse(&req.url).map_err(|e| HttpError::Other(e.to_string()))?;
+            let hop = RedirectHop {
+                method: &req.method,
+                url: &url,
+                method_rewritten: false,
+                body_len: 0,
+            };
+            guard.audit_egress_denial(&hop, EgressAt::CurrentHop);
+            return Err(denied());
+        }
         if let (Some(target), Some(guard)) = (self.redirect_to, req.redirect_guard.as_ref()) {
             let url = url::Url::parse(target).map_err(|e| HttpError::Other(e.to_string()))?;
-            guard
-                .authorize(&RedirectHop {
-                    method: "GET",
-                    url: &url,
-                    method_rewritten: false,
-                    body_len: 0,
-                })
-                .map_err(HttpError::PermissionDenied)?;
+            let hop = RedirectHop {
+                method: "GET",
+                url: &url,
+                method_rewritten: false,
+                body_len: 0,
+            };
+            if matches!(self.egress, Egress::UnauthorizedHop) {
+                guard.audit_egress_denial(&hop, EgressAt::NewHop);
+                return Err(denied());
+            }
+            guard.authorize(&hop).map_err(HttpError::PermissionDenied)?;
+            if matches!(self.egress, Egress::AuthorizedHop) {
+                guard.audit_egress_denial(&hop, EgressAt::CurrentHop);
+                return Err(denied());
+            }
         }
         Ok(HttpResponse {
             status: 200,
@@ -167,9 +228,16 @@ struct Setup {
     record: Option<DecisionLogConfig>,
     packages: Vec<(&'static str, &'static str)>,
     redirect_to: Option<&'static str>,
+    egress: Egress,
     strip_debug_info: bool,
     git: bool,
     session: bool,
+    session_limits: Option<SessionKvLimits>,
+    /// Mounts a read-only volume at `/ro`.
+    read_only_volume: bool,
+    /// Installs a fake model provider (`open`, `secret`) with this token ceiling.
+    llm: Option<LlmLimits>,
+    near_miss_actual: Option<Value>,
 }
 
 struct Outcome {
@@ -179,6 +247,7 @@ struct Outcome {
     consulted: u64,
     log: Option<DecisionLogOutput>,
     host_attached: u64,
+    memory_peak: u64,
 }
 
 impl Outcome {
@@ -252,12 +321,33 @@ async fn run(source: &str, setup: Setup) -> Outcome {
     let script = compile_script(source, "main.ts", FileId(0), &declarations, &[])
         .unwrap_or_else(|d| panic!("script: {d:#?}"));
 
-    let policy = Capture::new(setup.deny);
-    let mut data = StoreData::with_vfs(Vfs::tempdir().expect("tempdir"));
+    let policy = Capture::new(setup.deny, setup.near_miss_actual);
+    let volume = tempfile::tempdir().expect("volume");
+    let mut vfs = Vfs::tempdir().expect("tempdir");
+    if setup.read_only_volume {
+        vfs = vfs
+            .with_mount(MountSpec {
+                guest_path: "/ro".into(),
+                host: volume.path().to_path_buf(),
+                volume: "ro".into(),
+                access: Access::ReadOnly,
+                quota: None,
+            })
+            .expect("mount");
+    }
+    let mut data = StoreData::with_vfs(vfs);
     data.install_type_info(script.type_info.clone());
     data.http_client = Arc::new(Web {
         redirect_to: setup.redirect_to,
+        egress: setup.egress,
     });
+    if let Some(limits) = setup.llm {
+        data.llm_provider = Some(Arc::new(FakeLlm));
+        data.llm_budget = Some(Arc::new(ExecutionTokenBudget::new(
+            limits,
+            SharedTokenBudget::new(u64::MAX),
+        )));
+    }
     data.security_check = policy.clone();
     if setup.git {
         data.git = Some(GitConfig {
@@ -267,7 +357,10 @@ async fn run(source: &str, setup: Setup) -> Outcome {
         });
     }
     if setup.session {
-        data.session_kv = Some(Arc::new(InMemorySessionKv::default()));
+        data.session_kv = Some(Arc::new(match setup.session_limits {
+            Some(limits) => InMemorySessionKv::new(limits),
+            None => InMemorySessionKv::default(),
+        }));
     }
     let log = setup
         .record
@@ -311,9 +404,8 @@ async fn run(source: &str, setup: Setup) -> Outcome {
         .map(Option::unwrap_or_default)
         .map_err(|error| format!("{error:#}"));
 
-    let fuel = ExecutionUsage::capture(&store, cfg.fuel)
-        .expect("usage")
-        .fuel;
+    let usage = ExecutionUsage::capture(&store, cfg.fuel).expect("usage");
+    let (fuel, memory_peak) = (usage.fuel, usage.memory_peak);
     let host_attached = store.data().tenant_limits.host_attached_bytes();
     let audits = policy.audits.lock().unwrap().clone();
     Outcome {
@@ -323,6 +415,35 @@ async fn run(source: &str, setup: Setup) -> Outcome {
         consulted: policy.rules.consulted.load(Ordering::Relaxed),
         log: log.map(|log| log.finish()),
         host_attached,
+        memory_peak,
+    }
+}
+
+/// Serves `open` and `secret`, answering every prompt.
+struct FakeLlm;
+
+impl LlmProvider for FakeLlm {
+    fn call<'a>(
+        &'a self,
+        _model: &'a str,
+        prompts: &'a [String],
+        _schema_json: Option<&'a str>,
+    ) -> std::pin::Pin<
+        Box<dyn std::future::Future<Output = Result<Vec<LlmOutcome>, LlmCallError>> + Send + 'a>,
+    > {
+        let outcomes = prompts
+            .iter()
+            .map(|_| LlmOutcome::success("answer").with_usage(Some(10), Some(10)))
+            .collect();
+        Box::pin(async move { Ok(outcomes) })
+    }
+
+    fn models<'a>(
+        &'a self,
+    ) -> std::pin::Pin<
+        Box<dyn std::future::Future<Output = Result<Vec<LlmModel>, LlmCallError>> + Send + 'a>,
+    > {
+        Box::pin(async { Ok(vec![LlmModel::new("open"), LlmModel::new("secret")]) })
     }
 }
 
@@ -376,6 +497,8 @@ async fn recording_changes_neither_outcome_nor_audit_nor_fuel() {
     );
     assert_eq!(recorded.consulted, plain.consulted, "policy consultations");
     assert_eq!(recorded.fuel, plain.fuel, "fuel use, line lookup included");
+    assert_eq!(recorded.memory_peak, plain.memory_peak, "memory peak");
+    assert_eq!(recorded.host_attached, plain.host_attached, "host memory");
     assert_eq!(plain.audits.len(), 3);
     assert_eq!(recorded.records().len(), 3);
 }
@@ -682,61 +805,59 @@ async fn a_loop_of_caught_denials_hits_the_cap_and_the_run_completes_truncated()
     assert_eq!(few.log.as_ref().unwrap().dropped, 40);
 }
 
-#[tokio::test]
-async fn recorder_buffers_are_charged_to_host_memory_and_refunded() {
-    let source = caught_denials(50);
-    let setup = || Setup {
+fn caught_denial_setup(record: Option<DecisionLogConfig>) -> Setup {
+    Setup {
         deny: vec![Deny {
             caller: None,
             capability: "http.get",
             path: Some("/deny"),
         }],
+        record,
         ..Setup::default()
-    };
-    let unrecorded = run(&source, setup()).await;
-    // `run` reads host memory before `finish` releases the log's charge.
-    let recorded = run(
+    }
+}
+
+#[tokio::test]
+async fn recorder_buffers_have_their_own_budget_and_never_touch_the_runs_memory() {
+    let source = caught_denials(200);
+    let unrecorded = run(&source, caught_denial_setup(None)).await;
+    let recorded = run(&source, caught_denial_setup(recording())).await;
+    assert_eq!(recorded.host_attached, unrecorded.host_attached);
+    assert_eq!(recorded.memory_peak, unrecorded.memory_peak);
+    assert_eq!(recorded.records().len(), 200);
+}
+
+#[tokio::test]
+async fn an_exhausted_recorder_budget_truncates_the_log_and_changes_nothing_the_run_sees() {
+    let source = caught_denials(200);
+    let unrecorded = run(&source, caught_denial_setup(None)).await;
+    let starved = run(
         &source,
-        Setup {
-            record: recording(),
-            ..setup()
-        },
+        caught_denial_setup(Some(DecisionLogConfig {
+            max_recorder_bytes: 3000,
+            ..DecisionLogConfig::default()
+        })),
     )
     .await;
-    assert!(
-        recorded.host_attached > unrecorded.host_attached,
-        "the recorder's buffers are charged: {} vs {}",
-        recorded.host_attached,
-        unrecorded.host_attached
-    );
 
-    // A cap of 10 decisions bounds the charge however long the loop runs.
-    let bounded = |count: u32| {
-        let source = caught_denials(count);
-        async move {
-            run(
-                &source,
-                Setup {
-                    deny: vec![Deny {
-                        caller: None,
-                        capability: "http.get",
-                        path: Some("/deny"),
-                    }],
-                    record: Some(DecisionLogConfig {
-                        max_decisions: 10,
-                        ..DecisionLogConfig::default()
-                    }),
-                    ..Setup::default()
-                },
-            )
-            .await
-        }
-    };
-    assert_eq!(
-        bounded(100).await.host_attached,
-        bounded(1000).await.host_attached,
-        "host memory does not grow past the cap"
+    let log = starved.log.as_ref().unwrap();
+    assert!(log.truncated, "the budget ran out");
+    assert!(
+        log.records.len() < 200 && log.dropped > 0,
+        "{} kept",
+        log.records.len()
     );
+    assert!(
+        log.records
+            .iter()
+            .any(|record| record.payload_dropped && record.context_digest != 0),
+        "a record past the payload budget keeps its verdict and digest"
+    );
+    assert_eq!(starved.result, unrecorded.result);
+    assert_eq!(starved.audits, unrecorded.audits);
+    assert_eq!(starved.fuel, unrecorded.fuel);
+    assert_eq!(starved.memory_peak, unrecorded.memory_peak);
+    assert_eq!(starved.host_attached, unrecorded.host_attached);
 }
 
 #[tokio::test]
@@ -844,6 +965,303 @@ async fn the_line_of_each_call_is_its_own() {
             ("http.get", Some(8)),
         ]
     );
+}
+
+// ---- one host call, one call index ------------------------------------------------------
+
+const TWO_GETS_REFUSED_AT_EGRESS: &str = r#"
+import { get } from "submilli:http";
+function main(): string {
+  try { get("https://10.0.0.1/a"); } catch (e: Error) {}
+  try { get("https://10.0.0.1/b"); } catch (e: Error) {}
+  return "done";
+}
+"#;
+
+#[tokio::test]
+async fn an_egress_refusal_of_the_original_request_continues_its_own_call() {
+    let outcome = run(
+        TWO_GETS_REFUSED_AT_EGRESS,
+        Setup {
+            record: recording(),
+            egress: Egress::Original,
+            ..Setup::default()
+        },
+    )
+    .await;
+    assert_eq!(outcome.result, Ok("done".to_owned()));
+    let records = outcome.records();
+    assert_eq!(records.len(), 4, "{records:#?}");
+    for (gate, egress, seq) in [(0, 1, 1), (2, 3, 2)] {
+        let (gate, egress) = (&records[gate], &records[egress]);
+        assert!(gate.allowed && !egress.allowed);
+        assert_eq!(egress.source, "egress_guard");
+        assert_eq!(egress.call_index, gate.call_index);
+        assert_eq!((gate.seq, egress.seq), (seq, seq));
+        assert_eq!(egress.entry_path, EntryPath::GatedOp);
+        assert_eq!(egress.line, gate.line);
+        assert!(matches!(
+            egress.cause,
+            DecisionCause::RuntimeInvariant { .. }
+        ));
+    }
+    assert!(records[2].call_index > records[0].call_index);
+}
+
+#[tokio::test]
+async fn an_egress_refusal_of_an_authorized_hop_reuses_that_hops_call() {
+    let outcome = run(
+        TWO_GETS_REFUSED_AT_EGRESS,
+        Setup {
+            record: recording(),
+            redirect_to: Some("https://10.0.0.2/landing"),
+            egress: Egress::AuthorizedHop,
+            ..Setup::default()
+        },
+    )
+    .await;
+    let records = outcome.records();
+    // Per request: the call, its hop (authorized), the hop's egress refusal.
+    assert_eq!(records.len(), 6, "{records:#?}");
+    let (call, hop, refusal) = (&records[0], &records[1], &records[2]);
+    assert_eq!(
+        hop.entry_path,
+        EntryPath::RedirectHop {
+            parent_call_index: call.call_index,
+            index: 0
+        }
+    );
+    assert_eq!(refusal.source, "egress_guard");
+    assert_eq!(refusal.entry_path, hop.entry_path, "no further hop index");
+    assert_eq!((refusal.call_index, refusal.seq), (hop.call_index, hop.seq));
+    assert_eq!(refusal.line, call.line);
+    // The second request starts again at hop 0, with its own call.
+    assert_eq!(
+        records[4].entry_path,
+        EntryPath::RedirectHop {
+            parent_call_index: records[3].call_index,
+            index: 0
+        }
+    );
+}
+
+#[tokio::test]
+async fn an_egress_refusal_of_an_unauthorized_hop_is_a_new_hop_of_the_request() {
+    let outcome = run(
+        TWO_GETS_REFUSED_AT_EGRESS,
+        Setup {
+            record: recording(),
+            redirect_to: Some("https://10.0.0.2/landing"),
+            egress: Egress::UnauthorizedHop,
+            ..Setup::default()
+        },
+    )
+    .await;
+    let records = outcome.records();
+    assert_eq!(records.len(), 4, "{records:#?}");
+    let (call, refusal) = (&records[0], &records[1]);
+    assert_eq!(refusal.source, "egress_guard");
+    assert_eq!(
+        refusal.entry_path,
+        EntryPath::RedirectHop {
+            parent_call_index: call.call_index,
+            index: 0
+        }
+    );
+    assert!(refusal.call_index > call.call_index);
+}
+
+#[tokio::test]
+async fn a_denial_at_the_entry_of_a_new_check_is_its_own_call_not_an_earlier_ones() {
+    // The closure is main's code running inside the package, so its `check` is refused as
+    // an invariant at entry. It must not attach to the first, direct `check` of the pair.
+    let lib = r#"
+export function apply(f: () => void): void { f(); }
+"#;
+    let source = r#"
+import { check } from "submilli:security";
+import { apply } from "@acme/core";
+function main(): string {
+  check("x", { a: 1 });
+  try { apply(() => { check("x", { a: 1 }); }); } catch (e: PermissionDeniedError) { return "refused"; }
+  return "allowed";
+}
+"#;
+    let outcome = run(
+        source,
+        Setup {
+            record: recording(),
+            packages: vec![("@acme/core", lib)],
+            ..Setup::default()
+        },
+    )
+    .await;
+    assert_eq!(outcome.result, Ok("refused".to_owned()));
+    let records = outcome.records();
+    assert_eq!(records.len(), 2, "{records:#?}");
+    let (first, second) = (&records[0], &records[1]);
+    assert!(first.allowed && !second.allowed);
+    assert_eq!(second.source, "invariant");
+    assert_eq!((first.seq, second.seq), (1, 2));
+    assert!(second.call_index > first.call_index);
+    assert_eq!(first.line.map(|l| l.line), Some(5));
+    assert_eq!(second.line.map(|l| l.line), Some(6));
+    assert_eq!(second.entry_path, EntryPath::PackageCheck);
+    assert_eq!(first.entry_path, EntryPath::PackageCheck);
+}
+
+#[tokio::test]
+async fn a_read_only_refusal_continues_the_call_whose_gate_allowed_it() {
+    let source = r#"
+import { writeText } from "submilli:fs";
+function main(): string {
+  try { writeText("/ro/a.txt", "x"); } catch (e: PermissionDeniedError) { return "refused"; }
+  return "written";
+}
+"#;
+    let outcome = run(
+        source,
+        Setup {
+            record: recording(),
+            read_only_volume: true,
+            ..Setup::default()
+        },
+    )
+    .await;
+    assert_eq!(outcome.result, Ok("refused".to_owned()));
+    let records = outcome.records();
+    assert_eq!(records.len(), 2, "{records:#?}");
+    let (gate, refusal) = (&records[0], &records[1]);
+    assert!(gate.allowed && !refusal.allowed);
+    assert_eq!(refusal.source, "read_only");
+    assert_eq!(
+        (refusal.call_index, refusal.seq),
+        (gate.call_index, gate.seq)
+    );
+    assert_eq!(refusal.line, gate.line);
+}
+
+#[tokio::test]
+async fn a_session_quota_refusal_continues_the_write_that_the_gate_allowed() {
+    let source = r#"
+import session from "submilli:session";
+function main(): string {
+  try { session.set("k", "value"); } catch (e: QuotaExceededError) { return "refused"; }
+  return "written";
+}
+"#;
+    let outcome = run(
+        source,
+        Setup {
+            record: recording(),
+            session: true,
+            session_limits: Some(SessionKvLimits {
+                max_entries: 0,
+                ..SessionKvLimits::default()
+            }),
+            ..Setup::default()
+        },
+    )
+    .await;
+    assert_eq!(outcome.result, Ok("refused".to_owned()));
+    let records = outcome.records();
+    assert_eq!(records.len(), 2, "{records:#?}");
+    let (gate, refusal) = (&records[0], &records[1]);
+    assert_eq!(refusal.source, "quota");
+    assert_eq!(
+        (refusal.call_index, refusal.seq),
+        (gate.call_index, gate.seq)
+    );
+}
+
+#[tokio::test]
+async fn a_model_token_quota_refusal_continues_the_call_whose_gate_allowed_it() {
+    let source = r#"
+import llm from "submilli:llm";
+function main(): string {
+  try { llm.call("open", "hello"); } catch (e: QuotaExceededError) { return "refused"; }
+  return "answered";
+}
+"#;
+    let outcome = run(
+        source,
+        Setup {
+            record: recording(),
+            llm: Some(LlmLimits {
+                per_execution_tokens: 1,
+                ..LlmLimits::default()
+            }),
+            ..Setup::default()
+        },
+    )
+    .await;
+    assert_eq!(outcome.result, Ok("refused".to_owned()));
+    let records = outcome.records();
+    assert_eq!(records.len(), 2, "{records:#?}");
+    let (gate, refusal) = (&records[0], &records[1]);
+    assert_eq!(refusal.source, "quota");
+    assert_eq!(
+        (refusal.call_index, refusal.seq),
+        (gate.call_index, gate.seq)
+    );
+}
+
+#[tokio::test]
+async fn a_hidden_model_in_the_listing_is_recorded_as_filtered() {
+    let source = r#"
+import llm from "submilli:llm";
+function main(): string { return llm.models().length.toString(); }
+"#;
+    let outcome = run(
+        source,
+        Setup {
+            deny: vec![Deny {
+                caller: None,
+                capability: "llm.call",
+                path: None,
+            }],
+            record: recording(),
+            llm: Some(LlmLimits::default()),
+            ..Setup::default()
+        },
+    )
+    .await;
+    assert_eq!(outcome.result, Ok("0".to_owned()));
+    let denied: Vec<_> = outcome
+        .records()
+        .iter()
+        .filter(|record| record.capability == "llm.call")
+        .collect();
+    assert_eq!(denied.len(), 2, "one gate per candidate");
+    assert!(
+        denied
+            .iter()
+            .all(|record| !record.allowed && record.filtered)
+    );
+    assert_ne!(denied[0].call_index, denied[1].call_index);
+}
+
+#[tokio::test]
+async fn near_miss_values_are_capped_like_the_context() {
+    let huge = json!({ "k".repeat(5000): "v".repeat(5000) });
+    let outcome = run(
+        r#"
+import { get } from "submilli:http";
+function main(): string { get("https://example.test/a"); return "done"; }
+"#,
+        Setup {
+            record: recording(),
+            near_miss_actual: Some(huge),
+            ..Setup::default()
+        },
+    )
+    .await;
+    let get = outcome.record("http.get");
+    assert!(get.context_truncated, "a capped near miss marks the record");
+    let actual = get.near_misses[0].failures[0].actual.as_ref().unwrap();
+    let text = serde_json::to_string(actual).unwrap();
+    assert!(text.len() < 2600, "{} bytes", text.len());
+    assert!(text.contains("truncated"), "{text}");
 }
 
 // ---- throwaway cost measurement ---------------------------------------------------------------

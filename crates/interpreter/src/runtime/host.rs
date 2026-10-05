@@ -1215,6 +1215,21 @@ impl ThrownDenials {
     }
 }
 
+/// Runs `f` on the store's denial table with the store readable alongside it.
+///
+/// Both [`ThrownDenials::record`] and [`ThrownDenials::find`] check handles against the
+/// store, which cannot be borrowed while the table inside its data is. The table is moved
+/// out for the call and put back here, so no caller can lose it on an early return.
+pub(crate) fn with_thrown_denials<T: AsContextMut<Data = StoreData>, R>(
+    store: &mut T,
+    f: impl FnOnce(&mut ThrownDenials, &T) -> R,
+) -> R {
+    let mut table = std::mem::take(&mut store.as_context_mut().data_mut().thrown_denials);
+    let result = f(&mut table, store);
+    store.as_context_mut().data_mut().thrown_denials = table;
+    result
+}
+
 impl PermissionDenied {
     /// The fields an embedder reports when this denial escapes the program.
     fn denial(&self) -> Denial {
@@ -1535,9 +1550,9 @@ fn throw_error_inner(
     match caller.as_context_mut().throw::<()>(exn) {
         Err(thrown) => {
             if let Some(denial) = denial {
-                let mut data = std::mem::take(&mut caller.data_mut().thrown_denials);
-                data.record(&*caller, error_struct, denial);
-                caller.data_mut().thrown_denials = data;
+                with_thrown_denials(caller, |table, store| {
+                    table.record(store, error_struct, denial);
+                });
             }
             Ok(wasmtime::Error::new(thrown))
         }

@@ -477,13 +477,16 @@ fn classify_runtime_error(err: &wasmtime::Error, sources: &Sources, file: FileId
     let denial = err
         .downcast_ref::<interpreter::backtrace::ThrownError>()
         .and_then(|thrown| thrown.denial.as_ref());
-    let kind = match err.downcast_ref::<Trap>() {
-        _ if denial.is_some() => ErrorKind::PermissionDenied,
-        Some(Trap::Interrupt) => ErrorKind::Timeout,
-        Some(Trap::OutOfFuel) => ErrorKind::FuelExhausted,
-        Some(Trap::StackOverflow) => ErrorKind::StackExhausted,
-        _ if is_memory_exhausted(err) => ErrorKind::MemoryExhausted,
-        _ => ErrorKind::RuntimeError,
+    let kind = if denial.is_some() {
+        ErrorKind::PermissionDenied
+    } else {
+        match err.downcast_ref::<Trap>() {
+            Some(Trap::Interrupt) => ErrorKind::Timeout,
+            Some(Trap::OutOfFuel) => ErrorKind::FuelExhausted,
+            Some(Trap::StackOverflow) => ErrorKind::StackExhausted,
+            _ if is_memory_exhausted(err) => ErrorKind::MemoryExhausted,
+            _ => ErrorKind::RuntimeError,
+        }
     };
     // drops middle host frames; full trace available from the CLI
     let message = render_backtrace(err, sources, file, BacktraceMode::LlmTrimmed)

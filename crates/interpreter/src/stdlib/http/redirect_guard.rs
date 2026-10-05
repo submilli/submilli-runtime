@@ -5,12 +5,12 @@
 //! consults the guard before sending each redirect hop, so a hop the blueprint
 //! denies for the request's caller is never sent.
 
-use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::{Arc, Mutex};
 
 use url::Url;
 
-use super::transport::{RedirectDenied, RedirectGuard, RedirectHop};
+use super::transport::{EgressAt, RedirectDenied, RedirectGuard, RedirectHop};
 use crate::runtime::decision::{CallSite, CallTicket, EntryPath};
 use crate::runtime::security::SecurityCheck;
 use crate::stdlib::shared::{audit_denial_at, authorize_capability};
@@ -75,6 +75,9 @@ pub(super) struct CapabilityGuard {
     /// since the program's stack is gone by the time a hop is authorized.
     parent: Option<CallTicket>,
     hops: AtomicU32,
+    /// The call a refusal of the request's current hop continues: the originating call until
+    /// a redirect hop is authorized, then that hop's.
+    current: Mutex<CallSite>,
 }
 
 impl std::fmt::Debug for CapabilityGuard {
@@ -100,10 +103,22 @@ impl CapabilityGuard {
             cwd,
             parent,
             hops: AtomicU32::new(0),
+            current: Mutex::new(CallSite::new(parent, EntryPath::GatedOp)),
         }
     }
 
-    /// The recorder's identity for the next hop, when one is installed.
+    /// The call a refusal of `at` belongs to.
+    fn egress_site(&self, at: EgressAt, capability: &str) -> CallSite {
+        match at {
+            EgressAt::CurrentHop => *self
+                .current
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner),
+            EgressAt::NewHop => self.hop_site(capability),
+        }
+    }
+
+    /// Begins the call for the next redirect hop, when a recorder is installed.
     fn hop_site(&self, capability: &str) -> CallSite {
         let Some(recorder) = self.security_check.recorder() else {
             return CallSite::default();
@@ -143,7 +158,7 @@ impl CapabilityGuard {
 }
 
 impl RedirectGuard for CapabilityGuard {
-    fn audit_egress_denial(&self, hop: &RedirectHop<'_>) {
+    fn audit_egress_denial(&self, hop: &RedirectHop<'_>, at: EgressAt) {
         let (capability, context) = self.hop_check(hop);
         audit_denial_at(
             self.security_check.as_ref(),
@@ -152,19 +167,24 @@ impl RedirectGuard for CapabilityGuard {
             &context,
             "egress_guard",
             "outbound destination refused",
-            self.hop_site(&capability),
+            self.egress_site(at, &capability),
         );
     }
 
     fn authorize(&self, hop: &RedirectHop<'_>) -> Result<(), RedirectDenied> {
         let (capability, context) = self.hop_check(hop);
+        let site = self.hop_site(&capability);
+        *self
+            .current
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = site;
         authorize_capability(
             &self.caller,
             self.security_check.as_ref(),
             &capability,
             &context,
             &self.cwd,
-            self.hop_site(&capability),
+            site,
         )
         .map_err(RedirectDenied::from_error)
     }

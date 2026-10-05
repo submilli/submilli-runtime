@@ -16,7 +16,6 @@ use crate::runtime::host::{
 };
 use crate::runtime::intrinsic_types::build_intrinsic_types;
 use crate::runtime::prelude::vtable::dispatch_vtable_slot;
-use crate::runtime::security::{AuditDecision, CheckOutcome};
 use crate::{MangledName, PackageDeclaration, Param, Span, Type, ValueKind, ValueSymbol};
 
 pub const MODULE_NAME: &str = "submilli:security";
@@ -102,6 +101,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
                             caller.data().security_check.as_ref(),
                             &context,
                             error,
+                            || crate::stdlib::shared::source_line(&*caller),
                         );
                     },
                 )?;
@@ -110,45 +110,15 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
                 let ticket =
                     crate::stdlib::shared::begin_recorded_call(&*caller, &who, &capability);
                 let site = CallSite::new(ticket, EntryPath::PackageCheck);
-                let outcome = policy.check_with_cwd(&who, &capability, &context, &cwd);
-                let explanation = policy
-                    .recorder()
-                    .and_then(|_| policy.explain(&who, &capability, &context, &cwd));
-                let audit_context = policy.audit_context(&capability, &context, &cwd);
-                match outcome {
-                    CheckOutcome::Allow { rule } => {
-                        policy.audit(
-                            AuditDecision::new(
-                                &who,
-                                &capability,
-                                audit_context.as_ref(),
-                                true,
-                                "policy",
-                                rule,
-                                None,
-                            )
-                            .with_explanation(explanation.as_ref())
-                            .with_site(site),
-                        );
-                        Ok(())
-                    }
-                    CheckOutcome::Deny { reason, rule } => {
-                        policy.audit(
-                            AuditDecision::new(
-                                &who,
-                                &capability,
-                                audit_context.as_ref(),
-                                false,
-                                "policy",
-                                rule,
-                                Some(&reason),
-                            )
-                            .with_explanation(explanation.as_ref())
-                            .with_site(site),
-                        );
-                        Err(permission_denied(who, capability, reason))
-                    }
-                }
+                crate::stdlib::shared::check_and_audit(
+                    policy.as_ref(),
+                    &who,
+                    &capability,
+                    &context,
+                    &cwd,
+                    site,
+                )
+                .map_err(|reason| permission_denied(who, capability, reason))
             })
         },
     )
@@ -263,26 +233,35 @@ fn consumer_of_running_package(
     }
 }
 
+/// Audits an attribution failure at the entry of `security.check` as a call of its own.
+/// `line` runs only while a recorder is installed.
 fn audit_consumer_failure(
     policy: &dyn crate::runtime::security::SecurityCheck,
     context: &serde_json::Value,
     error: &wasmtime::Error,
+    line: impl FnOnce() -> Option<crate::runtime::decision::SourceLine>,
 ) {
-    if let Some(denial) = error.downcast_ref::<crate::runtime::host::PermissionDenied>() {
-        crate::stdlib::shared::audit_denial(
-            policy,
-            &denial.caller,
-            &denial.capability,
-            context,
-            "invariant",
-            &denial.reason,
-        );
-    }
+    let Some(denial) = error.downcast_ref::<crate::runtime::host::PermissionDenied>() else {
+        return;
+    };
+    let ticket = policy
+        .recorder()
+        .map(|recorder| recorder.begin_call(&denial.caller, &denial.capability, line()));
+    crate::stdlib::shared::audit_denial_at(
+        policy,
+        &denial.caller,
+        &denial.capability,
+        context,
+        "invariant",
+        &denial.reason,
+        CallSite::new(ticket, EntryPath::PackageCheck),
+    );
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::runtime::security::CheckOutcome;
 
     #[test]
     fn consumer_audit_distinguishes_attribution_denials_from_execution_failures() {
@@ -307,11 +286,13 @@ mod tests {
             &sink,
             &context,
             &wasmtime::Error::new(wasmtime::Trap::OutOfFuel),
+            || None,
         );
         audit_consumer_failure(
             &sink,
             &context,
             &crate::runtime::host::fatal_host_error("engine failure"),
+            || None,
         );
         assert!(sink.0.lock().unwrap().is_empty());
         for label in ["<no wasm frame>", "<unnamed module>"] {
@@ -319,6 +300,7 @@ mod tests {
                 &sink,
                 &context,
                 &permission_denied_invariant(label, "test.op", "unattributed caller"),
+                || None,
             );
         }
         assert_eq!(

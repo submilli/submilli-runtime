@@ -21,8 +21,9 @@ use url::Url;
 use std::collections::BTreeMap;
 
 use submilli_blueprint::{
-    Action, AuthError, Blueprint, FailureReason, HarnessSecretBindings, Injections, Resolution,
-    ResolutionCause, RuleRef, SecretResolver, SecretSource, VarBindings, resolve_injections,
+    Action, AuthError, Blueprint, ComparisonFailure, FailureReason, HarnessSecretBindings,
+    Injections, NearMiss, Resolution, ResolutionCause, RuleRef, SecretResolver, SecretSource,
+    VarBindings, resolve_injections,
 };
 
 /// The package name auth-proxy injection is scoped to. Matches the name the runtime gives a
@@ -143,46 +144,56 @@ impl SecurityCheck for PolicyCheck {
 }
 
 fn explanation_of(resolution: Resolution) -> DecisionExplanation {
-    let citation = |rule: RuleRef| RuleCitation {
-        caller: rule.caller,
-        index: rule.index,
-        name: rule.name,
-    };
     DecisionExplanation {
         action: match resolution.action {
             Action::Allow => DecisionAction::Allow,
             Action::Deny => DecisionAction::Deny,
             Action::AskHuman => DecisionAction::AskHuman,
         },
-        cause: match resolution.cause {
-            ResolutionCause::Rule(rule) => DecisionCause::Rule(citation(rule)),
-            ResolutionCause::Default { caller_block } => DecisionCause::Default { caller_block },
-        },
+        cause: cause_of(resolution.cause),
         near_misses: resolution
             .near_misses
             .into_iter()
-            .map(|miss| NearMissRecord {
-                rule: citation(miss.rule),
-                filter: miss.filter,
-                failures: miss
-                    .failures
-                    .into_iter()
-                    .map(|failure| FailureRecord {
-                        comparison: failure.comparison,
-                        actual: failure.actual,
-                        expected: failure.expected,
-                        reason: match failure.reason {
-                            FailureReason::FieldMissing => FailureReasonRecord::FieldMissing,
-                            FailureReason::VariableNotBound(name) => {
-                                FailureReasonRecord::VariableNotBound(name)
-                            }
-                            FailureReason::NotSatisfied => FailureReasonRecord::NotSatisfied,
-                        },
-                        negated: failure.negated,
-                    })
-                    .collect(),
-            })
+            .map(near_miss_record)
             .collect(),
+    }
+}
+
+fn citation(rule: RuleRef) -> RuleCitation {
+    RuleCitation {
+        caller: rule.caller,
+        index: rule.index,
+        name: rule.name,
+    }
+}
+
+fn cause_of(cause: ResolutionCause) -> DecisionCause {
+    match cause {
+        ResolutionCause::Rule(rule) => DecisionCause::Rule(citation(rule)),
+        ResolutionCause::Default { caller_block } => DecisionCause::Default { caller_block },
+    }
+}
+
+fn near_miss_record(miss: NearMiss) -> NearMissRecord {
+    NearMissRecord {
+        rule: citation(miss.rule),
+        filter: miss.filter,
+        failures: miss.failures.into_iter().map(failure_record).collect(),
+    }
+}
+
+fn failure_record(failure: ComparisonFailure) -> FailureRecord {
+    let reason = match failure.reason {
+        FailureReason::FieldMissing => FailureReasonRecord::FieldMissing,
+        FailureReason::VariableNotBound(name) => FailureReasonRecord::VariableNotBound(name),
+        FailureReason::NotSatisfied => FailureReasonRecord::NotSatisfied,
+    };
+    FailureRecord {
+        comparison: failure.comparison,
+        actual: failure.actual,
+        expected: failure.expected,
+        reason,
+        negated: failure.negated,
     }
 }
 

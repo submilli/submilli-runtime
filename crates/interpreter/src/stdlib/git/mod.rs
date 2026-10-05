@@ -27,7 +27,6 @@ use crate::runtime::host::{
     write_submilli_uint8array_struct,
 };
 use crate::runtime::intrinsic_types::{IntrinsicTypes, build_intrinsic_types};
-use crate::runtime::security::{AuditDecision, CheckOutcome};
 use crate::runtime::{HttpClient, SecretProvider, SecurityCheck, StoreData};
 use crate::stdlib::{session::value, shared::running_package};
 use serde_json::Value;
@@ -84,7 +83,6 @@ impl Job {
 
     fn check(&self, capability: &str, context: Value) -> Result<()> {
         self.check_cancelled()?;
-        let outcome = self.security.check(&self.caller, capability, &context);
         // Git's decisions are made on a worker thread, after the program's stack is gone;
         // they reuse the line the host call captured on entry.
         let site = CallSite::new(
@@ -93,49 +91,22 @@ impl Job {
                 .map(|recorder| recorder.begin_call(&self.caller, capability, self.line)),
             EntryPath::Git,
         );
-        let explanation = self.security.recorder().and_then(|_| {
-            self.security
-                .explain(&self.caller, capability, &context, "/")
-        });
-        match outcome {
-            CheckOutcome::Allow { rule } => {
-                self.security.audit(
-                    AuditDecision::new(
-                        &self.caller,
-                        capability,
-                        &context,
-                        true,
-                        "policy",
-                        rule,
-                        None,
-                    )
-                    .with_explanation(explanation.as_ref())
-                    .with_site(site),
-                );
-                Ok(())
-            }
-            CheckOutcome::Deny { reason, rule } => {
-                self.security.audit(
-                    AuditDecision::new(
-                        &self.caller,
-                        capability,
-                        &context,
-                        false,
-                        "policy",
-                        rule,
-                        Some(&reason),
-                    )
-                    .with_explanation(explanation.as_ref())
-                    .with_site(site),
-                );
-                // Poison may leave the denied capability and reason partly updated.
-                // AGENTS.md permits poisoned-lock panics rather than recovering this
-                // attribution; it does not permit the panic that caused poisoning.
-                let mut denial = self.denial.lock().expect("git worker denial lock poisoned");
-                *denial = Some((capability.to_owned(), reason.clone()));
-                Err(permission_denied(&self.caller, capability, reason))
-            }
-        }
+        crate::stdlib::shared::check_and_audit(
+            self.security.as_ref(),
+            &self.caller,
+            capability,
+            &context,
+            "/",
+            site,
+        )
+        .map_err(|reason| {
+            // Poison may leave the denied capability and reason partly updated.
+            // AGENTS.md permits poisoned-lock panics rather than recovering this
+            // attribution; it does not permit the panic that caused poisoning.
+            let mut denial = self.denial.lock().expect("git worker denial lock poisoned");
+            *denial = Some((capability.to_owned(), reason.clone()));
+            permission_denied(&self.caller, capability, reason)
+        })
     }
 
     /// One of the workers Git shares across the process, waited for until

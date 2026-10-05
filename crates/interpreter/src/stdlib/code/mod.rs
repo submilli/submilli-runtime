@@ -17,7 +17,8 @@ use crate::runtime::{
     prelude::vtable::read_string_units,
 };
 use crate::stdlib::shared::{
-    atomic_write, check_security, contain_trap, require_writable, resolve_content_or_trap,
+    atomic_write, check_security, check_security_call, contain_trap, require_writable,
+    resolve_content_or_trap,
 };
 use budget::{Budget, OutputBudget};
 use serde_json::{Value, json};
@@ -248,7 +249,7 @@ fn mutate(
     } else {
         String::new()
     };
-    check_security(
+    let ticket = check_security_call(
         &mut *caller,
         "fs.write",
         json!({"path":path, "length": change.text.len(), "diff": patch}),
@@ -259,7 +260,7 @@ fn mutate(
     let result = encode(caller, budget, &result)?;
     if changed {
         let resolved = resolve_content_or_trap(caller.data(), path, op)?;
-        require_writable(&*caller, resolved.placement(), "fs.write", path)?;
+        require_writable(&*caller, ticket, resolved.placement(), "fs.write", path)?;
         let permissions = resolved
             .metadata()
             .map_err(|e| contain_trap(op, path, &e))?

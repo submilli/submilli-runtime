@@ -71,7 +71,7 @@ export async function openSession(options: SessionOptions): Promise<Session> {
           // `caller`, `capability` and `source`; it is the operator's final answer, so
           // it is marked for the model to report rather than route around.
           const denied = run.error?.kind === "permission_denied";
-          return { result: run.result, console: run.console, error: run.error, ...(denied && { denied: true }) };
+          return { result: run.result, console: run.console, error: run.error, denied };
         },
       }),
       submilli__typescript__last_run: tool({
