@@ -877,6 +877,7 @@ fn finish_file_tool_run(
         console: String::new(),
         usage: interpreter::runtime::limits::ExecutionUsage::default(),
         log: log.finish(),
+        mcp_catalog: None,
         wall: recording.started.elapsed(),
     });
 }

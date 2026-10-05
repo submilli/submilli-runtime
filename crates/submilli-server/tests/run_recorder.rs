@@ -54,6 +54,8 @@ struct Finished {
     result: Option<String>,
     decisions: Vec<DecisionRecord>,
     calls: Vec<interpreter::runtime::CallRecord>,
+    /// The `@mcp/<server>` packages the run compiled against, by name.
+    mcp_packages: Option<Vec<String>>,
     returned: Option<u64>,
 }
 
@@ -136,6 +138,13 @@ impl RunRecorder for Recorder {
             result: run.result,
             decisions: run.log.records,
             calls: run.log.calls,
+            mcp_packages: run.mcp_catalog.map(|catalog| {
+                catalog
+                    .defs_refs()
+                    .iter()
+                    .map(|defs| defs.package_name.clone())
+                    .collect()
+            }),
             returned: None,
         });
         self.runs.changed.notify_waiters();
@@ -370,6 +379,8 @@ async fn rest_session_and_mcp_execute_each_record_exactly_one_run() {
         };
         assert!(decision.allowed);
         assert_eq!(run.calls.len(), 1);
+        // The blueprint declares no MCP servers: the run compiled against none.
+        assert_eq!(run.mcp_packages, Some(Vec::new()));
         assert!(run.start.blueprint_hash.is_some());
         assert_eq!(run.start.code.as_deref(), Some(ALLOWED));
     }
@@ -442,6 +453,7 @@ async fn an_uninstalled_package_is_recorded_as_a_package_resolution_failure() {
     let finished = server.runs.only();
     assert!(!finished[0].dispatched);
     assert_eq!(finished[0].error, Some(ErrorKind::PackageResolution));
+    assert_eq!(finished[0].mcp_packages, None);
 }
 
 #[tokio::test]
@@ -649,6 +661,7 @@ async fn a_denied_mcp_file_read_is_a_single_decision_run() {
     );
     assert_eq!(run.start.label, "app");
     assert_eq!(run.start.code, None);
+    assert_eq!(run.mcp_packages, None, "a file tool compiles nothing");
     assert_eq!(run.error, Some(ErrorKind::PermissionDenied));
     let [decision] = run.decisions.as_slice() else {
         panic!("one decision: {:#?}", run.decisions);

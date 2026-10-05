@@ -106,6 +106,7 @@ const DISCOVERY_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// One reachable server's virtual package. Unavailable servers (unauthenticated or
 /// unreachable) are omitted from the catalog entirely — see [`discover_all`].
+#[derive(serde::Serialize, serde::Deserialize)]
 pub struct McpPackage {
     pub server: String,
     pub defs: PackageDeclaration,
@@ -146,7 +147,10 @@ fn plural(n: usize) -> &'static str {
     if n == 1 { "" } else { "s" }
 }
 
-/// The `@mcp/*` packages for one blueprint, discovered once and cached.
+/// The `@mcp/*` packages for one blueprint, discovered once and cached. It serializes
+/// whole, so a recorded run can keep the catalog it compiled against and a replay can
+/// compile against it without contacting the servers.
+#[derive(serde::Serialize, serde::Deserialize)]
 pub struct McpCatalog {
     packages: Vec<McpPackage>,
     /// Server-level warnings for servers omitted from the catalog (unauthenticated
@@ -864,6 +868,23 @@ mod tests {
 
     fn names(hits: &[ModuleSummary]) -> Vec<String> {
         hits.iter().map(|m| m.name.clone()).collect()
+    }
+
+    #[test]
+    fn a_catalog_survives_serialization_unchanged() {
+        let mut original = catalog(vec![server_pkg("linear", &["createIssue"])]);
+        original
+            .unavailable
+            .push(ToolWarning::server_unavailable("github", "unreachable"));
+        let stored = serde_json::to_string(&original).unwrap();
+        let restored: McpCatalog = serde_json::from_str(&stored).unwrap();
+        assert_eq!(restored.defs_refs(), original.defs_refs());
+        assert!(original.unavailable_reason("github").is_some());
+        assert_eq!(
+            restored.unavailable_reason("github"),
+            original.unavailable_reason("github")
+        );
+        assert_eq!(names(&restored.search("")), names(&original.search("")));
     }
 
     #[test]

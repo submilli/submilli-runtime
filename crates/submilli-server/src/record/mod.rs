@@ -24,6 +24,7 @@ pub mod events;
 mod program;
 pub use events::{EVENT_SCHEMA, EventKind, SessionEvent};
 pub use program::{ProgramRun, run_program};
+pub use submilli_shared::mcp::McpCatalog;
 
 /// How a run reached the server.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -93,6 +94,13 @@ pub struct FinishedRun {
     pub usage: ExecutionUsage,
     /// Decisions and calls. Empty for a run that never dispatched.
     pub log: DecisionLogOutput,
+    /// The `@mcp/<server>` packages the program was compiled against: only the declared
+    /// servers it imports. A replay compiles against these instead of contacting the
+    /// servers again; the catalog serializes for keeping with a recording. Usually shared
+    /// with the server's discovery cache (a blueprint with harness secrets discovers per
+    /// run), and not counted in the recorder's byte budget. `None` when the run never
+    /// reached the runner or was dropped without reporting, and for an MCP file tool.
+    pub mcp_catalog: Option<Arc<McpCatalog>>,
     /// From the run's start to its end.
     pub wall: Duration,
 }
@@ -206,6 +214,7 @@ impl RunShared {
             console: String::new(),
             usage: ExecutionUsage::default(),
             log: DecisionLogOutput::default(),
+            mcp_catalog: None,
             wall: self.started.elapsed(),
         }
     }
@@ -314,9 +323,12 @@ impl Recording {
     }
 
     /// Finishes a run whose owner task ended without finishing it (it panicked). Its
-    /// records went with the task.
-    pub(crate) fn lost(&self, error: &ExecuteError) {
-        self.finish(self.without_log(true, error));
+    /// records went with the task; the catalog it compiled against did not.
+    pub(crate) fn lost(&self, error: &ExecuteError, mcp_catalog: Arc<McpCatalog>) {
+        self.finish(FinishedRun {
+            mcp_catalog: Some(mcp_catalog),
+            ..self.without_log(true, error)
+        });
     }
 
     fn without_log(&self, dispatched: bool, error: &ExecuteError) -> FinishedRun {
@@ -327,6 +339,7 @@ impl Recording {
             console: String::new(),
             usage: ExecutionUsage::default(),
             log: DecisionLogOutput::default(),
+            mcp_catalog: None,
             wall: self.started.elapsed(),
         }
     }
@@ -404,7 +417,7 @@ mod tests {
         let owner = recording(&calls);
         let outside = owner.clone();
         owner.finish(owner.without_log(true, &error()));
-        outside.lost(&error());
+        outside.lost(&error(), Arc::new(McpCatalog::empty()));
         outside.undispatched(&error());
         assert_eq!(*calls.0.lock().unwrap(), ["finish true"]);
     }
@@ -492,7 +505,7 @@ mod tests {
         let calls = Arc::new(Calls::default());
         let recording = recording(&calls);
         recording.returned(1);
-        recording.lost(&error());
+        recording.lost(&error(), Arc::new(McpCatalog::empty()));
         recording.returned(2);
         recording.returned(3);
         assert_eq!(*calls.0.lock().unwrap(), ["finish true", "returned 2"]);

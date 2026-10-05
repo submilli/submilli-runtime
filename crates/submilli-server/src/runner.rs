@@ -190,6 +190,7 @@ pub(crate) async fn run(
                 console: outcome.console_raw.clone(),
                 usage: outcome.usage,
                 log: log.finish(),
+                mcp_catalog: Some(Arc::clone(&mcps)),
                 wall: owner_recording.started.elapsed(),
             });
         }
@@ -202,7 +203,7 @@ pub(crate) async fn run(
             let outcome = internal_failure(&format!("execution task failed: {error}"));
             if let (Some(recording), Some(error)) = (&recording, &outcome.error) {
                 // A no-op when the owner had already finished the run.
-                recording.lost(error);
+                recording.lost(error, Arc::clone(imports.mcps));
             }
             outcome
         }
