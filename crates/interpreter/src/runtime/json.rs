@@ -203,44 +203,22 @@ pub(super) fn install_json_module(
                 };
                 let intr = intrinsic_types(&mut *caller)?;
                 let mut remaining = crate::runtime::MAX_STRUCTURAL_WALK_NODES;
-                let json = if contains_dynamic_object(
+                // The typed walk first; a dynamic object or any value that
+                // doesn't fit its TypeInfo falls back to the vtable walk.
+                let typed = if contains_dynamic_object(
                     caller,
                     abi_arg(params, 2)?,
                     &intr,
                     0,
                     &mut remaining,
                 )? {
-                    let serialized = crate::runtime::prelude::vtable::object_to_json(
-                        caller,
-                        abi_arg(params, 2)?,
-                        &intr.raw_string,
-                        &intr.string,
-                    )
-                    .await?;
-                    let string = boxed_struct(caller, serialized, "JSON serializer result")?;
-                    let raw = match string.field(&mut *caller, 1)? {
-                        Val::AnyRef(Some(raw)) => raw.unwrap_array(&mut *caller)?,
-                        _ => {
-                            return Err(super::host::fatal_host_error(
-                                "JSON serializer returned invalid string payload",
-                            ));
-                        }
-                    };
-                    let len = raw.len(&mut *caller)?;
-                    let _input = super::limits::HostBytes::new(
-                        &caller.data().tenant_limits,
-                        u64::from(len) * 2,
-                    )?;
-                    let units = crate::runtime::prelude::vtable::read_string_units(
-                        caller,
-                        &serialized,
-                        "JSON.stringify dynamic object",
-                    )?;
-                    let mut output = Output::new(caller);
-                    output.append(caller, &units)?;
-                    output
+                    None
                 } else {
                     stringify_typed_object(caller, &package, type_id, value)?
+                };
+                let json = match typed {
+                    Some(json) => json,
+                    None => stringify_dynamic_object(caller, abi_arg(params, 2)?).await?,
                 };
                 let raw = super::host::write_code_units(&mut *caller, json.units())?;
                 *abi_result(results, 0)? = Val::AnyRef(Some(raw.to_anyref()));
@@ -250,6 +228,40 @@ pub(super) fn install_json_module(
     )?;
 
     Ok(())
+}
+
+/// Serializes through each value's own vtable rather than a static TypeInfo.
+async fn stringify_dynamic_object(
+    caller: &mut Caller<'_, StoreData>,
+    value: &Val,
+) -> wasmtime::Result<Output> {
+    let intr = intrinsic_types(&mut *caller)?;
+    let serialized = crate::runtime::prelude::vtable::object_to_json(
+        caller,
+        value,
+        &intr.raw_string,
+        &intr.string,
+    )
+    .await?;
+    let string = boxed_struct(caller, serialized, "JSON serializer result")?;
+    let raw = match string.field(&mut *caller, 1)? {
+        Val::AnyRef(Some(raw)) => raw.unwrap_array(&mut *caller)?,
+        _ => {
+            return Err(super::host::fatal_host_error(
+                "JSON serializer returned invalid string payload",
+            ));
+        }
+    };
+    let len = raw.len(&mut *caller)?;
+    let _input = super::limits::HostBytes::new(&caller.data().tenant_limits, u64::from(len) * 2)?;
+    let units = crate::runtime::prelude::vtable::read_string_units(
+        caller,
+        &serialized,
+        "JSON.stringify dynamic object",
+    )?;
+    let mut output = Output::new(caller);
+    output.append(caller, &units)?;
+    Ok(output)
 }
 
 /// TypeInfo describes a static view. A spread can retain fields and values
@@ -338,12 +350,24 @@ fn charge_json_visit(
     fuel::charge(caller, fuel::ELEM, 1)
 }
 
+/// Whether a value fit the static view its TypeInfo describes. A value can be
+/// wider than that view: the shape of `{ v: null }` types its field `null`, yet
+/// a `{ v: number | null }` binding holding it may later store a number there.
+/// A mismatch abandons the typed walk for the dynamic serializer.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Fit {
+    Matched,
+    Mismatch,
+}
+
+/// The typed serialization of `value`, or `None` when some value it reaches
+/// doesn't fit its TypeInfo.
 fn stringify_typed_object(
     caller: &mut Caller<'_, StoreData>,
     package: &str,
     type_id: crate::TypeInfoId,
     value: Rooted<StructRef>,
-) -> wasmtime::Result<Output> {
+) -> wasmtime::Result<Option<Output>> {
     let (kind, _metadata) = read_type_kind(caller, package, type_id)?;
     let crate::TypeInfoKind::Object { fields } = kind else {
         return Err(super::host::fatal_host_error(
@@ -353,7 +377,7 @@ fn stringify_typed_object(
     let mut remaining = crate::runtime::MAX_STRUCTURAL_WALK_NODES;
     charge_json_visit(caller, &mut remaining)?;
     let mut output = Output::new(caller);
-    stringify_typed_object_value(
+    let fit = stringify_typed_object_value(
         caller,
         package,
         fields,
@@ -362,7 +386,7 @@ fn stringify_typed_object(
         0,
         &mut output,
     )?;
-    Ok(output)
+    Ok((fit == Fit::Matched).then_some(output))
 }
 
 fn stringify_typed_object_value(
@@ -373,10 +397,15 @@ fn stringify_typed_object_value(
     remaining: &mut u32,
     depth: u32,
     output: &mut Output,
-) -> wasmtime::Result<()> {
+) -> wasmtime::Result<Fit> {
     let receiver = Val::AnyRef(Some(value.to_anyref()));
+    let intr = intrinsic_types(&mut *caller)?;
+    // The top-level object skips `value_fits_kind`, so check its shape here.
+    if !value.matches_ty(&*caller, &intr.object_shape)? {
+        return Ok(Fit::Mismatch);
+    }
     output.append(caller, &[123])?;
-    let mut first = true;
+    let mut written = 0usize;
     // TypeInfo object fields inherit the compiler's BTreeMap name order.
     for field in fields {
         let Some(raw) = crate::runtime::prelude::collection::object_field_present(
@@ -388,32 +417,38 @@ fn stringify_typed_object_value(
             if field.optional {
                 continue;
             }
-            return Err(wasmtime::Error::msg(format!(
-                "JSON.stringify: missing required field `{}`",
-                field.name
-            )));
+            return Ok(Fit::Mismatch);
         };
-        if !first {
+        if written != 0 {
             output.append(caller, &[44])?;
         }
-        first = false;
+        written = written.saturating_add(1);
         append_quoted_text(caller, output, &field.name)?;
         output.append(caller, &[58])?;
         if matches!(raw, Val::AnyRef(None)) {
             output.append(caller, &[110, 117, 108, 108])?;
-        } else {
-            stringify_type_info_val(
-                caller,
-                package,
-                field.type_id,
-                raw,
-                remaining,
-                depth + 1,
-                output,
-            )?;
+            continue;
+        }
+        let fit = stringify_type_info_val(
+            caller,
+            package,
+            field.type_id,
+            raw,
+            remaining,
+            depth + 1,
+            output,
+        )?;
+        if fit == Fit::Mismatch {
+            return Ok(Fit::Mismatch);
         }
     }
-    output.append(caller, &[125])
+    // An object stored through a narrower field type can carry fields this
+    // TypeInfo doesn't list; fall back so they are still serialized.
+    if crate::runtime::prelude::object::data_field_count(caller, &receiver)? > written {
+        return Ok(Fit::Mismatch);
+    }
+    output.append(caller, &[125])?;
+    Ok(Fit::Matched)
 }
 
 fn stringify_type_info_val(
@@ -424,7 +459,7 @@ fn stringify_type_info_val(
     remaining: &mut u32,
     depth: u32,
     output: &mut Output,
-) -> wasmtime::Result<()> {
+) -> wasmtime::Result<Fit> {
     if depth >= crate::runtime::MAX_VTABLE_WALK_DEPTH {
         return Err(super::host::range_error(
             "JSON.stringify type traversal exceeds 128 levels; serialize a less deeply nested value",
@@ -432,8 +467,14 @@ fn stringify_type_info_val(
     }
     charge_json_visit(caller, remaining)?;
     let (kind, _metadata) = read_type_kind(caller, package, type_id)?;
+    if !value_fits_kind(caller, &kind, &val)? {
+        return Ok(Fit::Mismatch);
+    }
     match kind {
-        crate::TypeInfoKind::Null => output.append(caller, &[110, 117, 108, 108]),
+        crate::TypeInfoKind::Null => {
+            output.append(caller, &[110, 117, 108, 108])?;
+            Ok(Fit::Matched)
+        }
         crate::TypeInfoKind::Boolean | crate::TypeInfoKind::BooleanLiteral(_) => {
             let value = boxed_bool(caller, val)?;
             output.append(
@@ -443,15 +484,17 @@ fn stringify_type_info_val(
                 } else {
                     &[102, 97, 108, 115, 101]
                 },
-            )
+            )?;
+            Ok(Fit::Matched)
         }
         crate::TypeInfoKind::Number | crate::TypeInfoKind::NumberLiteral(_) => {
             let n = boxed_number(caller, val)?;
             if n.is_finite() {
-                append_text(caller, output, &json_number(n)?.to_string())
+                append_text(caller, output, &json_number(n)?.to_string())?;
             } else {
-                output.append(caller, &[110, 117, 108, 108])
+                output.append(caller, &[110, 117, 108, 108])?;
             }
+            Ok(Fit::Matched)
         }
         crate::TypeInfoKind::String | crate::TypeInfoKind::StringLiteral(_) => {
             let string = boxed_struct(caller, val, "string")?;
@@ -467,7 +510,8 @@ fn stringify_type_info_val(
             let _input =
                 super::limits::HostBytes::new(&caller.data().tenant_limits, u64::from(count) * 2)?;
             let units = super::host::read_code_units(&mut *caller, raw, "JSON.stringify string")?;
-            output.append_escaped(caller, &units)
+            output.append_escaped(caller, &units)?;
+            Ok(Fit::Matched)
         }
         crate::TypeInfoKind::Array { element } => {
             stringify_array(caller, package, element, val, remaining, depth, output)
@@ -493,7 +537,8 @@ fn stringify_type_info_val(
             }) =>
         {
             if matches!(val, Val::AnyRef(None)) {
-                return output.append(caller, &[110, 117, 108, 108]);
+                output.append(caller, &[110, 117, 108, 108])?;
+                return Ok(Fit::Matched);
             }
             let non_null = members
                 .iter()
@@ -525,6 +570,42 @@ fn stringify_type_info_val(
     }
 }
 
+/// Whether `val` has the runtime representation `kind` describes. A nullable
+/// union defers to its member.
+fn value_fits_kind(
+    caller: &mut Caller<'_, StoreData>,
+    kind: &crate::TypeInfoKind,
+    val: &Val,
+) -> wasmtime::Result<bool> {
+    let intr = intrinsic_types(&mut *caller)?;
+    let expected = match kind {
+        crate::TypeInfoKind::Null => return Ok(matches!(val, Val::AnyRef(None))),
+        crate::TypeInfoKind::Boolean | crate::TypeInfoKind::BooleanLiteral(_) => {
+            &intr.boxed_boolean
+        }
+        crate::TypeInfoKind::Number | crate::TypeInfoKind::NumberLiteral(_) => &intr.boxed_number,
+        crate::TypeInfoKind::String | crate::TypeInfoKind::StringLiteral(_) => &intr.string,
+        crate::TypeInfoKind::Array { .. } | crate::TypeInfoKind::Tuple { .. } => &intr.array,
+        crate::TypeInfoKind::Object { .. } => &intr.object_shape,
+        _ => return Ok(true),
+    };
+    is_struct_of(caller, val, expected)
+}
+
+fn is_struct_of(
+    caller: &mut Caller<'_, StoreData>,
+    val: &Val,
+    ty: &wasmtime::StructType,
+) -> wasmtime::Result<bool> {
+    let Val::AnyRef(Some(any)) = val else {
+        return Ok(false);
+    };
+    match any.as_struct(&mut *caller)? {
+        Some(object) => object.matches_ty(&*caller, ty),
+        None => Ok(false),
+    }
+}
+
 fn stringify_array(
     caller: &mut Caller<'_, StoreData>,
     package: &str,
@@ -533,7 +614,7 @@ fn stringify_array(
     remaining: &mut u32,
     depth: u32,
     output: &mut Output,
-) -> wasmtime::Result<()> {
+) -> wasmtime::Result<Fit> {
     let storage = super::array_storage::ArrayStorage::read(caller, &val)?;
     let raw = storage.backing;
     let len = storage.len;
@@ -543,9 +624,14 @@ fn stringify_array(
         if index != 0 {
             output.append(caller, &[44])?;
         }
-        stringify_type_info_val(caller, package, element, elem, remaining, depth + 1, output)?;
+        let fit =
+            stringify_type_info_val(caller, package, element, elem, remaining, depth + 1, output)?;
+        if fit == Fit::Mismatch {
+            return Ok(Fit::Mismatch);
+        }
     }
-    output.append(caller, &[93])
+    output.append(caller, &[93])?;
+    Ok(Fit::Matched)
 }
 
 fn stringify_tuple(
@@ -556,15 +642,12 @@ fn stringify_tuple(
     remaining: &mut u32,
     depth: u32,
     output: &mut Output,
-) -> wasmtime::Result<()> {
+) -> wasmtime::Result<Fit> {
     let storage = super::array_storage::ArrayStorage::read(caller, &val)?;
     let raw = storage.backing;
     let len = storage.len;
     if len as usize != elements.len() {
-        return Err(wasmtime::Error::msg(format!(
-            "JSON.stringify: tuple length mismatch, expected {}, got {len}",
-            elements.len()
-        )));
+        return Ok(Fit::Mismatch);
     }
     output.append(caller, &[91])?;
     for (index, element) in elements.iter().enumerate() {
@@ -573,9 +656,14 @@ fn stringify_tuple(
         if index != 0 {
             output.append(caller, &[44])?;
         }
-        stringify_type_info_val(caller, package, element, elem, remaining, depth + 1, output)?;
+        let fit =
+            stringify_type_info_val(caller, package, element, elem, remaining, depth + 1, output)?;
+        if fit == Fit::Mismatch {
+            return Ok(Fit::Mismatch);
+        }
     }
-    output.append(caller, &[93])
+    output.append(caller, &[93])?;
+    Ok(Fit::Matched)
 }
 
 /// Copy only the schema data used by this walk, admitting native storage before
