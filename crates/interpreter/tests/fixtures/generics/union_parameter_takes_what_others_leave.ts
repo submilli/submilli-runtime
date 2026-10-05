@@ -105,6 +105,14 @@ function boxOrOther<T, U>(first: T | Box<number>, other: T | U): T[] {
   return [];
 }
 
+function boxThenOther<T, U>(first: T | Box<number>, either: T | U, other: U): U[] {
+  return [other];
+}
+
+function textOrCountFor(flag: boolean): number | string {
+  return flag ? 1 : "s";
+}
+
 function textOrFlagBox(flag: boolean): Box<string> | Box<boolean> {
   return flag ? new Box("s") : new Box(true);
 }
@@ -186,6 +194,12 @@ function main(): void {
   const others = boxOrOther(new Box(true), new Box("s"));
   others.push(new Box(false));
   assert(others.length === 1, "another type parameter takes a later argument beside the fallback");
+
+  const fitsFallback = boxThenOther(new Box(true), new Box(false), 3);
+  const counts: number[] = fitsFallback;
+  const unionForOther = boxOrOther(new Box(true), textOrCountFor(true));
+  const nestedForOther = boxOrOther(new Box(true), [new Box(5)][0]);
+  assert(counts[0] === 3 && unionForOther.length === 0 && nestedForOther.length === 0, "the fallback's type parameter leaves the rest to another");
 
   const inferredList = listOrNumbers(lists(true));
   const fromList: string[] | null = inferredList;

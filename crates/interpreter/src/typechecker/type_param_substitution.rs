@@ -619,7 +619,7 @@ impl<'a> Unifier<'a> {
                 }
                 let mut leftover_pa: Vec<&Type> = Vec::new();
                 let mut leftover_pb: Vec<Type> = pb.to_vec();
-                for a in pa {
+                for a in self.fallback_type_vars_last(pa) {
                     let resolved_a = self.sub.apply_or_record(a, self.limits);
                     // Snapshot and roll back on failure — speculative pairing.
                     let mut paired: Option<usize> = None;
@@ -665,6 +665,9 @@ impl<'a> Unifier<'a> {
                     self.restore(snap);
                 }
                 if self.unify_by_lone_type_var_rule(pa, arg_ty) {
+                    return Ok(());
+                }
+                if self.defer_into_fallback_it_fits(pa, arg_ty) {
                     return Ok(());
                 }
                 for m in self.fallback_type_vars_last(pa) {
@@ -893,6 +896,35 @@ impl<'a> Unifier<'a> {
         Some(Ok(()))
     }
 
+    /// Defer `arg` when it fits the whole-union fallback of a member that is
+    /// an unbound type parameter: tsc takes it as one more candidate of the
+    /// fallback's priority, which the fallback already covers, so it binds
+    /// nothing now and is checked against `params` once inference is done.
+    /// Binding another type parameter to it instead would take that one's
+    /// place from a later argument. Returns whether it deferred `arg`.
+    fn defer_into_fallback_it_fits(&mut self, params: &[Type], arg: &Type) -> bool {
+        if !self.is_argument || self.contravariant {
+            return false;
+        }
+        let fitting = params.iter().find(|member| {
+            let Type::TypeVar(name) = member.peel() else {
+                return false;
+            };
+            if !self.is_unbound_fallback_type_var(member) {
+                return false;
+            }
+            let Some(fallback) = self.sub.whole_union_fallback(name).cloned() else {
+                return false;
+            };
+            self.would_unify(&fallback, arg)
+        });
+        let Some(type_var) = fitting else {
+            return false;
+        };
+        self.record_close_match(params, type_var, arg);
+        true
+    }
+
     /// `members` in order to try an argument against, those that are an
     /// unbound type parameter with a whole-union fallback last: tsc's first
     /// candidate for it is the fallback, so a later argument goes to another
@@ -909,24 +941,35 @@ impl<'a> Unifier<'a> {
 
     /// The one member of `params` that is a type parameter not yet bound,
     /// and the other members; None when there is no such member or more
-    /// than one.
+    /// than one. In an argument, unbound type parameters with a whole-union
+    /// fallback are left out when another one is unbound: tsc's first
+    /// candidate for them is their fallback, so the other one takes what
+    /// the remaining members leave.
     fn split_lone_unbound_type_var<'p>(
         &self,
         params: &'p [Type],
     ) -> Option<(&'p Type, Vec<&'p Type>)> {
-        let mut unbound = params
+        let unbound: Vec<&Type> = params
             .iter()
-            .enumerate()
-            .filter(|(_, member)| self.is_unbound_type_var(member));
-        let (type_var_index, type_var) = unbound.next()?;
-        if unbound.next().is_some() {
+            .filter(|member| self.is_unbound_type_var(member))
+            .collect();
+        let candidates: Vec<&Type> = if unbound.len() > 1 && self.is_argument && !self.contravariant
+        {
+            unbound
+                .into_iter()
+                .filter(|member| !self.is_unbound_fallback_type_var(member))
+                .collect()
+        } else {
+            unbound
+        };
+        let [type_var] = candidates[..] else {
             return None;
-        }
+        };
         let others = params
             .iter()
-            .enumerate()
-            .filter(|(index, _)| *index != type_var_index)
-            .map(|(_, member)| member)
+            .filter(|member| {
+                !std::ptr::eq(*member, type_var) && !self.is_unbound_fallback_type_var(member)
+            })
             .collect();
         Some((type_var, others))
     }
