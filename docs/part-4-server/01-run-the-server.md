@@ -7,8 +7,8 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "1942e26eb25291d52a2bd8a2fff9a506f36d420d6779fd8d612d6830760ba162"
-  confirmedAt: "2026-10-05T10:59:51.485Z"
+  contentHash: "e1a7cf98f4a97f20e4f46afd3716000e8620350a7c18e6ba8c8dea3d1051ea2a"
+  confirmedAt: "2026-10-05T13:01:53.009Z"
 ---
 
 This guide shows you how to run `submilli-server` for an application.
@@ -111,8 +111,8 @@ The token so far is an admin token. It can call the entire API, so one
 token serves the CLI and your application alike. That is fine while both
 are yours, on one machine or one private network. Before an agent runs
 somewhere you don't fully trust, give the application a `user` token. A
-`user` token runs programs, opens sessions, and reads what a blueprint
-offers. The server refuses anything else, such as replacing the blueprint
+`user` token runs programs, opens sessions, and reads what a Blueprint
+offers. The server refuses anything else, such as replacing the Blueprint
 that constrains the agent. Add the token as a second entry, with its own
 file:
 
@@ -175,8 +175,8 @@ mcp_allowed_hosts:
 ## Put its state on a persistent disk
 
 Most of what the server knows has to outlive the process. That includes
-the blueprints you registered, the sessions your users are partway
-through, and the secrets and packages you gave it. On a laptop this takes
+the Blueprints you registered, the sessions your users are partway
+through, and the secrets and Packages you gave it. On a laptop this takes
 care of itself. Everything lands under `~/.submilli` (or `$SUBMILLI_HOME`
 when set), and a restart picks up where it left off. In a container,
 anything not on a persistent volume is gone after the next deploy. So
@@ -184,7 +184,7 @@ decide what has to be kept, and what losing each piece would cost you.
 
 | What | Setting | Default | If it's lost |
 | --- | --- | --- | --- |
-| Registered blueprints | `blueprint_dir` | `$SUBMILLI_HOME/server/blueprints` | Every program is refused until you register them again. That's quick if they live in source control and a deploy job applies them ([Manage blueprints in Git](/docs/tutorials/manage-blueprints-in-git)). |
+| Registered Blueprints | `blueprint_dir` | `$SUBMILLI_HOME/server/blueprints` | Every program is refused until you register them again. That's quick if they live in source control and a deploy job applies them ([Manage Blueprints in Git](/docs/tutorials/manage-blueprints-in-git)). |
 | Open sessions | `session_store_dir` | `$SUBMILLI_HOME/server/sessions` | Your users' sessions end, and reconnecting clients get `404 unknown session`. There's nothing to rebuild them from. |
 | Sessions' files | `vfs_session_dir` | `$SUBMILLI_HOME/server/vfs/sessions` | Files the agent wrote in a session are gone. |
 | Secrets | `secret_store.dir` | `$SUBMILLI_HOME/server/secrets` | Blueprints that read `store:` secrets fail until every value is put back. Keep the key file safe too, because without it the store can't be read. |
@@ -217,18 +217,18 @@ ts=2026-10-03T17:05:26.518Z level=info stream=log target=submilli_server::serve 
 ```
 
 Back up the sessions, the managed volumes, and the secrets, and keep the
-store's key somewhere separate from the store. Blueprints and packages
+store's key somewhere separate from the store. Blueprints and Packages
 can be rebuilt from source.
 
 The server keeps its state under `server/`, apart from the CLI's own
 `packages/`, `secrets/`, and `mcp_oauth.yaml`. It does read the CLI's
-`packages/` as a read-only fallback. So a package installed with
+`packages/` as a read-only fallback. So a Package installed with
 `submilli install` or `submilli build publish-local` is visible to a
 server on the same machine, and the quickstart relied on this.
 
 ## Turn on the secret store
 
-A blueprint's `store:` secrets read from the server's secret store, and
+A Blueprint's `store:` secrets read from the server's secret store, and
 `submilli server mcp authenticate` keeps the OAuth tokens it obtains
 there. The store is encrypted at rest and off until it has a key.
 Generate one, and name the file in the config file:
@@ -257,7 +257,7 @@ Stored secret 'billing_api_key'
 
 `put` prompts for the value with echo off, `list` prints keys, and
 `delete` removes one. Nothing reads a value back over the API. The server
-decrypts the value inside its process when a package calls `secrets.get`,
+decrypts the value inside its process when a Package calls `secrets.get`,
 and the value never leaves that process.
 
 A credential that belongs to the session, such as a customer's API token,
@@ -279,9 +279,9 @@ outside its notes:
 ts=2026-10-03T20:02:39.695Z level=info stream=audit target=submilli_server::audit msg=decision blueprint=support blueprint_hash=5a2a1e61c440e6b36c43c60b2eff7ecad0ed7989bf5dee30d486678206a480d0 caller=main capability=fs.write context.length=1 context.path=/etc/passwd decision=deny event_id=4760971b-3dee-412c-9dea-b1d77bcb1420 execution_id=0dfa846a-4483-4b8a-b271-45339daecbaf principal=SUBMILLI_SERVER_TOKEN reason="policy denied the capability" rule=default schema=submilli.audit/1 source=policy type=decision
 ```
 
-The record names the run, the blueprint and the version of it in force,
+The record names the run, the Blueprint and the version of it in force,
 who called, what the program asked for and with which values, and the
-rule that decided (here the blueprint's `default`). To keep the trail in
+rule that decided (here the Blueprint's `default`). To keep the trail in
 a separate file:
 
 ```yaml title="server.yaml (fragment)"

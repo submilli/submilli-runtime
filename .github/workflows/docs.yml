@@ -33,6 +33,25 @@ jobs:
       - run: npm ci
       - run: npm run check
       - run: npm run build
+      - name: Check built documentation links
+        uses: lycheeverse/lychee-action@v2
+        with:
+          lycheeVersion: v0.24.2
+          fail: true
+          failIfEmpty: true
+          args: >-
+            --config ${{ github.workspace }}/docs-site/lychee.toml
+            --extensions html
+            --root-dir ${{ github.workspace }}/docs-site/dist
+            --remap '^https://submilli\.ai/docs([?#].*)?$ file://${{ github.workspace }}/docs-site/dist/docs/$1'
+            --remap '^https://submilli\.ai/docs/(.*)$ file://${{ github.workspace }}/docs-site/dist/docs/$1'
+            --remap '^https://github\.com/submilli/submilli-runtime/edit/main/(.*)$ file://${{ github.workspace }}/$1'
+            ${{ github.workspace }}/docs-site/dist/docs
+      - name: Test link-check failure cases
+        working-directory: docs-site
+        run: npm run check:links:fixtures
+        env:
+          LYCHEE_BIN: lychee
       - uses: actions/upload-artifact@v4
         with:
           name: documentation-site

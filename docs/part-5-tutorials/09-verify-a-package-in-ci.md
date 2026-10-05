@@ -1,6 +1,6 @@
 ---
-title: "Verify a package in CI"
-description: "Build a GitHub Actions job that fails a pull request when a package's tests fail, with the tests that call the service run from the repository's secrets and skipped where there are none, and an agent's security review beside them."
+title: "Verify a Package in CI"
+description: "Build a GitHub Actions job that fails a pull request when a Package's tests fail, with the tests that call the service run from the repository's secrets and skipped where there are none, and an agent's security review beside them."
 slug: tutorials/verify-a-package-in-ci
 # The workflows have not run on GitHub: the installer is not public yet.
 # SUB-1309 runs them. Every command inside them was run locally. The
@@ -12,26 +12,26 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "8bc2fc74a127cdacf6905f2070ea6de459e3f8c0843ca857d5db4036b21c1e13"
-  confirmedAt: "2026-10-05T10:59:51.480Z"
+  contentHash: "341e3e5a94b53c8a10a1d5f751ef255d7bc34fc5c52329541cb19ea70312f360"
+  confirmedAt: "2026-10-05T13:01:53.009Z"
 ---
 
-A package is reviewed once and then called by programs nobody reviews,
+A Package is reviewed once and then called by programs nobody reviews,
 so a change to it has to prove itself before it merges. The diff can't
-tell the reviewer whether the package still does what its tests say. A
+tell the reviewer whether the Package still does what its tests say. A
 job can.
 
 In this tutorial we will build a GitHub Actions job that runs a
-package's tests on every pull request and every push to main, and fails
+Package's tests on every pull request and every push to main, and fails
 when one breaks. The
-package is a small charge lookup over fixed data, written here from
+Package is a small charge lookup over fixed data, written here from
 scratch so that it needs no service and no key. Later sections add the
 tests that do call a service, and an agent's review for the bugs tests
 miss.
 
-## The package
+## The Package
 
-In an empty repository, scaffold the package and replace its source and
+In an empty repository, scaffold the Package and replace its source and
 its test:
 
 ```sh
@@ -111,7 +111,7 @@ ok   packages/billing/tests/lib.test.ts :: scopes the lookup to the customer ask
 2 passed, 0 failed across 1 files
 ```
 
-Tests run with no blueprint, so every `check` is allowed and printed.
+Tests run with no Blueprint, so every `check` is allowed and printed.
 A rule would see the `[security]` lines. The job prints the same when
 the pull request is good.
 
@@ -149,7 +149,7 @@ request, and the check runs and passes.
 
 ## See it fail
 
-Now break the package the way a careless edit would. Drop the comparison
+Now break the Package the way a careless edit would. Drop the comparison
 that keeps a lookup to one customer, so every charge comes back.
 
 ```typescript title="packages/billing/src/lib.ts (fragment)"
@@ -177,14 +177,14 @@ error: Error: cus_northwind has two charges in the fixture
 0 passed, 1 failed across 1 files
 ```
 
-Notice that the `check` still passed. The package asked about
-`cus_northwind` and was told yes. A blueprint can't catch this. Only the
-package's tests can, so they gate the merge. Restore the
+Notice that the `check` still passed. The Package asked about
+`cus_northwind` and was told yes. A Blueprint can't catch this. Only the
+Package's tests can, so they gate the merge. Restore the
 line.
 
 ## Tests that call the service
 
-A package over a real API also has tests that call it, and they need the
+A Package over a real API also has tests that call it, and they need the
 service's key. Three steps get it to them in CI, and only to them.
 
 **1. Keep them apart.** Put every test that calls the service in
@@ -195,7 +195,7 @@ which matters below, when there is no key.
 **2. Add the key to the repository's secrets.** On GitHub, open the
 repository's **Settings**, then **Secrets and variables**, **Actions**,
 and **New repository secret**. Name it `BILLING_API_KEY`, the name the
-package reads, and paste the key as its value. With the GitHub CLI,
+Package reads, and paste the key as its value. With the GitHub CLI,
 from a checkout of the repository:
 
 ```sh
@@ -294,7 +294,7 @@ skip packages/billing/tests/network.test.ts (--skip-network)
 ```
 
 Tests see no credential unless the command passes one, so the key
-reaches only the run that names it, and the package reads it the way it
+reaches only the run that names it, and the Package reads it the way it
 would on a server. Keep live tests read-only unless they have a target
 that is safe to change, such as the service's test mode. [Write
 tests](/docs/packages/write-tests) has the details.
@@ -384,9 +384,9 @@ it read. A review that can't finish exits 2 and fails the job too. A
 pull request from a fork has no secrets, so it is reviewed after the
 merge.
 
-You have a job that tests a package on every pull request and an
+You have a job that tests a Package on every pull request and an
 agent's review beside it, each catching a bug no rule would. [Review a
-package's security](/docs/packages/review-package-security) runs the
-review with Claude Code. Next: [Manage blueprints in
+Package's security](/docs/packages/review-package-security) runs the
+review with Claude Code. Next: [Manage Blueprints in
 Git](/docs/tutorials/manage-blueprints-in-git), the same idea for the
-blueprints that grant the package.
+Blueprints that grant the Package.

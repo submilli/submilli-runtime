@@ -729,6 +729,8 @@ impl Inferer<'_> {
             exits.extend(outcome.exit);
             all_assigned.extend(outcome.all_writes);
             self.scopes.pop();
+            // Catch-property materializations cannot outlive their parameter's scope.
+            self.drop_out_of_scope_narrowings();
             if let Some(body) = outcome.body {
                 typed_catches.push(crate::TypedCatchClause {
                     binding: clause.binding.clone(),
@@ -3187,6 +3189,11 @@ impl Inferer<'_> {
             // Strings, literal ones included, iterate by code point through
             // `String#iterator`.
             ty if ty.is_string_shaped() => Some((Type::String, crate::ForOfKind::Iterable)),
+            // A union of arrays and tuples is one `$Array` at runtime too. It
+            // follows the string arm, which takes unions of string literals.
+            Type::Union(_) => iter_ty
+                .array_like_union_element()
+                .map(|element| (element, crate::ForOfKind::Array)),
             // Exact-name match keeps Iterator<U> on its own desugar path
             // (it declares `next()`, not `iterator()`, so it fails the structural check below).
             Type::InterfaceRef { name, args, .. } if name == "Iterator" && args.len() == 1 => {

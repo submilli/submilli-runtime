@@ -7,25 +7,25 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "82e9862464b6bd7698866d0f97a055893a62a3f20aedd67ee9961bb999e437ac"
-  confirmedAt: "2026-10-05T10:59:51.480Z"
+  contentHash: "ddfb5a1c574fa30ee8b025baa90336a0e0e86cbfb0e5e179141f73dad190c508"
+  confirmedAt: "2026-10-05T13:01:53.009Z"
 ---
 
 A denial is the system working. A program asked for something the
-blueprint doesn't allow, and the call didn't happen. But you will also
+Blueprint doesn't allow, and the call didn't happen. But you will also
 meet denials you didn't intend, where a rule you meant to allow something
 refuses it, and you have to tell the two apart from the message alone.
 
 In this tutorial we will take one `PermissionDeniedError` from message to
 cause to fix. The setup is the [quickstart](/docs/quickstart)'s,
 repeated here so that the page stands alone. It uses an offline billing
-package with one operation, installed from the book's example repository, and a blueprint
+Package with one operation, installed from the book's example repository, and a Blueprint
 that grants it for one customer.
 
 ## Set up
 
-In an empty directory, install the package from the book's example
-repository and save the blueprint beside it:
+In an empty directory, install the Package from the book's example
+repository and save the Blueprint beside it:
 
 ```sh
 submilli install submilli/acme @submilli/acme-billing
@@ -36,7 +36,7 @@ fetched github.com/submilli/acme at 88656b81c537
 installed @submilli/acme-billing v0.1.0 -> ~/.submilli/packages/@submilli/acme-billing
 ```
 
-The repository is public, so the install needs no token. The package
+The repository is public, so the install needs no token. The Package
 reads fixed data, so it needs no key either.
 
 ```yaml title="blueprint.yaml"
@@ -144,10 +144,10 @@ error: PermissionDeniedError: permission denied: caller=main capability=acme.com
 ## Read the message
 
 The first line names three things: the **caller**, `main`, which is the
-program itself rather than a package; the **capability**, the operation
+program itself rather than a Package; the **capability**, the operation
 that was asked for; and the **reason**. The rest of the line is addressed
 to the model that wrote the program. Then come two frames. `[thrown here]` is
-the package's `check`, the line that asked the blueprint, and `[entry]` is
+the Package's `check`, the line that asked the Blueprint, and `[entry]` is
 the line in the program that made the call, line 12, the "compliance
 step".
 
@@ -241,7 +241,7 @@ error: blueprint.yaml: `permissions.main` rule 1 for `acme.com/charges.list` tes
 ```
 
 Lint refuses the file. Look at the `capability list` output again. The
-operation reports one field, `customerId`. The package never says what
+operation reports one field, `customerId`. The Package never says what
 class a customer is, so `customerClass` is missing from every call, and
 a condition on a field that isn't there is false, whatever the operator.
 The rule could never match. `submilli run` doesn't lint, so run the
@@ -277,7 +277,7 @@ Allowed, because `not` of a false condition is true, so the rule
 matches every call, premium or not. Lint refuses this form with the
 same message. Write `allow` rules as conditions on fields the operation
 reports, and remember that `not` matches when the field is missing. The
-fix here belongs in the package. An operation that should be
+fix here belongs in the Package. An operation that should be
 allowed by class has to report the class, looked up from the account, as
 [Export a function](/docs/packages/export-a-function) does. Restore
 the filter before going on:
@@ -292,7 +292,7 @@ the filter before going on:
 | --- | --- |
 | Asked for something the session isn't for, like the `cus_initech` step | Nothing. The rule did its job. The message tells the model to report and stop, and it should. |
 | Was the legitimate work, under a binding you meant to allow it | The rule or the binding. Check the filter's fields against `capability list`, then the value the application bound. |
-| Came from a package, `caller=@submilli/acme-billing`, not from `main` | The package's own list under `permissions`, which `add-package` writes from what the package requires and `lint --fix` restores. |
+| Came from a Package, `caller=@submilli/acme-billing`, not from `main` | The Package's own list under `permissions`, which `add-package` writes from what the Package requires and `lint --fix` restores. |
 
 Refer to [Filter
 language](/docs/reference/filter-language#how-a-filter-is-evaluated) for
@@ -303,7 +303,7 @@ You have read one denial all the way down, from the message to the rule
 that decided to the binding that made it decide that way. You have also
 seen the denial a dead rule makes, a filter on a field the operation
 doesn't report, which lint refuses before it reaches a server. Next:
-[Verify a package in
-CI](/docs/tutorials/verify-a-package-in-ci), then [Manage blueprints
+[Verify a Package in
+CI](/docs/tutorials/verify-a-package-in-ci), then [Manage Blueprints
 in Git](/docs/tutorials/manage-blueprints-in-git), where the two runs
 you made by hand become a check on every pull request.

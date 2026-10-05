@@ -1,0 +1,35 @@
+name: Request a curated Package
+description: Suggest a service or integration for the curated Package catalog.
+title: "Package request: "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Browse the [curated Packages](https://github.com/submilli/submilli-runtime/blob/main/packages/README.md) and [existing requests](https://github.com/submilli/submilli-runtime/issues?q=is%3Aissue%20%22Package%20request%3A%22) before submitting.
+  - type: input
+    id: service
+    attributes:
+      label: Service or integration
+      placeholder: Name of the service you want to use
+    validations:
+      required: true
+  - type: input
+    id: documentation
+    attributes:
+      label: Service website or API documentation
+      placeholder: https://...
+    validations:
+      required: true
+  - type: textarea
+    id: workflow
+    attributes:
+      label: What should your agent accomplish?
+      description: Describe the workflow this Package would enable.
+      placeholder: Let my support agent look up payments and issue refunds up to a limit.
+    validations:
+      required: true
+  - type: textarea
+    id: operations
+    attributes:
+      label: Operations and permission constraints (optional)
+      description: List specific operations you need and any restrictions on what the agent may do.

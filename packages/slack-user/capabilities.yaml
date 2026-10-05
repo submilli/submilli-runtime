@@ -1,12 +1,19 @@
 namespace: submilli
 provides:
+- name: fs.write
+  description: Stream a Slack-hosted private file into the Submilli VFS, limited to 20 MB. The caller's `fs.write` rule checks the normalized destination and byte limit. The package capability retains the caller's original `path` for compatibility. The package rejects download URLs outside `files.slack.com`; the destination is not overwritten unless the underlying download policy permits it.
+  fields:
+    max_bytes:
+      type: number
+    path:
+      type: string
 - name: slack.com/user/addReaction
   description: Add an emoji reaction as the authenticated user.
   fields:
     channelId:
       type: string
 - name: slack.com/user/downloadFile
-  description: Stream a Slack-hosted private file into the Submilli VFS. The package rejects download URLs outside `files.slack.com`; the destination is not overwritten unless the underlying download policy permits it.
+  description: Stream a Slack-hosted private file into the Submilli VFS, limited to 20 MB. The caller's `fs.write` rule checks the normalized destination and byte limit. The package capability retains the caller's original `path` for compatibility. The package rejects download URLs outside `files.slack.com`; the destination is not overwritten unless the underlying download policy permits it.
   fields:
     path:
       type: string

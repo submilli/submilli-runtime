@@ -37,7 +37,11 @@ Upstream: 4463 single-file TypeScript tests. Suite: 451 TypeScript cases, 657 te
 | `boolean` | §1.1 | done | 482 | 107 | 375 | 0 | 1707 | 1 of 1 | — | — |  |
 | `null` | §1.1 | done | 386 | 73 | 313 | 0 | 1370 | 1 of 1 | — | — |  |
 | `void` | §1.1 | done | 500 | 41 | 459 | 0 | 583 | 1 of 1 | — | — |  |
+<<<<<<< HEAD
 | `never` | §1.1 | done | 72 | 8 | 64 | 0 | 68 | 1 of 1 | — | — |  |
+=======
+| `never` | §1.1 | done | 72 | 8 | 64 | 0 | 69 | 1 of 1 | — | — |  |
+>>>>>>> origin/main
 | `bigint` | §1.1 | done | 16 | 3 | 13 | 0 | 15 | 1 of 1 | 16 | 68 |  |
 | Radix literals (`0x`/`0b`/`0o`) | §1.1 | done | 22 | 3 | 19 | 0 | 15 | 4 of 4 | — | — |  |
 | Numeric separators (`1_000`) | §1.1 | done | 6 | 2 | 4 | 0 | 9 | 1 of 1 | — | — |  |
@@ -50,7 +54,7 @@ Upstream: 4463 single-file TypeScript tests. Suite: 451 TypeScript cases, 657 te
 | `readonly` arrays and tuples | §1.2 | done | 24 | 5 | 19 | 0 | 43 | 1 of 1 | — | — |  |
 | Union types (`A | B`) | §1.2 | done | 458 | 159 | 299 | 0 | 1586 | 1 of 1 | — | — |  |
 | Type aliases (`type X = …`) | §1.2 | done | 267 | 48 | 219 | 0 | 328 | 1 of 1 | — | — |  |
-| Literal types (`"foo"`, `42`, `true`) | §1.2 | done | 258 | 66 | 192 | 0 | 843 | 2 of 2 | — | — |  |
+| Literal types (`"foo"`, `42`, `true`) | §1.2 | done | 258 | 66 | 192 | 0 | 844 | 2 of 2 | — | — |  |
 
 ## Declarations
 
@@ -64,7 +68,7 @@ Upstream: 4463 single-file TypeScript tests. Suite: 451 TypeScript cases, 657 te
 
 | Feature | Spec | Status | Upstream tests | In the suite | Excluded | Not yet dealt with | Lines checked | Forms checked | test262 cases | test262 checks | Note |
 |:--|:--|:--|--:|--:|--:|--:|--:|--:|--:|--:|:--|
-| Function declarations | §1.4 | done | 1367 | 158 | 1209 | 0 | 660 | 1 of 1 | — | — |  |
+| Function declarations | §1.4 | done | 1368 | 158 | 1210 | 0 | 660 | 1 of 1 | — | — |  |
 | Nested function declarations | §1.4 | done | 62 | 4 | 58 | 0 | 1 | 1 of 1 | — | — |  |
 | Arrow functions | §1.4 | done | 563 | 61 | 502 | 0 | 132 | 1 of 1 | — | — |  |
 | Closures (function expressions and arrows in a function) | §1.4 | done | 205 | 21 | 184 | 0 | 46 | 1 of 1 | — | — |  |
@@ -150,7 +154,7 @@ Upstream: 4463 single-file TypeScript tests. Suite: 451 TypeScript cases, 657 te
 
 | Feature | Spec | Status | Upstream tests | In the suite | Excluded | Not yet dealt with | Lines checked | Forms checked | test262 cases | test262 checks | Note |
 |:--|:--|:--|--:|--:|--:|--:|--:|--:|--:|--:|:--|
-| Generic functions | §2.1 | done | 590 | 55 | 535 | 0 | 129 | 1 of 1 | — | — |  |
+| Generic functions | §2.1 | done | 591 | 55 | 536 | 0 | 129 | 1 of 1 | — | — |  |
 | Generic types | §2.1 | done | 294 | 21 | 273 | 0 | 85 | 1 of 1 | — | — |  |
 | Explicit type arguments | §2.1 | done | 133 | 24 | 109 | 0 | 36 | 1 of 1 | — | — |  |
 

@@ -3337,7 +3337,7 @@ impl<'a> Parser<'a> {
                 }
                 self.advance();
                 let ty = self.parse_type_annotation()?;
-                if rest && !matches!(ty.kind, crate::ast::TypeAnnotationKind::Array(_)) {
+                if rest && !is_rest_array_annotation(&ty) {
                     self.error_at(ty.span, "rest parameter type must be an array");
                     return None;
                 }
@@ -5004,20 +5004,33 @@ impl<'a> Parser<'a> {
         let start = head_tok.span.start;
         let mut parts: Vec<String> = vec![head];
         let mut exprs: Vec<ExprId> = Vec::new();
+        let mut substitution_spans: Vec<Span> = Vec::new();
+        // The token before a substitution ends just past its `${`; the one after
+        // starts at its `}`.
+        let mut substitution_start = head_tok.span.end.saturating_sub(2);
         loop {
             let expr = self.parse_expression()?;
             exprs.push(expr);
+            let closing = self.peek().span.start;
+            let substitution_span = self.span(substitution_start, closing.saturating_add(1));
             match self.peek().kind.clone() {
                 TokenKind::TemplateMiddle(s) => {
-                    self.advance();
+                    let tok = self.advance();
+                    substitution_spans.push(substitution_span);
+                    substitution_start = tok.span.end.saturating_sub(2);
                     parts.push(s);
                 }
                 TokenKind::TemplateTail(s) => {
                     let tok = self.advance();
+                    substitution_spans.push(substitution_span);
                     parts.push(s);
                     return parse_arena_result(
                         self.ast.try_push_expr(Expr {
-                            kind: ExprKind::TemplateLiteral { parts, exprs },
+                            kind: ExprKind::TemplateLiteral {
+                                parts,
+                                exprs,
+                                substitution_spans,
+                            },
                             span: self.span(start, tok.span.end),
                         }),
                         &mut self.fatal,
@@ -5631,6 +5644,16 @@ fn parse_arena_result<T>(
             fatal.get_or_insert_with(|| error.into_compiler_failure(CompilerStage::Parse));
             None
         }
+    }
+}
+
+/// Whether a rest parameter's annotation names an array: `T[]`, or `readonly T[]`.
+fn is_rest_array_annotation(ty: &crate::TypeAnnotation) -> bool {
+    use crate::ast::TypeAnnotationKind;
+    match &ty.kind {
+        TypeAnnotationKind::Array(_) => true,
+        TypeAnnotationKind::Readonly(inner) => matches!(inner.kind, TypeAnnotationKind::Array(_)),
+        _ => false,
     }
 }
 

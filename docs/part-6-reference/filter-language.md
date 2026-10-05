@@ -7,8 +7,8 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "23119b887b19eeed9296c545b4b9a6409f9c97aa1453dbb6b67d9cef0d482bae"
-  confirmedAt: "2026-10-05T10:59:51.476Z"
+  contentHash: "55e3b91757ad4c0b8b51d0a1da57a017584d0e48ca857b87ae9ae6a747147747"
+  confirmedAt: "2026-10-05T13:01:53.009Z"
 ---
 
 This page describes the language of the `filter` in a permission rule.
@@ -77,7 +77,7 @@ names.
 
 ## Variables
 
-`${vars.NAME}` stands for the value of a variable the blueprint declares
+`${vars.NAME}` stands for the value of a variable the Blueprint declares
 under `variables:`. `NAME` holds letters, digits, `_`, and `-`.
 
 - It stands alone as a value, as in `customerId == ${vars.customerId}`, or
@@ -115,12 +115,12 @@ capability reports, and their types, are listed under
 [Capabilities](/docs/reference/permissions#capabilities). Some fields are
 [normalized](/docs/reference/permissions#normalized-fields) before a rule
 sees them, and [some are reported by only some calls](/docs/reference/permissions#fields-only-some-calls-report).
-`submilli blueprint capability list` prints them for a blueprint.
+`submilli blueprint capability list` prints them for a Blueprint.
 
 ## Errors
 
-A filter is parsed when the blueprint is read, by `submilli blueprint lint`,
-by the server when it registers the blueprint, and by
+A filter is parsed when the Blueprint is read, by `submilli blueprint lint`,
+by the server when it registers the Blueprint, and by
 `submilli run --blueprint`. Each of these errors stops it:
 
 | Mistake | Error |
@@ -128,8 +128,8 @@ by the server when it registers the blueprint, and by
 | A malformed filter | ``invalid filter `path = "/a"`: expected `==`; a single `=` is not an operator``, with the filter and a caret under the fault |
 | A regular expression that doesn't compile | ``invalid filter `…`: invalid regex:`` and the reason |
 | `matches` with a variable | `` `matches` takes a literal regex; `${vars.NAME}` interpolation isn't supported inside a regex pattern `` |
-| A variable the blueprint doesn't declare | `filter references undeclared variable '${vars.customer}'` |
+| A variable the Blueprint doesn't declare | `filter references undeclared variable '${vars.customer}'` |
 
 A filter that tests a field the capability doesn't report is an error in
 `submilli blueprint lint` and at registration. It is listed with the other
-[errors when the blueprint is read](/docs/reference/permissions#errors-when-the-blueprint-is-read).
+[errors when the Blueprint is read](/docs/reference/permissions#errors-when-the-blueprint-is-read).

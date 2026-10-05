@@ -7,8 +7,8 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "1507cf9287ce25c887012e13211c88c70ec4eb2937db97997d624bf080182aaf"
-  confirmedAt: "2026-10-05T10:59:51.491Z"
+  contentHash: "5ac75e0814de4bae8a50d4393324f7ad56c5c8f97277ef83e1c2ab30ee5b4dac"
+  confirmedAt: "2026-10-05T13:01:53.009Z"
 ---
 
 An agent often needs more than one program to finish a job. It downloads a
@@ -21,7 +21,7 @@ This guide shows you how to let the programs in one session keep files
 and state between them. The example keeps notes under `/notes`.
 Substitute your paths.
 
-## Start from an empty blueprint
+## Start from an empty Blueprint
 
 ```sh
 submilli blueprint init notes
@@ -33,7 +33,7 @@ submilli blueprint init notes
 
 ## The filesystem
 
-Each program gets its own filesystem, rooted at `/`. The blueprint's
+Each program gets its own filesystem, rooted at `/`. The Blueprint's
 `vfs` line says what backs it and how long it lasts. It has no command, so
 add it by hand, with `idle_timeout`:
 
@@ -49,7 +49,7 @@ Pick the mode by how long the files should last:
 | `none` | Nothing. Every `submilli:fs` call fails |
 | `ephemeral` (the default) | A scratch directory created for the run and deleted after it |
 | `per_session` | A directory that lasts as long as the session |
-| `named` | A volume the server's operator declared, kept across sessions and restarts, and shared with every blueprint that names it |
+| `named` | A volume the server's operator declared, kept across sessions and restarts, and shared with every Blueprint that names it |
 
 Under `per_session`, files and session state both last as long as the
 session. `idle_timeout` closes a session nobody has used for that long. The
@@ -84,7 +84,7 @@ function writeText(path: string, content: string): void;
 …
 ```
 
-Under a blueprint that grants nothing, a program can call none of it. The
+Under a Blueprint that grants nothing, a program can call none of it. The
 module's operations fall under eight capabilities. List them with the
 fields a filter can test:
 
@@ -200,7 +200,7 @@ The second run returns both lines:
 - call Northwind about the credit
 ```
 
-A program that writes `/notes/../secrets.md` under this blueprint gets a
+A program that writes `/notes/../secrets.md` under this Blueprint gets a
 `PermissionDeniedError` for `fs.write` before anything is written.
 
 ## Cap the size
@@ -226,7 +226,7 @@ error: QuotaExceededError: fs.writeText /notes/big.md: the filesystem's size lim
 
 Deleting files frees the space. A named volume takes no `size_limit`
 here. The operator sets one where the server declares the volume, and
-that limit covers all sessions and blueprints using it.
+that limit covers all sessions and Blueprints using it.
 
 ## Session state
 
@@ -316,7 +316,7 @@ The store exists only inside a session, which the application opens.
 `submilli run` has none, so use `submilli-server`. [Run the
 server](/docs/server/run-the-server) starts one and [Connect the
 CLI](/docs/server/connect-the-cli) points the commands at it.
-Register the blueprint:
+Register the Blueprint:
 
 ```sh
 submilli server blueprint apply blueprint.yaml

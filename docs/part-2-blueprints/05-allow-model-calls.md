@@ -7,15 +7,15 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "24aea5d03fc0c984631b0b2c465b8fa24a78dda9b48700c8b015551203d00917"
-  confirmedAt: "2026-10-05T10:59:51.491Z"
+  contentHash: "d1b649e5ab9c279cd942af36774176a032dbf7eebff4e0364b5923a31465b13d"
+  confirmedAt: "2026-10-05T13:01:53.009Z"
 ---
 
 The agent is a model already, so why would its program call another?
 Because a program can read more than any context window holds. It can
 loop over a thousand tickets, hand each one to a cheap model, and keep
 the tickets out of the agent's context. At the end it can ask a stronger
-model for one typed verdict and return only that. The blueprint holds
+model for one typed verdict and return only that. The Blueprint holds
 the provider's key so the program never sees it. It also names the models
 a program may use, gates each call, and bounds what each prompt may spend.
 
@@ -23,7 +23,7 @@ This guide shows you how to let a program call a model through
 `submilli:llm`. The example uses two Anthropic models. Substitute your
 provider and models.
 
-## Start from an empty blueprint
+## Start from an empty Blueprint
 
 ```sh
 submilli blueprint init triage
@@ -36,7 +36,7 @@ submilli blueprint init triage
 ## Declare the key
 
 The provider's key is a secret of yours, so it goes in the secret store,
-as in [Start a blueprint](/docs/blueprints/start-a-blueprint):
+as in [Start a Blueprint](/docs/blueprints/start-a-blueprint):
 
 ```sh
 submilli blueprint secret add ANTHROPIC_API_KEY --store anthropic_api_key
@@ -196,7 +196,7 @@ failed prompt never fails the batch.
 ## The result
 
 The CLI keeps the hand-written block and drops the quotes. Refer to the
-[blueprint file reference](/docs/reference/blueprint-file) for the
+[Blueprint file reference](/docs/reference/blueprint-file) for the
 rest of the `llm` block, such as what a prompt reserves from the token
 budget.
 
@@ -227,7 +227,7 @@ llm:
 
 ## Register it on a server
 
-Put the key in the server's store, register the blueprint, and run the
+Put the key in the server's store, register the Blueprint, and run the
 program there, the way an application would:
 
 ```sh

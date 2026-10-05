@@ -7,8 +7,8 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "114768d644f033e39db84d8820ebd77529c50e2d3759ef2a3d399ea7b863688d"
-  confirmedAt: "2026-10-05T10:59:51.492Z"
+  contentHash: "0ed93cf873a63c12a53cc1a2431f9d03104992466dcb5a646f7f8c10ff6a94fc"
+  confirmedAt: "2026-10-05T13:01:53.009Z"
 ---
 
 Agents use tools to perform tasks. Most of them call one tool at a time, wait for the service to respond, process its response using inference tokens, and make the decision on next steps. This typically means slow (model turns, waiting for tool call completion), expensive (context bloat, inference) and potentially brittle - inference is not meant for highly deterministic tasks (like mathematical functions).
@@ -33,7 +33,7 @@ Programmatic tool calling is an emerging pattern across the industry, and its im
 serves their 2,500-endpoint API to the model in about 1,000 tokens. As tool
 schemas, the same API takes 1.17 million tokens.
 * [OpenAI](https://developers.openai.com/api/docs/guides/latest-model#programmatic-tool-calling)
-and [LangChain](https://docs.langchain.com/oss/javascript/deepagents/interpreters#programmatic-tool-calling) are aligned.
+and [LangChain](https://docs.langchain.com/oss/javascript/deepagents/interpreters#programmatic-tool-calling-ptc) are aligned.
 
 It has become clear that agents should write code. The question that stems from it, is where should this code run, and what should it be allowed to do?
 
@@ -132,9 +132,9 @@ calls. Generated main code has no raw network connection and no direct credentia
 
 ### Blueprints
 
-A **blueprint**, is a configuration file written in advance, typically by a human. It lists the allowed operations and the rules for using them. Anything not explicitly allowed is denied. The next chapters explain where the operations come from, and what a blueprint can say.
+A **Blueprint**, is a configuration file written in advance, typically by a human. It lists the allowed operations and the rules for using them. Anything not explicitly allowed is denied. The next chapters explain where the operations come from, and what a Blueprint can say.
 
-Here is the blueprint for an agent that investigates a single customer's charges, from inside a support session, and posts a summary to the team's channel. The narrower scope (one customer, one support ticket) means that the correct access controls cannot be enforced without going into every operation's arguments and "locking" them to facts about the session:
+Here is the Blueprint for an agent that investigates a single customer's charges, from inside a support session, and posts a summary to the team's channel. The narrower scope (one customer, one support ticket) means that the correct access controls cannot be enforced without going into every operation's arguments and "locking" them to facts about the session:
 
 ```yaml
 variables:
@@ -151,9 +151,9 @@ permissions:
       action: allow
 ```
 
-This agent may list Stripe charges and post Slack messages and nothing else, only for the signed-in customer, and only to one channel. Your application binds `stripeCustomerId` when the session starts. The value comes from the login, not the conversation, so the model cannot choose it or change it. Nothing else appears in the blueprint, so none of the other actions the agent may want to take (e.g. HTTP call to another Stripe API) are possible.
+This agent may list Stripe charges and post Slack messages and nothing else, only for the signed-in customer, and only to one channel. Your application binds `stripeCustomerId` when the session starts. The value comes from the login, not the conversation, so the model cannot choose it or change it. Nothing else appears in the Blueprint, so none of the other actions the agent may want to take (e.g. HTTP call to another Stripe API) are possible.
 
-Now let's think about the attack from the previous example. The injected program tries to export the customer list. No tool or capability for that exists in the blueprint, so it fails to get the information, and the Submilli runtime records the failed attempt.
+Now let's think about the attack from the previous example. The injected program tries to export the customer list. No tool or capability for that exists in the Blueprint, so it fails to get the information, and the Submilli runtime records the failed attempt.
 
 It doesn't matter that the model was persuaded, because the policy is external to it.
 
@@ -168,5 +168,5 @@ Submilli is a dedicated runtime for a strict subset of TypeScript, compiled to W
 Running in-process means no microVM and no cold start delay. It works with the harness you choose, connected over MCP or an SDK. Your agent keeps its brain, and Submilli runs its code.
 
 Next: [install](/docs/install) the CLI and the server, then the
-[quickstart](/docs/quickstart), where you write a blueprint and a
-package of your own and watch a rule fire.
+[quickstart](/docs/quickstart), where you write a Blueprint and a
+Package of your own and watch a rule fire.

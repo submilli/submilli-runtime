@@ -1,6 +1,6 @@
 ---
 title: Security review
-description: "Agent selection, authentication, review scope, report fields, limits, and exit codes for package security reviews."
+description: "Agent selection, authentication, review scope, report fields, limits, and exit codes for Package security reviews."
 slug: reference/security-review
 # Agent versions used during implementation: Codex 0.160.0, Claude Code
 # 2.1.288, Copilot CLI 1.0.91.
@@ -9,14 +9,14 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "59de2570557a5e96b2691d1cea95e0868bbfa74d37f3e723d7023131e9afbfd2"
-  confirmedAt: "2026-10-05T10:59:51.478Z"
+  contentHash: "d4d84745120b1431b996adbe8ea4540c7434775d67c15111664e2e8885292916"
+  confirmedAt: "2026-10-05T13:01:53.009Z"
 ---
 
 `submilli build security-review` runs an installed coding agent against a source
-snapshot of a package project. It reviews whether package authorization checks
+snapshot of a Package project. It reviews whether Package authorization checks
 protect the operations and data exposed to callers. It does not certify a
-package, execute tests, or change runtime enforcement. Model reviews can miss
+Package, execute tests, or change runtime enforcement. Model reviews can miss
 defects and report false positives.
 
 ## Invocation
@@ -42,14 +42,14 @@ costs, is up to the provider.
 ## Scope and execution
 
 The command finds `submilli.toml` by walking upward from the current directory.
-It includes the manifest, `.ts` and `.subm` files, package readmes,
-capability YAML, and package lockfiles under the selected package directories.
-Every `.ts` and `.subm` file beneath a package's `src` directory is included.
+It includes the manifest, `.ts` and `.subm` files, Package readmes,
+capability YAML, and Package lockfiles under the selected Package directories.
+Every `.ts` and `.subm` file beneath a Package's `src` directory is included.
 Outside `src`, it skips hidden entries, `node_modules`, `target`, `dist`, and
 `graphify-out`.
 Imports requiring omitted source must be reported as coverage gaps.
 
-Local package dependencies are included. External package source is not fetched.
+Local Package dependencies are included. External Package source is not fetched.
 Each declared external dependency produces a coverage gap, so that review exits
 2 even if the agent finds no defect. Review such dependencies in their source
 projects. Standard library operations are covered by the bundled review procedure.
@@ -91,7 +91,7 @@ Submilli does not create accounts, mint tokens, or manage subscription refresh.
 
 With both `CLAUDE_CODE_OAUTH_TOKEN` and `ANTHROPIC_API_KEY` set, Claude Code
 uses the API key. Copilot with `GITHUB_TOKEN` needs the workflow permission
-`copilot-requests: write`. [Review a package's
+`copilot-requests: write`. [Review a Package's
 security](/docs/packages/review-package-security#require-it-in-ci) sets up
 each agent in CI.
 
@@ -105,7 +105,7 @@ each agent in CI.
 | `agent`, `agent_version` | Selected agent and its reported CLI version, when available. |
 | `model`, `effort` | Requested model after Submilli alias expansion and requested effort. This is not attestation of the provider's actual routing. |
 | `skill_sha256` | Hash of the embedded review procedure. |
-| `packages` | Selected packages, including local dependencies. |
+| `packages` | Selected Packages, including local dependencies. |
 | `files` | Snapshot paths mapped to SHA-256 hashes of the exact supplied contents. |
 | `reviewed_files` | Paths the agent reports inspecting. The CLI rejects unknown or duplicate paths and requires all snapshot files for completion. |
 | `coverage_gaps` | Missing source or unresolved review coverage. Any gap makes the result incomplete. |
@@ -129,7 +129,7 @@ every supplied file. Existing report files are refused, so a failed attempt neve
 reuses an earlier clean report. If the output destination itself cannot be
 created or written, the command fails and a usable report may be absent.
 
-[Review a package's security](/docs/packages/review-package-security) runs
-the review locally and in CI. [Verify a package in
+[Review a Package's security](/docs/packages/review-package-security) runs
+the review locally and in CI. [Verify a Package in
 CI](/docs/tutorials/verify-a-package-in-ci#have-an-agent-review-it) walks
 through one review.

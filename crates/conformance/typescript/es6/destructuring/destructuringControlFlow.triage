@@ -1,3 +1,6 @@
-line 13, 14, 15, 17, 18, 19, 20 extra: bug SUB-1206 indexing, destructuring and `for-of` reject a union of arrays, tuples or strings
 line 6 type: bug SUB-1196 (literal under an expected type) a literal checked against an expected type takes that type, where tsc keeps its own
+<<<<<<< HEAD
 line 26 type: by-design spec §1.6 `&&` keeps `number` whole in its falsy part, where tsc narrows to `0`
+=======
+line 17, 26 type: by-design spec §1.6 `&&` keeps `number` and `boolean` whole in its falsy part, where tsc narrows to `0` or `false`
+>>>>>>> origin/main
