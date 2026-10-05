@@ -5303,12 +5303,17 @@ impl Inferer<'_> {
     ) -> Result<Option<SpreadFields>, crate::compiler_error::CompilerFailure> {
         let mut alternatives = Vec::new();
         self.collect_spread_alternatives(typed_source, source_ty, &mut alternatives)?;
-        let mut objects: Vec<ObjectFields> = Vec::new();
+        let mut objects: Vec<SpreadAlternative> = Vec::new();
         for alternative in alternatives {
+            let index = self
+                .resolver()
+                .index_signature(&alternative)
+                .map(|index| *index.value);
             match alternative {
                 Type::Object { fields, .. } => {
-                    if !objects.contains(&fields) {
-                        objects.push(fields);
+                    let object = SpreadAlternative { fields, index };
+                    if !objects.contains(&object) {
+                        objects.push(object);
                     }
                 }
                 Type::InterfaceRef {
@@ -5316,13 +5321,14 @@ impl Inferer<'_> {
                     ref name,
                     ref args,
                     ..
-                } if self.resolver().index_signature(&alternative).is_some() => {
+                } if index.is_some() => {
                     let Some(fields) = self.resolver().interface_full_form(mangled, name, args)
                     else {
                         return Ok(None);
                     };
-                    if !objects.contains(&fields) {
-                        objects.push(fields);
+                    let object = SpreadAlternative { fields, index };
+                    if !objects.contains(&object) {
+                        objects.push(object);
                     }
                 }
                 Type::InterfaceRef { name, .. } => {
@@ -5345,15 +5351,23 @@ impl Inferer<'_> {
                 }
             }
         }
-        Ok(Some(match objects.as_slice() {
-            [only] => SpreadFields {
-                fields: only.clone(),
-                by_name: false,
-            },
-            _ => SpreadFields {
-                fields: merge_spread_alternatives(&objects),
+        let [only] = objects.as_slice() else {
+            let fields = merge_spread_alternatives(&objects);
+            self.typed_ast.spread_mask_fields.insert(
+                typed_source,
+                fields
+                    .iter()
+                    .map(|(name, field)| (name.clone(), field.ty.clone()))
+                    .collect(),
+            );
+            return Ok(Some(SpreadFields {
+                fields,
                 by_name: true,
-            },
+            }));
+        };
+        Ok(Some(SpreadFields {
+            fields: only.fields.clone(),
+            by_name: false,
         }))
     }
 
@@ -10152,23 +10166,43 @@ fn collect_union_members(ty: &Type, out: &mut Vec<Type>) {
     }
 }
 
+/// One object type a spread's source may be, with its string index
+/// signature's value type when it has one.
+#[derive(PartialEq)]
+struct SpreadAlternative {
+    fields: ObjectFields,
+    index: Option<Type>,
+}
+
 /// The fields of a spread whose source is one of several object types: every
-/// field any of them has, optional where some lack it or have it optional.
-fn merge_spread_alternatives(alternatives: &[ObjectFields]) -> ObjectFields {
+/// field any of them has, optional where some lack it or have it optional. An
+/// alternative with an index signature can hold a field it doesn't name, so
+/// that field may also hold the index signature's value type.
+fn merge_spread_alternatives(alternatives: &[SpreadAlternative]) -> ObjectFields {
     let names: std::collections::BTreeSet<&String> = alternatives
         .iter()
-        .flat_map(|fields| fields.keys())
+        .flat_map(|alternative| alternative.fields.keys())
         .collect();
     names
         .into_iter()
         .map(|name| {
             let present: Vec<&crate::ObjectField> = alternatives
                 .iter()
-                .filter_map(|fields| fields.get(name))
+                .filter_map(|alternative| alternative.fields.get(name))
                 .collect();
             let optional =
                 present.len() < alternatives.len() || present.iter().any(|field| field.optional);
-            let ty = Type::union(present.iter().map(|field| field.ty.clone()).collect());
+            let indexed = alternatives
+                .iter()
+                .filter(|alternative| !alternative.fields.contains_key(name))
+                .filter_map(|alternative| alternative.index.clone());
+            let ty = Type::union(
+                present
+                    .iter()
+                    .map(|field| field.ty.clone())
+                    .chain(indexed)
+                    .collect(),
+            );
             (
                 name.clone(),
                 crate::ObjectField {

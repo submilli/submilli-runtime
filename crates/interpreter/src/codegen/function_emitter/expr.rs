@@ -2593,7 +2593,7 @@ fn emit_object_spread(
             emitter.instruction(Instruction::RefNull(HeapType::Concrete(intrinsics.object)));
         }
         if matches!(source, TypedObjectMember::Spread { by_name: true, .. }) {
-            emit_spread_mask(emitter, ctx, source_local, narrowed_ty, shape)?;
+            emit_spread_mask(emitter, ctx, source_local, source.expr_id(), shape)?;
         } else {
             emitter.instruction(Instruction::RefNull(HeapType::Concrete(intrinsics.object)));
         }
@@ -2609,11 +2609,14 @@ fn emit_spread_mask(
     emitter: &mut FunctionEmitter,
     ctx: &CodegenCtx,
     source: u32,
-    source_ty: &Type,
+    source_expr: crate::ExprId,
     shape: &Type,
 ) -> Result<(), crate::compiler_error::CompilerFailure> {
-    let mut fields = std::collections::BTreeMap::new();
-    collect_spread_field_types(source_ty, &mut fields)?;
+    let fields = ctx
+        .ta
+        .spread_mask_fields
+        .get(&source_expr)
+        .ok_or_else(|| crate::codegen::internal_failure("by-name spread fields recorded"))?;
     let intrinsics = ctx
         .symbols
         .intrinsic_type_indices()
@@ -2634,7 +2637,7 @@ fn emit_spread_mask(
         array_type_index: intrinsics.field_names,
         array_size: crate::codegen::wasm_u32(fields.len())?,
     });
-    for (name, ty) in &fields {
+    for (name, ty) in fields {
         let global = ctx
             .symbols
             .field_name_string_global_idx(name)
@@ -2664,33 +2667,6 @@ fn emit_spread_mask(
     });
     emitter.instruction(Instruction::RefNull(HeapType::ANY));
     emitter.instruction(Instruction::StructNew(intrinsics.object_shape));
-    Ok(())
-}
-
-fn collect_spread_field_types(
-    ty: &Type,
-    fields: &mut std::collections::BTreeMap<String, Type>,
-) -> Result<(), crate::compiler_error::CompilerFailure> {
-    match ty.peel() {
-        Type::Object { fields: source, .. } => {
-            for (name, field) in source {
-                fields
-                    .entry(name.clone())
-                    .and_modify(|ty| *ty = Type::union(vec![ty.clone(), field.ty.clone()]))
-                    .or_insert_with(|| field.ty.clone());
-            }
-        }
-        Type::Union(members) => {
-            for member in members {
-                collect_spread_field_types(member, fields)?;
-            }
-        }
-        _ => {
-            return Err(crate::codegen::internal_failure(
-                "spread mask source is not structural",
-            ));
-        }
-    }
     Ok(())
 }
 
