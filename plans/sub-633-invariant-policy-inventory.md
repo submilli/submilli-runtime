@@ -73,6 +73,7 @@ separate resource/dependency backlog.
 | R05 | Complete: retained | Preserve capture/narrowing behavior and existing error propagation |
 | R06 | Complete: retained | Keep ordered substitution and numeric filter dispatch structure |
 | R07 | Complete: retained | Keep cross-phase registration checks and fallible emission |
+| R08 | Complete: selectively simplified | Removed root-scope-only failure checks; kept slot/mark/limit contracts |
 
 ### R01 execution evidence
 
@@ -206,6 +207,22 @@ registration as an invariant or close SUB-633's implicit audit. Reviewed current
 symbol/class/closure/recursive-validator contracts and public codegen entry;
 documentation-only, no tests rerun. Three independent reviews had no findings;
 diff checks passed.
+
+### R08 execution evidence
+
+FunctionEmitter construction seeds a root; the only production scope removal,
+`pop_scope`, rejects its removal. Documented that invariant at the private field,
+removed `require_scope`, and replaced three repeated binding/shadow/source scope
+error branches with descriptive expectations. Existing Result interfaces remain
+for local-type/AST validation. Kept evaluation mark validation: callers pass a raw
+usize, and nested registration lifetimes are distinct from root-scope existence.
+Kept local limits, root-pop errors and parameter validation. Removed only the
+test segment fabricating an empty private scope vector.
+
+Three independent reviews had no findings. Formatting, offline workspace/all-target
+Clippy and 27 focused emitter library tests passed with full tests disabled and
+HTTP skipped. AST graph update retained existing extraction limitations. Accepted
+sites recorded in the SUB-633 source ledger; implementation recorded by this commit.
 
 ## Completed fixes: candidates and decisions
 
