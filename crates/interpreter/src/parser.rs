@@ -3544,6 +3544,8 @@ impl<'a> Parser<'a> {
             let readonly = self.eat_readonly_property_modifier();
             if self.peek_is_parameterless_index_signature() {
                 self.skip_parameterless_index_signature()?;
+            } else if self.peek_is_construct_signature() {
+                self.reject_construct_signature()?;
             } else if matches!(self.peek().kind, TokenKind::LeftBracket) {
                 let signature = self.parse_index_signature(readonly)?;
                 if index.is_some() {
@@ -3578,6 +3580,40 @@ impl<'a> Parser<'a> {
             kind: TypeAnnotationKind::Object { index, fields },
             span: self.span(open.span.start, close.span.end),
         })
+    }
+
+    /// `new (params): T` or `new <T>(params): T` inside a type literal: a construct
+    /// signature, which TypeScript reads where it would otherwise see a method named
+    /// `new`. A quoted `"new"()`, an optional `new?()` and a field `new: T` are
+    /// ordinary members, as in TypeScript.
+    fn peek_is_construct_signature(&self) -> bool {
+        matches!(self.peek().kind, TokenKind::New)
+            && matches!(self.peek_at(1).kind, TokenKind::LeftParen | TokenKind::LessThan)
+    }
+
+    /// Only interfaces declare construct signatures, so one in a type literal (see
+    /// `peek_is_construct_signature`) is diagnosed, then skipped rather than misread
+    /// as a method named `new`.
+    fn reject_construct_signature(&mut self) -> Option<()> {
+        let keyword = self.advance();
+        self.error_at_with_help(
+            keyword.span,
+            "construct signatures are not supported in object types",
+            vec![
+                "declare an `interface` with the `new (…)` signature, or pass a factory \
+                 function such as `() => T`"
+                    .to_string(),
+            ],
+        );
+        if matches!(self.peek().kind, TokenKind::LessThan) {
+            self.parse_generic_param_list()?;
+        }
+        if !matches!(self.peek().kind, TokenKind::LeftParen) {
+            self.error_at_peek("expected `(` after construct signature type parameters");
+            return None;
+        }
+        self.parse_object_type_method_signature(keyword.span.start)?;
+        Some(())
     }
 
     /// `name: T`, `name?: T` or the method signature `name(params): T`.
