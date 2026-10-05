@@ -7,8 +7,8 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "c1b2cf2d290675642673a32cb9736721a5652bd3826d002e557814a98fcf3b5a"
-  confirmedAt: "2026-10-05T13:01:53.009Z"
+  contentHash: "1ffbf950967f6b738f16118daa96eb4e605f94e23f050545a7241b3f2c900b87"
+  confirmedAt: "2026-10-05T17:33:06.426Z"
 ---
 
 Built-ins are the globals in scope in every program without an `import`. They
