@@ -993,6 +993,14 @@ above. The remaining candidates are tracked individually.
 
 ### T01 — Replace the obsolete overarching requirement
 
+Execution complete: exact issue/ledger patches replace blanket invariant recovery
+with AGENTS.md's documented construction/validation/API and poison dispositions.
+Real failures, resource bounds, fatal-vs-guest semantics and historical evidence
+remain. Accepted sites stay in the ledger rather than counting as removed panics.
+Three independent reviews found no issues. Narrow patches applied to SUB-633 and
+its source ledger; all changed anchors read back and verified. Parent status and
+checkboxes unchanged. Documentation-only; diff checks passed, no tests run.
+
 Align the issue's blanket “even internal invariants” requirement with AGENTS.md.
 Define outcomes as fixed input/operational failure, accepted documented invariant,
 accepted poisoned lock, out of scope with reachability evidence, or unresolved.
