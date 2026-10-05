@@ -41,7 +41,7 @@ Upstream: 4463 single-file TypeScript tests. Suite: 450 TypeScript cases, 657 te
 | `bigint` | §1.1 | done | 16 | 3 | 13 | 0 | 15 | 1 of 1 | 16 | 68 |  |
 | Radix literals (`0x`/`0b`/`0o`) | §1.1 | done | 22 | 3 | 19 | 0 | 15 | 4 of 4 | — | — |  |
 | Numeric separators (`1_000`) | §1.1 | done | 6 | 2 | 4 | 0 | 9 | 1 of 1 | — | — |  |
-| `unknown` | §2.11 | done | 74 | 10 | 64 | 0 | 734 | 1 of 1 | — | — |  |
+| `unknown` | §2.11 | done | 74 | 10 | 64 | 0 | 733 | 1 of 1 | — | — |  |
 | Object types (`{ x: T }`) | §1.2 | done | 1443 | 168 | 1275 | 0 | 1123 | 1 of 1 | — | — |  |
 | Optional properties (`a?: T`) | §1.2 | done | 129 | 35 | 94 | 0 | 40 | 1 of 1 | — | — |  |
 | Object literal shorthand (`{ x }`) | §1.2 | done | 79 | 6 | 73 | 0 | 2 | 1 of 1 | — | — |  |
@@ -49,7 +49,7 @@ Upstream: 4463 single-file TypeScript tests. Suite: 450 TypeScript cases, 657 te
 | Tuples (`[T, U]`) | §1.2 | done | 153 | 30 | 123 | 0 | 173 | 1 of 1 | — | — |  |
 | `readonly` arrays and tuples | §1.2 | done | 24 | 5 | 19 | 0 | 43 | 1 of 1 | — | — |  |
 | Union types (`A | B`) | §1.2 | done | 458 | 159 | 299 | 0 | 1585 | 1 of 1 | — | — |  |
-| Type aliases (`type X = …`) | §1.2 | done | 267 | 48 | 219 | 0 | 328 | 1 of 1 | — | — |  |
+| Type aliases (`type X = …`) | §1.2 | done | 267 | 48 | 219 | 0 | 327 | 1 of 1 | — | — |  |
 | Literal types (`"foo"`, `42`, `true`) | §1.2 | done | 258 | 66 | 192 | 0 | 843 | 2 of 2 | — | — |  |
 
 ## Declarations

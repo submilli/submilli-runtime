@@ -756,14 +756,6 @@ impl<'a> Inferer<'a> {
         })
     }
 
-    /// `keyof T` as the union of `T`'s member names, resolved eagerly to string literal
-    /// types. Matches TypeScript: methods count as members alongside properties, and
-    /// `keyof` of a type with no members is `never` — which `Type::union` already
-    /// produces from an empty vector.
-    ///
-    /// Only concrete operands are supported. `keyof T` for a type parameter has no
-    /// eager answer and would need a deferred type node, so it is rejected by name
-    /// rather than resolved to something narrower than it should be.
     /// `typeof x` — the type of the value `x`, read from the value namespace.
     ///
     /// Locals shadow globals, as everywhere else. A dotted path walks object fields
@@ -775,8 +767,7 @@ impl<'a> Inferer<'a> {
         let name = root_span.name.clone();
 
         let Some(mut ty) = self.lookup_value_type(&name) else {
-            self.error(root_span.span, format!("unresolved identifier `{name}`"));
-            return Ok(Type::Error);
+            return Ok(self.typeof_type_name(root_span, rest));
         };
 
         for seg in rest {
@@ -788,6 +779,84 @@ impl<'a> Inferer<'a> {
             ty = next;
         }
         Ok(ty)
+    }
+
+    /// `typeof` whose root names no value. An enum member reads as its enum, as
+    /// `E.A` does in an expression; a class or a whole enum is a type, not a
+    /// value, so there is nothing for `typeof` to take.
+    fn typeof_type_name(&mut self, root: &crate::Ident, rest: &[crate::Ident]) -> Type {
+        let name = &root.name;
+        let Some(sym) = self.lookup_named_type(name) else {
+            self.error_with_help(
+                root.span,
+                format!("unresolved identifier `{name}`"),
+                vec![
+                    "`typeof` names a value declared before the annotation: a binding can't \
+                     name its own type, nor a parameter its own signature's"
+                        .to_string(),
+                ],
+            );
+            return Type::Error;
+        };
+        let mangled = sym.mangled_name.clone();
+        let variants: Option<Vec<String>> = match &sym.kind {
+            crate::TypeKind::NumberEnum { variants, .. } => {
+                Some(variants.iter().map(|(v, _)| v.clone()).collect())
+            }
+            crate::TypeKind::StringEnum { variants, .. } => {
+                Some(variants.iter().map(|(v, _)| v.clone()).collect())
+            }
+            _ => None,
+        };
+        let is_number_enum = matches!(sym.kind, crate::TypeKind::NumberEnum { .. });
+        let is_class = matches!(sym.kind, crate::TypeKind::Class { .. });
+        match (variants, rest) {
+            (Some(variants), [member]) if variants.contains(&member.name) => {
+                let package = self.type_package(name);
+                if is_number_enum {
+                    Type::number_enum(package, name.clone(), mangled)
+                } else {
+                    Type::string_enum(package, name.clone(), mangled)
+                }
+            }
+            (Some(_), [member]) => {
+                self.error(
+                    member.span,
+                    format!("no variant `{}` on enum `{name}`", member.name),
+                );
+                Type::Error
+            }
+            (Some(_), _) => {
+                self.error_with_help(
+                    root.span,
+                    format!(
+                        "`{name}` is an enum type, not a value, so `typeof` has no type to take"
+                    ),
+                    vec![format!(
+                        "write `{name}` for one of its values, or `typeof {name}.<variant>`"
+                    )],
+                );
+                Type::Error
+            }
+            (None, _) if is_class => {
+                self.error_with_help(
+                    root.span,
+                    format!("`{name}` is a class, not a value, so `typeof` has no type to take"),
+                    vec![format!(
+                        "write `{name}` for an instance; a class has no constructor type"
+                    )],
+                );
+                Type::Error
+            }
+            (None, _) => {
+                self.error_with_help(
+                    root.span,
+                    format!("`{name}` is a type, not a value, so `typeof` has no type to take"),
+                    vec![format!("write `{name}` itself")],
+                );
+                Type::Error
+            }
+        }
     }
 
     /// The declared type of a value, locals shadowing globals.
@@ -833,16 +902,36 @@ impl<'a> Inferer<'a> {
         }
     }
 
+    /// `keyof T` as the union of `T`'s member names, resolved eagerly to string literal
+    /// types. Matches TypeScript: methods count as members alongside properties, and
+    /// `keyof` of a type with no members is `never` — which `Type::union` already
+    /// produces from an empty vector. `unknown` has no members either.
+    ///
+    /// Only concrete operands are supported. `keyof T` for a type parameter has no
+    /// eager answer and would need a deferred type node, so it is rejected by name
+    /// rather than resolved to something narrower than it should be.
     fn resolve_keyof(&mut self, operand: &TypeAnnotation) -> Result<Type, CompilerFailure> {
         let resolved = self.resolve_value_type(operand, ValuePosition::UnionMember)?;
+        if matches!(resolved.peel(), Type::Unknown) {
+            return Ok(Type::Never);
+        }
         if self.resolver().index_signature(&resolved).is_some() {
             return Ok(Type::String);
         }
         let Some(names) = self.member_names_of(&resolved) else {
             if !matches!(resolved.peel(), Type::Error) {
-                self.error(
+                let help = if matches!(
+                    resolved.peel(),
+                    Type::TypeVar(_) | Type::GenericParam { .. }
+                ) {
+                    vec!["`keyof` of a type parameter is not supported: generics are erased, so `keyof` needs a concrete object type".to_string()]
+                } else {
+                    Vec::new()
+                };
+                self.error_with_help(
                     operand.span,
                     format!("`keyof` needs an object type or interface, got `{resolved}`"),
+                    help,
                 );
             }
             return Ok(Type::Error);

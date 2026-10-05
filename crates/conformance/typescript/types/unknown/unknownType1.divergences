@@ -1,4 +1,1 @@
 types: 49 of 92 tsc entries compared, 0 differ
-
-errors:
-line 46: ours: `keyof` needs an object type or interface, got `unknown` (tsc accepts)
