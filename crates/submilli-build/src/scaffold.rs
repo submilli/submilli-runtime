@@ -423,6 +423,8 @@ fn generated_tsconfig_text(manifest: &ProjectManifest) -> String {
         },
         "include": include,
     });
+    // This closed JSON Value tree has string keys and no custom serializers;
+    // serializing it to an in-memory string cannot return a data or I/O error.
     format!(
         "{}\n",
         serde_json::to_string_pretty(&config).expect("generated tsconfig is serializable")

@@ -882,7 +882,7 @@ locators; follow symbols after edits.
 | --- | --- | --- |
 | P01 | 40 std poisoned-lock accesses, grouped below | Accepted: documented poison policy; initiating panics assessed separately |
 | P02 | `submilli-blueprint/src/lib.rs:1302`, `to_yaml` | Accepted: closed YAML-supported serialization graph; proof below |
-| P03 | `submilli-build/src/scaffold.rs:428`, generated tsconfig JSON | Accept candidate: fixed JSON Value construction; document serializer contract; setup/scaffolding scope |
+| P03 | `submilli-build/src/scaffold.rs:428`, generated tsconfig JSON | Accepted: fixed JSON Value construction and in-memory serializer contract |
 | P04 | `submilli-build/src/scaffold.rs:466`, generated task JSON | Same as P03; call is inside a formatting macro |
 | P05 | `submilli-build/src/scaffold.rs:530`, package path `to_str` | Prove first: filesystem paths can be non-UTF-8; prove construction from validated UTF-8 or handle the path error |
 | P06 | `submilli/src/commands/blueprint/package_secrets.rs:46`, filter YAML | Accept candidate: FilterExpr serializes as a string; document YAML string serializer contract; recursive formatting bounds remain separate |
@@ -903,6 +903,14 @@ expectation; it does not bound allocation or recursive FilterExpr formatting.
 Three independent reviews: one P3 stale remaining-work sentence corrected by the
 parent, no higher-priority findings. Formatting, workspace Clippy and diff checks
 passed; graph updated. Comment-only source change; runtime tests not rerun.
+
+P03 execution: generated tsconfig is a locally constructed JSON Value tree of
+strings, booleans, arrays and string-keyed objects. Package paths are converted to
+strings before insertion; no custom serializer or fallible writer participates.
+Documented the serialization invariant beside its expect. This does not classify
+filesystem writes or allocation exhaustion as invariants. Three independent reviews
+found no issues. Formatting, workspace Clippy and diff checks passed; graph updated.
+Comment-only source change; runtime tests not rerun.
 
 P01 lock groups (paths below `crates/`):
 
