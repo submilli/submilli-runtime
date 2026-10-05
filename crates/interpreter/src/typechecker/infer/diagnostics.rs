@@ -699,7 +699,43 @@ impl<'a> Inferer<'a> {
     pub(super) fn closest_local_or_global(&self, query: &str) -> Option<String> {
         let locals: Vec<&str> = self.scopes.all_names().collect();
         let globals = self.top_symbols.keys().map(String::as_str);
-        did_you_mean::closest_match(query, locals.into_iter().chain(globals)).map(String::from)
+        // A later global bound early is in `top_symbols` though hidden here;
+        // suggesting the name itself would not help.
+        let candidates = locals
+            .into_iter()
+            .chain(globals)
+            .filter(|name| *name != query);
+        did_you_mean::closest_match(query, candidates).map(String::from)
+    }
+
+    /// Report `name` as unresolved. A `let`/`const` declared in another clause
+    /// of an enclosing `switch` gets its own message: JavaScript scopes the
+    /// clauses together, but the declaration only runs when its own clause does.
+    pub(super) fn report_unresolved_identifier(&mut self, name: &str, span: Span) {
+        if let Some(declaration) = self.declaration_in_another_case_clause(name) {
+            // A read above the declaration already has its use-before-declaration error.
+            let reported = self
+                .diagnostics
+                .iter()
+                .any(|d| d.severity == crate::Severity::Error && d.span == span);
+            if reported {
+                return;
+            }
+            self.error_with_help_and_notes(
+                span,
+                format!("`{name}` is declared in another `case` clause"),
+                vec![format!(
+                    "declare `{name}` before the `switch` to use it in more than one clause"
+                )],
+                vec![(declaration, format!("`{name}` is declared here"))],
+            );
+            return;
+        }
+        let help: Vec<String> = self
+            .closest_local_or_global(name)
+            .map(|s| vec![format!("did you mean `{}`?", s)])
+            .unwrap_or_default();
+        self.error_with_help(span, format!("unresolved identifier `{name}`"), help);
     }
 
     /// Suggest the closest type name to `query` from the four

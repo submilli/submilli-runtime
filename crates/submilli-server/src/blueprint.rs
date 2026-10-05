@@ -12,9 +12,13 @@ use std::sync::RwLock;
 
 use submilli_blueprint::Blueprint;
 
+mod sqlite;
+pub use sqlite::SqliteBlueprintStore;
+
 #[derive(Debug)]
 pub enum StoreError {
     AlreadyExists,
+    Database(crate::database::DatabaseError),
     Io(String),
     Serialization(String),
     RevisionExhausted { name: String },
@@ -23,6 +27,7 @@ pub enum StoreError {
 impl std::fmt::Display for StoreError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::Database(error) => write!(f, "blueprint database failed: {error}"),
             Self::AlreadyExists => f.write_str("blueprint already exists"),
             Self::Io(message) => write!(f, "store I/O failed: {message}"),
             Self::Serialization(message) => write!(f, "blueprint serialization failed: {message}"),
@@ -34,6 +39,18 @@ impl std::fmt::Display for StoreError {
 }
 
 impl std::error::Error for StoreError {}
+
+impl From<crate::database::DatabaseError> for StoreError {
+    fn from(error: crate::database::DatabaseError) -> Self {
+        match error {
+            crate::database::DatabaseError::AlreadyExists => Self::AlreadyExists,
+            crate::database::DatabaseError::RevisionExhausted { name } => {
+                Self::RevisionExhausted { name }
+            }
+            error => Self::Database(error),
+        }
+    }
+}
 
 /// Log internal details without exposing stored credentials or host paths.
 pub(crate) fn store_failure_message(error: StoreError) -> &'static str {
@@ -103,7 +120,9 @@ impl StoredBlueprint {
 
 #[derive(Default)]
 pub struct InMemoryBlueprintStore {
-    // Poisoned state is unsupported; see AGENTS.md accepted poisoned-lock panics.
+    // Poison means a panic may have interrupted a blueprint mutation. AGENTS.md
+    // permits poisoned-lock panics rather than recovering potentially partial
+    // registrations; it does not permit the panic that caused poisoning.
     inner: RwLock<HashMap<String, StoredBlueprint>>,
 }
 
@@ -245,7 +264,9 @@ impl State {
 /// either fully the old map or fully the new one.
 pub struct FileBlueprintStore {
     dir: PathBuf,
-    // Poisoned state is unsupported; see AGENTS.md accepted poisoned-lock panics.
+    // Poison may leave registrations, reserved names and revision counters partly
+    // updated. AGENTS.md permits poisoned-lock panics rather than recovering this
+    // state; it does not permit the panic that caused poisoning.
     state: RwLock<State>,
 }
 

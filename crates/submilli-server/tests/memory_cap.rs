@@ -10,6 +10,9 @@
 //! So the assertion that matters is not "the engine enforces a cap" but "a
 //! request served by this binary is bounded". Only the real path can make it.
 
+#[path = "common/in_memory_config.rs"]
+mod in_memory_config;
+
 use std::sync::Arc;
 
 use axum::Router;
@@ -52,7 +55,7 @@ fn router_with_cap(max_store_bytes: u64) -> Router {
             max_store_bytes,
             ..RuntimeConfig::default()
         },
-        ..ServerConfig::default()
+        ..in_memory_config::config()
     };
     app(AppState::new(config).expect("build AppState"))
 }
@@ -74,6 +77,10 @@ async fn execute(router: &Router, code: &str) -> Value {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn a_guest_over_the_cap_traps_instead_of_growing() {
+    if !nightly_only_requested() {
+        eprintln!("server memory cap: skipped; set SUBMILLI_TEST_NIGHTLY_ONLY=1 to run");
+        return;
+    }
     // 2^25 code units = 64 MB, against the 50 MB default.
     let response = execute(&router_with_cap(50 * 1024 * 1024), &doubling_program(25)).await;
 
@@ -96,6 +103,10 @@ async fn a_guest_over_the_cap_traps_instead_of_growing() {
 /// must be able to tell the limit from a bug in the program.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_guest_cannot_catch_reaching_the_cap() {
+    if !nightly_only_requested() {
+        eprintln!("server memory cap: skipped; set SUBMILLI_TEST_NIGHTLY_ONLY=1 to run");
+        return;
+    }
     let program = r#"export function main(): string {
              let s = "x";
              try {
@@ -120,6 +131,10 @@ async fn a_guest_cannot_catch_reaching_the_cap() {
 /// just as well against a server that refused everything.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_guest_under_the_cap_runs_normally() {
+    if !nightly_only_requested() {
+        eprintln!("server memory cap: skipped; set SUBMILLI_TEST_NIGHTLY_ONLY=1 to run");
+        return;
+    }
     // 2^24 code units = 32 MB, comfortably inside the same 50 MB cap.
     let response = execute(&router_with_cap(50 * 1024 * 1024), &doubling_program(24)).await;
 
@@ -132,6 +147,10 @@ async fn a_guest_under_the_cap_runs_normally() {
 /// would leave a legitimate workload with no recourse.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_raised_cap_admits_what_the_default_refuses() {
+    if !nightly_only_requested() {
+        eprintln!("server memory cap: skipped; set SUBMILLI_TEST_NIGHTLY_ONLY=1 to run");
+        return;
+    }
     let response = execute(&router_with_cap(200 * 1024 * 1024), &doubling_program(25)).await;
 
     assert_eq!(
@@ -140,4 +159,13 @@ async fn a_raised_cap_admits_what_the_default_refuses() {
         "a 64 MB allocation should fit a 200 MB cap"
     );
     assert_eq!(response["result"], "len 33554432");
+}
+
+fn nightly_only_requested() -> bool {
+    std::env::var("SUBMILLI_TEST_NIGHTLY_ONLY").is_ok_and(|value| {
+        matches!(
+            value.to_ascii_lowercase().as_str(),
+            "1" | "true" | "yes" | "on"
+        )
+    })
 }

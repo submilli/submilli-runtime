@@ -1,12 +1,11 @@
-// A nested function reading a local declared below it is reported once, at the
-// read, as for any closure; the early call adds no second error.
-// expect-error: cannot access `x` before its initialization
+// A nested function may read a local declared below it, but exists only once that
+// local is declared: the early call is the error, not the read in its body.
+// expect-error: `readX` is used before `x`, which it uses, is declared
 // expect-error-count: 1
 function main(): void {
-  setX();
-  function setX(): void {
-    x = 5;
+  console.log(readX());
+  function readX(): number {
+    return x;
   }
-  let x = 1;
-  console.log(x);
+  const x = 1;
 }

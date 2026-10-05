@@ -2,12 +2,8 @@ types: 3 of 6 tsc entries compared, 2 differ
 
 line 2: v
   tsc:  { a: B; }
-  ours: { a: <error>[] }
+  ours: { a: <error> }
 
 line 5: null as unknown as ({ a: B []; })
   tsc:  { a: B; }
-  ours: { a: <error>[] }
-
-errors:
-line 4: tsc TS1096: An index signature must have exactly one parameter. (we accept)
-line 7: tsc TS1096: An index signature must have exactly one parameter. (we accept)
+  ours: { a: <error> }

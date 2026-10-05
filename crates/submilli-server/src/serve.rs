@@ -108,7 +108,7 @@ async fn wait_until(deadline: Option<tokio::time::Instant>) {
 
 async fn serve_opened(
     addr: SocketAddr,
-    config: ServerConfig,
+    mut config: ServerConfig,
     shutdown_grace: Duration,
     signals: ShutdownSignals,
 ) -> Result<DrainStatus> {
@@ -116,6 +116,7 @@ async fn serve_opened(
     let tls = config.tls.clone();
     let settings_hash = crate::audit::settings_hash(&config, addr, shutdown_grace);
     let allow_unauthenticated = matches!(config.auth, crate::auth::AuthConfig::Disabled);
+    config.blueprints = Some(prepare_blueprint_store(&config).await?);
     let state = AppState::new(config)?;
     let audit = state.audit().clone();
     // Rehydrate persisted sessions and sweep orphan directories before serving,
@@ -145,6 +146,7 @@ async fn serve_opened(
     let _lifecycle = ServerAuditStop(audit);
     state.set_bind_addr(bound);
     let shutdown = state.shutdown_signal();
+    let requests = state.graceful_shutdown();
     let router = app(state);
     crate::metrics::server_start();
     tracing::info!(addr = %bound, protocol = if tls.is_some() { "https" } else { "http" }, "submilli-server listening");
@@ -155,12 +157,41 @@ async fn serve_opened(
             router,
             signals,
             shutdown,
+            requests,
             shutdown_grace,
         )
         .await
     } else {
-        serve_listener(listener, router, signals, shutdown, shutdown_grace).await
+        serve_listener(
+            listener,
+            router,
+            signals,
+            shutdown,
+            requests,
+            shutdown_grace,
+        )
+        .await
     }
+}
+
+/// Resolve the blueprint backend and finish migration before application startup.
+async fn prepare_blueprint_store(
+    config: &ServerConfig,
+) -> Result<Arc<dyn crate::blueprint::BlueprintStore>> {
+    use crate::blueprint::{FileBlueprintStore, InMemoryBlueprintStore, SqliteBlueprintStore};
+
+    if let Some(store) = &config.blueprints {
+        return Ok(Arc::clone(store));
+    }
+    if let Some(database) = &config.database {
+        let store = SqliteBlueprintStore::new(Arc::clone(database), config.blueprint_dir.clone());
+        store.migrate().await?;
+        return Ok(Arc::new(store));
+    }
+    if let Some(directory) = &config.blueprint_dir {
+        return Ok(Arc::new(FileBlueprintStore::new(directory.clone())?));
+    }
+    Ok(Arc::new(InMemoryBlueprintStore::default()))
 }
 
 async fn serve_listener<L>(
@@ -168,12 +199,15 @@ async fn serve_listener<L>(
     router: axum::Router,
     signals: ShutdownSignals,
     shutdown: Arc<Notify>,
+    requests: Arc<crate::graceful_shutdown::GracefulShutdownTracker>,
     shutdown_grace: Duration,
 ) -> Result<DrainStatus>
 where
     L: axum::serve::Listener<Addr = SocketAddr>,
     for<'a> PeerAddr: axum::extract::connect_info::Connected<axum::serve::IncomingStream<'a, L>>,
 {
+    let _request_guard = RequestShutdownGuard(Arc::clone(&requests));
+    let shutdown_requests = Arc::clone(&requests);
     // The handoff announces that draining has begun. The signal streams stay
     // available for a second signal while database work drains after HTTP.
     let (draining, drain_started) = oneshot::channel();
@@ -190,22 +224,29 @@ where
         let mut signals = shutdown_signals.lock().await;
         signals.recv(shutdown).await;
         drop(signals);
+        shutdown_requests.close();
         let started_at = tokio::time::Instant::now();
         let _ = shutdown_started_at.set(started_at);
         let _ = draining.send(started_at);
     })
     .into_future();
 
+    let drain = async {
+        server.await?;
+        requests.close();
+        requests.wait().await;
+        Ok::<(), std::io::Error>(())
+    };
     let forced = tokio::select! {
         // Biased so a drain that finishes as the deadline expires is reported as
         // the clean shutdown it was.
         biased;
-        result = server => { result?; false },
+        result = drain => { result?; false },
         cause = forced_stop(drain_started, force_signals, shutdown_grace) => {
             tracing::warn!(
                 %cause,
                 grace_secs = shutdown_grace.as_secs_f64(),
-                "stopped waiting with requests still in flight; their connections are being dropped"
+                "stopped waiting for HTTP responses and request tasks"
             );
             true
         }
@@ -220,6 +261,15 @@ where
         },
         None => DrainStatus::NoDrain,
     })
+}
+
+/// Also cancel owned requests if serving fails or its caller drops the future.
+struct RequestShutdownGuard(Arc<crate::graceful_shutdown::GracefulShutdownTracker>);
+
+impl Drop for RequestShutdownGuard {
+    fn drop(&mut self) {
+        self.0.cancel();
+    }
 }
 
 #[derive(Clone)]
@@ -345,33 +395,7 @@ impl ShutdownSignals {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[tokio::test]
-    async fn forced_database_drain_releases_lock_after_work_finishes() {
-        let directory = tempfile::tempdir().unwrap();
-        let path = directory.path().join("server.db");
-        let database = Arc::new(crate::database::ServerDatabase::open(&path).await.unwrap());
-        close_database(database, Ok(DrainStatus::Forced), Duration::ZERO)
-            .await
-            .unwrap();
-        let reopened = tokio::time::timeout(Duration::from_secs(5), async {
-            loop {
-                match crate::database::ServerDatabase::open(&path).await {
-                    Ok(database) => break database,
-                    Err(crate::database::DatabaseError::AlreadyOpen(_)) => {
-                        tokio::time::sleep(Duration::from_millis(10)).await;
-                    }
-                    Err(error) => panic!("unexpected database error: {error}"),
-                }
-            }
-        })
-        .await
-        .unwrap();
-        reopened.close().await.unwrap();
-    }
-}
+mod tests;
 
 #[cfg(not(unix))]
 struct ShutdownSignals;

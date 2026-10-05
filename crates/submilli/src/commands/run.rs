@@ -202,6 +202,19 @@ pub(crate) fn execute_with_dispatch(
     args: Args,
     llm_dispatch: Option<Arc<dyn ModelDispatch>>,
 ) -> anyhow::Result<ExitCode> {
+    execute_with_mcp_setup(
+        args,
+        llm_dispatch,
+        submilli_shared::mcp::schema_registry::initialize_builtin_packs,
+    )
+}
+
+fn execute_with_mcp_setup(
+    args: Args,
+    llm_dispatch: Option<Arc<dyn ModelDispatch>>,
+    initialize_mcp: fn() -> Result<(), submilli_shared::mcp::schema_registry::SchemaPackError>,
+) -> anyhow::Result<ExitCode> {
+    initialize_mcp().context("MCP schema initialization failed")?;
     // A host call that re-enters Wasm nests frames on the native stack, so the
     // program runs on a thread sized for the Wasm stack it is given. The same
     // thread compiles it, which needs the interpreter's compiler stack.
@@ -319,16 +332,18 @@ fn execute_on_this_thread(
                 http,
                 Arc::new(Vec::new()),
             ));
-            let catalog = rt.block_on(discover_all_local(
-                DiscoveryAuth {
-                    secret_store: Some(&store),
-                    oauth: Some(&oauth),
-                    harness_secrets: None,
-                    network_policy: &network_policy,
-                },
-                &bp.name,
-                bp,
-            ));
+            let catalog = rt
+                .block_on(discover_all_local(
+                    DiscoveryAuth {
+                        secret_store: Some(&store),
+                        oauth: Some(&oauth),
+                        harness_secrets: None,
+                        network_policy: &network_policy,
+                    },
+                    &bp.name,
+                    bp,
+                ))
+                .context("MCP discovery initialization failed")?;
             mcp_transport = Some(Arc::new(StreamableHttpTransport::new(
                 bp.name.clone(),
                 bp.clone(),
@@ -722,6 +737,26 @@ function main(): string {
                 max_llm_concurrency: None,
             },
         }
+    }
+
+    #[test]
+    fn invalid_mcp_assets_fail_before_reading_the_script() {
+        let mut f = fixture("mcp_setup", None);
+        f.args.script = f._dir.path().join("missing.ts");
+        let error = execute_with_mcp_setup(f.args, None, || {
+            Err(
+                submilli_shared::mcp::schema_registry::SchemaPackError::MissingTools {
+                    pack: "injected",
+                },
+            )
+        })
+        .unwrap_err();
+        assert_eq!(error.to_string(), "MCP schema initialization failed");
+        assert!(
+            error
+                .chain()
+                .any(|cause| cause.to_string().contains("injected"))
+        );
     }
 
     #[test]

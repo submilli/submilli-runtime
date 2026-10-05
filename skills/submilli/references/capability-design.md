@@ -72,9 +72,11 @@ wrap it when argument-level rules matter.
 List the distinct combinations of who acts, on whose behalf, and with what
 authority. Each becomes a blueprint. Within one, allow the business
 capabilities the role needs, filtered by the bound identity variable, and let
-`add-package` write the package's infrastructure grants. Mark consequential
-writes `ask-human` only where the harness implements approval; otherwise keep
-them out of the first slice or expose a draft operation.
+`add-package` write the package's infrastructure grants. `ask-human` currently
+denies the call; it does not implement an approval flow. Keep consequential
+writes out of the first slice or expose a draft operation. If the user requires
+approval, place the approval and subsequent authorized execution in the trusted
+application, outside the runtime agent's control.
 
 ## 7. Produce the mapping
 
@@ -83,7 +85,7 @@ Deliver this before implementing, with file and function citations:
 | Workflow | Existing code | Package operation and check fields | Blueprint, caller rules, bound variables | Verification |
 | --- | --- | --- | --- | --- |
 | Support balance lookup | `billing.ts readBalance`, identity from `auth.ts requireSession` | `@acme/billing` `readBalance(customerId)` checks `{ customerId }` | `support-read`: main allows `balance.read` where `customerId == ${vars.customerId}`; `customerId` required | own customer allowed; other customer denied; missing binding rejected |
-| Small refunds | `billing.ts refund(chargeId, amountCents)` | `refund(chargeId, amountCents)` resolves the charge's customer, checks `{ customerId, chargeId, amountCents }` | `support-refund`: `ask-human` where `customerId == ${vars.customerId} and amountCents <= 5000`; package gets `http.post` to the billing host and its secret | denied over limit; denied for another customer; no side effect on denial |
+| Small refunds awaiting approval | `billing.ts refund(chargeId, amountCents)` | `refund(chargeId, amountCents)` resolves the charge's customer, checks `{ customerId, chargeId, amountCents }` | Runtime agent gets no refund grant; trusted application owns approval and a separate execution path with customer and amount constraints | agent refund denied; no side effect; approved path must separately verify the exact approved operation |
 | Finance export | `billing.ts exportCustomers` | `exportCustomers()` checks `{}` | `finance-report`: no customer variable; selected by the app only for the finance role | support blueprint cannot call it |
 
 Unresolved authority questions go under the table, not into the grants.

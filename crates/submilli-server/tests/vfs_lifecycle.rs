@@ -1,5 +1,8 @@
 //! End-to-end tests for the VFS session lifecycle over the HTTP API.
 
+#[path = "common/in_memory_config.rs"]
+mod in_memory_config;
+
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -56,7 +59,7 @@ impl Harness {
             blueprints: Some(blueprints),
             session_storage_root: Some(vfs_root.path().to_path_buf()),
             volumes,
-            ..ServerConfig::default()
+            ..in_memory_config::config()
         };
         Self {
             state: AppState::new(config).expect("AppState"),
@@ -261,7 +264,7 @@ fn restartable_state(vfs_root: &Path, store_dir: &Path) -> AppState {
         blueprints: Some(blueprints),
         session_storage_root: Some(vfs_root.to_path_buf()),
         session_store_dir: Some(store_dir.to_path_buf()),
-        ..ServerConfig::default()
+        ..in_memory_config::config()
     };
     AppState::new(config).expect("AppState")
 }

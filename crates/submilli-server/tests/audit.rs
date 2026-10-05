@@ -330,6 +330,7 @@ async fn auth_refusals_have_safe_metadata_and_never_the_token() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("audit.log");
     let config = ServerConfig {
+        blueprints: Some(Arc::new(InMemoryBlueprintStore::default())),
         auth: AuthConfig::Tokens(vec![ApiToken::new("harness", Role::User, TOKEN).unwrap()]),
         audit: AuditConfig {
             file: Some(path.clone()),

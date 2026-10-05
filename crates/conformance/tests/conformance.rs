@@ -16,7 +16,7 @@
 //! `// rejected: <reason>` header.
 //!
 //! The full conformance body is opt-in for local runs. Set
-//! `SUBMILLI_CONFORMANCE_TEST=1` in nightly/release checks. `CONFORMANCE_FILTER`
+//! `SUBMILLI_TEST_NIGHTLY_ONLY=1` in nightly/release checks. `CONFORMANCE_FILTER`
 //! narrows an opted-in run; it does not enable conformance on its own.
 
 #[path = "support/conformance_gate.rs"]
@@ -42,7 +42,7 @@ const ROOT: &str = env!("CARGO_MANIFEST_DIR");
 #[test]
 fn conformance() {
     if !conformance_gate::requested() {
-        eprintln!("conformance: skipped; set SUBMILLI_CONFORMANCE_TEST=1 to run");
+        eprintln!("conformance: skipped; set SUBMILLI_TEST_NIGHTLY_ONLY=1 to run");
         return;
     }
     let root = Path::new(ROOT);

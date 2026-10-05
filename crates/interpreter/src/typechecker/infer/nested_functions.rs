@@ -59,6 +59,10 @@ impl Inferer<'_> {
         let mut opening = Vec::new();
         let mut hoisted = Vec::new();
         for &stmt in stmts {
+            // A function in a `switch` clause was declared with the whole body.
+            if self.is_hoisted_to_switch_body(stmt) {
+                continue;
+            }
             let Some(declaration) = self.nested_declaration(stmt)? else {
                 continue;
             };
@@ -133,6 +137,30 @@ impl Inferer<'_> {
             .collect::<Result<_, _>>()
     }
 
+    /// The functions `block` declares that are not defined yet.
+    pub(super) fn nested_functions_not_yet_defined(&self, block: StmtId) -> Vec<usize> {
+        self.nested_functions
+            .iter()
+            .enumerate()
+            .filter(|(_, function)| function.block == block && !function.defined)
+            .map(|(index, _)| index)
+            .collect()
+    }
+
+    /// Mark functions as not defined again, past the clause that created them.
+    pub(super) fn mark_nested_functions_undefined(
+        &mut self,
+        indices: &[usize],
+    ) -> Result<(), CompilerFailure> {
+        for &index in indices {
+            self.nested_functions
+                .get_mut(index)
+                .ok_or_else(|| super::inference_failure("invalid nested function index"))?
+                .defined = false;
+        }
+        Ok(())
+    }
+
     /// Check a use of nested function `index`. Inside a sibling's body, it is
     /// recorded as that sibling's dependency; anywhere else, it and every
     /// sibling it uses must already be defined.
@@ -184,9 +212,15 @@ impl Inferer<'_> {
         let local = missing.created_after.as_ref().ok_or_else(|| {
             super::inference_failure("missing nested function creation point").with_span(span)
         })?;
-        // A local declared below the function is already reported where the
-        // function's body reads it, as for any closure.
-        if local.span.start > missing.name.span.start {
+        if self.declaration_in_another_case_clause(&local.name) == Some(local.span) {
+            let local = local.clone();
+            let user = if missing.name.name == *name {
+                "it".to_string()
+            } else {
+                format!("`{}`", missing.name.name)
+            };
+            let name = name.clone();
+            self.report_function_used_outside_clause(&name, &user, &local, span);
             return Ok(());
         }
         let message = if missing.name.name == *name {
@@ -208,6 +242,32 @@ impl Inferer<'_> {
         let note = (local.span, format!("`{}` is declared here", local.name));
         self.error_with_help_and_notes(span, message, vec![help], vec![note]);
         Ok(())
+    }
+
+    /// A function that captures a local of one `switch` clause exists only once
+    /// that clause has run, so another clause, which may be entered directly,
+    /// can't use it.
+    fn report_function_used_outside_clause(
+        &mut self,
+        name: &str,
+        user: &str,
+        local: &Ident,
+        span: Span,
+    ) {
+        self.error_with_help_and_notes(
+            span,
+            format!(
+                "`{name}` can't be used here: {user} uses `{}`, which is declared in \
+                 another `case` clause",
+                local.name
+            ),
+            vec![format!(
+                "declare `{0}` before the `switch`, or use `{name}` only in the clause \
+                 that declares `{0}`",
+                local.name
+            )],
+            vec![(local.span, format!("`{}` is declared here", local.name))],
+        );
     }
 
     /// The first function not yet defined among `index` and the siblings it

@@ -5,6 +5,9 @@
 //! see one store, two sessions on one blueprint see two, and every way a session
 //! ends takes the store with it.
 
+#[path = "common/in_memory_config.rs"]
+mod in_memory_config;
+
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
@@ -75,7 +78,7 @@ impl Harness {
                 InMemoryBlueprintStore::seed(blueprints).expect("seed blueprints"),
             )),
             session_storage_root: Some(vfs_root.path().to_path_buf()),
-            ..ServerConfig::default()
+            ..in_memory_config::config()
         };
         Self {
             state: AppState::new(tweak(config)).expect("AppState"),
@@ -456,7 +459,7 @@ async fn a_restored_session_starts_with_an_empty_store() {
             )),
             session_storage_root: Some(vfs_root.path().to_path_buf()),
             session_store_dir: Some(store_dir.path().to_path_buf()),
-            ..ServerConfig::default()
+            ..in_memory_config::config()
         };
         AppState::new(config).expect("AppState")
     };

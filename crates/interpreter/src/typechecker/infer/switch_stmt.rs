@@ -3,11 +3,69 @@ use crate::compiler_error::CompilerFailure;
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::{
-    BinOp, Diagnostic, EnumVariantPayload, ExprId, Severity, Span, SwitchCase, SwitchDefault, Type,
-    TypedExpr, TypedExprKind, TypedStmtKind, TypedSwitchCase, TypedSwitchValue,
+    Ast, BinOp, Diagnostic, EnumVariantPayload, ExprId, Ident, Severity, Span, StmtId, StmtKind,
+    SwitchCase, SwitchDefault, Type, TypedExpr, TypedExprKind, TypedStmt, TypedStmtKind,
+    TypedSwitchCase, TypedSwitchValue,
 };
 
 use super::{Inferer, assignable, narrowing};
+
+/// An enclosing `switch`: the `let`/`const` its clauses declare directly, and
+/// the clause being inferred.
+pub(in crate::typechecker) struct SwitchFrame {
+    locals: BTreeMap<String, Span>,
+    /// The whole `switch` until a clause is entered, so that no local counts
+    /// as another clause's in the discriminant or the hoisted functions.
+    current_clause: Span,
+    switch_span: Span,
+    /// Clause statements whose functions were declared with the whole body.
+    declared_with_body: BTreeSet<StmtId>,
+}
+
+fn span_contains(outer: Span, inner: Span) -> bool {
+    outer.start <= inner.start && inner.end <= outer.end
+}
+
+/// One `case` or `default` clause: the values it matches and the statements
+/// directly in its body.
+pub(super) struct SwitchClause<'a> {
+    pub(super) values: &'a [ExprId],
+    pub(super) stmts: Vec<StmtId>,
+}
+
+/// The clauses of a `switch` in source order, which is the order JavaScript
+/// runs their declarations in; `default` may sit between cases.
+pub(super) fn clauses_in_source_order<'a>(
+    ast: &Ast,
+    cases: &'a [SwitchCase],
+    default: Option<&SwitchDefault>,
+) -> Result<Vec<SwitchClause<'a>>, CompilerFailure> {
+    let mut clauses: Vec<(Span, &'a [ExprId], StmtId)> = cases
+        .iter()
+        .map(|case| (case.span, case.values.as_slice(), case.body))
+        .chain(default.map(|d| (d.span, &[][..], d.body)))
+        .collect();
+    clauses.sort_by_key(|(span, _, _)| span.start);
+    clauses
+        .into_iter()
+        .map(|(_, values, body)| {
+            let stmts = match &ast.try_stmt(body).map_err(super::arena_failure)?.kind {
+                StmtKind::Block(stmts) => stmts.clone(),
+                _ => vec![body],
+            };
+            Ok(SwitchClause { values, stmts })
+        })
+        .collect()
+}
+
+/// A discriminant inferred ahead of the switch body.
+struct Discriminant {
+    /// The narrowings in force before the discriminant ran.
+    entry_env: narrowing::NarrowEnv,
+    typed: ExprId,
+    ty: Type,
+    source_span: Span,
+}
 
 /// Narrowing anchor for the switch's default body.
 enum ResidualSite {
@@ -23,30 +81,255 @@ enum ResidualSite {
 }
 
 impl Inferer<'_> {
+    /// JavaScript scopes a `switch` body as one block: a function declared in
+    /// one clause is hoisted to the body's start, so every clause can call it.
+    /// Its `let`/`const` stay usable only in their own clause, which is the only
+    /// one sure to have run their declaration.
     pub(super) fn infer_switch(
         &mut self,
+        switch_id: StmtId,
         discriminant: ExprId,
         cases: Vec<SwitchCase>,
         default: Option<SwitchDefault>,
         switch_span: Span,
     ) -> Result<TypedStmtKind, CompilerFailure> {
+        let clause_stmts: Vec<StmtId> =
+            clauses_in_source_order(self.ast, &cases, default.as_ref())?
+                .into_iter()
+                .flat_map(|clause| clause.stmts)
+                .collect();
+        let discriminant = self.infer_discriminant(discriminant)?;
+        let locals = self.clause_locals(&clause_stmts)?;
+        self.switch_frames.push(SwitchFrame {
+            locals,
+            current_clause: switch_span,
+            switch_span,
+            declared_with_body: BTreeSet::new(),
+        });
+        let hoists_functions = self.declares_function(&clause_stmts)?;
+        let opening = if hoists_functions {
+            self.scopes.push();
+            let opening = self.declare_nested_functions(switch_id, &clause_stmts)?;
+            if let Some(frame) = self.switch_frames.last_mut() {
+                frame.declared_with_body = clause_stmts.iter().copied().collect();
+            }
+            opening
+        } else {
+            Vec::new()
+        };
+        let switch =
+            self.infer_switch_clauses(switch_id, discriminant, cases, default, switch_span);
+        if hoists_functions {
+            self.scopes.pop();
+        }
+        self.switch_frames.pop();
+        let switch = switch?;
+        if opening.is_empty() {
+            return Ok(switch);
+        }
+        self.wrap_with_hoisted_functions(switch_id, switch, opening, switch_span)
+    }
+
+    /// Put the hoisted functions' opening statements ahead of the switch, after
+    /// the discriminant: `{ let temp = discriminant; opening…; switch (temp) }`.
+    fn wrap_with_hoisted_functions(
+        &mut self,
+        switch_id: StmtId,
+        mut switch: TypedStmtKind,
+        opening: Vec<StmtId>,
+        switch_span: Span,
+    ) -> Result<TypedStmtKind, CompilerFailure> {
+        // Narrowing reads the discriminant's own expression, so the temporary
+        // takes its place only once the clauses are inferred.
+        let TypedStmtKind::Switch {
+            discriminant,
+            discriminant_ty,
+            ..
+        } = &mut switch
+        else {
+            return Err(super::inference_failure("inferred switch is not a Switch"));
+        };
+        let mut stmts =
+            vec![self.bind_discriminant_to_temporary(switch_id, discriminant, discriminant_ty)?];
+        stmts.extend(opening);
+        let switch_stmt = self
+            .typed_ast
+            .try_push_stmt(TypedStmt {
+                kind: switch,
+                span: switch_span,
+            })
+            .map_err(crate::typechecker::arena_failure)?;
+        stmts.push(switch_stmt);
+        Ok(TypedStmtKind::Block(stmts))
+    }
+
+    /// Bind the discriminant's value to a temporary ahead of the hoisted
+    /// functions, which codegen would otherwise resolve its names against, and
+    /// read the temporary in its place.
+    fn bind_discriminant_to_temporary(
+        &mut self,
+        switch_id: StmtId,
+        discriminant: &mut ExprId,
+        ty: &Type,
+    ) -> Result<StmtId, CompilerFailure> {
+        let span = self
+            .typed_ast
+            .try_expr(*discriminant)
+            .map_err(crate::typechecker::arena_failure)?
+            .span;
+        let name = Ident {
+            // `#` cannot occur in a source identifier.
+            name: format!("#switch_discriminant_{}", switch_id.0),
+            span,
+        };
+        let value = std::mem::replace(
+            discriminant,
+            self.typed_ast
+                .try_push_expr(TypedExpr {
+                    kind: TypedExprKind::LocalRef {
+                        ident: name.clone(),
+                        boxed: false,
+                    },
+                    span,
+                    ty: ty.clone(),
+                })
+                .map_err(crate::typechecker::arena_failure)?,
+        );
+        self.typed_ast
+            .try_push_stmt(TypedStmt {
+                kind: TypedStmtKind::Let {
+                    name,
+                    ty: ty.clone(),
+                    value,
+                    boxed: false,
+                    doc: None,
+                },
+                span,
+            })
+            .map_err(crate::typechecker::arena_failure)
+    }
+
+    /// Whether `stmt` is a clause statement of the innermost `switch` whose
+    /// function was already declared at the start of the switch body.
+    pub(super) fn is_hoisted_to_switch_body(&self, stmt: StmtId) -> bool {
+        self.switch_frames
+            .last()
+            .is_some_and(|frame| frame.declared_with_body.contains(&stmt))
+    }
+
+    /// Whether any of `stmts` is a function declaration.
+    fn declares_function(&self, stmts: &[StmtId]) -> Result<bool, CompilerFailure> {
+        for &stmt in stmts {
+            if matches!(
+                self.ast.try_stmt(stmt).map_err(super::arena_failure)?.kind,
+                StmtKind::Function { .. }
+            ) {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
+    fn clause_locals(&self, stmts: &[StmtId]) -> Result<BTreeMap<String, Span>, CompilerFailure> {
+        let mut locals = BTreeMap::new();
+        for &stmt in stmts {
+            if let StmtKind::Let { name, .. }
+            | StmtKind::Const { name, .. }
+            | StmtKind::ConstRest { name, .. } =
+                &self.ast.try_stmt(stmt).map_err(super::arena_failure)?.kind
+            {
+                locals.entry(name.name.clone()).or_insert(name.span);
+            }
+        }
+        Ok(locals)
+    }
+
+    /// The declaration of `name` in a clause of an enclosing `switch` other than
+    /// the one being inferred.
+    ///
+    /// The whole body is the name's scope, so a binding of it from outside the
+    /// `switch` is shadowed there; only one declared inside the `switch`, in a
+    /// block of the current clause, hides the other clause's declaration.
+    pub(super) fn declaration_in_another_case_clause(&self, name: &str) -> Option<Span> {
+        let frame = self
+            .switch_frames
+            .iter()
+            .rev()
+            .find(|frame| frame.locals.contains_key(name))?;
+        let declaration = *frame.locals.get(name)?;
+        if span_contains(frame.current_clause, declaration) {
+            return None;
+        }
+        let visible_inside_switch = self
+            .scopes
+            .get(name)
+            .is_some_and(|entry| span_contains(frame.switch_span, entry.decl_span));
+        (!visible_inside_switch).then_some(declaration)
+    }
+
+    /// Infer one clause body. A hoisted function that captures a local of the
+    /// clause is created there, so it exists only once that clause has run:
+    /// other clauses, which may be entered directly, can't use it.
+    fn infer_case_clause(
+        &mut self,
+        switch_id: StmtId,
+        body: StmtId,
+        body_span: Span,
+    ) -> Result<StmtId, CompilerFailure> {
+        if let Some(frame) = self.switch_frames.last_mut() {
+            frame.current_clause = body_span;
+        }
+        let pending_before_clause = self.nested_functions_not_yet_defined(switch_id);
+        let typed_body = self.infer_stmt(body)?.ok_or_else(|| {
+            super::inference_failure("switch clause body is a Block, never a type-only decl")
+        })?;
+        self.mark_nested_functions_undefined(&pending_before_clause)?;
+        Ok(typed_body)
+    }
+
+    /// Infer the discriminant, which runs outside the switch body's scope.
+    fn infer_discriminant(
+        &mut self,
+        discriminant: ExprId,
+    ) -> Result<Discriminant, CompilerFailure> {
         let (entry_env, _) = self.snapshot_active_narrowings(0);
-        let disc_source_span = self
+        let source_span = self
             .ast
             .try_expr(discriminant)
             .map_err(super::arena_failure)?
             .span;
-        let (typed_disc, disc_ty) = self.infer_expr(discriminant, None)?;
+        let (typed, ty) = self.infer_expr(discriminant, None)?;
         // A `void` discriminant has nothing to compare against, and an empty
         // switch reaches codegen with no case to report a type error first.
-        if disc_ty.carries_void() {
+        if ty.carries_void() {
             self.error_non_comparable_type(
-                disc_source_span,
-                &disc_ty,
+                source_span,
+                &ty,
                 super::diagnostics::ComparisonPosition::SwitchDiscriminant,
             );
         }
+        Ok(Discriminant {
+            entry_env,
+            typed,
+            ty,
+            source_span,
+        })
+    }
 
+    fn infer_switch_clauses(
+        &mut self,
+        switch_id: StmtId,
+        discriminant: Discriminant,
+        cases: Vec<SwitchCase>,
+        default: Option<SwitchDefault>,
+        switch_span: Span,
+    ) -> Result<TypedStmtKind, CompilerFailure> {
+        let Discriminant {
+            entry_env,
+            typed: typed_disc,
+            ty: disc_ty,
+            source_span: disc_source_span,
+        } = discriminant;
         let label_hint = switch_label_hint(&disc_ty);
         let entry_reachable = self.reachable;
         self.push_pending_join_frame(narrowing::PendingJoinKind::Switch);
@@ -129,9 +412,7 @@ impl Inferer<'_> {
             self.push_narrow_frame(true_env.clone());
             self.switch_depth += 1;
             self.reachable = entry_reachable;
-            let typed_body = self.infer_stmt(case.body)?.ok_or_else(|| {
-                super::inference_failure("switch case body is a Block, never a type-only decl")
-            })?;
+            let typed_body = self.infer_case_clause(switch_id, case.body, body_span)?;
             let body_reachable = self.reachable;
             self.switch_depth -= 1;
             let (_n, body_assigned) = self.pop_narrow_frame_capture()?;
@@ -160,9 +441,7 @@ impl Inferer<'_> {
             self.push_narrow_frame(env.clone());
             self.switch_depth += 1;
             self.reachable = entry_reachable;
-            let typed_body = self.infer_stmt(d.body)?.ok_or_else(|| {
-                super::inference_failure("switch default body is a Block, never a type-only decl")
-            })?;
+            let typed_body = self.infer_case_clause(switch_id, d.body, body_span)?;
             let body_reachable = self.reachable;
             self.switch_depth -= 1;
             let (_n, body_assigned) = self.pop_narrow_frame_capture()?;

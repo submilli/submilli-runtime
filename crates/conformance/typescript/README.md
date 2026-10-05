@@ -5,7 +5,7 @@ checked against what `tsc` says about it: the type it infers at every expression
 and the errors it reports. Run with:
 
 ```sh
-SUBMILLI_CONFORMANCE_TEST=1 cargo test -p conformance --test typescript
+SUBMILLI_TEST_NIGHTLY_ONLY=1 cargo test -p conformance --test typescript
 ```
 
 This is the second half of the conformance crate. The test262 cases next door check
@@ -94,7 +94,7 @@ change shows up in review. When the change is intended, rewrite the files and co
 them:
 
 ```sh
-UPDATE_TYPESCRIPT_EXPECTED=1 SUBMILLI_CONFORMANCE_TEST=1 cargo test -p conformance --test typescript
+UPDATE_TYPESCRIPT_EXPECTED=1 SUBMILLI_TEST_NIGHTLY_ONLY=1 cargo test -p conformance --test typescript
 ```
 
 `CONFORMANCE_FILTER=<path substring>` limits the run to matching cases.
@@ -115,7 +115,7 @@ of the case, for one kind of divergence on it:
 
 ```text
 line 12 type: by-design spec §1.2 arrays are homogeneous, so an array literal's elements must share one type
-line 14, 17 extra: bug SUB-1026 construct signatures read as a method named `new`
+line 14, 17 missed: bug SUB-1358 `readonly` is accepted on a method
 line 30 missed: artifact pruning removed the assignment that narrowed `x`
 ```
 
@@ -294,7 +294,7 @@ the upstream case has.
 2. When the change is intended, write the new divergences:
 
    ```sh
-   UPDATE_TYPESCRIPT_EXPECTED=1 SUBMILLI_CONFORMANCE_TEST=1 cargo test -p conformance --test typescript
+   UPDATE_TYPESCRIPT_EXPECTED=1 SUBMILLI_TEST_NIGHTLY_ONLY=1 cargo test -p conformance --test typescript
    ```
 
    Then edit the `.triage` files by hand:
@@ -416,7 +416,7 @@ To add one, write the case, then from `typescript-baselines/`:
 node write-baselines.cjs <case path>
 echo <case path relative to typescript/> > /tmp/ported.txt
 cd ../../..
-UPDATE_TYPESCRIPT_EXPECTED=1 TYPESCRIPT_PORTED_CASES=/tmp/ported.txt SUBMILLI_CONFORMANCE_TEST=1 cargo test -p conformance --test typescript
+UPDATE_TYPESCRIPT_EXPECTED=1 TYPESCRIPT_PORTED_CASES=/tmp/ported.txt SUBMILLI_TEST_NIGHTLY_ONLY=1 cargo test -p conformance --test typescript
 ```
 
 The list's path must be absolute: the test runs from the crate's directory.
