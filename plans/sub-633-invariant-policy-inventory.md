@@ -880,7 +880,7 @@ locators; follow symbols after edits.
 
 | ID | Site | Proposed disposition and reason |
 | --- | --- | --- |
-| P01 | 40 std poisoned-lock accesses, grouped below | Accept under explicit poison policy; keep reason and distinguish initiating panic |
+| P01 | 40 std poisoned-lock accesses, grouped below | Accepted: documented poison policy; initiating panics assessed separately |
 | P02 | `submilli-blueprint/src/lib.rs:1302`, `to_yaml` | Prove first: audit full Blueprint serializer graph and YAML supported shapes; generic serialization is not inherently infallible |
 | P03 | `submilli-build/src/scaffold.rs:428`, generated tsconfig JSON | Accept candidate: fixed JSON Value construction; document serializer contract; setup/scaffolding scope |
 | P04 | `submilli-build/src/scaffold.rs:466`, generated task JSON | Same as P03; call is inside a formatting macro |
@@ -905,6 +905,13 @@ P01 lock groups (paths below `crates/`):
 | submilli-server/src/idempotency_store.rs | 3 | 196, 245, 274 |
 | submilli-server/src/app.rs | 9 | 525, 537, 586, 606, 645, 710, 720, 736, 750 |
 | submilli-server/src/mcp/router.rs | 1 | 141 |
+
+P01 execution: reviewed the lock access/shared-field comments in all listed groups.
+They identify potentially partial protected state and distinguish poisoned access
+from the initiating panic. Keep all 40 baseline accesses as accepted sites; R18
+already confirmed poison-only fallible plumbing was reverted. No recovery API or
+source change is needed. Documentation-only, no tests rerun. Three independent
+reviews found no issues; diff checks passed.
 
 These groups support accepting poison access, not declaring the surrounding
 functions panic-free. No new input-triggered panic was reproduced by this review.
