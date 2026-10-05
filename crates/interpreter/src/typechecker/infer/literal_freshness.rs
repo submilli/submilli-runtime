@@ -22,7 +22,9 @@
 //! TypeScript keeps, never a rejected program. Generic inference is the main
 //! such origin: it can infer a literal type argument where TypeScript infers the
 //! widened one (`new Box(c1)` is `Box<"hello">`), so a literal read out of a
-//! value it produced counts as fresh, however it is reached.
+//! value it produced counts as fresh, however it is reached. A generic call's
+//! own result is the exception: its literal types are as declared, but for one
+//! it kept from a fresh argument (`id(1)` is a fresh `1`).
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -106,43 +108,38 @@ pub(super) struct LiteralFreshness {
 
 impl Inferer<'_> {
     /// The type a function literal infers from a value it returns, `value` of
-    /// type `ty`: with each literal a generic call kept from a fresh argument
-    /// widened, as tsc widens a function's inferred return type (`() => id(1)`
-    /// is `() => number`). Other literals stay as before generic calls kept
-    /// them: a closure returning a declared literal (`() => ms.pop()` with
-    /// `ms: Mode[]`) must keep it, and a binding's literal origin can't always
-    /// tell a declared literal from a fresh one.
-    pub(super) fn widen_kept_call_literals(
+    /// type `ty`: with each literal member known to be fresh, and not also
+    /// passed through regular from another operand, widened, as tsc widens a
+    /// function's inferred return type (`() => id(1)` is `() => number`). A
+    /// literal of unknown origin stays, so a closure returning a declared
+    /// literal (`() => ms.pop()` with `ms: Mode[]`) keeps it.
+    pub(super) fn widen_returned_literals(
         &self,
         value: ExprId,
         ty: &Type,
     ) -> Result<Type, CompilerFailure> {
-        let mut fresh = BTreeSet::new();
-        let mut pending = vec![value];
-        while let Some(id) = pending.pop() {
-            let expr = self
-                .typed_ast
-                .try_expr(id)
-                .map_err(crate::typechecker::arena_failure)?;
-            if let Some(operands) = self.passed_through_operands(&expr.kind) {
-                pending.extend(operands);
-                continue;
-            }
-            if let TypedExprKind::GenericCall { args, .. }
-            | TypedExprKind::GenericMethodCall { args, .. } = &expr.kind
-            {
-                for argument in args {
-                    if self
-                        .literal_freshness
-                        .kept_arguments
-                        .contains(&argument.expr)
-                    {
-                        fresh.extend(self.known_fresh_literals(argument.expr)?);
-                    }
-                }
-            }
-        }
+        let mut fresh = self.known_fresh_literals(value)?;
+        let regular = self.regular_literals(value)?;
+        fresh.retain(|literal| !regular.contains(literal));
         Ok(widen_only(ty, &fresh))
+    }
+
+    /// The literals known to be fresh of the arguments a generic call, given
+    /// `args`, kept for its result.
+    fn kept_fresh_literals(
+        &self,
+        args: &[crate::GenericArgument],
+    ) -> Result<BTreeSet<Type>, CompilerFailure> {
+        let mut fresh = BTreeSet::new();
+        let kept = args.iter().filter(|argument| {
+            self.literal_freshness
+                .kept_arguments
+                .contains(&argument.expr)
+        });
+        for argument in kept {
+            fresh.extend(self.known_fresh_literals(argument.expr)?);
+        }
+        Ok(fresh)
     }
 
     /// Record that a generic call's result keeps the literal type of
@@ -273,8 +270,8 @@ impl Inferer<'_> {
     /// `!`) pass its freshness through too. A read of a declared type (a
     /// binding, a field, an element, a non-generic call's result) keeps the
     /// regular literals of what it reads, and an assertion's are all regular.
-    /// Anything else is fresh, including a generic call's result, whose literal
-    /// may come from a fresh argument.
+    /// A generic call's result is declared too, but for the literals it kept
+    /// from a fresh argument. Anything else is fresh.
     fn regular_literals(&self, value: ExprId) -> Result<BTreeSet<Type>, CompilerFailure> {
         let mut regular = BTreeSet::new();
         let mut pending = vec![value];
@@ -328,6 +325,17 @@ impl Inferer<'_> {
                     if declared {
                         regular.extend(declared_literals(&expr.ty));
                     }
+                }
+                // A generic call's result is declared, except for the literals
+                // it kept from a fresh argument (`id(1)` is a fresh `1`).
+                TypedExprKind::GenericCall { args, .. }
+                | TypedExprKind::GenericMethodCall { args, .. } => {
+                    let kept = self.kept_fresh_literals(args)?;
+                    regular.extend(
+                        declared_literals(&expr.ty)
+                            .into_iter()
+                            .filter(|literal| !kept.contains(literal)),
+                    );
                 }
                 _ => {}
             }
@@ -430,13 +438,7 @@ impl Inferer<'_> {
                 }
                 TypedExprKind::GenericCall { args, .. }
                 | TypedExprKind::GenericMethodCall { args, .. } => {
-                    pending.extend(
-                        args.iter()
-                            .map(|argument| argument.expr)
-                            .filter(|argument| {
-                                self.literal_freshness.kept_arguments.contains(argument)
-                            }),
-                    );
+                    fresh.extend(self.kept_fresh_literals(args)?);
                 }
                 _ => {}
             }

@@ -55,6 +55,25 @@ function main(): void {
   lengths.push(4);
   assert(letter() === "b" && lengths.join(",") === "0,0,4", "a returned call widens");
 
+  // So does a fresh literal reached through a `const`, whether the `const`
+  // holds the literal or a call that kept it.
+  const label = "fixed";
+  const flag = true;
+  const labels = [1, 2].map(() => label);
+  labels.push("other");
+  const flags = [1].map(() => flag);
+  flags.push(false);
+  const blocks = [1].map(() => {
+    const local = "blk";
+    return local;
+  });
+  blocks.push("more");
+  const kept1 = id(1);
+  let counter = () => kept1;
+  counter = () => 2;
+  assert(labels.join(",") === "fixed,fixed,other" && flags.join(",") === "true,false", "a const's literal widens");
+  assert(blocks.join(",") === "blk,more" && counter() === 2, "through a block and a kept call");
+
   // A literal type the call declares, rather than takes from a fresh
   // argument, stays.
   const modes: Mode[] = ["on", "off"];

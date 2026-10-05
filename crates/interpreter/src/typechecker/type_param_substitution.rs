@@ -603,20 +603,21 @@ impl<'a> Unifier<'a> {
     }
 
     /// Whether an argument's function parameter `arg` that failed to unify with
-    /// the parameter type `bound` is still acceptable, because `bound` is
+    /// the parameter type `param` is still acceptable, because `param` is
     /// assignable to it: `[5].map((a: unknown, i: unknown) => ...)` passes each
     /// `number` to a parameter that takes any value, and `(a: Animal) => ...`
-    /// takes each `Dog`. `bound` must be fully known: a type parameter still
+    /// takes each `Dog`. `param` must be fully known: a type parameter still
     /// unbound in it could later bind to something `arg` doesn't accept.
-    fn accepts_as_supertype(&self, arg: &Type, bound: &Type) -> bool {
+    fn accepts_as_supertype(&self, arg: &Type, param: &Type) -> bool {
         let Some(types) = self.types else {
             return false;
         };
         if !self.is_argument || !self.contravariant {
             return false;
         }
-        let bound = self.sub.apply_or_record(bound, self.limits);
-        !super::infer::expr::mentions_type_var(&bound, &|_| true) && assignable(&bound, arg, types)
+        let known_param = self.sub.apply_or_record(param, self.limits);
+        !super::infer::expr::type_contains_type_var(&known_param)
+            && assignable(&known_param, arg, types)
     }
 
     /// Unify within a function type's parameter: subtype-widening stops (see

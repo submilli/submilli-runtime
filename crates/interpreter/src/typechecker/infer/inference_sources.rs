@@ -80,7 +80,7 @@ impl<'a> Inferer<'a> {
     /// Infer the value a `return` gives, marking the object literals it builds
     /// directly when the enclosing function literal infers its return type.
     /// That type widens a literal a generic call kept from a fresh argument
-    /// (see [`Self::widen_kept_call_literals`]), unless the function literal
+    /// (see [`Self::widen_returned_literals`]), unless the function literal
     /// keeps its returned literals for a type parameter (see
     /// `returns_keep_literals`) or has a contextual return type other than a
     /// bare type parameter: `() => id(1)` is `() => number`.
@@ -104,7 +104,7 @@ impl<'a> Inferer<'a> {
         if self.returns_keep_literals || has_contextual_return_type {
             return Ok((typed, ty));
         }
-        Ok((typed, self.widen_kept_call_literals(typed, &ty)?))
+        Ok((typed, self.widen_returned_literals(typed, &ty)?))
     }
 
     pub(super) fn is_inference_source(&self, literal: ExprId) -> bool {

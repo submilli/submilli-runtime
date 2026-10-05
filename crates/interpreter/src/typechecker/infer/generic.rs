@@ -1318,10 +1318,12 @@ impl Inferer<'_> {
             self.record_kept_literal_argument(typed_id);
         }
         // A literal that fits what the type parameter is already bound to is
-        // not widened: tsc takes the declared candidate as their common
-        // supertype, so `pick(mode, "off")` with `mode: Mode` binds `Mode`.
-        // Nor is one the call's expected result asks for: `const f: () => "a"
-        // = later(c)` binds `"a"`.
+        // not widened, so it doesn't conflict with that binding:
+        // `pick(mode, "off")` with `mode: Mode` binds `Mode`, as tsc does when
+        // the type parameter is the result (where it isn't, tsc widens to
+        // `string`, and a later push of another string is SUB-1397). Nor is
+        // one the call's expected result asks for: `const f: () => "a" =
+        // later(c)` binds `"a"`.
         let hint_is_known = !super::expr::mentions_type_var(&hint, &|var| {
             arguments.inferred_generics.iter().any(|name| name == var)
         });
