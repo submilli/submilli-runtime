@@ -87,7 +87,10 @@ impl<'a> Inferer<'a> {
         }
         let mut marked = Vec::new();
         self.mark_inference_source(expr, &mut marked)?;
-        self.with_marked(marked, |this| this.infer_expr(expr, hint))
+        self.with_marked(marked, |this| {
+            this.keeps_literal_types = this.returns_keep_literals;
+            this.infer_expr(expr, hint)
+        })
     }
 
     pub(super) fn is_inference_source(&self, literal: ExprId) -> bool {

@@ -7431,6 +7431,10 @@ impl Inferer<'_> {
         // Save / set return-type frames. Stack-based so nested arrows
         // restore correctly.
         let prev_return = std::mem::replace(&mut self.current_return, ret_hint.clone());
+        let keeps_returned_literals = annotated_ret.is_none()
+            && expected.is_some_and(|want| matches!(want.peel(), Type::TypeVar(_)));
+        let prev_keeps_returned_literals =
+            std::mem::replace(&mut self.returns_keep_literals, keeps_returned_literals);
         let prev_collect = if annotated_ret.is_none() {
             self.inferred_returns.replace(Vec::new())
         } else {
@@ -7468,7 +7472,7 @@ impl Inferer<'_> {
                     // stays `void`.
                     Type::Unknown
                 } else {
-                    self.unify_returns(&collected)
+                    self.unify_returns(&self.returned_types(collected))
                 };
                 (ClosureBody::Block(id), t)
             }
@@ -7483,6 +7487,7 @@ impl Inferer<'_> {
         self.current_type_predicate = prev_predicate;
         self.inferred_returns = prev_collect;
         self.current_return = prev_return;
+        self.returns_keep_literals = prev_keeps_returned_literals;
         self.scopes.pop();
 
         // when the arrow has an explicit return-type
@@ -7549,6 +7554,25 @@ impl Inferer<'_> {
     /// return every other one is `assignable` to, in whichever order they
     /// appear: each returned value has to fit the closure's type. None such →
     /// a diagnostic, plus `Type::Error` to keep downstream silent.
+    /// The types of a block body's returns to unify. Literal types kept for a
+    /// bare type parameter (see `returns_keep_literals`) widen when no one of
+    /// them covers the rest, as they would have without it: tsc would infer
+    /// their union, which one return type can't be.
+    fn returned_types(&self, collected: Vec<(Type, Span)>) -> Vec<(Type, Span)> {
+        let covered = collected.iter().any(|(candidate, _)| {
+            collected
+                .iter()
+                .all(|(other, _)| assignable(other, candidate, self.resolver()))
+        });
+        if !self.returns_keep_literals || covered {
+            return collected;
+        }
+        collected
+            .into_iter()
+            .map(|(ty, span)| (ty.widen_literal(), span))
+            .collect()
+    }
+
     fn unify_returns(&mut self, collected: &[(Type, Span)]) -> Type {
         if collected.is_empty() {
             return Type::Void;

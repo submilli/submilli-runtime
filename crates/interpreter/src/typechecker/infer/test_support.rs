@@ -121,6 +121,7 @@ pub(super) fn with_source_inferer(source: &str, test: impl FnOnce(&mut super::In
         pattern_sources: BTreeMap::new(),
         literal_freshness: super::literal_freshness::LiteralFreshness::default(),
         keeps_literal_types: false,
+        returns_keep_literals: false,
         captured_mutators: bindings.mutators,
         last_assignments: bindings.last_assignments,
         nested_function_creation_points: bindings.nested_function_creation_points,

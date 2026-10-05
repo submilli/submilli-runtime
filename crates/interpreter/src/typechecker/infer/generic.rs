@@ -1248,8 +1248,10 @@ impl Inferer<'_> {
                     self.arguments_hinted_by_expected_result.insert(arg_id);
                 }
                 let enclosing = self.start_object_argument_inference(arg_id, &param_ty, sub)?;
+                let keeps_literal = literal_types.keeps(&param_ty);
                 let inferred =
                     self.with_inferred_positions(arg_id, &param_ty, &literal_inferred, |this| {
+                        this.keeps_literal_types = keeps_literal;
                         this.infer_expr(arg_id, Some(&hint))
                     });
                 self.finish_object_argument_inference(enclosing, sub);
@@ -1620,20 +1622,28 @@ impl Inferer<'_> {
     }
 }
 
-/// The type parameters of a call whose arguments' fresh literal types widen,
-/// as in tsc, so the result can hold other values: `box(c)` with
-/// `const c = "a"` is a `{ v: string }`. That is one every parameter names at
-/// its top level (one nested in another, as in `append<T>(a: T[], x: T)`, has
-/// candidates tsc doesn't widen), unless its sole candidate is passed for a
-/// type parameter the result is (`id<T>(x: T): T`, or a union naming it).
-/// An annotated literal type is not fresh and stays.
+/// What a call does with the literal type of an argument passed straight for
+/// one of its inferred type parameters, as tsc does: a parameter the result
+/// is (`id<T>(x: T): T`, or a union naming it) keeps the literal (`id(1)` is
+/// `1`), and any other widens a fresh one (`box(c)` with `const c = "a"`
+/// is a `{ v: string }`), so the result can hold other values. An annotated
+/// literal type is not fresh and stays.
+///
+/// This applies only to a type parameter every parameter names at its top
+/// level: one nested in another (`append<T>(a: T[], x: T)`) has candidates
+/// tsc doesn't widen. A literal is kept only when its argument is the type
+/// parameter's sole candidate: tsc would infer a union of several, which a
+/// conflicting binding can't express, so those widen (`two(c, "x")` binds
+/// `string`).
 struct LiteralTypeArguments {
+    kept: Vec<String>,
     widened: Vec<String>,
 }
 
 impl LiteralTypeArguments {
     fn new(args: &[(ExprId, Type)], ret: &Type, inferred_generics: &[String]) -> Self {
         let in_result = top_level_type_params(ret);
+        let mut kept = Vec::new();
         let mut widened = Vec::new();
         for name in inferred_generics {
             let mentioning: Vec<&Type> = args
@@ -1648,11 +1658,20 @@ impl LiteralTypeArguments {
                 continue;
             }
             let sole_candidate = mentioning.len() == 1;
-            if !(sole_candidate && in_result.contains(&name.as_str())) {
+            if sole_candidate && in_result.contains(&name.as_str()) {
+                kept.push(name.clone());
+            } else {
                 widened.push(name.clone());
             }
         }
-        Self { widened }
+        Self { kept, widened }
+    }
+
+    /// Whether an argument for `param` keeps its literal type.
+    fn keeps(&self, param: &Type) -> bool {
+        top_level_type_params(param)
+            .iter()
+            .any(|name| self.kept.iter().any(|kept| kept == name))
     }
 
     /// Whether an argument for `param` widens its fresh literal types.
