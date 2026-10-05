@@ -36,8 +36,8 @@ flat names listed. A dash means the form doesn't exist.
 | `mcp_allowed_hosts` | `--mcp-allowed-host`, repeatable | `SUBMILLI_MCP_ALLOWED_HOSTS`, comma-separated | list of `host[:port]` | `[]` | `Host` headers the MCP endpoint accepts beside the loopback names. See [`mcp_allowed_hosts`](#mcp_allowed_hosts). |
 | `mcp_oauth` | — | — | block | no providers | OAuth client registrations for MCP servers. See [`mcp_oauth`](#mcp_oauth). |
 | `github_token_file` | — | — | path | none | GitHub token for package installs. See [`github_token_file`](#github_token_file). |
-| `database_path` | `--database-path` | `SUBMILLI_DATABASE_PATH` | path | `$SUBMILLI_HOME/server/db/submilli.db` | SQLite database file. See [Database](#database). |
-| `blueprint_dir` | `--blueprint-dir` | `SUBMILLI_BLUEPRINT_DIR` | path | `$SUBMILLI_HOME/server/blueprints` | Source for the one-time blueprint import. See [Directories](#directories). |
+| `database_path` | `--database-path` | `SUBMILLI_DATABASE_PATH` | path | `$SUBMILLI_HOME/server/db/submilli.db` | SQLite database file. |
+| `blueprint_dir` | `--blueprint-dir` | `SUBMILLI_BLUEPRINT_DIR` | path | `$SUBMILLI_HOME/server/blueprints` | Obsolete. |
 | `session_store_dir` | `--session-store-dir` | `SUBMILLI_SESSION_STORE_DIR` | path | `$SUBMILLI_HOME/server/sessions` | Session lifecycle records. |
 | `vfs_session_dir` | `--vfs-session-dir` | `SUBMILLI_VFS_SESSION_DIR` | path | `$SUBMILLI_HOME/server/vfs/sessions` | Files of `per_session` filesystems. |
 | `vfs_ephemeral_dir` | `--vfs-ephemeral-dir` | `SUBMILLI_VFS_EPHEMERAL_DIR` | path | the OS temp directory | Scratch directories of `ephemeral` filesystems. |
@@ -181,7 +181,7 @@ mcp_allowed_hosts:
 
 | Setting | Holds | Default |
 | --- | --- | --- |
-| `blueprint_dir` | Source files for the one-time blueprint import. | `$SUBMILLI_HOME/server/blueprints` |
+| `blueprint_dir` | Obsolete. | `$SUBMILLI_HOME/server/blueprints` |
 | `session_store_dir` | Open sessions' lifecycle records, so sessions and idle timeouts survive a restart. | `$SUBMILLI_HOME/server/sessions` |
 | `vfs_session_dir` | The files of each session with a `per_session` filesystem. | `$SUBMILLI_HOME/server/vfs/sessions` |
 | `vfs_ephemeral_dir` | One directory per run of an `ephemeral` filesystem, deleted when the run ends. | The OS temp directory |
@@ -191,41 +191,6 @@ mcp_allowed_hosts:
 
 The server creates each directory it needs. It also reads the CLI's package
 store, `$SUBMILLI_HOME/packages`, as a read-only fallback.
-
-## Database
-
-`database_path` names the SQLite file. The server creates its parent directory
-and applies embedded schema migrations before accepting requests. A failed
-migration or a database from a newer server version stops startup.
-
-Mount and persist the containing `db/` directory, including the journal and
-lock files. SQLite requires local or block-backed storage. Each database has
-one owning server process.
-
-On startup with an empty blueprint revision table, the server imports revision
-files from `blueprint_dir` and their active selections from `index.json` in one
-transaction. Stop the old server before upgrading. A failed import rolls back
-and leaves the files in place.
-
-After commit, the server renames the entire source directory to `archive/blueprints/`
-beside the source directory: by default, `~/.submilli/server/archive/blueprints/`.
-The move is atomic and includes every file and subdirectory. The source and archive
-must share a filesystem. An existing archive directory is never replaced.
-The source must be a real directory, not a symbolic link, and must not contain
-the open database.
-
-An archive failure stops startup after the database commit. On retry, the server
-checks the source revisions against immutable database history and retries
-archiving without restoring old active selections. Conflicting source files stop
-startup. An absent or empty source needs no import. Without an index, revision
-files become inactive history.
-
-Archived files are not read on later startups. They contain no subsequent
-database updates and cannot serve as a current downgrade copy.
-
-Unreadable files, a corrupt index, or missing indexed revisions stop the
-import. Readable YAML that no longer validates is retained. Its active name
-remains reserved and its YAML can be read, replaced, or deleted through the API.
 
 ## `secret_store`
 
