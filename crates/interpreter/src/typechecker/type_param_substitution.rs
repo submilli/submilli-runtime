@@ -210,6 +210,9 @@ struct Unifier<'a> {
     /// Whether this unifies a call argument, which replaces a binding taken
     /// from the expected result type when it doesn't fit it.
     is_argument: bool,
+    /// Whether the walk is inside a function type's parameter, where an
+    /// argument may be wider than the type parameter's binding.
+    contravariant: bool,
 }
 
 impl<'a> Unifier<'a> {
@@ -254,6 +257,7 @@ impl<'a> Unifier<'a> {
                 return match self.unify(&resolved, &arg_resolved) {
                     Ok(()) => Ok(()),
                     Err(_) if self.accepts_as_subtype(&arg_resolved, &resolved) => Ok(()),
+                    Err(_) if self.accepts_as_supertype(&arg_resolved, &resolved) => Ok(()),
                     Err(_) if replaceable => {
                         self.sub.bindings.insert(name.clone(), arg_ty.clone());
                         Ok(())
@@ -310,7 +314,7 @@ impl<'a> Unifier<'a> {
                     });
                 }
                 for (p, a) in pa.iter().zip(pb.iter()) {
-                    self.without_subtype_widening(|u| u.unify(p, a))?;
+                    self.in_function_parameter(|u| u.unify(p, a))?;
                 }
                 self.unify(ra, rb)
             }
@@ -525,6 +529,7 @@ impl<'a> Unifier<'a> {
             assumed_pairs: Vec::new(),
             subtype_widening: false,
             is_argument: false,
+            contravariant: false,
         }
     }
 
@@ -535,6 +540,30 @@ impl<'a> Unifier<'a> {
             return false;
         };
         self.subtype_widening && assignable(arg, bound, types)
+    }
+
+    /// Whether an argument's function parameter that failed to unify with an
+    /// already-bound type parameter is still acceptable, because the binding
+    /// is assignable to it: `[5].map((a: unknown) => ...)` passes each `number`
+    /// to a parameter that takes any value.
+    fn accepts_as_supertype(&self, arg: &Type, bound: &Type) -> bool {
+        let Some(types) = self.types else {
+            return false;
+        };
+        self.is_argument && self.contravariant && assignable(bound, arg, types)
+    }
+
+    /// Unify within a function type's parameter: subtype-widening stops (see
+    /// [`Self::without_subtype_widening`]), and the variance flips.
+    #[allow(clippy::result_large_err)]
+    fn in_function_parameter(
+        &mut self,
+        f: impl FnOnce(&mut Self) -> Result<(), UnifyError>,
+    ) -> Result<(), UnifyError> {
+        self.contravariant = !self.contravariant;
+        let out = self.without_subtype_widening(f);
+        self.contravariant = !self.contravariant;
+        out
     }
 
     /// Run `f` with subtype-widening off — function parameters are
