@@ -97,6 +97,10 @@ function eitherOf<T>(first: T | Box<number>, second: T | Box<number>): T | null 
   return first instanceof Box || second instanceof Box ? null : first;
 }
 
+function boxOrMark<T>(first: T | Box<number>, mark: T | "x"): T[] {
+  return [];
+}
+
 function textOrFlagBox(flag: boolean): Box<string> | Box<boolean> {
   return flag ? new Box("s") : new Box(true);
 }
@@ -170,6 +174,10 @@ function main(): void {
   const exactLater = eitherOf(new Box(true), new Box(1));
   const flagBox: Box<boolean> | null = exactLater;
   assert(flagBox === null, "a later argument its own member takes leaves the fallback");
+
+  const marked = boxOrMark(new Box(true), "x");
+  marked.push(new Box(false));
+  assert(marked.length === 1, "a literal its literal member takes leaves the fallback");
 
   const inferredList = listOrNumbers(lists(true));
   const fromList: string[] | null = inferredList;

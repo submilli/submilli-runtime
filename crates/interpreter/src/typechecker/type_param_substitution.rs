@@ -923,8 +923,9 @@ impl<'a> Unifier<'a> {
     }
 
     /// Whether one of `others` takes `arg`, keeping its bindings, when
-    /// `type_var` has a whole-union fallback. tsc infers nothing from such an
-    /// argument, so it must not bind the type parameter ahead of the fallback.
+    /// `type_var` has a whole-union fallback: tsc counts such an argument at
+    /// most as another candidate of the fallback's priority, so it must not
+    /// bind the type parameter ahead of the fallback.
     fn member_takes_beside_fallback(
         &mut self,
         type_var: &Type,
