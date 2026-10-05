@@ -68,6 +68,7 @@ separate resource/dependency backlog.
 | Policy and inventory baseline | Committed `46893ac3` | Three independent reviews, no findings; local links, commit references, 42-item coverage and diff checks passed |
 | R01 | Complete: retained | Keep compiler fatal-error architecture; evidence below; leaf simplifications remain assigned to their individual rows |
 | R02 | Complete: selectively simplified | Nine accepted local dispatch invariants; real validation/failure contracts retained; evidence below |
+| R03 | Complete: retained | Keep checked public arena/span/source contracts; no API redesign |
 
 ### R01 execution evidence
 
@@ -111,6 +112,25 @@ Graphify AST update completed with existing unsupported/partial-parse warnings.
 Accepted invariant evidence was appended to the linked SUB-633 source-site ledger;
 historical checkboxes remain unchanged. The commit containing this entry records
 the implementation; the documentation-only R01 commit is `c1af5940`.
+
+### R03 execution evidence
+
+`ExprId`/`StmtId` expose their u32 payload; the expression/statement vectors are
+private, but callers can fabricate IDs or pass IDs from a different AST. Public
+metadata and mutable node access can also introduce invalid references.
+`try_expr`, `try_stmt` and mutable counterparts accept IDs without an owner token.
+`arena::get`/`get_mut` therefore perform real public-boundary validation. Allocation
+and ID-width limits remain independent errors. Source APIs accept supplied spans,
+file IDs, offsets and positions and validate identity, bounds and UTF-8 boundaries.
+The checked-arena and checked-source integration tests exercise these contracts.
+
+Disposition: retain the existing checked APIs. Private accesses may be redundant
+after local construction, but introducing separate trusted-access APIs would add
+surface area without removing these public contracts. Leave their simple existing
+Result paths in place, as the policy permits. This closes R03's simplification
+decision without claiming a general implicit-index audit. Documentation-only;
+existing source/tests inspected, no runtime tests rerun. Three independent reviews
+reported no findings; diff checks passed. Completion is recorded by this commit.
 
 ## Completed fixes: candidates and decisions
 
