@@ -1,5 +1,1 @@
 types: 20 of 44 tsc entries compared, 0 differ
-
-errors:
-line 14: ours: expected `Pair<T, U>`, got `{ first: string; second: number }` (tsc accepts)
-line 15: ours: expected `{ first: T; second: U }`, got `Pair<string, number>` (tsc accepts)

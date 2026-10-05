@@ -147,6 +147,8 @@ pub fn infer_with_transitive_checked<'a>(
         current_type_predicate: None,
         inferred_returns: None,
         inference_source_literals: BTreeSet::new(),
+        arguments_hinted_by_expected_result: BTreeSet::new(),
+        object_argument_inference: None,
         generics_in_scope: Vec::new(),
         body_instantiations: Vec::new(),
         next_generic_param_id: 0,
@@ -404,6 +406,8 @@ pub fn infer_package_checked<'a>(
         current_type_predicate: None,
         inferred_returns: None,
         inference_source_literals: BTreeSet::new(),
+        arguments_hinted_by_expected_result: BTreeSet::new(),
+        object_argument_inference: None,
         generics_in_scope: Vec::new(),
         body_instantiations: Vec::new(),
         next_generic_param_id: 0,
@@ -787,6 +791,14 @@ pub(super) struct Inferer<'a> {
     /// Object literals inferred for their own type rather than checked against
     /// a declared one; see [`inference_sources`].
     pub(super) inference_source_literals: BTreeSet<crate::ExprId>,
+    /// Call arguments whose expected type comes partly from the call's own
+    /// expected result, so it guides their inference without being a
+    /// requirement: an argument that doesn't fit it decides the type parameter
+    /// instead.
+    pub(super) arguments_hinted_by_expected_result: BTreeSet<crate::ExprId>,
+    /// The object literal argument whose fields a generic call is inferring
+    /// one at a time; see [`generic::ObjectArgumentInference`].
+    pub(super) object_argument_inference: Option<generic::ObjectArgumentInference>,
     pub(super) generics_in_scope: Vec<Vec<String>>,
     /// Empty during the signature pass; populated with fresh `GenericParam` ids at body entry.
     pub(super) body_instantiations: Vec<BTreeMap<String, Type>>,

@@ -4,13 +4,19 @@ use std::collections::BTreeMap;
 
 use crate::Type;
 use crate::type_size::{TypeBudget, TypeLimits, TypeTooLarge, map_children};
-use crate::typechecker::infer::assignable::{TypeResolver, assignable, expand_alias_ref};
+use crate::typechecker::infer::assignable::{
+    TypeResolver, assignable, expand_alias_ref, expand_interface_data_shape,
+};
 use crate::typechecker::infer::type_aliases::rehydrate_alias_refs;
 
 /// BTreeMap for deterministic ordering (stable snapshots and error messages).
 #[derive(Default, Clone, Debug, PartialEq, Eq)]
 pub struct TypeParamSubstitution {
     bindings: BTreeMap<String, Type>,
+    /// Bindings taken from the type a call's result is expected to have, which
+    /// an argument may still replace: as in tsc, what the arguments say comes
+    /// first. One stays replaceable until an argument agrees with it.
+    from_expected_result: std::collections::BTreeSet<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -40,6 +46,7 @@ impl TypeParamSubstitution {
                 .zip(type_args.iter())
                 .map(|(name, ty)| (name.clone(), ty.clone()))
                 .collect(),
+            from_expected_result: Default::default(),
         }
     }
 
@@ -48,7 +55,33 @@ impl TypeParamSubstitution {
     /// receiver and is correct only when that declaration is the one the member
     /// was found on.
     pub fn from_bindings(bindings: BTreeMap<String, Type>) -> Self {
-        Self { bindings }
+        Self {
+            bindings,
+            from_expected_result: Default::default(),
+        }
+    }
+
+    /// Mark the bindings made since `before` as taken from the call's expected
+    /// result type, so an argument may replace them.
+    pub fn mark_from_expected_result(&mut self, before: &TypeParamSubstitution) {
+        for name in self.bindings.keys() {
+            if !before.bindings.contains_key(name) {
+                self.from_expected_result.insert(name.clone());
+            }
+        }
+    }
+
+    /// Whether `ty` mentions a type parameter bound only from the call's
+    /// expected result type.
+    pub fn mentions_expected_result_binding(&self, ty: &Type) -> bool {
+        super::infer::expr::mentions_type_var(ty, &|name| self.from_expected_result.contains(name))
+    }
+
+    /// Make the bindings from the expected result type that `ty` mentions
+    /// final, so no argument replaces them.
+    pub fn keep_expected_result_bindings(&mut self, ty: &Type) {
+        self.from_expected_result
+            .retain(|name| !super::infer::expr::mentions_type_var(ty, &|var| var == name));
     }
 
     pub fn insert(&mut self, name: String, ty: Type) {
@@ -147,8 +180,16 @@ impl TypeParamSubstitution {
         }
         let mut unifier = Unifier::new(self, Some(types), types.limits);
         unifier.subtype_widening = true;
+        unifier.is_argument = true;
         unifier.unify(param_ty, arg_ty)
     }
+}
+
+/// A [`Unifier`]'s state before a speculative attempt.
+struct Snapshot {
+    bindings: BTreeMap<String, Type>,
+    from_expected_result: std::collections::BTreeSet<String>,
+    assumed_len: usize,
 }
 
 /// The mutable state of one `unify` call: the bindings being built, the
@@ -166,6 +207,9 @@ struct Unifier<'a> {
     /// [`unify_argument`](TypeParamSubstitution::unify_argument), and cleared
     /// while descending into a function *parameter*, which is contravariant.
     subtype_widening: bool,
+    /// Whether this unifies a call argument, which replaces a binding taken
+    /// from the expected result type when it doesn't fit it.
+    is_argument: bool,
 }
 
 impl<'a> Unifier<'a> {
@@ -206,9 +250,14 @@ impl<'a> Unifier<'a> {
                 }
                 let arg_resolved = self.sub.apply_or_record(arg_ty, self.limits);
                 // Recurse instead of `==` to peel aliases at every level; remap to Conflict to pin the offending param.
+                let replaceable = self.is_argument && self.sub.from_expected_result.remove(name);
                 return match self.unify(&resolved, &arg_resolved) {
                     Ok(()) => Ok(()),
                     Err(_) if self.accepts_as_subtype(&arg_resolved, &resolved) => Ok(()),
+                    Err(_) if replaceable => {
+                        self.sub.bindings.insert(name.clone(), arg_ty.clone());
+                        Ok(())
+                    }
                     Err(_) => Err(UnifyError::Conflict {
                         name: name.clone(),
                         prev: resolved,
@@ -348,6 +397,27 @@ impl<'a> Unifier<'a> {
                 }
                 Ok(())
             }
+            // A data-only interface and an object type are mutually assignable
+            // (spec §2.3), so one infers from the other through its fields.
+            (Type::InterfaceRef { .. }, Type::Object { .. })
+            | (Type::Object { .. }, Type::InterfaceRef { .. }) => {
+                let expanded = self.types.and_then(|types| {
+                    let param = expand_interface_data_shape(param_ty, types);
+                    let arg = expand_interface_data_shape(arg_ty, types);
+                    Some((
+                        param.unwrap_or_else(|| param_ty.clone()),
+                        arg.unwrap_or_else(|| arg_ty.clone()),
+                    ))
+                    .filter(|(param, arg)| param != param_ty || arg != arg_ty)
+                });
+                match expanded {
+                    Some((param, arg)) => self.unify(&param, &arg),
+                    None => Err(UnifyError::Mismatch {
+                        expected: param_ty.clone(),
+                        got: arg_ty.clone(),
+                    }),
+                }
+            }
             // Two-pass union-vs-union: pair matching members first, then unify leftovers in order.
             (Type::Union(pa), Type::Union(pb)) => {
                 if pa.len() != pb.len() {
@@ -454,6 +524,7 @@ impl<'a> Unifier<'a> {
             limits,
             assumed_pairs: Vec::new(),
             subtype_widening: false,
+            is_argument: false,
         }
     }
 
@@ -488,13 +559,18 @@ impl<'a> Unifier<'a> {
     /// A speculative attempt's rollback point. The assumption set rolls back
     /// with the bindings: a pair assumed to hold inside an attempt that failed
     /// was never proved, and leaving it behind would let a later mismatch pass.
-    fn snapshot(&self) -> (BTreeMap<String, Type>, usize) {
-        (self.sub.bindings.clone(), self.assumed_pairs.len())
+    fn snapshot(&self) -> Snapshot {
+        Snapshot {
+            bindings: self.sub.bindings.clone(),
+            from_expected_result: self.sub.from_expected_result.clone(),
+            assumed_len: self.assumed_pairs.len(),
+        }
     }
 
-    fn restore(&mut self, (bindings, assumed_len): (BTreeMap<String, Type>, usize)) {
-        self.sub.bindings = bindings;
-        self.assumed_pairs.truncate(assumed_len);
+    fn restore(&mut self, snapshot: Snapshot) {
+        self.sub.bindings = snapshot.bindings;
+        self.sub.from_expected_result = snapshot.from_expected_result;
+        self.assumed_pairs.truncate(snapshot.assumed_len);
     }
 
     /// Rehydrate any recursion back-edge in `ty` to its inline form. A no-op

@@ -696,6 +696,7 @@ impl Inferer<'_> {
         // reject as expected.
         if let Some(want) = expected
             && !arrow_reported
+            && !self.arguments_hinted_by_expected_result.contains(&expr_id)
             && !assignable(&ty, want, self.resolver())
         {
             let has_structural_diff = super::type_diff::format_type_diff(want, &ty).is_some();
@@ -4995,13 +4996,16 @@ impl Inferer<'_> {
                     // wins (the override is invariant, the surrounding
                     // hint can only restate it).
                     let override_sig = override_field_signature(&field.name.name);
-                    let hint: Option<Type> = override_sig.clone().or_else(|| {
-                        expected_fields
-                            .as_ref()
-                            .and_then(|m| m.get(&field.name.name))
-                            .map(|f| f.ty.clone())
-                            .or_else(|| expected_index.as_ref().map(|i| (*i.value).clone()))
-                    });
+                    let hint: Option<Type> = override_sig
+                        .clone()
+                        .or_else(|| self.object_argument_field_hint(literal, &field.name.name))
+                        .or_else(|| {
+                            expected_fields
+                                .as_ref()
+                                .and_then(|m| m.get(&field.name.name))
+                                .map(|f| f.ty.clone())
+                                .or_else(|| expected_index.as_ref().map(|i| (*i.value).clone()))
+                        });
                     let previous_hint = self.object_this_hint.take();
                     if matches!(
                         self.ast
@@ -5024,6 +5028,7 @@ impl Inferer<'_> {
                         inferred_fields.remove(&field.value),
                     )?;
                     self.object_this_hint = previous_hint;
+                    self.infer_from_object_argument_field(literal, &field.name.name, &value_ty);
                     if !has_spread {
                         object_members.push(crate::TypedObjectMember::Value(typed_value));
                     }

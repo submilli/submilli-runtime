@@ -1139,7 +1139,7 @@ fn weak_type_rejects(
 /// `Type::Object` of its properties. Returns `None` for non-interfaces,
 /// method-bearing interfaces, or unresolvable names — callers treat `None` as
 /// "not structurally assignable".
-pub(super) fn expand_interface_data_shape(ty: &Type, types: TypeResolver) -> Option<Type> {
+pub(crate) fn expand_interface_data_shape(ty: &Type, types: TypeResolver) -> Option<Type> {
     let Type::InterfaceRef {
         mangled,
         name,

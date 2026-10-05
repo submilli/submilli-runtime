@@ -957,6 +957,12 @@ impl Inferer<'_> {
     /// A mismatch is reported later, where the call's result is checked
     /// against the expected type.
     fn bind_from_expected_result(&self, sub: &mut TypeParamSubstitution, ret: &Type, want: &Type) {
+        let before = sub.clone();
+        self.bind_from_expected_type(sub, ret, want);
+        sub.mark_from_expected_result(&before);
+    }
+
+    fn bind_from_expected_type(&self, sub: &mut TypeParamSubstitution, ret: &Type, want: &Type) {
         let unifies_with_whole_union = matches!(ret.peel(), Type::TypeVar(_) | Type::Union(_));
         let members = match want.peel() {
             Type::Union(members) if !unifies_with_whole_union => members,
@@ -1043,6 +1049,97 @@ impl Inferer<'_> {
         Ok(())
     }
 
+    /// Start inferring an object literal argument's fields one at a time, when
+    /// one of them is a function literal with an unannotated parameter: as in
+    /// tsc, a type parameter an earlier field binds then types that function's
+    /// parameters. `test({ produce: (n: number) => n, consume: (x) => ... })`
+    /// types `x` from `produce`. Returns the inference this one interrupts.
+    fn start_object_argument_inference(
+        &mut self,
+        arg: ExprId,
+        param_ty: &Type,
+        sub: &TypeParamSubstitution,
+    ) -> Result<Option<ObjectArgumentInference>, CompilerFailure> {
+        let enclosing = self.object_argument_inference.take();
+        let ExprKind::ObjectLiteral { members } = self
+            .ast
+            .try_expr(arg)
+            .map_err(super::arena_failure)?
+            .kind
+            .clone()
+        else {
+            return Ok(enclosing);
+        };
+        let mut has_context_sensitive_field = false;
+        for member in &members {
+            if let crate::ObjectLiteralMember::Field(field) = member {
+                has_context_sensitive_field |= self.is_context_sensitive_function(field.value)?;
+            }
+        }
+        let fields = match param_ty.peel() {
+            Type::Object { fields, .. } => Some(fields.clone()),
+            interface @ Type::InterfaceRef { .. } => {
+                match super::assignable::expand_interface_data_shape(interface, self.resolver()) {
+                    Some(Type::Object { fields, .. }) => Some(fields),
+                    _ => None,
+                }
+            }
+            _ => None,
+        };
+        if let Some(fields) = fields.filter(|_| has_context_sensitive_field) {
+            self.object_argument_inference = Some(ObjectArgumentInference {
+                literal: arg,
+                fields,
+                sub: sub.clone(),
+            });
+        }
+        Ok(enclosing)
+    }
+
+    /// Keep what the fields of the argument bound, and resume `enclosing`.
+    fn finish_object_argument_inference(
+        &mut self,
+        enclosing: Option<ObjectArgumentInference>,
+        sub: &mut TypeParamSubstitution,
+    ) {
+        if let Some(finished) = std::mem::replace(&mut self.object_argument_inference, enclosing) {
+            *sub = finished.sub;
+        }
+    }
+
+    /// The hint for field `name` of `literal`, with what its earlier fields
+    /// bound, if the literal's fields are being inferred one at a time.
+    pub(super) fn object_argument_field_hint(&self, literal: ExprId, name: &str) -> Option<Type> {
+        let inference = self
+            .object_argument_inference
+            .as_ref()
+            .filter(|inference| inference.literal == literal)?;
+        let field = inference.fields.get(name)?;
+        Some(inference.sub.apply_or_record(&field.ty, &self.type_limits))
+    }
+
+    /// Bind the type parameters field `name` of `literal` determines, for the
+    /// fields after it. A mismatch is reported when the whole argument is.
+    pub(super) fn infer_from_object_argument_field(
+        &mut self,
+        literal: ExprId,
+        name: &str,
+        value_ty: &Type,
+    ) {
+        let Some(mut inference) = self
+            .object_argument_inference
+            .take_if(|inference| inference.literal == literal)
+        else {
+            return;
+        };
+        if let Some(field) = inference.fields.get(name) {
+            let _ = inference
+                .sub
+                .unify_argument(&field.ty, value_ty, self.resolver());
+        }
+        self.object_argument_inference = Some(inference);
+    }
+
     fn function_literal_params(
         &self,
         expr: ExprId,
@@ -1126,10 +1223,18 @@ impl Inferer<'_> {
                 // An oversized hint fails at the argument's own checkpoint.
                 let hint = sub.apply_or_record(&param_ty, &self.type_limits);
                 let errors_before = self.error_count();
-                let (typed_id, arg_ty) =
+                let hinted_by_expected_result = sub.mentions_expected_result_binding(&param_ty);
+                if hinted_by_expected_result {
+                    self.arguments_hinted_by_expected_result.insert(arg_id);
+                }
+                let enclosing = self.start_object_argument_inference(arg_id, &param_ty, sub)?;
+                let inferred =
                     self.with_inferred_positions(arg_id, &param_ty, &literal_inferred, |this| {
                         this.infer_expr(arg_id, Some(&hint))
-                    })?;
+                    });
+                self.finish_object_argument_inference(enclosing, sub);
+                self.arguments_hinted_by_expected_result.remove(&arg_id);
+                let (typed_id, arg_ty) = inferred?;
                 typed_slots[i] = Some(typed_id);
                 let missing_slot = i >= fixed_count && !has_rest;
                 if missing_slot || matches!(arg_ty, Type::Error) {
@@ -1137,6 +1242,11 @@ impl Inferer<'_> {
                 }
                 // An error inferring the argument already covers a mismatch here.
                 let already_reported = self.error_count() > errors_before;
+                // The argument was already reported against the expected
+                // result's binding; replacing it would report the result too.
+                if already_reported {
+                    sub.keep_expected_result_bindings(&param_ty);
+                }
                 if let Err(error) = sub.unify_argument(&param_ty, &arg_ty, self.resolver()) {
                     self.unify_argument_error(
                         error,
@@ -1495,6 +1605,15 @@ fn function_part(ty: &Type) -> Option<&Type> {
         }
         _ => None,
     }
+}
+
+/// An object literal argument whose fields bind a generic call's type
+/// parameters one at a time, for the fields after them.
+pub(crate) struct ObjectArgumentInference {
+    literal: ExprId,
+    /// The parameter's fields, in terms of the type parameters.
+    fields: std::collections::BTreeMap<String, crate::ObjectField>,
+    sub: TypeParamSubstitution,
 }
 
 /// A coarse category of value, used to skip the union members a call's result
