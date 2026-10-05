@@ -9182,14 +9182,16 @@ impl Inferer<'_> {
         }
         let resolver = self.resolver();
         let target_members = narrowing::union_members(target);
-        narrowing::union_members(source).into_iter().any(|source_member| {
-            let widened = widen_assertion_source(source_member);
-            target_members.iter().any(|target_member| {
-                assignable(source_member, target_member, resolver)
-                    || assignable(target_member, source_member, resolver)
-                    || assignable(target_member, &widened, resolver)
+        narrowing::union_members(source)
+            .into_iter()
+            .any(|source_member| {
+                let widened = widen_assertion_source(source_member);
+                target_members.iter().any(|target_member| {
+                    assignable(source_member, target_member, resolver)
+                        || assignable(target_member, source_member, resolver)
+                        || assignable(target_member, &widened, resolver)
+                })
             })
-        })
     }
 
     /// `x instanceof Foo` — a runtime class test. `Foo` must name a class (interfaces aren't
