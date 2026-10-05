@@ -1,4 +1,4 @@
-types: 40 of 63 tsc entries compared, 11 differ
+types: 40 of 63 tsc entries compared, 9 differ
 
 line 12: x
   tsc:  0
@@ -35,14 +35,6 @@ line 62: x
 line 65: x
   tsc:  never
   ours: 0 | 1 | string | true
-
-line 68: x
-  tsc:  string | true
-  ours: 0 | 1 | string | true
-
-line 89: x
-  tsc:  string | number | false
-  ours: number | string | boolean
 
 errors:
 line 11: ours: `case` label must be a literal (string, number, boolean, `null`, or enum member) (tsc accepts)

@@ -8003,9 +8003,12 @@ impl Inferer<'_> {
     ) -> Result<(TypedExprKind, Type), CompilerFailure> {
         self.keeps_literal_types = keeps_literal;
         let (typed_lhs, lhs_ty) = self.infer_expr(lhs, None)?;
+        // The right side runs only where the left is `null`.
+        let rhs_env = self.null_operand_env(typed_lhs)?;
         self.keeps_literal_types = keeps_literal;
-        let (typed_rhs, rhs_ty) =
-            self.infer_conditional_operand(rhs, &super::narrowing::NarrowEnv::new(), None)?;
+        let (typed_rhs, rhs_ty) = self.infer_conditional_operand(rhs, &rhs_env, None)?;
+        let rhs_span = self.ast.try_expr(rhs).map_err(super::arena_failure)?.span;
+        let typed_rhs = self.wrap_narrow_exprs(typed_rhs, &rhs_env, rhs_span)?;
 
         // `void` has no value to test for null. JavaScript would always take
         // the right side, which a left side that is `void` on only some paths

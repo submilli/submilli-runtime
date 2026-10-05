@@ -1,7 +1,4 @@
-line 49, 51, 59, 60, 66, 68, 85, 87 extra: by-design spec §1.6 `&&` keeps `number` and `boolean` whole in its falsy part, where tsc narrows to `0` or `false`
-line 75, 77 extra: bug SUB-1212 an assignment on the right of `&&` doesn't narrow its target in that `&&`'s true branch; also by-design spec §1.6 `&&` keeps `number` and `boolean` whole in its falsy part, where tsc narrows to `0` or `false`
-line 80 extra: bug SUB-1212 an assignment on the right of `&&` doesn't narrow its target in that `&&`'s true branch
-line 49, 51, 59, 60, 66, 68, 85, 87 type: by-design spec §1.6 `&&` keeps `number` and `boolean` whole in its falsy part, where tsc narrows to `0` or `false`
+line 49, 51, 59, 60, 66, 68 extra: by-design spec §1.6 `&&` keeps `number` whole in its falsy part, where tsc narrows to `0`
+line 49, 51, 59, 60, 66, 68, 87 type: by-design spec §1.6 `&&` keeps `number` whole in its falsy part, where tsc narrows to `0`
 line 52, 53, 69, 78, 88 type: bug SUB-1156 narrowing doesn't follow a value through the truthiness of an assignment
-line 75, 77 type: bug SUB-1212 an assignment on the right of `&&` doesn't narrow its target in that `&&`'s true branch; also by-design spec §1.6 `&&` keeps `number` and `boolean` whole in its falsy part, where tsc narrows to `0` or `false`
-line 80 type: bug SUB-1212 an assignment on the right of `&&` doesn't narrow its target in that `&&`'s true branch
+line 77 type: bug SUB-1204 a literal widens to its base type where tsc keeps the literal type; also by-design spec §1.6 `&&` keeps `number` whole in its falsy part, where tsc narrows to `0`

@@ -1,4 +1,4 @@
-types: 18 of 27 tsc entries compared, 4 differ
+types: 18 of 27 tsc entries compared, 3 differ
 
 line 5: (x = "") && (x = 0)
   tsc:  ""
@@ -7,10 +7,6 @@ line 5: (x = "") && (x = 0)
 line 6: x
   tsc:  string | number
   ours: number | string | boolean
-
-line 9: cond && (x = 0)
-  tsc:  false | 0
-  ours: 0 | boolean
 
 line 10: x
   tsc:  string | number

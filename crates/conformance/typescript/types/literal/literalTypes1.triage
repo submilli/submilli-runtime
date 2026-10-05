@@ -2,4 +2,3 @@ line 11, 14, 17, 27, 30 extra: bug SUB-1196 (non-literal `case` label) a `case` 
 line 61, 64 extra: bug SUB-1203 a `case` value must be assignable to the discriminant, where tsc needs only overlap
 line 12, 15, 18, 21, 28, 31, 34 type: bug SUB-1196 (non-literal `case` label) a `case` label must be a literal
 line 62, 65 type: bug SUB-1203 a `case` value must be assignable to the discriminant, where tsc needs only overlap
-line 68, 89 type: bug SUB-1212 a `switch` default doesn't exclude matched literals from a union with a non-literal member

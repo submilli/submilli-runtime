@@ -1,241 +1,137 @@
-types: 213 of 378 tsc entries compared, 53 differ
+types: 213 of 378 tsc entries compared, 27 differ
 
 line 33: { ...config.a !== null && { a: config.a.toString() }, ...config.b !== null && { b: config.b.toString() }, ...config.c !== null && { c: config.c.toString() }, ...config.d !== null && { d: config.d.toString() }, ...config.e !== null && { e: config.e.toString() }, ...config.f !== null && { f: config.f.toString() }, ...config.g !== null && { g: config.g.toString() }, ...config.h !== null && { h: config.h.toString() }, ...config.i !== null && { i: config.i.toString() }, ...config.j !== null && { j: config.j.toString() }, ...config.k !== null && { k: config.k.toString() }, ...config.l !== null && { l: config.l.toString() }, ...config.m !== null && { m: config.m.toString() }, ...config.n !== null && { n: config.n.toString() }, ...config.o !== null && { o: config.o.toString() }, ...config.p !== null && { p: config.p.toString() }, ...config.q !== null && { q: config.q.toString() }, ...config.r !== null && { r: config.r.toString() }, ...config.s !== null && { s: config.s.toString() }, ...config.t !== null && { t: config.t.toString() }, ...config.u !== null && { u: config.u.toString() }, ...config.v !== null && { v: config.v.toString() }, ...config.w !== null && { w: config.w.toString() }, ...config.x !== null && { x: config.x.toString() }, ...config.y !== null && { y: config.y.toString() }, ...config.z !== null && { z: config.z.toString() } }
   tsc:  { z?: string | undefined; y?: string | undefined; x?: string | undefined; w?: string | undefined; v?: string | undefined; u?: string | undefined; t?: string | undefined; s?: string | undefined; r?: string | undefined; q?: string | undefined; p?: string | undefined; o?: string | undefined; n?: string | undefined; m?: string | undefined; l?: string | undefined; k?: string | undefined; j?: string | undefined; i?: string | undefined; h?: string | undefined; g?: string | undefined; f?: string | undefined; e?: string | undefined; d?: string | undefined; c?: string | undefined; b?: string | undefined; a?: string | undefined; }
   ours: Props
 
-line 34: config.a !== null && { a: config.a.toString() }
-  tsc:  false | { a: string; }
-  ours: boolean | { a: string }
-
 line 34: config.a
   tsc:  number
   ours: number | null
-
-line 35: config.b !== null && { b: config.b.toString() }
-  tsc:  false | { b: string; }
-  ours: boolean | { b: string }
 
 line 35: config.b
   tsc:  number
   ours: number | null
 
-line 36: config.c !== null && { c: config.c.toString() }
-  tsc:  false | { c: string; }
-  ours: boolean | { c: string }
-
 line 36: config.c
   tsc:  number
   ours: number | null
-
-line 37: config.d !== null && { d: config.d.toString() }
-  tsc:  false | { d: string; }
-  ours: boolean | { d: string }
 
 line 37: config.d
   tsc:  number
   ours: number | null
 
-line 38: config.e !== null && { e: config.e.toString() }
-  tsc:  false | { e: string; }
-  ours: boolean | { e: string }
-
 line 38: config.e
   tsc:  number
   ours: number | null
-
-line 39: config.f !== null && { f: config.f.toString() }
-  tsc:  false | { f: string; }
-  ours: boolean | { f: string }
 
 line 39: config.f
   tsc:  number
   ours: number | null
 
-line 40: config.g !== null && { g: config.g.toString() }
-  tsc:  false | { g: string; }
-  ours: boolean | { g: string }
-
 line 40: config.g
   tsc:  number
   ours: number | null
-
-line 41: config.h !== null && { h: config.h.toString() }
-  tsc:  false | { h: string; }
-  ours: boolean | { h: string }
 
 line 41: config.h
   tsc:  number
   ours: number | null
 
-line 42: config.i !== null && { i: config.i.toString() }
-  tsc:  false | { i: string; }
-  ours: boolean | { i: string }
-
 line 42: config.i
   tsc:  number
   ours: number | null
-
-line 43: config.j !== null && { j: config.j.toString() }
-  tsc:  false | { j: string; }
-  ours: boolean | { j: string }
 
 line 43: config.j
   tsc:  number
   ours: number | null
 
-line 44: config.k !== null && { k: config.k.toString() }
-  tsc:  false | { k: string; }
-  ours: boolean | { k: string }
-
 line 44: config.k
   tsc:  number
   ours: number | null
-
-line 45: config.l !== null && { l: config.l.toString() }
-  tsc:  false | { l: string; }
-  ours: boolean | { l: string }
 
 line 45: config.l
   tsc:  number
   ours: number | null
 
-line 46: config.m !== null && { m: config.m.toString() }
-  tsc:  false | { m: string; }
-  ours: boolean | { m: string }
-
 line 46: config.m
   tsc:  number
   ours: number | null
-
-line 47: config.n !== null && { n: config.n.toString() }
-  tsc:  false | { n: string; }
-  ours: boolean | { n: string }
 
 line 47: config.n
   tsc:  number
   ours: number | null
 
-line 48: config.o !== null && { o: config.o.toString() }
-  tsc:  false | { o: string; }
-  ours: boolean | { o: string }
-
 line 48: config.o
   tsc:  number
   ours: number | null
-
-line 49: config.p !== null && { p: config.p.toString() }
-  tsc:  false | { p: string; }
-  ours: boolean | { p: string }
 
 line 49: config.p
   tsc:  number
   ours: number | null
 
-line 50: config.q !== null && { q: config.q.toString() }
-  tsc:  false | { q: string; }
-  ours: boolean | { q: string }
-
 line 50: config.q
   tsc:  number
   ours: number | null
-
-line 51: config.r !== null && { r: config.r.toString() }
-  tsc:  false | { r: string; }
-  ours: boolean | { r: string }
 
 line 51: config.r
   tsc:  number
   ours: number | null
 
-line 52: config.s !== null && { s: config.s.toString() }
-  tsc:  false | { s: string; }
-  ours: boolean | { s: string }
-
 line 52: config.s
   tsc:  number
   ours: number | null
-
-line 53: config.t !== null && { t: config.t.toString() }
-  tsc:  false | { t: string; }
-  ours: boolean | { t: string }
 
 line 53: config.t
   tsc:  number
   ours: number | null
 
-line 54: config.u !== null && { u: config.u.toString() }
-  tsc:  false | { u: string; }
-  ours: boolean | { u: string }
-
 line 54: config.u
   tsc:  number
   ours: number | null
-
-line 55: config.v !== null && { v: config.v.toString() }
-  tsc:  false | { v: string; }
-  ours: boolean | { v: string }
 
 line 55: config.v
   tsc:  number
   ours: number | null
 
-line 56: config.w !== null && { w: config.w.toString() }
-  tsc:  false | { w: string; }
-  ours: boolean | { w: string }
-
 line 56: config.w
   tsc:  number
   ours: number | null
-
-line 57: config.x !== null && { x: config.x.toString() }
-  tsc:  false | { x: string; }
-  ours: boolean | { x: string }
 
 line 57: config.x
   tsc:  number
   ours: number | null
 
-line 58: config.y !== null && { y: config.y.toString() }
-  tsc:  false | { y: string; }
-  ours: boolean | { y: string }
-
 line 58: config.y
   tsc:  number
   ours: number | null
-
-line 59: config.z !== null && { z: config.z.toString() }
-  tsc:  false | { z: string; }
-  ours: boolean | { z: string }
 
 line 59: config.z
   tsc:  number
   ours: number | null
 
 errors:
-line 34: ours: cannot spread `boolean` into an object literal (tsc accepts)
-line 35: ours: cannot spread `boolean` into an object literal (tsc accepts)
-line 36: ours: cannot spread `boolean` into an object literal (tsc accepts)
-line 37: ours: cannot spread `boolean` into an object literal (tsc accepts)
-line 38: ours: cannot spread `boolean` into an object literal (tsc accepts)
-line 39: ours: cannot spread `boolean` into an object literal (tsc accepts)
-line 40: ours: cannot spread `boolean` into an object literal (tsc accepts)
-line 41: ours: cannot spread `boolean` into an object literal (tsc accepts)
-line 42: ours: cannot spread `boolean` into an object literal (tsc accepts)
-line 43: ours: cannot spread `boolean` into an object literal (tsc accepts)
-line 44: ours: cannot spread `boolean` into an object literal (tsc accepts)
-line 45: ours: cannot spread `boolean` into an object literal (tsc accepts)
-line 46: ours: cannot spread `boolean` into an object literal (tsc accepts)
-line 47: ours: cannot spread `boolean` into an object literal (tsc accepts)
-line 48: ours: cannot spread `boolean` into an object literal (tsc accepts)
-line 49: ours: cannot spread `boolean` into an object literal (tsc accepts)
-line 50: ours: cannot spread `boolean` into an object literal (tsc accepts)
-line 51: ours: cannot spread `boolean` into an object literal (tsc accepts)
-line 52: ours: cannot spread `boolean` into an object literal (tsc accepts)
-line 53: ours: cannot spread `boolean` into an object literal (tsc accepts)
-line 54: ours: cannot spread `boolean` into an object literal (tsc accepts)
-line 55: ours: cannot spread `boolean` into an object literal (tsc accepts)
-line 56: ours: cannot spread `boolean` into an object literal (tsc accepts)
-line 57: ours: cannot spread `boolean` into an object literal (tsc accepts)
-line 58: ours: cannot spread `boolean` into an object literal (tsc accepts)
-line 59: ours: cannot spread `boolean` into an object literal (tsc accepts)
+line 34: ours: cannot spread `false` into an object literal (tsc accepts)
+line 35: ours: cannot spread `false` into an object literal (tsc accepts)
+line 36: ours: cannot spread `false` into an object literal (tsc accepts)
+line 37: ours: cannot spread `false` into an object literal (tsc accepts)
+line 38: ours: cannot spread `false` into an object literal (tsc accepts)
+line 39: ours: cannot spread `false` into an object literal (tsc accepts)
+line 40: ours: cannot spread `false` into an object literal (tsc accepts)
+line 41: ours: cannot spread `false` into an object literal (tsc accepts)
+line 42: ours: cannot spread `false` into an object literal (tsc accepts)
+line 43: ours: cannot spread `false` into an object literal (tsc accepts)
+line 44: ours: cannot spread `false` into an object literal (tsc accepts)
+line 45: ours: cannot spread `false` into an object literal (tsc accepts)
+line 46: ours: cannot spread `false` into an object literal (tsc accepts)
+line 47: ours: cannot spread `false` into an object literal (tsc accepts)
+line 48: ours: cannot spread `false` into an object literal (tsc accepts)
+line 49: ours: cannot spread `false` into an object literal (tsc accepts)
+line 50: ours: cannot spread `false` into an object literal (tsc accepts)
+line 51: ours: cannot spread `false` into an object literal (tsc accepts)
+line 52: ours: cannot spread `false` into an object literal (tsc accepts)
+line 53: ours: cannot spread `false` into an object literal (tsc accepts)
+line 54: ours: cannot spread `false` into an object literal (tsc accepts)
+line 55: ours: cannot spread `false` into an object literal (tsc accepts)
+line 56: ours: cannot spread `false` into an object literal (tsc accepts)
+line 57: ours: cannot spread `false` into an object literal (tsc accepts)
+line 58: ours: cannot spread `false` into an object literal (tsc accepts)
+line 59: ours: cannot spread `false` into an object literal (tsc accepts)

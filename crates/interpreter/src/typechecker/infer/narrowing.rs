@@ -441,7 +441,7 @@ pub fn has_type_parameter_member(ty: &Type) -> bool {
     }
 }
 
-fn unit_literal_value(ty: &Type) -> Option<LiteralValue> {
+pub(super) fn unit_literal_value(ty: &Type) -> Option<LiteralValue> {
     match ty.peel() {
         Type::StringLiteral(s) => Some(LiteralValue::String(s.clone())),
         Type::NumberLiteral(n) => Some(LiteralValue::Number(*n)),
@@ -714,7 +714,7 @@ pub fn truthiness_class(member: &Type) -> TruthinessClass {
     }
 }
 
-fn union_members(ty: &Type) -> Vec<&Type> {
+pub(super) fn union_members(ty: &Type) -> Vec<&Type> {
     match ty.peel() {
         Type::Union(members) => members.iter().collect(),
         // `ty` itself, not its peel: peeling drops a `readonly` wrapper.
@@ -733,17 +733,22 @@ pub fn truthy_part(ty: &Type) -> Type {
     {
         return preserve_refinement(original, truthy_part(shape));
     }
+    // `boolean` is exactly `true | false` (spec §1.2), so its truthy part is `true`.
     let kept: Vec<Type> = union_members(ty)
         .into_iter()
         .filter(|m| truthiness_class(m) != TruthinessClass::AlwaysFalsy)
-        .cloned()
+        .map(|m| match m.without_aliases() {
+            Type::Boolean => Type::BooleanLiteral(true),
+            _ => m.clone(),
+        })
         .collect();
     Type::union(kept)
 }
 
 /// The type of `x` where `x` is known falsy: keep `null` and falsy literals,
-/// collapse `string` to `""`, drop never-falsy reference types. `number` stays
-/// `number` — a `0` literal would be unsound for `NaN`/`-0`.
+/// collapse `string` to `""` and `boolean` to `false`, drop never-falsy
+/// reference types. `number` stays `number` — a `0` literal would be unsound
+/// for `NaN`/`-0`.
 pub fn falsy_part(ty: &Type) -> Type {
     if let Type::Refined {
         original,
@@ -760,7 +765,10 @@ pub fn falsy_part(ty: &Type) -> Type {
                 Type::String => Type::StringLiteral(String::new()),
                 _ => m.clone(),
             }),
-            _ => Some(m.clone()),
+            _ => Some(match m.without_aliases() {
+                Type::Boolean => Type::BooleanLiteral(false),
+                _ => m.clone(),
+            }),
         })
         .collect();
     Type::union(kept)
@@ -962,7 +970,8 @@ pub(super) fn preserve_refinement(original: &Type, shape: Type) -> Type {
 /// Strip covered literal values from `ty`. When the residual is `Type::Never`,
 /// all discriminant values were covered by `case` labels.
 ///
-/// - **Literal-union**: filter out covered members; collapses to `Never` when all drop.
+/// - **Union**: filter out covered literal members, keeping the rest (`number`
+///   in `number | "a"`); collapses to `Never` when all drop.
 /// - **Single literal**: `Never` if covered, unchanged otherwise.
 /// - **Anything else**: returned unchanged.
 pub fn subtract_literals(ty: &Type, covered: &BTreeSet<LiteralValue>) -> Type {
@@ -975,15 +984,6 @@ pub fn subtract_literals(ty: &Type, covered: &BTreeSet<LiteralValue>) -> Type {
     }
     match ty.peel() {
         Type::Union(members) => {
-            // Only fire when every member is a unit-literal type; a
-            // mixed union (e.g., `"a" | number`) can't be exhaustively
-            // covered by literal `case` labels, so return as-is. A
-            // `boolean` member counts: it is `true | false`.
-            let coverable_by_cases =
-                |m: &Type| unit_literal_value(m).is_some() || matches!(m.peel(), Type::Boolean);
-            if !members.iter().all(coverable_by_cases) {
-                return ty.clone();
-            }
             let kept: Vec<Type> = members
                 .iter()
                 .map(|m| subtract_literals(m, covered))
@@ -1537,7 +1537,7 @@ mod tests {
             Type::StringLiteral("a".to_string())
         );
         assert_eq!(truthy_part(&Type::Null), Type::Never);
-        assert_eq!(truthy_part(&Type::Boolean), Type::Boolean);
+        assert_eq!(truthy_part(&Type::Boolean), Type::BooleanLiteral(true));
         assert_eq!(truthy_part(&Type::Number), Type::Number);
     }
 
@@ -1548,7 +1548,7 @@ mod tests {
             Type::union(vec![Type::StringLiteral(String::new()), Type::Null])
         );
         assert_eq!(falsy_part(&Type::Number), Type::Number);
-        assert_eq!(falsy_part(&Type::Boolean), Type::Boolean);
+        assert_eq!(falsy_part(&Type::Boolean), Type::BooleanLiteral(false));
         // Never-falsy references drop entirely.
         assert_eq!(
             falsy_part(&Type::union(vec![

@@ -1,12 +1,4 @@
-types: 93 of 142 tsc entries compared, 18 differ
-
-line 9: typeof x === "string" && ((x = 10) && x)
-  tsc:  number | false
-  ours: number | boolean
-
-line 13: typeof x === "string" && ((x = "hello") && x)
-  tsc:  string | false
-  ours: string | boolean
+types: 93 of 142 tsc entries compared, 16 differ
 
 line 23: typeof x !== "string" // string | number | boolean && ((b = x) && (typeof x !== "number" // number | boolean && x))
   tsc:  boolean | 0
@@ -30,23 +22,23 @@ line 25: x
 
 line 38: typeof x !== "string" && ((z = x) // number | boolean && (typeof x === "number" // change value of x ? ((x = 10) && x.toString()) // x is number // do not change value : ((y = x) && x.toString())))
   tsc:  string | false | 0
-  ours: number | string | boolean
+  ours: number | string | false
 
 line 39: ((z = x) // number | boolean && (typeof x === "number" // change value of x ? ((x = 10) && x.toString()) // x is number // do not change value : ((y = x) && x.toString())))
   tsc:  string | false | 0
-  ours: number | string | boolean
+  ours: number | string | false
 
 line 39: (z = x) // number | boolean && (typeof x === "number" // change value of x ? ((x = 10) && x.toString()) // x is number // do not change value : ((y = x) && x.toString()))
   tsc:  string | false | 0
-  ours: number | string | boolean
+  ours: number | string | false
 
 line 40: (typeof x === "number" // change value of x ? ((x = 10) && x.toString()) // x is number // do not change value : ((y = x) && x.toString()))
   tsc:  string
-  ours: string | boolean
+  ours: string | false
 
 line 40: typeof x === "number" // change value of x ? ((x = 10) && x.toString()) // x is number // do not change value : ((y = x) && x.toString())
   tsc:  string
-  ours: string | boolean
+  ours: string | false
 
 line 40: x
   tsc:  number | true
@@ -54,11 +46,11 @@ line 40: x
 
 line 44: ((y = x) && x.toString())
   tsc:  string
-  ours: string | boolean
+  ours: string | false
 
 line 44: (y = x) && x.toString()
   tsc:  string
-  ours: string | boolean
+  ours: string | false
 
 line 44: y = x
   tsc:  true
@@ -73,11 +65,7 @@ line 44: x
   ours: boolean
 
 errors:
-line 9: ours: expected `number | false`, got `number | boolean` (tsc accepts)
-line 13: ours: expected `string | false`, got `string | boolean` (tsc accepts)
 line 23: ours: expected `0 | boolean`, got `number | boolean` (tsc accepts)
 line 24: ours: expected `0 | boolean`, got `number | boolean` (tsc accepts)
-line 38: ours: expected `0 | string | false`, got `number | string | boolean` (tsc accepts)
-line 39: ours: expected `0 | string | false`, got `number | string | boolean` (tsc accepts)
-line 40: ours: expected `0 | string | false`, got `string | boolean` (tsc accepts)
-line 44: ours: expected `0 | string | false`, got `string | boolean` (tsc accepts)
+line 38: ours: expected `0 | string | false`, got `number | string | false` (tsc accepts)
+line 39: ours: expected `0 | string | false`, got `number | string | false` (tsc accepts)
