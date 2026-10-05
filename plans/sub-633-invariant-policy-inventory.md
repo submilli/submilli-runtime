@@ -1042,6 +1042,12 @@ actual per-request/shared resource requirements and related prerequisite issues.
 
 ### T04 — Refresh dependency scope without erasing its baseline
 
+Execution complete: applied current 0.1.9 engine scope while preserving the 0.1.4 baseline;
+stack proof and separate-engine adoption remain unresolved. The absent SSH path
+is explicitly an integration check. Three independent reviews found no issues;
+issue and ledger writes read back and verified. No checkbox/status changes.
+Diff checks passed; documentation-only, no tests run.
+
 Item 39 names engine 0.1.4; the inspected lockfile uses 0.1.9. Keep the original
 ledger and add a current-version disposition. The operand-stack
 `pop().expect("operand stack underflow")` in engine `exec/stack.rs:137`, and tagged
