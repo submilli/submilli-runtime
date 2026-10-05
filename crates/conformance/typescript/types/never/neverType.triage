@@ -1,3 +1,0 @@
-line 93 extra: bug SUB-1213 an arrow whose body only throws is typed `() => void`, not `() => never`
-line 30, 65, 76 extra: bug SUB-1188 a `while (true)` loop without `break` counts as falling through
-line 93 type: bug SUB-1213 an arrow whose body only throws is typed `() => void`, not `() => never`

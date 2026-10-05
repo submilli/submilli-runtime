@@ -7231,6 +7231,10 @@ impl Inferer<'_> {
                     // annotated `unknown` body may. A body with no `return`
                     // stays `void`.
                     Type::Unknown
+                } else if collected.is_empty() && !self.reachable {
+                    // No `return`, and the end of the body can't be reached: the
+                    // closure only throws, so it never returns, as tsc infers.
+                    Type::Never
                 } else {
                     self.unify_returns(&collected)
                 };
@@ -8122,6 +8126,13 @@ impl Inferer<'_> {
         let mut short_circuit_span: Option<Span> = None;
 
         for part in parts {
+            // A `?.` whose receiver can't be `null` never short-circuits, so it
+            // is the plain step and adds no `| null`, as in tsc.
+            let part = if part.is_optional() && !type_admits_null(&receiver_ty, self.resolver()) {
+                part.as_plain_step()
+            } else {
+                part
+            };
             if part.is_optional() && short_circuit_span.is_none() {
                 short_circuit_span = Some(part.span());
                 self.push_narrow_frame(super::narrowing::NarrowEnv::new());
@@ -8193,8 +8204,8 @@ impl Inferer<'_> {
         // A void-tailed chain has no value on either branch, so it stays
         // `void` rather than widening to `void | null` (void is a return
         // type only — see `reject_void_binding`).
-        let final_ty = if matches!(receiver_ty.peel(), Type::Void) {
-            Type::Void
+        let final_ty = if matches!(receiver_ty.peel(), Type::Void) || short_circuit_span.is_none() {
+            receiver_ty
         } else {
             Type::union(vec![receiver_ty, Type::Null])
         };

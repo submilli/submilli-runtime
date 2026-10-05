@@ -179,6 +179,17 @@ impl ChainPart {
         }
     }
 
+    /// This step with its `?.` dropped, for a receiver that can't be `null`.
+    pub fn as_plain_step(mut self) -> Self {
+        match &mut self {
+            ChainPart::Field { optional, .. }
+            | ChainPart::Index { optional, .. }
+            | ChainPart::Call { optional, .. } => *optional = false,
+            ChainPart::NonNull { .. } => {}
+        }
+        self
+    }
+
     pub fn span(&self) -> Span {
         match self {
             ChainPart::Field { span, .. }

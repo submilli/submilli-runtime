@@ -111,10 +111,26 @@ fn completion(
                 ..
             } => switch_completion(ta, declarations, *discriminant, cases, *default)?,
             TypedStmtKind::NarrowRegion { body, .. } => completion(ta, declarations, *body)?,
-            TypedStmtKind::While { .. }
-            | TypedStmtKind::For { .. }
-            | TypedStmtKind::ForOf { .. }
-            | TypedStmtKind::DoWhile { .. }
+            TypedStmtKind::While { condition, body } => {
+                let runs_forever = is_static_true(ta, *condition)?;
+                loop_completion(ta, declarations, *body, runs_forever)?
+            }
+            TypedStmtKind::For {
+                condition, body, ..
+            } => {
+                let runs_forever = condition.map_or(Ok(true), |c| is_static_true(ta, c))?;
+                loop_completion(ta, declarations, *body, runs_forever)?
+            }
+            TypedStmtKind::DoWhile { body, condition } => {
+                let pass = completion(ta, declarations, *body)?;
+                let repeats = pass.falls || pass.continues;
+                let exits_by_condition = repeats && !is_static_true(ta, *condition)?;
+                Completion {
+                    falls: exits_by_condition || pass.breaks,
+                    ..Default::default()
+                }
+            }
+            TypedStmtKind::ForOf { .. }
             | TypedStmtKind::ReboxLocal { .. }
             | TypedStmtKind::Let { .. }
             | TypedStmtKind::Const { .. }
@@ -125,6 +141,42 @@ fn completion(
             | TypedStmtKind::Expr(_) => falls,
         },
     )
+}
+
+/// A `while`/`for` loop ends normally when its condition can fail, or when its
+/// body breaks out of it. A `break` inside a nested loop or `switch` is that
+/// statement's own, so it never reaches here.
+fn loop_completion(
+    ta: &TypedAst,
+    declarations: &TypeDeclarations<'_>,
+    body: StmtId,
+    runs_forever: bool,
+) -> Result<Completion, crate::compiler_error::CompilerFailure> {
+    let breaks = completion(ta, declarations, body)?.breaks;
+    Ok(Completion {
+        falls: !runs_forever || breaks,
+        ..Default::default()
+    })
+}
+
+/// Whether a loop condition is the literal `true`, as the inferer's
+/// reachability also treats it, seen through any narrowing wrappers.
+fn is_static_true(
+    ta: &TypedAst,
+    condition: crate::ExprId,
+) -> Result<bool, crate::compiler_error::CompilerFailure> {
+    let mut id = condition;
+    loop {
+        match &ta
+            .try_expr(id)
+            .map_err(crate::typechecker::arena_failure)?
+            .kind
+        {
+            TypedExprKind::Boolean(value) => return Ok(*value),
+            TypedExprKind::Narrowed { inner, .. } => id = *inner,
+            _ => return Ok(false),
+        }
+    }
 }
 
 fn try_completion(
