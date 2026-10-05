@@ -611,9 +611,11 @@ impl Inferer<'_> {
                 type_args,
                 args,
             } => self.infer_new(callee, type_args, args, expected, span),
-            ExprKind::TemplateLiteral { parts, exprs } => {
-                self.lower_template_literal(parts, exprs, span)
-            }
+            ExprKind::TemplateLiteral {
+                parts,
+                exprs,
+                substitution_spans,
+            } => self.lower_template_literal(parts, exprs, substitution_spans, span),
             ExprKind::Ternary { cond, then_, else_ } => {
                 self.infer_ternary(cond, then_, else_, expected, span)
             }
@@ -4327,9 +4329,12 @@ impl Inferer<'_> {
         &mut self,
         parts: Vec<String>,
         exprs: Vec<ExprId>,
+        substitution_spans: Vec<Span>,
         span: Span,
     ) -> Result<(TypedExprKind, Type), CompilerFailure> {
-        if parts.len().checked_sub(1) != Some(exprs.len()) {
+        if parts.len().checked_sub(1) != Some(exprs.len())
+            || substitution_spans.len() != exprs.len()
+        {
             return Err(
                 super::inference_failure("template part/interpolation count mismatch")
                     .with_span(span),
@@ -4343,7 +4348,8 @@ impl Inferer<'_> {
         let mut had_error = false;
         let typed_interps: Vec<ExprId> = exprs
             .into_iter()
-            .map(|expr_id| {
+            .zip(substitution_spans)
+            .map(|(expr_id, substitution_span)| {
                 let (typed_id, ty) = self.infer_expr(expr_id, None)?;
                 if matches!(ty, Type::Error) {
                     had_error = true;
@@ -4353,7 +4359,7 @@ impl Inferer<'_> {
                     .try_expr(typed_id)
                     .map_err(crate::typechecker::arena_failure)?
                     .span;
-                self.wrap_interpolation_in_to_string(typed_id, &ty, interp_span)
+                self.wrap_interpolation_in_to_string(typed_id, &ty, interp_span, substitution_span)
             })
             .collect::<Result<_, _>>()?;
 
@@ -4441,11 +4447,16 @@ impl Inferer<'_> {
     /// The allowlist is shared with the nullable-narrowing hint below: the hint may
     /// only claim narrowing is the fix when the non-null form is a receiver this
     /// accepts, or it advises a guard that leaves the same error behind.
+    ///
+    /// Diagnostics point at the interpolated expression. The conversion node
+    /// spans the whole `${…}`: it is not the source expression, and sharing that
+    /// expression's span would make the conversion's `string` read as its type.
     fn wrap_interpolation_in_to_string(
         &mut self,
         expr_id: ExprId,
         ty: &Type,
         span: Span,
+        substitution_span: Span,
     ) -> Result<ExprId, crate::compiler_error::CompilerFailure> {
         let peeled = ty.primitive_behavior();
         if matches!(peeled, Type::String | Type::StringLiteral(_)) {
@@ -4501,7 +4512,7 @@ impl Inferer<'_> {
                         args: Vec::new(),
                         type_predicate: None,
                     },
-                    span,
+                    span: substitution_span,
                     ty: Type::Error,
                 })
                 .map_err(crate::typechecker::arena_failure);
@@ -4536,7 +4547,7 @@ impl Inferer<'_> {
                     args,
                     type_predicate: None,
                 },
-                span,
+                span: substitution_span,
                 ty: if matches!(ty, Type::Error) {
                     Type::Error
                 } else {
@@ -12184,7 +12195,7 @@ mod invariant_tests {
         super::super::test_support::with_inferer(|tc| {
             let span = Span::at(crate::FileId(0));
             assert!(matches!(
-                tc.lower_template_literal(Vec::new(), Vec::new(), span),
+                tc.lower_template_literal(Vec::new(), Vec::new(), Vec::new(), span),
                 Err(CompilerFailure::Internal { .. })
             ));
             let part = ChainPart::NonNull { span };
