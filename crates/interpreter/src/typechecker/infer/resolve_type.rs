@@ -795,6 +795,11 @@ impl<'a> Inferer<'a> {
         if let Some(local) = self.scopes.get(name) {
             return Some(local.ty.clone());
         }
+        // A later declaration is bound only once a function body uses it, so a
+        // type query above it is unsupported (TypeScript accepts one).
+        if self.is_later_global(name) {
+            return None;
+        }
         Some(match &self.top_symbols.get(name)?.kind {
             crate::ValueKind::Let { ty, .. } | crate::ValueKind::Const { ty, .. } => ty.clone(),
             crate::ValueKind::Function {

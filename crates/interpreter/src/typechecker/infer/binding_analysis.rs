@@ -152,15 +152,26 @@ fn visit_stmt(ast: &Ast, id: StmtId, out: &mut Analysis) -> Result<(), CompilerF
             default,
         } => {
             visit_expr(ast, *discriminant, out)?;
-            for case in cases {
-                for &value in &case.values {
+            // The clauses share one scope, as in JavaScript: a name declared in
+            // two clauses is a redeclaration, a function is hoisted to the body's
+            // start, and a `let`/`const` is uninitialized until its statement.
+            let clauses =
+                super::switch_stmt::clauses_in_source_order(ast, cases, default.as_ref())?;
+            out.scopes.push(Default::default());
+            let all_stmts: Vec<StmtId> = clauses
+                .iter()
+                .flat_map(|c| c.stmts.iter().copied())
+                .collect();
+            out.reserve_statements(ast, &all_stmts)?;
+            for clause in &clauses {
+                for &value in clause.values {
                     visit_expr(ast, value, out)?;
                 }
-                visit_stmt(ast, case.body, out)?;
+                for &stmt in &clause.stmts {
+                    visit_stmt(ast, stmt, out)?;
+                }
             }
-            if let Some(d) = default {
-                visit_stmt(ast, d.body, out)?;
-            }
+            out.scopes.pop();
         }
         StmtKind::Try {
             body,
@@ -470,10 +481,10 @@ impl Analysis {
             .find_map(|(index, s)| s.get(name).map(|binding| (index, binding)))
     }
 
-    /// The binding a use of `ident` resolves to. A `let`/`const` it names is
-    /// captured by each nested function being scanned that is declared in the
-    /// same block, which keeps the last declared of those.
-    fn resolve_use(&mut self, ident: &Ident) -> Option<Binding> {
+    /// The binding a use of `ident` resolves to, and the index of its scope. A
+    /// `let`/`const` it names is captured by each nested function being scanned
+    /// that is declared in the same block, which keeps the last declared of those.
+    fn resolve_use(&mut self, ident: &Ident) -> Option<(usize, Binding)> {
         let (scope, binding) = self.lookup(&ident.name)?;
         let binding = *binding;
         if binding.block_local {
@@ -485,7 +496,18 @@ impl Analysis {
                 },
             );
         }
-        Some(binding)
+        Some((scope, binding))
+    }
+
+    /// Whether the use is inside a nested function declared in block `scope`.
+    /// `resolve_use` has recorded each such function's capture of the local
+    /// (`note_capture` keeps the same functions), so its closure is created
+    /// only once the local is declared, and calling it earlier is reported
+    /// where it is called.
+    fn is_inside_function_declared_in(&self, scope: usize) -> bool {
+        self.nested_functions
+            .iter()
+            .any(|&(_, declaring_scope)| declaring_scope == scope)
     }
 
     fn note_capture(&mut self, scope: usize, local: Ident) {
@@ -505,10 +527,10 @@ impl Analysis {
     }
 
     fn read(&mut self, ident: &Ident) {
-        let Some(binding) = self.resolve_use(ident) else {
+        let Some((scope, binding)) = self.resolve_use(ident) else {
             return;
         };
-        if binding.initialized {
+        if binding.initialized || self.is_inside_function_declared_in(scope) {
             return;
         }
         let declaration = binding.span;
@@ -522,7 +544,7 @@ impl Analysis {
     }
 
     fn write(&mut self, ident: &Ident) {
-        let Some(binding) = self.resolve_use(ident) else {
+        let Some((_, binding)) = self.resolve_use(ident) else {
             return;
         };
         let declaration = binding.span;

@@ -3,6 +3,9 @@
 //! host and `localhost` (the same server, reached by another name) the denied
 //! one, so a denied destination is observable as a mock that is never hit.
 
+#[path = "common/in_memory_config.rs"]
+mod in_memory_config;
+
 use std::path::Path;
 use std::sync::Arc;
 
@@ -25,7 +28,7 @@ fn router(yaml: &str, package_store_root: Option<&Path>) -> Router {
             InMemoryBlueprintStore::seed([blueprint]).expect("seed blueprints"),
         )),
         package_store_root: package_store_root.map(Path::to_path_buf),
-        ..ServerConfig::default()
+        ..in_memory_config::config()
     };
     app(AppState::new(config).expect("build AppState"))
 }

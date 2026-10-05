@@ -140,7 +140,7 @@ Stdlib gates and their fields, from `submilli blueprint capability list`:
 
 For the orders package in [packages](packages.md): a required customer
 binding, a server-side token, read allowed for the bound customer, and small
-cancellations routed to human approval.
+cancellations held for a separate application approval workflow.
 
 ```yaml
 kind: blueprint
@@ -186,10 +186,13 @@ package puts in the context; if the field is missing, fix the package, never
 the prompt. A cancel of another customer's order or one above the limit falls
 through to `default: deny`.
 
-`ask-human` routes the call to the operator's approval flow. It is meaningful
-only when the client integration implements that flow; confirm the harness
-supports it before relying on it, and use a separate approval-stage blueprint
-or a draft operation when it does not.
+The runtime currently treats `ask-human` as a denial. It does not pause,
+dispatch an approval request, or resume the call after a human approves it.
+This example therefore cannot execute cancellations. If approval is required,
+the trusted application must collect it separately and execute the approved
+operation through a separately authorized path with appropriately scoped
+`allow` rules. Keep that path and its credentials outside the runtime agent's
+control. A draft operation is another option when the service supports one.
 
 ## Roles and tenants
 
@@ -365,34 +368,41 @@ and checks the `requires` of listed packages' dependencies like those of the
 packages themselves. A provided capability with no `main` rule is withheld, not
 a finding; `submilli blueprint capability list --unconfigured` lists them.
 
-Register and run:
+Register only after the server can resolve the blueprint's packages,
+dependencies, secrets, and named volumes. `add` and `apply` reject a missing
+package with `package_missing`; applying YAML does not install it.
+
+For the `support-orders` example, build and publish `@acme/orders` locally
+from its project directory. A server on the same machine can use that local
+store when it has the same `SUBMILLI_HOME`. For a remote server, install the
+package from its actual GitHub repository with `submilli server packages
+install <org/repo> @acme/orders`. The curated `@submilli/*` packages live in
+`submilli/submilli-runtime`; they do not supply custom `@acme/*` operations.
+
+Start an authenticated server with its encrypted secret store configured as
+in [setup](setup.md). Use its admin token in `SUBMILLI_SERVER_TOKEN` for the
+CLI. The example YAML already declares `ORDERS_API_TOKEN` as a `store:`
+secret. Populate it from the application's securely supplied environment
+variable before applying the blueprint:
 
 ```sh
-export SUBMILLI_SERVER_TOKEN=...                 # the token the server was started with
-submilli-server                                  # separate terminal, same variable
-submilli server packages install submilli/submilli-runtime @submilli/jina
-submilli server blueprint apply blueprint.yaml   # or: submilli server apply -f dir/
-submilli server run-code --blueprint support-orders program.ts
-```
-
-The server builds each package in `packages:` from its GitHub repository,
-pinned to a commit. The curated `@submilli/*` packages live in
-`submilli/submilli-runtime`; `submilli server packages list` shows what is
-installed. A server on the same machine also sees packages in the CLI's local
-store (`submilli build publish-local`, `submilli install`), so a package may
-work locally without being in `packages list`. `apply` doesn't check that
-packages are installed; the first program that imports a missing one fails.
-
-The server and the `submilli server` commands share one token,
-`SUBMILLI_SERVER_TOKEN`; see [setup](setup.md).
-
-Declare a secret with `--store` and provision its value into the server's
-secret store, or use a `harness` source bound per session:
-
-```sh
-submilli blueprint secret add ORDERS_API_TOKEN --store ORDERS_API_TOKEN
+# From the @acme/orders project, sharing SUBMILLI_HOME with the local server.
+submilli build publish-local --deny-warnings
 printf '%s' "$ORDERS_API_TOKEN" | submilli server secret put ORDERS_API_TOKEN
+submilli server blueprint apply blueprint.yaml
 ```
+
+`submilli server packages install` builds packages from a GitHub repository,
+pinned to a commit. `submilli server packages list` includes server-managed
+packages and packages from the fallback CLI store, marking the latter as
+unmanaged and showing their source.
+For credentials supplied by the trusted application per session, use a
+`harness` secret source instead of `store:`.
+
+Registered blueprints and their revisions live in the server's SQLite
+database. Manage them through the CLI/API; editing an old blueprint directory
+does not update the active policy. See [setup](setup.md) for database
+persistence and the one-time legacy import.
 
 REST is `POST /v1/execute` with `{ "blueprint", "code", "variables", "secrets" }`
 and `Authorization: Bearer $SUBMILLI_SERVER_TOKEN`;
@@ -415,12 +425,12 @@ Prove the boundary with deterministic calls, not a model ignoring bait:
 | Same binding, program passes `cus_initech` | `permission denied ... capability=acme.com/...`, not a network error or empty list |
 | Omit the required variable | `invalid_request` naming the variable; program never runs |
 | Call an unlisted capability or a raw `http.get` from `main` | Denied |
-| A write under `ask-human` | The approval path fires and nothing changes until approved |
+| A write under `ask-human` | `PermissionDeniedError`, no side effect, and no built-in approval or resume flow |
 | Denied write | No side effect at the service; note that earlier successful calls in the same program are not rolled back |
 
 Then run controls that prove the assertions are load-bearing, as the
-quickstart's `verify.sh` does: remove the filter and the cross-customer call
+quickstart's `verify.sh` does, using only isolated fixture data: remove the filter and the cross-customer call
 must succeed; flip the bound customer and both outcomes must invert. Finally,
-optionally run the real harness with an injected instruction and capture the
+with the user's authorization, run the real harness with an injected instruction and capture the
 executed code and the denial. A denial is a result to report, never a reason
 to widen policy without the developer's decision.

@@ -1013,8 +1013,9 @@ impl<'a> Parser<'a> {
 
     /// `public`/`private`/`static`/`readonly`. Duplicate or conflicting modifiers are
     /// diagnosed but parsing continues so the member shape is still recovered.
-    /// Visibility must precede `static` (the TypeScript order); `readonly` is accepted
-    /// on either side of `static` — no semantic difference under our subset.
+    /// Visibility must precede `static` and `readonly` (the TypeScript order);
+    /// `readonly` is accepted on either side of `static` — no semantic difference
+    /// under our subset.
     fn parse_class_modifiers(&mut self) -> crate::ClassModifiers {
         let mut visibility = crate::Visibility::Public;
         let mut visibility_span: Option<Span> = None;
@@ -1024,7 +1025,11 @@ impl<'a> Parser<'a> {
             if self.peek_word_is_class_modifier("public")
                 || self.peek_word_is_class_modifier("private")
             {
-                let is_private = self.peek_identifier_text_is("private");
+                let (kind, word) = if self.peek_identifier_text_is("private") {
+                    (crate::Visibility::Private, "private")
+                } else {
+                    (crate::Visibility::Public, "public")
+                };
                 let tok = self.advance();
                 if visibility_span.is_some() {
                     self.error_at_with_help(
@@ -1032,22 +1037,22 @@ impl<'a> Parser<'a> {
                         "a class member may have at most one visibility modifier",
                         vec!["keep a single `public` or `private`".to_string()],
                     );
-                } else {
-                    if static_span.is_some() {
-                        let word = if is_private { "private" } else { "public" };
-                        self.error_at_with_help(
-                            tok.span,
-                            format!("`{word}` must come before `static`"),
-                            vec![format!("write `{word} static <name>`")],
-                        );
-                    }
-                    visibility = if is_private {
-                        crate::Visibility::Private
-                    } else {
-                        crate::Visibility::Public
-                    };
-                    visibility_span = Some(tok.span);
+                    continue;
                 }
+                // TypeScript reports one misplaced modifier per member; `static` is
+                // named first when both precede.
+                let preceding = static_span
+                    .map(|_| "static")
+                    .or(readonly.map(|_| "readonly"));
+                if let Some(preceding) = preceding {
+                    self.error_at_with_help(
+                        tok.span,
+                        format!("`{word}` must come before `{preceding}`"),
+                        vec![format!("write `{word} {preceding} <name>`")],
+                    );
+                }
+                visibility = kind;
+                visibility_span = Some(tok.span);
                 continue;
             }
             if self.peek_word_is_class_modifier("static") {
@@ -1160,7 +1165,13 @@ impl<'a> Parser<'a> {
                 self.error_at_peek("generic call signatures are not yet supported");
                 return None;
             }
+            let member_start = self.peek().span.start;
             let readonly = self.eat_readonly_property_modifier();
+            if self.peek_is_parameterless_index_signature() {
+                self.skip_parameterless_index_signature(member_start)?;
+                self.finish_interface_member(self.prev_token_end())?;
+                continue;
+            }
             if matches!(self.peek().kind, TokenKind::LeftBracket) {
                 let signature = self.parse_index_signature(readonly)?;
                 self.finish_interface_member(signature.span.end)?;
@@ -1244,17 +1255,22 @@ impl<'a> Parser<'a> {
         )
     }
 
-    /// Consume the separator after an interface member and return where the member
-    /// ends. `;` and `,` are interchangeable and the last member's is optional — the
-    /// rule `parse_object_type_annotation` already applies to inline type literals,
-    /// extended here to `interface` bodies. `body_end` is where the member ends when
-    /// it carries no separator of its own.
     fn finish_interface_member(&mut self, body_end: u32) -> Option<u32> {
+        self.finish_type_member(body_end, "expected `;`, `,`, or `}` after interface member")
+    }
+
+    /// Consume the separator after an interface or type-literal member and return
+    /// where the member ends. `;` and `,` are interchangeable and the last member's
+    /// is optional. A line break also ends a member, as in TypeScript: ASI inserts
+    /// `;` there, but keeps some tokens, such as `[` and `(`, attached. `body_end` is
+    /// where the member ends when it carries no separator of its own.
+    fn finish_type_member(&mut self, body_end: u32, message: &str) -> Option<u32> {
         match self.peek().kind {
             TokenKind::Semicolon | TokenKind::Comma => Some(self.advance().span.end),
             TokenKind::RightBrace => Some(body_end),
+            _ if self.line_break_before_peek() => Some(body_end),
             _ => {
-                self.error_at_peek("expected `;`, `,`, or `}` after interface member");
+                self.error_at_peek(message);
                 None
             }
         }
@@ -1279,11 +1295,16 @@ impl<'a> Parser<'a> {
 
         let ty = self.parse_type_annotation()?;
 
-        if !matches!(self.peek().kind, TokenKind::Semicolon) {
+        // ASI keeps a `[` on the next line attached, but the type already ended at
+        // the line break (see `parse_type_array_inner`), so the break ends the alias.
+        let end = if matches!(self.peek().kind, TokenKind::Semicolon) {
+            self.advance().span.end
+        } else if self.line_break_before_peek() {
+            self.prev_token_end()
+        } else {
             self.error_at_peek("expected `;` after type alias body");
             return None;
-        }
-        let semi = self.advance();
+        };
 
         parse_arena_result(
             self.ast.try_push_stmt(Stmt {
@@ -1293,7 +1314,7 @@ impl<'a> Parser<'a> {
                     ty,
                     doc,
                 },
-                span: self.span(kw.span.start, semi.span.end),
+                span: self.span(kw.span.start, end),
             }),
             &mut self.fatal,
         )
@@ -3120,7 +3141,9 @@ impl<'a> Parser<'a> {
         // Array suffixes nest boxed annotations without recursing, so each one
         // spends the recursive grammar budget to keep the chain's drop bounded.
         let mut array_suffixes = 0usize;
-        while matches!(self.peek().kind, TokenKind::LeftBracket) {
+        // As in TypeScript, a line break ends the type before `[`: in an object type,
+        // `a: B` ⏎ `[k: string]: V` is a field followed by an index signature.
+        while matches!(self.peek().kind, TokenKind::LeftBracket) && !self.line_break_before_peek() {
             array_suffixes += 1;
             if self.recursion_depth.saturating_add(array_suffixes) >= MAX_PARSE_DEPTH {
                 self.stop_at_recursion_limit();
@@ -3455,6 +3478,31 @@ impl<'a> Parser<'a> {
         );
     }
 
+    /// `[]` or `[]: V` — an index signature with no parameter, which TypeScript
+    /// reads and rejects.
+    fn peek_is_parameterless_index_signature(&self) -> bool {
+        matches!(self.peek().kind, TokenKind::LeftBracket)
+            && matches!(self.peek_at(1).kind, TokenKind::RightBracket)
+    }
+
+    /// Diagnoses and skips a parameterless index signature (see
+    /// `peek_is_parameterless_index_signature`) so the members after it still parse.
+    /// `member_start` is where the member begins, at a `readonly` modifier if any.
+    fn skip_parameterless_index_signature(&mut self, member_start: u32) -> Option<()> {
+        self.advance();
+        let close = self.advance();
+        self.error_at_with_help(
+            self.span(member_start, close.span.end),
+            "an index signature must declare exactly one parameter",
+            vec!["write `[key: string]: V`".to_string()],
+        );
+        if matches!(self.peek().kind, TokenKind::Colon) {
+            self.advance();
+            self.parse_type_annotation()?;
+        }
+        Some(())
+    }
+
     fn parse_index_signature(&mut self, readonly: bool) -> Option<crate::IndexSignatureAnnotation> {
         let open = self.advance();
         self.expect_property_ident("expected index parameter name")?;
@@ -3490,71 +3538,37 @@ impl<'a> Parser<'a> {
         let open = self.advance();
         let mut fields: Vec<TypeAnnotationField> = Vec::new();
         let mut index = None;
-        if !matches!(self.peek().kind, TokenKind::RightBrace) {
-            loop {
-                let readonly = self.eat_readonly_property_modifier();
-                if matches!(self.peek().kind, TokenKind::LeftBracket) {
-                    let signature = self.parse_index_signature(readonly)?;
-                    if index.is_some() {
-                        self.error_at_with_help(
-                            signature.span,
-                            "duplicate string index signature",
-                            vec![],
-                        );
-                    }
-                    index = Some(Box::new(signature));
-                    self.finish_interface_member(self.peek().span.start)?;
-                    if matches!(self.peek().kind, TokenKind::RightBrace) {
-                        break;
-                    }
-                    continue;
+        while !matches!(self.peek().kind, TokenKind::RightBrace | TokenKind::Eof) {
+            let member_start = self.peek().span.start;
+            let readonly = self.eat_readonly_property_modifier();
+            if self.peek_is_parameterless_index_signature() {
+                self.skip_parameterless_index_signature(member_start)?;
+            } else if self.peek_is_construct_signature() {
+                self.reject_construct_signature()?;
+            } else if matches!(self.peek().kind, TokenKind::LeftBracket) {
+                let signature = self.parse_index_signature(readonly)?;
+                if index.is_some() {
+                    self.error_at_with_help(
+                        signature.span,
+                        "duplicate string index signature",
+                        vec![],
+                    );
                 }
-                let name = self.expect_property_ident("expected field name in object type")?;
-                // `name?: T` — omittable at construction; reads widen to `T | null`.
-                let optional = matches!(self.peek().kind, TokenKind::Question);
-                if optional {
-                    self.advance();
-                }
-                let ty = if matches!(self.peek().kind, TokenKind::LeftParen) {
-                    self.parse_object_type_method_signature(name.span.start)?
-                } else {
-                    if !matches!(self.peek().kind, TokenKind::Colon) {
-                        self.error_at_peek("expected `:` after field name");
-                        return None;
-                    }
-                    self.advance();
-                    self.parse_type_annotation()?
-                };
-                if let Some(existing) = fields.iter().find(|f| f.name.name == name.name) {
+                index = Some(Box::new(signature));
+            } else {
+                let field = self.parse_object_type_field(readonly)?;
+                if let Some(existing) = fields.iter().find(|f| f.name.name == field.name.name) {
                     self.diagnostics.push(Diagnostic {
                         severity: Severity::Error,
-                        span: name.span,
-                        message: format!("duplicate field `{}` in object type", name.name),
+                        span: field.name.span,
+                        message: format!("duplicate field `{}` in object type", field.name.name),
                         help: vec![],
                         notes: vec![(existing.name.span, "first defined here".into())],
                     });
                 }
-                fields.push(TypeAnnotationField {
-                    name,
-                    ty,
-                    optional,
-                    readonly,
-                    rest: false,
-                });
-                match self.peek().kind {
-                    TokenKind::Semicolon | TokenKind::Comma => {
-                        self.advance();
-                        if matches!(self.peek().kind, TokenKind::RightBrace) {
-                            break;
-                        }
-                    }
-                    TokenKind::RightBrace => break,
-                    _ => {
-                        self.error_at_peek("expected `;`, `,`, or `}`");
-                        return None;
-                    }
-                }
+                fields.push(field);
             }
+            self.finish_type_member(self.prev_token_end(), "expected `;`, `,`, or `}`")?;
         }
         if !matches!(self.peek().kind, TokenKind::RightBrace) {
             self.error_at_peek("expected `}`");
@@ -3564,6 +3578,70 @@ impl<'a> Parser<'a> {
         Some(TypeAnnotation {
             kind: TypeAnnotationKind::Object { index, fields },
             span: self.span(open.span.start, close.span.end),
+        })
+    }
+
+    /// `new (params): T` or `new <T>(params): T` inside a type literal: a construct
+    /// signature, which TypeScript reads where it would otherwise see a method named
+    /// `new`. A quoted `"new"()`, an optional `new?()` and a field `new: T` are
+    /// ordinary members, as in TypeScript.
+    fn peek_is_construct_signature(&self) -> bool {
+        matches!(self.peek().kind, TokenKind::New)
+            && matches!(
+                self.peek_at(1).kind,
+                TokenKind::LeftParen | TokenKind::LessThan
+            )
+    }
+
+    /// Only interfaces declare construct signatures, so one in a type literal (see
+    /// `peek_is_construct_signature`) is diagnosed, then skipped rather than misread
+    /// as a method named `new`.
+    fn reject_construct_signature(&mut self) -> Option<()> {
+        let keyword = self.advance();
+        self.error_at_with_help(
+            keyword.span,
+            "construct signatures are not supported in object types",
+            vec![
+                "declare an `interface` with the `new (…)` signature, or pass a factory \
+                 function such as `() => T`"
+                    .to_string(),
+            ],
+        );
+        if matches!(self.peek().kind, TokenKind::LessThan) {
+            self.parse_generic_param_list()?;
+        }
+        if !matches!(self.peek().kind, TokenKind::LeftParen) {
+            self.error_at_peek("expected `(` after construct signature type parameters");
+            return None;
+        }
+        self.parse_object_type_method_signature(keyword.span.start)?;
+        Some(())
+    }
+
+    /// `name: T`, `name?: T` or the method signature `name(params): T`.
+    fn parse_object_type_field(&mut self, readonly: bool) -> Option<TypeAnnotationField> {
+        let name = self.expect_property_ident("expected field name in object type")?;
+        // `name?: T` — omittable at construction; reads widen to `T | null`.
+        let optional = matches!(self.peek().kind, TokenKind::Question);
+        if optional {
+            self.advance();
+        }
+        let ty = if matches!(self.peek().kind, TokenKind::LeftParen) {
+            self.parse_object_type_method_signature(name.span.start)?
+        } else {
+            if !matches!(self.peek().kind, TokenKind::Colon) {
+                self.error_at_peek("expected `:` after field name");
+                return None;
+            }
+            self.advance();
+            self.parse_type_annotation()?
+        };
+        Some(TypeAnnotationField {
+            name,
+            ty,
+            optional,
+            readonly,
+            rest: false,
         })
     }
 
@@ -5280,6 +5358,16 @@ impl<'a> Parser<'a> {
 
     fn is_at_eof(&self) -> bool {
         self.fatal.is_some() || matches!(self.peek().kind, TokenKind::Eof)
+    }
+
+    /// Whether a line break separates the next token from the one before it. The
+    /// ASI pass drops newline tokens, so the source between the two is read instead.
+    fn line_break_before_peek(&self) -> bool {
+        let start = self.prev_token_end() as usize;
+        let end = self.peek().span.start as usize;
+        self.source
+            .get(start..end)
+            .is_some_and(|gap| gap.contains(['\n', '\r']))
     }
 
     /// End offset of the most recently consumed token (the body of the file's first
@@ -11139,6 +11227,32 @@ class Dog extends Animal {
             &single_stmt(&ast).kind,
             StmtKind::ClassDecl { .. }
         ));
+    }
+
+    #[test]
+    fn parameterless_index_signature_is_reported_from_its_member_start() {
+        for (source, expected) in [
+            ("interface P { readonly []: number }", "readonly []"),
+            ("let p: { readonly []: number } = {};", "readonly []"),
+            ("let q: { []: number } = {};", "[]"),
+        ] {
+            let (_ast, diags) = parse_str(source);
+            let diag = diags
+                .iter()
+                .find(|d| d.message.contains("must declare exactly one parameter"))
+                .unwrap_or_else(|| panic!("no diagnostic for {source}"));
+            let reported = &source[diag.span.start as usize..diag.span.end as usize];
+            assert_eq!(reported, expected, "{source}");
+        }
+    }
+
+    #[test]
+    fn unterminated_object_type_expects_closing_brace() {
+        let (_ast, diags) = parse_str("let p: { a: number\n");
+        assert!(
+            diags.iter().any(|d| d.message == "expected `}`"),
+            "{diags:?}"
+        );
     }
 
     #[test]

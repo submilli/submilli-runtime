@@ -1,3 +1,1 @@
-line 20, 30 extra: bug SUB-1198 `x?.kind === lit` doesn't narrow a nullable discriminated union
-line 15, 19, 20, 25, 29, 30, 39, 42, 48, 51, 57, 60, 66, 69, 75, 78, 84, 87, 93, 96, 102, 105 type: bug SUB-1198 `x?.kind === lit` doesn't narrow a nullable discriminated union
-line 38, 47, 56, 65, 74, 83, 92, 101 type: artifact tsc types the member name in an optional chain as the chain's result (ours carries the receiver's type)
+line 39, 42, 48, 51, 57, 60, 66, 69, 75, 78, 84, 87, 93, 96, 102, 105 type: by-design spec §1.6 `?.` short-circuits to `null`, not `undefined`, so `x?.kind === null` holds when `x` is `null`

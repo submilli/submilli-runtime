@@ -1,6 +1,7 @@
 use std::collections::BTreeMap;
 
-use crate::{MethodSig, ObjectField, PropertySig, Type, TypeKind, TypeSymbol};
+use crate::compiler_error::CompilerFailure;
+use crate::{MethodSig, ObjectField, PropertySig, Span, Type, TypeKind, TypeSymbol};
 
 use super::Inferer;
 use super::generic::substitute_or_record;
@@ -33,9 +34,34 @@ pub(super) enum MemberFieldMiss {
 }
 
 impl<'a> Inferer<'a> {
+    /// The local binding `name` resolves to, unless another `case` clause of an
+    /// enclosing `switch` declares it, which hides every binding from outside.
+    pub(super) fn visible_local(&self, name: &str) -> Option<&super::scopes::ScopeEntry> {
+        if self.declaration_in_another_case_clause(name).is_some() {
+            return None;
+        }
+        self.scopes.get(name)
+    }
+
+    /// Whether the module-level binding of `name` is visible here: no other
+    /// `case` clause declares it, and it isn't a later declaration read directly
+    /// at the top level. In a function body, a later declaration is bound early.
+    pub(super) fn top_symbol_visible(
+        &mut self,
+        name: &str,
+        span: Span,
+    ) -> Result<bool, CompilerFailure> {
+        if self.declaration_in_another_case_clause(name).is_some() {
+            return Ok(false);
+        }
+        Ok(!self.hides_later_global(name, span)?)
+    }
+
     /// Direct-call metadata belongs only to a function that survives lexical lookup.
     pub(super) fn lookup_top_function(&self, name: &str) -> Option<&super::ValueEntry> {
-        if self.scopes.get(name).is_some() {
+        if self.scopes.get(name).is_some()
+            || self.declaration_in_another_case_clause(name).is_some()
+        {
             return None;
         }
         self.top_symbols

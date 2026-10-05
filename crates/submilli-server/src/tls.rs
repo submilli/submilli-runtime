@@ -219,7 +219,7 @@ mod tests {
             auth: crate::AuthConfig::Tokens(vec![
                 crate::ApiToken::new("admin", crate::Role::Admin, token).unwrap(),
             ]),
-            ..crate::ServerConfig::default()
+            ..crate::config::test_config()
         })
         .unwrap();
         let shutdown = state.shutdown_signal();

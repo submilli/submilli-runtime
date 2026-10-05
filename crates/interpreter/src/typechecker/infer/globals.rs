@@ -9,6 +9,7 @@ use super::Inferer;
 impl<'a> Inferer<'a> {
     pub(super) fn infer_global_variables(&mut self) -> Result<(), CompilerFailure> {
         let top_level: Vec<_> = self.ast.top_level.clone();
+        self.collect_later_globals()?;
         // Assignments to module `let`s narrow them for later top-level
         // statements. Function bodies are inferred after this frame is gone.
         self.push_narrow_frame(super::narrowing::NarrowEnv::new());
@@ -41,6 +42,7 @@ impl<'a> Inferer<'a> {
                     doc,
                 } => {
                     if self.reject_intrinsic_name(&name) {
+                        self.forget_later_global(&name.name);
                         continue;
                     }
                     let hint = ty.as_ref().map(|a| self.resolve_type(a)).transpose()?;
@@ -52,6 +54,7 @@ impl<'a> Inferer<'a> {
                         Some(hint) => hint,
                         None => self.widen_fresh_literals(typed_value, &value_ty)?,
                     };
+                    self.finish_later_global(&name, &bound)?;
                     self.bind_top(
                         &name,
                         ValueKind::Let {
@@ -96,6 +99,7 @@ impl<'a> Inferer<'a> {
                     doc,
                 } => {
                     if self.reject_intrinsic_name(&name) {
+                        self.forget_later_global(&name.name);
                         continue;
                     }
                     // Keeps the literal types its value passes through; see the
@@ -106,6 +110,7 @@ impl<'a> Inferer<'a> {
                     let origin =
                         self.initializer_literal_origin(ty.is_some(), typed_value, &value_ty)?;
                     let bound = hint.unwrap_or(value_ty);
+                    self.finish_later_global(&name, &bound)?;
                     self.bind_top(
                         &name,
                         ValueKind::Const {
@@ -115,6 +120,9 @@ impl<'a> Inferer<'a> {
                     )?;
                     let mangled = self.mangle_top_symbol(&name.name)?;
                     self.record_global_literal_origin(mangled.clone(), origin);
+                    if ty.is_none() {
+                        self.record_global_aliased_condition(mangled.clone(), typed_value);
+                    }
                     self.add_typed_global(crate::TypedGlobal {
                         name: name.clone(),
                         mangled_name: mangled.clone(),

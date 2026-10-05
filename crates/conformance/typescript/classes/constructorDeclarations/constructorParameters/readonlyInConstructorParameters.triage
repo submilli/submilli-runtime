@@ -1,2 +1,1 @@
-line 8 missed: bug SUB-1162 `readonly public` is accepted in either order
 line 14 missed: by-design spec §2.2 privacy is module-scoped, and this read of the `private` parameter property is in its module

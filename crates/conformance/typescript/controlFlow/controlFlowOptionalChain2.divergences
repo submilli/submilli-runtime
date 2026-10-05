@@ -1,125 +1,65 @@
-types: 70 of 103 tsc entries compared, 30 differ
-
-line 15: arg
-  tsc:  B
-  ours: null | A | B
-
-line 19: arg
-  tsc:  A | null
-  ours: null | A | B
-
-line 20: arg
-  tsc:  A | null
-  ours: null | A | B
-
-line 25: arg
-  tsc:  B
-  ours: null | A | B
-
-line 29: arg
-  tsc:  A | null
-  ours: null | A | B
-
-line 30: arg
-  tsc:  A | null
-  ours: null | A | B
-
-line 38: kind
-  tsc:  "X" | null | undefined
-  ours: X | U
+types: 64 of 103 tsc entries compared, 16 differ
 
 line 39: x
   tsc:  U
-  ours: null | X | U
+  ours: null | U
 
 line 42: x
   tsc:  X | null
-  ours: X | U
-
-line 47: kind
-  tsc:  "X" | null | undefined
-  ours: X | N
+  ours: X
 
 line 48: x
   tsc:  N
-  ours: null | X | N
+  ours: null | N
 
 line 51: x
   tsc:  X | null
-  ours: X | N
-
-line 56: kind
-  tsc:  "X" | null | undefined
-  ours: X | U
+  ours: X
 
 line 57: x
   tsc:  U
-  ours: null | X | U
+  ours: null | U
 
 line 60: x
   tsc:  X | null
-  ours: X | U
-
-line 65: kind
-  tsc:  "X" | null | undefined
-  ours: X | N
+  ours: X
 
 line 66: x
   tsc:  N
-  ours: null | X | N
+  ours: null | N
 
 line 69: x
   tsc:  X | null
-  ours: X | N
-
-line 74: kind
-  tsc:  "X" | null | undefined
-  ours: X | U
+  ours: X
 
 line 75: x
   tsc:  U
-  ours: null | X | U
+  ours: null | U
 
 line 78: x
   tsc:  X | null
-  ours: X | U
-
-line 83: kind
-  tsc:  "X" | null | undefined
-  ours: X | N
+  ours: X
 
 line 84: x
   tsc:  N
-  ours: null | X | N
+  ours: null | N
 
 line 87: x
   tsc:  X | null
-  ours: X | N
-
-line 92: kind
-  tsc:  "X" | null | undefined
-  ours: X | U
+  ours: X
 
 line 93: x
   tsc:  U
-  ours: null | X | U
+  ours: null | U
 
 line 96: x
   tsc:  X | null
-  ours: X | U
-
-line 101: kind
-  tsc:  "X" | null | undefined
-  ours: X | N
+  ours: X
 
 line 102: x
   tsc:  N
-  ours: null | X | N
+  ours: null | N
 
 line 105: x
   tsc:  X | null
-  ours: X | N
-
-errors:
-line 20: ours: field `name` does not exist on all members of `A | B` (missing on `B`) (tsc accepts)
-line 30: ours: field `name` does not exist on all members of `A | B` (missing on `B`) (tsc accepts)
+  ours: X

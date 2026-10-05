@@ -1,5 +1,6 @@
 //! Inference pass — produces the Typed AST.
 
+mod aliased_conditions;
 mod assign_expr;
 pub(crate) mod assignable;
 mod binding_analysis;
@@ -11,6 +12,7 @@ mod exports;
 pub mod expr;
 mod format_definition;
 mod format_signature;
+mod forward_globals;
 pub mod generic;
 mod generic_scopes;
 mod globals;
@@ -120,6 +122,7 @@ pub fn infer_with_transitive_checked<'a>(
         pattern_sources: BTreeMap::new(),
         literal_freshness: literal_freshness::LiteralFreshness::default(),
         keeps_literal_types: false,
+        aliased_conditions: Default::default(),
         captured_mutators: bindings.mutators,
         last_assignments: bindings.last_assignments,
         nested_function_creation_points: bindings.nested_function_creation_points,
@@ -137,6 +140,8 @@ pub fn infer_with_transitive_checked<'a>(
         super_seen: false,
         read_before_super: false,
         in_nested_function: false,
+        later_globals: BTreeMap::new(),
+        switch_frames: Vec::new(),
         super_call_is_statement: false,
         in_super_arguments: false,
         in_super_handler: false,
@@ -378,6 +383,7 @@ pub fn infer_package_checked<'a>(
         pattern_sources: BTreeMap::new(),
         literal_freshness: literal_freshness::LiteralFreshness::default(),
         keeps_literal_types: false,
+        aliased_conditions: Default::default(),
         captured_mutators: Default::default(),
         last_assignments: Default::default(),
         nested_function_creation_points: Default::default(),
@@ -395,6 +401,8 @@ pub fn infer_package_checked<'a>(
         super_seen: false,
         read_before_super: false,
         in_nested_function: false,
+        later_globals: BTreeMap::new(),
+        switch_frames: Vec::new(),
         super_call_is_statement: false,
         in_super_arguments: false,
         in_super_handler: false,
@@ -680,6 +688,7 @@ pub(super) struct Inferer<'a> {
     /// for one: an unannotated `const`'s initializer. Read and cleared on
     /// entry, so it reaches only the operands that carry the value.
     keeps_literal_types: bool,
+    aliased_conditions: aliased_conditions::AliasedConditions,
     pub(super) source: &'a str,
     pub(super) package_name: &'a str,
     pub(super) ast: &'a Ast,
@@ -752,6 +761,12 @@ pub(super) struct Inferer<'a> {
     /// function nested in the constructor rather than the constructor's own
     /// body. A `super(...)` there can run late or never.
     pub(super) in_nested_function: bool,
+    /// Module-level `let`/`const` declarations step 2 has yet to reach, by
+    /// name. See [`forward_globals`].
+    pub(super) later_globals: BTreeMap<String, forward_globals::LaterGlobal>,
+    /// The `let`/`const` declared directly in the clauses of each enclosing
+    /// `switch`, innermost last.
+    pub(super) switch_frames: Vec<switch_stmt::SwitchFrame>,
     /// Set by an expression statement that is a bare `super(...)` call, for
     /// `infer_super_call` to take. A call inside an expression can be skipped
     /// (`c ? super(1) : f()`), which the super-call rule can't see.
@@ -892,6 +907,7 @@ impl<'a> Inferer<'a> {
         self.clause_write_scopes.clear();
         self.tombstone_scopes.clear();
         self.last_write_spans.clear();
+        self.aliased_conditions = Default::default();
         self.suspended_narrow_scopes.clear();
         self.pending_post_if_materializations.clear();
         if !self.pending_implements.is_empty() {

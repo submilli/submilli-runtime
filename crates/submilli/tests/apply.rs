@@ -1,6 +1,9 @@
 //! End-to-end tests for `submilli server apply` against a running submilli-server
 //! using blueprint files and multi-document YAML streams.
 
+#[path = "../../submilli-server/tests/common/in_memory_config.rs"]
+mod in_memory_config;
+
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
@@ -33,7 +36,7 @@ fn apply(path: &Path, env: &[(&str, &str)]) -> Output {
 }
 
 async fn spawn_server() -> (String, std::sync::Arc<tokio::sync::Notify>) {
-    spawn_server_with(ServerConfig::default()).await
+    spawn_server_with(in_memory_config::config()).await
 }
 
 async fn spawn_server_with(config: ServerConfig) -> (String, std::sync::Arc<tokio::sync::Notify>) {
@@ -226,7 +229,7 @@ async fn apply_sends_the_admin_token_from_the_environment() {
     let admin = ApiToken::new("ops", Role::Admin, ADMIN_TOKEN).expect("valid token");
     let (server, shutdown) = spawn_server_with(ServerConfig {
         auth: AuthConfig::Tokens(vec![admin]),
-        ..ServerConfig::default()
+        ..in_memory_config::config()
     })
     .await;
     let dir = tempfile::tempdir().unwrap();

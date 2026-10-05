@@ -1,3 +1,6 @@
+#[path = "common/in_memory_config.rs"]
+mod in_memory_config;
+
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -12,7 +15,7 @@ use submilli_server::{AppState, ServerConfig, app};
 use tower::ServiceExt;
 
 fn router() -> Router {
-    app(AppState::new(ServerConfig::default()).expect("build AppState"))
+    app(AppState::new(in_memory_config::config()).expect("build AppState"))
 }
 
 /// Router over pre-parsed blueprints, bypassing the HTTP add path (and its
@@ -24,7 +27,7 @@ fn seeded_router(yamls: &[&str]) -> Router {
     let store = Arc::new(InMemoryBlueprintStore::seed(blueprints).expect("seed blueprints"));
     app(AppState::new(ServerConfig {
         blueprints: Some(store),
-        ..ServerConfig::default()
+        ..in_memory_config::config()
     })
     .expect("build AppState"))
 }
@@ -44,7 +47,7 @@ fn router_with_volumes(names: &[&str]) -> Router {
         .collect();
     app(AppState::new(ServerConfig {
         volumes,
-        ..ServerConfig::default()
+        ..in_memory_config::config()
     })
     .expect("build AppState"))
 }
@@ -68,7 +71,7 @@ fn router_over_retired_form(dir: &std::path::Path) -> Router {
     );
     app(AppState::new(ServerConfig {
         blueprints: Some(store),
-        ..ServerConfig::default()
+        ..in_memory_config::config()
     })
     .expect("build AppState"))
 }
@@ -789,7 +792,7 @@ async fn registration_rejects_missing_packages() {
     let router = app(AppState::new(ServerConfig {
         package_store_root: Some(owned.path().to_path_buf()),
         package_fallback_root: Some(fallback.path().to_path_buf()),
-        ..ServerConfig::default()
+        ..in_memory_config::config()
     })
     .expect("state"));
     let (status, body) = post(
@@ -858,7 +861,7 @@ async fn registration_checks_dependency_requirements_and_preserves_existing_blue
     let router = app(AppState::new(ServerConfig {
         package_store_root: Some(owned.path().to_path_buf()),
         package_fallback_root: Some(fallback.path().to_path_buf()),
-        ..ServerConfig::default()
+        ..in_memory_config::config()
     })
     .expect("state"));
     let original = json!({"yaml": "name: demo\n"});
