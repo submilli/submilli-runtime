@@ -1,6 +1,6 @@
 ---
-title: "Review a package's security"
-description: "How to have a coding agent review a package's authorization: run the review locally with Codex or Claude Code, read and keep its report, require it in CI, and make deployment wait for it."
+title: "Review a Package's security"
+description: "How to have a coding agent review a Package's authorization: run the review locally with Codex or Claude Code, read and keep its report, require it in CI, and make deployment wait for it."
 slug: packages/review-package-security
 # The report excerpt is from a Codex 0.160.0 review run on 2026-10-04 with
 # the CLI built from main b5002307; the same day, Claude Code 2.1.288 with
@@ -12,24 +12,24 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "c3364d3e25214a01d20d59e48079c486ec1cc5ee98035a7e361eaec549ba073a"
-  confirmedAt: "2026-10-05T10:59:51.490Z"
+  contentHash: "6eb28f0d6d9d6ee4adcb891330e728c9f48bf919a46eeb145135cab249322307"
+  confirmedAt: "2026-10-05T13:01:53.009Z"
 ---
 
-A blueprint's rules see only what a package passes to `check()`. A package
+A Blueprint's rules see only what a Package passes to `check()`. A Package
 can check one customer and still return another customer's data, and
 neither its tests nor the compiler need notice. The tag and the `check`
 agree, and a test that asks for a customer's charges passes when it gets
-too many. An agent that reads the package with that question in mind can.
+too many. An agent that reads the Package with that question in mind can.
 
-This guide shows you how to review a package's authorization with a coding
+This guide shows you how to review a Package's authorization with a coding
 agent. [Verify a
-package in CI](/docs/tutorials/verify-a-package-in-ci#have-an-agent-review-it)
+Package in CI](/docs/tutorials/verify-a-package-in-ci#have-an-agent-review-it)
 walks through one review end to end with Codex.
 
 ## Run a review
 
-From the package project, with the agent installed and signed in:
+From the Package project, with the agent installed and signed in:
 
 ```sh
 submilli build security-review -a codex -m gpt-6.1-sol -e high --fail-on high --output review.json
@@ -38,15 +38,15 @@ submilli build security-review -a codex -m gpt-6.1-sol -e high --fail-on high --
 `-a` picks the agent, `-m` its model, and `-e` how hard it reasons.
 `--fail-on` is the lowest severity that fails the command, and
 `--output` saves the report to a new file. The command refuses to
-overwrite one. `-p @acme/billing` limits the review to one package and
-the local packages it depends on.
+overwrite one. `-p @acme/billing` limits the review to one Package and
+the local Packages it depends on.
 
 | Agent | `-a` | Install | Sign in locally | Model, for example |
 | --- | --- | --- | --- | --- |
 | Codex | `codex` | `npm install -g @openai/codex@0.160.0` | `codex login` | `gpt-6.1-sol` |
 | Claude Code | `claude` | `npm install -g @anthropic-ai/claude-code@2.1.288` | `claude auth login`, or `ANTHROPIC_API_KEY` set | `claude-opus-5-5` |
 
-The agent runs with its tools turned off and sees only the package's
+The agent runs with its tools turned off and sees only the Package's
 source, which goes to that agent's model provider under your account's
 terms. Install the agents from a pinned version, as here, because the review runs
 the executable it finds on `PATH`.
@@ -86,16 +86,16 @@ jq '{status, agent, agent_version, model, files, findings}' review.json
 ```
 
 Keep the report with the revision it reviewed, because the hashes say
-which source the verdict covers. A package that depends on a package
+which source the verdict covers. A Package that depends on a Package
 from another repository reviews incomplete, with a coverage gap for the
 dependency, and exits `2`. Review that dependency in its own project.
 
 ## Require it in CI
 
-The `review` job in [Verify a package in
+The `review` job in [Verify a Package in
 CI](/docs/tutorials/verify-a-package-in-ci#have-an-agent-review-it)
 runs on every pull request and push to main, installs the agent and a
-pinned Submilli release, reviews the package, and uploads the report
+pinned Submilli release, reviews the Package, and uploads the report
 even when the review fails. For Claude Code,
 the install, the credential, and the agent and its model change:
 
@@ -150,9 +150,9 @@ authentication](https://code.claude.com/docs/en/authentication#generate-a-long-l
 
 ## Make deployment wait for it
 
-Review the package's own repository, at the revision you deploy. Reviewing
-the repository that holds your blueprints doesn't inspect the packages it
-installs. When the packages live elsewhere, as in [Manage blueprints in
+Review the Package's own repository, at the revision you deploy. Reviewing
+the repository that holds your Blueprints doesn't inspect the Packages it
+installs. When the Packages live elsewhere, as in [Manage Blueprints in
 Git](/docs/tutorials/manage-blueprints-in-git), pin a commit in
 `packages.txt` only after its review passed, and keep that review's report
 with the deployment.

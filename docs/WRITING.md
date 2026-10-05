@@ -15,9 +15,9 @@ material that only a code-writing agent needs belongs there.
 The book follows [Diátaxis](https://diataxis.fr/): every page is one of four
 types, and the type decides how it is written. The parts are a single reading
 line: each page assumes only what earlier pages established. Blueprints come
-before packages everywhere, the policy first and then the operation it governs.
+before Packages everywhere, the policy first and then the operation it governs.
 One scenario runs through the book: the Acme support agent, its billing
-package, the customer `cus_northwind`, and the injected ticket.
+Package, the customer `cus_northwind`, and the injected ticket.
 
 | Part | Folder | Type | Read |
 | --- | --- | --- | --- |
@@ -35,7 +35,7 @@ A folder inside a part is a sidebar group, named in `astro.config.mjs`.
 ### Explanation
 
 Say what the thing *is* before what it does, with an analogy the reader
-already holds (a blueprint is to a session what a blueprint is to a house).
+already holds (a Blueprint is to a session what a blueprint is to a house).
 Then list its main parts and say which one the page is about. Explain why by
 contrast with what the reader uses today, named concretely. Put the concept in
 the heading, so the argument reads in the table of contents. Order ideas so
@@ -349,7 +349,7 @@ Before handing a page over for review, check it against this list:
   it, and name the warning the next step clears.
 - **Explain arguments the first time** a command appears, and define a term
   in a sentence or two where the reader first needs it.
-- **Real examples, not stubs.** A package makes its HTTP call and reads its
+- **Real examples, not stubs.** A Package makes its HTTP call and reads its
   key; names, paths, and ids stay consistent within the page.
 - **Purpose before command,** in the reader's terms and with concrete things:
   "the customer the agent is serving", not "the session's context".

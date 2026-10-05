@@ -1,22 +1,22 @@
 ---
 title: "Mount a shared volume"
-description: "How to give programs a directory that outlives sessions and is shared across blueprints: declare a named volume on the server, mount it in a blueprint read-only or read-write, use it from a program, and know where its files live."
+description: "How to give programs a directory that outlives sessions and is shared across Blueprints: declare a named volume on the server, mount it in a Blueprint read-only or read-write, use it from a program, and know where its files live."
 slug: server/mount-a-shared-volume
 sidebar:
   order: 9
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "224ee8b79165f3a4b41ee1791c147ca6beee7a8728fdc3fccc6f26b05cee1afa"
-  confirmedAt: "2026-10-05T10:59:51.487Z"
+  contentHash: "05086b03dfa77e84521d4390ea813c1046e5016e3d0ea8a9cd0828a153966565"
+  confirmedAt: "2026-10-05T13:01:53.009Z"
 ---
 
 A session's files end with the session. Some things an agent works with
 must outlive it, such as the notes it keeps between conversations, a
-handbook every agent should be able to read, or a workspace two blueprints
+handbook every agent should be able to read, or a workspace two Blueprints
 share. For those there is the named volume. The server owns and declares
-it, a blueprint mounts it at a path it chooses, read-only or read-write,
-and every session and blueprint that mounts it sees it.
+it, a Blueprint mounts it at a path it chooses, read-only or read-write,
+and every session and Blueprint that mounts it sees it.
 
 This guide shows you how to mount a shared volume. The example gives
 Acme's support agent a memory it keeps across conversations and a
@@ -25,8 +25,8 @@ read-only company handbook. Substitute your volumes.
 ## Declare it on the server
 
 Volumes are declared in the server's config file, under `volumes:`, and
-nowhere else. A blueprint can only name them. Each has a kind, a size
-limit, and the most access any blueprint may have:
+nowhere else. A Blueprint can only name them. Each has a kind, a size
+limit, and the most access any Blueprint may have:
 
 ```yaml title="server.yaml (fragment)"
 volumes:
@@ -47,14 +47,14 @@ volumes:
 
 `size_limit` is required, a size such as `100MB` or `10GB`, or
 `unlimited`. One limit covers the volume however many sessions and
-blueprints use it, so a blueprint can't get a second allowance by
+Blueprints use it, so a Blueprint can't get a second allowance by
 mounting the same volume twice. `access` is `read_write` unless you
 write `read_only`. The server reads the declarations at startup, so
 restart it after a change.
 
-## Mount it in a blueprint
+## Mount it in a Blueprint
 
-A blueprint mounts a volume at a path under `vfs.mounts`, beside its
+A Blueprint mounts a volume at a path under `vfs.mounts`, beside its
 root, which stays `ephemeral` or `per_session` as [Keep files and
 state](/docs/blueprints/keep-files-and-state) describes. The
 support agent keeps its session files at `/`, its memory at `/memory`,
@@ -76,8 +76,8 @@ vfs:
 
 `access` can only narrow what the server declared. Leave it out to take
 the server's setting. A volume can also be the root itself, `vfs:
-{mode: named, volume: project-memory}`, for a blueprint whose
-filesystem should outlive the session. The blueprint's filesystem rules
+{mode: named, volume: project-memory}`, for a Blueprint whose
+filesystem should outlive the session. The Blueprint's filesystem rules
 apply under a mount as anywhere else. The example allows `fs.read`,
 `fs.write`, `fs.stat`, and `fs.list` to `main`.
 
@@ -102,7 +102,7 @@ error: volume 'team-memory' is not declared on this server; declared volumes: co
 error: volume 'company-handbook' is read_only on this server; drop `access: read_write` (or write `access: read_only`), or ask the operator to declare it read_write
 ```
 
-A blueprint written for the earlier `persistent` mode is refused too,
+A Blueprint written for the earlier `persistent` mode is refused too,
 with the edit that replaces it:
 
 ```text
@@ -190,7 +190,7 @@ Mount points can't be moved or removed, and one mount can't sit inside
 another. The same volume may be mounted at two paths, under one limit. A move
 between the root and a mount, or between two mounts, copies and then
 removes, so it isn't atomic. A named volume needs a server to resolve
-it, so `submilli run` refuses a blueprint that mounts one and says what
+it, so `submilli run` refuses a Blueprint that mounts one and says what
 to do instead:
 
 ```text
@@ -220,7 +220,7 @@ vfs:
 ```
 
 `subPath` names the directory inside the volume to mount. The program sees it as `/memory` whichever customer the session is
-for, and nothing above it, so neither the program nor a package it
+for, and nothing above it, so neither the program nor a Package it
 calls can reach another customer's notes, and no rule has to name a
 customer. `${vars.customerId}` must be a whole part of the path, and a
 writable mount creates the directory the first time it is used. `cwd`
@@ -267,7 +267,7 @@ invalid vfs config: each path component must be nonempty and contain no separato
 ```
 
 `cwd` is a convenience. `..` and absolute paths still
-reach the rest of what the blueprint mounts. The boundary is `subPath`.
+reach the rest of what the Blueprint mounts. The boundary is `subPath`.
 
 ## Where the files live
 
@@ -279,8 +279,8 @@ after the volume, and a `local-path` volume's are where you put them:
 ```
 
 Nothing the server does deletes a volume's files. Ending a session or
-removing a blueprint leaves them, and removing the declaration from the
-config only stops blueprints from naming the volume. Declare it again
+removing a Blueprint leaves them, and removing the declaration from the
+config only stops Blueprints from naming the volume. Declare it again
 and its files are still there. To remove a managed volume for good,
 delete its directory under `volume_dir` while the server is stopped.
 Back up `volume_dir` with the sessions, as [Run the

@@ -1,39 +1,39 @@
 ---
 title: "Packages"
-description: "What a package is in Submilli: a library built for agents, where every operation asks the blueprint before it acts; how a program uses one, and the tools for building one."
+description: "What a Package is in Submilli: a library built for agents, where every operation asks the Blueprint before it acts; how a program uses one, and the tools for building one."
 slug: packages
 sidebar:
   order: 5
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "39167099e58b67bc4cdb229bca99c0ca79e10d771966727f94a955345dfd71f2"
-  confirmedAt: "2026-10-05T10:59:51.493Z"
+  contentHash: "abec4d0a47f11e9d8d987a39d8915f6947254efe420923afcd68f56ee1e91a0e"
+  confirmedAt: "2026-10-05T13:01:53.009Z"
 ---
 
-A package in Submilli is like a package in npm or pip, a library you
+A Package in Submilli is like a package in npm or pip, a library you
 install and import. The language is TypeScript, but npm packages can't be
-used. Submilli resets the ecosystem with packages built for AI agents.
+used. Submilli resets the ecosystem with Packages built for AI agents.
 Each function that reaches outside names its operation and asks the
-blueprint before it acts. Why the reset is worth it comes later in this
+Blueprint before it acts. Why the reset is worth it comes later in this
 chapter. In the quickstart you wrote one with a single function.
 
 Packages are also Submilli's answer to MCP servers. Other code-execution
 platforms take the MCP servers you run and turn them into an interface the
 agent's code can call. Submilli can do that too. Declare a server in the
-blueprint and it becomes a package, with each tool a function the blueprint
+Blueprint and it becomes a Package, with each tool a function the Blueprint
 can allow or deny. But MCP was designed for tool calling. Most
 MCP servers publish no output schema, so a program can't know the shape of
 what a tool returns, and a rule over an MCP tool can see only the tool's
-name. A package needs no server to deploy or maintain, calls the API
+name. A Package needs no server to deploy or maintain, calls the API
 directly, returns typed values, and tells the runtime what each call means.
 
-A package can be one you write for an internal system, one you write for a
-third-party service you consume, or one someone else published. Any package
+A Package can be one you write for an internal system, one you write for a
+third-party service you consume, or one someone else published. Any Package
 in a Git repository
 [installs straight from it](/docs/blueprints/start-a-blueprint).
 Submilli publishes
-[curated packages](/docs/reference/curated-packages) that way for
+[curated Packages](/docs/reference/curated-packages) that way for
 common services such as GitHub, Slack, Google Drive, Linear, Notion, and others.
 
 ## Why not npm
@@ -43,12 +43,12 @@ is written for Node, and Node gives it the whole operating system: files,
 sockets, processes, anything a system call can reach. Submilli is designed
 for agents, and the ways a program can reach the outside world are designed
 for that. A program gets a small set of operations, each named and checked. An npm
-package also has no semantic security (no `check` calls), so a blueprint
-would have nothing to govern. You pay by wrapping your systems as packages.
+package also has no semantic security (no `check` calls), so a Blueprint
+would have nothing to govern. You pay by wrapping your systems as Packages.
 
-## A package, from the inside
+## A Package, from the inside
 
-Here is one operation of the billing package, the one the previous
+Here is one operation of the billing Package, the one the previous
 chapter's rules were about:
 
 ```typescript title="package/src/lib.ts (fragment)"
@@ -88,12 +88,12 @@ export function applyCredit(customerId: string, amount: number): Credit {
 Two lines make it an operation. The `@capability` tag **declares** it with a
 name and the fields a rule may test. The `check` call, from
 `submilli:security`, **enforces** it. It takes the capability's name and
-those fields, asks the blueprint whether the caller may do this with these
+those fields, asks the Blueprint whether the caller may do this with these
 values, and throws `PermissionDeniedError` if not.
 
 :::tip[Did you know?]
 The compiler keeps the `@capability` tag and the `check` call in step. When
-you build a package, it compares the fields the tag declares with the
+you build a Package, it compares the fields the tag declares with the
 fields the call passes, and warns when they disagree: a field in one and
 not the other, a tag with no check, a check with no tag.
 
@@ -107,16 +107,16 @@ warning: payload key `customerClass` missing from `@capability` binding
 ```
 :::
 
-This is semantic security from the package's side. The package decides
+This is semantic security from the Package's side. The Package decides
 what the operation means and which facts describe it, and hands them to
 the runtime typed: the customer, the amount, and the customer's class,
-which the call didn't carry and the package looked up. A blueprint can then
+which the call didn't carry and the Package looked up. A Blueprint can then
 say "premium customers only", and nobody had to read a payload.
 
 ## What the agent's program sees
 
-To the model, a package is an import. Before it writes a program, the agent
-searches for packages and reads a package's documentation. You can do the
+To the model, a Package is an import. Before it writes a program, the agent
+searches for Packages and reads a Package's documentation. You can do the
 same from the CLI:
 
 ```
@@ -159,7 +159,7 @@ interface Credit {
 ```
 
 The agent's documentation tool returns the same declarations, doc comments
-included, together with the package's readme. Then it writes the program:
+included, together with the Package's readme. Then it writes the program:
 
 ```typescript title="credit.ts"
 import { applyCredit } from "@acme/billing";
@@ -171,30 +171,30 @@ function main(): string {
 ```
 
 Calls are synchronous. There is no `await`, and the program gets the value back. Run
-under the previous chapter's blueprint, bound to `cus_northwind`:
+under the previous chapter's Blueprint, bound to `cus_northwind`:
 
 ```text
 credited 1500 cents
 ```
 
 The program never sees the billing API, its URL, or the key that
-authenticates the request. The package holds all three. When the blueprint
+authenticates the request. The Package holds all three. When the Blueprint
 refuses the call, the program gets the error you saw in the quickstart, and
 the model reads it.
 
 ## The tools to build one
 
-`submilli build` is to a package what `npm` is to a Node project. It
+`submilli build` is to a Package what `npm` is to a Node project. It
 scaffolds the project, compiles it, derives what it can be granted from the
 `@capability` tags, runs its tests, and installs it where programs can
 import it. And with the skill installed, your coding assistant does the
 writing. Give it a service's API documentation and what the agent may do,
-and it writes the package, the readme the model reads, and the tests, then
-tests it under a blueprint.
+and it writes the Package, the readme the model reads, and the tests, then
+tests it under a Blueprint.
 
-The how-to pages on packages take each step in turn, starting with
+The how-to pages on Packages take each step in turn, starting with
 [start a project](/docs/packages/start-a-project), and the
-[build a package](/docs/tutorials/build-a-package) tutorial walks
+[build a Package](/docs/tutorials/build-a-package) tutorial walks
 through doing it with your assistant.
 
 Next: [the server](/docs/server), the process that compiles the

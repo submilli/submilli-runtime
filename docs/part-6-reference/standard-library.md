@@ -7,8 +7,8 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "189104fa3920886ba781a3dc2d160b825c7ee2ddb941854cc58127c3b597e16a"
-  confirmedAt: "2026-10-05T10:59:51.479Z"
+  contentHash: "b316181a40f118b787f61623f5abc3a58db24051517cc308e14edc85f0fbfebd"
+  confirmedAt: "2026-10-05T13:01:53.009Z"
 ---
 
 This page describes what each `submilli:` module does, the capabilities
@@ -29,11 +29,11 @@ and `Temporal`, are on [Built-ins](/docs/reference/built-ins).
 | `submilli:crypto` | SHA-256, SHA-512, HMAC-SHA-256, random bytes | Nothing |
 | `submilli:url` | URL and query-string parsing and building | Nothing |
 | `submilli:uuid` | UUID v4 and v7 | Nothing |
-| `submilli:secrets` | A declared secret's value, for packages | `secrets.get` |
-| `submilli:security` | `check`, for packages | The capability it names |
+| `submilli:secrets` | A declared secret's value, for Packages | `secrets.get` |
+| `submilli:security` | `check`, for Packages | The capability it names |
 | `submilli:test` | `label` and `expectException`, for test files | Nothing |
 
-`submilli:git` is available under a blueprint with a `git` block. Each
+`submilli:git` is available under a Blueprint with a `git` block. Each
 capability's fields are on [Permissions](/docs/reference/permissions).
 
 A module is imported by its name, as a namespace, a default, or by name:
@@ -45,7 +45,7 @@ import { sha256 } from "submilli:crypto";
 ```
 
 `submilli search` and `submilli docs` list the modules a program may import.
-With `--blueprint`, they list only those the blueprint lets it use.
+With `--blueprint`, they list only those the Blueprint lets it use.
 
 ## Rules for every module
 
@@ -61,7 +61,7 @@ With `--blueprint`, they list only those the blueprint lets it use.
 
 ## HTTP requests
 
-- HTTPS, unless the blueprint sets `allow_insecure_http: true`.
+- HTTPS, unless the Blueprint sets `allow_insecure_http: true`.
 - Redirects, up to 10, are each checked against the caller's rules before
   they are sent. A redirect to another origin drops the credential headers.
 - A request times out after 30 seconds and a download after 60. A
@@ -88,7 +88,7 @@ atomically and returns the change as a unified diff.
 ## Git repositories
 
 `submilli:git` works on Git repositories in the program's filesystem. The
-blueprint's `git` block sets the identity that authors every commit and the
+Blueprint's `git` block sets the identity that authors every commit and the
 `username` that pairs with the `GIT_TOKEN` secret for private remotes
 ([Allow Git](/docs/blueprints/allow-git)). `Repository.init`,
 `Repository.clone`, and `Repository.open` return a `Repository`:
@@ -125,7 +125,7 @@ An operation that passes a limit throws and leaves the repository as it was.
 
 ## Model calls
 
-`submilli:llm` sends prompts to the models the blueprint declares
+`submilli:llm` sends prompts to the models the Blueprint declares
 ([Allow model calls](/docs/blueprints/allow-model-calls)):
 
 | Form | Returns |
@@ -144,14 +144,14 @@ An operation that passes a limit throws and leaves the repository as it was.
 - A batch takes up to 128 prompts, each up to 256 KB. A call's tokens are
   reserved against the run's and the server's budgets before it is sent.
 
-## Modules for packages and tests
+## Modules for Packages and tests
 
-`secrets.get(name)` returns a declared secret's value to a package. From the
+`secrets.get(name)` returns a declared secret's value to a Package. From the
 program itself, `main`, it always throws, so a secret's value never reaches
 generated code.
 
-`check(capability, context)` from `submilli:security` asks the blueprint
-whether the package's caller may perform `capability` with the fields in
+`check(capability, context)` from `submilli:security` asks the Blueprint
+whether the Package's caller may perform `capability` with the fields in
 `context`, and throws `PermissionDeniedError` if not
 ([Export a function](/docs/packages/export-a-function)).
 
@@ -301,7 +301,7 @@ A repository under the VFS root.
 | `add(paths: string[]): void` |  | Stage explicit files or directories, including deletions. |
 | `addRemote(name: string, url: string): void` |  | Add a named HTTPS remote, for example origin or upstream. |
 | `branches(): { current: boolean; id: string; name: string }[]` |  | List local branches. |
-| `commit(message: string): string` | `git.commit { path: string, branch: string }` | Commit staged changes with blueprint identity and return the commit ID. |
+| `commit(message: string): string` | `git.commit { path: string, branch: string }` | Commit staged changes with Blueprint identity and return the commit ID. |
 | `createBranch(name: string, start?: string): void` |  | Create a branch without overwriting an existing branch. |
 | `diff(options?: null \| { from?: string; mode?: string; to?: string }): { binaryPaths: string[]; patch: string }` |  | Compare working (default), staged, or refs (requires from and to). |
 | `fetch(remote?: string, branch?: string): { branches: string[] }` | `git.fetch { path: string, remoteName: $remote, remote: string, branch: string }` | Fetch remote-tracking branches. |
@@ -417,11 +417,11 @@ One model this caller may call.
 
 ## `submilli:secrets`
 
-Policy-gated access to blueprint-declared secrets.
+Policy-gated access to Blueprint-declared secrets.
 
 | Function | Capability | Description |
 | --- | --- | --- |
-| `get(secret: string): string \| null` | `secrets.get { name: $secret }` | Resolve a blueprint-declared secret by name. |
+| `get(secret: string): string \| null` | `secrets.get { name: $secret }` | Resolve a Blueprint-declared secret by name. |
 
 ## `submilli:session`
 

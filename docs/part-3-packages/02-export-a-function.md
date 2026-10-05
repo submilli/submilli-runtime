@@ -1,21 +1,21 @@
 ---
 title: "Export a function"
-description: "How to export a function a blueprint can allow, filter, or deny: declare it with a @capability tag, enforce it with check, design the payload, call the service with a key the program never sees, and build it."
+description: "How to export a function a Blueprint can allow, filter, or deny: declare it with a @capability tag, enforce it with check, design the payload, call the service with a key the program never sees, and build it."
 slug: packages/export-a-function
 sidebar:
   order: 2
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "ff885f87e7cd970871899431711b0fcba96e34a2ce860cde373b35be918b8470"
-  confirmedAt: "2026-10-05T10:59:51.488Z"
+  contentHash: "f6b915dfa61861dfab47e48f6d16d9f33aa7c54c004af48ac608dee86b858b1d"
+  confirmedAt: "2026-10-05T13:01:53.009Z"
 ---
 
 The agent's program is going to call a function of yours, and the program
 was written by a model that reads untrusted text. The function is safe to
-hand it because it asks the blueprint before it acts, with the facts a
+hand it because it asks the Blueprint before it acts, with the facts a
 rule can test, such as which customer, how much, and what kind of
-account. In the package, that is two lines:
+account. In the Package, that is two lines:
 
 ```typescript
 /** @capability acme.com/credits.apply { customerId: string, customerClass: string, amount: number } */
@@ -24,14 +24,14 @@ export function applyCredit(customerId: string, amount: number): Credit {
     check("acme.com/credits.apply", { customerId: id, customerClass, amount });
 ```
 
-The first, in the doc comment, names the capability a blueprint rule
-refers to and the facts it reports. The second asks the blueprint with
+The first, in the doc comment, names the capability a Blueprint rule
+refers to and the facts it reports. The second asks the Blueprint with
 those facts, before anything runs. The facts you choose decide what a
 policy can ever be precise about.
 
-This guide shows you how to export a function that a blueprint can
+This guide shows you how to export a function that a Blueprint can
 allow, filter, or deny, called an **operation**. The example is
-`applyCredit` in Acme's billing package, which runs on Stripe in test
+`applyCredit` in Acme's billing Package, which runs on Stripe in test
 mode. Substitute your operation and your service.
 
 ## Declare and enforce it
@@ -39,7 +39,7 @@ mode. Substitute your operation and your service.
 Replace the scaffold's `src/lib.ts`. The `@capability` tag in the doc
 comment **declares** the operation by giving it a name and the fields a
 rule may test. The `check` call, from `submilli:security`, **enforces**
-it. It asks the blueprint whether the caller may do this with these
+it. It asks the Blueprint whether the caller may do this with these
 values, and throws `PermissionDeniedError` if not. Until the service call is written,
 the function returns the credit it was asked for:
 
@@ -104,21 +104,21 @@ a parameter the function doesn't have.
 :::
 
 Name a capability `<domain>/<resource>.<verb>`, one per operation, so a
-blueprint can allow reading without allowing writing. The tag alone
+Blueprint can allow reading without allowing writing. The tag alone
 enforces nothing. The `check` call does, by throwing. So call
 `check` before the request, the write, or whatever else the operation
-does, and that effect never happens when the blueprint says no. A field
+does, and that effect never happens when the Blueprint says no. A field
 in the tag is written one of four ways:
 
 | Form | Meaning |
 | --- | --- |
 | `customerId` | A parameter of that name, with the parameter's type |
 | `orderId: $id`, `team: $input.teamId` | A parameter, or a path inside one, under another name |
-| `amount: number`, `tags: string[]` | A value the package computes, with its type |
+| `amount: number`, `tags: string[]` | A value the Package computes, with its type |
 | `kind: "order"` | A fixed value |
 
 Call `check` directly in the body of the exported function. The compiler
-warns about a `check` anywhere else. A function the package doesn't
+warns about a `check` anywhere else. A function the Package doesn't
 export runs only if some exported function happens to call it, and a
 nested function may run later, more than once, or never:
 
@@ -144,7 +144,7 @@ note: the nested function starts here
 
 A warning doesn't stop the build. After it, `submilli build check` still
 prints `checked @acme/billing v0.1.0`. Each of these warnings is a gap in
-what a blueprint can enforce, so make them fail in CI or before you
+what a Blueprint can enforce, so make them fail in CI or before you
 publish, with `--deny-warnings`, or set `SUBMILLI_DENY_WARNINGS=1` for a
 CI job:
 
@@ -160,8 +160,8 @@ error: 1 warning(s) treated as errors (--deny-warnings)
 
 ## Design the payload
 
-A rule never sees the request the package sends to the service. It sees
-the capability's name and the payload the package passes to `check`, and
+A rule never sees the request the Package sends to the service. It sees
+the capability's name and the payload the Package passes to `check`, and
 nothing else, so a fact that isn't in the payload can never appear in a
 rule. Build the payload for the rules people will want to write, not from
 the arguments the function happens to take. Ask what an operator would
@@ -179,8 +179,8 @@ operation that leaves the scope out is the way around it.
 
 Add facts the caller didn't pass. `applyCredit` takes a customer and an
 amount. Whether the customer is premium is a fact about the account, so
-the package looks it up and puts `customerClass` in the payload, and a
-blueprint can then allow credits for premium customers only. Don't take
+the Package looks it up and puts `customerClass` in the payload, and a
+Blueprint can then allow credits for premium customers only. Don't take
 such a fact from the caller, because the caller is the program you are
 guarding against.
 
@@ -231,7 +231,7 @@ the build warns that `customerClass` is missing from the tag.
 ## Call the service
 
 Now the request. Replace the placeholder return and the stand-in lookup,
-and keep the credential inside the package:
+and keep the credential inside the Package:
 
 ```typescript title="packages/billing/src/lib.ts (fragment)"
 import secrets from "submilli:secrets";
@@ -295,11 +295,11 @@ function requestHeaders(form: boolean): Map<string, string> {
 }
 ```
 
-Three habits keep the package's own grants narrow and the credential
+Three habits keep the Package's own grants narrow and the credential
 inside it:
 
 - Keep the host in a constant. The build reads the host out of `BASE`
-  and writes `host == "api.stripe.com"` into what the package requires. A
+  and writes `host == "api.stripe.com"` into what the Package requires. A
   host that arrives in a parameter can't be derived, and the build says
   the filter is lost:
 
@@ -308,15 +308,15 @@ inside it:
   ```
 
 - Read the secret by its literal name. `secrets.get("BILLING_API_KEY")`
-  becomes `name == "BILLING_API_KEY"`. The blueprint says where the value
-  comes from, and the package only names it. A program can't call
-  `secrets.get` itself, whatever the blueprint says, so the package is the
+  becomes `name == "BILLING_API_KEY"`. The Blueprint says where the value
+  comes from, and the Package only names it. A program can't call
+  `secrets.get` itself, whatever the Blueprint says, so the Package is the
   only place the value exists.
 - Never return the credential. Don't export a function that returns
   the key, accept a destination that will carry it, or log the headers.
 
 Give the service's shapes their own types, with only the fields the
-package reads, and return the package's type, so the program never sees
+Package reads, and return the Package's type, so the program never sees
 the service's field names. `Credit` gains the balance Stripe reports:
 
 ```typescript title="packages/billing/src/lib.ts (fragment)"
@@ -385,10 +385,10 @@ requires:
   filter: name == "BILLING_API_KEY"
 ```
 
-`provides` lists the capabilities a blueprint grants to programs, and the
-fields their rules may test. `requires` is what the package itself needs.
-A blueprint reads this file once the package is published.
-[Publish a package](/docs/packages/publish-a-package) adds it to one and
+`provides` lists the capabilities a Blueprint grants to programs, and the
+fields their rules may test. `requires` is what the Package itself needs.
+A Blueprint reads this file once the Package is published.
+[Publish a Package](/docs/packages/publish-a-package) adds it to one and
 runs it.
 
 ## The whole file

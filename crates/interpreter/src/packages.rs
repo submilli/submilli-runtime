@@ -792,7 +792,7 @@ fn module_description(name: &str) -> &'static str {
         }
         "submilli:http" => "Outbound HTTP: get/post/put/patch/delete/head.",
         "submilli:llm" => "Gated model calls: call/batch, and models() to discover them.",
-        "submilli:secrets" => "Policy-gated access to blueprint-declared secrets.",
+        "submilli:secrets" => "Policy-gated access to Blueprint-declared secrets.",
         "submilli:session" => "Session-scoped key-value state: get/has/set/remove/list.",
         "submilli:url" => "URL parse/build and query-string handling. Pure compute.",
         "submilli:uuid" => "UUID v4/v7 generation and validation.",

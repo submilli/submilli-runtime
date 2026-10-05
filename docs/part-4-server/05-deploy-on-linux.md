@@ -10,8 +10,8 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "721cf2282e5ae497fce05a22ace9ceb90f313f3eae34407e034d6429a5b38dc5"
-  confirmedAt: "2026-10-05T10:59:51.486Z"
+  contentHash: "b15d0aa9fa0b1f5e4606e3215138661661eabce8adec1f3d0dde72a7371f9253"
+  confirmedAt: "2026-10-05T13:01:53.009Z"
 ---
 
 In production, `submilli-server` runs on a dedicated machine, and your
@@ -133,10 +133,10 @@ Your application connects to `http://<the machine's name>:8128` with
 the value in `/etc/submilli/app.token`, given to it through whatever keeps
 its other secrets. From your machine, [Connect the
 CLI](/docs/server/connect-the-cli) reaches the server with the
-admin token. Register blueprints, store their secrets, and install their
-packages as [Register a blueprint](/docs/server/register-a-blueprint)
+admin token. Register Blueprints, store their secrets, and install their
+Packages as [Register a Blueprint](/docs/server/register-a-blueprint)
 shows. A deploy job does the same with the admin token, and [Manage
-blueprints in Git](/docs/tutorials/manage-blueprints-in-git) builds one.
+Blueprints in Git](/docs/tutorials/manage-blueprints-in-git) builds one.
 
 ## Enable HTTPS
 
@@ -206,7 +206,7 @@ export SSL_CERT_FILE=$PWD/ca-bundle.pem
 ## Reach an internal service
 
 The server blocks programs from calling private addresses, whatever a
-blueprint allows, so a package that calls a service on your private
+Blueprint allows, so a Package that calls a service on your private
 network fails until you allow that address in the config file:
 
 ```yaml title="/etc/submilli/server.yaml (fragment)"

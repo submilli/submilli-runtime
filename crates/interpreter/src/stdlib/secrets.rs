@@ -1,4 +1,4 @@
-//! `submilli:secrets` — policy-gated access to blueprint-declared secrets.
+//! `submilli:secrets` — policy-gated access to Blueprint-declared secrets.
 //!
 //! One async Rust host function registered directly under the package name;
 //! the linker resolves the user import (`submilli:secrets#get`) with no Wasm
@@ -30,7 +30,7 @@ pub fn package_declaration() -> PackageDeclaration {
                 type_predicate: None,
                 doc: crate::doc(
                     crate::FileId::SECRETS,
-                    "/**\n * Resolve a blueprint-declared secret by name. **Packages only** — a call from main-module code is refused whatever the policy says, because secret values must never reach it. From `main`, pass the secret *name* to the package API that needs the credential; the package resolves it internally and never returns it. Returns `null` when the secret is undeclared or unavailable. Traps if policy denies access or the resolver fails internally.\n * @param secret Secret name from the blueprint `secrets:` block.\n * @capability secrets.get { name: $secret }\n */",
+                    "/**\n * Resolve a Blueprint-declared secret by name. **Packages only** — a call from main-module code is refused whatever the policy says, because secret values must never reach it. From `main`, pass the secret *name* to the Package API that needs the credential; the Package resolves it internally and never returns it. Returns `null` when the secret is undeclared or unavailable. Traps if policy denies access or the resolver fails internally.\n * @param secret Secret name from the Blueprint `secrets:` block.\n * @capability secrets.get { name: $secret }\n */",
                 ),
             },
         },
