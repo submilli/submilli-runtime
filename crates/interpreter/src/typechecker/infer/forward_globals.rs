@@ -19,11 +19,13 @@ use super::void_value::ValuePosition;
 pub(in crate::typechecker) enum LaterGlobal {
     /// No function body has used it.
     Pending(StmtId),
-    /// A function body used it, and it was bound with `ty`.
+    /// A function body used it, so it was bound early.
     BoundEarly(EarlyBinding),
 }
 
+/// A later declaration's binding, made at its first use from a function body.
 pub(in crate::typechecker) struct EarlyBinding {
+    stmt: StmtId,
     ty: Type,
     /// Where it was first used, when no type could be bound there: reported at
     /// the declaration, which is inferred once, unlike a use in a loop condition
@@ -31,13 +33,22 @@ pub(in crate::typechecker) struct EarlyBinding {
     untyped_use: Option<(Span, Untyped)>,
 }
 
-/// Why a later declaration had no type at its first use.
+/// Why a later declaration's type couldn't be bound at its first use.
 #[derive(Clone, Copy)]
 enum Untyped {
-    /// The declaration states no type.
+    /// The declaration states no type: it would need its initializer inferred.
     Unstated,
-    /// Its annotation names something declared after that use.
+    /// Its written type doesn't resolve there: it names something declared
+    /// after that use, or it is wrong.
     AnnotationUnresolved,
+}
+
+/// The parts of a module-level `let`/`const` declaration.
+struct LaterDeclaration {
+    name: Ident,
+    annotation: Option<TypeAnnotation>,
+    value: ExprId,
+    is_const: bool,
 }
 
 impl Inferer<'_> {
@@ -87,27 +98,24 @@ impl Inferer<'_> {
 
     /// Step 2 has reached the declaration of `name`, bound with type `bound`:
     /// drop its early binding, and report a use above it the binding couldn't
-    /// serve. `declaration_failed` says the declaration reported an error itself.
+    /// serve.
     pub(super) fn finish_later_global(
         &mut self,
         name: &Ident,
         bound: &Type,
-        declaration_failed: bool,
-    ) {
+    ) -> Result<(), CompilerFailure> {
         let Some(LaterGlobal::BoundEarly(early)) = self.forget_later_global(&name.name) else {
-            return;
+            return Ok(());
         };
         if let Some((use_span, why)) = early.untyped_use {
-            // An annotation that fails at the declaration too is reported there.
-            let declaration_reports_it =
-                matches!(why, Untyped::AnnotationUnresolved) && declaration_failed;
-            if !declaration_reports_it {
+            // A written type that is wrong here too is reported by the declaration.
+            if matches!(why, Untyped::Unstated) || self.stated_type_resolves(early.stmt)? {
                 self.report_untyped_later_global(name, use_span, why);
             }
-            return;
+            return Ok(());
         }
         if early.ty == *bound || matches!(early.ty, Type::Error) || matches!(bound, Type::Error) {
-            return;
+            return Ok(());
         }
         self.error_with_help(
             name.span,
@@ -117,6 +125,7 @@ impl Inferer<'_> {
             ),
             vec![format!("annotate its type: `{}: {bound}`", name.name)],
         );
+        Ok(())
     }
 
     /// Stop treating `name` as a later global, removing an early binding.
@@ -153,60 +162,84 @@ impl Inferer<'_> {
         );
     }
 
+    /// Whether the declaration's stated type resolves now, at the declaration.
+    /// One that doesn't is reported there, so its earlier use needs no error.
+    fn stated_type_resolves(&mut self, stmt: StmtId) -> Result<bool, CompilerFailure> {
+        let declaration = self.later_declaration(stmt)?;
+        Ok(self.resolve_stated_type(&declaration)?.is_ok())
+    }
+
     fn bind_global_early(&mut self, stmt: StmtId, use_span: Span) -> Result<(), CompilerFailure> {
+        let declaration = self.later_declaration(stmt)?;
+        let (ty, untyped_use) = match self.resolve_stated_type(&declaration)? {
+            Ok(ty) => (ty, None),
+            Err(why) => (Type::Error, Some((use_span, why))),
+        };
+        let kind = if declaration.is_const {
+            ValueKind::Const {
+                ty: ty.clone(),
+                doc: None,
+            }
+        } else {
+            ValueKind::Let {
+                ty: ty.clone(),
+                doc: None,
+            }
+        };
+        self.bind_top(&declaration.name, kind)?;
+        self.later_globals.insert(
+            declaration.name.name,
+            LaterGlobal::BoundEarly(EarlyBinding {
+                stmt,
+                ty,
+                untyped_use,
+            }),
+        );
+        Ok(())
+    }
+
+    fn later_declaration(&self, stmt: StmtId) -> Result<LaterDeclaration, CompilerFailure> {
         let (name, annotation, value, is_const) =
             match &self.ast.try_stmt(stmt).map_err(super::arena_failure)?.kind {
                 StmtKind::Let {
                     name, ty, value, ..
-                } => (name.clone(), ty.clone(), *value, false),
+                } => (name, ty, *value, false),
                 StmtKind::Const {
                     name, ty, value, ..
-                } => (name.clone(), ty.clone(), *value, true),
+                } => (name, ty, *value, true),
                 _ => {
                     return Err(super::inference_failure(
                         "later global is not a let or const",
                     ));
                 }
             };
-        // The declaration is at module level, so its annotation must not see
-        // the locals around the use.
+        Ok(LaterDeclaration {
+            name: name.clone(),
+            annotation: annotation.clone(),
+            value,
+            is_const,
+        })
+    }
+
+    /// The type the declaration states, resolved at module level: the locals
+    /// around a use can't name it. Any diagnostic is discarded, since the
+    /// declaration reports it when reached.
+    fn resolve_stated_type(
+        &mut self,
+        declaration: &LaterDeclaration,
+    ) -> Result<Result<Type, Untyped>, CompilerFailure> {
         let use_scopes = std::mem::take(&mut self.scopes);
+        let errors_before = self.error_count();
         let diagnostics_before = self.diagnostics.len();
-        let stated = self.stated_global_type(annotation.as_ref(), value, is_const);
+        let stated = self.stated_global_type(declaration);
         self.scopes = use_scopes;
-        // An annotation that doesn't resolve here either names something below
-        // the use or is wrong; the declaration reports it.
-        let annotation_failed = self.diagnostics.len() != diagnostics_before;
+        let reported_error = self.error_count() != errors_before;
         self.diagnostics.truncate(diagnostics_before);
-        let early = match stated? {
-            Some(ty) if !annotation_failed => EarlyBinding {
-                ty,
-                untyped_use: None,
-            },
-            Some(_) => EarlyBinding {
-                ty: Type::Error,
-                untyped_use: Some((use_span, Untyped::AnnotationUnresolved)),
-            },
-            None => EarlyBinding {
-                ty: Type::Error,
-                untyped_use: Some((use_span, Untyped::Unstated)),
-            },
-        };
-        let kind = if is_const {
-            ValueKind::Const {
-                ty: early.ty.clone(),
-                doc: None,
-            }
-        } else {
-            ValueKind::Let {
-                ty: early.ty.clone(),
-                doc: None,
-            }
-        };
-        self.bind_top(&name, kind)?;
-        self.later_globals
-            .insert(name.name, LaterGlobal::BoundEarly(early));
-        Ok(())
+        Ok(match stated? {
+            Some(ty) if !reported_error => Ok(ty),
+            Some(_) => Err(Untyped::AnnotationUnresolved),
+            None => Err(Untyped::Unstated),
+        })
     }
 
     /// The type a declaration states without its initializer being inferred,
@@ -214,15 +247,14 @@ impl Inferer<'_> {
     /// `let`), or an arrow with every parameter and its return type written.
     fn stated_global_type(
         &mut self,
-        annotation: Option<&TypeAnnotation>,
-        value: ExprId,
-        is_const: bool,
+        declaration: &LaterDeclaration,
     ) -> Result<Option<Type>, CompilerFailure> {
-        if let Some(annotation) = annotation {
+        if let Some(annotation) = &declaration.annotation {
             return self.resolve_type(annotation).map(Some);
         }
+        let value = declaration.value;
         if let Some(literal) = super::stmt::literal_type_of(self.ast, value)? {
-            return Ok(Some(if is_const {
+            return Ok(Some(if declaration.is_const {
                 literal
             } else {
                 literal.widen_literal()

@@ -41,14 +41,12 @@ impl<'a> Inferer<'a> {
                         self.forget_later_global(&name.name);
                         continue;
                     }
-                    let errors_before = self.error_count();
                     let hint = ty.as_ref().map(|a| self.resolve_type(a)).transpose()?;
                     let (typed_value, value_ty) = self.infer_expr(value, hint.as_ref())?;
-                    let declaration_failed = self.error_count() > errors_before;
                     // Reassignable, so an inferred literal widens; see the block-scoped
                     // `Let` arm in `stmt.rs`.
                     let bound = hint.unwrap_or_else(|| value_ty.widen_literal());
-                    self.finish_later_global(&name, &bound, declaration_failed);
+                    self.finish_later_global(&name, &bound)?;
                     self.bind_top(
                         &name,
                         ValueKind::Let {
@@ -92,7 +90,6 @@ impl<'a> Inferer<'a> {
                         self.forget_later_global(&name.name);
                         continue;
                     }
-                    let errors_before = self.error_count();
                     // See `literal_type_of` for the rule.
                     let hint = ty
                         .as_ref()
@@ -103,9 +100,8 @@ impl<'a> Inferer<'a> {
                             |ty| Ok(Some(ty)),
                         )?;
                     let (typed_value, value_ty) = self.infer_expr(value, hint.as_ref())?;
-                    let declaration_failed = self.error_count() > errors_before;
                     let bound = hint.unwrap_or(value_ty);
-                    self.finish_later_global(&name, &bound, declaration_failed);
+                    self.finish_later_global(&name, &bound)?;
                     self.bind_top(
                         &name,
                         ValueKind::Const {
