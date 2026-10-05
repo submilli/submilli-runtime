@@ -132,26 +132,31 @@ impl TypeParamSubstitution {
         self.whole_union_fallbacks.get(name)
     }
 
-    /// `ty` with each type parameter still unbound that a whole union
-    /// argument stands in for replaced by `never`, so only the rest of `ty`
-    /// can take a value; None when `ty` names no such type parameter.
-    pub fn without_fallback_type_params(&self, ty: &Type, limits: &TypeLimits) -> Option<Type> {
-        let mut concrete = self.clone();
-        let mut replaced = false;
-        for name in self.whole_union_fallbacks.keys() {
-            if self.is_unbound(name)
-                && super::infer::expr::mentions_type_var(ty, &|var| var == name)
-            {
-                concrete.bindings.insert(name.clone(), Type::Never);
-                replaced = true;
-            }
-        }
-        replaced.then(|| concrete.apply_or_record(ty, limits))
-    }
-
     /// Whether a whole union argument stands in for `name`.
     pub fn has_whole_union_fallback(&self, name: &str) -> bool {
         self.whole_union_fallbacks.contains_key(name)
+    }
+
+    /// `ty` with every unbound type parameter that has a whole-union
+    /// fallback replaced by `never`, so only the rest of `ty` can take a
+    /// value; None when `ty` names no such type parameter.
+    pub fn without_fallback_type_params(&self, ty: &Type, limits: &TypeLimits) -> Option<Type> {
+        let names: Vec<&String> = self
+            .whole_union_fallbacks
+            .keys()
+            .filter(|name| {
+                self.is_unbound(name)
+                    && super::infer::expr::mentions_type_var(ty, &|var| var == name.as_str())
+            })
+            .collect();
+        if names.is_empty() {
+            return None;
+        }
+        let mut concrete = self.clone();
+        for name in names {
+            concrete.bindings.insert(name.clone(), Type::Never);
+        }
+        Some(concrete.apply_or_record(ty, limits))
     }
 
     /// Bind each type parameter still unbound that a whole union argument
@@ -893,14 +898,12 @@ impl<'a> Unifier<'a> {
     /// candidate for it is the fallback, so a later argument goes to another
     /// member that takes it first.
     fn fallback_type_vars_last<'m>(&self, members: &'m [Type]) -> Vec<&'m Type> {
-        let has_fallback = |member: &Type| {
-            self.is_argument
-                && !self.contravariant
-                && self.is_unbound_type_var(member)
-                && matches!(member.peel(), Type::TypeVar(name) if self.sub.has_whole_union_fallback(name))
-        };
-        let (last, first): (Vec<&Type>, Vec<&Type>) =
-            members.iter().partition(|member| has_fallback(member));
+        if !self.is_argument || self.contravariant {
+            return members.iter().collect();
+        }
+        let (last, first): (Vec<&Type>, Vec<&Type>) = members
+            .iter()
+            .partition(|member| self.is_unbound_fallback_type_var(member));
         first.into_iter().chain(last).collect()
     }
 
@@ -971,11 +974,7 @@ impl<'a> Unifier<'a> {
         others: &[&Type],
         arg: &Type,
     ) -> bool {
-        let has_fallback = matches!(
-            type_var.peel(),
-            Type::TypeVar(name) if self.sub.has_whole_union_fallback(name)
-        );
-        if !has_fallback {
+        if !self.is_unbound_fallback_type_var(type_var) {
             return false;
         }
         others
@@ -1031,6 +1030,13 @@ impl<'a> Unifier<'a> {
             }
         }
         Ok(())
+    }
+
+    /// Whether `ty` is a type parameter with no binding yet that a whole
+    /// union argument stands in for.
+    fn is_unbound_fallback_type_var(&self, ty: &Type) -> bool {
+        self.is_unbound_type_var(ty)
+            && matches!(ty.peel(), Type::TypeVar(name) if self.sub.has_whole_union_fallback(name))
     }
 
     /// Whether `ty` is a type parameter with no binding yet, or bound only to

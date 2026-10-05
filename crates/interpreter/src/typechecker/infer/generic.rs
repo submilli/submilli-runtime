@@ -1414,7 +1414,7 @@ impl Inferer<'_> {
             && super::assignable(&arg_ty, &hint, self.resolver());
         if arguments.literal_types.widens(param_ty)
             && !fits_binding
-            && !self.fits_beside_fallbacks(sub, param_ty, &arg_ty)
+            && !self.fits_without_fallback_type_params(sub, param_ty, &arg_ty)
         {
             let widened = self.widen_fresh_literals(typed_id, &arg_ty)?;
             return Ok((typed_id, widened));
@@ -1423,11 +1423,10 @@ impl Inferer<'_> {
     }
 
     /// Whether `arg_ty` fits `param_ty` without the type parameters that
-    /// have a whole-union fallback: `"x"` for `T | "x"` then goes to the
-    /// other members (see
-    /// `Unifier::unify_with_member_beside_fallback`), as tsc matches it
-    /// before widening, and must not bind the type parameter widened.
-    fn fits_beside_fallbacks(
+    /// have a whole-union fallback. `"x"` for `T | "x"` then goes to the
+    /// other members, as tsc matches it before widening, and must not bind
+    /// the type parameter widened (see `unify_with_member_beside_fallback`).
+    fn fits_without_fallback_type_params(
         &self,
         sub: &TypeParamSubstitution,
         param_ty: &Type,
