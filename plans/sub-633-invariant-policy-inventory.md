@@ -1069,6 +1069,14 @@ APIs each need their actual contract, not a blanket dependency exception.
 
 ### T05 — Replace a zero-panic target with a review gate
 
+Execution complete: synchronized the canonical review skill with AGENTS.md and applied
+item 41/source-ledger scope updates. Reviewers assess guarantees before reporting
+violations and record accepted sites without reopening completed work solely for
+panic syntax. The separate CI/lint implementation stays open. Three independent
+reviews found no issues. Frontmatter, local links, Claude delegation, policy
+consistency and diff checks passed. Both external writes read back and verified;
+no checkbox/status changes. No runtime tests for this instruction-only change.
+
 Item 41 should detect unreviewed explicit panic sites and require a documented
 invariant, poison exception or ordinary error path. Its target is zero unreviewed
 violations, not zero `expect`/assert/index syntax. Keep macro-aware inspection and
