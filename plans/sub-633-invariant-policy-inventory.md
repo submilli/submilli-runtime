@@ -67,6 +67,7 @@ separate resource/dependency backlog.
 | --- | --- | --- |
 | Policy and inventory baseline | Committed `46893ac3` | Three independent reviews, no findings; local links, commit references, 42-item coverage and diff checks passed |
 | R01 | Complete: retained | Keep compiler fatal-error architecture; evidence below; leaf simplifications remain assigned to their individual rows |
+| R02 | Complete: selectively simplified | Nine accepted local dispatch invariants; real validation/failure contracts retained; evidence below |
 
 ### R01 execution evidence
 
@@ -85,6 +86,31 @@ existing compiler tests covering fatal limits and mismatched source. Individual 
 leaves remain pending under R02–R16. Documentation diff/link checks are sufficient
 for this retention decision; no runtime tests were rerun. Three independent review
 roles reported no findings. The commit containing this entry records completion.
+
+### R02 execution evidence
+
+`lex_newline`, `lex_operator` and `lex_delimiter` now document immediate
+`next_token_inner` dispatch and use invariant panics for mismatched/missing bytes.
+Parser string/number literal type extraction, accepted atom conversion and
+TemplateHead extraction likewise use the token just matched: `advance` clones
+`peek` before moving the cursor; `parse_atom` is the sole template helper caller.
+Nine explicit sites are accepted, in addition to the original baseline inventory.
+
+Retained the lexer fatal latch, source/Unicode checks, template depth overflow,
+public token validation and parser limits. Other private parser checks remain:
+removing their errors does not eliminate the still-needed Option/fatal machinery,
+and nonlocal dispatch/state assumptions are not proven by this local review.
+Only the test fragment demanding recovery from a deliberately invalid private
+operator dispatch was removed; Unicode and depth failure tests remain.
+
+Three independent review roles reported no findings. `cargo fmt --all --check`,
+offline workspace/all-target Clippy with `-D warnings`, and focused interpreter
+library tests passed: `lexer::tests` 134 and `parser::tests` 391. Tests used
+`SUBMILLI_SKIP_HTTP_TESTS=1 SUBMILLI_FULL_TEST=0`; no transport behavior changed.
+Graphify AST update completed with existing unsupported/partial-parse warnings.
+Accepted invariant evidence was appended to the linked SUB-633 source-site ledger;
+historical checkboxes remain unchanged. The commit containing this entry records
+the implementation; the documentation-only R01 commit is `c1af5940`.
 
 ## Completed fixes: candidates and decisions
 

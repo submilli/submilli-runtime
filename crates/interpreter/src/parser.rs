@@ -3099,7 +3099,8 @@ impl<'a> Parser<'a> {
                 let tok = self.advance();
                 let span = tok.span;
                 let TokenKind::StringLiteral(s) = tok.kind else {
-                    return self.invariant_failure("just matched StringLiteral");
+                    // advance returns the token just matched, before moving the cursor.
+                    unreachable!("advance preserves the matched StringLiteral variant");
                 };
                 TypeAnnotation {
                     kind: TypeAnnotationKind::StringLiteral(s),
@@ -3110,7 +3111,8 @@ impl<'a> Parser<'a> {
                 let tok = self.advance();
                 let span = tok.span;
                 let TokenKind::NumberLiteral(v) = tok.kind else {
-                    return self.invariant_failure("just matched NumberLiteral");
+                    // advance returns the token just matched, before moving the cursor.
+                    unreachable!("advance preserves the matched NumberLiteral variant");
                 };
                 // Canonicalize `-0.0` → `0.0` so literal type `0` matches both signs.
                 let canonical = if v == 0.0 { 0.0 } else { v };
@@ -4961,7 +4963,8 @@ impl<'a> Parser<'a> {
                 span,
             }),
             TokenKind::RegexLiteral { source, flags } => ExprKind::Regex { source, flags },
-            _ => return self.invariant_failure("dispatch above already filtered"),
+            // No cursor movement occurs between the accepted-kind check and advance.
+            _ => unreachable!("advance preserves the accepted expression token"),
         };
         parse_arena_result(self.ast.try_push_expr(Expr { kind, span }), &mut self.fatal)
     }
@@ -4995,11 +4998,12 @@ impl<'a> Parser<'a> {
         parse_arena_result(self.ast.try_push_expr(Expr { kind, span }), &mut self.fatal)
     }
 
-    // The lexer guarantees: TemplateHead → expr → (TemplateMiddle → expr)* → TemplateTail.
+    // parse_atom dispatches immediately after matching TemplateHead.
+    // The remaining template tokens are still parsed and diagnosed normally.
     fn parse_template_literal(&mut self) -> Option<ExprId> {
         let head_tok = self.advance();
         let TokenKind::TemplateHead(head) = head_tok.kind else {
-            return self.invariant_failure("dispatch guaranteed TemplateHead");
+            unreachable!("template dispatch requires TemplateHead");
         };
         let start = head_tok.span.start;
         let mut parts: Vec<String> = vec![head];
