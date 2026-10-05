@@ -87,6 +87,14 @@ function orWrapped<A, B>(a: A, b: Tagged<B>): A | B {
   return a;
 }
 
+function fromDict<A, B>(dict: { [key: string]: A }, b: B): A | B {
+  return b;
+}
+
+function fromOneOrMany<A, B>(o: { kind: "one"; v: A } | { kind: "many"; v: A[] }, b: B): A | B {
+  return b;
+}
+
 function taggedPair<L, R>(t: [L, Mode], b: R): L | R {
   return b;
 }
@@ -249,4 +257,11 @@ function main(): void {
   const declaredWrapped: Mode = fromWrapped;
   assert(fromObject === "elsewhere" && fromTuple === "elsewhere", "an unrelated part");
   assert(fromInterface === "elsewhere" && declaredWrapped === "on", "an interface's part");
+
+  // So does one a part binds through an index signature, or through any
+  // member of a union of object types.
+  let viaIndex = fromDict({ key: mode }, "on");
+  let viaUnion = fromOneOrMany({ kind: "many", v: [mode] }, "on");
+  const declaredParts: Mode[] = [viaIndex, viaUnion];
+  assert(declaredParts.join(",") === "on,on", "an index signature or union member");
 }
