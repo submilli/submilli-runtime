@@ -5618,9 +5618,9 @@ impl Inferer<'_> {
                     let types_itself = self.types_itself(elem_id)?;
                     // A literal that will normalize takes a hint only from a running
                     // type of its own shape, which one with other fields can't match.
-                    let shape_differs = normalization.is_some()
+                    let lacks_running_shape = normalization.is_some()
                         && !has_running_shape(self.ast, elem_id, element_ty.as_ref())?;
-                    let hint = if open_element_type && (types_itself || shape_differs) {
+                    let hint = if open_element_type && (types_itself || lacks_running_shape) {
                         None
                     } else {
                         element_ty.as_ref().or(expected_elem)
@@ -5789,16 +5789,16 @@ impl Inferer<'_> {
         let fits = assignable(elem_ty, running, self.resolver());
         // Object literals of the same shape join by type like any other
         // elements; only differing fields need normalizing.
-        let fields_differ = join
+        let shapes_differ = join
             .normalization
             .is_some_and(|nested_fields| !same_shape(running, elem_ty, nested_fields));
-        if fits && !fields_differ {
+        if fits && !shapes_differ {
             return Some(running.clone());
         }
         // A later element every earlier one fits becomes the element type, as
         // tsc's best common type: `[(x) => x, (x, y) => x * y]` holds
         // two-parameter functions.
-        if join.widens && !fields_differ && assignable(running, elem_ty, self.resolver()) {
+        if join.widens && !shapes_differ && assignable(running, elem_ty, self.resolver()) {
             return Some(elem_ty.widen_literal());
         }
         // Object literals with differing fields, or the same fields neither of
@@ -10373,7 +10373,7 @@ fn has_running_shape(
         return Ok(false);
     }
     for field in literal_fields {
-        let running_field = fields.get(&field.name.name).map(|field| &field.ty);
+        let running_field = fields.get(&field.name.name).map(|running| &running.ty);
         if matches!(running_field, Some(Type::Object { .. }))
             && fresh_object_fields(ast, field.value)?.is_some()
             && !has_running_shape(ast, field.value, running_field)?
@@ -10420,30 +10420,42 @@ fn field_names(ty: &Type) -> BTreeSet<&String> {
         .collect()
 }
 
-fn same_field_names(left: &Type, right: &Type) -> bool {
-    field_names(left) == field_names(right)
-}
-
 /// Whether `left` and `right` name the same fields, and the same fields within
 /// each of `nested_fields`, the ones that normalize one level down.
 fn same_shape(left: &Type, right: &Type, nested_fields: &BTreeSet<String>) -> bool {
-    same_field_names(left, right)
-        && nested_fields
-            .iter()
-            .all(|name| nested_field_names(left, name) == nested_field_names(right, name))
+    field_names(left) == field_names(right)
+        && nested_fields.iter().all(|name| {
+            let names_inside = |ty| {
+                nested_field_types(object_field_maps_of(ty), name)
+                    .into_iter()
+                    .flat_map(field_names)
+                    .collect::<BTreeSet<_>>()
+            };
+            names_inside(left) == names_inside(right)
+        })
 }
 
-/// The field names of the objects field `name` holds across `ty`'s members.
-fn nested_field_names<'a>(ty: &'a Type, name: &str) -> BTreeSet<&'a String> {
+/// The object field maps among `ty`'s members.
+fn object_field_maps_of(ty: &Type) -> impl Iterator<Item = &ObjectFields> {
     object_members(ty)
         .unwrap_or_default()
         .into_iter()
         .filter_map(|member| match member {
-            Type::Object { fields, .. } => fields.get(name),
+            Type::Object { fields, .. } => Some(fields),
             _ => None,
         })
+}
+
+/// The types field `name` holds across `members`, leaving out the fields an
+/// earlier join added, which say nothing about it.
+fn nested_field_types<'a>(
+    members: impl Iterator<Item = &'a ObjectFields>,
+    name: &str,
+) -> Vec<&'a Type> {
+    members
+        .filter_map(|fields| fields.get(name))
         .filter(|field| !is_added_missing_field(field))
-        .flat_map(|field| field_names(&field.ty))
+        .map(|field| &field.ty)
         .collect()
 }
 
@@ -10507,12 +10519,7 @@ fn nested_object_field_names(
     candidates
         .iter()
         .filter_map(|name| {
-            let field_types = members
-                .iter()
-                .filter_map(|fields| fields.get(name))
-                .filter(|field| !is_added_missing_field(field))
-                .map(|field| &field.ty)
-                .collect::<Vec<_>>();
+            let field_types = nested_field_types(members.iter().copied(), name);
             field_types
                 .iter()
                 .all(|ty| object_members(ty).is_some())

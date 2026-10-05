@@ -56,4 +56,13 @@ function main(): void {
 
   const crossed = [{ k: 1, s: "a" }, { k: "b", s: 2 }];
   assert(JSON.stringify(crossed) === '[{"k":1,"s":"a"},{"k":"b","s":2}]', "same fields, neither element fits the other");
+
+  const emptyFirst = [{ p: {} }, { p: { x: 1 } }];
+  assert(emptyFirst.map((v) => show(v.p.x ?? null)).join(",") === "null,1", "a nested empty object literal");
+  const alternating = [{ p: { x: 1 } }, { p: { x: 2, y: 2 } }, { p: { x: 3 } }, { p: { z: 5 } }];
+  assert(
+    alternating.map((v) => show(v.p.x ?? null) + show(v.p.y ?? null) + show(v.p.z ?? null)).join(",") ===
+      "1nullnull,22null,3nullnull,nullnull5",
+    "nested shapes alternating after the element type became a union",
+  );
 }
