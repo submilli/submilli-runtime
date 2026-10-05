@@ -6,28 +6,30 @@ sidebar:
   order: 3
 authorship:
   label: ai-assisted
-  confirmed: true
+  confirmed: false
   contentHash: "ba6a847184afb7c2a54a26515c281fff2771f366e9820b28c0739bc4166fb480"
   confirmedAt: "2026-10-05T13:01:53.009Z"
 ---
 
-By the end of this chapter you will have watched a policy you wrote defeat a
-prompt injection. It won't refuse a host or a port. It will refuse an
-*argument*. An agent's program will ask for a customer it isn't allowed to
-ask about, and the runtime will stop that call while the rest of the
-program keeps running.
+In this chapter you will:
+* Install Submilli
+* Write your first Submilli Package
+* Define a Submilli Blueprint
+* Use submilli to fend off an otherwise successful prompt injection attempt.
 
-Two authors work in this chapter. You write a Blueprint, a Package, and an
-application, and the agent writes everything that runs. For this
-walkthrough you type the agent's files yourself, so you can see the flow.
+Normally, a human writes a Blueprint, a Package, and an application, and the agent writes the code that runs inside the runtime.
 
-You need the CLI and the server from [install](/docs/install):
+In this walkthrough, you will write the "agent generated code" yourself, so you can experience the flow.
+
+## Installing Submilli
+
+You need the Submilli CLI and the server from [install](/docs/install):
 
 ```
 curl -fsSL https://submilli.ai/install.sh | sh
 ```
 
-Make a directory to work in:
+Create a directory to work in:
 
 ```
 mkdir quickstart && cd quickstart
@@ -35,11 +37,13 @@ mkdir quickstart && cd quickstart
 
 ## The Blueprint
 
-A Blueprint is a YAML file that says what your agent's programs may do.
-Writing it is your job. This one lets the agent list a customer's charges,
-and only for the customer your application names. That is one operation,
-`acme.com/charges.list`, which the Package in the next step will provide.
-Save it as `blueprint.yaml`:
+A Blueprint is a YAML file that defines the policy for what your agent's programs may do. Writing it is typically a human's job.
+
+The following Blueprint example lets the agent list a customer's charges, but it allows for that exclusively for the customer your application names.
+
+That is one operation, `acme.com/charges.list`, which the Package in the next step will provide.
+
+Save the following as `blueprint.yaml`:
 
 ```yaml
 kind: blueprint
@@ -61,26 +65,20 @@ permissions:
   - capability: acme.com/charges.list
     filter: customerId == ${vars.customerId}
     action: allow
-
-  # What the package itself may do. Nothing: it reads a fixture.
-  '@acme/billing': []
 ```
 
-Read it as a sentence. This agent may list charges and nothing else, and only
-for the customer this session was opened for. Whatever code the agent
-writes, it can call `charges.list` only with that customer's id. Any other
+This Blueprint specifies that an agent may list charges and nothing else, exclusively for the customer this session was created for. Whatever code the agent writes, it can call `charges.list` only with that customer's id. Any other
 call is denied.
 
-Two details are worth noting. Every Blueprint starts from `default: deny`.
-Anything you have not written a rule for does not exist for this
-agent. `required: true` means a request that does not bind `customerId` is
-rejected before the agent's program runs.
+Two details are worth noting:
+* Every Blueprint starts from `default: deny`. Anything you have not written a rule for does not exist for this agent.
+* `required: true` means a request that does not bind `customerId` is rejected before the agent's program runs.
 
 ## The Package
 
-A Package is a small wrapper you write around your own API or business
-logic. It is your agent's only way in, because generated code can call nothing
-but the Packages your Blueprint lists. Scaffold one:
+A Package is a small wrapper you write around your own API or business logic. It is your agent's only way to use tools, because generated code can call nothing but the Packages your Blueprint lists. There is a growing set of Submilli curated Packages for common services and providers, that you may use and reference in your Blueprints.
+
+Let's write your first Package:
 
 ```
 submilli build init @acme/billing package
