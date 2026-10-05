@@ -5591,6 +5591,9 @@ impl Inferer<'_> {
         } else {
             None
         };
+        // Without an outside hint, an element that types itself takes no hint from
+        // the elements before it, as in tsc, so they combine by type afterwards.
+        let siblings_only_hint = !hint_pins_element_ty && expected_elem.is_none();
         for el in elements {
             match el {
                 crate::ArrayLiteralElement::Value(elem_id) => {
@@ -5599,7 +5602,12 @@ impl Inferer<'_> {
                         .try_expr(elem_id)
                         .map_err(super::arena_failure)?
                         .span;
-                    let hint = element_ty.as_ref().or(expected_elem);
+                    let types_itself = self.is_fully_annotated_function(elem_id)?;
+                    let hint = if siblings_only_hint && types_itself {
+                        None
+                    } else {
+                        element_ty.as_ref().or(expected_elem)
+                    };
                     let ValueOperand {
                         typed_expr: typed_id,
                         ty: elem_ty,
@@ -5621,6 +5629,16 @@ impl Inferer<'_> {
                             // `const a = 1; const xs = [a, 2];` is `number[]`, not
                             // `1[]`. An annotation that pins the element type takes
                             // the `hint_pins_element_ty` path above instead.
+                            element_ty = Some(elem_ty.widen_literal());
+                        }
+                        // A later element every earlier one fits becomes the element
+                        // type, as tsc's best common type: `[(x) => x, (x, y) => x * y]`
+                        // holds two-parameter functions.
+                        Some(running)
+                            if !hint_pins_element_ty
+                                && !assignable(&elem_ty, running, self.resolver())
+                                && assignable(running, &elem_ty, self.resolver()) =>
+                        {
                             element_ty = Some(elem_ty.widen_literal());
                         }
                         Some(running) => {

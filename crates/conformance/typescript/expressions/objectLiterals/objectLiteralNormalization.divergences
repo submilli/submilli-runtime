@@ -1,4 +1,4 @@
-types: 97 of 220 tsc entries compared, 53 differ
+types: 95 of 220 tsc entries compared, 51 differ
 
 line 6: a1
   tsc:  { a: number; b?: undefined; c?: undefined; } | { a: number; b: string; c?: undefined; } | { a: number; b: string; c: boolean; }
@@ -46,51 +46,43 @@ line 13: { c: true }
 
 line 15: a2
   tsc:  { a: number; b: number; } | { a: string; b?: undefined; } | { a?: undefined; b?: undefined; }
-  ours: { a: number; b: number }
+  ours: {}
 
 line 15: [{ a: 1, b: 2 }, { a: "abc" }, {}][0]
   tsc:  { a: number; b: number; } | { a: string; } | {}
-  ours: { a: number; b: number }
+  ours: {}
 
 line 15: [{ a: 1, b: 2 }, { a: "abc" }, {}]
   tsc:  ({ a: number; b: number; } | { a: string; } | {})[]
-  ours: { a: number; b: number }[]
-
-line 16: a2.a
-  tsc:  string | number | undefined
-  ours: number
+  ours: {}[]
 
 line 16: a2
   tsc:  { a: number; b: number; } | { a: string; b?: undefined; } | { a?: undefined; b?: undefined; }
-  ours: { a: number; b: number }
-
-line 17: a2.b
-  tsc:  number | undefined
-  ours: number
+  ours: {}
 
 line 17: a2
   tsc:  { a: number; b: number; } | { a: string; b?: undefined; } | { a?: undefined; b?: undefined; }
-  ours: { a: number; b: number }
+  ours: {}
 
 line 18: a2
   tsc:  { a: number; b: number; } | { a: string; b?: undefined; } | { a?: undefined; b?: undefined; }
-  ours: { a: number; b: number }
+  ours: {}
 
 line 19: a2
   tsc:  { a: number; b: number; } | { a: string; b?: undefined; } | { a?: undefined; b?: undefined; }
-  ours: { a: number; b: number }
+  ours: {}
 
 line 20: a2
   tsc:  { a: number; b: number; } | { a: string; b?: undefined; } | { a?: undefined; b?: undefined; }
-  ours: { a: number; b: number }
+  ours: {}
 
 line 21: a2
   tsc:  { a: number; b: number; } | { a: string; b?: undefined; } | { a?: undefined; b?: undefined; }
-  ours: { a: number; b: number }
+  ours: {}
 
 line 22: a2
   tsc:  { a: number; b: number; } | { a: string; b?: undefined; } | { a?: undefined; b?: undefined; }
-  ours: { a: number; b: number }
+  ours: {}
 
 line 26: b2
   tsc:  { z: number; a: string; b: string; } | { z: number; b: string; c: string; }
@@ -213,12 +205,14 @@ line 44: d1
   ours: { kind: string; pos: { x: number; y: number } }
 
 errors:
+line 21: tsc TS2322: Type '{ a: string; b: number; }' is not assignable to type '{ a: number; b: number; } | { a: string; b?: undefined; } | { a?: undefined; b?: undefined; }'.   Types of property 'b' are incompatible.     Type 'number' is not assignable to type 'undefined'. (we accept)
+line 22: tsc TS2322: Type '{ a: number; }' is not assignable to type '{ a: number; b: number; } | { a: string; b?: undefined; } | { a?: undefined; b?: undefined; }'.   Property 'b' is missing in type '{ a: number; }' but required in type '{ a: number; b: number; }'. (we accept)
 line 6: ours: object literal has unknown field `b` for the target type (tsc accepts)
 line 8: ours: field `b` does not exist on `{ a: number }` (tsc accepts)
 line 9: ours: field `c` does not exist on `{ a: number }` (tsc accepts)
 line 15: ours: expected `number`, got `string` (tsc accepts)
-line 19: ours: expected `number`, got `string` (tsc accepts)
-line 20: ours: object literal is missing required fields `a`, `b` (tsc accepts)
+line 16: ours: field `a` does not exist on `{}` (tsc accepts)
+line 17: ours: field `b` does not exist on `{}` (tsc accepts)
 line 38: ours: object literal has unknown field `a` for the target type (tsc accepts)
 line 43: ours: field `a` does not exist on `{ x: number; y: number }` (tsc accepts)
 line 44: ours: field `b` does not exist on `{ x: number; y: number }` (tsc accepts)

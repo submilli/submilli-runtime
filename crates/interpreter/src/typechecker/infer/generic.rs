@@ -1002,6 +1002,16 @@ impl Inferer<'_> {
             .is_some_and(|params| params.iter().any(|p| p.ty.is_none())))
     }
 
+    /// A function literal that annotates every parameter, so it types itself.
+    pub(super) fn is_fully_annotated_function(
+        &self,
+        expr: ExprId,
+    ) -> Result<bool, CompilerFailure> {
+        Ok(self
+            .function_literal_params(expr)?
+            .is_some_and(|params| params.iter().all(|p| p.ty.is_some())))
+    }
+
     /// Infer a generic call's arguments against `params`, binding its type
     /// parameters in `sub`. A function literal with an unannotated parameter,
     /// passed for a function-typed parameter, is inferred after the others,
