@@ -341,18 +341,28 @@ fn emit_structural_test_inner(
         ),
         Type::Function { has_rest, .. } => {
             let signature = crate::codegen::closures::classify(ty)?;
-            emit_ref_test(
-                emitter,
-                value_local,
-                ctx.symbols
-                    .closure_struct_type_idx(signature)
-                    .ok_or_else(|| {
-                        crate::codegen::internal_failure(
-                            "closure signature registered during analysis",
-                        )
-                    })?,
-            );
+            let structure = ctx
+                .symbols
+                .closure_struct_type_idx(signature)
+                .ok_or_else(|| {
+                    crate::codegen::internal_failure("closure signature registered during analysis")
+                })?;
+            emit_ref_test(emitter, value_local, structure);
             if !has_rest {
+                // A rest closure shares the struct of its Wasm arity but takes
+                // its arguments packed, so a closure that may have one is
+                // checked against its metadata like a closure of another arity.
+                emitter.emit_if(BlockType::Result(ValType::I32));
+                super::closure_coercions::emit_may_have_argument_metadata(
+                    emitter,
+                    ctx,
+                    value_local,
+                    structure,
+                )?;
+                emitter.instruction(Instruction::I32Eqz);
+                emitter.emit_else();
+                emitter.instruction(Instruction::I32Const(0));
+                emitter.emit_end();
                 emitter.emit_if(BlockType::Result(ValType::I32));
                 emitter.instruction(Instruction::I32Const(1));
                 emitter.emit_else();

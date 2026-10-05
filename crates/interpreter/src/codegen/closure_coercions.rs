@@ -148,9 +148,8 @@ fn emit_body(
 /// other return convention at the same arity, and every smaller arity, whose
 /// closures ignore the trailing arguments. Every argument such a closure
 /// declares is supplied, so its defaults are never needed. A rest closure is
-/// not expected here: the typechecker never lets it stand for another arity and
-/// `__value_defaults_fit` rejects it. A cast from `unknown` still can mislabel
-/// one at its own Wasm arity, because that cast tests only the closure struct.
+/// not expected here: the typechecker never lets it stand for another arity, and
+/// a cast from `unknown` asks `__value_defaults_fit`, which rejects it.
 fn direct_sources(target: ClosureSig, symbols: &SymbolTable) -> Vec<ClosureSig> {
     let smaller = (0..target.arity)
         .rev()
@@ -398,6 +397,42 @@ pub(super) fn emit_defaults_fit(
     ));
     super::function_emitter::cast::emit_cast_to(emitter, ctx, &crate::Type::Boolean)?;
 
+    Ok(())
+}
+
+/// Pushes whether the `structure` closure in `function` may declare a default
+/// or a rest parameter. Only such a closure's environment carries argument
+/// metadata, possibly under a bound receiver; any other one takes exactly the
+/// arguments its struct's arity names, so a cast needs no host lookup for it.
+pub(super) fn emit_may_have_argument_metadata(
+    emitter: &mut FunctionEmitter<'_>,
+    ctx: &CodegenCtx<'_>,
+    function: u32,
+    structure: u32,
+) -> Result<(), crate::compiler_error::CompilerFailure> {
+    let metadata = ctx
+        .symbols
+        .call_metadata_type
+        .ok_or_else(|| crate::codegen::internal_failure("call metadata type"))?;
+    let receiver = ctx
+        .symbols
+        .this_environment_type
+        .ok_or_else(|| crate::codegen::internal_failure("this environment"))?;
+    let env = emitter.add_anonymous_local(ValType::Ref(RefType {
+        nullable: true,
+        heap_type: HeapType::ANY,
+    }))?;
+    emitter.instruction(Instruction::LocalGet(function));
+    emitter.instruction(Instruction::RefCastNonNull(HeapType::Concrete(structure)));
+    emitter.instruction(Instruction::StructGet {
+        struct_type_index: structure,
+        field_index: 2,
+    });
+    emitter.instruction(Instruction::LocalTee(env));
+    emitter.instruction(Instruction::RefTestNonNull(HeapType::Concrete(metadata)));
+    emitter.instruction(Instruction::LocalGet(env));
+    emitter.instruction(Instruction::RefTestNonNull(HeapType::Concrete(receiver)));
+    emitter.instruction(Instruction::I32Or);
     Ok(())
 }
 
