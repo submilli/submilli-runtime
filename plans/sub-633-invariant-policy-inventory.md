@@ -886,7 +886,7 @@ locators; follow symbols after edits.
 | P04 | `submilli-build/src/scaffold.rs:466`, generated task JSON | Accepted: fixed JSON Value and in-memory writer; documented at macro call |
 | P05 | `submilli-build/src/scaffold.rs:530`, package path `to_str` | Accepted: both callers pass validated UTF-8 components; malformed paths already return an error |
 | P06 | `submilli/src/commands/blueprint/package_secrets.rs:46`, filter YAML | Accepted: the input is a Rust str serialized as a YAML scalar; filter parse failure remains None |
-| P07 | `submilli/src/commands/skill.rs:225`, Sync unreachable | Accept: preceding dispatch returns for Sync and does not mutate the command |
+| P07 | `submilli/src/commands/skill.rs:225`, Sync unreachable | Accepted: preceding dispatch returns for Sync and does not mutate the command |
 | P08 | `submilli/src/commands/mcp/authenticate.rs:151`, client ID | Accept: if absent, successful registration assigns Some; failure returns before access |
 | P09 | `submilli/src/commands/server/run_code.rs:135`, JSON Value serialization | Accept candidate under JSON Value serializer contract; prefer descriptive expect over bare unwrap; deep-value recursion is a separate resource question |
 
@@ -936,6 +936,13 @@ to None. Documented the scalar guarantee at the expect. No recursive FilterExpr
 formatting occurs at this site. Three independent reviews found no issues;
 formatting, workspace Clippy and diff checks passed; graph updated. Comment-only
 source change; runtime tests not rerun.
+
+P07 execution: `skill::execute` first matches `&cmd` and returns immediately for
+Sync. Remaining operations use the target/path and do not mutate the owned command;
+the later match therefore cannot see Sync. The existing unreachable message names
+this earlier dispatch. Retain it; operational path/install errors remain Results.
+Documentation-only, no tests rerun. Three independent reviews found no issues;
+diff checks passed.
 
 P01 lock groups (paths below `crates/`):
 
