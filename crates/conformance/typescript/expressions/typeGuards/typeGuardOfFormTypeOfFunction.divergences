@@ -1,4 +1,4 @@
-types: 35 of 65 tsc entries compared, 4 differ
+types: 35 of 65 tsc entries compared, 3 differ
 
 line 11: x
   tsc:  Function
@@ -6,12 +6,8 @@ line 11: x
 
 line 17: x
   tsc:  Function
-  ours: {}
+  ours: never
 
 line 23: x
   tsc:  T & Function
   ours: T
-
-line 29: x
-  tsc:  never
-  ours: { s: string }

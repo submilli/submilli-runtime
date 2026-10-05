@@ -151,6 +151,11 @@ fn emit_expr_value(
                 cast::emit_unerase(emitter, ctx, &expr.ty)?;
             }
         }
+        // A guard that rules out every value leaves no shadow to read, and
+        // no value ever reaches the read.
+        TypedExprKind::LocalNarrowRef { .. } if inferred_never(ctx, id)? => {
+            emitter.instruction(Instruction::Unreachable);
+        }
         TypedExprKind::LocalNarrowRef { binding, path, .. } => {
             emit_local_narrow_ref(emitter, ctx, binding, path, &expr.ty)?;
         }
@@ -552,6 +557,12 @@ fn emit_expr_value(
             )?;
         }
     };
+    // A `never` expression doesn't complete, so what an enclosing expression
+    // would do with its value is unreachable: `"a" + fail()` never concatenates.
+    if matches!(expr.ty, Type::Never) && !matches!(expr.kind, TypedExprKind::LocalNarrowRef { .. })
+    {
+        emitter.instruction(Instruction::Unreachable);
+    }
     Ok(())
 }
 
@@ -1425,6 +1436,19 @@ fn emit_closure_value(
     }
 
     Ok(())
+}
+
+/// Whether inference typed `id` as `never`. Runtime-value lowering may widen
+/// an expression's type afterwards, so `expr.ty` alone can't tell.
+fn inferred_never(
+    ctx: &CodegenCtx,
+    id: ExprId,
+) -> Result<bool, crate::compiler_error::CompilerFailure> {
+    let ty = ctx
+        .ta
+        .source_type(id)
+        .map_err(crate::codegen::arena_failure)?;
+    Ok(matches!(ty, Type::Never))
 }
 
 fn emit_local_narrow_ref(

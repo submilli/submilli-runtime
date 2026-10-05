@@ -6,7 +6,7 @@ line 29: arg
 
 line 38: arg
   tsc:  { toLowerCase?(): string; } | { toUpperCase?(): string; otherOptionalProp?: number; } | "A" | "B"
-  ours: LiteralsOrWeakTypes
+  ours: "A" | "B"
 
 line 47: arg
   tsc:  { toLowerCase?(): string; } | { toUpperCase?(): string; otherOptionalProp?: number; }

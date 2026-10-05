@@ -1,2 +1,1 @@
-line 52 type: bug SUB-1156 narrowing doesn't follow a value through the truthiness of an assignment
 line 84 type: bug SUB-1196 (narrowing a type parameter) narrowing a `T` keeps `T`, where tsc gives `NonNullable<T>` or `T & object`

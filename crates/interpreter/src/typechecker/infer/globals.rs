@@ -4,7 +4,10 @@ use crate::compiler_error::CompilerFailure;
 
 use crate::{ClassMember, StmtKind, TypedStmt, TypedStmtKind, ValueKind};
 
+use std::collections::BTreeSet;
+
 use super::Inferer;
+use super::narrowing::BindingId;
 
 impl<'a> Inferer<'a> {
     pub(super) fn infer_global_variables(&mut self) -> Result<(), CompilerFailure> {
@@ -46,8 +49,8 @@ impl<'a> Inferer<'a> {
                         continue;
                     }
                     let hint = ty.as_ref().map(|a| self.resolve_type(a)).transpose()?;
-                    self.keeps_literal_types = true;
-                    let (typed_value, value_ty) = self.infer_expr(value, hint.as_ref())?;
+                    let (typed_value, value_ty) =
+                        self.infer_expr_keeping_literals(value, hint.as_ref(), true)?;
                     // Reassignable, so a fresh literal widens; see the block-scoped
                     // `Let` arm in `stmt.rs`.
                     let bound = match hint {
@@ -105,8 +108,8 @@ impl<'a> Inferer<'a> {
                     // Keeps the literal types its value passes through; see the
                     // block-scoped `Const` arm in `stmt.rs`.
                     let hint = ty.as_ref().map(|a| self.resolve_type(a)).transpose()?;
-                    self.keeps_literal_types = hint.is_none();
-                    let (typed_value, value_ty) = self.infer_expr(value, hint.as_ref())?;
+                    let (typed_value, value_ty) =
+                        self.infer_expr_keeping_literals(value, hint.as_ref(), hint.is_none())?;
                     let origin =
                         self.initializer_literal_origin(ty.is_some(), typed_value, &value_ty)?;
                     let bound = hint.unwrap_or(value_ty);
@@ -166,11 +169,7 @@ impl<'a> Inferer<'a> {
         value: crate::ExprId,
         value_ty: crate::Type,
     ) -> Result<(), CompilerFailure> {
-        if !matches!(
-            declared.peel(),
-            crate::Type::Union(_) | crate::Type::Boolean
-        ) || matches!(value_ty, crate::Type::Error)
-            || value_ty == *declared
+        if !super::stmt::initializer_may_narrow(declared, &value_ty)
             || !super::assignable(&value_ty, declared, self.resolver())
         {
             return Ok(());
@@ -181,13 +180,27 @@ impl<'a> Inferer<'a> {
     }
 
     /// Top-level statements are not wrapped in narrowing regions, so only a
-    /// module variable's own narrowing, read live, carries to the next one.
+    /// module variable's own narrowing, read live, carries to the next one,
+    /// and only for a variable no function writes: a statement between may
+    /// call that function.
     fn keep_only_global_narrowings(&mut self) {
+        let written = self.function_written_global_names();
+        let is_unwritten_global = |path: &super::narrowing::ReferencePath| {
+            path.chain.is_empty()
+                && matches!(&path.root, BindingId::Global(mangled) if !written.contains(mangled))
+        };
         if let Some(env) = self.narrow_scopes.last_mut() {
-            env.retain(|path, _| {
-                path.chain.is_empty() && matches!(path.root, super::narrowing::BindingId::Global(_))
-            });
+            env.retain(|path, _| is_unwritten_global(path));
         }
+    }
+
+    /// The mangled names of the module variables some function assigns.
+    fn function_written_global_names(&self) -> BTreeSet<crate::MangledName> {
+        self.top_symbols
+            .iter()
+            .filter(|(name, _)| self.function_written_globals.contains(*name))
+            .map(|(_, entry)| entry.mangled_name.clone())
+            .collect()
     }
 
     /// One module global per static field, keyed `Class#static#name`. Fields

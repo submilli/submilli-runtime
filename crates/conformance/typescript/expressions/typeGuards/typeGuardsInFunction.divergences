@@ -1,17 +1,1 @@
-types: 53 of 74 tsc entries compared, 4 differ
-
-line 11: typeof var1 === "string" && var1.length
-  tsc:  number | false
-  ours: number | boolean
-
-line 15: typeof var2 === "string" && var2.length
-  tsc:  number | false
-  ours: number | boolean
-
-line 18: typeof param === "string" && param.length
-  tsc:  number | false
-  ours: number | boolean
-
-line 88: typeof f4() === "string" && f4()
-  tsc:  string | number | false
-  ours: number | string | boolean
+types: 53 of 74 tsc entries compared, 0 differ

@@ -1,2 +1,2 @@
 line 29, 47 type: bug SUB-1356 `===` doesn't drop the union members that can never equal the other operand
-line 38 type: bug SUB-1212 `===` against a union-typed operand doesn't narrow
+line 38 type: by-design spec §1.6 equality with a union narrows to the members that can equal it, and an object never equals a string; tsc keeps the weak object types, which it counts as comparable to a string literal

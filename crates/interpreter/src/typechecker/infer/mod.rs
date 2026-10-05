@@ -18,6 +18,7 @@ mod forward_globals;
 pub mod generic;
 mod generic_scopes;
 mod globals;
+mod iife;
 mod import_graph;
 mod imports;
 mod literal_freshness;
@@ -125,7 +126,10 @@ pub fn infer_with_transitive_checked<'a>(
         literal_freshness: literal_freshness::LiteralFreshness::default(),
         keeps_literal_types: false,
         aliased_conditions: Default::default(),
+        immediately_invoked: None,
+        invoked_body_exit: None,
         captured_mutators: bindings.mutators,
+        function_written_globals: bindings.function_written_globals,
         last_assignments: bindings.last_assignments,
         nested_function_creation_points: bindings.nested_function_creation_points,
         nested_functions: Vec::new(),
@@ -387,7 +391,10 @@ pub fn infer_package_checked<'a>(
         literal_freshness: literal_freshness::LiteralFreshness::default(),
         keeps_literal_types: false,
         aliased_conditions: Default::default(),
+        immediately_invoked: None,
+        invoked_body_exit: None,
         captured_mutators: Default::default(),
+        function_written_globals: Default::default(),
         last_assignments: Default::default(),
         nested_function_creation_points: Default::default(),
         nested_functions: Vec::new(),
@@ -690,9 +697,16 @@ pub(super) struct Inferer<'a> {
     /// The next expression `infer_expr` infers keeps the literal type of a
     /// literal it is, or passes its value through from, without a hint asking
     /// for one: an unannotated `const`'s initializer. Read and cleared on
-    /// entry, so it reaches only the operands that carry the value.
+    /// entry, so it reaches only the operands that carry the value; set it
+    /// through [`Inferer::infer_expr_keeping_literals`].
     keeps_literal_types: bool,
     aliased_conditions: aliased_conditions::AliasedConditions,
+    /// The span of the arrow an immediately-invoked call is about to infer;
+    /// see [`iife::immediately_invoked_arrow`].
+    immediately_invoked: Option<Span>,
+    /// What the immediately-invoked body just inferred leaves for the code
+    /// after its call.
+    invoked_body_exit: Option<iife::InvokedBodyExit>,
     pub(super) source: &'a str,
     pub(super) package_name: &'a str,
     pub(super) ast: &'a Ast,
@@ -707,6 +721,9 @@ pub(super) struct Inferer<'a> {
     pub(super) narrow_scopes: Vec<narrowing::NarrowEnv>,
     /// Bindings reassigned inside closures; narrowings on these paths are dropped (a closure could invalidate the narrowing between check and use).
     pub(super) captured_mutators: std::collections::HashSet<(String, Span)>,
+    /// Module-level names some function body writes; top-level code may call
+    /// that function between a guard on the name and its use.
+    pub(super) function_written_globals: std::collections::HashSet<String>,
     pub(super) last_assignments: std::collections::HashMap<Span, u32>,
     /// From the binding analysis: nested functions that capture a local of
     /// their block, by name span, with the last declared of those locals. See
@@ -925,6 +942,7 @@ impl<'a> Inferer<'a> {
         }
         let bindings = binding_analysis::analyze(ast)?;
         self.captured_mutators = bindings.mutators;
+        self.function_written_globals = bindings.function_written_globals;
         self.last_assignments = bindings.last_assignments;
         self.nested_function_creation_points = bindings.nested_function_creation_points;
         self.nested_functions.clear();

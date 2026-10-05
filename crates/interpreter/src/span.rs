@@ -156,6 +156,11 @@ impl Span {
     pub fn contains(self, offset: u32) -> bool {
         self.start <= offset && offset < self.end
     }
+
+    /// Whether `inner` lies wholly within this span, in the same file.
+    pub fn encloses(self, inner: Span) -> bool {
+        self.file == inner.file && self.start <= inner.start && inner.end <= self.end
+    }
 }
 
 /// Owns the text as well as its index, so line access cannot use unrelated text.
@@ -343,6 +348,14 @@ mod tests {
         let a = Span::new(F, 2, 6).unwrap();
         let b = Span::new(F, 4, 10).unwrap();
         assert_eq!(a.merge(b).unwrap(), b.merge(a).unwrap());
+    }
+
+    #[test]
+    fn encloses_a_span_inside_and_itself() {
+        let outer = Span::new(F, 3, 7).unwrap();
+        assert!(outer.encloses(Span::new(F, 4, 7).unwrap()));
+        assert!(outer.encloses(outer));
+        assert!(!outer.encloses(Span::new(F, 2, 5).unwrap()));
     }
 
     #[test]

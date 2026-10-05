@@ -1,0 +1,31 @@
+// A guard on `record[key]` doesn't survive a write to the same entry spelled
+// another way, as a field or with another key.
+// expect-error: expected `string`, got `number | string`
+// expect-error: expected `string`, got `number | string | null`
+// expect-error-count: 2
+type Pair = { a: string | number; b: string | number };
+
+function byField(pair: Pair): string {
+  const key = "a";
+  if (typeof pair[key] === "string") {
+    pair.a = 5;
+    const text: string = pair[key];
+    return text;
+  }
+  return "";
+}
+
+function byOtherKey(record: { [name: string]: string | number }): string {
+  const key = "a";
+  const other = "a";
+  if (typeof record[key] === "string") {
+    record[other] = 5;
+    const text: string = record[key];
+    return text;
+  }
+  return "";
+}
+
+function main(): void {
+  console.log(byField({ a: "x", b: "y" }), byOtherKey({ a: "x" }));
+}
