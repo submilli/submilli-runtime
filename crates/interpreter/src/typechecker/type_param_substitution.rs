@@ -87,14 +87,20 @@ impl TypeParamSubstitution {
     /// Bind each type parameter still unbound that a whole union argument
     /// stands in for, as tsc does with its lowest-priority inference.
     pub fn bind_whole_union_fallbacks(&mut self) {
-        for (name, ty) in &self.whole_union_fallbacks {
-            let unbound = match self.bindings.get(name) {
-                None => true,
-                Some(bound) => matches!(bound.peel(), Type::TypeVar(other) if other == name),
-            };
-            if unbound {
-                self.bindings.insert(name.clone(), ty.clone());
-            }
+        let unbound: Vec<(String, Type)> = self
+            .whole_union_fallbacks
+            .iter()
+            .filter(|(name, _)| self.is_unbound(name))
+            .map(|(name, ty)| (name.clone(), ty.clone()))
+            .collect();
+        self.bindings.extend(unbound);
+    }
+
+    /// Whether `name` has no binding yet, or is bound only to itself.
+    fn is_unbound(&self, name: &str) -> bool {
+        match self.bindings.get(name) {
+            None => true,
+            Some(bound) => matches!(bound.peel(), Type::TypeVar(other) if other == name),
         }
     }
 
@@ -692,8 +698,8 @@ impl<'a> Unifier<'a> {
     /// `"on" | "off" | null` binds `T` to `"on" | "off"`). A member that only
     /// [`closely_matches`] another member, as `Box<string>` does `Box<number>`,
     /// is not given to the type parameter, as tsc pairs them, but must fit
-    /// some member once the type parameter is bound; a member identical to an
-    /// argument member pairs with that one only. When none is left over, the
+    /// some member once the type parameter is bound; a parameter member
+    /// identical to some argument member is not closely matched with others. When none is left over, the
     /// whole argument becomes the type parameter's fallback. None when no
     /// single member is such a type parameter, so the members pair up instead.
     #[allow(clippy::result_large_err)]
@@ -741,6 +747,8 @@ impl<'a> Unifier<'a> {
             }
             return Some(self.check_closely_matched(params, &closely_matched));
         }
+        // Absorbing argument members into another member, as `Box<T>` does
+        // `Box<number>`, may have bound the type parameter after all.
         if let Type::TypeVar(name) = type_var.peel()
             && self.is_unbound_type_var(type_var)
         {
@@ -776,13 +784,7 @@ impl<'a> Unifier<'a> {
     /// Whether `ty` is a type parameter with no binding yet, or bound only to
     /// itself.
     fn is_unbound_type_var(&self, ty: &Type) -> bool {
-        let Type::TypeVar(name) = ty.peel() else {
-            return false;
-        };
-        match self.sub.bindings.get(name) {
-            None => true,
-            Some(bound) => matches!(bound.peel(), Type::TypeVar(other) if other == name),
-        }
+        matches!(ty.peel(), Type::TypeVar(name) if self.sub.is_unbound(name))
     }
 
     /// Whether `param_ty` unifies with `arg_ty`, keeping the bindings that

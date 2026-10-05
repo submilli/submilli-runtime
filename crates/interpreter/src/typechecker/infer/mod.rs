@@ -844,8 +844,8 @@ pub(super) struct Inferer<'a> {
     /// a declared one; see [`inference_sources`].
     pub(super) inference_source_literals: BTreeSet<crate::ExprId>,
     /// Call arguments whose expected type comes partly from a binding an
-    /// argument may replace (the call's own expected result, or a weak
-    /// binding), so it guides their inference without being a requirement:
+    /// argument may replace (the call's own expected result), so it guides
+    /// their inference without being a requirement:
     /// an argument that doesn't fit it decides the type parameter instead.
     pub(super) arguments_with_replaceable_hints: BTreeSet<crate::ExprId>,
     /// The object literal argument whose fields a generic call is inferring

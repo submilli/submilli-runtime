@@ -1832,28 +1832,29 @@ impl InterfaceExpansion {
 
 /// `ty` expanded by [`expand_inferred_interfaces`] through as many levels of
 /// nested unions as the budget covers. Each pass goes one union deeper, and
-/// the deepest pass that stayed within the budget wins, so the members of an
-/// outer union all expand before any member of a union inside them: a wide
-/// union of interfaces that name it again (`Lit<T> | Add<T> | …`) expands its
-/// own members rather than the first member's descendants.
+/// the deepest pass that stayed within the budget wins (the first pass's
+/// result stands even when it ran out), so the members of an outer union all
+/// expand before any member of a union inside them: a wide union of
+/// interfaces that name it again (`Lit<T> | Add<T> | …`) expands its own
+/// members rather than the first member's descendants.
 fn expand_hint_interfaces(
     ty: &Type,
     inferred_generics: &[String],
     types: super::assignable::TypeResolver,
 ) -> Type {
-    let mut deepest_within_budget = None;
-    for max_union_depth in 1..=MAX_HINT_UNION_DEPTH {
-        let mut expansion = InterfaceExpansion::new(max_union_depth);
+    let mut expansion = InterfaceExpansion::new(1);
+    let mut deepest = expand_inferred_interfaces(ty, inferred_generics, types, &mut expansion);
+    for max_union_depth in 2..=MAX_HINT_UNION_DEPTH {
+        if expansion.starved || !expansion.cut_at_union_depth {
+            break;
+        }
+        expansion = InterfaceExpansion::new(max_union_depth);
         let expanded = expand_inferred_interfaces(ty, inferred_generics, types, &mut expansion);
-        if expansion.starved {
-            return deepest_within_budget.unwrap_or(expanded);
+        if !expansion.starved {
+            deepest = expanded;
         }
-        if !expansion.cut_at_union_depth {
-            return expanded;
-        }
-        deepest_within_budget = Some(expanded);
     }
-    deepest_within_budget.unwrap_or_else(|| ty.clone())
+    deepest
 }
 
 /// `ty` with each data-only interface that names one of `inferred_generics`
@@ -1949,9 +1950,10 @@ fn function_part(ty: &Type) -> Option<&Type> {
     }
 }
 
-/// Bind to `unknown` the type parameters a deferred callback's parameters take
-/// that no other argument inferred, as tsc fixes them before typing the
-/// callback: `Array.from({ length: 3 }, (_, i) => i)` types `_` as `unknown`.
+/// Bind the type parameters a deferred callback's parameters take that no
+/// other argument inferred to their whole-union fallback, or to `unknown`
+/// when there is none, as tsc fixes them before typing the callback:
+/// `Array.from({ length: 3 }, (_, i) => i)` types `_` as `unknown`.
 fn fix_callback_parameters(sub: &mut TypeParamSubstitution, param_ty: &Type, inferred: &[String]) {
     let Some(Type::Function { params, .. }) = function_part(param_ty) else {
         return;

@@ -3,8 +3,8 @@
 // `Mode | null` argument binds `T` to `Mode`, as does an index signature's
 // `A | number` with a `Mode` field. When the other members take every member,
 // `T` takes the whole argument unless another argument decides it. A member
-// of the same class or array kind pairs with that member, unless an identical
-// one already did.
+// of the same class or interface, or an array of the same mutability, pairs
+// with that member, unless an identical one already did.
 type Mode = "on" | "off";
 
 function orElse<T>(value: T | null, fallback: T): T {
