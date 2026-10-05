@@ -129,7 +129,7 @@ pub(crate) fn check_security_call(
         }
         error.into_denial(capability)
     })?;
-    // Only a recorded run pays for the backtrace, and never in guest fuel.
+    // Uncharged on purpose; see `DecisionLogConfig::max_line_capture_frames`.
     let ticket = begin_recorded_call(&store, &caller, capability);
     authorize_capability(
         &caller,
@@ -156,12 +156,18 @@ pub(crate) fn begin_recorded_call(
 /// The line in the submitted program that is running, or `None` when the lookup fails.
 ///
 /// Walks a full backtrace, which costs more than [`running_package`]'s module visit, so
-/// callers reach it only while a recorder is installed. Package frames are skipped: the
-/// line is the user's call into the package, not a line inside it.
+/// it runs only while a recorder is installed and still wants lines, uncharged to guest
+/// fuel (see `DecisionLogConfig::max_line_capture_frames`). Package frames are skipped:
+/// the line is the user's call into the package, not a line inside it.
 pub(crate) fn source_line(
     store: &impl wasmtime::AsContext<Data = StoreData>,
 ) -> Option<SourceLine> {
+    let recorder = store.as_context().data().security_check.recorder()?;
+    if !recorder.wants_line() {
+        return None;
+    }
     let backtrace = wasmtime::WasmBacktrace::force_capture(store);
+    recorder.note_line_capture(backtrace.frames().len());
     let frame = backtrace
         .frames()
         .iter()

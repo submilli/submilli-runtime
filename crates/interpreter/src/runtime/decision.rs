@@ -5,6 +5,13 @@
 //! exactly what it would without a recorder, and taps the same `audit` calls. Recording
 //! never changes a decision, never fails a call, and never charges guest fuel.
 //!
+//! Observation work (the source-line backtrace per call) is never charged to guest fuel;
+//! see [`DecisionLogConfig::max_line_capture_frames`] for why and what bounds it. Lines stop
+//! being captured when the decision cap is reached, when the byte budget cannot fit even a
+//! bare record, after a record has been dropped whole for want of bytes, or when that frame
+//! budget is exceeded. A later, smaller record may still be kept after such a drop, without
+//! a line. Other truncation (a byte-budget payload drop, the pair cap) does not stop them.
+//!
 //! Record buffers are charged against the recorder's own byte budget, separate from the
 //! run's memory limit so that recording never changes a run's memory behavior, and a
 //! per-run decision cap; a run that reaches either is marked truncated rather than refused.
@@ -146,6 +153,15 @@ pub trait DecisionRecorder: Send + Sync {
     fn begin_call(&self, caller: &str, capability: &str, line: Option<SourceLine>) -> CallTicket;
     /// Marks the latest call's record as a denial the host function treated as a filter.
     fn mark_last_filtered(&self);
+    /// Whether the next call's source line would be kept. Callers check it before paying
+    /// for a backtrace; it is false once the decision cap is reached, the byte budget cannot
+    /// fit even a bare record, a record has been dropped whole for want of bytes, or the
+    /// frame budget is exceeded. Other truncation (a payload drop, the pair cap) does not
+    /// turn it off.
+    fn wants_line(&self) -> bool;
+    /// Counts the frames of a backtrace captured for a line. Past the recorder's frame
+    /// budget it marks the run truncated and stops further captures.
+    fn note_line_capture(&self, frames: usize);
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -185,6 +201,20 @@ pub struct DecisionLogConfig {
     /// Bytes the recorder may hold, independent of the run's memory limit. Past it, payloads
     /// are dropped (verdict and digest kept), then whole records.
     pub max_recorder_bytes: u64,
+    /// Wasm frames the recorder may walk, summed over the run's source-line captures.
+    ///
+    /// Line capture is observation work, deliberately left uncharged to guest fuel so that
+    /// recording never changes a run: a recorded run spends exactly the fuel an unrecorded
+    /// one does (R19). That deviates from AGENTS.md, "Fuel for host functions", which asks
+    /// host work to be charged; this budget bounds the work instead, together with the
+    /// decision cap. The fuel plan's "Gated functions call `check_security`" bullet
+    /// (`plans/sub-1269-host-fuel-costs.md`) is the written record of the deviation.
+    ///
+    /// The budget is checked before each capture, so it can be exceeded by at most one
+    /// stack: the capture that crosses it keeps its line. Past it no new line is captured
+    /// and the run is marked truncated (a redirect hop or git worker check may still carry
+    /// a line captured earlier).
+    pub max_line_capture_frames: u64,
 }
 
 impl Default for DecisionLogConfig {
@@ -193,6 +223,7 @@ impl Default for DecisionLogConfig {
             max_decisions: 10_000,
             max_context_value_bytes: 1024,
             max_recorder_bytes: 16 * 1024 * 1024,
+            max_line_capture_frames: 1_000_000,
         }
     }
 }
@@ -201,11 +232,14 @@ impl Default for DecisionLogConfig {
 #[derive(Debug, Clone, Default)]
 pub struct DecisionLogOutput {
     pub records: Vec<DecisionRecord>,
-    /// Some decision was not kept in full: past the cap, over the byte budget, or
-    /// beyond the pairs the recorder tracks.
+    /// Some decision was not kept in full: past the cap, over the byte budget, beyond the
+    /// pairs the recorder tracks, or the line-capture frame budget was exceeded (after which
+    /// no new lines are captured).
     pub truncated: bool,
     /// Decisions not kept at all.
     pub dropped: u64,
+    /// Wasm frames walked by line captures over the run (diagnostic).
+    pub line_frames: u64,
 }
 
 /// Distinct (caller, capability) pairs tracked per run. Capability names come from
@@ -231,6 +265,12 @@ struct LogState {
     truncated: bool,
     dropped: u64,
     charged: u64,
+    line_frames: u64,
+    /// The frame budget was exceeded: no new lines are captured.
+    lines_exhausted: bool,
+    /// A record was dropped whole for want of bytes: no new lines are captured. A smaller
+    /// later record may still be kept, without a line.
+    bytes_exhausted: bool,
 }
 
 /// The per-run recorder.
@@ -272,6 +312,7 @@ impl DecisionLog {
             records,
             truncated: state.truncated,
             dropped: state.dropped,
+            line_frames: state.line_frames,
         };
         state.charged = 0;
         state.pairs.clear();
@@ -279,7 +320,11 @@ impl DecisionLog {
     }
 
     fn lock(&self) -> MutexGuard<'_, LogState> {
-        // A poisoned lock means a recorder call panicked; the data is still sound to read.
+        // A poisoned lock means a recorder call panicked while it may have been updating
+        // this state, so the state could be partly updated. Recovering is acceptable here
+        // (unlike the accepted poisoned-lock panics in AGENTS.md) only because the log is
+        // observation-only: it never feeds a decision, so a skewed record cannot change
+        // what the run is allowed to do.
         self.state
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
@@ -298,6 +343,12 @@ impl DecisionLog {
         }
         state.charged = next;
         true
+    }
+
+    /// Whether the decision cap and the byte budget leave room for one more bare record.
+    fn can_keep_another(&self, state: &LogState) -> bool {
+        state.records.len() < self.config.max_decisions
+            && state.charged.saturating_add(RECORD_BASE_BYTES) <= self.config.max_recorder_bytes
     }
 
     fn begin(
@@ -369,6 +420,7 @@ impl DecisionLog {
         if self.charge(&mut state, minimal) {
             state.records.push(record);
         } else {
+            state.bytes_exhausted = true;
             state.dropped = state.dropped.saturating_add(1);
         }
     }
@@ -452,6 +504,20 @@ impl DecisionRecorder for DecisionLog {
     fn begin_call(&self, caller: &str, capability: &str, line: Option<SourceLine>) -> CallTicket {
         let mut state = self.lock();
         self.begin(&mut state, caller, capability, line)
+    }
+
+    fn wants_line(&self) -> bool {
+        let state = self.lock();
+        !state.lines_exhausted && !state.bytes_exhausted && self.can_keep_another(&state)
+    }
+
+    fn note_line_capture(&self, frames: usize) {
+        let mut state = self.lock();
+        state.line_frames = state.line_frames.saturating_add(frames as u64);
+        if state.line_frames > self.config.max_line_capture_frames {
+            state.lines_exhausted = true;
+            state.truncated = true;
+        }
     }
 
     fn mark_last_filtered(&self) {
@@ -642,6 +708,141 @@ mod tests {
         let mut data = StoreData::with_vfs_and_cap(Vfs::none(), 1 << 20);
         let log = DecisionLog::install(&mut data, config);
         (data, log)
+    }
+
+    fn audit_denied(data: &StoreData, ticket: CallTicket) {
+        let context = serde_json::json!({});
+        data.security_check.audit(
+            AuditDecision::new("main", "fs.read", &context, false, "policy", None, None)
+                .with_site(CallSite::new(Some(ticket), EntryPath::GatedOp)),
+        );
+    }
+
+    #[test]
+    fn a_full_log_stops_asking_for_lines() {
+        let (data, log) = log_with(DecisionLogConfig {
+            max_decisions: 2,
+            ..DecisionLogConfig::default()
+        });
+        let recorder = data.security_check.recorder().unwrap();
+        for _ in 0..2 {
+            assert!(recorder.wants_line());
+            audit_denied(&data, recorder.begin_call("main", "fs.read", None));
+        }
+        assert!(!recorder.wants_line(), "the cap is reached");
+        audit_denied(&data, recorder.begin_call("main", "fs.read", None));
+        assert!(!recorder.wants_line(), "still off once the log is full");
+        assert!(log.finish().truncated);
+    }
+
+    #[test]
+    fn a_byte_budget_payload_drop_keeps_asking_for_lines() {
+        let (data, log) = log_with(DecisionLogConfig {
+            max_recorder_bytes: 4 * RECORD_BASE_BYTES,
+            ..DecisionLogConfig::default()
+        });
+        let recorder = data.security_check.recorder().unwrap();
+        let context = serde_json::json!({ "path": "p".repeat(900) });
+        let ticket = recorder.begin_call("main", "fs.read", None);
+        data.security_check.audit(
+            AuditDecision::new("main", "fs.read", &context, true, "policy", None, None)
+                .with_site(CallSite::new(Some(ticket), EntryPath::GatedOp)),
+        );
+        assert!(recorder.wants_line(), "a minimal record still fits");
+        let output = log.finish();
+        assert!(output.truncated);
+        assert!(output.records.iter().any(|r| r.payload_dropped));
+    }
+
+    #[test]
+    fn filling_the_pair_cap_keeps_asking_for_lines() {
+        let (data, log) = log_with(DecisionLogConfig::default());
+        let recorder = data.security_check.recorder().unwrap();
+        for index in 0..=MAX_TRACKED_PAIRS {
+            recorder.begin_call("main", &format!("cap.{index}"), None);
+        }
+        assert!(recorder.wants_line());
+        assert!(log.finish().truncated, "the pair cap truncates");
+    }
+
+    #[test]
+    fn lines_stop_once_the_byte_budget_cannot_fit_a_record() {
+        let (data, log) = log_with(DecisionLogConfig {
+            max_recorder_bytes: 3 * RECORD_BASE_BYTES,
+            ..DecisionLogConfig::default()
+        });
+        let recorder = data.security_check.recorder().unwrap();
+        let mut captures = 0;
+        for _ in 0..20 {
+            if recorder.wants_line() {
+                captures += 1;
+                recorder.note_line_capture(5);
+            }
+            audit_denied(&data, recorder.begin_call("main", "fs.read", None));
+        }
+        let output = log.finish();
+        assert!(output.dropped > 0, "records were dropped whole");
+        assert!(
+            captures < 20 && output.line_frames == 5 * captures,
+            "capture stopped: {captures} captures"
+        );
+        assert!(
+            captures <= output.records.len() as u64 + 1,
+            "no captures beyond the first dropped record: {captures} for {} kept",
+            output.records.len()
+        );
+    }
+
+    #[test]
+    fn a_budget_below_one_bare_record_wants_no_line() {
+        for max_recorder_bytes in [0, RECORD_BASE_BYTES - 1] {
+            let (data, _log) = log_with(DecisionLogConfig {
+                max_recorder_bytes,
+                ..DecisionLogConfig::default()
+            });
+            let recorder = data.security_check.recorder().unwrap();
+            assert!(!recorder.wants_line(), "budget {max_recorder_bytes}");
+        }
+    }
+
+    #[test]
+    fn a_whole_record_drop_stops_lines_though_a_bare_record_would_fit() {
+        let (data, log) = log_with(DecisionLogConfig {
+            // After the call's pair is charged, the leftover is a bare record plus 2 bytes:
+            // less than this record's strings need.
+            max_recorder_bytes: PAIR_OVERHEAD_BYTES
+                + "main".len() as u64
+                + "fs.read".len() as u64
+                + RECORD_BASE_BYTES
+                + 2,
+            ..DecisionLogConfig::default()
+        });
+        let recorder = data.security_check.recorder().unwrap();
+        assert!(recorder.wants_line(), "a bare record fits before any call");
+        let ticket = recorder.begin_call("main", "fs.read", None);
+        assert!(
+            recorder.wants_line(),
+            "a bare record still fits after the call"
+        );
+        audit_denied(&data, ticket);
+        assert!(!recorder.wants_line(), "the drop turns lines off");
+        let output = log.finish();
+        assert_eq!(output.dropped, 1);
+        assert!(output.records.is_empty());
+    }
+
+    #[test]
+    fn the_line_capture_frame_budget_truncates_the_log_once_exceeded() {
+        let (data, log) = log_with(DecisionLogConfig {
+            max_line_capture_frames: 10,
+            ..DecisionLogConfig::default()
+        });
+        let recorder = data.security_check.recorder().unwrap();
+        recorder.note_line_capture(10);
+        assert!(recorder.wants_line(), "at the budget is still within it");
+        recorder.note_line_capture(1);
+        assert!(!recorder.wants_line());
+        assert!(log.finish().truncated);
     }
 
     #[test]

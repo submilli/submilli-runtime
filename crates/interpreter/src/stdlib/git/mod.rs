@@ -484,11 +484,7 @@ async fn invoke(
         algorithm_fuel: Arc::new(work::AlgorithmWork::with_meter(Arc::clone(&meter))),
         denial: Arc::new(Mutex::new(None)),
         history_cache: caller.data().git_history.clone(),
-        line: if caller.data().security_check.recorder().is_some() {
-            crate::stdlib::shared::source_line(&*caller)
-        } else {
-            None
-        },
+        line: crate::stdlib::shared::source_line(&*caller),
     };
     let vfs = caller.data().vfs.clone();
     let op = op.to_owned();

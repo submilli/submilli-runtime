@@ -861,6 +861,134 @@ async fn an_exhausted_recorder_budget_truncates_the_log_and_changes_nothing_the_
 }
 
 #[tokio::test]
+async fn a_byte_budget_payload_drop_does_not_stop_lines_on_later_records() {
+    // A large context makes a full record cost several minimal ones, so after the first
+    // payload drop the budget still keeps more records, each with its line.
+    let source = caught_denials(200).replace("/deny\"", &format!("/{}\"", "q".repeat(900)));
+    let starved = run(
+        &source,
+        Setup {
+            deny: vec![Deny {
+                caller: None,
+                capability: "http.get",
+                path: None,
+            }],
+            record: Some(DecisionLogConfig {
+                max_recorder_bytes: 10000,
+                ..DecisionLogConfig::default()
+            }),
+            ..Setup::default()
+        },
+    )
+    .await;
+    let log = starved.log.as_ref().unwrap();
+    let first_dropped = log
+        .records
+        .iter()
+        .position(|r| r.payload_dropped)
+        .expect("a payload was dropped");
+    assert!(
+        log.records.len() > first_dropped + 1,
+        "several records are kept after the first drop: {} kept, first drop at {first_dropped}",
+        log.records.len()
+    );
+    assert!(
+        log.records[first_dropped..]
+            .iter()
+            .all(|r| r.line.is_some()),
+        "records kept after the drop still carry their lines"
+    );
+}
+
+#[tokio::test]
+async fn lines_stop_once_the_line_capture_budget_is_spent_and_the_run_is_unchanged() {
+    let source = caught_denials(50);
+    let unrecorded = run(&source, caught_denial_setup(None)).await;
+    let limited = run(
+        &source,
+        caught_denial_setup(Some(DecisionLogConfig {
+            max_line_capture_frames: 6,
+            ..DecisionLogConfig::default()
+        })),
+    )
+    .await;
+    let unlimited = run(&source, caught_denial_setup(recording())).await;
+
+    let log = limited.log.as_ref().unwrap();
+    assert!(log.truncated, "the frame budget ran out");
+    assert_eq!(log.records.len(), 50, "records are still kept");
+    let with_line = log.records.iter().filter(|r| r.line.is_some()).count();
+    let per_capture = unlimited.log.as_ref().unwrap().line_frames / 50;
+    assert!(per_capture > 0);
+    let expected = (6 / per_capture + 1) as usize;
+    assert_eq!(with_line, expected, "{per_capture} frames per capture");
+    assert!(
+        log.records[..with_line].iter().all(|r| r.line.is_some()),
+        "no line returns once capture stops"
+    );
+    assert_eq!(
+        log.line_frames,
+        per_capture * with_line as u64,
+        "capture itself stopped, not just the lines"
+    );
+    assert_eq!(limited.result, unrecorded.result);
+    assert_eq!(limited.audits, unrecorded.audits);
+    assert_eq!(limited.fuel, unrecorded.fuel);
+    assert_eq!(limited.memory_peak, unrecorded.memory_peak);
+    assert_eq!(limited.host_attached, unrecorded.host_attached);
+}
+
+#[tokio::test]
+async fn a_zero_frame_budget_allows_one_capture_that_keeps_its_line() {
+    let source = caught_denials(10);
+    let outcome = run(
+        &source,
+        caught_denial_setup(Some(DecisionLogConfig {
+            max_line_capture_frames: 0,
+            ..DecisionLogConfig::default()
+        })),
+    )
+    .await;
+    let log = outcome.log.as_ref().unwrap();
+    assert!(log.truncated);
+    assert_eq!(log.records.len(), 10);
+    assert!(
+        log.records[0].line.is_some(),
+        "the crossing capture keeps its line"
+    );
+    assert!(log.records[1..].iter().all(|r| r.line.is_none()));
+    let one = run(&caught_denials(1), caught_denial_setup(recording())).await;
+    assert_eq!(log.line_frames, one.log.as_ref().unwrap().line_frames);
+}
+
+#[tokio::test]
+async fn records_up_to_the_decision_cap_keep_their_lines_and_the_run_is_unchanged() {
+    let source = caught_denials(100);
+    let unrecorded = run(&source, caught_denial_setup(None)).await;
+    let capped = run(
+        &source,
+        caught_denial_setup(Some(DecisionLogConfig {
+            max_decisions: 5,
+            ..DecisionLogConfig::default()
+        })),
+    )
+    .await;
+    let log = capped.log.as_ref().unwrap();
+    assert_eq!(log.records.len(), 5);
+    assert!(log.records.iter().all(|r| r.line.is_some()));
+    assert_eq!(log.dropped, 95);
+    let five = run(&caught_denials(5), caught_denial_setup(recording())).await;
+    assert_eq!(
+        log.line_frames,
+        five.log.as_ref().unwrap().line_frames,
+        "no capture past the cap"
+    );
+    assert_eq!(capped.result, unrecorded.result);
+    assert_eq!(capped.audits, unrecorded.audits);
+    assert_eq!(capped.fuel, unrecorded.fuel);
+}
+
+#[tokio::test]
 async fn a_session_list_denial_is_recorded_as_filtered_and_the_program_succeeds() {
     let source = r#"
 import session from "submilli:session";
@@ -1284,6 +1412,7 @@ async fn line_lookup_cost() {
     // Unbounded cap so every call pays the whole recording path.
     let config = DecisionLogConfig {
         max_decisions: usize::MAX,
+        max_line_capture_frames: u64::MAX,
         ..DecisionLogConfig::default()
     };
     // Best of several runs each: the program's own cost is large next to the recorder's.

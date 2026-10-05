@@ -77,6 +77,9 @@ pub(super) struct CapabilityGuard {
     hops: AtomicU32,
     /// The call a refusal of the request's current hop continues: the originating call until
     /// a redirect hop is authorized, then that hop's.
+    ///
+    /// Poison recovery is acceptable: the value is `Copy` and always overwritten whole, so a
+    /// panicking holder cannot leave a partly updated site behind.
     current: Mutex<CallSite>,
 }
 
