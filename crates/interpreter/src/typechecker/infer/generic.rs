@@ -405,6 +405,11 @@ impl Inferer<'_> {
             return false;
         };
         for member in &members {
+            // An object type routes to the `Object` interface, whose members
+            // every value has; its own fields are unified directly.
+            if matches!(member.peel(), Type::Object { .. }) {
+                continue;
+            }
             let Some((me, _pe, ne, ae)) = member.interface_routing() else {
                 continue;
             };
@@ -761,9 +766,9 @@ impl Inferer<'_> {
             self.pack_rest_tail(fixed_count, rest_elem_ty.clone(), span, &mut typed_args)?;
         }
 
-        let array_from_mapper = iface_mangled == crate::mangle::prelude("ArrayConstructor")
-            && name.name == "from"
-            && sig.generics.len() == 2;
+        let array_from =
+            iface_mangled == crate::mangle::prelude("ArrayConstructor") && name.name == "from";
+        let array_from_mapper = array_from && sig.generics.len() == 2;
         let mapper_type = typed_args
             .get(1)
             .map(|id| {
@@ -776,6 +781,10 @@ impl Inferer<'_> {
                 )
             })
             .transpose()?;
+        // An array-like `{ length }` has no elements to infer `T` from.
+        if array_from && sub.get("T").is_none() {
+            sub.insert("T".into(), Type::Unknown);
+        }
         if array_from_mapper
             && mapper_type
                 .as_ref()
@@ -1220,6 +1229,9 @@ impl Inferer<'_> {
                 if deferred != deferred_pass {
                     continue;
                 }
+                if deferred {
+                    fix_callback_parameters(sub, &param_ty, inferred_generics);
+                }
                 // An oversized hint fails at the argument's own checkpoint.
                 let hint = sub.apply_or_record(&param_ty, &self.type_limits);
                 let errors_before = self.error_count();
@@ -1604,6 +1616,23 @@ fn function_part(ty: &Type) -> Option<&Type> {
             functions.next().is_none().then_some(function)
         }
         _ => None,
+    }
+}
+
+/// Bind to `unknown` the type parameters a deferred callback's parameters take
+/// that no other argument inferred, as tsc fixes them before typing the
+/// callback: `Array.from({ length: 3 }, (_, i) => i)` types `_` as `unknown`.
+fn fix_callback_parameters(sub: &mut TypeParamSubstitution, param_ty: &Type, inferred: &[String]) {
+    let Some(Type::Function { params, .. }) = function_part(param_ty) else {
+        return;
+    };
+    for name in inferred {
+        let taken = params
+            .iter()
+            .any(|param| super::expr::mentions_type_var(param, &|var| var == name));
+        if taken && sub.get(name).is_none() {
+            sub.insert(name.clone(), Type::Unknown);
+        }
     }
 }
 
@@ -2324,21 +2353,18 @@ mod tests {
     }
 
     #[test]
-    fn under_constrained_method_generic_still_diagnoses() {
+    fn under_constrained_method_generic_is_unknown() {
         let (_, diags) = run(r#"
             interface Box<T> {
                 empty<U>(): U[];
             }
             function go(b: Box<number>): void {
-                b.empty();
+                const xs: unknown[] = b.empty();
             }
             "#);
         assert!(
-            diags
-                .iter()
-                .any(|d| d.message.contains("cannot infer type parameter")
-                    && d.message.contains("`U`")),
-            "expected under-constrained diagnostic, got: {diags:?}",
+            diags.is_empty(),
+            "expected `U` to infer as `unknown`, got: {diags:?}"
         );
     }
 

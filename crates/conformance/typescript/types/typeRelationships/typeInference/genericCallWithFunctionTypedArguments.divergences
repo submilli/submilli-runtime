@@ -1,16 +1,4 @@
-types: 41 of 98 tsc entries compared, 7 differ
-
-line 11: r3
-  tsc:  unknown
-  ours: string
-
-line 11: foo(x => '')
-  tsc:  unknown
-  ours: string
-
-line 11: x => ''
-  tsc:  (x: unknown) => string
-  ours: (arg0: T) => string
+types: 41 of 98 tsc entries compared, 4 differ
 
 line 27: foo3(1, function (a) { return '' }, 1)
   tsc:  1

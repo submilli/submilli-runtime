@@ -506,6 +506,7 @@ impl<'a> Unifier<'a> {
             _ => {
                 if param_ty == arg_ty
                     || (matches!(arg_ty, Type::Never) && self.accepts_as_subtype(arg_ty, param_ty))
+                    || self.is_literal_of(arg_ty, param_ty)
                 {
                     Ok(())
                 } else {
@@ -540,6 +541,18 @@ impl<'a> Unifier<'a> {
             return false;
         };
         self.subtype_widening && assignable(arg, bound, types)
+    }
+
+    /// Whether `arg` is a literal type of the primitive `param`, which binds
+    /// nothing and is assignable to it: `{ length: n }` with `const n = 4` is
+    /// a `{ length: number }`.
+    fn is_literal_of(&self, arg: &Type, param: &Type) -> bool {
+        let Some(types) = self.types else {
+            return false;
+        };
+        matches!(param, Type::Number | Type::String | Type::Boolean)
+            && is_primitive_literal(arg)
+            && assignable(arg, param, types)
     }
 
     /// Whether an argument's function parameter that failed to unify with an
@@ -709,6 +722,13 @@ impl TypeParamSubstitution {
             Ok(Err(unbound))
         }
     }
+}
+
+fn is_primitive_literal(ty: &Type) -> bool {
+    matches!(
+        ty,
+        Type::NumberLiteral(_) | Type::StringLiteral(_) | Type::BooleanLiteral(_)
+    )
 }
 
 #[cfg(test)]
