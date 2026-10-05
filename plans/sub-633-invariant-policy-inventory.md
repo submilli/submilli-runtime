@@ -81,6 +81,7 @@ separate resource/dependency backlog.
 | R13 | Complete: simplified | Removed four private numeric engine-error wrappers; range errors preserved |
 | R14 | Complete: retained | Keep shared raw-slice ABI helpers and boundary validation |
 | R15 | Complete: simplified | Removed HMAC-init and fixed-digest-only error layers |
+| R16 | Complete: selectively simplified | Accepted first path component; retained pack and borrowing checks |
 
 ### R01 execution evidence
 
@@ -341,6 +342,21 @@ tests passed, including wire vectors, guest-catch classification and healthy
 follow-up. Formatting and workspace/all-target Clippy passed; graph updated with
 existing limitations. Full tests disabled and HTTP skipped. Accepted invariants
 recorded/verified in SUB-633; this commit records R15.
+
+### R16 execution evidence
+
+`validate_metadata_path` now documents and uses str::split's guaranteed first
+component; existing path validation and subsequent security checks are unchanged.
+Pack widths are already structural fixed arrays with checked read lengths; retain
+untrusted header/offset validation. Pending-worktree and reference-cache borrowing
+spans filesystem/resource work and use compact existing errors; retain them rather
+than asserting a broad no-reentry contract. No wholesale Git reversion.
+
+Three independent reviews had no findings. Ten storage tests and two required Git
+memory tests passed; optional calibration ignored. Formatting and workspace Clippy
+passed, full tests disabled, HTTP skipped; focused Git nightly bodies enabled as
+required. Graph updated with existing limitations. Accepted site recorded/verified
+in SUB-633; this commit records R16.
 
 ## Completed fixes: candidates and decisions
 
