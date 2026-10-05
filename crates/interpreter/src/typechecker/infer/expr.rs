@@ -10409,34 +10409,29 @@ fn object_members(ty: &Type) -> Option<Vec<&Type>> {
 }
 
 fn field_names(ty: &Type) -> BTreeSet<&String> {
-    object_members(ty)
-        .unwrap_or_default()
-        .into_iter()
-        .filter_map(|member| match member {
-            Type::Object { fields, .. } => Some(fields.keys()),
-            _ => None,
-        })
-        .flatten()
+    member_field_maps(ty)
+        .flat_map(|fields| fields.keys())
         .collect()
+}
+
+/// The field names across `types`.
+fn field_names_across<'a>(types: &[&'a Type]) -> BTreeSet<&'a String> {
+    types.iter().flat_map(|ty| field_names(ty)).collect()
 }
 
 /// Whether `left` and `right` name the same fields, and the same fields within
 /// each of `nested_fields`, the ones that normalize one level down.
 fn same_shape(left: &Type, right: &Type, nested_fields: &BTreeSet<String>) -> bool {
+    let nested_names =
+        |ty, name| field_names_across(&nested_field_types(member_field_maps(ty), name));
     field_names(left) == field_names(right)
-        && nested_fields.iter().all(|name| {
-            let names_inside = |ty| {
-                nested_field_types(object_field_maps_of(ty), name)
-                    .into_iter()
-                    .flat_map(field_names)
-                    .collect::<BTreeSet<_>>()
-            };
-            names_inside(left) == names_inside(right)
-        })
+        && nested_fields
+            .iter()
+            .all(|name| nested_names(left, name) == nested_names(right, name))
 }
 
-/// The object field maps among `ty`'s members.
-fn object_field_maps_of(ty: &Type) -> impl Iterator<Item = &ObjectFields> {
+/// The field maps of `ty`'s object members, with or without an index.
+fn member_field_maps(ty: &Type) -> impl Iterator<Item = &ObjectFields> {
     object_members(ty)
         .unwrap_or_default()
         .into_iter()
@@ -10524,9 +10519,8 @@ fn nested_object_field_names(
                 .iter()
                 .all(|ty| object_members(ty).is_some())
                 .then(|| {
-                    let nested_names = field_types
-                        .iter()
-                        .flat_map(|ty| field_names(ty))
+                    let nested_names = field_names_across(&field_types)
+                        .into_iter()
                         .cloned()
                         .collect();
                     (name.clone(), nested_names)
