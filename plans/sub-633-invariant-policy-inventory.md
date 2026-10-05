@@ -79,6 +79,7 @@ separate resource/dependency backlog.
 | R11 | Complete: retained | Keep bounded rendering and DWARF writer/source errors |
 | R12 | Complete: simplified | 24 same-builder type lookup expectations; build failures remain fallible |
 | R13 | Complete: simplified | Removed four private numeric engine-error wrappers; range errors preserved |
+| R14 | Complete: retained | Keep shared raw-slice ABI helpers and boundary validation |
 
 ### R01 execution evidence
 
@@ -305,6 +306,23 @@ Initial compilation caught the obsolete injection signatures; after their remova
 generic fatal-wrapper test, formatting and workspace/all-target Clippy passed.
 Full tests disabled, HTTP skipped; AST graph updated with existing limitations.
 Accepted sites recorded/verified in SUB-633; this commit records R13 completion.
+
+### R14 execution evidence
+
+Retain `check_host_abi`, `abi_arg` and `abi_result`. The wrappers validate buffer
+shape against a registered FuncType, but a helper accepts an arbitrary slice and
+index and does not carry that signature. Shape validation alone does not prove a
+callback's chosen index belongs to that signature. The shared helpers span over a
+thousand source occurrences; changing their contract would require proving every
+registration/body pair, or adding a new validated-signature access API. Neither
+removes host Results needed for guest values, memory, callbacks and operations.
+
+Individual fixed accesses can qualify, but retaining these compact existing
+helpers is explicitly allowed by policy and avoids a large low-value mechanical
+change. Keep their fatal trap classification and current boundary regression tests.
+This completes R14 as a no-revert decision, not a claim that fixed slots are all
+fallible or that an ABI bug was found. Source review only; no code/tests changed.
+Three independent reviews reported no findings; diff checks passed.
 
 ## Completed fixes: candidates and decisions
 
