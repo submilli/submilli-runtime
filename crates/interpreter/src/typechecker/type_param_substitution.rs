@@ -13,14 +13,12 @@ use crate::typechecker::infer::type_aliases::rehydrate_alias_refs;
 #[derive(Default, Clone, Debug, PartialEq, Eq)]
 pub struct TypeParamSubstitution {
     bindings: BTreeMap<String, Type>,
-    /// Bindings taken from the type a call's result is expected to have, which
-    /// an argument may still replace: as in tsc, what the arguments say comes
-    /// first. One stays replaceable until an argument agrees with it.
-    from_expected_result: std::collections::BTreeSet<String>,
-    /// Bindings inferred from a whole union argument whose members other
-    /// members of the parameter all took, which tsc infers at a lower
-    /// priority: a later argument the binding doesn't fit replaces it.
-    weak: std::collections::BTreeSet<String>,
+    /// Bindings a later argument may still replace, as tsc infers them at a
+    /// lower priority: those taken from the type a call's result is expected
+    /// to have, since what the arguments say comes first, and those from a
+    /// whole union argument whose members the parameter's other members all
+    /// took. One stays replaceable until an argument agrees with it.
+    replaceable: std::collections::BTreeSet<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -50,8 +48,7 @@ impl TypeParamSubstitution {
                 .zip(type_args.iter())
                 .map(|(name, ty)| (name.clone(), ty.clone()))
                 .collect(),
-            from_expected_result: Default::default(),
-            weak: Default::default(),
+            replaceable: Default::default(),
         }
     }
 
@@ -62,8 +59,7 @@ impl TypeParamSubstitution {
     pub fn from_bindings(bindings: BTreeMap<String, Type>) -> Self {
         Self {
             bindings,
-            from_expected_result: Default::default(),
-            weak: Default::default(),
+            replaceable: Default::default(),
         }
     }
 
@@ -72,18 +68,15 @@ impl TypeParamSubstitution {
     pub fn mark_from_expected_result(&mut self, before: &TypeParamSubstitution) {
         for name in self.bindings.keys() {
             if !before.bindings.contains_key(name) {
-                self.from_expected_result.insert(name.clone());
+                self.replaceable.insert(name.clone());
             }
         }
     }
 
     /// Whether `ty` mentions a type parameter whose binding an argument may
-    /// still replace: one taken from the call's expected result type, or a
-    /// weak one.
+    /// still replace.
     pub fn mentions_replaceable_binding(&self, ty: &Type) -> bool {
-        super::infer::expr::mentions_type_var(ty, &|name| {
-            self.from_expected_result.contains(name) || self.weak.contains(name)
-        })
+        super::infer::expr::mentions_type_var(ty, &|name| self.replaceable.contains(name))
     }
 
     /// Make the replaceable bindings that `ty` mentions final, so no argument
@@ -91,8 +84,7 @@ impl TypeParamSubstitution {
     pub fn keep_replaceable_bindings(&mut self, ty: &Type) {
         let mentioned =
             |name: &String| super::infer::expr::mentions_type_var(ty, &|var| var == name);
-        self.from_expected_result.retain(|name| !mentioned(name));
-        self.weak.retain(|name| !mentioned(name));
+        self.replaceable.retain(|name| !mentioned(name));
     }
 
     pub fn insert(&mut self, name: String, ty: Type) {
@@ -199,8 +191,7 @@ impl TypeParamSubstitution {
 /// A [`Unifier`]'s state before a speculative attempt.
 struct Snapshot {
     bindings: BTreeMap<String, Type>,
-    from_expected_result: std::collections::BTreeSet<String>,
-    weak: std::collections::BTreeSet<String>,
+    replaceable: std::collections::BTreeSet<String>,
     assumed_len: usize,
 }
 
@@ -264,12 +255,9 @@ impl<'a> Unifier<'a> {
                     return Ok(());
                 }
                 let arg_resolved = self.sub.apply_or_record(arg_ty, self.limits);
-                // Unified with an argument, a binding from the expected result
-                // is the arguments' own from here on, whether or not it is
-                // replaced.
-                let from_expected_result = self.sub.from_expected_result.remove(name);
-                let weak = self.sub.weak.remove(name);
-                let replaceable = self.is_argument && (from_expected_result || weak);
+                // Unified with an argument, a replaceable binding is the
+                // arguments' own from here on, whether or not it is replaced.
+                let replaceable = self.sub.replaceable.remove(name) && self.is_argument;
                 // Recurse instead of `==` to peel aliases at every level; remap to Conflict to pin the offending param.
                 return match self.unify(&resolved, &arg_resolved) {
                     Ok(()) => Ok(()),
@@ -679,7 +667,7 @@ impl<'a> Unifier<'a> {
     /// [`closely_matches`] another member, as `Box<string>` does `Box<number>`,
     /// is unified with it and fails there, as tsc pairs them and then rejects
     /// the call. When none is left over the type parameter is bound to all of
-    /// `args` weakly, as tsc infers from the whole argument at a lower
+    /// `args` replaceably, as tsc infers from the whole argument at a lower
     /// priority, so it isn't left unbound and a later argument may still
     /// replace it. None when no single member is such a type parameter, so the
     /// members pair up instead.
@@ -725,7 +713,7 @@ impl<'a> Unifier<'a> {
         }
         let unified = self.unify(type_var, &Type::union(args.to_vec()));
         if let (Ok(()), Type::TypeVar(name)) = (&unified, type_var.peel()) {
-            self.sub.weak.insert(name.clone());
+            self.sub.replaceable.insert(name.clone());
         }
         Some(unified)
     }
@@ -759,16 +747,14 @@ impl<'a> Unifier<'a> {
     fn snapshot(&self) -> Snapshot {
         Snapshot {
             bindings: self.sub.bindings.clone(),
-            from_expected_result: self.sub.from_expected_result.clone(),
-            weak: self.sub.weak.clone(),
+            replaceable: self.sub.replaceable.clone(),
             assumed_len: self.assumed_pairs.len(),
         }
     }
 
     fn restore(&mut self, snapshot: Snapshot) {
         self.sub.bindings = snapshot.bindings;
-        self.sub.from_expected_result = snapshot.from_expected_result;
-        self.sub.weak = snapshot.weak;
+        self.sub.replaceable = snapshot.replaceable;
         self.assumed_pairs.truncate(snapshot.assumed_len);
     }
 

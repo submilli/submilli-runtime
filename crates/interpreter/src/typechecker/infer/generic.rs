@@ -1822,9 +1822,10 @@ impl InterfaceExpansion {
 /// `ty` with each data-only interface that names one of `inferred_generics`
 /// replaced by its fields, through object fields, array and tuple elements and
 /// union members: the positions a literal's own fields and elements take
-/// their hints from. An interface met again inside its own fields stays as it
-/// is, so a recursive one expands once, as does every interface below
-/// [`MAX_HINT_INTERFACE_DEPTH`] or once the walk has used its budget.
+/// their hints from. An interface stays as it is when met again inside its
+/// own fields (so a recursive one expands once), when
+/// [`MAX_HINT_INTERFACE_DEPTH`] interfaces are already being expanded around
+/// it, or once the walk has used its budget.
 fn expand_inferred_interfaces(
     ty: &Type,
     inferred_generics: &[String],
