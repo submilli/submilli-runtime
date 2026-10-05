@@ -1,0 +1,33 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="300" viewBox="0 0 1200 300" role="img" aria-labelledby="title desc">
+  <title id="title">Submilli roadmap</title>
+  <desc id="desc">A dark banner with the Submilli mark and four connected nodes representing areas of planned work.</desc>
+  <defs>
+    <radialGradient id="light" cx="85%" cy="40%" r="75%">
+      <stop stop-color="#31415c" stop-opacity=".65"/>
+      <stop offset="1" stop-color="#131313" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+  <rect width="1200" height="300" rx="24" fill="#131313"/>
+  <rect width="1200" height="300" rx="24" fill="url(#light)"/>
+  <rect x=".5" y=".5" width="1199" height="299" rx="24" fill="none" stroke="#373b47"/>
+  <g transform="translate(52 42) scale(.8)" fill="#c4e4f9"><path d="M 27.652 0 C 29.822 0 31.594 1.704 31.703 3.847 L 31.708 4.056 L 31.708 11.499 L 37.267 11.499 C 39.507 11.499 41.323 13.315 41.323 15.554 C 41.323 17.794 39.506 19.609 37.267 19.609 L 31.708 19.609 L 31.708 37.268 C 31.708 39.509 29.891 41.323 27.652 41.323 C 25.413 41.323 23.598 39.508 23.598 37.268 L 23.598 24.82 L 6.814 40.255 C 5.166 41.771 2.601 41.666 1.084 40.016 C -0.432 38.368 -0.324 35.802 1.324 34.286 L 17.283 19.609 L 4.056 19.609 C 1.817 19.609 0 17.794 0 15.554 C 0 13.315 1.816 11.499 4.056 11.499 L 23.598 11.499 L 23.598 4.056 C 23.598 1.817 25.412 0 27.652 0 Z"/></g>
+  <g font-family="Arial, Helvetica, sans-serif">
+    <text x="101" y="68" fill="#c4e4f9" font-size="24" font-weight="600">Submilli</text>
+    <text x="52" y="156" fill="#ffffff" font-size="64" font-weight="700" letter-spacing="-2">What's next</text>
+    <text x="55" y="208" fill="#b6b6b6" font-size="25">Our roadmap for agent execution.</text>
+  </g>
+  <g stroke="#4d6183" stroke-width="2" fill="none">
+    <path d="M850 94 H1050 V206 H850 Z"/>
+    <path d="M850 94 L1050 206 M1050 94 L850 206" stroke-dasharray="5 8" opacity=".5"/>
+  </g>
+  <g fill="#161718" stroke="#88e5ff" stroke-width="2">
+    <rect x="823" y="67" width="54" height="54" rx="16"/>
+    <rect x="1023" y="67" width="54" height="54" rx="16"/>
+    <rect x="823" y="179" width="54" height="54" rx="16"/>
+    <rect x="1023" y="179" width="54" height="54" rx="16"/>
+  </g>
+  <g fill="#c4e4f9">
+    <circle cx="850" cy="94" r="5"/><circle cx="1050" cy="94" r="5"/>
+    <circle cx="850" cy="206" r="5"/><circle cx="1050" cy="206" r="5"/>
+  </g>
+</svg>
