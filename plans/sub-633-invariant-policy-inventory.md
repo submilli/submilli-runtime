@@ -89,6 +89,7 @@ separate resource/dependency backlog.
 | R21 | Complete: simplified | Remove compiled schema asset error chain |
 | R22 | Complete: retained | Keep iterative filesystem traversal; explicit sites handled individually |
 | R23 | Complete: retained | Preserve parser, closure arity and compiler limits |
+| R24 | Complete: retained | Keep real boundary errors; narrow item 31 |
 
 ### R01 execution evidence
 
@@ -452,6 +453,19 @@ retain depth accounting. The relaxed invariant policy does not justify undoing
 these fixes or their error propagation. This resolves the reversion decision only;
 aggregate resource work remains in item 38. Documentation-only, no tests rerun.
 Three independent reviews found no issues; diff checks passed.
+
+### R24 execution evidence
+
+Keep boundary failures for source/import preparation, discovery, stores, diagnostics
+and worker cleanup. Current runner preparation converts source/metadata failures
+into caller errors; recording and diagnostics also have actual allocation/I/O
+failure paths. Their outer representation as strings or anyhow errors is not a
+panic or sufficient reason for another typed-error redesign. R21 removed only the
+asset-only chain encountered in this review. Item 31 remains an audit of concrete
+boundary failures, not a mandate to turn every internal invariant into a Result.
+This is a retention/scope decision, not a claim that all boundaries are panic-free.
+Documentation-only; no tests rerun. Three independent reviews found no issues;
+diff checks passed.
 
 ## Completed fixes: candidates and decisions
 
