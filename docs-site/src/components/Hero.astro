@@ -1,4 +1,5 @@
 ---
+import AuthorshipBadge from './AuthorshipBadge.astro';
 /**
  * Documentation home. Renders the `hero` frontmatter of `docs/index.md` in the
  * Submilli layout: mono eyebrow, display title, lead, two actions, and a
@@ -38,7 +39,10 @@ const steps = nextSteps.flatMap((slug) =>
 <div class="home-hero">
 	<div class="home-hero__glow" aria-hidden="true"></div>
 	<p class="home-hero__eyebrow">Documentation</p>
-	<h1 id="_top" data-page-title set:html={title} />
+	<div class="home-hero__title">
+		<h1 id="_top" data-page-title set:html={title} />
+		<AuthorshipBadge />
+	</div>
 	{tagline && <p class="home-hero__lead" set:html={tagline} />}
 	{
 		actions.length > 0 && (
@@ -91,6 +95,7 @@ const steps = nextSteps.flatMap((slug) =>
 </div>
 
 <style>
+	.home-hero__title { display: flex; align-items: center; gap: 0.8rem; }
 	.home-hero {
 		position: relative;
 		display: flex;
