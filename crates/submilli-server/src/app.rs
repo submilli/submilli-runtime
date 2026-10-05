@@ -77,6 +77,7 @@ struct AppStateInner {
     boot_lock: AsyncMutex<()>,
     booted: AtomicBool,
     router_ready: AtomicBool,
+    request_tasks: Arc<crate::request_tasks::RequestTasks>,
     database: Option<Arc<crate::database::ServerDatabase>>,
     audit: crate::audit::AuditLog,
     auth: Arc<AuthConfig>,
@@ -253,6 +254,7 @@ impl AppState {
                 boot_lock: AsyncMutex::new(()),
                 booted: AtomicBool::new(false),
                 router_ready: AtomicBool::new(false),
+                request_tasks: Arc::new(crate::request_tasks::RequestTasks::default()),
                 database: config.database,
                 audit,
                 auth: Arc::new(config.auth),
@@ -319,6 +321,10 @@ impl AppState {
         }
         self.inner.router_ready.store(true, Ordering::Release);
         Ok(())
+    }
+
+    pub(crate) fn request_tasks(&self) -> Arc<crate::request_tasks::RequestTasks> {
+        Arc::clone(&self.inner.request_tasks)
     }
 
     /// Handle `serve` awaits for graceful shutdown; `POST /v1/shutdown` signals it.
@@ -834,12 +840,17 @@ fn layered_package_store(root: Option<PathBuf>, fallback: Option<PathBuf>) -> Pa
 
 pub fn app(state: AppState) -> Router {
     let boot_state = state.clone();
+    let request_tasks = state.request_tasks();
     routes(state.auth(), state.audit().clone())
         .router
         .with_state(state)
         .layer(middleware::from_fn_with_state(
             boot_state,
             ensure_router_ready,
+        ))
+        .layer(middleware::from_fn_with_state(
+            request_tasks,
+            crate::request_tasks::run,
         ))
 }
 

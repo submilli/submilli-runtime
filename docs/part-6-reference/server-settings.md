@@ -414,9 +414,17 @@ trail](/docs/reference/audit-trail) lists every record and its fields.
 ## Shutdown
 
 SIGTERM, SIGINT, `submilli server stop`, and `POST /v1/shutdown` each stop the
-server. It stops accepting connections and lets running requests finish for
-up to `shutdown_grace` seconds. A program still running then is cut off. A
-second signal skips the wait.
+server. It stops accepting connections and new request work. Running handlers
+continue even if their clients disconnect. Connected clients can receive their
+responses while the server drains.
+
+HTTP responses, owned request tasks, and database cleanup share the
+`shutdown_grace` deadline. When the deadline expires, unfinished handlers are
+cancelled. A second signal skips the remaining wait. Database cleanup can
+continue until the process exits.
+
+A disconnect during request-body upload can still cause a read error. Streaming
+a response remains tied to its connection.
 
 ## Command-line help
 
