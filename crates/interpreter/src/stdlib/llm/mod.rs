@@ -30,6 +30,7 @@ use std::sync::Arc;
 use wasmtime::{FuncType, HeapType, Linker, RefType, StructType, Val, ValType};
 
 use crate::runtime::StoreData;
+use crate::runtime::call_log::{ModelUsage, Payload, Side, record_payload, record_usage};
 use crate::runtime::decision::CallTicket;
 use crate::runtime::fuel;
 use crate::runtime::host::{
@@ -261,6 +262,13 @@ async fn dispatch(
     schema: Option<String>,
 ) -> wasmtime::Result<Vec<LlmOutcome>> {
     let ticket = gate(caller, model, prompts.len())?;
+    record_payload(&*caller, ticket, Side::Request, || {
+        let body = serde_json::to_vec(&prompts).unwrap_or_default();
+        let bytes = sent_bytes(&prompts, schema.as_deref());
+        Payload::meta(serde_json::json!({ "op": op, "model": model, "schema": schema }))
+            .with_owned_body(body)
+            .with_size(bytes)
+    });
 
     let budget = budget(caller);
     let limits = budget
@@ -271,9 +279,8 @@ async fn dispatch(
     // Clone the provider out of the store before any `await`: the borrow on
     // `caller.data()` cannot be held across one.
     let provider = provider(caller, op, model)?;
-    let sent: usize =
-        prompts.iter().map(String::len).sum::<usize>() + schema.as_ref().map_or(0, String::len);
-    fuel::charge(&mut *caller, fuel::IO, sent as u64)?;
+    let sent = sent_bytes(&prompts, schema.as_deref());
+    fuel::charge(&mut *caller, fuel::IO, sent)?;
 
     // The model's own cap, not the default: KTD3b makes the reservation an upper
     // bound by reserving the same cap the request is sent with.
@@ -332,6 +339,14 @@ async fn dispatch(
                 .iter()
                 .map(|outcome| outcome.text.as_ref().map_or(0, String::len))
                 .sum();
+            record_payload(&*caller, ticket, Side::Response, || {
+                let texts: Vec<_> = outcomes.iter().map(|outcome| &outcome.text).collect();
+                let ok: Vec<_> = outcomes.iter().map(|outcome| outcome.ok).collect();
+                Payload::meta(serde_json::json!({ "ok": ok }))
+                    .with_owned_body(serde_json::to_vec(&texts).unwrap_or_default())
+                    .with_size(received as u64)
+            });
+            record_usage(&*caller, ticket, reported_usage(&outcomes));
             fuel::settle(&mut *caller, fuel::IO, received as u64)?;
             Ok(outcomes)
         }
@@ -343,6 +358,25 @@ async fn dispatch(
             }
             Err(error)
         }
+    }
+}
+
+/// The bytes a dispatch sends: its prompts and schema.
+fn sent_bytes(prompts: &[String], schema: Option<&str>) -> u64 {
+    (prompts.iter().map(String::len).sum::<usize>() + schema.map_or(0, str::len)) as u64
+}
+
+/// The token counts the provider reported, summed over the dispatch's prompts. A count
+/// any prompt left unreported is absent, not zero.
+fn reported_usage(outcomes: &[LlmOutcome]) -> ModelUsage {
+    let sum = |field: fn(&LlmOutcome) -> Option<u64>| {
+        outcomes.iter().try_fold(0u64, |total, outcome| {
+            Some(total.saturating_add(field(outcome)?))
+        })
+    };
+    ModelUsage {
+        input_tokens: sum(|outcome| outcome.input_tokens),
+        output_tokens: sum(|outcome| outcome.output_tokens),
     }
 }
 

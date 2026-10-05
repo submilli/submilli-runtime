@@ -6,13 +6,14 @@ use std::sync::{Arc, Mutex};
 
 use interpreter::runtime::security::AuditDecision;
 use interpreter::runtime::{
-    Access, CheckOutcome, DecisionAction, DecisionCause, DecisionExplanation, DecisionLog,
-    DecisionLogConfig, DecisionLogOutput, DecisionRecord, EntryPath, ExecutionTokenBudget,
-    FailureReasonRecord, FailureRecord, InMemorySessionKv, LinkedPackageModule, LlmCallError,
-    LlmLimits, LlmModel, LlmOutcome, LlmProvider, MountSpec, NearMissRecord, RuleCitation,
-    SecurityCheck, SessionKvLimits, SharedTokenBudget, StoreData, Vfs,
-    install_package_modules_async, install_runtime_host_functions, install_runtime_store_bound,
-    install_tenant_limits, limits::ExecutionUsage,
+    Access, BodyCopy, CallOutcome, CallRecord, CheckOutcome, DecisionAction, DecisionCause,
+    DecisionExplanation, DecisionLog, DecisionLogConfig, DecisionLogOutput, DecisionRecord,
+    EntryPath, ExecutionTokenBudget, FailureReasonRecord, FailureRecord, InMemorySessionKv,
+    LinkedPackageModule, LlmCallError, LlmLimits, LlmModel, LlmOutcome, LlmProvider, MountSpec,
+    NearMissRecord, RecordObserver, RuleCitation, SecurityCheck, SessionKvLimits,
+    SharedTokenBudget, StoreData, Vfs, install_package_modules_async,
+    install_runtime_host_functions, install_runtime_store_bound, install_tenant_limits,
+    limits::ExecutionUsage,
 };
 use interpreter::stdlib::git::GitConfig;
 use interpreter::stdlib::http::transport::{
@@ -155,6 +156,8 @@ impl SecurityCheck for Capture {
 struct Web {
     redirect_to: Option<&'static str>,
     egress: Egress,
+    /// The body every response carries; `ok` when unset.
+    body: Option<Vec<u8>>,
 }
 
 /// Where the transport refuses the destination at the network layer, as the real one does
@@ -207,8 +210,8 @@ impl HttpClient for Web {
         Ok(HttpResponse {
             status: 200,
             status_text: "OK".into(),
-            headers: Vec::new(),
-            body: b"ok".to_vec(),
+            headers: vec![("set-cookie".into(), "session=hidden".into())],
+            body: self.body.clone().unwrap_or_else(|| b"ok".to_vec()),
             final_url: req.url.clone(),
         })
     }
@@ -238,6 +241,8 @@ struct Setup {
     /// Installs a fake model provider (`open`, `secret`) with this token ceiling.
     llm: Option<LlmLimits>,
     near_miss_actual: Option<Value>,
+    observer: Option<Arc<dyn RecordObserver>>,
+    response_body: Option<Vec<u8>>,
 }
 
 struct Outcome {
@@ -253,6 +258,17 @@ struct Outcome {
 impl Outcome {
     fn records(&self) -> &[DecisionRecord] {
         &self.log.as_ref().expect("a recorder was installed").records
+    }
+
+    fn calls(&self) -> &[CallRecord] {
+        &self.log.as_ref().expect("a recorder was installed").calls
+    }
+
+    fn call(&self, capability: &str) -> &CallRecord {
+        self.calls()
+            .iter()
+            .find(|call| call.capability == capability)
+            .unwrap_or_else(|| panic!("no call for {capability}: {:#?}", self.calls()))
     }
 
     fn record(&self, capability: &str) -> &DecisionRecord {
@@ -340,6 +356,7 @@ async fn run(source: &str, setup: Setup) -> Outcome {
     data.http_client = Arc::new(Web {
         redirect_to: setup.redirect_to,
         egress: setup.egress,
+        body: setup.response_body,
     });
     if let Some(limits) = setup.llm {
         data.llm_provider = Some(Arc::new(FakeLlm));
@@ -364,7 +381,7 @@ async fn run(source: &str, setup: Setup) -> Outcome {
     }
     let log = setup
         .record
-        .map(|config| DecisionLog::install(&mut data, config));
+        .map(|config| DecisionLog::install_observed(&mut data, config, setup.observer));
 
     let mut store = cfg.store_async(&engine, data).expect("store");
     install_tenant_limits(&mut store);
@@ -833,8 +850,10 @@ async fn an_exhausted_recorder_budget_truncates_the_log_and_changes_nothing_the_
     let unrecorded = run(&source, caught_denial_setup(None)).await;
     let starved = run(
         &source,
+        // No call records, so the budget goes to decisions alone.
         caught_denial_setup(Some(DecisionLogConfig {
             max_recorder_bytes: 3000,
+            max_calls: 0,
             ..DecisionLogConfig::default()
         })),
     )
@@ -873,8 +892,10 @@ async fn a_byte_budget_payload_drop_does_not_stop_lines_on_later_records() {
                 capability: "http.get",
                 path: None,
             }],
+            // No call records, so the budget goes to decisions alone.
             record: Some(DecisionLogConfig {
                 max_recorder_bytes: 10000,
+                max_calls: 0,
                 ..DecisionLogConfig::default()
             }),
             ..Setup::default()
@@ -1428,4 +1449,430 @@ async fn line_lookup_cost() {
     }
     let per_call = best_recorded.saturating_sub(best_plain).as_nanos() / 20_000;
     println!("plain {best_plain:?} recorded {best_recorded:?} => ~{per_call} ns per gated call");
+}
+
+// ---- call records ----------------------------------------------------------------------
+
+fn body_text(copy: Option<&BodyCopy>) -> Option<&str> {
+    match copy? {
+        BodyCopy::Text(text) => Some(text),
+        BodyCopy::Base64(_) => None,
+    }
+}
+
+#[tokio::test]
+async fn every_gated_call_records_its_timing_and_outcome() {
+    let outcome = run(MIXED_PROGRAM, mixed(recording())).await;
+    assert_eq!(outcome.result, Ok("ok:yes".to_owned()));
+    let calls = outcome.calls();
+    assert_eq!(calls.len(), 3, "{calls:#?}");
+    for call in calls {
+        let ended = call.ended_micros.expect("every call ended");
+        assert!(ended >= call.started_micros, "{call:#?}");
+    }
+    let outcomes: Vec<_> = calls.iter().map(|call| call.outcome).collect();
+    assert_eq!(
+        outcomes,
+        [
+            Some(CallOutcome::Returned),
+            Some(CallOutcome::Failed),
+            Some(CallOutcome::Returned)
+        ],
+        "the denied post failed"
+    );
+    // Each call shares its index with its decision.
+    for (call, record) in calls.iter().zip(outcome.records()) {
+        assert_eq!(call.call_index, record.call_index);
+        assert_eq!(call.capability, record.capability);
+    }
+    assert_eq!(calls[2].caller, "@acme/core");
+}
+
+#[tokio::test]
+async fn an_http_call_keeps_its_request_and_response_with_credentials_masked() {
+    let source = r#"
+import { get } from "submilli:http";
+function main(): string {
+  const headers = new Map<string, string>([["Authorization", "Bearer token-one"], ["x-trace", "abc"]]);
+  const response = get("https://example.test/data", headers);
+  return response.body;
+}
+"#;
+    let outcome = run(
+        source,
+        Setup {
+            record: recording(),
+            ..Setup::default()
+        },
+    )
+    .await;
+    assert_eq!(outcome.result, Ok("ok".to_owned()));
+    let call = outcome.call("http.get");
+    let request = call.request.as_ref().expect("the request");
+    assert_eq!(request.meta["method"], "GET");
+    assert_eq!(request.meta["url"], "https://example.test/data");
+    assert_eq!(request.masked_headers, ["Authorization"]);
+    let response = call.response.as_ref().expect("the response");
+    assert_eq!(response.meta["status"], 200);
+    assert_eq!(body_text(response.body.as_ref()), Some("ok"));
+    assert_eq!(response.bytes, 2);
+    assert_eq!(response.masked_headers, ["set-cookie"]);
+    let text = serde_json::to_string(call).unwrap();
+    assert!(!text.contains("token-one"), "{text}");
+    assert!(!text.contains("session=hidden"), "{text}");
+    assert!(text.contains("abc"), "an ordinary header is kept");
+
+    // A refreshed credential leaves the request's digest unchanged.
+    let refreshed = run(
+        &source.replace("token-one", "token-two"),
+        Setup {
+            record: recording(),
+            ..Setup::default()
+        },
+    )
+    .await;
+    assert_eq!(
+        refreshed.call("http.get").request.as_ref().unwrap().digest,
+        request.digest
+    );
+}
+
+#[tokio::test]
+async fn a_response_over_the_payload_cap_keeps_its_full_size_and_digest() {
+    let body = vec![b'x'; 4096];
+    let setup = |max_payload_bytes| Setup {
+        record: Some(DecisionLogConfig {
+            max_payload_bytes,
+            ..DecisionLogConfig::default()
+        }),
+        response_body: Some(body.clone()),
+        ..Setup::default()
+    };
+    let source = r#"
+import { get } from "submilli:http";
+function main(): string { return get("https://example.test/big").body.length.toString(); }
+"#;
+    let capped = run(source, setup(100)).await;
+    let whole = run(source, setup(1 << 20)).await;
+    assert_eq!(capped.result, Ok("4096".to_owned()));
+    let capped = *capped.call("http.get").response.clone().unwrap();
+    let whole = *whole.call("http.get").response.clone().unwrap();
+    assert!(capped.truncated && !whole.truncated);
+    assert_eq!(body_text(capped.body.as_ref()).map(str::len), Some(100));
+    assert_eq!((capped.bytes, whole.bytes), (4096, 4096));
+    assert_eq!(capped.digest, whole.digest);
+}
+
+#[tokio::test]
+async fn file_and_session_reads_keep_what_they_returned() {
+    let source = r#"
+import * as fs from "submilli:fs";
+import session from "submilli:session";
+function main(): string {
+  fs.writeText("/notes.txt", "hello file");
+  session.set("greeting", "hi");
+  const text = fs.readText("/notes.txt");
+  const stored = session.get<string>("greeting");
+  return (text ?? "") + "|" + (stored ?? "");
+}
+"#;
+    let outcome = run(
+        source,
+        Setup {
+            record: recording(),
+            session: true,
+            ..Setup::default()
+        },
+    )
+    .await;
+    assert_eq!(outcome.result, Ok("hello file|hi".to_owned()));
+    let read = outcome.call("fs.read");
+    let response = read.response.as_ref().expect("the read's contents");
+    assert_eq!(body_text(response.body.as_ref()), Some("hello file"));
+    assert_eq!(response.bytes, 10);
+    let session = outcome.call("session.read");
+    let stored = session.response.as_ref().expect("the stored value");
+    assert!(
+        body_text(stored.body.as_ref()).is_some_and(|text| text.contains("hi")),
+        "{stored:?}"
+    );
+    // A write is a call too, with its timing and no response copy.
+    let write = outcome.call("fs.write");
+    assert_eq!(write.outcome, Some(CallOutcome::Returned));
+    assert!(write.response.is_none());
+}
+
+#[tokio::test]
+async fn a_model_call_keeps_its_prompts_reply_and_token_usage() {
+    let source = r#"
+import llm from "submilli:llm";
+function main(): string { return llm.call("open", "what is two plus two").text ?? ""; }
+"#;
+    let outcome = run(
+        source,
+        Setup {
+            record: recording(),
+            llm: Some(LlmLimits::default()),
+            ..Setup::default()
+        },
+    )
+    .await;
+    assert_eq!(outcome.result, Ok("answer".to_owned()));
+    let call = outcome.call("llm.call");
+    let request = call.request.as_ref().expect("the prompts");
+    assert_eq!(request.meta["model"], "open");
+    assert!(body_text(request.body.as_ref()).is_some_and(|t| t.contains("two plus two")));
+    assert_eq!(request.bytes, "what is two plus two".len() as u64);
+    let response = call.response.as_ref().expect("the reply");
+    assert!(body_text(response.body.as_ref()).is_some_and(|t| t.contains("answer")));
+    assert_eq!(
+        call.usage,
+        Some(interpreter::runtime::ModelUsage {
+            input_tokens: Some(10),
+            output_tokens: Some(10),
+        })
+    );
+}
+
+#[tokio::test]
+async fn a_secret_read_records_its_timing_and_never_its_value() {
+    let source = r#"
+import { get } from "@acme/keys";
+function main(): string { return get().length.toString(); }
+"#;
+    let keys = r#"
+import { get as read } from "submilli:secrets";
+export function get(): string { return read("api-key") ?? ""; }
+"#;
+    let outcome = run(
+        source,
+        Setup {
+            record: recording(),
+            packages: vec![("@acme/keys", keys)],
+            ..Setup::default()
+        },
+    )
+    .await;
+    let call = outcome.call("secrets.get");
+    assert!(call.ended_micros.is_some());
+    assert!(
+        call.request.is_none() && call.response.is_none(),
+        "{call:?}"
+    );
+}
+
+/// Collects what an observer is shown, in order.
+#[derive(Default)]
+struct Seen(Mutex<Vec<String>>);
+
+impl RecordObserver for Seen {
+    fn call_started(&self, call: &CallRecord) {
+        self.push(format!("started {} {}", call.call_index, call.capability));
+    }
+    fn decision(&self, record: &DecisionRecord) {
+        self.push(format!("decision {} {}", record.call_index, record.allowed));
+    }
+    fn call_finished(&self, call: &CallRecord) {
+        let size = call.response.as_ref().map(|r| r.bytes);
+        self.push(format!("finished {} {:?}", call.call_index, size));
+    }
+}
+
+impl Seen {
+    fn push(&self, entry: String) {
+        self.0.lock().unwrap().push(entry);
+    }
+}
+
+#[tokio::test]
+async fn an_observer_sees_each_call_start_decide_and_finish_in_order() {
+    let seen = Arc::new(Seen::default());
+    let mut setup = mixed(recording());
+    setup.observer = Some(seen.clone());
+    let outcome = run(MIXED_PROGRAM, setup).await;
+    assert_eq!(outcome.result, Ok("ok:yes".to_owned()));
+    assert_eq!(
+        *seen.0.lock().unwrap(),
+        [
+            "started 0 http.get",
+            "decision 0 true",
+            "finished 0 Some(2)",
+            "started 1 http.post",
+            "decision 1 false",
+            "finished 1 None",
+            "started 2 http.get",
+            "decision 2 true",
+            "finished 2 Some(2)",
+        ]
+    );
+}
+
+#[tokio::test]
+async fn an_observed_and_recorded_run_matches_an_unrecorded_one() {
+    let plain = run(MIXED_PROGRAM, mixed(None)).await;
+    let mut setup = mixed(recording());
+    setup.observer = Some(Arc::new(Seen::default()));
+    let observed = run(MIXED_PROGRAM, setup).await;
+    assert_eq!(observed.result, plain.result);
+    assert_eq!(observed.audits, plain.audits);
+    assert_eq!(observed.fuel, plain.fuel);
+    assert_eq!(observed.memory_peak, plain.memory_peak);
+    assert_eq!(observed.host_attached, plain.host_attached);
+}
+
+#[tokio::test]
+async fn calls_past_the_cap_are_counted_and_truncate_the_log() {
+    let outcome = run(
+        &caught_denials(5),
+        Setup {
+            record: Some(DecisionLogConfig {
+                max_calls: 2,
+                ..DecisionLogConfig::default()
+            }),
+            ..caught_denial_setup(None)
+        },
+    )
+    .await;
+    let log = outcome.log.as_ref().unwrap();
+    assert_eq!(log.calls.len(), 2);
+    assert_eq!(log.calls_dropped, 3);
+    assert!(log.truncated);
+    assert_eq!(log.records.len(), 5, "decisions are capped separately");
+}
+
+#[tokio::test]
+async fn large_payloads_never_crowd_out_a_later_denial() {
+    let source = r#"
+import { get } from "submilli:http";
+function main(): string {
+  for (let i = 0; i < 6; i++) { get("https://example.test/big"); }
+  let denied = "no";
+  try { get("https://example.test/deny"); } catch (e: PermissionDeniedError) { denied = "yes"; }
+  return denied;
+}
+"#;
+    let outcome = run(
+        source,
+        Setup {
+            deny: vec![Deny {
+                caller: None,
+                capability: "http.get",
+                path: Some("/deny"),
+            }],
+            // Six 100 KiB bodies fill this budget to within a record's size without the
+            // decision reserve, which leaves the denial nowhere to go.
+            record: Some(DecisionLogConfig {
+                max_recorder_bytes: 6 * 100 * 1024 + 2048,
+                ..DecisionLogConfig::default()
+            }),
+            response_body: Some(vec![b'x'; 100 * 1024]),
+            ..Setup::default()
+        },
+    )
+    .await;
+    assert_eq!(outcome.result, Ok("yes".to_owned()));
+    let log = outcome.log.as_ref().unwrap();
+    assert_eq!(log.dropped, 0, "no decision was lost");
+    let denial = log
+        .records
+        .iter()
+        .find(|record| !record.allowed)
+        .expect("the denial is recorded");
+    assert!(!denial.payload_dropped, "{denial:?}");
+    assert!(
+        outcome
+            .calls()
+            .iter()
+            .filter_map(|call| call.response.as_deref())
+            .any(|response| response.body.is_none() && response.truncated),
+        "a response past the reserve keeps its digest and size only"
+    );
+}
+
+#[tokio::test]
+async fn every_kind_of_gated_call_ends_and_keeps_the_payloads_its_class_promises() {
+    let lib = r#"
+import { check } from "submilli:security";
+/**
+ * Runs the operation.
+ * @param id Identifier of the target.
+ * @capability test.com/op { id }
+ */
+export function run(id: string): void { check("test.com/op", { id }); }
+"#;
+    let source = r#"
+import * as fs from "submilli:fs";
+import session from "submilli:session";
+import { get } from "submilli:http";
+import llm from "submilli:llm";
+import { read } from "submilli:code";
+import { run } from "@acme/core";
+function main(): string {
+  fs.writeText("/a.txt", "one\ntwo\n");
+  session.set("k", "v");
+  const text = fs.readText("/a.txt");
+  const lines = read("/a.txt").lines.length;
+  const stored = session.get<string>("k");
+  const body = get("https://example.test/x").body;
+  const answer = llm.call("open", "ping").text ?? "";
+  run("1");
+  return (text ?? "").length.toString() + ":" + lines.toString() + ":" + stored + ":" + body + ":" + answer;
+}
+"#;
+    let outcome = run(
+        source,
+        Setup {
+            record: recording(),
+            session: true,
+            llm: Some(LlmLimits::default()),
+            packages: vec![("@acme/core", lib)],
+            ..Setup::default()
+        },
+    )
+    .await;
+    assert_eq!(outcome.result, Ok("8:2:v:ok:answer".to_owned()));
+    for call in outcome.calls() {
+        assert!(
+            matches!(call.outcome, Some(CallOutcome::Returned)),
+            "every call ends: {call:#?}"
+        );
+        assert!(call.ended_micros.is_some(), "{call:#?}");
+    }
+    let reads: Vec<_> = outcome
+        .calls()
+        .iter()
+        .filter(|call| call.capability == "fs.read")
+        .collect();
+    assert_eq!(reads.len(), 2, "fs.readText and code.read both read");
+    for call in reads {
+        assert!(
+            call.response.is_some(),
+            "a read keeps its contents: {call:#?}"
+        );
+    }
+    assert!(outcome.call("session.read").response.is_some());
+    // The program makes one request and it does not redirect, so the one `http.get` call
+    // is the request's own. A redirect hop would be a further, payload-less call.
+    let http_calls = outcome
+        .calls()
+        .iter()
+        .filter(|call| call.capability == "http.get")
+        .count();
+    assert_eq!(http_calls, 1);
+    let http = outcome.call("http.get");
+    assert!(http.request.is_some() && http.response.is_some());
+    let model = outcome.call("llm.call");
+    let prompt = model.request.as_ref().expect("the prompt");
+    assert!(body_text(prompt.body.as_ref()).is_some_and(|text| text.contains("ping")));
+    let reply = model.response.as_ref().expect("the reply");
+    assert!(body_text(reply.body.as_ref()).is_some_and(|text| text.contains("answer")));
+    for capability in ["fs.write", "session.write"] {
+        let write = outcome.call(capability);
+        assert!(
+            matches!(write.outcome, Some(CallOutcome::Returned)) && write.request.is_none(),
+            "{capability} keeps its timing and outcome: {write:#?}"
+        );
+    }
+    let check = outcome.call("test.com/op");
+    assert!(check.request.is_none() && check.response.is_none());
 }
