@@ -7582,21 +7582,19 @@ impl Inferer<'_> {
             let result_ty = postfix_result_ty(&operand_ty);
             // For non-error declared types that aren't assignable from
             // the result, mirror `infer_assign`'s rejection.
-            if !matches!(entry.ty, Type::Error)
-                && !assignable(&result_ty, &entry.ty, self.resolver())
-            {
+            let fits = assignable(&result_ty, &entry.ty, self.resolver());
+            if !matches!(entry.ty, Type::Error) && !fits {
                 self.error(
                     span,
                     format!("expected `{}`, got `{}`", entry.ty, result_ty),
                 );
             }
-            // Re-install assignment narrowing: result reads see the
-            // post-increment type.
-            if !matches!(entry.ty, Type::Error) {
-                let path = narrowing::ReferencePath::root(narrowing::BindingId::Local {
-                    name: target.name.clone(),
-                    decl_scope: entry.decl_scope,
-                });
+            // A rejected write leaves the declared type, as in TypeScript.
+            if !fits {
+                self.invalidate_for_reassignment(path, target.span);
+            } else if !matches!(entry.ty, Type::Error) {
+                // Re-install assignment narrowing: result reads see the
+                // post-increment type.
                 self.install_assignment_narrowing(
                     path,
                     target.clone(),

@@ -1,4 +1,4 @@
-types: 158 of 241 tsc entries compared, 34 differ
+types: 158 of 241 tsc entries compared, 32 differ
 
 line 7: a
   tsc:  1
@@ -32,10 +32,6 @@ line 15: a
   tsc:  1
   ours: A
 
-line 16: b
-  tsc:  B
-  ours: A
-
 line 21: a
   tsc:  1
   ours: A
@@ -55,10 +51,6 @@ line 28: a
 line 29: a
   tsc:  1
   ours: A
-
-line 32: d
-  tsc:  D
-  ours: C
 
 line 35: a
   tsc:  1
@@ -135,7 +127,3 @@ line 82: a
 line 86: a
   tsc:  1
   ours: A
-
-errors:
-line 16: ours: expected `B`, got `A` (tsc accepts)
-line 32: ours: expected `D`, got `C` (tsc accepts)

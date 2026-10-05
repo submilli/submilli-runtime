@@ -1,2 +1,1 @@
 line 5, 11, 24 type: artifact the runner pairs tsc's entry with a node we synthesize (the read for the `for` update's narrowing)
-line 37, 38 type: bug SUB-1152 a rejected assignment, `++` or `--` still narrows its target (`x = null`)

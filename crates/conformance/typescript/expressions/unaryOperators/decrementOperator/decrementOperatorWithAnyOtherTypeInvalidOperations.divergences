@@ -1,17 +1,1 @@
-types: 15 of 45 tsc entries compared, 4 differ
-
-line 35: obj
-  tsc:  () => {}
-  ours: number
-
-line 36: obj1
-  tsc:  { x: string; y: () => void; }
-  ours: number
-
-line 61: obj1
-  tsc:  { x: string; y: () => void; }
-  ours: number
-
-line 62: obj1
-  tsc:  { x: string; y: () => void; }
-  ours: number
+types: 17 of 45 tsc entries compared, 0 differ

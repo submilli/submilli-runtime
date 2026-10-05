@@ -1,2 +1,1 @@
 line 13, 14, 15 extra: bug SUB-1196 (primitive to `{}`) a primitive isn't assignable to `{}` or `Object`
-line 19 type: bug SUB-1152 a rejected assignment, `++` or `--` still narrows its target

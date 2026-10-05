@@ -1079,7 +1079,8 @@ impl Inferer<'_> {
         }
         let path = narrowing::ReferencePath::root(narrowing::BindingId::Global(mangled.clone()));
         let written_ty = self.assignment_narrowed_ty(declared_ty, written_ty);
-        if written_ty == *declared_ty {
+        // A rejected write narrows to nothing it wrote, as in TypeScript.
+        if written_ty == *declared_ty || !assignable(&written_ty, declared_ty, self.resolver()) {
             self.invalidate_for_reassignment(path, ident.span);
             return Ok(());
         }
@@ -1693,7 +1694,8 @@ impl Inferer<'_> {
             decl_scope,
         });
         let written_ty = self.assignment_narrowed_ty(declared_ty, written_ty);
-        if written_ty == *declared_ty {
+        // A rejected write narrows to nothing it wrote, as in TypeScript.
+        if written_ty == *declared_ty || !assignable(&written_ty, declared_ty, self.resolver()) {
             self.invalidate_for_reassignment(path, target.span);
             return Ok(None);
         }

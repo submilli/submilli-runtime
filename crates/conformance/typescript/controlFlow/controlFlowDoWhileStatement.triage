@@ -1,2 +1,0 @@
-line 23 type: bug SUB-1152 a rejected assignment, `++` or `--` still narrows its target (`x = null`, so the `continue` edge carries a type the guard rules out)
-line 25 type: bug SUB-1152 a rejected assignment, `++` or `--` still narrows its target (`x = null`)
