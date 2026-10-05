@@ -14,7 +14,7 @@ pub mod oauth;
 pub mod schema_registry;
 pub mod transport;
 
-pub use discovery::{McpCatalog, discover_all, discover_selected};
+pub use discovery::{DiscoveryError, McpCatalog, discover_all, discover_selected};
 pub use transport::StreamableHttpTransport;
 
 /// A diagnostic raised while mapping a server's `tools/list` to the typed

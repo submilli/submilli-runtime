@@ -36,7 +36,7 @@ pub use response::McpResponse;
 pub enum McpCallError {
     /// The tool ran but its response exceeded the host's bounded output buffer.
     ResponseTooLarge,
-    /// Internal allocation or serialization failure; never a guest exception.
+    /// Internal initialization, allocation or serialization failure; never a guest exception.
     Internal { message: &'static str },
     /// OAuth authentication failed. A provider rejection may be transient;
     /// surfaces to the script as a catchable `McpAuthExpiredError`.
@@ -367,6 +367,84 @@ mod tests {
         let inst = linker.instantiate_async(&mut store, &module).await.unwrap();
         let out = dispatch_main_async(&mut store, &inst).await;
         (out, calls)
+    }
+
+    struct FailingTransport {
+        internal: bool,
+    }
+
+    impl McpTransport for FailingTransport {
+        fn call<'a>(
+            &'a self,
+            _: &'a str,
+            _: &'a str,
+            _: &'a str,
+        ) -> std::pin::Pin<Box<dyn std::future::Future<Output = McpOutcome> + Send + 'a>> {
+            Box::pin(async move {
+                McpOutcome {
+                    result: Err(if self.internal {
+                        super::McpCallError::Internal {
+                            message: "MCP HTTP client initialization failed",
+                        }
+                    } else {
+                        super::McpCallError::Transport("remote connection failed".into())
+                    }),
+                    received_bytes: 0,
+                    parsed_bytes: 0,
+                }
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn internal_client_failure_bypasses_guest_catch_and_keeps_runtime_usable() {
+        let package = test_mcp_package();
+        let source = r#"import test from "@mcp/test"; function main(): number { try { test.raw(); } catch (e) { return 7; } return 9; }"#;
+        let compiled =
+            compile_script(source, "<test>", crate::FileId(0), &[], &[&package]).unwrap();
+        let healthy = compile_script(
+            "function main(): number { return 42; }",
+            "<healthy>",
+            crate::FileId(0),
+            &[],
+            &[],
+        )
+        .unwrap();
+        let cfg = RuntimeConfig::default();
+        let engine = cfg.engine().unwrap();
+        let mut data = StoreData::with_vfs(Vfs::none());
+        data.install_type_info(compiled.type_info.clone());
+        data.mcp_transport = Some(Arc::new(FailingTransport { internal: true }));
+        let mut store = cfg.store_async(&engine, data).unwrap();
+        install_tenant_limits(&mut store);
+        let mut linker = Linker::<StoreData>::new(&engine);
+        install_runtime_async(&mut linker, &mut store)
+            .await
+            .unwrap();
+        let module = Module::new(&engine, &compiled.wasm).unwrap();
+        let instance = linker.instantiate_async(&mut store, &module).await.unwrap();
+        let error = dispatch_main_async(&mut store, &instance)
+            .await
+            .unwrap_err();
+        assert!(
+            error.is::<crate::runtime::host::FatalHostError>(),
+            "{error:?}"
+        );
+        store.data_mut().blocking_work.finish().await.unwrap();
+        store.data_mut().mcp_transport = Some(Arc::new(FailingTransport { internal: false }));
+        assert_eq!(
+            dispatch_main_async(&mut store, &instance).await.unwrap(),
+            Some("7".into())
+        );
+        store
+            .data_mut()
+            .install_type_info(healthy.type_info.clone());
+        let module = Module::new(&engine, &healthy.wasm).unwrap();
+        let instance = linker.instantiate_async(&mut store, &module).await.unwrap();
+        assert_eq!(
+            dispatch_main_async(&mut store, &instance).await.unwrap(),
+            Some("42".into())
+        );
     }
 
     #[tokio::test]

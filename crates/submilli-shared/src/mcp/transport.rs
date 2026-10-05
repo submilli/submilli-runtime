@@ -37,6 +37,9 @@ use submilli_blueprint::{Blueprint, HarnessSecretBindings, McpAuth, McpServer, i
 use crate::mcp_token::{McpTokenError, OAuthTokenManager};
 use crate::secret_store::SecretStore;
 
+pub(crate) type PolicyClientFactory =
+    dyn Fn(&Arc<NetworkPolicy>) -> Result<reqwest::Client, reqwest::Error> + Send + Sync;
+
 /// Bounds authentication, connection, and the tool response together.
 const CALL_TIMEOUT: Duration = Duration::from_secs(60);
 
@@ -51,6 +54,7 @@ pub struct StreamableHttpTransport {
     /// The server's outbound-address policy; an MCP server's `url` is judged
     /// like any other outbound destination.
     policy: Arc<NetworkPolicy>,
+    client_factory: Arc<PolicyClientFactory>,
     /// The sessions this execute has opened, by server name. Held across a call,
     /// which also keeps two calls from interleaving on one session.
     sessions: tokio::sync::Mutex<HashMap<String, McpSession>>,
@@ -123,6 +127,10 @@ impl CallWork {
     }
 
     fn finish(mut self, result: Result<McpResponse, McpCallError>) -> McpOutcome {
+        let result = match self.budget.as_ref().and_then(|budget| budget.error()) {
+            Some(error) => Err(error),
+            None => result,
+        };
         self.drain();
         McpOutcome {
             result,
@@ -149,6 +157,7 @@ impl StreamableHttpTransport {
             secret_store,
             harness_secrets: Arc::new(HarnessSecretBindings::new()),
             policy,
+            client_factory: Arc::new(policy_http_client),
             sessions: tokio::sync::Mutex::new(HashMap::new()),
         }
     }
@@ -203,9 +212,9 @@ impl StreamableHttpTransport {
             sessions.insert(server_name.to_string(), session);
         }
         let Some(session) = sessions.get(server_name) else {
-            return Err(McpCallError::Transport(format!(
-                "no session with server '{server_name}'"
-            )));
+            return Err(McpCallError::Internal {
+                message: "MCP session is missing after initialization",
+            });
         };
         work.attach(session.budget.clone());
         let param = CallToolRequestParams::new(tool.to_string()).with_arguments(arguments);
@@ -244,8 +253,7 @@ impl StreamableHttpTransport {
         // the discovery path for the rationale. Both stateful and stateless work.
         config.allow_stateless = true;
         let client = BoundedClient::new(
-            policy_http_client(&self.policy)
-                .map_err(|error| McpCallError::Transport(error.to_string()))?,
+            (self.client_factory)(&self.policy).map_err(client_initialization_failure)?,
         )
         .with_timeout(work.request_timeout.unwrap_or(CALL_TIMEOUT));
         let budget = client.budget.clone();
@@ -300,6 +308,12 @@ impl StreamableHttpTransport {
                 work,
             )
             .await;
+        if first.is_err() {
+            work.drain_connection().await;
+            if let Some(error) = work.budget.as_ref().and_then(|budget| budget.error()) {
+                return Err(error);
+            }
+        }
         if first.is_ok()
             || matches!(
                 first,
@@ -485,8 +499,115 @@ pub(crate) fn policy_http_client(
     policy.client_builder().pool_max_idle_per_host(0).build()
 }
 
+fn client_initialization_failure(error: reqwest::Error) -> McpCallError {
+    tracing::error!(error = ?error, "MCP HTTP client initialization failed");
+    McpCallError::Internal {
+        message: "MCP HTTP client initialization failed",
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    fn failing_transport() -> (StreamableHttpTransport, Arc<std::sync::atomic::AtomicUsize>) {
+        let bp = parse("name: bp\nmcp:\n  local:\n    url: http://127.0.0.1:1/mcp\n").unwrap();
+        let mut transport = StreamableHttpTransport::new(
+            "bp".into(),
+            Arc::new(bp),
+            None,
+            None,
+            Arc::new(NetworkPolicy::allow_all()),
+        );
+        let attempts = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        transport.client_factory = {
+            let attempts = attempts.clone();
+            Arc::new(move |_| {
+                attempts.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                reqwest::Client::builder()
+                    .user_agent("invalid\nheader")
+                    .build()
+            })
+        };
+        (transport, attempts)
+    }
+
+    #[tokio::test]
+    async fn client_initialization_failure_is_internal_and_has_no_pending_work() {
+        let (transport, attempts) = failing_transport();
+        let outcome = transport.call("local", "raw", "{}").await;
+        assert!(matches!(
+            outcome.result,
+            Err(McpCallError::Internal {
+                message: "MCP HTTP client initialization failed"
+            })
+        ));
+        assert_eq!(outcome.received_bytes, 0);
+        assert!(transport.sessions.lock().await.is_empty());
+        assert_eq!(attempts.load(std::sync::atomic::Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn internal_client_failure_does_not_refresh_oauth_or_retry() {
+        use crate::mcp_auth::{OAuthCredential, write_credential};
+        use crate::secret_store::PlaintextFileSecretStore;
+        let (mut transport, attempts) = failing_transport();
+        Arc::make_mut(&mut transport.blueprint)
+            .mcp
+            .get_mut("local")
+            .unwrap()
+            .auth = Some(McpAuth::Oauth2 {
+            client_id: None,
+            authorization_endpoint: None,
+            token_endpoint: None,
+            scopes: Vec::new(),
+        });
+        let root = tempfile::tempdir().unwrap();
+        let store: Arc<dyn SecretStore> =
+            Arc::new(PlaintextFileSecretStore::open(root.path().join("secrets")).unwrap());
+        write_credential(
+            "bp",
+            "local",
+            &OAuthCredential {
+                refresh_token: None,
+                access_token: Some("static".into()),
+                client_id: None,
+                token_endpoint: None,
+                scopes: Vec::new(),
+            },
+            &store,
+        )
+        .await
+        .unwrap();
+        transport.oauth = Some(Arc::new(OAuthTokenManager::new(
+            store,
+            Arc::new(interpreter::runtime::ReqwestHttpClient::new(
+                transport.policy.clone(),
+            )),
+            Arc::new(Vec::new()),
+        )));
+        assert!(matches!(
+            transport.call("local", "raw", "{}").await.result,
+            Err(McpCallError::Internal { .. })
+        ));
+        assert_eq!(
+            attempts.load(std::sync::atomic::Ordering::SeqCst),
+            1,
+            "an OAuth retry would construct a second client"
+        );
+    }
+
+    #[tokio::test]
+    async fn late_internal_response_failure_overrides_timeout_after_cleanup() {
+        let budget = Arc::new(ResponseBudget::default());
+        let mut work = CallWork::default();
+        work.attach(budget.clone());
+        work.retain_cleanup(async move {
+            budget.inject_allocation_failure();
+        });
+        work.drain_connection().await;
+        let outcome = work.finish(Err(McpCallError::Transport("timed out".into())));
+        assert!(matches!(outcome.result, Err(McpCallError::Internal { .. })));
+    }
+
     #[tokio::test]
     async fn final_accounting_waits_for_detached_response_streams() {
         let budget = Arc::new(ResponseBudget::default());

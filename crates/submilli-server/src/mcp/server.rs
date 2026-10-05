@@ -367,6 +367,21 @@ impl SubmilliMcp {
                 audit.error(crate::error::ErrorKind::RuntimeError);
                 ErrorData::internal_error(error.to_string(), None)
             })?;
+        let mcp_catalog = self
+            .state
+            .mcp_catalog_for_imports(
+                &self.blueprint_name,
+                &blueprint,
+                &script_imports.mcp_servers,
+                &harness_secrets,
+                &network_policy,
+            )
+            .await
+            .map_err(|error| {
+                audit.error(crate::error::ErrorKind::RuntimeError);
+                mcp_discovery_error(error)
+            })?;
+
         let (vfs, vfs_info) = self
             .acquire_vfs(
                 &blueprint,
@@ -419,16 +434,6 @@ impl SubmilliMcp {
             llm_provider,
             llm_budget: Some(manager.llm_budget_for_execute()),
         };
-        let mcp_catalog = self
-            .state
-            .mcp_catalog_for_imports(
-                &self.blueprint_name,
-                &blueprint,
-                &script_imports.mcp_servers,
-                &harness_secrets,
-                &network_policy,
-            )
-            .await;
         let packages = self
             .state
             .prepared_packages_for_imports(&self.blueprint_name, &blueprint, &script_imports)
@@ -531,7 +536,8 @@ impl SubmilliMcp {
                 let catalog = self
                     .state
                     .mcp_catalog(&self.blueprint_name, &blueprint)
-                    .await;
+                    .await
+                    .map_err(mcp_discovery_error)?;
                 packages::lookup_with_blueprint(
                     &args.name,
                     &catalog,
@@ -571,7 +577,8 @@ impl SubmilliMcp {
                 let catalog = self
                     .state
                     .mcp_catalog(&self.blueprint_name, &blueprint)
-                    .await;
+                    .await
+                    .map_err(mcp_discovery_error)?;
                 packages::search_json_with_blueprint(
                     &args.query,
                     &catalog,
@@ -606,7 +613,8 @@ impl SubmilliMcp {
                 let catalog = self
                     .state
                     .mcp_catalog(&self.blueprint_name, &blueprint)
-                    .await;
+                    .await
+                    .map_err(mcp_discovery_error)?;
                 (
                     packages::mcp_package_names(&catalog),
                     LibraryVisibility::for_blueprint(&blueprint),
@@ -1124,6 +1132,11 @@ impl ServerHandler for SubmilliMcp {
     fn get_tool(&self, name: &str) -> Option<Tool> {
         self.tool_router.get(name).cloned()
     }
+}
+
+fn mcp_discovery_error(error: submilli_shared::mcp::DiscoveryError) -> ErrorData {
+    tracing::error!(error = ?error, "MCP discovery initialization failed");
+    ErrorData::internal_error(error.to_string(), None)
 }
 
 fn blueprint_store_error(error: crate::blueprint::StoreError) -> ErrorData {

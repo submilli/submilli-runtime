@@ -106,7 +106,9 @@ impl Job {
                         rule,
                         reason: Some(&reason),
                     });
-                // Poisoned state is unsupported; see AGENTS.md accepted poisoned-lock panics.
+                // Poison may leave the denied capability and reason partly updated.
+                // AGENTS.md permits poisoned-lock panics rather than recovering this
+                // attribution; it does not permit the panic that caused poisoning.
                 let mut denial = self.denial.lock().expect("git worker denial lock poisoned");
                 *denial = Some((capability.to_owned(), reason.clone()));
                 Err(permission_denied(&self.caller, capability, reason))
@@ -531,7 +533,9 @@ async fn invoke(
         }
         other => other,
     };
-    // Poisoned state is unsupported; see AGENTS.md accepted poisoned-lock panics.
+    // Poison may leave denial attribution partly updated by the worker. AGENTS.md
+    // permits this poisoned-lock panic instead of recovery, including after worker
+    // cleanup; it does not permit the panic that caused poisoning.
     let denial = denial.lock().expect("git: denial lock poisoned").take();
     drop(cancel_guard);
     fuel::settle_result(caller, |caller| {
