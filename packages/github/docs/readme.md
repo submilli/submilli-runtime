@@ -57,7 +57,7 @@ function main(): string {
 }
 ```
 
-## Topic research in the last 30 days
+## Search issues across repositories
 
 Broad discovery requires `github.com/issues.searchAcrossRepositories`. Dates below
 are inclusive UTC calendar days; check both partial-result flags before treating
@@ -67,10 +67,9 @@ the page as exhaustive.
 import github from "@submilli/github";
 
 function main(): string {
-    const now = Temporal.Now.instant();
     const page = github.searchIssuesAcrossRepositories("wasmgc is:public", {
-        createdSince: now.subtract({ hours: 24 * 30 }).toString().slice(0, 10),
-        createdUntil: now.toString().slice(0, 10),
+        createdSince: "2026-01-01",
+        createdUntil: "2026-03-31",
         sort: "updated", limit: 20,
     });
     const lines: string[] = [];
