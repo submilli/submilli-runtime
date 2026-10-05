@@ -6828,13 +6828,15 @@ impl Inferer<'_> {
                 .insert(name.name.clone(), signature, true, name.span);
         }
         let previous_hint = self.object_this_hint.take();
+        // With neither a `this` annotation nor an object literal to bind it,
+        // `this` has no receiver to name, so a use is rejected as it is
+        // outside a class (tsc: implicitly `any`).
         let receiver = this_type
             .as_ref()
             .map(|ty| self.resolve_type(ty))
             .transpose()?
-            .or_else(|| previous_hint.clone())
-            .unwrap_or(Type::Unknown);
-        let previous_this = self.function_this.replace(receiver.clone());
+            .or_else(|| previous_hint.clone());
+        let previous_this = std::mem::replace(&mut self.function_this, receiver.clone());
         let previous_class = self.current_class.take();
         let previous_static = self.current_static.take();
         let (id, ty) = self.infer_expr(function, expected)?;
@@ -6843,7 +6845,9 @@ impl Inferer<'_> {
         self.current_class = previous_class;
         self.current_static = previous_static;
         self.scopes.pop();
-        self.typed_ast.closure_this.insert(id, receiver);
+        self.typed_ast
+            .closure_this
+            .insert(id, receiver.unwrap_or(Type::Unknown));
         if let Some(name) = name {
             self.typed_ast.closure_names.insert(id, name);
         }
