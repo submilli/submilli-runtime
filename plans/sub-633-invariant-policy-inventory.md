@@ -1027,6 +1027,12 @@ now be acceptable. The exact code changes remain proposals until implemented.
 
 ### T03 — Narrow 31/37 and preserve 32/38
 
+Execution complete: applied narrow item 31/37 requirements and an explicit item 32 deferral
+note. Item 38's frontier/aggregate budget findings stay unchanged. Source ledger
+contains the same scope distinction. Three independent reviews found no issues.
+Both writes read back and verified (normalizing Linear issue-link markup only);
+checkboxes and parent status unchanged. Diff checks passed; no tests run.
+
 Item 31 needs concrete boundary failures, not another universal Result cascade.
 Item 37 needs proof/disposition of potentially panicking operations, not mandatory
 replacement of all indexes. Keep unresolved arithmetic, narrowing, borrow,
