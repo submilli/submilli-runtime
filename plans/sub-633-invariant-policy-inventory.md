@@ -86,6 +86,7 @@ separate resource/dependency backlog.
 | R18 | Complete: already simplified | Poison-only reversion already implemented; preserve real backend errors |
 | R19 | Complete: retained | Keep direct wire maps and retry classification loop |
 | R20 | Complete: retained | Keep bounded unordered collection and positional sort |
+| R21 | Complete: simplified | Remove compiled schema asset error chain |
 
 ### R01 execution evidence
 
@@ -409,6 +410,25 @@ concurrency bounds, empty/single batches and cancellation of active dispatches.
 This decision changes no dispatch, accounting or cancellation behavior.
 Documentation-only source review; no tests rerun. Three independent reviewers
 reported no findings; diff checks passed.
+
+### R21 execution evidence
+
+The sole production pack constructor consumes `include_str!("schemas/github.json")`.
+Maintained tests parse that exact compiled asset, check tool coverage, validate every
+schema's representability and compare recorded server responses. Documented expects
+now enforce its JSON/tools-object invariants; a broken binary asset may panic.
+Removed SchemaPackError, cached Result, DiscoveryError::SchemaPack and CLI injection
+wrappers. Pack lookup returns Option; eager initialization remains at startup and
+discovery. Server failure injection is test-only, retaining downstream fatal-error,
+cache, idempotency and healthy-follow-up coverage without production setup plumbing.
+Real client construction, remote discovery, allocation and filesystem errors retain
+their existing propagation. Removed only corrupt-asset recovery tests. Shared MCP
+focused checks: 73 passed, four HTTP tests ignored. Four server setup tests passed.
+CLI run checks: nine passed initially; two failed because the sandbox blocked the
+default local secret store, then passed with an isolated SUBMILLI_HOME. Formatting,
+workspace Clippy and diff checks passed. Three independent reviews found no issues.
+Graph updated; accepted-invariant entry appended to the source ledger and verified.
+HTTP tests were skipped because transport behavior is unchanged.
 
 ## Completed fixes: candidates and decisions
 
