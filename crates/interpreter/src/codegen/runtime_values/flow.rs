@@ -355,10 +355,7 @@ fn connect_live_narrow_read(
     // so a closure doesn't capture it and there is no live value to connect.
     // A field or global still reads its live value, which an alias or a call
     // may have changed since the guard.
-    if matches!(expr.ty, Type::Never)
-        && path.chain.is_empty()
-        && matches!(path.root, BindingId::Local { .. })
-    {
+    if matches!(expr.ty, Type::Never) && path.is_bare_local() {
         return Ok(());
     }
     let Some(source) = live_source(ast, lowered, locals, sources, id, flow)? else {

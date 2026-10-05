@@ -152,16 +152,8 @@ fn emit_expr_value(
             }
         }
         // A guard that rules out every value leaves no shadow to read, and
-        // no value ever reaches the read. Runtime-value lowering may have
-        // widened the read's type, so test the type inference gave it.
-        TypedExprKind::LocalNarrowRef { .. }
-            if matches!(
-                ctx.ta
-                    .source_type(id)
-                    .map_err(crate::codegen::arena_failure)?,
-                Type::Never
-            ) =>
-        {
+        // no value ever reaches the read.
+        TypedExprKind::LocalNarrowRef { .. } if inferred_never(ctx, id)? => {
             emitter.instruction(Instruction::Unreachable);
         }
         TypedExprKind::LocalNarrowRef { binding, path, .. } => {
@@ -1444,6 +1436,19 @@ fn emit_closure_value(
     }
 
     Ok(())
+}
+
+/// Whether inference typed `id` as `never`. Runtime-value lowering may widen
+/// an expression's type afterwards, so `expr.ty` alone can't tell.
+fn inferred_never(
+    ctx: &CodegenCtx,
+    id: ExprId,
+) -> Result<bool, crate::compiler_error::CompilerFailure> {
+    let ty = ctx
+        .ta
+        .source_type(id)
+        .map_err(crate::codegen::arena_failure)?;
+    Ok(matches!(ty, Type::Never))
 }
 
 fn emit_local_narrow_ref(

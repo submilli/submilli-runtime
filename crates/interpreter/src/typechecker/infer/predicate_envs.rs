@@ -924,8 +924,8 @@ impl<'a> Inferer<'a> {
         let lhs_lit = comparison_literal(&self.typed_ast, lhs_id)?;
         let rhs_lit = comparison_literal(&self.typed_ast, rhs_id)?;
         match (lhs_lit, rhs_lit) {
-            (None, Some(lit)) => self.narrow_equal_to_literal(op, lhs_id, lit),
-            (Some(lit), None) => self.narrow_equal_to_literal(op, rhs_id, lit),
+            (None, Some(lit)) => self.narrow_to_other_literal(op, lhs_id, rhs_id, lit),
+            (Some(lit), None) => self.narrow_to_other_literal(op, rhs_id, lhs_id, lit),
             (None, None) => self.narrow_equal_to_union(op, lhs_id, rhs_id),
             (Some(lhs_lit), Some(rhs_lit)) => {
                 let lhs_envs = self.narrow_to_other_literal(op, lhs_id, rhs_id, rhs_lit)?;
@@ -942,9 +942,9 @@ impl<'a> Inferer<'a> {
         }
     }
 
-    /// Where both sides of an equality have literal types, narrows `path_id`
-    /// by the literal of `other_id`, unless `path_id` is written out as a
-    /// literal or `other_id`'s literal type may be stale.
+    /// Narrows `path_id` compared with `other_id`, whose type is the literal
+    /// `other_lit`, unless `path_id` is written out as a literal or
+    /// `other_id`'s literal type may be stale.
     fn narrow_to_other_literal(
         &mut self,
         op: crate::BinOp,
@@ -1001,6 +1001,9 @@ impl<'a> Inferer<'a> {
         path_id: ExprId,
         value_id: ExprId,
     ) -> Result<Option<narrowing::NarrowEnv>, crate::compiler_error::CompilerFailure> {
+        if !holds_its_literal_type(&self.typed_ast, value_id)? {
+            return Ok(None);
+        }
         match comparison_literal_union(&self.typed_ast, value_id)? {
             Some(literals) => self.equal_to_one_of(path_id, literals),
             None => self.equal_to_value_of(path_id, value_id),
@@ -2459,9 +2462,10 @@ fn is_written_literal(
     Ok(literal_value_of(&expr.kind).is_some())
 }
 
-/// Whether an operand's literal type is sure to describe its value. A field or
-/// global narrowed to a literal is not: a write through an alias or a call can
-/// change it unseen, and ruling out the other side on it would trap.
+/// Whether an operand's type is sure to describe its value, so the other side
+/// of an equality may be narrowed by it. A narrowed field or global is not: a
+/// write through an alias or a call can change it unseen, and ruling out the
+/// other side on it would trap.
 fn holds_its_literal_type(
     ast: &crate::TypedAst,
     id: ExprId,
@@ -2470,9 +2474,7 @@ fn holds_its_literal_type(
         .try_expr(id)
         .map_err(crate::typechecker::arena_failure)?;
     Ok(match &expr.kind {
-        crate::TypedExprKind::LocalNarrowRef { path, .. } => {
-            path.chain.is_empty() && matches!(path.root, narrowing::BindingId::Local { .. })
-        }
+        crate::TypedExprKind::LocalNarrowRef { path, .. } => path.is_bare_local(),
         _ => true,
     })
 }

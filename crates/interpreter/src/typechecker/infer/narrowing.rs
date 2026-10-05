@@ -11,6 +11,12 @@ pub struct ReferencePath {
 }
 
 impl ReferencePath {
+    /// A local itself, with no field or element step. Only such a path can't
+    /// change behind a guard's back, through an alias or in a call.
+    pub fn is_bare_local(&self) -> bool {
+        self.chain.is_empty() && matches!(self.root, BindingId::Local { .. })
+    }
+
     pub fn root(root: BindingId) -> Self {
         Self {
             root,
@@ -1166,7 +1172,7 @@ pub fn is_ruled_out(ty: &Type) -> bool {
 /// where it holds. Only a local qualifies: a field, an element or a global
 /// can change behind the guard's back (through an alias, or in a call).
 pub fn rules_out_to_never(path: &ReferencePath) -> bool {
-    path.chain.is_empty() && matches!(path.root, BindingId::Local { .. })
+    path.is_bare_local()
 }
 
 /// Flow joins collapse a literal already covered by a broad primitive. Keep
