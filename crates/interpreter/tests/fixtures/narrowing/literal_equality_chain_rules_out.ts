@@ -67,6 +67,28 @@ function byReference(x: "a" | "b", a: "a", b: "b"): number {
   return assertNever(x);
 }
 
+function byReferenceOnTheRight(a: "a", b: "b", x: "a" | "b"): number {
+  if (a === x) {
+    return 1;
+  } else if (b === x) {
+    return 2;
+  }
+  return assertNever(x);
+}
+
+// A field's narrowed literal can go stale through an alias, so comparing with
+// it rules nothing out.
+function againstAliasedField(x: "a"): string {
+  const o = { y: "a" as "a" | "b" };
+  const alias = o;
+  o.y = "a";
+  alias.y = "b";
+  if (x === o.y) {
+    return "equal";
+  }
+  return "kept " + x;
+}
+
 // Code after the chain still type-checks; a read of `x` there would trap.
 function testedAfter(x: "a" | "b"): number {
   if (x === "a") {
@@ -102,5 +124,6 @@ function main(): void {
   console.log(letter("a"), letter("b"), digit(1), digit(2), flag(true), flag(false));
   console.log(letterOrNull(null), letterOrNull("a"), single("b"), primitive("s"), primitive(0));
   console.log(byReference("a", "a", "b"), byReference("b", "a", "b"), testedAfter("b"));
+  console.log(byReferenceOnTheRight("a", "b", "a"), byReferenceOnTheRight("a", "b", "b"), againstAliasedField("a"));
   console.log(localChain(), topResult);
 }

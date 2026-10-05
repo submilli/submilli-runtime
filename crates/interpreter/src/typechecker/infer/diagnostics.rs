@@ -5,7 +5,9 @@
 //! delegate to [`crate::did_you_mean`] but need access to `self.types`
 //! and `self.scopes`, so the helper sits here on the `Inferer`.
 
-use crate::{Diagnostic, ExprId, MethodSig, Severity, Span, Type, TypeKind, ValueKind};
+use crate::{
+    Diagnostic, ExprId, MethodSig, Severity, Span, Type, TypeKind, TypedExprKind, ValueKind,
+};
 
 use super::format_signature::SignatureKind;
 use super::lookup::FieldWrite;
@@ -1560,15 +1562,15 @@ impl<'a> Inferer<'a> {
         }
     }
 
-    /// validate a condition expression's type, preferring
+    /// Validate a condition expression's type, preferring
     /// the "narrow first" diagnostic when the type is `unknown`
     /// (forcing the LLM toward `typeof` / `x === null` /
     /// `Array.isArray(x)` rather than puzzling over a generic
-    /// "expected boolean" mismatch). Falls back to the standard
-    /// boolean-compatibility check for all other non-condition types.
+    /// "expected boolean" mismatch). Otherwise defers to
+    /// [`is_condition_value`](Self::is_condition_value).
     pub(super) fn check_condition_ty(
         &mut self,
-        condition: crate::ExprId,
+        condition: ExprId,
         ty: &Type,
         span: Span,
     ) -> Result<(), crate::compiler_error::CompilerFailure> {
@@ -1588,12 +1590,12 @@ impl<'a> Inferer<'a> {
         Ok(())
     }
 
-    /// Whether a condition operand produces a value to test. A local a guard
-    /// narrowed to `never` counts, as in TypeScript: the test sits in code no
+    /// Whether a condition operand produces a value to test. A local that a
+    /// guard narrowed to `never` counts, as in TypeScript: the test sits in code no
     /// value reaches (after an exhausted `else if` chain), and its read traps.
     pub(super) fn is_condition_value(
         &self,
-        condition: crate::ExprId,
+        condition: ExprId,
         ty: &Type,
     ) -> Result<bool, crate::compiler_error::CompilerFailure> {
         if super::narrowing::condition_compatible(ty) {
@@ -1605,8 +1607,8 @@ impl<'a> Inferer<'a> {
             .map_err(crate::typechecker::arena_failure)?
             .kind;
         Ok(
-            matches!(ty, Type::Never)
-                && matches!(kind, crate::TypedExprKind::LocalNarrowRef { .. }),
+            matches!(ty.peel(), Type::Never)
+                && matches!(kind, TypedExprKind::LocalNarrowRef { .. }),
         )
     }
 }

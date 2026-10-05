@@ -927,20 +927,40 @@ impl<'a> Inferer<'a> {
             (None, Some(lit)) => self.narrow_equal_to_literal(op, lhs_id, lit),
             (Some(lit), None) => self.narrow_equal_to_literal(op, rhs_id, lit),
             (None, None) => self.narrow_equal_to_union(op, lhs_id, rhs_id),
-            // Both sides have literal types: narrow a side that isn't written
-            // out as a literal, the left one when both are references.
             (Some(lhs_lit), Some(rhs_lit)) => {
-                if !is_written_literal(&self.typed_ast, lhs_id)?
-                    && let Some(envs) = self.narrow_equal_to_literal(op, lhs_id, rhs_lit)?
-                {
-                    return Ok(Some(envs));
-                }
-                if is_written_literal(&self.typed_ast, rhs_id)? {
-                    return Ok(None);
-                }
-                self.narrow_equal_to_literal(op, rhs_id, lhs_lit)
+                let lhs_envs = self.narrow_to_other_literal(op, lhs_id, rhs_id, rhs_lit)?;
+                let rhs_envs = self.narrow_to_other_literal(op, rhs_id, lhs_id, lhs_lit)?;
+                Ok(match (lhs_envs, rhs_envs) {
+                    (Some((mut equal, mut unequal)), Some((other_equal, other_unequal))) => {
+                        add_missing_views(&mut equal, other_equal);
+                        add_missing_views(&mut unequal, other_unequal);
+                        Some((equal, unequal))
+                    }
+                    (envs, other) => envs.or(other),
+                })
             }
         }
+    }
+
+    /// Where both sides of an equality have literal types, narrows `path_id`
+    /// by the literal of `other_id`, unless `path_id` is written out as a
+    /// literal or `other_id`'s literal type may be stale.
+    fn narrow_to_other_literal(
+        &mut self,
+        op: crate::BinOp,
+        path_id: ExprId,
+        other_id: ExprId,
+        other_lit: narrowing::LiteralValue,
+    ) -> Result<
+        Option<(narrowing::NarrowEnv, narrowing::NarrowEnv)>,
+        crate::compiler_error::CompilerFailure,
+    > {
+        if is_written_literal(&self.typed_ast, path_id)?
+            || !holds_its_literal_type(&self.typed_ast, other_id)?
+        {
+            return Ok(None);
+        }
+        self.narrow_equal_to_literal(op, path_id, other_lit)
     }
 
     /// Narrows a path compared with a value whose type is a union, as
@@ -2437,6 +2457,24 @@ fn is_written_literal(
         .try_expr(id)
         .map_err(crate::typechecker::arena_failure)?;
     Ok(literal_value_of(&expr.kind).is_some())
+}
+
+/// Whether an operand's literal type is sure to describe its value. A field or
+/// global narrowed to a literal is not: a write through an alias or a call can
+/// change it unseen, and ruling out the other side on it would trap.
+fn holds_its_literal_type(
+    ast: &crate::TypedAst,
+    id: ExprId,
+) -> Result<bool, crate::compiler_error::CompilerFailure> {
+    let expr = ast
+        .try_expr(id)
+        .map_err(crate::typechecker::arena_failure)?;
+    Ok(match &expr.kind {
+        crate::TypedExprKind::LocalNarrowRef { path, .. } => {
+            path.chain.is_empty() && matches!(path.root, narrowing::BindingId::Local { .. })
+        }
+        _ => true,
+    })
 }
 
 /// The literals an operand's type allows, when it is a union of two or more

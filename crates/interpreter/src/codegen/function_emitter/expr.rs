@@ -152,8 +152,16 @@ fn emit_expr_value(
             }
         }
         // A guard that rules out every value leaves no shadow to read, and
-        // no value ever reaches the read.
-        TypedExprKind::LocalNarrowRef { .. } if matches!(expr.ty, Type::Never) => {
+        // no value ever reaches the read. Runtime-value lowering may have
+        // widened the read's type, so test the type inference gave it.
+        TypedExprKind::LocalNarrowRef { .. }
+            if matches!(
+                ctx.ta
+                    .source_type(id)
+                    .map_err(crate::codegen::arena_failure)?,
+                Type::Never
+            ) =>
+        {
             emitter.instruction(Instruction::Unreachable);
         }
         TypedExprKind::LocalNarrowRef { binding, path, .. } => {
