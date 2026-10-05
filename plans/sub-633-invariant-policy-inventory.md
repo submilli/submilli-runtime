@@ -887,7 +887,7 @@ locators; follow symbols after edits.
 | P05 | `submilli-build/src/scaffold.rs:530`, package path `to_str` | Accepted: both callers pass validated UTF-8 components; malformed paths already return an error |
 | P06 | `submilli/src/commands/blueprint/package_secrets.rs:46`, filter YAML | Accepted: the input is a Rust str serialized as a YAML scalar; filter parse failure remains None |
 | P07 | `submilli/src/commands/skill.rs:225`, Sync unreachable | Accepted: preceding dispatch returns for Sync and does not mutate the command |
-| P08 | `submilli/src/commands/mcp/authenticate.rs:151`, client ID | Accept: if absent, successful registration assigns Some; failure returns before access |
+| P08 | `submilli/src/commands/mcp/authenticate.rs:151`, client ID | Accepted: if absent, successful registration assigns Some; failure returns before access |
 | P09 | `submilli/src/commands/server/run_code.rs:135`, JSON Value serialization | Accept candidate under JSON Value serializer contract; prefer descriptive expect over bare unwrap; deep-value recursion is a separate resource question |
 
 P02 execution: inspected every Blueprint field and custom serializer. VFS/mounts
@@ -943,6 +943,14 @@ the later match therefore cannot see Sync. The existing unreachable message name
 this earlier dispatch. Retain it; operational path/install errors remain Results.
 Documentation-only, no tests rerun. Three independent reviews found no issues;
 diff checks passed.
+
+P08 execution: immediately before the client-ID expect, the absent-ID branch either
+returns an error for a missing registration endpoint/failed registration or assigns
+Some(registration result). Existing configured/provider IDs bypass that branch.
+No mutation occurs between the branch and access. The existing expect names these
+three sources. Keep it and all actual configuration/network errors; no new fallible
+layer is needed. Documentation-only, no tests rerun. Three independent reviews
+found no issues; diff checks passed.
 
 P01 lock groups (paths below `crates/`):
 
