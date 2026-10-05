@@ -8,46 +8,6 @@ use crate::{
 use super::classes::{FieldRw, StaticResolution};
 use super::{Inferer, assignable, narrowing};
 
-/// The literal type of a literal initializer, for an unannotated `const`.
-///
-/// A literal token qualifies, through any number of parentheses, and so does a
-/// `?:` whose branches all qualify with literals of one primitive type:
-/// `const c = cond ? "a" : "b"` is `"a" | "b"`, as in TypeScript. A computed
-/// initializer widens even under `const` (`const a = 1 + 1` is `number`), matching
-/// TypeScript, and so do arrays, object literals, and call results.
-///
-/// Branches of different primitives, or with `null`, don't qualify:
-/// `cond ? "a" : null` is `string | null`, where TypeScript keeps `"a" | null`.
-/// A `let` copying such a `const` would widen to a union, and a union-typed `let`
-/// starts out narrowed to its initializer's literals; TypeScript widens instead
-/// because those literals are fresh, which Submilli doesn't track.
-pub(super) fn literal_type_of(
-    ast: &crate::Ast,
-    value: crate::ExprId,
-) -> Result<Option<Type>, CompilerFailure> {
-    Ok(
-        match &ast.try_expr(value).map_err(super::arena_failure)?.kind {
-            ExprKind::Number(v) => Some(Type::NumberLiteral(crate::types::LiteralF64(*v))),
-            ExprKind::String(s) => Some(Type::StringLiteral(s.clone())),
-            ExprKind::Boolean(b) => Some(Type::BooleanLiteral(*b)),
-            // `const a = (1)` is `1`, as in TypeScript: parentheses group, they do not
-            // compute.
-            ExprKind::Paren(inner) => literal_type_of(ast, *inner)?,
-            ExprKind::Ternary { then_, else_, .. } => {
-                match (literal_type_of(ast, *then_)?, literal_type_of(ast, *else_)?) {
-                    (Some(then_ty), Some(else_ty))
-                        if then_ty.widen_literal() == else_ty.widen_literal() =>
-                    {
-                        Some(Type::union(vec![then_ty, else_ty]))
-                    }
-                    _ => None,
-                }
-            }
-            _ => None,
-        },
-    )
-}
-
 /// Outcome of peeking at `ClassName.member` on the left of a write.
 pub(super) enum StaticWrite {
     /// The receiver is not a bare class name; fall through to instance-field inference.
@@ -465,16 +425,13 @@ impl Inferer<'_> {
         doc: Option<crate::DocComment>,
         span: Span,
     ) -> Result<TypedStmtKind, CompilerFailure> {
-        // An unannotated `const` bound to a literal, or to a `?:` of literals of
-        // one primitive type, keeps the literal type, as in TypeScript: the
-        // binding cannot be reassigned, so nothing can invalidate it. `let` widens
-        // (it is reassignable), and so does any other initializer; see
-        // `literal_type_of`.
-        let hint = ty
-            .as_ref()
-            .map(|a| self.resolve_type(a))
-            .transpose()?
-            .map_or_else(|| literal_type_of(self.ast, value), |ty| Ok(Some(ty)))?;
+        // An unannotated `const` keeps the literal types its value passes
+        // through, as in TypeScript: `cond ? "a" : null` is `"a" | null` and
+        // `x ?? "d"` adds `"d"`. The binding cannot be reassigned, so nothing
+        // can invalidate them, and they are fresh, so a `let` copying it widens.
+        // A computed value still widens (`const a = 1 + 1` is `number`).
+        let hint = ty.as_ref().map(|a| self.resolve_type(a)).transpose()?;
+        self.keeps_literal_types = hint.is_none();
         let (typed_value, value_ty) = self.infer_expr(value, hint.as_ref())?;
         let origin = self.initializer_literal_origin(ty.is_some(), typed_value, &value_ty)?;
         let bound = hint.unwrap_or_else(|| value_ty.clone());

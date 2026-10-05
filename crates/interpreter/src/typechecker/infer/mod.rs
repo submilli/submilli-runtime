@@ -119,6 +119,7 @@ pub fn infer_with_transitive_checked<'a>(
         pending_post_if_materializations: Vec::new(),
         pattern_sources: BTreeMap::new(),
         literal_freshness: literal_freshness::LiteralFreshness::default(),
+        keeps_literal_types: false,
         captured_mutators: bindings.mutators,
         last_assignments: bindings.last_assignments,
         nested_function_creation_points: bindings.nested_function_creation_points,
@@ -376,6 +377,7 @@ pub fn infer_package_checked<'a>(
         pending_post_if_materializations: Vec::new(),
         pattern_sources: BTreeMap::new(),
         literal_freshness: literal_freshness::LiteralFreshness::default(),
+        keeps_literal_types: false,
         captured_mutators: Default::default(),
         last_assignments: Default::default(),
         nested_function_creation_points: Default::default(),
@@ -673,6 +675,11 @@ pub(super) struct Inferer<'a> {
     /// Source expressions before synthetic destructuring annotations widen them.
     pattern_sources: BTreeMap<String, crate::ExprId>,
     literal_freshness: literal_freshness::LiteralFreshness,
+    /// The next expression `infer_expr` infers keeps the literal type of a
+    /// literal it is, or passes its value through from, without a hint asking
+    /// for one: an unannotated `const`'s initializer. Read and cleared on
+    /// entry, so it reaches only the operands that carry the value.
+    keeps_literal_types: bool,
     pub(super) source: &'a str,
     pub(super) package_name: &'a str,
     pub(super) ast: &'a Ast,

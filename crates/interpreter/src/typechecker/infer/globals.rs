@@ -92,15 +92,10 @@ impl<'a> Inferer<'a> {
                     if self.reject_intrinsic_name(&name) {
                         continue;
                     }
-                    // See `literal_type_of` for the rule.
-                    let hint = ty
-                        .as_ref()
-                        .map(|a| self.resolve_type(a))
-                        .transpose()?
-                        .map_or_else(
-                            || super::stmt::literal_type_of(self.ast, value),
-                            |ty| Ok(Some(ty)),
-                        )?;
+                    // Keeps the literal types its value passes through; see the
+                    // block-scoped `Const` arm in `stmt.rs`.
+                    let hint = ty.as_ref().map(|a| self.resolve_type(a)).transpose()?;
+                    self.keeps_literal_types = hint.is_none();
                     let (typed_value, value_ty) = self.infer_expr(value, hint.as_ref())?;
                     let origin =
                         self.initializer_literal_origin(ty.is_some(), typed_value, &value_ty)?;

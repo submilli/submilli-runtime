@@ -630,7 +630,7 @@ fn widen_only(ty: &Type, fresh: &BTreeSet<Type>) -> Type {
         {
             ty.widen_literal()
         }
-        Type::Union(members) => Type::union(
+        Type::Union(members) => without_absorbed_literals(
             members
                 .iter()
                 .map(|member| widen_only(member, fresh))
@@ -648,7 +648,7 @@ fn widen_unless_regular(ty: &Type, regular: &BTreeSet<Type>) -> Type {
         {
             ty.clone()
         }
-        Type::Union(members) => Type::union(
+        Type::Union(members) => without_absorbed_literals(
             members
                 .iter()
                 .map(|member| widen_unless_regular(member, regular))
@@ -656,4 +656,26 @@ fn widen_unless_regular(ty: &Type, regular: &BTreeSet<Type>) -> Type {
         ),
         _ => ty.widen_literal(),
     }
+}
+
+/// The union of `members`, less each literal type beside its own base type,
+/// as TypeScript reduces it: a regular `"u"` kept beside a fresh `"x"` widened
+/// to `string` leaves `string`.
+fn without_absorbed_literals(members: Vec<Type>) -> Type {
+    let bases: BTreeSet<Type> = members
+        .iter()
+        .filter(|member| matches!(member, Type::String | Type::Number | Type::Boolean))
+        .cloned()
+        .collect();
+    Type::union(
+        members
+            .into_iter()
+            .filter(|member| {
+                !matches!(
+                    member,
+                    Type::NumberLiteral(_) | Type::StringLiteral(_) | Type::BooleanLiteral(_)
+                ) || !bases.contains(&member.widen_literal())
+            })
+            .collect(),
+    )
 }
