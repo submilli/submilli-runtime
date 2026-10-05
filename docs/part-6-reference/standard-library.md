@@ -4,6 +4,11 @@ description: "Every submilli: module: what gates it, who may import it, the rule
 slug: reference/standard-library
 sidebar:
   order: 6
+authorship:
+  label: ai-assisted
+  confirmed: true
+  contentHash: "189104fa3920886ba781a3dc2d160b825c7ee2ddb941854cc58127c3b597e16a"
+  confirmedAt: "2026-10-05T10:59:51.479Z"
 ---
 
 This page describes what each `submilli:` module does, the capabilities

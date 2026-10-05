@@ -4,6 +4,11 @@ description: "A package project: its layout, every key of submilli.toml and the 
 slug: reference/package-manifest
 sidebar:
   order: 11
+authorship:
+  label: ai-assisted
+  confirmed: true
+  contentHash: "da80701c169052f945cabf6daaa6ce8ff000dd840add7cd4d1357abe419b3e3b"
+  confirmedAt: "2026-10-05T10:59:51.478Z"
 ---
 
 This page describes a package project as `submilli build` reads and writes

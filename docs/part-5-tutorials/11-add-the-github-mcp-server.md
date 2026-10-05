@@ -4,6 +4,11 @@ description: "Give an agent GitHub through GitHub's hosted MCP server: declare i
 slug: tutorials/add-the-github-mcp-server
 sidebar:
   order: 11
+authorship:
+  label: ai-assisted
+  confirmed: true
+  contentHash: "07a4ce4718ed88cfe591b56af7fea7b983a9ff0f9f1686f21b78733b28023c0e"
+  confirmedAt: "2026-10-05T10:59:51.481Z"
 ---
 
 The curated `@submilli/github` package covers what most agents need from

@@ -14,6 +14,8 @@ for (const chapter of chapters) {
 	const path = `docs/${chapter.slug ? `${chapter.slug}/` : ''}index.html`;
 	const html = await readFile(new URL(path, directory), 'utf8');
 	const markdown = markdownPath(chapter.slug);
+	assert.ok(chapter.authorshipLabel, `${path}: missing confirmed authorship`);
+	assert.ok(html.includes(`${chapter.authorshipLabel}. Authorship details`), `${path}: missing authorship icon`);
 	assert.ok(html.includes(`rel="alternate" type="text/markdown" href="https://submilli.ai${markdown}"`), path);
 	assert.ok(html.includes('rel="describedby" href="https://submilli.ai/docs/llms.txt"'), path);
 	assert.match(html, new RegExp(`href="${markdown.replace('.', '\\.')}"[^>]*>View Markdown</a>`), path);

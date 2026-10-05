@@ -4,6 +4,11 @@ description: "How to create a blueprint with the CLI: start from nothing allowed
 slug: blueprints/start-a-blueprint
 sidebar:
   order: 1
+authorship:
+  label: ai-assisted
+  confirmed: true
+  contentHash: "bb1415caa827cac20a5dd90f8c2304e65d53e3656374084a5e9733d08a370580"
+  confirmedAt: "2026-10-05T10:59:51.490Z"
 ---
 
 This guide shows you how to build a blueprint block by block with the

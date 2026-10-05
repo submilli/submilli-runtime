@@ -6,6 +6,11 @@ slug: reference/security-review
 # 2.1.288, Copilot CLI 1.0.91.
 sidebar:
   order: 12
+authorship:
+  label: ai-assisted
+  confirmed: true
+  contentHash: "59de2570557a5e96b2691d1cea95e0868bbfa74d37f3e723d7023131e9afbfd2"
+  confirmedAt: "2026-10-05T10:59:51.478Z"
 ---
 
 `submilli build security-review` runs an installed coding agent against a source

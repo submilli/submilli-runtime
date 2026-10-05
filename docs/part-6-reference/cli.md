@@ -4,6 +4,11 @@ description: "The submilli command tree: what each command does and where it run
 slug: reference/cli
 sidebar:
   order: 3
+authorship:
+  label: ai-assisted
+  confirmed: true
+  contentHash: "cc2bc858d1ec20f87d8e3a9f15f67f05313d16177ba87eed6044afe3663494e5"
+  confirmedAt: "2026-10-05T10:59:51.475Z"
 ---
 
 This page describes `submilli`, the command-line tool. It covers the

@@ -11,6 +11,11 @@ slug: server/set-limits
 # log line was recaptured with the release server on main 51ce450b.
 sidebar:
   order: 4
+authorship:
+  label: ai-assisted
+  confirmed: true
+  contentHash: "22aac93ebd2bf651349f158028db808745144187263e631e93441741a981d2ef"
+  confirmedAt: "2026-10-05T10:59:51.486Z"
 ---
 
 Some of the programs an agent writes will be wrong. A loop never stops,

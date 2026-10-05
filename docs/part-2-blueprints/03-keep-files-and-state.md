@@ -4,6 +4,11 @@ description: "How to give the programs in one session a filesystem and a key-val
 slug: blueprints/keep-files-and-state
 sidebar:
   order: 3
+authorship:
+  label: ai-assisted
+  confirmed: true
+  contentHash: "1507cf9287ce25c887012e13211c88c70ec4eb2937db97997d624bf080182aaf"
+  confirmedAt: "2026-10-05T10:59:51.491Z"
 ---
 
 An agent often needs more than one program to finish a job. It downloads a

@@ -4,6 +4,11 @@ description: "Run the research agent on the Vercel AI SDK with no MCP client: th
 slug: tutorials/use-the-http-api
 sidebar:
   order: 7
+authorship:
+  label: ai-assisted
+  confirmed: true
+  contentHash: "cefadbab4f3ba35fbb7eff3ba0dedf20398a74a383886c6583498203b1c0f8c0"
+  confirmedAt: "2026-10-05T10:59:51.484Z"
 ---
 
 The HTTP API offers the same operations as plain requests. Use it when

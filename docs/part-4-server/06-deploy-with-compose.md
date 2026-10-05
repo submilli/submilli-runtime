@@ -10,6 +10,11 @@ slug: server/deploy-with-compose
 # release binaries on main 51ce450b.
 sidebar:
   order: 6
+authorship:
+  label: ai-assisted
+  confirmed: true
+  contentHash: "1b0eae934c64c209083e8c2cd3db5684eec2841dbbdefb54bb3014f4ffb3c70d"
+  confirmedAt: "2026-10-05T10:59:51.486Z"
 ---
 
 If your application runs in containers on one host, the server runs as
