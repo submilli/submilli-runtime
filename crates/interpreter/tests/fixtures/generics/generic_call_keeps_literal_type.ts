@@ -13,6 +13,14 @@ function maybe<T>(x: T, keep: boolean): T | null {
 
 type Mode = "on" | "off";
 
+class Holder<T> {
+  constructor(public value: T) {}
+}
+
+function unbox<T>(holder: Holder<T>): T {
+  return holder.value;
+}
+
 function first<T>(xs: T[]): T {
   return xs[0];
 }
@@ -74,6 +82,11 @@ function main(): void {
   assert(labels.join(",") === "fixed,fixed,other" && flags.join(",") === "true,false", "a const's literal widens");
   assert(blocks.join(",") === "blk,more" && counter() === 2, "through a block and a kept call");
 
+  // A union of literals is no single literal, so a returned one stays.
+  const either = one > 5 ? "on" : "off";
+  const eithers: Mode[] = [1].map(() => either);
+  assert(eithers[0] === "off", "a returned union stays");
+
   // A literal type the call declares, rather than takes from a fresh
   // argument, stays.
   const modes: Mode[] = ["on", "off"];
@@ -90,4 +103,16 @@ function main(): void {
   let copy = id(1);
   copy = 5;
   assert(copy === 5, "a let widens");
+
+  // A fresh literal read back out of a generic container is still fresh, but
+  // a written type argument declares it.
+  const hello = "hello";
+  let unboxed = unbox(new Holder(hello));
+  unboxed = "x";
+  let total = [1, 2].reduce((sum, n) => sum, hello);
+  total = "y";
+  const fixed = id<1>(1);
+  const fixedLater = () => fixed;
+  const declaredOne: 1 = fixedLater();
+  assert(unboxed === "x" && total === "y" && declaredOne === 1, "a container's literal");
 }

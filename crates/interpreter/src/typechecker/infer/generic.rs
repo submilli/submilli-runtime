@@ -758,6 +758,9 @@ impl Inferer<'_> {
             &mut sub,
             signature_help,
         )?;
+        if type_args.is_some() {
+            self.record_arguments_of_typed_call(&typed_args);
+        }
 
         if has_rest || typed_args.len() < sig.params.len() {
             self.typed_ast
@@ -1532,6 +1535,9 @@ impl Inferer<'_> {
             &mut sub,
             signature_help,
         )?;
+        if type_args_written {
+            self.record_arguments_of_typed_call(&typed_args);
+        }
 
         if has_rest || typed_args.len() < params.len() {
             self.typed_ast

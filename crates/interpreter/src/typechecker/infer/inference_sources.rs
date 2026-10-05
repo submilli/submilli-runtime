@@ -79,8 +79,8 @@ impl<'a> Inferer<'a> {
 
     /// Infer the value a `return` gives, marking the object literals it builds
     /// directly when the enclosing function literal infers its return type.
-    /// That type widens a literal a generic call kept from a fresh argument
-    /// (see [`Self::widen_returned_literals`]), unless the function literal
+    /// That type widens each literal known to be fresh (see
+    /// [`Self::widen_returned_literals`]), unless the function literal
     /// keeps its returned literals for a type parameter (see
     /// `returns_keep_literals`) or has a contextual return type other than a
     /// bare type parameter: `() => id(1)` is `() => number`.
