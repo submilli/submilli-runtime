@@ -456,6 +456,9 @@ impl Inferer<'_> {
         if name.name.starts_with("#pattern_dst_") {
             self.pattern_sources.insert(name.name.clone(), typed_value);
         }
+        if ty.is_none() {
+            self.record_aliased_condition(&name.name, typed_value);
+        }
         let flow_ty = match self.pattern_binding_flow_type(value)? {
             Some(flow_ty) => flow_ty,
             None => self.assigned_flow_type(&bound, typed_value, value_ty)?,

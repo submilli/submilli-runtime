@@ -33,7 +33,7 @@ Upstream: 4463 single-file TypeScript tests. Suite: 450 TypeScript cases, 657 te
 | Feature | Spec | Status | Upstream tests | In the suite | Excluded | Not yet dealt with | Lines checked | Forms checked | test262 cases | test262 checks | Note |
 |:--|:--|:--|--:|--:|--:|--:|--:|--:|--:|--:|:--|
 | `number` | §1.1 | done | 1407 | 225 | 1182 | 0 | 2320 | 1 of 1 | — | — |  |
-| `string` | §1.1 | done | 1498 | 242 | 1256 | 0 | 2299 | 1 of 1 | — | — |  |
+| `string` | §1.1 | done | 1498 | 242 | 1256 | 0 | 2301 | 1 of 1 | — | — |  |
 | `boolean` | §1.1 | done | 482 | 107 | 375 | 0 | 1707 | 1 of 1 | — | — |  |
 | `null` | §1.1 | done | 386 | 73 | 313 | 0 | 1372 | 1 of 1 | — | — |  |
 | `void` | §1.1 | done | 500 | 41 | 459 | 0 | 583 | 1 of 1 | — | — |  |
@@ -48,7 +48,7 @@ Upstream: 4463 single-file TypeScript tests. Suite: 450 TypeScript cases, 657 te
 | Arrays (`T[]`) | §1.2 | done | 781 | 125 | 656 | 0 | 474 | 1 of 1 | 72 | 294 |  |
 | Tuples (`[T, U]`) | §1.2 | done | 153 | 30 | 123 | 0 | 173 | 1 of 1 | — | — |  |
 | `readonly` arrays and tuples | §1.2 | done | 24 | 5 | 19 | 0 | 43 | 1 of 1 | — | — |  |
-| Union types (`A | B`) | §1.2 | done | 458 | 159 | 299 | 0 | 1585 | 1 of 1 | — | — |  |
+| Union types (`A | B`) | §1.2 | done | 458 | 159 | 299 | 0 | 1586 | 1 of 1 | — | — |  |
 | Type aliases (`type X = …`) | §1.2 | done | 267 | 48 | 219 | 0 | 328 | 1 of 1 | — | — |  |
 | Literal types (`"foo"`, `42`, `true`) | §1.2 | done | 258 | 66 | 192 | 0 | 843 | 2 of 2 | — | — |  |
 
@@ -127,7 +127,7 @@ Upstream: 4463 single-file TypeScript tests. Suite: 450 TypeScript cases, 657 te
 |:--|:--|:--|--:|--:|--:|--:|--:|--:|--:|--:|:--|
 | Class declarations | §2.2 | done | 1807 | 109 | 1698 | 0 | 361 | 1 of 1 | — | — |  |
 | `constructor` | §2.2 | done | 373 | 27 | 346 | 0 | 17 | 1 of 1 | — | — |  |
-| Instance methods | §2.2 | done | 699 | 30 | 669 | 0 | 30 | 1 of 1 | — | — |  |
+| Instance methods | §2.2 | done | 699 | 30 | 669 | 0 | 40 | 1 of 1 | — | — |  |
 | Instance properties | §2.2 | done | 838 | 70 | 768 | 0 | 90 | 1 of 1 | — | — |  |
 | Field initializers | §2.2 | done | 260 | 20 | 240 | 0 | 4 | 1 of 1 | — | — |  |
 | Parameter properties | §2.2 | done | 118 | 14 | 104 | 0 | 15 | 1 of 1 | — | — |  |

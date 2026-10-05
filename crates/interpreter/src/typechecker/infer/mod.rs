@@ -1,5 +1,6 @@
 //! Inference pass — produces the Typed AST.
 
+mod aliased_conditions;
 mod assign_expr;
 pub(crate) mod assignable;
 mod binding_analysis;
@@ -123,6 +124,7 @@ pub fn infer_with_transitive_checked<'a>(
         keeps_literal_types: false,
         returns_keep_literals: false,
         function_keeps_returned_literals: false,
+        aliased_conditions: Default::default(),
         captured_mutators: bindings.mutators,
         last_assignments: bindings.last_assignments,
         nested_function_creation_points: bindings.nested_function_creation_points,
@@ -386,6 +388,7 @@ pub fn infer_package_checked<'a>(
         keeps_literal_types: false,
         returns_keep_literals: false,
         function_keeps_returned_literals: false,
+        aliased_conditions: Default::default(),
         captured_mutators: Default::default(),
         last_assignments: Default::default(),
         nested_function_creation_points: Default::default(),
@@ -702,6 +705,7 @@ pub(super) struct Inferer<'a> {
     /// `keeps_literal_types`, so it doesn't reach a conditional's branches,
     /// whose function types couldn't form one callable union.
     function_keeps_returned_literals: bool,
+    aliased_conditions: aliased_conditions::AliasedConditions,
     pub(super) source: &'a str,
     pub(super) package_name: &'a str,
     pub(super) ast: &'a Ast,
@@ -925,6 +929,7 @@ impl<'a> Inferer<'a> {
         self.clause_write_scopes.clear();
         self.tombstone_scopes.clear();
         self.last_write_spans.clear();
+        self.aliased_conditions = Default::default();
         self.suspended_narrow_scopes.clear();
         self.pending_post_if_materializations.clear();
         if !self.pending_implements.is_empty() {

@@ -250,7 +250,7 @@ impl<'a> Inferer<'a> {
     /// Whether a path's root binding is still in lexical scope, by identity —
     /// `decl_scope` equality, so a same-named binding in a sibling scope does
     /// not count as the same root.
-    fn path_root_in_scope(&self, path: &narrowing::ReferencePath) -> bool {
+    pub(super) fn path_root_in_scope(&self, path: &narrowing::ReferencePath) -> bool {
         match &path.root {
             narrowing::BindingId::Local { name, decl_scope } => self
                 .scopes

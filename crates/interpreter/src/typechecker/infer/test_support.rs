@@ -123,6 +123,7 @@ pub(super) fn with_source_inferer(source: &str, test: impl FnOnce(&mut super::In
         keeps_literal_types: false,
         returns_keep_literals: false,
         function_keeps_returned_literals: false,
+        aliased_conditions: Default::default(),
         captured_mutators: bindings.mutators,
         last_assignments: bindings.last_assignments,
         nested_function_creation_points: bindings.nested_function_creation_points,

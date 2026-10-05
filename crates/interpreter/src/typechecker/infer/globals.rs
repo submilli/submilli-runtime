@@ -115,6 +115,9 @@ impl<'a> Inferer<'a> {
                     )?;
                     let mangled = self.mangle_top_symbol(&name.name)?;
                     self.record_global_literal_origin(mangled.clone(), origin);
+                    if ty.is_none() {
+                        self.record_global_aliased_condition(mangled.clone(), typed_value);
+                    }
                     self.add_typed_global(crate::TypedGlobal {
                         name: name.clone(),
                         mangled_name: mangled.clone(),
