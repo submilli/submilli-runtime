@@ -1351,11 +1351,15 @@ impl Inferer<'_> {
         if !self.builds_literal(arg_id)? {
             return Ok(hint);
         }
+        let mut expansion = InterfaceExpansion {
+            expanding: Vec::new(),
+            remaining: MAX_HINT_INTERFACE_EXPANSIONS,
+        };
         Ok(expand_inferred_interfaces(
             &hint,
             inferred_generics,
             self.resolver(),
-            &mut Vec::new(),
+            &mut expansion,
         ))
     }
 
@@ -1789,23 +1793,40 @@ fn type_param_name(ty: &Type) -> Option<&str> {
     }
 }
 
+/// How many interfaces one literal argument's hint expands at most.
+/// Interfaces that name each other in their fields expand along every order
+/// of them, so without a bound the hint grows factorially, and checking a
+/// literal against a large structural hint costs what its size does; a
+/// literal's hint needs few levels in practice.
+const MAX_HINT_INTERFACE_EXPANSIONS: usize = 64;
+
+/// The state of one [`expand_inferred_interfaces`] walk.
+struct InterfaceExpansion {
+    /// The interfaces being expanded, outermost first.
+    expanding: Vec<crate::MangledName>,
+    /// How many more interfaces may expand.
+    remaining: usize,
+}
+
 /// `ty` with each data-only interface that names one of `inferred_generics`
 /// replaced by its fields, through object fields, array and tuple elements and
 /// union members: the positions a literal's own fields and elements take
 /// their hints from. An interface met again inside its own fields stays as it
-/// is, so a recursive one expands once.
+/// is, so a recursive one expands once, as does every interface once the
+/// walk has used its budget.
 fn expand_inferred_interfaces(
     ty: &Type,
     inferred_generics: &[String],
     types: super::assignable::TypeResolver,
-    expanding: &mut Vec<crate::MangledName>,
+    expansion: &mut InterfaceExpansion,
 ) -> Type {
-    let expand = |inner: &Type, expanding: &mut Vec<crate::MangledName>| {
-        expand_inferred_interfaces(inner, inferred_generics, types, expanding)
+    let expand = |inner: &Type, expansion: &mut InterfaceExpansion| {
+        expand_inferred_interfaces(inner, inferred_generics, types, expansion)
     };
     match ty.peel() {
         interface @ Type::InterfaceRef { mangled, .. }
-            if !expanding.contains(mangled)
+            if expansion.remaining > 0
+                && !expansion.expanding.contains(mangled)
                 && super::expr::mentions_type_var(interface, &|var| {
                     inferred_generics.iter().any(|name| name == var)
                 }) =>
@@ -1814,16 +1835,17 @@ fn expand_inferred_interfaces(
             else {
                 return ty.clone();
             };
-            expanding.push(mangled.clone());
-            let expanded = expand(&shape, expanding);
-            expanding.pop();
+            expansion.remaining -= 1;
+            expansion.expanding.push(mangled.clone());
+            let expanded = expand(&shape, expansion);
+            expansion.expanding.pop();
             expanded
         }
         Type::Object { fields, index } => Type::Object {
             fields: fields
                 .iter()
                 .map(|(name, field)| {
-                    let ty = expand(&field.ty, expanding);
+                    let ty = expand(&field.ty, expansion);
                     (
                         name.clone(),
                         crate::types::ObjectField {
@@ -1835,20 +1857,46 @@ fn expand_inferred_interfaces(
                 .collect(),
             index: index.clone(),
         },
-        Type::Array(element) => Type::Array(Box::new(expand(element, expanding))),
+        Type::Array(element) => Type::Array(Box::new(expand(element, expansion))),
         Type::Tuple(elements) => Type::Tuple(
             elements
                 .iter()
-                .map(|element| expand(element, expanding))
+                .map(|element| expand(element, expansion))
                 .collect(),
         ),
-        Type::Union(members) => Type::union(
-            members
+        Type::Union(members) => {
+            // A member's siblings count as being expanded inside it, so a
+            // union of interfaces that name the same union expands each once
+            // rather than in every order.
+            let siblings: Vec<crate::MangledName> =
+                members.iter().filter_map(interface_name).cloned().collect();
+            let depth = expansion.expanding.len();
+            let expanded = members
                 .iter()
-                .map(|member| expand(member, expanding))
-                .collect(),
-        ),
+                .map(|member| {
+                    let own = interface_name(member);
+                    expansion.expanding.extend(
+                        siblings
+                            .iter()
+                            .filter(|sibling| Some(*sibling) != own)
+                            .cloned(),
+                    );
+                    let expanded = expand(member, expansion);
+                    expansion.expanding.truncate(depth);
+                    expanded
+                })
+                .collect();
+            Type::union(expanded)
+        }
         _ => ty.clone(),
+    }
+}
+
+/// The declaration `ty` names when it is an interface.
+fn interface_name(ty: &Type) -> Option<&crate::MangledName> {
+    match ty.peel() {
+        Type::InterfaceRef { mangled, .. } => Some(mangled),
+        _ => None,
     }
 }
 

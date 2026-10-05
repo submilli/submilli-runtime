@@ -216,6 +216,61 @@ struct Unifier<'a> {
 }
 
 impl<'a> Unifier<'a> {
+    /// tsc's union-to-union rule when exactly one of `params` is a type
+    /// parameter not yet bound: each member of `args` another member of
+    /// `params` takes stays with it, and the type parameter takes the rest
+    /// (`T | null` with `"on" | "off" | null` binds `T` to `"on" | "off"`).
+    /// None when no single member is such a type parameter, so the members
+    /// pair up instead.
+    #[allow(clippy::result_large_err)]
+    fn unify_union_into_lone_type_var(
+        &mut self,
+        params: &[Type],
+        args: &[Type],
+    ) -> Option<Result<(), UnifyError>> {
+        let mut unbound = params
+            .iter()
+            .filter(|member| self.is_unbound_type_var(member));
+        let type_var = unbound.next()?;
+        if unbound.next().is_some() {
+            return None;
+        }
+        let others: Vec<&Type> = params
+            .iter()
+            .filter(|member| !std::ptr::eq(*member, type_var))
+            .collect();
+        let mut rest = Vec::new();
+        for arg in args {
+            let taken = others.iter().any(|other| {
+                let snap = self.snapshot();
+                let unified = self.unify(other, arg).is_ok();
+                if !unified {
+                    self.restore(snap);
+                }
+                unified
+            });
+            if !taken {
+                rest.push(arg.clone());
+            }
+        }
+        if rest.is_empty() {
+            return Some(Ok(()));
+        }
+        Some(self.unify(type_var, &Type::union(rest)))
+    }
+
+    /// Whether `ty` is a type parameter with no binding yet, or bound only to
+    /// itself.
+    fn is_unbound_type_var(&self, ty: &Type) -> bool {
+        let Type::TypeVar(name) = ty.peel() else {
+            return false;
+        };
+        match self.sub.bindings.get(name) {
+            None => true,
+            Some(bound) => matches!(bound.peel(), Type::TypeVar(other) if other == name),
+        }
+    }
+
     /// Structural unification of `param_ty` against `arg_ty`. Binds `TypeVar`s on the
     /// param side; `Type::Error` on either side silently succeeds (upstream already reported).
     #[allow(clippy::result_large_err)]
@@ -438,6 +493,9 @@ impl<'a> Unifier<'a> {
             }
             // Two-pass union-vs-union: pair matching members first, then unify leftovers in order.
             (Type::Union(pa), Type::Union(pb)) => {
+                if let Some(unified) = self.unify_union_into_lone_type_var(pa, pb) {
+                    return unified;
+                }
                 if pa.len() != pb.len() {
                     return Err(UnifyError::Mismatch {
                         expected: param_ty.clone(),

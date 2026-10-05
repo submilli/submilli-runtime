@@ -31,6 +31,8 @@
 //! it is read for its own type the same way, and the literal types it carries
 //! are settled with it (see `Inferer::infer_returned_value`).
 
+use std::collections::BTreeSet;
+
 use crate::compiler_error::CompilerFailure;
 use crate::{ArrayLiteralElement, ExprId, ExprKind, ObjectLiteralMember, Type};
 
@@ -47,8 +49,15 @@ impl<'a> Inferer<'a> {
         inferred_generics: &[String],
     ) -> Result<Vec<String>, CompilerFailure> {
         let mut candidates = Vec::new();
+        let mut visited = BTreeSet::new();
         for (arg, param) in args {
-            self.collect_candidates(*arg, param, inferred_generics, &mut candidates)?;
+            self.collect_candidates(
+                *arg,
+                param,
+                inferred_generics,
+                &mut candidates,
+                &mut visited,
+            )?;
         }
         let mut literal_only = Vec::new();
         for name in inferred_generics {
@@ -73,7 +82,13 @@ impl<'a> Inferer<'a> {
         infer: impl FnOnce(&mut Self) -> Result<R, CompilerFailure>,
     ) -> Result<R, CompilerFailure> {
         let mut marked = Vec::new();
-        self.mark_inferred_positions(expr, param, literal_inferred, &mut marked)?;
+        self.mark_inferred_positions(
+            expr,
+            param,
+            literal_inferred,
+            &mut marked,
+            &mut BTreeSet::new(),
+        )?;
         self.with_marked(marked, infer)
     }
 
@@ -133,12 +148,15 @@ impl<'a> Inferer<'a> {
         param: &Type,
         inferred_generics: &[String],
         candidates: &mut Vec<(String, ExprId)>,
+        visited: &mut BTreeSet<(ExprId, Type)>,
     ) -> Result<(), CompilerFailure> {
         let mentioned: Vec<&String> = inferred_generics
             .iter()
             .filter(|name| mentions_type_var(param, &|var| var == name.as_str()))
             .collect();
-        if mentioned.is_empty() {
+        // A union of recursive types reaches one position by many paths;
+        // walking each once keeps the walk linear in the literal's size.
+        if mentioned.is_empty() || !visited.insert((expr, param.clone())) {
             return Ok(());
         }
         let add_candidate = |candidates: &mut Vec<(String, ExprId)>, candidate: ExprId| {
@@ -155,7 +173,7 @@ impl<'a> Inferer<'a> {
             // it is a candidate through each.
             Type::Union(members) => {
                 for member in members {
-                    self.collect_candidates(expr, member, inferred_generics, candidates)?;
+                    self.collect_candidates(expr, member, inferred_generics, candidates, visited)?;
                 }
                 return Ok(());
             }
@@ -164,11 +182,11 @@ impl<'a> Inferer<'a> {
         let param = param.peel();
         match self.expr_kind(expr)? {
             ExprKind::Paren(inner) => {
-                self.collect_candidates(inner, param, inferred_generics, candidates)
+                self.collect_candidates(inner, param, inferred_generics, candidates, visited)
             }
             ExprKind::Ternary { then_, else_, .. } => {
-                self.collect_candidates(then_, param, inferred_generics, candidates)?;
-                self.collect_candidates(else_, param, inferred_generics, candidates)
+                self.collect_candidates(then_, param, inferred_generics, candidates, visited)?;
+                self.collect_candidates(else_, param, inferred_generics, candidates, visited)
             }
             ExprKind::ObjectLiteral { members } => {
                 let Some(fields) = self.field_types(param) else {
@@ -184,6 +202,7 @@ impl<'a> Inferer<'a> {
                                     declared,
                                     inferred_generics,
                                     candidates,
+                                    visited,
                                 )?;
                             }
                         }
@@ -210,6 +229,7 @@ impl<'a> Inferer<'a> {
                             element_ty,
                             inferred_generics,
                             candidates,
+                            visited,
                         )?,
                         None => add_candidate(candidates, value),
                     }
@@ -251,8 +271,13 @@ impl<'a> Inferer<'a> {
         param: &Type,
         literal_inferred: &[String],
         marked: &mut Vec<ExprId>,
+        visited: &mut BTreeSet<(ExprId, Type)>,
     ) -> Result<(), CompilerFailure> {
         let param = param.peel();
+        // As in `collect_candidates`, each position is walked once.
+        if !visited.insert((expr, param.clone())) {
+            return Ok(());
+        }
         if is_typed_by_type_param(param, literal_inferred) {
             return self.mark_inference_source(expr, marked);
         }
@@ -263,17 +288,17 @@ impl<'a> Inferer<'a> {
                 .iter()
                 .filter(|member| !is_bare(member, literal_inferred))
             {
-                self.mark_inferred_positions(expr, member, literal_inferred, marked)?;
+                self.mark_inferred_positions(expr, member, literal_inferred, marked, visited)?;
             }
             return Ok(());
         }
         match self.expr_kind(expr)? {
             ExprKind::Paren(inner) => {
-                self.mark_inferred_positions(inner, param, literal_inferred, marked)
+                self.mark_inferred_positions(inner, param, literal_inferred, marked, visited)
             }
             ExprKind::Ternary { then_, else_, .. } => {
-                self.mark_inferred_positions(then_, param, literal_inferred, marked)?;
-                self.mark_inferred_positions(else_, param, literal_inferred, marked)
+                self.mark_inferred_positions(then_, param, literal_inferred, marked, visited)?;
+                self.mark_inferred_positions(else_, param, literal_inferred, marked, visited)
             }
             ExprKind::ObjectLiteral { members } => {
                 let Some(fields) = self.field_types(param) else {
@@ -288,6 +313,7 @@ impl<'a> Inferer<'a> {
                             declared,
                             literal_inferred,
                             marked,
+                            visited,
                         )?;
                     }
                 }
@@ -298,7 +324,13 @@ impl<'a> Inferer<'a> {
                     if let ArrayLiteralElement::Value(value) = element
                         && let Some(element_ty) = element_type(param, index)
                     {
-                        self.mark_inferred_positions(value, element_ty, literal_inferred, marked)?;
+                        self.mark_inferred_positions(
+                            value,
+                            element_ty,
+                            literal_inferred,
+                            marked,
+                            visited,
+                        )?;
                     }
                 }
                 Ok(())

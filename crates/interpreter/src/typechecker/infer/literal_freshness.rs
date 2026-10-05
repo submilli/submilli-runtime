@@ -248,7 +248,7 @@ impl Inferer<'_> {
         let regular = self.regular_literals(value)?;
         let mut fresh = self.known_fresh_literals(value)?;
         // One literal type can be fresh in one operand and regular in
-        // another, and the regular copy must survive the alias pass.
+        // another, and `widen_only` must not widen the regular copy.
         fresh.retain(|literal| !regular.contains(literal));
         Ok(widen_unless_regular(&widen_only(ty, &fresh), &regular))
     }
@@ -725,18 +725,21 @@ impl Inferer<'_> {
     }
 
     /// The `literals` `value`, checked against `param`, binds to the type
-    /// parameters `named` picks: none when `param` names none of them. An
-    /// object, array or tuple literal binds those of each part against the
-    /// part's own position in `param` (see
-    /// [`Self::literal_part_positions`]).
+    /// parameters `is_counted` accepts: none when `param` names none of them.
+    /// An object, array or tuple literal binds those of each part against
+    /// the part's own position in `param` (see
+    /// [`Self::literal_part_positions`]). Any other value binds, of its
+    /// regular literals, those `param`'s shape takes (see
+    /// [`binds_nested_literals`]), and of its fresh ones every one it may
+    /// hold, nested or not: a fresh literal over-counted only widens.
     fn literals_bound_at(
         &self,
         value: ExprId,
         param: &Type,
-        named: &impl Fn(&str) -> bool,
+        is_counted: &impl Fn(&str) -> bool,
         literals: BoundLiterals,
     ) -> Result<BTreeSet<Type>, CompilerFailure> {
-        if !super::expr::mentions_type_var(param, named) {
+        if !super::expr::mentions_type_var(param, is_counted) {
             return Ok(BTreeSet::new());
         }
         let expr = self
@@ -747,13 +750,13 @@ impl Inferer<'_> {
             return match literals {
                 BoundLiterals::Fresh => self.possibly_fresh_literals(value),
                 BoundLiterals::Regular => {
-                    self.regular_literals_bound_as(value, &expr.ty, Some(param))
+                    self.whole_value_regular_literals(value, &expr.ty, Some(param))
                 }
             };
         };
         let mut bound = BTreeSet::new();
         for (part, position) in parts {
-            bound.extend(self.literals_bound_at(part, &position, named, literals)?);
+            bound.extend(self.literals_bound_at(part, &position, is_counted, literals)?);
         }
         Ok(bound)
     }
@@ -767,7 +770,7 @@ impl Inferer<'_> {
             .try_expr(value)
             .map_err(crate::typechecker::arena_failure)?;
         let Some(parts) = literal_parts(&expr.kind) else {
-            return self.regular_literals_bound_as(value, &expr.ty, None);
+            return self.whole_value_regular_literals(value, &expr.ty, None);
         };
         let mut regular = BTreeSet::new();
         for part in parts {
@@ -780,7 +783,7 @@ impl Inferer<'_> {
     /// `param`: its top-level ones and, when it binds what it holds inside
     /// (see [`binds_nested_literals`]) and every nested one is regular, those
     /// too.
-    fn regular_literals_bound_as(
+    fn whole_value_regular_literals(
         &self,
         value: ExprId,
         ty: &Type,
@@ -797,14 +800,9 @@ impl Inferer<'_> {
     /// position in `param`: the union of what every member of `param` that
     /// could take the literal gives it, so `v` in `{ kind: "many", v: [m] }`
     /// checked against `{ kind: "one"; v: A } | { kind: "many"; v: A[] }` is
-    /// at `A | A[]`. A field is at its field's type or else at the index
-    /// signature's value type, an interface read as its fields' shape; an
-    /// array element at an array member's element type; a tuple element at
-    /// a tuple member's slot or an array member's element type. A part no
-    /// member places (an excess field, a tuple element past every slot)
-    /// binds nothing and is left out; a spread or computed member is checked
-    /// against `param` whole. None when `param` has no member of the
-    /// literal's kind, so the literal binds as a whole value.
+    /// at `A | A[]`. A part no member places binds nothing and is left out.
+    /// None when `param` has no member of the literal's kind, so the literal
+    /// binds as a whole value.
     fn literal_part_positions(
         &self,
         kind: &TypedExprKind,
@@ -813,62 +811,47 @@ impl Inferer<'_> {
         let param_members = union_members(param);
         match kind {
             TypedExprKind::ObjectLiteral { members, fields } => {
-                let objects: Vec<Type> = param_members
-                    .iter()
-                    .filter_map(|member| self.object_shape(member))
-                    .collect();
-                if objects.is_empty() {
-                    return None;
-                }
-                let named = fields.iter().filter_map(|field| {
-                    let part = field.source.literal_expr_id()?;
-                    let positions = objects
-                        .iter()
-                        .filter_map(|object| field_position(object, &field.name.name));
-                    Some((part, union_of(positions)?))
-                });
-                let unnamed = members
-                    .iter()
-                    .filter(|member| !matches!(member, crate::TypedObjectMember::Value(_)))
-                    .map(|member| (member.expr_id(), param.clone()));
-                Some(named.chain(unnamed).collect())
+                self.object_part_positions(members, fields, param, &param_members)
             }
             TypedExprKind::ArrayLiteral { elements, .. } => {
-                let position = union_of(param_members.iter().filter_map(|member| match member {
-                    Type::Array(element) => Some(&**element),
-                    _ => None,
-                }))?;
-                Some(
-                    elements
-                        .iter()
-                        .map(|element| (element.expr_id(), position.clone()))
-                        .collect(),
-                )
+                array_part_positions(elements, &param_members)
             }
             TypedExprKind::TupleLiteral { elements, .. } => {
-                if !param_members
-                    .iter()
-                    .any(|member| matches!(member, Type::Tuple(_) | Type::Array(_)))
-                {
-                    return None;
-                }
-                let slot = |index: usize| {
-                    union_of(param_members.iter().filter_map(move |member| match member {
-                        Type::Tuple(slots) => slots.get(index),
-                        Type::Array(element) => Some(&**element),
-                        _ => None,
-                    }))
-                };
-                Some(
-                    elements
-                        .iter()
-                        .enumerate()
-                        .filter_map(|(index, part)| Some((*part, slot(index)?)))
-                        .collect(),
-                )
+                tuple_part_positions(elements, &param_members)
             }
             _ => None,
         }
+    }
+
+    /// An object literal's parts with their positions: a field at its field's
+    /// type or else at the index signature's value type, an interface read
+    /// as its fields' shape; a spread or computed member at `param` whole.
+    fn object_part_positions(
+        &self,
+        members: &[crate::TypedObjectMember],
+        fields: &[crate::TypedObjectFieldOrigin],
+        param: &Type,
+        param_members: &[&Type],
+    ) -> Option<Vec<(ExprId, Type)>> {
+        let objects: Vec<Type> = param_members
+            .iter()
+            .filter_map(|member| self.object_shape(member))
+            .collect();
+        if objects.is_empty() {
+            return None;
+        }
+        let named = fields.iter().filter_map(|field| {
+            let part = field.source.literal_expr_id()?;
+            let positions = objects
+                .iter()
+                .filter_map(|object| field_position(object, &field.name.name));
+            Some((part, union_of(positions)?))
+        });
+        let unnamed = members
+            .iter()
+            .filter(|member| !matches!(member, crate::TypedObjectMember::Value(_)))
+            .map(|member| (member.expr_id(), param.clone()));
+        Some(named.chain(unnamed).collect())
     }
 
     /// `member` as an object type, an interface read as its fields' shape
@@ -1151,6 +1134,59 @@ fn literal_parts(kind: &TypedExprKind) -> Option<Vec<ExprId>> {
     }
 }
 
+/// An array literal's elements, each at an array member's element type.
+fn array_part_positions(
+    elements: &[crate::TypedArrayElement],
+    param_members: &[&Type],
+) -> Option<Vec<(ExprId, Type)>> {
+    let position = union_of(
+        param_members
+            .iter()
+            .filter_map(|member| array_element(member)),
+    )?;
+    Some(
+        elements
+            .iter()
+            .map(|element| (element.expr_id(), position.clone()))
+            .collect(),
+    )
+}
+
+/// A tuple literal's elements, each at a tuple member's slot or an array
+/// member's element type; one past every slot is left out.
+fn tuple_part_positions(
+    elements: &[ExprId],
+    param_members: &[&Type],
+) -> Option<Vec<(ExprId, Type)>> {
+    if !param_members
+        .iter()
+        .any(|member| matches!(member, Type::Tuple(_) | Type::Array(_)))
+    {
+        return None;
+    }
+    let slot = |index: usize| {
+        union_of(param_members.iter().filter_map(move |member| match member {
+            Type::Tuple(slots) => slots.get(index),
+            other => array_element(other),
+        }))
+    };
+    Some(
+        elements
+            .iter()
+            .enumerate()
+            .filter_map(|(index, part)| Some((*part, slot(index)?)))
+            .collect(),
+    )
+}
+
+/// The element type of `member` when it is an array type.
+fn array_element(member: &Type) -> Option<&Type> {
+    match member {
+        Type::Array(element) => Some(element),
+        _ => None,
+    }
+}
+
 /// The type an object type `object` gives its field `name`: the field's
 /// own, or else its index signature's value type.
 fn field_position<'a>(object: &'a Type, name: &str) -> Option<&'a Type> {
@@ -1163,9 +1199,14 @@ fn field_position<'a>(object: &'a Type, name: &str) -> Option<&'a Type> {
         .or_else(|| index.as_ref().map(|index| &*index.value))
 }
 
-/// The union of `positions`, or None when there are none.
+/// The union of the `positions` that name a type parameter, or None when
+/// none does. One that names none binds nothing, and left in it could make
+/// the union `unknown` and hide the others (`A | unknown`).
 fn union_of<'a>(positions: impl Iterator<Item = &'a Type>) -> Option<Type> {
-    let positions: Vec<Type> = positions.cloned().collect();
+    let positions: Vec<Type> = positions
+        .filter(|position| super::expr::type_contains_type_var(position))
+        .cloned()
+        .collect();
     if positions.is_empty() {
         return None;
     }
