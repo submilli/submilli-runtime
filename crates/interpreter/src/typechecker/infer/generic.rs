@@ -1070,7 +1070,10 @@ impl Inferer<'_> {
             .unify(&close_match.sibling, &close_match.arg, self.resolver())
         {
             Err(UnifyError::Mismatch { expected, got }) => (expected, got),
-            _ => (close_match.sibling, close_match.arg),
+            _ => (
+                sub.apply_or_record(&close_match.sibling, &self.type_limits),
+                close_match.arg,
+            ),
         }
     }
 

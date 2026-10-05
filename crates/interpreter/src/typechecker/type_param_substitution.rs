@@ -900,8 +900,10 @@ impl<'a> Unifier<'a> {
     /// an unbound type parameter: tsc takes it as one more candidate of the
     /// fallback's priority, which the fallback already covers, so it binds
     /// nothing now and is checked against `params` once inference is done.
-    /// Binding another type parameter to it instead would take that one's
-    /// place from a later argument. Returns whether it deferred `arg`.
+    /// Each other unbound type parameter in `params` takes `arg` as its
+    /// fallback, as tsc gives it the same low-priority candidate, so a later
+    /// argument still binds it ahead of `arg`. Returns whether it deferred
+    /// `arg`.
     fn defer_to_fitting_fallback(&mut self, params: &[Type], arg: &Type) -> bool {
         if !self.infers_from_covariant_argument() {
             return false;
@@ -919,6 +921,15 @@ impl<'a> Unifier<'a> {
         // Reported against the type parameter itself if it ends up not
         // taking `arg`.
         self.record_close_match(params, type_var, arg);
+        let others: Vec<&Type> = params
+            .iter()
+            .filter(|member| {
+                self.is_unbound_type_var(member) && !self.is_unbound_fallback_type_var(member)
+            })
+            .collect();
+        for other in others {
+            self.offer_whole_union_fallback(other, arg.clone());
+        }
         true
     }
 

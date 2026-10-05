@@ -109,6 +109,10 @@ function boxThenOther<T, U>(first: T | Box<number>, either: T | U, other: U): U[
   return [other];
 }
 
+function otherOf<T, U>(first: T | Box<number>, either: T | U): U[] {
+  return [];
+}
+
 function textOrCountFor(flag: boolean): number | string {
   return flag ? 1 : "s";
 }
@@ -202,6 +206,10 @@ function main(): void {
   assert(unionForOther.length === 0, "the other type parameter takes a union argument");
   const nestedForOther = boxOrOther(new Box(true), [new Box(5)][0]);
   assert(nestedForOther.length === 0, "the other type parameter takes a nested box");
+
+  const inferredShared = otherOf(new Box(true), new Box(false));
+  const sharedFit: Box<boolean>[] = inferredShared;
+  assert(sharedFit.length === 0, "an argument fitting the fallback stands in for the other type parameter");
 
   const inferredList = listOrNumbers(lists(true));
   const fromList: string[] | null = inferredList;
