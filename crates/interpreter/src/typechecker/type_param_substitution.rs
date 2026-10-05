@@ -28,12 +28,14 @@ pub struct TypeParamSubstitution {
     close_matches: Vec<CloseMatch>,
 }
 
-/// An argument member that closely matched `sibling`, a member of the union
-/// parameter `param`, as `Box<string>` does `Box<number>`.
+/// An argument member that must fit the union parameter `param` once
+/// inference is done, reported against `matched_member` if it does not:
+/// the member it closely matched, as `Box<string>` does `Box<number>`, or
+/// the type parameter whose fallback it fit.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CloseMatch {
     pub param: Type,
-    pub sibling: Type,
+    pub matched_member: Type,
     pub arg: Type,
     /// The call argument it came from, once the call has located it.
     pub argument_span: Option<Span>,
@@ -900,10 +902,7 @@ impl<'a> Unifier<'a> {
     /// an unbound type parameter: tsc takes it as one more candidate of the
     /// fallback's priority, which the fallback already covers, so it binds
     /// nothing now and is checked against `params` once inference is done.
-    /// Each other unbound type parameter in `params` takes `arg` as its
-    /// fallback, as tsc gives it the same low-priority candidate, so a later
-    /// argument still binds it ahead of `arg`. Returns whether it deferred
-    /// `arg`.
+    /// Returns whether it deferred `arg`.
     fn defer_to_fitting_fallback(&mut self, params: &[Type], arg: &Type) -> bool {
         if !self.infers_from_covariant_argument() {
             return false;
@@ -918,19 +917,23 @@ impl<'a> Unifier<'a> {
         let Some((type_var, _)) = fitting else {
             return false;
         };
-        // Reported against the type parameter itself if it ends up not
-        // taking `arg`.
         self.record_close_match(params, type_var, arg);
-        let others: Vec<&Type> = params
-            .iter()
-            .filter(|member| {
-                self.is_unbound_type_var(member) && !self.is_unbound_fallback_type_var(member)
-            })
-            .collect();
-        for other in others {
-            self.offer_whole_union_fallback(other, arg.clone());
-        }
+        self.offer_to_type_vars_without_fallback(params, arg);
         true
+    }
+
+    /// Offer `arg` as the fallback of each unbound type parameter in
+    /// `params` without one of its own: tsc gives it the same low-priority
+    /// candidate, so a later argument still binds it ahead of `arg`.
+    fn offer_to_type_vars_without_fallback(&mut self, params: &[Type], arg: &Type) {
+        // Collected first: offering needs `self` mutably.
+        let without_fallback: Vec<&Type> = params
+            .iter()
+            .filter(|member| self.is_unbound_type_var_without_fallback(member))
+            .collect();
+        for type_var in without_fallback {
+            self.offer_whole_union_fallback(type_var, arg.clone());
+        }
     }
 
     /// `members` in order to try an argument against, those that are an
@@ -964,7 +967,7 @@ impl<'a> Unifier<'a> {
         let candidates: Vec<&Type> = if unbound.len() > 1 && self.infers_from_covariant_argument() {
             unbound
                 .into_iter()
-                .filter(|member| !self.is_unbound_fallback_type_var(member))
+                .filter(|member| self.is_unbound_type_var_without_fallback(member))
                 .collect()
         } else {
             unbound
@@ -1037,7 +1040,7 @@ impl<'a> Unifier<'a> {
     fn record_close_match(&mut self, params: &[Type], matched_member: &Type, arg: &Type) {
         self.sub.close_matches.push(CloseMatch {
             param: Type::union(params.to_vec()),
-            sibling: matched_member.clone(),
+            matched_member: matched_member.clone(),
             arg: arg.clone(),
             argument_span: None,
         });
@@ -1098,6 +1101,12 @@ impl<'a> Unifier<'a> {
             Type::TypeVar(name) => self.sub.whole_union_fallback(name),
             _ => None,
         }
+    }
+
+    /// Whether `ty` is a type parameter with no binding yet and no
+    /// whole-union fallback.
+    fn is_unbound_type_var_without_fallback(&self, ty: &Type) -> bool {
+        self.is_unbound_type_var(ty) && !self.is_unbound_fallback_type_var(ty)
     }
 
     /// Whether the unifier is inferring from a call argument outside any

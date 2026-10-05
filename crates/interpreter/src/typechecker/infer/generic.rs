@@ -1058,20 +1058,22 @@ impl Inferer<'_> {
         }
     }
 
-    /// The types to report a closely matched member under: where it departs
-    /// from the member it closely matched.
+    /// The types to report a close match under: where the argument departs
+    /// from its matched member, or that member as `sub` resolves it when it
+    /// does not depart structurally.
     fn close_match_mismatch(
         &self,
         sub: &TypeParamSubstitution,
         close_match: CloseMatch,
     ) -> (Type, Type) {
-        match sub
-            .clone()
-            .unify(&close_match.sibling, &close_match.arg, self.resolver())
-        {
+        match sub.clone().unify(
+            &close_match.matched_member,
+            &close_match.arg,
+            self.resolver(),
+        ) {
             Err(UnifyError::Mismatch { expected, got }) => (expected, got),
             _ => (
-                sub.apply_or_record(&close_match.sibling, &self.type_limits),
+                sub.apply_or_record(&close_match.matched_member, &self.type_limits),
                 close_match.arg,
             ),
         }
