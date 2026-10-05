@@ -281,9 +281,9 @@ pub(super) fn type_admits_null(ty: &Type, types: TypeResolver<'_>) -> bool {
     walk(ty, types, &mut BTreeSet::new())
 }
 
-/// Whether no value of `ty` is `null`. Unlike `!type_admits_null`, a type
-/// parameter counts as possibly null, since a caller may instantiate it so.
-fn never_holds_null(ty: &Type, types: TypeResolver<'_>) -> bool {
+/// Whether a value of `ty` may be `null`. Unlike `type_admits_null`, a type
+/// parameter counts, since a caller may instantiate it with `null`.
+fn may_hold_null(ty: &Type, types: TypeResolver<'_>) -> bool {
     fn has_type_param(ty: &Type) -> bool {
         match ty.peel() {
             Type::TypeVar(_) | Type::GenericParam { .. } => true,
@@ -291,7 +291,7 @@ fn never_holds_null(ty: &Type, types: TypeResolver<'_>) -> bool {
             _ => false,
         }
     }
-    !type_admits_null(ty, types) && !has_type_param(ty)
+    type_admits_null(ty, types) || has_type_param(ty)
 }
 
 /// What to tell someone who wrote `?.` on a namespace when there is no fix to
@@ -4447,13 +4447,21 @@ impl Inferer<'_> {
 
     /// Wrap an already-typed interpolation expression in a
     /// `MethodCall { name: "toString" }` unless its type is already
-    /// `Type::String`. Uses the exact valid-types allowlist /
-    /// diagnostic shape as the `String(x)` coercion call, so `String(x)` and
-    /// `${x}` route through the same dispatch path at codegen time.
+    /// `Type::String`. The receivers are those [`Self::reaches_to_string`]
+    /// accepts, and the call dispatches as the `String(x)` coercion's does, so
+    /// `String(x)` and `${x}` route through the same path at codegen time.
     ///
     /// The allowlist is shared with the nullable-narrowing hint below: the hint may
     /// only claim narrowing is the fix when the non-null form is a receiver this
     /// accepts, or it advises a guard that leaves the same error behind.
+    /// Whether values of `ty` reach a `toString`: the `has_to_string` types, and an
+    /// interface value, which has one declared or the universal one.
+    fn reaches_to_string(&self, ty: &Type) -> bool {
+        has_to_string(ty)
+            || (matches!(ty, Type::InterfaceRef { .. })
+                && self.find_method(ty, "toString").is_some())
+    }
+
     fn wrap_interpolation_in_to_string(
         &mut self,
         expr_id: ExprId,
@@ -4468,9 +4476,7 @@ impl Inferer<'_> {
             name: "toString".to_string(),
             span,
         };
-        let interface_to_string = matches!(peeled, Type::InterfaceRef { .. })
-            && self.find_method(peeled, "toString").is_some();
-        if !has_to_string(peeled) && !interface_to_string {
+        if !self.reaches_to_string(peeled) {
             let nullable = matches!(peeled, Type::Null)
                 || matches!(
                     peeled,
@@ -4487,7 +4493,8 @@ impl Inferer<'_> {
                 // otherwise the help tells them to do what they just did.
                 // `null` is the whole problem here — the non-null form always has a
                 // `toString`, or the outer allowlist would have rejected it too.
-                let culprit = self.nullable_culprit(&[(expr_id, ty)], |t| has_to_string(t.peel()));
+                let culprit =
+                    self.nullable_culprit(&[(expr_id, ty)], |t| self.reaches_to_string(t.peel()));
                 self.error_with_narrowing_hint(
                     span,
                     format!(
@@ -8147,7 +8154,7 @@ impl Inferer<'_> {
         for part in parts {
             // A `?.` whose receiver can't be `null` never short-circuits, so it
             // is the plain step and adds no `| null`, as in tsc.
-            let part = if part.is_optional() && never_holds_null(&receiver_ty, self.resolver()) {
+            let part = if part.is_optional() && !may_hold_null(&receiver_ty, self.resolver()) {
                 part.as_plain_step()
             } else {
                 part
@@ -8638,7 +8645,7 @@ impl Inferer<'_> {
         }
         // A poisoned receiver has no knowable nullability, and naming it in the
         // message would print `<error>` at the user.
-        if !never_holds_null(base_ty, self.resolver()) || matches!(base_ty.peel(), Type::Error) {
+        if may_hold_null(base_ty, self.resolver()) || matches!(base_ty.peel(), Type::Error) {
             return;
         }
         self.diagnostics.push(crate::Diagnostic {
@@ -10160,7 +10167,8 @@ fn never_operand_result(lt: &Type, rt: &Type, partners: NeverPartners) -> NeverO
     }
 }
 
-/// Types whose values reach a `toString` — the receivers `String(x)` and `${x}` accept.
+/// Types whose values reach a `toString` without a lookup — the receivers
+/// `String(x)` and `${x}` accept, beside the interfaces `reaches_to_string` adds.
 fn has_to_string(ty: &Type) -> bool {
     matches!(
         ty,

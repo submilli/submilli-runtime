@@ -817,13 +817,10 @@ impl<'a> Inferer<'a> {
                 );
                 Type::Error
             }
-            (TypeofRoot::Enum { .. }, [member, field, ..]) => {
+            (TypeofRoot::Enum { .. }, [_, field, ..]) => {
                 self.error(
                     field.span,
-                    format!(
-                        "`{}` is not a field of `{name}.{}`",
-                        field.name, member.name
-                    ),
+                    "`typeof` of a path past an enum member is not supported".to_string(),
                 );
                 Type::Error
             }
