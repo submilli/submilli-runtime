@@ -21,6 +21,18 @@ function unbox<T>(holder: Holder<T>): T {
   return holder.value;
 }
 
+function field<T>(o: { value: T }): T {
+  return o.value;
+}
+
+function call<T>(f: () => T): T {
+  return f();
+}
+
+function last<T>(...xs: T[]): T {
+  return xs[xs.length - 1];
+}
+
 function first<T>(xs: T[]): T {
   return xs[0];
 }
@@ -115,4 +127,14 @@ function main(): void {
   const fixedLater = () => fixed;
   const declaredOne: 1 = fixedLater();
   assert(unboxed === "x" && total === "y" && declaredOne === 1, "a container's literal");
+
+  // A declared literal passed through a callback, beside a fresh one, or
+  // inside an object literal stays declared.
+  let viaCallback = call(() => mode);
+  let besideFresh = pick(mode, "on");
+  let inObject = field({ value: mode });
+  const declaredModes: Mode[] = [viaCallback, besideFresh, inObject];
+  let rested = last<1>(1);
+  const restedOne: 1 = rested;
+  assert(declaredModes.join(",") === "on,on,on" && restedOne === 1, "declared through a call");
 }

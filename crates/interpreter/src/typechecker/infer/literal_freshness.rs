@@ -108,7 +108,7 @@ pub(super) struct LiteralFreshness {
     kept_arguments: BTreeSet<ExprId>,
     /// The arguments of the generic calls whose type arguments are written
     /// (`id<1>(1)`): such a result's literal types are as declared.
-    typed_call_arguments: BTreeSet<ExprId>,
+    written_type_argument_calls: BTreeSet<ExprId>,
 }
 
 impl Inferer<'_> {
@@ -140,9 +140,12 @@ impl Inferer<'_> {
 
     /// Record that `arguments` are those of a generic call whose type
     /// arguments are written.
-    pub(super) fn record_arguments_of_typed_call(&mut self, arguments: &[ExprId]) {
+    pub(super) fn record_arguments_of_call_with_written_type_arguments(
+        &mut self,
+        arguments: &[ExprId],
+    ) {
         self.literal_freshness
-            .typed_call_arguments
+            .written_type_argument_calls
             .extend(arguments.iter().copied());
     }
 
@@ -523,8 +526,9 @@ impl Inferer<'_> {
     /// type given its `receiver` and `args`. Inference can only have taken a
     /// literal type from those, so one they hold only fresh is fresh
     /// (`get(new Box(c1))` with `const c1 = "a"`), and any other is declared
-    /// (`first(modes)` with `modes: Mode[]`, a literal in the callee's return
-    /// type, or every literal when the type arguments are written).
+    /// (`first(modes)` with `modes: Mode[]`, `pick(m, "on")` with `m: Mode`,
+    /// a literal in the callee's return type, or every literal when the type
+    /// arguments are written).
     fn generic_result_regular_literals(
         &self,
         result_ty: &Type,
@@ -532,31 +536,103 @@ impl Inferer<'_> {
         args: &[crate::GenericArgument],
     ) -> Result<BTreeSet<Type>, CompilerFailure> {
         let mut regular = declared_literals(result_ty);
-        let typed = args.iter().any(|argument| {
+        let mut fresh = self.inferable_fresh_literals(receiver, args)?;
+        let values = receiver
+            .into_iter()
+            .chain(args.iter().map(|argument| argument.expr));
+        for value in values {
+            for literal in self.held_regular_literals(value)? {
+                fresh.remove(&literal);
+            }
+        }
+        regular.retain(|literal| !fresh.contains(literal));
+        Ok(regular)
+    }
+
+    /// The fresh literals a generic call given `receiver` and `args` may have
+    /// inferred a type argument from: none when its type arguments are written.
+    fn inferable_fresh_literals(
+        &self,
+        receiver: Option<ExprId>,
+        args: &[crate::GenericArgument],
+    ) -> Result<BTreeSet<Type>, CompilerFailure> {
+        let has_written_type_arguments = args.iter().any(|argument| {
             self.literal_freshness
-                .typed_call_arguments
+                .written_type_argument_calls
                 .contains(&argument.expr)
         });
-        if typed {
-            return Ok(regular);
+        let mut fresh = BTreeSet::new();
+        if has_written_type_arguments {
+            return Ok(fresh);
         }
         let values = receiver
             .into_iter()
             .chain(args.iter().map(|argument| argument.expr));
         for value in values {
+            fresh.extend(self.possibly_fresh_literals(value)?);
+        }
+        Ok(fresh)
+    }
+
+    /// The literal types in the type of `value`, at the top or nested inside
+    /// it, that may be fresh. A function literal's returns were already
+    /// widened unless a generic call kept them, and its parameters are not
+    /// values it holds, so it has none otherwise.
+    fn possibly_fresh_literals(&self, value: ExprId) -> Result<BTreeSet<Type>, CompilerFailure> {
+        let expr = self
+            .typed_ast
+            .try_expr(value)
+            .map_err(crate::typechecker::arena_failure)?;
+        let mut fresh = BTreeSet::new();
+        match &expr.kind {
+            TypedExprKind::ObjectLiteral { members, .. } => {
+                for member in members {
+                    fresh.extend(self.possibly_fresh_literals(member.expr_id())?);
+                }
+                return Ok(fresh);
+            }
+            TypedExprKind::ArrayLiteral { elements, .. } => {
+                for element in elements {
+                    fresh.extend(self.possibly_fresh_literals(element.expr_id())?);
+                }
+                return Ok(fresh);
+            }
+            TypedExprKind::GenericCall { args, .. } => {
+                return self.inferable_fresh_literals(None, args);
+            }
+            TypedExprKind::GenericMethodCall { receiver, args, .. } => {
+                return self.inferable_fresh_literals(Some(*receiver), args);
+            }
+            _ => {}
+        }
+        if let Type::Function { ret, .. } = expr.ty.peel() {
+            if self.literal_freshness.kept_arguments.contains(&value) {
+                fresh.extend(deep_literals(ret));
+            }
+            return Ok(fresh);
+        }
+        fresh = if self.are_nested_literals_regular(value)? {
+            literal_members(&expr.ty)
+        } else {
+            deep_literals(&expr.ty)
+        };
+        for literal in self.regular_literals(value)? {
+            fresh.remove(&literal);
+        }
+        Ok(fresh)
+    }
+
+    /// The regular literals `value` holds, at the top or, when every nested
+    /// one is regular, inside it.
+    fn held_regular_literals(&self, value: ExprId) -> Result<BTreeSet<Type>, CompilerFailure> {
+        let mut regular = self.regular_literals(value)?;
+        if self.are_nested_literals_regular(value)? {
             let ty = &self
                 .typed_ast
                 .try_expr(value)
                 .map_err(crate::typechecker::arena_failure)?
                 .ty;
-            if self.are_nested_literals_regular(value)? {
-                continue;
-            }
-            let mut fresh = deep_literals(ty);
-            for literal in self.regular_literals(value)? {
-                fresh.remove(&literal);
-            }
-            regular.retain(|literal| !fresh.contains(literal));
+            regular.extend(deep_literals(ty));
         }
         Ok(regular)
     }

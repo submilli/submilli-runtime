@@ -758,9 +758,6 @@ impl Inferer<'_> {
             &mut sub,
             signature_help,
         )?;
-        if type_args.is_some() {
-            self.record_arguments_of_typed_call(&typed_args);
-        }
 
         if has_rest || typed_args.len() < sig.params.len() {
             self.typed_ast
@@ -862,6 +859,9 @@ impl Inferer<'_> {
         // bare `V`, but also `V | null` and other erased unions (their object
         // members lower to the narrower `$ObjectShape`).
         let return_needs_cast = return_erases_to_object_slot(&sig.ret);
+        if type_args.is_some() {
+            self.record_arguments_of_call_with_written_type_arguments(&typed_args);
+        }
         if any_generic_arg || return_needs_cast {
             let generic_args: Vec<crate::GenericArgument> = typed_args
                 .into_iter()
@@ -1535,9 +1535,6 @@ impl Inferer<'_> {
             &mut sub,
             signature_help,
         )?;
-        if type_args_written {
-            self.record_arguments_of_typed_call(&typed_args);
-        }
 
         if has_rest || typed_args.len() < params.len() {
             self.typed_ast
@@ -1649,6 +1646,9 @@ impl Inferer<'_> {
         }
         if let Some(schema) = &llm_schema {
             self.substitute_schema_argument(&params, &mut typed_args, schema, span)?;
+        }
+        if type_args_written {
+            self.record_arguments_of_call_with_written_type_arguments(&typed_args);
         }
 
         let generic_args: Vec<crate::GenericArgument> = typed_args
