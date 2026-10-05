@@ -1,0 +1,65 @@
+=== objectTypeLiteralSyntax2.ts ===
+let x: {
+>x : { foo: string; bar: string; }
+>  : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+    foo: string,
+>foo : string
+>    : ^^^^^^
+
+    bar: string
+>bar : string
+>    : ^^^^^^
+
+} = null as unknown as ({
+>null as unknown as ({     foo: string,     bar: string }) : { foo: string; bar: string; }
+>                                                          : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+    foo: string,
+>foo : string
+>    : ^^^^^^
+
+    bar: string
+>bar : string
+>    : ^^^^^^
+
+});
+
+// ASI makes this work
+let y: {
+>y : { foo: string; bar: string; }
+>  : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+    foo: string
+>foo : string
+>    : ^^^^^^
+
+    bar: string
+>bar : string
+>    : ^^^^^^
+
+} = null as unknown as ({
+>null as unknown as ({     foo: string     bar: string }) : { foo: string; bar: string; }
+>                                                         : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+    foo: string
+>foo : string
+>    : ^^^^^^
+
+    bar: string
+>bar : string
+>    : ^^^^^^
+
+});
+
+/*pruned*/;                                                                           
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+
