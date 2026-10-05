@@ -83,10 +83,10 @@ code preparation or PR creation merely because Linear is unavailable.
    checks for their respective changes; combine checks for mixed changes.
    Fix formatting before review, without modifying unrelated work.
    For routine Submilli Cargo checks, set `SUBMILLI_SKIP_HTTP_TESTS=1`, including
-   full compiler/runtime suites. Set `SUBMILLI_CONFORMANCE_TEST=0` for development
-   and post-rebase PR checks: neither ECMA-262 nor TypeScript conformance belongs
-   in this workflow. The dedicated flag is enabled by nightly CI and, separately,
-   the release skill. For package/example checks, pass `--skip-network`
+   full compiler/runtime suites. Set `SUBMILLI_TEST_NIGHTLY_ONLY=0` for development
+   and post-rebase PR checks: conformance, compiler determinism, and expensive
+   CLI fuel-accounting tests do not belong in this workflow. The flag is enabled
+   by nightly CI and, separately, the release skill. For package/example checks, pass `--skip-network`
    to `build test`; that command ignores `SUBMILLI_SKIP_HTTP_TESTS`. Follow
    `AGENTS.md`'s conditional HTTP policy: use `SUBMILLI_SKIP_HTTP_TESTS=0` for
    affected Rust socket tests; for live package tests, omit `--skip-network` and

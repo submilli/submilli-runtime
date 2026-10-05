@@ -1,7 +1,7 @@
-//! Shared opt-in for the expensive conformance suite bodies.
+//! The shared nightly-only flag gates the expensive conformance suite bodies.
 
 pub fn requested() -> bool {
-    std::env::var("SUBMILLI_CONFORMANCE_TEST").is_ok_and(|value| enabled(&value))
+    std::env::var("SUBMILLI_TEST_NIGHTLY_ONLY").is_ok_and(|value| enabled(&value))
 }
 
 fn enabled(value: &str) -> bool {

@@ -655,12 +655,16 @@ fn internal_failure(msg: &str) -> RunOutcome {
     }
 }
 
-// Poisoned state is unsupported; see AGENTS.md accepted poisoned-lock panics.
+// Poison means a panic may have interrupted a console write. AGENTS.md permits
+// poisoned-lock panics instead of treating potentially partial output as intact;
+// it does not permit the panic that caused poisoning. This also applies on readback.
 fn captured_console(buf: &Mutex<Vec<u8>>) -> String {
     String::from_utf8_lossy(&buf.lock().expect("console buffer lock poisoned")).into_owned()
 }
 
-// Poisoned state is unsupported; see AGENTS.md accepted poisoned-lock panics.
+// A panic during writing may leave partial console output. AGENTS.md permits
+// panicking on poisoned access instead of recovering it; the panic that caused
+// poisoning is still subject to the no-panic policy.
 struct Sink(Arc<Mutex<Vec<u8>>>);
 
 const MAX_CONSOLE_BYTES: usize = 1024 * 1024;

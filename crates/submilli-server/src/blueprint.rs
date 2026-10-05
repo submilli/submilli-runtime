@@ -103,7 +103,9 @@ impl StoredBlueprint {
 
 #[derive(Default)]
 pub struct InMemoryBlueprintStore {
-    // Poisoned state is unsupported; see AGENTS.md accepted poisoned-lock panics.
+    // Poison means a panic may have interrupted a blueprint mutation. AGENTS.md
+    // permits poisoned-lock panics rather than recovering potentially partial
+    // registrations; it does not permit the panic that caused poisoning.
     inner: RwLock<HashMap<String, StoredBlueprint>>,
 }
 
@@ -245,7 +247,9 @@ impl State {
 /// either fully the old map or fully the new one.
 pub struct FileBlueprintStore {
     dir: PathBuf,
-    // Poisoned state is unsupported; see AGENTS.md accepted poisoned-lock panics.
+    // Poison may leave registrations, reserved names and revision counters partly
+    // updated. AGENTS.md permits poisoned-lock panics rather than recovering this
+    // state; it does not permit the panic that caused poisoning.
     state: RwLock<State>,
 }
 

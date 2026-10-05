@@ -6,7 +6,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use axum::{
     Router,
     extract::{Request, State},
@@ -48,7 +48,10 @@ use crate::session_manager::{
 use crate::session_store::{
     DurableSessionStore, FileDurableSessionStore, InMemoryDurableSessionStore,
 };
-use submilli_shared::mcp::discovery::DiscoveryAuth;
+use submilli_shared::mcp::discovery::{DiscoveryAuth, DiscoveryError};
+
+type McpSetup = Arc<dyn Fn() -> std::result::Result<(), DiscoveryError> + Send + Sync>;
+
 use submilli_shared::mcp_token::OAuthTokenManager;
 
 /// How often the background reaper sweeps for expired sessions.
@@ -95,6 +98,9 @@ struct AppStateInner {
     /// Mediates `Idempotency-Key` reservations against the ledger it owns.
     idempotency: Arc<Coordinator>,
     /// Per-blueprint MCP services, built lazily and evicted on blueprint change.
+    /// Poison means a panic may have interrupted service registration or eviction.
+    /// AGENTS.md permits poisoned-lock panics rather than reusing partial state;
+    /// the panic that caused poisoning is still subject to the no-panic policy.
     mcp_services: BlueprintServiceCache,
     /// `Host` headers the MCP endpoint accepts (DNS-rebinding guard). `None`
     /// leaves rmcp's loopback-only default in place.
@@ -108,12 +114,18 @@ struct AppStateInner {
     network_policy: Arc<interpreter::stdlib::http::NetworkPolicy>,
     /// Per-blueprint discovered `@mcp/<server>` catalogs (the typed import
     /// surface), built lazily on first execute and evicted on blueprint change.
+    /// Poison may leave the catalog map and its generation partly updated.
+    /// AGENTS.md permits panicking on poisoned access instead of recovering that
+    /// state; it does not permit the panic that caused poisoning.
     mcp_catalogs: Mutex<HashMap<String, Arc<McpCatalog>>>,
     mcp_catalog_generation: AtomicU64,
     package_store: PackageStore,
     /// Where package installs read the GitHub token from; read on each
     /// install so a replaced file takes effect without a restart.
     github_token_file: Option<PathBuf>,
+    /// Poison may leave the package map and eviction generation inconsistent.
+    /// AGENTS.md permits poisoned-lock panics rather than reusing partial state;
+    /// the panic that caused poisoning is still subject to the no-panic policy.
     prepared_packages: Mutex<HashMap<String, Arc<PreparedBlueprintPackages>>>,
     /// Bumped by every eviction. A prepare snapshots it before reading the
     /// store and only caches its result if no eviction happened in between:
@@ -128,6 +140,7 @@ struct AppStateInner {
     /// [`AppState::llm_provider_for`] builds the real per-blueprint HTTP one.
     llm_dispatch: Option<Arc<dyn ModelDispatch>>,
     llm_dispatch_factory: LlmDispatchFactory,
+    mcp_setup: McpSetup,
 }
 
 impl AppState {
@@ -139,6 +152,15 @@ impl AppState {
         config: ServerConfig,
         llm_dispatch_factory: LlmDispatchFactory,
     ) -> Result<Self> {
+        Self::with_setup_factories(config, llm_dispatch_factory, Arc::new(initialize_mcp))
+    }
+
+    fn with_setup_factories(
+        config: ServerConfig,
+        llm_dispatch_factory: LlmDispatchFactory,
+        mcp_setup: McpSetup,
+    ) -> Result<Self> {
+        mcp_setup().context("MCP schema initialization failed")?;
         let audit = config
             .audit_log
             .unwrap_or_else(|| crate::audit::AuditLog::new(config.audit, None));
@@ -277,6 +299,7 @@ impl AppState {
                 bind_addr: OnceLock::new(),
                 llm_dispatch: config.llm_dispatch,
                 llm_dispatch_factory,
+                mcp_setup,
             }),
         })
     }
@@ -476,28 +499,29 @@ impl AppState {
         &self,
         blueprint_name: &str,
         blueprint: &Blueprint,
-    ) -> Arc<McpCatalog> {
+    ) -> std::result::Result<Arc<McpCatalog>, DiscoveryError> {
+        (self.inner.mcp_setup)()?;
         if blueprint.mcp.is_empty() {
-            return Arc::new(McpCatalog::empty());
+            return Ok(Arc::new(McpCatalog::empty()));
         }
         let generation = self.inner.mcp_catalog_generation.load(Ordering::Acquire);
         let key = mcp_catalog_cache_key(blueprint_name, None);
         if let Some(cached) = self.cached_mcp_catalog(&key) {
-            return cached;
+            return Ok(cached);
         }
         // Discovery does network I/O, so it runs without the cache lock held; a
         // concurrent first-caller may also discover — the first to insert wins.
         let discovered =
-            Arc::new(discover_all(self.discovery_auth(None), blueprint_name, blueprint).await);
+            Arc::new(discover_all(self.discovery_auth(None), blueprint_name, blueprint).await?);
         let mut cache = self
             .inner
             .mcp_catalogs
             .lock()
             .expect("mcp catalog poisoned");
         if self.inner.mcp_catalog_generation.load(Ordering::Acquire) != generation {
-            return discovered;
+            return Ok(discovered);
         }
-        Arc::clone(cache.entry(key).or_insert(discovered))
+        Ok(Arc::clone(cache.entry(key).or_insert(discovered)))
     }
 
     fn cached_mcp_catalog(&self, key: &str) -> Option<Arc<McpCatalog>> {
@@ -516,9 +540,10 @@ impl AppState {
         servers: &BTreeSet<String>,
         harness_secrets: &Arc<submilli_blueprint::HarnessSecretBindings>,
         network_policy: &Arc<interpreter::runtime::NetworkPolicy>,
-    ) -> Arc<McpCatalog> {
+    ) -> std::result::Result<Arc<McpCatalog>, DiscoveryError> {
+        (self.inner.mcp_setup)()?;
         if servers.is_empty() || blueprint.mcp.is_empty() {
-            return Arc::new(McpCatalog::empty());
+            return Ok(Arc::new(McpCatalog::empty()));
         }
         let declared: BTreeSet<String> = servers
             .iter()
@@ -526,13 +551,13 @@ impl AppState {
             .cloned()
             .collect();
         if declared.is_empty() {
-            return Arc::new(McpCatalog::empty());
+            return Ok(Arc::new(McpCatalog::empty()));
         }
         let generation = self.inner.mcp_catalog_generation.load(Ordering::Acquire);
         let key = mcp_catalog_cache_key(blueprint_name, Some(&declared));
         let session_scoped = !harness_secrets.is_empty();
         if !session_scoped && let Some(cached) = self.cached_mcp_catalog(&key) {
-            return cached;
+            return Ok(cached);
         }
         let discovered = Arc::new(
             discover_selected(
@@ -544,10 +569,10 @@ impl AppState {
                 blueprint,
                 &declared,
             )
-            .await,
+            .await?,
         );
         if session_scoped {
-            return discovered;
+            return Ok(discovered);
         }
         let mut cache = self
             .inner
@@ -555,9 +580,9 @@ impl AppState {
             .lock()
             .expect("mcp catalog poisoned");
         if self.inner.mcp_catalog_generation.load(Ordering::Acquire) != generation {
-            return discovered;
+            return Ok(discovered);
         }
-        Arc::clone(cache.entry(key).or_insert(discovered))
+        Ok(Arc::clone(cache.entry(key).or_insert(discovered)))
     }
 
     pub(crate) fn package_store(&self) -> &PackageStore {
@@ -1036,6 +1061,10 @@ fn selected_stdlib_declarations(names: &BTreeSet<String>) -> Vec<PackageDeclarat
         .collect()
 }
 
+fn initialize_mcp() -> std::result::Result<(), DiscoveryError> {
+    submilli_shared::mcp::schema_registry::initialize_builtin_packs().map_err(DiscoveryError::from)
+}
+
 fn mcp_catalog_cache_key(blueprint_name: &str, servers: Option<&BTreeSet<String>>) -> String {
     match servers {
         Some(servers) => format!("mcp:{blueprint_name}:{}", join_key_parts(servers)),
@@ -1082,7 +1111,7 @@ mod tests {
             ..ServerConfig::default()
         })
         .unwrap();
-        let before = state.mcp_catalog("test", &blueprint).await;
+        let before = state.mcp_catalog("test", &blueprint).await.unwrap();
         assert!(
             before
                 .warnings()
@@ -1097,7 +1126,7 @@ mod tests {
         )
         .await
         .unwrap();
-        let after = state.mcp_catalog("test", &blueprint).await;
+        let after = state.mcp_catalog("test", &blueprint).await.unwrap();
         assert!(
             !Arc::ptr_eq(&before, &after),
             "catalog must be rediscovered after authentication"
@@ -1290,3 +1319,6 @@ mod tests {
 
 #[cfg(test)]
 mod llm_setup_tests;
+
+#[cfg(test)]
+mod mcp_setup_tests;

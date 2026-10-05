@@ -200,7 +200,15 @@ async fn registered_blueprint(
         .map_err(crate::blueprint::store_failure_response)?
     {
         Some(blueprint) => {
-            let catalog = state.mcp_catalog(name, &blueprint).await;
+            let catalog = state.mcp_catalog(name, &blueprint).await.map_err(|error| {
+                tracing::error!(error = ?error, "MCP discovery initialization failed");
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(serde_json::json!({
+                        "error": "internal_error", "message": error.to_string(),
+                    })),
+                )
+            })?;
             Ok((blueprint, catalog))
         }
         None => Err((

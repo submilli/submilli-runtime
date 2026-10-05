@@ -161,17 +161,35 @@ cargo fmt --all --check
 cargo clippy --workspace --all-targets -- -D warnings
 ```
 
-Conformance suites (ECMA-262 and TypeScript) are excluded from development and
-post-rebase PR verification. `SUBMILLI_FULL_TEST` does not enable them. Both need
-`SUBMILLI_CONFORMANCE_TEST=1`, including filtered or baseline-update runs. Nightly
-CI enables this flag; the [release skill](.agents/skills/release/SKILL.md) requires
-both suites on the final release candidate before publication.
-Do not enable it during routine development or review.
+Nightly-only tests are excluded from routine development and post-rebase PR
+verification, including `SUBMILLI_FULL_TEST=1`. `SUBMILLI_TEST_NIGHTLY_ONLY=1`
+enables the ECMA-262 and TypeScript conformance suite bodies, both compiler
+determinism sweeps, compiler type limits (`type_limits`), Git memory-limit tests
+(`git_memory`), host memory bounds
+(`host_memory`), server memory caps (`memory_cap`), and the CLI fuel-accounting tests
+`accessors_do_not_pay_for_the_whole_receiver` and
+`operations_charge_for_the_input_they_process`. Conformance filters and
+baseline-update settings do not opt in. Nightly CI enables the flag; the
+[release skill](.agents/skills/release/SKILL.md) requires all these checks on the
+final release candidate before publication. Enable the flag during development
+only for focused verification of changes to these tests or their selection,
+and for the Git standard-library checks below.
+
+Whenever modifying the Git standard library (`crates/interpreter/src/stdlib/git/`),
+run the Git memory-limit tests in addition to other affected checks:
+
+```sh
+SUBMILLI_SKIP_HTTP_TESTS=1 SUBMILLI_FULL_TEST=0 SUBMILLI_TEST_NIGHTLY_ONLY=1 cargo test --locked -p interpreter --test git_memory -- --nocapture
+```
+
+These tests use an in-process HTTP transport backed by local `git upload-pack`,
+so they need no network access. The optional calibration report remains ignored;
+it is not required by this command.
 
 At the single post-rebase, pre-PR full-test gate, run:
 
 ```sh
-SUBMILLI_SKIP_HTTP_TESTS=1 SUBMILLI_CONFORMANCE_TEST=0 SUBMILLI_FULL_TEST=1 cargo test --workspace
+SUBMILLI_SKIP_HTTP_TESTS=1 SUBMILLI_TEST_NIGHTLY_ONLY=0 SUBMILLI_FULL_TEST=1 cargo test --workspace
 cargo run -p submilli -- build test --skip-network
 ```
 

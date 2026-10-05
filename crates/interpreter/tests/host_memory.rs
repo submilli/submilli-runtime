@@ -180,6 +180,10 @@ fn measure_scenario(
 #[test]
 fn download_host_memory_stays_bounded() {
     const BODY_BYTES: u64 = 4 * 1024 * 1024;
+    if !nightly_only_requested() {
+        eprintln!("host memory: skipped; set SUBMILLI_TEST_NIGHTLY_ONLY=1 to run");
+        return;
+    }
     let _guard = TEST_LOCK
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -222,6 +226,10 @@ function main(): void {
 fn fs_lines_host_memory_stays_bounded() {
     const FILE_BYTES: u64 = 4 * 1024 * 1024;
     const LINE_LEN: usize = 200;
+    if !nightly_only_requested() {
+        eprintln!("host memory: skipped; set SUBMILLI_TEST_NIGHTLY_ONLY=1 to run");
+        return;
+    }
     let _guard = TEST_LOCK
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -270,6 +278,10 @@ function main(): void {
 #[test]
 fn fs_bytes_host_memory_stays_bounded() {
     const FILE_BYTES: u64 = 4 * 1024 * 1024;
+    if !nightly_only_requested() {
+        eprintln!("host memory: skipped; set SUBMILLI_TEST_NIGHTLY_ONLY=1 to run");
+        return;
+    }
     let _guard = TEST_LOCK
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -310,4 +322,13 @@ fn report(api: &str, delta: usize, body_bytes: u64) {
         "host_memory[{api}]: peak delta={delta} bytes, body={body_bytes} bytes ({:.4}% of body)",
         delta as f64 / body_bytes as f64 * 100.0,
     );
+}
+
+fn nightly_only_requested() -> bool {
+    std::env::var("SUBMILLI_TEST_NIGHTLY_ONLY").is_ok_and(|value| {
+        matches!(
+            value.to_ascii_lowercase().as_str(),
+            "1" | "true" | "yes" | "on"
+        )
+    })
 }

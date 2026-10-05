@@ -5,7 +5,7 @@
 use std::time::Duration;
 
 use interpreter::{compile_script, runtime::RuntimeConfig};
-use wasmtime::Trap;
+use wasmtime::{Trap, WasmBacktrace};
 
 /// Every program below returns normally from its handler, so a run that reaches
 /// one is an `Ok`.
@@ -116,6 +116,19 @@ fn assert_trap_ends_the_run(raise: &str, cfg: &RuntimeConfig, expected: Trap) {
             Some(&expected),
             "{name}: expected {expected:?}, got: {err:#}"
         );
+        if expected == Trap::OutOfFuel {
+            // A small budget must reach the callback, rather than expire in setup.
+            let backtrace = err.downcast_ref::<WasmBacktrace>().expect("trap backtrace");
+            assert!(
+                backtrace.frames().iter().any(|frame| {
+                    frame
+                        .symbols()
+                        .iter()
+                        .any(|symbol| symbol.name() == Some("spin"))
+                }),
+                "{name}: fuel must run out in spin, got: {err:#}"
+            );
+        }
     }
 }
 
@@ -127,7 +140,7 @@ fn stack_exhaustion_under_a_callback_is_not_catchable() {
 #[test]
 fn fuel_exhaustion_under_a_callback_is_not_catchable() {
     let cfg = RuntimeConfig {
-        fuel: 20_000_000,
+        fuel: 20_000,
         ..RuntimeConfig::default()
     };
     assert_trap_ends_the_run("spin()", &cfg, Trap::OutOfFuel);

@@ -45,7 +45,9 @@ impl std::error::Error for LastRunStoreError {
 
 #[derive(Default)]
 pub struct InMemorySessionStore {
-    // Poisoned state is unsupported; see AGENTS.md accepted poisoned-lock panics.
+    // Poison means a panic may have interrupted replacement of a last-run record.
+    // AGENTS.md permits poisoned-lock panics rather than recovering potentially
+    // partial records; it does not permit the panic that caused poisoning.
     inner: Mutex<HashMap<String, LastRun>>,
 }
 
