@@ -1,8 +1,9 @@
 # SUB-633: invariant policy and simplification inventory
 
-Reviewed 2026-10-05. This is an execution ledger, not an instruction to revert whole
-commits. The decisions below began as proposals; completed work is recorded in
-the execution section. Unrecorded proposals remain pending.
+Completed inventory decisions 2026-10-05. R01–R26 and P01–P09 have final
+dispositions; T01–T06 record tracking/workflow synchronization. R25/item 32 remains
+deferred by the user, and the retained SUB-633 resource/dependency/gate backlog is
+still open. This ledger records selective simplification, not whole-commit reverts.
 The policy is [AGENTS.md](../AGENTS.md#no-panic-execution-paths).
 
 The useful rollback is selective: remove error propagation that exists only for
@@ -17,9 +18,9 @@ more clearly without panicking; permission to panic is no reason to undo them.
   [original source-site inventory](https://linear.app/submilli/document/sub-633-complete-baseline-source-site-inventory-4b6b6b5a42c5).
 - Original source baseline: `25717faee899650ebbf81c1e4310547594be42e2`;
   original engine baseline: submilli-wasm 0.1.4. Preserve these historical records.
-- Checkout inspected: `16e10725a08aabd5937bb64abf6f5a3c9b49fff1` on
-  `codex/bounded-diagnostics`; engine locked at 0.1.9. The proposed policy edit
-  in AGENTS.md is uncommitted at this baseline.
+- Initial checkout inspected: `16e10725a08aabd5937bb64abf6f5a3c9b49fff1` on
+  `codex/bounded-diagnostics`; engine locked at 0.1.9. The policy and initial
+  inventory were committed as `46893ac3`; individual execution commits follow.
 - Cached local main: `f9c1608b0a39d4a22a3fccd4ae624812d573398b`;
   cached upstream/main at the end of inspection:
   `dc1e61f47d909d5cbfdc540c8bcd5373cf60599a`. No fetch or rebase was performed.
@@ -38,7 +39,7 @@ Stable IDs R01–R26 identify code decisions; P01–P09 identify current explici
 sites; T01–T06 identify tracking changes. Keep IDs when splitting work, using
 suffixes such as R04a. Keep original SUB-633 item numbers too.
 
-Each code row has a proposed disposition:
+The original analysis used these dispositions:
 
 - **Simplify:** a concrete local guarantee supports removing invariant-only
   checks. Verify all callers and document the guarantee in the implementing diff.
@@ -48,9 +49,9 @@ Each code row has a proposed disposition:
 - **Already simplified:** the historical reversal has already happened.
 - **Deferred:** intentionally not reopened by this review.
 
-These are recommendations, not completion statuses. On execution, append
-owner/commit or PR, exact symbols changed, proof,
-remaining error cases, focused checks and final disposition to the row. A row is
+The execution entries now supersede those original recommendations. For future
+changes, append owner/commit or PR, exact symbols, proof, remaining error cases,
+focused checks and final disposition. A row is
 finished only when its code and tracking disposition agree. An accepted invariant
 stays recorded; it does not count as a removed panic. Do not delete history or
 reinterpret a checked historical item as a promise of zero panics.
@@ -106,8 +107,8 @@ internal-only plumbing. Removing these contracts would lose real failure handlin
 
 Disposition: retain R01's shared architecture unchanged. No code/test changes or
 new runtime claims; inspected conversion arms and public call sites above, with
-existing compiler tests covering fatal limits and mismatched source. Individual internal
-leaves remain pending under R02–R16. Documentation diff/link checks are sufficient
+existing compiler tests covering fatal limits and mismatched source. Individual leaf
+decisions are recorded under R02–R16. Documentation diff/link checks are sufficient
 for this retention decision; no runtime tests were rerun. Three independent review
 roles reported no findings. The commit containing this entry records completion.
 
@@ -494,7 +495,11 @@ This resolves what to retain, not the underlying budget/dependency audits.
 Documentation-only; no tests rerun. Three independent reviews found no issues;
 diff checks passed.
 
-## Completed fixes: candidates and decisions
+## Historical candidates and original rationale
+
+The original candidate analysis below is retained for provenance. Its “prove first”
+and “candidate” wording is not outstanding work: the execution entries above give
+each R ID's final simplification, retention or deferred decision.
 
 ### R01 — Compiler fatal-error architecture: keep; prune leaves
 
@@ -789,23 +794,23 @@ SUB-1108/SUB-1123 where appropriate. Review actual dependency preconditions and
 OS failures. Engine stack expectations require validation/execution proof, not
 automatic conversion to Result. Details and tracking changes appear below.
 
-## Which fallible contracts can actually disappear?
+## Final fallible-contract decisions
 
 Remove a leaf first, then walk callers upward until encountering a real remaining
 failure. Do not infer that a whole API becomes infallible from one accepted check.
 
-| Contract | Candidate change | What prevents broader deletion |
+| Contract | Final outcome | What prevents broader deletion |
 | --- | --- | --- |
-| Embedded schema-pack APIs and error type | R21: potentially remove the complete asset-only chain | Remote discovery/client construction remain fallible |
-| Numeric `to_*_checked` wrappers | R13: remove internal-only engine-error layer after proof | User precision/radix errors remain |
-| Call `metadata` / `typed_metadata` | R10: return metadata directly after serializer proof | Call-wrapper emission still has limits/errors |
-| Private namespace chain helpers | R04: remove redundant root/path error return | Other inference failures remain |
-| Private lexer/parser dispatch helpers | R02: remove only locally established branches | Token/source validation and limits still use fatal state |
-| Emitter scope/temporary access helpers | R08: remove invariant-only Results where callers establish state | Local counts, registration, emission remain fallible |
-| GC singleton helpers | R12: remove lookup error branch | `RecGroupBuilder::build` still returns real errors |
-| Fixed host slot accessors | R14: simplify after ABI check | Boundary ABI errors and dynamic values remain |
-| Cursor crypto helpers | R15: remove impossible fixed-width/key errors | Entropy, malformed input, size/allocation remain |
-| Compiler/typechecker/codegen entry points | R01/R03/R07: prune individual internal cases | Limits, diagnostics, public metadata, allocation remain |
+| Embedded schema-pack APIs and error type | R21: removed the asset-only chain | Remote discovery/client construction remain fallible |
+| Numeric `to_*_checked` wrappers | R13: removed private internal-only engine-error wrappers | User precision/radix errors remain |
+| Call `metadata` / `typed_metadata` | R10: metadata returns directly under documented serializer proof | Call-wrapper emission still has limits/errors |
+| Private namespace chain helpers | R04: removed redundant root/path error returns | Other inference failures remain |
+| Private lexer/parser dispatch helpers | R02: simplified locally established dispatch branches | Token/source validation and limits still use fatal state |
+| Emitter scope/temporary access helpers | R08: removed root-scope error checks; retained other emitter Results | Local counts, registration, emission remain fallible |
+| GC singleton helpers | R12: accepted post-build lookup invariants | `RecGroupBuilder::build` still returns real errors |
+| Fixed host slot accessors | R14: retained compact existing raw-slice helpers | Boundary ABI errors and dynamic values remain |
+| Cursor crypto helpers | R15: removed fixed-key/tag error-only helpers | Entropy, malformed input, size/allocation remain |
+| Compiler/typechecker/codegen entry points | R01/R03/R07: retained entry-point and public metadata errors | Limits, diagnostics, public metadata, allocation remain |
 | Server caches/stores/console | R18: poison-only work already removed | Backend/I/O/writer failures remain |
 | Workers/client factories | R17: retain contracts | OS/runtime/join/ownership failures remain |
 | Diagnostics/DWARF | R11: keep bounded writer error propagation | Truncation/source/allocation/emitter failures remain |
@@ -815,44 +820,44 @@ failure. Do not infer that a whole API becomes infallible from one accepted chec
 The historical state below is the fetched issue state, not a new assessment of
 completion. Checked: 01–30 and 33–36. Open: 31, 32, 37–42.
 
-| Item | Historical subject | State | Proposed disposition / inventory |
+| Item | Historical subject | State | Final review disposition / inventory |
 | --- | --- | --- | --- |
 | 01 | Parser recursion | Checked | Keep reproduced abort fix; R23 |
 | 02 | Closure arity | Checked | Keep reproduced panic fix; R23 |
 | 03 | Compiler fatal contracts | Checked | Keep architecture, prune leaves; R01 |
 | 04 | Fatal host vs guest errors | Checked | Keep semantic separation; R14 |
 | 05 | Lexer/parser assumptions | Checked | Simplify proven local dispatch; R02 |
-| 06 | Arenas/spans/source | Checked | Keep public checks, prove private accesses; R03 |
-| 07 | Patterns/capture/desugaring | Checked | Preserve real fixes; prove state helpers; R05 |
-| 08 | Inference setup/namespaces | Checked | Simplify local namespace checks; R04/R07 |
-| 09 | Class inference | Checked | Registration/metadata proof first; R07 |
+| 06 | Arenas/spans/source | Checked | Retain public arena/source checks; R03 |
+| 07 | Patterns/capture/desugaring | Checked | Retain real fixes and public/recursive-state checks; R05 |
+| 08 | Inference setup/namespaces | Checked | Simplified local namespace checks; retain registration errors; R04/R07 |
+| 09 | Class inference | Checked | Retain registration/metadata checks; R07 |
 | 10 | Expressions/flow state | Checked | Preserve narrowing fixes; R05 |
-| 11 | Generics/schema/substitution | Checked | Keep structure, prove other assumptions; R05/R06 |
+| 11 | Generics/schema/substitution | Checked | Retain current structure and checks; R05/R06 |
 | 12 | Compiler walks/work | Checked | Keep bounds; aggregate scope stays in 38; R23 |
-| 13 | Symbol/type lowering | Checked | Prove registration before simplifying; R07 |
-| 14 | Pools/metadata/DWARF | Checked | Separate pool boundaries, serializers and writers; R09–R11 |
-| 15 | Closures/adapters | Checked | Keep arity; prove registration; R07/R23 |
-| 16 | Class/imported-class emission | Checked | Prove producer and imported metadata contracts; R07 |
-| 17 | Casts/guards/validators | Checked | Prove registration; retain guest type checks; R07 |
+| 13 | Symbol/type lowering | Checked | Retain cross-phase registration errors; R07 |
+| 14 | Pools/metadata/DWARF | Checked | Simplified decimal/metadata leaves; retain public pools/writers; R09–R11 |
+| 15 | Closures/adapters | Checked | Retain arity and registration checks; R07/R23 |
+| 16 | Class/imported-class emission | Checked | Retain producer/imported metadata checks; R07 |
+| 17 | Casts/guards/validators | Checked | Retain registration and guest type checks; R07 |
 | 18 | Emitter state/parameters | Checked | Simplify root-scope invariants; retain limits; R08 |
 | 19 | Expression emission | Checked | Prune proven leaves, keep fallible emitter; R07/R08 |
-| 20 | Statement/finally emission | Checked | Prove stack/label lifetime; R08 |
+| 20 | Statement/finally emission | Checked | Retain stack/label checks; scope-root simplification only; R08 |
 | 21 | JSON/MCP/throw emission | Checked | Preserve compile-error vs guest-trap distinction; R07 |
 | 22 | Top-level propagation | Checked | Keep fallible entry points and artifact integrity; R01 |
 | 23 | GC/intrinsic/error types | Checked | Simplify post-build lookups only; R12 |
-| 24 | Prelude operations | Checked | Numeric wrapper candidate; keep input/UTF-16 fixes; R13 |
-| 25 | Host ABI/value access | Checked | Simplify fixed slots after validation; R14 |
+| 24 | Prelude operations | Checked | Removed private numeric wrappers; retain input/UTF-16 fixes; R13 |
+| 25 | Host ABI/value access | Checked | Retain compact raw-slice ABI helpers; R14 |
 | 26 | Workers | Checked | Keep operational errors and ownership; R17 |
 | 27 | Client/runtime setup | Checked | Keep real construction/context failures; R17 |
-| 28 | Other stdlib | Checked | Crypto/width proofs; keep input/borrow checks until proven; R15/R16 |
+| 28 | Other stdlib | Checked | Simplified fixed crypto/split leaves; retain input/borrow checks; R15/R16 |
 | 29 | Console | Checked | Poison requirement superseded; writer errors remain; R18 |
 | 30 | Poisoned caches/stores | Checked | Poison conversion requirement superseded and reversed; R18 |
 | 31 | Outer preparation/recording | Open | Narrow to concrete real failures; R24 |
 | 32 | Cleanup/idempotency | Open | Deferred by user; no new panic finding; R25 |
 | 33 | Diagnostics/backtraces | Checked | Keep bounded rendering; R11 |
-| 34 | LLM | Checked | Keep structure; optional batch simplification; R19/R20 |
-| 35 | MCP discovery/packs | Checked | Asset-only chain is a removal candidate; R21 |
-| 36 | Blueprint/build | Checked | Keep structural/traversal fixes; classify retained sites; R06/R22 |
+| 34 | LLM | Checked | Retain wire/retry/batch structure; R19/R20 |
+| 35 | MCP discovery/packs | Checked | Removed compiled-asset-only error chain; R21 |
+| 36 | Blueprint/build | Checked | Retain structure/traversal; P02–P06 accepted; R06/R22 |
 | 37 | Implicit panics | Open | Accept proven accesses; retain unresolved/input-controlled audit; R26 |
 | 38 | Allocation/work bounds | Open | Keep real budget work; R26 |
 | 39 | Engine | Open | Update current version and accept proven engine invariants; R26/T04 |
@@ -866,9 +871,9 @@ poison-only acceptance requirements, and fault-injection expectations that
 contradict accepted invariant contracts. Individual sites can leave the unresolved
 queue once their proof is recorded; retain them in the accepted ledger.
 
-## Explicit panics still present in this checkout
+## Explicit-site baseline and completed dispositions
 
-A Rust syntax-tree scan excluded test files and test-only nodes and inspected
+At the initial `16e10725` baseline, a Rust syntax-tree scan excluded test files and test-only nodes and inspected
 panic/assert/unreachable macros and `unwrap`/`expect` calls. It found 51 candidate
 nodes: 40 poisoned-lock accesses, six non-panicking `self.expect` parser calls in
 session value decoding, and five other sites. A separate textual inspection found
@@ -878,7 +883,7 @@ defects. This is a scoped scan, not proof about macro expansion, implicit panics
 dependencies or all conditional compilations. Line numbers below are baseline
 locators; follow symbols after edits.
 
-| ID | Site | Proposed disposition and reason |
+| ID | Baseline site | Final disposition and reason |
 | --- | --- | --- |
 | P01 | 40 std poisoned-lock accesses, grouped below | Accepted: documented poison policy; initiating panics assessed separately |
 | P02 | `submilli-blueprint/src/lib.rs:1302`, `to_yaml` | Accepted: closed YAML-supported serialization graph; proof below |
@@ -987,9 +992,10 @@ reviews found no issues; diff checks passed.
 These groups support accepting poison access, not declaring the surrounding
 functions panic-free. No new input-triggered panic was reproduced by this review.
 P02 and P05 now have their serialization and caller-validation proofs recorded
-above. The remaining candidates are tracked individually.
+above. All P01–P09 dispositions are now recorded individually. New accepted sites added
+by R simplifications are recorded in their execution entries and the Linear ledger.
 
-## Proposed SUB-633 tracking changes
+## Completed SUB-633 tracking changes
 
 ### T01 — Replace the obsolete overarching requirement
 
@@ -1023,7 +1029,7 @@ Attach R01–R23 to their completed numbered items. Mark the poison-conversion
 requirements in 29/30 superseded, citing the existing reversal. For 05–25 and
 34–36, permit selective simplification rather than reopening all completed items.
 Record structural improvements as retained, even when the previous panic would
-now be acceptable. The exact code changes remain proposals until implemented.
+now be acceptable. The implemented and retained outcomes are recorded in the execution entries above.
 
 ### T03 — Narrow 31/37 and preserve 32/38
 
@@ -1048,8 +1054,8 @@ is explicitly an integration check. Three independent reviews found no issues;
 issue and ledger writes read back and verified. No checkbox/status changes.
 Diff checks passed; documentation-only, no tests run.
 
-Item 39 names engine 0.1.4; the inspected lockfile uses 0.1.9. Keep the original
-ledger and add a current-version disposition. The operand-stack
+Item 39 originally named engine 0.1.4; its current scope and the inspected lockfile
+now use 0.1.9. The original ledger remains historical evidence. The operand-stack
 `pop().expect("operand stack underflow")` in engine `exec/stack.rs:137`, and tagged
 stack operations, are proof candidates: show that validation and every execution
 transition preserve height, including host calls and cleanup. They are not defects
@@ -1086,6 +1092,17 @@ module allow. This inventory does not implement a lint/CI gate.
 
 ### T06 — Test supported failure contracts
 
+Execution complete: applied item 42/source-ledger contract updates. Preserved real failure,
+resource, classification and follow-up tests; accepted private-invariant corruption
+may panic. Item 32 stays deferred and the adversarial/fuzz gate stays open. Final
+inventory reconciliation replaces stale proposal-only status and the original
+no-implementation disclaimer. Three independent final document reviews found two
+P3 stale-status sentences, corrected and parent-checked; no higher-priority findings.
+All 26 R, nine P, six T and 42 issue mappings, local links and 42 referenced commits
+validated; diff checks passed. Issue/ledger writes read back and verified. Confirmed
+all 42 issue checkboxes are preserved, with 31/32/37–42 open and parent In Progress.
+No runtime tests for this final documentation/tracking change.
+
 Item 42 should retain source/arity regressions, malformed public metadata,
 resource boundaries, operational fault injection, fatal-vs-guest classification
 and healthy-request-after-failure coverage. A test that corrupts a private,
@@ -1094,30 +1111,41 @@ recovery plumbing. Poisoned-lock tests must reflect the accepted poison policy.
 Keep cleanup tests for actual supported lifecycle paths without reopening deferred
 32 here. Parent closure still requires dispositions for unresolved in-scope sites.
 
-## Suggested execution order
+## Completion and remaining work
 
-1. Synchronize tracking language (T01–T06) and record already-simplified poison
-   work. This removes misleading future work without changing runtime behavior.
-2. Take small local changes: R02 newline dispatch, R04 namespace checks, R12
-   singleton lookups. Separate each proof from broader nearby checks.
-3. Remove meaningful invariant-only API layers: R21 embedded packs, R10 metadata,
-   R13 numeric wrappers, then R14 repeated fixed ABI accesses. Prove the complete
-   caller chain before changing signatures.
-4. Resolve P02/P05 and document the other retained explicit sites. Review R08/R09/
-   R15 locally; leave cross-phase R05/R07 and borrowing R16 behind explicit proof
-   tasks. R20 is optional and low priority.
-5. Continue real limits/dependency work under 37–40 and incorporate the engine
-   agent's findings. Do not schedule whole-commit reverts or reopen 32 by default.
+All R and P decisions were handled individually, independently reviewed, and
+committed before continuing. Invariant-only plumbing was simplified in R02, R04,
+R08–R10, R12–R13, R15–R16 and R21; other code decisions retained useful structure or
+real failure contracts. R25 remains deferred. P01–P09 are documented accepted
+sites, not removed panics. T01–T06 synchronize current policy and tracking without
+erasing historical fixes or changing the parent's In Progress state.
 
-Each implementation should show the invariant where it is used, list which real
-errors remain, and run focused affected checks. Preserve meaningful regression
-tests; remove only tests requiring recovery from newly accepted private invariant
-violations. Follow the repository's review and single post-rebase full-test gate
-when opening a PR. Do not run full suites merely to edit this inventory.
+The remaining SUB-633 work is explicitly retained: concrete boundary/implicit
+failure audits (31/37), resource budgets (38), engine/dependency proof and adoption
+(39/40), a future CI/lint gate (41), and adversarial/fuzz verification (42). These
+are separate backlog outcomes, not unfinished reversion candidates. No new
+input-triggered panic was reproduced by this selective invariant review.
 
-## Verification of this inventory
+## Verification and review handoff
 
-Documentation-only review: check source links, all 42 item mappings, commit
-references, distinction between proposed and completed work, and Markdown/diff
-consistency. No runtime reversions, new panic reproductions, implementation tests,
-Linear edits or engine modifications are claimed by this document.
+Each item records its focused verification and independent clean-code, correctness,
+and edge-case review. R13 and R15 required follow-up review of their final changes;
+P02, T02 and the final T06 reconciliation had only P3 wording findings, corrected
+and parent-checked. All final
+in-scope findings are resolved. Retention-only entries did not rerun runtime tests.
+Rust changes passed formatting and workspace/all-target Clippy; implementation
+entries retain the focused test counts, including failures and corrected reruns.
+HTTP coverage was skipped where transport behavior was unchanged; in-process
+server failure/recovery tests ran. Graph updates retained existing partial-parse
+warnings; generated graph artifacts were not committed.
+
+Linear updates were made through the
+[canonical review skill](../.agents/skills/launch-review-agents-loop/SKILL.md)
+and read back, with accepted sites distinguished from removed panics. Final
+tracking reconciliation and document checks are recorded under T06.
+
+Reviews covered each incremental task against its preceding commit. The starting
+commit `16e10725` includes earlier diagnostic work; this ledger does not claim a
+whole-PR review against main. No fetch, rebase, push, PR or full-suite run occurred
+in this execution. A future PR must review its full proposed diff and perform the
+repository's single post-rebase full-test gate. Engine source was not modified.
