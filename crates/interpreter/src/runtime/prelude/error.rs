@@ -600,6 +600,43 @@ fn error_equals(caller: &mut Caller<'_, StoreData>, params: &[Val]) -> wasmtime:
     Rooted::ref_eq(&*caller, a, b)
 }
 
+/// Which of an Error instance's inherited `message`/`name` slots JSON leaves
+/// out, as JavaScript does: `message` is not an own enumerable property, and
+/// `name` is one only when the instance assigned it. An assigned `name` can't
+/// be told from the one the constructor stored, so a `name` equal to a built-in
+/// error class's is taken as the constructor's. Likewise a subclass that
+/// redeclares `message` as a class field still has it left out. `None` for a
+/// non-Error value.
+pub(crate) fn json_hidden_slots(
+    caller: &mut Caller<'_, StoreData>,
+    value: &Val,
+) -> wasmtime::Result<Option<ErrorJsonSlots>> {
+    let class_vtable = super::super::intrinsic_types::intrinsic_types(&mut *caller)?
+        .class_vtable
+        .clone();
+    if !is_error(caller, value, &class_vtable)? {
+        return Ok(None);
+    }
+    let name = payload_units(caller, value, NAME_SLOT, "JSON.stringify")?;
+    let name_is_builtin = std::iter::once(BuiltinErrorClass::Error)
+        .chain(BuiltinErrorClass::SUBCLASSES)
+        .any(|class| name.iter().copied().eq(class.name_text().encode_utf16()));
+    Ok(Some(ErrorJsonSlots {
+        hides_name: name_is_builtin,
+    }))
+}
+
+/// The payload slots of an Error instance that JSON serialization skips.
+pub(crate) struct ErrorJsonSlots {
+    hides_name: bool,
+}
+
+impl ErrorJsonSlots {
+    pub(crate) fn hides(&self, slot: u32) -> bool {
+        slot == MESSAGE_SLOT || (self.hides_name && slot == NAME_SLOT)
+    }
+}
+
 /// Host-side twin of codegen's nominal `instanceof` walk
 /// (`emit_nominal_instance_test`): read the value's vtable and, while it is a
 /// `$ClassVTable`, walk the parent chain comparing by identity against the

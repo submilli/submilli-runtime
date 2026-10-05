@@ -89,3 +89,56 @@ SUBMILLI_HOME="$github_test_home" cargo run -p submilli -- run packages/github/t
 These are separate commands because `build test` uses an unrestricted policy;
 its ordinary unit tests cannot prove a `main` caller is constrained.
 `cargo test -p submilli --test package_policy` runs them all.
+
+## Capability compatibility notes
+
+Repository `owner` and `repo` identities are now lowercase in capability checks,
+REST paths, GraphQL variables, and scoped search qualifiers. Update mixed-case
+blueprint literals to lowercase. GitHub repository names are case-insensitive;
+branch/ref and file-path values retain their case. Prefer allow rules for refs:
+`main`, `heads/main`, tags and commit SHAs can name the same history.
+`listCommits` checks its `sha` option as `ref` and its path as `path`; omitted or
+empty values are null and are not sent.
+
+## Research search
+
+`searchIssuesAcrossRepositories` and `searchPullRequestsAcrossRepositories`
+require their own broad grants (`github.com/issues.searchAcrossRepositories` and
+`github.com/pulls.searchAcrossRepositories`). Existing repository grants do not
+permit them. They search repositories visible to the token; raw `repo:`, `org:`
+and `user:` qualifiers can narrow discovery. Their checks include the final
+`query`, normalized `author`, and inclusive `createdSince`/`createdUntil` dates.
+Use one login or `app/login` and UTC calendar dates in `YYYY-MM-DD` form. Kind,
+author, creation qualifiers and unquoted `OR` in the query are rejected so they
+cannot override those structured options. Quoted phrases remain literal terms.
+
+`searchPullRequestSummaries` is repository-restricted and needs
+`github.com/pulls.searchSummaries`. It uses the same scope guard as existing
+search. Both summary APIs make one request per page, without per-hit detail calls.
+Existing `searchPullRequests` keeps its full-detail contract. Enrich selected
+summary hits with `getPullRequest`; use `getPullRequestReactions` (grant `github.com/pulls.getReactions`) for
+issue-style reaction counts when the pull-request detail endpoint omits them.
+
+Research pages retain `totalCount`, `nextPageToken`, and `incompleteResults`.
+`isComplete` means there is no next accessible page; it does not mean the search
+is exhaustive. `isCapped` reports more than 1,000 matches. Narrow or partition a
+capped query by date/repository, and check `incompleteResults` even on its last
+page. GitHub also limits the search scope to 4,000 repositories and can time out.
+REST search uses a separate rate-limit bucket (30 authenticated requests/minute,
+10 unauthenticated); requests are not retried. Respect typed rate-limit metadata.
+GitHub may return validation errors for query length/boolean complexity. These
+limits are documented in [REST search](https://docs.github.com/en/rest/search/search)
+and [issue/PR qualifiers](https://docs.github.com/en/search-github/searching-on-github/searching-issues-and-pull-requests).
+
+Issue, pull-request and comment models expose nullable `reactions`. A summary or
+individual counter omitted by the endpoint is null; an explicit zero is zero.
+GraphQL issue lists currently return null reaction summaries. Search hits carry
+repository identity, URLs, authors and creation/update timestamps; PR summaries
+omit mergeability, diff statistics, and head/base details rather than fabricating
+those values.
+
+Offline request-contract checks:
+
+```sh
+node --test packages/github/scripts/contract.test.mjs
+```

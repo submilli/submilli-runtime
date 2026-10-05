@@ -1,5 +1,4 @@
 // test262: test/built-ins/decodeURI/S15.1.3.1_A2.1_T1.js
-// expect-fail: a lone surrogate in the input comes back as U+FFFD (decodeURI("\uD800") is "\uFFFD"); the standard returns code units outside an escape unchanged, so all 2,048 surrogate code units differ
 //
 // The try/catch around the decode becomes a separate throws check; the
 // "differs" check then decodes again outside it.

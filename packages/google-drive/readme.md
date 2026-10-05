@@ -60,3 +60,18 @@ blueprints of the same name, without a token or network:
   `parentId`.
 
 `cargo test -p submilli --test package_policy` runs them.
+
+## Upload destination policy
+
+`uploadFile` resolves its parent folder before checking `path`, `parentId` and
+`driveId`. The check's `driveId` is the folder's actual shared-drive ID, or null for
+My Drive. An explicit `driveId` must match the resolved destination; it no longer
+serves only as a shared-drive support hint. Omitted parents and `root` resolve My
+Drive root. Missing/non-folder parents and mismatched drives fail before starting
+a resumable upload. The metadata lookup requests only folder MIME type and drive ID using native
+package HTTP/secret grants;
+caller upload denial prevents the session request and transfer.
+
+```sh
+node --test packages/google-drive/scripts/contract.test.mjs
+```

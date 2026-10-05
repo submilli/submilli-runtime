@@ -7,6 +7,7 @@ import VideoLibrary from './VideoLibrary.astro';
 const path = Astro.url.pathname.replace(/\/$/, '');
 const isLibraryPage = path === '/docs/videos';
 const isQuickstartPage = path === '/docs/quickstart';
+const isInstallPage = path === '/docs/install';
 const destinations = (film: (typeof films)[number]) => [film.canonicalPath, ...(film.contextualPaths ?? [])];
 const pageFilms = films.filter(film => destinations(film).some(destination => destination?.split('#')[0].replace(/\/$/, '') === path));
 const topFilms = pageFilms.filter(film => destinations(film).some(destination => destination?.replace(/\/$/, '') === path));
@@ -14,7 +15,7 @@ const rendered = pageFilms.length ? await Astro.slots.render('default') : '';
 const sections = rendered.split(/<!-- video:([a-z][a-z0-9-]*) -->/);
 ---
 <DefaultContent>
-  {isQuickstartPage && <AgentSetup />}
+  {(isQuickstartPage || isInstallPage) && <AgentSetup />}
   {isLibraryPage ? <><slot /><VideoLibrary /></> : pageFilms.length ? <>
     {topFilms.map(film => <VideoFigure film={film} />)}
     {sections.map((section, index) => {

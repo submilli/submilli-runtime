@@ -616,13 +616,15 @@ export function reply(input: ReplyInput): Message {
  * Send an existing draft. The draft is read first, so the check covers every address in its To, Cc and Bcc headers.
  * @param draftId ID of the draft to send.
  * @returns The sent message as stored by Gmail; throws `GmailError` `not_found` when the draft does not exist.
- * @capability submilli/gmail.sendDraft { recipients: string[] }
+ * @capability submilli/gmail.sendDraft { recipients: string[], from: string }
  */
 export function sendDraft(draftId: string): Message {
     const draft = fetchDraft(draftId, formatMetadata());
     if (draft === null) throw new GmailError("not_found", "Gmail draft was not found", 404);
-    const recipients = draftRecipients(sentHeaders(draft.message));
-    check("submilli/gmail.sendDraft", { recipients: recipients });
+    const headers = sentHeaders(draft.message);
+    const recipients = draftRecipients(headers);
+    const from = draftSender(headers);
+    check("submilli/gmail.sendDraft", { recipients: recipients, from: from });
     const response = post(API + "/drafts/send", { id: draftId }, authHeaders());
     requireOk(response);
     return messageFrom(response.json() as ApiMessage);
@@ -1070,6 +1072,21 @@ function sentHeaders(item: ApiMessage): Header[] {
     if (values === null) return headers;
     for (const header of values) headers.push({ name: header.name, value: header.value });
     return headers;
+}
+
+// From may contain a display name, but must resolve to exactly one mailbox.
+function draftSender(headers: Header[]): string | null {
+    let from: string | null = null;
+    let seen = false;
+    for (const header of headers) {
+        if (header.name.toLowerCase() !== "from") continue;
+        if (seen) throw unresolvedHeader("From");
+        seen = true;
+        const addresses = addressList(header.value, "From");
+        if (addresses.length !== 1) throw unresolvedHeader("From");
+        for (const address of addresses) from = address;
+    }
+    return from;
 }
 
 function unfold(value: string): string {

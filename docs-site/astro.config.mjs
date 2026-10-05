@@ -7,10 +7,12 @@ import { submilliDark, submilliLight } from "./src/code-themes.mjs";
 import { securityAside } from "./src/plugins/satteri-security-aside.mjs";
 import { agentDocs } from "./src/plugins/agent-docs.ts";
 
+import { legacyDocsRoutes } from "./src/lib/legacy-docs.ts";
+
 export default defineConfig({
   site: "https://submilli.ai",
   base: "/docs",
-  redirects: { "/concepts/execution-model": "/docs/why/" },
+  redirects: legacyDocsRoutes,
   // Match the URL prefix on static hosts that publish dist/ at the domain root.
   outDir: "./dist/docs",
   markdown: {

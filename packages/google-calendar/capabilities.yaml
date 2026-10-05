@@ -56,6 +56,10 @@ provides:
       type: string[]
     calendarId:
       type: string
+    notificationRecipients:
+      type: string[]
+    removedAttendees:
+      type: string[]
     sendUpdates:
       type: string
 requires:

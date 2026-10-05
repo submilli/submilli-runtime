@@ -1028,8 +1028,26 @@ impl ClassPlan {
                         })
                         .transpose()
                 };
+            let extends_error = ctx
+                .symbols
+                .class_struct_type_idx(&crate::mangle::prelude("Error"))
+                .is_some_and(|error_type| {
+                    ctx.symbols.ref_fits_slot(
+                        RefType {
+                            nullable: false,
+                            heap_type: HeapType::Concrete(class.struct_type_idx),
+                        },
+                        RefType {
+                            nullable: false,
+                            heap_type: HeapType::Concrete(error_type),
+                        },
+                    )
+                });
             let to_string = match user_method_thunk("toString")? {
                 Some(thunk) => thunk,
+                None if extends_error => {
+                    emit_error_slot_body(ctx.symbols, intrinsics, 0, intrinsics.to_string_fn)?
+                }
                 None => emit_class_to_string_body(intrinsics, string_vtable_global_idx)?,
             };
             code.function(&to_string);
@@ -1046,22 +1064,7 @@ impl ClassPlan {
                 ctx.symbols,
             )?);
             let field_count = wasm_u32(class.fields.len())?;
-            let identity_error = ctx
-                .symbols
-                .class_struct_type_idx(&crate::mangle::prelude("Error"))
-                .is_some_and(|error_type| {
-                    ctx.symbols.ref_fits_slot(
-                        RefType {
-                            nullable: false,
-                            heap_type: HeapType::Concrete(class.struct_type_idx),
-                        },
-                        RefType {
-                            nullable: false,
-                            heap_type: HeapType::Concrete(error_type),
-                        },
-                    )
-                });
-            if identity_error {
+            if extends_error {
                 let mut equals = Function::new([]);
                 equals.instruction(&Instruction::LocalGet(0));
                 equals.instruction(&Instruction::LocalGet(1));
@@ -1076,8 +1079,13 @@ impl ClassPlan {
                 None => emit_class_to_json_body(ctx.symbols)?,
             };
             code.function(&to_json);
-            if identity_error {
-                code.function(&emit_error_hash_body(ctx.symbols, intrinsics)?);
+            if extends_error {
+                code.function(&emit_error_slot_body(
+                    ctx.symbols,
+                    intrinsics,
+                    3,
+                    intrinsics.hash_fn,
+                )?);
             } else {
                 code.function(&emit_class_hash_body(field_count, intrinsics));
             }
@@ -2008,9 +2016,14 @@ fn stub_body() -> Function {
     f
 }
 
-fn emit_error_hash_body(
+/// An Error subclass's universal slot that forwards to the prelude `Error`
+/// vtable's body for the same slot: `toString` renders the `name` and
+/// `message` every subclass inherits, and `hash` uses identity.
+fn emit_error_slot_body(
     symbols: &SymbolTable,
     intrinsics: IntrinsicTypeIndices,
+    slot: u32,
+    slot_fn_type: u32,
 ) -> Result<Function, CompilerFailure> {
     let vtable = symbols
         .class_vtable_global_idx(&crate::mangle::prelude("Error"))
@@ -2020,9 +2033,9 @@ fn emit_error_hash_body(
     body.instruction(&Instruction::GlobalGet(vtable));
     body.instruction(&Instruction::StructGet {
         struct_type_index: intrinsics.vtable,
-        field_index: 3,
+        field_index: slot,
     });
-    body.instruction(&Instruction::CallRef(intrinsics.hash_fn));
+    body.instruction(&Instruction::CallRef(slot_fn_type));
     body.instruction(&Instruction::End);
     Ok(body)
 }
