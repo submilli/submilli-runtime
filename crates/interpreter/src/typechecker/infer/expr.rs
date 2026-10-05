@@ -5615,13 +5615,12 @@ impl Inferer<'_> {
                         .try_expr(elem_id)
                         .map_err(super::arena_failure)?
                         .span;
+                    let types_itself = self.types_itself(elem_id)?;
                     // A literal that will normalize takes a hint only from a running
                     // type of its own shape, which one with other fields can't match.
-                    let hint = if open_element_type
-                        && (self.types_itself(elem_id)?
-                            || normalization.is_some()
-                                && !has_running_shape(self.ast, elem_id, element_ty.as_ref())?)
-                    {
+                    let shape_differs = normalization.is_some()
+                        && !has_running_shape(self.ast, elem_id, element_ty.as_ref())?;
+                    let hint = if open_element_type && (types_itself || shape_differs) {
                         None
                     } else {
                         element_ty.as_ref().or(expected_elem)
@@ -5788,18 +5787,18 @@ impl Inferer<'_> {
         join: ElementJoin,
     ) -> Option<Type> {
         let fits = assignable(elem_ty, running, self.resolver());
-        // Object literals with the same fields join by type like any other
+        // Object literals of the same shape join by type like any other
         // elements; only differing fields need normalizing.
-        let normalization = join
+        let fields_differ = join
             .normalization
-            .filter(|_| !same_field_names(running, elem_ty));
-        if fits && normalization.is_none() {
+            .is_some_and(|nested_fields| !same_shape(running, elem_ty, nested_fields));
+        if fits && !fields_differ {
             return Some(running.clone());
         }
         // A later element every earlier one fits becomes the element type, as
         // tsc's best common type: `[(x) => x, (x, y) => x * y]` holds
         // two-parameter functions.
-        if join.widens && normalization.is_none() && assignable(running, elem_ty, self.resolver()) {
+        if join.widens && !fields_differ && assignable(running, elem_ty, self.resolver()) {
             return Some(elem_ty.widen_literal());
         }
         // Object literals with differing fields, or the same fields neither of
@@ -5827,9 +5826,10 @@ impl Inferer<'_> {
         )
     }
 
-    /// Whether an expression needs a hint to be typed: an empty array, a function
-    /// with an unannotated parameter, a call that may infer from its return, or
-    /// an expression holding one. Unlisted kinds count as needing one.
+    /// Whether an expression needs a hint to be typed. Leaves that type themselves
+    /// need none, an expression built from others needs one when a part does, and
+    /// any other kind, such as a call that may infer from its return type, is
+    /// assumed to.
     fn needs_hint(&self, expr: ExprId) -> Result<bool, CompilerFailure> {
         let id = peel_parens(self.ast, expr)?;
         Ok(
@@ -10353,7 +10353,7 @@ fn fresh_object_fields(
 }
 
 /// Whether the object literal `expr` names exactly the fields of `running`, a
-/// single object type.
+/// single object type, and so does each object literal it holds directly.
 fn has_running_shape(
     ast: &crate::Ast,
     expr: ExprId,
@@ -10369,7 +10369,19 @@ fn has_running_shape(
         .iter()
         .map(|field| &field.name.name)
         .collect::<BTreeSet<_>>();
-    Ok(literal_names == fields.keys().collect())
+    if literal_names != fields.keys().collect() {
+        return Ok(false);
+    }
+    for field in literal_fields {
+        let running_field = fields.get(&field.name.name).map(|field| &field.ty);
+        if matches!(running_field, Some(Type::Object { .. }))
+            && fresh_object_fields(ast, field.value)?.is_some()
+            && !has_running_shape(ast, field.value, running_field)?
+        {
+            return Ok(false);
+        }
+    }
+    Ok(true)
 }
 
 /// Whether `expr` evaluates to a fresh object literal: one, or a conditional
@@ -10410,6 +10422,29 @@ fn field_names(ty: &Type) -> BTreeSet<&String> {
 
 fn same_field_names(left: &Type, right: &Type) -> bool {
     field_names(left) == field_names(right)
+}
+
+/// Whether `left` and `right` name the same fields, and the same fields within
+/// each of `nested_fields`, the ones that normalize one level down.
+fn same_shape(left: &Type, right: &Type, nested_fields: &BTreeSet<String>) -> bool {
+    same_field_names(left, right)
+        && nested_fields
+            .iter()
+            .all(|name| nested_field_names(left, name) == nested_field_names(right, name))
+}
+
+/// The field names of the objects field `name` holds across `ty`'s members.
+fn nested_field_names<'a>(ty: &'a Type, name: &str) -> BTreeSet<&'a String> {
+    object_members(ty)
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|member| match member {
+            Type::Object { fields, .. } => fields.get(name),
+            _ => None,
+        })
+        .filter(|field| !is_added_missing_field(field))
+        .flat_map(|field| field_names(&field.ty))
+        .collect()
 }
 
 /// tsc's normalized union of object literal types: each member gains, as an

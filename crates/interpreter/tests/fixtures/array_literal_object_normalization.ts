@@ -48,4 +48,12 @@ function main(): void {
   const missing: { foo?: string } | null = flag ? opts : null;
   const fallback = missing ?? {};
   assert(show(fallback.foo ?? null) === "null", "`??` joins `{}` too");
+
+  const wider = [{ p: { x: 1, y: 2 } }, { p: { x: 3 } }];
+  assert(wider.map((v) => show(v.p.y ?? null)).join(",") === "2,null", "nested fields differ under the same top-level fields");
+  const narrower = [{ p: { a: 1 }, q: 1 }, { p: { a: 2, b: 5 }, q: 2 }];
+  assert(narrower.map((v) => show(v.p.b ?? null)).join(",") === "null,5", "a later nested literal adds a field");
+
+  const crossed = [{ k: 1, s: "a" }, { k: "b", s: 2 }];
+  assert(JSON.stringify(crossed) === '[{"k":1,"s":"a"},{"k":"b","s":2}]', "same fields, neither element fits the other");
 }
