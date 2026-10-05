@@ -1,0 +1,14 @@
+# The workflow supplies the absolute workspace path for root_dir and remap.
+# Keeping the behavior defaults here makes local runs and CI use the same rules.
+include_fragments = "full"
+extensions = ["html"]
+index_files = ["index.html"]
+fallback_extensions = ["html"]
+no_progress = true
+max_retries = 2
+timeout = 20
+max_concurrency = 8
+host_concurrency = 2
+# These two account-setup forms require a signed-in GitHub session.
+# Repository and source links remain checked.
+exclude = ['^https://github\.com/settings/(applications/new|personal-access-tokens/new)(?:[?#].*)?$']

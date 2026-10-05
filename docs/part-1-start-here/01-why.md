@@ -7,7 +7,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "114768d644f033e39db84d8820ebd77529c50e2d3759ef2a3d399ea7b863688d"
+  contentHash: "41a9075e1a080eb909bff2c9d6e1db1ff6668e1d006f7e6384518852c14a1fff"
   confirmedAt: "2026-10-05T10:59:51.492Z"
 ---
 
@@ -33,7 +33,7 @@ Programmatic tool calling is an emerging pattern across the industry, and its im
 serves their 2,500-endpoint API to the model in about 1,000 tokens. As tool
 schemas, the same API takes 1.17 million tokens.
 * [OpenAI](https://developers.openai.com/api/docs/guides/latest-model#programmatic-tool-calling)
-and [LangChain](https://docs.langchain.com/oss/javascript/deepagents/interpreters#programmatic-tool-calling) are aligned.
+and [LangChain](https://docs.langchain.com/oss/javascript/deepagents/interpreters#programmatic-tool-calling-ptc) are aligned.
 
 It has become clear that agents should write code. The question that stems from it, is where should this code run, and what should it be allowed to do?
 
