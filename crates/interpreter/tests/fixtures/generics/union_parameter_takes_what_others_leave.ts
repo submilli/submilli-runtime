@@ -93,6 +93,14 @@ function annotatedEach<T>(use: (x: T | Box<number>, i: number) => number, value:
   return value;
 }
 
+function eitherOf<T>(first: T | Box<number>, second: T | Box<number>): T | null {
+  return first instanceof Box || second instanceof Box ? null : first;
+}
+
+function textOrFlagBox(flag: boolean): Box<string> | Box<boolean> {
+  return flag ? new Box("s") : new Box(true);
+}
+
 function listOrNumbers<T>(value: T | number[]): T | null {
   return null;
 }
@@ -153,6 +161,11 @@ function main(): void {
 
   const viaAnnotation = annotatedEach((x: Box<string> | Box<number | string>, i) => i, new Box("s"));
   assert(viaAnnotation.value === "s", "an annotated callback parameter wider than its slot");
+
+  const narrowerLater = eitherOf(textOrFlagBox(true), new Box(true));
+  const widerLater = eitherOf(new Box(true), textOrFlagBox(false));
+  const bothBoxes: Box<string> | Box<boolean> | null = narrowerLater ?? widerLater;
+  assert(bothBoxes === null, "two union slots take the wider of their arguments");
 
   const inferredList = listOrNumbers(lists(true));
   const fromList: string[] | null = inferredList;
