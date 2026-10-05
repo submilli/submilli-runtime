@@ -76,6 +76,18 @@ function textBox(flag: boolean): Box<string> | null {
   return flag ? new Box("s") : null;
 }
 
+function boxedOrNumber<T>(value: T): T | Box<number> {
+  return value;
+}
+
+function tagged<T>(holder: { value: T | string | number; list: T[]; last: T; use: (each: T) => number }): T[] {
+  return holder.list;
+}
+
+function textsAndCounts(): (string | number)[] {
+  return ["a", 1];
+}
+
 function listOrNumbers<T>(value: T | number[]): T | null {
   return null;
 }
@@ -126,6 +138,12 @@ function main(): void {
   const boxes: (Box<string> | null)[] = inferredBoxes;
   assert(viaField === 1 && viaList === 2, "a callback beside the union");
   assert(boxes.length === 0, "a closely matched member the fallback takes");
+
+  const expectedWider: Box<string> | Box<number | boolean> = boxedOrNumber(new Box("s"));
+  const label = "x";
+  const inferredTagged = tagged({ value: textOrCount(1), list: textsAndCounts(), last: label, use: (each) => 1 });
+  const taggedList: (string | number)[] = inferredTagged;
+  assert(expectedWider instanceof Box && taggedList.length === 2, "an expected result and a field binding the fallback's type");
 
   const inferredList = listOrNumbers(lists(true));
   const fromList: string[] | null = inferredList;

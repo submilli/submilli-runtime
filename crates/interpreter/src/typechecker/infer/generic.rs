@@ -964,10 +964,14 @@ impl Inferer<'_> {
     /// Bind type parameters from the type a call's result is expected to have,
     /// before its arguments are inferred, as bindings an argument may still
     /// replace (see [`TypeParamSubstitution::mark_from_expected_result`]).
+    ///
+    /// The expected type is no argument, so the union members it closely
+    /// matches are not checked.
     fn bind_from_expected_result(&self, sub: &mut TypeParamSubstitution, ret: &Type, want: &Type) {
         let before = sub.clone();
         self.bind_from_expected_type(sub, ret, want);
         sub.mark_from_expected_result(&before);
+        sub.forget_close_matches_after(before.close_match_count());
     }
 
     /// Bind type parameters by unifying the result type `ret` with `want`.
@@ -1210,8 +1214,12 @@ impl Inferer<'_> {
             let _ = inference
                 .sub
                 .unify_argument(&field.ty, value_ty, self.resolver());
-            let echoes = inference.sub.unbind_fallback_echoes(&before);
-            inference.fallback_echoes.extend(echoes);
+            // Only a callback field's parameters took the fallback from the
+            // hint; another field binding the same type binds it for real.
+            if function_part(&field.ty).is_some() {
+                let echoes = inference.sub.unbind_fallback_echoes(&before);
+                inference.fallback_echoes.extend(echoes);
+            }
         }
         self.object_argument_inference = Some(inference);
     }
