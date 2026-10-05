@@ -1078,7 +1078,7 @@ impl<'a> Inferer<'a> {
         for member in narrowing::union_members(path_ty) {
             for value_member in &value_members {
                 if super::assignable(member, value_member, self.resolver())
-                    || may_share_an_object(member, value_member)
+                    || self.may_share_an_object(member, value_member)
                 {
                     shared.push(member.clone());
                 } else if super::assignable(value_member, member, self.resolver()) {
@@ -1087,6 +1087,18 @@ impl<'a> Inferer<'a> {
             }
         }
         Type::union(shared)
+    }
+
+    /// [`may_share_an_object`], unless a property both shapes require can't
+    /// hold the same value in each (`kind: "a"` against `kind: "b"`).
+    fn may_share_an_object(&self, left: &Type, right: &Type) -> bool {
+        if !may_share_an_object(left, right) {
+            return false;
+        }
+        match (self.member_shape(left), self.member_shape(right)) {
+            (Some(left), Some(right)) => !have_disjoint_unit_property(&left, &right),
+            _ => true,
+        }
     }
 
     /// Narrows the path `path_id` compared with `literal`.
@@ -1470,7 +1482,7 @@ impl<'a> Inferer<'a> {
                 }
                 continue;
             };
-            if super::assignable(literal_ty, &field_ty, self.resolver()) {
+            if self.field_may_hold(&field_ty, literal_ty) {
                 equal.push(member.clone());
             }
             if field_ty.peel() != literal_ty {
@@ -1478,6 +1490,23 @@ impl<'a> Inferer<'a> {
             }
         }
         Some((equal, unequal))
+    }
+
+    /// Whether a discriminant field typed `field_ty` can hold `literal_ty`'s
+    /// value: an enum holds the literals of its members' values, which is the
+    /// type a `case K.A` label has.
+    fn field_may_hold(&self, field_ty: &Type, literal_ty: &Type) -> bool {
+        narrowing::union_members(field_ty)
+            .into_iter()
+            .any(|member| {
+                super::assignable(literal_ty, member, self.resolver())
+                    || super::comparable::enum_admits_literal(
+                        member.peel(),
+                        literal_ty,
+                        self.resolver(),
+                    )
+                    .unwrap_or(false)
+            })
     }
 
     /// Each member's `key` type, or None for a `null` member, when `key` is a
@@ -2416,12 +2445,48 @@ fn is_unreachable_env(env: &narrowing::NarrowEnv) -> bool {
     })
 }
 
+/// Whether a property both shapes require holds unit values in each and
+/// none in common, as `kind: "a"` and `kind: "b"` do.
+fn have_disjoint_unit_property(
+    left: &std::collections::BTreeMap<String, crate::types::ObjectField>,
+    right: &std::collections::BTreeMap<String, crate::types::ObjectField>,
+) -> bool {
+    left.iter().any(|(key, left_field)| {
+        let Some(right_field) = right.get(key) else {
+            return false;
+        };
+        if left_field.optional || right_field.optional {
+            return false;
+        }
+        let (Some(left_values), Some(right_values)) = (
+            unit_values(&left_field.read_ty()),
+            unit_values(&right_field.read_ty()),
+        ) else {
+            return false;
+        };
+        left_values.is_disjoint(&right_values)
+    })
+}
+
+/// The values a type made only of literals and `null` holds; `None` stands
+/// for `null`.
+fn unit_values(ty: &Type) -> Option<std::collections::BTreeSet<Option<narrowing::LiteralValue>>> {
+    narrowing::union_members(ty)
+        .into_iter()
+        .map(|member| match member.peel() {
+            Type::Null => Some(None),
+            Type::Boolean => None,
+            other => narrowing::unit_literal_value(other).map(Some),
+        })
+        .collect()
+}
+
 /// Whether one object can have both types though neither is assignable to the
 /// other: structural types overlap (`{ a: number }` and `{ b: number }` both
 /// hold `{ a: 1, b: 2 }`). Two classes can't, since an instance has one class
 /// and assignability already covers a subclass.
 fn may_share_an_object(left: &Type, right: &Type) -> bool {
-    let is_object = |ty: &Type| {
+    let is_non_primitive = |ty: &Type| {
         !matches!(
             ty.peel(),
             Type::Null
@@ -2435,7 +2500,7 @@ fn may_share_an_object(left: &Type, right: &Type) -> bool {
         )
     };
     let is_class = |ty: &Type| matches!(ty.peel(), Type::ClassRef { .. });
-    is_object(left) && is_object(right) && !(is_class(left) && is_class(right))
+    is_non_primitive(left) && is_non_primitive(right) && !(is_class(left) && is_class(right))
 }
 
 /// Adds the views of `extra` on paths `env` doesn't narrow.

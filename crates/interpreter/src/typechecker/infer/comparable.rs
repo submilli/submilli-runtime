@@ -433,7 +433,11 @@ fn enum_base(ty: &Type) -> &Type {
 /// Whether `enum_ty` has a member whose value is `literal`, when `enum_ty` is an
 /// enum and `literal` a literal of its kind: `Color` and `0` share no value when
 /// no member of `Color` is `0`.
-fn enum_admits_literal(enum_ty: &Type, literal: &Type, types: TypeResolver) -> Option<bool> {
+pub(super) fn enum_admits_literal(
+    enum_ty: &Type,
+    literal: &Type,
+    types: TypeResolver,
+) -> Option<bool> {
     match (enum_ty, literal) {
         (Type::NumberEnum { mangled, name, .. }, Type::NumberLiteral(value)) => {
             match &types.lookup(mangled, name)?.kind {

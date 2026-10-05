@@ -4,7 +4,10 @@ use crate::compiler_error::CompilerFailure;
 
 use crate::{ClassMember, StmtKind, TypedStmt, TypedStmtKind, ValueKind};
 
+use std::collections::BTreeSet;
+
 use super::Inferer;
+use super::narrowing::BindingId;
 
 impl<'a> Inferer<'a> {
     pub(super) fn infer_global_variables(&mut self) -> Result<(), CompilerFailure> {
@@ -181,18 +184,23 @@ impl<'a> Inferer<'a> {
     /// and only for a variable no function writes: a statement between may
     /// call that function.
     fn keep_only_global_narrowings(&mut self) {
-        let written: std::collections::BTreeSet<crate::MangledName> = self
-            .top_symbols
+        let written = self.function_written_global_names();
+        let is_unwritten_global = |path: &super::narrowing::ReferencePath| {
+            path.chain.is_empty()
+                && matches!(&path.root, BindingId::Global(mangled) if !written.contains(mangled))
+        };
+        if let Some(env) = self.narrow_scopes.last_mut() {
+            env.retain(|path, _| is_unwritten_global(path));
+        }
+    }
+
+    /// The mangled names of the module variables some function assigns.
+    fn function_written_global_names(&self) -> BTreeSet<crate::MangledName> {
+        self.top_symbols
             .iter()
             .filter(|(name, _)| self.function_written_globals.contains(*name))
             .map(|(_, entry)| entry.mangled_name.clone())
-            .collect();
-        if let Some(env) = self.narrow_scopes.last_mut() {
-            env.retain(|path, _| {
-                path.chain.is_empty()
-                    && matches!(&path.root, super::narrowing::BindingId::Global(mangled) if !written.contains(mangled))
-            });
-        }
+            .collect()
     }
 
     /// One module global per static field, keyed `Class#static#name`. Fields
