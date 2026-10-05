@@ -56,3 +56,85 @@ function main(): string {
     return lines.join("\n");
 }
 ```
+
+## Topic research in the last 30 days
+
+Broad discovery requires `github.com/issues.searchAcrossRepositories`. Dates below
+are inclusive UTC calendar days; check both partial-result flags before treating
+the page as exhaustive.
+
+```ts
+import github from "@submilli/github";
+
+function main(): string {
+    const now = Temporal.Now.instant();
+    const page = github.searchIssuesAcrossRepositories("wasmgc is:public", {
+        createdSince: now.subtract({ hours: 24 * 30 }).toString().slice(0, 10),
+        createdUntil: now.toString().slice(0, 10),
+        sort: "updated", limit: 20,
+    });
+    const lines: string[] = [];
+    for (const hit of page.items) {
+        lines.push(hit.repository.owner + "/" + hit.repository.name + " " + hit.issue.htmlUrl);
+    }
+    if (page.isCapped || page.incompleteResults) lines.push("Partial results: narrow the query.");
+    return lines.join("\n");
+}
+```
+
+## A person's pull requests in a date window
+
+Summary search costs one request per page. Enrich only selected hits; full detail
+and issue-style reaction reads need the corresponding repository grants.
+
+```ts
+import github from "@submilli/github";
+
+function main(): string {
+    const page = github.searchPullRequestsAcrossRepositories("is:public", {
+        author: "dtolnay", createdSince: "2026-01-01", createdUntil: "2026-01-31",
+        limit: 10,
+    });
+    if (page.items.length === 0) return "No matching pull requests.";
+    const selected = page.items[0];
+    const full = github.getPullRequest(selected.repository, selected.pullRequest.number);
+    if (full === null) return "The selected pull request is no longer available.";
+    const reactions = github.getPullRequestReactions(selected.repository, selected.pullRequest.number);
+    let engagement = "reactions unavailable";
+    if (reactions !== null && reactions.totalCount !== null) {
+        engagement = reactions.totalCount.toString() + " reactions";
+    }
+    return full.htmlUrl + " " + full.additions.toString() + " additions; " + engagement;
+}
+```
+
+## Rank a topic page by engagement
+
+Ranking applies to this page only; unknown reactions are displayed separately
+from confirmed zero. Continue with `nextPageToken` to collect additional pages,
+and partition queries when `isCapped` is true.
+
+```ts
+import github from "@submilli/github";
+
+function main(): string {
+    const page = github.searchIssuesAcrossRepositories("wasmgc is:public", { limit: 30 });
+    const ranked = page.items.sort((a, b) => {
+        const aReactions = a.issue.reactions == null ? 0 : (a.issue.reactions.totalCount ?? 0);
+        const bReactions = b.issue.reactions == null ? 0 : (b.issue.reactions.totalCount ?? 0);
+        return (b.issue.comments + bReactions) - (a.issue.comments + aReactions);
+    });
+    const lines: string[] = [];
+    for (const hit of ranked) {
+        const reactions = hit.issue.reactions == null || hit.issue.reactions.totalCount === null
+            ? "unknown" : hit.issue.reactions.totalCount.toString();
+        lines.push(hit.issue.htmlUrl + " comments=" + hit.issue.comments.toString() + " reactions=" + reactions);
+    }
+    return lines.join("\n");
+}
+```
+
+Repository owners and names are lowercase in policy and requests. Update any
+mixed-case owner/repo literals in blueprints. Commit listing also exposes `sha`
+as `ref` and its path as `path`; these values retain their case. Ref rules should
+allow specific values because branches, tags and SHAs can name the same history.

@@ -127,3 +127,16 @@ SUBMILLI_HOME="$gmail_test_home" cargo run -p submilli -- run packages/gmail/tes
 These are separate commands because `build test` uses an unrestricted policy;
 its ordinary unit tests cannot prove a `main` caller is constrained.
 `cargo test -p submilli --test package_policy` runs them all.
+
+## Stored-draft sender policy
+
+`sendDraft` checks `from` resolved from the stored From header as well as all To,
+Cc and Bcc recipients. Display names are parsed, mailbox case and trailing domain
+dots are normalized, and duplicate or ambiguous From headers are refused. Missing
+From is null, meaning Gmail chooses the authenticated account's default sender.
+An allow rule naming an alias therefore rejects a missing sender. Metadata is
+read before the send check; denial prevents the send request.
+
+```sh
+node --test packages/gmail/scripts/contract.test.mjs
+```
