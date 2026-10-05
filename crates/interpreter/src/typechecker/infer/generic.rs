@@ -1414,7 +1414,7 @@ impl Inferer<'_> {
             && super::assignable(&arg_ty, &hint, self.resolver());
         if arguments.literal_types.widens(param_ty)
             && !fits_binding
-            && !self.fits_concrete_member_beside_fallback(sub, param_ty, &arg_ty)
+            && !self.fits_beside_fallbacks(sub, param_ty, &arg_ty)
         {
             let widened = self.widen_fresh_literals(typed_id, &arg_ty)?;
             return Ok((typed_id, widened));
@@ -1422,30 +1422,19 @@ impl Inferer<'_> {
         Ok((typed_id, arg_ty))
     }
 
-    /// Whether `arg_ty` fits a member of the union `param_ty` that names no
-    /// type parameter while a type parameter in it has a whole-union
-    /// fallback: `"x"` for `T | "x"` then goes to that member (see
-    /// `Unifier::unify_with_member_beside_fallback`), as tsc matches it before
-    /// widening, and must not bind the type parameter widened.
-    fn fits_concrete_member_beside_fallback(
+    /// Whether `arg_ty` fits `param_ty` without the type parameters that
+    /// have a whole-union fallback: `"x"` for `T | "x"` then goes to the
+    /// other members (see
+    /// `Unifier::unify_with_member_beside_fallback`), as tsc matches it
+    /// before widening, and must not bind the type parameter widened.
+    fn fits_beside_fallbacks(
         &self,
         sub: &TypeParamSubstitution,
         param_ty: &Type,
         arg_ty: &Type,
     ) -> bool {
-        let Type::Union(members) = param_ty.peel() else {
-            return false;
-        };
-        let has_fallback = top_level_type_params(param_ty)
-            .iter()
-            .any(|name| sub.has_whole_union_fallback(name));
-        if !has_fallback {
-            return false;
-        }
-        members.iter().any(|member| {
-            let names_no_type_param = !super::expr::mentions_type_var(member, &|_| true);
-            names_no_type_param && super::assignable(arg_ty, member, self.resolver())
-        })
+        sub.without_fallback_type_params(param_ty, &self.type_limits)
+            .is_some_and(|concrete| super::assignable(arg_ty, &concrete, self.resolver()))
     }
 
     /// The hint for an object or array literal argument, with each data-only

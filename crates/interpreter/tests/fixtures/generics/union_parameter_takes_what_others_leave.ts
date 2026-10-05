@@ -101,6 +101,10 @@ function boxOrMark<T>(first: T | Box<number>, mark: T | "x"): T[] {
   return [];
 }
 
+function boxOrOther<T, U>(first: T | Box<number>, other: T | U): T[] {
+  return [];
+}
+
 function textOrFlagBox(flag: boolean): Box<string> | Box<boolean> {
   return flag ? new Box("s") : new Box(true);
 }
@@ -178,6 +182,10 @@ function main(): void {
   const marked = boxOrMark(new Box(true), "x");
   marked.push(new Box(false));
   assert(marked.length === 1, "a literal its literal member takes leaves the fallback");
+
+  const others = boxOrOther(new Box(true), new Box("s"));
+  others.push(new Box(false));
+  assert(others.length === 1, "another type parameter takes a later argument beside the fallback");
 
   const inferredList = listOrNumbers(lists(true));
   const fromList: string[] | null = inferredList;
