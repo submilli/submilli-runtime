@@ -3141,6 +3141,11 @@ impl Inferer<'_> {
             // Tuples are `$Array` at runtime, so the array desugar reads them
             // directly; the positions' union is what each element can be.
             Type::Tuple(elements) => Some((Type::union(elements.clone()), crate::ForOfKind::Array)),
+            // A union of arrays and tuples is one `$Array` at runtime too.
+            Type::Union(_) => match iter_ty.array_like_union_view()? {
+                Type::Array(element) => Some((*element, crate::ForOfKind::Array)),
+                _ => None,
+            },
             // Strings, literal ones included, iterate by code point through
             // `String#iterator`.
             ty if ty.is_string_shaped() => Some((Type::String, crate::ForOfKind::Iterable)),

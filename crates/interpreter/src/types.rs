@@ -456,6 +456,50 @@ impl Type {
         matches!(self.peel_preserving_readonly(), Type::Readonly(_))
     }
 
+    /// The element type of a rest parameter's array: `T` for `T[]` or
+    /// `readonly T[]`. Not peeled through aliases, since rest lowering matches the
+    /// parameter type as written.
+    pub fn rest_element(&self) -> Option<&Type> {
+        match self {
+            Type::Array(element) => Some(element),
+            Type::Readonly(inner) => match inner.as_ref() {
+                Type::Array(element) => Some(element),
+                _ => None,
+            },
+            _ => None,
+        }
+    }
+
+    /// A rest parameter's type with any `readonly` removed. Each call packs a
+    /// fresh array for the rest, so whether the callee may write to it is the
+    /// callee's own concern: two function types relate on their rest elements,
+    /// as in tsc.
+    pub fn rest_array_ignoring_readonly(&self) -> &Type {
+        match self {
+            Type::Readonly(inner) if matches!(inner.as_ref(), Type::Array(_)) => inner,
+            _ => self,
+        }
+    }
+
+    /// A union of arrays and tuples read as one array: they share the `$Array`
+    /// representation, so the union's element is any member's element. `None` for
+    /// any other type. Only reads may go through this view; writing a member's
+    /// element through the joined type could store another member's element type.
+    pub fn array_like_union_view(&self) -> Option<Type> {
+        let Type::Union(members) = self.peel() else {
+            return None;
+        };
+        let elements = members
+            .iter()
+            .map(|member| match member.peel() {
+                Type::Array(element) => Some((**element).clone()),
+                Type::Tuple(positions) => Some(Type::union(positions.clone())),
+                _ => None,
+            })
+            .collect::<Option<Vec<_>>>()?;
+        Some(Type::Array(Box::new(Type::union(elements))))
+    }
+
     /// Whether this type is `void`, through any depth of alias.
     ///
     /// `void` is the one type with no value slot at all, so a gate that tests

@@ -3314,7 +3314,7 @@ impl<'a> Parser<'a> {
                 }
                 self.advance();
                 let ty = self.parse_type_annotation()?;
-                if rest && !matches!(ty.kind, crate::ast::TypeAnnotationKind::Array(_)) {
+                if rest && !is_rest_array_annotation(&ty) {
                     self.error_at(ty.span, "rest parameter type must be an array");
                     return None;
                 }
@@ -5543,6 +5543,16 @@ fn parse_arena_result<T>(
             fatal.get_or_insert_with(|| error.into_compiler_failure(CompilerStage::Parse));
             None
         }
+    }
+}
+
+/// Whether a rest parameter's annotation names an array: `T[]`, or `readonly T[]`.
+fn is_rest_array_annotation(ty: &crate::TypeAnnotation) -> bool {
+    use crate::ast::TypeAnnotationKind;
+    match &ty.kind {
+        TypeAnnotationKind::Array(_) => true,
+        TypeAnnotationKind::Readonly(inner) => matches!(inner.kind, TypeAnnotationKind::Array(_)),
+        _ => false,
     }
 }
 

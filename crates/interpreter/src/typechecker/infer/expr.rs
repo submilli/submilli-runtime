@@ -1670,6 +1670,18 @@ impl Inferer<'_> {
             );
             return true;
         }
+        if recv_ty.array_like_union_view().is_some() {
+            self.error_with_help(
+                name.span,
+                format!("cannot call `{}` on `{}`", name.name, recv_ty),
+                vec![format!(
+                    "`{}` would write one member's element type into an array that may be \
+                     another member; narrow to one member first, e.g. with `typeof` on an element",
+                    name.name
+                )],
+            );
+            return true;
+        }
         if matches!(recv_ty.peel(), Type::Tuple(_)) {
             self.error_with_help(
                 name.span,
@@ -2331,10 +2343,8 @@ impl Inferer<'_> {
             param_types
                 .as_ref()
                 .and_then(|tys| tys.get(fixed_count))
-                .and_then(|t| match t {
-                    Type::Array(elem) => Some((**elem).clone()),
-                    _ => None,
-                })
+                .and_then(Type::rest_element)
+                .cloned()
         } else {
             None
         };
@@ -3833,10 +3843,10 @@ impl Inferer<'_> {
         }
 
         let rest_elem_ty: Option<Type> = if has_rest {
-            params.get(fixed_count).and_then(|p| match &p.ty {
-                Type::Array(elem) => Some((**elem).clone()),
-                _ => None,
-            })
+            params
+                .get(fixed_count)
+                .and_then(|p| p.ty.rest_element())
+                .cloned()
         } else {
             None
         };
@@ -6381,68 +6391,15 @@ impl Inferer<'_> {
             // form at all (`arr[i] = v` is rejected by the parser as
             // "invalid assignment target"), so no separate check
             // needed here.
-            // tuple-union receiver. Every member of the
-            // union must be a `Type::Tuple` (after peeling), the
-            // literal index must be in range for every variant, and
-            // the result type is the union of each variant's element
-            // at that position. Cross-arity unions where the index
-            // is out of bounds for some variants stay rejected
-            // (would need a runtime length check).
-            Type::Union(members) if members.iter().all(|m| matches!(m.peel(), Type::Tuple(_))) => {
-                let index_expr = self.ast.try_expr(index).map_err(super::arena_failure)?;
-                let literal_idx: Option<usize> = match &index_expr.kind {
-                    ExprKind::Number(n) if n.is_finite() && n.fract() == 0.0 && *n >= 0.0 => {
-                        Some(*n as usize)
-                    }
-                    _ => None,
-                };
-                if let Some(idx) = literal_idx {
-                    let mut elems: Vec<Type> = Vec::with_capacity(members.len());
-                    let mut oob = false;
-                    let mut min_arity = usize::MAX;
-                    for m in members {
-                        if let Type::Tuple(es) = m.peel() {
-                            min_arity = min_arity.min(es.len());
-                            if let Some(t) = es.get(idx) {
-                                elems.push(t.clone());
-                            } else {
-                                oob = true;
-                                break;
-                            }
-                        }
-                    }
-                    if oob {
-                        if let Some(origin) = &pattern_origin {
-                            self.error(
-                                origin.pattern_span,
-                                format!(
-                                    "destructuring pattern has {} element{}, but right-hand side tuple union has variants with only {} element{}",
-                                    origin.slot_arity,
-                                    if origin.slot_arity == 1 { "" } else { "s" },
-                                    min_arity,
-                                    if min_arity == 1 { "" } else { "s" },
-                                ),
-                            );
-                        } else {
-                            self.error(
-                                index_expr.span,
-                                format!(
-                                    "tuple index {idx} out of bounds for some variants of the tuple union (smallest variant has {min_arity} element{})",
-                                    if min_arity == 1 { "" } else { "s" },
-                                ),
-                            );
-                        }
-                        Type::Error
-                    } else {
-                        Type::union(elems)
-                    }
-                } else {
-                    self.error(
-                        index_expr.span,
-                        "tuple index must be a non-negative integer literal".to_string(),
-                    );
-                    Type::Error
-                }
+            // A union of arrays and tuples is one `$Array` at runtime, so a read
+            // takes each member's element at the index and joins them. A tuple
+            // member needs a literal index in its range, as a lone tuple does.
+            Type::Union(members)
+                if members
+                    .iter()
+                    .all(|m| matches!(m.peel(), Type::Tuple(_) | Type::Array(_))) =>
+            {
+                self.array_like_union_element(members, index, pattern_origin.as_ref())?
             }
             Type::Uint8Array => Type::Number,
             Type::Error => Type::Error,
@@ -6546,6 +6503,80 @@ impl Inferer<'_> {
 
     /// Infer data fields before method bodies so receiver types do not depend on
     /// member order. Cached expressions still execute in their original source order.
+    /// The element a read at `index` gives from a union of arrays and tuples: the
+    /// union of each member's element there. An array member gives its element at
+    /// any index; a tuple member needs a non-negative integer literal within its
+    /// arity, since its positions have distinct types and no runtime length check
+    /// guards a shorter variant.
+    fn array_like_union_element(
+        &mut self,
+        members: &[Type],
+        index: ExprId,
+        pattern_origin: Option<&crate::PatternOrigin>,
+    ) -> Result<Type, CompilerFailure> {
+        let index_expr = self.ast.try_expr(index).map_err(super::arena_failure)?;
+        let index_span = index_expr.span;
+        let literal_idx: Option<usize> = match &index_expr.kind {
+            ExprKind::Number(n) if n.is_finite() && n.fract() == 0.0 && *n >= 0.0 => {
+                Some(*n as usize)
+            }
+            _ => None,
+        };
+        let mut elements: Vec<Type> = Vec::with_capacity(members.len());
+        let mut min_tuple_arity: Option<usize> = None;
+        let mut out_of_bounds = false;
+        for member in members {
+            match member.peel() {
+                Type::Array(element) => elements.push((**element).clone()),
+                Type::Tuple(positions) => {
+                    min_tuple_arity =
+                        Some(min_tuple_arity.map_or(positions.len(), |m| m.min(positions.len())));
+                    match literal_idx.and_then(|idx| positions.get(idx)) {
+                        Some(element) => elements.push(element.clone()),
+                        None => out_of_bounds = true,
+                    }
+                }
+                _ => {
+                    return Err(super::inference_failure(
+                        "array-like union member is neither an array nor a tuple",
+                    ));
+                }
+            }
+        }
+        let Some(min_arity) = min_tuple_arity else {
+            return Ok(Type::union(elements));
+        };
+        let Some(idx) = literal_idx else {
+            self.error(
+                index_span,
+                "tuple index must be a non-negative integer literal".to_string(),
+            );
+            return Ok(Type::Error);
+        };
+        if !out_of_bounds {
+            return Ok(Type::union(elements));
+        }
+        let plural = if min_arity == 1 { "" } else { "s" };
+        if let Some(origin) = pattern_origin {
+            let slot_plural = if origin.slot_arity == 1 { "" } else { "s" };
+            self.error(
+                origin.pattern_span,
+                format!(
+                    "destructuring pattern has {} element{slot_plural}, but right-hand side tuple union has variants with only {min_arity} element{plural}",
+                    origin.slot_arity,
+                ),
+            );
+        } else {
+            self.error(
+                index_span,
+                format!(
+                    "tuple index {idx} out of bounds for some variants of the tuple union (smallest variant has {min_arity} element{plural})",
+                ),
+            );
+        }
+        Ok(Type::Error)
+    }
+
     pub(super) fn infer_object_receiver(
         &mut self,
         members: &[crate::ObjectLiteralMember],
@@ -7043,8 +7074,16 @@ impl Inferer<'_> {
                     // source of truth for the closure body, and the
                     // call site's `TypeParamSubstitution::unify`
                     // walks the resulting closure type to bind T/U.
-                    if let Some(h) = hp.get(i)
-                        && !assignable(h, t, self.resolver())
+                    let (hint_param, own_param) = if p.rest {
+                        (
+                            hp.get(i).map(Type::rest_array_ignoring_readonly),
+                            t.rest_array_ignoring_readonly(),
+                        )
+                    } else {
+                        (hp.get(i), t)
+                    };
+                    if let Some(h) = hint_param
+                        && !assignable(h, own_param, self.resolver())
                     {
                         self.error(
                             p.name.span,

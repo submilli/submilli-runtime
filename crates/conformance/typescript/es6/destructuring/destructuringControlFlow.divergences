@@ -1,18 +1,13 @@
-types: 32 of 67 tsc entries compared, 2 differ
+types: 47 of 67 tsc entries compared, 3 differ
 
 line 6: {}
   tsc:  {}
   ours: { a?: string }
 
+line 17: obj[0] && obj[1]
+  tsc:  string | 0 | null
+  ours: number | string | null
+
 line 26: obj.a && obj.b
   tsc:  string | 0 | undefined
   ours: number | string | null
-
-errors:
-line 13: ours: cannot index into non-array type `null[] | [number, string]` (tsc accepts)
-line 14: ours: cannot index into non-array type `null[] | [number, string]` (tsc accepts)
-line 15: ours: cannot destructure a value of type `null[] | [number, string]`; expected a tuple or array (tsc accepts)
-line 17: ours: cannot index into non-array type `null[] | [number, string]` (tsc accepts)
-line 18: ours: cannot index into non-array type `null[] | [number, string]` (tsc accepts)
-line 19: ours: cannot index into non-array type `null[] | [number, string]` (tsc accepts)
-line 20: ours: cannot destructure a value of type `null[] | [number, string]`; expected a tuple or array (tsc accepts)
