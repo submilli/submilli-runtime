@@ -521,6 +521,12 @@ impl Inferer<'_> {
                     entry_reachable && else_possible,
                 )
             };
+        // Neither branch falls through and the condition can't be false: code
+        // after the `if` is reached only through the false outcome no value
+        // takes. As in TypeScript it still counts as reachable, so an
+        // enclosing `else if` chain carries on, and what that outcome rules
+        // out reads as `never`.
+        let ruled_out_fallthrough = !then_reachable && !else_reachable && !else_possible;
         let (joined_narrowings, joined_assigned) = match (then_reachable, else_reachable) {
             (true, true) => crate::typechecker::infer::narrowing::union_envs(
                 then_narrowings,
@@ -530,16 +536,14 @@ impl Inferer<'_> {
             ),
             (true, false) => (then_narrowings, then_assigned),
             (false, true) => (else_narrowings, else_assigned),
-            // Neither branch falls through and the condition can't be false:
-            // code after the `if` is reached only through the false outcome
-            // no value takes, so what that outcome rules out reads as `never`.
-            (false, false) if !else_possible => (else_narrowings, else_assigned),
+            (false, false) if ruled_out_fallthrough => (else_narrowings, else_assigned),
             (false, false) => (
                 crate::typechecker::infer::narrowing::NarrowEnv::new(),
                 std::collections::BTreeSet::new(),
             ),
         };
-        self.reachable = then_reachable || else_reachable;
+        self.reachable =
+            then_reachable || else_reachable || (entry_reachable && ruled_out_fallthrough);
         self.merge_assigned_into_outer(joined_assigned, span);
         self.install_joined_narrowings(joined_narrowings, span)?;
         Ok(TypedStmtKind::If {

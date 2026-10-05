@@ -927,7 +927,17 @@ impl<'a> Inferer<'a> {
             (None, Some(lit)) => self.narrow_equal_to_literal(op, lhs_id, lit),
             (Some(lit), None) => self.narrow_equal_to_literal(op, rhs_id, lit),
             (None, None) => self.narrow_equal_to_union(op, lhs_id, rhs_id),
-            (Some(_), Some(_)) => Ok(None),
+            // A reference already narrowed to one literal, compared with a
+            // literal written out: unequal, it holds nothing.
+            (Some(lhs_lit), Some(rhs_lit)) => {
+                if is_written_literal(&self.typed_ast, rhs_id)? {
+                    self.narrow_equal_to_literal(op, lhs_id, rhs_lit)
+                } else if is_written_literal(&self.typed_ast, lhs_id)? {
+                    self.narrow_equal_to_literal(op, rhs_id, lhs_lit)
+                } else {
+                    Ok(None)
+                }
+            }
         }
     }
 
@@ -1556,9 +1566,6 @@ impl<'a> Inferer<'a> {
             ty => std::slice::from_ref(ty),
         };
         let literal_ty = literal_to_type(&literal);
-        if path_ty.peel() == &literal_ty {
-            return Ok(None);
-        }
         let mut matched: Vec<Type> = Vec::new();
         let mut remaining: Vec<Type> = Vec::new();
         for m in members {
@@ -1583,7 +1590,12 @@ impl<'a> Inferer<'a> {
             return Ok(None);
         }
         let matched_ty = Type::union(matched);
-        let remaining_ty = Type::union(remaining);
+        // Unequal, a path that can only be the literal holds no value.
+        let remaining_ty = if remaining.is_empty() {
+            narrowing::RULED_OUT
+        } else {
+            Type::union(remaining)
+        };
         let (true_ty, false_ty) = match op {
             BinOp::Eq => (matched_ty, remaining_ty),
             BinOp::NotEq => (remaining_ty, matched_ty),
@@ -1594,8 +1606,15 @@ impl<'a> Inferer<'a> {
             }
         };
 
-        let true_ty = narrowing::with_source_refinement(&path_ty, true_ty);
-        let false_ty = narrowing::with_source_refinement(&path_ty, false_ty);
+        let refine = |ty: Type| {
+            if narrowing::is_ruled_out(&ty) {
+                ty
+            } else {
+                narrowing::with_source_refinement(&path_ty, ty)
+            }
+        };
+        let true_ty = refine(true_ty);
+        let false_ty = refine(false_ty);
         let source_true = self
             .typed_ast
             .try_push_expr(TypedExpr {
@@ -2404,6 +2423,18 @@ fn comparison_literal(
         },
         |value| Ok(Some(value)),
     )
+}
+
+/// Whether the operand is a literal written in the source, not a reference
+/// whose type is a literal.
+fn is_written_literal(
+    ast: &crate::TypedAst,
+    id: ExprId,
+) -> Result<bool, crate::compiler_error::CompilerFailure> {
+    let expr = ast
+        .try_expr(id)
+        .map_err(crate::typechecker::arena_failure)?;
+    Ok(literal_value_of(&expr.kind).is_some())
 }
 
 /// The literals an operand's type allows, when it is a union of two or more
