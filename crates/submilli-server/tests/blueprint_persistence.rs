@@ -4,6 +4,9 @@
 //! restarts, history retention, and crash-recovery semantics — both directly
 //! against `FileBlueprintStore` and through the HTTP surface.
 
+#[path = "common/in_memory_config.rs"]
+mod in_memory_config;
+
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU32, Ordering};
@@ -207,8 +210,10 @@ async fn get_json(router: &Router, path: &str) -> (StatusCode, Value) {
 async fn http_add_survives_appstate_rebuild() {
     let dir = temp_dir();
     let router = app(AppState::new(ServerConfig {
-        blueprint_dir: Some(dir.clone()),
-        ..ServerConfig::default()
+        blueprints: Some(std::sync::Arc::new(
+            FileBlueprintStore::new(dir.clone()).unwrap(),
+        )),
+        ..in_memory_config::config()
     })
     .expect("AppState"));
 
@@ -236,8 +241,8 @@ mcp:
 
     // Rebuild AppState over the same dir — the blueprint loads from disk.
     let router = app(AppState::new(ServerConfig {
-        blueprint_dir: Some(dir),
-        ..ServerConfig::default()
+        blueprints: Some(std::sync::Arc::new(FileBlueprintStore::new(dir).unwrap())),
+        ..in_memory_config::config()
     })
     .expect("AppState reload"));
     let (status, body) = get_json(&router, "/v1/blueprints").await;
@@ -446,4 +451,100 @@ async fn removing_a_reserved_name_frees_it() {
 
     store.add(bp("tenant-alpha")).await.expect("name is free");
     assert!(!store.remove("never-registered").await.expect("no-op"));
+}
+
+#[tokio::test]
+async fn sqlx_import_and_http_changes_survive_restart_without_reimport() {
+    use std::sync::Arc;
+    use submilli_server::database::ServerDatabase;
+    let directory = tempfile::tempdir().unwrap();
+    let source = directory.path().join("blueprints");
+    let files = FileBlueprintStore::new(source.clone()).unwrap();
+    files.add(bp("tenant")).await.unwrap();
+    let path = directory.path().join("db/server.db");
+    let database = Arc::new(ServerDatabase::open(&path).await.unwrap());
+    let store = submilli_server::blueprint::SqliteBlueprintStore::new(
+        database.clone(),
+        Some(source.clone()),
+    );
+    store.migrate().await.unwrap();
+    let state = AppState::new(ServerConfig {
+        blueprints: Some(Arc::new(store)),
+        database: Some(database.clone()),
+        blueprint_dir: Some(source.clone()),
+        ..Default::default()
+    })
+    .unwrap();
+    state.boot().await.unwrap();
+    let router = app(state);
+    let (status, _) = get_json(&router, "/v1/blueprints/tenant").await;
+    assert_eq!(status, StatusCode::OK);
+    let yaml = "# retained\nname: tenant\n";
+    let response = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("PUT")
+                .uri("/v1/blueprints/tenant")
+                .header("content-type", "application/json")
+                .body(Body::from(json!({"yaml": yaml}).to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let response = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("DELETE")
+                .uri("/v1/blueprints/tenant")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let response = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("PUT")
+                .uri("/v1/blueprints/tenant")
+                .header("content-type", "application/json")
+                .body(Body::from(json!({"yaml": yaml}).to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    drop(router);
+    database.close().await.unwrap();
+
+    let database = Arc::new(ServerDatabase::open(&path).await.unwrap());
+    let store = submilli_server::blueprint::SqliteBlueprintStore::new(
+        database.clone(),
+        Some(source.clone()),
+    );
+    store.migrate().await.unwrap();
+    let state = AppState::new(ServerConfig {
+        blueprints: Some(Arc::new(store)),
+        database: Some(database.clone()),
+        blueprint_dir: Some(source.clone()),
+        ..Default::default()
+    })
+    .unwrap();
+    // The concrete store is migrated before the router can handle requests.
+    let router = app(state);
+    let (status, body) = get_json(&router, "/v1/blueprints/tenant").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["yaml"], yaml);
+    assert_eq!(
+        fs::read_to_string(directory.path().join("archive/blueprints/index.json"))
+            .unwrap()
+            .trim(),
+        "{\n  \"tenant\": 1\n}"
+    );
+    drop(router);
+    database.close().await.unwrap();
 }

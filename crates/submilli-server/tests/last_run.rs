@@ -2,6 +2,9 @@
 //! execute mints a fresh session id and records its result/console under it, so
 //! the run stays readable by that id even though the request is stateless.
 
+#[path = "common/in_memory_config.rs"]
+mod in_memory_config;
+
 use std::sync::Arc;
 
 use axum::Router;
@@ -20,7 +23,7 @@ const BLUEPRINT_NAME: &str = "test";
 mod last_run_store;
 
 fn router() -> Router {
-    router_with_config(ServerConfig::default())
+    router_with_config(in_memory_config::config())
 }
 
 fn router_with_config(config: ServerConfig) -> Router {

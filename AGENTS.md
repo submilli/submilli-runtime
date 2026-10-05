@@ -89,6 +89,66 @@ protected field when changing poison handling; do not claim that poisoning is
 impossible. Record these sites as accepted exceptions in SUB-633 rather than as
 removed panics.
 
+## Fuel for host functions
+
+Fuel bounds the CPU a program spends, wherever it spends it. Wasm instructions
+burn fuel by themselves. A host function (a standard-library or prelude function
+implemented in Rust) must charge for its own work from the same budget, through
+`crates/interpreter/src/runtime/fuel.rs`. A host function that charges nothing
+is a free loop for any program.
+
+**Host work is discounted.** One fuel is about 2.5 ns, the cost of one
+interpreted Wasm instruction. Native Rust does the same work far faster, so host
+work is priced by the native time it takes, not by counting Rust operations.
+Copying a byte costs 1/8 fuel (`COPY`), not the dozens of fuel the same copy
+would cost as a Wasm loop. Don't inflate a charge to match what the work would
+cost in Wasm.
+
+**Build every charge from the cost classes in `fuel.rs`.** A formula is `CALL`
+plus `rate × n` for each class that describes what the function does with sizes
+it knows: `COPY`, `SCAN`, `PARSE`, `ELEM`, `HASH`, `REGEX`, `IO`, `SYSCALL`, the
+flat `TZ` and `GATE`, and the helpers `sort_cost` and `bigint_product_cost`.
+Never write a raw number in a host function, and never tune a rate for one
+function. The rates are placeholders that SUB-1270 calibrates in one place.
+`CALL` is charged for you by `register_host_fn` and `fuel::host_func`. An O(1)
+function costs `CALL` alone. Waiting costs nothing: time blocked on the network,
+a model, or a child process is free.
+
+**Charge only your own overhead.** Callbacks, comparators, getters, and the
+hooks of user classes run as Wasm and pay their own fuel. The host function
+charges its per-element overhead, not the callback's work. Charge each term at
+one level: most charges already sit in shared helpers (`read_string_arg`,
+`write_code_units`, `ArrayStorage`, the Map and Set probes, `check_security`),
+listed in `plans/sub-1269-host-fuel-costs.md`. Don't charge again in the
+function that calls them.
+
+**Charge before the work, when the size is known.** `fuel::charge` refuses
+when the budget is short, before anything happens. Charge the input before the
+work and the output once its size is known, before building the result. For
+work whose size appears only as it runs (walks, iterators, searches with early
+exit), charge per item or per chunk inside the loop. Cap and charge unbounded
+results before computing them, such as a BigInt power or a `replaceAll` output.
+
+**Never lose an effect.** Durable execution will let a user continue a run that
+stopped for fuel, so a stop must not discard work that already had an effect.
+Refuse only before any effect: the request, the write, the commit. Once the
+effect has happened, charge the rest with `fuel::settle` (or `settle_result`
+while marshalling the result). It never refuses: it takes the budget to zero,
+the call returns its result, and the run stops at the next fuel check in Wasm.
+Never clamp a response to the remaining fuel or abort halfway through a write.
+When a cost is uncertain, charge the lower estimate.
+
+**Don't copy what you don't read.** An accessor such as `length`, `at`,
+`charCodeAt`, or `pop` reads the GC value in place and costs `CALL`, not a
+copy of the whole receiver. The nightly tests
+`accessors_do_not_pay_for_the_whole_receiver` and
+`operations_charge_for_the_input_they_process` (`crates/submilli/tests/run.rs`)
+guard this.
+
+`submilli:test` charges nothing. It runs only under `submilli build test`.
+When you add or change a host function, add or update its row in
+`plans/sub-1269-host-fuel-costs.md` with its formula and when it charges.
+
 ## Code style
 
 - Rust 2024; typed errors in library APIs. `anyhow` is appropriate at the CLI
@@ -127,8 +187,10 @@ committing reviewed content or parent-checked final low-priority fixes does not.
 Complete required checks on the final proposed diff. A blocked
 or non-converged review does not satisfy this requirement. If delegation is
 unavailable, use the skill's separate-pass fallback and disclose that limitation
-in the PR. Report review rounds, finding dispositions, checks, and outstanding
-items in the PR description. Filing an issue does not clear an unresolved defect
+in the working handoff. Keep review rounds, finding dispositions, checks, and
+outstanding items in that handoff for reuse. PR descriptions should briefly state
+the problem and solution, with only material compatibility or rollout notes.
+Filing an issue does not clear an unresolved defect
 within the PR's scope.
 
 ## Verification

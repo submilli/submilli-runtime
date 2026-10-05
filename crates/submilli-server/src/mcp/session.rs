@@ -487,7 +487,7 @@ mod tests {
 
     #[tokio::test]
     async fn session_lookup_accepts_unpersisted_worker_until_runtime_session_expires() {
-        let state = AppState::new(crate::ServerConfig::default()).expect("state");
+        let state = AppState::new(crate::config::test_config()).expect("state");
         let manager = VfsSessionManager::new(state.clone(), "test".into());
         let (id, _transport) = manager.inner.create_session().await.expect("session");
         let record = crate::session_store::SessionRecord {

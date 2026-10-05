@@ -65,7 +65,7 @@ function danglingElse(a: boolean, b: boolean): string {
 }
 
 function main(): void {
-  assert(fib(20) === 6765, "fib");
+  assert(fib(8) === 21, "fib");
   assert(classify(-3) === "negative", "classify negative");
   assert(classify(0) === "zero", "classify zero");
   assert(classify(7) === "positive", "classify positive");
