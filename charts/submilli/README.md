@@ -406,3 +406,16 @@ ingress-nginx, the backend protocol annotation is
 See the [Kubernetes guide](https://submilli.ai/docs/server/deploy-on-kubernetes)
 and [CLI trust guide](https://submilli.ai/docs/server/connect-the-cli#trust-a-self-signed-server)
 for certificate creation and self-signed trust approval.
+
+
+### Server database
+
+The chart sets `database_path` to `/var/lib/submilli/server/db/submilli.db`
+inside the existing state volume. Persist the whole directory, including
+SQLite journal and lock files. Use local or block-backed storage for SQLite.
+
+On upgrade, stop the old server before the new server imports blueprint revision
+files. The revisions and active selections commit in one SQLite transaction,
+then the whole blueprint directory moves to `server/archive/blueprints/` inside the state volume.
+Subsequent blueprint changes live only in SQLite. Back up the state
+volume while the server is stopped.

@@ -243,14 +243,12 @@ pub async fn add(
     let name = blueprint.name.clone();
     crate::audit::annotate(serde_json::json!({"name": name,
         "new_hash": crate::audit::blueprint_hash(&blueprint)}));
+    let stored = StoredBlueprint::new(blueprint, permissions_last_preserving_comments(&req.yaml));
     state
         .blueprints()
-        .add_yaml(StoredBlueprint::new(
-            blueprint,
-            permissions_last_preserving_comments(&req.yaml),
-        ))
+        .add_yaml(stored)
         .await
-        .map_err(|err| match err {
+        .map_err(|error| match error {
             StoreError::AlreadyExists => (
                 StatusCode::CONFLICT,
                 Json(ErrorResponse::named(
@@ -289,7 +287,6 @@ pub async fn apply(
     let previous = state.blueprints().get(&name).await.map_err(store_error)?;
     crate::audit::annotate(serde_json::json!({"name": name,
         "old_hash": previous.as_ref().map(crate::audit::blueprint_hash)}));
-    let packages_changed = previous.is_some_and(|existing| existing.packages != blueprint.packages);
     if blueprint.name != name {
         let message = format!(
             "blueprint name '{}' in the file does not match '{name}' in the request path",
@@ -303,21 +300,15 @@ pub async fn apply(
             ),
         ));
     }
+    let stored = StoredBlueprint::new(blueprint, permissions_last_preserving_comments(&req.yaml));
     let created = state
         .blueprints()
-        .upsert_yaml(StoredBlueprint::new(
-            blueprint,
-            permissions_last_preserving_comments(&req.yaml),
-        ))
+        .upsert_yaml(stored)
         .await
         .map_err(store_error)?;
-    // Keep the live MCP service (and its sessions) — the execute path re-fetches
-    // the blueprint per call, so open sessions run under the new config. Only the
-    // discovered `@mcp/<server>` catalog and changed packages need rebuilding.
     state.evict_mcp_catalog(&name);
-    if packages_changed {
-        state.evict_prepared_packages(&name);
-    }
+    // Another apply may have committed since the audit read above.
+    state.evict_prepared_packages(&name);
     crate::audit::annotate(
         serde_json::json!({"event": if created { "blueprint_created" } else { "blueprint_replaced" }}),
     );
@@ -419,15 +410,14 @@ pub async fn remove(
         .remove(&name)
         .await
         .map_err(store_error)?;
-    if removed {
-        state.wipe_blueprint_sessions(&name).await;
-        state.evict_mcp_service(&name);
-        state.evict_mcp_catalog(&name);
-        state.evict_prepared_packages(&name);
-        Ok((StatusCode::OK, Json(AddResponse { name })))
-    } else {
-        Err(not_found(name))
+    if !removed {
+        return Err(not_found(name));
     }
+    state.wipe_blueprint_sessions(&name).await;
+    state.evict_mcp_service(&name);
+    state.evict_mcp_catalog(&name);
+    state.evict_prepared_packages(&name);
+    Ok((StatusCode::OK, Json(AddResponse { name })))
 }
 
 fn store_error(error: StoreError) -> (StatusCode, Json<ErrorResponse>) {
