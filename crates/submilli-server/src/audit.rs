@@ -366,6 +366,10 @@ struct ExecutionState {
 
 pub(crate) struct ExecutionAudit {
     pub id: String,
+    /// The API token's name (never the token), or `unauthenticated`.
+    pub principal: String,
+    /// `http`, `session`, `mcp`, or `program`.
+    pub entry: String,
     log: AuditLog,
     started: Instant,
     state: Mutex<ExecutionState>,
@@ -389,6 +393,8 @@ impl ExecutionAudit {
         }
         Arc::new(Self {
             id,
+            principal: principal.to_owned(),
+            entry: entry.to_owned(),
             log,
             started: Instant::now(),
             state: Mutex::new(ExecutionState {

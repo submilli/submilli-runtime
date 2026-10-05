@@ -338,18 +338,30 @@ impl DecisionLog {
         config: DecisionLogConfig,
         observer: Option<Arc<dyn RecordObserver>>,
     ) -> Arc<Self> {
-        let log = Arc::new(Self {
+        let log = Self::new(config, observer);
+        data.security_check = log.wrap(data.security_check.clone());
+        log
+    }
+
+    /// A log not yet attached to a run; [`wrap`](Self::wrap) a check to record through it.
+    /// The clock starts now.
+    pub fn new(config: DecisionLogConfig, observer: Option<Arc<dyn RecordObserver>>) -> Arc<Self> {
+        Arc::new(Self {
             state: Mutex::new(LogState::default()),
             config,
             started: Instant::now(),
             clock: AtomicU64::new(0),
             observer,
-        });
-        data.security_check = Arc::new(RecordingCheck {
-            inner: data.security_check.clone(),
-            log: log.clone(),
-        });
-        log
+        })
+    }
+
+    /// `inner`, with every decision it audits also recorded here. For a check made outside
+    /// a program run, such as a server's file tool; a run uses [`install`](Self::install).
+    pub fn wrap(self: &Arc<Self>, inner: Arc<dyn SecurityCheck>) -> Arc<dyn SecurityCheck> {
+        Arc::new(RecordingCheck {
+            inner,
+            log: self.clone(),
+        })
     }
 
     /// Takes the run's records and releases their byte charge. Call once, when the

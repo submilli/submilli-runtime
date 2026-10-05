@@ -145,6 +145,24 @@ struct AppStateInner {
     llm_dispatch: Option<Arc<dyn ModelDispatch>>,
     llm_dispatch_factory: LlmDispatchFactory,
     mcp_setup: McpSetup,
+    run_recorder: Option<Arc<dyn crate::record::RunRecorderFactory>>,
+    /// Cancellers of the recorded runs in flight, by execution id. Poison means a panic
+    /// interrupted a registration; AGENTS.md permits the poisoned-lock panic.
+    running: Mutex<HashMap<String, tokio::sync::oneshot::Sender<()>>>,
+}
+
+/// Removes a run's canceller once the run is over.
+pub(crate) struct RunRegistration {
+    state: AppState,
+    execution_id: String,
+}
+
+impl Drop for RunRegistration {
+    fn drop(&mut self) {
+        if let Ok(mut running) = self.state.inner.running.lock() {
+            running.remove(&self.execution_id);
+        }
+    }
 }
 
 impl AppState {
@@ -305,6 +323,8 @@ impl AppState {
                 llm_dispatch: config.llm_dispatch,
                 llm_dispatch_factory,
                 mcp_setup,
+                run_recorder: config.run_recorder,
+                running: Mutex::new(HashMap::new()),
             }),
         })
     }
@@ -362,6 +382,43 @@ impl AppState {
 
     pub fn audit(&self) -> &crate::audit::AuditLog {
         &self.inner.audit
+    }
+
+    pub(crate) fn run_recorder(&self) -> Option<&Arc<dyn crate::record::RunRecorderFactory>> {
+        self.inner.run_recorder.as_ref()
+    }
+
+    /// Cancels a recorded run in flight, whoever sent it. The run ends with a
+    /// `cancelled` outcome once its workers have drained. `false` when no recorded run
+    /// with that id is running.
+    pub fn cancel_run(&self, execution_id: &str) -> bool {
+        let canceller = self
+            .inner
+            .running
+            .lock()
+            .expect("running-run registry lock poisoned")
+            .remove(execution_id);
+        canceller.is_some_and(|canceller| canceller.send(()).is_ok())
+    }
+
+    /// Registers a recorded run's canceller until the returned guard drops.
+    pub(crate) fn register_run(
+        &self,
+        execution_id: &str,
+    ) -> (RunRegistration, tokio::sync::oneshot::Receiver<()>) {
+        let (canceller, cancelled) = tokio::sync::oneshot::channel();
+        self.inner
+            .running
+            .lock()
+            .expect("running-run registry lock poisoned")
+            .insert(execution_id.to_owned(), canceller);
+        (
+            RunRegistration {
+                state: self.clone(),
+                execution_id: execution_id.to_owned(),
+            },
+            cancelled,
+        )
     }
 
     pub fn database(&self) -> Option<Arc<crate::database::ServerDatabase>> {

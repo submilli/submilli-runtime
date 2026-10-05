@@ -13,9 +13,9 @@ use std::time::Instant;
 use interpreter::diagnostics::{self, Severity};
 use interpreter::runtime::limits::ExecutionUsage;
 use interpreter::runtime::{
-    AuthProxy, ExecutionTokenBudget, HttpClient, LinkedPackageModule, LlmProvider, McpTransport,
-    RuntimeConfig, SecretProvider, SecurityCheck, SessionKvStore, StoreData, Vfs, VfsInfo,
-    install_package_modules_async, install_runtime_store_bound, install_tenant_limits,
+    AuthProxy, DecisionLog, ExecutionTokenBudget, HttpClient, LinkedPackageModule, LlmProvider,
+    McpTransport, RuntimeConfig, SecretProvider, SecurityCheck, SessionKvStore, StoreData, Vfs,
+    VfsInfo, install_package_modules_async, install_runtime_store_bound, install_tenant_limits,
     is_memory_exhausted,
 };
 use interpreter::{
@@ -30,6 +30,7 @@ use crate::app::PreparedBlueprintPackages;
 use crate::compiler_thread;
 use crate::error::{DenialDetails, DiagnosticNote, DiagnosticPayload, ErrorKind, ExecuteError};
 use crate::mcp::McpCatalog;
+use crate::record::FinishedRun;
 
 pub struct RunOutcome {
     pub usage: ExecutionUsage,
@@ -101,6 +102,10 @@ pub struct HostServices {
     /// server-wide one together. Released on drop, so a run that traps or times
     /// out returns its reservation.
     pub llm_budget: Option<Arc<ExecutionTokenBudget>>,
+    /// The run's recorder, finished from the owner task; `None` records nothing.
+    pub(crate) recording: Option<crate::record::Recording>,
+    /// Fires when someone other than the caller cancels the run.
+    pub(crate) cancel: Option<tokio::sync::oneshot::Receiver<()>>,
 }
 
 pub(crate) struct RunnerImports<'a> {
@@ -144,6 +149,13 @@ pub(crate) async fn run(
     let owner = tokio::spawn(async move {
         let audit = services.audit.clone();
         let budget = services.llm_budget.clone();
+        let recording = services.recording.clone();
+        let log = recording.as_ref().map(|recording| {
+            DecisionLog::new(
+                recording.recorder.log_config(),
+                recording.recorder.observer(),
+            )
+        });
         let outcome = run_inner(
             &owned_code,
             parsed,
@@ -160,12 +172,23 @@ pub(crate) async fn run(
                 packages: &packages,
                 mcps: &mcps,
             },
-            cancelled,
+            (cancelled, log.clone()),
         )
         .await;
         if let Some(audit) = audit {
             audit.result(&outcome, budget.as_ref().map_or(0, |b| b.used()));
             audit.finish(outcome.error.is_none());
+        }
+        if let (Some(recording), Some(log)) = (recording, log) {
+            recording.recorder.finish(FinishedRun {
+                dispatched: true,
+                error: outcome.error.clone(),
+                result: outcome.value.clone(),
+                console: outcome.console_raw.clone(),
+                usage: outcome.usage,
+                log: log.finish(),
+                wall: recording.started.elapsed(),
+            });
         }
         log_execution(&blueprint, &session, started, &outcome);
         outcome
@@ -190,10 +213,11 @@ async fn run_inner(
     mut parsed: ParsedExecute,
     runtime: RunnerRuntime<'_>,
     (vfs, vfs_info): (Vfs, VfsInfo),
-    services: HostServices,
+    mut services: HostServices,
     imports: RunnerImports<'_>,
-    mut cancelled: tokio::sync::oneshot::Receiver<()>,
+    (mut cancelled, log): (tokio::sync::oneshot::Receiver<()>, Option<Arc<DecisionLog>>),
 ) -> RunOutcome {
+    let external = services.cancel.take();
     let git = match services.git {
         Ok(git) => git,
         Err(error) => return internal_failure(&error),
@@ -245,6 +269,11 @@ async fn run_inner(
     data.auth_proxy = services.auth_proxy;
     data.secret_provider = services.secret_provider;
     data.security_check = services.security_check;
+    // Outermost, so the host functions see the recorder; installed before packages run
+    // their top-level statements, so those decisions are recorded too.
+    if let Some(log) = &log {
+        data.security_check = log.wrap(data.security_check.clone());
+    }
     data.http_client = services.http_client;
     data.mcp_transport = Some(services.mcp_transport);
     data.session_kv = Some(services.session_kv);
@@ -348,13 +377,19 @@ async fn run_inner(
             },
         }
     };
+    // Only a sent cancel counts: the canceller is dropped, unsent, when the run ends.
+    let cancelled_elsewhere = async {
+        if let Some(external) = external
+            && external.await.is_ok()
+        {
+            return;
+        }
+        std::future::pending::<()>().await;
+    };
     let mut outcome = tokio::select! {
         biased;
-        _ = &mut cancelled => {
-            let mut outcome = internal_failure("execution cancelled");
-            if let Some(error) = &mut outcome.error { error.kind = ErrorKind::Cancelled; }
-            outcome
-        },
+        _ = &mut cancelled => cancelled_outcome(),
+        () = cancelled_elsewhere => cancelled_outcome(),
         outcome = execution => outcome,
     };
     if let Err(error) = store.data_mut().blocking_work.finish().await {
@@ -363,6 +398,14 @@ async fn run_inner(
     match ExecutionUsage::capture(&store, runtime.config.fuel) {
         Ok(usage) => outcome.usage = usage,
         Err(error) => return internal_failure(&format!("usage capture failed: {error}")),
+    }
+    outcome
+}
+
+fn cancelled_outcome() -> RunOutcome {
+    let mut outcome = internal_failure("execution cancelled");
+    if let Some(error) = &mut outcome.error {
+        error.kind = ErrorKind::Cancelled;
     }
     outcome
 }
@@ -946,6 +989,8 @@ mod tests {
             session_kv: Arc::new(InMemorySessionKv::default()),
             llm_provider: None,
             llm_budget: None,
+            recording: None,
+            cancel: None,
         };
         let config = RuntimeConfig::default();
         let engine = config.engine().unwrap();

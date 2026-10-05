@@ -7,7 +7,10 @@ use std::borrow::Cow;
 use std::sync::Arc;
 
 use interpreter::runtime::fs::{ContainError, ContentPath, guest_normalize, resolve_content};
-use interpreter::runtime::{CheckOutcome, SecurityCheck, Vfs, VfsInfo};
+use interpreter::runtime::security::AuditDecision;
+use interpreter::runtime::{
+    CallSite, CheckOutcome, DecisionLog, EntryPath, SecurityCheck, Vfs, VfsInfo,
+};
 use interpreter::stdlib::fs::handles::kind_of;
 use rmcp::handler::server::router::tool::ToolRouter;
 use rmcp::handler::server::tool::{Extension, ToolCallContext};
@@ -137,6 +140,10 @@ struct ExecuteOutput {
     console: Vec<String>,
     error: Option<ExecuteError>,
 }
+
+/// The client's name from its `initialize`, for the run's record.
+#[derive(Clone)]
+struct McpClient(String);
 
 /// The `mcp-session-id` header, present on every request in stateful mode.
 fn session_header(parts: &axum::http::request::Parts) -> Option<String> {
@@ -372,6 +379,11 @@ impl SubmilliMcp {
                 harness_secrets,
                 audit: Some(audit),
                 entry: ExecuteEntry::Mcp { vfs, vfs_info },
+                client: parts
+                    .extensions
+                    .get::<McpClient>()
+                    .map(|client| client.0.clone()),
+                idempotency_key: None,
             },
         )
         .await;
@@ -573,7 +585,7 @@ impl SubmilliMcp {
             &parts,
             Arc::clone(&blueprint),
             Arc::clone(&variables),
-            "fs.read",
+            ("submilli__files__read", "fs.read"),
             &args.path,
             None,
         ) {
@@ -632,7 +644,7 @@ impl SubmilliMcp {
             &parts,
             Arc::clone(&blueprint),
             Arc::clone(&variables),
-            "fs.list",
+            ("submilli__files__list", "fs.list"),
             dir,
             Some(recursive),
         ) {
@@ -681,7 +693,7 @@ impl SubmilliMcp {
         parts: &axum::http::request::Parts,
         blueprint: Arc<Blueprint>,
         variables: Arc<submilli_blueprint::VarBindings>,
-        capability: &str,
+        (tool, capability): (&str, &str),
         path: &str,
         recursive: Option<bool>,
     ) -> Result<(), FileToolError> {
@@ -697,7 +709,20 @@ impl SubmilliMcp {
             .map_err(|error| FileToolError::denied(capability, &error.to_string()))?;
         guest_normalize(config.cwd(), path)
             .map_err(|error| FileToolError::file(path, error.into()))?;
-        let policy = PolicyCheck::with_variables(blueprint.clone(), variables);
+        let recording = self.file_tool_recording(parts, &blueprint, &variables, tool);
+        let log = recording.as_ref().map(|recording| {
+            DecisionLog::new(
+                recording.recorder.log_config(),
+                recording.recorder.observer(),
+            )
+        });
+        let policy: Arc<dyn SecurityCheck> =
+            Arc::new(PolicyCheck::with_variables(blueprint.clone(), variables));
+        let policy = log.as_ref().map_or(policy.clone(), |log| log.wrap(policy));
+        let call = policy.recorder().map(|recorder| {
+            let marker = recorder.enter_host_call();
+            (marker, recorder.begin_call("main", capability, None))
+        });
         let outcome = policy.check_with_cwd("main", capability, &context, config.cwd());
         let audit_context = policy.audit_context(capability, &context, config.cwd());
         self.state.audit().file_decision(
@@ -707,12 +732,87 @@ impl SubmilliMcp {
             audit_context.as_ref(),
             &outcome,
         );
-        let reason = match outcome {
-            CheckOutcome::Allow { .. } => return Ok(()),
-            CheckOutcome::Deny { reason, .. } => reason,
-            _ => "unrecognized policy outcome".to_string(),
+        let refusal = match &outcome {
+            CheckOutcome::Allow { .. } => None,
+            CheckOutcome::Deny { reason, .. } => Some(reason.clone()),
+            _ => Some("unrecognized policy outcome".to_string()),
         };
-        Err(FileToolError::denied(capability, &reason))
+        if let (Some(recording), Some(log), Some((marker, ticket))) = (recording, log, call) {
+            let explanation = policy.explain("main", capability, &context, config.cwd());
+            let (rule, allowed) = match &outcome {
+                CheckOutcome::Allow { rule } => (*rule, true),
+                CheckOutcome::Deny { rule, .. } => (*rule, false),
+                _ => (None, false),
+            };
+            policy.audit(
+                AuditDecision::new(
+                    "main",
+                    capability,
+                    audit_context.as_ref(),
+                    allowed,
+                    "policy",
+                    rule,
+                    refusal.as_deref(),
+                )
+                .with_explanation(explanation.as_ref())
+                .with_site(CallSite::new(Some(ticket), EntryPath::FileTool)),
+            );
+            if let Some(recorder) = policy.recorder() {
+                recorder.exit_host_call(marker, allowed);
+            }
+            recording.recorder.finish(crate::record::FinishedRun {
+                dispatched: true,
+                error: refusal.as_ref().map(|reason| ExecuteError {
+                    kind: crate::error::ErrorKind::PermissionDenied,
+                    message: FileToolError::denied(capability, reason).message,
+                    diagnostics: Vec::new(),
+                    denial: Some(crate::error::DenialDetails {
+                        caller: "main".into(),
+                        capability: capability.into(),
+                        source: "policy",
+                    }),
+                }),
+                result: None,
+                console: String::new(),
+                usage: interpreter::runtime::limits::ExecutionUsage::default(),
+                log: log.finish(),
+                wall: recording.started.elapsed(),
+            });
+        }
+        match refusal {
+            None => Ok(()),
+            Some(reason) => Err(FileToolError::denied(capability, &reason)),
+        }
+    }
+
+    /// A file tool's decision is a run of its own, when runs are recorded.
+    fn file_tool_recording(
+        &self,
+        parts: &axum::http::request::Parts,
+        blueprint: &Arc<Blueprint>,
+        variables: &Arc<submilli_blueprint::VarBindings>,
+        tool: &str,
+    ) -> Option<crate::record::Recording> {
+        let factory = self.state.run_recorder()?;
+        crate::record::Recording::start(
+            Some(factory),
+            crate::record::RunStart {
+                execution_id: uuid::Uuid::new_v4().to_string(),
+                label: parts
+                    .extensions
+                    .get::<crate::audit::Principal>()
+                    .map_or_else(|| "unauthenticated".to_owned(), |p| p.0.clone()),
+                entry: crate::record::RunEntry::McpFileTool { tool: tool.into() },
+                client: parts.extensions.get::<McpClient>().map(|c| c.0.clone()),
+                session_id: session_header(parts),
+                idempotency_key: None,
+                blueprint_name: self.blueprint_name.clone(),
+                blueprint: Arc::clone(blueprint),
+                blueprint_hash: crate::audit::blueprint_hash(blueprint),
+                variables: Arc::clone(variables),
+                code: None,
+            },
+        )
     }
 }
 
@@ -934,6 +1034,16 @@ impl ServerHandler for SubmilliMcp {
         mut request: CallToolRequestParams,
         mut context: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, ErrorData> {
+        let client = context
+            .peer
+            .peer_info()
+            .map(|info| McpClient(info.client_info.name.clone()));
+        if let (Some(client), Some(parts)) = (
+            client,
+            context.extensions.get_mut::<axum::http::request::Parts>(),
+        ) {
+            parts.extensions.insert(client);
+        }
         let audit = if request.name.as_ref() == TOOL_NAME {
             let parts = context.extensions.get::<axum::http::request::Parts>();
             let principal = parts

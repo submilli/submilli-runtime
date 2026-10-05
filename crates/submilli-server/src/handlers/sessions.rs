@@ -231,6 +231,7 @@ pub async fn execute(
                 variables,
                 harness_secrets,
                 &req.code,
+                None,
             )
             .await;
             return execute::with_session_header(&session_id, outcome.response).into_response();
@@ -249,6 +250,15 @@ pub async fn execute(
             if let Some(audit) = crate::audit::execution() {
                 audit.replay();
             }
+            if let Some(recorder) = state.run_recorder() {
+                recorder.retried(crate::record::RetryLink {
+                    session_id: session_id.clone(),
+                    idempotency_key: key.clone(),
+                    original_execution_id: serde_json::from_str::<serde_json::Value>(&outcome.body)
+                        .ok()
+                        .and_then(|body| body.get("execution_id")?.as_str().map(str::to_owned)),
+                });
+            }
             // A replay is session activity: a client retrying must not have its
             // session reaped underneath it. `execute_core` normally does this,
             // and the replay path never reaches it.
@@ -266,6 +276,7 @@ pub async fn execute(
         variables,
         harness_secrets,
         &req.code,
+        Some(&key),
     )
     .await;
     if !outcome.dispatched {
@@ -299,6 +310,7 @@ async fn run(
     variables: Arc<submilli_blueprint::VarBindings>,
     harness_secrets: Arc<HarnessSecretBindings>,
     code: &str,
+    idempotency_key: Option<&str>,
 ) -> execute::ExecuteOutcome {
     execute::execute_core(
         state,
@@ -311,6 +323,8 @@ async fn run(
             harness_secrets,
             audit: crate::audit::execution(),
             entry: execute::ExecuteEntry::Http,
+            client: None,
+            idempotency_key,
         },
     )
     .await

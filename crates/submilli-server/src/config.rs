@@ -150,6 +150,10 @@ pub struct ServerConfig {
     /// path and read on every install, so replacing the file rotates the
     /// token without a restart.
     pub github_token_file: Option<PathBuf>,
+    /// Records every program the server runs, for an embedder such as the playground.
+    /// Code-only, like `llm_dispatch`: no flag, env var, or config-file key. `None` (the
+    /// default) records nothing and changes nothing.
+    pub run_recorder: Option<Arc<dyn crate::record::RunRecorderFactory>>,
 }
 
 pub use submilli_shared::OAuthProvider;
