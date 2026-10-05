@@ -335,7 +335,7 @@ tutorial), Blueprints, Packages, and Server (how-to guides), Tutorials, and
 Reference.
 
 Before writing or reviewing any page in `docs/`, read
-[docs-site/WRITING.md](docs-site/WRITING.md). It says which type each part is,
+[docs/WRITING.md](docs/WRITING.md). It says which type each part is,
 how each type is written, and the checklist a page passes before review. Every
 command output in the book comes from a real run.
 

@@ -12,7 +12,7 @@ const authorshipSchema = z.object({
 
 export const collections = {
   docs: defineCollection({
-    loader: glob({ pattern: "**/*.md", base: "../docs" }),
+    loader: glob({ pattern: ["**/*.md", "!WRITING.md"], base: "../docs" }),
     schema: docsSchema({
       // The home page's "Next steps" cards, as slugs in the order shown.
       extend: z.object({

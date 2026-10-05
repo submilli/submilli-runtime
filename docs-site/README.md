@@ -26,7 +26,7 @@ been initialized; it never replaces an existing generated configuration.
 
 ## Editing
 
-Use the [writing framework](WRITING.md) to define a chapter's purpose and reader
+Use the [writing framework](../docs/WRITING.md) to define a chapter's purpose and reader
 outcomes before drafting, then review the draft against those outcomes.
 
 Edit pages in `docs/`. Frontmatter `slug` controls the path below `/docs/`;
