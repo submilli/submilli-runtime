@@ -629,6 +629,8 @@ impl<'a> Inferer<'a> {
     /// - members differing only in `readonly` (`readonly T[] | T[]`): the readonly one;
     /// - the most specific accepting member, when it keeps every `readonly` of
     ///   the value's own;
+    /// - among function types, the one with the most parameters, which is how
+    ///   TypeScript calls their union;
     /// - a subclass instance's own class, when an ancestor class is that member;
     /// - otherwise every accepting member, which is TypeScript's answer.
     ///
@@ -652,6 +654,9 @@ impl<'a> Inferer<'a> {
             && accepting.iter().all(|m| m.peel() == readonly.peel())
         {
             return Some((*readonly).clone());
+        }
+        if let Some(longest) = longest_function_member(&accepting) {
+            return Some(longest.clone());
         }
         match self.most_specific_member(&accepting) {
             Some(member) if !self.may_lose_readonly(&part, member) => Some(member.clone()),
@@ -1817,6 +1822,23 @@ fn join_exit_envs(mut level: Vec<narrowing::NarrowEnv>) -> Option<narrowing::Nar
         level = next;
     }
     level.pop()
+}
+
+/// The function type with the most parameters, when every member is a
+/// function type. A call to a union of function types passes the longest
+/// parameter list, and a function that fits a member with fewer parameters
+/// ignores the extra arguments.
+fn longest_function_member<'t>(members: &[&'t Type]) -> Option<&'t Type> {
+    let mut longest: Option<(&Type, usize)> = None;
+    for &member in members {
+        let Type::Function { params, .. } = member.peel() else {
+            return None;
+        };
+        if longest.is_none_or(|(_, count)| params.len() > count) {
+            longest = Some((member, params.len()));
+        }
+    }
+    longest.map(|(member, _)| member)
 }
 
 #[cfg(test)]
