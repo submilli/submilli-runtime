@@ -578,7 +578,7 @@ impl Inferer<'_> {
                 callee,
                 type_args,
                 args,
-            } => self.infer_call(callee, type_args, args, expected, span),
+            } => self.infer_call_running_invoked_body(callee, type_args, args, expected, span),
             ExprKind::Paren(inner) => {
                 self.keeps_literal_types = keeps_literal;
                 return self.infer_expr(inner, expected);
@@ -1686,7 +1686,7 @@ impl Inferer<'_> {
         false
     }
 
-    fn infer_call(
+    pub(super) fn infer_call(
         &mut self,
         callee: ExprId,
         type_args: Option<Vec<crate::TypeAnnotation>>,
@@ -6333,13 +6333,11 @@ impl Inferer<'_> {
                 &key_ty,
                 self.ast.try_expr(index).map_err(super::arena_failure)?.span,
             );
-            return Ok((
-                TypedExprKind::IndexAccess {
-                    receiver: typed_receiver,
-                    index: typed_index,
-                },
-                ty,
-            ));
+            let kind = TypedExprKind::IndexAccess {
+                receiver: typed_receiver,
+                index: typed_index,
+            };
+            return self.narrowed_index_read(kind, ty);
         }
         // Peel: an array or tuple reached through an alias (`type Pair = [A, B]`)
         // is indexable on the same terms as the type it names.
@@ -6552,6 +6550,15 @@ impl Inferer<'_> {
             receiver: typed_receiver,
             index: typed_index,
         };
+        self.narrowed_index_read(kind, elem_ty)
+    }
+
+    /// An index read, or the narrowed view of it when a guard narrowed it.
+    fn narrowed_index_read(
+        &self,
+        kind: TypedExprKind,
+        read_ty: Type,
+    ) -> Result<(TypedExprKind, Type), CompilerFailure> {
         if let Some(path) = self.kind_to_reference_path(&kind)?
             && let Some(view) = self.lookup_narrowed_view(&path)
         {
@@ -6563,7 +6570,7 @@ impl Inferer<'_> {
                 view.narrowed_ty.clone(),
             ));
         }
-        Ok((kind, elem_ty))
+        Ok((kind, read_ty))
     }
 
     /// Infer data fields before method bodies so receiver types do not depend on
@@ -7196,7 +7203,10 @@ impl Inferer<'_> {
         // scope so a shadowed root is rejected. `pending_joins` is deliberately
         // left alone: a `break` inside the body snapshots an empty range over
         // the fresh, shorter stack.
-        let narrow_seed = self.enter_closure_narrow_boundary(span)?;
+        let immediately_invoked = self.immediately_invoked.take() == Some(span);
+        let returns_before_end =
+            immediately_invoked && super::iife::returns_before_end(self.ast, &body)?;
+        let narrow_seed = self.enter_closure_narrow_boundary(span, immediately_invoked)?;
         // The body's own `return`s end its flow, not the enclosing one's.
         let prev_reachable = std::mem::replace(&mut self.reachable, true);
         // Nor can its `break`/`continue` reach a loop or switch outside it.
@@ -7268,6 +7278,9 @@ impl Inferer<'_> {
             }
         };
 
+        if immediately_invoked {
+            self.invoked_body_exit = Some(self.invoked_body_exit(returns_before_end));
+        }
         // Restore frames.
         self.exit_closure_narrow_boundary()?;
         self.reachable = prev_reachable;
@@ -8956,16 +8969,10 @@ impl Inferer<'_> {
                 Some(path)
             }
             TypedChainPart::Index { idx, .. } => {
-                let Some(lit) = super::predicate_envs::index_literal_value(
-                    &self
-                        .typed_ast
-                        .try_expr(*idx)
-                        .map_err(crate::typechecker::arena_failure)?
-                        .kind,
-                ) else {
+                let Some(element) = self.index_path_elem(*idx)? else {
                     return Ok(None);
                 };
-                path.chain.push(super::narrowing::PathElem::Index(lit));
+                path.chain.push(element);
                 Some(path)
             }
             TypedChainPart::NonNull { .. } => Some(path),

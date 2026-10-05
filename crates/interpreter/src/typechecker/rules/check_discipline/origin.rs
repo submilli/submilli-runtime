@@ -2,7 +2,7 @@
 
 use std::fmt::Write;
 
-use crate::typechecker::infer::narrowing::{LiteralValue, PathElem};
+use crate::typechecker::infer::narrowing::{KeyKind, LiteralValue, PathElem};
 use crate::{ExprId, MangledName, Span};
 
 /// A caller-supplied parameter: the one at `position` of the body itself, or
@@ -106,6 +106,8 @@ impl ReadKey {
             PathElem::Field(name) => ReadKey::Property(name.clone()),
             PathElem::Index(LiteralValue::String(name)) => ReadKey::Property(name.clone()),
             PathElem::Index(index) => ReadKey::Element(index.clone()),
+            PathElem::Key(_, KeyKind::Property) => ReadKey::AnyProperty,
+            PathElem::Key(_, KeyKind::Element) => ReadKey::AnyElement,
         }
     }
 

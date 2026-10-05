@@ -1,4 +1,1 @@
-line 7, 13, 17, 21, 30, 33 extra: bug SUB-1200 narrowing doesn't reach into or out of an immediately-invoked function, or a repeated `obj[key]` (a guard on `obj[key]`)
-line 7, 13, 17, 21 type: bug SUB-1200 narrowing doesn't reach into or out of an immediately-invoked function, or a repeated `obj[key]` (a guard on `obj[key]`)
-line 27, 28, 29, 32 type: artifact one side prints a type alias (or `keyof`) by name and the other expands it
-line 30, 33 type: bug SUB-1200 narrowing doesn't reach into or out of an immediately-invoked function, or a repeated `obj[key]` (a guard on `obj[key]`); also artifact one side prints a type alias (or `keyof`) by name and the other expands it
+line 27, 28, 29, 30, 32, 33 type: artifact one side prints a type alias (or `keyof`) by name and the other expands it

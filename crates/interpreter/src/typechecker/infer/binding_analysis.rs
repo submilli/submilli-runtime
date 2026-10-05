@@ -328,6 +328,20 @@ fn visit_expr(ast: &Ast, id: ExprId, out: &mut Analysis) -> Result<(), CompilerF
         } => {
             visit_expr(ast, *inner, out)?;
         }
+        ExprKind::Call { callee, args, .. }
+            if let Some(arrow) = super::iife::immediately_invoked_arrow(ast, *callee, args)? =>
+        {
+            // The body runs at the call, so its writes are the enclosing
+            // function's own, as in TypeScript.
+            let ExprKind::Arrow { params, body, .. } =
+                &ast.try_expr(arrow).map_err(super::arena_failure)?.kind
+            else {
+                return Err(super::inference_failure(
+                    "an immediately-invoked callee is an arrow",
+                ));
+            };
+            scan_function_body(ast, params, *body, out)?;
+        }
         ExprKind::Call { callee, args, .. } | ExprKind::New { callee, args, .. } => {
             visit_expr(ast, *callee, out)?;
             for &a in args {
@@ -592,6 +606,18 @@ fn scan_function(
         .function_depth
         .checked_add(1)
         .ok_or_else(|| super::inference_failure("binding analysis function depth overflow"))?;
+    scan_function_body(ast, params, body, out)?;
+    out.function_depth -= 1;
+    Ok(())
+}
+
+/// A function's parameters and body, at the current function depth.
+fn scan_function_body(
+    ast: &Ast,
+    params: &[crate::ParamDecl],
+    body: crate::ArrowBody,
+    out: &mut Analysis,
+) -> Result<(), CompilerFailure> {
     let mut scope = BTreeMap::new();
     // Duplicate parameters have a dedicated diagnostic during signature resolution.
     for param in params {
@@ -608,7 +634,6 @@ fn scan_function(
         crate::ArrowBody::Block(body) => scan_body(ast, body, out)?,
     }
     out.scopes.pop();
-    out.function_depth -= 1;
 
     Ok(())
 }

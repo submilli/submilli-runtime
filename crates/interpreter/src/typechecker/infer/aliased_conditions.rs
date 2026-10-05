@@ -312,7 +312,7 @@ impl Inferer<'_> {
         true
     }
 
-    fn constant_root_type(&self, root: &narrowing::BindingId) -> Option<Type> {
+    pub(super) fn constant_root_type(&self, root: &narrowing::BindingId) -> Option<Type> {
         match root {
             narrowing::BindingId::Local { name, decl_scope } => {
                 let entry = self.scopes.get_binding(name, *decl_scope)?;
@@ -353,6 +353,7 @@ impl Inferer<'_> {
         match elem {
             narrowing::PathElem::Field(name) => self.readonly_field_type(receiver, name),
             narrowing::PathElem::Index(index) => readonly_element_type(receiver, index),
+            narrowing::PathElem::Key(..) => None,
         }
     }
 

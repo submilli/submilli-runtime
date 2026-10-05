@@ -1629,19 +1629,21 @@ fn render_literal(literal: &narrowing::LiteralValue) -> String {
 mod dropped_guard_tests {
     use super::super::test_support::run;
 
+    // A guard through a key whose declared type can't index, which the
+    // narrowing source can't rebuild from declared types.
     const TYPES: &str = "class Leaf { z: number | null = 3; }\n\
-        class Element { y: Leaf | null = new Leaf(); }\n\
-        class Holder { elems: Element[] = [new Element()]; }\n";
+        const key: string | null = \"k\";\n\
+        class Holder { leaves: Record<string, Leaf | null> = {}; }\n";
 
     #[test]
     fn dropped_guard_hint_stays_in_its_branch() {
         for (condition, guarded_arm) in [
             (
-                "h.elems[0].y !== null && h.elems[0].y.z !== null",
+                "key !== null && h.leaves[key] !== null && h.leaves[key].z !== null",
                 "thenValue",
             ),
             (
-                "h.elems[0].y === null || h.elems[0].y.z === null",
+                "key === null || h.leaves[key] === null || h.leaves[key].z === null",
                 "elseValue",
             ),
         ] {
@@ -1650,11 +1652,11 @@ mod dropped_guard_tests {
                 function main(): void {{
                     const h = new Holder();
                     if ({condition}) {{
-                        const thenValue: number = h.elems[0].y.z;
+                        const thenValue: number = h.leaves[key].z;
                     }} else {{
-                        const elseValue: number = h.elems[0].y.z;
+                        const elseValue: number = h.leaves[key].z;
                     }}
-                    const afterValue: number = h.elems[0].y.z;
+                    const afterValue: number = h.leaves[key].z;
                 }}"
             );
             let (_, diagnostics) = run(&source);
@@ -1690,8 +1692,8 @@ mod dropped_guard_tests {
             "{TYPES}
             function main(): number {{
                 const h = new Holder();
-                if (h.elems[0].y === null || h.elems[0].y.z === null) return 0;
-                return h.elems[0].y.z;
+                if (key === null || h.leaves[key] === null || h.leaves[key].z === null) return 0;
+                return h.leaves[key].z;
             }}"
         );
         let (_, diagnostics) = run(&source);
@@ -1710,7 +1712,7 @@ mod dropped_guard_tests {
     fn branch_join_keeps_only_a_common_dropped_refinement() {
         for (else_guard, expected_hint) in [
             (
-                "if (h.elems[0].y === null || h.elems[0].y.z === null) return 0;",
+                "if (key === null || h.leaves[key] === null || h.leaves[key].z === null) return 0;",
                 true,
             ),
             ("", false),
@@ -1719,9 +1721,9 @@ mod dropped_guard_tests {
                 "{TYPES}
                 function read(h: Holder, flag: boolean): number {{
                     if (flag) {{
-                        if (h.elems[0].y === null || h.elems[0].y.z === null) return 0;
+                        if (key === null || h.leaves[key] === null || h.leaves[key].z === null) return 0;
                     }} else {{ {else_guard} }}
-                    return h.elems[0].y.z;
+                    return h.leaves[key].z;
                 }}"
             );
             let (_, diagnostics) = run(&source);
@@ -1741,12 +1743,12 @@ mod dropped_guard_tests {
             "{TYPES}
             function first(): void {{
                 const h = new Holder();
-                do {{}} while (h.elems[0].y !== null && h.elems[0].y.z !== null);
-                const read = (): number => h.elems[0].y.z;
+                do {{}} while (key !== null && h.leaves[key] !== null && h.leaves[key].z !== null);
+                const read = (): number => h.leaves[key].z;
             }}
             function second(): number {{
                 const h = new Holder();
-                return h.elems[0].y.z;
+                return h.leaves[key].z;
             }}"
         );
         let (_, diagnostics) = run(&source);
