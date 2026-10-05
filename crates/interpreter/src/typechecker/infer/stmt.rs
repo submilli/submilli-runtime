@@ -727,6 +727,8 @@ impl Inferer<'_> {
             exits.extend(outcome.exit);
             all_assigned.extend(outcome.all_writes);
             self.scopes.pop();
+            // Catch-property materializations cannot outlive their parameter's scope.
+            self.drop_out_of_scope_narrowings();
             if let Some(body) = outcome.body {
                 typed_catches.push(crate::TypedCatchClause {
                     binding: clause.binding.clone(),
