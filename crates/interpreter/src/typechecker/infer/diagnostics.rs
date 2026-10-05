@@ -1566,7 +1566,12 @@ impl<'a> Inferer<'a> {
     /// `Array.isArray(x)` rather than puzzling over a generic
     /// "expected boolean" mismatch). Falls back to the standard
     /// boolean-compatibility check for all other non-condition types.
-    pub(super) fn check_condition_ty(&mut self, ty: &Type, span: Span) {
+    pub(super) fn check_condition_ty(
+        &mut self,
+        condition: crate::ExprId,
+        ty: &Type,
+        span: Span,
+    ) -> Result<(), crate::compiler_error::CompilerFailure> {
         if matches!(ty.peel(), Type::Unknown) {
             self.error_with_help(
                 span,
@@ -1577,9 +1582,32 @@ impl<'a> Inferer<'a> {
                         .to_string(),
                 ],
             );
-        } else if !super::narrowing::condition_compatible(ty) {
+        } else if !self.is_condition_value(condition, ty)? {
             self.error_non_condition_type(span, ty);
         }
+        Ok(())
+    }
+
+    /// Whether a condition operand produces a value to test. A local a guard
+    /// narrowed to `never` counts, as in TypeScript: the test sits in code no
+    /// value reaches (after an exhausted `else if` chain), and its read traps.
+    pub(super) fn is_condition_value(
+        &self,
+        condition: crate::ExprId,
+        ty: &Type,
+    ) -> Result<bool, crate::compiler_error::CompilerFailure> {
+        if super::narrowing::condition_compatible(ty) {
+            return Ok(true);
+        }
+        let kind = &self
+            .typed_ast
+            .try_expr(condition)
+            .map_err(crate::typechecker::arena_failure)?
+            .kind;
+        Ok(
+            matches!(ty, Type::Never)
+                && matches!(kind, crate::TypedExprKind::LocalNarrowRef { .. }),
+        )
     }
 }
 

@@ -927,16 +927,18 @@ impl<'a> Inferer<'a> {
             (None, Some(lit)) => self.narrow_equal_to_literal(op, lhs_id, lit),
             (Some(lit), None) => self.narrow_equal_to_literal(op, rhs_id, lit),
             (None, None) => self.narrow_equal_to_union(op, lhs_id, rhs_id),
-            // A reference already narrowed to one literal, compared with a
-            // literal written out: unequal, it holds nothing.
+            // Both sides have literal types: narrow a side that isn't written
+            // out as a literal, the left one when both are references.
             (Some(lhs_lit), Some(rhs_lit)) => {
-                if is_written_literal(&self.typed_ast, rhs_id)? {
-                    self.narrow_equal_to_literal(op, lhs_id, rhs_lit)
-                } else if is_written_literal(&self.typed_ast, lhs_id)? {
-                    self.narrow_equal_to_literal(op, rhs_id, lhs_lit)
-                } else {
-                    Ok(None)
+                if !is_written_literal(&self.typed_ast, lhs_id)?
+                    && let Some(envs) = self.narrow_equal_to_literal(op, lhs_id, rhs_lit)?
+                {
+                    return Ok(Some(envs));
                 }
+                if is_written_literal(&self.typed_ast, rhs_id)? {
+                    return Ok(None);
+                }
+                self.narrow_equal_to_literal(op, rhs_id, lhs_lit)
             }
         }
     }
@@ -1088,7 +1090,7 @@ impl<'a> Inferer<'a> {
         for member in narrowing::union_members(path_ty) {
             for value_member in &value_members {
                 if super::assignable(member, value_member, self.resolver())
-                    || self.may_share_an_object(member, value_member)
+                    || self.objects_may_be_equal(member, value_member)
                 {
                     shared.push(member.clone());
                 } else if super::assignable(value_member, member, self.resolver()) {
@@ -1101,7 +1103,7 @@ impl<'a> Inferer<'a> {
 
     /// [`may_share_an_object`], unless a property both shapes require can't
     /// hold the same value in each (`kind: "a"` against `kind: "b"`).
-    fn may_share_an_object(&self, left: &Type, right: &Type) -> bool {
+    fn objects_may_be_equal(&self, left: &Type, right: &Type) -> bool {
         if !may_share_an_object(left, right) {
             return false;
         }
@@ -2499,8 +2501,8 @@ fn have_disjoint_unit_property(
     })
 }
 
-/// The values a type made only of literals and `null` holds; `None` stands
-/// for `null`.
+/// The values a type made only of literals and `null` holds, or `None` if it
+/// has another member. In the set, `None` stands for `null`.
 fn unit_values(ty: &Type) -> Option<std::collections::BTreeSet<Option<narrowing::LiteralValue>>> {
     narrowing::union_members(ty)
         .into_iter()

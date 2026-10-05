@@ -58,6 +58,28 @@ function single(x: "b"): number {
   return 2;
 }
 
+function byReference(x: "a" | "b", a: "a", b: "b"): number {
+  if (x === a) {
+    return 1;
+  } else if (x === b) {
+    return 2;
+  }
+  return assertNever(x);
+}
+
+// Code after the chain still type-checks; a read of `x` there would trap.
+function testedAfter(x: "a" | "b"): number {
+  if (x === "a") {
+    return 1;
+  } else if (x === "b") {
+    return 2;
+  }
+  if (!x || x) {
+    return 3;
+  }
+  return x ? 4 : 5;
+}
+
 function localChain(): string {
   let mode: "a" | "b" = "a";
   if (mode === "a") {
@@ -79,5 +101,6 @@ if (topMode === "a") {
 function main(): void {
   console.log(letter("a"), letter("b"), digit(1), digit(2), flag(true), flag(false));
   console.log(letterOrNull(null), letterOrNull("a"), single("b"), primitive("s"), primitive(0));
+  console.log(byReference("a", "a", "b"), byReference("b", "a", "b"), testedAfter("b"));
   console.log(localChain(), topResult);
 }

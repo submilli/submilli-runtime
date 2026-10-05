@@ -1353,7 +1353,7 @@ impl Inferer<'_> {
                                 .to_string(),
                         ],
                     );
-                } else if !super::narrowing::condition_compatible(&lhs_ty) {
+                } else if !self.is_condition_value(typed_lhs, &lhs_ty)? {
                     condition_error = true;
                     let lhs_span = self.ast.try_expr(lhs).map_err(super::arena_failure)?.span;
                     self.error_non_condition_type(lhs_span, &lhs_ty);
@@ -1366,7 +1366,9 @@ impl Inferer<'_> {
                 };
                 let (typed_rhs, rhs_ty) =
                     self.infer_conditional_operand(rhs, &rhs_env, expected, keeps_literal)?;
-                if matches!(rhs_ty.peel(), Type::Void | Type::Never) {
+                if matches!(rhs_ty.peel(), Type::Void | Type::Never)
+                    && !self.is_condition_value(typed_rhs, &rhs_ty)?
+                {
                     condition_error = true;
                     let rhs_span = self.ast.try_expr(rhs).map_err(super::arena_failure)?.span;
                     self.error_non_condition_type(rhs_span, &rhs_ty);
@@ -1474,7 +1476,7 @@ impl Inferer<'_> {
                                 .to_string(),
                         ],
                     );
-                } else if !super::narrowing::condition_compatible(&operand_ty) {
+                } else if !self.is_condition_value(id, &operand_ty)? {
                     let operand_span = self
                         .ast
                         .try_expr(operand)
@@ -7995,7 +7997,7 @@ impl Inferer<'_> {
     ) -> Result<(TypedExprKind, Type), CompilerFailure> {
         let (typed_cond, cond_ty) = self.infer_expr(cond, None)?;
         let cond_span = self.ast.try_expr(cond).map_err(super::arena_failure)?.span;
-        self.check_condition_ty(&cond_ty, cond_span);
+        self.check_condition_ty(typed_cond, &cond_ty, cond_span)?;
 
         let (true_env, false_env) = self.predicate_envs(typed_cond)?;
 
