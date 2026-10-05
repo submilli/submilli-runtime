@@ -135,7 +135,7 @@ impl Inferer<'_> {
                     .clone(),
                 op,
             ) {
-                (ExprKind::Identifier(ident), None) => self.infer_assign(ident, value, span)?,
+                (ExprKind::Identifier(ident), None) => self.infer_assign(ident, value)?,
                 (ExprKind::Identifier(ident), Some((op, op_span))) => {
                     self.infer_compound_assign(ident, op, op_span, value, span)?
                 }
