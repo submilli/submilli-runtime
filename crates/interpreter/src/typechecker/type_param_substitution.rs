@@ -627,7 +627,7 @@ impl<'a> Unifier<'a> {
                     }
                     self.restore(snap);
                 }
-                if self.defers_close_match_into_lone_type_var(pa, arg_ty) {
+                if self.try_defer_close_match_into_lone_type_var(pa, arg_ty) {
                     return Ok(());
                 }
                 for m in pa {
@@ -817,13 +817,7 @@ impl<'a> Unifier<'a> {
         params: &[Type],
         args: &[Type],
     ) -> Option<Result<(), UnifyError>> {
-        let (type_var_index, type_var) = self.lone_unbound_type_var(params)?;
-        let others: Vec<&Type> = params
-            .iter()
-            .enumerate()
-            .filter(|(index, _)| *index != type_var_index)
-            .map(|(_, member)| member)
-            .collect();
+        let (type_var, others) = self.split_lone_unbound_type_var(params)?;
         let pairable: Vec<&Type> = others
             .iter()
             .copied()
@@ -855,82 +849,85 @@ impl<'a> Unifier<'a> {
         if !self.is_unbound_type_var(type_var) {
             return Some(self.check_closely_matched(params, &closely_matched));
         }
-        let param = Type::union(params.to_vec());
         for (sibling, arg) in closely_matched {
-            self.sub.close_matches.push(CloseMatch {
-                param: param.clone(),
-                sibling: sibling.clone(),
-                arg: arg.clone(),
-            });
+            self.record_close_match(params, sibling, arg);
         }
-        self.add_whole_union_fallback(type_var, Type::union(args.to_vec()));
+        self.offer_whole_union_fallback(type_var, Type::union(args.to_vec()));
         Some(Ok(()))
     }
 
-    /// The one member of `params` that is a type parameter not yet bound, with
-    /// its index; None when there is no such member or more than one.
-    fn lone_unbound_type_var<'p>(&self, params: &'p [Type]) -> Option<(usize, &'p Type)> {
+    /// The one member of `params` that is a type parameter not yet bound,
+    /// and the other members; None when there is no such member or more
+    /// than one.
+    fn split_lone_unbound_type_var<'p>(
+        &self,
+        params: &'p [Type],
+    ) -> Option<(&'p Type, Vec<&'p Type>)> {
         let mut unbound = params
             .iter()
             .enumerate()
             .filter(|(_, member)| self.is_unbound_type_var(member));
-        let lone = unbound.next()?;
-        unbound.next().is_none().then_some(lone)
-    }
-
-    /// tsc's rule for an argument that only [`closely_matches`] a member of a
-    /// union parameter whose lone other member is an unbound type parameter,
-    /// as `Box<boolean>` does `Box<number>` in `T | Box<number>`: like a union
-    /// argument whose members are all closely matched, it becomes the type
-    /// parameter's fallback and is checked once inference is done. Whether it
-    /// did; when it did not, the members are tried in order.
-    fn defers_close_match_into_lone_type_var(&mut self, params: &[Type], arg: &Type) -> bool {
-        if !self.is_argument || self.contravariant {
-            return false;
+        let (type_var_index, type_var) = unbound.next()?;
+        if unbound.next().is_some() {
+            return None;
         }
-        let Some((type_var_index, type_var)) = self.lone_unbound_type_var(params) else {
-            return false;
-        };
-        let mut others = params
+        let others = params
             .iter()
             .enumerate()
             .filter(|(index, _)| *index != type_var_index)
-            .map(|(_, member)| member);
-        let Some(sibling) = others.clone().find(|other| closely_matches(other, arg)) else {
-            return false;
-        };
-        let absorbed = others.any(|other| {
-            let snap = self.snapshot();
-            let unified = self.unify(other, arg).is_ok();
-            self.restore(snap);
-            unified
-        });
-        if absorbed {
+            .map(|(_, member)| member)
+            .collect();
+        Some((type_var, others))
+    }
+
+    /// tsc's rule for a non-union argument against a union parameter, as
+    /// `Box<boolean>` against `T | Box<number>`. When `params` has exactly
+    /// one unbound type parameter and `arg` [`closely_matches`] one of the
+    /// other members without unifying with any of them, `arg` is deferred as
+    /// a union argument whose members are all closely matched is: it is
+    /// recorded as a close match, checked once inference is done, and
+    /// offered as the type parameter's fallback. Returns true when `arg` was
+    /// deferred, false when the caller should try each member in order.
+    fn try_defer_close_match_into_lone_type_var(&mut self, params: &[Type], arg: &Type) -> bool {
+        if !self.is_argument || self.contravariant {
             return false;
         }
+        let Some((type_var, others)) = self.split_lone_unbound_type_var(params) else {
+            return false;
+        };
+        let Some(sibling) = others.iter().find(|other| closely_matches(other, arg)) else {
+            return false;
+        };
+        if others.iter().any(|other| self.would_unify(other, arg)) {
+            return false;
+        }
+        self.record_close_match(params, sibling, arg);
+        self.offer_whole_union_fallback(type_var, arg.clone());
+        true
+    }
+
+    /// Record that `arg` closely matched `sibling`, a member of the union
+    /// parameter `params`, to be checked once inference is done.
+    fn record_close_match(&mut self, params: &[Type], sibling: &Type, arg: &Type) {
         self.sub.close_matches.push(CloseMatch {
             param: Type::union(params.to_vec()),
             sibling: sibling.clone(),
             arg: arg.clone(),
         });
-        self.add_whole_union_fallback(type_var, arg.clone());
-        true
     }
 
     /// Offer `candidate` as `type_var`'s whole-union fallback. As tsc picks
-    /// the common supertype of candidates of the same priority, it replaces
-    /// an earlier fallback it accepts; otherwise the earlier one stays.
-    fn add_whole_union_fallback(&mut self, type_var: &Type, candidate: Type) {
+    /// the common supertype of candidates of the same priority, `candidate`
+    /// replaces the existing fallback when that fallback is assignable to
+    /// it; otherwise the existing fallback stays.
+    fn offer_whole_union_fallback(&mut self, type_var: &Type, candidate: Type) {
         let Type::TypeVar(name) = type_var.peel() else {
             return;
         };
-        if let Some(existing) = self.sub.whole_union_fallbacks.get(name).cloned() {
-            let snap = self.snapshot();
-            let widens = self.unify(&candidate, &existing).is_ok();
-            self.restore(snap);
-            if !widens {
-                return;
-            }
+        if let Some(existing) = self.sub.whole_union_fallbacks.get(name).cloned()
+            && !self.would_unify(&candidate, &existing)
+        {
+            return;
         }
         self.sub
             .whole_union_fallbacks
@@ -972,6 +969,15 @@ impl<'a> Unifier<'a> {
         if !unified {
             self.restore(snap);
         }
+        unified
+    }
+
+    /// Whether `param_ty` unifies with `arg_ty`, undoing the bindings either
+    /// way.
+    fn would_unify(&mut self, param_ty: &Type, arg_ty: &Type) -> bool {
+        let snap = self.snapshot();
+        let unified = self.unify(param_ty, arg_ty).is_ok();
+        self.restore(snap);
         unified
     }
 
