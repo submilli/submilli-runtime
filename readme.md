@@ -32,27 +32,27 @@ runtime, built purposely for agents.
 
 Submilli comes with governance, but from the inside out. Before any call to
 the outside world, we first check the environment's permissions (the
-blueprint) to see if the call is allowed. And we don't just check the IP,
-domain, or port. The package author defines a semantic language for each
+Blueprint) to see if the call is allowed. And we don't just check the IP,
+domain, or port. The Package author defines a semantic language for each
 operation, and you filter what your agent can do in those terms: "Allow a
 refund up to $500, only for customer 123". These rules are outside the
 model's control. They are not a prompt.
 
-We also gave the ecosystem a reset. All the packages for Submilli are written
+We also gave the ecosystem a reset. All the Packages for Submilli are written
 from scratch, purposely for agents, with semantic security. We don't use npm
-packages, and while we do support MCP servers, packages are the native way to
+Packages, and while we do support MCP servers, Packages are the native way to
 work with Submilli.
 
 ## What a rule looks like
 
 Blueprints are one of Submilli's main building blocks, together with
-packages. A blueprint defines the environment the agent's code runs in. You
+Packages. A Blueprint defines the environment the agent's code runs in. You
 write it in YAML.
 
-The permissions block in a blueprint defines what the code can do, and you
+The permissions block in a Blueprint defines what the code can do, and you
 fill it by adding capabilities. Package authors publish capabilities, and you
-grant them to the agent in the blueprint. You can also define variables for a
-blueprint, which is a very strong concept. Now you control not only the
+grant them to the agent in the Blueprint. You can also define variables for a
+Blueprint, which is a very strong concept. Now you control not only the
 agent's capabilities, but also the context it can use them in. In the example
 below, we allow billing operations only for a specific customer, and credits
 only up to $500. If the agent tries a different customer, the operation
@@ -107,7 +107,7 @@ and [plain HTTP](https://submilli.ai/docs/tutorials/use-the-http-api).
 - [Blueprints](https://submilli.ai/docs/blueprints) with rules on an operation's
   arguments, bound per session, and everything denied by default.
 - [Packages](https://submilli.ai/docs/packages) that wrap your APIs and hold the
-  credentials, so generated code never sees a secret. Curated packages for
+  credentials, so generated code never sees a secret. Curated Packages for
   GitHub, Slack, Gmail, Google Drive and Calendar, Linear, Notion, Sentry, and
   web search are [included](https://submilli.ai/docs/reference/curated-packages).
 - [Limits](https://submilli.ai/docs/server/set-limits) on fuel, memory, time,
@@ -115,8 +115,8 @@ and [plain HTTP](https://submilli.ai/docs/tutorials/use-the-http-api).
   server keeps serving.
 - An [audit trail](https://submilli.ai/docs/reference/audit-trail) of every
   refusal, run, session, and admin change.
-- MCP servers as packages, with rules on their tools.
-- Checks for package authors: `--deny-warnings` in CI and an
+- MCP servers as Packages, with rules on their tools.
+- Checks for Package authors: `--deny-warnings` in CI and an
   [agent security review](https://submilli.ai/docs/packages/review-package-security).
 - HTTPS, API tokens with admin and user roles, and an encrypted secret store.
 
@@ -124,7 +124,7 @@ and [plain HTTP](https://submilli.ai/docs/tutorials/use-the-http-api).
 
 Submilli is young and moving quickly. Releases are on the
 [releases page](https://github.com/submilli/submilli-runtime/releases).
-Breaking changes are called out in the release notes, and a blueprint that
+Breaking changes are called out in the release notes, and a Blueprint that
 uses a removed feature fails to load with a message that says what to write
 instead.
 
@@ -136,10 +136,10 @@ Submilli Enterprise is fault tolerant. To learn more, email
 | Path | What it holds |
 | --- | --- |
 | `crates/` | The compiler, runtime, CLI, and server, in Rust |
-| `packages/` | The curated packages |
+| `packages/` | The curated Packages |
 | `charts/` | The Helm chart |
 | `docs/`, `docs-site/` | The book at [submilli.ai/docs](https://submilli.ai/docs/) |
-| `skills/` | The skill that teaches coding assistants to write blueprints and packages |
+| `skills/` | The skill that teaches coding assistants to write Blueprints and Packages |
 | `examples/` | The quickstart and harness examples |
 
 ## Contributing

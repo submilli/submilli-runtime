@@ -27,5 +27,5 @@ authorship:
 ---
 
 Start with the [introduction](/docs/why) for the argument and a first
-look at a blueprint, then the quickstart to install the CLI and run your first
+look at a Blueprint, then the quickstart to install the CLI and run your first
 agent-generated program.

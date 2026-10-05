@@ -52,11 +52,11 @@ function main(): { count: number; hours: number } {
 <file>` runs a program. `submilli check <file>` only compiles it.
 
 Modules are imported by name: `submilli:<name>` for the standard library,
-`@<org>/<name>` for installed packages, and `@mcp/<server>` for MCP servers
-a blueprint declares. Namespace (`import * as fs`), default
+`@<org>/<name>` for installed Packages, and `@mcp/<server>` for MCP servers
+a Blueprint declares. Namespace (`import * as fs`), default
 (`import fs`), and named (`import { sha256 }`) imports all work. Built-ins
 need no import. Importing a module grants nothing. Every gated call is
-checked against the blueprint.
+checked against the Blueprint.
 
 ## Stricter by design
 
@@ -93,7 +93,7 @@ record key all read as `null`.
 
 ### Calls return their result
 
-Every call into the standard library or a package returns its result
+Every call into the standard library or a Package returns its result
 directly, with no `async`, `await`, or `Promise`, so a program reads top to
 bottom:
 
@@ -121,7 +121,7 @@ for (const word of words) {
 | `==` and `!=` | Strict, like `===` and `!==`, so `1 == "1"` is a compile error |
 | Return types | Declared on functions and methods; arrow functions infer them |
 | `items[i]` | Out-of-range reads and writes throw `RangeError`. `push` appends |
-| Runtime APIs | The standard library and Submilli packages, in place of Node.js APIs, browser globals, and npm |
+| Runtime APIs | The standard library and Submilli Packages, in place of Node.js APIs, browser globals, and npm |
 | Dates and times | `Temporal`, in place of `Date` |
 | `Symbol`, `Proxy`, prototype reflection | Not available |
 
@@ -152,15 +152,15 @@ interface Credit {
 ```
 
 A runtime error names the error and shows the call stack and the line that
-threw. A call the blueprint doesn't allow throws `PermissionDeniedError`
+threw. A call the Blueprint doesn't allow throws `PermissionDeniedError`
 ([Permissions](/docs/reference/permissions#denials-at-run-time)).
 
 ## Looking declarations up
 
 | Command | Prints |
 | --- | --- |
-| `submilli search <query>` | Modules and packages whose name, description, or exports match, such as `submilli search writeText` |
-| `submilli docs <module>` | A module's declarations, such as `submilli docs submilli:http`. With `--blueprint <file>`, only what that blueprint's programs can import |
+| `submilli search <query>` | Modules and Packages whose name, description, or exports match, such as `submilli search writeText` |
+| `submilli docs <module>` | A module's declarations, such as `submilli docs submilli:http`. With `--blueprint <file>`, only what that Blueprint's programs can import |
 | `submilli builtins` | The built-in types and namespaces |
 | `submilli builtins <name>` | A built-in's declarations, or one member, such as `submilli builtins Map.get` |
 

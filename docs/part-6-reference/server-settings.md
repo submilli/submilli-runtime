@@ -40,18 +40,18 @@ flat names listed. A dash means the form doesn't exist.
 | `allow_unauthenticated` | `--allow-unauthenticated` | `SUBMILLI_ALLOW_UNAUTHENTICATED` | boolean | `false` | Serve without API tokens. |
 | `mcp_allowed_hosts` | `--mcp-allowed-host`, repeatable | `SUBMILLI_MCP_ALLOWED_HOSTS`, comma-separated | list of `host[:port]` | `[]` | `Host` headers the MCP endpoint accepts beside the loopback names. See [`mcp_allowed_hosts`](#mcp_allowed_hosts). |
 | `mcp_oauth` | — | — | block | no providers | OAuth client registrations for MCP servers. See [`mcp_oauth`](#mcp_oauth). |
-| `github_token_file` | — | — | path | none | GitHub token for package installs. See [`github_token_file`](#github_token_file). |
+| `github_token_file` | — | — | path | none | GitHub token for Package installs. See [`github_token_file`](#github_token_file). |
 | `database_path` | `--database-path` | `SUBMILLI_DATABASE_PATH` | path | `$SUBMILLI_HOME/server/db/submilli.db` | SQLite database file. |
 | `blueprint_dir` | `--blueprint-dir` | `SUBMILLI_BLUEPRINT_DIR` | path | `$SUBMILLI_HOME/server/blueprints` | Obsolete. |
 | `session_store_dir` | `--session-store-dir` | `SUBMILLI_SESSION_STORE_DIR` | path | `$SUBMILLI_HOME/server/sessions` | Session lifecycle records. |
 | `vfs_session_dir` | `--vfs-session-dir` | `SUBMILLI_VFS_SESSION_DIR` | path | `$SUBMILLI_HOME/server/vfs/sessions` | Files of `per_session` filesystems. |
 | `vfs_ephemeral_dir` | `--vfs-ephemeral-dir` | `SUBMILLI_VFS_EPHEMERAL_DIR` | path | the OS temp directory | Scratch directories of `ephemeral` filesystems. |
-| `package_store_dir` | `--package-store-dir` | `SUBMILLI_PACKAGE_STORE_DIR` | path | `$SUBMILLI_HOME/server/packages` | Installed packages. |
+| `package_store_dir` | `--package-store-dir` | `SUBMILLI_PACKAGE_STORE_DIR` | path | `$SUBMILLI_HOME/server/packages` | Installed Packages. |
 | `volume_dir` | `--volume-dir` | `SUBMILLI_VOLUME_DIR` | path | `$SUBMILLI_HOME/server/volumes` | `managed-local` volumes. |
 | `secret_store.dir` | `--secret-store-dir` | `SUBMILLI_SECRET_STORE_DIR` | path | `$SUBMILLI_HOME/server/secrets` | The encrypted secret store. See [`secret_store`](#secret_store). |
 | `secret_store.key_file` | `--secret-store-key-file` | `SUBMILLI_SECRET_STORE_KEY_FILE` | path | none | File holding the store's key. |
 | `secret_store.key_env` | `--secret-store-key-env` | `SUBMILLI_SECRET_STORE_KEY_ENV` | variable name | `SUBMILLI_SECRET_KEY` | Variable holding the store's key. |
-| `volumes` | — | — | map | `{}` | Named volumes blueprints may use. See [`volumes`](#volumes). |
+| `volumes` | — | — | map | `{}` | Named volumes Blueprints may use. See [`volumes`](#volumes). |
 | `network.allow_ip` | `--allow-ip`, repeatable | `SUBMILLI_ALLOW_IP`, comma-separated | list of IP addresses or CIDR ranges | `[]` | Addresses the outbound block lets through. See [`network`](#network). |
 | `network.allow_localhost` | `--allow-localhost` | `SUBMILLI_ALLOW_LOCALHOST` | boolean | `false` | Let outbound calls reach loopback. |
 | `network.allow_private` | `--allow-private` | `SUBMILLI_ALLOW_PRIVATE` | boolean | `false` | Let outbound calls reach the private ranges. |
@@ -63,7 +63,7 @@ flat names listed. A dash means the form doesn't exist.
 | `max_llm_tokens` | `--max-llm-tokens` | `SUBMILLI_MAX_LLM_TOKENS` | count, at least 1 | `20M` | Model tokens across all runs. |
 | `max_execution_llm_tokens` | `--max-execution-llm-tokens` | `SUBMILLI_MAX_EXECUTION_LLM_TOKENS` | count, at least 1 | `1M` | Model tokens one run may spend. |
 | `max_llm_concurrency` | `--max-llm-concurrency` | `SUBMILLI_MAX_LLM_CONCURRENCY` | prompts, at least 1 | `4` | Prompts of one `llm.batch` in flight at once. |
-| — | — | `SUBMILLI_DENY_WARNINGS` | `1` or unset | unset | Refuse every package install that has a code warning, whatever the caller asks. |
+| — | — | `SUBMILLI_DENY_WARNINGS` | `1` or unset | unset | Refuse every Package install that has a code warning, whatever the caller asks. |
 | `telemetry` | — | `SUBMILLI_TELEMETRY` | boolean | `false` | Report to the Submilli maintainers. See [`telemetry`](#telemetry). |
 | `telemetry_include_source` | — | `SUBMILLI_TELEMETRY_INCLUDE_SOURCE` | boolean | `false` | Attach failed programs' source to reports. |
 | `logging.file` | `--log-file` | `SUBMILLI_LOG_FILE` | path | standard output | Append server logs to a file. See [Logs](#logs). |
@@ -163,8 +163,8 @@ role, restart, move the callers, remove the old entry, and restart again.
 
 | Role | May call |
 | --- | --- |
-| `user` | What a harness needs: running programs, sessions, the MCP endpoint, and a blueprint's prompt, packages, and built-ins ([HTTP API](/docs/reference/http-api)) |
-| `admin` | Everything, including blueprints, secrets, packages, status, and shutdown |
+| `user` | What a harness needs: running programs, sessions, the MCP endpoint, and a Blueprint's prompt, Packages, and built-ins ([HTTP API](/docs/reference/http-api)) |
+| `admin` | Everything, including Blueprints, secrets, Packages, status, and shutdown |
 
 `allow_unauthenticated` serves every caller that reaches the port, with no
 token, and can't be combined with tokens. The server logs a warning when it
@@ -194,12 +194,12 @@ mcp_allowed_hosts:
 | `volume_dir` | One directory per `managed-local` volume. | `$SUBMILLI_HOME/server/volumes` |
 | `secret_store.dir` | The encrypted secret store. | `$SUBMILLI_HOME/server/secrets` |
 
-The server creates each directory it needs. It also reads the CLI's package
+The server creates each directory it needs. It also reads the CLI's Package
 store, `$SUBMILLI_HOME/packages`, as a read-only fallback.
 
 ## `secret_store`
 
-The secret store holds the values of a blueprint's `store:` secrets and the
+The secret store holds the values of a Blueprint's `store:` secrets and the
 OAuth tokens of MCP logins, encrypted with a key. The key is base64 of 32 bytes, such as
 `head -c 32 /dev/urandom | base64`.
 
@@ -216,14 +216,14 @@ back out through the API.
 
 ## `volumes`
 
-Named volumes a blueprint may use as its filesystem root or mount under
+Named volumes a Blueprint may use as its filesystem root or mount under
 `vfs.mounts`. Each entry maps a name to:
 
 | Key | Value |
 | --- | --- |
 | `kind` | Required. `managed-local`: the server keeps the files at `<volume_dir>/<name>`, created on first use. `local-path`: the files are in the directory `path` names, which the server never creates or deletes. |
 | `path` | Required for `local-path`, refused for `managed-local`. An absolute path. |
-| `access` | `read_write` (default) or `read_only`. A blueprint can narrow it, never widen it. |
+| `access` | `read_write` (default) or `read_only`. A Blueprint can narrow it, never widen it. |
 | `size_limit` | Required. A size such as `500MB` or `10GB`, or `unlimited`. Units are binary: `KB` is 1,024 bytes, `MB` 1,024 KB, `GB` 1,024 MB, `TB` 1,024 GB. `B` or no unit means bytes. |
 
 ```yaml title="server.yaml (fragment)"
@@ -233,7 +233,7 @@ volumes:
     size_limit: 1GB
 ```
 
-One `size_limit` covers the volume across every session and blueprint that
+One `size_limit` covers the volume across every session and Blueprint that
 uses it, and the server never deletes a volume's files. A declaration that
 is incomplete, overlaps a server directory or another volume, or names one
 directory twice stops the server from starting. [Mount a shared
@@ -243,7 +243,7 @@ volume](/docs/server/mount-a-shared-volume) shows a volume in use.
 
 The server blocks every outbound connection a program causes, through
 `submilli:http`, Git, model providers, and MCP servers, from reaching an
-internal address, whatever the blueprint allows. It checks the addresses a
+internal address, whatever the Blueprint allows. It checks the addresses a
 name resolves to, so a public name pointing inside is blocked too.
 
 | Addresses | Blocked unless |
@@ -266,7 +266,7 @@ or in another container through its address, with `allow_ip`.
 ## Limits
 
 The `max_*` settings bound each run and the server as a whole, and a
-blueprint can't raise them. [Errors and
+Blueprint can't raise them. [Errors and
 limits](/docs/reference/errors-and-limits) lists what each one bounds and
 what a program sees. [Set limits](/docs/server/set-limits) shows how to
 choose them.
@@ -293,10 +293,10 @@ mcp_oauth:
 
 ## `github_token_file`
 
-A file holding the GitHub token the server sends when it installs packages,
+A file holding the GitHub token the server sends when it installs Packages,
 so installs can reach private repositories. Without it, installs reach only public ones.
 The file is read again on every install, so replacing it rotates the token.
-[Install private packages on a server](/docs/server/install-private-packages)
+[Install private Packages on a server](/docs/server/install-private-packages)
 shows it in use.
 
 ## `telemetry`
@@ -305,7 +305,7 @@ Off by default. When on, the server reports to the Submilli maintainers:
 
 | Reported | When |
 | --- | --- |
-| Crashes; usage counters (sessions opened, programs run by outcome, package and built-in lookups, blueprint changes); for each failed program, its error `kind` and the first line of its message | `telemetry` is on |
+| Crashes; usage counters (sessions opened, programs run by outcome, Package and built-in lookups, Blueprint changes); for each failed program, its error `kind` and the first line of its message | `telemetry` is on |
 | The failed program's source and its full error, including the backtrace or the diagnostics that quote its lines | `telemetry` and `telemetry_include_source` are both on |
 | Client IP addresses, request headers, the hosts of programs' outbound calls | Never |
 
@@ -315,7 +315,7 @@ Off by default. When on, the server reports to the Submilli maintainers:
 `submilli-server --health-check` probes it and exits `0` when the server
 answers, reading the address from its own config file and environment, not
 the serving process's flags. `GET /v1/status`, with an `admin` token, returns
-the bind address, process ID, open sessions, and registered blueprints.
+the bind address, process ID, open sessions, and registered Blueprints.
 
 ## Logs
 
@@ -347,7 +347,7 @@ ts=2026-10-03T15:29:46.963Z level=info stream=log target=submilli_server::execut
 
 | Field | Value |
 | --- | --- |
-| `blueprint` | The blueprint the program ran under. |
+| `blueprint` | The Blueprint the program ran under. |
 | `session` | The session ID. |
 | `fuel` | Fuel consumed, `wasm_fuel` plus `host_fuel`. |
 | `wasm_fuel` | Fuel the program's own instructions consumed. |
@@ -374,7 +374,7 @@ logging:
 `summary` writes one record per run for each caller, capability, and
 rule, with a count. `all` writes one per operation, and `none` writes none.
 Refusals are always recorded one by one. The complete JSON context passed
-to a package or built-in permission check is recorded. Secure the audit
+to a Package or built-in permission check is recorded. Secure the audit
 destination accordingly.
 
 Writing a record never stops a run. If the output can't be written, the

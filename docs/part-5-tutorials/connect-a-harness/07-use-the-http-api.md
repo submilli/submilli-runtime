@@ -1,6 +1,6 @@
 ---
 title: "Use the HTTP API"
-description: "Run the research agent on the Vercel AI SDK with no MCP client: the tools built by hand on the server's HTTP API, the blueprint and variables fixed in your code, then a real conversation."
+description: "Run the research agent on the Vercel AI SDK with no MCP client: the tools built by hand on the server's HTTP API, the Blueprint and variables fixed in your code, then a real conversation."
 slug: tutorials/use-the-http-api
 sidebar:
   order: 7
@@ -15,14 +15,14 @@ The HTTP API offers the same operations as plain requests. Use it when
 your harness has no MCP client, or when you want to decide which tools
 the model gets and what they are called. The cost is that you build the
 tools yourself. The execute tool's description is not yours to write.
-That text teaches the model the language, with this blueprint's
-packages and rules filled in, and the server publishes it for you to
+That text teaches the model the language, with this Blueprint's
+Packages and rules filled in, and the server publishes it for you to
 fetch.
 
 In this tutorial we will run the research agent on the Vercel AI SDK
-with tools built on the server's HTTP API, and the blueprint and the
+with tools built on the server's HTTP API, and the Blueprint and the
 signed-in user (`u_ada` in the examples) fixed in our own code. You need the server and the `research`
-blueprint from [Connect a harness](/docs/tutorials/connect-a-harness),
+Blueprint from [Connect a harness](/docs/tutorials/connect-a-harness),
 with `SUBMILLI_SERVER_TOKEN` still exported, Node.js 20 or later, and a
 key from your model provider for the conversation. The agent file
 imports `@ai-sdk/anthropic`. For Google or OpenAI, `@ai-sdk/google` or
@@ -238,14 +238,14 @@ async function json(response: Response): Promise<any> {
 
 Notice `description: describe.prompt` on the execute tool. That text is
 all the model is told about the language. It covers the subset of
-TypeScript it may write, the modules this blueprint lets it import, its
+TypeScript it may write, the modules this Blueprint lets it import, its
 filesystem and hosts, and what to do with a denial. Write your own description
-there and the model writes Node.js, imports packages the blueprint
+there and the model writes Node.js, imports Packages the Blueprint
 doesn't list, and retries denials. Fetch it from the server, per
-blueprint, and never cache it across blueprint changes. The second
-request opens the session and fixes the blueprint and the variables,
+Blueprint, and never cache it across Blueprint changes. The second
+request opens the session and fixes the Blueprint and the variables,
 the step the address and the header perform over MCP. A missing variable is refused there with HTTP 400, and an
-unknown blueprint with 404.
+unknown Blueprint with 404.
 
 Notice the execute tool's schema. It takes `code` and nothing else. The model
 fills in the arguments of a tool, so an argument named `blueprint` or
@@ -264,11 +264,11 @@ on, such as an unknown session, gets an error status.
 | `DELETE /v1/sessions/{id}` | Ends the session |
 | `GET /v1/blueprints/{name}/prompt` | The tool descriptions |
 | `GET /v1/blueprints/{name}/packages/search?q=` | Package search |
-| `GET /v1/blueprints/{name}/packages/docs?name=` | One package's documentation |
+| `GET /v1/blueprints/{name}/packages/docs?name=` | One Package's documentation |
 | `GET /v1/blueprints/{name}/builtins` | The list of built-ins |
 | `GET /v1/blueprints/{name}/builtins/docs?name=&name=` | Declarations of the built-ins named |
 
-A secret the blueprint declares with a `harness` source goes in the
+A secret the Blueprint declares with a `harness` source goes in the
 request that opens the session, beside the variables:
 
 ```json
@@ -283,7 +283,7 @@ with `session_requires_secrets` until the harness supplies them again,
 with `POST /v1/sessions/{id}/rebind`, or over MCP a new connection.
 
 The HTTP API has no counterpart to the two file tools. `POST
-/v1/execute`, which the quickstart used, takes the blueprint and
+/v1/execute`, which the quickstart used, takes the Blueprint and
 variables with the code and runs the program in a session that ends when
 the program returns. It suits a single run. An agent needs the session
 endpoints, so that one program can build on the state of the last.
@@ -308,7 +308,7 @@ The note is a file on the server's volume, there for the next
 conversation `u_ada` opens, on this harness or any other.
 
 You have the research agent running on the Vercel AI SDK with your own
-tools on the HTTP API, the blueprint and the user fixed where the
+tools on the HTTP API, the Blueprint and the user fixed where the
 model can't reach them, and the binding proved on the index before
 any model was involved. Project:
 [`examples/harnesses/vercel-ai-sdk-http/`](https://github.com/submilli/submilli-runtime/tree/main/examples/harnesses/vercel-ai-sdk-http).

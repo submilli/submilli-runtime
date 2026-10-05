@@ -1,6 +1,6 @@
 ---
 title: "Your application"
-description: "How the application or agent framework connects: it opens a session under a blueprint, binds the variables, and hands the agent its tools; what the agent gets back."
+description: "How the application or agent framework connects: it opens a session under a Blueprint, binds the variables, and hands the agent its tools; what the agent gets back."
 slug: application
 sidebar:
   order: 7
@@ -17,10 +17,10 @@ carries out the tool calls the model asks for, and sends the results back.
 It may be Mastra, LangChain, or a loop you wrote yourself. Submilli replaces
 none of it. The harness keeps the model and the loop, and gains a tool
 that takes a program the model wrote and runs it under your
-blueprint.
+Blueprint.
 
 The quickstart's application was that tool in miniature. Its forty lines
-sent a program to the server with a blueprint's name and a customer id, and
+sent a program to the server with a Blueprint's name and a customer id, and
 printed the result. A real harness does the same for a model instead of a
 file, and does it once per conversation.
 
@@ -35,12 +35,12 @@ application did.
 Whatever the harness, connecting comes down to three things your
 application decides.
 
-The address names the blueprint. The MCP endpoint is
+The address names the Blueprint. The MCP endpoint is
 `http://127.0.0.1:8128/mcp/<blueprint>`. A harness connected to
-`/mcp/quickstart` runs every program under that blueprint. The model can't
-choose another, because the blueprint isn't an argument of any tool.
+`/mcp/quickstart` runs every program under that Blueprint. The model can't
+choose another, because the Blueprint isn't an argument of any tool.
 
-A header binds the variables. A blueprint that requires a variable, such
+A header binds the variables. A Blueprint that requires a variable, such
 as the quickstart's `customerId`, gets it from the harness when it
 connects:
 
@@ -48,7 +48,7 @@ connects:
 submilli-variables: customerId=cus_northwind
 ```
 
-The server checks the values against the blueprint before it accepts the
+The server checks the values against the Blueprint before it accepts the
 connection, and refuses one that leaves out a required variable. The value
 must come from what your application knows, such as the signed-in user.
 Never take it from the conversation, because anything there could have been written
@@ -65,13 +65,13 @@ Connected, the model gets Submilli as a set of tools. The ones that matter:
 
 - **Execute**: compiles and runs a program.
 - **Last run**: returns the last run again, with everything it logged.
-- **Search**: finds packages the blueprint allows, by name, description,
+- **Search**: finds Packages the Blueprint allows, by name, description,
   or function.
-- **Docs**: returns one package's documentation and declarations.
+- **Docs**: returns one Package's documentation and declarations.
 
 The harness supplies no system prompt for Submilli. The instructions that
 teach a model the language arrive as the description of the execute tool,
-with this blueprint's packages and permissions already filled in. You supply
+with this Blueprint's Packages and permissions already filled in. You supply
 the agent's brief: what it is for, and how to work. This is
 the brief the book's research agent runs with, from [Connect a
 harness](/docs/tutorials/connect-a-harness):
@@ -155,10 +155,10 @@ To go deeper into the three components:
 
 - [Blueprints](/docs/blueprints/start-a-blueprint): grant operations,
   declare secrets and variables, allow HTTP, files, Git, and models, add
-  MCP servers, install packages.
+  MCP servers, install Packages.
 - [Packages](/docs/packages/start-a-project): start a project, write
   operations, call a service, document, test, publish.
-- [Server](/docs/server/run-the-server): run it, register blueprints,
+- [Server](/docs/server/run-the-server): run it, register Blueprints,
   operate MCP servers, set limits, deploy.
 
 Or jump straight to embedding Submilli:

@@ -1,6 +1,6 @@
 ---
 title: "Deploy on Kubernetes"
-description: "How to install the server in your cluster with the Helm chart: generated tokens, a network policy that admits only your application, HTTPS, the encrypted secret store and its key, blueprints registered through the API, memory sizing, storage, and upgrades."
+description: "How to install the server in your cluster with the Helm chart: generated tokens, a network policy that admits only your application, HTTPS, the encrypted secret store and its key, Blueprints registered through the API, memory sizing, storage, and upgrades."
 slug: server/deploy-on-kubernetes
 # The OCI install awaits the first public chart publication (SUB-959).
 # Enable HTTPS was checked against the chart templates (tls values,
@@ -194,7 +194,7 @@ ingress:
 
 Other controllers have their own setting for the backend's protocol.
 
-## Store secrets and register blueprints
+## Store secrets and register Blueprints
 
 The server's secret store is on from the first install. The chart
 generates its 32-byte key into a Secret named `submilli-secret-store`,
@@ -206,8 +206,8 @@ the volume has nothing to open.
 Everything else reaches the server through its API, with the admin
 token. Reach it from your machine as [Connect the
 CLI](/docs/server/connect-the-cli) shows, with the token read from
-the Secret, then put each blueprint's secrets in the store and register
-the blueprint:
+the Secret, then put each Blueprint's secrets in the store and register
+the Blueprint:
 
 ```sh
 submilli server secret put billing_api_key
@@ -221,12 +221,12 @@ Added blueprint 'support'
 ```
 
 A deploy job does the same with the admin token in its secrets, as
-[Manage blueprints in Git](/docs/tutorials/manage-blueprints-in-git)
+[Manage Blueprints in Git](/docs/tutorials/manage-blueprints-in-git)
 builds. [Register a
-blueprint](/docs/server/register-a-blueprint) covers what registration
-checks and how to replace or remove a blueprint. For a package in a
+Blueprint](/docs/server/register-a-blueprint) covers what registration
+checks and how to replace or remove a Blueprint. For a Package in a
 private repository the server needs a GitHub token from a Secret. Refer
-to [Install private packages](/docs/server/install-private-packages).
+to [Install private Packages](/docs/server/install-private-packages).
 
 With Argo CD, or any pipeline that renders the chart without the cluster,
 the key needs the same treatment as the tokens. Create the Secret
@@ -235,14 +235,14 @@ the key `key`, and name it in `secretStore.existingSecret`, or the chart
 would generate a different key on every sync and lock the store.
 
 Run `helm test submilli` after every install and upgrade. It registers a
-small test blueprint through the API, runs a program under it, and
+small test Blueprint through the API, runs a program under it, and
 removes it when it is done.
 
 ## Allow an internal service
 
 Pod and Service addresses in a cluster are private addresses, so the
 server blocks programs from calling them until you allow them. For a
-package that calls one of your own services, find the Service's cluster
+Package that calls one of your own services, find the Service's cluster
 IP and allow that one address, through `config:` again:
 
 ```sh
@@ -301,8 +301,8 @@ Access mode, storage class, and size are fixed when the claim is created,
 and `helm upgrade` can't change them, so choose them before installing.
 
 `replicaCount` above 1 gives you several independent servers. Anything
-done over the API (registered blueprints,
-sessions, packages, secrets) lands only on the pod that handled it. A
+done over the API (registered Blueprints,
+sessions, Packages, secrets) lands only on the pod that handled it. A
 client that opens a session has to keep talking to the same pod, through
 the headless Service:
 

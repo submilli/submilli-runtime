@@ -133,10 +133,10 @@ Your application connects to `http://<the machine's name>:8128` with
 the value in `/etc/submilli/app.token`, given to it through whatever keeps
 its other secrets. From your machine, [Connect the
 CLI](/docs/server/connect-the-cli) reaches the server with the
-admin token. Register blueprints, store their secrets, and install their
-packages as [Register a blueprint](/docs/server/register-a-blueprint)
+admin token. Register Blueprints, store their secrets, and install their
+Packages as [Register a Blueprint](/docs/server/register-a-blueprint)
 shows. A deploy job does the same with the admin token, and [Manage
-blueprints in Git](/docs/tutorials/manage-blueprints-in-git) builds one.
+Blueprints in Git](/docs/tutorials/manage-blueprints-in-git) builds one.
 
 ## Enable HTTPS
 
@@ -206,7 +206,7 @@ export SSL_CERT_FILE=$PWD/ca-bundle.pem
 ## Reach an internal service
 
 The server blocks programs from calling private addresses, whatever a
-blueprint allows, so a package that calls a service on your private
+Blueprint allows, so a Package that calls a service on your private
 network fails until you allow that address in the config file:
 
 ```yaml title="/etc/submilli/server.yaml (fragment)"

@@ -1,6 +1,6 @@
 ---
-title: "Build a package"
-description: "Have your coding assistant build a read-only package over a real API: the package, its readme, tests, a blueprint, and a verifier's review, tested against the live service; then tests for a package on a machine without the key. What a good result looks like."
+title: "Build a Package"
+description: "Have your coding assistant build a read-only Package over a real API: the Package, its readme, tests, a Blueprint, and a verifier's review, tested against the live service; then tests for a Package on a machine without the key. What a good result looks like."
 slug: tutorials/build-a-package
 # Re-run after SUB-1300 (https://linear.app/submilli/issue/SUB-1300): the
 # skill should put live tests in `network.test.ts` files and suggest
@@ -15,14 +15,14 @@ authorship:
   confirmedAt: "2026-10-05T10:59:51.482Z"
 ---
 
-The package pages showed how a package is written by hand. With the
+The Package pages showed how a Package is written by hand. With the
 Submilli skill, your coding assistant builds one from a service's API
-documentation. It writes the package, the readme the model reads, the
-tests, and a blueprint, and it tests all of them against the service. Runs vary by
+documentation. It writes the Package, the readme the model reads, the
+tests, and a Blueprint, and it tests all of them against the service. Runs vary by
 model, so each step below says what to look for, not what the assistant
 will type.
 
-In this tutorial we will have the assistant build a read-only package
+In this tutorial we will have the assistant build a read-only Package
 over a real API with a key, read its work, and then ask for tests on a
 machine that has no key. The run was made with Claude Code, the skill,
 and an [Attio](https://attio.com) workspace. Attio is a CRM, the kind of
@@ -41,7 +41,7 @@ has to appear in the conversation:
 ATTIO_API_KEY=…
 ```
 
-## Ask for the package
+## Ask for the Package
 
 ```text
 Build a read-only Submilli package over the Attio REST API (https://docs.attio.com/rest-api/overview) for our support agent. The agent may look up the company it is serving and read that company's people, notes, and tasks. It must never read any other company's records. The Attio API key is in the ATTIO_API_KEY environment variable.
@@ -57,7 +57,7 @@ response shapes. Then it scaffolds the project and produces:
 | `docs/readme.md` | What the model reads: each operation, paging, and that a denial means the record is forbidden, so don't retry with other ids |
 | `tests/lib.test.ts` | Unit tests of the request builders, and live reads that skip without the key |
 | `blueprint.yaml` | A required `companyId` variable, and one rule per operation |
-| `verify.sh` | Programs run under the blueprint: the allowed reads and each way the rule should refuse |
+| `verify.sh` | Programs run under the Blueprint: the allowed reads and each way the rule should refuse |
 
 ## Read one operation
 
@@ -119,7 +119,7 @@ checked and the one sent, so the rule sees what Attio receives.
 Each paging field is read once, before the check, and the helper takes
 the fields and not the object the program passed. The loop keeps only
 notes whose parent is that company, so a response that somehow names
-another company's note doesn't reach the program. And the package
+another company's note doesn't reach the program. And the Package
 defines `Note`, so the program never sees Attio's field names.
 
 The rule it wrote covers all four operations with one filter, because
@@ -138,13 +138,13 @@ Attio's notes and tasks endpoints return every record in the workspace
 when their company filter is missing, so `normalizeRecordId` refuses
 anything but a record id, and each result's owner is checked before it
 is returned, as `listNotes` does above. The second was the assistant's
-choice. It narrowed the package's grant from all of `api.attio.com` to
+choice. It narrowed the Package's grant from all of `api.attio.com` to
 the paths it calls.
 
 ## Read the tests it ran
 
 It tested against the live workspace. `submilli build test` passed,
-live reads included. Under the blueprint, a session bound to one company
+live reads included. Under the Blueprint, a session bound to one company
 read that company, its people, notes, and tasks. All four operations
 were refused for another company, and calling Attio directly, reading
 the key, and a session with no company were refused too. Two controls
@@ -168,14 +168,14 @@ twelve minutes.
 ## Ask for tests without the key
 
 Now the same skill on a machine that has no key, with the billing
-package from [Packages](/docs/packages/write-tests), which has one
+Package from [Packages](/docs/packages/write-tests), which has one
 test:
 
 ```text
 Add tests for @acme/billing. I don't have the billing API key on this machine.
 ```
 
-The assistant reads the package and runs the existing test before
+The assistant reads the Package and runs the existing test before
 writing any. Then it writes tests that need no key: the invoice path for
 a hostile id, `cus/../admin?x=1`, which must stay inside the customer's
 segment of the path; credits for a premium and a standard customer; a
@@ -185,19 +185,19 @@ of the same file it adds a live read that runs only when the key is set.
 
 Notice what it does with its own mistake. Its first expectation for the
 hostile path didn't match what `encodeComponent` returns. It ran the
-function to see, decided the package was right and its test wrong, fixed
+function to see, decided the Package was right and its test wrong, fixed
 the test, and said so in its report. All the tests passed, about a
 minute after the prompt.
 
 The report separates what ran from what didn't. The live read hadn't
 run, so the report calls it unverified until someone runs it with the
 key. It also repeats the limit from [Write tests](/docs/packages/write-tests).
-The tests show the package works, not that a blueprint refuses what it
+The tests show the Package works, not that a Blueprint refuses what it
 should.
 
 ## Packages that write
 
-This example is read-only on purpose. A package that writes gets tested
+This example is read-only on purpose. A Package that writes gets tested
 by writing, so where the assistant does that matters. If the service has
 a sandbox or test mode, give it a key for that. If it doesn't, tell it
 which records it may change, such as one test company, and that it must
@@ -205,7 +205,7 @@ not touch anything else. Without that, a careful assistant tests writes
 only with unit tests and says so. A less careful one writes to your real
 data.
 
-You have seen a package built from an API reference and tested against
+You have seen a Package built from an API reference and tested against
 the service from both sides, read the four things that make an operation
 safe, and watched the assistant correct itself and say what it didn't
 prove. Next: [Connect a harness](/docs/tutorials/connect-a-harness).

@@ -123,7 +123,7 @@ These globals are in scope and are not in the `submilli builtins` catalog.
 | `URL`, `URLSearchParams` | `submilli:url` |
 | `crypto` | `submilli:crypto`, `submilli:uuid` |
 | `atob`, `btoa`, `Buffer` | `Uint8Array.fromBase64`, `toBase64`, `TextEncoder`, `TextDecoder` |
-| `process`, `require`, and other Node.js globals | The [standard library](/docs/reference/standard-library) and Submilli packages |
+| `process`, `require`, and other Node.js globals | The [standard library](/docs/reference/standard-library) and Submilli Packages |
 
 An absent global is a compile error. `Date` has its own message:
 
@@ -372,7 +372,7 @@ The built-in permission-denial class (`extends Error`, `name` = `"PermissionDeni
 
 | Member | Description |
 | --- | --- |
-| `caller: string` | The package the denied call was attributed to (e.g. `"main"`). |
+| `caller: string` | The Package the denied call was attributed to (e.g. `"main"`). |
 | `capability: string` | The denied capability name (e.g. `"fs.read"`, `"http.get"`). |
 | `reason: string` | The policy-supplied denial reason. |
 | `constructor(message: string, caller: string, capability: string, reason: string)` |  |

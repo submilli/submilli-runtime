@@ -23,7 +23,7 @@ second.
 
 Submilli is open source under the [Apache License
 2.0](https://github.com/submilli/submilli-runtime/blob/main/LICENSE). The
-source, the curated packages, and the releases are in the
+source, the curated Packages, and the releases are in the
 [`submilli/submilli-runtime`](https://github.com/submilli/submilli-runtime)
 repository.
 
@@ -101,7 +101,7 @@ Later, `submilli upgrade` moves both binaries to the latest release in place.
 
 ## The skill
 
-The skill teaches your coding assistant to write blueprints and packages,
+The skill teaches your coding assistant to write Blueprints and Packages,
 test them, and connect your agent harness. Choose your assistant:
 
 | Assistant | Command | Installed at |

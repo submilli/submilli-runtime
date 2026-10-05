@@ -14,11 +14,11 @@ authorship:
 In this tutorial we will run the research agent on the Claude Agent SDK,
 with every action going through Submilli and its programs executed on the
 server as the signed-in user (`u_ada` in the examples).
-You need the server and the `research` blueprint from [Connect a
+You need the server and the `research` Blueprint from [Connect a
 harness](/docs/tutorials/connect-a-harness), with
 `SUBMILLI_SERVER_TOKEN` still exported, Node.js 20 or later, and an
 Anthropic key for the conversation. This SDK speaks to Claude,
-whichever provider the blueprint's model uses.
+whichever provider the Blueprint's model uses.
 
 ## Start the project
 
@@ -100,7 +100,7 @@ if (import.meta.filename === process.argv[1]) {
 
 Notice the four options after the server. This SDK gives its agent a
 shell, file access, and web fetch unless told otherwise, and those tools
-run outside Submilli, where no blueprint applies. `tools: []` removes
+run outside Submilli, where no Blueprint applies. `tools: []` removes
 them, and `allowedTools` lets the agent call Submilli's without asking.
 The SDK also loads the MCP servers of whoever runs the process. Run under
 a Claude login that had two connectors attached, this agent started with
@@ -108,7 +108,7 @@ a Claude login that had two connectors attached, this agent started with
 server named here, and `settingSources: []` keeps that person's other
 settings out.
 
-The same caution holds for any harness. A blueprint governs what
+The same caution holds for any harness. A Blueprint governs what
 programs do. It can't govern a tool the harness offers beside Submilli's.
 
 The SDK takes its credentials from `ANTHROPIC_API_KEY`, from Amazon
@@ -138,7 +138,7 @@ The latest stable Rust release is **1.99.0**, released 2026-10-01. I checked thi
 Notice the notebook paragraph. Another harness's agent wrote the note,
 in another conversation, under the same user. This one found it
 at `/notes`, read it before searching, and added to it. The notebook
-belongs to the user and the blueprint, not to the harness.
+belongs to the user and the Blueprint, not to the harness.
 
 You have the research agent running on the Claude Agent SDK with nothing
 beside Submilli's tools, each program it writes executed on the server

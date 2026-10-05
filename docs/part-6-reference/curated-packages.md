@@ -1,6 +1,6 @@
 ---
-title: "Curated packages"
-description: "The packages Submilli maintains for common services: each package, what it is for, the secret it reads, the hosts it reaches, its readme, and the commands that install it and grant one of its capabilities."
+title: "Curated Packages"
+description: "The Packages Submilli maintains for common services: each Package, what it is for, the secret it reads, the hosts it reaches, its readme, and the commands that install it and grant one of its capabilities."
 slug: reference/curated-packages
 sidebar:
   order: 7
@@ -11,13 +11,13 @@ authorship:
   confirmedAt: "2026-10-05T10:59:51.475Z"
 ---
 
-This page lists the curated packages, the `@submilli/*` packages maintained
+This page lists the curated Packages, the `@submilli/*` Packages maintained
 in the `submilli/submilli-runtime` repository, under `packages/<name>`. All
-are at version `0.1.0`. How to add a package to a blueprint and bind its
+are at version `0.1.0`. How to add a Package to a Blueprint and bind its
 secret is in [Packages](/docs/packages) and
 [HTTP and credentials](/docs/blueprints/http-and-credentials).
 
-## The packages
+## The Packages
 
 | Package | For | Secret | Hosts |
 | --- | --- | --- | --- |
@@ -38,29 +38,29 @@ secret is in [Packages](/docs/packages) and
 
 ## Package entries
 
-Each entry below has the same rows, taken from the package's
+Each entry below has the same rows, taken from the Package's
 `capabilities.yaml` and source:
 
 | Row | Holds |
 | --- | --- |
-| Secret | The name the package reads with `secrets.get`. Its `requires` entry is `secrets.get` with `name == "<secret>"` |
+| Secret | The name the Package reads with `secrets.get`. Its `requires` entry is `secrets.get` with `name == "<secret>"` |
 | Credential | The value the secret must hold |
 | Without the secret | What a call does when `secrets.get` returns `null` for the secret |
-| HTTP | Each host the package requires, with the `http.<method>` capabilities for it. `download` is `http.download`. A path is the `path ==` term of a requirement's filter. |
-| Filesystem | The `fs.*` capabilities the package requires, all without a filter |
-| Readme | The package's readme on GitHub, with its setup and development notes |
+| HTTP | Each host the Package requires, with the `http.<method>` capabilities for it. `download` is `http.download`. A path is the `path ==` term of a requirement's filter. |
+| Filesystem | The `fs.*` capabilities the Package requires, all without a filter |
+| Readme | The Package's readme on GitHub, with its setup and development notes |
 
 Each entry ends with the same four commands, run in the directory of a
-blueprint:
+Blueprint:
 
 | Command | Does |
 | --- | --- |
-| `submilli install submilli/submilli-runtime @submilli/<name>` | Fetches the repository, builds the package, and installs it in the local package store. `@<ref>` after the repository name pins a branch, tag, or commit. |
-| `submilli blueprint add-package @submilli/<name> --no-capabilities` | Lists the package in `blueprint.yaml` and writes the rules the package needs for its own calls, and grants the program nothing |
-| `submilli blueprint capability list @submilli/<name>` | Prints the package's capabilities, their fields, and the rules for them |
+| `submilli install submilli/submilli-runtime @submilli/<name>` | Fetches the repository, builds the Package, and installs it in the local Package store. `@<ref>` after the repository name pins a branch, tag, or commit. |
+| `submilli blueprint add-package @submilli/<name> --no-capabilities` | Lists the Package in `blueprint.yaml` and writes the rules the Package needs for its own calls, and grants the program nothing |
+| `submilli blueprint capability list @submilli/<name>` | Prints the Package's capabilities, their fields, and the rules for them |
 | `submilli blueprint capability add <capability>` | Allows the program one capability, here one that reads. `--filter` narrows it |
 
-`submilli docs @submilli/<name>` prints an installed package's
+`submilli docs @submilli/<name>` prints an installed Package's
 declarations.
 
 ## @submilli/brave-search
@@ -150,7 +150,7 @@ Gmail profiles, thread search and triage, messages, drafts, sending and replying
 | | |
 | --- | --- |
 | Secret | `GOOGLE_ACCESS_TOKEN` |
-| Credential | A Google OAuth access token with a Gmail scope (`gmail.modify` covers every operation). The package doesn't refresh it |
+| Credential | A Google OAuth access token with a Gmail scope (`gmail.modify` covers every operation). The Package doesn't refresh it |
 | Without the secret | Throws `GmailError` with code `missing_token` |
 | HTTP | `gmail.googleapis.com`: DELETE, GET, POST |
 | Filesystem | `fs.read`, `fs.stat`, `fs.write` |
@@ -170,7 +170,7 @@ Google Calendar calendars, events, agendas, free/busy queries, and bounded free-
 | | |
 | --- | --- |
 | Secret | `GOOGLE_ACCESS_TOKEN` |
-| Credential | A Google OAuth access token with a Calendar scope (`calendar` covers every operation). The package doesn't refresh it |
+| Credential | A Google OAuth access token with a Calendar scope (`calendar` covers every operation). The Package doesn't refresh it |
 | Without the secret | Throws `CalendarError` with code `missing_token` |
 | HTTP | `www.googleapis.com`: DELETE, GET, PATCH, POST |
 | Filesystem | None |
@@ -190,7 +190,7 @@ Google Drive files and folders in My Drive and Shared Drives: search, read, down
 | | |
 | --- | --- |
 | Secret | `GOOGLE_ACCESS_TOKEN` |
-| Credential | A Google OAuth access token with a Drive scope (`drive` covers every operation). The package doesn't refresh it |
+| Credential | A Google OAuth access token with a Drive scope (`drive` covers every operation). The Package doesn't refresh it |
 | Without the secret | Throws `DriveError` with code `missing_token` |
 | HTTP | `www.googleapis.com`: DELETE, download, GET, PATCH, POST, PUT |
 | Filesystem | `fs.read`, `fs.stat`, `fs.write` |

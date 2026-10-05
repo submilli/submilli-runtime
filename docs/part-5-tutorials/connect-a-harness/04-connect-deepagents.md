@@ -13,12 +13,12 @@ authorship:
 
 In this tutorial we will run the research agent on LangChain deepagents,
 with its programs executed on the server as the signed-in user (`u_ada` in the examples). You need the server and the `research`
-blueprint from [Connect a harness](/docs/tutorials/connect-a-harness),
+Blueprint from [Connect a harness](/docs/tutorials/connect-a-harness),
 with `SUBMILLI_SERVER_TOKEN` still exported, Python 3.11 or later, and a
 key from your model provider for the conversation. The agent file
 names Claude. For Google or OpenAI, the `model` argument takes
 `google_genai:gemini-3.8-flash` or `openai:gpt-4o-mini` instead, with
-that provider's LangChain package installed and its key in the
+that provider's LangChain Package installed and its key in the
 environment.
 
 ## Start the project
@@ -144,7 +144,7 @@ Note updated at `/notes/rust-latest-release.md` with this information and source
 
 Notice where the note came from. Another harness wrote it, in another
 conversation, under the same user. The notebook belongs to the user and
-the blueprint, not to the harness, and the model updated it instead of
+the Blueprint, not to the harness, and the model updated it instead of
 starting a new one, as the brief asks. The run took eight tool calls,
 none of which failed.
 
@@ -153,14 +153,14 @@ none of which failed.
 With the [skill](/docs/install#the-skill) installed, your coding
 assistant finds the mistakes this page warns about. This project was a
 deepagents agent that loads its tools with
-`MultiServerMCPClient.get_tools()`, under a blueprint whose `vfs` is
+`MultiServerMCPClient.get_tools()`, under a Blueprint whose `vfs` is
 `per_session`:
 
 ```text
 My deepagents agent saves pages under /pages in one program, and the next program can't find them. Why?
 ```
 
-The assistant reads `agent.py` and the blueprint and names the cause in a
+The assistant reads `agent.py` and the Blueprint and names the cause in a
 few steps. Tools loaded without a session open a new MCP session for
 every call. Under `per_session`, each program therefore gets a new,
 empty filesystem. Its fix is the one above, a single session held open

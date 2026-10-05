@@ -24,7 +24,7 @@ program runs in a separate WebAssembly instance inside the server
 process, which ends a failing run without disturbing the others ([The
 server](/docs/server#when-a-program-fails)). The limits decide when a run
 like that ends, so it can't starve another session or run up your model
-provider's bill. The operator sets them, and a blueprint can't raise them.
+provider's bill. The operator sets them, and a Blueprint can't raise them.
 
 This guide shows you how to set the server's limits. [Errors and
 limits](/docs/reference/errors-and-limits) lists each limit, its default,
@@ -147,9 +147,9 @@ the fuel the run had spent when it ended. The memory figure is what the
 program held at its peak, counted as the limit counts it, not what the
 process used.
 
-Run the programs your agent produces, or a package's tests, and set the
+Run the programs your agent produces, or a Package's tests, and set the
 budget a few times above the largest honest figure. A server logs the
-same figures once per execution, with the blueprint, the session, and
+same figures once per execution, with the Blueprint, the session, and
 how the run ended. A limit that fires shows up in the log without the
 client's help:
 
@@ -170,7 +170,7 @@ max_execution_time: 25
 ```
 
 The clock starts when the program starts. The top-level statements of the
-packages it imports run first, then the program's, then `main`. A program that
+Packages it imports run first, then the program's, then `main`. A program that
 passes the limit ends with `timeout exceeded`, and the program can't
 catch it. The same `loop.ts` under a two-second limit, for the
 example's sake:
@@ -274,7 +274,7 @@ running programs. The run's budget keeps one program from spending it
 all. `max_llm_concurrency` bounds how many of one batch's prompts are in
 flight at once, and the rest wait their turn.
 
-The reserved output is 64,000 tokens per prompt unless the blueprint's
+The reserved output is 64,000 tokens per prompt unless the Blueprint's
 model sets `output_reserve`, which [Allow model
 calls](/docs/blueprints/allow-model-calls) covers.
 
@@ -286,7 +286,7 @@ the total, so a server with many sessions can't be filled by them. A
 `set` that would pass either is refused with a `QuotaExceededError`, and
 nothing another session holds is evicted to make room.
 
-The blueprint, not the server, limits the size of a session's files with
+The Blueprint, not the server, limits the size of a session's files with
 `vfs.size_limit`, which [Keep files and
 state](/docs/blueprints/keep-files-and-state) covers. A named
 volume's limit is the server's, set where the volume is declared, as

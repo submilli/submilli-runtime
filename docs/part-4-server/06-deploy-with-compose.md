@@ -57,7 +57,7 @@ submilli server status
 The file also sets up:
 
 - A named volume, `submilli-state`, holds `$SUBMILLI_HOME`,
-  so blueprints, sessions, packages, and secrets survive `docker compose
+  so Blueprints, sessions, Packages, and secrets survive `docker compose
   down` and image upgrades. `docker compose down -v` deletes it.
 - Each run's scratch directory lives in a
   256 MB `tmpfs` at `/tmp`, so it never grows the container's disk.
@@ -110,14 +110,14 @@ the service name as a `Host` header, or its requests are refused with
 `403 Forbidden: Host header is not allowed`. The shipped file sets
 `SUBMILLI_MCP_ALLOWED_HOSTS: submilli:8128` on the service for this. Change that value if you rename the service or its port.
 
-## Register blueprints and install packages
+## Register Blueprints and install Packages
 
-The port is published on the host, so blueprints, secrets, and packages
+The port is published on the host, so Blueprints, secrets, and Packages
 reach the server from the host with the same commands as anywhere,
-through [Register a blueprint](/docs/server/register-a-blueprint).
-A deploy job does the same with the token from `.env`. For a package in
+through [Register a Blueprint](/docs/server/register-a-blueprint).
+A deploy job does the same with the token from `.env`. For a Package in
 a private repository the server needs its own GitHub token. Refer
-to [Install private packages](/docs/server/install-private-packages).
+to [Install private Packages](/docs/server/install-private-packages).
 
 ## Give it the store key as a file
 
@@ -221,7 +221,7 @@ export SSL_CERT_FILE=/tmp/ca-bundle.pem
 ## Allow a service on your Docker network
 
 The server blocks programs from calling private addresses, which
-includes other containers on your Docker networks. So a package that
+includes other containers on your Docker networks. So a Package that
 calls one of your own services, say an inventory API in another
 container, fails with a generic network error until you allow that
 service's address:
@@ -248,7 +248,7 @@ ts=2026-10-03T17:04:41.940Z level=warn stream=log target=submilli_server msg="th
 Both the file and the image are pinned to a release. Version 0.2.0 is the
 first published release compatible with this guide's token authentication
 and health check. An older installation needs its configuration and
-blueprints migrated before starting the new server. Read the
+Blueprints migrated before starting the new server. Read the
 [0.2.0 release notes](https://github.com/submilli/submilli-runtime/releases/tag/v0.2.0)
 and back up its state first.
 

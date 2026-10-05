@@ -1,6 +1,6 @@
 ---
 title: "Blueprint file"
-description: "Every top-level key and field of a blueprint file: types, defaults, allowed values, where variables and secrets may be referenced, and the errors that refuse a file at lint and at registration."
+description: "Every top-level key and field of a Blueprint file: types, defaults, allowed values, where variables and secrets may be referenced, and the errors that refuse a file at lint and at registration."
 slug: reference/blueprint-file
 sidebar:
   order: 1
@@ -11,7 +11,7 @@ authorship:
   confirmedAt: "2026-10-05T10:59:51.473Z"
 ---
 
-A blueprint file is one YAML document. This page describes each of its
+A Blueprint file is one YAML document. This page describes each of its
 top-level keys and their fields, in the order the CLI writes them, and the
 errors that refuse a file when it is linted or registered.
 
@@ -150,9 +150,9 @@ error: case.yaml: invalid blueprint kind: unknown kind 'policy': expected `bluep
 | Required | yes |
 | Constraints | non-empty, with only ASCII letters, digits, `_` and `-` |
 
-The name a server registers the blueprint under and an application names
+The name a server registers the Blueprint under and an application names
 when it opens a session. `submilli server blueprint apply` registers the
-file under this name, replacing a blueprint registered with it.
+file under this name, replacing a Blueprint registered with it.
 
 ```text
 error: case.yaml: blueprint parse error: missing field `name`
@@ -170,7 +170,7 @@ error: case.yaml: invalid blueprint name: blueprint name 'my agent' contains cha
 | Default | `false` |
 
 `true` permits `http://` requests through `submilli:http`, including
-package calls and downloads. With `false`, only `https://` is permitted. An
+Package calls and downloads. With `false`, only `https://` is permitted. An
 `http://` request to a host that has an [`auth_proxy`](#auth_proxy) rule is
 permitted only when that rule's own `allow_insecure_http` is `true` as well.
 The check applies to every redirect too.
@@ -204,7 +204,7 @@ with `mode` and that mode's fields.
 | `none` | No filesystem. Every `submilli:fs` call fails |
 | `ephemeral` (default) | A directory created for the run and deleted when it returns |
 | `per_session` | A directory that lasts as long as the session |
-| `named` | A named volume declared in the server's config. It is kept across sessions and restarts, and shared with every blueprint that names it |
+| `named` | A named volume declared in the server's config. It is kept across sessions and restarts, and shared with every Blueprint that names it |
 
 | Field | Type | Modes | Default | Constraints |
 | --- | --- | --- | --- | --- |
@@ -244,7 +244,7 @@ error: case.yaml: blueprint parse error: vfs: vfs mode `persistent` was removed:
 error: case.yaml: blueprint parse error: vfs.path: the `path` key is retired: a blueprint can no longer name a host directory. Use `volume: <name>` under `mode: named` — the operator declares each volume by name in the server config at line 4 column 9
 ```
 
-`submilli run` refuses a blueprint that names a volume, as the root or as a
+`submilli run` refuses a Blueprint that names a volume, as the root or as a
 mount, because volumes are declared only in a server's config.
 
 ### Sizes
@@ -297,7 +297,7 @@ A mount path:
 - is not inside another mount, does not contain one, and differs from every
   other mount by more than letter case
 
-A blueprint has at most 16 mounts. The same volume may be mounted at several
+A Blueprint has at most 16 mounts. The same volume may be mounted at several
 paths. `mounts` under `mode: none` is refused.
 
 ```text
@@ -317,7 +317,7 @@ error: case.yaml: blueprint parse error: vfs.mounts./a.size_limit: unknown field
 `subPath` (on a named root or a mount) is relative to the volume's root. The
 program sees the selected directory as the root of that volume. `cwd` is an
 absolute guest path, and the directory relative paths resolve against for
-`submilli:fs`, packages, and `http.download` destinations. `fs.cwd()`
+`submilli:fs`, Packages, and `http.download` destinations. `fs.cwd()`
 returns it. In both, `${vars.NAME}` may stand for one whole component, and
 must resolve to a non-empty name containing no `/`, `\` or NUL that is not
 `.` or `..`. A path is at most 4,096 bytes, before and after substitution.
@@ -409,9 +409,9 @@ error: case.yaml: invalid variables config: variable 'a': `required: true` and `
 error: case.yaml: invalid variables config: permissions for 'main': filter references undeclared variable '${vars.p}'
 ```
 
-## packages
+## Packages
 
-A list of package names a program may import. A map whose keys are the
+A list of Package names a program may import. A map whose keys are the
 names is accepted as well, and its values are ignored.
 
 Each name:
@@ -421,7 +421,7 @@ Each name:
   with no leading or trailing hyphen
 - has a `name` of ASCII letters, digits, `.`, `_` and `-`, other than `.`
   and `..`
-- is not a `submilli:*` module and not an `@mcp/*` package
+- is not a `submilli:*` module and not an `@mcp/*` Package
 - is listed once
 
 ```text
@@ -436,7 +436,7 @@ error: case.yaml: invalid packages config: `@mcp/linear` is an MCP virtual packa
 error: case.yaml: blueprint parse error: duplicate package `@acme/a` in packages:
 ```
 
-`submilli blueprint lint` checks each package against the local package
+`submilli blueprint lint` checks each Package against the local Package
 store, and registration against the server's:
 
 ```text
@@ -541,7 +541,7 @@ error: case.yaml: blueprint parse error: default: unknown variant `block`, expec
 ## permissions
 
 A map from caller to an ordered list of rules. The caller is `main` for the
-program, or a package name for that package's own calls.
+program, or a Package name for that Package's own calls.
 
 | Field | Type | Required |
 | --- | --- | --- |
@@ -576,7 +576,7 @@ error: case.yaml: blueprint parse error: permissions.main[0]: invalid filter `pa
 ## mcp
 
 A map from a server name, chosen by the file, to an outbound MCP server.
-The name becomes the package `@mcp/<name>` and the capability
+The name becomes the Package `@mcp/<name>` and the capability
 `mcp.<name>`.
 
 | Field | Type | Required | Default |
@@ -726,12 +726,12 @@ check isn't registered.
 | Every volume, as the root or a mount, is declared on the server | `volume 'team' is not declared on this server; declared volumes: handbook, notes` |
 | `access` doesn't exceed the server's declaration | ``volume 'handbook' is read_only on this server; drop `access: read_write` (or write `access: read_only`), or ask the operator to declare it read_write`` |
 | Every `store` secret has a value in the server's store | `secret check failed: missing secret 'K'` |
-| Every package, and every package it depends on, is installed on the server | ``package check failed: package `@acme/billing` is not installed; install it with `submilli server packages install <org/repo> @acme/billing` `` |
-| Each capability a package requires for its own calls has a rule under that package's caller | `package check failed:` followed by the package, the capability, and the missing rule |
-| A filter tests only fields its capability reports, for standard-library, package, and `mcp.<name>` capabilities | The rule, the field, and the fields the capability reports |
+| Every Package, and every Package it depends on, is installed on the server | ``package check failed: package `@acme/billing` is not installed; install it with `submilli server packages install <org/repo> @acme/billing` `` |
+| Each capability a Package requires for its own calls has a rule under that Package's caller | `package check failed:` followed by the Package, the capability, and the missing rule |
+| A filter tests only fields its capability reports, for standard-library, Package, and `mcp.<name>` capabilities | The rule, the field, and the fields the capability reports |
 
-`submilli blueprint lint` makes the package and filter checks against the
-local package store, and reports every filter field it finds:
+`submilli blueprint lint` makes the Package and filter checks against the
+local Package store, and reports every filter field it finds:
 
 ```text
 error: case.yaml: `permissions.main` rule 2 for `fs.read` tests `host`, which the operation doesn't report, so a condition on it is false for every call, and true under `not`; its fields are: chunkSize, length, path, recursive

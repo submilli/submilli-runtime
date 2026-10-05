@@ -1,6 +1,6 @@
 ---
 title: "MCP servers"
-description: "The blueprint's mcp block, discovery, how tools become functions, output schemas, results, failure messages, OAuth, limits, and the local and server commands."
+description: "The Blueprint's mcp block, discovery, how tools become functions, output schemas, results, failure messages, OAuth, limits, and the local and server commands."
 slug: reference/mcp-servers
 sidebar:
   order: 13
@@ -11,21 +11,21 @@ authorship:
   confirmedAt: "2026-10-05T10:59:51.477Z"
 ---
 
-An entry in a blueprint's `mcp` block declares an outbound MCP server, which
-programs import as the package `@mcp/<name>`. This page describes the block,
+An entry in a Blueprint's `mcp` block declares an outbound MCP server, which
+programs import as the Package `@mcp/<name>`. This page describes the block,
 how Submilli turns the server's tools into functions, what calls return and
 throw, OAuth logins, limits, and the commands that operate the servers
 locally and on `submilli-server`.
 
 ## The mcp block
 
-A map from a server name to a server. The name is chosen by the blueprint
+A map from a server name to a server. The name is chosen by the Blueprint
 and becomes three things:
 
 | Name | Example, for `linear` |
 | --- | --- |
 | The key in `mcp` | `linear` |
-| The package | `@mcp/linear` |
+| The Package | `@mcp/linear` |
 | The capability | `mcp.linear` |
 
 | Field | Type | Required | Default | Constraints |
@@ -44,7 +44,7 @@ and becomes three things:
 | `scopes` | list of strings | no | See [Scopes](#scopes) |
 
 Each `auth` value may hold `${secrets.NAME}`. Every `${secrets.NAME}` in the
-block must name a secret the blueprint declares. A `harness` secret in a
+block must name a secret the Blueprint declares. A `harness` secret in a
 header takes the value the application supplied for the session.
 
 ```yaml title="blueprint.yaml (fragment)"
@@ -63,7 +63,7 @@ mcp:
 ```
 
 `submilli blueprint add-mcp <name> <url>` writes an entry and a
-`mcp.<name>` deny rule under `main`, when the blueprint has a `permissions`
+`mcp.<name>` deny rule under `main`, when the Blueprint has a `permissions`
 block.
 
 | `add-mcp` option | Writes |
@@ -169,16 +169,16 @@ and gives the server 10 seconds.
 | `submilli run --blueprint` | Every server in the block | At each run |
 | `submilli docs @mcp/<name>` | The named server | At each call |
 | `submilli-server`, running a program | The servers the program imports | At first use, then cached |
-| `submilli-server`, package docs and search | Every server in the block | At first use, then cached |
+| `submilli-server`, Package docs and search | Every server in the block | At first use, then cached |
 
-The server keeps a blueprint's discovered tools until the blueprint is
+The server keeps a Blueprint's discovered tools until the Blueprint is
 applied again or removed, a login for it is stored or removed, or the server
 restarts. A session with `harness` secrets bound is discovered for that
 session and not cached.
 
 ### A server that can't be used
 
-A server is left out of the package catalog, and the rest of the blueprint
+A server is left out of the Package catalog, and the rest of the Blueprint
 works, when:
 
 - it has `auth: oauth2` and no login is stored for it
@@ -205,7 +205,7 @@ server's log as a `level=warn` line:
 ts=2026-10-03T17:06:08.482Z level=warn stream=log target=submilli_shared::mcp::discovery msg="MCP server omitted: not authenticated — run `submilli server mcp authenticate browse tracker`" server=tracker
 ```
 
-A program that imports a package that was left out doesn't compile:
+A program that imports a Package that was left out doesn't compile:
 
 ```text
 error: MCP server `local` is unavailable — `@mcp/local` is absent from the discovered catalog; check the blueprint's `mcp:` block and discovery warnings
@@ -220,8 +220,8 @@ help: no MCP servers are currently available; declared servers may need authenti
 
 ### PENDING and ACTIVE
 
-A blueprint is `PENDING` while any of its `auth: oauth2` servers has no
-stored login, and `ACTIVE` otherwise. A `PENDING` blueprint runs programs.
+A Blueprint is `PENDING` while any of its `auth: oauth2` servers has no
+stored login, and `ACTIVE` otherwise. A `PENDING` Blueprint runs programs.
 Its servers without a login are left out. `auth-status` prints the state and
 one line per server:
 
@@ -312,9 +312,9 @@ function two_texts(): unknown;
 ```
 
 `get_ticket`'s `extra` property is an `allOf`, `limit` is an `integer`, and
-`note` is `["string", "null"]`. `submilli docs @mcp/<name>` and the package
+`note` is `["string", "null"]`. `submilli docs @mcp/<name>` and the Package
 docs tool the agent reads list every discovered tool, whether or not the
-blueprint allows it.
+Blueprint allows it.
 
 ## Output schemas
 
@@ -376,7 +376,7 @@ begins with the function's name:
 
 | Failure | Message |
 | --- | --- |
-| The blueprint denies the call | `PermissionDeniedError: permission denied: caller=main capability=mcp.<name>: …` |
+| The Blueprint denies the call | `PermissionDeniedError: permission denied: caller=main capability=mcp.<name>: …` |
 | The tool returns `isError: true` | `@mcp/<name>.<tool>: ` and the tool's text, or `MCP tool reported an error` when it has none |
 | The connection, the HTTP exchange, or the protocol fails | `@mcp/<name>.<tool>: transport error: ` and the cause |
 | The call takes more than 60 seconds | `@mcp/<name>.<tool>: transport error: MCP tool '<name>/<tool>' timed out after 60 seconds` |
@@ -397,21 +397,21 @@ opens a new one. Each program run gets its own sessions.
 
 ## OAuth
 
-A server with `auth: type: oauth2` needs a login, made once per blueprint
+A server with `auth: type: oauth2` needs a login, made once per Blueprint
 and server with `submilli mcp authenticate` locally or
-`submilli server mcp authenticate` for a registered blueprint. Both run on
+`submilli server mcp authenticate` for a registered Blueprint. Both run on
 the machine where the command is typed. They print an authorization URL and
 wait for the browser's redirect on `http://127.0.0.1:8765/callback`.
 `SUBMILLI_OAUTH_REDIRECT_PORT` changes the port. The flow uses PKCE.
 
-Endpoints the blueprint doesn't set are discovered from the server's OAuth
+Endpoints the Blueprint doesn't set are discovered from the server's OAuth
 metadata.
 
 ### Client id
 
 The first of:
 
-1. `auth.client_id` in the blueprint.
+1. `auth.client_id` in the Blueprint.
 2. The `client_id` of a configured [provider](#providers) for the OAuth
    host.
 3. A client registered at login through the server's dynamic client
@@ -460,7 +460,7 @@ A login is stored in a secret store under
 uses the local store, and `submilli server mcp authenticate` uses the
 server's. The two are separate. The server's
 login needs the server to have a secret store. One login serves every
-program run under the blueprint, and on a server every session of it.
+program run under the Blueprint, and on a server every session of it.
 
 | Event | Behavior |
 | --- | --- |
@@ -470,7 +470,7 @@ program run under the blueprint, and on a server every session of it.
 | The service issues a new refresh token | It replaces the stored one |
 | The service refuses the refresh token (`invalid_grant`) | Retried after 1 and 2 more seconds, then `McpAuthExpiredError`. The stored login is kept |
 | A call fails | The token is refreshed and the call retried once |
-| `deauthenticate` | The login is removed and the blueprint is `PENDING` |
+| `deauthenticate` | The login is removed and the Blueprint is `PENDING` |
 
 Running `authenticate` again replaces the stored login.
 
@@ -488,7 +488,7 @@ Running `authenticate` again replaces the stored login.
 
 ## Local and server commands
 
-| Task | Local, with a blueprint file | On `submilli-server`, with a registered blueprint |
+| Task | Local, with a Blueprint file | On `submilli-server`, with a registered Blueprint |
 | --- | --- | --- |
 | Declare a server | `submilli blueprint add-mcp <name> <url>` | `submilli server blueprint apply <file>` after declaring it |
 | Run a program | `submilli run --blueprint <file> <script>` | `submilli server run-code <script> --blueprint <blueprint>` |
@@ -499,7 +499,7 @@ Running `authenticate` again replaces the stored login.
 | Providers | `submilli mcp provider add\|list\|remove` | `mcp_oauth.providers` in the config file |
 | Logins kept in | The local secret store, in plain files | The server's secret store, encrypted |
 | Private and loopback addresses | Allowed | Refused unless the server allows them |
-| Tool list refreshed | On every run | When the blueprint is applied, a login changes, or the server restarts |
+| Tool list refreshed | On every run | When the Blueprint is applied, a login changes, or the server restarts |
 
 The steps for declaring a server, choosing tools, and logging in are in
 [Add an MCP server](/docs/blueprints/add-an-mcp-server).
