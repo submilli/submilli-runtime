@@ -7,7 +7,8 @@ description: Install and adopt Submilli, design and build its packages and bluep
 
 Help the developer expose useful operations and enforce their intended policy
 while keeping their chosen application and agent harness. Official website:
-https://submilli.ai; start at https://submilli.ai/docs/quickstart.
+https://submilli.ai. For a first local trial, build and run the example with
+the developer instead of handing back installation commands or a reading list.
 
 Before reading any reference, if the `submilli` CLI is installed, run
 `submilli skill sync` (no flags). It refreshes this skill to the newest release
@@ -20,6 +21,8 @@ that general knowledge gets wrong; what goes wrong without it is named.
 
 - First explanation or comparison: [concepts](references/concepts.md);
   without it Submilli gets described as a sandbox.
+- First local trial or quickstart: [first run](references/first-run.md);
+  without it onboarding becomes a business-policy interview or requires a model key.
 - Installation, new project, skill updates, deploying the server:
   [setup](references/setup.md); without it the server binary is missed or
   deployed where more than the application can reach it.
