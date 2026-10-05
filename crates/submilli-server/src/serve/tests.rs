@@ -30,7 +30,7 @@ use tokio::io::AsyncWriteExt;
 struct RunningServer {
     address: SocketAddr,
     shutdown: Arc<Notify>,
-    requests: Arc<crate::request_tasks::RequestTasks>,
+    requests: Arc<crate::graceful_shutdown::GracefulShutdownTracker>,
     task: tokio::task::JoinHandle<Result<DrainStatus>>,
 }
 
@@ -38,10 +38,10 @@ async fn start(router: axum::Router, grace: Duration) -> RunningServer {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
     let shutdown = Arc::new(Notify::new());
-    let requests = Arc::new(crate::request_tasks::RequestTasks::default());
+    let requests = Arc::new(crate::graceful_shutdown::GracefulShutdownTracker::default());
     let router = router.layer(axum::middleware::from_fn_with_state(
         Arc::clone(&requests),
-        crate::request_tasks::run,
+        crate::graceful_shutdown::run,
     ));
     let signals = ShutdownSignals::install().unwrap();
     let task = tokio::spawn(serve_listener(
@@ -227,4 +227,70 @@ async fn grace_deadline_cancels_owned_handlers() {
     tokio::time::timeout(Duration::from_secs(5), server.requests.wait())
         .await
         .unwrap();
+}
+
+#[tokio::test]
+async fn startup_selects_memory_file_and_explicit_blueprint_stores() {
+    use crate::blueprint::{BlueprintStore, InMemoryBlueprintStore};
+
+    let memory = prepare_blueprint_store(&ServerConfig::default())
+        .await
+        .unwrap();
+    memory
+        .add(submilli_blueprint::parse("name: memory").unwrap())
+        .await
+        .unwrap();
+    assert_eq!(memory.list().await.unwrap(), ["memory"]);
+
+    let directory = tempfile::tempdir().unwrap();
+    let config = ServerConfig {
+        blueprint_dir: Some(directory.path().join("blueprints")),
+        ..Default::default()
+    };
+    let files = prepare_blueprint_store(&config).await.unwrap();
+    files
+        .add(submilli_blueprint::parse("name: files").unwrap())
+        .await
+        .unwrap();
+    let reopened = prepare_blueprint_store(&config).await.unwrap();
+    assert_eq!(reopened.list().await.unwrap(), ["files"]);
+
+    let explicit: Arc<dyn BlueprintStore> = Arc::new(InMemoryBlueprintStore::default());
+    let config = ServerConfig {
+        blueprints: Some(Arc::clone(&explicit)),
+        blueprint_dir: Some(directory.path().join("unused")),
+        ..Default::default()
+    };
+    let selected = prepare_blueprint_store(&config).await.unwrap();
+    assert!(Arc::ptr_eq(&explicit, &selected));
+    assert!(!directory.path().join("unused").exists());
+}
+
+#[tokio::test]
+async fn startup_migrates_sqlite_before_constructing_application_state() {
+    use crate::blueprint::{BlueprintStore, FileBlueprintStore};
+
+    let directory = tempfile::tempdir().unwrap();
+    let source = directory.path().join("blueprints");
+    FileBlueprintStore::new(source.clone())
+        .unwrap()
+        .add(submilli_blueprint::parse("name: imported").unwrap())
+        .await
+        .unwrap();
+    let database = Arc::new(
+        crate::database::ServerDatabase::open(&directory.path().join("db/server.db"))
+            .await
+            .unwrap(),
+    );
+    let mut config = ServerConfig {
+        database: Some(Arc::clone(&database)),
+        blueprint_dir: Some(source.clone()),
+        ..Default::default()
+    };
+    config.blueprints = Some(prepare_blueprint_store(&config).await.unwrap());
+    let state = AppState::new(config).unwrap();
+    assert_eq!(state.blueprints().list().await.unwrap(), ["imported"]);
+    assert!(!source.exists());
+    assert!(directory.path().join("archive/blueprints").is_dir());
+    database.close().await.unwrap();
 }

@@ -116,16 +116,7 @@ async fn serve_opened(
     let tls = config.tls.clone();
     let settings_hash = crate::audit::settings_hash(&config, addr, shutdown_grace);
     let allow_unauthenticated = matches!(config.auth, crate::auth::AuthConfig::Disabled);
-    if config.blueprints.is_none()
-        && let Some(database) = &config.database
-    {
-        let store = crate::blueprint::SqliteBlueprintStore::new(
-            Arc::clone(database),
-            config.blueprint_dir.clone(),
-        );
-        store.migrate().await?;
-        config.blueprints = Some(Arc::new(store));
-    }
+    config.blueprints = Some(prepare_blueprint_store(&config).await?);
     let state = AppState::new(config)?;
     let audit = state.audit().clone();
     // Rehydrate persisted sessions and sweep orphan directories before serving,
@@ -155,7 +146,7 @@ async fn serve_opened(
     let _lifecycle = ServerAuditStop(audit);
     state.set_bind_addr(bound);
     let shutdown = state.shutdown_signal();
-    let requests = state.request_tasks();
+    let requests = state.graceful_shutdown();
     let router = app(state);
     crate::metrics::server_start();
     tracing::info!(addr = %bound, protocol = if tls.is_some() { "https" } else { "http" }, "submilli-server listening");
@@ -183,12 +174,32 @@ async fn serve_opened(
     }
 }
 
+/// Resolve the blueprint backend and finish migration before application startup.
+async fn prepare_blueprint_store(
+    config: &ServerConfig,
+) -> Result<Arc<dyn crate::blueprint::BlueprintStore>> {
+    use crate::blueprint::{FileBlueprintStore, InMemoryBlueprintStore, SqliteBlueprintStore};
+
+    if let Some(store) = &config.blueprints {
+        return Ok(Arc::clone(store));
+    }
+    if let Some(database) = &config.database {
+        let store = SqliteBlueprintStore::new(Arc::clone(database), config.blueprint_dir.clone());
+        store.migrate().await?;
+        return Ok(Arc::new(store));
+    }
+    if let Some(directory) = &config.blueprint_dir {
+        return Ok(Arc::new(FileBlueprintStore::new(directory.clone())?));
+    }
+    Ok(Arc::new(InMemoryBlueprintStore::default()))
+}
+
 async fn serve_listener<L>(
     listener: L,
     router: axum::Router,
     signals: ShutdownSignals,
     shutdown: Arc<Notify>,
-    requests: Arc<crate::request_tasks::RequestTasks>,
+    requests: Arc<crate::graceful_shutdown::GracefulShutdownTracker>,
     shutdown_grace: Duration,
 ) -> Result<DrainStatus>
 where
@@ -253,7 +264,7 @@ where
 }
 
 /// Also cancel owned requests if serving fails or its caller drops the future.
-struct RequestShutdownGuard(Arc<crate::request_tasks::RequestTasks>);
+struct RequestShutdownGuard(Arc<crate::graceful_shutdown::GracefulShutdownTracker>);
 
 impl Drop for RequestShutdownGuard {
     fn drop(&mut self) {

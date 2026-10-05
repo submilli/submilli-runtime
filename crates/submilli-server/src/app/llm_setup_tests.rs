@@ -55,7 +55,7 @@ impl Harness {
                 ephemeral_storage_root: Some(root.path().join("ephemeral")),
                 llm_dispatch: installed,
                 idempotency_store: Some(ledger.clone()),
-                ..ServerConfig::default()
+                ..crate::config::test_config()
             },
             factory,
         )

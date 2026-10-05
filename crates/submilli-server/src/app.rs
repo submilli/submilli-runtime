@@ -32,8 +32,11 @@ use wasmtime::{Engine, Linker, Module};
 
 use crate::ServerConfig;
 use crate::auth::{Access, AuthConfig, Guard};
-use crate::blueprint::{BlueprintStore, FileBlueprintStore, InMemoryBlueprintStore};
+use crate::blueprint::BlueprintStore;
+#[cfg(test)]
+use crate::blueprint::InMemoryBlueprintStore;
 use crate::config::{OAuthProvider, VolumeTable};
+use crate::graceful_shutdown::GracefulShutdownTracker;
 use crate::idempotency::Coordinator;
 use crate::idempotency_store::{FileIdempotencyStore, IdempotencyStore, InMemoryIdempotencyStore};
 use crate::mcp::{
@@ -80,7 +83,7 @@ struct AppStateInner {
     boot_lock: AsyncMutex<()>,
     booted: AtomicBool,
     router_ready: AtomicBool,
-    request_tasks: Arc<crate::request_tasks::RequestTasks>,
+    graceful_shutdown: Arc<GracefulShutdownTracker>,
     database: Option<Arc<crate::database::ServerDatabase>>,
     audit: crate::audit::AuditLog,
     auth: Arc<AuthConfig>,
@@ -145,6 +148,8 @@ struct AppStateInner {
 }
 
 impl AppState {
+    /// Construct application state with the blueprint store supplied in config.
+    /// Store selection and migration belong to server startup.
     pub fn new(config: ServerConfig) -> Result<Self> {
         Self::with_llm_dispatch_factory(config, Arc::new(HttpModelDispatch::new))
     }
@@ -162,6 +167,9 @@ impl AppState {
         mcp_setup: McpSetup,
     ) -> Result<Self> {
         mcp_setup().context("MCP schema initialization failed")?;
+        let blueprints = config.blueprints.context(
+            "AppState requires a prepared blueprint store; supply ServerConfig.blueprints",
+        )?;
         let audit = config
             .audit_log
             .unwrap_or_else(|| crate::audit::AuditLog::new(config.audit, None));
@@ -184,18 +192,6 @@ impl AppState {
         let sessions = config
             .sessions
             .unwrap_or_else(|| Arc::new(InMemorySessionStore::default()));
-        let blueprints: Arc<dyn BlueprintStore> = match (
-            config.blueprints,
-            config.database.as_ref(),
-            config.blueprint_dir,
-        ) {
-            (Some(store), _, _) => store,
-            (None, Some(_), _) => anyhow::bail!(
-                "supply a migrated SQLite blueprint store in ServerConfig.blueprints before constructing AppState"
-            ),
-            (None, None, Some(dir)) => Arc::new(FileBlueprintStore::new(dir)?),
-            (None, None, None) => Arc::new(InMemoryBlueprintStore::default()),
-        };
         let secret_store = config.secret_store;
         let mcp_oauth_providers = Arc::new(config.mcp_oauth_providers);
         // Dedicated HTTP client (its own pool) for token-endpoint exchanges,
@@ -276,7 +272,7 @@ impl AppState {
                 boot_lock: AsyncMutex::new(()),
                 booted: AtomicBool::new(false),
                 router_ready: AtomicBool::new(false),
-                request_tasks: Arc::new(crate::request_tasks::RequestTasks::default()),
+                graceful_shutdown: Arc::new(GracefulShutdownTracker::default()),
                 database: config.database,
                 audit,
                 auth: Arc::new(config.auth),
@@ -346,8 +342,8 @@ impl AppState {
         Ok(())
     }
 
-    pub(crate) fn request_tasks(&self) -> Arc<crate::request_tasks::RequestTasks> {
-        Arc::clone(&self.inner.request_tasks)
+    pub(crate) fn graceful_shutdown(&self) -> Arc<GracefulShutdownTracker> {
+        Arc::clone(&self.inner.graceful_shutdown)
     }
 
     /// Handle `serve` awaits for graceful shutdown; `POST /v1/shutdown` signals it.
@@ -865,7 +861,7 @@ fn layered_package_store(root: Option<PathBuf>, fallback: Option<PathBuf>) -> Pa
 
 pub fn app(state: AppState) -> Router {
     let boot_state = state.clone();
-    let request_tasks = state.request_tasks();
+    let graceful_shutdown = state.graceful_shutdown();
     routes(state.auth(), state.audit().clone())
         .router
         .with_state(state)
@@ -874,8 +870,8 @@ pub fn app(state: AppState) -> Router {
             ensure_router_ready,
         ))
         .layer(middleware::from_fn_with_state(
-            request_tasks,
-            crate::request_tasks::run,
+            graceful_shutdown,
+            crate::graceful_shutdown::run,
         ))
 }
 
@@ -1126,7 +1122,7 @@ mod tests {
             blueprints: Some(Arc::new(
                 InMemoryBlueprintStore::seed([blueprint.clone()]).expect("seed blueprints"),
             )),
-            ..ServerConfig::default()
+            ..crate::config::test_config()
         })
         .unwrap();
         let before = state.mcp_catalog("test", &blueprint).await.unwrap();
@@ -1181,6 +1177,24 @@ mod tests {
         Vfs, dispatch_main_async, install_runtime_async, install_tenant_limits,
     };
 
+    #[test]
+    fn app_state_requires_a_prepared_blueprint_store() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("blueprints");
+        let result = AppState::new(ServerConfig {
+            blueprint_dir: Some(source.clone()),
+            ..Default::default()
+        });
+        assert!(
+            result
+                .err()
+                .unwrap()
+                .to_string()
+                .contains("prepared blueprint store")
+        );
+        assert!(!source.exists());
+    }
+
     #[tokio::test]
     async fn failed_boot_does_not_start_the_reaper() {
         let dir = tempfile::tempdir().expect("tempdir");
@@ -1188,7 +1202,7 @@ mod tests {
         let store = Arc::new(FileDurableSessionStore::new(root.clone()).expect("session store"));
         let state = AppState::new(ServerConfig {
             session_store: Some(store),
-            ..ServerConfig::default()
+            ..crate::config::test_config()
         })
         .expect("app state");
         std::fs::remove_dir(&root).expect("make store unavailable");
@@ -1210,7 +1224,7 @@ mod tests {
     async fn direct_router_still_starts_the_reaper() {
         use tower::ServiceExt;
 
-        let state = AppState::new(ServerConfig::default()).expect("app state");
+        let state = AppState::new(crate::config::test_config()).expect("app state");
         assert_eq!(Arc::strong_count(&state.inner.session_manager), 1);
 
         let router = app(state.clone());
@@ -1237,7 +1251,7 @@ mod tests {
         let store = Arc::new(FileDurableSessionStore::new(root.clone()).expect("session store"));
         let state = AppState::new(ServerConfig {
             session_store: Some(store),
-            ..ServerConfig::default()
+            ..crate::config::test_config()
         })
         .expect("app state");
         let router = app(state.clone());
@@ -1289,7 +1303,7 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let _state = AppState::new(ServerConfig {
             session_store_dir: Some(dir.path().to_path_buf()),
-            ..ServerConfig::default()
+            ..crate::config::test_config()
         })
         .expect("app state");
 
@@ -1305,7 +1319,7 @@ mod tests {
         let _state = AppState::new(ServerConfig {
             session_store_dir: Some(dir.path().to_path_buf()),
             idempotency_store: Some(Arc::new(InMemoryIdempotencyStore::default())),
-            ..ServerConfig::default()
+            ..crate::config::test_config()
         })
         .expect("app state");
 

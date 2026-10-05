@@ -136,7 +136,7 @@ async fn check_mutations(cancel: bool) {
             let response = request.await.unwrap().unwrap();
             assert_eq!(response.status(), axum::http::StatusCode::OK);
         }
-        let tasks = state.request_tasks();
+        let tasks = state.graceful_shutdown();
         tasks.close();
         tokio::time::timeout(Duration::from_secs(5), tasks.wait())
             .await

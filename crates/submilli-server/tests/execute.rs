@@ -1,3 +1,6 @@
+#[path = "common/in_memory_config.rs"]
+mod in_memory_config;
+
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -30,7 +33,7 @@ fn router() -> Router {
     );
     let config = ServerConfig {
         blueprints: Some(blueprints),
-        ..ServerConfig::default()
+        ..in_memory_config::config()
     };
     app(AppState::new(config).expect("build AppState"))
 }
@@ -60,7 +63,7 @@ fn router_with_packages_and_runtime(
         blueprints: Some(blueprints),
         package_store_root: Some(package_store_root),
         runtime,
-        ..ServerConfig::default()
+        ..in_memory_config::config()
     };
     app(AppState::new(config).expect("build AppState"))
 }
@@ -89,7 +92,7 @@ fn router_with_oauth_mcp() -> Router {
     );
     let config = ServerConfig {
         blueprints: Some(blueprints),
-        ..ServerConfig::default()
+        ..in_memory_config::config()
     };
     app(AppState::new(config).expect("build AppState"))
 }
@@ -331,7 +334,7 @@ async fn blueprint_package_resolves_from_the_fallback_store() {
         blueprints: Some(blueprints),
         package_store_root: Some(owned.clone()),
         package_fallback_root: Some(fallback),
-        ..ServerConfig::default()
+        ..in_memory_config::config()
     })
     .expect("build AppState"));
     let code = r#"

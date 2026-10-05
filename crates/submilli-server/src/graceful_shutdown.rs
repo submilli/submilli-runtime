@@ -1,5 +1,6 @@
 //! Request ownership independent of the HTTP connection.
 
+use std::future::Future;
 use std::sync::Arc;
 
 use axum::{
@@ -12,12 +13,43 @@ use tokio_util::{sync::CancellationToken, task::TaskTracker};
 use tracing::Instrument;
 
 #[derive(Default)]
-pub(crate) struct RequestTasks {
+pub(crate) struct GracefulShutdownTracker {
     tasks: TaskTracker,
     stop: CancellationToken,
 }
 
-impl RequestTasks {
+impl GracefulShutdownTracker {
+    /// Own and track work until completion, even if the waiter is dropped.
+    /// Closing admission rejects new work; cancellation stops unfinished work.
+    pub(crate) async fn watch<F>(&self, work: F) -> Result<F::Output, WatchError>
+    where
+        F: Future + Send + 'static,
+        F::Output: Send + 'static,
+    {
+        // Use the tracker's own state for admission. A token registered before
+        // close is counted by wait; a token registered after close is rejected.
+        let token = self.tasks.token();
+        if self.tasks.is_closed() {
+            return Err(WatchError::ShuttingDown);
+        }
+        let runtime = tokio::runtime::Handle::try_current().map_err(WatchError::Runtime)?;
+        let stop = self.stop.clone();
+        runtime
+            .spawn(
+                async move {
+                    let _token = token;
+                    tokio::select! {
+                        biased;
+                        () = stop.cancelled() => Err(WatchError::ShuttingDown),
+                        result = work => Ok(result),
+                    }
+                }
+                .in_current_span(),
+            )
+            .await
+            .map_err(WatchError::Task)?
+    }
+
     pub(crate) fn close(&self) {
         self.tasks.close();
     }
@@ -32,40 +64,28 @@ impl RequestTasks {
     }
 }
 
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum WatchError {
+    #[error("server is shutting down")]
+    ShuttingDown,
+    #[error("owned work requires a Tokio runtime: {0}")]
+    Runtime(#[source] tokio::runtime::TryCurrentError),
+    #[error("owned task failed: {0}")]
+    Task(#[source] tokio::task::JoinError),
+}
+
 /// Run outside authentication/audit middleware so their task-local context and
 /// completion hooks live as long as the handler, even after HTTP disconnects.
 pub(crate) async fn run(
-    State(tasks): State<Arc<RequestTasks>>,
+    State(shutdown): State<Arc<GracefulShutdownTracker>>,
     request: Request,
     next: Next,
 ) -> Response {
-    // Register before checking admission: close + wait cannot miss an accepted
-    // task racing with shutdown. A token acquired after close is rejected.
-    let token = tasks.tasks.token();
-    if tasks.tasks.is_closed() {
-        return shutting_down();
-    }
-    let runtime = match tokio::runtime::Handle::try_current() {
-        Ok(runtime) => runtime,
-        Err(error) => {
-            tracing::error!(%error, "request requires a Tokio runtime");
-            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
-        }
-    };
-    let stop = tasks.stop.clone();
-    let task = runtime.spawn(
-        async move {
-            let _token = token;
-            tokio::select! {
-                biased;
-                () = stop.cancelled() => shutting_down(),
-                response = next.run(request) => response,
-            }
-        }
-        .in_current_span(),
-    );
-    match task.await {
+    match shutdown.watch(next.run(request)).await {
         Ok(response) => response,
+        Err(WatchError::ShuttingDown) => {
+            (StatusCode::SERVICE_UNAVAILABLE, "server is shutting down").into_response()
+        }
         Err(error) => {
             tracing::error!(%error, "request task failed");
             StatusCode::INTERNAL_SERVER_ERROR.into_response()
@@ -73,14 +93,41 @@ pub(crate) async fn run(
     }
 }
 
-fn shutting_down() -> Response {
-    (StatusCode::SERVICE_UNAVAILABLE, "server is shutting down").into_response()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use tower::ServiceExt;
+
+    #[tokio::test]
+    async fn watch_keeps_non_http_work_alive_after_waiter_cancellation() {
+        let tracker = Arc::new(GracefulShutdownTracker::default());
+        let started = Arc::new(tokio::sync::Notify::new());
+        let release = Arc::new(tokio::sync::Notify::new());
+        let (result_tx, result_rx) = tokio::sync::oneshot::channel();
+        let waiter = {
+            let tracker = Arc::clone(&tracker);
+            let started = Arc::clone(&started);
+            let release = Arc::clone(&release);
+            tokio::spawn(async move {
+                tracker
+                    .watch(async move {
+                        started.notify_one();
+                        release.notified().await;
+                        result_tx.send(42).unwrap();
+                    })
+                    .await
+            })
+        };
+        started.notified().await;
+        waiter.abort();
+        assert!(waiter.await.unwrap_err().is_cancelled());
+        tracker.close();
+        release.notify_one();
+        tokio::time::timeout(std::time::Duration::from_secs(1), tracker.wait())
+            .await
+            .unwrap();
+        assert_eq!(result_rx.await.unwrap(), 42);
+    }
 
     async fn panicked_handler() -> Response {
         panic!("injected handler panic");
@@ -88,7 +135,7 @@ mod tests {
 
     #[tokio::test]
     async fn closed_admission_does_not_run_handler() {
-        let tasks = Arc::new(RequestTasks::default());
+        let tasks = Arc::new(GracefulShutdownTracker::default());
         tasks.close();
         let router = axum::Router::new()
             .route("/", axum::routing::get(panicked_handler))
@@ -113,7 +160,7 @@ mod tests {
 
     #[tokio::test]
     async fn panicked_handler_returns_error_and_releases_tracking() {
-        let tasks = Arc::new(RequestTasks::default());
+        let tasks = Arc::new(GracefulShutdownTracker::default());
         let router = axum::Router::new()
             .route("/", axum::routing::get(panicked_handler))
             .route("/healthy", axum::routing::get(|| async { "healthy" }))

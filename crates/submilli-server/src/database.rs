@@ -218,6 +218,21 @@ fn database_worker(
 /// An uncertain native close must never allow another server to acquire the lock.
 struct DatabaseLock(Option<File>);
 
+impl DatabaseLock {
+    fn release(&mut self, path: &Path) -> Result<(), DatabaseError> {
+        if let Some(lock) = &self.0 {
+            // A child may inherit this descriptor before exec closes it.
+            // Explicit unlock releases ownership even while that copy exists.
+            lock.unlock().map_err(|source| DatabaseError::Io {
+                path: path.to_path_buf(),
+                source,
+            })?;
+        }
+        drop(self.0.take());
+        Ok(())
+    }
+}
+
 impl Drop for DatabaseLock {
     fn drop(&mut self) {
         if let Some(lock) = self.0.take() {
@@ -257,7 +272,7 @@ impl OwnedDatabase {
         .await;
         if let Err(error) = initialized {
             connection.close().await?;
-            drop(lock.0.take());
+            lock.release(&path)?;
             return Err(error);
         }
         Ok(Self {
@@ -273,7 +288,7 @@ impl OwnedDatabase {
                 .fetch_one(&mut self.connection)
                 .await;
         self.connection.close().await?;
-        drop(self.lock.0.take());
+        self.lock.release(&self.path)?;
         if checkpoint?.0 != 0 {
             return Err(DatabaseError::CheckpointBusy);
         }

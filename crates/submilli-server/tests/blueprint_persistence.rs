@@ -4,6 +4,9 @@
 //! restarts, history retention, and crash-recovery semantics — both directly
 //! against `FileBlueprintStore` and through the HTTP surface.
 
+#[path = "common/in_memory_config.rs"]
+mod in_memory_config;
+
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU32, Ordering};
@@ -207,8 +210,10 @@ async fn get_json(router: &Router, path: &str) -> (StatusCode, Value) {
 async fn http_add_survives_appstate_rebuild() {
     let dir = temp_dir();
     let router = app(AppState::new(ServerConfig {
-        blueprint_dir: Some(dir.clone()),
-        ..ServerConfig::default()
+        blueprints: Some(std::sync::Arc::new(
+            FileBlueprintStore::new(dir.clone()).unwrap(),
+        )),
+        ..in_memory_config::config()
     })
     .expect("AppState"));
 
@@ -236,8 +241,8 @@ mcp:
 
     // Rebuild AppState over the same dir — the blueprint loads from disk.
     let router = app(AppState::new(ServerConfig {
-        blueprint_dir: Some(dir),
-        ..ServerConfig::default()
+        blueprints: Some(std::sync::Arc::new(FileBlueprintStore::new(dir).unwrap())),
+        ..in_memory_config::config()
     })
     .expect("AppState reload"));
     let (status, body) = get_json(&router, "/v1/blueprints").await;

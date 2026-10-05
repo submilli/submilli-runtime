@@ -29,12 +29,13 @@ pub struct ServerConfig {
     pub network_policy: NetworkPolicy,
     /// When `None`, `AppState::new` installs an in-memory store.
     pub sessions: Option<Arc<dyn SessionStore>>,
-    /// Explicit blueprint store. Takes precedence over `blueprint_dir`; mainly
-    /// for tests and embedded callers that inject their own store.
+    /// Prepared blueprint store, required by `AppState::new`.
+    /// `serve` selects and migrates a store when this is unset.
+    /// An explicit store takes precedence over the database and source directory.
     pub blueprints: Option<Arc<dyn BlueprintStore>>,
     /// Source directory for the SQLite migration performed by `serve`.
-    /// Explicit blueprint stores take precedence. Embedded callers without a
-    /// database retain the file store when this is set, otherwise an in-memory store.
+    /// Without a database, startup selects a file store for this directory,
+    /// or an in-memory store when unset. Explicit blueprint stores take precedence.
     pub blueprint_dir: Option<PathBuf>,
     /// Explicit durable session store. Takes precedence over `session_store_dir`;
     /// mainly for tests and embedded callers that inject their own store.
@@ -1161,5 +1162,13 @@ fn resolve_links(path: &Path) -> PathBuf {
             return path.to_path_buf();
         }
         missing.push(name);
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn test_config() -> ServerConfig {
+    ServerConfig {
+        blueprints: Some(Arc::new(crate::blueprint::InMemoryBlueprintStore::default())),
+        ..Default::default()
     }
 }

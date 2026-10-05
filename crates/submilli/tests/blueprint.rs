@@ -1,13 +1,16 @@
 //! End-to-end integration tests for `submilli server blueprint {add,list}`.
 
+#[path = "../../submilli-server/tests/common/in_memory_config.rs"]
+mod in_memory_config;
+
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
-use submilli_server::{AppState, ServerConfig, app};
+use submilli_server::{AppState, app};
 
 async fn spawn_server() -> String {
-    let state = AppState::new(ServerConfig::default()).expect("AppState");
+    let state = AppState::new(in_memory_config::config()).expect("AppState");
     let router = app(state);
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
         .await

@@ -715,3 +715,17 @@ async fn busy_checkpoint_still_closes_connection_and_releases_lock() {
         .await
         .unwrap();
 }
+
+#[cfg(unix)]
+#[tokio::test]
+async fn native_close_unlocks_even_when_a_child_descriptor_remains() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("server.db");
+    let database = OwnedDatabase::open(&path).await.unwrap();
+    // A duplicated descriptor shares the lock as a forked child's copy does.
+    let inherited = database.lock.0.as_ref().unwrap().try_clone().unwrap();
+    database.close().await.unwrap();
+    let reopened = ServerDatabase::open(&path).await.unwrap();
+    reopened.close().await.unwrap();
+    drop(inherited);
+}
