@@ -1,5 +1,4 @@
 line 10, 13, 20, 28, 31, 40, 43, 55, 70, 85, 88, 127, 130, 138, 141, 148, 151, 181, 184, 191, 194, 201, 204, 211, 212, 223, 224, 236, 251, 252, 271, 274 extra: bug SUB-1197 a condition or discriminant stored in a `const`, or a destructured discriminant, doesn't narrow
 line 10, 13, 20, 28, 31, 40, 43, 49, 70, 85, 88, 127, 130, 138, 141, 181, 184, 191, 194, 201, 204, 211, 212, 223, 224, 236, 251, 252, 271, 274 type: bug SUB-1197 a condition or discriminant stored in a `const`, or a destructured discriminant, doesn't narrow
-line 52, 53, 59, 60, 61, 63, 145, 146 type: bug SUB-1211 our type display drops a field's `readonly` or doesn't quote a non-identifier field name
-line 55, 148, 151 type: bug SUB-1197 a condition or discriminant stored in a `const`, or a destructured discriminant, doesn't narrow; also bug SUB-1211 our type display drops a field's `readonly` or doesn't quote a non-identifier field name
+line 55, 148, 151 type: bug SUB-1197 a condition or discriminant stored in a `const`, or a destructured discriminant, doesn't narrow
 line 76 type: bug SUB-1196 (literal under an expected type) a literal checked against an expected type takes that type, where tsc keeps its own

@@ -730,6 +730,21 @@ impl Type {
     }
 }
 
+/// A field name as TypeScript prints it: bare when it is an identifier (keywords
+/// included), otherwise double-quoted, as `"a b"` and `"1"` are.
+fn write_field_name(f: &mut fmt::Formatter<'_>, name: &str) -> fmt::Result {
+    let mut chars = name.chars();
+    let is_identifier = chars
+        .next()
+        .is_some_and(|c| c == '_' || c == '$' || unicode_ident::is_xid_start(c))
+        && chars.all(|c| c == '_' || c == '$' || unicode_ident::is_xid_continue(c));
+    if is_identifier {
+        f.write_str(name)
+    } else {
+        write!(f, "{name:?}")
+    }
+}
+
 /// Writes the `(…)` of a function type with synthesized `arg{i}` parameter
 /// names. A `Type::Function` carries no names, but the type grammar requires one
 /// per position, so a nameless rendering does not re-parse — and a diagnostic
@@ -834,8 +849,12 @@ impl fmt::Display for Type {
                     if i > 0 {
                         f.write_str("; ")?;
                     }
+                    if field.readonly {
+                        f.write_str("readonly ")?;
+                    }
+                    write_field_name(f, name)?;
                     let marker = if field.optional { "?" } else { "" };
-                    write!(f, "{}{}: {}", name, marker, field.ty)?;
+                    write!(f, "{marker}: {}", field.ty)?;
                 }
                 if let Some(index) = index {
                     if !fields.is_empty() {

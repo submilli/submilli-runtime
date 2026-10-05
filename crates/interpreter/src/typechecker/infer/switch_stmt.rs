@@ -59,6 +59,7 @@ impl Inferer<'_> {
         for case in cases {
             let case_span = case.span;
             let mut typed_values: Vec<TypedSwitchValue> = Vec::new();
+            let mut label_tys: Vec<Type> = Vec::new();
             for value_expr in &case.values {
                 let value_span = self
                     .ast
@@ -102,17 +103,26 @@ impl Inferer<'_> {
                     continue;
                 }
                 typed_values.push(lit);
+                label_tys.push(val_ty);
             }
 
-            let mut iter = typed_values.iter();
+            let mut iter = typed_values.iter().zip(&label_tys);
             let true_env = match iter.next() {
                 None => narrowing::NarrowEnv::new(),
-                Some(first) => {
-                    let mut acc =
-                        self.predicate_env_for_case_value(typed_disc, disc_source_span, first)?;
-                    for value in iter {
-                        let next =
-                            self.predicate_env_for_case_value(typed_disc, disc_source_span, value)?;
+                Some((first, first_ty)) => {
+                    let mut acc = self.predicate_env_for_case_value(
+                        typed_disc,
+                        disc_source_span,
+                        first,
+                        first_ty,
+                    )?;
+                    for (value, label_ty) in iter {
+                        let next = self.predicate_env_for_case_value(
+                            typed_disc,
+                            disc_source_span,
+                            value,
+                            label_ty,
+                        )?;
                         let (joined, _) =
                             narrowing::union_envs(acc, BTreeSet::new(), next, BTreeSet::new());
                         acc = joined;
@@ -206,9 +216,12 @@ impl Inferer<'_> {
         })
     }
 
+    /// The label as an expression for the synthesized `disc === label` test. An
+    /// enum member keeps the label's own type (`E`), as its `case` reads in source.
     fn push_switch_value_expr(
         &mut self,
         value: &TypedSwitchValue,
+        label_ty: &Type,
     ) -> Result<ExprId, crate::compiler_error::CompilerFailure> {
         let (kind, ty, span) = match value {
             TypedSwitchValue::String { value, span } => (
@@ -237,7 +250,7 @@ impl Inferer<'_> {
                         variant: member.clone(),
                         value: *n,
                     },
-                    Type::NumberLiteral(crate::types::LiteralF64(*n)),
+                    label_ty.clone(),
                     *span,
                 ),
                 EnumVariantPayload::String(s) => (
@@ -246,7 +259,7 @@ impl Inferer<'_> {
                         variant: member.clone(),
                         value: s.clone(),
                     },
-                    Type::StringLiteral(s.clone()),
+                    label_ty.clone(),
                     *span,
                 ),
             },
@@ -261,8 +274,9 @@ impl Inferer<'_> {
         typed_disc: ExprId,
         disc_source_span: Span,
         value: &TypedSwitchValue,
+        label_ty: &Type,
     ) -> Result<narrowing::NarrowEnv, crate::compiler_error::CompilerFailure> {
-        let lit_expr_id = self.push_switch_value_expr(value)?;
+        let lit_expr_id = self.push_switch_value_expr(value, label_ty)?;
         let synth = self
             .typed_ast
             .try_push_expr(TypedExpr {

@@ -1,4 +1,4 @@
-types: 270 of 512 tsc entries compared, 46 differ
+types: 270 of 512 tsc entries compared, 35 differ
 
 line 10: x
   tsc:  string
@@ -36,37 +36,9 @@ line 49: x
   tsc:  number
   ours: number | null
 
-line 52: obj
-  tsc:  { readonly x: string | number; }
-  ours: { x: number | string }
-
-line 53: obj
-  tsc:  { readonly x: string | number; }
-  ours: { x: number | string }
-
 line 55: obj.x
   tsc:  string
   ours: number | string
-
-line 55: obj
-  tsc:  { readonly x: string | number; }
-  ours: { x: number | string }
-
-line 59: obj
-  tsc:  { readonly x: string | number; }
-  ours: { x: number | string }
-
-line 60: obj
-  tsc:  { readonly x: string | number; }
-  ours: { x: number | string }
-
-line 61: obj
-  tsc:  { readonly x: string | number; }
-  ours: { x: number | string }
-
-line 63: obj
-  tsc:  { readonly x: string | number; }
-  ours: { x: number | string }
 
 line 70: obj[0]
   tsc:  string
@@ -100,29 +72,13 @@ line 141: obj
   tsc:  { kind: "bar"; bar: number; }
   ours: { bar: number; kind: "bar" } | { foo: string; kind: "foo" }
 
-line 145: outer
-  tsc:  { readonly obj: { kind: "foo"; foo: string; } | { kind: "bar"; bar: number; }; }
-  ours: { obj: { bar: number; kind: "bar" } | { foo: string; kind: "foo" } }
-
-line 146: outer
-  tsc:  { readonly obj: { kind: "foo"; foo: string; } | { kind: "bar"; bar: number; }; }
-  ours: { obj: { bar: number; kind: "bar" } | { foo: string; kind: "foo" } }
-
 line 148: outer.obj
   tsc:  { kind: "foo"; foo: string; }
   ours: { bar: number; kind: "bar" } | { foo: string; kind: "foo" }
 
-line 148: outer
-  tsc:  { readonly obj: { kind: "foo"; foo: string; } | { kind: "bar"; bar: number; }; }
-  ours: { obj: { bar: number; kind: "bar" } | { foo: string; kind: "foo" } }
-
 line 151: outer.obj
   tsc:  { kind: "bar"; bar: number; }
   ours: { bar: number; kind: "bar" } | { foo: string; kind: "foo" }
-
-line 151: outer
-  tsc:  { readonly obj: { kind: "foo"; foo: string; } | { kind: "bar"; bar: number; }; }
-  ours: { obj: { bar: number; kind: "bar" } | { foo: string; kind: "foo" } }
 
 line 181: obj
   tsc:  { kind: "foo"; foo: string; }

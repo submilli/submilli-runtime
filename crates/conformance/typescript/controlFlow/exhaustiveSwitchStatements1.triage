@@ -6,5 +6,5 @@ line 237 extra: by-design spec §1.5 a case must end with `break` or `return`, n
 line 241 extra: bug SUB-1199 a `switch` without `default` doesn't narrow the path that falls out
 line 7 type: bug SUB-1196 (literals from constant expressions) `!` on an operand of known truthiness isn't a literal type
 line 12 type: bug SUB-1199 after an exhaustive `switch` whose cases all return, the value isn't narrowed to `never`
-line 43, 44, 104, 105, 113, 114, 122, 123 type: bug SUB-1211 an enum-member `case` label is recorded with its underlying literal type instead of the enum
+line 43, 44, 104, 105, 113, 114, 122, 123 type: bug SUB-1196 (enum member types) an enum member has its enum's type, where tsc gives it a member literal type
 line 240, 241 type: bug SUB-1199 a `switch` without `default` doesn't narrow the path that falls out
