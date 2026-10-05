@@ -82,6 +82,7 @@ separate resource/dependency backlog.
 | R14 | Complete: retained | Keep shared raw-slice ABI helpers and boundary validation |
 | R15 | Complete: simplified | Removed HMAC-init and fixed-digest-only error layers |
 | R16 | Complete: selectively simplified | Accepted first path component; retained pack and borrowing checks |
+| R17 | Complete: retained | Keep worker/client construction errors and ownership |
 
 ### R01 execution evidence
 
@@ -357,6 +358,19 @@ memory tests passed; optional calibration ignored. Formatting and workspace Clip
 passed, full tests disabled, HTTP skipped; focused Git nightly bodies enabled as
 required. Graph updated with existing limitations. Accepted site recorded/verified
 in SUB-633; this commit records R16.
+
+### R17 execution evidence
+
+BlockingWork acquires a Tokio runtime through `try_current`, reserves failure
+storage, spawns an OS thread and handles worker/channel outcomes. Those operations
+can fail independently of invariants. Its ownership and draining protect resources
+used by work after caller cancellation. HTTP client builders likewise return real
+configuration/TLS/runtime setup errors. Retain these contracts and containment;
+allowing a worker invariant panic does not justify rethrowing it or abandoning its
+resources. Existing tests explicitly cover absent runtime, thread-spawn failure,
+worker panic and subsequent healthy work. Source/history reviewed; no code or test
+changes, no runtime checks rerun. R17 is resolved as retention; three independent
+reviews had no findings and diff checks passed.
 
 ## Completed fixes: candidates and decisions
 
