@@ -9987,6 +9987,9 @@ fn equality_types_overlap(
 /// the `+` arm and the narrowing hint it emits: a hint may only claim a guard is the
 /// fix when the guarded pair is one this accepts.
 pub(super) fn plus_result(lt: &Type, rt: &Type) -> Option<Type> {
+    if let Some(result) = never_operand_result(lt, rt, true) {
+        return result;
+    }
     match (lt.primitive_behavior(), rt.primitive_behavior()) {
         // A literal operand behaves as its base and yields the base, never a
         // literal: `1 + 1` is `number`, not `2`. Same rule as `ordering_accepts`.
@@ -10004,6 +10007,9 @@ pub(super) fn plus_result(lt: &Type, rt: &Type) -> Option<Type> {
 
 /// [`plus_result`] for `-`, `*`, `/`, `%`, `**` — same role, no string arm.
 pub(super) fn arithmetic_result(lt: &Type, rt: &Type) -> Option<Type> {
+    if let Some(result) = never_operand_result(lt, rt, false) {
+        return result;
+    }
     match (lt.primitive_behavior(), rt.primitive_behavior()) {
         (Type::Number | Type::NumberLiteral(_), Type::Number | Type::NumberLiteral(_)) => {
             Some(Type::Number)
@@ -10016,6 +10022,11 @@ pub(super) fn arithmetic_result(lt: &Type, rt: &Type) -> Option<Type> {
 /// [`plus_result`] for `<`, `>`, `<=`, `>=`, which always yield `boolean` — strings
 /// compare lexicographically, and literal types order as their widened base.
 fn ordering_accepts(lt: &Type, rt: &Type) -> bool {
+    // A `never` operand orders against numbers and bigints only: tsc rejects
+    // `never < string`, unlike `never + string`.
+    if let Some(result) = never_operand_result(lt, rt, false) {
+        return result.is_some();
+    }
     matches!(
         (lt.primitive_behavior(), rt.primitive_behavior()),
         (
@@ -10034,7 +10045,7 @@ fn ordering_accepts(lt: &Type, rt: &Type) -> bool {
 fn unary_arith_result(op: UnOp, ty: &Type) -> Option<Type> {
     match ty.primitive_behavior() {
         Type::BigInt => Some(Type::BigInt),
-        Type::Number | Type::NumberLiteral(_) | Type::Error => Some(Type::Number),
+        Type::Number | Type::NumberLiteral(_) | Type::Never | Type::Error => Some(Type::Number),
         // `+s` is JS's explicit string→number coercion and the one TS keeps; it
         // lowers to the same parse `Number(s)` does (`NaN` when the text isn't a
         // number). Unary `-` on a string stays rejected: it reads as arithmetic,
@@ -10042,6 +10053,26 @@ fn unary_arith_result(op: UnOp, ty: &Type) -> Option<Type> {
         t if matches!(op, UnOp::Pos) && t.is_string_shaped() => Some(Type::Number),
         _ => None,
     }
+}
+
+/// The binary operator result when either operand is `never`, or `None` when neither is.
+///
+/// A `never` value can't exist, so the operator is accepted whenever some operand type
+/// would be, and its result comes from the other operand as tsc's does: `never + string`
+/// is `string`, `never - bigint` is `bigint`, and `never` with `never` is `number`.
+/// `allows_string` admits a string partner, which only `+` does.
+fn never_operand_result(lt: &Type, rt: &Type, allows_string: bool) -> Option<Option<Type>> {
+    let other = match (lt.peel(), rt.peel()) {
+        (Type::Never, _) => rt,
+        (_, Type::Never) => lt,
+        _ => return None,
+    };
+    Some(match other.primitive_behavior() {
+        Type::Never | Type::Number | Type::NumberLiteral(_) => Some(Type::Number),
+        Type::BigInt => Some(Type::BigInt),
+        Type::String | Type::StringLiteral(_) if allows_string => Some(Type::String),
+        _ => None,
+    })
 }
 
 /// Types whose values reach a `toString` — the receivers `String(x)` and `${x}` accept.

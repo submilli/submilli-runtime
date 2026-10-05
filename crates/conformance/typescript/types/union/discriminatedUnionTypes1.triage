@@ -1,4 +1,3 @@
-line 44 extra: bug SUB-1207 `+` rejects a `never` operand
 line 62 extra: bug SUB-1199 after an exhaustive `switch` whose cases all return, the value isn't narrowed to `never`; also by-design spec §1.5 code after an exhaustive `switch` is unreachable
 line 116 extra: by-design spec §1.5 a case must end with `break` or `return`, no fallthrough
 line 127, 136 extra: bug SUB-1196 (non-exhaustive `switch`) a `switch` without `default` must cover every case, which the spec doesn't state

@@ -1,4 +1,4 @@
-types: 144 of 251 tsc entries compared, 16 differ
+types: 145 of 251 tsc entries compared, 16 differ
 
 line 62: s
   tsc:  never
@@ -65,7 +65,6 @@ line 142: m
   ours: Message
 
 errors:
-line 44: ours: `+` not defined for `string` and `never` (tsc accepts)
 line 62: ours: expected `never`, got `Shape` (tsc accepts)
 line 116: ours: `switch` case body must end with `break` or `return` — no fallthrough (tsc accepts)
 line 127: ours: non-exhaustive `switch`: missing case(s) "C", "D" (tsc accepts)
