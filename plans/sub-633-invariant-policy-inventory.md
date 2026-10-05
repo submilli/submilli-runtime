@@ -84,6 +84,7 @@ separate resource/dependency backlog.
 | R16 | Complete: selectively simplified | Accepted first path component; retained pack and borrowing checks |
 | R17 | Complete: retained | Keep worker/client construction errors and ownership |
 | R18 | Complete: already simplified | Poison-only reversion already implemented; preserve real backend errors |
+| R19 | Complete: retained | Keep direct wire maps and retry classification loop |
 
 ### R01 execution evidence
 
@@ -383,6 +384,17 @@ implementation returning Ok does not make the trait error redundant. Keep the
 existing reversal and backend contracts. Original 40 poisoned-lock accesses remain
 accepted under P01; initiating panics are assessed separately. No further poison
 reversion identified in this review. Documentation-only, no tests rerun. Three
+independent reviewers reported no findings; diff checks passed.
+
+### R19 execution evidence
+
+Anthropic, Google and OpenAI wire builders construct Map values directly, avoiding
+both a Value downcast and any error layer. Retain this structure. Provider failure
+classification consumes Retry wrappers in a loop and then classifies the actual
+failure; restoring an unreachable Retry arm adds no value. Keep real client-build
+and remote-provider errors. Existing retry-wrapper tests describe the intended
+classification; no network call or behavior change is involved. Source reviewed,
+documentation-only, no tests rerun. R19 is resolved as retention. Three
 independent reviewers reported no findings; diff checks passed.
 
 ## Completed fixes: candidates and decisions
