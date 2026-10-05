@@ -546,7 +546,7 @@ async fn prepared_package_cache_survives_store_removal() {
 }
 
 #[tokio::test]
-async fn prepared_package_cache_only_evicts_when_blueprint_packages_change() {
+async fn prepared_package_cache_evicts_on_every_blueprint_apply() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let store_root = tmp.path().join("packages");
     write_acme_util_package(&store_root);
@@ -559,7 +559,7 @@ async fn prepared_package_cache_only_evicts_when_blueprint_packages_change() {
 
     let (_, first) = execute_on(&router, code).await;
     // Registration needs valid artifacts; change the on-disk result to distinguish
-    // reuse of the prepared module from reloading it after a package-list change.
+    // reuse of the prepared module from reloading it after an apply.
     write_acme_util_package_with_source(
         &store_root,
         "export function answer(): number { return 99; } export function plusOne(n: number): number { return n + 1; }",
@@ -595,7 +595,7 @@ vfs: none
     assert_eq!(first["result"], json!("42"), "got: {first:#}");
     assert_eq!(
         after_non_package_update["result"],
-        json!("42"),
+        json!("100"),
         "got: {after_non_package_update:#}"
     );
     assert_eq!(
