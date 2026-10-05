@@ -9039,7 +9039,14 @@ impl Inferer<'_> {
         span: Span,
     ) -> Result<(TypedExprKind, Type), CompilerFailure> {
         let target_ty = self.resolve_type(&ty)?;
-        let (inner_id, inner_ty) = self.infer_expr(inner, None)?;
+        // An empty `[]` has no element type of its own, so it takes the target's
+        // array element type, as under an annotation. Other operands infer
+        // unhinted: a hint is enforced (an object literal rejects fields the target
+        // lacks), while a cast only needs one type assignable to the other.
+        let operand_hint = (has_array_element_type(&target_ty)
+            && is_empty_array_literal(self.ast, inner)?)
+        .then_some(&target_ty);
+        let (inner_id, inner_ty) = self.infer_expr(inner, operand_hint)?;
         // Error escape — already in error state; produce a Cast so
         // downstream passes see a sensible node, but don't emit more
         // diagnostics on top.
@@ -9910,6 +9917,26 @@ fn branch_result_type(left: Type, right: Type, types: super::assignable::TypeRes
         left
     } else {
         Type::union(vec![left, right])
+    }
+}
+
+/// Whether `ty` gives an array literal an element type: an array, or a union whose
+/// only array-like member is one, as `infer_array_literal` reads its hint.
+fn has_array_element_type(ty: &Type) -> bool {
+    let peeled = ty.peel();
+    matches!(
+        sole_array_like_member(peeled).unwrap_or(peeled),
+        Type::Array(_)
+    )
+}
+
+fn is_empty_array_literal(ast: &crate::Ast, mut id: ExprId) -> Result<bool, CompilerFailure> {
+    loop {
+        match &ast.try_expr(id).map_err(super::arena_failure)?.kind {
+            ExprKind::Paren(inner) => id = *inner,
+            ExprKind::ArrayLiteral { elements } => return Ok(elements.is_empty()),
+            _ => return Ok(false),
+        }
     }
 }
 
