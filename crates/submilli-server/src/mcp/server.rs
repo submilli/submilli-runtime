@@ -26,7 +26,7 @@ use submilli_shared::library_visibility::LibraryVisibility;
 
 use crate::app::AppState;
 use crate::error::ExecuteError;
-use crate::handlers::execute::{ExecuteEntry, ExecuteInputs, blueprint_miss_message, execute_core};
+use crate::handlers::execute::{ExecuteInputs, VfsSource, blueprint_miss_message, execute_core};
 use crate::packages;
 use crate::session_manager::{attach_limits, build_vfs, vfs_info};
 
@@ -380,7 +380,8 @@ impl SubmilliMcp {
                 variables,
                 harness_secrets,
                 audit: Some(audit),
-                entry: ExecuteEntry::Mcp { vfs, vfs_info },
+                vfs_source: VfsSource::Mcp { vfs, vfs_info },
+                run_entry: crate::record::RunEntry::Mcp,
                 client: parts
                     .extensions
                     .get::<McpClient>()
@@ -591,7 +592,10 @@ impl SubmilliMcp {
             &parts,
             Arc::clone(&blueprint),
             Arc::clone(&variables),
-            ("submilli__files__read", "fs.read"),
+            FileTool {
+                name: "submilli__files__read",
+                capability: "fs.read",
+            },
             &args.path,
             None,
         ) {
@@ -650,7 +654,10 @@ impl SubmilliMcp {
             &parts,
             Arc::clone(&blueprint),
             Arc::clone(&variables),
-            ("submilli__files__list", "fs.list"),
+            FileTool {
+                name: "submilli__files__list",
+                capability: "fs.list",
+            },
             dir,
             Some(recursive),
         ) {
@@ -699,10 +706,11 @@ impl SubmilliMcp {
         parts: &axum::http::request::Parts,
         blueprint: Arc<Blueprint>,
         variables: Arc<submilli_blueprint::VarBindings>,
-        (tool, capability): (&str, &str),
+        tool: FileTool<'_>,
         path: &str,
         recursive: Option<bool>,
     ) -> Result<(), FileToolError> {
+        let capability = tool.capability;
         let mut context = serde_json::Map::new();
         context.insert("path".into(), path.into());
         if let Some(recursive) = recursive {
@@ -715,7 +723,7 @@ impl SubmilliMcp {
             .map_err(|error| FileToolError::denied(capability, &error.to_string()))?;
         guest_normalize(config.cwd(), path)
             .map_err(|error| FileToolError::file(path, error.into()))?;
-        let recording = self.file_tool_recording(parts, &blueprint, &variables, tool);
+        let recording = self.file_tool_recording(parts, &blueprint, &variables, tool.name);
         let log = recording.as_ref().map(crate::record::Recording::log);
         let policy: Arc<dyn SecurityCheck> =
             Arc::new(PolicyCheck::with_variables(blueprint.clone(), variables));
@@ -733,52 +741,28 @@ impl SubmilliMcp {
             audit_context.as_ref(),
             &outcome,
         );
-        let refusal = match &outcome {
-            CheckOutcome::Allow { .. } => None,
-            CheckOutcome::Deny { reason, .. } => Some(reason.clone()),
-            _ => Some("unrecognized policy outcome".to_string()),
+        let (allowed, rule, refusal) = match outcome {
+            CheckOutcome::Allow { rule } => (true, rule, None),
+            CheckOutcome::Deny { reason, rule } => (false, rule, Some(reason)),
+            _ => (false, None, Some("unrecognized policy outcome".to_string())),
         };
         if let (Some(recording), Some(log), Some((marker, ticket))) = (recording, log, call) {
-            let explanation = policy.explain("main", capability, &context, config.cwd());
-            let (rule, allowed) = match &outcome {
-                CheckOutcome::Allow { rule } => (*rule, true),
-                CheckOutcome::Deny { rule, .. } => (*rule, false),
-                _ => (None, false),
-            };
-            policy.audit(
-                AuditDecision::new(
-                    "main",
-                    capability,
-                    audit_context.as_ref(),
+            finish_file_tool_run(
+                &recording,
+                &log,
+                &FileToolCall {
+                    policy: policy.as_ref(),
+                    tool,
+                    context: &context,
+                    audit_context: audit_context.as_ref(),
+                    cwd: config.cwd(),
                     allowed,
-                    "policy",
                     rule,
-                    refusal.as_deref(),
-                )
-                .with_explanation(explanation.as_ref())
-                .with_site(CallSite::new(Some(ticket), EntryPath::FileTool)),
+                    refusal: refusal.as_deref(),
+                    marker,
+                    ticket,
+                },
             );
-            if let Some(recorder) = policy.recorder() {
-                recorder.exit_host_call(marker, allowed);
-            }
-            recording.finish(crate::record::FinishedRun {
-                dispatched: true,
-                error: refusal.as_ref().map(|reason| ExecuteError {
-                    kind: crate::error::ErrorKind::PermissionDenied,
-                    message: FileToolError::denied(capability, reason).message,
-                    diagnostics: Vec::new(),
-                    denial: Some(crate::error::DenialDetails {
-                        caller: "main".into(),
-                        capability: capability.into(),
-                        source: "policy",
-                    }),
-                }),
-                result: None,
-                console: String::new(),
-                usage: interpreter::runtime::limits::ExecutionUsage::default(),
-                log: log.finish(),
-                wall: recording.started.elapsed(),
-            });
         }
         match refusal {
             None => Ok(()),
@@ -786,7 +770,8 @@ impl SubmilliMcp {
         }
     }
 
-    /// A file tool's decision is a run of its own, when runs are recorded.
+    /// A file tool's decision is a run of its own, when runs are recorded. Nothing is
+    /// built for a server without a run recorder.
     fn file_tool_recording(
         &self,
         parts: &axum::http::request::Parts,
@@ -794,27 +779,106 @@ impl SubmilliMcp {
         variables: &Arc<submilli_blueprint::VarBindings>,
         tool: &str,
     ) -> Option<crate::record::Recording> {
-        crate::record::Recording::start(
-            &self.state,
-            crate::record::RunStart {
-                execution_id: uuid::Uuid::new_v4().to_string(),
-                label: parts
-                    .extensions
-                    .get::<crate::audit::Principal>()
-                    .map_or_else(|| "unauthenticated".to_owned(), |p| p.0.clone()),
-                entry: crate::record::RunEntry::McpFileTool { tool: tool.into() },
-                client: parts.extensions.get::<McpClient>().map(|c| c.0.clone()),
-                tool_call_id: parts.extensions.get::<McpToolCall>().map(|c| c.0.clone()),
-                session_id: session_header(parts),
-                idempotency_key: None,
-                blueprint_name: self.blueprint_name.clone(),
-                blueprint: Arc::clone(blueprint),
-                blueprint_hash: crate::audit::blueprint_hash(blueprint),
-                variables: Arc::clone(variables),
-                code: None,
-            },
-        )
+        crate::record::Recording::start(&self.state, || crate::record::RunStart {
+            execution_id: uuid::Uuid::new_v4().to_string(),
+            label: parts
+                .extensions
+                .get::<crate::audit::Principal>()
+                .map_or_else(|| "unauthenticated".to_owned(), |p| p.0.clone()),
+            entry: crate::record::RunEntry::McpFileTool { tool: tool.into() },
+            client: parts.extensions.get::<McpClient>().map(|c| c.0.clone()),
+            tool_call_id: parts.extensions.get::<McpToolCall>().map(|c| c.0.clone()),
+            session_id: session_header(parts),
+            idempotency_key: None,
+            blueprint_name: self.blueprint_name.clone(),
+            blueprint: Arc::clone(blueprint),
+            blueprint_hash: crate::audit::blueprint_hash(blueprint),
+            variables: Arc::clone(variables),
+            code: None,
+        })
     }
+}
+
+/// A file tool: its name as the record gives it, and the capability it is gated by.
+#[derive(Clone, Copy)]
+struct FileTool<'a> {
+    name: &'a str,
+    capability: &'a str,
+}
+
+/// One file tool call and the policy's decision on it, with what the run's record needs.
+struct FileToolCall<'a> {
+    policy: &'a dyn SecurityCheck,
+    tool: FileTool<'a>,
+    /// The call's context as the tool built it, for the policy to explain.
+    context: &'a serde_json::Value,
+    /// The context the policy actually tested, for the record.
+    audit_context: &'a serde_json::Value,
+    cwd: &'a str,
+    allowed: bool,
+    rule: Option<usize>,
+    /// The denial's reason; `None` when allowed.
+    refusal: Option<&'a str>,
+    /// Where the call's host-call span began, and its ticket.
+    marker: u64,
+    ticket: interpreter::runtime::CallTicket,
+}
+
+/// Records the decision and finishes the run. A file tool's run is its one decision: it
+/// ends here, so the read's own I/O and its outcome are not part of it.
+fn finish_file_tool_run(
+    recording: &crate::record::Recording,
+    log: &interpreter::runtime::DecisionLog,
+    call: &FileToolCall<'_>,
+) {
+    let FileToolCall {
+        policy,
+        tool,
+        context,
+        audit_context,
+        cwd,
+        allowed,
+        rule,
+        refusal,
+        marker,
+        ticket,
+    } = *call;
+    let capability = tool.capability;
+    let explanation = policy.explain("main", capability, context, cwd);
+    policy.audit(
+        AuditDecision::new(
+            "main",
+            capability,
+            audit_context,
+            allowed,
+            "policy",
+            rule,
+            refusal,
+        )
+        .with_explanation(explanation.as_ref())
+        .with_site(CallSite::new(Some(ticket), EntryPath::FileTool)),
+    );
+    if let Some(recorder) = policy.recorder() {
+        recorder.exit_host_call(marker, allowed);
+    }
+    recording.finish(crate::record::FinishedRun {
+        dispatched: true,
+        error: refusal.map(|reason| ExecuteError {
+            kind: crate::error::ErrorKind::PermissionDenied,
+            message: FileToolError::denied(capability, reason).message,
+            diagnostics: Vec::new(),
+            denial: Some(crate::error::DenialDetails {
+                caller: "main".into(),
+                capability: capability.into(),
+                source: "policy",
+            }),
+        }),
+        result: None,
+        console: String::new(),
+        usage: interpreter::runtime::limits::ExecutionUsage::default(),
+        log: log.finish(),
+        wall: recording.started.elapsed(),
+    });
 }
 
 /// A file tool call that failed for this call alone: a denial, a missing file, a
@@ -1021,88 +1085,6 @@ fn read_window(
     })
 }
 
-impl SubmilliMcp {
-    /// Runs a tool call: the audit, argument normalization, and the tool itself.
-    async fn dispatch_tool(
-        &self,
-        mut request: CallToolRequestParams,
-        mut context: RequestContext<RoleServer>,
-    ) -> Result<CallToolResult, ErrorData> {
-        let client = context
-            .peer
-            .peer_info()
-            .map(|info| McpClient(info.client_info.name.clone()));
-        if let (Some(client), Some(parts)) = (
-            client,
-            context.extensions.get_mut::<axum::http::request::Parts>(),
-        ) {
-            parts.extensions.insert(client);
-        }
-        let audit = if request.name.as_ref() == TOOL_NAME {
-            let parts = context.extensions.get::<axum::http::request::Parts>();
-            let principal = parts
-                .and_then(|p| p.extensions.get::<crate::audit::Principal>())
-                .map_or("unauthenticated", |p| p.0.as_str());
-            let session = parts.and_then(session_header);
-            let audit = crate::audit::ExecutionAudit::new(
-                self.state.audit().clone(),
-                principal,
-                "mcp",
-                session.as_deref(),
-            );
-            let code = request
-                .arguments
-                .as_ref()
-                .and_then(|a| a.get("code"))
-                .and_then(serde_json::Value::as_str)
-                .unwrap_or_default();
-            let variables = self
-                .state
-                .session_manager()
-                .variables(session.as_deref().unwrap_or(""));
-            audit.annotate(code, &self.blueprint_name, None, &variables);
-            if let Some(parts) = context.extensions.get_mut::<axum::http::request::Parts>() {
-                parts.extensions.insert(audit.clone());
-            }
-            Some(audit)
-        } else {
-            None
-        };
-        let tool = self
-            .tool_router
-            .get(&request.name)
-            .ok_or_else(|| ErrorData::invalid_params("tool not found", None))?;
-        if let Some(arguments) = request.arguments.as_mut() {
-            normalize_tool_arguments(arguments, &tool.input_schema);
-        }
-        let tcc = ToolCallContext::new(self, request, context);
-        let result = self.tool_router.call(tcc).await;
-        if let (Some(audit), Err(error)) = (&audit, &result)
-            && error.code == rmcp::model::ErrorCode::INVALID_PARAMS
-        {
-            audit.error(crate::error::ErrorKind::InvalidRequest);
-        }
-        let result = result.or_else(tool_call_failure);
-        let Some(audit) = audit else {
-            return result;
-        };
-        let success = result.as_ref().is_ok_and(|r| !r.is_error.unwrap_or(false));
-        audit.finish(success);
-        with_execution_id(result, &audit.id)
-    }
-}
-
-/// The client's id for this tool call, when it names one: Claude Code sends
-/// `claudecode/toolUseId` in the request's `_meta`.
-fn tool_call_id(context: &RequestContext<RoleServer>) -> Option<String> {
-    context
-        .meta
-        .0
-        .get("claudecode/toolUseId")
-        .and_then(serde_json::Value::as_str)
-        .map(str::to_owned)
-}
-
 // Hand-written rather than `#[tool_handler]` so `list_tools` can serve a
 // per-blueprint description (the canonical prompt with `{vfs_mode}` resolved).
 // Argument normalization and tool failures are handled before returning to clients.
@@ -1118,12 +1100,7 @@ impl ServerHandler for SubmilliMcp {
         mut context: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, ErrorData> {
         let tool_call_id = tool_call_id(&context);
-        if let (Some(id), Some(parts)) = (
-            tool_call_id.clone(),
-            context.extensions.get_mut::<axum::http::request::Parts>(),
-        ) {
-            parts.extensions.insert(McpToolCall(id));
-        }
+        attach_run_context(&mut context, tool_call_id.clone());
         let Some(hub) = self.state.event_hub().cloned() else {
             return self.dispatch_tool(request, context).await;
         };
@@ -1145,7 +1122,7 @@ impl ServerHandler for SubmilliMcp {
             ),
         };
         crate::record::events::tool_call(
-            Some(&hub),
+            &hub,
             session.as_deref(),
             tool_call_id.as_deref(),
             &tool,
@@ -1205,6 +1182,105 @@ impl ServerHandler for SubmilliMcp {
 
     fn get_tool(&self, name: &str) -> Option<Tool> {
         self.tool_router.get(name).cloned()
+    }
+}
+
+impl SubmilliMcp {
+    /// Runs a tool call: the audit, argument normalization, and the tool itself.
+    async fn dispatch_tool(
+        &self,
+        mut request: CallToolRequestParams,
+        mut context: RequestContext<RoleServer>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let audit = if request.name.as_ref() == TOOL_NAME {
+            let parts = context.extensions.get::<axum::http::request::Parts>();
+            let principal = parts
+                .and_then(|p| p.extensions.get::<crate::audit::Principal>())
+                .map_or("unauthenticated", |p| p.0.as_str());
+            let session = parts.and_then(session_header);
+            let audit = crate::audit::ExecutionAudit::new(
+                self.state.audit().clone(),
+                principal,
+                "mcp",
+                session.as_deref(),
+            );
+            let code = request
+                .arguments
+                .as_ref()
+                .and_then(|a| a.get("code"))
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or_default();
+            let variables = self
+                .state
+                .session_manager()
+                .variables(session.as_deref().unwrap_or(""));
+            audit.annotate(code, &self.blueprint_name, None, &variables);
+            if let Some(parts) = context.extensions.get_mut::<axum::http::request::Parts>() {
+                parts.extensions.insert(audit.clone());
+            }
+            Some(audit)
+        } else {
+            None
+        };
+        let tool = self
+            .tool_router
+            .get(&request.name)
+            .ok_or_else(|| ErrorData::invalid_params("tool not found", None))?;
+        if let Some(arguments) = request.arguments.as_mut() {
+            normalize_tool_arguments(arguments, &tool.input_schema);
+        }
+        let tcc = ToolCallContext::new(self, request, context);
+        let result = self.tool_router.call(tcc).await;
+        if let (Some(audit), Err(error)) = (&audit, &result)
+            && error.code == rmcp::model::ErrorCode::INVALID_PARAMS
+        {
+            audit.error(crate::error::ErrorKind::InvalidRequest);
+        }
+        let result = result.or_else(tool_call_failure);
+        let Some(audit) = audit else {
+            return result;
+        };
+        let success = result.as_ref().is_ok_and(|r| !r.is_error.unwrap_or(false));
+        audit.finish(success);
+        with_execution_id(result, &audit.id)
+    }
+}
+
+/// The longest `tool_call_id` kept. A client's id is an opaque handle of a few dozen
+/// bytes; a longer one is not an id worth carrying through every record and event, so it
+/// is dropped rather than truncated, which could make two ids collide.
+const MAX_TOOL_CALL_ID_BYTES: usize = 256;
+
+/// The client's id for this tool call, when it names a usable one: Claude Code sends
+/// `claudecode/toolUseId` in the request's `_meta`.
+fn tool_call_id(context: &RequestContext<RoleServer>) -> Option<String> {
+    context
+        .meta
+        .0
+        .get("claudecode/toolUseId")
+        .and_then(serde_json::Value::as_str)
+        .and_then(usable_tool_call_id)
+}
+
+fn usable_tool_call_id(id: &str) -> Option<String> {
+    (id.len() <= MAX_TOOL_CALL_ID_BYTES).then(|| id.to_owned())
+}
+
+/// Puts what the run's record needs of the call where the tools find it: the client's
+/// name from its `initialize` and the id of this tool call.
+fn attach_run_context(context: &mut RequestContext<RoleServer>, tool_call_id: Option<String>) {
+    let client = context
+        .peer
+        .peer_info()
+        .map(|info| McpClient(info.client_info.name.clone()));
+    let Some(parts) = context.extensions.get_mut::<axum::http::request::Parts>() else {
+        return;
+    };
+    if let Some(client) = client {
+        parts.extensions.insert(client);
+    }
+    if let Some(id) = tool_call_id {
+        parts.extensions.insert(McpToolCall(id));
     }
 }
 
@@ -1335,5 +1411,19 @@ mod tests {
         ] {
             assert_eq!(tool_call_failure(error.clone()).unwrap_err(), error);
         }
+    }
+
+    #[test]
+    fn an_overlong_tool_call_id_is_dropped() {
+        let at_cap = "a".repeat(MAX_TOOL_CALL_ID_BYTES);
+        assert_eq!(
+            usable_tool_call_id(&at_cap).as_deref(),
+            Some(at_cap.as_str())
+        );
+        assert_eq!(
+            usable_tool_call_id(&"a".repeat(MAX_TOOL_CALL_ID_BYTES + 1)),
+            None
+        );
+        assert_eq!(usable_tool_call_id("toolu_01").as_deref(), Some("toolu_01"));
     }
 }

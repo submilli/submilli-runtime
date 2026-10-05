@@ -1739,3 +1739,140 @@ async fn calls_past_the_cap_are_counted_and_truncate_the_log() {
     assert!(log.truncated);
     assert_eq!(log.records.len(), 5, "decisions are capped separately");
 }
+
+#[tokio::test]
+async fn large_payloads_never_crowd_out_a_later_denial() {
+    let source = r#"
+import { get } from "submilli:http";
+function main(): string {
+  for (let i = 0; i < 6; i++) { get("https://example.test/big"); }
+  let denied = "no";
+  try { get("https://example.test/deny"); } catch (e: PermissionDeniedError) { denied = "yes"; }
+  return denied;
+}
+"#;
+    let outcome = run(
+        source,
+        Setup {
+            deny: vec![Deny {
+                caller: None,
+                capability: "http.get",
+                path: Some("/deny"),
+            }],
+            // Six 100 KiB bodies fill this budget to within a record's size without the
+            // decision reserve, which leaves the denial nowhere to go.
+            record: Some(DecisionLogConfig {
+                max_recorder_bytes: 6 * 100 * 1024 + 2048,
+                ..DecisionLogConfig::default()
+            }),
+            response_body: Some(vec![b'x'; 100 * 1024]),
+            ..Setup::default()
+        },
+    )
+    .await;
+    assert_eq!(outcome.result, Ok("yes".to_owned()));
+    let log = outcome.log.as_ref().unwrap();
+    assert_eq!(log.dropped, 0, "no decision was lost");
+    let denial = log
+        .records
+        .iter()
+        .find(|record| !record.allowed)
+        .expect("the denial is recorded");
+    assert!(!denial.payload_dropped, "{denial:?}");
+    assert!(
+        outcome
+            .calls()
+            .iter()
+            .filter_map(|call| call.response.as_deref())
+            .any(|response| response.body.is_none() && response.truncated),
+        "a response past the reserve keeps its digest and size only"
+    );
+}
+
+#[tokio::test]
+async fn every_kind_of_gated_call_ends_and_keeps_the_payloads_its_class_promises() {
+    let lib = r#"
+import { check } from "submilli:security";
+/**
+ * Runs the operation.
+ * @param id Identifier of the target.
+ * @capability test.com/op { id }
+ */
+export function run(id: string): void { check("test.com/op", { id }); }
+"#;
+    let source = r#"
+import * as fs from "submilli:fs";
+import session from "submilli:session";
+import { get } from "submilli:http";
+import llm from "submilli:llm";
+import { read } from "submilli:code";
+import { run } from "@acme/core";
+function main(): string {
+  fs.writeText("/a.txt", "one\ntwo\n");
+  session.set("k", "v");
+  const text = fs.readText("/a.txt");
+  const lines = read("/a.txt").lines.length;
+  const stored = session.get<string>("k");
+  const body = get("https://example.test/x").body;
+  const answer = llm.call("open", "ping").text ?? "";
+  run("1");
+  return (text ?? "").length.toString() + ":" + lines.toString() + ":" + stored + ":" + body + ":" + answer;
+}
+"#;
+    let outcome = run(
+        source,
+        Setup {
+            record: recording(),
+            session: true,
+            llm: Some(LlmLimits::default()),
+            packages: vec![("@acme/core", lib)],
+            ..Setup::default()
+        },
+    )
+    .await;
+    assert_eq!(outcome.result, Ok("8:2:v:ok:answer".to_owned()));
+    for call in outcome.calls() {
+        assert!(
+            matches!(call.outcome, Some(CallOutcome::Returned)),
+            "every call ends: {call:#?}"
+        );
+        assert!(call.ended_micros.is_some(), "{call:#?}");
+    }
+    let reads: Vec<_> = outcome
+        .calls()
+        .iter()
+        .filter(|call| call.capability == "fs.read")
+        .collect();
+    assert_eq!(reads.len(), 2, "fs.readText and code.read both read");
+    for call in reads {
+        assert!(
+            call.response.is_some(),
+            "a read keeps its contents: {call:#?}"
+        );
+    }
+    assert!(outcome.call("session.read").response.is_some());
+    // The program makes one request and it does not redirect, so the one `http.get` call
+    // is the request's own. A redirect hop would be a further, payload-less call.
+    let http_calls = outcome
+        .calls()
+        .iter()
+        .filter(|call| call.capability == "http.get")
+        .count();
+    assert_eq!(http_calls, 1);
+    let http = outcome.call("http.get");
+    assert!(http.request.is_some() && http.response.is_some());
+    let model = outcome.call("llm.call");
+    let prompt = model.request.as_ref().expect("the prompt");
+    assert!(body_text(prompt.body.as_ref()).is_some_and(|text| text.contains("ping")));
+    let reply = model.response.as_ref().expect("the reply");
+    assert!(body_text(reply.body.as_ref()).is_some_and(|text| text.contains("answer")));
+    for capability in ["fs.write", "session.write"] {
+        let write = outcome.call(capability);
+        assert!(
+            matches!(write.outcome, Some(CallOutcome::Returned)) && write.request.is_none(),
+            "{capability} keeps its timing and outcome: {write:#?}"
+        );
+    }
+    let check = outcome.call("test.com/op");
+    assert!(check.request.is_none() && check.response.is_none());
+}

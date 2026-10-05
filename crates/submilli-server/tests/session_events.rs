@@ -467,7 +467,7 @@ function main(): number {
 }
 
 #[tokio::test]
-async fn a_call_whose_copy_was_dropped_for_the_budget_keeps_its_end_and_size() {
+async fn a_copy_cut_to_the_budget_keeps_its_end_and_full_size() {
     let server = server_with(
         DecisionLogConfig {
             max_recorder_bytes: 64 * 1024,
@@ -497,7 +497,13 @@ function main(): void {
         .unwrap();
     assert!(read.ended_micros.is_some());
     let response = read.response.as_ref().unwrap();
-    assert!(response.body.is_none() && response.truncated);
+    // The copy is cut to the room the budget has, never the whole body.
+    assert!(response.truncated);
+    let kept = match &response.body {
+        Some(interpreter::runtime::BodyCopy::Text(text)) => text.len(),
+        other => panic!("a cut text body is kept as text: {other:?}"),
+    };
+    assert!(kept > 0 && kept < 64 * 1024, "{kept}");
     assert_eq!(response.bytes, 512 * 1024);
 }
 

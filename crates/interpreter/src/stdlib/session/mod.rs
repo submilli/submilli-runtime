@@ -81,9 +81,9 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
                 let store = provider(caller, "get")?;
                 let found = store.get(&key).map_err(|e| trap(caller, None, &e))?;
                 record_payload(&*caller, ticket, Side::Response, || match &found {
+                    // The size is of the copy and digest's encoding: UTF-8 bytes.
                     Some(payload) => Payload::meta(serde_json::Value::Null)
-                        .with_owned_body(String::from_utf16_lossy(payload).into_bytes())
-                        .with_size(2 * payload.len() as u64),
+                        .with_owned_body(String::from_utf16_lossy(payload).into_bytes()),
                     None => Payload::meta(serde_json::json!({ "found": false })),
                 });
                 let Some(payload) = found else {
@@ -92,7 +92,11 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
                 };
                 // Read from the store (code units, two bytes each), then
                 // parsed back into values.
-                fuel::charge(&mut *caller, fuel::IO, 2 * payload.len() as u64)?;
+                fuel::charge(
+                    &mut *caller,
+                    fuel::IO,
+                    (payload.len() as u64).saturating_mul(2),
+                )?;
                 fuel::charge(&mut *caller, fuel::PARSE, payload.len() as u64)?;
                 *abi_result(results, 0)? = value::deserialize(caller, &payload)?;
                 Ok(())
@@ -135,7 +139,11 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
                 // with no JSON form must leave the previous entry intact.
                 let payload = value::serialize(caller, abi_arg(params, 1)?).await?;
                 // Written to the store: code units, two bytes each.
-                fuel::charge(&mut *caller, fuel::IO, 2 * payload.len() as u64)?;
+                fuel::charge(
+                    &mut *caller,
+                    fuel::IO,
+                    (payload.len() as u64).saturating_mul(2),
+                )?;
                 let store = provider(caller, "set")?;
                 store
                     .set(&key, &payload)

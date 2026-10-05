@@ -1597,7 +1597,7 @@ pub fn register_host_fn(
     + 'static,
 ) -> wasmtime::Result<()> {
     let call_fuel = call_fuel_of(module);
-    let tracked = begins_calls(module);
+    let ends_its_calls = begins_calls(module);
     let abi = ty.clone();
     linker.func_new(
         module,
@@ -1605,7 +1605,7 @@ pub fn register_host_fn(
         ty,
         move |mut hc, params, results| {
             check_host_abi(&abi, params, results)?;
-            let marker = tracked.then(|| enter_host_call(&hc)).flatten();
+            let marker = ends_its_calls.then(|| enter_host_call(&hc)).flatten();
             let outcome =
                 charge_host_fuel(&mut hc, call_fuel).and_then(|()| body(&mut hc, params, results));
             if let Some(marker) = marker {
@@ -1622,22 +1622,23 @@ pub fn register_host_fn(
     Ok(())
 }
 
-/// Whether `module`'s host functions gate capabilities, so the recorder ends a call they
-/// begin when they return. Other modules skip the recorder check entirely.
+/// The modules whose host functions gate capabilities, so the recorder ends a call they
+/// begin when they return. Other modules skip the recorder check entirely. A module that
+/// gates must be listed: its calls would otherwise stay open until the run ends.
+pub(crate) const CALL_MODULES: &[&str] = &[
+    crate::stdlib::fs::MODULE_NAME,
+    crate::stdlib::http::MODULE_NAME,
+    crate::stdlib::llm::MODULE_NAME,
+    crate::stdlib::session::MODULE_NAME,
+    crate::stdlib::secrets::MODULE_NAME,
+    crate::stdlib::git::MODULE_NAME,
+    crate::stdlib::code::MODULE_NAME,
+    crate::stdlib::security::MODULE_NAME,
+    super::mcp::MCP_MODULE_NAME,
+];
+
 pub(crate) fn begins_calls(module: &str) -> bool {
-    use crate::stdlib;
-    [
-        stdlib::fs::MODULE_NAME,
-        stdlib::http::MODULE_NAME,
-        stdlib::llm::MODULE_NAME,
-        stdlib::session::MODULE_NAME,
-        stdlib::secrets::MODULE_NAME,
-        stdlib::git::MODULE_NAME,
-        stdlib::code::MODULE_NAME,
-        stdlib::security::MODULE_NAME,
-        super::mcp::MCP_MODULE_NAME,
-    ]
-    .contains(&module)
+    CALL_MODULES.contains(&module)
 }
 
 fn enter_host_call(store: &impl wasmtime::AsContext<Data = StoreData>) -> Option<u64> {
@@ -1649,9 +1650,9 @@ fn enter_host_call(store: &impl wasmtime::AsContext<Data = StoreData>) -> Option
         .map(super::decision::DecisionRecorder::enter_host_call)
 }
 
-fn exit_host_call(store: &impl wasmtime::AsContext<Data = StoreData>, marker: u64, ok: bool) {
+fn exit_host_call(store: &impl wasmtime::AsContext<Data = StoreData>, marker: u64, returned: bool) {
     if let Some(recorder) = store.as_context().data().security_check.recorder() {
-        recorder.exit_host_call(marker, ok);
+        recorder.exit_host_call(marker, returned);
     }
 }
 
@@ -1691,7 +1692,7 @@ where
     // a bare `&body` reference to the `Fn`'s captured state can't escape it.
     let body = std::sync::Arc::new(body);
     let call_fuel = call_fuel_of(module);
-    let tracked = begins_calls(module);
+    let ends_its_calls = begins_calls(module);
     let abi = ty.clone();
     linker.func_new_async(
         module,
@@ -1702,7 +1703,7 @@ where
             let shape = check_host_abi(&abi, params, results);
             Box::new(async move {
                 shape?;
-                let marker = tracked.then(|| enter_host_call(&hc)).flatten();
+                let marker = ends_its_calls.then(|| enter_host_call(&hc)).flatten();
                 let outcome = match charge_host_fuel(&mut hc, call_fuel) {
                     Ok(()) => body(&mut hc, params, results).await,
                     Err(err) => Err(err),

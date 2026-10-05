@@ -104,8 +104,8 @@ pub struct HostServices {
     pub llm_budget: Option<Arc<ExecutionTokenBudget>>,
     /// The run's recorder, finished from the owner task; `None` records nothing.
     pub(crate) recording: Option<crate::record::Recording>,
-    /// Fires when someone other than the caller cancels the run.
-    pub(crate) cancel: Option<tokio::sync::oneshot::Receiver<()>>,
+    /// Fires when someone other than the caller asks to cancel the run.
+    pub(crate) cancel_requested: Option<tokio::sync::oneshot::Receiver<()>>,
 }
 
 pub(crate) struct RunnerImports<'a> {
@@ -143,14 +143,21 @@ pub(crate) async fn run(
     let config = runtime.config.clone();
     let packages = Arc::clone(imports.packages);
     let mcps = Arc::clone(imports.mcps);
-    let (request, cancelled) = tokio::sync::oneshot::channel();
+    let (request, caller_gone) = tokio::sync::oneshot::channel();
+    // This clone stays outside the owner task, so a run whose task panics is still
+    // finished.
+    let recording = services.recording.clone();
+    if let Some(recording) = &recording {
+        recording.mark_dispatched();
+    }
+    // This one goes into the owner task, which finishes the run.
+    let owner_recording = recording.clone();
     // This task owns the store independently of the request. Dropping the
     // request signals cancellation; the owner drains workers before exiting.
     let owner = tokio::spawn(async move {
         let audit = services.audit.clone();
         let budget = services.llm_budget.clone();
-        let recording = services.recording.clone();
-        let log = recording.as_ref().map(crate::record::Recording::log);
+        let log = owner_recording.as_ref().map(crate::record::Recording::log);
         let outcome = run_inner(
             &owned_code,
             parsed,
@@ -167,22 +174,23 @@ pub(crate) async fn run(
                 packages: &packages,
                 mcps: &mcps,
             },
-            (cancelled, log.clone()),
+            caller_gone,
+            log.clone(),
         )
         .await;
         if let Some(audit) = audit {
             audit.result(&outcome, budget.as_ref().map_or(0, |b| b.used()));
             audit.finish(outcome.error.is_none());
         }
-        if let (Some(recording), Some(log)) = (recording, log) {
-            recording.finish(FinishedRun {
+        if let (Some(owner_recording), Some(log)) = (owner_recording, log) {
+            owner_recording.finish(FinishedRun {
                 dispatched: true,
                 error: outcome.error.clone(),
                 result: outcome.value.clone(),
                 console: outcome.console_raw.clone(),
                 usage: outcome.usage,
                 log: log.finish(),
-                wall: recording.started.elapsed(),
+                wall: owner_recording.started.elapsed(),
             });
         }
         log_execution(&blueprint, &session, started, &outcome);
@@ -190,7 +198,14 @@ pub(crate) async fn run(
     });
     let outcome = match owner.await {
         Ok(outcome) => outcome,
-        Err(error) => internal_failure(&format!("execution task failed: {error}")),
+        Err(error) => {
+            let outcome = internal_failure(&format!("execution task failed: {error}"));
+            if let (Some(recording), Some(error)) = (&recording, &outcome.error) {
+                // A no-op when the owner had already finished the run.
+                recording.lost(error);
+            }
+            outcome
+        }
     };
     drop(request);
     crate::metrics::execution(match &outcome.error {
@@ -203,6 +218,9 @@ pub(crate) async fn run(
     outcome
 }
 
+// The per-run signals and the decision log are separate arguments on purpose: they are
+// not host services, and a grouping struct would only be built to be taken apart here.
+#[allow(clippy::too_many_arguments)]
 async fn run_inner(
     code: &str,
     mut parsed: ParsedExecute,
@@ -210,9 +228,10 @@ async fn run_inner(
     (vfs, vfs_info): (Vfs, VfsInfo),
     mut services: HostServices,
     imports: RunnerImports<'_>,
-    (mut cancelled, log): (tokio::sync::oneshot::Receiver<()>, Option<Arc<DecisionLog>>),
+    mut caller_gone: tokio::sync::oneshot::Receiver<()>,
+    log: Option<Arc<DecisionLog>>,
 ) -> RunOutcome {
-    let external = services.cancel.take();
+    let cancel_receiver = services.cancel_requested.take();
     let git = match services.git {
         Ok(git) => git,
         Err(error) => return internal_failure(&error),
@@ -373,9 +392,9 @@ async fn run_inner(
         }
     };
     // Only a sent cancel counts: the canceller is dropped, unsent, when the run ends.
-    let cancelled_elsewhere = async {
-        if let Some(external) = external
-            && external.await.is_ok()
+    let cancel_sent = async {
+        if let Some(requested) = cancel_receiver
+            && requested.await.is_ok()
         {
             return;
         }
@@ -383,8 +402,8 @@ async fn run_inner(
     };
     let mut outcome = tokio::select! {
         biased;
-        _ = &mut cancelled => cancelled_outcome(),
-        () = cancelled_elsewhere => cancelled_outcome(),
+        _ = &mut caller_gone => cancelled_outcome(),
+        () = cancel_sent => cancelled_outcome(),
         outcome = execution => outcome,
     };
     if let Err(error) = store.data_mut().blocking_work.finish().await {
@@ -985,7 +1004,7 @@ mod tests {
             llm_provider: None,
             llm_budget: None,
             recording: None,
-            cancel: None,
+            cancel_requested: None,
         };
         let config = RuntimeConfig::default();
         let engine = config.engine().unwrap();

@@ -14,6 +14,7 @@ use submilli_shared::{BlueprintAuthProxy, BlueprintSecretProvider, PolicyCheck};
 
 use crate::app::AppState;
 use crate::error::{ErrorKind, ExecuteError};
+use crate::record::RunEntry;
 use interpreter::runtime::{Vfs, VfsInfo};
 
 use crate::runner::{self, RunOutcome};
@@ -88,16 +89,20 @@ pub async fn handle(
                 .into_response();
         }
     };
-    let (session_id, response) = one_shot(&state, req, crate::audit::execution()).await;
+    let (session_id, response) =
+        one_shot(&state, req, crate::audit::execution(), RunEntry::Http).await;
     with_session_header(&session_id, response).into_response()
 }
 
 /// Runs one program in a fresh session that is torn down once it returns, the
-/// `POST /v1/execute` shape. Returns the session id and the response.
+/// `POST /v1/execute` shape. Returns the session id and the response. `run_entry` is how the
+/// run is recorded: [`RunEntry::Http`] for the endpoint, [`RunEntry::Program`] for an
+/// in-process caller.
 pub(crate) async fn one_shot(
     state: &AppState,
     req: ExecuteRequest,
     audit: Option<Arc<crate::audit::ExecutionAudit>>,
+    run_entry: RunEntry,
 ) -> (String, ExecuteResponse) {
     // Stateless one-shot: every call gets a fresh transient session, torn down
     // once the run returns. A caller that wants state across executes (a
@@ -207,7 +212,8 @@ pub(crate) async fn one_shot(
             variables,
             harness_secrets,
             audit,
-            entry: ExecuteEntry::Http,
+            vfs_source: VfsSource::Rest,
+            run_entry,
             client: None,
             tool_call_id: None,
             idempotency_key: None,
@@ -224,23 +230,31 @@ pub(crate) async fn one_shot(
 }
 
 /// Already-resolved inputs to one execution, shared by the one-shot
-/// `POST /v1/execute` and the session-scoped `POST /v1/sessions/{id}/execute`
-/// handlers. Each handler resolves the blueprint and variables its own way (the
+/// `POST /v1/execute`, the session-scoped `POST /v1/sessions/{id}/execute`, and the MCP
+/// execute tool. Each caller resolves the blueprint and variables its own way (the
 /// one-shot reads them from the request body; the session path reads them from
 /// the bound session) before handing off to [`execute_core`].
 pub(crate) struct ExecuteInputs<'a> {
+    /// The session the run executes against; empty for an MCP request that has none.
     pub session_id: &'a str,
+    /// The program's source.
     pub code: &'a str,
     /// The blueprint's name, used to key MCP catalog / package resolution and
     /// the outbound MCP transport.
     pub blueprint_name: &'a str,
+    /// The blueprint the run is decided under.
     pub blueprint: Arc<Blueprint>,
+    /// The validated `${vars.NAME}` bindings.
     pub variables: Arc<VarBindings>,
+    /// Trusted harness credentials for this run alone.
     pub harness_secrets: Arc<HarnessSecretBindings>,
     /// The execution's audit record. REST handlers take it from the request's
     /// task-local; MCP creates its own per tool call.
     pub audit: Option<Arc<crate::audit::ExecutionAudit>>,
-    pub entry: ExecuteEntry,
+    /// Who opens the run's VFS.
+    pub vfs_source: VfsSource,
+    /// How the run is recorded, when it is.
+    pub run_entry: RunEntry,
     /// The MCP client's name, for the run's record.
     pub client: Option<String>,
     /// The MCP client's id for the tool call, for the run's record.
@@ -249,10 +263,11 @@ pub(crate) struct ExecuteInputs<'a> {
     pub idempotency_key: Option<&'a str>,
 }
 
-/// How a run reached the core, for the steps that differ by transport.
-pub(crate) enum ExecuteEntry {
+/// Who opens a run's VFS, which also sets how the core audits a program that fails to
+/// parse.
+pub(crate) enum VfsSource {
     /// REST: the core registers the session and opens its VFS.
-    Http,
+    Rest,
     /// MCP: the tool opened the VFS under its own file-area rules, ahead of the
     /// core. A program that fails to parse is audited as a compile error, as the
     /// MCP tool always has.
@@ -289,19 +304,27 @@ impl ExecuteOutcome {
     }
 }
 
-/// Run one program against a session and record its last-run. Registers the
-/// session id (idempotent), builds the per-session VFS + HTTP client + host
-/// services, resolves imports, runs, and touches the session's idle timer.
+/// Runs one program: starts its recording (when the server records runs), registers it
+/// to be cancelled, prepares and runs it, and reports to its recorder what the caller
+/// got. See [`prepare_and_run`] for the work itself.
 pub(crate) async fn execute_core(state: &AppState, inputs: ExecuteInputs<'_>) -> ExecuteOutcome {
-    let recording = crate::record::Recording::start(state, run_start(&inputs));
-    let registration = recording
-        .as_ref()
-        .zip(inputs.audit.as_ref())
-        .map(|(_, audit)| state.register_run(&audit.id));
-    let (_registered, cancel) = registration.unzip();
-    let outcome = execute_recorded(state, inputs, recording.clone(), cancel).await;
+    let recording = crate::record::Recording::start(state, || run_start(&inputs));
+    // Only a recorded run can be cancelled from outside (the registry exists for a stop
+    // control over recorded runs), so an unrecorded run pays for no registration. The
+    // guard keeps the entry until this function returns, which is after the run has
+    // ended, so `cancel_run` finds the run for exactly as long as it is in flight.
+    let (_registered, cancel_requested) = match (&recording, &inputs.audit) {
+        (Some(_), Some(audit)) => {
+            let (registered, cancel_requested) = state.register_run(&audit.id);
+            (Some(registered), Some(cancel_requested))
+        }
+        _ => (None, None),
+    };
+    let outcome = prepare_and_run(state, inputs, recording.clone(), cancel_requested).await;
     if let Some(recording) = &recording {
         match (&outcome.response.error, outcome.dispatched) {
+            // The runner finishes a dispatched run itself; one that never got there is
+            // finished here.
             (Some(error), false) => recording.undispatched(error),
             _ => recording.returned(returned_bytes(&outcome.response)),
         }
@@ -311,21 +334,14 @@ pub(crate) async fn execute_core(state: &AppState, inputs: ExecuteInputs<'_>) ->
 
 /// The run as its recorder first sees it.
 fn run_start(inputs: &ExecuteInputs<'_>) -> crate::record::RunStart {
-    use crate::record::RunEntry;
     let audit = inputs.audit.as_deref();
-    let entry = match (audit.map(|audit| audit.entry.as_str()), &inputs.entry) {
-        (Some("session"), _) => RunEntry::Session,
-        (Some("program"), _) => RunEntry::Program,
-        (_, ExecuteEntry::Mcp { .. }) => RunEntry::Mcp,
-        _ => RunEntry::Http,
-    };
     crate::record::RunStart {
         execution_id: execution_id_of(audit),
         label: audit.map_or_else(
             || "unauthenticated".to_owned(),
             |audit| audit.principal.clone(),
         ),
-        entry,
+        entry: inputs.run_entry.clone(),
         client: inputs.client.clone(),
         tool_call_id: inputs.tool_call_id.clone(),
         session_id: (!inputs.session_id.is_empty()).then(|| inputs.session_id.to_owned()),
@@ -355,11 +371,14 @@ fn returned_bytes(response: &ExecuteResponse) -> u64 {
     .map_or(0, |bytes| bytes.len() as u64)
 }
 
-async fn execute_recorded(
+/// Runs one program against a session and records its last-run. Registers the session id
+/// (idempotent), builds the per-session VFS + HTTP client + host services, resolves
+/// imports, runs, and touches the session's idle timer.
+async fn prepare_and_run(
     state: &AppState,
     inputs: ExecuteInputs<'_>,
     recording: Option<crate::record::Recording>,
-    cancel: Option<tokio::sync::oneshot::Receiver<()>>,
+    cancel_requested: Option<tokio::sync::oneshot::Receiver<()>>,
 ) -> ExecuteOutcome {
     let ExecuteInputs {
         session_id,
@@ -369,7 +388,8 @@ async fn execute_recorded(
         variables,
         harness_secrets,
         audit: execution_audit,
-        entry,
+        vfs_source,
+        run_entry: _,
         client: _,
         tool_call_id: _,
         idempotency_key: _,
@@ -381,9 +401,9 @@ async fn execute_recorded(
     let fail = |kind: ErrorKind, message: String| {
         ExecuteOutcome::undispatched(failure_response(audit, session_id, kind, message))
     };
-    let parse_audit_kind = match entry {
-        ExecuteEntry::Http => ErrorKind::RuntimeError,
-        ExecuteEntry::Mcp { .. } => ErrorKind::CompileError,
+    let parse_audit_kind = match vfs_source {
+        VfsSource::Rest => ErrorKind::RuntimeError,
+        VfsSource::Mcp { .. } => ErrorKind::CompileError,
     };
     let fail_to_parse = |message: String| {
         if let Some(audit) = audit {
@@ -436,9 +456,9 @@ async fn execute_recorded(
     };
 
     let manager = state.session_manager();
-    let (vfs, vfs_info) = match entry {
-        ExecuteEntry::Mcp { vfs, vfs_info } => (vfs, vfs_info),
-        ExecuteEntry::Http => {
+    let (vfs, vfs_info) = match vfs_source {
+        VfsSource::Mcp { vfs, vfs_info } => (vfs, vfs_info),
+        VfsSource::Rest => {
             if let Err(err) = manager.ensure(session_id, &blueprint).await {
                 return fail(
                     ErrorKind::RuntimeError,
@@ -515,7 +535,7 @@ async fn execute_recorded(
         llm_provider,
         llm_budget: Some(manager.llm_budget_for_execute()),
         recording,
-        cancel,
+        cancel_requested,
     };
     let packages =
         match state.prepared_packages_for_imports(blueprint_name, &blueprint, &script_imports) {

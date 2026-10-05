@@ -169,6 +169,12 @@ pub trait DecisionRecorder: Send + Sync {
     /// That host function returned (`returned`) or failed. Ends every call begun since
     /// `marker` that is still open; a nested host function has ended its own already.
     fn exit_host_call(&self, marker: u64, returned: bool);
+    /// Whether a payload for the call `call_index` would be kept: the call is open and the
+    /// payload budget is not spent. Callers check it before building a payload. The
+    /// default asks for every payload.
+    fn wants_payload(&self, _call_index: u64) -> bool {
+        true
+    }
     /// One side of a call that reached outside the program.
     fn call_payload(&self, call_index: u64, side: Side, payload: Payload<'_>);
     /// Token counts a model provider reported for a call.
@@ -184,6 +190,9 @@ pub trait DecisionRecorder: Send + Sync {
 pub trait RecordObserver: Send + Sync {
     fn call_started(&self, _call: &CallRecord) {}
     fn decision(&self, _record: &DecisionRecord) {}
+    /// The call as it ended, without its payload contents: each side's meta is `Null`
+    /// and it has no body and no masked header names, but it keeps its size, digest,
+    /// truncation flag, timing, and usage.
     fn call_finished(&self, _call: &CallRecord) {}
 }
 
@@ -282,6 +291,11 @@ const MAX_TRACKED_PAIRS: usize = 4096;
 const PAIR_OVERHEAD_BYTES: u64 = 96;
 const RECORD_BASE_BYTES: u64 = std::mem::size_of::<DecisionRecord>() as u64;
 const CALL_BASE_BYTES: u64 = std::mem::size_of::<CallRecord>() as u64;
+/// The share of the recorder's byte budget, as a divisor, kept for what must survive a
+/// run that moves a lot of data. One rule: payload bodies and metas stop at the reserve;
+/// the digest-only record of a payload whose copy was dropped, and decision records, may
+/// use it.
+const RECORD_RESERVE_DIVISOR: u64 = 4;
 const MAX_CONTEXT_DEPTH: usize = 8;
 const MAX_CONTEXT_ENTRIES: usize = 64;
 
@@ -406,12 +420,24 @@ impl DecisionLog {
     }
 
     fn charge(&self, state: &mut LogState, bytes: u64) -> bool {
+        self.charge_within(state, bytes, self.config.max_recorder_bytes)
+    }
+
+    /// Charges `bytes` if the total stays within `limit`.
+    fn charge_within(&self, state: &mut LogState, bytes: u64, limit: u64) -> bool {
         let next = state.charged.saturating_add(bytes);
-        if next > self.config.max_recorder_bytes {
+        if next > limit {
             return false;
         }
         state.charged = next;
         true
+    }
+
+    /// The most the recorder's charge may reach for payload bodies and metas: the budget
+    /// less the reserve. Digest-only records and decisions may spend the reserve.
+    fn payload_limit(&self) -> u64 {
+        let max = self.config.max_recorder_bytes;
+        max.saturating_sub(max / RECORD_RESERVE_DIVISOR)
     }
 
     /// Whether the decision cap and the byte budget leave room for one more bare record.
@@ -506,7 +532,8 @@ impl DecisionLog {
         capability: &str,
         ticket: CallTicket,
     ) -> Option<CallRecord> {
-        let cost = CALL_BASE_BYTES + (caller.len() + capability.len()) as u64;
+        let cost =
+            CALL_BASE_BYTES.saturating_add(caller.len().saturating_add(capability.len()) as u64);
         if state.calls.len() >= self.config.max_calls
             || state.calls.try_reserve(1).is_err()
             || state.open_calls.try_reserve(1).is_err()
@@ -658,7 +685,8 @@ impl DecisionRecorder for DecisionLog {
                     CallOutcome::Failed
                 });
                 if self.observer.is_some() {
-                    finished.push(call.clone());
+                    // Observers report sizes and timing; the bodies stay in the log.
+                    finished.push(call.without_bodies());
                 }
             }
         }
@@ -670,28 +698,48 @@ impl DecisionRecorder for DecisionLog {
         }
     }
 
+    fn wants_payload(&self, call_index: u64) -> bool {
+        let mut state = self.lock();
+        // Past the payload limit a record of it, at least its digest, still fits the
+        // budget, so a payload is wanted until even that cannot be charged.
+        Self::call_mut(&mut state, call_index).is_some()
+            && state.charged.saturating_add(call_log::DIGEST_ONLY_COST)
+                <= self.config.max_recorder_bytes
+    }
+
     fn call_payload(&self, call_index: u64, side: Side, payload: Payload<'_>) {
+        let room = {
+            let mut state = self.lock();
+            // A call that was not kept, or has ended, takes no payload: skip the hashing
+            // and the copy.
+            if Self::call_mut(&mut state, call_index).is_none() {
+                return;
+            }
+            self.payload_limit().saturating_sub(state.charged)
+        };
         let record = call_log::capture(
             &payload,
             self.config.max_context_value_bytes,
+            room,
             self.config.max_payload_bytes,
         );
         let mut state = self.lock();
+        // The lock was released while the payload was hashed, so the call may have ended.
         if Self::call_mut(&mut state, call_index).is_none() {
             return;
         }
         let cost = call_log::payload_cost(&record);
-        let record = if self.charge(&mut state, cost) {
+        let record = if self.charge_within(&mut state, cost, self.payload_limit()) {
             record
         } else {
-            // Keep the digest and the size; drop the copies.
+            // Only the digest and the size enter the reserve.
             state.truncated = true;
-            call_log::PayloadRecord {
-                meta: Value::Null,
-                body: None,
-                truncated: true,
-                ..record
+            let mut kept = record.digest_only();
+            kept.truncated = true;
+            if !self.charge(&mut state, call_log::payload_cost(&kept)) {
+                return;
             }
+            kept
         };
         let Some(call) = Self::call_mut(&mut state, call_index) else {
             return;
@@ -836,7 +884,7 @@ fn capped_key(key: &str, position: usize, max: usize, truncated: &mut bool) -> S
 }
 
 /// `text` cut to `max` bytes at a character boundary, ending in a marker when cut.
-fn cap_text(text: &str, max: usize, truncated: &mut bool) -> String {
+pub(crate) fn cap_text(text: &str, max: usize, truncated: &mut bool) -> String {
     if text.len() <= max {
         return text.to_owned();
     }
@@ -919,6 +967,216 @@ mod tests {
             AuditDecision::new("main", "fs.read", &context, false, "policy", None, None)
                 .with_site(CallSite::new(Some(ticket), EntryPath::GatedOp)),
         );
+    }
+
+    #[test]
+    fn a_call_still_open_at_finish_is_unfinished() {
+        let (data, log) = log_with(DecisionLogConfig::default());
+        let recorder = data.security_check.recorder().unwrap();
+        recorder.enter_host_call();
+        recorder.begin_call("main", "http.get", None);
+        let output = log.finish();
+        let [call] = output.calls.as_slice() else {
+            panic!("one call: {output:?}");
+        };
+        assert_eq!(call.outcome, Some(CallOutcome::Unfinished));
+        assert_eq!(call.ended_micros, None);
+    }
+
+    #[test]
+    fn payload_copies_leave_the_decision_reserve_free() {
+        let max = 64 * 1024;
+        let (data, log) = log_with(DecisionLogConfig {
+            max_recorder_bytes: max,
+            ..DecisionLogConfig::default()
+        });
+        let recorder = data.security_check.recorder().unwrap();
+        let body = vec![b'x'; 20 * 1024];
+        for _ in 0..6 {
+            let ticket = recorder.begin_call("main", "http.get", None);
+            recorder.call_payload(
+                ticket.call_index,
+                Side::Response,
+                Payload::meta(serde_json::Value::Null).with_body(&body),
+            );
+        }
+        assert!(
+            log.lock().charged <= max - max / RECORD_RESERVE_DIVISOR + 6 * 256,
+            "bodies stay out of the reserve; only digests may enter it"
+        );
+        let output = log.finish();
+        let responses: Vec<_> = output
+            .calls
+            .iter()
+            .filter_map(|call| call.response.as_deref())
+            .collect();
+        assert_eq!(responses.len(), 6, "every payload keeps a record");
+        assert!(responses.iter().any(|payload| payload.body.is_some()));
+        let cut = responses
+            .iter()
+            .find(|payload| payload.body.is_none())
+            .expect("a payload past the reserve keeps no body");
+        assert!(cut.truncated && cut.bytes == body.len() as u64 && !cut.digest.is_empty());
+        assert!(output.truncated);
+    }
+
+    #[test]
+    fn digest_only_records_do_not_spend_the_reserve_on_masked_names() {
+        let max = 64 * 1024;
+        let (data, log) = log_with(DecisionLogConfig {
+            max_recorder_bytes: max,
+            ..DecisionLogConfig::default()
+        });
+        let recorder = data.security_check.recorder().unwrap();
+        let body = vec![b'x'; 20 * 1024];
+        for _ in 0..6 {
+            let ticket = recorder.begin_call("main", "http.get", None);
+            recorder.call_payload(
+                ticket.call_index,
+                Side::Response,
+                Payload::meta(serde_json::Value::Null).with_body(&body),
+            );
+        }
+        let before = log.lock().charged;
+        let names: Vec<String> = (0..64)
+            .map(|i| format!("x-token-{i}-{}", "n".repeat(900)))
+            .collect();
+        let ticket = recorder.begin_call("main", "http.get", None);
+        recorder.call_payload(
+            ticket.call_index,
+            Side::Response,
+            Payload::meta(serde_json::Value::Null)
+                .with_body(&body)
+                .with_masked(names),
+        );
+        let spent = log.lock().charged - before;
+        assert!(
+            spent < 512,
+            "a payload past the limit enters the reserve as a digest and a size: {spent}"
+        );
+        audit_denied(&data, recorder.begin_call("main", "fs.read", None));
+        let output = log.finish();
+        assert_eq!(output.records.len(), 1, "a later denial is still recorded");
+        let last = output
+            .calls
+            .iter()
+            .rev()
+            .find_map(|call| call.response.as_deref());
+        assert!(last.is_some_and(|payload| payload.masked_headers.is_empty()));
+    }
+
+    #[test]
+    fn a_body_is_sized_to_the_room_its_record_leaves() {
+        let max = 16 * 1024;
+        let (data, log) = log_with(DecisionLogConfig {
+            max_recorder_bytes: max,
+            ..DecisionLogConfig::default()
+        });
+        let recorder = data.security_check.recorder().unwrap();
+        let body = vec![b'x'; 64 * 1024];
+        let meta = serde_json::json!({ "url": "https://x.test/" });
+        let ticket = recorder.begin_call("main", "http.get", None);
+        recorder.call_payload(
+            ticket.call_index,
+            Side::Response,
+            Payload::meta(meta.clone()).with_body(&body),
+        );
+        let charged = log.lock().charged;
+        assert!(
+            charged <= log.payload_limit(),
+            "the copy fits what it is charged"
+        );
+        let output = log.finish();
+        let payload = output.calls[0]
+            .response
+            .as_deref()
+            .expect("a response record");
+        let kept = match &payload.body {
+            Some(call_log::BodyCopy::Text(text)) => text.len(),
+            other => panic!("a cut text body is kept as text: {other:?}"),
+        };
+        assert!(payload.truncated && kept > 0 && kept < body.len());
+        assert_eq!(payload.bytes, body.len() as u64);
+        // Binary bodies are charged as base64: a quarter more.
+        let (data, log) = log_with(DecisionLogConfig {
+            max_recorder_bytes: max,
+            ..DecisionLogConfig::default()
+        });
+        let recorder = data.security_check.recorder().unwrap();
+        let binary = vec![0xffu8; 64 * 1024];
+        let ticket = recorder.begin_call("main", "http.get", None);
+        recorder.call_payload(
+            ticket.call_index,
+            Side::Response,
+            Payload::meta(meta).with_body(&binary),
+        );
+        let output = log.finish();
+        let payload = output.calls[0]
+            .response
+            .as_deref()
+            .expect("a response record");
+        let Some(call_log::BodyCopy::Base64(text)) = &payload.body else {
+            panic!("a binary body is kept as base64: {payload:?}");
+        };
+        assert!(payload.truncated);
+        assert!(text.len() as u64 <= max - max / RECORD_RESERVE_DIVISOR);
+    }
+
+    #[test]
+    fn a_payload_is_wanted_exactly_while_its_digest_only_record_fits() {
+        let max = 4096;
+        let (data, log) = log_with(DecisionLogConfig {
+            max_recorder_bytes: max,
+            ..DecisionLogConfig::default()
+        });
+        let recorder = data.security_check.recorder().unwrap();
+        recorder.enter_host_call();
+        let ticket = recorder.begin_call("main", "http.get", None);
+        log.lock().charged = max - call_log::DIGEST_ONLY_COST;
+        assert!(recorder.wants_payload(ticket.call_index));
+        log.lock().charged = max - call_log::DIGEST_ONLY_COST + 1;
+        assert!(!recorder.wants_payload(ticket.call_index));
+    }
+
+    #[test]
+    fn a_body_with_no_room_is_not_copied() {
+        let (data, log) = log_with(DecisionLogConfig {
+            max_recorder_bytes: 1024,
+            ..DecisionLogConfig::default()
+        });
+        let recorder = data.security_check.recorder().unwrap();
+        let ticket = recorder.begin_call("main", "http.get", None);
+        let meta = serde_json::json!({ "url": "u".repeat(400) });
+        recorder.call_payload(
+            ticket.call_index,
+            Side::Response,
+            Payload::meta(meta).with_body(&[b'x'; 4096]),
+        );
+        let output = log.finish();
+        let payload = output.calls[0]
+            .response
+            .as_deref()
+            .expect("a response record");
+        assert!(payload.body.is_none() && payload.truncated);
+        assert_eq!(payload.bytes, 4096);
+    }
+
+    #[test]
+    fn a_payload_is_wanted_while_its_call_is_open_and_the_budget_lasts() {
+        let (data, _log) = log_with(DecisionLogConfig {
+            max_recorder_bytes: 4096,
+            ..DecisionLogConfig::default()
+        });
+        let recorder = data.security_check.recorder().unwrap();
+        recorder.enter_host_call();
+        let ticket = recorder.begin_call("main", "http.get", None);
+        assert!(recorder.wants_payload(ticket.call_index));
+        assert!(
+            !recorder.wants_payload(ticket.call_index + 1),
+            "no such call"
+        );
+        recorder.exit_host_call(0, true);
+        assert!(!recorder.wants_payload(ticket.call_index), "the call ended");
     }
 
     #[test]

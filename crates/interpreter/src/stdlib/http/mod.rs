@@ -20,7 +20,7 @@ use wasmtime::{
     Caller, FuncType, HeapType, Linker, RefType, Rooted, StructRef, StructType, Val, ValType,
 };
 
-use crate::runtime::call_log::{Payload, Side, mask_headers, record_payload};
+use crate::runtime::call_log::{Payload, Side, mask_headers, mask_url, record_payload};
 use crate::runtime::fs::{ContainError, ContentPath};
 use crate::runtime::fuel;
 use crate::runtime::host::{
@@ -444,7 +444,7 @@ async fn perform_request(
     settle_response(caller, send_result, method)
 }
 
-/// A request as the recorder keeps it: credential headers masked.
+/// A request as the recorder keeps it: credential headers and URL credentials masked.
 fn request_payload<'a>(
     method: &str,
     url: &str,
@@ -454,7 +454,7 @@ fn request_payload<'a>(
     let (headers, masked) = mask_headers(headers);
     Payload::meta(serde_json::json!({
         "method": method.to_ascii_uppercase(),
-        "url": url,
+        "url": mask_url(url),
         "headers": headers,
     }))
     .with_body(body)
@@ -469,7 +469,7 @@ fn response_payload(result: &std::result::Result<HttpResponse, HttpError>) -> Pa
             Payload::meta(serde_json::json!({
                 "status": resp.status,
                 "status_text": resp.status_text,
-                "url": resp.final_url,
+                "url": mask_url(&resp.final_url),
                 "headers": headers,
             }))
             .with_body(&resp.body)

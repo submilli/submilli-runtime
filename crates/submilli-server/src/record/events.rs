@@ -14,8 +14,12 @@
 //! decision and call the recorder kept.
 //!
 //! The buffer has its own budget, separate from the run's memory limit, so that streaming
-//! a run never changes how much memory it may use (the plan's R19; the same choice the
-//! decision recorder makes).
+//! a run never changes how much memory it may use (the same choice the decision recorder
+//! makes).
+//!
+//! Events exist only for runs whose [`RunRecorderFactory::start`] returned a recorder.
+//! A failure before a run starts (an unknown blueprint, invalid variables) has no run to
+//! stream.
 
 use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex, MutexGuard};
@@ -129,23 +133,33 @@ impl EventKind {
     }
 }
 
-/// Events the buffer holds at most, and how many of those only reserved events may use.
-const MAX_EVENTS: usize = 4096;
-const RESERVED_EVENTS: usize = 512;
-/// Bytes the buffer holds at most, and how many of those only reserved events may use.
-const MAX_BYTES: usize = 16 * 1024 * 1024;
-const RESERVED_BYTES: usize = 2 * 1024 * 1024;
+/// What the buffer holds, and how much of it only reserved events may use.
+#[derive(Debug, Clone, Copy)]
+struct Limits {
+    events: usize,
+    reserved_events: usize,
+    bytes: usize,
+    reserved_bytes: usize,
+}
+
+const LIMITS: Limits = Limits {
+    events: 4096,
+    reserved_events: 512,
+    bytes: 16 * 1024 * 1024,
+    reserved_bytes: 2 * 1024 * 1024,
+};
 
 #[derive(Default)]
 struct Buffer {
     queue: VecDeque<(SessionEvent, usize)>,
     bytes: usize,
     next_seq: u64,
-    /// Delivery has been asked for and has not yet emptied the queue.
-    draining: bool,
+    /// Events are queued that no delivery pass has taken yet, or one is taking them.
+    delivery_pending: bool,
     /// The delivery task is running.
-    deliverer: bool,
-    /// Events dropped per run still in progress.
+    delivery_task_running: bool,
+    /// Events dropped per run still in progress. A run is listed from its start until its
+    /// end reads the count, so drops for a run that is not listed are not counted.
     dropped: HashMap<String, u64>,
 }
 
@@ -153,7 +167,7 @@ struct Buffer {
 pub(crate) struct EventHub {
     factory: Arc<dyn RunRecorderFactory>,
     buffer: Mutex<Buffer>,
-    limits: (usize, usize, usize, usize),
+    limits: Limits,
     /// Wakes the delivery task.
     wake: Arc<tokio::sync::Notify>,
     /// Event ids are this, then the sequence number: unique without a random draw each.
@@ -162,16 +176,10 @@ pub(crate) struct EventHub {
 
 impl EventHub {
     pub(crate) fn new(factory: Arc<dyn RunRecorderFactory>) -> Arc<Self> {
-        Self::with_limits(
-            factory,
-            (MAX_EVENTS, RESERVED_EVENTS, MAX_BYTES, RESERVED_BYTES),
-        )
+        Self::with_limits(factory, LIMITS)
     }
 
-    fn with_limits(
-        factory: Arc<dyn RunRecorderFactory>,
-        limits: (usize, usize, usize, usize),
-    ) -> Arc<Self> {
+    fn with_limits(factory: Arc<dyn RunRecorderFactory>, limits: Limits) -> Arc<Self> {
         Arc::new(Self {
             factory,
             buffer: Mutex::new(Buffer::default()),
@@ -197,30 +205,11 @@ impl EventHub {
         tool_call_id: Option<&str>,
         kind: EventKind,
     ) {
-        let reserved = kind.reserved();
-        let size = event_size(&kind);
-        let (max_events, reserved_events, max_bytes, reserved_bytes) = self.limits;
+        let size = event_size(&[session_id, run_id, tool_call_id], &kind);
         let mut buffer = self.lock();
-        buffer.next_seq = buffer.next_seq.saturating_add(1);
-        let seq = buffer.next_seq;
-        let (events, bytes) = if reserved {
-            (max_events, max_bytes)
-        } else {
-            (
-                max_events.saturating_sub(reserved_events),
-                max_bytes.saturating_sub(reserved_bytes),
-            )
-        };
-        let fits = buffer.queue.len() < events
-            && buffer.bytes.saturating_add(size) <= bytes
-            && buffer.queue.try_reserve(1).is_ok();
-        if !fits {
-            if let Some(run_id) = run_id {
-                let count = buffer.dropped.entry(run_id.to_owned()).or_default();
-                *count = count.saturating_add(1);
-            }
+        let Some(seq) = self.admit(&mut buffer, run_id, kind.reserved(), size) else {
             return;
-        }
+        };
         let event = SessionEvent {
             schema: EVENT_SCHEMA,
             event_id: format!("{}-{seq}", self.id_prefix),
@@ -233,24 +222,64 @@ impl EventHub {
         };
         buffer.bytes = buffer.bytes.saturating_add(size);
         buffer.queue.push_back((event, size));
-        if buffer.draining {
+        self.schedule_delivery(buffer);
+    }
+
+    /// Numbers an event and makes room for it. `None` when it does not fit: it is dropped,
+    /// counted against its run, and its number is skipped so a gap shows it.
+    fn admit(
+        &self,
+        buffer: &mut Buffer,
+        run_id: Option<&str>,
+        reserved: bool,
+        size: usize,
+    ) -> Option<u64> {
+        buffer.next_seq = buffer.next_seq.saturating_add(1);
+        let seq = buffer.next_seq;
+        let limits = self.limits;
+        let (events, bytes) = if reserved {
+            (limits.events, limits.bytes)
+        } else {
+            (
+                limits.events.saturating_sub(limits.reserved_events),
+                limits.bytes.saturating_sub(limits.reserved_bytes),
+            )
+        };
+        let fits = buffer.queue.len() < events
+            && buffer.bytes.saturating_add(size) <= bytes
+            && buffer.queue.try_reserve(1).is_ok();
+        if fits {
+            return Some(seq);
+        }
+        // Only a run still in progress is counted, so a late event of a run that has
+        // ended cannot leave an entry behind.
+        if let Some(count) = run_id.and_then(|run_id| buffer.dropped.get_mut(run_id)) {
+            *count = count.saturating_add(1);
+        }
+        None
+    }
+
+    /// Makes sure something delivers the queue: the running task, a new one, or this
+    /// thread when there is no runtime to hand it to.
+    fn schedule_delivery(self: &Arc<Self>, mut buffer: MutexGuard<'_, Buffer>) {
+        if buffer.delivery_pending {
             return;
         }
-        buffer.draining = true;
-        if buffer.deliverer {
+        buffer.delivery_pending = true;
+        if buffer.delivery_task_running {
             drop(buffer);
             self.wake.notify_one();
             return;
         }
         let Ok(runtime) = tokio::runtime::Handle::try_current() else {
-            // No runtime to hand delivery to: deliver here.
             drop(buffer);
             self.drain();
             return;
         };
-        buffer.deliverer = true;
+        buffer.delivery_task_running = true;
         drop(buffer);
-        // One long-lived task delivers everything; it ends with the hub.
+        // One long-lived task delivers everything; it ends with the hub, which wakes it
+        // as it drops.
         let hub = Arc::downgrade(self);
         let wake = self.wake.clone();
         runtime.spawn(async move {
@@ -265,7 +294,17 @@ impl EventHub {
         });
     }
 
-    /// The events dropped for `run_id`, forgetting the count.
+    /// Starts counting the events dropped for `run_id`.
+    fn register_run(&self, run_id: &str) {
+        self.lock().dropped.insert(run_id.to_owned(), 0);
+    }
+
+    #[cfg(test)]
+    pub(super) fn tracked_runs(&self) -> usize {
+        self.lock().dropped.len()
+    }
+
+    /// The events dropped for `run_id`, forgetting the run.
     fn take_dropped(&self, run_id: &str) -> u64 {
         self.lock().dropped.remove(run_id).unwrap_or(0)
     }
@@ -275,53 +314,115 @@ impl EventHub {
             let next = {
                 let mut buffer = self.lock();
                 let Some((event, size)) = buffer.queue.pop_front() else {
-                    buffer.draining = false;
+                    buffer.delivery_pending = false;
                     return;
                 };
                 buffer.bytes = buffer.bytes.saturating_sub(size);
                 event
             };
-            self.factory.event(next);
+            // An embedder that panics on one event must not end delivery of the rest.
+            let delivered = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                self.factory.event(next);
+            }));
+            if delivered.is_err() {
+                tracing::warn!("the run recorder panicked while handling a session event");
+            }
         }
     }
 }
 
-/// Bytes an event holds, for the buffer's budget. A decision's capped record dominates;
-/// the rest are small and charged a flat amount.
-fn event_size(kind: &EventKind) -> usize {
-    const BASE: usize = 512;
-    match kind {
-        EventKind::Decision { record } => {
-            let misses: usize = record
-                .near_misses
-                .iter()
-                .flat_map(|miss| &miss.failures)
-                .map(|failure| {
-                    failure.comparison.len()
-                        + failure.expected.as_ref().map_or(0, String::len)
-                        + failure.actual.as_ref().map_or(0, value_size)
-                })
-                .sum();
-            BASE + value_size(&record.context) + misses
-        }
-        _ => BASE,
+impl Drop for EventHub {
+    fn drop(&mut self) {
+        // Wake the parked delivery task so it sees the hub is gone and ends.
+        self.wake.notify_one();
     }
+}
+
+/// Bytes an event holds, for the buffer's budget: a flat amount for the event itself, the
+/// owned strings it and its ids carry, and a decision's capped record, which dominates.
+fn event_size(ids: &[Option<&str>], kind: &EventKind) -> usize {
+    const BASE: usize = 512;
+    let ids = ids.iter().flatten().map(|id| id.len());
+    saturating_sum(ids.chain([BASE, kind_size(kind)]))
+}
+
+/// The owned strings, and for a decision the capped record, that `kind` holds.
+fn kind_size(kind: &EventKind) -> usize {
+    let text = |text: &Option<String>| text.as_ref().map_or(0, String::len);
+    match kind {
+        EventKind::RunStarted {
+            label,
+            entry,
+            client,
+            blueprint,
+            blueprint_hash,
+            code_hash,
+        } => saturating_sum([
+            label.len(),
+            entry.len(),
+            text(client),
+            blueprint.len(),
+            text(blueprint_hash),
+            text(code_hash),
+        ]),
+        EventKind::CallStarted {
+            caller, capability, ..
+        } => saturating_sum([caller.len(), capability.len()]),
+        EventKind::CallFinished { capability, .. } => capability.len(),
+        EventKind::ToolCall { tool, .. } => tool.len(),
+        EventKind::Decision { record } => saturating_sum(
+            [
+                record.caller.len(),
+                record.capability.len(),
+                record.source.len(),
+                text(&record.reason),
+                value_size(&record.context),
+            ]
+            .into_iter()
+            .chain(record.near_misses.iter().map(near_miss_size)),
+        ),
+        EventKind::RunFinished { .. } | EventKind::Returned { .. } => 0,
+    }
+}
+
+fn near_miss_size(miss: &interpreter::runtime::NearMissRecord) -> usize {
+    saturating_sum(
+        [
+            miss.rule.caller.len(),
+            miss.rule.name.as_ref().map_or(0, String::len),
+            miss.filter.len(),
+        ]
+        .into_iter()
+        .chain(miss.failures.iter().map(failure_size)),
+    )
+}
+
+fn failure_size(failure: &interpreter::runtime::FailureRecord) -> usize {
+    saturating_sum([
+        failure.comparison.len(),
+        failure.expected.as_ref().map_or(0, String::len),
+        failure.actual.as_ref().map_or(0, value_size),
+    ])
+}
+
+fn saturating_sum(sizes: impl IntoIterator<Item = usize>) -> usize {
+    sizes.into_iter().fold(0, usize::saturating_add)
 }
 
 /// Roughly what a JSON value holds: its strings and keys, and a word per node.
 fn value_size(value: &serde_json::Value) -> usize {
     use serde_json::Value;
+    const NODE: usize = 8;
     match value {
-        Value::String(text) => text.len() + 8,
-        Value::Array(items) => items.iter().map(value_size).sum::<usize>() + 8,
-        Value::Object(fields) => {
+        Value::String(text) => text.len().saturating_add(NODE),
+        Value::Array(items) => saturating_sum(items.iter().map(value_size).chain([NODE])),
+        Value::Object(fields) => saturating_sum(
             fields
                 .iter()
-                .map(|(key, item)| key.len() + value_size(item))
-                .sum::<usize>()
-                + 8
-        }
-        _ => 8,
+                .map(|(key, item)| key.len().saturating_add(value_size(item)))
+                .chain([NODE]),
+        ),
+        _ => NODE,
     }
 }
 
@@ -343,6 +444,7 @@ pub(crate) struct RunEvents {
 
 impl RunEvents {
     pub(crate) fn start(hub: &Arc<EventHub>, run: &RunStart) -> Arc<Self> {
+        hub.register_run(&run.execution_id);
         let events = Arc::new(Self {
             hub: hub.clone(),
             run_id: run.execution_id.clone(),
@@ -435,9 +537,9 @@ impl RecordObserver for RunEvents {
     }
 }
 
-/// Records an MCP tool call on a session, when events are wanted.
+/// Records an MCP tool call on a session.
 pub(crate) fn tool_call(
-    hub: Option<&Arc<EventHub>>,
+    hub: &Arc<EventHub>,
     session_id: Option<&str>,
     tool_call_id: Option<&str>,
     tool: &str,
@@ -445,19 +547,17 @@ pub(crate) fn tool_call(
     result_bytes: u64,
     wall: std::time::Duration,
 ) {
-    if let Some(hub) = hub {
-        hub.push(
-            session_id,
-            None,
-            tool_call_id,
-            EventKind::ToolCall {
-                tool: tool.to_owned(),
-                ok,
-                result_bytes,
-                wall_ms: u64::try_from(wall.as_millis()).unwrap_or(u64::MAX),
-            },
-        );
-    }
+    hub.push(
+        session_id,
+        None,
+        tool_call_id,
+        EventKind::ToolCall {
+            tool: tool.to_owned(),
+            ok,
+            result_bytes,
+            wall_ms: u64::try_from(wall.as_millis()).unwrap_or(u64::MAX),
+        },
+    );
 }
 
 #[cfg(test)]
@@ -493,11 +593,20 @@ mod tests {
     fn an_overflow_drops_progress_first_and_counts_the_runs_losses() {
         let collect = Arc::new(Collect::default());
         // Room for four events, one of them reserved.
-        let hub = EventHub::with_limits(collect.clone(), (4, 1, usize::MAX, 0));
+        let hub = EventHub::with_limits(
+            collect.clone(),
+            Limits {
+                events: 4,
+                reserved_events: 1,
+                bytes: usize::MAX,
+                reserved_bytes: 0,
+            },
+        );
+        hub.register_run("r");
         {
             // Hold delivery back so the buffer fills.
             let mut buffer = hub.lock();
-            buffer.draining = true;
+            buffer.delivery_pending = true;
         }
         for index in 0..5 {
             hub.push(Some("s"), Some("r"), None, progress(index));
@@ -514,6 +623,89 @@ mod tests {
         let seqs: Vec<_> = events.iter().map(|event| event.seq).collect();
         assert_eq!(seqs, [1, 2, 3, 6], "a gap marks what was dropped");
         assert!(matches!(events[3].kind, EventKind::Returned { bytes: 1 }));
+    }
+
+    #[test]
+    fn an_event_is_sized_by_the_strings_it_carries() {
+        let small = event_size(&[None], &progress(0));
+        let long = "x".repeat(10_000);
+        let big = event_size(
+            &[Some(&long), Some("run"), None],
+            &EventKind::CallStarted {
+                call_index: 0,
+                caller: long.clone(),
+                capability: long.clone(),
+                started_micros: 0,
+                line: None,
+            },
+        );
+        assert!(big >= small + 29_000, "{small} vs {big}");
+        let tool = EventKind::ToolCall {
+            tool: long.clone(),
+            ok: true,
+            result_bytes: 0,
+            wall_ms: 0,
+        };
+        assert!(event_size(&[None], &tool) >= long.len());
+        assert_eq!(
+            event_size(
+                &[Some(&long)],
+                &EventKind::Returned {
+                    bytes: usize::MAX as u64
+                }
+            ),
+            event_size(&[None], &EventKind::Returned { bytes: 0 }) + long.len()
+        );
+    }
+
+    #[test]
+    fn a_finished_runs_late_drops_leave_nothing_behind() {
+        let collect = Arc::new(Collect::default());
+        let hub = EventHub::with_limits(
+            collect,
+            Limits {
+                events: 0,
+                reserved_events: 0,
+                bytes: 0,
+                reserved_bytes: 0,
+            },
+        );
+        hub.register_run("r");
+        hub.push(None, Some("r"), None, progress(0));
+        assert_eq!(hub.take_dropped("r"), 1);
+        // Events that arrive after the run's end, and the end's own, are all dropped.
+        hub.push(None, Some("r"), None, EventKind::Returned { bytes: 1 });
+        hub.push(None, Some("r"), None, progress(1));
+        hub.push(None, Some("never-started"), None, progress(2));
+        assert!(hub.lock().dropped.is_empty());
+    }
+
+    #[test]
+    fn a_panicking_embedder_does_not_stop_delivery() {
+        struct Flaky(Mutex<Vec<u64>>);
+        impl RunRecorderFactory for Flaky {
+            fn start(&self, _run: RunStart) -> Option<Arc<dyn super::super::RunRecorder>> {
+                None
+            }
+            fn wants_events(&self) -> bool {
+                true
+            }
+            fn event(&self, event: SessionEvent) {
+                assert!(event.seq != 1, "first event refused");
+                self.0.lock().unwrap().push(event.seq);
+            }
+        }
+        let flaky = Arc::new(Flaky(Mutex::default()));
+        let hub = EventHub::new(flaky.clone());
+        {
+            let mut buffer = hub.lock();
+            buffer.delivery_pending = true;
+        }
+        for index in 0..3 {
+            hub.push(None, None, None, progress(index));
+        }
+        hub.drain();
+        assert_eq!(*flaky.0.lock().unwrap(), [2, 3]);
     }
 
     #[test]

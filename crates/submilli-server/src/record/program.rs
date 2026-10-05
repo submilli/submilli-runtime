@@ -30,7 +30,13 @@ pub async fn run_program(state: &AppState, program: ProgramRun) -> ExecuteRespon
         variables: Some(program.variables),
         secrets: Some(program.secrets),
     };
-    let (_session, response) = one_shot(state, request, Some(audit.clone())).await;
+    let (_session, response) = one_shot(
+        state,
+        request,
+        Some(audit.clone()),
+        crate::record::RunEntry::Program,
+    )
+    .await;
     audit.finish(response.error.is_none());
     response
 }
