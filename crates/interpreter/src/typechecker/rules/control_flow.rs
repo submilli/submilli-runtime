@@ -122,13 +122,7 @@ fn completion(
                 loop_completion(ta, declarations, *body, runs_forever)?
             }
             TypedStmtKind::DoWhile { body, condition } => {
-                let pass = completion(ta, declarations, *body)?;
-                let repeats = pass.falls || pass.continues;
-                let exits_by_condition = repeats && !is_static_true(ta, *condition)?;
-                Completion {
-                    falls: exits_by_condition || pass.breaks,
-                    ..Default::default()
-                }
+                do_while_completion(ta, declarations, *body, *condition)?
             }
             TypedStmtKind::ForOf { .. }
             | TypedStmtKind::ReboxLocal { .. }
@@ -155,6 +149,23 @@ fn loop_completion(
     let breaks = completion(ta, declarations, body)?.breaks;
     Ok(Completion {
         falls: !runs_forever || breaks,
+        ..Default::default()
+    })
+}
+
+/// A `do … while` ends normally when its body breaks out, or when a pass reaches
+/// the condition and the condition can fail.
+fn do_while_completion(
+    ta: &TypedAst,
+    declarations: &TypeDeclarations<'_>,
+    body: StmtId,
+    condition: crate::ExprId,
+) -> Result<Completion, crate::compiler_error::CompilerFailure> {
+    let pass = completion(ta, declarations, body)?;
+    let reaches_condition = pass.falls || pass.continues;
+    let exits_by_condition = reaches_condition && !is_static_true(ta, condition)?;
+    Ok(Completion {
+        falls: exits_by_condition || pass.breaks,
         ..Default::default()
     })
 }

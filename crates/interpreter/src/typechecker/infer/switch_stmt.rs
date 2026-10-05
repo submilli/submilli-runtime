@@ -58,8 +58,8 @@ impl Inferer<'_> {
 
         for case in cases {
             let case_span = case.span;
-            let mut typed_values: Vec<TypedSwitchValue> = Vec::new();
-            let mut label_tys: Vec<Type> = Vec::new();
+            // Each label with its own type, which an enum member's test keeps.
+            let mut labels: Vec<(TypedSwitchValue, Type)> = Vec::new();
             for value_expr in &case.values {
                 let value_span = self
                     .ast
@@ -102,11 +102,10 @@ impl Inferer<'_> {
                     });
                     continue;
                 }
-                typed_values.push(lit);
-                label_tys.push(val_ty);
+                labels.push((lit, val_ty));
             }
 
-            let mut iter = typed_values.iter().zip(&label_tys);
+            let mut iter = labels.iter();
             let true_env = match iter.next() {
                 None => narrowing::NarrowEnv::new(),
                 Some((first, first_ty)) => {
@@ -150,7 +149,7 @@ impl Inferer<'_> {
             any_arm_reachable_exit |= body_reachable;
 
             typed_cases.push(TypedSwitchCase {
-                values: typed_values,
+                values: labels.into_iter().map(|(value, _)| value).collect(),
                 body: typed_body,
                 span: case_span,
             });

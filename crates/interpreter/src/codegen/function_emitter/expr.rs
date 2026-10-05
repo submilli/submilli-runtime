@@ -3018,7 +3018,7 @@ fn emit_binary(
     rhs: ExprId,
     result_ty: &Type,
 ) -> Result<(), crate::compiler_error::CompilerFailure> {
-    let lowers_to_numeric_instruction = matches!(
+    let admits_never_operand = matches!(
         op,
         BinOp::Add
             | BinOp::Sub
@@ -3031,9 +3031,7 @@ fn emit_binary(
             | BinOp::Le
             | BinOp::Ge
     );
-    if lowers_to_numeric_instruction
-        && try_emit_unreachable_for_never_operand(emitter, ctx, &[lhs, rhs])?
-    {
+    if admits_never_operand && try_emit_unreachable_for_never_operand(emitter, ctx, &[lhs, rhs])? {
         return Ok(());
     }
     let _: () = match op {

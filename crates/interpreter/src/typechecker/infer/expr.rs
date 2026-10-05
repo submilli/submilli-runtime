@@ -281,6 +281,19 @@ pub(super) fn type_admits_null(ty: &Type, types: TypeResolver<'_>) -> bool {
     walk(ty, types, &mut BTreeSet::new())
 }
 
+/// Whether no value of `ty` is `null`. Unlike `!type_admits_null`, a type
+/// parameter counts as possibly null, since a caller may instantiate it so.
+fn never_holds_null(ty: &Type, types: TypeResolver<'_>) -> bool {
+    fn has_type_param(ty: &Type) -> bool {
+        match ty.peel() {
+            Type::TypeVar(_) | Type::GenericParam { .. } => true,
+            Type::Union(members) => members.iter().any(has_type_param),
+            _ => false,
+        }
+    }
+    !type_admits_null(ty, types) && !has_type_param(ty)
+}
+
 /// What to tell someone who wrote `?.` on a namespace when there is no fix to
 /// spell: an index step has none, since index signatures are out of scope and
 /// `Number[…]` would not compile either.
@@ -4455,7 +4468,9 @@ impl Inferer<'_> {
             name: "toString".to_string(),
             span,
         };
-        if !has_to_string(peeled) {
+        let interface_to_string = matches!(peeled, Type::InterfaceRef { .. })
+            && self.find_method(peeled, "toString").is_some();
+        if !has_to_string(peeled) && !interface_to_string {
             let nullable = matches!(peeled, Type::Null)
                 || matches!(
                     peeled,
@@ -8132,7 +8147,7 @@ impl Inferer<'_> {
         for part in parts {
             // A `?.` whose receiver can't be `null` never short-circuits, so it
             // is the plain step and adds no `| null`, as in tsc.
-            let part = if part.is_optional() && !type_admits_null(&receiver_ty, self.resolver()) {
+            let part = if part.is_optional() && never_holds_null(&receiver_ty, self.resolver()) {
                 part.as_plain_step()
             } else {
                 part
@@ -8207,8 +8222,10 @@ impl Inferer<'_> {
 
         // A void-tailed chain has no value on either branch, so it stays
         // `void` rather than widening to `void | null` (void is a return
-        // type only — see `reject_void_binding`).
-        let final_ty = if matches!(receiver_ty.peel(), Type::Void) || short_circuit_span.is_none() {
+        // type only — see `reject_void_binding`). A chain with no step left
+        // that can short-circuit has no `null` branch to add.
+        let can_short_circuit = short_circuit_span.is_some();
+        let final_ty = if matches!(receiver_ty.peel(), Type::Void) || !can_short_circuit {
             receiver_ty
         } else {
             Type::union(vec![receiver_ty, Type::Null])
@@ -8621,7 +8638,7 @@ impl Inferer<'_> {
         }
         // A poisoned receiver has no knowable nullability, and naming it in the
         // message would print `<error>` at the user.
-        if type_admits_null(base_ty, self.resolver()) || matches!(base_ty.peel(), Type::Error) {
+        if !never_holds_null(base_ty, self.resolver()) || matches!(base_ty.peel(), Type::Error) {
             return;
         }
         self.diagnostics.push(crate::Diagnostic {
