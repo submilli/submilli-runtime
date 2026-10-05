@@ -45,6 +45,10 @@ function orMode<B>(mode: Mode, value: B): B | Mode {
   return value;
 }
 
+function orList<T, E>(value: T, fallback: E[]): T | E[] {
+  return value;
+}
+
 function head<T>(pair: [T, number]): T {
   return pair[0];
 }
@@ -169,4 +173,10 @@ function main(): void {
   let orDeclared = orMode(mode, "on");
   const unioned: Mode[] = [joined, orDeclared];
   assert(unioned.join(",") === "on,on", "a declared literal in the result");
+
+  // A declared literal nested in the result's array member doesn't absorb a
+  // fresh one in its other member.
+  let listed = orList("on", modes);
+  listed = "elsewhere";
+  assert(listed === "elsewhere", "a nested declared literal");
 }

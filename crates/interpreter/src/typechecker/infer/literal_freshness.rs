@@ -60,11 +60,7 @@ impl LiteralOrigin {
         match self {
             LiteralOrigin::Unknown => BTreeSet::new(),
             LiteralOrigin::Declared => declared_literals(declared_ty),
-            LiteralOrigin::Inferred { fresh, .. } => {
-                let mut regular = declared_literals(declared_ty);
-                regular.retain(|literal| !fresh.contains(literal));
-                regular
-            }
+            LiteralOrigin::Inferred { fresh, .. } => declared_without(declared_ty, fresh),
         }
     }
 
@@ -116,7 +112,9 @@ pub(super) struct LiteralFreshness {
     /// The fresh literals each generic call, by its id, may have inferred a
     /// type argument from. Worked out once per call: a nested call is asked
     /// both for its fresh and its regular literals, so recomputing would cost
-    /// exponential time in the nesting depth.
+    /// exponential time in the nesting depth. Caching is sound because a
+    /// call's operands, their bindings and the freshness of what they read
+    /// are all settled when the call is built, before anything asks.
     inferable_fresh_by_call: RefCell<BTreeMap<ExprId, BTreeSet<Type>>>,
 }
 
@@ -125,6 +123,30 @@ pub(super) struct LiteralFreshness {
 struct ArgumentBinding {
     param: Type,
     callee_return: Type,
+}
+
+impl ArgumentBinding {
+    /// Whether the parameter takes the argument whole as a type parameter's
+    /// value (`A`, `A | null`) rather than inside one (`A[]`).
+    fn binds_whole_value(&self) -> bool {
+        union_members(&self.param)
+            .into_iter()
+            .any(|member| matches!(member, Type::TypeVar(_)))
+    }
+
+    /// Whether a literal type the value bound here holds regular is the one
+    /// the call's result takes: its parameter names a type parameter that is
+    /// a whole member of the callee's return type, so the declared type
+    /// absorbs a fresh copy of the literal in the same union (`L | R` with
+    /// `either(m, "on")`). One reaching the result only inside an array or
+    /// object (`A[] | B`) leaves another operand's fresh copy fresh.
+    fn may_reach_result(&self) -> bool {
+        super::expr::mentions_type_var(&self.param, &|name| {
+            union_members(&self.callee_return)
+                .into_iter()
+                .any(|member| matches!(member, Type::TypeVar(var) if var == name))
+        })
+    }
 }
 
 impl Inferer<'_> {
@@ -359,12 +381,8 @@ impl Inferer<'_> {
                         regular.extend(declared_literals(&expr.ty));
                     }
                 }
-                TypedExprKind::GenericCall { args, .. } => {
-                    let fresh = self.inferable_fresh_literals(id, None, args)?;
-                    regular.extend(declared_without(&expr.ty, &fresh));
-                }
-                TypedExprKind::GenericMethodCall { receiver, args, .. } => {
-                    let fresh = self.inferable_fresh_literals(id, Some(*receiver), args)?;
+                TypedExprKind::GenericCall { .. } | TypedExprKind::GenericMethodCall { .. } => {
+                    let fresh = self.inferable_fresh_literals(id)?;
                     regular.extend(declared_without(&expr.ty, &fresh));
                 }
                 _ => {}
@@ -554,21 +572,16 @@ impl Inferer<'_> {
         Ok(true)
     }
 
-    /// The fresh literals generic call `call`, given `receiver` and `args`,
-    /// may have inferred a type argument from: none when its type arguments
-    /// are written. Its result's other literal types are declared
-    /// (`first(modes)` with `modes: Mode[]`). A literal an operand holds fresh
-    /// stays declared when the callee's return type names it or another
-    /// operand that can bind a type parameter of the result holds it regular,
-    /// as the result then takes the declared type (`pick(m, "on")`), but
-    /// widens when that other operand's binding can't reach the result
-    /// (`second(m, "on")` with `second<A, B>(a: A, b: B): B`).
-    fn inferable_fresh_literals(
-        &self,
-        call: ExprId,
-        receiver: Option<ExprId>,
-        args: &[crate::GenericArgument],
-    ) -> Result<BTreeSet<Type>, CompilerFailure> {
+    /// The fresh literals generic call `call` may have inferred a type
+    /// argument from: none when its type arguments are written. Its result's
+    /// other literal types are declared (`first(modes)` with `modes: Mode[]`).
+    /// A literal an operand holds fresh stays declared when the callee's
+    /// return type names it, or when an operand whose binding reaches the
+    /// result (see [`ArgumentBinding::may_reach_result`]) holds it regular
+    /// (`pick(m, "on")`). A receiver, whose binding isn't recorded, counts as
+    /// reaching it. Otherwise it widens (`second(m, "on")` with
+    /// `second<A, B>(a: A, b: B): B`).
+    fn inferable_fresh_literals(&self, call: ExprId) -> Result<BTreeSet<Type>, CompilerFailure> {
         if let Some(fresh) = self
             .literal_freshness
             .inferable_fresh_by_call
@@ -577,7 +590,7 @@ impl Inferer<'_> {
         {
             return Ok(fresh.clone());
         }
-        let fresh = self.compute_inferable_fresh_literals(receiver, args)?;
+        let fresh = self.uncached_inferable_fresh_literals(call)?;
         self.literal_freshness
             .inferable_fresh_by_call
             .borrow_mut()
@@ -585,12 +598,21 @@ impl Inferer<'_> {
         Ok(fresh)
     }
 
-    fn compute_inferable_fresh_literals(
+    fn uncached_inferable_fresh_literals(
         &self,
-        receiver: Option<ExprId>,
-        args: &[crate::GenericArgument],
+        call: ExprId,
     ) -> Result<BTreeSet<Type>, CompilerFailure> {
-        let bindings = &self.literal_freshness.argument_bindings;
+        let expr = self
+            .typed_ast
+            .try_expr(call)
+            .map_err(crate::typechecker::arena_failure)?;
+        let (receiver, args) = match &expr.kind {
+            TypedExprKind::GenericCall { args, .. } => (None, args.as_slice()),
+            TypedExprKind::GenericMethodCall { receiver, args, .. } => {
+                (Some(*receiver), args.as_slice())
+            }
+            _ => return Ok(BTreeSet::new()),
+        };
         let has_written_type_arguments = args.iter().any(|argument| {
             self.literal_freshness
                 .arguments_of_explicitly_typed_calls
@@ -603,24 +625,39 @@ impl Inferer<'_> {
         for operand in call_operands(receiver, args) {
             fresh.extend(self.possibly_fresh_literals(operand)?);
         }
+        let bindings = &self.literal_freshness.argument_bindings;
         for operand in call_operands(receiver, args) {
             let binding = bindings.get(&operand);
-            if binding.is_none_or(ArgumentBinding::may_reach_result) {
-                for literal in self.held_regular_literals(operand)? {
-                    fresh.remove(&literal);
-                }
+            if !binding.is_none_or(ArgumentBinding::may_reach_result) {
+                continue;
+            }
+            // A value bound whole (`a: A`, `a: A | null`) reaches the result
+            // with only its top-level literals; one bound inside (`xs: A[]`)
+            // with the ones nested in it.
+            let held = if binding.is_some_and(ArgumentBinding::binds_whole_value) {
+                self.regular_literals(operand)?
+            } else {
+                self.held_regular_literals(operand)?
+            };
+            for literal in held {
+                fresh.remove(&literal);
             }
         }
-        let callee_return = args
-            .iter()
-            .find_map(|argument| bindings.get(&argument.expr))
-            .map(|binding| &binding.callee_return);
-        if let Some(callee_return) = callee_return {
+        if let Some(callee_return) = self.callee_return(args) {
             for literal in declared_literals(callee_return) {
                 fresh.remove(&literal);
             }
         }
         Ok(fresh)
+    }
+
+    /// The declared return type of the callee given `args`. Every argument of
+    /// one call records the same callee, so any recorded one tells it; a call
+    /// with no arguments has none to tell.
+    fn callee_return(&self, args: &[crate::GenericArgument]) -> Option<&Type> {
+        args.iter()
+            .find_map(|argument| self.literal_freshness.argument_bindings.get(&argument.expr))
+            .map(|binding| &binding.callee_return)
     }
 
     /// The literal types in the type of `value`, at the top or nested inside
@@ -646,11 +683,8 @@ impl Inferer<'_> {
             TypedExprKind::TupleLiteral { elements, .. } => {
                 return self.possibly_fresh_literals_in(elements.iter().copied());
             }
-            TypedExprKind::GenericCall { args, .. } => {
-                return self.inferable_fresh_literals(value, None, args);
-            }
-            TypedExprKind::GenericMethodCall { receiver, args, .. } => {
-                return self.inferable_fresh_literals(value, Some(*receiver), args);
+            TypedExprKind::GenericCall { .. } | TypedExprKind::GenericMethodCall { .. } => {
+                return self.inferable_fresh_literals(value);
             }
             _ => {}
         }
@@ -848,16 +882,6 @@ impl Inferer<'_> {
 /// The element a numeric path index names, when it is one.
 fn tuple_index(index: f64) -> Option<usize> {
     (index >= 0.0 && index.fract() == 0.0 && index <= u32::MAX as f64).then_some(index as usize)
-}
-
-impl ArgumentBinding {
-    /// Whether the value bound here can reach the call's result: its
-    /// parameter names a type parameter the callee's return type names too.
-    fn may_reach_result(&self) -> bool {
-        super::expr::mentions_type_var(&self.param, &|name| {
-            super::expr::mentions_type_var(&self.callee_return, &|other| other == name)
-        })
-    }
 }
 
 /// The declared literal members of `ty` that are not in `fresh`.
