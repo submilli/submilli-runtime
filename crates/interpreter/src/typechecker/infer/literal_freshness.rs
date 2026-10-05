@@ -106,16 +106,43 @@ pub(super) struct LiteralFreshness {
 
 impl Inferer<'_> {
     /// The type a function literal infers from a value it returns, `value` of
-    /// type `ty`: with each literal member known to be fresh widened, as tsc
-    /// widens a function's inferred return type. A literal of unknown origin
-    /// stays, since a closure returning a declared literal (`() => ms.pop()`
-    /// with `ms: Mode[]`) must keep it.
-    pub(super) fn widen_known_fresh_literals(
+    /// type `ty`: with each literal a generic call kept from a fresh argument
+    /// widened, as tsc widens a function's inferred return type (`() => id(1)`
+    /// is `() => number`). Other literals stay as before generic calls kept
+    /// them: a closure returning a declared literal (`() => ms.pop()` with
+    /// `ms: Mode[]`) must keep it, and a binding's literal origin can't always
+    /// tell a declared literal from a fresh one.
+    pub(super) fn widen_kept_call_literals(
         &self,
         value: ExprId,
         ty: &Type,
     ) -> Result<Type, CompilerFailure> {
-        Ok(widen_only(ty, &self.known_fresh_literals(value)?))
+        let mut fresh = BTreeSet::new();
+        let mut pending = vec![value];
+        while let Some(id) = pending.pop() {
+            let expr = self
+                .typed_ast
+                .try_expr(id)
+                .map_err(crate::typechecker::arena_failure)?;
+            if let Some(operands) = self.passed_through_operands(&expr.kind) {
+                pending.extend(operands);
+                continue;
+            }
+            if let TypedExprKind::GenericCall { args, .. }
+            | TypedExprKind::GenericMethodCall { args, .. } = &expr.kind
+            {
+                for argument in args {
+                    if self
+                        .literal_freshness
+                        .kept_arguments
+                        .contains(&argument.expr)
+                    {
+                        fresh.extend(self.known_fresh_literals(argument.expr)?);
+                    }
+                }
+            }
+        }
+        Ok(widen_only(ty, &fresh))
     }
 
     /// Record that a generic call's result keeps the literal type of
@@ -366,10 +393,10 @@ impl Inferer<'_> {
     }
 
     /// The literal members of the type of `value` known to be fresh: written
-    /// as literals, read from a binding that recorded them as fresh, or kept
-    /// by a generic call from such an argument. The
-    /// counterpart of [`regular_literals`](Self::regular_literals) for where a
-    /// literal of unknown origin must not widen.
+    /// as literals, read from a binding that recorded them as fresh, or kept by
+    /// a generic call from such an argument. The counterpart of
+    /// [`regular_literals`](Self::regular_literals) for where a literal of
+    /// unknown origin must not widen.
     fn known_fresh_literals(&self, value: ExprId) -> Result<BTreeSet<Type>, CompilerFailure> {
         let mut fresh = BTreeSet::new();
         let mut pending = vec![value];

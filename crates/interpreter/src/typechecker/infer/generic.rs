@@ -1317,11 +1317,17 @@ impl Inferer<'_> {
         if keeps_literal {
             self.record_kept_literal_argument(typed_id);
         }
-        // A literal the call's expected result asks for is not widened,
-        // as in tsc: `const f: () => "a" = later(c)` binds `"a"`.
-        let asked_for =
-            hinted_by_expected_result && super::assignable(&arg_ty, &hint, self.resolver());
-        if arguments.literal_types.widens(param_ty) && !asked_for {
+        // A literal that fits what the type parameter is already bound to is
+        // not widened: tsc takes the declared candidate as their common
+        // supertype, so `pick(mode, "off")` with `mode: Mode` binds `Mode`.
+        // Nor is one the call's expected result asks for: `const f: () => "a"
+        // = later(c)` binds `"a"`.
+        let hint_is_known = !super::expr::mentions_type_var(&hint, &|var| {
+            arguments.inferred_generics.iter().any(|name| name == var)
+        });
+        let fits_binding = (hinted_by_expected_result || hint_is_known)
+            && super::assignable(&arg_ty, &hint, self.resolver());
+        if arguments.literal_types.widens(param_ty) && !fits_binding {
             let widened = self.widen_fresh_literals(typed_id, &arg_ty)?;
             return Ok((typed_id, widened));
         }

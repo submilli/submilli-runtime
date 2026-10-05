@@ -396,14 +396,19 @@ impl<'a> Unifier<'a> {
                     ..
                 },
             ) => {
-                if ma != mb && self.accepts_as_supertype(arg_ty, param_ty) {
-                    return Ok(());
+                let mismatch = || UnifyError::Mismatch {
+                    expected: param_ty.clone(),
+                    got: arg_ty.clone(),
+                };
+                if ma != mb {
+                    return if self.accepts_as_supertype(arg_ty, param_ty) {
+                        Ok(())
+                    } else {
+                        Err(mismatch())
+                    };
                 }
-                if ma != mb || aa.len() != ab.len() {
-                    return Err(UnifyError::Mismatch {
-                        expected: param_ty.clone(),
-                        got: arg_ty.clone(),
-                    });
+                if aa.len() != ab.len() {
+                    return Err(mismatch());
                 }
                 for (a, b) in aa.iter().zip(ab.iter()) {
                     self.unify(a, b)?;
@@ -597,16 +602,21 @@ impl<'a> Unifier<'a> {
             && assignable(arg, param, types)
     }
 
-    /// Whether an argument's function parameter that failed to unify with an
-    /// already-bound type parameter, or with a concrete parameter type, is
-    /// still acceptable, because that type is assignable to it:
-    /// `[5].map((a: unknown, i: unknown) => ...)` passes each `number` to a
-    /// parameter that takes any value.
+    /// Whether an argument's function parameter `arg` that failed to unify with
+    /// the parameter type `bound` is still acceptable, because `bound` is
+    /// assignable to it: `[5].map((a: unknown, i: unknown) => ...)` passes each
+    /// `number` to a parameter that takes any value, and `(a: Animal) => ...`
+    /// takes each `Dog`. `bound` must be fully known: a type parameter still
+    /// unbound in it could later bind to something `arg` doesn't accept.
     fn accepts_as_supertype(&self, arg: &Type, bound: &Type) -> bool {
         let Some(types) = self.types else {
             return false;
         };
-        self.is_argument && self.contravariant && assignable(bound, arg, types)
+        if !self.is_argument || !self.contravariant {
+            return false;
+        }
+        let bound = self.sub.apply_or_record(bound, self.limits);
+        !super::infer::expr::mentions_type_var(&bound, &|_| true) && assignable(&bound, arg, types)
     }
 
     /// Unify within a function type's parameter: subtype-widening stops (see

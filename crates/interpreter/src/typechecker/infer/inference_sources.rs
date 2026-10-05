@@ -26,6 +26,10 @@
 //! they would be against the declared type, and one sharing no field with a
 //! target whose fields are all optional is still rejected (see
 //! `report_no_field_in_common`).
+//!
+//! A value an unannotated function literal returns is inferred here too, since
+//! it is read for its own type the same way, and the literal types it carries
+//! are settled with it (see `Inferer::infer_returned_value`).
 
 use crate::compiler_error::CompilerFailure;
 use crate::{ArrayLiteralElement, ExprId, ExprKind, ObjectLiteralMember, Type};
@@ -75,11 +79,11 @@ impl<'a> Inferer<'a> {
 
     /// Infer the value a `return` gives, marking the object literals it builds
     /// directly when the enclosing function literal infers its return type.
-    /// That type widens a literal known to be fresh, as tsc widens a
-    /// function's inferred return type, unless the literal is kept for a type
-    /// parameter (see `returns_keep_literals`) or the function literal has a
-    /// contextual return type other than a bare type parameter: `() => id(1)`
-    /// is `() => number`.
+    /// That type widens a literal a generic call kept from a fresh argument
+    /// (see [`Self::widen_kept_call_literals`]), unless the function literal
+    /// keeps its returned literals for a type parameter (see
+    /// `returns_keep_literals`) or has a contextual return type other than a
+    /// bare type parameter: `() => id(1)` is `() => number`.
     pub(super) fn infer_returned_value(
         &mut self,
         expr: ExprId,
@@ -100,7 +104,7 @@ impl<'a> Inferer<'a> {
         if self.returns_keep_literals || has_contextual_return_type {
             return Ok((typed, ty));
         }
-        Ok((typed, self.widen_known_fresh_literals(typed, &ty)?))
+        Ok((typed, self.widen_kept_call_literals(typed, &ty)?))
     }
 
     pub(super) fn is_inference_source(&self, literal: ExprId) -> bool {

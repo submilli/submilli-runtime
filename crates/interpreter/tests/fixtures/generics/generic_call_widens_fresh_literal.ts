@@ -2,7 +2,11 @@
 // result widens, as in tsc, so the result can hold other values: `box(label)`
 // with `const label = "items"` is a `{ v: string }`. The same holds for a
 // tuple element or an object-literal property typed by a type parameter, and
-// for a type parameter several arguments share.
+// for a type parameter several arguments share, unless an earlier argument
+// already bound it to a type the literal fits: `two(mode, "off")` with
+// `mode: Mode` is a `Mode`.
+type Mode = "on" | "off";
+
 class Box<T> {
   constructor(public value: T) {}
 }
@@ -51,4 +55,9 @@ function main(): void {
   const numbers = box(n);
   numbers.v = 5;
   assert(numbers.v === 5, "a number literal");
+
+  const modes: Mode[] = ["on"];
+  const current: Mode = modes[0];
+  const mode = two(current, "off");
+  assert(mode === "on", "a literal that fits the earlier binding");
 }
