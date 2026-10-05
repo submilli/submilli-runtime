@@ -387,26 +387,28 @@ fn spread_element_type(peeled_source: &Type) -> Option<Type> {
 /// parameters must be pinned by the enclosing call — from its arguments or its
 /// expected type — rather than at the receiver in isolation.
 pub(crate) fn type_contains_type_var(ty: &Type) -> bool {
+    mentions_type_var(ty, &|_| true)
+}
+
+/// Does `ty` mention a `TypeVar` whose name `wanted` accepts?
+pub(crate) fn mentions_type_var(ty: &Type, wanted: &impl Fn(&str) -> bool) -> bool {
+    let recurse = |ty: &Type| mentions_type_var(ty, wanted);
     match ty {
-        Type::TypeVar(_) => true,
-        Type::Array(elem) | Type::Readonly(elem) => type_contains_type_var(elem),
-        Type::Tuple(elems) => elems.iter().any(type_contains_type_var),
-        Type::Function { params, ret, .. } => {
-            params.iter().any(type_contains_type_var) || type_contains_type_var(ret)
-        }
+        Type::TypeVar(name) => wanted(name),
+        Type::Array(elem) | Type::Readonly(elem) => recurse(elem),
+        Type::Tuple(elems) => elems.iter().any(recurse),
+        Type::Function { params, ret, .. } => params.iter().any(recurse) || recurse(ret),
         Type::Object { fields, index } => {
-            index
-                .as_ref()
-                .is_some_and(|i| type_contains_type_var(&i.value))
-                || fields.values().any(|f| type_contains_type_var(&f.ty))
+            index.as_ref().is_some_and(|i| recurse(&i.value))
+                || fields.values().any(|f| recurse(&f.ty))
         }
         Type::InterfaceRef { args, .. }
         | Type::ClassRef { args, .. }
-        | Type::AliasRef { args, .. } => args.iter().any(type_contains_type_var),
+        | Type::AliasRef { args, .. } => args.iter().any(recurse),
         Type::Alias {
             args, ty: inner, ..
-        } => args.iter().any(type_contains_type_var) || type_contains_type_var(inner),
-        Type::Union(members) => members.iter().any(type_contains_type_var),
+        } => args.iter().any(recurse) || recurse(inner),
+        Type::Union(members) => members.iter().any(recurse),
         _ => false,
     }
 }
@@ -548,7 +550,7 @@ impl Inferer<'_> {
             } => self.infer_call(callee, type_args, args, expected, span),
             ExprKind::Paren(inner) => return self.infer_expr(inner, expected),
             ExprKind::ObjectLiteral { members } => {
-                self.infer_object_literal(members, expected, span)
+                self.infer_object_literal(expr_id, members, expected, span)
             }
             ExprKind::ArrayLiteral { elements } => {
                 self.infer_array_literal(elements, expected, span)
@@ -4619,6 +4621,75 @@ impl Inferer<'_> {
         Ok(())
     }
 
+    /// Rejects a literal that tsc's unknown-field check skips but its weak-type
+    /// check doesn't (TS2559): one whose fields, spreads included, are all
+    /// absent from a target member whose fields are all optional, when no other
+    /// member of the target accepts it. Width subtyping alone would accept it.
+    fn report_no_field_in_common(
+        &mut self,
+        expected: Option<&Type>,
+        literal_fields: &std::collections::BTreeMap<
+            String,
+            (crate::ObjectField, crate::TypedObjectFieldSource),
+        >,
+        span: Span,
+    ) {
+        let Some(expected) = expected else {
+            return;
+        };
+        if literal_fields.is_empty() {
+            return;
+        }
+        let literal_ty = Type::Object {
+            index: None,
+            fields: literal_fields
+                .iter()
+                .map(|(name, (field, _))| (name.clone(), field.clone()))
+                .collect(),
+        };
+        let targets = match expected.peel() {
+            Type::Union(members) => members.as_slice(),
+            _ => std::slice::from_ref(expected),
+        };
+        let mut disjoint_weak = None;
+        for target in targets {
+            let is_disjoint_weak = self
+                .weak_type_fields(target)
+                .is_some_and(|weak| literal_fields.keys().all(|name| !weak.contains_key(name)));
+            if is_disjoint_weak {
+                disjoint_weak.get_or_insert(target);
+            } else if assignable(&literal_ty, target, self.resolver()) {
+                return;
+            }
+        }
+        if let Some(weak) = disjoint_weak {
+            self.error(
+                span,
+                format!("object literal has no fields in common with `{weak}`, whose fields are all optional"),
+            );
+        }
+    }
+
+    /// The fields of an object type whose fields are all optional, if `ty` is one.
+    fn weak_type_fields(&self, ty: &Type) -> Option<ObjectFields> {
+        let fields = match ty.peel() {
+            Type::Object {
+                fields,
+                index: None,
+            } => fields.clone(),
+            Type::InterfaceRef {
+                mangled,
+                name,
+                args,
+                ..
+            } if self.resolver().index_signature(ty).is_none() => {
+                self.structural_form(mangled, name, args)?
+            }
+            _ => return None,
+        };
+        (!fields.is_empty() && fields.values().all(|field| field.optional)).then_some(fields)
+    }
+
     /// The field maps of a union's object members, skipping its primitives.
     /// `None`, so nothing is checked, when there are none or a member could
     /// take any field: one with an index signature, an empty shape, or a type
@@ -4783,6 +4854,7 @@ impl Inferer<'_> {
 
     fn infer_object_literal(
         &mut self,
+        literal: ExprId,
         members: Vec<crate::ObjectLiteralMember>,
         expected: Option<&Type>,
         span: Span,
@@ -4841,9 +4913,10 @@ impl Inferer<'_> {
             }
             other => other,
         };
+        let checks_unknown_fields = !self.is_inference_source(literal);
         // Still the union only when no member was picked above, so this check
         // and the single-shape one below never both run.
-        if let Some(Type::Union(union_members)) = peeled {
+        if checks_unknown_fields && let Some(Type::Union(union_members)) = peeled {
             self.report_unknown_union_fields(union_members, &members)?;
         }
         let interface_target: Option<(crate::Package, String, crate::MangledName, Vec<Type>)> =
@@ -4868,6 +4941,7 @@ impl Inferer<'_> {
         if let Some(want) = expected_fields.as_ref()
             && expected_index.is_none()
             && !want.is_empty()
+            && checks_unknown_fields
         {
             for member in &members {
                 if let crate::ObjectLiteralMember::Field(field) = member
@@ -5116,6 +5190,10 @@ impl Inferer<'_> {
                     }
                 }
             }
+        }
+
+        if !checks_unknown_fields && spread_index_values.is_empty() {
+            self.report_no_field_in_common(expected, &merged, span);
         }
 
         // If we had an expected shape, surface missing required fields.
@@ -7206,7 +7284,7 @@ impl Inferer<'_> {
 
         let (typed_body, body_ret) = match body {
             ArrowBody::Expr(e) => {
-                let (id, t) = self.infer_expr(e, ret_hint.as_ref())?;
+                let (id, t) = self.infer_returned_value(e, ret_hint.as_ref())?;
                 self.validate_type_predicate_return(id, span)?;
                 // Re-emit the seeded regions inside the body, over a fresh read
                 // of the `const` — the closure then captures the ordinary

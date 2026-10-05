@@ -147,6 +147,7 @@ pub(super) fn with_source_inferer(source: &str, test: impl FnOnce(&mut super::In
         invalid_class_hierarchies: std::collections::BTreeSet::new(),
         current_type_predicate: None,
         inferred_returns: None,
+        inference_source_literals: std::collections::BTreeSet::new(),
         generics_in_scope: Vec::new(),
         body_instantiations: Vec::new(),
         next_generic_param_id: 0,

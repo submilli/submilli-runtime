@@ -736,9 +736,15 @@ impl Inferer<'_> {
             })
         };
         let errors_before_args = self.error_count();
+        let inferred_generics: &[String] = if type_args.is_some() {
+            &[]
+        } else {
+            &sig.generics
+        };
         let mut typed_args = self.infer_generic_arguments(
             &args,
             &sig.params,
+            inferred_generics,
             &rest_elem_ty,
             &mut sub,
             signature_help,
@@ -1007,30 +1013,45 @@ impl Inferer<'_> {
     /// checking it late can't observe a later argument's assignment, while any
     /// other argument could. A fully annotated one binds from its annotations
     /// in order, as in TypeScript.
+    ///
+    /// `inferred_generics` names the type parameters the call infers rather
+    /// than takes as written type arguments. An object literal one of them
+    /// types, when only literals are its candidates, is a source for it and
+    /// isn't checked for unknown fields ([`super::inference_sources`]).
+    ///
     /// `signature_help` renders the callee for a mismatch diagnostic.
     fn infer_generic_arguments(
         &mut self,
         args: &[ExprId],
         params: &[Param],
+        inferred_generics: &[String],
         rest_elem_ty: &Type,
         sub: &mut TypeParamSubstitution,
         signature_help: impl Fn(&mut Self) -> String,
     ) -> Result<Vec<ExprId>, CompilerFailure> {
         let has_rest = params.last().is_some_and(|p| p.rest);
         let fixed_count = params.iter().take_while(|p| !p.rest).count();
+        let args_with_param_types: Vec<(ExprId, Type)> = args
+            .iter()
+            .enumerate()
+            .map(|(i, &arg_id)| {
+                let param_ty = match params.get(i) {
+                    Some(param) if i < fixed_count => param.ty.clone(),
+                    _ if has_rest => rest_elem_ty.clone(),
+                    _ => Type::Error,
+                };
+                (arg_id, param_ty)
+            })
+            .collect();
+        let literal_inferred =
+            self.literal_inferred_type_params(&args_with_param_types, inferred_generics)?;
         let mut typed_slots: Vec<Option<ExprId>> = vec![None; args.len()];
         for deferred_pass in [false, true] {
-            for (i, &arg_id) in args.iter().enumerate() {
+            for (i, (arg_id, param_ty)) in args_with_param_types.iter().enumerate() {
+                let (arg_id, param_ty) = (*arg_id, param_ty.clone());
                 if typed_slots[i].is_some() {
                     continue;
                 }
-                let param_ty = if i < fixed_count {
-                    params[i].ty.clone()
-                } else if has_rest {
-                    rest_elem_ty.clone()
-                } else {
-                    Type::Error
-                };
                 let deferred = function_part(&param_ty).is_some()
                     && self.is_context_sensitive_function(arg_id)?;
                 if deferred && !deferred_pass {
@@ -1042,7 +1063,10 @@ impl Inferer<'_> {
                 // An oversized hint fails at the argument's own checkpoint.
                 let hint = sub.apply_or_record(&param_ty, &self.type_limits);
                 let errors_before = self.error_count();
-                let (typed_id, arg_ty) = self.infer_expr(arg_id, Some(&hint))?;
+                let (typed_id, arg_ty) =
+                    self.with_inferred_positions(arg_id, &param_ty, &literal_inferred, |this| {
+                        this.infer_expr(arg_id, Some(&hint))
+                    })?;
                 typed_slots[i] = Some(typed_id);
                 let missing_slot = i >= fixed_count && !has_rest;
                 if missing_slot || matches!(arg_ty, Type::Error) {
@@ -1215,8 +1239,15 @@ impl Inferer<'_> {
             this.generic_callee_lift(callee, &callee_ident, &generics, &params, &ret)
         };
         let errors_before_args = self.error_count();
-        let mut typed_args =
-            self.infer_generic_arguments(&args, &params, &rest_elem_ty, &mut sub, signature_help)?;
+        let inferred_generics: &[String] = if type_args_written { &[] } else { &generics };
+        let mut typed_args = self.infer_generic_arguments(
+            &args,
+            &params,
+            inferred_generics,
+            &rest_elem_ty,
+            &mut sub,
+            signature_help,
+        )?;
 
         if has_rest || typed_args.len() < params.len() {
             self.typed_ast
