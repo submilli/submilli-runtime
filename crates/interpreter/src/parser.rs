@@ -1165,9 +1165,10 @@ impl<'a> Parser<'a> {
                 self.error_at_peek("generic call signatures are not yet supported");
                 return None;
             }
+            let member_start = self.peek().span.start;
             let readonly = self.eat_readonly_property_modifier();
             if self.peek_is_parameterless_index_signature() {
-                self.skip_parameterless_index_signature()?;
+                self.skip_parameterless_index_signature(member_start)?;
                 self.finish_interface_member(self.prev_token_end())?;
                 continue;
             }
@@ -3486,11 +3487,12 @@ impl<'a> Parser<'a> {
 
     /// Diagnoses and skips a parameterless index signature (see
     /// `peek_is_parameterless_index_signature`) so the members after it still parse.
-    fn skip_parameterless_index_signature(&mut self) -> Option<()> {
-        let open = self.advance();
+    /// `member_start` is where the member begins, at a `readonly` modifier if any.
+    fn skip_parameterless_index_signature(&mut self, member_start: u32) -> Option<()> {
         self.advance();
+        let close = self.advance();
         self.error_at_with_help(
-            open.span,
+            self.span(member_start, close.span.end),
             "an index signature must declare exactly one parameter",
             vec!["write `[key: string]: V`".to_string()],
         );
@@ -3537,9 +3539,10 @@ impl<'a> Parser<'a> {
         let mut fields: Vec<TypeAnnotationField> = Vec::new();
         let mut index = None;
         while !matches!(self.peek().kind, TokenKind::RightBrace) {
+            let member_start = self.peek().span.start;
             let readonly = self.eat_readonly_property_modifier();
             if self.peek_is_parameterless_index_signature() {
-                self.skip_parameterless_index_signature()?;
+                self.skip_parameterless_index_signature(member_start)?;
             } else if self.peek_is_construct_signature() {
                 self.reject_construct_signature()?;
             } else if matches!(self.peek().kind, TokenKind::LeftBracket) {
