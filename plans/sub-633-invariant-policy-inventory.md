@@ -77,6 +77,7 @@ separate resource/dependency backlog.
 | R09 | Complete: selectively simplified | Removed duplicate decimal validation and private parse-error Result |
 | R10 | Complete: simplified | Metadata and typed_metadata return Option directly |
 | R11 | Complete: retained | Keep bounded rendering and DWARF writer/source errors |
+| R12 | Complete: simplified | 24 same-builder type lookup expectations; build failures remain fallible |
 
 ### R01 execution evidence
 
@@ -267,6 +268,22 @@ separate invariant-only public interface was identified to remove. R11 is resolv
 as retention, not a statement that formatting can never panic. Inspected rendering,
 diagnostics and DWARF code; documentation-only, no tests rerun. Three independent
 reviewers reported no findings; diff checks passed.
+
+### R12 execution evidence
+
+Checked every declaration/definition/lookup in singleton, intrinsic, error-subtype
+and Git-class builders against locked engine 0.1.9's RecGroup contract. Successful
+build preserves IDs/kinds; getters return None for a different kind. All 24 lookups
+use the same builder's handle and matching kind with no intervening mutation.
+Documented expectations replace only lookup error branches. Build, invalid layout,
+supertype, prelude/setup and other ABI failures retain fatal error propagation.
+
+Three independent reviews had no findings. Formatting, offline workspace/all-target
+Clippy, singleton failure/recovery, intrinsic/codegen compatibility and error-field
+tests passed. Required Git memory-limit suite passed two tests; optional calibration
+remained ignored. Full tests stayed disabled; only the required focused Git check
+enabled nightly bodies, using in-process transport. Graph updated with existing
+limitations. Accepted sites recorded/verified in SUB-633; this commit records R12.
 
 ## Completed fixes: candidates and decisions
 

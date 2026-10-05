@@ -26,11 +26,13 @@ pub(crate) fn singleton_struct(
         def.field(field);
     }
     def.finish();
-    builder
+    // This builder declared and defined id with this kind. Successful build
+    // preserves its ID and kind, with no intervening mutation.
+    Ok(builder
         .build()
         .map_err(fatal_host_error)?
         .get_struct(id)
-        .ok_or_else(|| fatal_host_error("singleton struct id should resolve to a struct"))
+        .expect("declared singleton struct retains its kind"))
 }
 
 pub(crate) fn singleton_array(
@@ -44,11 +46,13 @@ pub(crate) fn singleton_array(
     def.finality(finality);
     def.element(field);
     def.finish();
-    builder
+    // This builder declared and defined id with this kind. Successful build
+    // preserves its ID and kind, with no intervening mutation.
+    Ok(builder
         .build()
         .map_err(fatal_host_error)?
         .get_array(id)
-        .ok_or_else(|| fatal_host_error("singleton array id should resolve to an array"))
+        .expect("declared singleton array retains its kind"))
 }
 
 /// Declare a non-final function type with no supertype — the shape codegen emits
@@ -69,11 +73,13 @@ pub(crate) fn singleton_func(
         def.result(result);
     }
     def.finish();
-    builder
+    // This builder declared and defined id with this kind. Successful build
+    // preserves its ID and kind, with no intervening mutation.
+    Ok(builder
         .build()
         .map_err(fatal_host_error)?
         .get_func(id)
-        .ok_or_else(|| fatal_host_error("singleton func id should resolve to a func"))
+        .expect("declared singleton func retains its kind"))
 }
 
 #[cfg(test)]
