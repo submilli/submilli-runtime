@@ -5594,6 +5594,7 @@ impl Inferer<'_> {
         // Without an outside hint, an element that types itself takes no hint from
         // the elements before it, as in tsc, so they combine by type afterwards.
         let siblings_only_hint = !hint_pins_element_ty && expected_elem.is_none();
+        let mut object_literals_only = true;
         for el in elements {
             match el {
                 crate::ArrayLiteralElement::Value(elem_id) => {
@@ -5602,7 +5603,10 @@ impl Inferer<'_> {
                         .try_expr(elem_id)
                         .map_err(super::arena_failure)?
                         .span;
-                    let types_itself = self.is_fully_annotated_function(elem_id)?;
+                    let is_object_literal = is_object_literal(self.ast, elem_id)?;
+                    object_literals_only &= is_object_literal;
+                    let types_itself =
+                        is_object_literal || self.is_fully_annotated_function(elem_id)?;
                     let hint = if siblings_only_hint && types_itself {
                         None
                     } else {
@@ -5630,6 +5634,26 @@ impl Inferer<'_> {
                             // `1[]`. An annotation that pins the element type takes
                             // the `hint_pins_element_ty` path above instead.
                             element_ty = Some(elem_ty.widen_literal());
+                        }
+                        // Object literals with differing fields join as tsc's
+                        // normalized union: `[{ a: 0 }, { a: 1, b: "x" }]` holds
+                        // `{ a: number; b?: null } | { a: number; b: string }`.
+                        Some(running)
+                            if siblings_only_hint
+                                && object_literals_only
+                                && (!same_field_names(running, &elem_ty)
+                                    || !assignable(&elem_ty, running, self.resolver())) =>
+                        {
+                            match normalized_object_union(running, &elem_ty.widen_literal()) {
+                                Some(union) => element_ty = Some(union),
+                                None => self.report_array_element_mismatch(
+                                    elem_span,
+                                    running,
+                                    &elem_ty,
+                                    hint_pins_element_ty,
+                                    already_errored,
+                                ),
+                            }
                         }
                         // A later element every earlier one fits becomes the element
                         // type, as tsc's best common type: `[(x) => x, (x, y) => x * y]`
@@ -5659,6 +5683,7 @@ impl Inferer<'_> {
                     value,
                     span: spread_span,
                 } => {
+                    object_literals_only = false;
                     // A spread only reads its source, so a readonly one qualifies.
                     let source_hint = element_ty
                         .as_ref()
@@ -10085,6 +10110,14 @@ fn conditional_result_type(
 }
 
 fn branch_result_type(left: Type, right: Type, types: super::assignable::TypeResolver<'_>) -> Type {
+    // `{}` reads as none of an all-optional object's fields, so it joins with
+    // that object as the object itself, as in tsc: `t ? {} : opts` is `opts`.
+    if is_empty_object(&left) && has_only_optional_fields(&right) {
+        return right;
+    }
+    if is_empty_object(&right) && has_only_optional_fields(&left) {
+        return left;
+    }
     if matches!(left.peel(), Type::Object { .. })
         && matches!(right.peel(), Type::Object { .. })
         && left.peel() != right.peel()
@@ -10099,6 +10132,17 @@ fn branch_result_type(left: Type, right: Type, types: super::assignable::TypeRes
     }
 }
 
+fn is_empty_object(ty: &Type) -> bool {
+    matches!(ty.peel(), Type::Object { fields, index: None } if fields.is_empty())
+}
+
+fn has_only_optional_fields(ty: &Type) -> bool {
+    matches!(
+        ty.peel(),
+        Type::Object { fields, index: None } if fields.values().all(|field| field.optional)
+    )
+}
+
 /// The hint an empty array literal cast to `ty` takes its element type from: `ty`
 /// itself when it is an array, or a union's first array member, which the empty
 /// literal then satisfies as it would any other.
@@ -10110,6 +10154,135 @@ fn empty_array_cast_hint(ty: &Type) -> Option<&Type> {
             .find(|member| matches!(member.peel(), Type::Array(_))),
         _ => None,
     }
+}
+
+fn is_object_literal(ast: &crate::Ast, mut id: ExprId) -> Result<bool, CompilerFailure> {
+    loop {
+        match &ast.try_expr(id).map_err(super::arena_failure)?.kind {
+            ExprKind::Paren(inner) => id = *inner,
+            ExprKind::ObjectLiteral { .. } => return Ok(true),
+            _ => return Ok(false),
+        }
+    }
+}
+
+/// The object members of `ty`: itself, or each member of a union of objects.
+fn object_members(ty: &Type) -> Option<Vec<&Type>> {
+    match ty {
+        Type::Object { .. } => Some(vec![ty]),
+        Type::Union(members) => members
+            .iter()
+            .map(|member| matches!(member, Type::Object { .. }).then_some(member))
+            .collect(),
+        _ => None,
+    }
+}
+
+fn field_names(ty: &Type) -> std::collections::BTreeSet<&String> {
+    object_members(ty)
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|member| match member {
+            Type::Object { fields, .. } => Some(fields.keys()),
+            _ => None,
+        })
+        .flatten()
+        .collect()
+}
+
+fn same_field_names(left: &Type, right: &Type) -> bool {
+    field_names(left) == field_names(right)
+}
+
+/// tsc's normalized union of object literal types: each member gains, as an
+/// optional `null` field, every field only other members declare, so any of
+/// them reads from the union. A field that holds objects in every member that
+/// has it is normalized the same way across those objects, one level down.
+/// `None` unless both sides are index-free objects.
+fn normalized_object_union(left: &Type, right: &Type) -> Option<Type> {
+    let mut members = object_members(left)?;
+    members.extend(object_members(right)?);
+    let members = members
+        .into_iter()
+        .map(|member| match member {
+            Type::Object { fields, index: None } => Some(fields),
+            _ => None,
+        })
+        .collect::<Option<Vec<_>>>()?;
+    let all_names = members
+        .iter()
+        .flat_map(|fields| fields.keys())
+        .collect::<std::collections::BTreeSet<_>>();
+    let nested_names = all_names
+        .iter()
+        .filter_map(|name| {
+            let field_types = members
+                .iter()
+                .filter_map(|fields| fields.get(*name))
+                .filter(|field| !(field.optional && field.ty == Type::Null))
+                .map(|field| &field.ty)
+                .collect::<Vec<_>>();
+            field_types
+                .iter()
+                .all(|ty| object_members(ty).is_some())
+                .then(|| {
+                    let names = field_types
+                        .iter()
+                        .flat_map(|ty| field_names(ty))
+                        .cloned()
+                        .collect::<std::collections::BTreeSet<String>>();
+                    ((*name).clone(), names)
+                })
+        })
+        .collect::<std::collections::BTreeMap<String, _>>();
+    let normalized = members
+        .into_iter()
+        .map(|fields| {
+            let mut fields = fields.clone();
+            for (name, names) in &nested_names {
+                if let Some(field) = fields.get_mut(name) {
+                    field.ty = with_missing_fields(&field.ty, names);
+                }
+            }
+            Type::Object {
+                fields: with_missing_field_entries(fields, all_names.iter().copied()),
+                index: None,
+            }
+        })
+        .collect();
+    Some(Type::union(normalized))
+}
+
+/// Each object member of `ty` with the fields of `names` it lacks added as
+/// optional `null`.
+fn with_missing_fields(ty: &Type, names: &std::collections::BTreeSet<String>) -> Type {
+    let Some(members) = object_members(ty) else {
+        return ty.clone();
+    };
+    Type::union(
+        members
+            .into_iter()
+            .map(|member| match member {
+                Type::Object { fields, index } => Type::Object {
+                    fields: with_missing_field_entries(fields.clone(), names.iter()),
+                    index: index.clone(),
+                },
+                other => other.clone(),
+            })
+            .collect(),
+    )
+}
+
+fn with_missing_field_entries<'a>(
+    mut fields: std::collections::BTreeMap<String, crate::ObjectField>,
+    names: impl Iterator<Item = &'a String>,
+) -> std::collections::BTreeMap<String, crate::ObjectField> {
+    for name in names {
+        fields
+            .entry(name.clone())
+            .or_insert_with(|| crate::ObjectField::optional(Type::Null));
+    }
+    fields
 }
 
 fn is_empty_array_literal(ast: &crate::Ast, mut id: ExprId) -> Result<bool, CompilerFailure> {
