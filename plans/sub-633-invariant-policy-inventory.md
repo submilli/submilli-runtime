@@ -1,9 +1,9 @@
 # SUB-633: invariant policy and simplification inventory
 
 Completed inventory decisions 2026-10-05. R01–R26 and P01–P09 have final
-dispositions; T01–T06 record tracking/workflow synchronization. R25/item 32 remains
-deferred by the user, and the retained SUB-633 resource/dependency/gate backlog is
-still open. This ledger records selective simplification, not whole-commit reverts.
+dispositions; T01–T06 record tracking/workflow synchronization. R25/item 32 is
+complete within the user-confirmed panic-only scope; the retained SUB-633
+resource/dependency/gate backlog is still open. This ledger records selective simplification, not whole-commit reverts.
 The policy is [AGENTS.md](../AGENTS.md#no-panic-execution-paths).
 
 The useful rollback is selective: remove error propagation that exists only for
@@ -60,8 +60,8 @@ reinterpret a checked historical item as a promise of zero panics.
 
 Owner: Codex in this checkout. Process: one item, focused verification, independent
 clean-code/correctness/edge review, commit, then the next item. Full PR verification
-remains deferred to the repository's post-rebase gate. Item 32/R25 remains deferred
-by the user's earlier instruction; completing this ledger does not close SUB-633's
+remains deferred to the repository's post-rebase gate. Item 32/R25 is complete for
+panic review by the user's subsequent instruction; this does not close SUB-633's
 separate resource/dependency backlog.
 
 | Task | Status | Decision and evidence |
@@ -91,7 +91,7 @@ separate resource/dependency backlog.
 | R22 | Complete: retained | Keep iterative filesystem traversal; explicit sites handled individually |
 | R23 | Complete: retained | Preserve parser, closure arity and compiler limits |
 | R24 | Complete: retained | Keep real boundary errors; narrow item 31 |
-| R25 | Deferred by user | Item 32 stays open; no cancellation redesign |
+| R25 | Complete: panic-only scope | No outstanding unaccepted panic identified; broader lifecycle work outside scope |
 | R26 | Complete: retained as backlog | Keep resource/dependency backlog with proof-based scope |
 
 ### R01 execution evidence
@@ -472,6 +472,13 @@ diff checks passed.
 
 ### R25 execution evidence
 
+Current disposition (user-directed scope correction, 2026-10-05): item 32 is
+checked in SUB-633. No outstanding unaccepted panic has been identified here.
+General cancellation, shutdown cleanup and idempotency correctness are outside
+this panic-only completion criterion; no comprehensive lifecycle audit is claimed.
+This supersedes the earlier R25 deferral and references to it in T03/T06 below.
+The following paragraph preserves the original deferral history.
+
 Preserve the user's explicit deferral of item 32. `GracefulShutdownTracker::watch`
 spawns owned work; dropping its waiter does not abort the spawned request. Its
 separate stop token can cancel work during forced shutdown. This distinction is
@@ -818,7 +825,8 @@ failure. Do not infer that a whole API becomes infallible from one accepted chec
 ## Every SUB-633 numbered item
 
 The historical state below is the fetched issue state, not a new assessment of
-completion. Checked: 01–30 and 33–36. Open: 31, 32, 37–42.
+completion, except the user-directed panic-only completion of item 32 recorded
+above. Checked: 01–30 and 32–36. Open: 31, 37–42.
 
 | Item | Historical subject | State | Final review disposition / inventory |
 | --- | --- | --- | --- |
@@ -853,7 +861,7 @@ completion. Checked: 01–30 and 33–36. Open: 31, 32, 37–42.
 | 29 | Console | Checked | Poison requirement superseded; writer errors remain; R18 |
 | 30 | Poisoned caches/stores | Checked | Poison conversion requirement superseded and reversed; R18 |
 | 31 | Outer preparation/recording | Open | Narrow to concrete real failures; R24 |
-| 32 | Cleanup/idempotency | Open | Deferred by user; no new panic finding; R25 |
+| 32 | Cleanup/idempotency | Checked | Panic-only review complete; broader lifecycle correctness outside scope; R25 |
 | 33 | Diagnostics/backtraces | Checked | Keep bounded rendering; R11 |
 | 34 | LLM | Checked | Retain wire/retry/batch structure; R19/R20 |
 | 35 | MCP discovery/packs | Checked | Removed compiled-asset-only error chain; R21 |
@@ -1116,8 +1124,8 @@ Keep cleanup tests for actual supported lifecycle paths without reopening deferr
 All R and P decisions were handled individually, independently reviewed, and
 committed before continuing. Invariant-only plumbing was simplified in R02, R04,
 R08–R10, R12–R13, R15–R16 and R21; other code decisions retained useful structure or
-real failure contracts. R25 remains deferred. P01–P09 are documented accepted
-sites, not removed panics. T01–T06 synchronize current policy and tracking without
+real failure contracts. R25 is complete within panic-only scope. P01–P09 are
+documented accepted sites, not removed panics. T01–T06 synchronize current policy and tracking without
 erasing historical fixes or changing the parent's In Progress state.
 
 The remaining SUB-633 work is explicitly retained: concrete boundary/implicit
