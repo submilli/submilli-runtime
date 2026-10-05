@@ -35,7 +35,7 @@ includes a new runtime; that workflow already publishes its chart.
 - Keep Cargo versions and runtime tags unchanged. Update chart install pins and
   compatibility notes in `charts/submilli/README.md`,
   `charts/submilli/PUBLISHING.md`, and
-  `docs/part-4-server/07-deploy-on-kubernetes.md`. Read `docs-site/WRITING.md`
+  `docs/part-4-server/07-deploy-on-kubernetes.md`. Read `docs/WRITING.md`
   before book edits. Preserve historical examples and unrelated version pins.
 
 ## Verify and push

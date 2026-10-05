@@ -10,6 +10,7 @@ use axum::extract::Request;
 use axum::middleware::Next;
 use axum::response::Response;
 use interpreter::runtime::security::AuditDecision;
+use interpreter::runtime::{CallSite, EntryPath};
 use interpreter::runtime::{CheckOutcome, SecurityCheck};
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
@@ -95,15 +96,10 @@ impl AuditLog {
         }
         let mut fields = decision_fields(
             &provenance,
-            &AuditDecision {
-                caller: "main",
-                capability,
-                context: metadata,
-                allowed,
-                source: "policy",
-                rule,
-                reason,
-            },
+            &AuditDecision::new(
+                "main", capability, metadata, allowed, "policy", rule, reason,
+            )
+            .with_site(CallSite::new(None, EntryPath::FileTool)),
         );
         let Ok(context) = context(metadata) else {
             report("cannot encode server audit decision payload");
@@ -465,15 +461,15 @@ impl ExecutionAudit {
                 .and_then(|s| s.active_call.clone());
             let (caller, capability) =
                 active.unwrap_or_else(|| ("server".into(), "network.egress".into()));
-            execution.decision(AuditDecision {
-                caller: &caller,
-                capability: &capability,
-                context: &json!({"host": host}),
-                allowed: false,
-                source: "egress_guard",
-                rule: None,
-                reason: Some("outbound destination refused"),
-            });
+            execution.decision(AuditDecision::new(
+                &caller,
+                &capability,
+                &json!({"host": host}),
+                false,
+                "egress_guard",
+                None,
+                Some("outbound destination refused"),
+            ));
         })))
     }
 
@@ -740,6 +736,15 @@ impl SecurityCheck for AuditedPolicy {
     fn audit(&self, decision: AuditDecision<'_>) {
         self.execution.decision(decision);
     }
+    fn explain(
+        &self,
+        caller: &str,
+        capability: &str,
+        context: &Value,
+        cwd: &str,
+    ) -> Option<interpreter::runtime::DecisionExplanation> {
+        self.policy.explain(caller, capability, context, cwd)
+    }
 }
 
 #[derive(Clone)]
@@ -992,19 +997,69 @@ mod tests {
         let execution = ExecutionAudit::new(log, "app", "http", None);
         execution.begin();
         let payload = json!({"body": "x".repeat(1_100_000)});
-        execution.decision(AuditDecision {
-            caller: "main",
-            capability: "x/op",
-            context: &payload,
-            allowed: false,
-            source: "policy",
-            rule: None,
-            reason: Some("denied"),
-        });
+        execution.decision(AuditDecision::new(
+            "main",
+            "x/op",
+            &payload,
+            false,
+            "policy",
+            None,
+            Some("denied"),
+        ));
         execution.finish(true);
         let text = std::fs::read_to_string(path).unwrap();
         assert!(!text.contains("type=decision"));
         assert!(text.contains("event=finished"));
+    }
+
+    #[test]
+    fn decision_records_ignore_the_recorder_fields() {
+        use interpreter::runtime::{
+            DecisionAction, DecisionCause, DecisionExplanation, NearMissRecord, RuleCitation,
+            SourceLine,
+        };
+        let provenance = Map::from_iter([("execution_id".to_owned(), json!("e1"))]);
+        let context = json!({"host": "example.test"});
+        let plain = AuditDecision::new(
+            "pkg",
+            "http.get",
+            &context,
+            false,
+            "policy",
+            Some(2),
+            Some("denied"),
+        );
+        let explanation = DecisionExplanation {
+            action: DecisionAction::AskHuman,
+            cause: DecisionCause::Rule(RuleCitation {
+                caller: "pkg".into(),
+                index: 2,
+                name: Some("named".into()),
+            }),
+            near_misses: Vec::<NearMissRecord>::new(),
+        };
+        let ticket = interpreter::runtime::CallTicket {
+            call_index: 9,
+            seq: 4,
+            at_micros: 77,
+            line: Some(SourceLine {
+                line: 3,
+                column: Some(1),
+            }),
+        };
+        let enriched = plain
+            .with_explanation(Some(&explanation))
+            .with_site(CallSite::new(
+                Some(ticket),
+                EntryPath::RedirectHop {
+                    parent_call_index: 8,
+                    index: 0,
+                },
+            ));
+        assert_eq!(
+            serde_json::to_string(&decision_fields(&provenance, &plain)).unwrap(),
+            serde_json::to_string(&decision_fields(&provenance, &enriched)).unwrap(),
+        );
     }
 
     #[test]
@@ -1119,15 +1174,15 @@ mod tests {
         let execution = ExecutionAudit::new(log, "app", "http", None);
         execution.begin();
         for rule in 0..1030 {
-            execution.decision(AuditDecision {
-                caller: "pkg",
-                capability: "fs.read",
-                context: &json!({"path": "/a"}),
-                allowed: true,
-                source: "policy",
-                rule: Some(rule),
-                reason: None,
-            });
+            execution.decision(AuditDecision::new(
+                "pkg",
+                "fs.read",
+                &json!({"path": "/a"}),
+                true,
+                "policy",
+                Some(rule),
+                None,
+            ));
         }
         assert_eq!(execution.state.lock().unwrap().summaries.len(), 1024);
         execution.finish(true);
@@ -1142,15 +1197,15 @@ mod tests {
         let execution = ExecutionAudit::new(log, "app", "http", None);
         execution.begin();
         for index in 0..10 {
-            execution.decision(AuditDecision {
-                caller: "pkg",
-                capability: "security.check",
-                context: &json!({"index": index, "text": "\n".repeat(50_000)}),
-                allowed: true,
-                source: "policy",
-                rule: Some(0),
-                reason: None,
-            });
+            execution.decision(AuditDecision::new(
+                "pkg",
+                "security.check",
+                &json!({"index": index, "text": "\n".repeat(50_000)}),
+                true,
+                "policy",
+                Some(0),
+                None,
+            ));
         }
         execution.finish(true);
         let text = std::fs::read_to_string(path).unwrap();
@@ -1177,15 +1232,15 @@ mod tests {
         let execution = ExecutionAudit::new(log, "app", "http", None);
         execution.begin();
         for index in 0..11 {
-            execution.decision(AuditDecision {
-                caller: "pkg",
-                capability: "security.check",
-                context: &json!({"index": index}),
-                allowed: true,
-                source: "policy",
-                rule: Some(0),
-                reason: None,
-            });
+            execution.decision(AuditDecision::new(
+                "pkg",
+                "security.check",
+                &json!({"index": index}),
+                true,
+                "policy",
+                Some(0),
+                None,
+            ));
         }
         execution.finish(true);
         let text = std::fs::read_to_string(path).unwrap();

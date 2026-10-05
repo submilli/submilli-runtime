@@ -4,8 +4,8 @@ use std::future::Future;
 use std::pin::Pin;
 
 use wasmtime::{
-    AnyRef, ArrayRef, ArrayRefPre, ArrayType, AsContextMut, Caller, Engine, FieldType, FuncType,
-    Global, HeapType, Linker, Mutability, RefType, Rooted, StorageType, Store, StructRef,
+    AnyRef, ArrayRef, ArrayRefPre, ArrayType, AsContext, AsContextMut, Caller, Engine, FieldType,
+    FuncType, Global, HeapType, Linker, Mutability, RefType, Rooted, StorageType, Store, StructRef,
     StructRefPre, StructType, Val, ValType,
 };
 
@@ -1143,11 +1143,12 @@ pub struct PermissionDenied {
     source: DenialSource,
 }
 
-/// Which layer refused. Private, and absent from the guest ABI: the guest sees
-/// `caller`/`capability`/`reason` as before, and this only selects the closing
-/// paragraph of the rendered message.
-#[derive(Debug, Clone, Copy)]
-enum DenialSource {
+/// Which layer refused. Absent from the guest ABI: the guest sees
+/// `caller`/`capability`/`reason` as before. It selects the closing paragraph of
+/// the rendered message and, for a denial that escapes the program, the
+/// `source` the embedder reports.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DenialSource {
     /// The operator's configured policy said no.
     Policy,
     /// A runtime invariant refused ahead of the policy. No rule can grant it,
@@ -1158,7 +1159,87 @@ enum DenialSource {
     ReadOnly,
 }
 
+/// A denial the runtime threw that escaped the program, as the embedder sees it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Denial {
+    pub caller: String,
+    pub capability: String,
+    pub source: DenialSource,
+}
+
+impl DenialSource {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Policy => "policy",
+            Self::Invariant => "invariant",
+            Self::ReadOnly => "read_only",
+        }
+    }
+}
+
+/// The denials the runtime itself threw, keyed by the generation-stamped handle
+/// of the thrown `$Error`. A program-constructed `PermissionDeniedError` is
+/// never entered, so it can be told apart from a real denial when it escapes.
+#[derive(Default)]
+pub(crate) struct ThrownDenials {
+    entries: std::collections::VecDeque<(Rooted<StructRef>, Denial)>,
+}
+
+/// Bound on the table. Past it the oldest entries go, so at worst an old
+/// caught-and-rethrown denial escapes as an ordinary runtime error.
+const MAX_THROWN_DENIALS: usize = 64;
+
+impl ThrownDenials {
+    /// Drops entries whose object was collected, then adds `denial`.
+    fn record(&mut self, store: impl AsContext, handle: Rooted<StructRef>, denial: Denial) {
+        self.entries.retain(|(entry, _)| entry.ty(&store).is_ok());
+        if self.entries.len() >= MAX_THROWN_DENIALS {
+            self.entries.pop_front();
+        }
+        self.entries.push_back((handle, denial));
+    }
+
+    /// The denial whose thrown object is `thrown`. An entry matches only when
+    /// its generation check still succeeds: a collected object's slot may now
+    /// hold a program-built error with the same index.
+    pub(crate) fn find(
+        &mut self,
+        store: impl AsContext,
+        thrown: &Rooted<AnyRef>,
+    ) -> Option<Denial> {
+        self.entries.retain(|(entry, _)| entry.ty(&store).is_ok());
+        self.entries
+            .iter()
+            .find(|(entry, _)| Rooted::ref_eq(&store, entry, thrown).unwrap_or(false))
+            .map(|(_, denial)| denial.clone())
+    }
+}
+
+/// Runs `f` on the store's denial table with the store readable alongside it.
+///
+/// Both [`ThrownDenials::record`] and [`ThrownDenials::find`] check handles against the
+/// store, which cannot be borrowed while the table inside its data is. The table is moved
+/// out for the call and put back here, so no caller can lose it on an early return.
+pub(crate) fn with_thrown_denials<T: AsContextMut<Data = StoreData>, R>(
+    store: &mut T,
+    f: impl FnOnce(&mut ThrownDenials, &T) -> R,
+) -> R {
+    let mut table = std::mem::take(&mut store.as_context_mut().data_mut().thrown_denials);
+    let result = f(&mut table, store);
+    store.as_context_mut().data_mut().thrown_denials = table;
+    result
+}
+
 impl PermissionDenied {
+    /// The fields an embedder reports when this denial escapes the program.
+    fn denial(&self) -> Denial {
+        Denial {
+            caller: self.caller.clone(),
+            capability: self.capability.clone(),
+            source: self.source,
+        }
+    }
+
     /// Whether the operator's policy refused, as opposed to a runtime invariant
     /// refusing ahead of it. A caller that treats a denial as a filter rather
     /// than an error — `session.list` omitting keys the policy hides — must act
@@ -1404,7 +1485,10 @@ pub(crate) fn throw_host_error(
     }
     let class = builtin_class_of(&err);
     let own = own_field_texts(&err);
-    throw_error_as(caller, class, &err.to_string(), &own)
+    let denial = err
+        .downcast_ref::<PermissionDenied>()
+        .map(PermissionDenied::denial);
+    throw_error_with(caller, class, &err.to_string(), &own, denial)
 }
 
 /// Whether `err` must reach the embedder as it is instead of becoming a guest
@@ -1424,7 +1508,18 @@ fn throw_error_as(
     message: &str,
     own_fields: &[&str],
 ) -> wasmtime::Error {
-    match throw_error_inner(caller, class, message, own_fields) {
+    throw_error_with(caller, class, message, own_fields, None)
+}
+
+/// [`throw_error_as`], also remembering `denial` against the thrown object.
+fn throw_error_with(
+    caller: &mut Caller<'_, StoreData>,
+    class: super::prelude::error::BuiltinErrorClass,
+    message: &str,
+    own_fields: &[&str],
+    denial: Option<Denial>,
+) -> wasmtime::Error {
+    match throw_error_inner(caller, class, message, own_fields, denial) {
         Ok(err) => err,
         // The error could not be built because the run is out of memory, which
         // ends the run as such rather than as a host failure.
@@ -1438,6 +1533,7 @@ fn throw_error_inner(
     class: super::prelude::error::BuiltinErrorClass,
     message: &str,
     own_fields: &[&str],
+    denial: Option<Denial>,
 ) -> wasmtime::Result<wasmtime::Error> {
     let tag = caller
         .data()
@@ -1445,12 +1541,21 @@ fn throw_error_inner(
         .as_ref()
         .ok_or_else(|| wasmtime::Error::msg("host_abi unset (prelude not instantiated)"))?
         .error_tag;
-    let error = super::prelude::error::construct_from_message(caller, class, message, own_fields)?;
+    let error_struct =
+        super::prelude::error::construct_from_message(caller, class, message, own_fields)?;
+    let error = Val::AnyRef(Some(error_struct.to_anyref()));
     let exn_ty = wasmtime::ExnType::from_tag_type(&tag.ty(&*caller))?;
     let pre = wasmtime::ExnRefPre::new(&mut *caller, exn_ty);
     let exn = wasmtime::ExnRef::new(&mut *caller, &pre, &tag, &[error])?;
     match caller.as_context_mut().throw::<()>(exn) {
-        Err(thrown) => Ok(wasmtime::Error::new(thrown)),
+        Err(thrown) => {
+            if let Some(denial) = denial {
+                with_thrown_denials(caller, |table, store| {
+                    table.record(store, error_struct, denial);
+                });
+            }
+            Ok(wasmtime::Error::new(thrown))
+        }
         // `throw` always returns the pending-exception error.
         Ok(()) => Err(fatal_host_error(
             "engine did not return its pending-exception error",
@@ -1677,6 +1782,78 @@ mod tests {
             &[Val::I64(0)],
         )
         .unwrap();
+    }
+
+    fn denial(capability: &str) -> Denial {
+        Denial {
+            caller: "main".into(),
+            capability: capability.into(),
+            source: DenialSource::Policy,
+        }
+    }
+
+    /// A lookup matches only the very object the runtime threw. After the
+    /// collector reclaims that object, a later allocation can take over its
+    /// slot, and the stale entry must not vouch for it.
+    #[test]
+    fn a_collected_denial_never_matches_a_later_object() {
+        let (engine, mut store, _) = async_store();
+        let ty = StructType::new(
+            &engine,
+            [FieldType::new(Mutability::Const, StorageType::I8)],
+        )
+        .expect("struct type");
+        let pre = StructRefPre::new(&mut store, ty);
+        let mut denials = ThrownDenials::default();
+
+        let thrown = {
+            let mut scope = wasmtime::RootScope::new(&mut store);
+            let thrown = wasmtime::StructRef::new(&mut scope, &pre, &[Val::I32(1)]).expect("alloc");
+            denials.record(&scope, thrown, denial("fs.read"));
+            let found = denials.find(&scope, &thrown.to_anyref());
+            assert_eq!(found.map(|d| d.capability), Some("fs.read".to_string()));
+            thrown.to_anyref()
+        };
+        store.gc();
+
+        let mut scope = wasmtime::RootScope::new(&mut store);
+        let forged = wasmtime::StructRef::new(&mut scope, &pre, &[Val::I32(2)]).expect("alloc");
+        assert!(
+            denials.find(&scope, &forged.to_anyref()).is_none(),
+            "a program-built error is not a runtime denial"
+        );
+        assert!(
+            denials.find(&scope, &thrown).is_none(),
+            "the collected denial's entry is dropped"
+        );
+        assert!(denials.entries.is_empty());
+    }
+
+    #[test]
+    fn the_denial_table_drops_its_oldest_entries_past_the_cap() {
+        let (engine, mut store, _) = async_store();
+        let ty = StructType::new(
+            &engine,
+            [FieldType::new(Mutability::Const, StorageType::I8)],
+        )
+        .expect("struct type");
+        let pre = StructRefPre::new(&mut store, ty);
+        let mut denials = ThrownDenials::default();
+        let mut scope = wasmtime::RootScope::new(&mut store);
+        let mut thrown = Vec::new();
+        for i in 0..=MAX_THROWN_DENIALS {
+            let object =
+                wasmtime::StructRef::new(&mut scope, &pre, &[Val::I32(i as i32)]).expect("alloc");
+            denials.record(&scope, object, denial(&format!("cap.{i}")));
+            thrown.push(object.to_anyref());
+        }
+        assert_eq!(denials.entries.len(), MAX_THROWN_DENIALS);
+        assert!(denials.find(&scope, &thrown[0]).is_none(), "oldest dropped");
+        let newest = denials.find(&scope, &thrown[MAX_THROWN_DENIALS]);
+        assert_eq!(
+            newest.map(|d| d.capability),
+            Some(format!("cap.{MAX_THROWN_DENIALS}"))
+        );
     }
 
     #[tokio::test]

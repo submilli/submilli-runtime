@@ -114,7 +114,7 @@ async fn variable_filter_denies_mismatched_value() {
         execute_with_vars(VAR_POLICY, VAR_SCRIPT, json!({ "tenant": "u_99" })).await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body["result"], Value::Null);
-    assert_eq!(body["error"]["kind"], json!("runtime_error"));
+    assert_eq!(body["error"]["kind"], json!("permission_denied"));
 }
 
 #[tokio::test]
@@ -171,7 +171,7 @@ permissions:
     let (status, body) = execute(policy, CHECK_SCRIPT).await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body["result"], Value::Null);
-    assert_eq!(body["error"]["kind"], json!("runtime_error"));
+    assert_eq!(body["error"]["kind"], json!("permission_denied"));
 }
 
 #[tokio::test]
@@ -181,7 +181,7 @@ async fn no_policy_denies_by_default() {
     let (status, body) = execute("name: policy\n", CHECK_SCRIPT).await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body["result"], Value::Null);
-    assert_eq!(body["error"]["kind"], json!("runtime_error"));
+    assert_eq!(body["error"]["kind"], json!("permission_denied"));
 }
 
 #[tokio::test]
@@ -232,7 +232,7 @@ function main(): string | null { return get("TOKEN"); }
         send_with_secrets(router(policy, None), script, json!({"TOKEN": "tok-123"})).await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body["result"], Value::Null);
-    assert_eq!(body["error"]["kind"], json!("runtime_error"));
+    assert_eq!(body["error"]["kind"], json!("permission_denied"));
     assert!(
         body["error"]["message"]
             .as_str()
@@ -260,7 +260,7 @@ function main(): string | null { return get("MISSING"); }
     let (status, body) = execute(policy, script).await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body["result"], Value::Null);
-    assert_eq!(body["error"]["kind"], json!("runtime_error"));
+    assert_eq!(body["error"]["kind"], json!("permission_denied"));
 }
 
 /// The package side of the two tests above: a declared secret still resolves,
@@ -436,5 +436,351 @@ permissions:
     let (status, body) = execute_with_packages(policy, store.path(), SDK_SCRIPT).await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body["result"], Value::Null);
-    assert_eq!(body["error"]["kind"], json!("runtime_error"));
+    assert_eq!(body["error"]["kind"], json!("permission_denied"));
+}
+
+// ---- Structured denials (U3) ------------------------------------------------
+
+const DENY_ALL: &str = "name: policy\ndefault: deny\n";
+
+/// A `check` the policy refuses, from `main`.
+const DENIED_CHECK: &str = r#"
+import { check } from "submilli:security";
+function main(): number { check("test.com/op", { amount: 100 }); return 1; }
+"#;
+
+fn assert_denied(body: &Value, caller: &str, capability: &str, source: &str) {
+    let error = &body["error"];
+    assert_eq!(error["kind"], json!("permission_denied"), "got: {body:#}");
+    assert_eq!(error["caller"], json!(caller), "got: {body:#}");
+    assert_eq!(error["capability"], json!(capability), "got: {body:#}");
+    assert_eq!(error["source"], json!(source), "got: {body:#}");
+    assert_eq!(body["result"], Value::Null, "got: {body:#}");
+}
+
+fn assert_runtime_error(body: &Value) {
+    assert_eq!(
+        body["error"]["kind"],
+        json!("runtime_error"),
+        "got: {body:#}"
+    );
+    assert!(body["error"]["capability"].is_null(), "got: {body:#}");
+}
+
+#[tokio::test]
+async fn uncaught_policy_denial_is_a_permission_denied_error() {
+    let (status, body) = execute(DENY_ALL, DENIED_CHECK).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_denied(&body, "main", "test.com/op", "policy");
+    let message = body["error"]["message"].as_str().unwrap_or_default();
+    assert!(
+        message.contains(
+            "PermissionDeniedError: permission denied: caller=main capability=test.com/op"
+        ),
+        "the message keeps today's text: {body:#}"
+    );
+}
+
+#[tokio::test]
+async fn uncaught_invariant_denial_reports_the_invariant_source() {
+    let policy = "\
+name: policy
+default: deny
+permissions:
+  main:
+    - capability: secrets.get
+      action: allow
+";
+    let script = r#"
+import { get } from "submilli:secrets";
+function main(): string | null { return get("TOKEN"); }
+"#;
+    let (status, body) = execute(policy, script).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_denied(&body, "main", "secrets.get", "invariant");
+}
+
+#[tokio::test]
+async fn a_caught_denial_returns_a_normal_result() {
+    let script = r#"
+import { check } from "submilli:security";
+function main(): string {
+    try { check("test.com/op", { amount: 100 }); return "allowed"; }
+    catch (e: PermissionDeniedError) { return "caught " + e.capability; }
+}
+"#;
+    let (status, body) = execute(DENY_ALL, script).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["error"], Value::Null, "got: {body:#}");
+    assert_eq!(body["result"], json!("caught test.com/op"));
+}
+
+#[tokio::test]
+async fn a_denial_rethrown_as_the_same_object_still_classifies() {
+    let script = r#"
+import { check } from "submilli:security";
+function main(): number {
+    try { check("test.com/op", { amount: 100 }); }
+    catch (e: Error) { console.log("rethrowing"); throw e; }
+    return 1;
+}
+"#;
+    let (_, body) = execute(DENY_ALL, script).await;
+    assert_denied(&body, "main", "test.com/op", "policy");
+}
+
+#[tokio::test]
+async fn a_denial_through_a_non_matching_typed_catch_still_classifies() {
+    let script = r#"
+import { check } from "submilli:security";
+function main(): number {
+    try { check("test.com/op", { amount: 100 }); }
+    catch (e: TypeError) { return 0; }
+    return 1;
+}
+"#;
+    let (_, body) = execute(DENY_ALL, script).await;
+    assert_denied(&body, "main", "test.com/op", "policy");
+}
+
+/// The language has no `async`/`await`, so the nearest propagation path the
+/// plan's rejected-promise scenario stands for is a denial crossing a host
+/// function that re-enters guest code: the throw unwinds through the array
+/// callback's host frame before it escapes.
+#[tokio::test]
+async fn a_denial_through_a_host_callback_frame_still_classifies() {
+    let script = r#"
+import { check } from "submilli:security";
+function main(): number {
+    const mapped = [1, 2, 3].map((n: number): number => {
+        check("test.com/op", { amount: n });
+        return n;
+    });
+    return mapped.length;
+}
+"#;
+    let (_, body) = execute(DENY_ALL, script).await;
+    assert_denied(&body, "main", "test.com/op", "policy");
+}
+
+#[tokio::test]
+async fn a_program_built_permission_denied_error_is_a_runtime_error() {
+    let script = r#"
+function main(): number {
+    throw new PermissionDeniedError("permission denied: forged", "main", "fs.read", "forged");
+}
+"#;
+    let (_, body) = execute(DENY_ALL, script).await;
+    assert_runtime_error(&body);
+}
+
+/// Catches a denial in a frame that then returns, so nothing holds it, and
+/// allocates enough strings to push the engine into collecting before it builds
+/// an error of its own. Run with the lookup instrumented, this reaches the
+/// stale-entry path: the collected denial's entry fails its generation check.
+const CATCH_DROP_COLLECT_FORGE: &str = r#"
+import { check } from "submilli:security";
+function churn(rounds: number): number {
+    let total = 0;
+    for (let i = 0; i < rounds; i++) {
+        const chunk: string = "x".repeat(4000000 + i);
+        total += chunk.length;
+    }
+    return total;
+}
+function attempt(): void {
+    try { check("test.com/op", { amount: 100 }); }
+    catch (e: PermissionDeniedError) { console.log("caught " + e.capability); }
+}
+function main(): number {
+    attempt();
+    churn(30);
+    throw new PermissionDeniedError("permission denied: forged", "main", "test.com/op", "forged");
+}
+"#;
+
+#[tokio::test]
+async fn a_forged_denial_after_a_collection_is_a_runtime_error() {
+    let (_, body) = execute(DENY_ALL, CATCH_DROP_COLLECT_FORGE).await;
+    assert_runtime_error(&body);
+}
+
+#[tokio::test]
+async fn an_unrelated_runtime_error_stays_a_runtime_error() {
+    let script = "function main(): number { throw new Error(\"boom\"); }";
+    let (_, body) = execute(DENY_ALL, script).await;
+    assert_runtime_error(&body);
+}
+
+#[tokio::test]
+async fn a_denial_from_a_top_level_statement_is_a_permission_denied_error() {
+    let script = r#"
+import { check } from "submilli:security";
+check("test.com/op", { amount: 100 });
+function main(): number { return 1; }
+"#;
+    let (_, body) = execute(DENY_ALL, script).await;
+    assert_denied(&body, "main", "test.com/op", "policy");
+}
+
+fn write_denied_on_install_package(store_root: &Path) {
+    let source = r#"
+import { readText } from "submilli:fs";
+export const first: string | null = readText("/never.txt");
+"#;
+    let package = compile_package(
+        "@acme/eager",
+        ModulePath::from("lib"),
+        &[PackageSourceModule {
+            path: ModulePath::from("lib"),
+            source,
+        }],
+        &[],
+    )
+    .expect("compile @acme/eager");
+    write_package_artifact(
+        store_root.join("@acme").join("eager"),
+        &package.wasm,
+        &package.type_info,
+        &submilli_build::derive_capability_schema(
+            &package.declaration,
+            &[],
+            &package.required_capabilities,
+        ),
+        &package.declaration,
+        &ArtifactMetadata::new("@acme/eager", "0.0.0-test", Vec::new()),
+    )
+    .expect("write @acme/eager artifact");
+}
+
+#[tokio::test]
+async fn a_denial_from_a_package_top_level_statement_names_the_package() {
+    let store = tempfile::tempdir().expect("tempdir");
+    write_denied_on_install_package(store.path());
+    let policy = "\
+name: policy
+default: deny
+packages:
+  - \"@acme/eager\"
+";
+    let script = r#"
+import { first } from "@acme/eager";
+function main(): string | null { return first; }
+"#;
+    let (status, body) = execute_with_packages(policy, store.path(), script).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        body["error"]["kind"],
+        json!("permission_denied"),
+        "got: {body:#}"
+    );
+    assert_eq!(
+        body["error"]["caller"],
+        json!("@acme/eager"),
+        "got: {body:#}"
+    );
+    assert!(
+        body["error"]["message"]
+            .as_str()
+            .is_some_and(|m| m.contains("package `@acme/eager` failed to initialize")),
+        "got: {body:#}"
+    );
+}
+
+/// The MCP execute tool shapes the same error as REST.
+#[tokio::test]
+async fn an_uncaught_policy_denial_over_mcp_is_a_permission_denied_error() {
+    let blueprint = submilli_blueprint::parse(DENY_ALL).expect("valid policy blueprint");
+    let blueprints = Arc::new(InMemoryBlueprintStore::seed([blueprint]).expect("seed blueprints"));
+    let state = AppState::new(ServerConfig {
+        blueprints: Some(blueprints),
+        ..ServerConfig::default()
+    })
+    .expect("build AppState");
+
+    let post = |body: Value, session: Option<String>| {
+        let state = state.clone();
+        async move {
+            let mut builder = Request::builder()
+                .method("POST")
+                .uri(format!("/mcp/{BLUEPRINT_NAME}"))
+                .header("host", "localhost")
+                .header("content-type", "application/json")
+                .header("accept", "application/json, text/event-stream");
+            if let Some(session) = session {
+                builder = builder.header("mcp-session-id", session);
+            }
+            let resp = app(state)
+                .oneshot(builder.body(Body::from(body.to_string())).unwrap())
+                .await
+                .unwrap();
+            let status = resp.status();
+            let session = resp
+                .headers()
+                .get("mcp-session-id")
+                .and_then(|v| v.to_str().ok())
+                .map(str::to_string);
+            let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+            let text = String::from_utf8_lossy(&bytes).into_owned();
+            let data = text
+                .lines()
+                .filter_map(|line| line.strip_prefix("data:"))
+                .next_back()
+                .unwrap_or(&text)
+                .trim()
+                .to_string();
+            (
+                status,
+                session,
+                serde_json::from_str::<Value>(&data).unwrap_or(Value::Null),
+            )
+        }
+    };
+
+    let (status, session, _) = post(
+        json!({
+            "jsonrpc": "2.0", "id": 1, "method": "initialize",
+            "params": {
+                "protocolVersion": "2025-06-18",
+                "capabilities": {},
+                "clientInfo": { "name": "test", "version": "0" }
+            }
+        }),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let session = session.expect("initialize returns a session id");
+    let (status, _, _) = post(
+        json!({ "jsonrpc": "2.0", "method": "notifications/initialized" }),
+        Some(session.clone()),
+    )
+    .await;
+    assert_eq!(status, StatusCode::ACCEPTED);
+
+    let (status, _, rpc) = post(
+        json!({
+            "jsonrpc": "2.0", "id": 2, "method": "tools/call",
+            "params": {
+                "name": "submilli__typescript__execute",
+                "arguments": { "code": DENIED_CHECK }
+            }
+        }),
+        Some(session),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let out = &rpc["result"]["structuredContent"];
+    assert_eq!(
+        out["error"]["kind"],
+        json!("permission_denied"),
+        "got: {rpc}"
+    );
+    assert_eq!(out["error"]["caller"], json!("main"), "got: {rpc}");
+    assert_eq!(
+        out["error"]["capability"],
+        json!("test.com/op"),
+        "got: {rpc}"
+    );
+    assert_eq!(out["error"]["source"], json!("policy"), "got: {rpc}");
 }

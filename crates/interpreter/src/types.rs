@@ -792,31 +792,6 @@ impl Type {
     }
 }
 
-/// Writes the `(…)` of a function type with synthesized `arg{i}` parameter
-/// names. A `Type::Function` carries no names, but the type grammar requires one
-/// per position, so a nameless rendering does not re-parse — and a diagnostic
-/// exists to be turned into an edit. The names match what `packages::ts_type`
-/// emits into the generated `.d.ts`; they are not part of a function type's
-/// identity, so inventing them costs nothing.
-pub(crate) fn write_synthetic_params(
-    out: &mut impl fmt::Write,
-    params: &[Type],
-    has_rest: bool,
-) -> fmt::Result {
-    out.write_str("(")?;
-    let last_idx = params.len().saturating_sub(1);
-    for (i, p) in params.iter().enumerate() {
-        if i > 0 {
-            out.write_str(", ")?;
-        }
-        if has_rest && i == last_idx {
-            out.write_str("...")?;
-        }
-        write!(out, "arg{i}: {p}")?;
-    }
-    out.write_str(")")
-}
-
 /// `s` escaped for a double-quoted string the way `tsc` prints a string literal
 /// type (`escapeString` in TypeScript's `utilities.ts`): `"G\"HI"`, `"a\nb"`.
 pub(crate) fn escape_string_literal(s: &str) -> String {
@@ -862,137 +837,20 @@ fn fold_boolean_literals(members: &mut Vec<Type>) {
     }
 }
 
+impl Type {
+    pub fn render_checked(
+        &self,
+        limits: crate::rendering::RenderLimits,
+    ) -> Result<crate::rendering::RenderedText, crate::rendering::RenderError> {
+        crate::type_rendering::render(self, limits)
+    }
+}
+
 impl fmt::Display for Type {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Type::Number => f.write_str("number"),
-            Type::BigInt => f.write_str("bigint"),
-            Type::NumberLiteral(LiteralF64(v)) => {
-                f.write_str(&crate::runtime::number::format_number_js(*v))
-            }
-            Type::String => f.write_str("string"),
-            Type::StringLiteral(s) => write!(f, "\"{}\"", escape_string_literal(s)),
-            Type::Uint8Array => f.write_str("Uint8Array"),
-            Type::Boolean => f.write_str("boolean"),
-            Type::BooleanLiteral(value) => write!(f, "{value}"),
-            Type::Null => f.write_str("null"),
-            Type::Void => f.write_str("void"),
-            Type::Unknown => f.write_str("unknown"),
-            Type::Function {
-                params,
-                ret,
-                has_rest,
-                ..
-            } => {
-                write_synthetic_params(f, params, *has_rest)?;
-                write!(f, " => {ret}")
-            }
-            Type::Object { fields, index } => {
-                if fields.is_empty() && index.is_none() {
-                    return f.write_str("{}");
-                }
-                f.write_str("{ ")?;
-                for (i, (name, field)) in fields.iter().enumerate() {
-                    if i > 0 {
-                        f.write_str("; ")?;
-                    }
-                    let marker = if field.optional { "?" } else { "" };
-                    write!(f, "{}{}: {}", name, marker, field.ty)?;
-                }
-                if let Some(index) = index {
-                    if !fields.is_empty() {
-                        f.write_str("; ")?;
-                    }
-                    let readonly = if index.readonly { "readonly " } else { "" };
-                    write!(f, "{readonly}[key: string]: {}", index.value)?;
-                }
-                f.write_str(" }")
-            }
-            // `T[]` binds tighter than `|` and than a function type's arrow, so an
-            // element of either shape has to be parenthesised or the rendering
-            // re-parses as a different type.
-            Type::Array(elem) => match &**elem {
-                Type::Union(_) | Type::Function { .. } | Type::Readonly(_) => {
-                    write!(f, "({elem})[]")
-                }
-                _ => write!(f, "{elem}[]"),
-            },
-            Type::Readonly(inner) => write!(f, "readonly {inner}"),
-            Type::Tuple(elements) => {
-                f.write_str("[")?;
-                for (i, t) in elements.iter().enumerate() {
-                    if i > 0 {
-                        f.write_str(", ")?;
-                    }
-                    write!(f, "{t}")?;
-                }
-                f.write_str("]")
-            }
-            Type::Error => f.write_str("<error>"),
-            Type::Never => f.write_str("never"),
-            Type::TypeVar(name) => f.write_str(name),
-            Type::GenericParam { name, .. } => f.write_str(name),
-            Type::Refined { original, ty } => write!(f, "{original} & {ty}"),
-            Type::InterfaceRef { name, args, .. } | Type::ClassRef { name, args, .. } => {
-                f.write_str(name)?;
-                if !args.is_empty() {
-                    f.write_str("<")?;
-                    for (i, a) in args.iter().enumerate() {
-                        if i > 0 {
-                            f.write_str(", ")?;
-                        }
-                        write!(f, "{a}")?;
-                    }
-                    f.write_str(">")?;
-                }
-                Ok(())
-            }
-            Type::NumberEnum { name, .. } | Type::StringEnum { name, .. } => f.write_str(name),
-            Type::Alias { name, args, .. } => {
-                f.write_str(name)?;
-                if !args.is_empty() {
-                    f.write_str("<")?;
-                    for (i, a) in args.iter().enumerate() {
-                        if i > 0 {
-                            f.write_str(", ")?;
-                        }
-                        write!(f, "{a}")?;
-                    }
-                    f.write_str(">")?;
-                }
-                Ok(())
-            }
-            // AliasRef renders by name like `Alias` / `InterfaceRef` —
-            // it only appears at a recursion back-edge, where the name
-            // is exactly what a reader wants to see.
-            Type::AliasRef { name, args, .. } => {
-                f.write_str(name)?;
-                if !args.is_empty() {
-                    f.write_str("<")?;
-                    for (i, a) in args.iter().enumerate() {
-                        if i > 0 {
-                            f.write_str(", ")?;
-                        }
-                        write!(f, "{a}")?;
-                    }
-                    f.write_str(">")?;
-                }
-                Ok(())
-            }
-            Type::Union(members) => {
-                for (i, m) in members.iter().enumerate() {
-                    if i > 0 {
-                        f.write_str(" | ")?;
-                    }
-                    // Parenthesise so the return type doesn't greedily absorb the trailing union.
-                    if matches!(m, Type::Function { .. }) {
-                        write!(f, "({m})")?;
-                    } else {
-                        write!(f, "{m}")?;
-                    }
-                }
-                Ok(())
-            }
+        match self.render_checked(crate::rendering::RenderLimits::default()) {
+            Ok(rendered) => f.write_str(&rendered.text),
+            Err(_) => f.write_str("[diagnostic type unavailable]"),
         }
     }
 }

@@ -21,6 +21,7 @@ async fn spawn_server() -> String {
     let rules = ["session.read", "session.write"]
         .into_iter()
         .map(|capability| PermissionRule {
+            name: None,
             capability: capability.into(),
             filter: None,
             action: Action::Allow,

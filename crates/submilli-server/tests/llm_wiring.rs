@@ -63,6 +63,7 @@ fn allow_llm() -> BTreeMap<String, Vec<PermissionRule>> {
     BTreeMap::from([(
         "main".to_string(),
         vec![PermissionRule {
+            name: None,
             capability: "llm.call".into(),
             filter: None,
             action: Action::Allow,

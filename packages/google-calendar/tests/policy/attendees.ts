@@ -61,7 +61,7 @@ function meeting(attendees: Attendee[], sendUpdates: string | null): EventCreate
     return input;
 }
 
-function attendeeRuleHolds(capability: string, call: (attendees: Attendee[], sendUpdates: string | null) => void): void {
+function attendeeRuleHolds(capability: string, call: (attendees: Attendee[], sendUpdates: string | null) => void, readsCurrentAttendees: boolean = false): void {
     reachesCredentialBoundary(() => { call([{ email: "allowed@example.com" }, { email: "second@example.com" }], "none"); });
     // An unset `sendUpdates` is checked as "none", which is what Calendar does with it.
     reachesCredentialBoundary(() => { call([{ email: "allowed@example.com" }], null); });
@@ -71,8 +71,15 @@ function attendeeRuleHolds(capability: string, call: (attendees: Attendee[], sen
         deniedAt(capability, "main", () => { call([{ email: spelling }], "none"); });
     }
     // Who is emailed is policy-visible too: this blueprint allows no invitation email.
-    deniedAt(capability, "main", () => { call([{ email: "allowed@example.com" }], "all"); });
-    deniedAt(capability, "main", () => { call([{ email: "allowed@example.com" }], "externalOnly"); });
+    if (readsCurrentAttendees) {
+        // Notification updates resolve prior attendees before the business check.
+        // Offline contract tests cover denial after that metadata read.
+        reachesCredentialBoundary(() => { call([{ email: "allowed@example.com" }], "all"); });
+        reachesCredentialBoundary(() => { call([{ email: "allowed@example.com" }], "externalOnly"); });
+    } else {
+        deniedAt(capability, "main", () => { call([{ email: "allowed@example.com" }], "all"); });
+        deniedAt(capability, "main", () => { call([{ email: "allowed@example.com" }], "externalOnly"); });
+    }
     rejectedAs("invalid_send_updates", () => { call([{ email: "allowed@example.com" }], "everyone"); });
     // One entry is one address.
     for (const entry of ["allowed@example.com, blocked@example.com", "Allowed <blocked@example.com>", " allowed@example.com", "allowed", ""]) {
@@ -91,7 +98,7 @@ function main(): string {
     attendeeRuleHolds("submilli/google-calendar.updateEvent", (attendees: Attendee[], sendUpdates: string | null): void => {
         if (sendUpdates === null) updateEvent("event1", { attendees: attendees });
         else updateEvent("event1", { attendees: attendees, sendUpdates: sendUpdates });
-    });
+    }, true);
     // An event created without attendees has an empty list, which a deny-list allows.
     reachesCredentialBoundary(() => {
         createEvent({ summary: "Focus", start: { dateTime: "2026-10-05T10:00:00Z" }, end: { dateTime: "2026-10-05T10:30:00Z" } });

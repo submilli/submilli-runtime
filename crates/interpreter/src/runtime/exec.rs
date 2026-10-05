@@ -66,6 +66,7 @@ pub(crate) fn uncaught_error(
     let Some(exn) = store.take_pending_exception() else {
         return err;
     };
+    let denial = thrown_denial(store, exn);
     // An already-thrown error may follow a completed effect. Diagnostic
     // decoding must preserve its message even after settlement takes fuel to zero.
     let text = super::fuel::settle_result(store, |store| Ok(read_thrown_error_text(store, exn)))
@@ -81,7 +82,16 @@ pub(crate) fn uncaught_error(
     wasmtime::Error::new(crate::backtrace::ThrownError {
         message: text,
         backtrace,
+        denial,
     })
+}
+
+/// The denial the runtime threw, when `exn` carries that very object.
+fn thrown_denial(store: &mut Store<StoreData>, exn: Rooted<ExnRef>) -> Option<super::host::Denial> {
+    let Val::AnyRef(Some(thrown)) = exn.field(&mut *store, 0).ok()? else {
+        return None;
+    };
+    super::host::with_thrown_denials(store, |table, store| table.find(store, &thrown))
 }
 
 /// Reads `"name: message"` from a thrown exception's `$Error` payload, plus a
@@ -930,7 +940,7 @@ mod tests {
     #[tokio::test]
     async fn double_eq_same_as_strict_eq() {
         let bytes = compile(
-            "function main(): boolean { return (1 === 1) && (1 == 1) && (1 !== 2) && (1 != 2); }",
+            "function main(): boolean { const two: number = 2; return (1 === 1) && (1 == 1) && (1 !== two) && (1 != two); }",
         );
         let result = RuntimeConfig::default().run(&bytes).await.expect("runs");
         assert_eq!(result.value.as_deref(), Some("true"));

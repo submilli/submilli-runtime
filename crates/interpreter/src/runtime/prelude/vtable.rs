@@ -712,7 +712,14 @@ fn json_property_slots(
     entries
         .try_reserve_exact(count as usize)
         .map_err(fatal_host_error)?;
+    let error_slots = super::error::json_hidden_slots(caller, recv)?;
     for slot in 0..count {
+        if error_slots
+            .as_ref()
+            .is_some_and(|hidden| hidden.hides(slot))
+        {
+            continue;
+        }
         let name = names.get(&mut *caller, slot)?;
         if super::object::field_is_private(caller, &name)? {
             continue;

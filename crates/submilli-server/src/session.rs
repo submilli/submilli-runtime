@@ -83,6 +83,7 @@ mod tests {
                 kind: crate::error::ErrorKind::RuntimeError,
                 message: "original failure".into(),
                 diagnostics: Vec::new(),
+                denial: None,
             }),
         }
     }

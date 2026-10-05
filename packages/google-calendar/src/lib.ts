@@ -172,11 +172,17 @@ interface ApiEvent {
     hangoutLink?: string;
     created?: string;
     updated?: string;
+    attendeesOmitted?: boolean;
 }
 
 interface EventListResponse {
     items?: ApiEvent[];
     nextPageToken?: string;
+}
+
+interface EventAttendeeMetadata {
+    attendees?: { email?: string }[];
+    attendeesOmitted?: boolean;
 }
 
 /** Filters and pagination for listing events. */
@@ -571,7 +577,7 @@ export function createEvent(input: EventCreateInput, calendarId: string = "prima
   * @param input Fields to change; omitted fields keep their current values.
   * @param calendarId Calendar holding the event; defaults to `primary`.
   * @returns The event after the update.
- * @capability submilli/google-calendar.updateEvent { calendarId: string, attendees: string[], sendUpdates: string }
+ * @capability submilli/google-calendar.updateEvent { calendarId: string, attendees: string[], removedAttendees: string[], notificationRecipients: string[], sendUpdates: string }
  */
 export function updateEvent(eventId: string, input: EventUpdateInput, calendarId: string = "primary"): Event {
     const { summary, description, location, clearDescription, clearLocation, visibility, sendUpdates: requestedSendUpdates } = input;
@@ -610,7 +616,19 @@ export function updateEvent(eventId: string, input: EventUpdateInput, calendarId
     }
     const reminders = input.reminders;
     const attendeesAfterUpdate = attendees !== null ? distinctAddresses(attendees) : currentAttendeeAddresses(eventId, calendarId);
-    check("submilli/google-calendar.updateEvent", { calendarId: calendarId, attendees: attendeesAfterUpdate, sendUpdates: sendUpdates });
+    const removedAttendees: string[] = [];
+    let notificationRecipients: string[] = [];
+    if (sendUpdates !== "none") {
+        const previous = attendees === null ? attendeesAfterUpdate : currentAttendeeAddresses(eventId, calendarId);
+        for (const address of previous) {
+            if (!attendeesAfterUpdate.includes(address)) removedAttendees.push(address);
+        }
+        notificationRecipients = distinct(previous.concat(attendeesAfterUpdate));
+    }
+    check("submilli/google-calendar.updateEvent", {
+        calendarId: calendarId, attendees: attendeesAfterUpdate,
+        removedAttendees: removedAttendees, notificationRecipients: notificationRecipients, sendUpdates: sendUpdates,
+    });
     const body: EventUpdateBody = {};
     if (summary !== null) body.summary = summary;
     if (start !== null) body.start = normalizeEventTime(start);
@@ -694,13 +712,22 @@ export function deleteEvent(eventId: string, options: EventDeleteOptions | null 
 // A patch without `attendees` leaves the event's attendees in place, and they are the ones
 // `sendUpdates` notifies, so they are read from the event for the check.
 function currentAttendeeAddresses(eventId: string, calendarId: string): string[] {
-    const current = fetchEvent(eventId, calendarId);
-    if (current === null) throw new CalendarError("not_found", "Calendar event was not found", 404);
+    const query = new Map<string, string>();
+    query.set("fields", "attendees(email),attendeesOmitted");
+    const response = calendarRawGet("/calendars/" + encodeComponent(calendarId) + "/events/" + encodeComponent(eventId), query);
+    if (response.status === 404) throw new CalendarError("not_found", "Calendar event was not found", 404);
+    requireOk(response);
+    const current = response.json() as EventAttendeeMetadata;
+    if (current.attendeesOmitted === true) {
+        throw new CalendarError("incomplete_attendees", "Calendar omitted attendees; notification recipients cannot be authorized", 0);
+    }
     const addresses: string[] = [];
-    for (const attendee of current.attendees) {
+    const attendees = current.attendees;
+    if (attendees == null) return addresses;
+    for (const attendee of attendees) {
         const email = attendee.email;
         // Calendar can list an attendee without an address; there is nobody to notify.
-        if (email !== null) addresses.push(oneSpelling(email));
+        if (email != null) addresses.push(oneSpelling(email));
     }
     return distinct(addresses);
 }

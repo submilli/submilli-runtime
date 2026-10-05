@@ -5,6 +5,8 @@
 
 use std::sync::Arc;
 
+use super::decision::{CallSite, DecisionExplanation, DecisionRecorder};
+
 #[non_exhaustive]
 pub enum CheckOutcome {
     Allow { rule: Option<usize> },
@@ -12,6 +14,11 @@ pub enum CheckOutcome {
 }
 
 /// A decision observation; recording must never change authorization semantics.
+///
+/// `#[non_exhaustive]` so it can grow: build one with [`AuditDecision::new`] and the
+/// `with_*` methods. Sinks that predate a field ignore it.
+#[derive(Clone, Copy)]
+#[non_exhaustive]
 pub struct AuditDecision<'a> {
     pub caller: &'a str,
     pub capability: &'a str,
@@ -20,6 +27,44 @@ pub struct AuditDecision<'a> {
     pub source: &'a str,
     pub rule: Option<usize>,
     pub reason: Option<&'a str>,
+    /// Why the policy decided as it did. Present only while a recorder is installed.
+    pub explanation: Option<&'a DecisionExplanation>,
+    /// How the decision was reached, and the call it belongs to.
+    pub site: CallSite,
+}
+
+impl<'a> AuditDecision<'a> {
+    pub fn new(
+        caller: &'a str,
+        capability: &'a str,
+        context: &'a serde_json::Value,
+        allowed: bool,
+        source: &'a str,
+        rule: Option<usize>,
+        reason: Option<&'a str>,
+    ) -> Self {
+        Self {
+            caller,
+            capability,
+            context,
+            allowed,
+            source,
+            rule,
+            reason,
+            explanation: None,
+            site: CallSite::default(),
+        }
+    }
+
+    pub fn with_explanation(mut self, explanation: Option<&'a DecisionExplanation>) -> Self {
+        self.explanation = explanation;
+        self
+    }
+
+    pub fn with_site(mut self, site: CallSite) -> Self {
+        self.site = site;
+        self
+    }
 }
 
 pub trait SecurityCheck: Send + Sync {
@@ -44,6 +89,23 @@ pub trait SecurityCheck: Send + Sync {
         self.check(caller, capability, context)
     }
     fn check(&self, caller: &str, capability: &str, context: &serde_json::Value) -> CheckOutcome;
+    /// The per-run decision recorder, when one is installed. The runtime computes
+    /// explanations and captures source lines only while this is `Some`.
+    fn recorder(&self) -> Option<&dyn DecisionRecorder> {
+        None
+    }
+    /// Why the policy would decide as it does for this call, for a recorder.
+    /// Called only while [`Self::recorder`] is `Some`, with the context as the host
+    /// function built it; the policy applies its own normalization.
+    fn explain(
+        &self,
+        _caller: &str,
+        _capability: &str,
+        _context: &serde_json::Value,
+        _cwd: &str,
+    ) -> Option<DecisionExplanation> {
+        None
+    }
 }
 
 /// Default policy: allows all calls, logging each to stderr so stdout carries

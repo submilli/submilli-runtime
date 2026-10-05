@@ -1,0 +1,21 @@
+// Retired book URLs and their current destinations.
+export const legacyDocsRoutes = {
+	"/concepts/execution-model": "/docs/why/",
+	"/introduction": "/docs/why/",
+	"/how-submilli-works": "/docs/blueprints/",
+	"/cli": "/docs/reference/cli/",
+	"/curated-packages": "/docs/reference/curated-packages/",
+	"/deploying": "/docs/server/deploy-on-linux/",
+	"/editor-setup": "/docs/install/",
+	"/skill": "/docs/install/",
+	"/governance": "/docs/reference/audit-trail/",
+	"/harness": "/docs/tutorials/connect-a-harness/",
+	"/mcp-servers": "/docs/blueprints/add-an-mcp-server/",
+	"/package-anatomy": "/docs/packages/start-a-project/",
+	"/permissions": "/docs/reference/permissions/",
+	"/resource-limits": "/docs/server/set-limits/",
+	"/server-mcp": "/docs/reference/mcp-servers/",
+	"/standard-library": "/docs/reference/standard-library/",
+	"/testing-packages": "/docs/packages/write-tests/",
+	"/the-language": "/docs/reference/language/",
+};

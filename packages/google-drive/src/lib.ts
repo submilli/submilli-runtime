@@ -108,6 +108,11 @@ interface FileListResponse {
     nextPageToken?: string;
 }
 
+interface UploadDestinationMetadata {
+    mimeType: string;
+    driveId?: string;
+}
+
 /** Structured and raw Drive file-search options. */
 export interface SearchFilesOptions {
     /** Match files whose name contains this substring. */
@@ -405,12 +410,13 @@ export function downloadFile(fileId: string, path: string, options: FileDownload
   * @param sourcePath Path of the VFS file to upload.
   * @param options Name and MIME type for the uploaded file, with optional parent folder ID and Shared Drive ID.
   * @returns The metadata of the created Drive file.
- * @capability submilli/google-drive.uploadFile { path: string, parentId: string }
+ * @capability submilli/google-drive.uploadFile { path: string, parentId: string, driveId: string }
  */
 export function uploadFile(sourcePath: string, options: FileUploadOptions): DriveFile {
     const { name, mimeType, parentId: requestedParentId, driveId } = options;
     const parentId = destinationFolderId(requestedParentId);
-    check("submilli/google-drive.uploadFile", { path: sourcePath, parentId: parentId });
+    const destinationDrive = uploadDestinationDrive(parentId, driveId);
+    check("submilli/google-drive.uploadFile", { path: sourcePath, parentId: parentId, driveId: destinationDrive });
     const source = stat(sourcePath);
     if (source === null) throw new DriveError("source_not_found", "upload source is not a VFS file", 0);
     if (source.kind !== "file") throw new DriveError("source_not_found", "upload source is not a VFS file", 0);
@@ -420,7 +426,7 @@ export function uploadFile(sourcePath: string, options: FileUploadOptions): Driv
     const query = new Map<string, string>();
     query.set("uploadType", "resumable");
     query.set("fields", FILE_FIELDS);
-    if (driveId !== null) query.set("supportsAllDrives", "true");
+    query.set("supportsAllDrives", "true");
     const headers = authHeaders();
     headers.set("X-Upload-Content-Type", mimeType);
     headers.set("X-Upload-Content-Length", sourceSize.toString());
@@ -683,6 +689,25 @@ function destinationFolderId(parentId: string | null): string {
     if (parentId === null || parentId.length === 0) return "";
     if (!DRIVE_ID.test(parentId)) throw new DriveError("invalid_parent", "parent must be one Drive folder ID", 0);
     return parentId;
+}
+
+function uploadDestinationDrive(parentId: string, requestedDriveId: string | null): string | null {
+    const query = new Map<string, string>();
+    query.set("fields", "mimeType,driveId");
+    query.set("supportsAllDrives", "true");
+    const folderId = parentId.length === 0 ? "root" : parentId;
+    const response = driveRawGet("/files/" + encodeComponent(folderId), query);
+    if (response.status === 404) throw new DriveError("invalid_parent", "upload destination folder was not found", 404);
+    requireOk(response);
+    const folder = response.json() as UploadDestinationMetadata;
+    if (folder.mimeType !== "application/vnd.google-apps.folder") {
+        throw new DriveError("invalid_parent", "upload parent must be a folder", 0);
+    }
+    const driveId = folder.driveId ?? null;
+    if (requestedDriveId !== null && requestedDriveId !== driveId) {
+        throw new DriveError("invalid_drive", "driveId must match the destination folder's shared drive", 0);
+    }
+    return driveId;
 }
 
 function fetchFile(fileId: string): DriveFile | null {

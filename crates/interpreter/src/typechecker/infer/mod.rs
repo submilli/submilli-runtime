@@ -6,6 +6,8 @@ pub(crate) mod assignable;
 mod binding_analysis;
 mod classes;
 mod closure_arity;
+mod comparable;
+mod comparison_operand;
 mod diagnostics;
 mod enums;
 mod exports;
@@ -185,6 +187,7 @@ pub fn infer_with_transitive_checked<'a>(
         alias_resolution_stack: Vec::new(),
         type_resolution_depth: 0,
         type_limits: Default::default(),
+        diagnostic_failure: Default::default(),
     };
     tc.populate_prelude().map_err(|fatal| CompileError {
         diagnostics: tc.diagnostics.clone(),
@@ -438,6 +441,7 @@ pub fn infer_package_checked<'a>(
         alias_resolution_stack: Vec::new(),
         type_resolution_depth: 0,
         type_limits: Default::default(),
+        diagnostic_failure: Default::default(),
     };
 
     for module in order {
@@ -857,6 +861,8 @@ pub(super) struct Inferer<'a> {
     /// Oversized types met where the code could not return an error; see
     /// [`Inferer::type_size_checkpoint`].
     pub(super) type_limits: crate::type_size::TypeLimits,
+    /// A rendering failure invalidates the compilation at the next phase checkpoint.
+    pub(super) diagnostic_failure: std::cell::Cell<Option<crate::rendering::RenderError>>,
 }
 
 impl<'a> Inferer<'a> {
@@ -864,6 +870,10 @@ impl<'a> Inferer<'a> {
     /// `span`: the source being inferred when an oversized type was met where
     /// no error could be returned.
     pub(super) fn type_size_checkpoint(&self, span: Option<Span>) -> Result<(), CompilerFailure> {
+        if let Some(error) = self.diagnostic_failure.take() {
+            return Err(CompilerFailure::from(error)
+                .with_span(span.unwrap_or(Span::at(crate::FileId::COMPILER))));
+        }
         self.type_limits
             .take()
             .map_err(|exceeded| exceeded.into_failure(CompilerStage::Infer, span))

@@ -28,6 +28,12 @@ async function runSubmilli(code, trustedCustomerId) {
   });
   if (!response.ok) throw new Error(`Submilli HTTP ${response.status}`);
   const body = await response.json();
+  // A denial is the operator's answer, not a failure to retry: return it to the
+  // model as the final word, with who was refused what.
+  if (body.error?.kind === "permission_denied") {
+    const { caller, capability, source, message } = body.error;
+    return { denied: { caller, capability, source }, message, console: body.console ?? [] };
+  }
   if (body.error) throw new Error(body.error.message);
   return { result: body.result, console: body.console ?? [] };
 }
@@ -36,7 +42,10 @@ async function runSubmilli(code, trustedCustomerId) {
 `trustedCustomerId` comes from the authenticated handler and must not appear
 in the model's tool schema. Keep the server URL, token and blueprint selection
 application-owned too; a `401` means the token is missing or unknown. Use a timeout and finite model-loop budget. An HTTP
-success can still contain a runtime error; surface it. Avoid logging secret
+success can still contain a runtime error; surface it. `error.kind` is
+`permission_denied` for a denial that escaped the program, with `caller`,
+`capability`, and `source` (`policy`, `invariant`, or `read_only`); never retry
+it through another route. Avoid logging secret
 headers or unnecessary customer data in errors/transcripts.
 
 REST alone does not load MCP tool descriptions. Supply the resolved runtime

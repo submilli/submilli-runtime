@@ -1,5 +1,7 @@
 use super::*;
-use crate::runtime::{RuntimeConfig, Vfs, dispatch_main_async, install_runtime_async};
+use crate::runtime::{
+    CheckOutcome, RuntimeConfig, Vfs, dispatch_main_async, install_runtime_async,
+};
 use serde_json::json;
 
 #[tokio::test]

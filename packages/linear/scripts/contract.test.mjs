@@ -4,6 +4,7 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { stripTypeScriptTypes } from 'node:module';
 import { test } from 'node:test';
+import { nullableFields } from '../../../scripts/package-contract-host.mjs';
 
 let token = 'oauth-test-token';
 let response;
@@ -13,6 +14,8 @@ const capabilities = [];
 const contexts = [];
 // Every request since a test last reset this, in order; `request` is the last of them.
 let requests = [];
+let lookupResponse = null;
+const resolvedTeam = { team: { id: 'team' } };
 globalThis.__linearHost = {
     secrets: { get: () => token },
     check: (capability, context) => {
@@ -23,13 +26,26 @@ globalThis.__linearHost = {
     post: (url, body, headers) => {
         request = { url, body, headers };
         requests.push(request);
-        return { ok: true, json: () => ({ errors: null, data: response }) };
+        queries.add(body.query);
+        let data = response;
+        if (body.query.includes('team { id }')) {
+            data = lookupResponse ?? (response === null ? null : {
+                issue: Object.hasOwn(response, 'issue') && response.issue === null ? null : resolvedTeam,
+                comment: { issue: resolvedTeam },
+                agentSession: { issue: resolvedTeam, comment: null },
+            });
+        }
+        return { ok: true, json: () => ({ errors: null, data }) };
     },
 };
 const source = (await readFile(new URL('../src/lib.ts', import.meta.url), 'utf8'))
     .replace(/^import .*from "submilli:.*";\n/gm, '')
     .replace('const ENDPOINT', 'const { post, secrets, check } = globalThis.__linearHost;\nconst ENDPOINT');
-const linear = await import(`data:text/javascript;base64,${Buffer.from(stripTypeScriptTypes(source)).toString('base64')}`);
+const module = await import(`data:text/javascript;base64,${Buffer.from(stripTypeScriptTypes(source)).toString('base64')}`);
+// Make explicit the Submilli optional-field convention for equivalent Node calls.
+const linear = Object.fromEntries(Object.entries(module).map(([name, value]) => [name,
+    typeof value === 'function' ? (...args) => value(...args.map(nullableFields)) : value,
+]));
 const session = { id: 'session', status: 'active', issue: { id: 'issue' }, comment: null,
     url: null, summary: null, externalUrls: [], plan: null };
 const page = { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } };
@@ -158,6 +174,54 @@ test('an update and a comment are checked against the team of their issue', () =
     }
 });
 
+test('issue reads and all session operations check the resolved team before sensitive requests', () => {
+    const calls = [
+        ['getIssue', () => linear.getIssue('issue')],
+        ['listComments', () => linear.listComments('issue')],
+        ['getAgentSession', () => linear.getAgentSession('session')],
+        ['listAgentActivities', () => linear.listAgentActivities('session')],
+        ['createAgentActivity', () => linear.createAgentActivity({ agentSessionId: 'session', content: { type: 'thought', body: 'Working' } })],
+        ['updateAgentSession', () => linear.updateAgentSession('session', { summary: 'Working' })],
+        ['createAgentSessionOnIssue', () => linear.createAgentSessionOnIssue({ issueId: 'issue' })],
+        ['createAgentSessionOnComment', () => linear.createAgentSessionOnComment({ commentId: 'comment' })],
+    ];
+    lookupResponse = { issue: { team: { id: 'blocked-team' } }, comment: { issue: { team: { id: 'blocked-team' } } }, agentSession: { issue: null, comment: { issue: { team: { id: 'blocked-team' } } } } };
+    denied = true;
+    for (const [method, call] of calls) {
+        requests = [];
+        assert.throws(call, /Capability denied/);
+        assert.deepEqual(contexts.at(-1), { teamId: 'blocked-team' });
+        assert.equal(capabilities.at(-1), `linear.app/${method}`);
+        assert.equal(requests.length, 1);
+        assert.ok(requests[0].body.query.includes('team { id }'));
+        assert.ok(!requests[0].body.query.includes('mutation'));
+    }
+    denied = false;
+    lookupResponse = { issue: null };
+    requests = [];
+    assert.equal(linear.getIssue('absent'), null);
+    assert.deepEqual(contexts.at(-1), { teamId: null });
+    assert.equal(requests.length, 1);
+    lookupResponse = { agentSession: { issue: null, comment: null } };
+    assert.throws(() => linear.getAgentSession('session'), /no issue or comment team/);
+    lookupResponse = { comment: null };
+    assert.throws(() => linear.createAgentSessionOnComment({ commentId: 'missing' }), /comment was not found/);
+    lookupResponse = { comment: { issue: null } };
+    assert.throws(() => linear.createAgentSessionOnComment({ commentId: 'project-comment' }), /comment has no issue team/);
+    lookupResponse = null;
+});
+
+test('session creation snapshots target getters once', () => {
+    let reads = 0;
+    lookupResponse = { issue: resolvedTeam };
+    response = { agentSessionCreateOnIssue: { success: true, agentSession: session } };
+    linear.createAgentSessionOnIssue({ get issueId() { reads++; return reads === 1 ? 'allowed-issue' : 'blocked-issue'; } });
+    assert.equal(reads, 1);
+    assert.equal(requests.at(-2).body.variables.id, 'allowed-issue');
+    assert.equal(requests.at(-1).body.variables.input.issueId, 'allowed-issue');
+    lookupResponse = null;
+});
+
 test('OAuth uses Bearer, personal keys remain raw, existing Bearer is not doubled', () => {
     response = { agentSession: session };
     for (const [credential, expected] of [['oauth-token', 'Bearer oauth-token'], ['lin_api_test', 'lin_api_test'], ['Bearer existing', 'Bearer existing']]) {
@@ -167,11 +231,12 @@ test('OAuth uses Bearer, personal keys remain raw, existing Bearer is not double
     }
 });
 
-test('denied capabilities make no request', () => {
+test('denied session reads make only the team lookup', () => {
     denied = true;
     request = null;
     assert.throws(() => linear.getAgentSession('session'), /Capability denied/);
-    assert.equal(request, null);
+    assert.ok(request.body.query.includes('team { id }'));
+    assert.ok(!request.body.query.includes('status'));
     denied = false;
 });
 
