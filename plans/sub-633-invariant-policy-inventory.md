@@ -1009,6 +1009,16 @@ if it never happened. Link simplification decisions to R IDs and implementing PR
 
 ### T02 — Reclassify historical invariant-only work
 
+Execution complete: applied issue/source-ledger crosswalk for every R01–R26 decision and
+P01–P09 acceptance, with implementation commits and retained-error boundaries.
+Items 29/30 current requirements explicitly supersede poison-only conversions;
+dated history and existing checkboxes remain. Three independent reviews found one
+P3 directional wording error, corrected by the parent; no higher-priority findings.
+Both external updates were read back and every changed anchor verified. Linear
+automatically linked the SUB-633 substring inside the file path; quoting the path
+as code fixed it, and exact read-back then passed. Diff
+checks passed; no tests run for documentation-only tracking.
+
 Attach R01–R23 to their completed numbered items. Mark the poison-conversion
 requirements in 29/30 superseded, citing the existing reversal. For 05–25 and
 34–36, permit selective simplification rather than reopening all completed items.
