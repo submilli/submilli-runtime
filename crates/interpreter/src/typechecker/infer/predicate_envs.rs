@@ -944,24 +944,32 @@ impl<'a> Inferer<'a> {
         Option<(narrowing::NarrowEnv, narrowing::NarrowEnv)>,
         crate::compiler_error::CompilerFailure,
     > {
-        let equal = if let Some(literals) = comparison_literal_union(&self.typed_ast, rhs_id)? {
-            self.equal_to_one_of(lhs_id, literals)?
-        } else if let Some(literals) = comparison_literal_union(&self.typed_ast, lhs_id)? {
-            self.equal_to_one_of(rhs_id, literals)?
-        } else {
-            match self.equal_to_value_of(lhs_id, rhs_id)? {
-                Some(env) => Some(env),
-                None => self.equal_to_value_of(rhs_id, lhs_id)?,
+        // Where they are equal, each side holds a value the other allows.
+        let equal = match (self.equal_to(lhs_id, rhs_id)?, self.equal_to(rhs_id, lhs_id)?) {
+            (None, None) => return Ok(None),
+            (Some(equal), None) | (None, Some(equal)) => equal,
+            (Some(mut equal), Some(other)) => {
+                add_missing_views(&mut equal, other);
+                equal
             }
-        };
-        let Some(equal) = equal else {
-            return Ok(None);
         };
         Ok(Some(if op == crate::BinOp::Eq {
             (equal, narrowing::NarrowEnv::new())
         } else {
             (narrowing::NarrowEnv::new(), equal)
         }))
+    }
+
+    /// The narrowing where `path_id` equals `value_id`, whose type is a union.
+    fn equal_to(
+        &mut self,
+        path_id: ExprId,
+        value_id: ExprId,
+    ) -> Result<Option<narrowing::NarrowEnv>, crate::compiler_error::CompilerFailure> {
+        match comparison_literal_union(&self.typed_ast, value_id)? {
+            Some(literals) => self.equal_to_one_of(path_id, literals),
+            None => self.equal_to_value_of(path_id, value_id),
+        }
     }
 
     /// The narrowing where `path_id` equals one of `literals`: the join of
