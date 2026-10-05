@@ -9,6 +9,8 @@ use crate::{ObjectField, Type};
 const VOID_IS_NOT_A_VALUE: &str = "`void` is not a value: a function declared `: void` produces nothing. \
 Call it as its own statement, then produce the value separately.";
 
+const NO_DIFFERENCE: &str = "(no structural difference detected)";
+
 /// The `help:` lines the *diff* earns: the structural difference, plus a note
 /// when one side's rendering is lossy. Call sites may add their own on top. Separate entries, because they are
 /// separate advice — folding them into one string prints the second without a
@@ -46,6 +48,20 @@ pub(super) fn format_type_diff(expected: &Type, got: &Type) -> Option<String> {
             }
             Some(format_object_diff(a, b))
         }
+        (
+            Type::Function {
+                params: pa,
+                ret: ra,
+                has_rest: false,
+                ..
+            },
+            Type::Function {
+                params: pb,
+                ret: rb,
+                has_rest: true,
+                ..
+            },
+        ) => Some(format_rest_function_diff(pa, ra, pb, rb)),
         (
             Type::Function {
                 params: pa,
@@ -152,9 +168,37 @@ fn format_object_diff(
     }
 
     if rows.is_empty() {
-        return "(no structural difference detected)".to_string();
+        return NO_DIFFERENCE.to_string();
     }
     rows.join("\n")
+}
+
+/// A function with a rest parameter, `pb`, where the fixed-arity `pa` is
+/// expected: each expected parameter past its fixed ones is compared with the
+/// rest parameter's element type. When they all fit, the only difference left
+/// is the parameter count Submilli needs to differ.
+fn format_rest_function_diff(pa: &[Type], ra: &Type, pb: &[Type], rb: &Type) -> String {
+    let Some((Type::Array(element), fixed)) =
+        pb.split_last().map(|(rest, fixed)| (rest.peel(), fixed))
+    else {
+        return format_function_diff(pa, ra, pb, rb);
+    };
+    let spread: Vec<Type> = fixed
+        .iter()
+        .cloned()
+        .chain(std::iter::repeat_n(
+            (**element).clone(),
+            pa.len().saturating_sub(fixed.len()),
+        ))
+        .collect();
+    let diff = format_function_diff(pa, ra, &spread, rb);
+    if pa.len() == pb.len() && diff == NO_DIFFERENCE {
+        return format!(
+            "a function with a rest parameter can't stand for one with as many parameters ({})",
+            pa.len()
+        );
+    }
+    diff
 }
 
 fn format_function_diff(pa: &[Type], ra: &Type, pb: &[Type], rb: &Type) -> String {
@@ -175,7 +219,7 @@ fn format_function_diff(pa: &[Type], ra: &Type, pb: &[Type], rb: &Type) -> Strin
         rows.push(format!("return: expected `{ra}`, got `{rb}`"));
     }
     if rows.is_empty() {
-        return "(no structural difference detected)".to_string();
+        return NO_DIFFERENCE.to_string();
     }
     rows.join("\n")
 }

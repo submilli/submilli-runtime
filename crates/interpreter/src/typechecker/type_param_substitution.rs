@@ -5,7 +5,7 @@ use std::collections::BTreeMap;
 use crate::Type;
 use crate::type_size::{TypeBudget, TypeLimits, TypeTooLarge, map_children};
 use crate::typechecker::infer::assignable::{
-    TypeResolver, assignable, expand_alias_ref, expand_interface_data_shape,
+    TypeResolver, assignable, expand_alias_ref, expand_interface_data_shape, rest_function_accepts,
 };
 use crate::typechecker::infer::type_aliases::rehydrate_alias_refs;
 
@@ -307,6 +307,9 @@ impl<'a> Unifier<'a> {
                     ..
                 },
             ) => {
+                if *rest_b && !rest_a {
+                    return self.unify_rest_function(param_ty, arg_ty, pa, pb, ra, rb);
+                }
                 if !Type::function_arity_fits(pb.len(), pa.len(), *rest_a || *rest_b) {
                     return Err(UnifyError::Mismatch {
                         expected: param_ty.clone(),
@@ -541,6 +544,38 @@ impl<'a> Unifier<'a> {
             return false;
         };
         self.subtype_widening && assignable(arg, bound, types)
+    }
+
+    /// Unify a fixed-arity function type, `param_ty`, with an argument that
+    /// has a rest parameter: each fixed position against the argument's
+    /// parameter there, and each position past them against the rest
+    /// parameter's element type (see [`rest_function_accepts`]).
+    #[allow(clippy::result_large_err)]
+    fn unify_rest_function(
+        &mut self,
+        param_ty: &Type,
+        arg_ty: &Type,
+        params: &[Type],
+        arg_params: &[Type],
+        ret: &Type,
+        arg_ret: &Type,
+    ) -> Result<(), UnifyError> {
+        let mut result = Ok(());
+        let fits = rest_function_accepts(arg_params, params, |passed, declared| {
+            let unified = self.in_function_parameter(|u| u.unify(passed, declared));
+            let ok = unified.is_ok();
+            if result.is_ok() {
+                result = unified;
+            }
+            ok
+        });
+        if !fits {
+            return Err(result.err().unwrap_or(UnifyError::Mismatch {
+                expected: param_ty.clone(),
+                got: arg_ty.clone(),
+            }));
+        }
+        self.unify(ret, arg_ret)
     }
 
     /// Whether `arg` is a literal type of the primitive `param`, which binds

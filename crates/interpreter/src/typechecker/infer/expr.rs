@@ -7124,15 +7124,20 @@ impl Inferer<'_> {
         // parameters the arrow's line up with: the arrow's take the hint's
         // leading types, and any past the hint's are reported, which is
         // clearer than asking each to be annotated. Only a rest parameter
-        // needs an exact arity. We clone out into owned data so
-        // we can continue mutating `self` without borrow-checker complaints.
+        // needs an exact arity, and a hint with one of its own. We clone out
+        // into owned data so we can continue mutating `self` without
+        // borrow-checker complaints.
         // Peel aliases, and look through a `T | null`-style union to its
         // sole function member so an optional callback param (e.g. a
         // nullable `sort` comparator) still gives the arrow its contextual
         // parameter types.
         let arrow_rest = params.last().is_some_and(|p| p.rest);
+        // A rest arrow standing for a fixed-arity function takes no hint: its
+        // rest parameter would be compared with a single argument's type. It
+        // is checked as a whole function instead.
         let lines_up = |hint_params: &[Type], hint_rest: bool| {
-            hint_params.len() == params.len() || !(arrow_rest || hint_rest)
+            (hint_params.len() == params.len() && arrow_rest == hint_rest)
+                || !(arrow_rest || hint_rest)
         };
         let leading =
             |hint_params: &[Type]| hint_params[..params.len().min(hint_params.len())].to_vec();
