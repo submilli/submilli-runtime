@@ -4,9 +4,9 @@
 
 We want agents to carry out longer tasks, recover when things go wrong, and bring people in when a decision needs them. These are four areas we plan to build in Submilli.
 
-| [Durability](#durability) | [Undo](#undo) | [Ask human](#ask-human) | [Managed cloud](#managed-cloud) |
+| [Durability](#durability) | [Public package registry](#public-package-registry) | [Ask human](#ask-human) | [Managed cloud](#managed-cloud) |
 | :--- | :--- | :--- | :--- |
-| Resume interrupted work | Reverse supported actions | Pause for a person | Run without managing servers |
+| Resume interrupted work | Discover and share Packages | Pause for a person | Run without managing servers |
 
 > [!NOTE]
 > **Planned direction, no fixed dates.** Scope and order may change. The examples below describe intended behavior. See the [documentation](https://submilli.ai/docs/) and [release notes](https://github.com/submilli/submilli-runtime/releases) for what is available today.
@@ -25,13 +25,13 @@ External effects need explicit recovery rules: when a service's response is lost
 
 ---
 
-## Undo
+## Public package registry
 
-**Reverse an agent’s actions where the underlying system supports it.**
+**Discover, publish, and install Submilli Packages in one place.**
 
-We want [Packages](https://submilli.ai/docs/packages) to describe how an operation can be undone, and let people inspect what a rollback would change before running it.
+We plan a public registry for [Packages](https://submilli.ai/docs/packages), similar to npm. Package authors could publish versioned releases, and developers could find integrations and reuse them in their agents.
 
-**Example:** An agent that changes a set of records could restore their previous values where it is safe to do so. Undo must account for changes made since the original action and make partial failures visible. Some effects, such as a delivered email, cannot be reversed; those limits should be clear before execution.
+**Example:** A developer publishes a Package for a billing API. Another team finds it in the registry, checks its documentation and capabilities, and installs a specific version in their project. Their [Blueprint](https://submilli.ai/docs/blueprints) controls which operations the agent can use.
 
 ---
 
