@@ -885,7 +885,7 @@ locators; follow symbols after edits.
 | P03 | `submilli-build/src/scaffold.rs:428`, generated tsconfig JSON | Accepted: fixed JSON Value construction and in-memory serializer contract |
 | P04 | `submilli-build/src/scaffold.rs:466`, generated task JSON | Accepted: fixed JSON Value and in-memory writer; documented at macro call |
 | P05 | `submilli-build/src/scaffold.rs:530`, package path `to_str` | Accepted: both callers pass validated UTF-8 components; malformed paths already return an error |
-| P06 | `submilli/src/commands/blueprint/package_secrets.rs:46`, filter YAML | Accept candidate: FilterExpr serializes as a string; document YAML string serializer contract; recursive formatting bounds remain separate |
+| P06 | `submilli/src/commands/blueprint/package_secrets.rs:46`, filter YAML | Accepted: the input is a Rust str serialized as a YAML scalar; filter parse failure remains None |
 | P07 | `submilli/src/commands/skill.rs:225`, Sync unreachable | Accept: preceding dispatch returns for Sync and does not mutate the command |
 | P08 | `submilli/src/commands/mcp/authenticate.rs:151`, client ID | Accept: if absent, successful registration assigns Some; failure returns before access |
 | P09 | `submilli/src/commands/server/run_code.rs:135`, JSON Value serialization | Accept candidate under JSON Value serializer contract; prefer descriptive expect over bare unwrap; deep-value recursion is a separate resource question |
@@ -927,6 +927,15 @@ mutates the owned PathBuf before use. The expect is therefore accepted without
 removing the real public-path error. Added the caller proof at the expect.
 Comment-only source change. Three independent reviews found no issues; formatting,
 workspace Clippy and diff checks passed; graph updated. Runtime tests not rerun.
+
+P06 execution: corrected the initial inventory description: this call serializes
+`&str`, not FilterExpr. serde_yml supports strings (including escaping controls)
+and writes to memory; no custom serializer or unsupported YAML shape participates.
+The subsequent FilterExpr deserialization remains fallible and maps invalid syntax
+to None. Documented the scalar guarantee at the expect. No recursive FilterExpr
+formatting occurs at this site. Three independent reviews found no issues;
+formatting, workspace Clippy and diff checks passed; graph updated. Comment-only
+source change; runtime tests not rerun.
 
 P01 lock groups (paths below `crates/`):
 
