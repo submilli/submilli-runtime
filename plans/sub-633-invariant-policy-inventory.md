@@ -74,6 +74,7 @@ separate resource/dependency backlog.
 | R06 | Complete: retained | Keep ordered substitution and numeric filter dispatch structure |
 | R07 | Complete: retained | Keep cross-phase registration checks and fallible emission |
 | R08 | Complete: selectively simplified | Removed root-scope-only failure checks; kept slot/mark/limit contracts |
+| R09 | Complete: selectively simplified | Removed duplicate decimal validation and private parse-error Result |
 
 ### R01 execution evidence
 
@@ -223,6 +224,20 @@ Three independent reviews had no findings. Formatting, offline workspace/all-tar
 Clippy and 27 focused emitter library tests passed with full tests disabled and
 HTTP skipped. AST graph update retained existing extraction limitations. Accepted
 sites recorded in the SUB-633 source ledger; implementation recorded by this commit.
+
+### R09 execution evidence
+
+`intern_digits` is the sole production caller of `decimal_to_limbs`, after
+nonempty ASCII-decimal validation. Locked num-bigint 0.4.6's FromStr delegates to
+radix-10 parsing, whose only returned errors are empty/invalid digits. The private
+helper now returns Vec directly with a documented parse expectation. Removed its
+duplicate scan; kept zero representation and public malformed digits/index/width
+checks. String-pool public mutable tables retain their existing checked accesses.
+
+Three independent reviews had no findings. Four focused BigInt-pool tests,
+formatting, offline workspace/all-target Clippy and diff checks passed; full tests
+disabled and HTTP skipped. Graph updated with existing extraction limitations;
+accepted site recorded and verified in SUB-633's ledger. This commit records R09.
 
 ## Completed fixes: candidates and decisions
 
