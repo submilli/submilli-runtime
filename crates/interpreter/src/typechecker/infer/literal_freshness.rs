@@ -290,8 +290,8 @@ impl Inferer<'_> {
     /// widened: the union of the elements' own types with only their fresh
     /// literal types widened.
     ///
-    /// Only an array of primitives narrows, and only when every element is a
-    /// value that fits `seed`, so the result names no type `seed` doesn't.
+    /// Only an array of primitives narrows, and only when every element that
+    /// holds a value fits `seed`, so the result names no type `seed` doesn't.
     pub(super) fn kept_element_type(
         &self,
         seed: Type,
@@ -302,21 +302,41 @@ impl Inferer<'_> {
         }
         let mut members = Vec::with_capacity(elements.len());
         for element in elements {
-            let crate::TypedArrayElement::Value(value) = element else {
-                return Ok(seed);
+            let Some(kept) = self.kept_element_member(element)? else {
+                continue;
             };
-            let ty = &self
-                .typed_ast
-                .try_expr(*value)
-                .map_err(crate::typechecker::arena_failure)?
-                .ty;
-            let kept = self.widen_fresh_literals(*value, ty)?;
             if !is_primitive_union(&kept) || !assignable(&kept, &seed, self.resolver()) {
                 return Ok(seed);
             }
             members.extend(flattened_union_members(&kept).into_iter().cloned());
         }
+        if members.is_empty() {
+            return Ok(seed);
+        }
         Ok(without_absorbed_literals(members))
+    }
+
+    /// The type one array literal element adds to its kept element type: a
+    /// value's type with its fresh literal types widened, or the element type
+    /// of a spread source (whose own literal types were already settled).
+    /// `None` for an element that holds no value: a `never` value, or a
+    /// spread of a `never[]`.
+    fn kept_element_member(
+        &self,
+        element: &crate::TypedArrayElement,
+    ) -> Result<Option<Type>, CompilerFailure> {
+        let ty = &self
+            .typed_ast
+            .try_expr(element.expr_id())
+            .map_err(crate::typechecker::arena_failure)?
+            .ty;
+        let member = match element {
+            crate::TypedArrayElement::Value(id) => self.widen_fresh_literals(*id, ty)?,
+            crate::TypedArrayElement::Spread(_) => {
+                super::expr::spread_element_type(ty.peel()).unwrap_or(Type::Error)
+            }
+        };
+        Ok((!matches!(member.peel(), Type::Never)).then_some(member))
     }
 
     /// The literal types `&&` or `||` keeps of a left side whose type doesn't
