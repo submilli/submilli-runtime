@@ -7,7 +7,7 @@ sidebar:
 authorship:
   label: "human-written"
   confirmed: true
-  contentHash: "4496a396751807541a4611747cd7173f13f9431aa855e8e879bd41dabbb1febe"
+  contentHash: "7c2b3720446a25c1b51f3159a2401f96cbf90860e3abd4bab80a18519d426764"
   confirmedAt: "2026-10-05T20:18:00.685778+00:00"
 ---
 
@@ -158,9 +158,6 @@ It doesn't matter that the model was persuaded to do, because the policy is exte
 Submilli is a dedicate runtime for a strict subset of TypeScript, compiled to WebAssembly and run in-process.
 
 Running in-proces smeans no microVM and no cold start delay. It works with the harness you choose, connected over MCP or an SDK. Your agent keeps its brain, and Submilli runs its code.
-
-[The essay](https://submilli.ai/blog/why-submilli/) makes the full argument,
-with every attack replayed.
 
 Next: [install](/docs/install) the CLI and the server, then the
 [quickstart](/docs/quickstart), where you write a Blueprint and a
