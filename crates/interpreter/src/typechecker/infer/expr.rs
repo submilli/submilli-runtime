@@ -5639,10 +5639,12 @@ impl Inferer<'_> {
         // elements were all `never` (`[x]` is `never[]`, as in TypeScript, and
         // a generic hint then infers from it); else the hint, or `Type::Error`
         // (every spread had an invalid source) rather than panicking.
-        let element_ty = element_ty.unwrap_or_else(|| match expected_elem {
-            _ if saw_never => Type::Never,
-            Some(t) => t.clone(),
-            None => Type::Error,
+        let element_ty = element_ty.unwrap_or_else(|| {
+            if saw_never {
+                Type::Never
+            } else {
+                expected_elem.cloned().unwrap_or(Type::Error)
+            }
         });
         // The seed widened every literal type to check the elements against;
         // the regular ones stay, as in TypeScript: `[h]` with `h: "hello"` is
