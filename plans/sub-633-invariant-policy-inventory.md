@@ -881,7 +881,7 @@ locators; follow symbols after edits.
 | ID | Site | Proposed disposition and reason |
 | --- | --- | --- |
 | P01 | 40 std poisoned-lock accesses, grouped below | Accepted: documented poison policy; initiating panics assessed separately |
-| P02 | `submilli-blueprint/src/lib.rs:1302`, `to_yaml` | Prove first: audit full Blueprint serializer graph and YAML supported shapes; generic serialization is not inherently infallible |
+| P02 | `submilli-blueprint/src/lib.rs:1302`, `to_yaml` | Accepted: closed YAML-supported serialization graph; proof below |
 | P03 | `submilli-build/src/scaffold.rs:428`, generated tsconfig JSON | Accept candidate: fixed JSON Value construction; document serializer contract; setup/scaffolding scope |
 | P04 | `submilli-build/src/scaffold.rs:466`, generated task JSON | Same as P03; call is inside a formatting macro |
 | P05 | `submilli-build/src/scaffold.rs:530`, package path `to_str` | Prove first: filesystem paths can be non-UTF-8; prove construction from validated UTF-8 or handle the path error |
@@ -889,6 +889,20 @@ locators; follow symbols after edits.
 | P07 | `submilli/src/commands/skill.rs:225`, Sync unreachable | Accept: preceding dispatch returns for Sync and does not mutate the command |
 | P08 | `submilli/src/commands/mcp/authenticate.rs:151`, client ID | Accept: if absent, successful registration assigns Some; failure returns before access |
 | P09 | `submilli/src/commands/server/run_code.rs:135`, JSON Value serialization | Accept candidate under JSON Value serializer contract; prefer descriptive expect over bare unwrap; deep-value recursion is a separate resource question |
+
+P02 execution: inspected every Blueprint field and custom serializer. VFS/mounts
+and SecretSource serialize maps; idle duration and FilterExpr serialize strings;
+packages serialize a string sequence. Variables, auth proxy, Git and LLM contain
+scalars/options/sequences/string-keyed maps. Permission/access actions are unit
+enums; MCP OAuth is internally tagged (a map), not a nested YAML-tagged enum.
+serde_yml 0.0.12 rejects byte serialization and nested YAML enum tags; neither can
+be emitted by this closed graph, and none of its custom serializers rejects values.
+The in-memory writer produces UTF-8. Documented this guarantee at `to_yaml`, with
+an explicit reminder to revisit it when fields change. This accepts the Result
+expectation; it does not bound allocation or recursive FilterExpr formatting.
+Three independent reviews: one P3 stale remaining-work sentence corrected by the
+parent, no higher-priority findings. Formatting, workspace Clippy and diff checks
+passed; graph updated. Comment-only source change; runtime tests not rerun.
 
 P01 lock groups (paths below `crates/`):
 
@@ -916,7 +930,7 @@ reviews found no issues; diff checks passed.
 These groups support accepting poison access, not declaring the surrounding
 functions panic-free. No new input-triggered panic was reproduced by this review.
 P05 is a concrete contract question to resolve before classifying the remaining
-explicit set as accepted; P02 also needs its full serialization proof.
+explicit set as accepted. P02's serializer proof is now recorded above.
 
 ## Proposed SUB-633 tracking changes
 

@@ -1322,7 +1322,12 @@ fn readable_yaml_error_path(message: String, path: &[PathSeg]) -> String {
 }
 
 /// Render a blueprint back to YAML. Used by `show` to echo a registered
-/// blueprint; serialization of the value type is infallible.
+/// blueprint. Its serializers emit only YAML-supported scalars, sequences and
+/// maps: durations/filters become strings, VFS/secrets become maps, and OAuth
+/// uses an internally tagged map. There are no bytes, nested YAML enum tags or
+/// custom rejection paths; the destination is an in-memory string. Revisit this
+/// invariant when adding a field or custom serializer. Resource limits on large
+/// values (including recursive filter formatting) are a separate concern.
 pub fn to_yaml(blueprint: &Blueprint) -> String {
     serde_yml::to_string(blueprint).expect("blueprint serialization is infallible")
 }
