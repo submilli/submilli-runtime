@@ -85,6 +85,7 @@ separate resource/dependency backlog.
 | R17 | Complete: retained | Keep worker/client construction errors and ownership |
 | R18 | Complete: already simplified | Poison-only reversion already implemented; preserve real backend errors |
 | R19 | Complete: retained | Keep direct wire maps and retry classification loop |
+| R20 | Complete: retained | Keep bounded unordered collection and positional sort |
 
 ### R01 execution evidence
 
@@ -396,6 +397,18 @@ and remote-provider errors. Existing retry-wrapper tests describe the intended
 classification; no network call or behavior change is involved. Source reviewed,
 documentation-only, no tests rerun. R19 is resolved as retention. Three
 independent reviewers reported no findings; diff checks passed.
+
+### R20 execution evidence
+
+The batch dispatcher creates one indexed future per prompt, collects with
+`buffer_unordered` under the configured concurrency bound, and sorts completed
+outcomes by index. This is compact and has no invariant-only error API. Restoring
+semaphores and optional result slots adds machinery without a measured benefit.
+Retain the current implementation. Existing tests cover varied completion order,
+concurrency bounds, empty/single batches and cancellation of active dispatches.
+This decision changes no dispatch, accounting or cancellation behavior.
+Documentation-only source review; no tests rerun. Three independent reviewers
+reported no findings; diff checks passed.
 
 ## Completed fixes: candidates and decisions
 
