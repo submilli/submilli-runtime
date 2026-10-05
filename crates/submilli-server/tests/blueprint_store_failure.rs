@@ -1,4 +1,7 @@
 //! Store failures must stay distinct from missing names at every request boundary.
+#[path = "common/in_memory_config.rs"]
+mod in_memory_config;
+
 use std::sync::{
     Arc,
     atomic::{AtomicBool, AtomicUsize, Ordering},
@@ -119,7 +122,7 @@ impl Harness {
         let state = AppState::new(ServerConfig {
             blueprints: Some(store.clone()),
             session_storage_root: Some(root.path().into()),
-            ..ServerConfig::default()
+            ..in_memory_config::config()
         })
         .unwrap();
         Self {

@@ -587,7 +587,7 @@ impl Inferer<'_> {
                 {
                     self.check_nested_function_use(index, span)?;
                 }
-                Ok(self.resolve_ident(ident, span))
+                self.resolve_ident(ident, span)
             }
             ExprKind::Binary { op, lhs, rhs } => {
                 self.infer_binary(op, lhs, rhs, expected, keeps_literal, span)
@@ -797,7 +797,20 @@ impl Inferer<'_> {
         Ok((id, ty))
     }
 
-    fn resolve_ident(&mut self, ident: Ident, span: Span) -> (TypedExprKind, Type) {
+    fn resolve_ident(
+        &mut self,
+        ident: Ident,
+        span: Span,
+    ) -> Result<(TypedExprKind, Type), CompilerFailure> {
+        // Another clause's declaration hides every binding and namespace of the
+        // name from outside the `switch`.
+        if self
+            .declaration_in_another_case_clause(&ident.name)
+            .is_some()
+        {
+            self.report_unresolved_identifier(&ident.name, span);
+            return Ok(unresolved_ref(ident));
+        }
         if let Some(entry) = self.scopes.get(&ident.name) {
             // Plan 75.8: consult the active narrow-scope stack. If
             // this binding has been narrowed in an enclosing branch,
@@ -812,15 +825,15 @@ impl Inferer<'_> {
             if let Some(view) = self.lookup_narrowed_view(&path) {
                 let binding = view.binding.clone();
                 let narrowed_ty = view.narrowed_ty.clone();
-                return (TypedExprKind::LocalNarrowRef { binding, path }, narrowed_ty);
+                return Ok((TypedExprKind::LocalNarrowRef { binding, path }, narrowed_ty));
             }
-            return (
+            return Ok((
                 TypedExprKind::LocalRef {
                     ident: ident.clone(),
                     boxed: false,
                 },
                 entry.ty.clone(),
-            );
+            ));
         }
         // `JSON` is a compiler-intrinsic namespace
         // recognised only as the head of a member call
@@ -829,7 +842,10 @@ impl Inferer<'_> {
         // because the member-access expression infers its receiver via
         // `infer_expr` first. A top-level `JSON` of the user's own is an
         // ordinary value and resolves below.
-        if ident.name == "JSON" && !self.top_symbols.contains_key("JSON") {
+        if ident.name == "JSON"
+            && !self.top_symbols.contains_key("JSON")
+            && !self.is_later_global("JSON")
+        {
             self.error_with_help(
                 span,
                 "`JSON` is a compiler intrinsic, not a value".to_string(),
@@ -840,15 +856,11 @@ impl Inferer<'_> {
                         .to_string(),
                 ],
             );
-            return (
-                TypedExprKind::LocalRef {
-                    ident,
-                    boxed: false,
-                },
-                Type::Error,
-            );
+            return Ok(unresolved_ref(ident));
         }
-        if let Some(entry) = self.top_symbols.get(&ident.name) {
+        let visible = !self.hides_later_global(&ident.name, span)?;
+        let global = self.top_symbols.get(&ident.name).filter(|_| visible);
+        if let Some(entry) = global {
             let mangled = entry.mangled_name.clone();
             // Plan 75.8: globals narrow too (TS-compatible — TS
             // narrows non-exported module-level lets and all consts).
@@ -861,13 +873,13 @@ impl Inferer<'_> {
             if let Some(view) = self.lookup_narrowed_view(&global_path) {
                 let binding = view.binding.clone();
                 let narrowed_ty = view.narrowed_ty.clone();
-                return (
+                return Ok((
                     TypedExprKind::LocalNarrowRef {
                         binding,
                         path: global_path,
                     },
                     narrowed_ty,
-                );
+                ));
             }
             // Reject generic functions used as first-class values —
             // `let f = identity` and friends. Rationale: a generic
@@ -886,13 +898,13 @@ impl Inferer<'_> {
                         ident.name,
                     ),
                 );
-                return (
+                return Ok((
                     TypedExprKind::FunctionRef {
                         mangled,
                         name: ident.clone(),
                     },
                     Type::Error,
-                );
+                ));
             }
             let (kind, ty) = match &entry.kind {
                 ValueKind::Function {
@@ -924,14 +936,16 @@ impl Inferer<'_> {
                     ty.clone(),
                 ),
             };
-            return (kind, ty);
+            return Ok((kind, ty));
         }
         // namespace symbol (`Math`, `Temporal`, …) — sourced
         // from any loaded `PackageDeclaration` — used as a bare value, e.g.
         // `let x = Math;`. Same shape as the namespace-not-
         // a-value error, with a help block pointing at member-access.
-        if self.namespace_symbols.contains_key(&ident.name) {
-            return self.reject_bare_namespace_symbol(ident, span);
+        // A later declaration of the name shadows the namespace, but isn't
+        // declared yet: report the name as unresolved.
+        if self.namespace_symbols.contains_key(&ident.name) && !self.is_later_global(&ident.name) {
+            return Ok(self.reject_bare_namespace_symbol(ident, span));
         }
 
         // namespace import used as a bare value. The
@@ -948,13 +962,7 @@ impl Inferer<'_> {
                         .to_string(),
                 ],
             );
-            return (
-                TypedExprKind::LocalRef {
-                    ident,
-                    boxed: false,
-                },
-                Type::Error,
-            );
+            return Ok(unresolved_ref(ident));
         }
         // Enum types used as a bare value (without `.Variant`) get
         // a tailored diagnostic: the name resolves in type-space
@@ -990,13 +998,7 @@ impl Inferer<'_> {
                     ),
                     help,
                 );
-                return (
-                    TypedExprKind::LocalRef {
-                        ident,
-                        boxed: false,
-                    },
-                    Type::Error,
-                );
+                return Ok(unresolved_ref(ident));
             }
             // Class names are not first-class values either — only `new C(…)`
             // and static member access give them expression meaning.
@@ -1022,13 +1024,7 @@ impl Inferer<'_> {
                     format!("`{}` is a class, not a value", ident.name),
                     help,
                 );
-                return (
-                    TypedExprKind::LocalRef {
-                        ident,
-                        boxed: false,
-                    },
-                    Type::Error,
-                );
+                return Ok(unresolved_ref(ident));
             }
         }
         // `WeakMap` / `WeakSet` are intentionally out of scope.
@@ -1042,13 +1038,7 @@ impl Inferer<'_> {
                     "use `Map<K, V>` instead — Submilli has no weak references, so `WeakMap` would behave identically to `Map`".to_string(),
                 ],
             );
-            return (
-                TypedExprKind::LocalRef {
-                    ident,
-                    boxed: false,
-                },
-                Type::Error,
-            );
+            return Ok(unresolved_ref(ident));
         }
         if ident.name == "WeakSet" {
             self.error_with_help(
@@ -1058,13 +1048,7 @@ impl Inferer<'_> {
                     "use `Set<T>` instead — Submilli has no weak references, so `WeakSet` would behave identically to `Set`".to_string(),
                 ],
             );
-            return (
-                TypedExprKind::LocalRef {
-                    ident,
-                    boxed: false,
-                },
-                Type::Error,
-            );
+            return Ok(unresolved_ref(ident));
         }
         // legacy `Date` is intentionally out of scope. One branch
         // covers `new Date(...)`, `Date.now()`, `Date.parse(...)`,
@@ -1078,32 +1062,10 @@ impl Inferer<'_> {
                     "use `Temporal.Now.instant()` for wall-clock time, or `Temporal.ZonedDateTime` / `Temporal.Instant` for time values. `Date` is intentionally out of scope — see Temporal for a correct, immutable, timezone-aware time API.".to_string(),
                 ],
             );
-            return (
-                TypedExprKind::LocalRef {
-                    ident,
-                    boxed: false,
-                },
-                Type::Error,
-            );
+            return Ok(unresolved_ref(ident));
         }
-        let help: Vec<String> = self
-            .closest_local_or_global(&ident.name)
-            .map(|s| vec![format!("did you mean `{}`?", s)])
-            .unwrap_or_default();
-        self.error_with_help(
-            span,
-            format!("unresolved identifier `{}`", ident.name),
-            help,
-        );
-        // Placeholder for unresolved names. `Type::Error` already suppresses
-        // downstream cascades, so the variant choice doesn't propagate.
-        (
-            TypedExprKind::LocalRef {
-                ident,
-                boxed: false,
-            },
-            Type::Error,
-        )
+        self.report_unresolved_identifier(&ident.name, span);
+        Ok(unresolved_ref(ident))
     }
 
     fn infer_binary(
@@ -6151,12 +6113,16 @@ impl Inferer<'_> {
         ))
     }
 
-    /// Whether a user binding named `name` — local or top-level — hides the prelude
-    /// namespace of that name (`const Math = { … }` makes `Math.floor` the user's).
+    /// Whether a user binding named `name` — local, top-level, or another `case`
+    /// clause's — hides the prelude namespace of that name (`const Math = { … }`
+    /// makes `Math.floor` the user's).
     /// Only for namespaces the prelude does not itself bind at top level: `BigInt` is a
     /// top-level constructor binding, so it would always read as shadowed.
     fn shadows_namespace(&self, name: &str) -> bool {
-        self.scopes.get(name).is_some() || self.top_symbols.contains_key(name)
+        self.scopes.get(name).is_some()
+            || self.top_symbols.contains_key(name)
+            || self.is_later_global(name)
+            || self.declaration_in_another_case_clause(name).is_some()
     }
 
     fn infer_field_access(
@@ -7773,7 +7739,7 @@ impl Inferer<'_> {
         span: Span,
     ) -> Result<(TypedExprKind, Type), crate::compiler_error::CompilerFailure> {
         // Function-local first, then top-level (mirrors `infer_assign`).
-        if let Some(entry) = self.scopes.get(&target.name).cloned() {
+        if let Some(entry) = self.visible_local(&target.name).cloned() {
             if entry.is_const {
                 self.report_const_local_write(&target, &entry);
             }
@@ -7835,7 +7801,9 @@ impl Inferer<'_> {
                 result_ty,
             ));
         }
-        Ok(if let Some(entry) = self.top_symbols.get(&target.name) {
+        let visible = self.top_symbol_visible(&target.name, target.span)?;
+        let global = self.top_symbols.get(&target.name).filter(|_| visible);
+        Ok(if let Some(entry) = global {
             let kind_clone = entry.kind.clone();
             let prev_span = entry.declaration_span;
             let mangled = entry.mangled_name.clone();
@@ -7889,15 +7857,7 @@ impl Inferer<'_> {
                 }
             }
         } else {
-            let help: Vec<String> = self
-                .closest_local_or_global(&target.name)
-                .map(|s| vec![format!("did you mean `{}`?", s)])
-                .unwrap_or_default();
-            self.error_with_help(
-                span,
-                format!("unresolved identifier `{}`", target.name),
-                help,
-            );
+            self.report_unresolved_identifier(&target.name, target.span);
             (
                 TypedExprKind::PostfixUnary {
                     op,
@@ -10478,6 +10438,18 @@ fn widen_assertion_source(source: &Type) -> Type {
         Type::Union(members) => Type::union(members.iter().map(widen_assertion_source).collect()),
         source => source.widen_literal(),
     }
+}
+
+/// The placeholder for a name that doesn't resolve to a value. `Type::Error`
+/// suppresses downstream cascades, so the reference kind doesn't matter.
+fn unresolved_ref(ident: Ident) -> (TypedExprKind, Type) {
+    (
+        TypedExprKind::LocalRef {
+            ident,
+            boxed: false,
+        },
+        Type::Error,
+    )
 }
 
 #[cfg(test)]

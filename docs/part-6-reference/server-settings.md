@@ -36,7 +36,8 @@ flat names listed. A dash means the form doesn't exist.
 | `mcp_allowed_hosts` | `--mcp-allowed-host`, repeatable | `SUBMILLI_MCP_ALLOWED_HOSTS`, comma-separated | list of `host[:port]` | `[]` | `Host` headers the MCP endpoint accepts beside the loopback names. See [`mcp_allowed_hosts`](#mcp_allowed_hosts). |
 | `mcp_oauth` | — | — | block | no providers | OAuth client registrations for MCP servers. See [`mcp_oauth`](#mcp_oauth). |
 | `github_token_file` | — | — | path | none | GitHub token for package installs. See [`github_token_file`](#github_token_file). |
-| `blueprint_dir` | `--blueprint-dir` | `SUBMILLI_BLUEPRINT_DIR` | path | `$SUBMILLI_HOME/server/blueprints` | Registered blueprints. See [Directories](#directories). |
+| `database_path` | `--database-path` | `SUBMILLI_DATABASE_PATH` | path | `$SUBMILLI_HOME/server/db/submilli.db` | SQLite database file. |
+| `blueprint_dir` | `--blueprint-dir` | `SUBMILLI_BLUEPRINT_DIR` | path | `$SUBMILLI_HOME/server/blueprints` | Obsolete. |
 | `session_store_dir` | `--session-store-dir` | `SUBMILLI_SESSION_STORE_DIR` | path | `$SUBMILLI_HOME/server/sessions` | Session lifecycle records. |
 | `vfs_session_dir` | `--vfs-session-dir` | `SUBMILLI_VFS_SESSION_DIR` | path | `$SUBMILLI_HOME/server/vfs/sessions` | Files of `per_session` filesystems. |
 | `vfs_ephemeral_dir` | `--vfs-ephemeral-dir` | `SUBMILLI_VFS_EPHEMERAL_DIR` | path | the OS temp directory | Scratch directories of `ephemeral` filesystems. |
@@ -180,7 +181,7 @@ mcp_allowed_hosts:
 
 | Setting | Holds | Default |
 | --- | --- | --- |
-| `blueprint_dir` | Registered blueprints. | `$SUBMILLI_HOME/server/blueprints` |
+| `blueprint_dir` | Obsolete. | `$SUBMILLI_HOME/server/blueprints` |
 | `session_store_dir` | Open sessions' lifecycle records, so sessions and idle timeouts survive a restart. | `$SUBMILLI_HOME/server/sessions` |
 | `vfs_session_dir` | The files of each session with a `per_session` filesystem. | `$SUBMILLI_HOME/server/vfs/sessions` |
 | `vfs_ephemeral_dir` | One directory per run of an `ephemeral` filesystem, deleted when the run ends. | The OS temp directory |
@@ -378,9 +379,17 @@ trail](/docs/reference/audit-trail) lists every record and its fields.
 ## Shutdown
 
 SIGTERM, SIGINT, `submilli server stop`, and `POST /v1/shutdown` each stop the
-server. It stops accepting connections and lets running requests finish for
-up to `shutdown_grace` seconds. A program still running then is cut off. A
-second signal skips the wait.
+server. It stops accepting connections and new request work. Running handlers
+continue even if their clients disconnect. Connected clients can receive their
+responses while the server drains.
+
+HTTP responses, owned request tasks, and database cleanup share the
+`shutdown_grace` deadline. When the deadline expires, unfinished handlers are
+cancelled. A second signal skips the remaining wait. Database cleanup can
+continue until the process exits.
+
+A disconnect during request-body upload can still cause a read error. Streaming
+a response remains tied to its connection.
 
 ## Command-line help
 
@@ -405,9 +414,11 @@ Options:
       --tls-key-file <PATH>
           Private key PEM file matching the certificate. Read at startup; restart to rotate. Env: `$SUBMILLI_TLS_KEY_FILE`
       --blueprint-dir <BLUEPRINT_DIR>
-          Directory the registered blueprints are persisted to and loaded from on startup. Created if absent. [default: ~/.submilli/server/blueprints (override the base with $SUBMILLI_HOME)] Env: `$SUBMILLI_BLUEPRINT_DIR`
+          Source directory for the one-time blueprint import into SQLite. The directory moves to archive/blueprints/ beside its original location. [default: ~/.submilli/server/blueprints (override the base with $SUBMILLI_HOME)] Env: `$SUBMILLI_BLUEPRINT_DIR`
       --session-store-dir <SESSION_STORE_DIR>
           Directory the session lifecycle store persists to and loads from on startup — the bookkeeping that makes resume and idle reaping survive a restart. Mount on durable storage. [default: ~/.submilli/server/sessions] Env: `$SUBMILLI_SESSION_STORE_DIR`
+      --database-path <PATH>
+          Server SQLite database file. The parent directory is created at boot. [default: ~/.submilli/server/db/submilli.db] Env: `$SUBMILLI_DATABASE_PATH`
       --vfs-session-dir <VFS_SESSION_DIR>
           Durable root for `per_session` VFS directories. Mount on a PersistentVolume so a session's files survive a server restart. [default: ~/.submilli/server/vfs/sessions] Env: `$SUBMILLI_VFS_SESSION_DIR`
       --vfs-ephemeral-dir <VFS_EPHEMERAL_DIR>

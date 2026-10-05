@@ -74,9 +74,23 @@ pub fn execute(args: Args) -> anyhow::Result<ExitCode> {
 }
 
 fn mcp_docs(server: &str, path: &Path) -> anyhow::Result<ExitCode> {
+    mcp_docs_with_setup(
+        server,
+        path,
+        submilli_shared::mcp::schema_registry::initialize_builtin_packs,
+    )
+}
+
+fn mcp_docs_with_setup(
+    server: &str,
+    path: &Path,
+    initialize_mcp: fn() -> Result<(), submilli_shared::mcp::schema_registry::SchemaPackError>,
+) -> anyhow::Result<ExitCode> {
     use interpreter::runtime::{NetworkPolicy, ReqwestHttpClient};
     use submilli_shared::mcp::discovery::{DiscoveryAuth, discover_selected_local};
     use submilli_shared::mcp_token::OAuthTokenManager;
+
+    initialize_mcp().context("MCP schema initialization failed")?;
 
     let yaml =
         std::fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
@@ -104,7 +118,8 @@ fn mcp_docs(server: &str, path: &Path) -> anyhow::Result<ExitCode> {
         &blueprint.name,
         &blueprint,
         &selected,
-    ))?;
+    ))?
+    .context("MCP discovery initialization failed")?;
     for warning in catalog.warnings() {
         eprintln!("warning: @mcp/{}: {}", warning.server, warning.message);
     }
@@ -119,4 +134,28 @@ fn mcp_docs(server: &str, path: &Path) -> anyhow::Result<ExitCode> {
         packages::render_declarations(&package.defs)
     );
     Ok(ExitCode::SUCCESS)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn invalid_mcp_assets_fail_before_reading_the_blueprint() {
+        let root = tempfile::tempdir().unwrap();
+        let error = mcp_docs_with_setup("test", &root.path().join("missing.yaml"), || {
+            Err(
+                submilli_shared::mcp::schema_registry::SchemaPackError::MissingTools {
+                    pack: "injected",
+                },
+            )
+        })
+        .unwrap_err();
+        assert_eq!(error.to_string(), "MCP schema initialization failed");
+        assert!(
+            error
+                .chain()
+                .any(|cause| cause.to_string().contains("injected"))
+        );
+    }
 }

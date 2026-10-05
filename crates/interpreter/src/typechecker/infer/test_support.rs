@@ -141,6 +141,8 @@ pub(super) fn with_source_inferer(source: &str, test: impl FnOnce(&mut super::In
         super_seen: false,
         read_before_super: false,
         in_nested_function: false,
+        later_globals: Default::default(),
+        switch_frames: Vec::new(),
         super_call_is_statement: false,
         in_super_arguments: false,
         in_super_handler: false,

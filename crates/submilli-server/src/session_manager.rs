@@ -1011,7 +1011,9 @@ impl SessionManager {
     }
 
     fn lock(&self) -> std::sync::MutexGuard<'_, State> {
-        // Poisoned state is unsupported; see AGENTS.md accepted poisoned-lock panics.
+        // Poison may leave session bindings and their resource ownership partly
+        // updated. AGENTS.md permits poisoned-lock panics, including during cleanup,
+        // instead of recovery; it does not permit the panic that caused poisoning.
         self.inner
             .lock()
             .expect("session manager state lock poisoned")

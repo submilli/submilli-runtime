@@ -105,6 +105,11 @@ impl ResponseBudget {
         std::io::Error::new(std::io::ErrorKind::FileTooLarge, "MCP response limit")
     }
 
+    #[cfg(test)]
+    pub(super) fn inject_allocation_failure(&self) {
+        let _ = self.allocation_failed();
+    }
+
     fn allocation_failed(&self) -> std::io::Error {
         self.latch(RESPONSE_INTERNAL);
         std::io::Error::from(std::io::ErrorKind::OutOfMemory)

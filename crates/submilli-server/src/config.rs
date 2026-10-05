@@ -29,12 +29,13 @@ pub struct ServerConfig {
     pub network_policy: NetworkPolicy,
     /// When `None`, `AppState::new` installs an in-memory store.
     pub sessions: Option<Arc<dyn SessionStore>>,
-    /// Explicit blueprint store. Takes precedence over `blueprint_dir`; mainly
-    /// for tests and embedded callers that inject their own store.
+    /// Prepared blueprint store, required by `AppState::new`.
+    /// `serve` selects and migrates a store when this is unset.
+    /// An explicit store takes precedence over the database and source directory.
     pub blueprints: Option<Arc<dyn BlueprintStore>>,
-    /// Directory backing a file-persisted blueprint store. Used only when
-    /// `blueprints` is `None`; when both are `None`, `AppState::new` installs an
-    /// in-memory store.
+    /// Source directory for the SQLite migration performed by `serve`.
+    /// Without a database, startup selects a file store for this directory,
+    /// or an in-memory store when unset. Explicit blueprint stores take precedence.
     pub blueprint_dir: Option<PathBuf>,
     /// Explicit durable session store. Takes precedence over `session_store_dir`;
     /// mainly for tests and embedded callers that inject their own store.
@@ -49,7 +50,8 @@ pub struct ServerConfig {
     /// callers leave this unset and may inject their own stores.
     pub database_path: Option<PathBuf>,
     /// Open database supplied by the serving boundary. Takes precedence over
-    /// `database_path` when both are set; embedded callers can leave both unset.
+    /// `database_path` when both are set. Direct `AppState` callers must also
+    /// supply a migrated blueprint store; `serve` constructs and migrates it.
     pub database: Option<Arc<crate::database::ServerDatabase>>,
     /// Explicit idempotency ledger, backing `Idempotency-Key` on the session
     /// execute endpoint. When `None` and `session_store_dir` is set,
@@ -1160,5 +1162,13 @@ fn resolve_links(path: &Path) -> PathBuf {
             return path.to_path_buf();
         }
         missing.push(name);
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn test_config() -> ServerConfig {
+    ServerConfig {
+        blueprints: Some(Arc::new(crate::blueprint::InMemoryBlueprintStore::default())),
+        ..Default::default()
     }
 }

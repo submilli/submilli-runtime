@@ -6,6 +6,9 @@
 //! server `/v1/execute` path — blueprint → `BlueprintAuthProxy` → the real
 //! `ureq` client → the mock server, which validates the header on the wire.
 
+#[path = "common/in_memory_config.rs"]
+mod in_memory_config;
+
 use std::io::{BufRead, BufReader, Write};
 use std::net::TcpListener;
 use std::sync::{Arc, Mutex};
@@ -152,7 +155,7 @@ async fn auth_proxy_injects_header_to_real_server() {
     let router = router_with_blueprint(
         ServerConfig {
             secret_store: Some(store),
-            ..ServerConfig::default()
+            ..in_memory_config::config()
         },
         BLUEPRINT,
     );
@@ -190,7 +193,7 @@ async fn auth_proxy_injects_store_secret_to_real_server() {
     let store = store_with("api/token", STORE_TOKEN).await;
     let config = ServerConfig {
         secret_store: Some(store),
-        ..ServerConfig::default()
+        ..in_memory_config::config()
     };
     let router = app(AppState::new(config).expect("AppState"));
 
@@ -232,7 +235,7 @@ async fn auth_proxy_bearer_method_injects_header() {
     let router = router_with_blueprint(
         ServerConfig {
             secret_store: Some(store),
-            ..ServerConfig::default()
+            ..in_memory_config::config()
         },
         &blueprint,
     );
@@ -275,7 +278,7 @@ async fn auth_proxy_basic_method_injects_base64_header() {
     let router = router_with_blueprint(
         ServerConfig {
             secret_store: Some(store),
-            ..ServerConfig::default()
+            ..in_memory_config::config()
         },
         &blueprint,
     );
@@ -308,7 +311,7 @@ async fn plain_http_denials_reach_execute_without_touching_the_network() {
         let yaml = format!(
             "name: gates\ndefault: allow\nallow_insecure_http: {blueprint}\nsecrets:\n  K: {{ harness: {{}} }}\nauth_proxy:\n- host: 127.0.0.1\n  allow_insecure_http: {rule}\n  auth: {{ bearer: K }}\n"
         );
-        let router = router_with_blueprint(ServerConfig::default(), &yaml);
+        let router = router_with_blueprint(in_memory_config::config(), &yaml);
         for operation in [
             "get(\"http://127.0.0.1:1/?token=never-print-this\");",
             "download(\"http://127.0.0.1:1/?token=never-print-this\", \"/payload\");",

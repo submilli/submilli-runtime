@@ -106,29 +106,44 @@ notes can supplement the curated notes. Update notes if the candidate changes.
 
 Select checks using `AGENTS.md` and the entire release range, including preparation
 changes. Version-only preparation does not erase runtime changes since the prior
-release. Conformance is mandatory for every runtime release, regardless of the
-change range; ordinary development and PR checks do not satisfy this gate.
+release. All nightly-only checks are mandatory for every runtime
+release, regardless of the change range; ordinary development and PR checks do
+not satisfy these gates.
 
 - Run Rust formatting and workspace clippy for manifest/build changes. Check both
   release binaries with `--version` against the selected version.
 - Run workspace/package verification with `SUBMILLI_SKIP_HTTP_TESTS=1`,
-  `SUBMILLI_FULL_TEST=1`, `SUBMILLI_CONFORMANCE_TEST=0`, and package
+  `SUBMILLI_FULL_TEST=1`, `SUBMILLI_TEST_NIGHTLY_ONLY=0`, and package
   `--skip-network` as documented in `AGENTS.md`. Reuse completed results for the
   same candidate and environment. Enable required affected HTTP tests and
   explicitly supply credentials for live package tests. Report skipped coverage
   separately.
+- Run both compiler determinism sweeps locally on the final release candidate,
+  before tagging, pushing, or publishing:
+
+  ```sh
+  SUBMILLI_SKIP_HTTP_TESTS=1 SUBMILLI_TEST_NIGHTLY_ONLY=1 \
+    cargo test --locked -p interpreter --test determinism -- --nocapture
+  ```
+
+  `SUBMILLI_FULL_TEST` does not enable determinism. Require successful execution
+  of both `scripts_compile_deterministically` and
+  `packages_compile_deterministically`; a skipped or filtered sweep is not a pass.
+  Record the candidate revision, preparation diff, command, and both results.
+  Failures or unavailable checks block publication. Nightly results do not
+  substitute for this local pre-release verification.
 - Run both complete conformance suites locally on the operator machine, from
   the final release candidate checkout, before tagging, pushing, or publishing.
   Do not dispatch a GitHub Actions conformance run for release verification;
-  the conformance workflow is for nightly checks only. This is the explicit pre-release exception
+  the Nightly tests workflow is for nightly checks only. This is the explicit pre-release exception
   to keeping conformance disabled during development and PR verification.
   `SUBMILLI_FULL_TEST` does not enable conformance. Clear inherited filters and
-  baseline-update/output settings and opt in with the dedicated flag:
+  baseline-update/output settings and opt in with the nightly-only flag:
 
   ```sh
   env -u CONFORMANCE_FILTER -u UPDATE_TYPESCRIPT_EXPECTED \
     -u TYPESCRIPT_PORTED_CASES -u TYPESCRIPT_CHECKS_OUT \
-    SUBMILLI_SKIP_HTTP_TESTS=1 SUBMILLI_CONFORMANCE_TEST=1 \
+    SUBMILLI_SKIP_HTTP_TESTS=1 SUBMILLI_TEST_NIGHTLY_ONLY=1 \
     cargo test --locked -p conformance --test conformance --test typescript -- --nocapture
   ```
 
@@ -138,6 +153,48 @@ change range; ordinary development and PR checks do not satisfy this gate.
   candidate revision, any preparation diff, command, and both suite results.
   Failures or unavailable checks block release publication. Nightly results for
   any revision do not substitute for this local pre-release verification.
+- Run compiler type-limit tests on the same final candidate:
+
+  ```sh
+  SUBMILLI_SKIP_HTTP_TESTS=1 SUBMILLI_TEST_NIGHTLY_ONLY=1 \
+    cargo test --locked -p interpreter --test type_limits -- --nocapture
+  ```
+
+  Require all test bodies to execute successfully. Record the candidate and
+  results; failures or unavailable checks block publication.
+- Run the Git memory-limit tests on the same final candidate:
+
+  ```sh
+  SUBMILLI_SKIP_HTTP_TESTS=1 SUBMILLI_TEST_NIGHTLY_ONLY=1 \
+    cargo test --locked -p interpreter --test git_memory -- --nocapture
+  ```
+
+  Require both memory-limit test bodies to execute successfully. The optional
+  ignored calibration report is not required. Record the candidate and results;
+  failures or unavailable checks block publication.
+- Run host memory bounds and server memory caps on the same final candidate:
+
+  ```sh
+  SUBMILLI_SKIP_HTTP_TESTS=1 SUBMILLI_TEST_NIGHTLY_ONLY=1 \
+    cargo test --locked -p interpreter --test host_memory -- --nocapture
+  SUBMILLI_SKIP_HTTP_TESTS=1 SUBMILLI_TEST_NIGHTLY_ONLY=1 \
+    cargo test --locked -p submilli-server --test memory_cap -- --nocapture
+  ```
+
+  Require all test bodies to execute successfully. Record the candidate and
+  results; failures or unavailable checks block publication.
+- Run both expensive CLI fuel-accounting tests on the same final candidate:
+
+  ```sh
+  SUBMILLI_SKIP_HTTP_TESTS=1 SUBMILLI_TEST_NIGHTLY_ONLY=1 \
+    cargo test --locked -p submilli --test run accessors_do_not_pay_for_the_whole_receiver -- --exact --nocapture
+  SUBMILLI_SKIP_HTTP_TESTS=1 SUBMILLI_TEST_NIGHTLY_ONLY=1 \
+    cargo test --locked -p submilli --test run operations_charge_for_the_input_they_process -- --exact --nocapture
+  ```
+
+  Require both test bodies to execute successfully; skipped or filtered checks
+  are not passes. Record the candidate and results. Failures or unavailable
+  checks block publication. `SUBMILLI_FULL_TEST` does not enable these tests.
 - Check/build the documentation site for book changes. Run
   `helm unittest charts/submilli` for chart changes and relevant additional checks
   from `.github/workflows/chart-ci.yml` for behavioral chart changes.
@@ -150,10 +207,10 @@ change range; ordinary development and PR checks do not satisfy this gate.
 Stage only intended release files, inspect the staged diff, and commit with
 `Release vX.Y.Z` (include relevant issue IDs if applicable). Fetch main again.
 If it advanced, integrate the new commits before tagging, reassess the range and
-notes, and rerun affected verification plus both complete conformance suites on
-the integrated candidate. Any candidate changes after conformance verification
-invalidate that gate; rerun both suites before tagging. Confirm the candidate fast-forwards remote
-main and the release worktree is clean.
+notes, and rerun affected verification plus all nightly-only checks on the
+integrated candidate. Any candidate changes after those checks invalidate their
+gates; rerun them before tagging. Confirm the candidate fast-forwards remote main
+and the release worktree is clean.
 
 Set `release_remote`, `release_tag`, and `release_commit` to the verified canonical
 remote, tag, and full commit SHA; set `release_repo` to the GitHub repository and
@@ -215,9 +272,9 @@ does not trigger another workflow through a release event.
 
 Before retrying mutations, inspect remote main, the tag, release, assets, and
 workflow runs. Reuse matching state; stop on tag/commit mismatches. If the tag
-exists but no release does, require recorded successful conformance results for
-that exact candidate from the operator machine, or run both suites locally on
-its tagged source before publication.
+exists but no release does, require recorded successful results for all nightly-only
+checks for that exact candidate from the operator machine, or run those checks
+locally on its tagged source before publication.
 Then continue at creation after the remaining verification. Inspect and
 publish an existing draft rather than creating another release. Do not recreate
 a published release.

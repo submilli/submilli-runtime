@@ -135,7 +135,9 @@ async fn reject_invalid_variables(
 }
 
 fn get_or_build(state: &AppState, name: &str, blueprint: &Blueprint) -> Arc<McpService> {
-    // Poisoned state is unsupported; see AGENTS.md accepted poisoned-lock panics.
+    // Poison means a panic may have interrupted service registration or eviction.
+    // AGENTS.md permits poisoned-lock panics rather than reusing partial cache state;
+    // it does not permit the panic that caused poisoning. See AppStateInner's field.
     let mut cache = state
         .mcp_services()
         .lock()

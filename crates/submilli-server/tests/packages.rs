@@ -1,5 +1,8 @@
 //! REST package-discovery endpoint tests, in-process via `oneshot`.
 
+#[path = "common/in_memory_config.rs"]
+mod in_memory_config;
+
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use http_body_util::BodyExt;
@@ -16,7 +19,7 @@ async fn get(route: &str) -> (StatusCode, Value) {
             submilli_server::blueprint::InMemoryBlueprintStore::seed([blueprint])
                 .expect("seed blueprints"),
         )),
-        ..ServerConfig::default()
+        ..in_memory_config::config()
     })
     .expect("AppState");
     let uri = &format!("/v1/blueprints/open{route}");
@@ -337,7 +340,7 @@ mod blueprint_scoped {
         let config = ServerConfig {
             blueprints: Some(blueprints),
             package_store_root: Some(store_root.to_path_buf()),
-            ..ServerConfig::default()
+            ..in_memory_config::config()
         };
         app(AppState::new(config).expect("build AppState"))
     }
@@ -471,7 +474,7 @@ mod blueprint_scoped {
                 blueprints: Some(Arc::new(
                     InMemoryBlueprintStore::seed([blueprint]).expect("seed blueprints"),
                 )),
-                ..ServerConfig::default()
+                ..in_memory_config::config()
             })
             .unwrap());
             for query in ["", "models", "submilli:llm", "nothingmatchesthis"] {

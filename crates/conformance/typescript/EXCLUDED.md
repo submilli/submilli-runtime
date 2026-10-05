@@ -5,7 +5,7 @@ in `/`) is left out whole, with its subdirectories, except for any case in the s
 Written by `../typescript-baselines/port-suite.cjs`: change its lists or the porter,
 not this file. Declaration files (`.d.ts`) aren't cases, and `.tsx` files aren't read.
 
-3897 entries: 1696 not supported, 1019 multi-file or JavaScript, 717 the port changes what it checks, 99 duplicate, 297 checks too little, 69 porter failure.
+3896 entries: 1694 not supported, 1019 multi-file or JavaScript, 717 the port changes what it checks, 99 duplicate, 298 checks too little, 69 porter failure.
 
 | Case | Reason | Detail |
 |:-----|:-------|:-------|
@@ -38,7 +38,7 @@ not this file. Declaration files (`.d.ts`) aren't cases, and `.tsx` files aren't
 | `classes/classDeclarations/classAbstractKeyword/classAbstractAccessor.ts` | the port changes what it checks | `tsc` then reports TS7033 |
 | `classes/classDeclarations/classAbstractKeyword/classAbstractAsIdentifier.ts` | not supported | expected `(` after constructor name in `new` expression, on ` new abstract; ` |
 | `classes/classDeclarations/classAbstractKeyword/classAbstractAssignabilityConstructorFunction.ts` | not supported | expected `;` after expression, on ` abstract class A { } ` |
-| `classes/classDeclarations/classAbstractKeyword/classAbstractClinterfaceAssignability.ts` | not supported | construct signatures (SUB-1026: read as a method named `new`) |
+| `classes/classDeclarations/classAbstractKeyword/classAbstractClinterfaceAssignability.ts` | not supported | construct signatures |
 | `classes/classDeclarations/classAbstractKeyword/classAbstractConstructor.ts` | not supported | expected `;` after expression, on ` abstract class A { ` |
 | `classes/classDeclarations/classAbstractKeyword/classAbstractConstructorAssignability.ts` | not supported | expected `;` after expression, on ` abstract class B extends A {} ` |
 | `classes/classDeclarations/classAbstractKeyword/classAbstractCrashedOnce.ts` | the port changes what it checks | `tsc` then reports TS7010 |
@@ -71,7 +71,7 @@ not this file. Declaration files (`.d.ts`) aren't cases, and `.tsx` files aren't
 | `classes/classDeclarations/classBody/classWithEmptyBody.ts` | not supported | `as` to `C` is not yet supported: class types aren't yet supported as `as` targets, on ` let c: C = null as unknown as (C); ` |
 | `classes/classDeclarations/classDeclarationLoop.ts` | not supported | expected expression, on ` for (let i = 0; i < 10; ++i) { ` |
 | `classes/classDeclarations/classExtendingBuiltinType.ts` | not supported | unknown type `Function`, on ` class C2 extends Function { } ` |
-| `classes/classDeclarations/classExtendingClassLikeType.ts` | not supported | construct signatures (SUB-1026: read as a method named `new`) |
+| `classes/classDeclarations/classExtendingClassLikeType.ts` | not supported | construct signatures |
 | `classes/classDeclarations/classExtendingNull.ts` | checks too little | 0 after the port |
 | `classes/classDeclarations/classHeritageSpecification/classAppearsToHaveMembersOfObject.ts` | not supported | `as` to `C` is not yet supported: class types aren't yet supported as `as` targets, on ` let c: C = null as unknown as (C); ` |
 | `classes/classDeclarations/classHeritageSpecification/classExtendingOptionalChain.ts` | not supported | expected `;` after expression, on ` namespace A { ` |
@@ -171,7 +171,7 @@ not this file. Declaration files (`.d.ts`) aren't cases, and `.tsx` files aren't
 | `classes/members/classTypes/instancePropertyInClassType.ts` | not supported | expected `;` after expression, on ` namespace NonGeneric { ` |
 | `classes/members/classTypes/staticPropertyNotInClassType.ts` | not supported | expected `;` after expression, on ` namespace NonGeneric { ` |
 | `classes/members/constructorFunctionTypes/classWithConstructors.ts` | not supported | expected `;` after expression, on ` namespace NonGeneric { ` |
-| `classes/members/constructorFunctionTypes/classWithStaticMembers.ts` | not supported | static accessors are not supported, on ` static get x() { return 1; } ` |
+| `classes/members/constructorFunctionTypes/classWithStaticMembers.ts` | not supported | static accessors are not supported, on ` static get x(): number { return 1; } ` |
 | `classes/members/constructorFunctionTypes/constructorHasPrototypeProperty.ts` | not supported | expected `;` after expression, on ` namespace NonGeneric { ` |
 | `classes/members/inheritanceAndOverriding/derivedClassFunctionOverridesBaseClassAccessor.ts` | not supported | parameter requires a type annotation, on ` set x(v) { ` |
 | `classes/members/inheritanceAndOverriding/derivedClassIncludesInheritedMembers.ts` | the port changes what it checks | `tsc` then reports TS7006 |
@@ -179,9 +179,9 @@ not this file. Declaration files (`.d.ts`) aren't cases, and `.tsx` files aren't
 | `classes/members/inheritanceAndOverriding/derivedClassOverridesPrivates.ts` | checks too little | 2 after the port |
 | `classes/members/inheritanceAndOverriding/derivedClassOverridesProtectedMembers.ts` | not supported | `protected` is not supported, on ` protected a: typeof x; ` |
 | `classes/members/inheritanceAndOverriding/derivedClassOverridesProtectedMembers2.ts` | not supported | `protected` is not supported, on ` protected a: typeof x; ` |
-| `classes/members/inheritanceAndOverriding/derivedClassOverridesProtectedMembers3.ts` | not supported | static accessors are not supported, on ` static get t() { return x; } ` |
+| `classes/members/inheritanceAndOverriding/derivedClassOverridesProtectedMembers3.ts` | not supported | static accessors are not supported, on ` static get t(): { foo: string; } { return x; } ` |
 | `classes/members/inheritanceAndOverriding/derivedClassOverridesProtectedMembers4.ts` | not supported | `protected` is not supported, on ` protected a: typeof x; ` |
-| `classes/members/inheritanceAndOverriding/derivedClassOverridesPublicMembers.ts` | not supported | static accessors are not supported, on ` static get t() { return x; } ` |
+| `classes/members/inheritanceAndOverriding/derivedClassOverridesPublicMembers.ts` | not supported | static accessors are not supported, on ` static get t(): { foo: string; } { return x; } ` |
 | `classes/members/inheritanceAndOverriding/derivedClassOverridesWithoutSubtype.ts` | not supported | `any` is not supported, on ` foo: any; ` |
 | `classes/members/inheritanceAndOverriding/derivedClassTransitivity.ts` | not supported | optional function parameters are not yet supported, on ` foo(x?: string): void { } // ok to add optional parameters ` |
 | `classes/members/inheritanceAndOverriding/derivedClassTransitivity2.ts` | not supported | optional function parameters are not yet supported, on ` foo(x: number, y?: string): void { } // ok to add optional parameters ` |
@@ -191,7 +191,7 @@ not this file. Declaration files (`.d.ts`) aren't cases, and `.tsx` files aren't
 | `classes/members/inheritanceAndOverriding/derivedClassWithPrivateInstanceShadowingProtectedInstance.ts` | not supported | `protected` is not supported, on ` protected x: string; ` |
 | `classes/members/inheritanceAndOverriding/derivedClassWithPrivateInstanceShadowingPublicInstance.ts` | not supported | parameter requires a type annotation, on ` public set a(v) { } ` |
 | `classes/members/inheritanceAndOverriding/derivedClassWithPrivateStaticShadowingProtectedStatic.ts` | not supported | `protected` is not supported, on ` protected static x: string; ` |
-| `classes/members/inheritanceAndOverriding/derivedClassWithPrivateStaticShadowingPublicStatic.ts` | not supported | static accessors are not supported, on ` public static get a() { return 1; } ` |
+| `classes/members/inheritanceAndOverriding/derivedClassWithPrivateStaticShadowingPublicStatic.ts` | not supported | static accessors are not supported, on ` public static get a(): number { return 1; } ` |
 | `classes/members/inheritanceAndOverriding/derivedGenericClassWithAny.ts` | not supported | expected `,` or `>`, on ` class C<T extends number> { ` |
 | `classes/members/instanceAndStaticMembers/superInStaticMembers1.ts` | multi-file or JavaScript |  |
 | `classes/members/instanceAndStaticMembers/thisAndSuperInStaticMembers1.ts` | not supported | expected `;` after expression, on ` declare class B { ` |
@@ -211,9 +211,9 @@ not this file. Declaration files (`.d.ts`) aren't cases, and `.tsx` files aren't
 | `classes/members/instanceAndStaticMembers/typeOfThisInStaticMembers6.ts` | checks too little | 3 after the port |
 | `classes/members/instanceAndStaticMembers/typeOfThisInStaticMembers8.ts` | not supported | class fields require a type annotation, on ` static functionExprBoundary = function () { return this.f + 2 }; ` |
 | `classes/members/instanceAndStaticMembers/typeOfThisInStaticMembers9.ts` | not supported | class fields require a type annotation, on ` static functionExprBoundary = function () { return super.f + 2 }; ` |
-| `classes/members/privateNames/privateNameAccessors.ts` | not supported | unexpected character `#`, on ` get #prop() { return ""; } ` |
-| `classes/members/privateNames/privateNameAccessorsAccess.ts` | not supported | unexpected character `#`, on ` get #prop() { return ""; } ` |
-| `classes/members/privateNames/privateNameAccessorsCallExpression.ts` | the port changes what it checks | `tsc` then reports TS2683, TS7006, TS7019, TS7009 |
+| `classes/members/privateNames/privateNameAccessors.ts` | not supported | unexpected character `#`, on ` get #prop(): string { return ""; } ` |
+| `classes/members/privateNames/privateNameAccessorsAccess.ts` | not supported | unexpected character `#`, on ` get #prop(): string { return ""; } ` |
+| `classes/members/privateNames/privateNameAccessorsCallExpression.ts` | the port changes what it checks | `tsc` then reports TS2683, TS7009 |
 | `classes/members/privateNames/privateNameAccessorssDerivedClasses.ts` | not supported | unexpected character `#`, on ` get #prop(): number { return  123; } ` |
 | `classes/members/privateNames/privateNameAmbientNoImplicitAny.ts` | not supported | unexpected character `#`, on ` #prop; ` |
 | `classes/members/privateNames/privateNameAndAny.ts` | not supported | unexpected character `#`, on ` #foo = true; ` |
@@ -234,7 +234,7 @@ not this file. Declaration files (`.d.ts`) aren't cases, and `.tsx` files aren't
 | `classes/members/privateNames/privateNameConstructorReserved.ts` | not supported | unexpected character `#`, on `` #constructor(): void {}      // Error: `#constructor` is a reserved word. `` |
 | `classes/members/privateNames/privateNameConstructorSignature.ts` | not supported | construct signatures |
 | `classes/members/privateNames/privateNameDeclaration.ts` | not supported | unexpected character `#`, on ` #foo: string; ` |
-| `classes/members/privateNames/privateNameDeclarationMerging.ts` | not supported | construct signatures (SUB-1026: read as a method named `new`) |
+| `classes/members/privateNames/privateNameDeclarationMerging.ts` | not supported | construct signatures |
 | `classes/members/privateNames/privateNameDuplicateField.ts` | not supported | unexpected character `#`, on ` #foo = "foo"; ` |
 | `classes/members/privateNames/privateNameEmitHelpers.ts` | multi-file or JavaScript |  |
 | `classes/members/privateNames/privateNameEnum.ts` | not supported | unexpected character `#`, on ` #x ` |
@@ -270,7 +270,7 @@ not this file. Declaration files (`.d.ts`) aren't cases, and `.tsx` files aren't
 | `classes/members/privateNames/privateNameMethodClassExpression.ts` | the port changes what it checks | `tsc` then reports TS2749, TS18016 |
 | `classes/members/privateNames/privateNameMethodInStaticFieldInit.ts` | not supported | unexpected character `#`, on ` static s: number = new C().#method(); ` |
 | `classes/members/privateNames/privateNameMethodsDerivedClasses.ts` | not supported | unexpected character `#`, on ` #prop(): number{ return  123; } ` |
-| `classes/members/privateNames/privateNameNestedClassAccessorsShadowing.ts` | not supported | unexpected character `#`, on ` get #x() { return 1; }; ` |
+| `classes/members/privateNames/privateNameNestedClassAccessorsShadowing.ts` | not supported | unexpected character `#`, on ` get #x(): number { return 1; }; ` |
 | `classes/members/privateNames/privateNameNestedClassFieldShadowing.ts` | the port changes what it checks | `tsc` then reports TS7008 |
 | `classes/members/privateNames/privateNameNestedClassMethodShadowing.ts` | not supported | unexpected character `#`, on ` #x(): void { }; ` |
 | `classes/members/privateNames/privateNameNestedClassNameConflict.ts` | not supported | unexpected character `#`, on ` #foo: string; ` |
@@ -300,9 +300,9 @@ not this file. Declaration files (`.d.ts`) aren't cases, and `.tsx` files aren't
 | `classes/members/privateNames/privateNamesNoDelete.ts` | not supported | `delete` |
 | `classes/members/privateNames/privateNamesNotAllowedAsParameters.ts` | not supported | unexpected character `#`, on ` setFoo(#foo: string): void {} ` |
 | `classes/members/privateNames/privateNamesNotAllowedInVariableDeclarations.ts` | not supported | unexpected character `#`, on ` const #foo = 3; ` |
-| `classes/members/privateNames/privateNameStaticAccessors.ts` | not supported | unexpected character `#`, on ` static get #prop() { return ""; } ` |
-| `classes/members/privateNames/privateNameStaticAccessorsAccess.ts` | not supported | unexpected character `#`, on ` static get #prop() { return ""; } ` |
-| `classes/members/privateNames/privateNameStaticAccessorsCallExpression.ts` | the port changes what it checks | `tsc` then reports TS7006, TS7019, TS7009 |
+| `classes/members/privateNames/privateNameStaticAccessors.ts` | not supported | unexpected character `#`, on ` static get #prop(): string { return ""; } ` |
+| `classes/members/privateNames/privateNameStaticAccessorsAccess.ts` | not supported | unexpected character `#`, on ` static get #prop(): string { return ""; } ` |
+| `classes/members/privateNames/privateNameStaticAccessorsCallExpression.ts` | the port changes what it checks | `tsc` then reports TS7009 |
 | `classes/members/privateNames/privateNameStaticAccessorssDerivedClasses.ts` | not supported | unexpected character `#`, on ` static get #prop(): number { return  123; } ` |
 | `classes/members/privateNames/privateNameStaticAndStaticInitializer.ts` | not supported | unexpected character `#`, on ` static #foo = 1; ` |
 | `classes/members/privateNames/privateNameStaticEmitHelpers.ts` | multi-file or JavaScript |  |
@@ -340,9 +340,9 @@ not this file. Declaration files (`.d.ts`) aren't cases, and `.tsx` files aren't
 | `classes/mixinAbstractClasses.ts` | not supported | unexpected character `&`, on ` function Mixin<TBaseClass extends abstract new (...args: any) => any>(baseCla... ` |
 | `classes/mixinAbstractClassesReturnTypeInference.ts` | the port changes what it checks | `tsc` then reports TS1005, TS2304, TS2749, TS7008, TS2322 |
 | `classes/mixinAccessModifiers.ts` | not supported | unexpected character `&`, on ` function f1(x: Private & Private2): void { ` |
-| `classes/mixinAccessors1.ts` | not supported | construct signatures (SUB-1026: read as a method named `new`) |
-| `classes/mixinAccessors2.ts` | not supported | construct signatures (SUB-1026: read as a method named `new`) |
-| `classes/mixinAccessors3.ts` | not supported | construct signatures (SUB-1026: read as a method named `new`) |
+| `classes/mixinAccessors1.ts` | not supported | construct signatures |
+| `classes/mixinAccessors2.ts` | not supported | construct signatures |
+| `classes/mixinAccessors3.ts` | not supported | construct signatures |
 | `classes/mixinAccessors4.ts` | the port changes what it checks | `tsc` then reports TS1005, TS2304, TS2749, TS7008, TS2322 |
 | `classes/mixinAccessors5.ts` | not supported | unexpected character `&`, on ` ): T & U { return null as unknown as (T & U); } ` |
 | `classes/mixinClassesAnnotated.ts` | not supported | unexpected character `&`, on ` const Printable = <T extends Constructor<Base>>(superClass: T): Constructor<P... ` |
@@ -362,7 +362,7 @@ not this file. Declaration files (`.d.ts`) aren't cases, and `.tsx` files aren't
 | `classes/propertyMemberDeclarations/accessorsOverrideProperty5.ts` | not supported | parameter requires a type annotation, on ` set p(value) { } ` |
 | `classes/propertyMemberDeclarations/accessorsOverrideProperty6.ts` | duplicate | of `classes/propertyMemberDeclarations/accessorsOverrideProperty.ts` |
 | `classes/propertyMemberDeclarations/accessorsOverrideProperty7.ts` | not supported | expected `;` after expression, on ` abstract class A { ` |
-| `classes/propertyMemberDeclarations/accessorsOverrideProperty8.ts` | not supported | construct signatures (SUB-1026: read as a method named `new`) |
+| `classes/propertyMemberDeclarations/accessorsOverrideProperty8.ts` | not supported | construct signatures |
 | `classes/propertyMemberDeclarations/accessorsOverrideProperty9.ts` | not supported | unexpected character `&`, on ` ): TBaseClass & (new (...args: any[]) => ApiItemContainerMixin) { ` |
 | `classes/propertyMemberDeclarations/assignParameterPropertyToPropertyDeclarationES2022.ts` | not supported | class fields require a type annotation, on ` Inner = class extends F { ` |
 | `classes/propertyMemberDeclarations/assignParameterPropertyToPropertyDeclarationESNext.ts` | not supported | class fields require a type annotation, on ` Inner = class extends F { ` |
@@ -388,14 +388,14 @@ not this file. Declaration files (`.d.ts`) aren't cases, and `.tsx` files aren't
 | `classes/propertyMemberDeclarations/derivedUninitializedPropertyDeclaration.ts` | not supported | `any` is not supported, on ` property: any; // error ` |
 | `classes/propertyMemberDeclarations/initializerReferencingConstructorLocals.ts` | the port changes what it checks | `tsc` then reports TS7006 |
 | `classes/propertyMemberDeclarations/initializerReferencingConstructorParameters.ts` | the port changes what it checks | `tsc` then reports TS7006 |
-| `classes/propertyMemberDeclarations/instanceMemberInitialization.ts` | not supported | construct signatures (SUB-1026: read as a method named `new`) |
+| `classes/propertyMemberDeclarations/instanceMemberInitialization.ts` | not supported | construct signatures |
 | `classes/propertyMemberDeclarations/instanceMemberWithComputedPropertyName.ts` | not supported | expected class member name, on ` [x] = true; ` |
 | `classes/propertyMemberDeclarations/instanceMemberWithComputedPropertyName2.ts` | not supported | expected class member name, on ` [x]: string; ` |
 | `classes/propertyMemberDeclarations/memberAccessorDeclarations/accessorsAreNotContextuallyTyped.ts` | not supported | `as` to `C` is not yet supported: class types aren't yet supported as `as` targets, on ` let c: C = null as unknown as (C); ` |
 | `classes/propertyMemberDeclarations/memberAccessorDeclarations/accessorWithES5.ts` | the port changes what it checks | `tsc` then reports TS7032, TS7006 |
 | `classes/propertyMemberDeclarations/memberAccessorDeclarations/accessorWithMismatchedAccessibilityModifiers.ts` | not supported | parameter requires a type annotation, on ` private set x(v) { ` |
 | `classes/propertyMemberDeclarations/memberAccessorDeclarations/ambientAccessors.ts` | not supported | expected `;` after expression, on ` declare class C { ` |
-| `classes/propertyMemberDeclarations/memberAccessorDeclarations/typeOfThisInAccessor.ts` | not supported | static accessors are not supported, on ` static get y() { ` |
+| `classes/propertyMemberDeclarations/memberAccessorDeclarations/typeOfThisInAccessor.ts` | not supported | static accessors are not supported, on ` static get y(): number { ` |
 | `classes/propertyMemberDeclarations/memberFunctionDeclarations/instanceMemberAssignsToClassPrototype.ts` | not supported | parameter `x` requires a type annotation, on ` C.prototype.bar = (x) => x; // ok ` |
 | `classes/propertyMemberDeclarations/memberFunctionDeclarations/memberFunctionOverloadMixingStaticAndInstance.ts` | the port changes what it checks | `tsc` then reports TS7010 |
 | `classes/propertyMemberDeclarations/memberFunctionDeclarations/memberFunctionsWithPrivateOverloads.ts` | the port changes what it checks | `tsc` then reports TS7010 |
@@ -405,7 +405,7 @@ not this file. Declaration files (`.d.ts`) aren't cases, and `.tsx` files aren't
 | `classes/propertyMemberDeclarations/memberFunctionDeclarations/typeOfThisInMemberFunctions.ts` | not supported | expected `,` or `>`, on ` class E<T extends Date> { ` |
 | `classes/propertyMemberDeclarations/optionalMethod.ts` | not supported | expected `:` and a type for the class field, on ` method?(): void { } ` |
 | `classes/propertyMemberDeclarations/optionalProperty.ts` | the port changes what it checks | `tsc` then reports TS7008 |
-| `classes/propertyMemberDeclarations/overrideInterfaceProperty.ts` | not supported | construct signatures (SUB-1026: read as a method named `new`) |
+| `classes/propertyMemberDeclarations/overrideInterfaceProperty.ts` | not supported | construct signatures |
 | `classes/propertyMemberDeclarations/propertyAndAccessorWithSameName.ts` | the port changes what it checks | `tsc` then reports TS7032, TS7006 |
 | `classes/propertyMemberDeclarations/propertyAndFunctionWithSameName.ts` | the port changes what it checks | `tsc` then reports TS7006 |
 | `classes/propertyMemberDeclarations/propertyNamedConstructor.ts` | not supported | class fields require a type annotation, on ` "constructor" = 3; // Error ` |
@@ -463,7 +463,7 @@ not this file. Declaration files (`.d.ts`) aren't cases, and `.tsx` files aren't
 | `controlFlow/definiteAssignmentAssertionsWithObjectShortHand.ts` | not supported | expected `,` or `}`, on ` const foo = { a! } ` |
 | `controlFlow/dependentDestructuredVariables.ts` | the port changes what it checks | it leaves an `undefined` it can't rewrite |
 | `controlFlow/dependentDestructuredVariablesFromNestedPatterns.ts` | not supported | nested destructuring is not supported, on ` const [[p1, p1Error]] = arg; ` |
-| `controlFlow/neverReturningFunctions1.ts` | not supported | construct signatures (SUB-1026: read as a method named `new`) |
+| `controlFlow/neverReturningFunctions1.ts` | not supported | construct signatures |
 | `controlFlow/switchWithConstrainedTypeVariable.ts` | not supported | expected `,` or `>`, on ` function function1<T extends 'a' \| 'b'>(key: T): void { ` |
 | `declarationEmit/anonymousClassAccessorsDeclarationEmit1.ts` | the port changes what it checks | `tsc` then reports TS1005, TS2552, TS2304, TS2749, TS7008, TS2322 |
 | `declarationEmit/classDoesNotDependOnPrivateMember.ts` | not supported | expected `;` after expression, on ` namespace M { ` |
@@ -1012,10 +1012,10 @@ not this file. Declaration files (`.d.ts`) aren't cases, and `.tsx` files aren't
 | `es6/templates/taggedTemplateStringsPlainCharactersThatArePartsOfEscapes02.ts` | checks too little | 1 after the port |
 | `es6/templates/taggedTemplateStringsTypeArgumentInference.ts` | the port changes what it checks | it renames the repeated `var` declarations whose types `tsc` checks (TS2403) |
 | `es6/templates/taggedTemplateStringsTypeArgumentInferenceES6.ts` | the port changes what it checks | it renames the repeated `var` declarations whose types `tsc` checks (TS2403) |
-| `es6/templates/taggedTemplateStringsWithIncompatibleTypedTags.ts` | not supported | expected `]` to close array type, on ` [x: number]: I; ` |
-| `es6/templates/taggedTemplateStringsWithIncompatibleTypedTagsES6.ts` | not supported | expected `]` to close array type, on ` [x: number]: I; ` |
-| `es6/templates/taggedTemplateStringsWithManyCallAndMemberExpressions.ts` | not supported | construct signatures (SUB-1026: read as a method named `new`) |
-| `es6/templates/taggedTemplateStringsWithManyCallAndMemberExpressionsES6.ts` | not supported | construct signatures (SUB-1026: read as a method named `new`) |
+| `es6/templates/taggedTemplateStringsWithIncompatibleTypedTags.ts` | not supported | index signatures require string keys; use `[key: string]: V`, on ` [x: number]: I; ` |
+| `es6/templates/taggedTemplateStringsWithIncompatibleTypedTagsES6.ts` | not supported | index signatures require string keys; use `[key: string]: V`, on ` [x: number]: I; ` |
+| `es6/templates/taggedTemplateStringsWithManyCallAndMemberExpressions.ts` | not supported | construct signatures |
+| `es6/templates/taggedTemplateStringsWithManyCallAndMemberExpressionsES6.ts` | not supported | construct signatures |
 | `es6/templates/taggedTemplateStringsWithOverloadResolution1_ES6.ts` | not supported | expected `{`, on ` function foo(strs: TemplateStringsArray): number; ` |
 | `es6/templates/taggedTemplateStringsWithOverloadResolution1.ts` | not supported | expected `{`, on ` function foo(strs: TemplateStringsArray): number; ` |
 | `es6/templates/taggedTemplateStringsWithOverloadResolution2_ES6.ts` | the port changes what it checks | it leaves an `undefined` it can't rewrite |
@@ -1026,15 +1026,15 @@ not this file. Declaration files (`.d.ts`) aren't cases, and `.tsx` files aren't
 | `es6/templates/taggedTemplateStringsWithTagNamedDeclareES6.ts` | not supported | `any` is not supported, on ` function declare(x: any, ...ys: any[]): void { ` |
 | `es6/templates/taggedTemplateStringsWithTagsTypedAsAny.ts` | not supported | `any` is not supported, on ` let f: any = null as unknown as (any); ` |
 | `es6/templates/taggedTemplateStringsWithTagsTypedAsAnyES6.ts` | not supported | `any` is not supported, on ` let f: any = null as unknown as (any); ` |
-| `es6/templates/taggedTemplateStringsWithTypedTags.ts` | not supported | expected `]` to close array type, on ` [x: number]: I; ` |
-| `es6/templates/taggedTemplateStringsWithTypedTagsES6.ts` | not supported | expected `]` to close array type, on ` [x: number]: I; ` |
+| `es6/templates/taggedTemplateStringsWithTypedTags.ts` | not supported | index signatures require string keys; use `[key: string]: V`, on ` [x: number]: I; ` |
+| `es6/templates/taggedTemplateStringsWithTypedTagsES6.ts` | not supported | index signatures require string keys; use `[key: string]: V`, on ` [x: number]: I; ` |
 | `es6/templates/taggedTemplateStringsWithTypeErrorInFunctionExpressionsInSubstitutionExpression.ts` | not supported | `any` is not supported, on ` function foo(...rest: any[]): void { ` |
 | `es6/templates/taggedTemplateStringsWithTypeErrorInFunctionExpressionsInSubstitutionExpressionES6.ts` | not supported | `any` is not supported, on ` function foo(...rest: any[]): void { ` |
 | `es6/templates/taggedTemplatesWithTypeArguments1.ts` | not supported | `any` is not supported, on ` function f<T>(strs: TemplateStringsArray, ...callbacks: Array<(x: T) => any>)... ` |
-| `es6/templates/taggedTemplatesWithTypeArguments2.ts` | not supported | construct signatures (SUB-1026: read as a method named `new`) |
+| `es6/templates/taggedTemplatesWithTypeArguments2.ts` | not supported | construct signatures |
 | `es6/templates/taggedTemplateUntypedTagCall01.ts` | not supported | expected `;` after expression, on `` tag `Hello world!`; `` |
 | `es6/templates/taggedTemplateWithConstructableTag01.ts` | not supported | expected `;` after expression, on `` CtorTag `Hello world!`; `` |
-| `es6/templates/taggedTemplateWithConstructableTag02.ts` | not supported | construct signatures (SUB-1026: read as a method named `new`) |
+| `es6/templates/taggedTemplateWithConstructableTag02.ts` | not supported | construct signatures |
 | `es6/templates/TemplateExpression1.ts` | porter failure | nothing to prune at offsets 39; our first unsupported error: expected `}` to close template interpolation |
 | `es6/templates/templateStringBinaryOperations.ts` | not supported | unexpected character `&`, on `` var a4 = 1 + `${ 3 & 4 }`; `` |
 | `es6/templates/templateStringBinaryOperationsES6.ts` | not supported | unexpected character `&`, on `` var a4 = 1 + `${ 3 & 4 }`; `` |
@@ -1271,20 +1271,20 @@ not this file. Declaration files (`.d.ts`) aren't cases, and `.tsx` files aren't
 | `es7/exponentiationOperator/exponentiationOperatorSyntaxError2.ts` | not supported | unexpected character `~`, on ` ~ --temp ** 3; ` |
 | `es7/exponentiationOperator/exponentiationOperatorWithAnyAndNumber.ts` | not supported | `any` is not supported, on ` let a: any = null as unknown as (any); ` |
 | `es7/exponentiationOperator/exponentiationOperatorWithInvalidSimpleUnaryExpressionOperands.ts` | not supported | `any` is not supported, on ` let temp: any = null as unknown as (any); ` |
-| `es7/exponentiationOperator/exponentiationOperatorWithNew.ts` | not supported | construct signatures (SUB-1026: read as a method named `new`) |
+| `es7/exponentiationOperator/exponentiationOperatorWithNew.ts` | not supported | construct signatures |
 | `es7/exponentiationOperator/exponentiationOperatorWithOnlyNullValueOrUndefinedValue.ts` | checks too little | 4 after the port |
 | `es7/exponentiationOperator/exponentiationOperatorWithTemplateStringInvalid.ts` | not supported | expected `;` after expression, on `` var b = 1 ** `2${ 3 }`; `` |
 | `es7/exponentiationOperator/exponentiationOperatorWithTemplateStringInvalidES6.ts` | not supported | expected `;` after expression, on `` var b = 1 ** `2${ 3 }`; `` |
 | `es7/exponentiationOperator/exponentiationOperatorWithTypeParameter.ts` | the port changes what it checks | `tsc` then reports TS1263 |
 | `es7/exponentiationOperator/exponentiationOperatorWithUndefinedValueAndInvalidOperands.ts` | duplicate | of `es7/exponentiationOperator/exponentiationOperatorWithNullValueAndInvalidOperands.ts` |
 | `es7/trailingCommasInBindingPatterns.ts` | not supported | expected expression, on ` const {...b,} = {}; ` |
-| `es7/trailingCommasInGetter.ts` | not supported | expected parameter name, on ` get x(,) { return 0; } ` |
+| `es7/trailingCommasInGetter.ts` | not supported | expected parameter name, on ` get x(,): number { return 0; } ` |
 | `esDecorators/` | not supported | decorators |
 | `esnext/esnextSharedMemory.ts` | the port changes what it checks | `tsc` then reports TS2550 |
 | `esnext/logicalAssignment/logicalAssignment11.ts` | not supported | expected expression, on ` e ??= x ?? "x" ` |
 | `expressions/arrayLiterals/arrayLiterals.ts` | the port changes what it checks | `tsc` then reports TS7008 |
 | `expressions/arrayLiterals/arrayLiterals2ES5.ts` | the port changes what it checks | `tsc` then reports TS7034, TS7005 |
-| `expressions/asOperator/asOpEmitParens.ts` | not supported | construct signatures (SUB-1026: read as a method named `new`) |
+| `expressions/asOperator/asOpEmitParens.ts` | not supported | construct signatures |
 | `expressions/asOperator/asOperator3.ts` | not supported | `any` is not supported, on ` function tag(...x: any[]): any { return null as unknown as (any); } ` |
 | `expressions/asOperator/asOperator4.ts` | multi-file or JavaScript |  |
 | `expressions/asOperator/asOperatorAmbiguity.ts` | not supported | `any` is not supported, on ` let x: any = null as unknown as (any); ` |
@@ -1313,9 +1313,9 @@ not this file. Declaration files (`.d.ts`) aren't cases, and `.tsx` files aren't
 | `expressions/binaryOperators/arithmeticOperator/arithmeticOperatorWithTypeParameter.ts` | the port changes what it checks | `tsc` then reports TS1263 |
 | `expressions/binaryOperators/arithmeticOperator/arithmeticOperatorWithUndefinedValueAndInvalidOperands.ts` | duplicate | of `expressions/binaryOperators/arithmeticOperator/arithmeticOperatorWithNullValueAndInvalidOperands.ts` |
 | `expressions/binaryOperators/arithmeticOperator/arithmeticOperatorWithUndefinedValueAndValidOperands.ts` | not supported | unexpected character `&`, on ` let rh1 = null & a; ` |
-| `expressions/binaryOperators/comparisonOperator/comparisonOperatorWithIdenticalObjects.ts` | not supported | construct signatures (SUB-1026: read as a method named `new`) |
+| `expressions/binaryOperators/comparisonOperator/comparisonOperatorWithIdenticalObjects.ts` | not supported | construct signatures |
 | `expressions/binaryOperators/comparisonOperator/comparisonOperatorWithIntersectionType.ts` | not supported | intersection types |
-| `expressions/binaryOperators/comparisonOperator/comparisonOperatorWithNoRelationshipObjectsOnCallSignature.ts` | not supported | construct signatures (SUB-1026: read as a method named `new`) |
+| `expressions/binaryOperators/comparisonOperator/comparisonOperatorWithNoRelationshipObjectsOnCallSignature.ts` | not supported | construct signatures |
 | `expressions/binaryOperators/comparisonOperator/comparisonOperatorWithNoRelationshipObjectsOnConstructorSignature.ts` | not supported | construct signatures |
 | `expressions/binaryOperators/comparisonOperator/comparisonOperatorWithNoRelationshipObjectsOnIndexSignature.ts` | not supported | index signatures |
 | `expressions/binaryOperators/comparisonOperator/comparisonOperatorWithNoRelationshipObjectsOnInstantiatedCallSignature.ts` | not supported | expected `:` after field name, on ` let a1: { fn<T>(x: T): T } = null as unknown as ({ fn<T>(x: T): T }); ` |
@@ -1340,7 +1340,7 @@ not this file. Declaration files (`.d.ts`) aren't cases, and `.tsx` files aren't
 | `expressions/binaryOperators/instanceofOperator/instanceofOperatorWithLHSIsObject.ts` | not supported | `any` is not supported, on ` let x1: any = null as unknown as (any); ` |
 | `expressions/binaryOperators/instanceofOperator/instanceofOperatorWithLHSIsTypeParameter.ts` | not supported | `any` is not supported, on ` let x: any = null as unknown as (any); ` |
 | `expressions/binaryOperators/instanceofOperator/instanceofOperatorWithRHSHasSymbolHasInstance.ts` | not supported | `Symbol` |
-| `expressions/binaryOperators/instanceofOperator/instanceofOperatorWithRHSIsSubtypeOfFunction.ts` | not supported | construct signatures (SUB-1026: read as a method named `new`) |
+| `expressions/binaryOperators/instanceofOperator/instanceofOperatorWithRHSIsSubtypeOfFunction.ts` | not supported | construct signatures |
 | `expressions/binaryOperators/logicalAndOperator/logicalAndOperatorStrictMode.ts` | the port changes what it checks | `tsc` then reports TS2322 |
 | `expressions/binaryOperators/logicalOrOperator/logicalOrExpressionIsNotContextuallyTyped.ts` | not supported | parameter `a` requires a type annotation, on ` let r = a \|\| ((a) => a.toLowerCase()); ` |
 | `expressions/commaOperator/` | not supported | the comma operator |
@@ -1370,12 +1370,12 @@ not this file. Declaration files (`.d.ts`) aren't cases, and `.tsx` files aren't
 | `expressions/functionCalls/forgottenNew.ts` | not supported | expected `;` after expression, on ` namespace Tools { ` |
 | `expressions/functionCalls/functionCalls.ts` | not supported | `any` is not supported, on ` let anyVar: any = null as unknown as (any); ` |
 | `expressions/functionCalls/grammarAmbiguities.ts` | the port changes what it checks | `tsc` then reports TS18048 |
-| `expressions/functionCalls/newWithSpread.ts` | not supported | construct signatures (SUB-1026: read as a method named `new`) |
-| `expressions/functionCalls/newWithSpreadES5.ts` | not supported | construct signatures (SUB-1026: read as a method named `new`) |
-| `expressions/functionCalls/newWithSpreadES6.ts` | not supported | construct signatures (SUB-1026: read as a method named `new`) |
+| `expressions/functionCalls/newWithSpread.ts` | not supported | construct signatures |
+| `expressions/functionCalls/newWithSpreadES5.ts` | not supported | construct signatures |
+| `expressions/functionCalls/newWithSpreadES6.ts` | not supported | construct signatures |
 | `expressions/functionCalls/overloadResolution.ts` | the port changes what it checks | it renames the repeated `var` declarations whose types `tsc` checks (TS2403) |
 | `expressions/functionCalls/overloadResolutionClassConstructors.ts` | the port changes what it checks | `tsc` then reports TS7008, TS2322, TS2409 |
-| `expressions/functionCalls/overloadResolutionConstructors.ts` | not supported | construct signatures (SUB-1026: read as a method named `new`) |
+| `expressions/functionCalls/overloadResolutionConstructors.ts` | not supported | construct signatures |
 | `expressions/functionCalls/typeArgumentInference.ts` | the port changes what it checks | it renames the repeated `var` declarations whose types `tsc` checks (TS2403) |
 | `expressions/functionCalls/typeArgumentInferenceConstructSignatures.ts` | not supported | construct signatures |
 | `expressions/functionCalls/typeArgumentInferenceTransitiveConstraints.ts` | not supported | expected `,` or `>`, on ` function fn<A extends Date, B extends A, C extends B>(a: A, b: B, c: C): A[] { ` |
@@ -1388,9 +1388,9 @@ not this file. Declaration files (`.d.ts`) aren't cases, and `.tsx` files aren't
 | `expressions/functions/voidParamAssignmentCompatibility.ts` | not supported | `void` cannot be a parameter type — it has no values, on ` function g(a: void): void { } ` |
 | `expressions/identifiers/scopeResolutionIdentifiers.ts` | not supported | expected `;` after expression, on ` namespace M1 { ` |
 | `expressions/literals/strictModeOctalLiterals.ts` | not supported | expected `,` or `}` after enum member, on ` A = 12 + 01 ` |
-| `expressions/newOperator/newOperatorConformance.ts` | not supported | construct signatures (SUB-1026: read as a method named `new`) |
+| `expressions/newOperator/newOperatorConformance.ts` | not supported | construct signatures |
 | `expressions/newOperator/newOperatorErrorCases_noImplicitAny.ts` | not supported | `this` is a reserved keyword and can't be used as a name, on ` function fnNumber(this: void): number { return 90; } ` |
-| `expressions/newOperator/newOperatorErrorCases.ts` | not supported | construct signatures (SUB-1026: read as a method named `new`) |
+| `expressions/newOperator/newOperatorErrorCases.ts` | not supported | construct signatures |
 | `expressions/nullishCoalescingOperator/nullishCoalescingAssignmentVsPrivateFieldsJsEmit1.ts` | not supported | unexpected character `#`, on ` #privateProp: number \| null; ` |
 | `expressions/nullishCoalescingOperator/nullishCoalescingOperator_es2020.ts` | duplicate | of `expressions/nullishCoalescingOperator/nullishCoalescingOperator2.ts` |
 | `expressions/nullishCoalescingOperator/nullishCoalescingOperator_not_strict.ts` | duplicate | of `expressions/nullishCoalescingOperator/nullishCoalescingOperator2.ts` |
@@ -1445,7 +1445,7 @@ not this file. Declaration files (`.d.ts`) aren't cases, and `.tsx` files aren't
 | `expressions/typeAssertions/typeAssertions.ts` | the port changes what it checks | `tsc` then reports TS7008 |
 | `expressions/typeGuards/typeGuardEnums.ts` | not supported | `as` to `number \| string \| E \| V` is not yet supported: enum targets need a per-variant value check at runtime, on ` let x: number\|string\|E\|V = null as unknown as (number\|string\|E\|V); ` |
 | `expressions/typeGuards/typeGuardFunction.ts` | the port changes what it checks | `tsc` then reports TS7006 |
-| `expressions/typeGuards/typeGuardFunctionErrors.ts` | not supported | construct signatures (SUB-1026: read as a method named `new`) |
+| `expressions/typeGuards/typeGuardFunctionErrors.ts` | not supported | construct signatures |
 | `expressions/typeGuards/typeGuardFunctionGenerics.ts` | the port changes what it checks | `tsc` then reports TS7006 |
 | `expressions/typeGuards/typeGuardFunctionOfFormThis.ts` | not supported | expected type, on ` isLeader(): this is LeadGuard { ` |
 | `expressions/typeGuards/typeGuardFunctionOfFormThisErrors.ts` | not supported | expected type, on ` isLeader(): this is LeadGuard { ` |
@@ -1460,7 +1460,7 @@ not this file. Declaration files (`.d.ts`) aren't cases, and `.tsx` files aren't
 | `expressions/typeGuards/typeGuardOfFormThisMemberErrors.ts` | not supported | unexpected character `&`, on ` isNetworked: this is (Networked & this); ` |
 | `expressions/typeGuards/typeGuardOfFormTypeOfOther.ts` | not supported | `as` to `string \| C` is not yet supported: class types aren't yet supported as `as` targets, on ` let strOrC: string \| C = null as unknown as (string \| C); ` |
 | `expressions/typeGuards/typeGuardsDefeat.ts` | the port changes what it checks | `tsc` then reports TS2366, TS2304 |
-| `expressions/typeGuards/typeGuardsInClassAccessors.ts` | not supported | static accessors are not supported, on ` static get s1() { ` |
+| `expressions/typeGuards/typeGuardsInClassAccessors.ts` | not supported | static accessors are not supported, on ` static get s1(): string \| number { ` |
 | `expressions/typeGuards/typeGuardsInModule.ts` | not supported | expected `;` after expression, on ` namespace m1 { ` |
 | `expressions/typeGuards/typeGuardsObjectMethods.ts` | not supported | expected `,` or `}`, on ` get prop() { ` |
 | `expressions/typeGuards/typeGuardsWithAny.ts` | not supported | `any` is not supported, on ` let x: any = { p: 0 }; ` |
@@ -1816,7 +1816,7 @@ not this file. Declaration files (`.d.ts`) aren't cases, and `.tsx` files aren't
 | `interfaces/interfaceDeclarations/asiPreventsParsingAsInterface03.ts` | not supported | `interface` is a reserved keyword and can't be used as a name, on ` let interface: number = null as unknown as (number), I: string = null as unkn... ` |
 | `interfaces/interfaceDeclarations/asiPreventsParsingAsInterface04.ts` | not supported | expected `;` after declaration, on ` let declare: boolean = null as unknown as (boolean), interface: number = null... ` |
 | `interfaces/interfaceDeclarations/asiPreventsParsingAsInterface05.ts` | not supported | `interface` is a reserved keyword and can't be used as a name, on ` let interface: number = 123; ` |
-| `interfaces/interfaceDeclarations/derivedInterfaceDoesNotHideBaseSignatures.ts` | not supported | construct signatures (SUB-1026: read as a method named `new`) |
+| `interfaces/interfaceDeclarations/derivedInterfaceDoesNotHideBaseSignatures.ts` | not supported | construct signatures |
 | `interfaces/interfaceDeclarations/derivedInterfaceIncompatibleWithBaseIndexer.ts` | not supported | index signatures |
 | `interfaces/interfaceDeclarations/interfaceExtendingOptionalChain.ts` | not supported | expected `;` after expression, on ` namespace Foo { ` |
 | `interfaces/interfaceDeclarations/interfaceExtendsObjectIntersection.ts` | not supported | intersection types |
@@ -2357,9 +2357,9 @@ not this file. Declaration files (`.d.ts`) aren't cases, and `.tsx` files aren't
 | `override/override16.ts` | not supported | expected `:` and a type for the class field, on ` override foo: string = "string"; ` |
 | `override/override17.ts` | duplicate | of `override/override12.ts` |
 | `override/override18.ts` | not supported | expected `:` and a type for the class field, on ` override foo: string = "string"; ` |
-| `override/override19.ts` | not supported | construct signatures (SUB-1026: read as a method named `new`) |
+| `override/override19.ts` | not supported | construct signatures |
 | `override/override2.ts` | not supported | expected `;` after expression, on ` abstract class AB { ` |
-| `override/override20.ts` | not supported | construct signatures (SUB-1026: read as a method named `new`) |
+| `override/override20.ts` | not supported | construct signatures |
 | `override/override21.ts` | not supported | expected `:` and a type for the class field, on ` override [foo](): void { } ` |
 | `override/override3.ts` | not supported | expected `;` after expression, on ` declare class B { ` |
 | `override/override4.ts` | not supported | expected `:` and a type for the class field, on ` override p2: number = 3; ` |
@@ -2398,7 +2398,7 @@ not this file. Declaration files (`.d.ts`) aren't cases, and `.tsx` files aren't
 | `parser/ecmascript5/Accessors/parserAccessors7.ts` | not supported | expected `,` or `}`, on ` let v = { get foo(v: number) { } }; ` |
 | `parser/ecmascript5/Accessors/parserAccessors8.ts` | the port changes what it checks | `tsc` then reports TS7032 |
 | `parser/ecmascript5/Accessors/parserAccessors9.ts` | the port changes what it checks | `tsc` then reports TS7032, TS7006 |
-| `parser/ecmascript5/Accessors/parserGetAccessorWithTypeParameters1.ts` | not supported | expected `:` and a type for the class field, on ` get foo<T>() { } ` |
+| `parser/ecmascript5/Accessors/parserGetAccessorWithTypeParameters1.ts` | not supported | expected `:` and a type for the class field, on ` get foo<T>(): void { } ` |
 | `parser/ecmascript5/Accessors/parserSetAccessorWithTypeAnnotation1.ts` | the port changes what it checks | `tsc` then reports TS7032, TS7006 |
 | `parser/ecmascript5/Accessors/parserSetAccessorWithTypeParameters1.ts` | the port changes what it checks | `tsc` then reports TS7032, TS7006 |
 | `parser/ecmascript5/ArrayLiteralExpressions/parserArrayLiteralExpression1.ts` | checks too little | 0 after the port |
@@ -2507,7 +2507,7 @@ not this file. Declaration files (`.d.ts`) aren't cases, and `.tsx` files aren't
 | `parser/ecmascript5/ErrorRecovery/ArgumentLists/parserErrorRecovery_ArgumentList6.ts` | not supported | expected expression, on ` Foo(, ` |
 | `parser/ecmascript5/ErrorRecovery/ArgumentLists/parserErrorRecovery_ArgumentList7.ts` | not supported | expected expression, on ` Foo(a,, ` |
 | `parser/ecmascript5/ErrorRecovery/ArrayLiteralExpressions/parserErrorRecoveryArrayLiteralExpression1.ts` | not supported | expected `,` or `]`, on ` 4, 5, 6, 7]; ` |
-| `parser/ecmascript5/ErrorRecovery/ArrayLiteralExpressions/parserErrorRecoveryArrayLiteralExpression2.ts` | not supported | expected field name after `.`, on ` .7042760848999023, 1.1955541372299194, 0.19600726664066315, -0.71200698614120... ` |
+| `parser/ecmascript5/ErrorRecovery/ArrayLiteralExpressions/parserErrorRecoveryArrayLiteralExpression2.ts` | not supported | expected `,` or `]`, on ` .7042760848999023, 1.1955541372299194, 0.19600726664066315, -0.71200698614120... ` |
 | `parser/ecmascript5/ErrorRecovery/ArrayLiteralExpressions/parserErrorRecoveryArrayLiteralExpression3.ts` | porter failure | nothing to prune at offsets 123, 123; our first unsupported error: expected `,` or `]` |
 | `parser/ecmascript5/ErrorRecovery/ArrowFunctions/ArrowFunction1.ts` | not supported | expected type, on ` let v = (a: ) => { ` |
 | `parser/ecmascript5/ErrorRecovery/ArrowFunctions/ArrowFunction3.ts` | porter failure | nothing to prune at offsets 32, 32; our first unsupported error: expected `;` after declaration |
@@ -2599,7 +2599,7 @@ not this file. Declaration files (`.d.ts`) aren't cases, and `.tsx` files aren't
 | `parser/ecmascript5/Expressions/parserObjectCreation2.ts` | not supported | expected expression, on ` new new Foo()() ` |
 | `parser/ecmascript5/Expressions/parserPostfixPostfixExpression1.ts` | not supported | expected `;` after expression, on ` a++ ++; ` |
 | `parser/ecmascript5/Expressions/parserPostfixUnaryExpression1.ts` | not supported | expected `;` after expression, on ` foo ++ ++; ` |
-| `parser/ecmascript5/Expressions/parserTypeAssertionInObjectCreationExpression1.ts` | not supported | construct signatures (SUB-1026: read as a method named `new`) |
+| `parser/ecmascript5/Expressions/parserTypeAssertionInObjectCreationExpression1.ts` | not supported | construct signatures |
 | `parser/ecmascript5/Expressions/parserUnaryExpression1.ts` | not supported | expected expression, on ` ++this; ` |
 | `parser/ecmascript5/Expressions/parserUnaryExpression2.ts` | not supported | expected expression, on ` ++function(e) { } ` |
 | `parser/ecmascript5/Expressions/parserUnaryExpression3.ts` | not supported | expected expression, on ` ++[0]; ` |
@@ -2638,7 +2638,7 @@ not this file. Declaration files (`.d.ts`) aren't cases, and `.tsx` files aren't
 | `parser/ecmascript5/Generics/parserGenericConstraint5.ts` | not supported | expected `,` or `>`, on ` class C<T extends List<List<T>> > { ` |
 | `parser/ecmascript5/Generics/parserGenericConstraint6.ts` | not supported | expected `,` or `>`, on ` class C<T extends List<List<T> >> { ` |
 | `parser/ecmascript5/Generics/parserGenericConstraint7.ts` | not supported | expected `,` or `>`, on ` class C<T extends List<List<T>>> { ` |
-| `parser/ecmascript5/Generics/parserGenericsInInterfaceDeclaration1.ts` | not supported | construct signatures (SUB-1026: read as a method named `new`) |
+| `parser/ecmascript5/Generics/parserGenericsInInterfaceDeclaration1.ts` | not supported | construct signatures |
 | `parser/ecmascript5/Generics/parserGenericsInVariableDeclaration1.ts` | not supported | expected `,` or `>` to close generic argument list, on ` let v_2 : Foo<T>= 1; ` |
 | `parser/ecmascript5/Generics/parserGreaterThanTokenAmbiguity1.ts` | not supported | expected expression, on ` 1 >> 2; ` |
 | `parser/ecmascript5/Generics/parserGreaterThanTokenAmbiguity10.ts` | not supported | expected expression, on ` >>> // after ` |
@@ -2676,8 +2676,8 @@ not this file. Declaration files (`.d.ts`) aren't cases, and `.tsx` files aren't
 | `parser/ecmascript5/InterfaceDeclarations/parserInterfaceDeclaration9.ts` | not supported | expected `(` to start a method signature or `:` to start a property, on ` get foo(): number, ` |
 | `parser/ecmascript5/MemberAccessorDeclarations/parserMemberAccessor1.ts` | not supported | parameter requires a type annotation, on ` set foo(a) { } ` |
 | `parser/ecmascript5/MemberAccessorDeclarations/parserMemberAccessorDeclaration1.ts` | checks too little | 1 after the port |
-| `parser/ecmascript5/MemberAccessorDeclarations/parserMemberAccessorDeclaration10.ts` | not supported | expected `:` and a type for the class field, on ` export get Foo() { } ` |
-| `parser/ecmascript5/MemberAccessorDeclarations/parserMemberAccessorDeclaration11.ts` | not supported | expected `:` and a type for the class field, on ` declare get Foo() { } ` |
+| `parser/ecmascript5/MemberAccessorDeclarations/parserMemberAccessorDeclaration10.ts` | not supported | expected `:` and a type for the class field, on ` export get Foo(): void { } ` |
+| `parser/ecmascript5/MemberAccessorDeclarations/parserMemberAccessorDeclaration11.ts` | not supported | expected `:` and a type for the class field, on ` declare get Foo(): void { } ` |
 | `parser/ecmascript5/MemberAccessorDeclarations/parserMemberAccessorDeclaration12.ts` | checks too little | 1 after the port |
 | `parser/ecmascript5/MemberAccessorDeclarations/parserMemberAccessorDeclaration13.ts` | the port changes what it checks | `tsc` then reports TS7032 |
 | `parser/ecmascript5/MemberAccessorDeclarations/parserMemberAccessorDeclaration14.ts` | not supported | expected expression, on ` } ` |
@@ -2685,14 +2685,14 @@ not this file. Declaration files (`.d.ts`) aren't cases, and `.tsx` files aren't
 | `parser/ecmascript5/MemberAccessorDeclarations/parserMemberAccessorDeclaration16.ts` | checks too little | 1 after the port |
 | `parser/ecmascript5/MemberAccessorDeclarations/parserMemberAccessorDeclaration17.ts` | not supported | optional function parameters are not yet supported, on ` set Foo(a?: number) { } ` |
 | `parser/ecmascript5/MemberAccessorDeclarations/parserMemberAccessorDeclaration18.ts` | the port changes what it checks | `tsc` then reports TS7032, TS7019 |
-| `parser/ecmascript5/MemberAccessorDeclarations/parserMemberAccessorDeclaration2.ts` | not supported | expected `:` and a type for the class field, on ` get "b"() { } ` |
-| `parser/ecmascript5/MemberAccessorDeclarations/parserMemberAccessorDeclaration3.ts` | not supported | expected `:` and a type for the class field, on ` get 0() { } ` |
+| `parser/ecmascript5/MemberAccessorDeclarations/parserMemberAccessorDeclaration2.ts` | not supported | expected `:` and a type for the class field, on ` get "b"(): void { } ` |
+| `parser/ecmascript5/MemberAccessorDeclarations/parserMemberAccessorDeclaration3.ts` | not supported | expected `:` and a type for the class field, on ` get 0(): void { } ` |
 | `parser/ecmascript5/MemberAccessorDeclarations/parserMemberAccessorDeclaration4.ts` | the port changes what it checks | `tsc` then reports TS7032, TS7006 |
 | `parser/ecmascript5/MemberAccessorDeclarations/parserMemberAccessorDeclaration5.ts` | the port changes what it checks | `tsc` then reports TS7032, TS7006 |
 | `parser/ecmascript5/MemberAccessorDeclarations/parserMemberAccessorDeclaration6.ts` | the port changes what it checks | `tsc` then reports TS7032, TS7006 |
 | `parser/ecmascript5/MemberAccessorDeclarations/parserMemberAccessorDeclaration7.ts` | checks too little | 1 after the port |
 | `parser/ecmascript5/MemberAccessorDeclarations/parserMemberAccessorDeclaration8.ts` | the port changes what it checks | `tsc` then reports TS7008 |
-| `parser/ecmascript5/MemberAccessorDeclarations/parserMemberAccessorDeclaration9.ts` | not supported | static accessors are not supported, on ` static public get Foo() { } ` |
+| `parser/ecmascript5/MemberAccessorDeclarations/parserMemberAccessorDeclaration9.ts` | not supported | static accessors are not supported, on ` static public get Foo(): void { } ` |
 | `parser/ecmascript5/MemberFunctionDeclarations/parserMemberFunctionDeclaration1.ts` | checks too little | 1 after the port |
 | `parser/ecmascript5/MemberFunctionDeclarations/parserMemberFunctionDeclaration2.ts` | the port changes what it checks | `tsc` then reports TS7008 |
 | `parser/ecmascript5/MemberFunctionDeclarations/parserMemberFunctionDeclaration3.ts` | checks too little | 1 after the port |
@@ -2740,7 +2740,7 @@ not this file. Declaration files (`.d.ts`) aren't cases, and `.tsx` files aren't
 | `parser/ecmascript5/ParameterLists/parserParameterList10.ts` | not supported | expected expression, on ` } ` |
 | `parser/ecmascript5/ParameterLists/parserParameterList11.ts` | not supported | expected `,` or `)`, on ` (...arg?) => 102; ` |
 | `parser/ecmascript5/ParameterLists/parserParameterList12.ts` | the port changes what it checks | `tsc` then reports TS7006 |
-| `parser/ecmascript5/ParameterLists/parserParameterList13.ts` | not supported | construct signatures (SUB-1026: read as a method named `new`) |
+| `parser/ecmascript5/ParameterLists/parserParameterList13.ts` | not supported | construct signatures |
 | `parser/ecmascript5/ParameterLists/parserParameterList14.ts` | not supported | expected `;` after expression, on ` declare class C { ` |
 | `parser/ecmascript5/ParameterLists/parserParameterList15.ts` | the port changes what it checks | `tsc` then reports TS7010, TS7006 |
 | `parser/ecmascript5/ParameterLists/parserParameterList16.ts` | the port changes what it checks | `tsc` then reports TS7010, TS7006 |
@@ -2834,7 +2834,7 @@ not this file. Declaration files (`.d.ts`) aren't cases, and `.tsx` files aren't
 | `parser/ecmascript5/Protected/Protected7.ts` | not supported | `protected` is not supported, on ` protected private m(): void { } ` |
 | `parser/ecmascript5/Protected/Protected8.ts` | the port changes what it checks | `tsc` then reports TS7008 |
 | `parser/ecmascript5/Protected/Protected9.ts` | the port changes what it checks | `tsc` then reports TS7006 |
-| `parser/ecmascript5/RealWorld/parserharness.ts` | not supported | construct signatures (SUB-1026: read as a method named `new`) |
+| `parser/ecmascript5/RealWorld/parserharness.ts` | not supported | construct signatures |
 | `parser/ecmascript5/RealWorld/parserindenter.ts` | not supported | expected `;` after expression, on ` namespace Formatting { ` |
 | `parser/ecmascript5/RegressionTests/parser509534.ts` | the port changes what it checks | `tsc` then reports TS2580, TS7006 |
 | `parser/ecmascript5/RegressionTests/parser509546_1.ts` | the port changes what it checks | `tsc` then reports TS7008 |
@@ -3360,7 +3360,7 @@ not this file. Declaration files (`.d.ts`) aren't cases, and `.tsx` files aren't
 | `types/contextualTypes/methodDeclarations/contextuallyTypedBindingInitializer.ts` | not supported | default values inside destructuring patterns are not supported, on ` function f({ show = v => v.toString() }: Show): void {} ` |
 | `types/contextualTypes/methodDeclarations/contextuallyTypedBindingInitializerNegative.ts` | not supported | default values inside destructuring patterns are not supported, on ` function f({ show: showRename = v => v }: Show): void {} ` |
 | `types/contextualTypes/methodDeclarations/contextuallyTypedClassExpressionMethodDeclaration01.ts` | not supported | expected expression, on ` return class { ` |
-| `types/contextualTypes/methodDeclarations/contextuallyTypedClassExpressionMethodDeclaration02.ts` | not supported | construct signatures (SUB-1026: read as a method named `new`) |
+| `types/contextualTypes/methodDeclarations/contextuallyTypedClassExpressionMethodDeclaration02.ts` | not supported | construct signatures |
 | `types/contextualTypes/partiallyAnnotatedFunction/partiallyAnnotatedFunctionInferenceError.ts` | the port changes what it checks | `tsc` then reports TS7006 |
 | `types/contextualTypes/partiallyAnnotatedFunction/partiallyAnnotatedFunctionInferenceWithTypeParameter.ts` | not supported | expected `,` or `>`, on ` function test<T extends C>(a: (t: T, t1: T) => void): T { return null as unkn... ` |
 | `types/forAwait/` | not supported | async/await |
@@ -3461,8 +3461,8 @@ not this file. Declaration files (`.d.ts`) aren't cases, and `.tsx` files aren't
 | `types/objectTypeLiteral/callSignatures/callSignatureWithOptionalParameterAndInitializer.ts` | the port changes what it checks | `tsc` then reports TS7020, TS7010 |
 | `types/objectTypeLiteral/callSignatures/callSignatureWithoutAnnotationsOrBody.ts` | the port changes what it checks | `tsc` then reports TS7006, TS7020, TS7010 |
 | `types/objectTypeLiteral/callSignatures/callSignatureWithoutReturnTypeAnnotationInference.ts` | the port changes what it checks | `tsc` then reports TS7006, TS2322 |
-| `types/objectTypeLiteral/callSignatures/constructSignatureWithAccessibilityModifiersOnParameters.ts` | not supported | construct signatures (SUB-1026: read as a method named `new`) |
-| `types/objectTypeLiteral/callSignatures/constructSignatureWithAccessibilityModifiersOnParameters2.ts` | not supported | construct signatures (SUB-1026: read as a method named `new`) |
+| `types/objectTypeLiteral/callSignatures/constructSignatureWithAccessibilityModifiersOnParameters.ts` | not supported | construct signatures |
+| `types/objectTypeLiteral/callSignatures/constructSignatureWithAccessibilityModifiersOnParameters2.ts` | not supported | construct signatures |
 | `types/objectTypeLiteral/callSignatures/identicalCallSignatures.ts` | the port changes what it checks | `tsc` then reports TS7006 |
 | `types/objectTypeLiteral/callSignatures/identicalCallSignatures2.ts` | checks too little | 0 after the port |
 | `types/objectTypeLiteral/callSignatures/identicalCallSignatures3.ts` | not supported | duplicate declaration of interface `I`, on ` interface I { ` |
@@ -3487,7 +3487,6 @@ not this file. Declaration files (`.d.ts`) aren't cases, and `.tsx` files aren't
 | `types/objectTypeLiteral/methodSignatures/methodSignaturesWithOverloads2.ts` | not supported | expected field name in object type, on ` (x: number): number; ` |
 | `types/objectTypeLiteral/methodSignatures/objectTypesWithOptionalProperties.ts` | not supported | expected `,` or `}`, on ` x?: 1 // error ` |
 | `types/objectTypeLiteral/methodSignatures/objectTypesWithOptionalProperties2.ts` | the port changes what it checks | `tsc` then reports TS7010, TS7008 |
-| `types/objectTypeLiteral/objectTypeLiteralSyntax2.ts` | not supported | expected `;`, `,`, or `}`, on ` bar: string ` |
 | `types/objectTypeLiteral/propertySignatures/numericNamedPropertyDuplicates.ts` | not supported | expected class member name, on ` 1: number; ` |
 | `types/objectTypeLiteral/propertySignatures/numericStringNamedPropertyEquivalence.ts` | not supported | expected class member name, on ` 1.0: number; ` |
 | `types/objectTypeLiteral/propertySignatures/propertyNamesOfReservedWords.ts` | the port changes what it checks | `tsc` then reports TS7008 |
@@ -3537,13 +3536,13 @@ not this file. Declaration files (`.d.ts`) aren't cases, and `.tsx` files aren't
 | `types/specifyingTypes/predefinedTypes/objectTypesWithPredefinedTypesAsName2.ts` | porter failure | still pruning after 40 passes; our first unsupported error: `void` is a reserved keyword and can't be used as a name |
 | `types/specifyingTypes/typeLiterals/arrayOfFunctionTypes3.ts` | not supported | expected `(` after constructor name in `new` expression, on ` let r3 = new y[0](); ` |
 | `types/specifyingTypes/typeLiterals/arrayTypeOfFunctionTypes.ts` | the port changes what it checks | `tsc` then reports TS7053, TS7009 |
-| `types/specifyingTypes/typeLiterals/arrayTypeOfFunctionTypes2.ts` | not supported | construct signatures (SUB-1026: read as a method named `new`) |
+| `types/specifyingTypes/typeLiterals/arrayTypeOfFunctionTypes2.ts` | not supported | construct signatures |
 | `types/specifyingTypes/typeLiterals/arrayTypeOfTypeOf.ts` | not supported | `let` declaration requires an initializer, on ` let xs3: typeof Array<number> = null as unknown as (typeof Array<number>); ` |
-| `types/specifyingTypes/typeLiterals/functionLiteral.ts` | not supported | construct signatures (SUB-1026: read as a method named `new`) |
+| `types/specifyingTypes/typeLiterals/functionLiteral.ts` | not supported | construct signatures |
 | `types/specifyingTypes/typeLiterals/functionLiteralForOverloads.ts` | the port changes what it checks | `tsc` then reports TS2322 |
-| `types/specifyingTypes/typeLiterals/functionLiteralForOverloads2.ts` | not supported | construct signatures (SUB-1026: read as a method named `new`) |
+| `types/specifyingTypes/typeLiterals/functionLiteralForOverloads2.ts` | not supported | construct signatures |
 | `types/specifyingTypes/typeLiterals/parenthesizedTypes.ts` | the port changes what it checks | `tsc` then reports TS7051 |
-| `types/specifyingTypes/typeLiterals/unionTypeLiterals.ts` | not supported | construct signatures (SUB-1026: read as a method named `new`) |
+| `types/specifyingTypes/typeLiterals/unionTypeLiterals.ts` | not supported | construct signatures |
 | `types/specifyingTypes/typeQueries/invalidTypeOfTarget.ts` | not supported | expected a value name after `typeof`, on ` let x1: typeof = null as unknown as (typeof) {}; ` |
 | `types/specifyingTypes/typeQueries/typeofClass2.ts` | the port changes what it checks | `tsc` then reports TS7006, TS7010 |
 | `types/specifyingTypes/typeQueries/typeofClassWithPrivates.ts` | not supported | `as` to `C<string>` is not yet supported: class types aren't yet supported as `as` targets, on ` let c: C<string> = null as unknown as (C<string>); ` |
@@ -3603,26 +3602,26 @@ not this file. Declaration files (`.d.ts`) aren't cases, and `.tsx` files aren't
 | `types/typeAliases/asiPreventsParsingAsTypeAlias01.ts` | not supported | `let` declaration requires an initializer, on ` let type; ` |
 | `types/typeAliases/asiPreventsParsingAsTypeAlias02.ts` | the port changes what it checks | `tsc` then reports TS7034, TS7005 |
 | `types/typeAliases/circularTypeAliasForUnionWithClass.ts` | not supported | expected class member name, on ` [x: number]: T3; ` |
-| `types/typeAliases/circularTypeAliasForUnionWithInterface.ts` | not supported | construct signatures (SUB-1026: read as a method named `new`) |
+| `types/typeAliases/circularTypeAliasForUnionWithInterface.ts` | not supported | construct signatures |
 | `types/typeAliases/classDoesNotDependOnBaseTypes.ts` | not supported | expected class member name, on ` [n: number]: StringTree; ` |
-| `types/typeAliases/directDependenceBetweenTypeAliases.ts` | not supported | construct signatures (SUB-1026: read as a method named `new`) |
+| `types/typeAliases/directDependenceBetweenTypeAliases.ts` | not supported | construct signatures |
 | `types/typeAliases/intrinsicKeyword.ts` | not supported | string mapping types |
 | `types/typeAliases/intrinsicTypes.ts` | not supported | string mapping types |
 | `types/typeAliases/reservedNamesInAliases.ts` | porter failure | nothing to prune at offsets 110, 110; our first unsupported error: expected `;` after expression |
-| `types/typeAliases/typeAliases.ts` | not supported | construct signatures (SUB-1026: read as a method named `new`) |
+| `types/typeAliases/typeAliases.ts` | not supported | construct signatures |
 | `types/typeAliases/typeAliasesForObjectTypes.ts` | checks too little | 2 after the port |
 | `types/typeParameters/recurringTypeParamForContainerOfBase01.ts` | not supported | expected `,` or `>`, on ` interface BoxOfFoo<T extends Foo<T>> { ` |
 | `types/typeParameters/typeArgumentLists/callNonGenericFunctionWithTypeArguments.ts` | the port changes what it checks | `tsc` then reports TS7010, TS2722, TS18048 |
 | `types/typeParameters/typeArgumentLists/constraintSatisfactionWithAny.ts` | not supported | expected `,` or `>`, on ` function foo<T extends String>(x: T): T { return null; } ` |
 | `types/typeParameters/typeArgumentLists/constraintSatisfactionWithAny2.ts` | not supported | expected `,` or `>`, on ` function foo<Z, T extends <U>(x: U) => Z>(y: T): Z { return null as unknown a... ` |
 | `types/typeParameters/typeArgumentLists/constraintSatisfactionWithEmptyObject.ts` | not supported | expected `,` or `>`, on ` function foo<T extends Object>(x: T): void { } ` |
-| `types/typeParameters/typeArgumentLists/functionConstraintSatisfaction.ts` | not supported | construct signatures (SUB-1026: read as a method named `new`) |
-| `types/typeParameters/typeArgumentLists/functionConstraintSatisfaction2.ts` | not supported | construct signatures (SUB-1026: read as a method named `new`) |
-| `types/typeParameters/typeArgumentLists/functionConstraintSatisfaction3.ts` | not supported | construct signatures (SUB-1026: read as a method named `new`) |
+| `types/typeParameters/typeArgumentLists/functionConstraintSatisfaction.ts` | not supported | construct signatures |
+| `types/typeParameters/typeArgumentLists/functionConstraintSatisfaction2.ts` | not supported | construct signatures |
+| `types/typeParameters/typeArgumentLists/functionConstraintSatisfaction3.ts` | not supported | construct signatures |
 | `types/typeParameters/typeArgumentLists/instantiateGenericClassWithZeroTypeArguments.ts` | checks too little | 4 after the port |
 | `types/typeParameters/typeArgumentLists/instantiateNonGenericTypeWithTypeArguments.ts` | the port changes what it checks | `tsc` then reports TS7009 |
 | `types/typeParameters/typeArgumentLists/instantiationExpressionErrors.ts` | not supported | expected field name in object type, on ` let f: { <T>(): T, g<U>(): U } = null as unknown as ({ <T>(): T, g<U>(): U }); ` |
-| `types/typeParameters/typeArgumentLists/instantiationExpressions.ts` | not supported | construct signatures (SUB-1026: read as a method named `new`) |
+| `types/typeParameters/typeArgumentLists/instantiationExpressions.ts` | not supported | construct signatures |
 | `types/typeParameters/typeArgumentLists/typeParameterAsTypeParameterConstraint.ts` | not supported | expected `,` or `>`, on ` function foo<T, U extends T>(x: T, y: U): U { return y; } ` |
 | `types/typeParameters/typeArgumentLists/typeParameterAsTypeParameterConstraint2.ts` | not supported | expected `,` or `>`, on ` function foo<T, U extends T>(x: T, y: U): U { return y; } // this is now an e... ` |
 | `types/typeParameters/typeArgumentLists/typeParameterAsTypeParameterConstraintTransitively.ts` | the port changes what it checks | `tsc` then reports TS7006 |
@@ -3641,7 +3640,7 @@ not this file. Declaration files (`.d.ts`) aren't cases, and `.tsx` files aren't
 | `types/typeParameters/typeParameterLists/propertyAccessOnTypeParameterWithConstraints5.ts` | the port changes what it checks | `tsc` then reports TS7022, TS2448 |
 | `types/typeParameters/typeParameterLists/propertyAccessOnTypeParameterWithoutConstraints.ts` | the port changes what it checks | `tsc` then reports TS7053, TS2339, TS2571 |
 | `types/typeParameters/typeParameterLists/staticMembersUsingClassTypeParameter.ts` | not supported | expected `,` or `>`, on ` class C3<T extends Date> { ` |
-| `types/typeParameters/typeParameterLists/typeParameterConstModifiers.ts` | not supported | construct signatures (SUB-1026: read as a method named `new`) |
+| `types/typeParameters/typeParameterLists/typeParameterConstModifiers.ts` | not supported | construct signatures |
 | `types/typeParameters/typeParameterLists/typeParameterConstModifiersReturnsAndYields.ts` | the port changes what it checks | `tsc` then reports TS2322, TS2393, TS2554 |
 | `types/typeParameters/typeParameterLists/typeParameterConstModifiersReverseMappedTypes.ts` | not supported | `const` is a reserved keyword and can't be used as a name, on ` function test1<const T>(obj: { ` |
 | `types/typeParameters/typeParameterLists/typeParameterConstModifiersWithIntersection.ts` | not supported | intersection types |
@@ -3700,10 +3699,10 @@ not this file. Declaration files (`.d.ts`) aren't cases, and `.tsx` files aren't
 | `types/typeRelationships/assignmentCompatibility/callSignatureAssignabilityInInheritance4.ts` | not supported | expected type, on ` a: <T>(x: T) => T[]; ` |
 | `types/typeRelationships/assignmentCompatibility/callSignatureAssignabilityInInheritance5.ts` | not supported | expected type, on ` a: <T>(x: T) => T[]; ` |
 | `types/typeRelationships/assignmentCompatibility/callSignatureAssignabilityInInheritance6.ts` | not supported | expected type, on ` a: <T>(x: T) => T[]; ` |
-| `types/typeRelationships/assignmentCompatibility/constructSignatureAssignabilityInInheritance.ts` | not supported | construct signatures (SUB-1026: read as a method named `new`) |
-| `types/typeRelationships/assignmentCompatibility/constructSignatureAssignabilityInInheritance2.ts` | not supported | construct signatures (SUB-1026: read as a method named `new`) |
-| `types/typeRelationships/assignmentCompatibility/constructSignatureAssignabilityInInheritance3.ts` | not supported | construct signatures (SUB-1026: read as a method named `new`) |
-| `types/typeRelationships/assignmentCompatibility/constructSignatureAssignabilityInInheritance4.ts` | not supported | construct signatures (SUB-1026: read as a method named `new`) |
+| `types/typeRelationships/assignmentCompatibility/constructSignatureAssignabilityInInheritance.ts` | not supported | construct signatures |
+| `types/typeRelationships/assignmentCompatibility/constructSignatureAssignabilityInInheritance2.ts` | not supported | construct signatures |
+| `types/typeRelationships/assignmentCompatibility/constructSignatureAssignabilityInInheritance3.ts` | not supported | construct signatures |
+| `types/typeRelationships/assignmentCompatibility/constructSignatureAssignabilityInInheritance4.ts` | not supported | construct signatures |
 | `types/typeRelationships/assignmentCompatibility/constructSignatureAssignabilityInInheritance5.ts` | not supported | expected type, on ` a: new (x: number) => number[]; ` |
 | `types/typeRelationships/assignmentCompatibility/constructSignatureAssignabilityInInheritance6.ts` | not supported | expected type, on ` a: new <T>(x: T) => T[]; ` |
 | `types/typeRelationships/assignmentCompatibility/enumAssignability.ts` | not supported | expected `;` after expression, on ` namespace Others { ` |
@@ -3729,7 +3728,7 @@ not this file. Declaration files (`.d.ts`) aren't cases, and `.tsx` files aren't
 | `types/typeRelationships/recursiveTypes/arrayLiteralsWithRecursiveGenerics.ts` | not supported | `as` to `List<number>` is not yet supported: class types aren't yet supported as `as` targets, on ` let list: List<number> = null as unknown as (List<number>); ` |
 | `types/typeRelationships/recursiveTypes/infiniteExpansionThroughInstantiation.ts` | the port changes what it checks | `tsc` then reports TS1263 |
 | `types/typeRelationships/recursiveTypes/infiniteExpansionThroughInstantiation2.ts` | not supported | expected `,` or `>`, on ` interface AA<T extends AA<T>> // now an error due to referencing type paramet... ` |
-| `types/typeRelationships/recursiveTypes/infiniteExpansionThroughTypeInference.ts` | not supported | expected `;`, `,`, or `}` after interface member, on ` y: T ` |
+| `types/typeRelationships/recursiveTypes/infiniteExpansionThroughTypeInference.ts` | checks too little | 3 after the port |
 | `types/typeRelationships/recursiveTypes/nominalSubtypeCheckOfTypeParameter.ts` | checks too little | 0 after the port |
 | `types/typeRelationships/recursiveTypes/nominalSubtypeCheckOfTypeParameter2.ts` | checks too little | 0 after the port |
 | `types/typeRelationships/recursiveTypes/recursiveTypeInGenericConstraint.ts` | not supported | expected `,` or `>`, on ` class Foo<T extends G<T>> { // error, constraint referencing itself ` |
@@ -3834,13 +3833,13 @@ not this file. Declaration files (`.d.ts`) aren't cases, and `.tsx` files aren't
 | `types/typeRelationships/typeInference/contextualSignatureInstantiation.ts` | the port changes what it checks | it renames the repeated `var` declarations whose types `tsc` checks (TS2403) |
 | `types/typeRelationships/typeInference/discriminatedUnionInference.ts` | not supported | expected field name in object type, on ` type Foo<A> = { type: "foo", (): A[] }; ` |
 | `types/typeRelationships/typeInference/genericCallToOverloadedMethodWithOverloadedArguments.ts` | the port changes what it checks | `tsc` then reports TS2393 |
-| `types/typeRelationships/typeInference/genericCallTypeArgumentInference.ts` | not supported | construct signatures (SUB-1026: read as a method named `new`) |
-| `types/typeRelationships/typeInference/genericCallWithConstraintsTypeArgumentInference.ts` | not supported | construct signatures (SUB-1026: read as a method named `new`) |
+| `types/typeRelationships/typeInference/genericCallTypeArgumentInference.ts` | not supported | construct signatures |
+| `types/typeRelationships/typeInference/genericCallWithConstraintsTypeArgumentInference.ts` | not supported | construct signatures |
 | `types/typeRelationships/typeInference/genericCallWithConstraintsTypeArgumentInference2.ts` | the port changes what it checks | `tsc` then reports TS1263 |
 | `types/typeRelationships/typeInference/genericCallWithConstructorTypedArguments5.ts` | not supported | expected type, on ` function foo<T, U>(arg: { cb: new(t: T) => U }): U { ` |
-| `types/typeRelationships/typeInference/genericCallWithFunctionTypedArguments2.ts` | not supported | construct signatures (SUB-1026: read as a method named `new`) |
+| `types/typeRelationships/typeInference/genericCallWithFunctionTypedArguments2.ts` | not supported | construct signatures |
 | `types/typeRelationships/typeInference/genericCallWithFunctionTypedArguments3.ts` | not supported | expected field name in object type, on ` (x: boolean): boolean; ` |
-| `types/typeRelationships/typeInference/genericCallWithFunctionTypedArguments4.ts` | not supported | construct signatures (SUB-1026: read as a method named `new`) |
+| `types/typeRelationships/typeInference/genericCallWithFunctionTypedArguments4.ts` | not supported | construct signatures |
 | `types/typeRelationships/typeInference/genericCallWithGenericSignatureArguments.ts` | the port changes what it checks | `tsc` then reports TS2345 |
 | `types/typeRelationships/typeInference/genericCallWithGenericSignatureArguments2.ts` | the port changes what it checks | `tsc` then reports TS1263 |
 | `types/typeRelationships/typeInference/genericCallWithGenericSignatureArguments3.ts` | the port changes what it checks | `tsc` then reports TS1263, TS2322 |
@@ -3855,8 +3854,8 @@ not this file. Declaration files (`.d.ts`) aren't cases, and `.tsx` files aren't
 | `types/typeRelationships/typeInference/genericCallWithObjectTypeArgsAndIndexers.ts` | not supported | index signatures |
 | `types/typeRelationships/typeInference/genericCallWithObjectTypeArgsAndIndexersErrors.ts` | not supported | index signatures |
 | `types/typeRelationships/typeInference/genericCallWithObjectTypeArgsAndNumericIndexer.ts` | not supported | index signatures |
-| `types/typeRelationships/typeInference/genericCallWithOverloadedConstructorTypedArguments.ts` | not supported | construct signatures (SUB-1026: read as a method named `new`) |
-| `types/typeRelationships/typeInference/genericCallWithOverloadedConstructorTypedArguments2.ts` | not supported | construct signatures (SUB-1026: read as a method named `new`) |
+| `types/typeRelationships/typeInference/genericCallWithOverloadedConstructorTypedArguments.ts` | not supported | construct signatures |
+| `types/typeRelationships/typeInference/genericCallWithOverloadedConstructorTypedArguments2.ts` | not supported | construct signatures |
 | `types/typeRelationships/typeInference/genericCallWithOverloadedFunctionTypedArguments.ts` | the port changes what it checks | `tsc` then reports TS2345, TS2322 |
 | `types/typeRelationships/typeInference/genericCallWithOverloadedFunctionTypedArguments2.ts` | the port changes what it checks | `tsc` then reports TS1263 |
 | `types/typeRelationships/typeInference/genericClassWithFunctionTypedMemberArguments.ts` | not supported | expected `;` after expression, on ` namespace ImmediatelyFix { ` |
