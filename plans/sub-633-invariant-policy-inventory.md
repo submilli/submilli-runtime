@@ -1,7 +1,8 @@
 # SUB-633: invariant policy and simplification inventory
 
-Reviewed 2026-10-05. This is a proposal ledger, not an instruction to revert whole
-commits. No runtime changes or Linear status changes accompany this inventory.
+Reviewed 2026-10-05. This is an execution ledger, not an instruction to revert whole
+commits. The decisions below began as proposals; completed work is recorded in
+the execution section. Unrecorded proposals remain pending.
 The policy is [AGENTS.md](../AGENTS.md#no-panic-execution-paths).
 
 The useful rollback is selective: remove error propagation that exists only for
@@ -47,12 +48,43 @@ Each code row has a proposed disposition:
 - **Already simplified:** the historical reversal has already happened.
 - **Deferred:** intentionally not reopened by this review.
 
-These are recommendations, not completion statuses. All new simplifications are
-unimplemented. On execution, append owner/PR, exact symbols changed, proof,
+These are recommendations, not completion statuses. On execution, append
+owner/commit or PR, exact symbols changed, proof,
 remaining error cases, focused checks and final disposition to the row. A row is
 finished only when its code and tracking disposition agree. An accepted invariant
 stays recorded; it does not count as a removed panic. Do not delete history or
 reinterpret a checked historical item as a promise of zero panics.
+
+## Execution progress
+
+Owner: Codex in this checkout. Process: one item, focused verification, independent
+clean-code/correctness/edge review, commit, then the next item. Full PR verification
+remains deferred to the repository's post-rebase gate. Item 32/R25 remains deferred
+by the user's earlier instruction; completing this ledger does not close SUB-633's
+separate resource/dependency backlog.
+
+| Task | Status | Decision and evidence |
+| --- | --- | --- |
+| Policy and inventory baseline | Committed `46893ac3` | Three independent reviews, no findings; local links, commit references, 42-item coverage and diff checks passed |
+| R01 | Complete: retained | Keep compiler fatal-error architecture; evidence below; leaf simplifications remain assigned to their individual rows |
+
+### R01 execution evidence
+
+`ArenaError::into_compiler_failure` maps capacity and allocation failures to Limit
+and invalid public IDs to Internal. `SourceError::into_compiler_failure` similarly
+preserves source/file limits and invalid metadata. These are used by the public
+compile/typecheck APIs, not only private unreachable branches. `front_end_with_transitive`
+also rejects a source different from the parsed script's source. Capture, desugaring and codegen
+propagate failures before `CompiledScript` construction, retaining prior diagnostics.
+`CompileError::into_diagnostics` is an explicit compatibility adapter, not redundant
+internal-only plumbing. Removing these contracts would lose real failure handling.
+
+Disposition: retain R01's shared architecture unchanged. No code/test changes or
+new runtime claims; inspected conversion arms and public call sites above, with
+existing compiler tests covering fatal limits and mismatched source. Individual internal
+leaves remain pending under R02–R16. Documentation diff/link checks are sufficient
+for this retention decision; no runtime tests were rerun. Three independent review
+roles reported no findings. The commit containing this entry records completion.
 
 ## Completed fixes: candidates and decisions
 
