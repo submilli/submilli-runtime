@@ -102,7 +102,9 @@ impl DurableSessionStore for InMemoryDurableSessionStore {
 
 impl InMemoryDurableSessionStore {
     fn lock(&self) -> std::sync::MutexGuard<'_, HashMap<String, SessionRecord>> {
-        // Poisoned state is unsupported; see AGENTS.md accepted poisoned-lock panics.
+        // Poison means a panic may have interrupted a session-record mutation.
+        // AGENTS.md permits poisoned-lock panics rather than recovering potentially
+        // partial session state; it does not permit the panic that caused poisoning.
         self.inner.lock().expect("store lock poisoned")
     }
 }

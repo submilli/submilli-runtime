@@ -16,9 +16,38 @@
 //! schema flows through the same `schema_to_type` path as a published one.
 
 use std::collections::BTreeMap;
-use std::sync::LazyLock;
+use std::sync::{Arc, OnceLock};
 
 use serde_json::Value;
+
+#[derive(Clone, Debug)]
+pub enum SchemaPackError {
+    InvalidJson {
+        pack: &'static str,
+        source: Arc<serde_json::Error>,
+    },
+    MissingTools {
+        pack: &'static str,
+    },
+}
+
+impl std::fmt::Display for SchemaPackError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::InvalidJson { pack, .. } => write!(f, "schema pack '{pack}' is not valid JSON"),
+            Self::MissingTools { pack } => write!(f, "schema pack '{pack}' has no tools object"),
+        }
+    }
+}
+
+impl std::error::Error for SchemaPackError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::InvalidJson { source, .. } => Some(source.as_ref()),
+            Self::MissingTools { .. } => None,
+        }
+    }
+}
 
 /// One server's curated output schemas, keyed by tool name. The JSON values mirror
 /// the MCP `outputSchema` shape so they map through `schema_to_type` unchanged.
@@ -44,37 +73,59 @@ impl SchemaPack {
         Self { id, schemas }
     }
 
-    /// Parse a vendored pack file: `{ "_provenance": ..., "tools": { <tool>: <schema> } }`.
-    /// The `_provenance` key documents the source; only `tools` is loaded. Panics on a
-    /// malformed file — the file is a compiled-in asset, and `every_pack_is_representable`
-    /// guards it at test time.
-    fn from_json(id: &'static str, raw: &str) -> Self {
-        let doc: Value = serde_json::from_str(raw)
-            .unwrap_or_else(|e| panic!("schema pack '{id}' is not valid JSON: {e}"));
+    /// Parse the compiled-in asset, retaining a typed failure for bad metadata.
+    fn from_json(id: &'static str, raw: &str) -> Result<Self, SchemaPackError> {
+        let doc: Value =
+            serde_json::from_str(raw).map_err(|source| SchemaPackError::InvalidJson {
+                pack: id,
+                source: Arc::new(source),
+            })?;
         let tools = doc
             .get("tools")
             .and_then(Value::as_object)
-            .unwrap_or_else(|| panic!("schema pack '{id}' has no `tools` object"));
+            .ok_or(SchemaPackError::MissingTools { pack: id })?;
         let schemas = tools
             .iter()
             .map(|(name, schema)| (name.clone(), schema.clone()))
             .collect();
-        Self { id, schemas }
+        Ok(Self { id, schemas })
     }
 }
 
-static GITHUB_PACK: LazyLock<SchemaPack> =
-    LazyLock::new(|| SchemaPack::from_json("github", include_str!("schemas/github.json")));
+static GITHUB_PACK: OnceLock<Result<SchemaPack, SchemaPackError>> = OnceLock::new();
 
-/// Resolve the schema pack for a blueprint server's `url`, matched by host. `None`
-/// means no overlay applies (unknown host, or an unparseable URL).
-pub fn pack_for_url(url: &str) -> Option<&'static SchemaPack> {
-    let host = url::Url::parse(url).ok()?.host_str()?.to_ascii_lowercase();
-    match host.as_str() {
-        // The hosted remote GitHub MCP server. A self-hosted github-mcp-server on a
-        // custom host won't match — see the module docs.
-        "api.githubcopilot.com" => Some(&GITHUB_PACK),
-        _ => None,
+/// Validate every built-in pack before serving requests or starting discovery.
+/// Failed initialization is cached as a value, so repeated reads cannot poison it.
+pub fn initialize_builtin_packs() -> Result<(), SchemaPackError> {
+    github_pack().map(|_| ())
+}
+
+fn github_pack() -> Result<&'static SchemaPack, SchemaPackError> {
+    initialized_pack(&GITHUB_PACK, "github", include_str!("schemas/github.json"))
+}
+
+fn initialized_pack<'a>(
+    cell: &'a OnceLock<Result<SchemaPack, SchemaPackError>>,
+    id: &'static str,
+    raw: &str,
+) -> Result<&'a SchemaPack, SchemaPackError> {
+    cell.get_or_init(|| SchemaPack::from_json(id, raw))
+        .as_ref()
+        .map_err(Clone::clone)
+}
+
+/// Unknown hosts and malformed URLs have no overlay; broken built-in assets fail.
+pub fn pack_for_url(url: &str) -> Result<Option<&'static SchemaPack>, SchemaPackError> {
+    initialize_builtin_packs()?;
+    let Ok(url) = url::Url::parse(url) else {
+        return Ok(None);
+    };
+    let Some(host) = url.host_str() else {
+        return Ok(None);
+    };
+    match host.to_ascii_lowercase().as_str() {
+        "api.githubcopilot.com" => github_pack().map(Some),
+        _ => Ok(None),
     }
 }
 
@@ -85,8 +136,60 @@ mod tests {
     use interpreter::Type;
 
     #[test]
+    fn failed_initialization_is_cached_without_poisoning_and_keeps_its_cause() {
+        use std::error::Error;
+        let cell = OnceLock::new();
+        let first = initialized_pack(&cell, "broken", "{").err().unwrap();
+        let second = initialized_pack(&cell, "broken", r#"{"tools":{}}"#)
+            .err()
+            .unwrap();
+        assert!(first.source().is_some());
+        match (first, second) {
+            (
+                SchemaPackError::InvalidJson { source: a, .. },
+                SchemaPackError::InvalidJson { source: b, .. },
+            ) => assert!(Arc::ptr_eq(&a, &b)),
+            errors => panic!("unexpected errors: {errors:?}"),
+        }
+        let healthy = OnceLock::new();
+        assert_eq!(
+            initialized_pack(&healthy, "healthy", r#"{"tools":{}}"#)
+                .unwrap()
+                .id(),
+            "healthy"
+        );
+    }
+
+    #[test]
+    fn missing_and_non_object_tools_are_typed_failures() {
+        for raw in ["{}", r#"{"tools":null}"#, r#"{"tools":[]}"#] {
+            assert!(matches!(
+                SchemaPack::from_json("broken", raw),
+                Err(SchemaPackError::MissingTools { pack: "broken" })
+            ));
+        }
+    }
+
+    #[test]
+    fn concurrent_failed_initialization_remains_readable() {
+        let cell = OnceLock::new();
+        std::thread::scope(|scope| {
+            for _ in 0..4 {
+                let cell = &cell;
+                scope.spawn(move || {
+                    assert!(matches!(
+                        initialized_pack(cell, "broken", "{"),
+                        Err(SchemaPackError::InvalidJson { .. })
+                    ));
+                });
+            }
+        });
+        assert!(initialized_pack(&cell, "broken", "{").is_err());
+    }
+
+    #[test]
     fn github_pack_parses_and_covers_read_only_tools() {
-        let pack = &*GITHUB_PACK;
+        let pack = github_pack().unwrap();
         assert_eq!(pack.id(), "github");
         for tool in ["get_me", "list_issues", "get_label", "search_code"] {
             assert!(
@@ -98,7 +201,7 @@ mod tests {
 
     #[test]
     fn every_pack_schema_is_representable_and_structured() {
-        let pack = &*GITHUB_PACK;
+        let pack = github_pack().unwrap();
         for (tool, schema) in &pack.schemas {
             let ty = schema_to_type(schema, 0)
                 .unwrap_or_else(|| panic!("github tool `{tool}` schema is not representable"));
@@ -111,15 +214,27 @@ mod tests {
 
     #[test]
     fn pack_for_url_matches_github_host() {
-        assert!(pack_for_url("https://api.githubcopilot.com/mcp/").is_some());
+        assert!(
+            pack_for_url("https://api.githubcopilot.com/mcp/")
+                .unwrap()
+                .is_some()
+        );
         // Case-insensitive host, port and path ignored.
-        assert!(pack_for_url("https://API.GithubCopilot.com:443/mcp").is_some());
+        assert!(
+            pack_for_url("https://API.GithubCopilot.com:443/mcp")
+                .unwrap()
+                .is_some()
+        );
     }
 
     #[test]
     fn pack_for_url_misses_unknown_and_malformed() {
-        assert!(pack_for_url("https://mcp.linear.app/mcp").is_none());
-        assert!(pack_for_url("not a url").is_none());
+        assert!(
+            pack_for_url("https://mcp.linear.app/mcp")
+                .unwrap()
+                .is_none()
+        );
+        assert!(pack_for_url("not a url").unwrap().is_none());
     }
 
     /// Structurally validate `value` against `ty`, mirroring what `JSON.parse(...) as T`
@@ -268,7 +383,7 @@ mod tests {
 
     #[test]
     fn declared_types_parse_recorded_server_responses() {
-        let pack = &*GITHUB_PACK;
+        let pack = github_pack().unwrap();
         for (tool, response) in golden_server_responses() {
             let schema = pack
                 .output_schema(tool)
@@ -283,7 +398,7 @@ mod tests {
 
     #[test]
     fn list_endpoints_declare_bare_arrays_not_wrappers() {
-        let pack = &*GITHUB_PACK;
+        let pack = github_pack().unwrap();
         // These six tools marshal bare arrays on the wire; declaring an object
         // wrapper (the unmerged-PR shape that caused SUB-571) makes every typed
         // call trap at the JSON.parse boundary.

@@ -1,4 +1,4 @@
-name: Conformance
+name: Nightly tests
 
 on:
   schedule:
@@ -8,13 +8,13 @@ permissions:
   contents: read
 
 jobs:
-  conformance:
+  nightly:
     runs-on: ubuntu-latest
     timeout-minutes: 120
     env:
       SUBMILLI_TELEMETRY: "0"
       SUBMILLI_SKIP_HTTP_TESTS: "1"
-      SUBMILLI_CONFORMANCE_TEST: "1"
+      SUBMILLI_TEST_NIGHTLY_ONLY: "1"
       CARGO_PROFILE_DEV_DEBUG: "0"
       CARGO_PROFILE_TEST_DEBUG: "0"
     steps:
@@ -27,3 +27,24 @@ jobs:
       - name: TypeScript conformance
         if: ${{ !cancelled() && (steps.ecma.outcome == 'success' || steps.ecma.outcome == 'failure') }}
         run: cargo test --locked -p conformance --test typescript -- --nocapture
+      - name: Compiler determinism
+        if: ${{ !cancelled() }}
+        run: cargo test --locked -p interpreter --test determinism -- --nocapture
+      - name: Compiler type limits
+        if: ${{ !cancelled() }}
+        run: cargo test --locked -p interpreter --test type_limits -- --nocapture
+      - name: Git memory limits
+        if: ${{ !cancelled() }}
+        run: cargo test --locked -p interpreter --test git_memory -- --nocapture
+      - name: Host memory bounds
+        if: ${{ !cancelled() }}
+        run: cargo test --locked -p interpreter --test host_memory -- --nocapture
+      - name: Server memory caps
+        if: ${{ !cancelled() }}
+        run: cargo test --locked -p submilli-server --test memory_cap -- --nocapture
+      - name: Accessor fuel accounting
+        if: ${{ !cancelled() }}
+        run: cargo test --locked -p submilli --test run accessors_do_not_pay_for_the_whole_receiver -- --exact --nocapture
+      - name: Operation fuel accounting
+        if: ${{ !cancelled() }}
+        run: cargo test --locked -p submilli --test run operations_charge_for_the_input_they_process -- --exact --nocapture

@@ -4,6 +4,9 @@
 //! bumps its key per instance — so a hash-order leak into codegen shows up here as
 //! a byte diff. Detection is probabilistic per compile: a two-entry map still agrees
 //! with itself half the time, which is what `COMPILES_PER_SOURCE` is sized against.
+//!
+//! The sweep is opt-in for nightly and release verification. Set
+//! `SUBMILLI_TEST_NIGHTLY_ONLY=1` to run it; `SUBMILLI_FULL_TEST` does not enable it.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -21,6 +24,10 @@ const MIN_COMPILED_FIXTURES: usize = 800;
 
 #[test]
 fn scripts_compile_deterministically() {
+    if !determinism_requested() {
+        eprintln!("script determinism: skipped; set SUBMILLI_TEST_NIGHTLY_ONLY=1 to run");
+        return;
+    }
     let mut paths = Vec::new();
     collect_source_files(Path::new(FIXTURE_DIR), &mut paths);
     paths.sort();
@@ -49,6 +56,10 @@ fn scripts_compile_deterministically() {
 /// play while `lib` compiles.
 #[test]
 fn packages_compile_deterministically() {
+    if !determinism_requested() {
+        eprintln!("package determinism: skipped; set SUBMILLI_TEST_NIGHTLY_ONLY=1 to run");
+        return;
+    }
     let first = compile_narrowing_package().expect("package fixture compiles");
     for round in 1..COMPILES_PER_SOURCE {
         let again = compile_narrowing_package().unwrap_or_else(|d| {
@@ -63,6 +74,31 @@ fn packages_compile_deterministically() {
             "package declaration differs between compiles (round {round})",
         );
     }
+}
+
+#[test]
+fn determinism_requires_explicit_opt_in() {
+    for value in ["", "0", "false", "no", "off", "typo", "2"] {
+        assert!(!determinism_enabled(value), "unexpected opt-in: {value}");
+    }
+}
+
+#[test]
+fn determinism_accepts_documented_true_values() {
+    for value in ["1", "true", "yes", "on", "TRUE", "On"] {
+        assert!(determinism_enabled(value), "missing opt-in: {value}");
+    }
+}
+
+fn determinism_requested() -> bool {
+    std::env::var("SUBMILLI_TEST_NIGHTLY_ONLY").is_ok_and(|value| determinism_enabled(&value))
+}
+
+fn determinism_enabled(value: &str) -> bool {
+    matches!(
+        value.to_ascii_lowercase().as_str(),
+        "1" | "true" | "yes" | "on"
+    )
 }
 
 fn compile_narrowing_package() -> Result<CompiledPackage, Vec<Diagnostic>> {

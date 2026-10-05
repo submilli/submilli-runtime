@@ -1,6 +1,9 @@
 //! Type size, depth and work limits end to end: where each is reported, and
 //! dependency declarations, which an embedder can build directly rather than
 //! read from artifact JSON.
+//!
+//! Set `SUBMILLI_TEST_NIGHTLY_ONLY=1` to run these limit-sized inputs.
+//! `SUBMILLI_FULL_TEST` does not enable them.
 use interpreter::compile::{PackageSourceModule, compile_package_checked, compile_script_checked};
 use interpreter::compiler_error::{CompilerFailure, CompilerStage};
 use interpreter::compiler_limits::{COMPILER_STACK_BYTES, MAX_TYPE_DEPTH};
@@ -37,6 +40,9 @@ fn on_compiler_stack(test: impl FnOnce() + Send + 'static) {
 
 #[test]
 fn a_dependency_declaring_a_type_past_the_depth_limit_is_rejected() {
+    if !nightly_only_requested() {
+        return;
+    }
     on_compiler_stack(|| {
         let deep = declaring(nested(MAX_TYPE_DEPTH + 1));
         let Err(error) = compile_script_checked(SCRIPT, "main.ts", FileId(0), &[&deep], &[]) else {
@@ -60,6 +66,9 @@ fn a_dependency_declaring_a_type_past_the_depth_limit_is_rejected() {
 
 #[test]
 fn a_dependency_declaring_a_type_at_the_depth_limit_compiles() {
+    if !nightly_only_requested() {
+        return;
+    }
     on_compiler_stack(|| {
         let at_limit = declaring(nested(MAX_TYPE_DEPTH));
         compile_script_checked(SCRIPT, "main.ts", FileId(0), &[&at_limit], &[])
@@ -103,6 +112,9 @@ fn limit_of(source: String) -> (String, String) {
 
 #[test]
 fn an_oversized_alias_is_reported_at_its_reference() {
+    if !nightly_only_requested() {
+        return;
+    }
     let source = doubling_aliases(14)
         + "function f(x: A14 | null): number { return 0; }\n\
            export function main(): number { return f(null); }\n";
@@ -116,6 +128,9 @@ fn an_oversized_alias_is_reported_at_its_reference() {
 
 #[test]
 fn an_oversized_call_result_is_reported_at_the_call() {
+    if !nightly_only_requested() {
+        return;
+    }
     let mut source = "function pair<T>(x: T): { a: T; b: T } { return { a: x, b: x }; }\n\
                       export function main(): number {\n  const r0 = 1;\n"
         .to_string();
@@ -133,6 +148,9 @@ fn an_oversized_call_result_is_reported_at_the_call() {
 
 #[test]
 fn an_over_deep_inferred_type_is_reported_at_its_value() {
+    if !nightly_only_requested() {
+        return;
+    }
     let mut source = "export function main(): number {\n  const o0 = 1;\n".to_string();
     for i in 1..=MAX_TYPE_DEPTH {
         source.push_str(&format!("  const o{i} = {{ v: o{} }};\n", i - 1));
@@ -148,6 +166,9 @@ fn an_over_deep_inferred_type_is_reported_at_its_value() {
 
 #[test]
 fn an_inference_limit_on_a_multi_line_value_is_cut_to_its_first_line() {
+    if !nightly_only_requested() {
+        return;
+    }
     let mut source = "export function main(): number {\n  const o0 = 1;\n".to_string();
     for i in 1..MAX_TYPE_DEPTH {
         source.push_str(&format!("  const o{i} = {{ v: o{} }};\n", i - 1));
@@ -167,6 +188,9 @@ fn an_inference_limit_on_a_multi_line_value_is_cut_to_its_first_line() {
 
 #[test]
 fn a_limit_met_checking_a_returned_value_is_reported_at_the_value() {
+    if !nightly_only_requested() {
+        return;
+    }
     let source = doubling_aliases(13)
         + "interface Pair<T> { p: [T, T] }\n\
            interface Other<T> { p: [T, T] }\n\
@@ -183,6 +207,9 @@ fn a_limit_met_checking_a_returned_value_is_reported_at_the_value() {
 
 #[test]
 fn a_limit_met_checking_a_declaration_is_reported_at_that_declaration() {
+    if !nightly_only_requested() {
+        return;
+    }
     let mut source = "const unrelated = 42;\n\
                       class C0<T> { v: T; constructor(v: T) { this.v = v; } m(x: T): number { return 0; } }\n"
         .to_string();
@@ -206,6 +233,9 @@ fn a_limit_met_checking_a_declaration_is_reported_at_that_declaration() {
 
 #[test]
 fn comparing_types_draws_on_the_work_limit() {
+    if !nightly_only_requested() {
+        return;
+    }
     // Two isomorphic families of interfaces over unions of the same literals in
     // opposite orders: every level compares both members of the next.
     let members = |order: &mut dyn Iterator<Item = usize>| {
@@ -240,6 +270,9 @@ fn comparing_types_draws_on_the_work_limit() {
 
 #[test]
 fn a_package_rejects_a_dependency_past_the_depth_limit() {
+    if !nightly_only_requested() {
+        return;
+    }
     on_compiler_stack(|| {
         let deep = declaring(nested(MAX_TYPE_DEPTH + 1));
         let Err(error) = compile_package_checked(
@@ -267,6 +300,9 @@ fn a_package_rejects_a_dependency_past_the_depth_limit() {
 
 #[test]
 fn a_runtime_check_too_large_for_one_function_is_reported_at_the_cast() {
+    if !nightly_only_requested() {
+        return;
+    }
     // Each UTF-16 unit of a string literal tested at runtime is several
     // instructions, so eight fields of one long literal type outgrow a function
     // body long before the check runs out of steps or locals.
@@ -291,6 +327,9 @@ fn a_runtime_check_too_large_for_one_function_is_reported_at_the_cast() {
 
 #[test]
 fn a_function_with_too_many_locals_is_reported_where_it_runs_out() {
+    if !nightly_only_requested() {
+        return;
+    }
     let locals = interpreter::compiler_limits::MAX_FUNCTION_LOCALS + 10;
     let body: String = (0..locals)
         .map(|i| format!("  const v{i} = {i};\n"))
@@ -329,6 +368,9 @@ fn function_whose_loop_crosses_the_locals_limit(name: &str) -> String {
 
 #[test]
 fn desugared_code_crossing_the_locals_limit_is_reported_at_its_source() {
+    if !nightly_only_requested() {
+        return;
+    }
     let (message, text) = limit_of(function_whose_loop_crosses_the_locals_limit("main"));
     assert!(
         message.starts_with("the function this code compiles into"),
@@ -339,6 +381,9 @@ fn desugared_code_crossing_the_locals_limit_is_reported_at_its_source() {
 
 #[test]
 fn a_check_after_code_that_crossed_the_locals_limit_does_not_take_the_blame() {
+    if !nightly_only_requested() {
+        return;
+    }
     let locals = interpreter::compiler_limits::MAX_FUNCTION_LOCALS + 10;
     let body: String = (0..locals)
         .map(|i| format!("  const v{i} = {i};\n"))
@@ -363,6 +408,9 @@ fn a_check_after_code_that_crossed_the_locals_limit_does_not_take_the_blame() {
 
 #[test]
 fn a_limit_in_another_package_module_is_cut_to_its_first_line() {
+    if !nightly_only_requested() {
+        return;
+    }
     let helper = function_whose_loop_crosses_the_locals_limit("g");
     let (tx, rx) = std::sync::mpsc::channel();
     on_compiler_stack(move || {
@@ -398,4 +446,17 @@ fn a_limit_in_another_package_module_is_cut_to_its_first_line() {
         rx.recv().unwrap().as_deref(),
         Some("for (const x of arr) {")
     );
+}
+
+fn nightly_only_requested() -> bool {
+    let requested = std::env::var("SUBMILLI_TEST_NIGHTLY_ONLY").is_ok_and(|value| {
+        matches!(
+            value.to_ascii_lowercase().as_str(),
+            "1" | "true" | "yes" | "on"
+        )
+    });
+    if !requested {
+        eprintln!("type limits: skipped; set SUBMILLI_TEST_NIGHTLY_ONLY=1 to run");
+    }
+    requested
 }
