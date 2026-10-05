@@ -1145,7 +1145,7 @@ pub fn emit_closure_function(
             field_index: 0,
         });
     }
-    if crate::codegen::call_arguments::typed_metadata(&meta.params)?.is_some() {
+    if crate::codegen::call_arguments::typed_metadata(&meta.params).is_some() {
         crate::codegen::call_arguments::unwrap(&mut emitter, ctx)?;
     }
     emitter.instructions.push(Instruction::RefCastNonNull(

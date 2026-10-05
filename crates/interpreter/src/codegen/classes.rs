@@ -297,7 +297,7 @@ impl ClassPlan {
             let mut methods: Vec<SlotDraft> = parent_methods;
             for (m, _) in &sorted_methods {
                 let param_tys: Vec<crate::Type> = m.params.iter().map(|p| p.ty.clone()).collect();
-                let argument_metadata = super::call_arguments::typed_metadata(&m.params)?;
+                let argument_metadata = super::call_arguments::typed_metadata(&m.params);
                 if let Some(slot) = methods.iter_mut().find(|s| s.name == m.name.name) {
                     // Override: same slot, body now supplied by this class — so
                     // the slot must describe *this* body, not the ancestor's.

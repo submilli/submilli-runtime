@@ -75,6 +75,7 @@ separate resource/dependency backlog.
 | R07 | Complete: retained | Keep cross-phase registration checks and fallible emission |
 | R08 | Complete: selectively simplified | Removed root-scope-only failure checks; kept slot/mark/limit contracts |
 | R09 | Complete: selectively simplified | Removed duplicate decimal validation and private parse-error Result |
+| R10 | Complete: simplified | Metadata and typed_metadata return Option directly |
 
 ### R01 execution evidence
 
@@ -238,6 +239,20 @@ Three independent reviews had no findings. Four focused BigInt-pool tests,
 formatting, offline workspace/all-target Clippy and diff checks passed; full tests
 disabled and HTTP skipped. Graph updated with existing extraction limitations;
 accepted site recorded and verified in SUB-633's ledger. This commit records R09.
+
+### R10 execution evidence
+
+Audited every DefaultValue/EnumVariantValue variant, string-backed MangledName and
+the artifact_f64 serializer: the complete graph is JSON-compatible, and non-finite
+numbers become strings. No arbitrary serializer or map key is reachable. Metadata
+helpers now return Option directly with a documented serialization expectation;
+six caller sites drop only metadata error propagation. Actual wrapper emission,
+registration, size and other compiler errors remain fallible.
+
+Three independent reviews had no findings. Formatting, offline workspace/all-target
+Clippy and filtered fixtures (39 default, 21 rest, including non-finite defaults)
+passed with full tests disabled and HTTP skipped. AST graph updated with existing
+limitations. Accepted site recorded/verified in SUB-633; this commit records R10.
 
 ## Completed fixes: candidates and decisions
 
