@@ -1,6 +1,6 @@
 // Run through `submilli run --blueprint ref-filters.yaml`, not the allow-all build test runner.
 import {
-    CreatePullRequestInput, FileReadOptions, RepositoryRef, createPullRequest, listDirectory, readFile, readTextFile, updatePullRequest,
+    CreatePullRequestInput, FileReadOptions, RepositoryRef, listCommits, createPullRequest, listDirectory, readFile, readTextFile, updatePullRequest,
 } from "@submilli/github";
 
 const REPOSITORY: RepositoryRef = { owner: "allowed-org", name: "repo" };
@@ -92,5 +92,10 @@ function main(): string {
     reachesCredentialBoundary(() => { updatePullRequest(REPOSITORY, 5, { title: "Renamed" }); });
     reachesCredentialBoundary(() => { updatePullRequest(REPOSITORY, 5, { base: "main" }); });
     deniedAt("github.com/pulls.update", "main", () => { updatePullRequest(REPOSITORY, 5, { base: "release" }); });
+    reachesCredentialBoundary(() => { listCommits(REPOSITORY, { sha: "main", path: "src/lib.ts" }); });
+    deniedAt("github.com/commits.list", "main", () => { listCommits(REPOSITORY, { sha: "Main", path: "src/lib.ts" }); });
+    deniedAt("github.com/commits.list", "main", () => { listCommits(REPOSITORY, { sha: "secret-branch", path: "src/lib.ts" }); });
+    deniedAt("github.com/commits.list", "main", () => { listCommits(REPOSITORY, { sha: "main", path: "secret.txt" }); });
+    deniedAt("github.com/commits.list", "main", () => { listCommits(REPOSITORY); });
     return "ref, head and base checks passed";
 }

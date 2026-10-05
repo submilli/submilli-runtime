@@ -76,3 +76,15 @@ an active worker when testing the package in isolation. Testing real `created`,
 
 API references: [agent interactions](https://linear.app/developers/agent-interaction)
 and [signals](https://linear.app/developers/agent-signals).
+
+## Team-scoped reads and agent operations
+
+`getIssue`, `listComments`, and every session/activity operation now check
+`teamId` resolved from the target issue, comment, or session. The package reads
+only the target's team metadata before the business check; a denial prevents the
+subsequent content read or mutation. Metadata lookup uses the package's native
+HTTP/secret requirements, without requiring an additional caller read grant.
+Missing issues still return null from `getIssue` after a check with null team;
+missing mutation targets and sessions without an issue/comment team fail closed.
+Use allow rules naming permitted team UUIDs. Session target IDs are snapshotted
+before lookup so a getter cannot change the mutation's target after authorization.

@@ -60,6 +60,65 @@ export interface SearchPageResult<T> {
     incompleteResults: boolean;
 }
 
+/** Available reaction counts. A missing summary or counter is null, never an assumed zero. */
+export interface ReactionSummary {
+    /** All reaction types combined. */
+    totalCount: number | null;
+    /** Thumbs-up count. */
+    thumbsUp: number | null;
+    /** Thumbs-down count. */
+    thumbsDown: number | null;
+    /** Laugh count. */
+    laugh: number | null;
+    /** Hooray count. */
+    hooray: number | null;
+    /** Confused count. */
+    confused: number | null;
+    /** Heart count. */
+    heart: number | null;
+    /** Rocket count. */
+    rocket: number | null;
+    /** Eyes count. */
+    eyes: number | null;
+}
+
+/** Issue search metadata together with its repository identity. */
+export interface IssueSearchHit {
+    /** Repository containing the issue. */
+    repository: RepositoryRef;
+    /** Issue metadata from the search response. */
+    issue: Issue;
+}
+
+/** Search metadata without mergeability, diff statistics, head or base details. */
+export interface PullRequestSummary extends Issue {
+    /** Draft state, or null when search omits it. */
+    draft: boolean | null;
+}
+/** Pull-request search metadata together with its repository identity. */
+export interface PullRequestSearchHit {
+    /** Repository containing the pull request. */
+    repository: RepositoryRef;
+    /** Metadata returned by search, without detail requests. */
+    pullRequest: PullRequestSummary;
+}
+
+/** A research page can be exhausted while GitHub still caps the matching results. */
+export interface ResearchPageResult<T> extends SearchPageResult<T> {
+    /** More than 1,000 matches; narrow the query to retrieve beyond that ceiling. */
+    isCapped: boolean;
+}
+
+/** Structured author and inclusive UTC calendar-day creation window. */
+export interface ResearchSearchOptions extends SearchOptions {
+    /** One login or app/login; folded to lowercase. */
+    author?: string;
+    /** Inclusive first UTC day, YYYY-MM-DD. */
+    createdSince?: string;
+    /** Inclusive last UTC day, YYYY-MM-DD. */
+    createdUntil?: string;
+}
+
 /** A GitHub user account. */
 export interface User {
     /** Login (username). */
@@ -336,6 +395,8 @@ export interface Comment {
     createdAt: string;
     /** ISO 8601 time of the last edit. */
     updatedAt: string;
+    /** Reaction summary, or null when the endpoint does not provide it. */
+    reactions?: ReactionSummary | null;
 }
 
 /** A repository issue. */
@@ -372,6 +433,8 @@ export interface Issue {
     updatedAt: string;
     /** ISO 8601 close time, or null while open. */
     closedAt: string | null;
+    /** Reaction summary, or null when the endpoint does not provide it. */
+    reactions?: ReactionSummary | null;
 }
 
 /** One side (head or base) of a pull request. */
@@ -442,6 +505,8 @@ export interface PullRequest {
     closedAt: string | null;
     /** ISO 8601 merge time, or null when not merged. */
     mergedAt: string | null;
+    /** Reaction summary, or null when the endpoint does not provide it. */
+    reactions?: ReactionSummary | null;
 }
 
 /** One file changed by a pull request. */
@@ -938,6 +1003,18 @@ interface ApiMilestone {
     due_on?: string;
 }
 
+interface ApiReactionSummary {
+    total_count?: number;
+    "+1"?: number;
+    "-1"?: number;
+    laugh?: number;
+    hooray?: number;
+    confused?: number;
+    heart?: number;
+    rocket?: number;
+    eyes?: number;
+}
+
 interface ApiComment {
     id?: number;
     body?: string;
@@ -946,6 +1023,7 @@ interface ApiComment {
     author_association?: string;
     created_at?: string;
     updated_at?: string;
+    reactions?: ApiReactionSummary;
 }
 
 interface ApiIssue {
@@ -966,6 +1044,9 @@ interface ApiIssue {
     updated_at?: string;
     closed_at?: string;
     pull_request?: unknown;
+    reactions?: ApiReactionSummary;
+    repository_url?: string;
+    draft?: boolean;
 }
 
 interface ApiPullRef {
@@ -1003,6 +1084,7 @@ interface ApiPullRequest {
     updated_at?: string;
     closed_at?: string;
     merged_at?: string;
+    reactions?: ApiReactionSummary;
 }
 
 interface ApiPullFile {
@@ -1259,8 +1341,8 @@ interface RepositoryCapabilityContext {
     owner: string;
     repo: string;
     branch?: string;
-    path?: string;
-    ref?: string;
+    path?: string | null;
+    ref?: string | null;
     treeSha?: string;
     head?: string;
     base?: string;
@@ -1366,7 +1448,8 @@ export function searchRepositories(query: string, options: SearchOptions | null 
  * @capability github.com/code.search { owner: string, repo: string, branch: string, path: string, ref: string, treeSha: string, head: string, base: string }
  */
 export function searchCode(repository: RepositoryRef, query: string, options: SearchOptions | null = null): SearchPageResult<CodeSearchHit> {
-    const { owner, name } = repository;
+    const { owner: requestedOwner, name: requestedName } = repository;
+    const { owner, name } = canonicalRepository(requestedOwner, requestedName);
     const sort = options === null ? null : options.sort;
     const order = options === null ? null : options.order;
     const limit = options === null ? null : options.limit;
@@ -1430,7 +1513,8 @@ export function getRateLimit(): RateLimit {
  * @capability github.com/repositories.get { owner: string, repo: string, branch: string, path: string, ref: string, treeSha: string, head: string, base: string }
  */
 export function getRepository(repository: RepositoryRef): Repository | null {
-    const { owner, name } = repository;
+    const { owner: requestedOwner, name: requestedName } = repository;
+    const { owner, name } = canonicalRepository(requestedOwner, requestedName);
     const context = checkedRepository(owner, name);
     check("github.com/repositories.get", context);
     const response = githubGetNullable(repositoryPath(owner, name));
@@ -1444,7 +1528,8 @@ export function getRepository(repository: RepositoryRef): Repository | null {
  * @capability github.com/branches.get { owner: string, repo: string, branch: string, path: string, ref: string, treeSha: string, head: string, base: string }
  */
 export function getBranch(repository: RepositoryRef, branch: string): Branch | null {
-    const { owner, name } = repository;
+    const { owner: requestedOwner, name: requestedName } = repository;
+    const { owner, name } = canonicalRepository(requestedOwner, requestedName);
     const context = repositoryContext(owner, name, "branch", branch);
     check("github.com/branches.get", context);
     const response = githubGetNullable(repositoryPath(owner, name) + "/branches/" + segment(branch, "branch"));
@@ -1458,7 +1543,8 @@ export function getBranch(repository: RepositoryRef, branch: string): Branch | n
  * @capability github.com/branches.list { owner: string, repo: string, branch: string, path: string, ref: string, treeSha: string, head: string, base: string }
  */
 export function listBranches(repository: RepositoryRef, options: PageOptions | null = null): PageResult<Branch> {
-    const { owner, name } = repository;
+    const { owner: requestedOwner, name: requestedName } = repository;
+    const { owner, name } = canonicalRepository(requestedOwner, requestedName);
     const limit = options === null ? null : options.limit;
     const cursor = options === null ? null : options.pageToken;
     const context = checkedRepository(owner, name);
@@ -1477,7 +1563,8 @@ export function listBranches(repository: RepositoryRef, options: PageOptions | n
  * @capability github.com/commits.list { owner: string, repo: string, branch: string, path: string, ref: string, treeSha: string, head: string, base: string }
  */
 export function listCommits(repository: RepositoryRef, options: ListCommitsOptions | null = null): PageResult<Commit> {
-    const { owner, name } = repository;
+    const { owner: requestedOwner, name: requestedName } = repository;
+    const { owner, name } = canonicalRepository(requestedOwner, requestedName);
     const sha = options === null ? null : options.sha;
     const path = options === null ? null : options.path;
     const author = options === null ? null : options.author;
@@ -1486,10 +1573,12 @@ export function listCommits(repository: RepositoryRef, options: ListCommitsOptio
     const limit = options === null ? null : options.limit;
     const cursor = options === null ? null : options.pageToken;
     const context = checkedRepository(owner, name);
+    context.ref = namedRef(sha);
+    context.path = namedRef(path);
     check("github.com/commits.list", context);
     const query = pageQuery({ limit: limit, cursor: cursor });
-    putQuery(query, "sha", sha);
-    putQuery(query, "path", path);
+    putQuery(query, "sha", context.ref);
+    putQuery(query, "path", context.path);
     putQuery(query, "author", author);
     putQuery(query, "since", since !== null ? toRfc3339(since, "since") : null);
     putQuery(query, "until", until !== null ? toRfc3339(until, "until") : null);
@@ -1508,7 +1597,8 @@ export function listCommits(repository: RepositoryRef, options: ListCommitsOptio
  * @capability github.com/commits.get { owner: string, repo: string, ref: string, branch: string, path: string, treeSha: string, head: string, base: string }
  */
 export function getCommit(repository: RepositoryRef, ref: string, detail: CommitDetail | null = null): Commit | null {
-    const { owner, name } = repository;
+    const { owner: requestedOwner, name: requestedName } = repository;
+    const { owner, name } = canonicalRepository(requestedOwner, requestedName);
     const context = repositoryContext(owner, name, "ref", ref);
     check("github.com/commits.get", context);
     const response = githubGetNullable(repositoryPath(owner, name) + "/commits/" + segment(ref, "commit ref"));
@@ -1522,7 +1612,8 @@ export function getCommit(repository: RepositoryRef, ref: string, detail: Commit
  * @capability github.com/releases.list { owner: string, repo: string, branch: string, path: string, ref: string, treeSha: string, head: string, base: string }
  */
 export function listReleases(repository: RepositoryRef, options: PageOptions | null = null): PageResult<Release> {
-    const { owner, name } = repository;
+    const { owner: requestedOwner, name: requestedName } = repository;
+    const { owner, name } = canonicalRepository(requestedOwner, requestedName);
     const limit = options === null ? null : options.limit;
     const cursor = options === null ? null : options.pageToken;
     const context = checkedRepository(owner, name);
@@ -1540,7 +1631,8 @@ export function listReleases(repository: RepositoryRef, options: PageOptions | n
  * @capability github.com/releases.getLatest { owner: string, repo: string, branch: string, path: string, ref: string, treeSha: string, head: string, base: string }
  */
 export function getLatestRelease(repository: RepositoryRef): Release | null {
-    const { owner, name } = repository;
+    const { owner: requestedOwner, name: requestedName } = repository;
+    const { owner, name } = canonicalRepository(requestedOwner, requestedName);
     const context = checkedRepository(owner, name);
     check("github.com/releases.getLatest", context);
     const response = githubGetNullable(repositoryPath(owner, name) + "/releases/latest");
@@ -1556,7 +1648,8 @@ export function getLatestRelease(repository: RepositoryRef): Release | null {
  * @capability github.com/contents.readFile { owner: string, repo: string, path: string, ref: string, branch: string, treeSha: string, head: string, base: string }
  */
 export function readFile(repository: RepositoryRef, path: string, options: FileReadOptions | null = null): RepositoryFile | null {
-    const { owner, name } = repository;
+    const { owner: requestedOwner, name: requestedName } = repository;
+    const { owner, name } = canonicalRepository(requestedOwner, requestedName);
     const ref = options === null ? null : options.ref;
     const maxBytes = options === null ? null : options.maxBytes;
     const context = repositoryContext(owner, name, "path", path);
@@ -1573,7 +1666,8 @@ export function readFile(repository: RepositoryRef, path: string, options: FileR
  * @capability github.com/contents.readTextFile { owner: string, repo: string, path: string, ref: string, branch: string, treeSha: string, head: string, base: string }
  */
 export function readTextFile(repository: RepositoryRef, path: string, options: FileReadOptions | null = null): RepositoryTextFile | null {
-    const { owner, name } = repository;
+    const { owner: requestedOwner, name: requestedName } = repository;
+    const { owner, name } = canonicalRepository(requestedOwner, requestedName);
     const ref = options === null ? null : options.ref;
     const maxBytes = options === null ? null : options.maxBytes;
     const context = repositoryContext(owner, name, "path", path);
@@ -1598,7 +1692,8 @@ export function readTextFile(repository: RepositoryRef, path: string, options: F
  * @capability github.com/contents.listDirectory { owner: string, repo: string, path: string, ref: string, branch: string, treeSha: string, head: string, base: string }
  */
 export function listDirectory(repository: RepositoryRef, path: string, options: DirectoryOptions | null = null): DirectoryEntry[] {
-    const { owner, name } = repository;
+    const { owner: requestedOwner, name: requestedName } = repository;
+    const { owner, name } = canonicalRepository(requestedOwner, requestedName);
     const ref = options === null ? null : options.ref;
     const context = repositoryContext(owner, name, "path", path);
     context.ref = namedRef(ref);
@@ -1630,7 +1725,8 @@ export function listDirectory(repository: RepositoryRef, path: string, options: 
  * @capability github.com/trees.get { owner: string, repo: string, treeSha: string, branch: string, path: string, ref: string, head: string, base: string }
  */
 export function getTree(repository: RepositoryRef, treeSha: string, recursive: boolean = false): RepositoryTree | null {
-    const { owner, name } = repository;
+    const { owner: requestedOwner, name: requestedName } = repository;
+    const { owner, name } = canonicalRepository(requestedOwner, requestedName);
     const context = repositoryContext(owner, name, "treeSha", treeSha);
     check("github.com/trees.get", context);
     const query = new Map<string, string>();
@@ -1658,7 +1754,8 @@ export function getTree(repository: RepositoryRef, treeSha: string, recursive: b
  * @capability github.com/branches.create { owner: string, repo: string, branch: string, path: string, ref: string, treeSha: string, head: string, base: string }
  */
 export function createBranch(repository: RepositoryRef, input: CreateBranchInput): Branch {
-    const { owner, name: repo } = repository;
+    const { owner: requestedOwner, name: requestedName } = repository;
+    const { owner, name: repo } = canonicalRepository(requestedOwner, requestedName);
     const { name: requested, fromSha } = input;
     const context = repositoryContext(owner, repo, "branch", requested);
     check("github.com/branches.create", context);
@@ -1675,7 +1772,8 @@ export function createBranch(repository: RepositoryRef, input: CreateBranchInput
  * @capability github.com/branches.delete { owner: string, repo: string, branch: string, path: string, ref: string, treeSha: string, head: string, base: string }
  */
 export function deleteBranch(repository: RepositoryRef, branch: string): void {
-    const { owner, name: repo } = repository;
+    const { owner: requestedOwner, name: requestedName } = repository;
+    const { owner, name: repo } = canonicalRepository(requestedOwner, requestedName);
     const context = repositoryContext(owner, repo, "branch", branch);
     check("github.com/branches.delete", context);
     const name = branchName(branch);
@@ -1689,7 +1787,8 @@ export function deleteBranch(repository: RepositoryRef, branch: string): void {
  * @capability github.com/commits.create { owner: string, repo: string, branch: string, path: string, ref: string, treeSha: string, head: string, base: string }
  */
 export function commitFiles(repository: RepositoryRef, input: CommitFilesInput): Commit {
-    const { owner, name } = repository;
+    const { owner: requestedOwner, name: requestedName } = repository;
+    const { owner, name } = canonicalRepository(requestedOwner, requestedName);
     const { branch: requestedBranch, expectedHeadSha, message, changes } = input;
     const context = repositoryContext(owner, name, "branch", requestedBranch);
     check("github.com/commits.create", context);
@@ -1751,7 +1850,8 @@ export function commitFiles(repository: RepositoryRef, input: CommitFilesInput):
  * @capability github.com/issues.get { owner: string, repo: string, number: number, base: string }
  */
 export function getIssue(repository: RepositoryRef, number: number): Issue | null {
-    const { owner, name } = repository;
+    const { owner: requestedOwner, name: requestedName } = repository;
+    const { owner, name } = canonicalRepository(requestedOwner, requestedName);
     const context = repositoryNumberContext(owner, name, number);
     check("github.com/issues.get", context);
     const response = githubGetNullable(repositoryPath(owner, name) + "/issues/" + issueNumber(number));
@@ -1770,7 +1870,8 @@ export function getIssue(repository: RepositoryRef, number: number): Issue | nul
  * @capability github.com/issues.list { owner: string, repo: string, branch: string, path: string, ref: string, treeSha: string, head: string, base: string }
  */
 export function listIssues(repository: RepositoryRef, options: ListIssuesOptions | null = null): PageResult<Issue> {
-    const { owner, name } = repository;
+    const { owner: requestedOwner, name: requestedName } = repository;
+    const { owner, name } = canonicalRepository(requestedOwner, requestedName);
     const state = options === null ? null : options.state;
     const requestedLabels = options === null ? null : options.labels;
     const orderBy = options === null ? null : options.orderBy;
@@ -1833,7 +1934,8 @@ export function listIssues(repository: RepositoryRef, options: ListIssuesOptions
  * @capability github.com/issues.search { owner: string, repo: string, branch: string, path: string, ref: string, treeSha: string, head: string, base: string }
  */
 export function searchIssues(repository: RepositoryRef, query: string, options: SearchOptions | null = null): SearchPageResult<Issue> {
-    const { owner, name } = repository;
+    const { owner: requestedOwner, name: requestedName } = repository;
+    const { owner, name } = canonicalRepository(requestedOwner, requestedName);
     const sort = options === null ? null : options.sort;
     const order = options === null ? null : options.order;
     const limit = options === null ? null : options.limit;
@@ -1850,7 +1952,8 @@ export function searchIssues(repository: RepositoryRef, query: string, options: 
  * @capability github.com/issues.create { owner: string, repo: string, branch: string, path: string, ref: string, treeSha: string, head: string, base: string }
  */
 export function createIssue(repository: RepositoryRef, input: CreateIssueInput): Issue {
-    const { owner, name } = repository;
+    const { owner: requestedOwner, name: requestedName } = repository;
+    const { owner, name } = canonicalRepository(requestedOwner, requestedName);
     const {
         title,
         body: description,
@@ -1890,7 +1993,8 @@ export function createIssue(repository: RepositoryRef, input: CreateIssueInput):
  * @capability github.com/issues.update { owner: string, repo: string, number: number, base: string }
  */
 export function updateIssue(repository: RepositoryRef, number: number, input: UpdateIssueInput): Issue {
-    const { owner, name } = repository;
+    const { owner: requestedOwner, name: requestedName } = repository;
+    const { owner, name } = canonicalRepository(requestedOwner, requestedName);
     const {
         title,
         body: description,
@@ -1939,7 +2043,8 @@ export function updateIssue(repository: RepositoryRef, number: number, input: Up
  * @capability github.com/issueComments.list { owner: string, repo: string, number: number, base: string }
  */
 export function listIssueComments(repository: RepositoryRef, number: number, options: PageOptions | null = null): PageResult<Comment> {
-    const { owner, name } = repository;
+    const { owner: requestedOwner, name: requestedName } = repository;
+    const { owner, name } = canonicalRepository(requestedOwner, requestedName);
     const limit = options === null ? null : options.limit;
     const cursor = options === null ? null : options.pageToken;
     const context = repositoryNumberContext(owner, name, number);
@@ -1955,7 +2060,8 @@ export function listIssueComments(repository: RepositoryRef, number: number, opt
  * @capability github.com/issueComments.create { owner: string, repo: string, number: number, base: string }
  */
 export function addIssueComment(repository: RepositoryRef, number: number, body: string): Comment {
-    const { owner, name } = repository;
+    const { owner: requestedOwner, name: requestedName } = repository;
+    const { owner, name } = canonicalRepository(requestedOwner, requestedName);
     const context = repositoryNumberContext(owner, name, number);
     check("github.com/issueComments.create", context);
     return addCommentUnchecked(owner, name, number, body);
@@ -1968,7 +2074,8 @@ export function addIssueComment(repository: RepositoryRef, number: number, body:
  * @capability github.com/labels.list { owner: string, repo: string, branch: string, path: string, ref: string, treeSha: string, head: string, base: string }
  */
 export function listLabels(repository: RepositoryRef, options: PageOptions | null = null): PageResult<Label> {
-    const { owner, name } = repository;
+    const { owner: requestedOwner, name: requestedName } = repository;
+    const { owner, name } = canonicalRepository(requestedOwner, requestedName);
     const limit = options === null ? null : options.limit;
     const cursor = options === null ? null : options.pageToken;
     const context = checkedRepository(owner, name);
@@ -1987,7 +2094,8 @@ export function listLabels(repository: RepositoryRef, options: PageOptions | nul
  * @capability github.com/pulls.get { owner: string, repo: string, number: number, base: string }
  */
 export function getPullRequest(repository: RepositoryRef, number: number): PullRequest | null {
-    const { owner, name } = repository;
+    const { owner: requestedOwner, name: requestedName } = repository;
+    const { owner, name } = canonicalRepository(requestedOwner, requestedName);
     const context = repositoryNumberContext(owner, name, number);
     check("github.com/pulls.get", context);
     return getPullRequestUnchecked(owner, name, number);
@@ -2000,7 +2108,8 @@ export function getPullRequest(repository: RepositoryRef, number: number): PullR
  * @capability github.com/pulls.list { owner: string, repo: string, branch: string, path: string, ref: string, treeSha: string, head: string, base: string }
  */
 export function listPullRequests(repository: RepositoryRef, options: ListPullRequestsOptions | null = null): PageResult<PullRequest> {
-    const { owner, name } = repository;
+    const { owner: requestedOwner, name: requestedName } = repository;
+    const { owner, name } = canonicalRepository(requestedOwner, requestedName);
     const state = options === null ? null : options.state;
     const head = options === null ? null : options.head;
     const base = options === null ? null : options.base;
@@ -2023,6 +2132,95 @@ export function listPullRequests(repository: RepositoryRef, options: ListPullReq
     return pageFrom(response, items);
 }
 
+/** Fetch issue-style reaction counts for one pull request without loading diff details.
+ * @param repository Owner and repository name.
+ * @param number Pull-request number within the repository.
+ * @returns Reaction summary, or null if the pull request is missing or GitHub omits the summary.
+ * @capability github.com/pulls.getReactions { owner: string, repo: string, number: number }
+ */
+export function getPullRequestReactions(repository: RepositoryRef, number: number): ReactionSummary | null {
+    const { owner: requestedOwner, name: requestedName } = repository;
+    const { owner, name } = canonicalRepository(requestedOwner, requestedName);
+    requireIssueNumber(number);
+    check("github.com/pulls.getReactions", { owner: owner, repo: name, number: number });
+    const response = githubGetNullable(repositoryPath(owner, name) + "/issues/" + issueNumber(number));
+    if (response === null) return null;
+    const data = response.json() as ApiIssue;
+    if (data.pull_request == null) throw validationError("wrong_resource_type", "GitHub number identifies an issue; use getIssue");
+    return reactionsFrom(data.reactions ?? null);
+}
+
+/** Search issue metadata across repositories. Requires a separate, broader grant.
+ * @param query GitHub terms and scope qualifiers; kind, author, creation qualifiers and OR are reserved.
+ * @param options Author, inclusive UTC creation dates, sorting and pagination.
+ * @returns One page with repository identity, reactions, pagination and partial-result flags.
+ * @capability github.com/issues.searchAcrossRepositories { query: string, author: string, createdSince: string, createdUntil: string }
+ */
+export function searchIssuesAcrossRepositories(query: string, options: ResearchSearchOptions | null = null): ResearchPageResult<IssueSearchHit> {
+    const owned: ResearchOptionsSnapshot = {
+        author: options === null ? null : (options.author ?? null), createdSince: options === null ? null : (options.createdSince ?? null),
+        createdUntil: options === null ? null : (options.createdUntil ?? null), sort: options === null ? null : (options.sort ?? null),
+        order: options === null ? null : (options.order ?? null), limit: options === null ? null : (options.limit ?? null),
+        pageToken: options === null ? null : (options.pageToken ?? null),
+    };
+    const request = researchRequest(query, owned, "is:issue");
+    check("github.com/issues.searchAcrossRepositories", {
+        query: request.query, author: request.author, createdSince: request.createdSince, createdUntil: request.createdUntil,
+    });
+    const response = githubGet("/search/issues", searchQuery(request.query, request.search));
+    const data = researchData(response);
+    const items: IssueSearchHit[] = [];
+    for (const item of array(data.items)) {
+        if (item.pull_request != null) throw validationError("invalid_response", "Issue search returned a pull request");
+        items.push({ repository: searchRepository(item), issue: issueFrom(item) });
+    }
+    return researchPage(response, items, data, request.search);
+}
+
+/** Search lightweight pull-request metadata across repositories with one HTTP call per page.
+ * @param query GitHub terms and scope qualifiers; kind, author, creation qualifiers and OR are reserved.
+ * @param options Author, inclusive UTC creation dates, sorting and pagination.
+ * @returns One metadata page; select hits for explicit detail enrichment.
+ * @capability github.com/pulls.searchAcrossRepositories { query: string, author: string, createdSince: string, createdUntil: string }
+ */
+export function searchPullRequestsAcrossRepositories(query: string, options: ResearchSearchOptions | null = null): ResearchPageResult<PullRequestSearchHit> {
+    const owned: ResearchOptionsSnapshot = {
+        author: options === null ? null : (options.author ?? null), createdSince: options === null ? null : (options.createdSince ?? null),
+        createdUntil: options === null ? null : (options.createdUntil ?? null), sort: options === null ? null : (options.sort ?? null),
+        order: options === null ? null : (options.order ?? null), limit: options === null ? null : (options.limit ?? null),
+        pageToken: options === null ? null : (options.pageToken ?? null),
+    };
+    const request = researchRequest(query, owned, "is:pr");
+    check("github.com/pulls.searchAcrossRepositories", {
+        query: request.query, author: request.author, createdSince: request.createdSince, createdUntil: request.createdUntil,
+    });
+    return pullSummaryPage(request);
+}
+
+/** Lightweight pull-request search within one repository; enrich selected hits with getPullRequest.
+ * @param repository Owner and repository name.
+ * @param query GitHub terms; repository scope, kind, author, creation qualifiers and OR are reserved.
+ * @param options Author, inclusive UTC creation dates, sorting and pagination.
+ * @returns One repository-restricted metadata page without per-hit HTTP requests.
+ * @capability github.com/pulls.searchSummaries { owner: string, repo: string }
+ */
+export function searchPullRequestSummaries(repository: RepositoryRef, query: string, options: ResearchSearchOptions | null = null): ResearchPageResult<PullRequestSearchHit> {
+    const { owner: requestedOwner, name: requestedName } = repository;
+    const { owner, name } = canonicalRepository(requestedOwner, requestedName);
+    const owned: ResearchOptionsSnapshot = {
+        author: options === null ? null : (options.author ?? null), createdSince: options === null ? null : (options.createdSince ?? null),
+        createdUntil: options === null ? null : (options.createdUntil ?? null), sort: options === null ? null : (options.sort ?? null),
+        order: options === null ? null : (options.order ?? null), limit: options === null ? null : (options.limit ?? null),
+        pageToken: options === null ? null : (options.pageToken ?? null),
+    };
+    const request = researchRequest(query, owned, "is:pr");
+    // Keep the same scope parser as the existing repository-restricted endpoints.
+    const scoped = scopedSearch(query, owner, name, "");
+    request.query = scoped + request.query.slice(query.length);
+    check("github.com/pulls.searchSummaries", { owner: owner, repo: name });
+    return pullSummaryPage(request);
+}
+
 /** Search pull requests within one repository.
  * @param repository Owner and name of the repository.
  * @param query Non-empty GitHub search query for pull requests, which may use qualifiers such as `is:open`. `is:pr` and the repository scope are added automatically; `repo:`, `org:`, `user:`, `is:issue`, `is:pr` and `OR` are rejected.
@@ -2031,7 +2229,8 @@ export function listPullRequests(repository: RepositoryRef, options: ListPullReq
  * @capability github.com/pulls.search { owner: string, repo: string, branch: string, path: string, ref: string, treeSha: string, head: string, base: string }
  */
 export function searchPullRequests(repository: RepositoryRef, query: string, options: SearchOptions | null = null): SearchPageResult<PullRequest> {
-    const { owner, name } = repository;
+    const { owner: requestedOwner, name: requestedName } = repository;
+    const { owner, name } = canonicalRepository(requestedOwner, requestedName);
     const sort = options === null ? null : options.sort;
     const order = options === null ? null : options.order;
     const limit = options === null ? null : options.limit;
@@ -2060,7 +2259,8 @@ export function searchPullRequests(repository: RepositoryRef, query: string, opt
  * @capability github.com/pulls.create { owner: string, repo: string, head: string, base: string, branch: string, path: string, ref: string, treeSha: string }
  */
 export function createPullRequest(repository: RepositoryRef, input: CreatePullRequestInput): PullRequest {
-    const { owner, name } = repository;
+    const { owner: requestedOwner, name: requestedName } = repository;
+    const { owner, name } = canonicalRepository(requestedOwner, requestedName);
     const { title, head, base, body: description, draft, maintainerCanModify } = input;
     requireText(title, "pull request title");
     requireText(head, "pull request head");
@@ -2092,7 +2292,8 @@ export function createPullRequest(repository: RepositoryRef, input: CreatePullRe
  * @capability github.com/pulls.update { owner: string, repo: string, number: number, base: string }
  */
 export function updatePullRequest(repository: RepositoryRef, number: number, input: UpdatePullRequestInput): PullRequest {
-    const { owner, name } = repository;
+    const { owner: requestedOwner, name: requestedName } = repository;
+    const { owner, name } = canonicalRepository(requestedOwner, requestedName);
     const { title, body: description, clearBody, base, state, maintainerCanModify } = input;
     const context = repositoryNumberContext(owner, name, number);
     context.base = base;
@@ -2119,7 +2320,8 @@ export function updatePullRequest(repository: RepositoryRef, number: number, inp
  * @capability github.com/pulls.merge { owner: string, repo: string, number: number, base: string }
  */
 export function mergePullRequest(repository: RepositoryRef, number: number, input: MergePullRequestInput | null = null): MergeResult {
-    const { owner, name } = repository;
+    const { owner: requestedOwner, name: requestedName } = repository;
+    const { owner, name } = canonicalRepository(requestedOwner, requestedName);
     const commitTitle = input === null ? null : input.commitTitle;
     const commitMessage = input === null ? null : input.commitMessage;
     const method = input === null ? null : input.method;
@@ -2143,7 +2345,8 @@ export function mergePullRequest(repository: RepositoryRef, number: number, inpu
  * @capability github.com/pulls.diff { owner: string, repo: string, number: number, base: string }
  */
 export function getPullRequestDiff(repository: RepositoryRef, number: number): string {
-    const { owner, name } = repository;
+    const { owner: requestedOwner, name: requestedName } = repository;
+    const { owner, name } = canonicalRepository(requestedOwner, requestedName);
     const context = repositoryNumberContext(owner, name, number);
     check("github.com/pulls.diff", context);
     const path = repositoryPath(owner, name) + "/pulls/" + issueNumber(number);
@@ -2158,7 +2361,8 @@ export function getPullRequestDiff(repository: RepositoryRef, number: number): s
  * @capability github.com/pullFiles.list { owner: string, repo: string, number: number, base: string }
  */
 export function listPullRequestFiles(repository: RepositoryRef, number: number, options: PageOptions | null = null): PageResult<PullRequestFile> {
-    const { owner, name } = repository;
+    const { owner: requestedOwner, name: requestedName } = repository;
+    const { owner, name } = canonicalRepository(requestedOwner, requestedName);
     const limit = options === null ? null : options.limit;
     const cursor = options === null ? null : options.pageToken;
     const context = repositoryNumberContext(owner, name, number);
@@ -2178,7 +2382,8 @@ export function listPullRequestFiles(repository: RepositoryRef, number: number, 
  * @capability github.com/pullReviews.list { owner: string, repo: string, number: number, base: string }
  */
 export function listPullRequestReviews(repository: RepositoryRef, number: number, options: PageOptions | null = null): PageResult<PullRequestReview> {
-    const { owner, name } = repository;
+    const { owner: requestedOwner, name: requestedName } = repository;
+    const { owner, name } = canonicalRepository(requestedOwner, requestedName);
     const limit = options === null ? null : options.limit;
     const cursor = options === null ? null : options.pageToken;
     const context = repositoryNumberContext(owner, name, number);
@@ -2198,7 +2403,8 @@ export function listPullRequestReviews(repository: RepositoryRef, number: number
  * @capability github.com/pullReviews.create { owner: string, repo: string, number: number, base: string }
  */
 export function createPullRequestReview(repository: RepositoryRef, number: number, input: CreateReviewInput): PullRequestReview {
-    const { owner, name } = repository;
+    const { owner: requestedOwner, name: requestedName } = repository;
+    const { owner, name } = canonicalRepository(requestedOwner, requestedName);
     const { body: summary, event, commitId, comments } = input;
     const context = repositoryNumberContext(owner, name, number);
     check("github.com/pullReviews.create", context);
@@ -2234,7 +2440,8 @@ export function createPullRequestReview(repository: RepositoryRef, number: numbe
  * @capability github.com/pullComments.list { owner: string, repo: string, number: number, base: string }
  */
 export function listPullRequestComments(repository: RepositoryRef, number: number, options: PageOptions | null = null): PageResult<Comment> {
-    const { owner, name } = repository;
+    const { owner: requestedOwner, name: requestedName } = repository;
+    const { owner, name } = canonicalRepository(requestedOwner, requestedName);
     const limit = options === null ? null : options.limit;
     const cursor = options === null ? null : options.pageToken;
     const context = repositoryNumberContext(owner, name, number);
@@ -2250,7 +2457,8 @@ export function listPullRequestComments(repository: RepositoryRef, number: numbe
  * @capability github.com/pullComments.create { owner: string, repo: string, number: number, base: string }
  */
 export function addPullRequestComment(repository: RepositoryRef, number: number, body: string): Comment {
-    const { owner, name } = repository;
+    const { owner: requestedOwner, name: requestedName } = repository;
+    const { owner, name } = canonicalRepository(requestedOwner, requestedName);
     const context = repositoryNumberContext(owner, name, number);
     check("github.com/pullComments.create", context);
     return addCommentUnchecked(owner, name, number, body);
@@ -2279,6 +2487,129 @@ function addCommentUnchecked(owner: string, name: string, number: number, body: 
     return commentFrom(
         githubPost(repositoryPath(owner, name) + "/issues/" + issueNumber(number) + "/comments", { body: body }).json() as ApiComment,
     );
+}
+
+interface ResearchOptionsSnapshot {
+    author: string | null;
+    createdSince: string | null;
+    createdUntil: string | null;
+    sort: string | null;
+    order: "asc" | "desc" | null;
+    limit: number | null;
+    pageToken: string | null;
+}
+
+interface ResearchRequest {
+    query: string;
+    author: string | null;
+    createdSince: string | null;
+    createdUntil: string | null;
+    search: SearchRequest;
+}
+
+function researchRequest(query: string, options: ResearchOptionsSnapshot, kind: string): ResearchRequest {
+    const author = options === null ? null : (options.author ?? null);
+    const since = options === null ? null : (options.createdSince ?? null);
+    const until = options === null ? null : (options.createdUntil ?? null);
+    const search: SearchRequest = {
+        sort: options === null ? null : (options.sort ?? null), order: options === null ? null : (options.order ?? null),
+        limit: options === null ? null : (options.limit ?? null), cursor: options === null ? null : (options.pageToken ?? null),
+    };
+    requireText(query, "search query");
+    const syntax = searchSyntax(query);
+    if (SEARCH_KIND.test(syntax) || SEARCH_OR.test(syntax) || /author:|created:/.test(syntax)) {
+        throw validationError("unsafe_search_query", "Use structured author/creation options; kind qualifiers and OR are not allowed");
+    }
+    let value = query + " " + kind;
+    let normalizedAuthor: string | null = null;
+    if (author !== null) {
+        if (!/^(app\/)?[A-Za-z0-9_-]+(\[bot\])?$/.test(author)) throw validationError("invalid_author", "author must be one GitHub login or app/login");
+        normalizedAuthor = author.toLowerCase();
+        value += " author:" + normalizedAuthor;
+    }
+    const createdSince = researchDate(since);
+    const createdUntil = researchDate(until);
+    if (createdSince !== null && createdUntil !== null && createdSince > createdUntil) {
+        throw validationError("invalid_date_window", "createdSince must be on or before createdUntil");
+    }
+    // Repeated creation qualifiers do not reliably intersect on REST search.
+    if (createdSince !== null && createdUntil !== null) {
+        value += " created:" + createdSince + ".." + createdUntil;
+    } else if (createdSince !== null) {
+        value += " created:>=" + createdSince;
+    } else if (createdUntil !== null) {
+        value += " created:<=" + createdUntil;
+    }
+    const limit = pageLimit(search.limit);
+    const cursor = pageToken(search.cursor, true);
+    const page = cursor === null ? 1 : Number(cursor);
+    if (!Number.isInteger(page) || page < 1 || (page - 1) * limit >= 1000) {
+        throw validationError("invalid_page_token", "search page must fit within GitHub's 1,000-result ceiling");
+    }
+    return { query: value, author: normalizedAuthor, createdSince: createdSince, createdUntil: createdUntil, search: search };
+}
+
+function researchDate(value: string | null): string | null {
+    if (value === null) return null;
+    if (!/^[0-9]{4}-[0-9]{2}-[0-9]{2}$/.test(value)) throw validationError("invalid_date_window", "search dates must use YYYY-MM-DD");
+    const year = Number(value.slice(0, 4));
+    const month = Number(value.slice(5, 7));
+    const day = Number(value.slice(8, 10));
+    let daysInMonth = 31;
+    if (month === 4 || month === 6 || month === 9 || month === 11) daysInMonth = 30;
+    if (month === 2) daysInMonth = year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0) ? 29 : 28;
+    if (year < 1 || month < 1 || month > 12 || day < 1 || day > daysInMonth) {
+        throw validationError("invalid_date_window", "search date is not a valid calendar date");
+    }
+    return value;
+}
+
+function searchRepository(item: ApiIssue): RepositoryRef {
+    const url = str(item.repository_url);
+    const prefix = "https://api.github.com/repos/";
+    if (!url.startsWith(prefix)) throw validationError("invalid_response", "Search hit is missing its repository identity");
+    const parts = url.slice(prefix.length).split("/");
+    if (parts.length !== 2) throw validationError("invalid_response", "Search repository URL must name one owner and repository");
+    return canonicalRepository(parts[0], parts[1]);
+}
+
+function pullSummaryPage(request: ResearchRequest): ResearchPageResult<PullRequestSearchHit> {
+    const response = githubGet("/search/issues", searchQuery(request.query, request.search));
+    const data = researchData(response);
+    const items: PullRequestSearchHit[] = [];
+    for (const item of array(data.items)) {
+        if (item.pull_request == null) throw validationError("invalid_response", "Pull-request search returned an issue");
+        const issue = issueFrom(item);
+        const summary: PullRequestSummary = {
+            id: issue.id, number: issue.number, title: issue.title, body: issue.body, state: issue.state,
+            stateReason: issue.stateReason, locked: issue.locked, htmlUrl: issue.htmlUrl, user: issue.user,
+            labels: issue.labels, assignees: issue.assignees, milestone: issue.milestone, comments: issue.comments,
+            createdAt: issue.createdAt, updatedAt: issue.updatedAt, closedAt: issue.closedAt,
+            reactions: issue.reactions ?? null, draft: item.draft ?? null,
+        };
+        items.push({ repository: searchRepository(item), pullRequest: summary });
+    }
+    return researchPage(response, items, data, request.search);
+}
+
+function researchData(response: Response): ApiSearchIssues {
+    const data = response.json() as ApiSearchIssues;
+    if (data.total_count == null || !Number.isSafeInteger(data.total_count) || data.total_count < 0
+        || typeof data.incomplete_results !== "boolean" || !Array.isArray(data.items)) {
+        throw validationError("invalid_response", "GitHub search must include items, total_count and incomplete_results");
+    }
+    return data;
+}
+
+function researchPage<T>(response: Response, items: T[], data: ApiSearchIssues, search: SearchRequest): ResearchPageResult<T> {
+    const page = searchPageFrom(response, items, data.total_count, data.incomplete_results);
+    const limit = pageLimit(search.limit);
+    let next = page.nextPageToken;
+    if (next.length > 0 && (Number(next) - 1) * limit >= 1000) next = "";
+    return {
+        items: items, nextPageToken: next, isComplete: next.length === 0,
+        totalCount: page.totalCount, incompleteResults: page.incompleteResults, isCapped: page.totalCount > 1000,
+    };
 }
 
 function searchIssuesOrPulls(
@@ -2510,7 +2841,7 @@ function nextPageToken(response: Response): string {
 
 function pageLimit(value: number | null): number {
     const limit = value === null ? DEFAULT_LIMIT : value;
-    if (limit < 1 || limit > MAX_LIMIT) {
+    if (!Number.isInteger(limit) || limit < 1 || limit > MAX_LIMIT) {
         throw validationError("invalid_page_size", "limit must be between 1 and " + MAX_LIMIT.toString());
     }
     return limit;
@@ -2571,8 +2902,12 @@ function searchSyntax(query: string): string {
     return syntax.toLowerCase();
 }
 
-// The owner and name the check reads are put in paths and search queries as they are, so each
-// must be exactly one owner and one repository there too.
+// GitHub repository identities are case-insensitive. Validate before folding so a Unicode
+// character that folds to ASCII cannot pass the identifier grammar.
+function canonicalRepository(owner: string, name: string): RepositoryRef {
+    const context = checkedRepository(owner, name);
+    return { owner: context.owner, name: context.repo };
+}
 function checkedRepository(owner: string, name: string): RepositoryCapabilityContext {
     requireText(owner, "repository owner");
     requireText(name, "repository name");
@@ -2582,7 +2917,7 @@ function checkedRepository(owner: string, name: string): RepositoryCapabilityCon
     if (!REPOSITORY_NAME.test(name) || name === "." || name === "..") {
         throw validationError("invalid_input", "repository name may contain only letters, digits, hyphens, underscores, and periods, and cannot be . or ..");
     }
-    return { owner: owner, repo: name };
+    return { owner: owner.toLowerCase(), repo: name.toLowerCase() };
 }
 
 function repositoryContext(owner: string, name: string, field: string, value: string): RepositoryCapabilityContext {
@@ -2596,13 +2931,13 @@ function repositoryContext(owner: string, name: string, field: string, value: st
 
 function repositoryNumberContext(owner: string, name: string, number: number): RepositoryNumberCapabilityContext {
     requireIssueNumber(number);
-    checkedRepository(owner, name);
-    return { owner: owner, repo: name, number: number };
+    const context = checkedRepository(owner, name);
+    return { owner: context.owner, repo: context.repo, number: number };
 }
 
 function repositoryPath(owner: string, name: string): string {
-    checkedRepository(owner, name);
-    return "/repos/" + encodeComponent(owner) + "/" + encodeComponent(name);
+    const context = checkedRepository(owner, name);
+    return "/repos/" + encodeComponent(context.owner) + "/" + encodeComponent(context.repo);
 }
 
 // The ref a contents request names. An empty ref is not sent, so it is the default branch, which
@@ -2943,8 +3278,25 @@ function milestoneFrom(data: ApiMilestone | null): Milestone | null {
     };
 }
 
+function reactionsFrom(data: ApiReactionSummary | null): ReactionSummary | null {
+    if (data == null) return null;
+    return {
+        totalCount: reactionCount(data.total_count ?? null), thumbsUp: reactionCount(data["+1"] ?? null),
+        thumbsDown: reactionCount(data["-1"] ?? null), laugh: reactionCount(data.laugh ?? null),
+        hooray: reactionCount(data.hooray ?? null), confused: reactionCount(data.confused ?? null),
+        heart: reactionCount(data.heart ?? null), rocket: reactionCount(data.rocket ?? null), eyes: reactionCount(data.eyes ?? null),
+    };
+}
+
+function reactionCount(value: number | null): number | null {
+    if (value === null) return null;
+    if (!Number.isSafeInteger(value) || value < 0) throw validationError("invalid_response", "GitHub reaction count must be a nonnegative integer");
+    return value;
+}
+
 function commentFrom(data: ApiComment): Comment {
     return {
+        reactions: reactionsFrom(data.reactions ?? null),
         id: num(data.id),
         body: str(data.body),
         htmlUrl: str(data.html_url),
@@ -2961,6 +3313,7 @@ function issueFrom(data: ApiIssue): Issue {
     const assignees: User[] = [];
     for (const user of array(data.assignees)) assignees.push(userFrom(user));
     return {
+        reactions: reactionsFrom(data.reactions ?? null),
         id: num(data.id),
         number: num(data.number),
         title: str(data.title),
@@ -2990,6 +3343,7 @@ function graphQlIssueFrom(data: ApiGraphQlIssue): Issue {
         for (const user of array(data.assignees.nodes)) assignees.push(userFrom(user));
     }
     return {
+        reactions: null,
         id: num(data.id),
         number: num(data.number),
         title: str(data.title),
@@ -3037,6 +3391,7 @@ function pullRequestFrom(data: ApiPullRequest): PullRequest {
     const reviewers: User[] = [];
     for (const user of array(data.requested_reviewers)) reviewers.push(userFrom(user));
     return {
+        reactions: reactionsFrom(data.reactions ?? null),
         id: num(data.id),
         number: num(data.number),
         title: str(data.title),

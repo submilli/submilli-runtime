@@ -60,6 +60,8 @@ provides:
 - name: submilli/gmail.sendDraft
   description: Send an existing draft. The draft is read first, so the check covers every address in its To, Cc and Bcc headers.
   fields:
+    from:
+      type: string
     recipients:
       type: string[]
 - name: submilli/gmail.sendEmail

@@ -85,6 +85,8 @@ provides:
 - name: submilli/google-drive.uploadFile
   description: Upload a VFS file using Google's resumable protocol and fixed 8 MiB chunks. `parentId` in the check is the destination folder as the caller named it, or "" when the caller names none and the file goes to My Drive root. The alias `root` names that folder too, so a rule on `parentId` lists the folders it allows.
   fields:
+    driveId:
+      type: string
     parentId:
       type: string
     path:

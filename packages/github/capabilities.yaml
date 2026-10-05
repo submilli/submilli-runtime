@@ -299,6 +299,17 @@ provides:
       type: string
     treeSha:
       type: string
+- name: github.com/issues.searchAcrossRepositories
+  description: Search issue metadata across repositories. Requires a separate, broader grant.
+  fields:
+    author:
+      type: string
+    createdSince:
+      type: string
+    createdUntil:
+      type: string
+    query:
+      type: string
 - name: github.com/issues.update
   description: Update an issue.
   fields:
@@ -425,6 +436,15 @@ provides:
       type: string
     repo:
       type: string
+- name: github.com/pulls.getReactions
+  description: Fetch issue-style reaction counts for one pull request without loading diff details.
+  fields:
+    number:
+      type: number
+    owner:
+      type: string
+    repo:
+      type: string
 - name: github.com/pulls.list
   description: List pull requests.
   fields:
@@ -473,6 +493,24 @@ provides:
     repo:
       type: string
     treeSha:
+      type: string
+- name: github.com/pulls.searchAcrossRepositories
+  description: Search lightweight pull-request metadata across repositories with one HTTP call per page.
+  fields:
+    author:
+      type: string
+    createdSince:
+      type: string
+    createdUntil:
+      type: string
+    query:
+      type: string
+- name: github.com/pulls.searchSummaries
+  description: Lightweight pull-request search within one repository; enrich selected hits with getPullRequest.
+  fields:
+    owner:
+      type: string
+    repo:
       type: string
 - name: github.com/pulls.update
   description: Update a pull request. `base` in the check is the branch the update retargets the pull request to, or null when it leaves the base as it is.
