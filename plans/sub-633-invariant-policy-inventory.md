@@ -87,6 +87,7 @@ separate resource/dependency backlog.
 | R19 | Complete: retained | Keep direct wire maps and retry classification loop |
 | R20 | Complete: retained | Keep bounded unordered collection and positional sort |
 | R21 | Complete: simplified | Remove compiled schema asset error chain |
+| R22 | Complete: retained | Keep iterative filesystem traversal; explicit sites handled individually |
 
 ### R01 execution evidence
 
@@ -429,6 +430,16 @@ default local secret store, then passed with an isolated SUBMILLI_HOME. Formatti
 workspace Clippy and diff checks passed. Three independent reviews found no issues.
 Graph updated; accepted-invariant entry appended to the source ledger and verified.
 HTTP tests were skipped because transport behavior is unchanged.
+
+### R22 execution evidence
+
+`collect_source_files` maintains an explicit directory stack and canonical ancestor
+set. Filesystem enumeration, metadata and canonicalization can fail; symlinks can
+form ancestor cycles. Retain these checks and the iterative traversal. No fallible
+layer exists solely for a proven invariant here. Serialization/path expects remain
+separate P02–P06 decisions below; R22 does not pre-approve them. Existing source
+cycle/path tests were inspected, not rerun. Documentation-only retention. Three
+independent reviewers found no issues; diff checks passed.
 
 ## Completed fixes: candidates and decisions
 
