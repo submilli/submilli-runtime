@@ -156,7 +156,7 @@ impl<'a> Inferer<'a> {
             .collect();
         // A union of recursive types reaches one position by many paths;
         // walking each once keeps the walk linear in the literal's size.
-        if mentioned.is_empty() || !visited.insert((expr, param.clone())) {
+        if mentioned.is_empty() || !visited.insert((expr, param.peel().clone())) {
             return Ok(());
         }
         let add_candidate = |candidates: &mut Vec<(String, ExprId)>, candidate: ExprId| {

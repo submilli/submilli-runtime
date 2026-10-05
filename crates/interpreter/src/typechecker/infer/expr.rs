@@ -757,7 +757,7 @@ impl Inferer<'_> {
         // reject as expected.
         if let Some(want) = expected
             && !arrow_reported
-            && !self.arguments_hinted_by_expected_result.contains(&expr_id)
+            && !self.arguments_with_replaceable_hints.contains(&expr_id)
             && !assignable(&ty, want, self.resolver())
         {
             let has_structural_diff = super::type_diff::format_type_diff(want, &ty).is_some();

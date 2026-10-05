@@ -160,7 +160,7 @@ pub fn infer_with_transitive_checked<'a>(
         current_type_predicate: None,
         inferred_returns: None,
         inference_source_literals: BTreeSet::new(),
-        arguments_hinted_by_expected_result: BTreeSet::new(),
+        arguments_with_replaceable_hints: BTreeSet::new(),
         object_argument_inference: None,
         generics_in_scope: Vec::new(),
         body_instantiations: Vec::new(),
@@ -428,7 +428,7 @@ pub fn infer_package_checked<'a>(
         current_type_predicate: None,
         inferred_returns: None,
         inference_source_literals: BTreeSet::new(),
-        arguments_hinted_by_expected_result: BTreeSet::new(),
+        arguments_with_replaceable_hints: BTreeSet::new(),
         object_argument_inference: None,
         generics_in_scope: Vec::new(),
         body_instantiations: Vec::new(),
@@ -843,11 +843,11 @@ pub(super) struct Inferer<'a> {
     /// Object literals inferred for their own type rather than checked against
     /// a declared one; see [`inference_sources`].
     pub(super) inference_source_literals: BTreeSet<crate::ExprId>,
-    /// Call arguments whose expected type comes partly from the call's own
-    /// expected result, so it guides their inference without being a
-    /// requirement: an argument that doesn't fit it decides the type parameter
-    /// instead.
-    pub(super) arguments_hinted_by_expected_result: BTreeSet<crate::ExprId>,
+    /// Call arguments whose expected type comes partly from a binding an
+    /// argument may replace (the call's own expected result, or a weak
+    /// binding), so it guides their inference without being a requirement:
+    /// an argument that doesn't fit it decides the type parameter instead.
+    pub(super) arguments_with_replaceable_hints: BTreeSet<crate::ExprId>,
     /// The object literal argument whose fields a generic call is inferring
     /// one at a time; see [`generic::ObjectArgumentInference`].
     pub(super) object_argument_inference: Option<generic::ObjectArgumentInference>,

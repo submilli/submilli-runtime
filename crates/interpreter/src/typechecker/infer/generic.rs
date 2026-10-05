@@ -1266,7 +1266,7 @@ impl Inferer<'_> {
                 // The argument was already reported against the expected
                 // result's binding; replacing it would report the result too.
                 if already_reported {
-                    sub.keep_expected_result_bindings(&param_ty);
+                    sub.keep_replaceable_bindings(&param_ty);
                 }
                 if let Err(error) = sub.unify_argument(&param_ty, &arg_ty, self.resolver()) {
                     self.unify_argument_error(
@@ -1296,9 +1296,9 @@ impl Inferer<'_> {
         // An oversized hint fails at the argument's own checkpoint.
         let hint = sub.apply_or_record(param_ty, &self.type_limits);
         let hint = self.literal_argument_hint(arg_id, hint, arguments.inferred_generics)?;
-        let hinted_by_expected_result = sub.mentions_expected_result_binding(param_ty);
-        if hinted_by_expected_result {
-            self.arguments_hinted_by_expected_result.insert(arg_id);
+        let hinted_by_replaceable_binding = sub.mentions_replaceable_binding(param_ty);
+        if hinted_by_replaceable_binding {
+            self.arguments_with_replaceable_hints.insert(arg_id);
         }
         let enclosing = self.start_object_argument_inference(arg_id, param_ty, sub)?;
         let keeps_literal = arguments.literal_types.keeps(param_ty);
@@ -1313,7 +1313,7 @@ impl Inferer<'_> {
             },
         );
         self.finish_object_argument_inference(enclosing, sub);
-        self.arguments_hinted_by_expected_result.remove(&arg_id);
+        self.arguments_with_replaceable_hints.remove(&arg_id);
         let (typed_id, arg_ty) = inferred?;
         if keeps_literal {
             self.record_kept_literal_argument(typed_id);
@@ -1328,7 +1328,7 @@ impl Inferer<'_> {
         let hint_is_known = !super::expr::mentions_type_var(&hint, &|var| {
             arguments.inferred_generics.iter().any(|name| name == var)
         });
-        let fits_binding = (hinted_by_expected_result || hint_is_known)
+        let fits_binding = (hinted_by_replaceable_binding || hint_is_known)
             && super::assignable(&arg_ty, &hint, self.resolver());
         if arguments.literal_types.widens(param_ty) && !fits_binding {
             let widened = self.widen_fresh_literals(typed_id, &arg_ty)?;
@@ -1351,10 +1351,7 @@ impl Inferer<'_> {
         if !self.builds_literal(arg_id)? {
             return Ok(hint);
         }
-        let mut expansion = InterfaceExpansion {
-            expanding: Vec::new(),
-            remaining: MAX_HINT_INTERFACE_EXPANSIONS,
-        };
+        let mut expansion = InterfaceExpansion::new();
         Ok(expand_inferred_interfaces(
             &hint,
             inferred_generics,
@@ -1796,9 +1793,14 @@ fn type_param_name(ty: &Type) -> Option<&str> {
 /// How many interfaces one literal argument's hint expands at most.
 /// Interfaces that name each other in their fields expand along every order
 /// of them, so without a bound the hint grows factorially, and checking a
-/// literal against a large structural hint costs what its size does; a
+/// literal against a large structural hint takes time in proportion to its size; a
 /// literal's hint needs few levels in practice.
 const MAX_HINT_INTERFACE_EXPANSIONS: usize = 64;
+
+/// How many interfaces deep one literal argument's hint expands at most.
+/// Checking a literal against a union of expanded interfaces tries each
+/// member at every level, so a deep hint costs exponential time in its depth.
+const MAX_HINT_INTERFACE_DEPTH: usize = 3;
 
 /// The state of one [`expand_inferred_interfaces`] walk.
 struct InterfaceExpansion {
@@ -1808,12 +1810,21 @@ struct InterfaceExpansion {
     remaining: usize,
 }
 
+impl InterfaceExpansion {
+    fn new() -> Self {
+        Self {
+            expanding: Vec::new(),
+            remaining: MAX_HINT_INTERFACE_EXPANSIONS,
+        }
+    }
+}
+
 /// `ty` with each data-only interface that names one of `inferred_generics`
 /// replaced by its fields, through object fields, array and tuple elements and
 /// union members: the positions a literal's own fields and elements take
 /// their hints from. An interface met again inside its own fields stays as it
-/// is, so a recursive one expands once, as does every interface once the
-/// walk has used its budget.
+/// is, so a recursive one expands once, as does every interface below
+/// [`MAX_HINT_INTERFACE_DEPTH`] or once the walk has used its budget.
 fn expand_inferred_interfaces(
     ty: &Type,
     inferred_generics: &[String],
@@ -1826,6 +1837,7 @@ fn expand_inferred_interfaces(
     match ty.peel() {
         interface @ Type::InterfaceRef { mangled, .. }
             if expansion.remaining > 0
+                && expansion.expanding.len() < MAX_HINT_INTERFACE_DEPTH
                 && !expansion.expanding.contains(mangled)
                 && super::expr::mentions_type_var(interface, &|var| {
                     inferred_generics.iter().any(|name| name == var)
@@ -1864,39 +1876,13 @@ fn expand_inferred_interfaces(
                 .map(|element| expand(element, expansion))
                 .collect(),
         ),
-        Type::Union(members) => {
-            // A member's siblings count as being expanded inside it, so a
-            // union of interfaces that name the same union expands each once
-            // rather than in every order.
-            let siblings: Vec<crate::MangledName> =
-                members.iter().filter_map(interface_name).cloned().collect();
-            let depth = expansion.expanding.len();
-            let expanded = members
+        Type::Union(members) => Type::union(
+            members
                 .iter()
-                .map(|member| {
-                    let own = interface_name(member);
-                    expansion.expanding.extend(
-                        siblings
-                            .iter()
-                            .filter(|sibling| Some(*sibling) != own)
-                            .cloned(),
-                    );
-                    let expanded = expand(member, expansion);
-                    expansion.expanding.truncate(depth);
-                    expanded
-                })
-                .collect();
-            Type::union(expanded)
-        }
+                .map(|member| expand(member, expansion))
+                .collect(),
+        ),
         _ => ty.clone(),
-    }
-}
-
-/// The declaration `ty` names when it is an interface.
-fn interface_name(ty: &Type) -> Option<&crate::MangledName> {
-    match ty.peel() {
-        Type::InterfaceRef { mangled, .. } => Some(mangled),
-        _ => None,
     }
 }
 

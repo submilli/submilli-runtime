@@ -17,6 +17,10 @@ pub struct TypeParamSubstitution {
     /// an argument may still replace: as in tsc, what the arguments say comes
     /// first. One stays replaceable until an argument agrees with it.
     from_expected_result: std::collections::BTreeSet<String>,
+    /// Bindings inferred from a whole union argument whose members other
+    /// members of the parameter all took, which tsc infers at a lower
+    /// priority: a later argument the binding doesn't fit replaces it.
+    weak: std::collections::BTreeSet<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -47,6 +51,7 @@ impl TypeParamSubstitution {
                 .map(|(name, ty)| (name.clone(), ty.clone()))
                 .collect(),
             from_expected_result: Default::default(),
+            weak: Default::default(),
         }
     }
 
@@ -58,6 +63,7 @@ impl TypeParamSubstitution {
         Self {
             bindings,
             from_expected_result: Default::default(),
+            weak: Default::default(),
         }
     }
 
@@ -71,17 +77,22 @@ impl TypeParamSubstitution {
         }
     }
 
-    /// Whether `ty` mentions a type parameter bound only from the call's
-    /// expected result type.
-    pub fn mentions_expected_result_binding(&self, ty: &Type) -> bool {
-        super::infer::expr::mentions_type_var(ty, &|name| self.from_expected_result.contains(name))
+    /// Whether `ty` mentions a type parameter whose binding an argument may
+    /// still replace: one taken from the call's expected result type, or a
+    /// weak one.
+    pub fn mentions_replaceable_binding(&self, ty: &Type) -> bool {
+        super::infer::expr::mentions_type_var(ty, &|name| {
+            self.from_expected_result.contains(name) || self.weak.contains(name)
+        })
     }
 
-    /// Make the bindings from the expected result type that `ty` mentions
-    /// final, so no argument replaces them.
-    pub fn keep_expected_result_bindings(&mut self, ty: &Type) {
-        self.from_expected_result
-            .retain(|name| !super::infer::expr::mentions_type_var(ty, &|var| var == name));
+    /// Make the replaceable bindings that `ty` mentions final, so no argument
+    /// replaces them.
+    pub fn keep_replaceable_bindings(&mut self, ty: &Type) {
+        let mentioned =
+            |name: &String| super::infer::expr::mentions_type_var(ty, &|var| var == name);
+        self.from_expected_result.retain(|name| !mentioned(name));
+        self.weak.retain(|name| !mentioned(name));
     }
 
     pub fn insert(&mut self, name: String, ty: Type) {
@@ -189,6 +200,7 @@ impl TypeParamSubstitution {
 struct Snapshot {
     bindings: BTreeMap<String, Type>,
     from_expected_result: std::collections::BTreeSet<String>,
+    weak: std::collections::BTreeSet<String>,
     assumed_len: usize,
 }
 
@@ -216,61 +228,6 @@ struct Unifier<'a> {
 }
 
 impl<'a> Unifier<'a> {
-    /// tsc's union-to-union rule when exactly one of `params` is a type
-    /// parameter not yet bound: each member of `args` another member of
-    /// `params` takes stays with it, and the type parameter takes the rest
-    /// (`T | null` with `"on" | "off" | null` binds `T` to `"on" | "off"`).
-    /// None when no single member is such a type parameter, so the members
-    /// pair up instead.
-    #[allow(clippy::result_large_err)]
-    fn unify_union_into_lone_type_var(
-        &mut self,
-        params: &[Type],
-        args: &[Type],
-    ) -> Option<Result<(), UnifyError>> {
-        let mut unbound = params
-            .iter()
-            .filter(|member| self.is_unbound_type_var(member));
-        let type_var = unbound.next()?;
-        if unbound.next().is_some() {
-            return None;
-        }
-        let others: Vec<&Type> = params
-            .iter()
-            .filter(|member| !std::ptr::eq(*member, type_var))
-            .collect();
-        let mut rest = Vec::new();
-        for arg in args {
-            let taken = others.iter().any(|other| {
-                let snap = self.snapshot();
-                let unified = self.unify(other, arg).is_ok();
-                if !unified {
-                    self.restore(snap);
-                }
-                unified
-            });
-            if !taken {
-                rest.push(arg.clone());
-            }
-        }
-        if rest.is_empty() {
-            return Some(Ok(()));
-        }
-        Some(self.unify(type_var, &Type::union(rest)))
-    }
-
-    /// Whether `ty` is a type parameter with no binding yet, or bound only to
-    /// itself.
-    fn is_unbound_type_var(&self, ty: &Type) -> bool {
-        let Type::TypeVar(name) = ty.peel() else {
-            return false;
-        };
-        match self.sub.bindings.get(name) {
-            None => true,
-            Some(bound) => matches!(bound.peel(), Type::TypeVar(other) if other == name),
-        }
-    }
-
     /// Structural unification of `param_ty` against `arg_ty`. Binds `TypeVar`s on the
     /// param side; `Type::Error` on either side silently succeeds (upstream already reported).
     #[allow(clippy::result_large_err)]
@@ -310,7 +267,9 @@ impl<'a> Unifier<'a> {
                 // Unified with an argument, a binding from the expected result
                 // is the arguments' own from here on, whether or not it is
                 // replaced.
-                let replaceable = self.is_argument && self.sub.from_expected_result.remove(name);
+                let from_expected_result = self.sub.from_expected_result.remove(name);
+                let weak = self.sub.weak.remove(name);
+                let replaceable = self.is_argument && (from_expected_result || weak);
                 // Recurse instead of `==` to peel aliases at every level; remap to Conflict to pin the offending param.
                 return match self.unify(&resolved, &arg_resolved) {
                     Ok(()) => Ok(()),
@@ -491,7 +450,9 @@ impl<'a> Unifier<'a> {
                     }),
                 }
             }
-            // Two-pass union-vs-union: pair matching members first, then unify leftovers in order.
+            // Union-vs-union: a lone unbound type parameter takes what its
+            // siblings leave (see `unify_union_into_lone_type_var`); otherwise
+            // two passes pair matching members first, then unify leftovers in order.
             (Type::Union(pa), Type::Union(pb)) => {
                 if let Some(unified) = self.unify_union_into_lone_type_var(pa, pb) {
                     return unified;
@@ -710,6 +671,88 @@ impl<'a> Unifier<'a> {
         out
     }
 
+    /// tsc's union-to-union rule when exactly one of `params` is a type
+    /// parameter not yet bound. Each member of `args` that unifies with one of
+    /// the other members of `params` is absorbed by it, and the type parameter
+    /// is bound to the union of the members left over (`T | null` with
+    /// `"on" | "off" | null` binds `T` to `"on" | "off"`). A member that only
+    /// [`closely_matches`] another member, as `Box<string>` does `Box<number>`,
+    /// is unified with it and fails there, as tsc pairs them and then rejects
+    /// the call. When none is left over the type parameter is bound to all of
+    /// `args` weakly, as tsc infers from the whole argument at a lower
+    /// priority, so it isn't left unbound and a later argument may still
+    /// replace it. None when no single member is such a type parameter, so the
+    /// members pair up instead.
+    #[allow(clippy::result_large_err)]
+    fn unify_union_into_lone_type_var(
+        &mut self,
+        params: &[Type],
+        args: &[Type],
+    ) -> Option<Result<(), UnifyError>> {
+        let mut unbound = params
+            .iter()
+            .enumerate()
+            .filter(|(_, member)| self.is_unbound_type_var(member));
+        let (type_var_index, type_var) = unbound.next()?;
+        if unbound.next().is_some() {
+            return None;
+        }
+        let others: Vec<&Type> = params
+            .iter()
+            .enumerate()
+            .filter(|(index, _)| *index != type_var_index)
+            .map(|(_, member)| member)
+            .collect();
+        let mut rest = Vec::new();
+        let mut closely_matched = None;
+        for arg in args {
+            if others
+                .iter()
+                .any(|other| self.unifies_or_rolls_back(other, arg))
+            {
+                continue;
+            }
+            match others.iter().find(|other| closely_matches(other, arg)) {
+                Some(other) => closely_matched = closely_matched.or(Some((*other, arg))),
+                None => rest.push(arg.clone()),
+            }
+        }
+        if let Some((other, arg)) = closely_matched {
+            return Some(self.unify(other, arg));
+        }
+        if !rest.is_empty() {
+            return Some(self.unify(type_var, &Type::union(rest)));
+        }
+        let unified = self.unify(type_var, &Type::union(args.to_vec()));
+        if let (Ok(()), Type::TypeVar(name)) = (&unified, type_var.peel()) {
+            self.sub.weak.insert(name.clone());
+        }
+        Some(unified)
+    }
+
+    /// Whether `ty` is a type parameter with no binding yet, or bound only to
+    /// itself.
+    fn is_unbound_type_var(&self, ty: &Type) -> bool {
+        let Type::TypeVar(name) = ty.peel() else {
+            return false;
+        };
+        match self.sub.bindings.get(name) {
+            None => true,
+            Some(bound) => matches!(bound.peel(), Type::TypeVar(other) if other == name),
+        }
+    }
+
+    /// Whether `param_ty` unifies with `arg_ty`, keeping the bindings that
+    /// took when it does and undoing them when it doesn't.
+    fn unifies_or_rolls_back(&mut self, param_ty: &Type, arg_ty: &Type) -> bool {
+        let snap = self.snapshot();
+        let unified = self.unify(param_ty, arg_ty).is_ok();
+        if !unified {
+            self.restore(snap);
+        }
+        unified
+    }
+
     /// A speculative attempt's rollback point. The assumption set rolls back
     /// with the bindings: a pair assumed to hold inside an attempt that failed
     /// was never proved, and leaving it behind would let a later mismatch pass.
@@ -717,6 +760,7 @@ impl<'a> Unifier<'a> {
         Snapshot {
             bindings: self.sub.bindings.clone(),
             from_expected_result: self.sub.from_expected_result.clone(),
+            weak: self.sub.weak.clone(),
             assumed_len: self.assumed_pairs.len(),
         }
     }
@@ -724,6 +768,7 @@ impl<'a> Unifier<'a> {
     fn restore(&mut self, snapshot: Snapshot) {
         self.sub.bindings = snapshot.bindings;
         self.sub.from_expected_result = snapshot.from_expected_result;
+        self.sub.weak = snapshot.weak;
         self.assumed_pairs.truncate(snapshot.assumed_len);
     }
 
@@ -841,6 +886,19 @@ fn is_primitive_literal(ty: &Type) -> bool {
         ty,
         Type::NumberLiteral(_) | Type::StringLiteral(_) | Type::BooleanLiteral(_)
     )
+}
+
+/// Whether `arg` is the same kind of type as the union member `param` but
+/// with other type arguments or elements, as `Box<string>` is to
+/// `Box<number>`: tsc pairs such a member with that sibling rather than
+/// giving it to the union's type parameter.
+fn closely_matches(param: &Type, arg: &Type) -> bool {
+    match (param.peel(), arg.peel()) {
+        (Type::InterfaceRef { mangled: p, .. }, Type::InterfaceRef { mangled: a, .. }) => p == a,
+        (Type::ClassRef { mangled: p, .. }, Type::ClassRef { mangled: a, .. }) => p == a,
+        (Type::Array(_), Type::Array(_)) | (Type::Tuple(_), Type::Tuple(_)) => true,
+        _ => false,
+    }
 }
 
 #[cfg(test)]

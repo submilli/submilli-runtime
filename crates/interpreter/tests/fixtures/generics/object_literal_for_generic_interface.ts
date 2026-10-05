@@ -3,7 +3,8 @@
 // `unbox({ v: "s" })` is a `string`. So do literals nested in its fields, in
 // an array or tuple of the interface, for a nullable interface, in
 // parentheses or a conditional, and a recursive interface's own literal,
-// including interfaces that name each other in a union.
+// including interfaces that name each other in a union, and a union member
+// whose fields hold another member.
 interface Box<T> {
   v: T;
 }
@@ -39,6 +40,19 @@ interface Blue<T> {
 
 function lead<T>(chain: Red<T> | Green<T> | Blue<T>): T | null {
   return null;
+}
+
+interface Leaf<T> {
+  leaf: T;
+}
+
+interface Pair<T> {
+  left: Leaf<T>;
+  right: Leaf<T>;
+}
+
+function leftmost<T>(node: Leaf<T> | Pair<T>): T {
+  return "leaf" in node ? node.leaf : node.left.leaf;
 }
 
 function unbox<T>(box: Box<T>): T {
@@ -94,4 +108,8 @@ function main(): void {
     next: { green: 2, next: { blue: 3, next: { red: 4, next: { green: 5, next: null } } } },
   });
   assert(led === null && ledLiteral === null, "interfaces that name each other");
+
+  const fromPair = leftmost({ left: { leaf: "a" }, right: { leaf: "b" } });
+  const fromLeaf = leftmost({ leaf: 5 });
+  assert(fromPair.length === 1 && fromLeaf + 1 === 6, "a member holding another");
 }
