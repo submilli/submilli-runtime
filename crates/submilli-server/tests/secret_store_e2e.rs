@@ -1,6 +1,9 @@
 //! End-to-end tests for the secret-store REST surface (`/v1/secrets`) and the
 //! blueprint `store:` secret source, driven through the real router.
 
+#[path = "common/in_memory_config.rs"]
+mod in_memory_config;
+
 use std::sync::Arc;
 
 use axum::Router;
@@ -27,7 +30,7 @@ fn router_with_store() -> Router {
     std::mem::forget(tmp); // outlive the store for the test process
     let config = ServerConfig {
         secret_store: Some(store),
-        ..ServerConfig::default()
+        ..in_memory_config::config()
     };
     app(AppState::new(config).expect("AppState"))
 }
@@ -125,7 +128,7 @@ async fn secrets_cannot_be_read_back_over_the_api() {
 
 #[tokio::test]
 async fn disabled_store_returns_503() {
-    let router = app(AppState::new(ServerConfig::default()).expect("AppState"));
+    let router = app(AppState::new(in_memory_config::config()).expect("AppState"));
     let (status, body) = get(&router, "/v1/secrets").await;
     assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
     assert_eq!(body["error"], json!("no_secret_store"));

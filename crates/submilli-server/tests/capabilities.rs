@@ -3,6 +3,9 @@
 //! Package groups depend on what's installed in the local store, so assertions
 //! stick to the stdlib groups, which come from the interpreter catalog.
 
+#[path = "common/in_memory_config.rs"]
+mod in_memory_config;
+
 use std::collections::BTreeMap;
 
 use axum::body::Body;
@@ -17,7 +20,7 @@ use submilli_server::{AppState, ServerConfig, app};
 use tower::ServiceExt;
 
 async fn get(uri: &str) -> (StatusCode, Value) {
-    let state = AppState::new(ServerConfig::default()).expect("AppState");
+    let state = AppState::new(in_memory_config::config()).expect("AppState");
     get_with_state(state, uri).await
 }
 
@@ -167,7 +170,7 @@ async fn package_groups_carry_provides_and_requires() {
     );
     let state = AppState::new(ServerConfig {
         package_store_root: Some(root.path().to_path_buf()),
-        ..ServerConfig::default()
+        ..in_memory_config::config()
     })
     .expect("AppState");
 
@@ -199,7 +202,7 @@ async fn requires_only_package_is_listed() {
     );
     let state = AppState::new(ServerConfig {
         package_store_root: Some(root.path().to_path_buf()),
-        ..ServerConfig::default()
+        ..in_memory_config::config()
     })
     .expect("AppState");
 
@@ -218,7 +221,7 @@ async fn installed_packages_are_listed() {
     installed_package(root.path(), "@acme/tool", &CapabilitySchema::default());
     let state = AppState::new(ServerConfig {
         package_store_root: Some(root.path().to_path_buf()),
-        ..ServerConfig::default()
+        ..in_memory_config::config()
     })
     .expect("AppState");
 
@@ -245,7 +248,7 @@ async fn fallback_packages_are_listed_as_unmanaged() {
     let state = AppState::new(ServerConfig {
         package_store_root: Some(owned.path().to_path_buf()),
         package_fallback_root: Some(fallback.path().to_path_buf()),
-        ..ServerConfig::default()
+        ..in_memory_config::config()
     })
     .expect("AppState");
 
@@ -274,7 +277,7 @@ async fn uninstall_refuses_a_package_that_only_the_fallback_holds() {
     let state = AppState::new(ServerConfig {
         package_store_root: Some(owned.path().to_path_buf()),
         package_fallback_root: Some(fallback.path().to_path_buf()),
-        ..ServerConfig::default()
+        ..in_memory_config::config()
     })
     .expect("AppState");
     let router = app(state.clone());
@@ -304,7 +307,7 @@ async fn uninstall_removes_a_package() {
     installed_package(root.path(), "@acme/tool", &CapabilitySchema::default());
     let state = AppState::new(ServerConfig {
         package_store_root: Some(root.path().to_path_buf()),
-        ..ServerConfig::default()
+        ..in_memory_config::config()
     })
     .expect("AppState");
     let router = app(state.clone());

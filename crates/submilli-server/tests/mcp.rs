@@ -5,6 +5,9 @@
 //! `notifications/initialized` handshake and echoes the `MCP-Session-Id`.
 //! Responses are SSE, so the helper parses the `data:` frame.
 
+#[path = "common/in_memory_config.rs"]
+mod in_memory_config;
+
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
@@ -70,7 +73,7 @@ impl Harness {
             blueprints: Some(blueprints),
             sessions,
             session_storage_root: Some(session_root_path.clone()),
-            ..ServerConfig::default()
+            ..in_memory_config::config()
         };
         Self {
             state: AppState::new(config).expect("AppState"),
@@ -90,7 +93,7 @@ impl Harness {
             blueprints: Some(blueprints),
             session_storage_root: Some(session_root_path.clone()),
             volumes,
-            ..ServerConfig::default()
+            ..in_memory_config::config()
         };
         Self {
             state: AppState::new(config).expect("AppState"),
@@ -110,7 +113,7 @@ impl Harness {
             blueprints: Some(blueprints),
             session_storage_root: Some(session_root.clone()),
             session_store_dir: Some(session_store_dir),
-            ..ServerConfig::default()
+            ..in_memory_config::config()
         };
         Self {
             state: AppState::new(config).expect("AppState"),
@@ -131,7 +134,7 @@ impl Harness {
             blueprints: Some(blueprints),
             session_storage_root: Some(session_root_path.clone()),
             package_store_root: Some(package_store_root.path().to_path_buf()),
-            ..ServerConfig::default()
+            ..in_memory_config::config()
         };
         Self {
             state: AppState::new(config).expect("AppState"),
@@ -191,7 +194,7 @@ impl Harness {
         let config = ServerConfig {
             blueprints: Some(blueprints),
             session_storage_root: Some(session_root_path.clone()),
-            ..ServerConfig::default()
+            ..in_memory_config::config()
         };
         Self {
             state: AppState::new(config).expect("AppState"),

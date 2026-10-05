@@ -7,6 +7,9 @@
 //! than after it — without that, the duplicate takes the replay branch and the
 //! wait path is never exercised.
 
+#[path = "common/in_memory_config.rs"]
+mod in_memory_config;
+
 use std::io::{BufRead, BufReader, Write};
 use std::net::TcpListener;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -136,7 +139,7 @@ fn router_with_ledger() -> (Router, Arc<dyn IdempotencyStore>) {
             InMemoryBlueprintStore::seed([blueprint]).expect("seed blueprints"),
         )),
         idempotency_store: Some(Arc::clone(&ledger)),
-        ..ServerConfig::default()
+        ..in_memory_config::config()
     })
     .expect("build AppState");
     (app(state), ledger)
@@ -386,7 +389,7 @@ async fn an_unbound_harness_secret_is_reported_before_the_key_is_considered() {
             )),
             idempotency_store: Some(Arc::clone(&ledger)),
             session_store: Some(Arc::clone(&sessions)),
-            ..ServerConfig::default()
+            ..in_memory_config::config()
         })
         .expect("build AppState")
     };
@@ -489,7 +492,7 @@ async fn a_pre_dispatch_failure_leaves_no_entry_and_a_retry_runs_again() {
         )),
         idempotency_store: Some(Arc::clone(&ledger)),
         package_store_root: Some(tempfile::tempdir().unwrap().keep()),
-        ..ServerConfig::default()
+        ..in_memory_config::config()
     })
     .expect("build AppState");
     let router = app(state);
@@ -578,7 +581,7 @@ async fn the_file_backed_ledger_records_and_replays_through_the_endpoint() {
             InMemoryBlueprintStore::seed([blueprint]).expect("seed blueprints"),
         )),
         idempotency_store: Some(Arc::clone(&ledger)),
-        ..ServerConfig::default()
+        ..in_memory_config::config()
     })
     .expect("build AppState"));
 

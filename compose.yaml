@@ -35,18 +35,14 @@ services:
     networks:
       - submilli-net
 
-    # Five of the six state directories resolve under SUBMILLI_HOME, which the
-    # image sets to /var/lib/submilli — blueprints, sessions, vfs/sessions,
-    # secrets, packages, all in its server/ subdirectory (a volume from a
-    # release that kept them at the top level is moved on the first boot;
-    # a top-level packages/ stays and is read as a fallback).
-    # Blueprints are part of that state: the store is a
-    # revision log (index.json plus <name>.<rev>.yaml), not a directory of
-    # hand-written files, so it is registered over the API and persists here.
+    # Persist SQLite at /var/lib/submilli/server/db/submilli.db together with
+    # its journal and lock files. Sessions, VFS files, secrets, and packages
+    # remain under the same server/ root. Existing blueprint revision files
+    # are imported at startup, then the directory moves to server/archive/blueprints/.
     volumes:
       - submilli-state:/var/lib/submilli
 
-    # The sixth state directory. The ephemeral VFS root is a separate setting
+    # Ephemeral execution storage. The ephemeral VFS root is a separate setting
     # that defaults to the system temp dir, so it is not moved by SUBMILLI_HOME;
     # left on the container filesystem it would grow the writable layer instead
     # of a volume. A tmpfs is the right home for it — the data is per-execution
@@ -88,6 +84,7 @@ services:
     environment:
       SUBMILLI_BIND: 0.0.0.0
       SUBMILLI_PORT: 8128
+      SUBMILLI_DATABASE_PATH: /var/lib/submilli/server/db/submilli.db
       # Update this host and port if you rename the service or change its container port.
       SUBMILLI_MCP_ALLOWED_HOSTS: submilli:8128
       SUBMILLI_SERVER_TOKEN: ${SUBMILLI_SERVER_TOKEN:?set SUBMILLI_SERVER_TOKEN in .env, for example with `openssl rand -hex 32`}

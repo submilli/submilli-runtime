@@ -187,8 +187,10 @@ committing reviewed content or parent-checked final low-priority fixes does not.
 Complete required checks on the final proposed diff. A blocked
 or non-converged review does not satisfy this requirement. If delegation is
 unavailable, use the skill's separate-pass fallback and disclose that limitation
-in the PR. Report review rounds, finding dispositions, checks, and outstanding
-items in the PR description. Filing an issue does not clear an unresolved defect
+in the working handoff. Keep review rounds, finding dispositions, checks, and
+outstanding items in that handoff for reuse. PR descriptions should briefly state
+the problem and solution, with only material compatibility or rollout notes.
+Filing an issue does not clear an unresolved defect
 within the PR's scope.
 
 ## Verification

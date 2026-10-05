@@ -1,6 +1,9 @@
 //! Inbound authentication as a caller sees it: which routes need which token,
 //! and what a refusal looks like.
 
+#[path = "common/in_memory_config.rs"]
+mod in_memory_config;
+
 use axum::Router;
 use axum::body::Body;
 use axum::http::header::{AUTHORIZATION, WWW_AUTHENTICATE};
@@ -29,7 +32,7 @@ fn router() -> (Router, tempfile::TempDir) {
             token("app", Role::User, USER),
         ]),
         package_store_root: Some(packages.path().to_path_buf()),
-        ..ServerConfig::default()
+        ..in_memory_config::config()
     })
     .expect("build AppState"));
     (router, packages)
@@ -240,7 +243,7 @@ async fn a_forbidden_response_names_the_role_needed() {
 
 #[tokio::test]
 async fn a_server_without_tokens_admits_every_caller() {
-    let router = app(AppState::new(ServerConfig::default()).expect("build AppState"));
+    let router = app(AppState::new(in_memory_config::config()).expect("build AppState"));
     assert_eq!(
         status(&router, Method::GET, "/v1/status", None).await,
         StatusCode::OK
