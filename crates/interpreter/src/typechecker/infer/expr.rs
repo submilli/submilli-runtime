@@ -492,7 +492,8 @@ impl Inferer<'_> {
         // Only this expression keeps its literal type; whatever it infers
         // inside starts out widening again, unless it passes the request on.
         let keeps_literal = std::mem::take(&mut self.keeps_literal_types);
-        let keeps_returned_literals = std::mem::take(&mut self.function_keeps_returned_literals);
+        let keeps_returned_literals =
+            std::mem::take(&mut self.next_function_keeps_returned_literals);
         // A hint is read structurally — an object literal takes its per-field
         // hints from the expected type's fields — and `peel` stops at a
         // recursion back-edge, which carries no body to read. Rehydrating first
@@ -599,7 +600,7 @@ impl Inferer<'_> {
             } => self.infer_call(callee, type_args, args, expected, span),
             ExprKind::Paren(inner) => {
                 self.keeps_literal_types = keeps_literal;
-                self.function_keeps_returned_literals = keeps_returned_literals;
+                self.next_function_keeps_returned_literals = keeps_returned_literals;
                 return self.infer_expr(inner, expected);
             }
             ExprKind::ObjectLiteral { members } => {
@@ -625,9 +626,15 @@ impl Inferer<'_> {
                 type_predicate,
                 body,
             } => {
-                self.function_keeps_returned_literals = keeps_returned_literals;
-                let (kind, ty, reported) =
-                    self.infer_arrow(params, return_type, type_predicate, body, expected, span)?;
+                let (kind, ty, reported) = self.infer_arrow(
+                    params,
+                    return_type,
+                    type_predicate,
+                    body,
+                    expected,
+                    keeps_returned_literals,
+                    span,
+                )?;
                 arrow_reported = reported;
                 Ok((kind, ty))
             }
@@ -2511,14 +2518,13 @@ impl Inferer<'_> {
             _ => return Ok((kind, ty)),
         };
         let shape = self.reduce_interfaces_to_shapes(&target_ty);
-        let check = if assignable(&ty, &shape, self.resolver()) {
-            None
-        } else if unsupported_cast_target_reason(&shape, self.resolver(), &mut Vec::new()).is_some()
+        let fits = assignable(&ty, &shape, self.resolver());
+        if !fits
+            && unsupported_cast_target_reason(&shape, self.resolver(), &mut Vec::new()).is_some()
         {
             return Ok((kind, ty));
-        } else {
-            Some(Box::new(shape))
-        };
+        }
+        let check = (!fits).then(|| Box::new(shape));
         let value = self
             .typed_ast
             .try_push_expr(TypedExpr { kind, span, ty })
@@ -7072,7 +7078,7 @@ impl Inferer<'_> {
         let previous_this = self.function_this.replace(receiver.clone());
         let previous_class = self.current_class.take();
         let previous_static = self.current_static.take();
-        self.function_keeps_returned_literals = keeps_returned_literals;
+        self.next_function_keeps_returned_literals = keeps_returned_literals;
         let (id, ty) = self.infer_expr(function, expected)?;
         self.function_this = previous_this;
         self.object_this_hint = previous_hint;
@@ -7191,6 +7197,7 @@ impl Inferer<'_> {
     /// mismatch can only be a parameter or a returned value, and each is
     /// reported where it is written. Without such a hint, the caller still
     /// reports the whole type.
+    #[allow(clippy::too_many_arguments)]
     pub(super) fn infer_arrow(
         &mut self,
         params: Vec<ParamDecl>,
@@ -7198,9 +7205,9 @@ impl Inferer<'_> {
         type_predicate: Option<crate::TypePredicateAnnotation>,
         body: ArrowBody,
         expected: Option<&Type>,
+        keeps_returned_literals: bool,
         span: Span,
     ) -> Result<(TypedExprKind, Type, bool), CompilerFailure> {
-        let keeps_returned_literals = std::mem::take(&mut self.function_keeps_returned_literals);
         let errors_before = self.error_count();
         self.check_parameter_arity(&params)?;
         // Arrow parameters never reach `resolve_params`, so the duplicate check
@@ -7564,16 +7571,20 @@ impl Inferer<'_> {
     }
 
     /// The types of a block body's returns to unify. Literal types kept for a
-    /// bare type parameter (see `returns_keep_literals`) widen when no one of
+    /// function literal passed as the sole candidate of a type parameter that
+    /// is the call's result (see `returns_keep_literals`) widen when no one of
     /// them covers the rest, as they would have without it: tsc would infer
     /// their union, which one return type can't be.
     fn returned_types(&self, collected: Vec<(Type, Span)>) -> Vec<(Type, Span)> {
+        if !self.returns_keep_literals {
+            return collected;
+        }
         let covered = collected.iter().any(|(candidate, _)| {
             collected
                 .iter()
                 .all(|(other, _)| assignable(other, candidate, self.resolver()))
         });
-        if !self.returns_keep_literals || covered {
+        if covered {
             return collected;
         }
         collected

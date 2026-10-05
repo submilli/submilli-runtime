@@ -532,15 +532,15 @@ pub(crate) fn rest_function_accepts(
     let Type::Array(element) = rest.peel() else {
         return false;
     };
-    fixed.len() <= expected.len()
-        && actual.len() != expected.len()
+    let Some(past_fixed) = expected.get(fixed.len()..) else {
+        return false;
+    };
+    actual.len() != expected.len()
         && fixed
             .iter()
             .zip(expected)
             .all(|(declared, passed)| accepts(passed, declared))
-        && expected[fixed.len()..]
-            .iter()
-            .all(|passed| accepts(passed, element))
+        && past_fixed.iter().all(|passed| accepts(passed, element))
 }
 
 pub(crate) fn assignable(actual: &Type, expected: &Type, types: TypeResolver) -> bool {

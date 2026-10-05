@@ -31,7 +31,7 @@ use crate::compiler_error::CompilerFailure;
 use crate::{ArrayLiteralElement, ExprId, ExprKind, ObjectLiteralMember, Type};
 
 use super::Inferer;
-use super::expr::mentions_type_var;
+use super::expr::{is_type_parameter_position, mentions_type_var};
 
 impl<'a> Inferer<'a> {
     /// The type parameters among `inferred_generics` that only object and
@@ -75,6 +75,10 @@ impl<'a> Inferer<'a> {
 
     /// Infer the value a `return` gives, marking the object literals it builds
     /// directly when the enclosing function literal infers its return type.
+    /// That type widens a fresh literal, as tsc widens a function's inferred
+    /// return type, unless the literal is kept for a type parameter (see
+    /// `returns_keep_literals`) or the hint asks for one: `() => id(1)` is
+    /// `() => number`.
     pub(super) fn infer_returned_value(
         &mut self,
         expr: ExprId,
@@ -87,10 +91,15 @@ impl<'a> Inferer<'a> {
         }
         let mut marked = Vec::new();
         self.mark_inference_source(expr, &mut marked)?;
-        self.with_marked(marked, |this| {
+        let (typed, ty) = self.with_marked(marked, |this| {
             this.keeps_literal_types = this.returns_keep_literals;
             this.infer_expr(expr, hint)
-        })
+        })?;
+        let asks_for_literal = hint.is_some_and(|hint| !is_type_parameter_position(hint));
+        if self.returns_keep_literals || asks_for_literal {
+            return Ok((typed, ty));
+        }
+        Ok((typed, self.widen_fresh_literals(typed, &ty)?))
     }
 
     pub(super) fn is_inference_source(&self, literal: ExprId) -> bool {

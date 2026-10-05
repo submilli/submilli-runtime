@@ -372,6 +372,7 @@ impl Inferer<'_> {
             declaration.type_predicate.clone(),
             ArrowBody::Block(declaration.body),
             Some(&ty),
+            false,
             span,
         )?;
         self.exit_closure_narrow_boundary()?;

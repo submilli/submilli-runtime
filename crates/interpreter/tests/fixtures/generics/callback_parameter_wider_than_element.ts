@@ -30,4 +30,10 @@ function main(): void {
 
   const sum = [1, 2].reduce((acc: number, x: number | string) => acc + (typeof x === "number" ? x : 0), 0);
   assert(sum === 3, "a reducer's element parameter");
+
+  const position = (x: unknown, i: unknown): string => String(i);
+  assert([7, 8].map(position).join(",") === "0,1", "an `unknown` index parameter");
+
+  const count = (...xs: unknown[]): number => xs.length;
+  assert([4, 5].map(count).join(",") === "3,3", "a rest parameter of `unknown`");
 }

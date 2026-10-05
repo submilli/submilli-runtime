@@ -787,8 +787,10 @@ impl Inferer<'_> {
             .transpose()?;
         // An array-like `{ length }` has no elements to infer the element type
         // from.
-        let element_param = sig.generics.first().filter(|_| array_from);
-        if let Some(element) = element_param.filter(|element| sub.get(element).is_none()) {
+        if array_from
+            && let Some(element) = sig.generics.first()
+            && sub.get(element).is_none()
+        {
             sub.insert(element.clone(), Type::Unknown);
         }
         if array_from_mapper
@@ -1305,7 +1307,7 @@ impl Inferer<'_> {
             &arguments.sourced_by_literals,
             |this| {
                 this.keeps_literal_types = keeps_literal;
-                this.function_keeps_returned_literals = keeps_literal;
+                this.next_function_keeps_returned_literals = keeps_literal;
                 this.infer_expr(arg_id, Some(&hint))
             },
         );
@@ -1334,14 +1336,7 @@ impl Inferer<'_> {
         hint: Type,
         inferred_generics: &[String],
     ) -> Result<Type, CompilerFailure> {
-        let is_literal = matches!(
-            self.ast
-                .try_expr(arg_id)
-                .map_err(super::arena_failure)?
-                .kind,
-            ExprKind::ObjectLiteral { .. } | ExprKind::ArrayLiteral { .. }
-        );
-        if !is_literal {
+        if !self.builds_literal(arg_id)? {
             return Ok(hint);
         }
         Ok(expand_inferred_interfaces(
@@ -1350,6 +1345,21 @@ impl Inferer<'_> {
             self.resolver(),
             &mut Vec::new(),
         ))
+    }
+
+    /// Whether `expr` is an object or array literal, in parentheses or as a
+    /// conditional's branch.
+    fn builds_literal(&self, expr: ExprId) -> Result<bool, CompilerFailure> {
+        Ok(
+            match &self.ast.try_expr(expr).map_err(super::arena_failure)?.kind {
+                ExprKind::ObjectLiteral { .. } | ExprKind::ArrayLiteral { .. } => true,
+                ExprKind::Paren(inner) => self.builds_literal(*inner)?,
+                ExprKind::Ternary { then_, else_, .. } => {
+                    self.builds_literal(*then_)? || self.builds_literal(*else_)?
+                }
+                _ => false,
+            },
+        )
     }
 
     /// Handle an argument that didn't unify with its parameter: a structural
@@ -1767,10 +1777,10 @@ fn type_param_name(ty: &Type) -> Option<&str> {
 }
 
 /// `ty` with each data-only interface that names one of `inferred_generics`
-/// replaced by its fields, through object fields and array elements: the
-/// positions a literal's own fields and elements take their hints from. An
-/// interface met again inside its own fields stays as it is, so a recursive
-/// one expands once.
+/// replaced by its fields, through object fields, array and tuple elements and
+/// union members: the positions a literal's own fields and elements take
+/// their hints from. An interface met again inside its own fields stays as it
+/// is, so a recursive one expands once.
 fn expand_inferred_interfaces(
     ty: &Type,
     inferred_generics: &[String],
@@ -1813,6 +1823,18 @@ fn expand_inferred_interfaces(
             index: index.clone(),
         },
         Type::Array(element) => Type::Array(Box::new(expand(element, expanding))),
+        Type::Tuple(elements) => Type::Tuple(
+            elements
+                .iter()
+                .map(|element| expand(element, expanding))
+                .collect(),
+        ),
+        Type::Union(members) => Type::union(
+            members
+                .iter()
+                .map(|member| expand(member, expanding))
+                .collect(),
+        ),
         _ => ty.clone(),
     }
 }

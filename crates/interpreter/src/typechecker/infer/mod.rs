@@ -123,7 +123,7 @@ pub fn infer_with_transitive_checked<'a>(
         literal_freshness: literal_freshness::LiteralFreshness::default(),
         keeps_literal_types: false,
         returns_keep_literals: false,
-        function_keeps_returned_literals: false,
+        next_function_keeps_returned_literals: false,
         aliased_conditions: Default::default(),
         captured_mutators: bindings.mutators,
         last_assignments: bindings.last_assignments,
@@ -387,7 +387,7 @@ pub fn infer_package_checked<'a>(
         literal_freshness: literal_freshness::LiteralFreshness::default(),
         keeps_literal_types: false,
         returns_keep_literals: false,
-        function_keeps_returned_literals: false,
+        next_function_keeps_returned_literals: false,
         aliased_conditions: Default::default(),
         captured_mutators: Default::default(),
         last_assignments: Default::default(),
@@ -696,7 +696,7 @@ pub(super) struct Inferer<'a> {
     keeps_literal_types: bool,
     /// Whether the unannotated function literal being inferred keeps the
     /// literal types of the values it returns (see
-    /// `function_keeps_returned_literals`).
+    /// `next_function_keeps_returned_literals`).
     returns_keep_literals: bool,
     /// The next expression `infer_expr` infers, when it is a function literal,
     /// keeps the literal types of the values it returns: it is the sole
@@ -704,7 +704,7 @@ pub(super) struct Inferer<'a> {
     /// (`id(() => 42)` is `() => 42`). Read and cleared on entry like
     /// `keeps_literal_types`, so it doesn't reach a conditional's branches,
     /// whose function types couldn't form one callable union.
-    function_keeps_returned_literals: bool,
+    next_function_keeps_returned_literals: bool,
     aliased_conditions: aliased_conditions::AliasedConditions,
     pub(super) source: &'a str,
     pub(super) package_name: &'a str,

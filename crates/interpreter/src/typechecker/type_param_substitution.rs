@@ -252,11 +252,11 @@ impl<'a> Unifier<'a> {
                     return Ok(());
                 }
                 let arg_resolved = self.sub.apply_or_record(arg_ty, self.limits);
-                // Recurse instead of `==` to peel aliases at every level; remap to Conflict to pin the offending param.
                 // Unified with an argument, a binding from the expected result
                 // is the arguments' own from here on, whether or not it is
                 // replaced.
                 let replaceable = self.is_argument && self.sub.from_expected_result.remove(name);
+                // Recurse instead of `==` to peel aliases at every level; remap to Conflict to pin the offending param.
                 return match self.unify(&resolved, &arg_resolved) {
                     Ok(()) => Ok(()),
                     Err(_) if self.accepts_as_subtype(&arg_resolved, &resolved) => Ok(()),
@@ -513,6 +513,7 @@ impl<'a> Unifier<'a> {
                 if param_ty == arg_ty
                     || (matches!(arg_ty, Type::Never) && self.accepts_as_subtype(arg_ty, param_ty))
                     || self.is_literal_of(arg_ty, param_ty)
+                    || self.accepts_as_supertype(arg_ty, param_ty)
                 {
                     Ok(())
                 } else {
@@ -594,9 +595,10 @@ impl<'a> Unifier<'a> {
     }
 
     /// Whether an argument's function parameter that failed to unify with an
-    /// already-bound type parameter is still acceptable, because the binding
-    /// is assignable to it: `[5].map((a: unknown) => ...)` passes each `number`
-    /// to a parameter that takes any value.
+    /// already-bound type parameter, or with a concrete parameter type, is
+    /// still acceptable, because that type is assignable to it:
+    /// `[5].map((a: unknown, i: unknown) => ...)` passes each `number` to a
+    /// parameter that takes any value.
     fn accepts_as_supertype(&self, arg: &Type, bound: &Type) -> bool {
         let Some(types) = self.types else {
             return false;

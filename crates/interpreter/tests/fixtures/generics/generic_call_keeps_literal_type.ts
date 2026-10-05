@@ -41,6 +41,14 @@ function main(): void {
   const chosen = id(one > 5 ? () => 1 : () => 2);
   assert(chosen() === 2, "a conditional's branches widen");
 
+  // A function literal's inferred return type widens a call's literal
+  // result, as it widens a literal.
+  let letter = () => id("a");
+  letter = () => "b";
+  const lengths = [1, 2].map(() => id(0));
+  lengths.push(4);
+  assert(letter() === "b" && lengths.join(",") === "0,0,4", "a returned call widens");
+
   let copy = id(1);
   copy = 5;
   assert(copy === 5, "a let widens");
