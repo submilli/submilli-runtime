@@ -7,12 +7,13 @@
   },
   "scripts": {
     "dev": "astro dev",
-    "prebuild": "node ./scripts/ensure-root-tsconfig.mjs && node ./scripts/check-video-preview.mjs",
+    "prebuild": "node ./scripts/ensure-root-tsconfig.mjs && node ./scripts/check-video-preview.mjs && node ./scripts/check-published-videos.mjs",
     "build": "astro build && node --experimental-strip-types ./scripts/check-built-agent-docs.ts",
     "check:links:fixtures": "node --test ./scripts/link-check-fixtures.test.mjs",
+    "check:published-videos": "node --test ./scripts/check-published-videos.test.mjs",
     "preview": "astro preview",
     "reference": "node --experimental-strip-types ./scripts/generate-reference.ts",
-    "check": "astro check && node --experimental-strip-types --test ./scripts/agent-docs.test.ts ./scripts/code-blocks.test.mjs ./scripts/page-actions.test.ts ./scripts/structured-data.test.ts ./scripts/theme.test.mjs ./scripts/videos.test.ts",
+    "check": "astro check && node --experimental-strip-types --test ./scripts/agent-docs.test.ts ./scripts/code-blocks.test.mjs ./scripts/page-actions.test.ts ./scripts/structured-data.test.ts ./scripts/theme.test.mjs ./scripts/videos.test.ts ./scripts/check-published-videos.test.mjs",
     "precheck": "node ./scripts/ensure-root-tsconfig.mjs"
   },
   "dependencies": {
