@@ -315,11 +315,18 @@ impl Cassette {
 
     /// The miss of an embedding call: embeddings are never recorded.
     pub(super) fn embedding_miss(&self, model: &str) -> Miss {
+        let key = embedding_key(model);
+        let state = self.lock();
+        let nearest = state
+            .entries
+            .iter()
+            .find(|entry| entry.kind == Kind::Embedding && entry.key.as_deref() == Some(&*key))
+            .map(nearest);
         Miss {
-            key: embedding_key(model),
+            key,
             reason: MissReason::NotRecorded,
             detail: "embeddings are not recorded: the call log keeps no vectors".to_owned(),
-            nearest: None,
+            nearest,
         }
     }
 
