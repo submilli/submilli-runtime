@@ -371,6 +371,7 @@ async fn rest_session_and_mcp_execute_each_record_exactly_one_run() {
     assert_eq!(entries, [RunEntry::Http, RunEntry::Session, RunEntry::Mcp]);
     for run in finished.iter() {
         assert_eq!(run.start.label, "app");
+        assert_eq!(run.start.test_of, None);
         assert!(run.dispatched);
         assert_eq!(run.error, None);
         assert_eq!(run.result.as_deref(), Some("done"));

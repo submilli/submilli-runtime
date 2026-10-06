@@ -342,6 +342,7 @@ fn run_start(inputs: &ExecuteInputs<'_>) -> crate::record::RunStart {
             |audit| audit.principal.clone(),
         ),
         entry: inputs.run_entry.clone(),
+        test_of: None,
         client: inputs.client.clone(),
         tool_call_id: inputs.tool_call_id.clone(),
         session_id: (!inputs.session_id.is_empty()).then(|| inputs.session_id.to_owned()),

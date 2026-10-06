@@ -786,6 +786,7 @@ impl SubmilliMcp {
                 .get::<crate::audit::Principal>()
                 .map_or_else(|| "unauthenticated".to_owned(), |p| p.0.clone()),
             entry: crate::record::RunEntry::McpFileTool { tool: tool.into() },
+            test_of: None,
             client: parts.extensions.get::<McpClient>().map(|c| c.0.clone()),
             tool_call_id: parts.extensions.get::<McpToolCall>().map(|c| c.0.clone()),
             session_id: session_header(parts),
