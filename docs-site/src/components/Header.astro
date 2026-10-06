@@ -2,6 +2,7 @@
 import Search from '@astrojs/starlight/components/Search.astro';
 import DiscordLink from './DiscordLink.astro';
 import GitHubLink from './GitHubLink.astro';
+import MeetingLink from './MeetingLink.astro';
 import SiteTitle from './SiteTitle.astro';
 import ThemeSelect from './ThemeSelect.astro';
 
@@ -32,12 +33,13 @@ const WEBSITE_URL = 'https://submilli.ai';
 				<path d="M7 17 17 7M8 7h9v9"></path>
 			</svg>
 		</a>
+		<a href="/docs/quickstart/#agent-setup" class="setup-link">Agent setup</a>
 		<div class="utilities">
 			<GitHubLink variant="icon" />
 			<DiscordLink variant="icon" />
 			<ThemeSelect />
 		</div>
-		<a href="/docs/quickstart/#agent-setup" class="setup-link">Agent setup<span aria-hidden="true">→</span></a>
+		<MeetingLink />
 	</nav>
 </div>
 
@@ -76,7 +78,7 @@ const WEBSITE_URL = 'https://submilli.ai';
 		height: 2.75rem;
 		border: 0;
 	}
-	.website-link {
+	.website-link, .setup-link {
 		display: flex;
 		align-items: center;
 		gap: 0.375rem;
@@ -84,33 +86,33 @@ const WEBSITE_URL = 'https://submilli.ai';
 		font: 500 0.875rem/1 var(--sl-font);
 		color: var(--sl-color-gray-2);
 		text-decoration: none;
-	}
-	.website-link:hover { color: var(--sl-color-white); }
-	.setup-link {
-		display: inline-flex;
-		align-items: center;
-		justify-content: center;
-		gap: 0.625rem;
-		min-height: 2.75rem;
-		padding: 0 0.875rem;
-		border: 1px solid var(--sub-line-strong);
-		border-radius: var(--radius-md);
-		background: var(--sl-color-accent-low);
-		color: var(--sl-color-text-accent);
-		font: 600 0.875rem/1.4 var(--sl-font);
-		text-decoration: none;
 		white-space: nowrap;
 	}
-	.setup-link:hover { border-color: var(--sl-color-text-accent); }
+	.website-link:hover, .setup-link:hover { color: var(--sl-color-white); }
 	@media (max-width: 71.99rem) {
 		.website-link { display: none; }
 		.docs-header { gap: 0.75rem; }
 		.header-actions { gap: 0.5rem; }
 	}
 	@media (max-width: 49.99rem) {
-		/* Resource links and setup remain available in the mobile menu. */
+		/* Booking, setup, and resource links remain available in the mobile menu. */
 		.header-actions { display: none; }
 		.title-wrapper { flex: 1; }
 		.search-wrapper { flex: none; }
+	}
+	@media (min-width: 50rem) and (max-width: 63.99rem) {
+		/* Keep the search target usable when the full action row leaves little room. */
+		.search-wrapper { justify-content: flex-end; }
+		.search-wrapper > :global(*) { width: auto; }
+		.search-wrapper :global(button[data-open-modal]) {
+			width: 2.75rem;
+			height: 2.75rem;
+			padding: 0;
+			justify-content: center;
+			border: 0;
+			background: transparent;
+		}
+		.search-wrapper :global(button[data-open-modal] > :is(span, kbd)) { display: none; }
+		.search-wrapper :global(button[data-open-modal] > svg) { flex: none; }
 	}
 </style>

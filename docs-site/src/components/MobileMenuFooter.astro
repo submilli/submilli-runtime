@@ -1,13 +1,15 @@
 ---
 import DiscordLink from './DiscordLink.astro';
 import GitHubLink from './GitHubLink.astro';
+import MeetingLink from './MeetingLink.astro';
 import ThemeSelect from './ThemeSelect.astro';
 
 const WEBSITE_URL = 'https://submilli.ai';
 ---
 
 <div class="mobile-preferences">
-	<a href="/docs/quickstart/#agent-setup" class="website-link">Set up with your agent</a>
+	<MeetingLink />
+	<a href="/docs/quickstart/#agent-setup" class="website-link">Agent setup</a>
 	<DiscordLink variant="label" />
 	<GitHubLink variant="label" />
 	<a href={WEBSITE_URL} class="website-link">
