@@ -1260,13 +1260,13 @@ impl Inferer<'_> {
                         Type::Error
                     }
                     _ => {
-                        if let Some(ty) = super::stmt::compound_arith_result(op, &lt, &rt) {
+                        if let Some(ty) = super::stmt::binary_arith_result(op, &lt, &rt) {
                             ty
                         } else {
                             let culprit = self.nullable_binary_culprit(
                                 (typed_lhs, &lt),
                                 (typed_rhs, &rt),
-                                |l, r| super::stmt::compound_arith_result(op, l, r).is_some(),
+                                |l, r| super::stmt::binary_arith_result(op, l, r).is_some(),
                             );
                             self.error_with_narrowing_hint(
                                 span,

@@ -1,6 +1,6 @@
-// A `never` operand is accepted by `+`, arithmetic, ordering and unary `-`/`+`:
-// no value of it exists, so the operator takes its result from the other
-// operand, as tsc does. Each use below either sits in a dead branch or
+// A `never` operand is accepted by `+`, arithmetic, bitwise, ordering and unary
+// `-`/`+`/`~`: no value of it exists, so the operator takes its result from the
+// other operand, as tsc does. Each use below either sits in a dead branch or
 // evaluates an expression that throws first.
 type Shape = { kind: "circle"; r: number } | { kind: "square"; side: number };
 
@@ -54,7 +54,10 @@ function main(): void {
   try { const n: number = Level.High % fail("enum"); console.log(n); } catch (e) { caught++; }
   try { const n: number = fail("div") / 2 + 2 ** fail("pow"); console.log(n); } catch (e) { caught++; }
   try { if (fail("condition") > 0) { console.log("then"); } } catch (e) { caught++; }
-  assert(caught === 11, "every operator evaluates its throwing operand");
+  try { const n: number = fail("bitwise or") | 1; console.log(n); } catch (e) { caught++; }
+  try { const n: number = 1 >>> fail("unsigned shift"); console.log(n); } catch (e) { caught++; }
+  try { const n: number = ~fail("bitwise not"); console.log(n); } catch (e) { caught++; }
+  assert(caught === 14, "every operator evaluates its throwing operand");
 
   let order = "";
   const mark = (c: string): number => { order += c; return 1; };

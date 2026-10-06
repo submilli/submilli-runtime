@@ -2416,6 +2416,14 @@ pub(super) fn compound_arith_result(op: BinOp, lt: &Type, rt: &Type) -> Option<T
     if matches!(lt.peel(), Type::Never) {
         return None;
     }
+    binary_arith_result(op, lt, rt)
+}
+
+/// The result of the arithmetic or bitwise binary operator `op` on `lt` and `rt`.
+pub(super) fn binary_arith_result(op: BinOp, lt: &Type, rt: &Type) -> Option<Type> {
+    if matches!(lt.peel(), Type::Error) || matches!(rt.peel(), Type::Error) {
+        return Some(Type::Error);
+    }
     match op {
         BinOp::Add => super::expr::plus_result(lt, rt),
         BinOp::UnsignedShr => {
