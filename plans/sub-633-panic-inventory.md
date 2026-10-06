@@ -45,7 +45,7 @@ other N entries remain open. Evidence means:
 | --- | --- | --- |
 | N01 | **Fixed on branch:** bound blueprint filter parsing, tree height and destruction | Debug/release 2 MiB stack regressions pass |
 | N02 | **Fixed on branch:** bound package graph DFS in build and GitHub resolution | Debug/release 2 MiB stack regressions pass |
-| N03 | Check OAuth token expiry before adding it to `Instant` | Overflow operation reproduced; caller traced |
+| N03 | **Fixed on branch:** check OAuth token expiry before adding it to `Instant` | Overflow/rotation/recovery regression passes |
 | N04 | Charge and bound variable-to-variable substitution chains | Budget bypass reproduced; stack risk inspected |
 | N05 | Bound namespace metadata before recursive consumers | Inspection; direct metadata API |
 | N06 | Validate sibling dependencies at public build entry | Public API panic reproduced |
@@ -172,6 +172,13 @@ No token-endpoint integration reproduction is claimed.
 **Direction/done:** checked deadline construction and an explicit policy for an
 unrepresentable provider lifetime. Test maximal/normal/absent expiry and rotated
 credentials, preserving the last valid durable credential and future refresh.
+
+**Disposition (2026-10-06, fixed on branch):** checked deadline addition returns
+existing `McpTokenError::Malformed` for unrepresentable expiry. Refresh-token
+rotation remains persisted before validation so recovery uses the replacement
+credential. All 16 token-manager tests pass, including overflow, rotation,
+healthy retry and cache reuse. Three independent reviewers report no findings;
+formatting and workspace/all-target Clippy pass. No network/full-suite tests.
 
 ### N04 — Substitution binding hops bypass depth and work budgets
 
