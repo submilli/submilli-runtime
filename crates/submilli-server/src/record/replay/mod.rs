@@ -15,6 +15,7 @@ mod http;
 mod llm;
 mod mcp;
 
+pub(crate) use cassette::call_key;
 pub use cassette::{Cassette, Miss, MissReason, Nearest, ReplayReport, Served};
 pub use http::RecordedHttpClient;
 pub use llm::RecordedLlmProvider;

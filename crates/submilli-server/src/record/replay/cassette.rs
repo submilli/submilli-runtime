@@ -3,7 +3,7 @@
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
-use interpreter::runtime::{CallOutcome, DecisionRecord, EntryPath, PayloadRecord};
+use interpreter::runtime::{CallOutcome, CallRecord, DecisionRecord, EntryPath, PayloadRecord};
 use serde::Serialize;
 use serde_json::Value;
 use tokio::sync::oneshot;
@@ -256,6 +256,14 @@ impl Cassette {
         }
     }
 
+    /// Cancels the run, with no miss to note: someone outside asked.
+    pub(crate) fn cancel(&self) {
+        let cancel = self.lock().cancel.take();
+        if let Some(cancel) = cancel {
+            let _ = cancel.send(());
+        }
+    }
+
     /// Stops the run at `miss`: notes it (the first one is the stop), fires the cancel
     /// signal, and yields once so the run's executor sees the cancel before the program
     /// runs on with the connector's error.
@@ -336,6 +344,11 @@ fn entries_of(run: &RecordedRun) -> Vec<Entry> {
             })
         })
         .collect()
+}
+
+/// The key a recorded call is filed under, when it is one the connectors answer.
+pub(crate) fn call_key(call: &CallRecord) -> Option<String> {
+    key_of(kind_of(&call.capability)?, &call.request.as_deref()?.meta)
 }
 
 /// The key a recorded request is filed under, read from its meta.

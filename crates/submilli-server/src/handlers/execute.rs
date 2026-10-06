@@ -14,7 +14,7 @@ use submilli_shared::{BlueprintAuthProxy, BlueprintSecretProvider, PolicyCheck};
 
 use crate::app::AppState;
 use crate::error::{ErrorKind, ExecuteError};
-use crate::record::RunEntry;
+use crate::record::{RunEntry, TestWorld};
 use interpreter::runtime::{Vfs, VfsInfo};
 
 use crate::runner::{self, RunOutcome};
@@ -103,6 +103,18 @@ pub(crate) async fn one_shot(
     req: ExecuteRequest,
     audit: Option<Arc<crate::audit::ExecutionAudit>>,
     run_entry: RunEntry,
+) -> (String, ExecuteResponse) {
+    one_shot_with(state, req, audit, run_entry, None).await
+}
+
+/// [`one_shot`] as a test run when `test` is given: the run's outside connectors and local
+/// state come from it, and it is recorded as a test of its source.
+pub(crate) async fn one_shot_with(
+    state: &AppState,
+    req: ExecuteRequest,
+    audit: Option<Arc<crate::audit::ExecutionAudit>>,
+    run_entry: RunEntry,
+    test: Option<TestWorld>,
 ) -> (String, ExecuteResponse) {
     // Stateless one-shot: every call gets a fresh transient session, torn down
     // once the run returns. A caller that wants state across executes (a
@@ -202,7 +214,7 @@ pub(crate) async fn one_shot(
     // The one-shot path mints a fresh session per call, so a key would have
     // nothing durable to bind to: `dispatched` is irrelevant here and any
     // `Idempotency-Key` header is ignored rather than rejected.
-    let outcome = execute_core(
+    let outcome = execute_core_with(
         state,
         ExecuteInputs {
             session_id: &session_id,
@@ -218,6 +230,7 @@ pub(crate) async fn one_shot(
             tool_call_id: None,
             idempotency_key: None,
         },
+        test,
     )
     .await;
     // `execute_core` registers the session so a VFS and a KV store exist for the
@@ -308,7 +321,20 @@ impl ExecuteOutcome {
 /// to be cancelled, prepares and runs it, and reports to its recorder what the caller
 /// got. See [`prepare_and_run`] for the work itself.
 pub(crate) async fn execute_core(state: &AppState, inputs: ExecuteInputs<'_>) -> ExecuteOutcome {
-    let recording = crate::record::Recording::start(state, || run_start(&inputs));
+    execute_core_with(state, inputs, None).await
+}
+
+/// [`execute_core`] as a test run when `test` is given.
+async fn execute_core_with(
+    state: &AppState,
+    inputs: ExecuteInputs<'_>,
+    test: Option<TestWorld>,
+) -> ExecuteOutcome {
+    let recording = crate::record::Recording::start_tapped(
+        state,
+        || run_start(&inputs, test.as_ref()),
+        test.as_ref().map(TestWorld::tap),
+    );
     // Only a recorded run can be cancelled from outside (the registry exists for a stop
     // control over recorded runs), so an unrecorded run pays for no registration. The
     // guard keeps the entry until this function returns, which is after the run has
@@ -320,7 +346,7 @@ pub(crate) async fn execute_core(state: &AppState, inputs: ExecuteInputs<'_>) ->
         }
         _ => (None, None),
     };
-    let outcome = prepare_and_run(state, inputs, recording.clone(), cancel_requested).await;
+    let outcome = prepare_and_run(state, inputs, recording.clone(), cancel_requested, test).await;
     if let Some(recording) = &recording {
         match (&outcome.response.error, outcome.dispatched) {
             // The runner finishes a dispatched run itself; one that never got there is
@@ -333,7 +359,7 @@ pub(crate) async fn execute_core(state: &AppState, inputs: ExecuteInputs<'_>) ->
 }
 
 /// The run as its recorder first sees it.
-fn run_start(inputs: &ExecuteInputs<'_>) -> crate::record::RunStart {
+fn run_start(inputs: &ExecuteInputs<'_>, test: Option<&TestWorld>) -> crate::record::RunStart {
     let audit = inputs.audit.as_deref();
     crate::record::RunStart {
         execution_id: execution_id_of(audit),
@@ -342,7 +368,7 @@ fn run_start(inputs: &ExecuteInputs<'_>) -> crate::record::RunStart {
             |audit| audit.principal.clone(),
         ),
         entry: inputs.run_entry.clone(),
-        test_of: None,
+        test_of: test.map(|test| test.source_run().to_owned()),
         client: inputs.client.clone(),
         tool_call_id: inputs.tool_call_id.clone(),
         session_id: (!inputs.session_id.is_empty()).then(|| inputs.session_id.to_owned()),
@@ -380,6 +406,7 @@ async fn prepare_and_run(
     inputs: ExecuteInputs<'_>,
     recording: Option<crate::record::Recording>,
     cancel_requested: Option<tokio::sync::oneshot::Receiver<()>>,
+    mut test: Option<TestWorld>,
 ) -> ExecuteOutcome {
     let ExecuteInputs {
         session_id,
@@ -427,6 +454,12 @@ async fn prepare_and_run(
         Err(message) => return fail_to_parse(message),
     };
 
+    // A stop by the test run's own connectors, or a cancel from outside, ends the run.
+    let cancel_requested = match test.as_mut() {
+        Some(test) => Some(test.cancel_requested(cancel_requested)),
+        None => cancel_requested,
+    };
+
     let network_policy = execution_audit.as_ref().map_or_else(
         || state.network_policy().clone(),
         |audit| audit.network_policy(state.network_policy()),
@@ -448,21 +481,26 @@ async fn prepare_and_run(
             }
         };
 
-    let mcp_catalog = match state
-        .mcp_catalog_for_imports(
-            blueprint_name,
-            &blueprint,
-            &script_imports.mcp_servers,
-            &harness_secrets,
-            &network_policy,
-        )
-        .await
-    {
-        Ok(catalog) => catalog,
-        Err(error) => {
-            tracing::error!(error = ?error, "MCP discovery initialization failed");
-            return fail(ErrorKind::RuntimeError, error.to_string());
-        }
+    // A test run compiles against the catalog its source run compiled against, and never
+    // contacts an MCP server to discover one.
+    let mcp_catalog = match test.as_ref() {
+        Some(test) => test.mcp_catalog(),
+        None => match state
+            .mcp_catalog_for_imports(
+                blueprint_name,
+                &blueprint,
+                &script_imports.mcp_servers,
+                &harness_secrets,
+                &network_policy,
+            )
+            .await
+        {
+            Ok(catalog) => catalog,
+            Err(error) => {
+                tracing::error!(error = ?error, "MCP discovery initialization failed");
+                return fail(ErrorKind::RuntimeError, error.to_string());
+            }
+        },
     };
 
     let manager = state.session_manager();
@@ -485,10 +523,15 @@ async fn prepare_and_run(
             // collected mid-flight. The write is debounced (`PERSIST_INTERVAL`),
             // so this costs nothing per call.
             manager.touch(session_id).await;
-            match manager
-                .vfs_for_execute_with_variables(session_id, &blueprint, &variables)
-                .await
-            {
+            let vfs = match test.as_ref() {
+                Some(test) => test.vfs(manager, &blueprint, &variables).await,
+                None => {
+                    manager
+                        .vfs_for_execute_with_variables(session_id, &blueprint, &variables)
+                        .await
+                }
+            };
+            match vfs {
                 Ok(pair) => pair,
                 Err(err) => {
                     return fail(
@@ -501,8 +544,11 @@ async fn prepare_and_run(
     };
 
     let http_client = manager.http_client(session_id);
-    let session_kv = manager.session_kv_for_execute(session_id);
-    let mcp_transport = Arc::new(
+    let session_kv = match test.as_ref() {
+        Some(test) => test.session_kv(),
+        None => manager.session_kv_for_execute(session_id),
+    };
+    let mcp_transport: Arc<dyn interpreter::runtime::McpTransport> = Arc::new(
         submilli_shared::mcp::transport::StreamableHttpTransport::new(
             blueprint_name.to_string(),
             Arc::clone(&blueprint),
@@ -512,6 +558,24 @@ async fn prepare_and_run(
         )
         .with_harness_secrets(Arc::clone(&harness_secrets)),
     );
+    let (http_client, mcp_transport, llm_provider, llm_budget) = match test.as_ref() {
+        // Recorded token usage is charged to a held budget, so a test run holds its own.
+        Some(test) => {
+            let connectors = test.connectors(http_client, mcp_transport, llm_provider);
+            (
+                connectors.http,
+                connectors.mcp,
+                connectors.llm,
+                manager.private_llm_budget(),
+            )
+        }
+        None => (
+            http_client,
+            mcp_transport,
+            llm_provider,
+            manager.llm_budget_for_execute(),
+        ),
+    };
     let policy: Arc<dyn interpreter::runtime::SecurityCheck> = Arc::new(
         PolicyCheck::with_variables(Arc::clone(&blueprint), Arc::clone(&variables)),
     );
@@ -543,7 +607,7 @@ async fn prepare_and_run(
         mcp_transport,
         session_kv,
         llm_provider,
-        llm_budget: Some(manager.llm_budget_for_execute()),
+        llm_budget: Some(llm_budget),
         embedding_provider,
         embedding_budget: Some(manager.embedding_budget_for_execute()),
         recording,

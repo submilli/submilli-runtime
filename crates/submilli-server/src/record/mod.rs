@@ -24,15 +24,20 @@ pub mod events;
 mod program;
 pub mod recheck;
 pub mod replay;
+mod test_run;
 mod throwaway;
 pub use events::{EVENT_SCHEMA, EventKind, SessionEvent};
 pub use program::{ProgramRun, run_program};
-pub use recheck::{RecheckReport, RecordedRun, recheck};
+pub use recheck::{RecheckReport, RecordedRun, VariableReport, recheck};
 pub use replay::{
     Cassette, Miss, MissReason, RecordedHttpClient, RecordedLlmProvider, RecordedMcpTransport,
     ReplayReport, Served,
 };
 pub use submilli_shared::mcp::McpCatalog;
+pub(crate) use test_run::TestWorld;
+pub use test_run::{
+    ServedCall, Stop, TestError, TestMode, TestOutcome, TestReport, TestRun, test_program,
+};
 pub use throwaway::{
     ForkedSessionKv, LOCAL_STATE_CAP_BYTES, LocalState, Throwaway, ThrowawayError,
 };
@@ -272,10 +277,22 @@ impl Recording {
         state: &crate::app::AppState,
         describe_run: impl FnOnce() -> RunStart,
     ) -> Option<Self> {
+        Self::start_tapped(state, describe_run, None)
+    }
+
+    /// [`start`](Self::start), with a test run's `tap` told how the run ended.
+    pub(crate) fn start_tapped(
+        state: &crate::app::AppState,
+        describe_run: impl FnOnce() -> RunStart,
+        tap: Option<&Arc<test_run::CallTap>>,
+    ) -> Option<Self> {
         let factory = state.run_recorder()?;
         let started = std::time::Instant::now();
         let run = describe_run();
-        let recorder = factory.start(run.clone())?;
+        let mut recorder = factory.start(run.clone())?;
+        if let Some(tap) = tap {
+            recorder = Arc::new(test_run::TapRecorder::new(recorder, Arc::clone(tap)));
+        }
         let events = state
             .event_hub()
             .map(|hub| events::RunEvents::start(hub, &run));

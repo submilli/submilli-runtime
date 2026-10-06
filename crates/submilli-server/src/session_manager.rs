@@ -439,6 +439,16 @@ impl SessionManager {
         self.llm.build()
     }
 
+    /// A per-execution token budget with its own aggregate: it holds a run to the
+    /// per-execution ceiling without charging the server-wide one, for a run whose usage
+    /// is not new spend (a test run answered from a recording).
+    pub(crate) fn private_llm_budget(&self) -> Arc<ExecutionTokenBudget> {
+        Arc::new(ExecutionTokenBudget::new(
+            self.llm.limits,
+            SharedTokenBudget::new(u64::MAX),
+        ))
+    }
+
     /// The fan-out bound one `batch` dispatches at (KTD4).
     pub fn llm_max_concurrency(&self) -> usize {
         self.llm.max_concurrency
@@ -2307,6 +2317,18 @@ mod tests {
     /// Zero would deadlock the provider's fan-out semaphore, so it clamps to one
     /// here as well as at the provider — an operator who writes 0 gets serial
     /// dispatch, not a hang.
+    #[test]
+    fn a_private_budget_holds_a_run_without_charging_the_server_aggregate() {
+        let (mgr, _root) = manager();
+        let private = mgr.private_llm_budget();
+        private.reserve("m", 500).expect("reserves");
+        assert_eq!(private.used(), 500);
+        assert_eq!(mgr.llm_budget().used(), 0, "the aggregate is untouched");
+        let shared = mgr.llm_budget_for_execute();
+        shared.reserve("m", 500).expect("reserves");
+        assert_eq!(mgr.llm_budget().used(), 500, "a shared one is charged");
+    }
+
     #[test]
     fn a_zero_concurrency_bound_clamps_to_one() {
         let settings = LlmSettings::new(LlmLimits::default(), 1_000, 0);

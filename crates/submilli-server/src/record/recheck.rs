@@ -24,6 +24,8 @@ pub struct RecordedRun {
     pub blueprint_hash: Option<String>,
     /// The program's source; `None` for a file tool.
     pub code: Option<String>,
+    /// The session the run executed in, whose files and data a test run copies.
+    pub session_id: Option<String>,
     /// The variables the run was bound to.
     pub variables: VarBindings,
     pub decisions: Vec<DecisionRecord>,
@@ -49,6 +51,7 @@ impl RecordedRun {
             blueprint_name: start.blueprint_name.clone(),
             blueprint_hash: start.blueprint_hash.clone(),
             code: start.code.as_deref().map(str::to_owned),
+            session_id: start.session_id.clone(),
             variables: (*start.variables).clone(),
             decisions: finished.log.records.clone(),
             calls: finished.log.calls.clone(),
@@ -111,6 +114,15 @@ pub struct VariableReport {
     pub dropped: Vec<String>,
 }
 
+impl VariableReport {
+    /// The bindings a test run would use: kept and filled values together.
+    pub fn bindings(&self) -> VarBindings {
+        let mut bindings = self.kept.clone();
+        bindings.extend(self.filled.clone());
+        bindings
+    }
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
 pub struct RecheckSummary {
     pub newly_allowed: usize,
@@ -140,9 +152,7 @@ impl RecheckReport {
 
     /// The bindings a test run would use: kept and filled values together.
     pub fn bindings(&self) -> VarBindings {
-        let mut bindings = self.variables.kept.clone();
-        bindings.extend(self.variables.filled.clone());
-        bindings
+        self.variables.bindings()
     }
 }
 
@@ -154,11 +164,7 @@ pub fn recheck(
     run: &RecordedRun,
 ) -> RecheckReport {
     let variables = reconcile_variables(blueprint, current_bindings, &run.variables);
-    let bindings = {
-        let mut all = variables.kept.clone();
-        all.extend(variables.filled.clone());
-        all
-    };
+    let bindings = variables.bindings();
     // Calls with a decision that is now denied: their redirect hops are never made.
     let mut denied_calls: HashSet<u64> = HashSet::new();
     let mut summary = RecheckSummary::default();
@@ -218,7 +224,7 @@ pub fn recheck(
     }
 }
 
-fn reconcile_variables(
+pub(super) fn reconcile_variables(
     blueprint: &Blueprint,
     current: &VarBindings,
     recorded: &VarBindings,
